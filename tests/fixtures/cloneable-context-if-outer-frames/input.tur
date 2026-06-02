@@ -1,0 +1,37 @@
+;; cps-transform-plan (last grammar shape): an `if` branch point reached
+;; *through* outer context frames, e.g. (cloneable-reset (+ 5 (if cond
+;; THEN[shift] ELSE))).  ctx_if_branch only matched an `if` that was the whole
+;; reset body; this fixture exercises an `if` sitting *under* a chain of outer
+;; frames.  The lowering splits the body at the `if`: the shift path runs the DK
+;; chain built from the body with the `if` replaced by its shift arm (so the
+;; outer frames ride in the same chain), the pure path yields the body with the
+;; `if` replaced by its pure arm.  Previously this shape fell back to the legacy
+;; lowering (which itself could not compile a shift nested inside an operand).
+
+;; sum-two: resume the captured continuation twice (clone for the first use).
+(defn sum-two [k] :int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
+     (tur_cloneable_cont_resume k 2)))
+
+(defn main [] :int
+  ;; outer (+ 5 ...) frame, shift in THEN, cond true.  context (+ 5 (+ 10 [])):
+  ;;   (5+10+1) + (5+10+2)                                            = 33
+  (println (cloneable-reset
+             (+ 5 (if (< 0 1) (+ 10 (cloneable-shift sum-two 0)) 99))))
+  ;; same shape, cond false -> pure arm 99 through the outer (+ 5 99)  = 104
+  (println (cloneable-reset
+             (+ 5 (if (< 1 0) (+ 10 (cloneable-shift sum-two 0)) 99))))
+  ;; two outer frames (* 2 (+ 5 (if ...))), shift in ELSE, cond false.
+  ;;   context (* 2 (+ 5 [])): 2*(5+1) + 2*(5+2)                       = 26
+  (println (cloneable-reset
+             (* 2 (+ 5 (if (< 1 0) 77 (cloneable-shift sum-two 0))))))
+  ;; same, cond true -> pure THEN 77 through (* 2 (+ 5 77))            = 164
+  (println (cloneable-reset
+             (* 2 (+ 5 (if (< 0 1) 77 (cloneable-shift sum-two 0))))))
+  ;; outer `let` prelude + outer frame, then the `if`: a binding the outer
+  ;; frame references rides ahead of the chain.  context (+ b (+ 10 [])), b=5:
+  ;;   (5+10+1) + (5+10+2)                                            = 33
+  (println (cloneable-reset
+             (let [b 5]
+               (+ b (if (< 0 1) (+ 10 (cloneable-shift sum-two 0)) 99)))))
+  0)

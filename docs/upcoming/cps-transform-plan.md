@@ -34,9 +34,9 @@
 > serialize/deserialize round-trips). Remaining: parametric containers that
 > monomorphize to a by-value struct need carrier<->concrete ABI bridging to be
 > usable as a CPS env; and broadening contexts past single-hole binops/2-arg
-> calls (pure `let` preludes and one reset-body `if` branch point now supported;
-> only an `if` reached *through* outer frames remains). This is the substrate
-> that
+> calls (pure `let` preludes, a reset-body `if` branch point, and an `if` reached
+> *through* outer context frames -- the last grammar shape -- now all supported).
+> This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -801,6 +801,32 @@ no shipped snapshot regenerated):
   `if`+`let`+nested-frame arm -- multi-shot, = 23/99/6/77/46) and
   `serial-context-if` (shift path still serialize/deserialize round-trips, =
   15/42/95).
+- **Broaden the context subset: an `if` reached *through* outer frames (the last
+  grammar shape).** The previous increment handled an `if` that was the *whole*
+  reset body; this one handles an `(if cond THEN ELSE)` sitting *under* a chain
+  of outer context frames, e.g. `(cloneable-reset (+ 5 (if cond THEN[shift]
+  ELSE)))`. The lowering splits the body at the `if`: the **shift path** runs the
+  DK chain built from the reset body with the `if` replaced by its shift-bearing
+  arm -- so the *outer* frames above the `if` ride in the same chain, adjacent to
+  the inner frames and the shift (outermost-first, inside-out on resume); the
+  **pure path** yields the reset body with the `if` replaced by its pure arm,
+  evaluated directly (the outer frames apply to the pure value with no capture).
+  The split is implemented by `find_ctx_if` (walk the spine following the unique
+  shift-reaching child to the first enclosing `if`) plus `clone_spine` (a
+  compile-time-only copy of the spine with the `if` node substituted, sharing
+  every off-spine sub-expression); the two substituted bodies feed the existing
+  `emit_cloneable_ctx`/`emit_serial_ctx` (shift path) and `emit_value` (pure
+  path), so the outer/inner-frame split needs no new chain-building code. When
+  the `if` *is* the whole body, `clone_spine` returns the chosen arm directly, so
+  the prior `if`-at-root path is byte-identical. Selective + safe: `cl_can_lower`
+  / `sk_can_lower` validate the substituted shift body through `collect_ctx`
+  (operand purity/type, op support, exactly-one-hole) and fall back to the legacy
+  lowering -- byte-identical -- for any unsupported spine, so no shipped snapshot
+  regenerates. Fixtures: `cloneable-context-if-outer-frames` (one and two outer
+  frames, shift in `then`/`else`, both conditions, plus an outer-`let` prelude --
+  multi-shot, = 33/104/26/164/33) and `serial-context-if-outer-frames` (shift
+  path still serialize/deserialize round-trips through the outer frames, =
+  22/49/24).
 
   *Remaining:* parametric containers that monomorphize to a **by-value** struct
   (concrete `Pair[int int]`) need carrier<->concrete ABI bridging at the env
@@ -808,12 +834,9 @@ no shipped snapshot regenerated):
   works today). The handle<->cont bridging for the *explicit* `tur_serial_cont_*`
   builtins still needs a `::` ascribe at the call site (the `(k v)` sugar is
   seamless). The supported context grammar now spans single-hole binops, 2-arg
-  call frames, pure `let` preludes, and one `if` branch point at the reset body.
-  The remaining grammar shape is an `if` reached *through* outer context frames
-  (e.g. `(reset (+ 5 (if cond THEN[shift] ELSE)))`): it would need the outer
-  frames applied to the pure arm via a no-shift DK chain plus an
-  outer/inner-frame split; today it falls back to the legacy lowering (which has
-  a pre-existing limitation for a shift nested inside an operand).
+  call frames, pure `let` preludes, and an `if` branch point either at the reset
+  body or reached through outer context frames -- the whole `if`/frame grammar
+  the CPS-substrate lowering set out to cover.
 
 ---
 

@@ -775,28 +775,144 @@ static const Expr *ctx_if_branch(const Expr *body, ExprKind shift_kind,
     return shift_arm;
 }
 
+/* cps-transform-plan (grammar extension, last shape): an `if` branch point
+ * reached *through* outer context frames, e.g. (reset (+ 5 (if c THEN[shift]
+ * ELSE))). ctx_if_branch only matches an `if` that is the whole reset body; the
+ * helpers below locate an `if` sitting *under* a chain of context frames and let
+ * the lowering split it into a shift-bearing context body and a pure-arm context
+ * body, each still a flat frame chain the existing emitters handle. */
+
+/* The unique index of the arg in `args[0..n)` that reaches a shift of kind
+ * `target`, or -1 if zero or more than one arg reaches it (so the descent is
+ * unambiguous; collect_ctx enforces the "exactly one hole" rule later). */
+static int shift_child_index(Expr *const *args, uint32_t n, ExprKind target) {
+    int found = -1;
+    for (uint32_t i = 0; i < n; i++) {
+        if (reaches_shift_kind(args[i], target)) {
+            if (found >= 0) return -1;   /* ambiguous */
+            found = (int)i;
+        }
+    }
+    return found;
+}
+
+/* Walk down the context spine (single-hole binops, 2-arg calls, pure `let`
+ * bodies) from `cur` following the unique shift-reaching child. Return the first
+ * enclosing `if` reached this way, or NULL if the spine reaches the shift itself
+ * (a flat context, no branch point) or hits an unsupported node. The frame
+ * validity of the spine (op support, operand purity/type) is *not* checked here;
+ * the caller defers that to collect_ctx run over the substituted shift body. */
+static const Expr *find_ctx_if(const Expr *cur, ExprKind target) {
+    for (int guard = 0; cur && guard < 4096; guard++) {
+        if (cur->kind == EX_IF)   return cur;     /* the branch point */
+        if (cur->kind == target)  return NULL;    /* flat: shift, no `if` */
+        const Expr *next = NULL;
+        if (cur->kind == EX_BUILTIN && cur->as.builtin.n == 2) {
+            int h = shift_child_index(cur->as.builtin.args, 2, target);
+            if (h < 0) return NULL;
+            next = cur->as.builtin.args[h];
+        } else if (cur->kind == EX_CALL && cur->as.call_.n_args == 2 &&
+                   cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            int h = shift_child_index(cur->as.call_.args, 2, target);
+            if (h < 0) return NULL;
+            next = cur->as.call_.args[h];
+        } else if (cur->kind == EX_LET || cur->kind == EX_LETREC) {
+            if (!reaches_shift_kind(cur->as.let_.body, target)) return NULL;
+            next = cur->as.let_.body;
+        } else {
+            return NULL;
+        }
+        cur = next;
+    }
+    return NULL;
+}
+
+/* A small pool of compile-time-only allocations (spine clones + their cloned
+ * arg arrays) freed in bulk once the substituted bodies have been emitted. */
+typedef struct { void *items[128]; uint32_t n; } ClonePool;
+static void *pool_take(ClonePool *p, size_t sz) {
+    void *m = malloc(sz);
+    if (p->n < 128) p->items[p->n++] = m;   /* spine is tiny; cap defensively */
+    return m;
+}
+static void pool_free(ClonePool *p) {
+    for (uint32_t i = 0; i < p->n; i++) free(p->items[i]);
+    p->n = 0;
+}
+
+/* Return a copy of `orig` in which the spine node `if_node` (found by
+ * find_ctx_if) is replaced by `replacement`, following the same unique
+ * shift-reaching child path. Only the spine nodes (and the binop/call arg arrays
+ * carrying the hole) are freshly allocated -- every off-spine sub-expression is
+ * shared with `orig`. The clones live until pool_free. */
+static const Expr *clone_spine(const Expr *orig, const Expr *if_node,
+                               const Expr *replacement, ExprKind target,
+                               ClonePool *pool) {
+    if (orig == if_node) return replacement;
+    Expr *c = pool_take(pool, sizeof(Expr));
+    *c = *orig;
+    if (orig->kind == EX_BUILTIN && orig->as.builtin.n == 2) {
+        uint32_t n = orig->as.builtin.n;
+        int h = shift_child_index(orig->as.builtin.args, n, target);
+        Expr **na = pool_take(pool, n * sizeof(Expr *));
+        for (uint32_t i = 0; i < n; i++) na[i] = orig->as.builtin.args[i];
+        na[h] = (Expr *)clone_spine(orig->as.builtin.args[h], if_node,
+                                    replacement, target, pool);
+        c->as.builtin.args = na;
+    } else if (orig->kind == EX_CALL && orig->as.call_.n_args == 2) {
+        uint32_t n = orig->as.call_.n_args;
+        int h = shift_child_index(orig->as.call_.args, n, target);
+        Expr **na = pool_take(pool, n * sizeof(Expr *));
+        for (uint32_t i = 0; i < n; i++) na[i] = orig->as.call_.args[i];
+        na[h] = (Expr *)clone_spine(orig->as.call_.args[h], if_node,
+                                    replacement, target, pool);
+        c->as.call_.args = na;
+    } else if (orig->kind == EX_LET || orig->kind == EX_LETREC) {
+        c->as.let_.body = (Expr *)clone_spine(orig->as.let_.body, if_node,
+                                              replacement, target, pool);
+    }
+    return c;
+}
+
 /* Pure feasibility check (NO emission): is this cloneable-reset lowerable onto
  * the DK machine? Requires a non-empty supported context (so existing
  * empty-context fixtures stay on the legacy path, byte-identical) -- except for
  * the if-shaped body, which never matched the legacy path, so an empty context
- * in the shift arm is admitted there. */
+ * in the shift arm is admitted there. The `if` may be the whole body or sit
+ * beneath outer context frames (the last grammar shape). */
 static bool cl_can_lower(const Expr *e) {
     if (!e || e->kind != EX_CLONEABLE_RESET) return false;
     if (!ty_intptr_safe(e->type.kind)) return false;
-    const Expr *cond = NULL, *els = NULL; bool when = true;
     const Expr *inner = e->as.cloneable_reset_.body;
-    const Expr *branch = ctx_if_branch(inner, EX_CLONEABLE_SHIFT, &cond, &els, &when);
-    bool has_if = (branch != NULL);
-    if (has_if) inner = branch;
+    const Expr *if_node = find_ctx_if(inner, EX_CLONEABLE_SHIFT);
+    bool has_if = (if_node != NULL);
+
+    /* The context body to walk down to the shift: the whole reset body for a
+     * flat context, or -- when there is an `if` branch point (at the root or
+     * beneath outer frames) -- the reset body with the `if` replaced by its
+     * shift-bearing arm, so the outer frames + the shift arm form one flat
+     * chain. */
+    const Expr *shift_body = inner;
+    ClonePool pool = {0};
+    if (has_if) {
+        const Expr *cond = NULL, *els = NULL; bool when = true;
+        const Expr *branch = ctx_if_branch(if_node, EX_CLONEABLE_SHIFT,
+                                           &cond, &els, &when);
+        if (!branch) return false;
+        shift_body = clone_spine(inner, if_node, branch, EX_CLONEABLE_SHIFT, &pool);
+    }
+
     ClFrame frames[CL_MAX_CTX_FRAMES];
     CtxLet lets[CL_MAX_CTX_LETS];
     uint32_t nf = 0, nl = 0;
-    const Expr *shift = collect_ctx(inner, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false, lets, &nl);
-    if (!shift) return false;
-    if (!has_if && nf == 0) return false;
-    if (shift->as.cloneable_shift_.n_live_captures != 0) return false;
-    if (!shift->as.cloneable_shift_.k_fn) return false;
-    return true;
+    const Expr *shift = collect_ctx(shift_body, EX_CLONEABLE_SHIFT, frames, &nf,
+                                    NULL, false, lets, &nl);
+    bool ok = shift &&
+              (has_if || nf != 0) &&     /* empty flat context -> legacy */
+              shift->as.cloneable_shift_.n_live_captures == 0 &&
+              shift->as.cloneable_shift_.k_fn != NULL;
+    pool_free(&pool);
+    return ok;
 }
 
 /* Emit the body expression of a context frame: either a builtin arithmetic op
@@ -928,15 +1044,25 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (!cl_can_lower(e)) return NULL;
     if (!ctx->pending_handler_fns) return NULL;   /* need file scope for helpers */
 
-    const Expr *cond = NULL, *els = NULL; bool when = true;
-    const Expr *branch = ctx_if_branch(e->as.cloneable_reset_.body,
-                                       EX_CLONEABLE_SHIFT, &cond, &els, &when);
-    if (!branch)
-        return emit_cloneable_ctx(ctx, body, e, e->as.cloneable_reset_.body);
+    const Expr *inner = e->as.cloneable_reset_.body;
+    const Expr *if_node = find_ctx_if(inner, EX_CLONEABLE_SHIFT);
+    if (!if_node)
+        return emit_cloneable_ctx(ctx, body, e, inner);   /* flat context */
 
-    /* if-shaped body: the condition is pure, so evaluate it once and branch in
-     * the emitted C -- the shift path runs the DK chain built from the
-     * shift-bearing arm, the other path yields the pure arm's value. */
+    /* if-shaped context: the condition is pure, so evaluate it once and branch
+     * in the emitted C. The shift path runs the DK chain built from the reset
+     * body with the `if` replaced by its shift-bearing arm (so any *outer*
+     * frames above the `if` ride in the same chain); the other path yields the
+     * reset body with the `if` replaced by its pure arm, evaluated directly. */
+    const Expr *cond = NULL, *els = NULL; bool when = true;
+    const Expr *branch = ctx_if_branch(if_node, EX_CLONEABLE_SHIFT,
+                                       &cond, &els, &when);
+    ClonePool pool = {0};
+    const Expr *shift_body = clone_spine(inner, if_node, branch,
+                                         EX_CLONEABLE_SHIFT, &pool);
+    const Expr *pure_body  = clone_spine(inner, if_node, els,
+                                         EX_CLONEABLE_SHIFT, &pool);
+
     const char *rty = emit_type_c_name(ctx, e->type);
     char *result = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
@@ -946,7 +1072,7 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "if (%s(%s)) {\n", when ? "" : "!", cv);
     free(cv);
     ctx->indent++;
-    char *sub = emit_cloneable_ctx(ctx, body, e, branch);
+    char *sub = emit_cloneable_ctx(ctx, body, e, shift_body);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", result, sub);
     free(sub);
@@ -954,13 +1080,14 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_puts(body, "} else {\n");
     ctx->indent++;
-    char *ev = emit_value(ctx, body, els);
+    char *ev = emit_value(ctx, body, pure_body);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", result, ev);
     free(ev);
     ctx->indent--;
     indent_buf(body, ctx->indent);
     buf_puts(body, "}\n");
+    pool_free(&pool);
     return result;
 }
 
@@ -1074,19 +1201,32 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 static bool sk_can_lower(const Expr *e, const Expr *program) {
     if (!e || e->kind != EX_SERIAL_RESET) return false;
     if (!ty_intptr_safe(e->type.kind)) return false;
-    const Expr *cond = NULL, *els = NULL; bool when = true;
     const Expr *inner = e->as.serial_reset_.body;
-    const Expr *branch = ctx_if_branch(inner, EX_SERIAL_SHIFT, &cond, &els, &when);
-    if (branch) inner = branch;
+    const Expr *if_node = find_ctx_if(inner, EX_SERIAL_SHIFT);
+
+    /* See cl_can_lower: walk the shift-bearing context body, which is the whole
+     * reset body for a flat context or -- with an `if` branch point at the root
+     * or beneath outer frames -- the body with the `if` replaced by its
+     * shift arm. */
+    const Expr *shift_body = inner;
+    ClonePool pool = {0};
+    if (if_node) {
+        const Expr *cond = NULL, *els = NULL; bool when = true;
+        const Expr *branch = ctx_if_branch(if_node, EX_SERIAL_SHIFT,
+                                           &cond, &els, &when);
+        if (!branch) return false;
+        shift_body = clone_spine(inner, if_node, branch, EX_SERIAL_SHIFT, &pool);
+    }
+
     ClFrame frames[CL_MAX_CTX_FRAMES];
     CtxLet lets[CL_MAX_CTX_LETS];
     uint32_t nf = 0, nl = 0;
-    const Expr *shift = collect_ctx(inner, EX_SERIAL_SHIFT,
+    const Expr *shift = collect_ctx(shift_body, EX_SERIAL_SHIFT,
                                     frames, &nf, program, /*want_names=*/false,
                                     lets, &nl);
-    if (!shift) return false;
-    if (!shift->as.serial_shift_.k_fn) return false;
-    return true;
+    bool ok = shift && shift->as.serial_shift_.k_fn != NULL;
+    pool_free(&pool);
+    return ok;
 }
 
 /* The stable tag for a context frame (op + hole side), shared by the emitted
@@ -1231,15 +1371,24 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (!sk_can_lower(e, ctx->program_root)) return NULL;
     if (!ctx->pending_handler_fns) return NULL;
 
-    const Expr *cond = NULL, *els = NULL; bool when = true;
-    const Expr *branch = ctx_if_branch(e->as.serial_reset_.body,
-                                       EX_SERIAL_SHIFT, &cond, &els, &when);
-    if (!branch)
-        return emit_serial_ctx(ctx, body, e, e->as.serial_reset_.body);
+    const Expr *inner = e->as.serial_reset_.body;
+    const Expr *if_node = find_ctx_if(inner, EX_SERIAL_SHIFT);
+    if (!if_node)
+        return emit_serial_ctx(ctx, body, e, inner);   /* flat context */
 
-    /* if-shaped body: branch in the emitted C on the pure condition; the shift
-     * path captures + marshals the chain built from the shift-bearing arm, the
-     * other path yields the pure arm's value. */
+    /* if-shaped context: branch in the emitted C on the pure condition. The
+     * shift path captures + marshals the chain built from the reset body with
+     * the `if` replaced by its shift arm (outer frames above the `if` included);
+     * the other path yields the body with the `if` replaced by its pure arm. */
+    const Expr *cond = NULL, *els = NULL; bool when = true;
+    const Expr *branch = ctx_if_branch(if_node, EX_SERIAL_SHIFT,
+                                       &cond, &els, &when);
+    ClonePool pool = {0};
+    const Expr *shift_body = clone_spine(inner, if_node, branch,
+                                         EX_SERIAL_SHIFT, &pool);
+    const Expr *pure_body  = clone_spine(inner, if_node, els,
+                                         EX_SERIAL_SHIFT, &pool);
+
     const char *rty = emit_type_c_name(ctx, e->type);
     char *result = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
@@ -1249,7 +1398,7 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "if (%s(%s)) {\n", when ? "" : "!", cv);
     free(cv);
     ctx->indent++;
-    char *sub = emit_serial_ctx(ctx, body, e, branch);
+    char *sub = emit_serial_ctx(ctx, body, e, shift_body);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", result, sub);
     free(sub);
@@ -1257,13 +1406,14 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_puts(body, "} else {\n");
     ctx->indent++;
-    char *ev = emit_value(ctx, body, els);
+    char *ev = emit_value(ctx, body, pure_body);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", result, ev);
     free(ev);
     ctx->indent--;
     indent_buf(body, ctx->indent);
     buf_puts(body, "}\n");
+    pool_free(&pool);
     return result;
 }
 
