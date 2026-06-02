@@ -1,6 +1,7 @@
 #include "cps.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,8 @@ bool cps_expr_contains_shift(const Expr *e) {
         case EX_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
+        case EX_SERIAL_RESET:
+        case EX_SERIAL_SHIFT:
         case EX_CLONEABLE_RESET:
         case EX_CLONEABLE_SHIFT:
             return true;
@@ -917,6 +920,22 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             out->as.shift0_.body = new_body;
             return out;
         }
+
+        case EX_SERIAL_RESET: {
+            Expr *new_body = cps_mark_expr(a, e->as.serial_reset_.body);
+            Expr *out = expr_new(a, EX_SERIAL_RESET, e->type, e->span);
+            out->as.serial_reset_.body = new_body;
+            return out;
+        }
+
+        case EX_SERIAL_SHIFT: {
+            Expr *new_k_fn = cps_mark_expr(a, e->as.serial_shift_.k_fn);
+            Expr *new_body = cps_mark_expr(a, e->as.serial_shift_.body);
+            Expr *out = expr_new(a, EX_SERIAL_SHIFT, e->type, e->span);
+            out->as.serial_shift_.k_fn = new_k_fn;
+            out->as.serial_shift_.body = new_body;
+            return out;
+        }
         
         /* Phase B2: Cloneable continuations - pass through but mark */
         case EX_CLONEABLE_RESET: {
@@ -1107,25 +1126,229 @@ void cps_emit_capture_environment(Arena *a, Expr *program, TypeClassEnv *tc_env)
     cps_emit_capture_environment_expr(a, program, tc_env, clone_tc);
 }
 
+/* CPS1: Transitive call-graph coloring support. ==============================
+ *
+ * After cps_mark_expr has directly marked functions containing control
+ * operators, we propagate "may_capture" backward through the call graph:
+ * if a callee is colored, its caller is colored too.  We do this as a
+ * simple fixed-point iteration over the top-level FnDef list.
+ */
+
+/* Walk an expression and check if it calls any binding in the colored set.
+ * `colored` is an array of `n` Binding pointers known to be colored.
+ * Returns true if the expression (or any sub-expression) calls one of them,
+ * or if it makes any indirect call (conservative over-approximation). */
+static bool cps_body_calls_colored(const Expr *e,
+                                   Binding **colored, uint32_t n) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CALL: {
+            if (e->as.call_.fn_binding) {
+                for (uint32_t i = 0; i < n; i++) {
+                    if (e->as.call_.fn_binding == colored[i]) return true;
+                }
+            } else {
+                /* Indirect call: conservatively treat as calling colored */
+                return true;
+            }
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (cps_body_calls_colored(e->as.call_.args[i], colored, n))
+                    return true;
+            if (e->as.call_.fn_expr)
+                return cps_body_calls_colored(e->as.call_.fn_expr, colored, n);
+            return false;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cps_body_calls_colored(e->as.let_.bindings[i].init, colored, n))
+                    return true;
+            return cps_body_calls_colored(e->as.let_.body, colored, n);
+        case EX_IF:
+            return cps_body_calls_colored(e->as.if_.cond, colored, n) ||
+                   cps_body_calls_colored(e->as.if_.then_, colored, n) ||
+                   cps_body_calls_colored(e->as.if_.else_or_null, colored, n);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cps_body_calls_colored(e->as.do_.items[i], colored, n))
+                    return true;
+            return false;
+        case EX_WHILE:
+            return cps_body_calls_colored(e->as.while_.cond, colored, n) ||
+                   cps_body_calls_colored(e->as.while_.body, colored, n);
+        case EX_SET:
+            return cps_body_calls_colored(e->as.set_.value, colored, n);
+        case EX_RETURN:
+            return cps_body_calls_colored(e->as.return_.value, colored, n);
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn
+                ? cps_body_calls_colored(e->as.fn_def_.fn->body, colored, n)
+                : false;
+        case EX_FN:
+            return e->as.fn_.fn
+                ? cps_body_calls_colored(e->as.fn_.fn->body, colored, n)
+                : false;
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn
+                ? cps_body_calls_colored(e->as.closure_.closure->fn->body, colored, n)
+                : false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (cps_body_calls_colored(e->as.builtin.args[i], colored, n))
+                    return true;
+            return false;
+        case EX_RESET:
+            return cps_body_calls_colored(e->as.reset_.body, colored, n);
+        case EX_SHIFT:
+            return cps_body_calls_colored(e->as.shift_.k_fn, colored, n) ||
+                   cps_body_calls_colored(e->as.shift_.body, colored, n);
+        case EX_SHIFT0:
+            return cps_body_calls_colored(e->as.shift0_.k_fn, colored, n) ||
+                   cps_body_calls_colored(e->as.shift0_.body, colored, n);
+        case EX_SERIAL_RESET:
+            return cps_body_calls_colored(e->as.serial_reset_.body, colored, n);
+        case EX_SERIAL_SHIFT:
+            return cps_body_calls_colored(e->as.serial_shift_.k_fn, colored, n) ||
+                   cps_body_calls_colored(e->as.serial_shift_.body, colored, n);
+        default:
+            return false;
+    }
+}
+
+/* CPS1: Safely read a FnDef's may_capture field; arena-allocated FnDefs that
+ * were never touched by cps_mark_expr may have uninitialized bytes. */
+static bool fn_is_colored(const FnDef *fd) {
+    uint8_t raw;
+    memcpy(&raw, &fd->may_capture, 1);
+    return raw != 0;
+}
+
+/* Propagate may_capture transitively through the call graph of the given
+ * program (which must be EX_PROGRAM).  Runs as a fixed-point iteration. */
+static void cps_propagate_coloring(Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return;
+
+    uint32_t n = program->as.program.n;
+
+    /* Collect all top-level FnDef entries */
+    FnDef **fns     = malloc(n * sizeof(FnDef *));
+    Binding **binds = malloc(n * sizeof(Binding *));
+    uint32_t nfns   = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF) continue;
+        FnDef *fd = item->as.fn_def_.fn;
+        if (!fd || !fd->binding) continue;
+        /* Normalize may_capture: arena memory may be uninitialised; treat
+         * any non-zero byte as true so UBSAN is not triggered. */
+        fd->may_capture = fn_is_colored(fd);
+        fns[nfns]     = fd;
+        binds[nfns++] = fd->binding;
+    }
+
+    /* Collect initially colored bindings */
+    Binding **colored = malloc(nfns * sizeof(Binding *));
+    uint32_t ncolored = 0;
+    for (uint32_t i = 0; i < nfns; i++) {
+        if (fns[i]->may_capture) colored[ncolored++] = binds[i];
+    }
+
+    /* Fixed-point: propagate colored → callers */
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t i = 0; i < nfns; i++) {
+            if (fns[i]->may_capture) continue; /* already colored */
+            if (!fns[i]->body) continue;
+            if (cps_body_calls_colored(fns[i]->body, colored, ncolored)) {
+                fns[i]->may_capture = true;
+                colored[ncolored++] = binds[i];
+                changed = true;
+            }
+        }
+    }
+
+    /* CPS2: mirror may_capture into is_cps for all top-level functions */
+    for (uint32_t i = 0; i < nfns; i++) {
+        fns[i]->is_cps = fns[i]->may_capture;
+    }
+
+    free(fns);
+    free(binds);
+    free(colored);
+}
+
+/* CPS1: --dump-cps-coloring
+ * Walk the top-level FnDef list and print each function with its coloring. */
+void cps_dump_cps_coloring(const Expr *program, FILE *out) {
+    if (!program || program->kind != EX_PROGRAM) return;
+    fprintf(out, "=== cps coloring ===\n");
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF) continue;
+        const FnDef *fd = item->as.fn_def_.fn;
+        if (!fd || !fd->binding || !fd->binding->name) continue;
+        fprintf(out, "%s: %s\n",
+                fd->binding->name->name,
+                fd->may_capture ? "colored" : "uncolored");
+    }
+    fprintf(out, "=== end cps coloring ===\n");
+}
+
+/* CPS3: Normalize may_capture and is_cps for FnDef nodes nested inside
+ * EX_DEFMODULE items (stdlib/imported modules).  These are never processed
+ * by cps_mark_expr (which returns EX_DEFMODULE unchanged) or by
+ * cps_propagate_coloring (which only iterates top-level EX_FN_DEF items), so
+ * their arena-allocated may_capture/is_cps bytes can be uninitialized garbage.
+ * We use cps_fn_needs_transform (body scan) rather than the raw-byte read used
+ * by fn_is_colored, because arena memory is not zeroed and a garbage non-zero
+ * byte would incorrectly color an innocent stdlib function. */
+static void cps_normalize_module_fndefs(Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEFMODULE) continue;
+        DefModule *mod = item->as.defmodule_.mod;
+        if (!mod) continue;
+        for (uint32_t j = 0; j < mod->n_body; j++) {
+            Expr *body_item = mod->body[j];
+            if (!body_item || body_item->kind != EX_FN_DEF) continue;
+            FnDef *fd = body_item->as.fn_def_.fn;
+            if (!fd) continue;
+            fd->may_capture = cps_fn_needs_transform(fd);
+            fd->is_cps = fd->may_capture;
+        }
+    }
+}
+
 /* Main entry point: mark functions that contain shift for CPS transformation */
 Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env) {
     if (!program) {
         fprintf(stderr, "cps: NULL program\n");
         return NULL;
     }
-    
+
     if (program->kind != EX_PROGRAM) {
         fprintf(stderr, "cps: expected EX_PROGRAM, got %d\n", program->kind);
         return NULL;
     }
-    
+
+    /* Always normalize module-nested FnDefs before any emitter reads is_cps.
+     * This must run even when the program has no shift (early-return path)
+     * because the emitter iterates over all items (including module items) when
+     * --cps-path is active, and uninitialized arena bytes trigger UBSAN. */
+    cps_normalize_module_fndefs(program);
+
     /* Check if the program contains any shift expressions */
     if (!cps_expr_contains_shift(program)) {
         return program; /* No CPS transformation needed */
     }
-    
-    /* Mark all functions that contain shift and populate live_captures */
+
+    /* Mark all functions that directly contain shift/reset and populate live_captures */
     Expr *result = cps_mark_expr(a, program);
+
+    /* CPS1: Propagate may_capture transitively through the call graph.
+     * A function that calls a colored function is itself colored. */
+    cps_propagate_coloring(result);
 
     /* CPS-CL10: Clone-instance checking is now performed by check_cloneable_capture
      * in src/elab.c at elaboration time.  The CPS-CL11 pass below still resolves

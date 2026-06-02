@@ -58,6 +58,15 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# End-to-end MCP + LSP server tests: drives `tur mcp` and `tur lsp` over
+# stdio JSON-RPC and checks tools, hover, definition, documentSymbol,
+# completion (incl. dynamic stdlib discovery), and the TUR_NO_MCP kill
+# switch.  Skips cleanly if python3 is unavailable.
+add_test(
+  NAME tur_mcp_lsp_tests
+  COMMAND bash tests/lsp/run-mcp-lsp.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # PH3.2: LeakSanitizer regression gate for composite-type diagnostics. Runs the
 # sanitized `tur` directly on handler-mismatch error fixtures with
 # detect_leaks=1 and asserts no leak (the normal suite compiles generated
@@ -249,6 +258,12 @@ add_test(
 add_test(
   NAME tur_cps_prompt_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_cps_prompt_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# LSP docstring scanner unit test
+add_test(
+  NAME tur_docscanner_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_docscanner_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Phase S3: algebraic effects via eval core

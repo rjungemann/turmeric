@@ -2220,6 +2220,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
     fd->params = params;
     fd->n_params = n_params;
@@ -2710,6 +2711,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
     fd->params = params;
     fd->n_params = n_params;

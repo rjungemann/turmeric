@@ -21,8 +21,10 @@ Editors launch it as a subprocess and communicate via stdin/stdout.
 | Capability | Status |
 |---|---|
 | Diagnostics (`textDocument/publishDiagnostics`) | Supported |
-| Hover documentation | Not yet supported |
-| Go-to-definition | Not yet supported |
+| Document symbols (`textDocument/documentSymbol`) | Supported |
+| Workspace symbols (`workspace/symbol`) | Supported (open documents only) |
+| Hover documentation | Supported |
+| Go-to-definition | Supported |
 | Completion | Not yet supported |
 
 When you open or edit a `.tur` file, the server compiles it in check-only mode

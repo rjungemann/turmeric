@@ -320,4 +320,14 @@ int tur_panic_payload_line(tur_panic_payload *p);
  * Returns:   The boxed value if type matches, NULL otherwise. */
 void *tur_panic_payload_downcast(tur_panic_payload *p, TypeKindInt target_type);
 
+/* CPS3: Selective CPS -- v1 identity-CPS continuation handle.
+ * Wraps a function pointer so that colored functions can be called in CPS style.
+ * CPS4 will extend this struct to support heap-reified continuations. */
+typedef struct tur_cps_cont {
+    void (*fn)(struct tur_cps_cont *k, int64_t value);
+} tur_cps_cont_t;
+
+/* Invoke the continuation with value.  No-op if k is NULL. */
+void tur_cps_apply(tur_cps_cont_t *k, int64_t value);
+
 #endif /* TUR_RUNTIME_H */

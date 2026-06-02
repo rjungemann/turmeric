@@ -68,6 +68,8 @@
 #include "lsp/lsp.h"
 #include "lsp/lsp_sym.h"
 #include "lsp/lsp_docs.h"
+/* MCP server */
+#include "lsp/mcp.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -412,6 +414,8 @@ static int run_core_passes(PassContext *ctx) {
             if (!ctx->prog || diag_had_error()) return 1;
             /* Phase B5: --dump-clone-plan: print cloneable capture plan after CPS */
             if (g_dump_clone_plan) cps_dump_clone_plan(ctx->prog, stderr);
+            /* CPS1: --dump-cps-coloring: print colored/uncolored partition */
+            if (g_dump_cps_coloring) cps_dump_cps_coloring(ctx->prog, stderr);
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info preserved after CPS */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_CPS");
@@ -6557,6 +6561,8 @@ static int usage(void) {
         "  --lint-effects                   advisory warnings for unannotated effectful functions (ER6)\n"
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
+        "  --dump-cps-coloring              dump CPS coloring (colored/uncolored) per top-level defn (CPS1)\n"
+        "  --cps-path                       emit CPS wrappers for colored functions (CPS3)\n"
         "  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)\n"
         "  --no-abi-cache                   disable the persistent cross-module ABI cache (.tur-abi-cache/) (Phase J6)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
@@ -7270,6 +7276,22 @@ int main(int argc, char **argv) {
             }
             argc--;
             i--;
+        } else if (strcmp(argv[i], "--dump-cps-coloring") == 0) {
+            /* CPS1: dump CPS coloring (colored/uncolored) after cps_transform */
+            g_dump_cps_coloring = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--cps-path") == 0) {
+            /* CPS3: emit CPS wrappers for colored functions */
+            g_cps_path = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
         } else if (strcmp(argv[i], "--emit-abi-trace") == 0) {
             /* Phase I: trace the resolved ABI path for each call site during emit */
             g_emit_abi_trace = true;
@@ -7634,6 +7656,11 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "lsp") == 0) {
         diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
         lsp_server_run(STDIN_FILENO, STDOUT_FILENO);
+        return 0;
+    }
+    if (strcmp(cmd, "mcp") == 0) {
+        diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
+        mcp_server_run(STDIN_FILENO, STDOUT_FILENO);
         return 0;
     }
     if (strcmp(cmd, "build") == 0) {

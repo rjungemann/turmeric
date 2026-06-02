@@ -26,6 +26,8 @@ extern bool g_panic_abort;
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 extern bool g_panic_trace;
+/* CPS3: selective CPS lowering path */
+extern bool g_cps_path;
 /* Phase P3: HAMT lowering - track if HAMT is needed */
 extern bool g_needs_hamt;
 /* stdlib/re.tur: track if any inline-C body references <regex.h>. */

@@ -1113,6 +1113,37 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         buf_puts(out, ");\n");
         free((void*)fn_name);
     }
+    /* CPS3: forward declarations for __cps wrappers */
+    if (g_cps_path) {
+        for (uint32_t i = 0; i < n_items; i++) {
+            const Expr *e = items[i];
+            if (e->kind != EX_FN_DEF) continue;
+            FnDef *fd = e->as.fn_def_.fn;
+            if (!fd->is_cps) continue;
+            if (fd->closure) continue;
+            if (strcmp(fd->binding->name->name, "main") == 0) continue;
+            const char *fn_name = raw_name_for_binding(fd->binding);
+            buf_printf(out, "static void %s__cps(tur_cps_cont_t *__k", fn_name);
+            for (uint8_t j = 0; j < fd->n_params; j++) {
+                buf_puts(out, ", ");
+                if (fd->params[j]->is_poly_fn) {
+                    buf_puts(out, "tur_poly_fn_t");
+                } else if (fd->param_types[j].kind == TY_FN) {
+                    buf_puts(out, "int64_t");
+                } else {
+                    Type _pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                        ? *e->type.as.fn.arg_full_types[j]
+                        : fd->param_types[j];
+                    buf_puts(out, type_c_name(_pty));
+                }
+                const char *pn = raw_name_for_binding(fd->params[j]);
+                buf_printf(out, " %s", pn);
+                free((void*)pn);
+            }
+            buf_puts(out, ");\n");
+            free((void*)fn_name);
+        }
+    }
 }
 
 int emit_program(Buf *out, const Expr *program) {
@@ -2384,6 +2415,15 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    fprintf(stderr, \"panic (no unwind): %s\\n\", msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
+
+    /* CPS3: emit tur_cps_cont_t + tur_cps_apply when --cps-path is active */
+    if (g_cps_path) {
+        buf_puts(out, "/* CPS3: tur_cps_cont_t -- v1 identity-CPS continuation handle */\n");
+        buf_puts(out, "typedef struct tur_cps_cont {\n");
+        buf_puts(out, "    void (*fn)(struct tur_cps_cont *k, int64_t value);\n");
+        buf_puts(out, "} tur_cps_cont_t;\n");
+        buf_puts(out, "static inline void tur_cps_apply(tur_cps_cont_t *k, int64_t v) { if (k) k->fn(k, v); }\n\n");
+    }
 
     /* Phase R2: Panic with typed payload */
     /* tur_panic_with is forward-declared here; its body is emitted after

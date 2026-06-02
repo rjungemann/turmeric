@@ -953,6 +953,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
+        case EX_CPS_CONT_APP:
+            /* CPS2 stub: EX_CPS_CONT_APP is generated only by the CPS3 lowering pass;
+             * reaching emit_value here means a CPS-lowered node leaked into a
+             * context that has not yet been updated to handle it. */
+            fprintf(stderr, "tur: internal error: EX_CPS_CONT_APP reached emit_value "
+                    "(CPS3 lowering not yet active for this path)\n");
+            abort();
         case EX_VAR:      return atom_var(ctx, e->as.var.binding);
         case EX_CAST: {
             /* (as TargetType expr) — emit as C cast: (target_c_type)(inner) */

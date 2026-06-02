@@ -114,6 +114,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ASCRIBE:     /* Phase HRT1: type erased, delegate to inner */
         case EX_EXISTS_PACK: /* Phase HRT2: pure boxing, no stmt-level side effects */
         case EX_DEFGADT:     /* Phase G1: ADT definition — handled in Pass 0 */
+        case EX_CPS_CONT_APP: /* CPS2: continuation application — emit via emit_value if side-effecting */
             /* No side effects — emit nothing. */
             return;
         case EX_EXISTS_OPEN: { /* Phase HRT2: run open body for side effects */
