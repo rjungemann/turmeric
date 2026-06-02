@@ -1113,6 +1113,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             Type fn_t = type_fn(pk, n_mp, methods[i].return_type.kind);
 
             FnDef *def_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+            memset(def_fd, 0, sizeof(FnDef));
             Binding *def_b = binding_new(e, default_sym, fn_t, false, true,
                                           method_form->span);
             def_fd->binding        = def_b;
@@ -2104,6 +2105,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         
         /* Create FnDef for the method implementation */
         FnDef *method_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+        memset(method_fd, 0, sizeof(FnDef));
         Binding *method_binding = binding_new(e, method_sym, fn_type, false, true, impl_form->span);
         method_fd->binding = method_binding;
         method_fd->params = method_params;

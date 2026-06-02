@@ -487,3 +487,7 @@ bool tur_catch_panic_of(TypeKindInt expected_type, tur_thunk_fn thunk, void *env
         }
     }
 }
+
+void tur_cps_apply(tur_cps_cont_t *k, int64_t value) {
+    if (k) k->fn(k, value);
+}
