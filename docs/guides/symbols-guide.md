@@ -37,7 +37,7 @@ Every distinct `:foo` lowers to **one** record, so:
 
 - **Equality is pointer equality** -- two `:foo` references are the same
   pointer (`==`); `:foo` and `:bar` are distinct.
-- **Hashing is a single field load** -- no string work, no allocation. The
+- **Hashing is a single field load** -- skipping any string work or allocation. The
   hash is precomputed by the compiler.
 - **`sym->str` is free** -- it returns the address of the embedded name; no
   copy, no `strlen`.

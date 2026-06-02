@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#turmeric-performance-guide" style="">Turmeric Performance Guide</a></li>
 <li style=""><a href="#build-flags" style="">Build flags</a></li>
@@ -118,6 +119,22 @@
 <li style="padding-left:0.75rem;"><a href="#reading-results" style="color:var(--text-sec);">Reading results</a></li>
 <li style="padding-left:0.75rem;"><a href="#environment-checklist" style="color:var(--text-sec);">Environment checklist</a></li>
 <li style=""><a href="#10-performance-checklist" style="">10. Performance checklist</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="turmeric-performance-guide">Turmeric Performance Guide</h1>
@@ -410,7 +427,7 @@ defn count-matches [pattern text] :int
 </code></pre></div></div></div>
 <h3 id="prefer-strview-over-copying">Prefer <code>str/view</code> over copying</h3>
 <p><code>str/view</code> is a non-owning slice into an existing string. Use it when you only
-need to inspect a substring -- no allocation, no copy:</p>
+need to inspect a substring -- without allocating or copying:</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [s &quot;hello world&quot;]
   (str/view s 6 11))   ; =&gt; &quot;world&quot;, zero-copy
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [s &quot;hello world&quot;]

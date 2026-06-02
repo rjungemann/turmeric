@@ -265,7 +265,7 @@ Emscripten) is bundled inside a Cloudflare Worker. Each request calls `turi_wasm
 with a Turmeric expression and returns the result.
 
 This approach is best for programs that can express their request handling as a pure
-Turmeric expression: no long-running loops, no raw sockets, no filesystem access.
+Turmeric expression -- without long-running loops, raw sockets, or filesystem access.
 
 ### Step 1 -- build the WASM module
 

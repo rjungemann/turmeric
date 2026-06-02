@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#effects-system-guide" style="">Effects System Guide</a></li>
 <li style=""><a href="#overview" style="">Overview</a></li>
@@ -99,6 +100,22 @@
 <li style="padding-left:0.75rem;"><a href="#benefits" style="color:var(--text-sec);">Benefits</a></li>
 <li style=""><a href="#integration-with-ownership-and-defer" style="">Integration with Ownership and Defer</a></li>
 <li style=""><a href="#see-also" style="">See Also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="effects-system-guide">Effects System Guide</h1>
@@ -137,7 +154,7 @@ handle
   (Read [] k) resume(k &quot;World&quot;)
 </code></pre></div></div></div>
 <h3 id="one-shot-continuations">One-Shot Continuations</h3>
-<p>Continuations in Turmeric are <strong>one-shot</strong>: calling <code>(resume k v)</code> consumes <code>k</code>, preventing reuse. This matches Turmeric's ownership model. (See <a href="logic-programming-guide.md">Logic Programming Guide</a> for cloneable continuations.)</p>
+<p>Continuations in Turmeric are <strong>one-shot</strong>: calling <code>(resume k v)</code> consumes <code>k</code>, preventing reuse. This matches Turmeric's ownership model. (See <a href="logic-programming-guide.html">Logic Programming Guide</a> for cloneable continuations.)</p>
 <h3 id="properties">Properties</h3>
 <ul>
 <li><strong>Effects are not in the type system</strong> -- Whether <code>perform</code> is handled is checked dynamically. Unhandled effects raise an exception at runtime.</li>
@@ -205,7 +222,7 @@ values are now first-class. See
 </blockquote>
 <h2 id="common-use-cases">Common Use Cases</h2>
 <h3 id="direct-style-async">Direct-Style Async</h3>
-<p>Effects enable ergonomic async/await (see <a href="async-await-guide.md">Async/Await Guide</a>):</p>
+<p>Effects enable ergonomic async/await (see <a href="async-await-guide.html">Async/Await Guide</a>):</p>
 <pre><code class="language-turmeric">(async
   (await (read-file &quot;data.txt&quot;))
   (println &quot;done&quot;))
@@ -257,7 +274,7 @@ handle code
   (ReadFile [path] k) resume(k &quot;mock data&quot;)
 </code></pre></div></div></div>
 <h3 id="transactional-retry">Transactional Retry</h3>
-<p>Automatic conflict resolution (see <a href="stm-tutorial.md">STM Tutorial</a>):</p>
+<p>Automatic conflict resolution (see <a href="stm-tutorial.html">STM Tutorial</a>):</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Retry [] :nil)
 
 (handle
@@ -353,16 +370,16 @@ effect, the caller's inferred row does not include it.</p>
 <h2 id="integration-with-ownership-and-defer">Integration with Ownership and Defer</h2>
 <p>Effects interact with Turmeric's <code>defer</code> mechanism:</p>
 <ul>
-<li><code>defer</code> cleanup runs correctly even when <code>perform</code> is inside the same <code>do</code> block (see <a href="custom-effects-tutorial.md">Custom Effects Tutorial</a> §8).</li>
+<li><code>defer</code> cleanup runs correctly even when <code>perform</code> is inside the same <code>do</code> block (see <a href="custom-effects-tutorial.html">Custom Effects Tutorial</a> §8).</li>
 <li>Capturing a continuation across a <code>defer</code> boundary is handled: the continuation's environment is cleaned up if it crosses a <code>defer</code> boundary.</li>
 </ul>
 <h2 id="see-also">See Also</h2>
 <ul>
-<li><a href="async-await-guide.md">Async/Await Guide</a> -- Effects-based async/await syntax</li>
-<li><a href="logic-programming-guide.md">Logic Programming Guide</a> -- Backtracking via cloneable continuations</li>
-<li><a href="stm-tutorial.md">STM Tutorial</a> -- Composable transactions with effects</li>
-<li><a href="custom-effects-tutorial.md">Custom Effects Tutorial</a> -- Step-by-step walkthrough of all effect patterns</li>
-<li><a href="effects-vs-monads.md">Effects vs. Monads</a> -- Why effects replace monadic chaining in Turmeric</li>
+<li><a href="async-await-guide.html">Async/Await Guide</a> -- Effects-based async/await syntax</li>
+<li><a href="logic-programming-guide.html">Logic Programming Guide</a> -- Backtracking via cloneable continuations</li>
+<li><a href="stm-tutorial.html">STM Tutorial</a> -- Composable transactions with effects</li>
+<li><a href="custom-effects-tutorial.html">Custom Effects Tutorial</a> -- Step-by-step walkthrough of all effect patterns</li>
+<li><a href="effects-vs-monads.html">Effects vs. Monads</a> -- Why effects replace monadic chaining in Turmeric</li>
 </ul>
     </div>
   </div>

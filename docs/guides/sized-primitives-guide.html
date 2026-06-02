@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#sized-primitive-types-guide" style="">Sized Primitive Types Guide</a></li>
 <li style=""><a href="#available-types" style="">Available Types</a></li>
@@ -89,6 +90,22 @@
 <li style=""><a href="#struct-fields" style="">Struct Fields</a></li>
 <li style=""><a href="#bitwise-operations" style="">Bitwise Operations</a></li>
 <li style=""><a href="#test-surface" style="">Test Surface</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="sized-primitive-types-guide">Sized Primitive Types Guide</h1>
@@ -185,32 +202,48 @@ other types are distinct numeric kinds at both the type-system and C-codegen
 levels.</p>
 <h2 id="literal-syntax">Literal Syntax</h2>
 <p>Append a suffix to an integer or float literal to fix its kind:</p>
-<pre><code class="language-turmeric">42i8        ; int8   -- value 42
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">42i8        ; int8   -- value 42
 200u8       ; uint8  -- value 200
 1000i16     ; int16
 0xFFu32     ; uint32 -- hex literal
 2.5f32      ; float32
 3.14159f64  ; float64 (same as 3.14159)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">42i8        ; int8   -- value 42
+200u8       ; uint8  -- value 200
+1000i16     ; int16
+0xFFu32     ; uint32 -- hex literal
+2.5f32      ; float32
+3.14159f64  ; float64 (same as 3.14159)
+</code></pre></div></div></div>
 <p>Unsuffixed integer literals have type <code>int</code> (int64). Unsuffixed float
 literals have type <code>float</code> (float64).</p>
 <h2 id="no-implicit-coercion-use-as-explicitly">No Implicit Coercion -- Use <code>(as ...)</code> Explicitly</h2>
 <p><strong>Turmeric does not implicitly widen or narrow numeric values.</strong> Mixing
 two distinct numeric kinds in an arithmetic or comparison expression is a
 compile error (TUR-E0042):</p>
-<pre><code class="language-turmeric">(+ 1i8 2i16)      ; error TUR-E0042: int8 and int16 cannot be mixed
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(+ 1i8 2i16)      ; error TUR-E0042: int8 and int16 cannot be mixed
 (+ 1i32 2)        ; error TUR-E0042: int32 and int (int64) cannot be mixed
 (&lt; 1.5f32 2.0)    ; error TUR-E0042: float32 and float cannot be mixed
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">+(1i8 2i16)      ; error TUR-E0042: int8 and int16 cannot be mixed
++(1i32 2)        ; error TUR-E0042: int32 and int (int64) cannot be mixed
+&lt;(1.5f32 2.0)    ; error TUR-E0042: float32 and float cannot be mixed
+</code></pre></div></div></div>
 <p>To operate on values of different widths, cast one side with <code>(as type expr)</code>:</p>
-<pre><code class="language-turmeric">(+ 1i8 (as int8 2i16))      ; narrow 2i16 to int8
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(+ 1i8 (as int8 2i16))      ; narrow 2i16 to int8
 (+ (as int16 1i8) 2i16)     ; widen 1i8 to int16
 
 (+ 1i32 (as int32 2))       ; narrow canonical int to int32
 (+ (as int 1i32) 2)         ; widen int32 to int64
 
 (&lt; 1.5f32 (as float32 2.0)) ; narrow float64 literal to float32
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">+(1i8 as(int8 2i16))       ; narrow 2i16 to int8
++(as(int16 1i8) 2i16)      ; widen 1i8 to int16
+
++(1i32 as(int32 2))        ; narrow canonical int to int32
++(as(int 1i32) 2)          ; widen int32 to int64
+
+&lt;(1.5f32 as(float32 2.0))  ; narrow float64 literal to float32
+</code></pre></div></div></div>
 <h3 id="rationale">Rationale</h3>
 <p>Implicit numeric coercion makes it easy to accidentally widen a
 computation to 64 bits where a 32-bit or narrower representation was
@@ -221,26 +254,35 @@ source and keeps the generated C free of unintended <code>int64_t</code> round-t
 <h2 id="arithmetic-operators">Arithmetic Operators</h2>
 <p>All standard arithmetic and comparison operators are available for each
 numeric kind. Both operands must have the same kind:</p>
-<pre><code class="language-turmeric">(+ 10i8 20i8)       ; int8 + int8   -&gt; int8
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(+ 10i8 20i8)       ; int8 + int8   -&gt; int8
 (mod 100u32 7u32)   ; uint32 mod uint32 -&gt; uint32
 (&lt; 1i32 2i32)       ; int32 &lt; int32  -&gt; bool
 (= 42u8 42u8)       ; uint8 = uint8  -&gt; bool
 (+ 1.5f32 2.5f32)   ; float32 + float32 -&gt; float32
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">+(10i8 20i8)       ; int8 + int8   -&gt; int8
+mod(100u32 7u32)   ; uint32 mod uint32 -&gt; uint32
+&lt;(1i32 2i32)       ; int32 &lt; int32  -&gt; bool
+=(42u8 42u8)       ; uint8 = uint8  -&gt; bool
++(1.5f32 2.5f32)   ; float32 + float32 -&gt; float32
+</code></pre></div></div></div>
 <h2 id="casting-with-as">Casting with <code>(as ...)</code></h2>
 <p><code>(as TargetType expr)</code> converts a value to a different numeric kind. The
 conversion is the same as a C explicit cast -- no overflow checking is
 performed:</p>
-<pre><code class="language-turmeric">(as int8  300)          ; wraps: 300 mod 256 = 44
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(as int8  300)          ; wraps: 300 mod 256 = 44
 (as uint8 -1)           ; wraps: 255
 (as float32 1i32)       ; integer -&gt; float
 (as int32 3.7f32)       ; truncates: 3
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">as(int8 300)       ; wraps: 300 mod 256 = 44
+as(uint8 -1)       ; wraps: 255
+as(float32 1i32)   ; integer -&gt; float
+as(int32 3.7f32)   ; truncates: 3
+</code></pre></div></div></div>
 <p>Casts between signed and unsigned types of the same width reinterpret the
 bit pattern at the C level.</p>
 <h2 id="struct-fields">Struct Fields</h2>
 <p>Struct fields can use any numeric kind:</p>
-<pre><code class="language-turmeric">(defstruct Pixel
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Pixel
   [r :uint8
    g :uint8
    b :uint8
@@ -250,7 +292,17 @@ bit pattern at the C level.</p>
   [x :float32
    y :float32
    z :float32])
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Pixel
+  [r :uint8
+   g :uint8
+   b :uint8
+   a :uint8]
+
+defstruct Vec3f
+  [x :float32
+   y :float32
+   z :float32]
+</code></pre></div></div></div>
 <p>The generated C struct uses the corresponding <code>&lt;stdint.h&gt;</code> types
 (<code>uint8_t</code>, <code>float</code>, etc.) directly, with no <code>int64_t</code> boxing for fields
 of fully-known width.</p>
@@ -258,10 +310,13 @@ of fully-known width.</p>
 <p><code>bit-and</code>, <code>bit-or</code>, <code>bit-xor</code>, <code>bit-shl</code>, and <code>bit-shr</code> operate on the
 canonical <code>int</code> type. To use them on narrower types, cast to <code>int</code>, operate,
 then cast back:</p>
-<pre><code class="language-turmeric">(let [x 0xF0u8
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [x 0xF0u8
       y 0x0Fu8]
   (as uint8 (bit-and (as int x) (as int y))))  ; =&gt; 0u8
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [x 0xF0u8
+     y 0x0Fu8]
+  as(uint8 bit-and(as(int x) as(int y)))  ; =&gt; 0u8
+</code></pre></div></div></div>
 <p>See Phase C of the unboxing plan for kind-preserving bitwise ops.</p>
 <h2 id="test-surface">Test Surface</h2>
 <p>The <code>numeric-types-cast</code> fixture covers the main casting scenarios.  The

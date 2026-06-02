@@ -202,13 +202,11 @@ load straight into the spice via <code>tls-ctx-load-cert-pem</code> and
 (let [h (httpd-new 8080 my-handler)]
   (httpd-run h)
   (httpd-free h))
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load &quot;stdlib/httpd.tur&quot;
-
-defn my-handler [conn :ptr&lt;void&gt;] :nil
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/httpd.tur&quot;)
+defn my-handler [conn:ptr&lt;void&gt;] :nil
   httpd-resp-status!(conn 200)
   httpd-resp-body!(conn &quot;Hello over HTTP&quot;)
-
-let [h httpd-new(8080 my-handler)]
+let [h(httpd-new8080my-handler)]
   httpd-run(h)
   httpd-free(h)
 </code></pre></div></div></div>
@@ -232,21 +230,22 @@ let [h httpd-new(8080 my-handler)]
       (httpd-free h)
       (tls-ctx-free ctx)
       0)))
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load &quot;stdlib/httpd.tur&quot;
-import tls/ctx   :refer [tls-ctx-new tls-ctx-free
-                          tls-ctx-load-cert-pem tls-ctx-load-key-pem]
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/httpd.tur&quot;)
+import tls/ctx :refer [tls-ctx-newtls-ctx-free
+tls-ctx-load-cert-pemtls-ctx-load-key-pem]
 import tls/httpd :refer [tls-httpd-init]
-
-defn my-handler [conn :ptr&lt;void&gt;] :nil
+defn my-handler [conn:ptr&lt;void&gt;] :nil
   httpd-resp-status!(conn 200)
   httpd-resp-body!(conn &quot;Hello over HTTPS&quot;)
-
 defn main [] :int
-  tls-httpd-init()                              ;; (a)
-  let [ctx tls-ctx-new()]                       ;; (b)
+  tls-httpd-init()
+  ;; (a)
+  let [ctx(tls-ctx-new)]
+    ;; (b)
     tls-ctx-load-cert-pem(ctx &quot;/etc/letsencrypt/live/example.com/fullchain.pem&quot;)
     tls-ctx-load-key-pem(ctx &quot;/etc/letsencrypt/live/example.com/privkey.pem&quot;)
-    let [h httpd-new-tls(8443 4 my-handler ctx)] ;; (c)
+    let [h(httpd-new-tls84434my-handlerctx)]
+      ;; (c)
       httpd-run(h)
       httpd-free(h)
       tls-ctx-free(ctx)

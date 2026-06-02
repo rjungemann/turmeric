@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#turmeric-compiler-flags" style="">Turmeric Compiler Flags</a></li>
 <li style=""><a href="#quick-reference" style="">Quick Reference</a></li>
@@ -108,6 +109,22 @@
 <li style="padding-left:0.75rem;"><a href="#-emit-abi-trace" style="color:var(--text-sec);">--emit-abi-trace</a></li>
 <li style=""><a href="#common-combinations" style="">Common Combinations</a></li>
 <li style=""><a href="#flag-status-summary" style="">Flag Status Summary</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="turmeric-compiler-flags">Turmeric Compiler Flags</h1>
@@ -273,7 +290,7 @@ duplicating a linear value is a compile-time error.</p>
   (consume x))
 </code></pre>
 <p><strong>Implied by:</strong> <code>-Xsubstructural</code>, <code>-Xsessions</code></p>
-<p><strong>See also:</strong> <a href="substructural-types-guide.md">substructural-types-guide.md</a>,
+<p><strong>See also:</strong> <a href="substructural-types-guide.html">substructural-types-guide.md</a>,
 <a href="../archive/linear-types-plan.md">linear-types-plan.md</a></p>
 <hr />
 <h3 id="-xsubstructural-substructural-types"><code>-Xsubstructural</code> -- Substructural Types</h3>
@@ -290,7 +307,7 @@ duplicating a linear value is a compile-time error.</p>
 <tr>
 <td><code>^linear</code></td>
 <td><code>CK_LINEAR</code></td>
-<td>Exactly once (no drop, no copy)</td>
+<td>Exactly once (neither dropped nor copied)</td>
 </tr>
 <tr>
 <td><code>^affine</code></td>
@@ -308,7 +325,7 @@ duplicating a linear value is a compile-time error.</p>
 stronger-than-affine ones. A <code>^linear</code> value used in a context that expects
 <code>^affine</code> is an error (linear is <em>stronger</em> than affine, not a subtype).</p>
 <p><strong>Implies:</strong> <code>-Xlinear</code></p>
-<p><strong>See also:</strong> <a href="substructural-types-guide.md">substructural-types-guide.md</a></p>
+<p><strong>See also:</strong> <a href="substructural-types-guide.html">substructural-types-guide.md</a></p>
 <hr />
 <h3 id="-xunique-types-uniqueness-types"><code>-Xunique-types</code> -- Uniqueness Types</h3>
 <p>Makes uniqueness (<code>CK_UNIQUE</code>, <code>ref&lt;T&gt;</code>) an explicit first-class type-system
@@ -318,7 +335,7 @@ annotations are accepted and the elaborator checks that no two live bindings
 refer to the same unique value.</p>
 <p><strong>Status note:</strong> UT0–UT1 are complete. UT2–UT3 (inference, stdlib patterns)
 are deferred.</p>
-<p><strong>See also:</strong> <a href="uniqueness-types-guide.md">uniqueness-types-guide.md</a></p>
+<p><strong>See also:</strong> <a href="uniqueness-types-guide.html">uniqueness-types-guide.md</a></p>
 <hr />
 <h3 id="-xgadt-generalized-algebraic-data-types"><code>-Xgadt</code> -- Generalized Algebraic Data Types</h3>
 <p>Enables <code>defgadt</code> and GADT pattern matching. In a GADT, each constructor may
@@ -342,7 +359,7 @@ variables in each arm (via skolem equalities).</p>
 equality-witness programming.</p>
 <p><strong>Status note:</strong> G0–G4 substantially complete; <code>equal-cong</code> and some
 HKT-dependent features rely on higher-kinded types (always on, no flag).</p>
-<p><strong>See also:</strong> <a href="gadts-guide.md">gadts-guide.md</a>, <a href="gadts-cookbook.md">gadts-cookbook.md</a></p>
+<p><strong>See also:</strong> <a href="gadts-guide.html">gadts-guide.md</a>, <a href="gadts-cookbook.html">gadts-cookbook.md</a></p>
 <hr />
 <h3 id="higher-kinded-types-always-on-no-flag">Higher-Kinded Types <em>(always on -- no flag)</em></h3>
 <p>Type constructors can be typeclass parameters; there is no flag to enable this.
@@ -353,7 +370,7 @@ user-defined container.</p>
 </code></pre>
 <p><code>^f</code> declares a kind-<code>* -&gt; *</code> type variable; <code>^^f</code> declares kind <code>* -&gt; * -&gt; *</code>.</p>
 <p>The <code>--dump-kinds</code> debugging flag (below) is always available.</p>
-<p><strong>See also:</strong> <a href="hkt-guide.md">hkt-guide.md</a></p>
+<p><strong>See also:</strong> <a href="hkt-guide.html">hkt-guide.md</a></p>
 <hr />
 <h3 id="higher-ranked-types-always-on-no-flag">Higher-Ranked Types <em>(always on -- no flag)</em></h3>
 <p><code>forall</code> is permitted inside function argument types (rank-2 and rank-3
@@ -365,7 +382,7 @@ enable this.</p>
 </code></pre>
 <p>Higher-ranked types underpin <code>-Xeffect-types</code>' <code>forall [e]</code> effect
 quantification.</p>
-<p><strong>See also:</strong> <a href="hrt-guide.md">hrt-guide.md</a></p>
+<p><strong>See also:</strong> <a href="hrt-guide.html">hrt-guide.md</a></p>
 <hr />
 <h3 id="impredicative-polymorphism-always-on-no-flag">Impredicative Polymorphism <em>(always on -- no flag)</em></h3>
 <p>Type variables may be instantiated with polymorphic types (types containing
@@ -395,7 +412,7 @@ directly; the elaborator generates tag-dispatched dispatch automatically.</p>
 that requires <em>both</em> <code>-Xunion-types</code> and <code>-Xgadt</code>.</p>
 <p><strong>Status note:</strong> IT0–IT4 substantially complete; boxing codegen for <code>any</code>,
 <code>cast</code>/<code>type-of</code>, and ADT-as-union sugar are partially deferred.</p>
-<p><strong>See also:</strong> <a href="union-intersection-types-guide.md">union-intersection-types-guide.md</a></p>
+<p><strong>See also:</strong> <a href="union-intersection-types-guide.html">union-intersection-types-guide.md</a></p>
 <hr />
 <h3 id="-xintersection-types-intersection-types"><code>-Xintersection-types</code> -- Intersection Types</h3>
 <p>Enables intersection types <code>(A &amp; B)</code>, representing values that satisfy both
@@ -407,7 +424,7 @@ with a typeclass constraint at a call site.</p>
 <p>When a typeclass method is called on a union value, the elaborator checks that
 all members of the union carry the required instance and generates a
 tag-dispatched call -- this is the intersection-on-unions dispatch path.</p>
-<p><strong>See also:</strong> <a href="union-intersection-types-guide.md">union-intersection-types-guide.md</a></p>
+<p><strong>See also:</strong> <a href="union-intersection-types-guide.html">union-intersection-types-guide.md</a></p>
 <hr />
 <h3 id="-xeffect-types-effect-row-polymorphism"><code>-Xeffect-types</code> -- Effect Row Polymorphism</h3>
 <p>Enables the full row-polymorphic effect type system on top of the base
@@ -426,7 +443,7 @@ algebraic effects (Phase 19). With this flag:</p>
   (+ (f) (f)))
 </code></pre>
 <p><strong>Implies:</strong> <code>--strict-effects</code></p>
-<p><strong>See also:</strong> <a href="effects-system-guide.md">effects-system-guide.md</a></p>
+<p><strong>See also:</strong> <a href="effects-system-guide.html">effects-system-guide.md</a></p>
 <hr />
 <h3 id="-xcontracts-contract-types"><code>-Xcontracts</code> -- Contract Types</h3>
 <p>First-class contract types: <code>assert!</code>, <code>require!</code> (preconditions), and
@@ -435,7 +452,7 @@ checks. Contracts are <strong>on by default</strong> (<code>g_contracts_enabled<
 true): they are checked in debug builds and stripped in release builds. Pass
 <code>--keep-contracts</code> to retain them in release. The <code>-Xcontracts</code> flag is a
 redundant explicit re-enable, kept for symmetry with the other <code>-X</code> flags.</p>
-<p><strong>See also:</strong> <a href="contract-types-guide.md">contract-types-guide.md</a></p>
+<p><strong>See also:</strong> <a href="contract-types-guide.html">contract-types-guide.md</a></p>
 <hr />
 <h3 id="-xsessions-session-types"><code>-Xsessions</code> -- Session Types</h3>
 <p>Enables session types for type-safe, protocol-verified message passing.
@@ -461,7 +478,7 @@ two dual endpoints. <code>defprotocol</code> declares global N-party protocols; 
 compiler projects each role's local type and verifies it at compile time.</p>
 <p><strong>Implies:</strong> <code>-Xsubstructural</code> (and therefore <code>-Xlinear</code>)</p>
 <p><strong>Does not imply:</strong> <code>-Xgadt</code>, <code>-Xunion-types</code> (independent opt-in features)</p>
-<p><strong>See also:</strong> <a href="session-types-guide.md">session-types-guide.md</a>,
+<p><strong>See also:</strong> <a href="session-types-guide.html">session-types-guide.md</a>,
 <a href="../archive/session-types-plan.md">session-types-plan.md</a></p>
 <hr />
 <h3 id="-xdynamic-vars-dynamic-vars"><code>-Xdynamic-vars</code> -- Dynamic Vars</h3>
@@ -487,7 +504,7 @@ of the calling thread's binding frame to a new thread.</p>
 <code>*random-seed*</code>, <code>*current-module*</code>.</p>
 <p><strong>Does not imply</strong> any other flag. Substructural types (linear, affine, unique)
 are forbidden in dynamic vars (<code>TUR-E0603</code>).</p>
-<p><strong>See also:</strong> <a href="dynamic-vars-guide.md">dynamic-vars-guide.md</a>,
+<p><strong>See also:</strong> <a href="dynamic-vars-guide.html">dynamic-vars-guide.md</a>,
 <a href="../archive/dynamic-vars-plan.md">dynamic-vars-plan.md</a></p>
 <hr />
 <h3 id="-xcallcc-experimental-callcc-escape-unsound"><code>-Xcallcc</code> -- Experimental <code>call/cc</code> / <code>escape</code> <em>(unsound)</em></h3>
@@ -529,7 +546,7 @@ mentions <code>n</code> and a dimension mismatch is a compile-time error -- is i
 progress; see <a href="../sized-types-completion-plan.md">sized-types-completion-plan.md</a>
 (phases SZ6–SZ9).</p>
 <p><strong>Implies:</strong> <code>-Xgadt</code></p>
-<p><strong>See also:</strong> <a href="sized-types-guide.md">sized-types-guide.md</a>,
+<p><strong>See also:</strong> <a href="sized-types-guide.html">sized-types-guide.md</a>,
 <a href="../sized-types-completion-plan.md">sized-types-completion-plan.md</a></p>
 <hr />
 <h2 id="diagnostic-flags">Diagnostic Flags</h2>

@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#turmeric-package-management-guide-spice" style="">Turmeric Package Management Guide (Spice)</a></li>
 <li style=""><a href="#1-creating-a-new-project" style="">1. Creating a New Project</a></li>
@@ -106,6 +107,22 @@
 <li style="padding-left:0.75rem;"><a href="#security-guarantees" style="color:var(--text-sec);">Security guarantees</a></li>
 <li style="padding-left:0.75rem;"><a href="#conflict-resolution" style="color:var(--text-sec);">Conflict resolution</a></li>
 <li style="padding-left:0.75rem;"><a href="#private-repositories" style="color:var(--text-sec);">Private repositories</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="turmeric-package-management-guide-spice">Turmeric Package Management Guide (Spice)</h1>
@@ -511,7 +528,7 @@ tur fetch --update     # update spices to the latest allowed versions
 <h3 id="run-the-test-suite">Run the test suite</h3>
 <pre><code class="language-sh">tur test
 </code></pre>
-<p>See <a href="test-runner-contract.md">test-runner-contract.md</a> for the test framework
+<p>See <a href="test-runner-contract.html">test-runner-contract.md</a> for the test framework
 API.</p>
 <hr />
 <h2 id="6-project-directory-layout">6. Project Directory Layout</h2>
@@ -629,7 +646,7 @@ import geom/matrix :as mat
 <li><code>geom/matrix</code> -&gt; <code>spices/geom-v0.2.1/src/matrix.tur</code></li>
 </ul>
 <p>The module system handles namespacing within a single package; Spice handles
-dependencies between packages. See <a href="module-system-guide.md">module-system-guide.md</a>
+dependencies between packages. See <a href="module-system-guide.html">module-system-guide.md</a>
 for the full module system reference.</p>
 <hr />
 <h2 id="10-versioning-and-security">10. Versioning and Security</h2>

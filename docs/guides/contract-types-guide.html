@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#contract-types-guide" style="">Contract Types Guide</a></li>
 <li style=""><a href="#overview" style="">Overview</a></li>
@@ -100,13 +101,29 @@
 <li style=""><a href="#contract-types-vs-contract-macros" style="">Contract Types vs. Contract Macros</a></li>
 <li style=""><a href="#implementation-phases" style="">Implementation Phases</a></li>
 <li style=""><a href="#see-also" style="">See Also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="contract-types-guide">Contract Types Guide</h1>
 <blockquote>
 <p><strong>Status:</strong> Not yet implemented -- requires <code>-Xcontracts</code> flag (planned for v4).</p>
 <p>For runtime contract macros available today (<code>assert!</code>, <code>require!</code>, <code>ensure!</code>, <code>invariant!</code>),
-see <a href="error-handling-guide.md">Error Handling Guide</a>.</p>
+see <a href="error-handling-guide.html">Error Handling Guide</a>.</p>
 </blockquote>
 <p>Contract types add <strong>runtime-checked predicates</strong> to types as a first-class language feature.
 A contract type <code>{ x : T | p }</code> represents values of type <code>T</code> that satisfy predicate <code>p</code>,
@@ -437,10 +454,10 @@ binary as code written without contract annotations.</p>
 <hr />
 <h2 id="see-also">See Also</h2>
 <ul>
-<li><a href="error-handling-guide.md">Error Handling Guide</a> -- <code>Result</code>, <code>Option</code>, <code>panic</code>, and today's contract macros</li>
-<li><a href="c-integration-guide.md">C Integration Guide</a> -- FFI and <code>extern-c</code></li>
-<li><a href="type-annotations-guide.md">Type Annotations Guide</a> -- compound type syntax</li>
-<li><a href="advanced-type-system-rationale.md">Advanced Type System Rationale</a> -- why contract types shipped and refinement types were deferred</li>
+<li><a href="error-handling-guide.html">Error Handling Guide</a> -- <code>Result</code>, <code>Option</code>, <code>panic</code>, and today's contract macros</li>
+<li><a href="c-integration-guide.html">C Integration Guide</a> -- FFI and <code>extern-c</code></li>
+<li><a href="type-annotations-guide.html">Type Annotations Guide</a> -- compound type syntax</li>
+<li><a href="advanced-type-system-rationale.html">Advanced Type System Rationale</a> -- why contract types shipped and refinement types were deferred</li>
 </ul>
     </div>
   </div>

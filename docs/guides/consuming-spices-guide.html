@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#consuming-spices-guide" style="">Consuming Spices Guide</a></li>
 <li style=""><a href="#official-first-party-spices" style="">Official First-Party Spices</a></li>
@@ -96,13 +97,29 @@
 <li style=""><a href="#common-error-messages" style="">Common Error Messages</a></li>
 <li style=""><a href="#cli-quick-reference" style="">CLI Quick Reference</a></li>
 <li style=""><a href="#see-also" style="">See Also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="consuming-spices-guide">Consuming Spices Guide</h1>
 <p>A <em>spice</em> is a Turmeric package that your project depends on. This guide
 covers how to find, add, fetch, and import spices -- including pure-Turmeric
 spices and C library bindings via <code>:cmake-deps</code>.</p>
-<p>See <a href="developing-spices-guide.md">Developing Spices</a> if you want to create
+<p>See <a href="developing-spices-guide.html">Developing Spices</a> if you want to create
 and publish a spice of your own.</p>
 <hr />
 <h2 id="official-first-party-spices">Official First-Party Spices</h2>
@@ -469,11 +486,10 @@ tur test
 <hr />
 <h2 id="see-also">See Also</h2>
 <ul>
-<li><a href="package-management-guide.md">Package management guide</a> -- full <code>build.tur</code> manifest reference and <code>tur</code> CLI</li>
-<li><a href="developing-spices-guide.md">Developing spices</a> -- creating and publishing your own spice</li>
-<li><a href="c-integration-guide.md">C integration guide</a> -- <code>extern-c</code>, <code>include-c</code>, inline-C blocks</li>
-<li><a href="../archive/cmake-cpm-integration-plan.md">CMake/CPM integration notes</a> -- cmake-deps internals, generated files, outbound CPM publishing</li>
-<li><a href="using-turmeric-from-cmake.md">Using a Turmeric library from CMake</a> -- publishing a Turmeric library for C/C++ consumers</li>
+<li><a href="package-management-guide.html">Package management guide</a> -- full <code>build.tur</code> manifest reference and <code>tur</code> CLI</li>
+<li><a href="developing-spices-guide.html">Developing spices</a> -- creating and publishing your own spice</li>
+<li><a href="c-integration-guide.html">C integration guide</a> -- <code>extern-c</code>, <code>include-c</code>, inline-C blocks</li>
+<li><a href="using-turmeric-from-cmake.html">Using a Turmeric library from CMake</a> -- publishing a Turmeric library for C/C++ consumers</li>
 </ul>
     </div>
   </div>

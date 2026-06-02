@@ -102,7 +102,7 @@ tur run: unsupported Justfile feature at Justfile:14: recipe attribute [unix]
 
 ## Disambiguation with `tur run <file.tur>`
 
-`tur run <file.tur>` (with a `.tur` or `.tursweet` extension) uses the
+`tur run <file.tur>` (with a `.tur` or `.tur.sweet` extension) uses the
 classic compile-and-run path. `tur run build` (no `.tur` extension)
 invokes the Justfile task runner.
 

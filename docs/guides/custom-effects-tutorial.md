@@ -681,6 +681,6 @@ with-stderr-log println $ process(21)
 ### Further reading
 
 - `docs/turmeric-plan.md` §10.18–10.19 -- Phase 18 (shift/reset) and Phase 19 (algebraic effects) design details
-- `tests/fixtures/effect-*` -- full fixture test suite for every effect feature
+- [`tests/fixtures/effect-*`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- full fixture test suite for every effect feature
 - `docs/archive/async-await-plan.md` -- planned async/await built on the effect substrate
 - `docs/archive/stm-plan.md` -- planned STM built on the effect substrate

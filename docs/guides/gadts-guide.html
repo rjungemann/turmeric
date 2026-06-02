@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#gadts-in-turmeric-a-practical-guide" style="">GADTs in Turmeric -- A Practical Guide</a></li>
 <li style=""><a href="#1-plain-adts-first-defdata-match" style="">1. Plain ADTs First (defdata + match)</a></li>
@@ -94,6 +95,22 @@
 <li style=""><a href="#8-current-limitations" style="">8. Current Limitations</a></li>
 <li style=""><a href="#quick-reference" style="">Quick Reference</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="gadts-in-turmeric-a-practical-guide">GADTs in Turmeric -- A Practical Guide</h1>
@@ -218,7 +235,7 @@ parameters. Consider a typed tag:</p>
 </code></pre></div></div></div>
 <p>In the <code>IntTag</code> arm the type-checker knows <code>a = int</code>; in <code>BoolTag</code> it knows
 <code>a = bool</code>. These <em>skolem equalities</em> are introduced automatically per arm and
-are invisible to the programmer. No casts, no <code>option</code>, no runtime tags.</p>
+are invisible to the programmer. No casts, no <code>option</code> wrapper, and no runtime tags.</p>
 <p>A larger example combining plain ADTs and GADTs in one program:</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defdata Color :copy (Red) (Green) (Blue))
 
@@ -634,13 +651,12 @@ defn show-type [x : any] :int
 </code></pre></div></div></div>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><code>docs/guides/hrt-guide.md</code> -- Higher-ranked types; bidirectional checking
+<li><a href="hrt-guide.html">hrt-guide.md</a> -- Higher-ranked types; bidirectional checking
   that enables GADT skolem propagation</li>
-<li><code>docs/guides/hkt-guide.md</code> -- Higher-kinded types; used by <code>equal-cong</code>
+<li><a href="hkt-guide.html">hkt-guide.md</a> -- Higher-kinded types; used by <code>equal-cong</code>
   and polymorphic GADT indices</li>
-<li><code>docs/gadts-plan.md</code> -- Full implementation plan and phase history</li>
-<li><code>tests/fixtures/gadt-*/</code> -- Working GADT examples</li>
-<li><code>tests/fixtures/union-types-*/</code> -- Union type and gradual typing examples</li>
+<li><a href="https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/"><code>tests/fixtures/gadt-*/</code></a> -- Working GADT examples</li>
+<li><a href="https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/"><code>tests/fixtures/union-types-*/</code></a> -- Union type and gradual typing examples</li>
 </ul>
     </div>
   </div>

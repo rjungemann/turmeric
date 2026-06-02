@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#range-reader-shorthand-plan-rr0-rr4" style="">Range Reader Shorthand -- Plan (RR0--RR4)</a></li>
 <li style=""><a href="#overview" style="">Overview</a></li>
@@ -98,6 +99,22 @@
 <li style=""><a href="#error-messages" style="">Error Messages</a></li>
 <li style=""><a href="#affected-files" style="">Affected Files</a></li>
 <li style=""><a href="#example-usage" style="">Example Usage</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="range-reader-shorthand-plan-rr0-rr4">Range Reader Shorthand -- Plan (RR0--RR4)</h1>
@@ -112,7 +129,7 @@
 <code>stdlib/range.tur</code> (integers) and <code>stdlib/float-range.tur</code> (floats).  It
 desugars completely at read time to a plain constructor call -- no new
 elaborator phases, no new type-system machinery.</p>
-<pre><code class="language-turmeric">;; One-sided (unbounded on one end)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; One-sided (unbounded on one end)
 #r{n &gt; 0}        ; =&gt; (greater-than-range 0)         -- (0, +inf)
 #r{n &gt;= 0}       ; =&gt; (at-least-range 0)              -- [0, +inf)
 #r{n &lt; 0}        ; =&gt; (less-than-range 0)             -- (-inf, 0)
@@ -137,7 +154,32 @@ elaborator phases, no new type-system machinery.</p>
 ;; Expression bounds (runtime values, no compile-time empty check)
 #r{0 &lt;= n &lt; len}   ; =&gt; (closed-open-range 0 len)
 #r{lo &lt;= n &lt;= hi}  ; =&gt; (closed-range lo hi)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; One-sided (unbounded on one end)
+#r{n &gt; 0}        ; =&gt; greater-than-range(0)         -- (0, +inf)
+#r{n &gt;= 0}       ; =&gt; at-least-range(0)             -- [0, +inf)
+#r{n &lt; 0}        ; =&gt; less-than-range(0)            -- (-inf, 0)
+#r{n &lt;= 0}       ; =&gt; at-most-range(0)              -- (-inf, 0]
+#r{n = 0}        ; =&gt; singleton-range(0)            -- [0, 0]
+
+;; Two-sided (left-to-right)
+#r{0 &lt;= n &lt; 10}  ; =&gt; closed-open-range(0 10)       -- [0, 10)
+#r{0 &lt; n &lt;= 10}  ; =&gt; open-closed-range(0 10)       -- (0, 10]
+#r{0 &lt; n &lt; 10}   ; =&gt; open-range(0 10)              -- (0, 10)
+#r{0 &lt;= n &lt;= 10} ; =&gt; closed-range(0 10)            -- [0, 10]
+
+;; Two-sided (right-to-left -- same semantics, mirrored operators)
+#r{10 &gt; n &gt;= 0}  ; =&gt; closed-open-range(0 10)       -- [0, 10)
+#r{10 &gt;= n &gt; 0}  ; =&gt; open-closed-range(0 10)       -- (0, 10]
+#r{10 &gt; n &gt; 0}   ; =&gt; open-range(0 10)              -- (0, 10)
+#r{10 &gt;= n &gt;= 0} ; =&gt; closed-range(0 10)            -- [0, 10]
+
+;; Float bounds (uses float-range constructors)
+#r{0.0 &lt;= n &lt; 1.0} ; =&gt; float-closed-open-range(0.0 1.0)
+
+;; Expression bounds (runtime values, no compile-time empty check)
+#r{0 &lt;= n &lt; len}   ; =&gt; closed-open-range(0 len)
+#r{lo &lt;= n &lt;= hi}  ; =&gt; closed-range(lo hi)
+</code></pre></div></div></div>
 <p>The variable name (<code>n</code>, <code>i</code>, <code>x</code>, ...) must be a single-letter identifier.
 It guides the human reader but is not bound or referenced in the expansion.
 A warning is emitted at elaboration time if the variable shadows an outer
@@ -424,10 +466,13 @@ produce a clear <code>DIAG_ERROR</code>.</p>
 <p>Allow any Turmeric form (not just literals) as a bound.  The reader passes
 the form through unchanged into the constructor call; evaluation happens at
 runtime.</p>
-<pre><code class="language-turmeric">#r{0 &lt;= n &lt; len}        ; =&gt; (closed-open-range 0 len)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#r{0 &lt;= n &lt; len}        ; =&gt; (closed-open-range 0 len)
 #r{lo &lt;= n &lt;= hi}       ; =&gt; (closed-range lo hi)
 #r{(- hi 1) &gt; n &gt;= 0}  ; =&gt; (closed-open-range 0 (- hi 1))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#r{0 &lt;= n &lt; len}         ; =&gt; closed-open-range(0 len)
+#r{lo &lt;= n &lt;= hi}        ; =&gt; closed-range(lo hi)
+#r{{hi - 1} &gt; n &gt;= 0}    ; =&gt; closed-open-range(0 {hi - 1})
+</code></pre></div></div></div>
 <p>Changes from RR1:
 - The compile-time empty-range check is <strong>skipped</strong> when either bound is not a
   numeric literal (a non-literal form has unknown value at read time).
@@ -462,7 +507,7 @@ Fixture: <code>tests/fixtures/range_reader_shadow_warn.tur</code></p>
 <p><strong>Location:</strong> <code>stdlib/float-range.tur</code></p>
 <p>Mirror of <code>stdlib/range.tur</code> using <code>float64</code> bounds.  The internal
 <code>FloatRangeBound</code> struct uses <code>double</code> instead of <code>int64_t</code>.</p>
-<pre><code class="language-turmeric">;; float-range constructors (same shape as stdlib/range.tur)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; float-range constructors (same shape as stdlib/range.tur)
 (defn float-closed-range [lo :float hi :float] :int ...)
 (defn float-open-range [lo :float hi :float] :int ...)
 (defn float-closed-open-range [lo :float hi :float] :int ...)
@@ -474,7 +519,19 @@ Fixture: <code>tests/fixtures/range_reader_shadow_warn.tur</code></p>
 (defn float-singleton-range [v :float] :int ...)
 (defn float-unbounded-range [] :int ...)
 (defn float-range-contains? [r :int v :float] :bool ...)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; float-range constructors (same shape as stdlib/range.tur)
+defn float-closed-range [lo :float hi :float] :int ...
+defn float-open-range [lo :float hi :float] :int ...
+defn float-closed-open-range [lo :float hi :float] :int ...
+defn float-open-closed-range [lo :float hi :float] :int ...
+defn float-at-least-range [lo :float] :int ...
+defn float-greater-than-range [lo :float] :int ...
+defn float-at-most-range [hi :float] :int ...
+defn float-less-than-range [hi :float] :int ...
+defn float-singleton-range [v :float] :int ...
+defn float-unbounded-range [] :int ...
+defn float-range-contains? [r :int v :float] :bool ...
+</code></pre></div></div></div>
 <p>The reader selects float constructors when any bound token is a <code>F_FLOAT</code>
 literal.  If one bound is <code>F_INT</code> and the other is <code>F_FLOAT</code>, the int is
 promoted (the constructor call is emitted with the integer as a float literal,
@@ -589,7 +646,7 @@ type.  In that case it defaults to the integer constructor family and emits a
 </table>
 <hr />
 <h2 id="example-usage">Example Usage</h2>
-<pre><code class="language-turmeric">;; Index bounds check with expression upper bound
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Index bounds check with expression upper bound
 (defn safe-get [v :int i :int] :int
   (require! (range-contains? #r{0 &lt;= i &lt; (vec-len v)} i)
             &quot;index out of bounds&quot;)
@@ -614,7 +671,35 @@ type.  In that case it defaults to the integer constructor family and emits a
 ;; Right-to-left syntax (same semantics)
 (when (range-contains? #r{100 &gt; n &gt;= 0} score)
   (println &quot;in range&quot;))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Index bounds check with expression upper bound
+defn safe-get [v :int i :int] :int
+  require!(range-contains?(#r{0 &lt;= i &lt; vec-len(v)} i)
+           &quot;index out of bounds&quot;)
+  vec-get(v i)
+
+;; Contract type
+defn classify-score [score : { s : :int | range-contains?(#r{1 &lt;= s &lt;= 5} s) }] :cstr
+  cond
+    =(score 5) &quot;excellent&quot;
+    =(score 4) &quot;good&quot;
+    &quot;average&quot;
+
+;; Seq iteration over an integer range
+for i seq/from-range(#r{0 &lt;= i &lt; 10})
+  println(i)
+
+;; Float range membership test
+defn unit-clamp [x :float] :float
+  if float-range-contains?(#r{0.0 &lt;= x &lt;= 1.0} x)
+    x
+    if &lt;(x 0.0)
+      0.0
+      1.0
+
+;; Right-to-left syntax (same semantics)
+when range-contains?(#r{100 &gt; n &gt;= 0} score)
+  println(&quot;in range&quot;)
+</code></pre></div></div></div>
     </div>
   </div>
   <footer class="site-footer">

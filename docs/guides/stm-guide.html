@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#stm-guide" style="">STM Guide</a></li>
 <li style=""><a href="#overview" style="">Overview</a></li>
@@ -97,13 +98,29 @@
 <li style=""><a href="#limitations-v1" style="">Limitations (v1)</a></li>
 <li style=""><a href="#quick-reference" style="">Quick Reference</a></li>
 <li style=""><a href="#see-also" style="">See Also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="stm-guide">STM Guide</h1>
 <p>Reference guide for Software Transactional Memory -- composable, deadlock-free concurrent state.</p>
 <h2 id="overview">Overview</h2>
 <p><strong>Software Transactional Memory (STM)</strong> replaces manual lock management with transactions. A transaction either commits atomically or rolls back and retries, with no risk of deadlock. Turmeric's STM is modeled on Haskell's <code>Control.Concurrent.STM</code>.</p>
-<p>For a conceptual walkthrough and worked examples, see the <a href="stm-tutorial.md">STM Tutorial</a>. This guide focuses on the API and mechanics.</p>
+<p>For a conceptual walkthrough and worked examples, see the <a href="stm-tutorial.html">STM Tutorial</a>. This guide focuses on the API and mechanics.</p>
 <h2 id="core-concepts">Core Concepts</h2>
 <table>
 <thead>
@@ -449,10 +466,10 @@ atomically
 </table>
 <h2 id="see-also">See Also</h2>
 <ul>
-<li><a href="stm-tutorial.md">STM Tutorial</a> -- Conceptual overview and worked examples</li>
-<li><a href="threading-guide.md">Threading Guide</a> -- Locks, mutexes, <code>Arc&lt;T&gt;</code> for contrast</li>
-<li><a href="hamt-guide.md">HAMT Guide</a> -- Persistent maps suitable for storage inside TVars</li>
-<li><a href="effects-system-guide.md">Effects System Guide</a> -- Exception handling within transactions</li>
+<li><a href="stm-tutorial.html">STM Tutorial</a> -- Conceptual overview and worked examples</li>
+<li><a href="threading-guide.html">Threading Guide</a> -- Locks, mutexes, <code>Arc&lt;T&gt;</code> for contrast</li>
+<li><a href="hamt-guide.html">HAMT Guide</a> -- Persistent maps suitable for storage inside TVars</li>
+<li><a href="effects-system-guide.html">Effects System Guide</a> -- Exception handling within transactions</li>
 <li><a href="../../src/stm.h">src/stm.h</a> -- Full C API with implementation notes</li>
 </ul>
     </div>

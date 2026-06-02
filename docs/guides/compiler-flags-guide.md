@@ -97,7 +97,7 @@ Extends `-Xlinear` with the full three-annotation substructural framework:
 
 | Annotation | Capability kind | Rule |
 |---|---|---|
-| `^linear` | `CK_LINEAR` | Exactly once (no drop, no copy) |
+| `^linear` | `CK_LINEAR` | Exactly once (neither dropped nor copied) |
 | `^affine` | `CK_AFFINE` | At most once (may drop, may not copy) |
 | `^relevant` | `CK_RELEVANT` | At least once (may copy, may not drop) |
 

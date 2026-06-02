@@ -15,7 +15,7 @@ the highest-risk constraints:
   Never create or scaffold `./spices/` in this repo.
 - Use `;;;` docstrings for documented Turmeric definitions and keep fixture
   files ASCII-only.
-- Prefer sweet-expression style in new `.tursweet` files, following the
+- Prefer sweet-expression style in new `.tur.sweet` files, following the
   formatting and indentation rules documented in `CLAUDE.md`.
 
 If an instruction here conflicts with `CLAUDE.md`, follow `CLAUDE.md`.

@@ -13,7 +13,7 @@ Produce a single user-facing reference that teaches a newcomer to *read* and
 
 1. The default S-expression dialect (`.tur` files).
 2. The sweet-expression dialect activated by `#lang sweet-exp` or a
-   `.tursweet` extension (indentation + neoteric + `$` + curly-infix).
+   `.tur.sweet` extension (indentation + neoteric + `$` + curly-infix).
 
 Today this information is scattered across `CLAUDE.md` (sweet-exp style
 section), `docs/guides/reader-forms-guide.md` (reader-level forms only),
@@ -50,7 +50,7 @@ shape of the language.
 
 ### Part 2 -- Sweet-expression syntax
 
-- How to opt in: `#lang sweet-exp` directive, `.tursweet` extension; what
+- How to opt in: `#lang sweet-exp` directive, `.tur.sweet` extension; what
   happens if both are present; behaviour when the directive is missing.
 - The three tools and when each one wins:
   - Indentation (t-expr) -- replaces outer `(...)` for top-level forms and

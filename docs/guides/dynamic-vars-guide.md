@@ -240,7 +240,7 @@ overridden, never intercepted) or an interceptable operation.
 - You don't need multi-shot resumption or handler composition.
 
 ```turmeric
-;; Dynamic var: no annotation at call site, no handler at every boundary
+;; Dynamic var: no call-site annotation and no per-boundary handler
 (defdynamic *log-level* :int 1)
 
 (defn log-info [msg :cstr] :int
@@ -255,7 +255,7 @@ overridden, never intercepted) or an interceptable operation.
 ```
 
 ```sweet-exp
-;; Dynamic var: no annotation at call site, no handler at every boundary
+;; Dynamic var: zero call-site annotation; no boundary handler required
 defdynamic *log-level* :int 1
 
 defn log-info [msg :cstr] :int

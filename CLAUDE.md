@@ -285,8 +285,8 @@ git clone <turmeric-spices-url> ../turmeric-spices
 ## Sweet-Expression Style
 
 Turmeric files can opt into sweet-expression syntax with a `#lang` directive or
-a `.tursweet` extension. Prefer the full sweet-exp style over plain s-expressions
-when writing new `.tursweet` files.
+a `.tur.sweet` extension. Prefer the full sweet-exp style over plain s-expressions
+when writing new `.tur.sweet` files.
 
 ```
 #lang sweet-exp

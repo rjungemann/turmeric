@@ -44,9 +44,9 @@ Key facts the implementation must honour:
 
 - **Two positional file arguments.** The first is the `turmeric` block, the
   second is the `sweet-exp` block.
-- **Temp-file extensions are `.tur` and `.sweet`** -- *not* `.tursweet`.
+- **Temp-file extensions are `.tur` and `.sweet`** -- *not* `.tur.sweet`.
   So extension-based dialect detection (`is_tursweet_path` /
-  `.tursweet` suffix at `src/main.c:3810`) will **not** fire for the second
+  `.tur.sweet` suffix at `src/main.c:3810`) will **not** fire for the second
   file. The subcommand must force the sweet reader on argument 2 rather
   than relying on the extension.
 - **Inline snippets omit `#lang sweet-exp`.** Only complete-program
@@ -184,7 +184,7 @@ fail the build. Until then, `check-guides` is advisory only.
 ## Acceptance checklist
 
 - [ ] `tur parse-check a b` exits 0 on equal, 1 on mismatch, 2 on read error.
-- [ ] Forces sweet reader on arg 2 despite the `.sweet` (non-`.tursweet`)
+- [ ] Forces sweet reader on arg 2 despite the `.sweet` (non-`.tur.sweet`)
       extension; honours an explicit `#lang` directive when present.
 - [ ] `parse-check` appears in help text and `builtins[]`.
 - [ ] `python3 tools/check-guide-pairs.py docs/guides/` reports zero failed

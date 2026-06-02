@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#dynamic-vars-guide" style="">Dynamic Vars Guide</a></li>
 <li style=""><a href="#quick-start" style="">Quick Start</a></li>
@@ -97,6 +98,22 @@
 <li style="padding-left:0.75rem;"><a href="#test-fixture-injection" style="color:var(--text-sec);">Test fixture injection</a></li>
 <li style="padding-left:0.75rem;"><a href="#module-tagged-structured-logging" style="color:var(--text-sec);">Module-tagged structured logging</a></li>
 <li style=""><a href="#error-reference" style="">Error Reference</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="dynamic-vars-guide">Dynamic Vars Guide</h1>
@@ -299,7 +316,7 @@ overridden, never intercepted) or an interceptable operation.</p>
 <li>You want snapshot isolation across threads (<code>spawn-conveying</code>).</li>
 <li>You don't need multi-shot resumption or handler composition.</li>
 </ul>
-<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Dynamic var: no annotation at call site, no handler at every boundary
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Dynamic var: no call-site annotation and no per-boundary handler
 (defdynamic *log-level* :int 1)
 
 (defn log-info [msg :cstr] :int
@@ -311,7 +328,7 @@ overridden, never intercepted) or an interceptable operation.</p>
 
 (binding [*log-level* 0]   ; one override, deep stack covered automatically
   (process))
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Dynamic var: no annotation at call site, no handler at every boundary
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Dynamic var: zero call-site annotation; no boundary handler required
 defdynamic *log-level* :int 1
 
 defn log-info [msg :cstr] :int

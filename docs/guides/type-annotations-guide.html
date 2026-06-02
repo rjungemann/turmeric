@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#type-annotation-syntax" style="">Type Annotation Syntax</a></li>
 <li style=""><a href="#basic-annotations" style="">Basic annotations</a></li>
@@ -91,6 +92,22 @@
 <li style=""><a href="#annotations-on-let-bindings" style="">Annotations on let bindings</a></li>
 <li style=""><a href="#substructural-annotations" style="">Substructural annotations</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="type-annotation-syntax">Type Annotation Syntax</h1>
@@ -211,7 +228,7 @@ defn pack [] : (exists [a] (pair a (-&gt; a int))) ...
 </code></pre></div></div></div>
 <h3 id="higher-kinded-type-arguments">Higher-kinded type arguments</h3>
 <p>For functions parameterised over a type constructor, use the <code>^f</code> / <code>^^f</code> kind
-annotations (see <a href="hkt-guide.md">hkt-guide.md</a>):</p>
+annotations (see <a href="hkt-guide.html">hkt-guide.md</a>):</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn fmap [^f x : (^f a)  fn : (-&gt; a b)] : (^f b) ...)
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn fmap [^f x : (^f a)  fn : (-&gt; a b)] : (^f b) ...
 </code></pre></div></div></div>
@@ -248,15 +265,15 @@ type expression:</p>
 defn sort!   [^unique  v  : (vec int)]  : unit ...
 defn log     [^relevant msg : str]      : unit ...
 </code></pre></div></div></div>
-<p>See <a href="substructural-types-guide.md">substructural-types-guide.md</a> and
-<a href="uniqueness-types-guide.md">uniqueness-types-guide.md</a>.</p>
+<p>See <a href="substructural-types-guide.html">substructural-types-guide.md</a> and
+<a href="uniqueness-types-guide.html">uniqueness-types-guide.md</a>.</p>
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="hkt-guide.md">hkt-guide.md</a> -- higher-kinded types and kind annotations</li>
-<li><a href="hrt-guide.md">hrt-guide.md</a> -- rank-2 / rank-3 polymorphism</li>
-<li><a href="substructural-types-guide.md">substructural-types-guide.md</a> -- <code>^linear</code>, <code>^affine</code>, <code>^relevant</code></li>
-<li><a href="uniqueness-types-guide.md">uniqueness-types-guide.md</a> -- <code>^unique</code></li>
+<li><a href="hkt-guide.html">hkt-guide.md</a> -- higher-kinded types and kind annotations</li>
+<li><a href="hrt-guide.html">hrt-guide.md</a> -- rank-2 / rank-3 polymorphism</li>
+<li><a href="substructural-types-guide.html">substructural-types-guide.md</a> -- <code>^linear</code>, <code>^affine</code>, <code>^relevant</code></li>
+<li><a href="uniqueness-types-guide.html">uniqueness-types-guide.md</a> -- <code>^unique</code></li>
 </ul>
     </div>
   </div>

@@ -11,7 +11,7 @@ This guide is the front door to Turmeric's surface syntax. It teaches you to
 
 1. The default **S-expression** dialect used by `.tur` files.
 2. The **sweet-expression** dialect activated by `#lang sweet-exp` or a
-   `.tursweet` extension (indentation + neoteric + `$` + curly-infix).
+   `.tur.sweet` extension (indentation + neoteric + `$` + curly-infix).
 
 It does not re-explain the semantics of every special form -- the deep-dive
 guides own that. Instead it shows you the *shape* of the language and points
@@ -286,7 +286,7 @@ are verified to be parse-equal.
 Activate sweet-exp one of two ways:
 
 - A `#lang sweet-exp` directive on the first line of a `.tur` file.
-- A `.tursweet` file extension.
+- A `.tur.sweet` file extension.
 
 A complete runnable snippet opens with the directive:
 
@@ -301,7 +301,7 @@ defn main [] :int
 ```
 
 Inline fragments in prose omit the directive (as the paired examples in this
-guide do). If the directive is absent and the file is not `.tursweet`, the
+guide do). If the directive is absent and the file is not `.tur.sweet`, the
 reader stays in plain s-expression mode and treats indentation as
 insignificant.
 
@@ -490,7 +490,7 @@ A short list of pitfalls newcomers hit:
 4. **Non-ASCII bytes.** An em dash or smart quote pasted from a doc will hang
    the reader. Use `--` and straight quotes only.
 5. **Expecting `#lang sweet-exp` to enable neoteric in a plain file.** Without
-   the directive (or a `.tursweet` extension) the reader stays in s-expression
+   the directive (or a `.tur.sweet` extension) the reader stays in s-expression
    mode and indentation is insignificant.
 6. **Using `[...]` as a value without `-Xdata-literals`.** In expression
    position a bare vector literal needs the flag; otherwise `[...]` is only a

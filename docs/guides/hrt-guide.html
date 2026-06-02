@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#higher-ranked-types-in-turmeric" style="">Higher-Ranked Types in Turmeric</a></li>
 <li style=""><a href="#what-are-higher-ranked-types" style="">What are higher-ranked types?</a></li>
@@ -102,6 +103,22 @@
 <li style=""><a href="#runtime-representation" style="">Runtime representation</a></li>
 <li style=""><a href="#error-messages" style="">Error messages</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="higher-ranked-types-in-turmeric">Higher-Ranked Types in Turmeric</h1>
@@ -322,13 +339,11 @@ defn apply [f (forall [a] (-&gt; a a)) x :int] :int  ; rank-2
 </table>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><code>docs/higher-ranked-types-plan.md</code> -- Implementation plan and phase history</li>
-<li><code>tests/fixtures/hrt-*/</code> -- Working examples of every HRT feature</li>
-<li><code>docs/gadts-guide.md</code> -- GADTs and equality witnesses; skolem equalities produced
+<li><a href="https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/"><code>tests/fixtures/hrt-*/</code></a> -- Working examples of every HRT feature</li>
+<li><a href="gadts-guide.html">gadts-guide.md</a> -- GADTs and equality witnesses; skolem equalities produced
   by GADT <code>match</code> arms interact with HRT bidirectional checking to enable type
-  refinement without casts (see <code>gadts-plan.md</code> §Non-Goals item 4 for the
-  boundary between HRT and GADT phases)</li>
-<li><code>tests/fixtures/errors/hrt-*/</code> -- Error cases with expected diagnostics</li>
+  refinement without casts</li>
+<li><a href="https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/errors/"><code>tests/fixtures/errors/hrt-*/</code></a> -- Error cases with expected diagnostics</li>
 </ul>
     </div>
   </div>

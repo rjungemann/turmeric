@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#web-stack-guide" style="">Web Stack Guide</a></li>
 <li style=""><a href="#installation" style="">Installation</a></li>
@@ -105,6 +106,22 @@
 <li style="padding-left:0.75rem;"><a href="#static-file-serving" style="color:var(--text-sec);">Static file serving</a></li>
 <li style=""><a href="#template-rendering-in-tourist-handlers" style="">Template rendering in tourist handlers</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="web-stack-guide">Web Stack Guide</h1>
@@ -140,14 +157,20 @@ others; <code>tur-httpd</code> and <code>tur-template</code> have no shared depe
 <hr />
 <h2 id="installation">Installation</h2>
 <h3 id="tur-httpd-only"><code>tur-httpd</code> only</h3>
-<pre><code class="language-turmeric">:spices {
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:spices {
   &quot;httpd&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
            :ref    &quot;httpd-v0.1.0&quot;
            :subdir &quot;spices/httpd&quot;}
 }
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices
+{
+  &quot;httpd&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+           :ref    &quot;httpd-v0.1.0&quot;
+           :subdir &quot;spices/httpd&quot;}
+}
+</code></pre></div></div></div>
 <h3 id="full-stack-httpd-template-tourist">Full stack (httpd + template + tourist)</h3>
-<pre><code class="language-turmeric">:spices {
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:spices {
   &quot;httpd&quot;    {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
               :ref    &quot;httpd-v0.1.0&quot;
               :subdir &quot;spices/httpd&quot;}
@@ -158,7 +181,19 @@ others; <code>tur-httpd</code> and <code>tur-template</code> have no shared depe
               :ref    &quot;tourist-v0.1.0&quot;
               :subdir &quot;spices/tourist&quot;}
 }
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices
+{
+  &quot;httpd&quot;    {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;httpd-v0.1.0&quot;
+              :subdir &quot;spices/httpd&quot;}
+  &quot;template&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;template-v0.1.0&quot;
+              :subdir &quot;spices/template&quot;}
+  &quot;tourist&quot;  {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;tourist-v0.1.0&quot;
+              :subdir &quot;spices/tourist&quot;}
+}
+</code></pre></div></div></div>
 <hr />
 <h2 id="tur-httpd-raw-http-server"><code>tur-httpd</code> -- Raw HTTP server</h2>
 <p><code>tur-httpd</code> is the foundation: a minimal POSIX-socket HTTP/1.1 server with a
@@ -188,7 +223,7 @@ request handle and returns a response handle.</p>
 </tbody>
 </table>
 <h3 id="quick-start">Quick start</h3>
-<pre><code class="language-turmeric">(import httpd/server   :refer [server-start server-stop])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import httpd/server   :refer [server-start server-stop])
 (import httpd/request  :refer [req-path])
 (import httpd/response :refer [resp-ok])
 
@@ -201,33 +236,64 @@ request handle and returns a response handle.</p>
     ;; run until killed
     (server-stop s)
     0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import httpd/server :refer [server-start server-stop]
+import httpd/request :refer [req-path]
+import httpd/response :refer [resp-ok]
+defn handler [req :int] :int
+  resp-ok(&quot;text/plain&quot; str-concat(&quot;You requested: &quot; req-path(req)))
+defn main [] :int
+  let [s (server-start 8080 handler)]
+    ;; run until killed
+    server-stop(s)
+    0
+</code></pre></div></div></div>
 <h3 id="starting-the-server">Starting the server</h3>
-<pre><code class="language-turmeric">;; Bounded thread pool (default -- recommended)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Bounded thread pool (default -- recommended)
 (server-start      port handler)
 (server-start-pool port handler pool-size)
 
 ;; Thread-per-connection (legacy)
 (server-start-spawn port handler)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Bounded thread pool (default -- recommended)
+server-start(port handler)
+server-start-pool(port handler pool-size)
+;; Thread-per-connection (legacy)
+server-start-spawn(port handler)
+</code></pre></div></div></div>
 <p><code>server-start</code> returns a server handle. Pass it to <code>server-stop</code> to close
 the listening socket and join the pool threads.</p>
 <h3 id="request-accessors">Request accessors</h3>
-<pre><code class="language-turmeric">(req-method  req)       ;; &quot;GET&quot;, &quot;POST&quot;, &quot;PUT&quot;, &quot;DELETE&quot;, ...
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(req-method  req)       ;; &quot;GET&quot;, &quot;POST&quot;, &quot;PUT&quot;, &quot;DELETE&quot;, ...
 (req-path    req)       ;; &quot;/users/42&quot;
 (req-query   req)       ;; &quot;page=1&amp;limit=10&quot;  (raw query string)
 (req-body    req)       ;; request body as cstr (may be &quot;&quot;)
 (req-header  req &quot;x-api-key&quot;)  ;; value of a header, or 0 if absent
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">req-method(req)
+;; &quot;GET&quot;, &quot;POST&quot;, &quot;PUT&quot;, &quot;DELETE&quot;, ...
+req-path(req)
+;; &quot;/users/42&quot;
+req-query(req)
+;; &quot;page=1&amp;limit=10&quot;  (raw query string)
+req-body(req)
+;; request body as cstr (may be &quot;&quot;)
+req-header(req &quot;x-api-key&quot;)
+;; value of a header, or 0 if absent
+</code></pre></div></div></div>
 <h3 id="response-constructors">Response constructors</h3>
-<pre><code class="language-turmeric">;; Convenience: status 200 with a content-type and body
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Convenience: status 200 with a content-type and body
 (resp-ok &quot;text/html&quot;  &quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;)
 (resp-ok &quot;text/plain&quot; &quot;OK&quot;)
 (resp-ok &quot;application/json&quot; &quot;{\&quot;ok\&quot;:true}&quot;)
 
 ;; Custom status
 (with-header (resp-ok &quot;text/plain&quot; &quot;Not found&quot;) &quot;x-reason&quot; &quot;missing&quot;)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Convenience: status 200 with a content-type and body
+resp-ok(&quot;text/html&quot; &quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;)
+resp-ok(&quot;text/plain&quot; &quot;OK&quot;)
+resp-ok(&quot;application/json&quot; &quot;{\&quot;ok\&quot;:true}&quot;)
+;; Custom status
+with-header(resp-ok(&quot;text/plain&quot; &quot;Not found&quot;) &quot;x-reason&quot; &quot;missing&quot;)
+</code></pre></div></div></div>
 <hr />
 <h2 id="tur-template-erbejs-style-templating"><code>tur-template</code> -- ERB/EJS-style templating</h2>
 <p><code>tur-template</code> renders strings from templates that embed <code>&lt;%= expr %&gt;</code> and
@@ -252,7 +318,7 @@ the listening socket and join the pool threads.</p>
 </tbody>
 </table>
 <h3 id="quick-start_1">Quick start</h3>
-<pre><code class="language-turmeric">(import template/render :refer [render])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import template/render :refer [render])
 (import template/env    :refer [env-new env-set env-free])
 
 (defn greet [name :cstr] :cstr
@@ -261,7 +327,15 @@ the listening socket and join the pool threads.</p>
     (let [out (render &quot;Hello, &lt;%= name %&gt;!&quot; e)]
       (env-free e)
       out)))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import template/render :refer [render]
+import template/env :refer [env-new env-set env-free]
+defn greet [name :cstr] :cstr
+  let [e (env-new)]
+    env-set(e &quot;name&quot; name)
+    let [out (render &quot;Hello, &lt;%= name %&gt;!&quot; e)]
+      env-free(e)
+      out
+</code></pre></div></div></div>
 <p>The returned string is heap-allocated; the caller must free it.</p>
 <h3 id="template-syntax">Template syntax</h3>
 <table>
@@ -291,13 +365,21 @@ the listening socket and join the pool threads.</p>
 </tbody>
 </table>
 <h3 id="env-api">Env API</h3>
-<pre><code class="language-turmeric">(env-new)                           ;; create an Env handle
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(env-new)                           ;; create an Env handle
 (env-set  env &quot;key&quot; &quot;value&quot;)        ;; bind a scalar string
 (env-set-list env &quot;items&quot; lst)      ;; bind a cons list of cstr values
 (env-free env)                      ;; release the Env
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">env-new
+;; create an Env handle
+env-set(env &quot;key&quot; &quot;value&quot;)
+;; bind a scalar string
+env-set-list(env &quot;items&quot; lst)
+;; bind a cons list of cstr values
+env-free(env)
+;; release the Env
+</code></pre></div></div></div>
 <h3 id="rendering-from-a-file">Rendering from a file</h3>
-<pre><code class="language-turmeric">(import template/render :refer [render-ast])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import template/render :refer [render-ast])
 (import template/token  :refer [lex])
 (import template/parse  :refer [parse])
 
@@ -307,7 +389,16 @@ the listening socket and join the pool threads.</p>
       e    (env-new)]
   (env-set e &quot;title&quot; &quot;Home&quot;)
   (render-ast ast e))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import template/render :refer [render-ast]
+import template/token :refer [lex]
+import template/parse :refer [parse]
+let [src  (slurp &quot;views/index.html&quot;)   ;; read file as cstr
+      toks (lex src)
+      ast  (parse toks)
+      e    (env-new)]
+  env-set(e &quot;title&quot; &quot;Home&quot;)
+  render-ast(ast e)
+</code></pre></div></div></div>
 <hr />
 <h2 id="tur-tourist-routing-micro-framework"><code>tur-tourist</code> -- Routing micro-framework</h2>
 <p><code>tur-tourist</code> layers routing, response helpers, middleware, and static file
@@ -348,7 +439,7 @@ serving on top of <code>tur-httpd</code>.</p>
 </tbody>
 </table>
 <h3 id="quick-start_2">Quick start</h3>
-<pre><code class="language-turmeric">(import tourist/app     :refer [tourist])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import tourist/app     :refer [tourist])
 (import tourist/dsl     :refer [get! post!])
 (import tourist/helpers :refer [text html])
 (import tourist/param   :refer [capture param])
@@ -367,14 +458,42 @@ serving on top of <code>tur-httpd</code>.</p>
                 (text (req-body ctx)))))]
     (server-stop s)
     0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import tourist/app :refer [tourist]
+import tourist/dsl :refer [get! post!]
+import tourist/helpers :refer [text html]
+import tourist/param :refer [capture param]
+defn main [] :int
+  let [s (tourist 3000
+            (get! &quot;/hello/:name&quot;
+              (fn [ctx]
+                (text (str-concat &quot;Hello, &quot; (ok-val (capture ctx &quot;name&quot;)) &quot;!&quot;))))
+            (get! &quot;/search&quot;
+              (fn [ctx]
+                (let [q (ok-val (param ctx &quot;q&quot;))]
+                  (text (str-concat &quot;Searching for: &quot; q)))))
+            (post! &quot;/echo&quot;
+              (fn [ctx]
+                (text (req-body ctx)))))]
+    server-stop(s)
+    0
+</code></pre></div></div></div>
 <h3 id="route-constructors">Route constructors</h3>
-<pre><code class="language-turmeric">(get!    pattern handler)    ;; match GET  requests
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(get!    pattern handler)    ;; match GET  requests
 (post!   pattern handler)    ;; match POST requests
 (put!    pattern handler)    ;; match PUT  requests
 (delete! pattern handler)    ;; match DELETE requests
 (any!    pattern handler)    ;; match any method
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">get!(pattern handler)
+;; match GET  requests
+post!(pattern handler)
+;; match POST requests
+put!(pattern handler)
+;; match PUT  requests
+delete!(pattern handler)
+;; match DELETE requests
+any!(pattern handler)
+;; match any method
+</code></pre></div></div></div>
 <p>Pattern syntax:
 - <code>"/exact"</code> -- literal match
 - <code>"/user/:id"</code> -- <code>:id</code> captures one path segment
@@ -382,34 +501,60 @@ serving on top of <code>tur-httpd</code>.</p>
 <h3 id="request-context">Request context</h3>
 <p>Handler functions receive a <em>tourist context</em> <code>ctx</code>, not a raw httpd request.
 The context transparently forwards all <code>httpd/request</code> accessors:</p>
-<pre><code class="language-turmeric">(req-method ctx)         ;; &quot;GET&quot;
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(req-method ctx)         ;; &quot;GET&quot;
 (req-path   ctx)         ;; &quot;/user/42&quot;
 (req-body   ctx)         ;; request body
 (req-header ctx &quot;name&quot;)  ;; header value
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">req-method(ctx)
+;; &quot;GET&quot;
+req-path(ctx)
+;; &quot;/user/42&quot;
+req-body(ctx)
+;; request body
+req-header(ctx &quot;name&quot;)
+;; header value
+</code></pre></div></div></div>
 <p>Plus tourist-specific helpers:</p>
-<pre><code class="language-turmeric">(capture ctx &quot;id&quot;)       ;; URL segment capture -- result&lt;:cstr&gt;
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(capture ctx &quot;id&quot;)       ;; URL segment capture -- result&lt;:cstr&gt;
 (param   ctx &quot;page&quot;)     ;; query parameter    -- result&lt;:cstr&gt;
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">capture(ctx &quot;id&quot;)
+;; URL segment capture -- result&lt;:cstr&gt;
+param(ctx &quot;page&quot;)
+;; query parameter    -- result&lt;:cstr&gt;
+</code></pre></div></div></div>
 <p>Both return <code>result&lt;:cstr&gt;</code>. Unwrap with <code>ok-val</code> after checking for <code>err</code>:</p>
-<pre><code class="language-turmeric">(let [res (capture ctx &quot;id&quot;)]
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [res (capture ctx &quot;id&quot;)]
   (if (ok? res)
     (text (ok-val res))
     (status 400 (text &quot;missing id&quot;))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [res (capture ctx &quot;id&quot;)]
+  if ok?(res)
+    text(ok-val(res))
+    status(400 text(&quot;missing id&quot;))
+</code></pre></div></div></div>
 <h3 id="response-helpers">Response helpers</h3>
-<pre><code class="language-turmeric">(text body)              ;; 200 text/plain
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(text body)              ;; 200 text/plain
 (html body)              ;; 200 text/html
 (json-body body)         ;; 200 application/json
 (redirect path)          ;; 302 Location: path
 (status code resp)       ;; override the status code of any response
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">text(body)
+;; 200 text/plain
+html(body)
+;; 200 text/html
+json-body(body)
+;; 200 application/json
+redirect(path)
+;; 302 Location: path
+status(code resp)
+;; override the status code of any response
+</code></pre></div></div></div>
 <h3 id="middleware">Middleware</h3>
 <p><code>use!</code> items run in declaration order before any route handler. A middleware
 function receives a request and returns <code>option&lt;:int&gt;</code>:
 - <code>none-value</code> -- continue to the next middleware / route
 - <code>some(resp)</code> -- short-circuit and return this response immediately</p>
-<pre><code class="language-turmeric">(import tourist/middleware :refer [use!])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import tourist/middleware :refer [use!])
 (import stdlib/option      :refer [none-value some])
 
 (defn auth-mw [ctx :int] :int
@@ -420,20 +565,29 @@ function receives a request and returns <code>option&lt;:int&gt;</code>:
 (tourist 3000
   (use! auth-mw)
   (get! &quot;/private&quot; (fn [ctx] (text &quot;secret&quot;))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import tourist/middleware :refer [use!]
+import stdlib/option :refer [none-value some]
+defn auth-mw [ctx :int] :int
+  if =(req-header(ctx &quot;x-api-key&quot;) 0)
+    some(status(401 text(&quot;Unauthorized&quot;)))
+    none-value()
+tourist(3000 use!(auth-mw) get!(&quot;/private&quot; fn([ctx] text(&quot;secret&quot;))))
+</code></pre></div></div></div>
 <h3 id="static-file-serving">Static file serving</h3>
-<pre><code class="language-turmeric">(import tourist/static :refer [serve-static!])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import tourist/static :refer [serve-static!])
 
 (tourist 3000
   (serve-static! &quot;/assets&quot; &quot;./public&quot;)
   (get! &quot;/&quot; (fn [ctx] (html &quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import tourist/static :refer [serve-static!]
+tourist(3000 serve-static!(&quot;/assets&quot; &quot;./public&quot;) get!(&quot;/&quot; fn([ctx] html(&quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;))))
+</code></pre></div></div></div>
 <p><code>serve-static!</code> matches <code>GET /assets/**</code> paths and serves files from
 <code>./public/</code> on disk. It rejects path-traversal attempts (<code>..</code>).</p>
 <hr />
 <h2 id="template-rendering-in-tourist-handlers">Template rendering in tourist handlers</h2>
 <p>Using <code>tur-template</code> with <code>tur-tourist</code>:</p>
-<pre><code class="language-turmeric">(import tourist/app      :refer [tourist])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import tourist/app      :refer [tourist])
 (import tourist/dsl      :refer [get!])
 (import tourist/helpers  :refer [html])
 (import template/render  :refer [render])
@@ -454,12 +608,31 @@ function receives a request and returns <code>option&lt;:int&gt;</code>:
                   (html (render-view &quot;Hello, &lt;%= name %&gt;!&quot; e))))))]
     (server-stop s)
     0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import tourist/app :refer [tourist]
+import tourist/dsl :refer [get!]
+import tourist/helpers :refer [html]
+import template/render :refer [render]
+import template/env :refer [env-new env-set env-free]
+defn render-view [name :cstr env :int] :cstr
+  let [out (render name env)]
+    env-free(env)
+    out
+defn main [] :int
+  let [s (tourist 3000
+            (get! &quot;/hello/:name&quot;
+              (fn [ctx]
+                (let [e (env-new)
+                      n (ok-val (capture ctx &quot;name&quot;))]
+                  (env-set e &quot;name&quot; n)
+                  (html (render-view &quot;Hello, &lt;%= name %&gt;!&quot; e))))))]
+    server-stop(s)
+    0
+</code></pre></div></div></div>
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="threading-guide.md">Threading Guide</a> -- OS threads, Mutex, Arc (used by tur-httpd internally)</li>
-<li><a href="error-handling-guide.md">Error Handling Guide</a> -- <code>result&lt;:cstr&gt;</code> unwrapping patterns</li>
+<li><a href="threading-guide.html">Threading Guide</a> -- OS threads, Mutex, Arc (used by tur-httpd internally)</li>
+<li><a href="error-handling-guide.html">Error Handling Guide</a> -- <code>result&lt;:cstr&gt;</code> unwrapping patterns</li>
 </ul>
     </div>
   </div>

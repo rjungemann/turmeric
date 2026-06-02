@@ -145,8 +145,8 @@ tagged JSON node representation, because those nodes carry the runtime type tag
 "expected <code>:cstr</code>, got <code>:int</code>" validation possible.</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(load &quot;stdlib/json.tur&quot;)
 (load &quot;stdlib/schema.tur&quot;)
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load &quot;stdlib/json.tur&quot;
-load &quot;stdlib/schema.tur&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/json.tur&quot;)
+load(&quot;stdlib/schema.tur&quot;)
 </code></pre></div></div></div>
 <p>The input to <code>schema-decode</code> is a JSON node, from either <code>json/decode</code> (runtime
 text) or the <code>#json(...)</code> reader macro (compile-time literal).</p>
@@ -159,14 +159,20 @@ text) or the <code>#json(...)</code> reader macro (compile-time literal).</p>
 
 (schema/literal-str &quot;active&quot;)  ; matches only the exact string &quot;active&quot;
 (schema/literal-int 42)        ; matches only the exact integer 42
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">schema/str()                  ; matches JSON strings, decodes to the :cstr
-schema/int()                  ; matches JSON integers
-schema/float()                ; matches JSON floats
-schema/bool()                 ; matches JSON booleans
-schema/nil()                  ; matches JSON null
-
-schema/literal-str(&quot;active&quot;) ; matches only the exact string &quot;active&quot;
-schema/literal-int(42)        ; matches only the exact integer 42
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">schema/str
+; matches JSON strings, decodes to the :cstr
+schema/int
+; matches JSON integers
+schema/float
+; matches JSON floats
+schema/bool
+; matches JSON booleans
+schema/nil
+; matches JSON null
+schema/literal-str(&quot;active&quot;)
+; matches only the exact string &quot;active&quot;
+schema/literal-int(42)
+; matches only the exact integer 42
 </code></pre></div></div></div>
 <h2 id="decoding-errors-are-values">Decoding: errors are values</h2>
 <p><code>schema-decode</code> returns a <code>Result&lt;ptr&lt;void&gt;, Vec&lt;SchemaError&gt;&gt;</code>. Inspect it
@@ -175,9 +181,10 @@ with the helper accessors:</p>
   (if (schema-decode-ok? r)
     (schema-decode-value r)            ; =&gt; 42
     (schema-error-message (schema-decode-errors r))))
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [r schema-decode(schema/int() json/decode(&quot;42&quot;))]
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [r (schema-decode (schema/int) (json/decode &quot;42&quot;))]
   if schema-decode-ok?(r)
-    schema-decode-value(r)            ; =&gt; 42
+    schema-decode-value(r)
+    ; =&gt; 42
     schema-error-message(schema-decode-errors(r))
 </code></pre></div></div></div>
 <table>
@@ -250,9 +257,7 @@ Turmeric values:</p>
 (schema-decode (user-schema) (json/decode &quot;{\&quot;name\&quot;: \&quot;alice\&quot;, \&quot;age\&quot;: 30}&quot;))
 ;; =&gt; ok
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn user-schema [] :int
-  schema/field(schema/field(schema/object-new() &quot;name&quot; schema/str())
-               &quot;age&quot; schema/int())
-
+  schema/field(schema/field(schema/object-new() &quot;name&quot; schema/str()) &quot;age&quot; schema/int())
 schema-decode(user-schema() json/decode(&quot;{\&quot;name\&quot;: \&quot;alice\&quot;, \&quot;age\&quot;: 30}&quot;))
 ;; =&gt; ok
 </code></pre></div></div></div>
@@ -264,10 +269,14 @@ error.</p>
 (schema/optional (schema/str))                     ; null / absent ok
 (schema/union (vec-of (schema/int) (schema/str)))  ; first matching arm wins
 (schema/transform (schema/int) (fn [x] (* x 2)))   ; decode, then map
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">schema/array(schema/int())                          ; [1, 2, 3] -&gt; Vec of ints
-schema/optional(schema/str())                       ; null / absent ok
-schema/union(vec-of(schema/int() schema/str()))     ; first matching arm wins
-schema/transform(schema/int() fn [x] {x * 2})       ; decode, then map
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">schema/array(schema/int())
+; [1, 2, 3] -&gt; Vec of ints
+schema/optional(schema/str())
+; null / absent ok
+schema/union(vec-of(schema/int() schema/str()))
+; first matching arm wins
+schema/transform(schema/int() fn([x] *(x 2)))
+; decode, then map
 </code></pre></div></div></div>
 <p>Union arms are all schema pointers (<code>:int</code>), so a plain <code>(vec-of ...)</code> works.
 <code>schema/transform</code> applies its function only when the inner schema succeeds, so
@@ -292,15 +301,12 @@ a dot-separated path (<code>address.zip</code>) or an array index (<code>childre
 ;; name: expected :cstr, got :int
 ;; address.zip: expected :cstr, got :int
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn address-schema [] :int
-  schema/field(schema/field(schema/object-new() &quot;city&quot; schema/str())
-               &quot;zip&quot; schema/str())
-
+  schema/field(schema/field(schema/object-new() &quot;city&quot; schema/str()) &quot;zip&quot; schema/str())
 defn user-schema [] :int
-  schema/field(schema/field(schema/object-new() &quot;name&quot; schema/str())
-               &quot;address&quot; address-schema())
-
-let [r schema-decode(user-schema()
-                     json/decode(&quot;{\&quot;name\&quot;: 42, \&quot;address\&quot;: {\&quot;city\&quot;: \&quot;NYC\&quot;, \&quot;zip\&quot;: 10001}}&quot;))]
+  schema/field(schema/field(schema/object-new() &quot;name&quot; schema/str()) &quot;address&quot; address-schema())
+let [r (schema-decode (user-schema)
+          (json/decode
+            &quot;{\&quot;name\&quot;: 42, \&quot;address\&quot;: {\&quot;city\&quot;: \&quot;NYC\&quot;, \&quot;zip\&quot;: 10001}}&quot;))]
   println(schema-error-message(schema-decode-errors(r)))
 ;; name: expected :cstr, got :int
 ;; address.zip: expected :cstr, got :int
@@ -325,13 +331,8 @@ memoized:</p>
     &quot;{\&quot;value\&quot;: 1, \&quot;children\&quot;: [{\&quot;value\&quot;: 2, \&quot;children\&quot;: []}]}&quot;))
 ;; =&gt; ok, validated to arbitrary depth
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn tree-schema [] :int
-  schema/rec
-    fn [self]
-      schema/field(schema/field(schema/object-new() &quot;value&quot; schema/int())
-                   &quot;children&quot; schema/array(self))
-
-schema-decode(tree-schema()
-              json/decode(&quot;{\&quot;value\&quot;: 1, \&quot;children\&quot;: [{\&quot;value\&quot;: 2, \&quot;children\&quot;: []}]}&quot;))
+  schema/rec(fn([self] schema/field(schema/field(schema/object-new() &quot;value&quot; schema/int()) &quot;children&quot; schema/array(self))))
+schema-decode(tree-schema() json/decode(&quot;{\&quot;value\&quot;: 1, \&quot;children\&quot;: [{\&quot;value\&quot;: 2, \&quot;children\&quot;: []}]}&quot;))
 ;; =&gt; ok, validated to arbitrary depth
 </code></pre></div></div></div>
 <p>A violation deep in the tree still reports a full path, e.g.
@@ -366,22 +367,12 @@ binding), not from any argument.</p>
 ;; The ascription drives instance selection; decode! returns a real User.
 (let [u (:: (decode! (json/decode body)) User)]
   (.name u))
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load &quot;stdlib/json.tur&quot;
-load &quot;stdlib/schema.tur&quot;
-
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/json.tur&quot;)
+load(&quot;stdlib/schema.tur&quot;)
 defstruct User :copy [name :cstr age :int]
-
 defn user-schema [] :int
-  schema/field(schema/field(schema/object-new() &quot;name&quot; schema/str())
-               &quot;age&quot; schema/int())
-
-definstance HasSchema [User]
-  decode! [node]
-    let [v schema-decode!(user-schema() node)]
-      make-struct User
-        json/get-string(json/get!(v &quot;name&quot;))
-        json/get-int(json/get!(v &quot;age&quot;))
-
+  schema/field(schema/field(schema/object-new() &quot;name&quot; schema/str()) &quot;age&quot; schema/int())
+definstance HasSchema [User] decode!([node] let([v (schema-decode! (user-schema) node)] make-struct(User json/get-string(json/get!(v &quot;name&quot;)) json/get-int(json/get!(v &quot;age&quot;)))))
 ;; The ascription drives instance selection; decode! returns a real User.
 let [u (:: (decode! (json/decode body)) User)]
   .name(u)
@@ -401,7 +392,8 @@ error (<code>no instance 'HasSchema T'</code>).</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn parse-user [body :cstr] :User
   #json-str&lt;User&gt;(body))
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn parse-user [body :cstr] :User
-  #json-str&lt;User&gt;(body)
+  #json-str&lt;User&gt;
+  body()
 </code></pre></div></div></div>
 <p>Unlike <code>#json(...)</code>, the inner is an ordinary Turmeric expression (read with the
 normal reader), not a verbatim JSON blob. The bare <code>#json&lt;T&gt;(...)</code> literal form
@@ -467,12 +459,9 @@ once.</p>
                            (schema/field-of &quot;n&quot; (schema/int)))
                 (json/decode &quot;{\&quot;n\&quot;: 21}&quot;))
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn double-it [x :int] :int
-  {x * 2}
-
+  *(x 2)
 ;; pure(double-it) &lt;*&gt; field-of(&quot;n&quot;, int)  -- on {&quot;n&quot;:21} =&gt; 42
-schema-decode!(schema/ap(schema/always(double-it)
-                         schema/field-of(&quot;n&quot; schema/int()))
-               json/decode(&quot;{\&quot;n\&quot;: 21}&quot;))
+schema-decode!(schema/ap(schema/always(double-it) schema/field-of(&quot;n&quot; schema/int())) json/decode(&quot;{\&quot;n\&quot;: 21}&quot;))
 </code></pre></div></div></div>
 <p>Decoding <code>{"a": "x", "b": "y"}</code> against an <code>ap</code> of two <code>int</code> fields yields <strong>two</strong>
 path-tagged errors (<code>a: expected :int, got :cstr</code> and <code>b: ...</code>), one per arm.</p>
@@ -491,18 +480,11 @@ with the standard HKT method names and <strong>chain across operators</strong>:<
 (definstance Functor     [Schema] (fmap [c f] ...))
 (definstance Applicative [Schema] (pure [x] ...) (ap [ff fa] ...))
 (definstance Alternative [Schema] (empty [a] ...) (alt-or [a b] ...))
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Schema [A] (raw :int)   ; provided by stdlib/schema.tur
-
-definstance Functor [Schema]
-  (fmap [c f] ...)
-
-definstance Applicative [Schema]
-  (pure [x] ...)
-  (ap [ff fa] ...)
-
-definstance Alternative [Schema]
-  (empty [a] ...)
-  (alt-or [a b] ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Schema [A] raw(:int)
+; provided by stdlib/schema.tur
+definstance Functor [Schema] fmap([c f] ...)
+definstance Applicative [Schema] pure([x] ...) ap([ff fa] ...)
+definstance Alternative [Schema] empty([a] ...) alt-or([a b] ...)
 </code></pre></div></div></div>
 <p><code>(Schema a)</code> is a <strong>transparent int newtype</strong>: a parametric struct whose single
 field is a concrete <code>:int</code>, so the type parameter is phantom and the value has
@@ -520,8 +502,9 @@ the identity (the value <em>is</em> the schema pointer). Build a struct field by
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; -&gt;User is a curried constructor: name -&gt; (age -&gt; boxed User)
 defn user-schema [] :int
   let [name-s (:: (make-struct Schema (schema/field-of &quot;name&quot; (schema/str))) (Schema int))
-       age-s  (:: (make-struct Schema (schema/field-of &quot;age&quot;  (schema/int))) (Schema int))]
-    .raw(ap(fmap(name-s -&gt;User) age-s))   ; Validation: both fields decoded, errors accumulated
+        age-s  (:: (make-struct Schema (schema/field-of &quot;age&quot;  (schema/int))) (Schema int))]
+    .raw(ap(fmap(name-s -&gt;User) age-s))
+; Validation: both fields decoded, errors accumulated
 </code></pre></div></div></div>
 <p><code>ap</code> is built on <code>schema/ap-fat</code>, which applies the (possibly capturing) function
 arm through the fat-closure protocol, so a multi-argument curried constructor

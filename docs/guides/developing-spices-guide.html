@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#developing-spices-guide" style="">Developing Spices Guide</a></li>
 <li style=""><a href="#when-to-create-a-spice" style="">When to Create a Spice</a></li>
@@ -100,6 +101,8 @@
 <li style="padding-left:0.75rem;"><a href="#declaring-c-symbols-in-turmeric" style="color:var(--text-sec);">Declaring C symbols in Turmeric</a></li>
 <li style="padding-left:0.75rem;"><a href="#inline-c-for-small-wrappers" style="color:var(--text-sec);">Inline C for small wrappers</a></li>
 <li style="padding-left:0.75rem;"><a href="#cmake-name-and-targets-overrides" style="color:var(--text-sec);">:cmake-name and :targets overrides</a></li>
+<li style="padding-left:0.75rem;"><a href="#system-first-resolution-with-prefer-system" style="color:var(--text-sec);">System-first resolution with :prefer-system</a></li>
+<li style="padding-left:0.75rem;"><a href="#forcing-the-source-build-refetch" style="color:var(--text-sec);">Forcing the source build (--refetch)</a></li>
 <li style=""><a href="#writing-the-public-api" style="">Writing the Public API</a></li>
 <li style="padding-left:0.75rem;"><a href="#module-docstring-optional" style="color:var(--text-sec);">Module docstring (optional)</a></li>
 <li style="padding-left:0.75rem;"><a href="#style-avoid-cons-0-chains-in-examples" style="color:var(--text-sec);">Style: avoid cons ... 0 chains in examples</a></li>
@@ -119,13 +122,29 @@
 <li style=""><a href="#global-spices-as-libraries-v2" style="">Global Spices as Libraries (v2)</a></li>
 <li style=""><a href="#release-checklist" style="">Release Checklist</a></li>
 <li style=""><a href="#see-also" style="">See Also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="developing-spices-guide">Developing Spices Guide</h1>
 <p>A <em>spice</em> is a Turmeric package that other projects depend on. This guide
 covers every step of authoring one: project structure, declaring exports,
 wrapping C libraries with <code>:cmake-deps</code>, testing, versioning, and publishing.</p>
-<p>See <a href="consuming-spices-guide.md">Consuming Spices</a> if you only need to add
+<p>See <a href="consuming-spices-guide.html">Consuming Spices</a> if you only need to add
 an existing spice to your project.</p>
 <hr />
 <h2 id="when-to-create-a-spice">When to Create a Spice</h2>
@@ -387,7 +406,7 @@ that lists all members under <code>:members</code>), you can import one sibling 
 <p>Then <code>notebook</code> can <code>(import watch/watch ...)</code> directly -- the resolver walks up
 to the workspace <code>build.tur</code>, finds that <code>watch</code> is a listed member, and adds its
 <code>src/</code> to the search path automatically.</p>
-<pre><code class="language-sh"># No tur fetch, no symlink, no lock entry required:
+<pre><code class="language-sh"># No tur fetch or symlink, and no lock entry required:
 cd spices/notebook
 tur check src/notebook/cli.tur   # resolves watch/watch via workspace
 </code></pre>
@@ -524,6 +543,57 @@ the <a href="../../CLAUDE.md">inline-C style rule</a> for why.</p>
             :targets    [&quot;SQLite::SQLite3&quot;]}
 }
 </code></pre>
+<h3 id="system-first-resolution-with-prefer-system">System-first resolution with <code>:prefer-system</code></h3>
+<p>Heavy native libraries (mbedTLS, raylib, sqlite, libpq) are often already
+installed system-wide via Homebrew / apt / dnf. Building them from source on
+every clean <code>tur fetch</code> is slow. Add <code>:prefer-system true</code> to try CMake's
+<code>find_package</code> first and fall back to the source build only when no system
+copy is found:</p>
+<pre><code class="language-turmeric">:cmake-deps {
+  &quot;mbedtls&quot; {:prefer-system true                ;; try find_package first
+             :cmake-name    &quot;MbedTLS&quot;           ;; name passed to find_package
+             :cmake-version &quot;3.0&quot;               ;; optional minimum version
+             :targets       [&quot;MbedTLS::mbedtls&quot;
+                             &quot;MbedTLS::mbedx509&quot;
+                             &quot;MbedTLS::mbedcrypto&quot;]
+             :url           &quot;https://github.com/Mbed-TLS/mbedtls&quot;  ;; fallback
+             :ref           &quot;v3.6.2&quot;
+             :options       {:ENABLE_PROGRAMS &quot;OFF&quot;
+                             :USE_STATIC_MBEDTLS_LIBRARY &quot;ON&quot;}}
+}
+</code></pre>
+<p>Behaviour:</p>
+<ul>
+<li><code>:prefer-system true</code> <strong>requires</strong> <code>:cmake-name</code> -- it is the name handed to
+  <code>find_package</code>. Omitting it is a hard manifest error.</li>
+<li><code>:cmake-version</code> is optional; when present it becomes the minimum version in
+  <code>find_package(&lt;name&gt; &lt;version&gt; QUIET)</code>.</li>
+<li>When the system copy is found, the dep's include/link flags come from the
+  imported target's <code>INTERFACE_INCLUDE_DIRECTORIES</code> and <code>$&lt;TARGET_FILE_DIR:...&gt;</code>
+  -- skipping both the clone and the source build. Otherwise the existing <code>FetchContent</code> block
+  runs exactly as before.</li>
+<li>The generated <code>spice-deps-manifest.json</code> records <code>"resolved_via": "system"</code>
+  or <code>"fetch"</code> per dep, and <code>tur.lock</code> records <code>:resolved-via "system"</code> (with
+  no git SHA -- the system package manager owns the version) or the usual
+  <code>:url</code>/<code>:ref</code>/<code>:resolved</code> row for the fetch path.</li>
+</ul>
+<p><code>:prefer-system</code> is opt-in; deps without it keep their FetchContent-only
+behaviour unchanged.</p>
+<h4 id="forcing-the-source-build-refetch">Forcing the source build (<code>--refetch</code>)</h4>
+<p>To pin a build to the source copy and bypass any system package -- useful for
+reproducible CI artefacts -- pass <code>--refetch</code> (or set <code>TUR_FETCH_FORCE_FETCH=1</code>
+in the environment):</p>
+<pre><code class="language-sh">tur fetch --refetch          # ignore system copies, always build from source
+</code></pre>
+<p>This disables the <code>find_package</code> short-circuit for every <code>:prefer-system</code> dep
+in the manifest.</p>
+<blockquote>
+<p><strong>Caveats.</strong> A binary linked against a Homebrew/apt shared library will fail
+at runtime on a machine without that library installed; pin the source build
+(or <code>--refetch</code>) for portable artefacts. See
+<a href="../tur-fetch-system-first-plan.md">tur-fetch-system-first-plan.md</a> for the
+design rationale and open questions.</p>
+</blockquote>
 <p>For the full <code>:cmake-deps</code> field reference, the generated <code>SpiceDeps.cmake</code>
 format, the <code>spice-deps-manifest.json</code> schema, and hash locking, see the
 <a href="../archive/cmake-cpm-integration-plan.md">CMake/CPM integration notes</a>.</p>
@@ -637,7 +707,7 @@ run-all()
 <p>Run the test suite:</p>
 <pre><code class="language-sh">tur test
 </code></pre>
-<p>For the full testing API see <a href="test-runner-contract.md">test-runner-contract.md</a>.</p>
+<p>For the full testing API see <a href="test-runner-contract.html">test-runner-contract.md</a>.</p>
 <hr />
 <h2 id="versioning">Versioning</h2>
 <ul>
@@ -745,7 +815,7 @@ release, and a CPM consumer can add your library with:</p>
 target_link_libraries(my_app PRIVATE tur-mylib::all)
 </code></pre>
 <p>For the complete step-by-step see
-<a href="using-turmeric-from-cmake.md">Using a Turmeric library from CMake</a>.</p>
+<a href="using-turmeric-from-cmake.html">Using a Turmeric library from CMake</a>.</p>
 <hr />
 <h2 id="emscripten-wasm-support">Emscripten / WASM Support</h2>
 <p>Once <code>tur build --target wasm</code> lands, all cmake-deps spices will get WASM
@@ -798,12 +868,11 @@ for the full design sketch.</p>
 <hr />
 <h2 id="see-also">See Also</h2>
 <ul>
-<li><a href="consuming-spices-guide.md">Consuming spices</a> -- adding and using spices in a project</li>
-<li><a href="package-management-guide.md">Package management guide</a> -- full <code>build.tur</code> manifest reference and <code>tur</code> CLI</li>
-<li><a href="c-integration-guide.md">C integration guide</a> -- <code>extern-c</code>, <code>include-c</code>, inline-C blocks</li>
-<li><a href="../archive/cmake-cpm-integration-plan.md">CMake/CPM integration notes</a> -- cmake-deps internals, generated files, hash locking, security</li>
-<li><a href="using-turmeric-from-cmake.md">Using a Turmeric library from CMake</a> -- step-by-step guide for <code>tur emit-cmake</code></li>
-<li><a href="test-runner-contract.md">Test runner contract</a> -- full testing API</li>
+<li><a href="consuming-spices-guide.html">Consuming spices</a> -- adding and using spices in a project</li>
+<li><a href="package-management-guide.html">Package management guide</a> -- full <code>build.tur</code> manifest reference and <code>tur</code> CLI</li>
+<li><a href="c-integration-guide.html">C integration guide</a> -- <code>extern-c</code>, <code>include-c</code>, inline-C blocks</li>
+<li><a href="using-turmeric-from-cmake.html">Using a Turmeric library from CMake</a> -- step-by-step guide for <code>tur emit-cmake</code></li>
+<li><a href="test-runner-contract.html">Test runner contract</a> -- full testing API</li>
 </ul>
     </div>
   </div>

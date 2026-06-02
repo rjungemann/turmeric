@@ -104,22 +104,25 @@ static bool g_dump_kinds = false;
 /* Helper to detect language and adjust source for #lang directive */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
                                         const char **out_src, size_t *out_len) {
+    ReaderType ext_type = reader_type_from_extension(path);
+
+    /* Always run detect_lang so any leading "#lang ..." line is stripped from
+     * the source — otherwise the chosen reader would choke on the '#'. When
+     * the extension already selected a non-default reader, the extension
+     * still wins; the directive is treated as an optional, redundant hint. */
     const char *src_rest = src;
     size_t len_rest = len;
-    ReaderType detected_type = reader_type_from_extension(path);
-    
-    /* Only parse #lang if file extension didn't already select sweet */
-    if (detected_type == READER_TURMERIC) {
-        detected_type = detect_lang(src, len, &src_rest, &len_rest);
-    }
-    
+    ReaderType lang_type = detect_lang(src, len, &src_rest, &len_rest);
+
+    ReaderType detected_type = (ext_type != READER_TURMERIC) ? ext_type : lang_type;
+
     /* Check if the reader is implemented */
     if (!reader_type_is_implemented(detected_type)) {
-        fprintf(stderr, "tur: error: #lang %s is not yet implemented\n", 
+        fprintf(stderr, "tur: error: #lang %s is not yet implemented\n",
                 reader_type_name(detected_type));
         exit(1);
     }
-    
+
     *out_src = src_rest;
     *out_len = len_rest;
     return detected_type;
@@ -3809,7 +3812,7 @@ static bool fmt_skip_dir(const char *name) {
 static bool fmt_is_tur_file(const char *name) {
     size_t n = strlen(name);
     if (n >= 4 && strcmp(name + n - 4, ".tur") == 0) return true;
-    if (n >= 9 && strcmp(name + n - 9, ".tursweet") == 0) return true;
+    if (n >= 10 && strcmp(name + n - 10, ".tur.sweet") == 0) return true;
     return false;
 }
 
@@ -3945,7 +3948,7 @@ static int fmt_process_file(const char *path, ReaderType force_lang,
     return 0;
 }
 
-/* Walk a directory, processing all .tur/.tursweet files.
+/* Walk a directory, processing all .tur/.tur.sweet files.
  * Returns count of changed files, or -1 if an error occurred. */
 static int fmt_walk(const char *path, ReaderType force_lang, FmtMode mode,
                     int *err_count) {
@@ -4009,7 +4012,7 @@ static int fmt_walk(const char *path, ReaderType force_lang, FmtMode mode,
 static int usage_fmt(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur fmt [paths...]                   format .tur/.tursweet files in place\n"
+        "  tur fmt [paths...]                   format .tur/.tur.sweet files in place\n"
         "  tur fmt --check [paths...]           exit 1 if any file would change\n"
         "  tur fmt --dry-run [paths...]         alias for --check\n"
         "  tur fmt --diff [paths...]            print unified diff of changes\n"
@@ -4019,7 +4022,8 @@ static int usage_fmt(void) {
         "  Paths may be files or directories.  Defaults to current directory.\n"
         "  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/\n"
         "\n"
-        "  Dialects for --lang:  turmeric (default)  tursweet  curly-infix  neoteric\n"
+        "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric\n"
+        "  (tursweet is a deprecated alias for sweet-exp)\n"
         "\n"
         "Exit codes:\n"
         "  0   all files already formatted (or successfully written)\n"
@@ -4066,7 +4070,7 @@ static int cmd_fmt(int argc, char **argv) {
             const char *lang = argv[++i];
             if (strcmp(lang, "turmeric") == 0 || strcmp(lang, "tur") == 0) {
                 force_lang = READER_TURMERIC;
-            } else if (strcmp(lang, "tursweet") == 0 || strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0) {
+            } else if (strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0 || strcmp(lang, "tursweet") == 0) {
                 force_lang = READER_SWEET;
             } else if (strcmp(lang, "curly-infix") == 0) {
                 force_lang = READER_CURLY_INFIX;
@@ -7713,7 +7717,7 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "run") == 0) {
         /* Disambiguate: if the first non-flag argument ends in .tur or
-         * .tursweet, use the classic compile-and-run path; if --release /
+         * .tur.sweet, use the classic compile-and-run path; if --release /
          * -I flags appear (compile-only flags), also use classic path.
          * Otherwise dispatch to the Justfile task runner (RN0-RN7). */
         bool use_classic = false;
@@ -7734,7 +7738,7 @@ int main(int argc, char **argv) {
                 const char *a = argv[i];
                 size_t an = strlen(a);
                 if ((an > 4  && strcmp(a + an - 4,  ".tur")      == 0) ||
-                    (an > 9  && strcmp(a + an - 9,  ".tursweet") == 0) ||
+                    (an > 10 && strcmp(a + an - 10, ".tur.sweet") == 0) ||
                     strcmp(a, "-") == 0) {
                     use_classic = true;
                 }

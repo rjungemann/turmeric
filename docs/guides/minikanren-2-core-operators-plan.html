@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#plan-minikanren-part-2-core-operators" style="">Plan: MiniKanren Part 2 -- Core Operators</a></li>
 <li style=""><a href="#target-audience" style="">Target audience</a></li>
@@ -99,11 +100,27 @@
 <li style="padding-left:0.75rem;"><a href="#fresh-variable-counter" style="color:var(--text-sec);">Fresh variable counter</a></li>
 <li style=""><a href="#files-to-create" style="">Files to create</a></li>
 <li style=""><a href="#cross-references" style="">Cross-references</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="plan-minikanren-part-2-core-operators">Plan: MiniKanren Part 2 -- Core Operators</h1>
 <p>This document plans the second miniKanren tutorial guide.
-Part 1 (<a href="minikanren-1-relations-and-queries.md">minikanren-1-relations-and-queries.md</a>)
+Part 1 (<a href="minikanren-1-relations-and-queries.html">minikanren-1-relations-and-queries.md</a>)
 introduced relational programming using explicit loops and helper predicates.
 Part 2 implements the real miniKanren engine inside Turmeric, giving the reader
 working <code>==</code>, <code>fresh</code>, <code>conde</code>, <code>run</code>, and optional constraint operators.</p>
@@ -138,24 +155,37 @@ lifted into <code>Term</code>.</p>
 <p>Explain why <code>walk</code> must loop (chains of variable-to-variable bindings).</p>
 <h3 id="section-3-unification">Section 3 -- Unification (<code>==</code>)</h3>
 <p>Unification tries to make two terms identical under a substitution:</p>
-<pre><code class="language-turmeric">;;; unify -- attempt to unify two terms under substitution s.
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; unify -- attempt to unify two terms under substitution s.
 ;;;
 ;;; Returns: (some subst) on success, (none) on failure.
 (defn unify [u v s] ...)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; unify -- attempt to unify two terms under substitution s.
+;;;
+;;; Returns: (some subst) on success, (none) on failure.
+defn unify [u v s]
+  ...
+</code></pre></div></div></div>
 <p>Cover:
 - Unifying two atoms
 - Unifying a variable with a term (occurs check)
 - Unifying two pairs recursively
 - Unifying two already-walked values</p>
 <p>Show the <code>==</code> goal constructor that wraps <code>unify</code>:</p>
-<pre><code class="language-turmeric">(defn == [u v] ...)
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn == [u v] ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn == [u v]
+  ...
+</code></pre></div></div></div>
 <p>Demonstrate:</p>
-<pre><code class="language-turmeric">(run 1 (q) (== q 3))        ; =&gt; (3)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(run 1 (q) (== q 3))        ; =&gt; (3)
 (run 1 (q) (== 4 3))        ; =&gt; ()
 (run 1 (x) (fresh (y) (== x y) (== y 7)))  ; =&gt; (7)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">run(1 q() ==(q 3))
+; =&gt; (3)
+run(1 q() ==(4 3))
+; =&gt; ()
+run(1 x() fresh(y() ==(x y) ==(y 7)))
+; =&gt; (7)
+</code></pre></div></div></div>
 <h3 id="section-4-goals-and-the-goal-type">Section 4 -- Goals and the goal type</h3>
 <p>A <em>goal</em> is a function <code>Subst -&gt; Stream&lt;Subst&gt;</code> (a lazy stream of substitutions).
 Introduce the <code>Goal</code> type alias and the <code>Stream</code> type (lazy list / coroutine).</p>
@@ -168,36 +198,41 @@ Introduce the <code>Goal</code> type alias and the <code>Stream</code> type (laz
 </ul>
 <h3 id="section-5-fresh">Section 5 -- <code>fresh</code></h3>
 <p><code>fresh</code> introduces new logic variables and conjoins goals over them:</p>
-<pre><code class="language-turmeric">(fresh (x y)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(fresh (x y)
   (== x 1)
   (== y 2))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">fresh(x(y) ==(x 1) ==(y 2))
+</code></pre></div></div></div>
 <p>Implement as a macro that allocates fresh <code>LVar</code> ids and builds a <code>conj</code> chain.</p>
 <p>Demonstrate shadowing (a <code>fresh</code> variable can shadow an outer one) using the
 same example from webmk where the inner <code>y</code> differs from the outer <code>y</code>.</p>
 <h3 id="section-6-conde">Section 6 -- <code>conde</code></h3>
 <p><code>conde</code> provides disjunction in clausal form (each clause is a conjunction):</p>
-<pre><code class="language-turmeric">(conde
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(conde
   ((== q :cat))
   ((== q :dog))
   ((== q :fish)))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">conde(==(q :cat)() ==(q :dog)() ==(q :fish)())
+</code></pre></div></div></div>
 <p>Implement as interleaved <code>disj</code> of <code>conj</code> chains. Emphasise:
 - Each clause is tried independently (the substitution is "refreshed" per clause)
 - Answers are interleaved, not depth-first, so diverging clauses do not starve finite ones
 - Use <code>run N</code> to limit output; show <code>run*</code> causes divergence with recursive relations</p>
 <p>Example with multiple answers:</p>
-<pre><code class="language-turmeric">(run 3 (q)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(run 3 (q)
   (conde
     ((== q :a))
     ((== q :b))
     ((== q :c))))
 ; =&gt; (:a :b :c)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">run(3 q() conde(==(q :a)() ==(q :b)() ==(q :c)()))
+; =&gt; (:a :b :c)
+</code></pre></div></div></div>
 <h3 id="section-7-run-and-run">Section 7 -- <code>run</code> and <code>run*</code></h3>
 <p><code>run</code> is the top-level interface between Turmeric and the miniKanren engine:</p>
-<pre><code class="language-turmeric">(run N (q) goal ...)
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(run N (q) goal ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">run(N q() goal ...)
+</code></pre></div></div></div>
 <p>Steps:
 1. Allocate a fresh query variable <code>q</code>
 2. Build the goal as a conjunction
@@ -213,12 +248,16 @@ same example from webmk where the inner <code>y</code> differs from the outer <c
   (numbered left-to-right within each answer, restarting from 0 per answer)</li>
 </ul>
 <p>Show the reified output for:</p>
-<pre><code class="language-turmeric">(run 1 (q) succeed)           ; =&gt; (_.0)   -- q is unbound
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(run 1 (q) succeed)           ; =&gt; (_.0)   -- q is unbound
 (run 1 (q) (== q (list 1 q))) ; =&gt; ()      -- fails: occurs check
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">run(1 q() succeed)
+; =&gt; (_.0)   -- q is unbound
+run(1 q() ==(q list(1 q)))
+; =&gt; ()      -- fails: occurs check
+</code></pre></div></div></div>
 <h3 id="section-9-putting-it-together-family-graph-revisited">Section 9 -- Putting it together: family graph revisited</h3>
 <p>Re-encode the Part 1 family graph using the new engine:</p>
-<pre><code class="language-turmeric">(defn parento [parent child]
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn parento [parent child]
   (conde
     ((== parent :abe)   (== child :homer))
     ((== parent :homer) (== child :bart))
@@ -229,13 +268,25 @@ same example from webmk where the inner <code>y</code> differs from the outer <c
   (fresh (mid)
     (parento grand mid)
     (parento mid child)))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn parento [parent child]
+  conde(==(parent :abe)(==(child :homer)) ==(parent :homer)(==(child :bart)) ==(parent :homer)(==(child :lisa)) ...)
+defn grandparento [grand child]
+  fresh(mid() parento(grand mid) parento(mid child))
+</code></pre></div></div></div>
 <p>Show the same queries as Part 1, now written with <code>run</code>:</p>
-<pre><code class="language-turmeric">(run* (p) (parento p :bart))         ; parents of Bart
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(run* (p) (parento p :bart))         ; parents of Bart
 (run* (c) (parento :homer c))        ; children of Homer
 (run* (g) (grandparento g :bart))    ; grandparents of Bart
 (run* (p c) (parento p c))           ; all pairs
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">run*(p() parento(p :bart))
+; parents of Bart
+run*(c() parento(:homer c))
+; children of Homer
+run*(g() grandparento(g :bart))
+; grandparents of Bart
+run*(p(c) parento(p c))
+; all pairs
+</code></pre></div></div></div>
 <p>Contrast with Part 1 to show the gain in expressiveness.</p>
 <h3 id="section-10-optional-stretch-constraint-operators">Section 10 (optional / stretch) -- Constraint operators</h3>
 <p>If time permits, sketch the constraint extensions from cKanren:</p>
@@ -251,11 +302,15 @@ whenever new bindings are added.</p>
 <h3 id="streams">Streams</h3>
 <p>The lazy stream type can be implemented with Turmeric's existing coroutine / effect
 support or as a simple thunk-based lazy list:</p>
-<pre><code class="language-turmeric">;; A Stream&lt;A&gt; is one of:
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; A Stream&lt;A&gt; is one of:
 ;;   (Empty)
 ;;   (Cons head tail)    -- eager head, lazy tail (thunk)
 ;;   (Thunk f)           -- suspended computation
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; A Stream&lt;A&gt; is one of:
+;;   (Empty)
+;;   (Cons head tail)    -- eager head, lazy tail (thunk)
+;;   (Thunk f)           -- suspended computation
+</code></pre></div></div></div>
 <p>Interleaving (<code>disj</code>) alternates between two streams by forcing one step at a
 time -- this is the core of miniKanren's fair search.</p>
 <h3 id="occurs-check">Occurs check</h3>
@@ -320,10 +375,10 @@ provides fresh <code>LVar</code> ids. Document the chosen approach.</p>
 <hr />
 <h2 id="cross-references">Cross-references</h2>
 <ul>
-<li>Part 1: <a href="minikanren-1-relations-and-queries.md">minikanren-1-relations-and-queries.md</a></li>
-<li>Backtracking background: <a href="backtracking-guide.md">backtracking-guide.md</a></li>
-<li>Logic programming overview: <a href="logic-programming-guide.md">logic-programming-guide.md</a></li>
-<li>Datalog series (related relational approach): <a href="datalog-01-concepts.md">datalog-01-concepts.md</a></li>
+<li>Part 1: <a href="minikanren-1-relations-and-queries.html">minikanren-1-relations-and-queries.md</a></li>
+<li>Backtracking background: <a href="backtracking-guide.html">backtracking-guide.md</a></li>
+<li>Logic programming overview: <a href="logic-programming-guide.html">logic-programming-guide.md</a></li>
+<li>Datalog series (related relational approach): <a href="datalog-01-concepts.html">datalog-01-concepts.md</a></li>
 </ul>
     </div>
   </div>
