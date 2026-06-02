@@ -37,9 +37,12 @@ defdata Color :copy (Red) (Green) (Blue)
 
 defn color-to-int [c] :int
   match c
-    (Red)   1
-    (Green) 2
-    (Blue)  3
+    (Red)
+    1
+    (Green)
+    2
+    (Blue)
+    3
 ```
 
 Parameterized ADTs work the same way:
@@ -62,8 +65,10 @@ defdata Option [a]
 
 defn option-or [opt default] :int
   match opt
-    (None)    default
-    (Some x)  x
+    (None)
+    default
+    (Some x)
+    x
 ```
 
 The `:copy` modifier makes the type copyable (like `defstruct :copy`). Without
@@ -89,8 +94,10 @@ defdata Shape
 
 defn area [s] :int
   match s
-    (Circle r)   {r * r}
-    (Rect w h)   {w * h}
+    (Circle r)
+    (* r r)
+    (Rect w h)
+    (* w h)
 ```
 
 Pattern matching is exhaustiveness-checked. If you omit a constructor the
@@ -141,8 +148,10 @@ Evaluation is written the same as for a plain ADT:
 ```sweet-exp
 defn eval-expr [e] :int
   match e
-    (Lit n)   n
-    (Add l r) {eval-expr(l) + eval-expr(r)}
+    (Lit n)
+    n
+    (Add l r)
+    +(eval-expr(l) eval-expr(r))
 ```
 
 ---
@@ -176,8 +185,10 @@ A function dispatching on the tag can return `a` without a cast:
 ```sweet-exp
 defn default-value [t] :int
   match t
-    (IntTag)  0
-    (BoolTag) 0
+    (IntTag)
+    0
+    (BoolTag)
+    0
 ```
 
 In the `IntTag` arm the type-checker knows `a = int`; in `BoolTag` it knows
@@ -220,19 +231,24 @@ defgadt Expr [a]
 
 defn color-to-int [c] :int
   match c
-    (Red)   1
-    (Green) 2
-    (Blue)  3
+    (Red)
+    1
+    (Green)
+    2
+    (Blue)
+    3
 
 defn eval-expr [e] :int
   match e
-    (Lit n)   n
-    (Add l r) {eval-expr(l) + eval-expr(r)}
+    (Lit n)
+    n
+    (Add l r)
+    +(eval-expr(l) eval-expr(r))
 
 defn main [] :int
-  println $ color-to-int((Red))
-  println $ eval-expr(Add((Lit 10) (Lit 20)))
-  println $ color-to-int((Green))
+  println(color-to-int((Red)))
+  println(eval-expr(Add((Lit 10) (Lit 20))))
+  println(color-to-int((Green)))
   0
 ```
 
@@ -266,14 +282,17 @@ defgadt Expr [a]
 
 defn eval-expr [e] :int
   match e
-    (Lit n)   n
-    (Add l r) {eval-expr(l) + eval-expr(r)}
-    (Mul l r) {eval-expr(l) * eval-expr(r)}
+    (Lit n)
+    n
+    (Add l r)
+    +(eval-expr(l) eval-expr(r))
+    (Mul l r)
+    *(eval-expr(l) eval-expr(r))
 
 defn main [] :int
   ; (2 + (3 * 4)) = 14
   let [e Add((Lit 2) Mul((Lit 3) (Lit 4)))]
-    println $ eval-expr(e)
+    println(eval-expr(e))
     0
 ```
 
@@ -319,9 +338,9 @@ defgadt Equal [a b]
 defn main [] :int
   match (Refl)
     (Refl)
-      do
-        println $ coerce((Refl) 42)
-        0
+    do
+      println(coerce((Refl) 42))
+      0
 ```
 
 In the `(Refl)` arm the type-checker knows `a = b`, so `coerce` can safely
@@ -339,7 +358,8 @@ on `Refl` and returning `Refl`:
 ```sweet-exp
 defn sym [eq] :(Equal b a)
   match eq
-    (Refl) (Refl)
+    (Refl)
+    (Refl)
 ```
 
 ---
@@ -365,18 +385,24 @@ defdata Sign (Pos int) (Neg int) (Zero)
 
 defn classify [s] :int
   match s
-    (Pos n) when {n > 100} do
-                             println("big")
-                             0
-    (Pos n)                do
-                             println("pos")
-                             0
-    (Neg n)                do
-                             println("neg")
-                             0
-    (Zero)                 do
-                             println("zero")
-                             0
+    (Pos n)
+    when
+    >(n 100)
+    do
+      println("big")
+      0
+    (Pos n)
+    do
+      println("pos")
+      0
+    (Neg n)
+    do
+      println("neg")
+      0
+    (Zero)
+    do
+      println("zero")
+      0
 ```
 
 Arms are tried top to bottom. The first arm whose pattern matches *and* whose
@@ -427,12 +453,14 @@ features that can be used together.
 ```sweet-exp
 defn describe [x : (int | bool)] :int
   match x
-    (n : int)  do
-                 println("int")
-                 0
-    (b : bool) do
-                 println("bool")
-                 0
+    (n : int)
+    do
+      println("int")
+      0
+    (b : bool)
+    do
+      println("bool")
+      0
 ```
 
 The `(match x (n : int) body1 (b : bool) body2)` form dispatches on the
@@ -470,7 +498,7 @@ definstance Show [bool]
   show [x] "a-bool"
 
 defn print-any [x : (int | bool)] :int
-  println $ .show(x)
+  println(.show(x))
   0
 ```
 
@@ -496,7 +524,7 @@ boxed into `any` carry a runtime tag so their type can be recovered:
 
 ```sweet-exp
 defn consume [x : any] :int
-  println $ type-of(x)   ; prints "int", "bool", "cstr", etc.
+  println(type-of(x))   ; prints "int", "bool", "cstr", etc.
   0
 
 defn main [] :int
@@ -518,7 +546,7 @@ only when you know the type):
 
 ```sweet-exp
 defn print-as-int [x : any] :int
-  println $ cast(x int)
+  println(cast(x int))
   0
 ```
 
@@ -626,9 +654,12 @@ defgadt Expr [a]
 ; Pattern match -- exhaustiveness checked, guards optional
 defn eval-expr [e] :int
   match e
-    (Lit n)   n
-    (Add l r) {eval-expr(l) + eval-expr(r)}
-    (Mul l r) {eval-expr(l) * eval-expr(r)}
+    (Lit n)
+    n
+    (Add l r)
+    +(eval-expr(l) eval-expr(r))
+    (Mul l r)
+    *(eval-expr(l) eval-expr(r))
 
 ; Equality witness
 defgadt Equal [a b]
@@ -640,12 +671,14 @@ coerce((Refl) some-value)
 ; Union type dispatch  (requires -Xunion-types)
 defn describe [x : (int | bool)] :int
   match x
-    (n : int)  0
-    (b : bool) 1
+    (n : int)
+    0
+    (b : bool)
+    1
 
 ; Gradual typing  (requires -Xunion-types)
 defn show-type [x : any] :int
-  println $ type-of(x)
+  println(type-of(x))
   0
 ```
 

@@ -14,7 +14,7 @@ need a "file changed, react" loop.
 
 ## Installation
 
-```turmeric
+```turmeric no-check
 :spices {
   "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
            :ref    "watch-v0.2.0"
@@ -69,13 +69,20 @@ need a "file changed, react" loop.
 ```
 ```sweet-exp
 import watch/event :refer [watch-event-kind watch-event-path watch-event-free
-                             watch-kind-write watch-kind-rename]
+                            watch-kind-write watch-kind-rename]
 import watch/opts :refer [default-watch-opts]
 import watch/watch :refer [watch-open-one watch-close watch-next]
 defn main [] :int
-  let [opts (default-watch-opts)
-        w    (watch-open-one "notes.md" opts)]
-    loop([] let([ev (watch-next w -1)] ;; block indefinitely if(=(ev 0) 0 do(println(str-concat("changed: " watch-event-path(ev))) watch-event-free(ev) recur()))))
+  let [opts default-watch-opts()
+       w    watch-open-one("notes.md" opts)]
+    loop []
+      let [ev watch-next(w -1)]
+        if {ev = 0}
+          0
+          do
+            println(str-concat("changed: " watch-event-path(ev)))
+            watch-event-free(ev)
+            recur()
     watch-close(w)
     0
 ```
@@ -162,12 +169,13 @@ watch-close(w)
 ```
 ```sweet-exp
 ;; Use the defaults (150 ms debounce, non-recursive)
-default-watch-opts
+default-watch-opts()
+
 ;; Construct custom options
 ;; watch-opts-make recursive debounce-ms coalesce? reserved periodic?
 watch-opts-make(1 200 1 0 0)
-watch-opts-free(opts)
-;; release options handle
+
+watch-opts-free(opts)   ;; release options handle
 ```
 
 | Parameter | Type | Default | Meaning |
@@ -224,18 +232,13 @@ watch-event-free(ev)
 (watch-kind->cstr kind)  ;; human-readable string for a kind constant
 ```
 ```sweet-exp
-watch-kind-write
-;; file content changed
-watch-kind-create
-;; file created
-watch-kind-delete
-;; file deleted
-watch-kind-rename
-;; file renamed / moved
-watch-kind-none
-;; no change (returned only on timeout/drain miss)
-watch-kind->cstr(kind)
-;; human-readable string for a kind constant
+watch-kind-write()    ;; file content changed
+watch-kind-create()   ;; file created
+watch-kind-delete()   ;; file deleted
+watch-kind-rename()   ;; file renamed / moved
+watch-kind-none()     ;; no change (returned only on timeout/drain miss)
+
+watch-kind->cstr(kind)  ;; human-readable string for a kind constant
 ```
 
 ---
@@ -270,9 +273,21 @@ a burst of events into one batched notification:
 import watch/debounce :refer [debounce-batch-new debounce-batch-add
                                debounce-batch-ready? debounce-batch-drain
                                debounce-batch-free]
-let [batch (debounce-batch-new 300)]
-  ;; 300 ms window
-  loop([] let([ev (watch-next w 50)] ;; 50 ms poll step if(not=(ev 0) do(debounce-batch-add(batch ev) recur()) ;; No event -- check if debounce window elapsed if(debounce-batch-ready?(batch) let([paths (debounce-batch-drain batch)] ;; paths is a cons list of changed cstr paths rebuild!(paths) recur()) recur()))))
+
+let [batch debounce-batch-new(300)]  ;; 300 ms window
+  loop []
+    let [ev watch-next(w 50)]       ;; 50 ms poll step
+      if not=(ev 0)
+        do
+          debounce-batch-add(batch ev)
+          recur()
+        ;; No event -- check if debounce window elapsed
+        if debounce-batch-ready?(batch)
+          let [paths debounce-batch-drain(batch)]
+            ;; paths is a cons list of changed cstr paths
+            rebuild!(paths)
+            recur()
+          recur()
   debounce-batch-free(batch)
 ```
 

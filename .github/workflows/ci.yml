@@ -43,5 +43,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Check guide pairs
-        run: python3 tools/check-guide-pairs.py docs/guides/
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      - name: Build tur
+        run: cmake --build build -j --target tur
+      - name: Check guide pairs (AST-verified via tur parse-check)
+        run: python3 tools/check-guide-pairs.py --tur build/tur docs/guides/

@@ -7,15 +7,15 @@ literal syntax whose slot values are ordinary expressions, evaluated at
 runtime in the surrounding scope. They are sugar over the `hamt-of`,
 `vec-of`, and `set-of` stdlib macros.
 
-```turmeric
+```turmeric no-check
 (def payload #map{:name name :age (+ age 1) :active 1})
 (def points  [(make-point 0 0) (make-point 1 1) origin])
 (def small   #set{1 2 3})
 ```
 ```sweet-exp
-def payload #map
-def points [(make-point 0 0) (make-point 1 1) origin]
-def small #set
+def payload #map{:name name :age {age + 1} :active 1}
+def points [make-point(0 0) make-point(1 1) origin]
+def small #set{1 2 3}
 ```
 
 ## Enabling the feature
@@ -40,7 +40,7 @@ in expression position keeps its pre-existing meaning (a binding spec only).
 | `#map{k1 v1 k2 v2 ...}` | `(hamt-of k1' v1 k2' v2 ...)` | keys normalized (see below); last duplicate key wins |
 | `#set{e1 e2 e3 ...}` | `(set-of e1 e2 e3 ...)` | duplicate elements collapse |
 
-```turmeric
+```turmeric no-check
 [1 2 3]                       ; => (vec-of 1 2 3)
 #map{:a 1 :b x}               ; => map {:a -> 1, :b -> x}
 #set{:literal x (compute)}    ; (compute) evaluated once
@@ -48,11 +48,9 @@ in expression position keeps its pre-existing meaning (a binding spec only).
 ```sweet-exp
 [1 2 3]
 ; => (vec-of 1 2 3)
-#map
-{:a 1 :b x}
+#map{:a 1 :b x}
 ; => map {:a -> 1, :b -> x}
-#set
-{:literal x (compute)}
+#set{:literal x (compute)}
 ; (compute) evaluated once
 ```
 
@@ -65,7 +63,7 @@ elements of a vector must unify to one type, and all map values to one type
 element). Elements are stored through an `:int` carrier slot, so reads
 recover the type with an ascription:
 
-```turmeric
+```turmeric no-check
 [1.5 2.5 3.5]                 ; Vec[float]
 (:: (vec-get fs 0) :float)    ; => 1.5
 
@@ -77,8 +75,7 @@ recover the type with an ascription:
 ; Vec[float]
 ::(vec-get(fs 0) :float)
 ; => 1.5
-#map
-{1 "one" 2 "two"}
+#map{1 "one" 2 "two"}
 ; Map[int cstr]
 ::(map-get(m 1) :cstr)
 ; => "one"
@@ -186,16 +183,14 @@ element is used as **its own hash** -- the identity-hash convention the typed
 `Set[A]` uses everywhere (`(set-add s 42 42)`). Scalar element types (int,
 etc.) dedupe by value:
 
-```turmeric
+```turmeric no-check
 #set{1 1 2}        ; => set with two elements, {1, 2}
 #set{x (+ x x) y}  ; each element expression evaluated exactly once
 ```
 ```sweet-exp
-#set
-{1 1 2}
+#set{1 1 2}
 ; => set with two elements, {1, 2}
-#set
-{x (+ x x) y}
+#set{x (+ x x) y}
 ; each element expression evaluated exactly once
 ```
 
@@ -208,17 +203,15 @@ etc.) dedupe by value:
 
 ## Empty literals
 
-```turmeric
+```turmeric no-check
 #map{}   ; => empty Map
 #set{}   ; => empty Set
 []       ; => empty Vec  (expression position)
 ```
 ```sweet-exp
-#map
-{}
+#map{}
 ; => empty Map
-#set
-{}
+#set{}
 ; => empty Set
 []
 ; => empty Vec  (expression position)
@@ -230,22 +223,17 @@ An empty literal has no element to infer a type from, so a later typed
 operation (`.eq?`, `.push!`) can't recover its element type. Pin it with a
 fused `:T` element-type suffix immediately after the closer:
 
-```turmeric
+```turmeric no-check
 []:int             ; empty Vec[int]
 #set{}:cstr        ; empty Set[cstr]
 []:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
 ```
 ```sweet-exp
-[]
-:int
+[]:int
 ; empty Vec[int]
-#set
-{}
-:cstr
+#set{}:cstr
 ; empty Set[cstr]
-[]
-:
-Vec(int)
+[]:(Vec int)
 ; empty Vec[Vec[int]]  (parenthesize a compound element type)
 ```
 
@@ -313,7 +301,7 @@ The reader dispatch sits below the sweet-expression layer, so the literals
 work transparently inside `#lang sweet-exp` files alongside neoteric calls
 and curly-infix arithmetic:
 
-```turmeric
+```turmeric no-check
 #lang sweet-exp
 
 (defn build [] :int
@@ -321,10 +309,9 @@ and curly-infix arithmetic:
     map-count(m)))
 ```
 ```sweet-exp
-#lang
-sweet-exp
+#lang sweet-exp
+
 defn build [] :int
   let [m #map{:a 1 :b 2}]
-    map-count
-    m()
+    map-count(m)
 ```

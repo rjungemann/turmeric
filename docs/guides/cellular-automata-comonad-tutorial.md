@@ -61,7 +61,7 @@ The implementation lives in [`stdlib/comonad.tur`](../../stdlib/comonad.tur), wh
 
 Before tackling 2D grids, it helps to understand the simpler 1D case. A **Zipper** is a list with a cursor:
 
-```turmeric
+```turmeric no-check
 left  = [prev, prev-prev, ...]   -- nearest first
 focus = current element
 right = [next, next-next, ...]   -- nearest first
@@ -111,7 +111,7 @@ defn ca-rule [z] :int
   int64_t l = p->left_len  > 0 ? p->left[0]  : 0;
   int64_t r = p->right_len > 0 ? p->right[0] : 0;
   return (l + p->focus + r) & 1;   /* XOR of three neighbours */
-  ```)
+  ```
 
 defn main [] :int
   let [arr zap-array(9)]
@@ -237,12 +237,12 @@ defn __gridctx_extend [g fn] :int
   out->data = out_data; out->width = w; out->height = h;
   out->cx = src->cx; out->cy = src->cy;
   return (int64_t)(intptr_t)out;
-  ```)
+  ```
 
 definstance Comonad [gridctx]
   extract   [wa]    grid-focus(wa)
   extend    [wa fn] __gridctx_extend(wa fn)
-  duplicate [wa]    __gridctx_extend(wa fn [g] g)
+  duplicate [wa]    __gridctx_extend(wa (fn [g] g))
 ```
 
 Notice: `tmp` is a stack-allocated scratch struct that shares `src->data`. Because `fn` is called synchronously and never stores the pointer, this is safe. Each call gets a fresh `(cx, cy)`.
@@ -298,7 +298,7 @@ defn conway-rule [g] :int
   if (alive)          return 1;   /* survival        */
   if (n == 3)         return 1;   /* reproduction    */
   return 0;
-  ```)
+  ```
 ```
 
 A full generation step is then just:

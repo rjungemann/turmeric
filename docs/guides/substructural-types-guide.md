@@ -233,9 +233,10 @@ A `^linear` value bound inside a match arm must be consumed within that arm.
 ```sweet-exp
 match opt
   (some v)
-    let [^linear r ref(v)]
-      drop!(r)   ;; must consume before arm exits
-  none  0
+  let [^linear r ref(v)]
+    drop!(r)   ;; must consume before arm exits
+  none
+  0
 ```
 
 ---

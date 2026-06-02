@@ -107,7 +107,7 @@ defmodule app
 
   defn main [] :int
     let [p v/make-vector(3 4)]
-      println $ v/magnitude(p)
+      println(v/magnitude(p))
       0
 ```
 
@@ -315,7 +315,7 @@ For a single-file program, `./build/tur build app.tur -o app` works as before
 For a multi-file build, place modules under the same directory tree as
 the main file:
 
-```turmeric
+```turmeric no-check
 src/
   app.tur              ;; (defmodule app (import geom/vector :as v) ...)
   geom/
@@ -446,7 +446,7 @@ defmodule app
 
   defn main [] :int
     let [p make-vector(3 4)]
-      println $ magnitude(p)   ;; 5
+      println(magnitude(p))   ;; 5
       0
 ```
 

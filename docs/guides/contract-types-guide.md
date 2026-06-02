@@ -40,7 +40,7 @@ all predicate expressions.
 
 ### Inline Contract Type
 
-```turmeric
+```turmeric no-check
 ;; A non-negative integer
 (deftype Nat { x : int | (>= x 0) })
 
@@ -51,10 +51,10 @@ all predicate expressions.
 
 ```sweet-exp
 ;; A non-negative integer
-deftype Nat { x : int | {x >= 0} }
+deftype Nat { x : int | (>= x 0) }
 
 ;; Inline in a function signature
-defn sqrt [x : { y : double | {y >= 0} }] : double
+defn sqrt [x : { y : double | (>= y 0) }] : double
   ...
 ```
 
@@ -71,10 +71,8 @@ value being checked, not to any name in the surrounding scope.
 ```
 
 ```sweet-exp
-defn divide [x : int, y : int] : int
-  :pre  {y != 0}
-  :post {(* result y) = x}
-  {x / y}
+defn divide [x : int, y : int] : int :pre (!= y 0) :post (= (* result y) x)
+  (/ x y)
 ```
 
 - **`:pre`** -- checked at function entry, before any user code runs.
@@ -91,15 +89,13 @@ defn divide [x : int, y : int] : int
 ```
 
 ```sweet-exp
-defn safe-sqrt [x : double] : double
-  :pre  {x >= 0.0}
-  :post {result >= 0.0}
+defn safe-sqrt [x : double] : double :pre (>= x 0.0) :post (>= result 0.0)
   sqrt(x)
 ```
 
 ### Contract on a Struct Field
 
-```turmeric
+```turmeric no-check
 (defstruct BoundedBuffer [
   data  : (vec int)
   index : { i : int | (and (>= i 0) (< i (vec/len data))) }])
@@ -108,7 +104,7 @@ defn safe-sqrt [x : double] : double
 ```sweet-exp
 defstruct BoundedBuffer [
   data  : (vec int)
-  index : { i : int | and({i >= 0} {i < vec/len(data)}) }]
+  index : { i : int | (and (>= i 0) (< i (vec/len data))) }]
 ```
 
 The predicate for a struct field may reference other fields in scope at elaboration time.
@@ -122,9 +118,7 @@ The predicate for a struct field may reference other fields in scope at elaborat
 ```
 
 ```sweet-exp
-extern-c sqlite3_column_int [stmt : ptr, col : int] : int
-  :pre  and({stmt != null} {col >= 0})
-  :post {result >= 0}
+extern-c sqlite3_column_int [stmt : ptr, col : int] : int :pre (and (!= stmt null) (>= col 0)) :post (>= result 0)
 ```
 
 ---
@@ -136,7 +130,7 @@ extern-c sqlite3_column_int [stmt : ptr, col : int] : int
 The contract documents and enforces the requirement at the call site. Inside the body,
 no redundant check is needed:
 
-```turmeric
+```turmeric no-check
 (defn vec-get-checked [v : (vec a), i : { x : int | (and (>= x 0) (< x (vec/len v))) }] : a
   (vec/get-unsafe v i))
 
@@ -148,7 +142,7 @@ no redundant check is needed:
 ```
 
 ```sweet-exp
-defn vec-get-checked [v : (vec a), i : { x : int | and({x >= 0} {x < vec/len(v)}) }] : a
+defn vec-get-checked [v : (vec a), i : { x : int | (and (>= x 0) (< x (vec/len v))) }] : a
   vec/get-unsafe(v i)
 
 ;; At the call site, the elaborator inserts:
@@ -162,7 +156,7 @@ defn example [v : (vec int)] : int
 
 Accept an untyped value and narrow it at runtime:
 
-```turmeric
+```turmeric no-check
 (defn ensure-positive [x : any] : { y : int | (>= y 0) }
   :contract (>= x 0)
   x)
@@ -191,9 +185,7 @@ Contracts are checked before the C call and on return:
 ```
 
 ```sweet-exp
-extern-c sqlite3_column_int [stmt : ptr, col : int] : int
-  :pre  and({stmt != null} {col >= 0})
-  :post {result >= 0}
+extern-c sqlite3_column_int [stmt : ptr, col : int] : int :pre (and (!= stmt null) (>= col 0)) :post (>= result 0)
 ```
 
 ### Pre- and Post-Conditions
@@ -206,9 +198,7 @@ extern-c sqlite3_column_int [stmt : ptr, col : int] : int
 ```
 
 ```sweet-exp
-defn safe-sqrt [x : double] : double
-  :pre  {x >= 0.0}
-  :post {result >= 0.0}
+defn safe-sqrt [x : double] : double :pre (>= x 0.0) :post (>= result 0.0)
   sqrt(x)
 ```
 
@@ -235,8 +225,9 @@ By default, a violated contract calls `panic`. A custom handler can be registere
 ```
 
 ```sweet-exp
-set-contract-handler!(fn [msg location] : unit
-  log/error $ str("Contract violated at " location ": " msg))
+set-contract-handler!
+  fn [msg location] : unit
+    log/error $ str "Contract violated at " location ": " msg
 ```
 
 For scoped overrides:

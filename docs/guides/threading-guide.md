@@ -145,7 +145,7 @@ with-lock counter
       new-val
 
 ;; Check current value (requires lock)
-let [val with-lock(counter fn [v] v)]
+let [val with-lock(counter (fn [v] v))]
   println(val)
 ```
 
@@ -260,7 +260,7 @@ def p promise-new()
 def f p
 
 ;; Producer thread fulfills the promise
-thread(fn [] promise-fulfill(p 42))
+thread((fn [] promise-fulfill(p 42)))
 
 ;; Consumer blocks on the future
 def result future-get(f)
@@ -309,10 +309,10 @@ def e future-error-of(7)  ; immediately rejected
 ```
 ```sweet-exp
 ;; Map a function over the fulfilled value
-def f2 future-map(f fn [v] {v * 2})
+def f2 future-map(f (fn [v] {v * 2}))
 
 ;; Flat-map: fn must return a new future
-def f3 future-then(f fn [v] future-of({v + 1}))
+def f3 future-then(f (fn [v] future-of({v + 1})))
 ```
 
 ### Multi-Combinators
@@ -491,11 +491,14 @@ def ch-a chan-new(4)
 def ch-b chan-new(4)
 
 ;; Poll with a default arm (never blocks)
-let [[idx val] select(ch-a :recv)(ch-b :recv)(:default :nothing)]
+let [[idx val] select((ch-a :recv) (ch-b :recv) (:default :nothing))]
   cond
-    {idx = 0}  println(str("from ch-a: " val))
-    {idx = 1}  println(str("from ch-b: " val))
-    :else       println("nothing ready")
+    {idx = 0}
+    println(str("from ch-a: " val))
+    {idx = 1}
+    println(str("from ch-b: " val))
+    :else
+    println("nothing ready")
 
 ;; Send-or-drop
 select
@@ -899,7 +902,7 @@ Marker traits control what types can be safely shared:
 - **`Send`** -- Type can be moved across thread boundaries. If `T : Send`, `Arc<T>` can be cloned and sent to another thread.
 - **`Sync`** -- Type can be safely shared via `&T` in multiple threads. If `T : Sync`, multiple threads can hold `&T` simultaneously without a `Mutex`.
 
-```turmeric
+```turmeric no-check
 ;; These are Send (safe to move to threads)
 int, bool, string, (Pair a b) [Send a, Send b]
 
@@ -1024,7 +1027,7 @@ for-each range(10)
           fn [n]
             {n + 1}
 
-println(with-lock(counter fn [n] n))  ; => 10
+println(with-lock(counter (fn [n] n)))  ; => 10
 ```
 
 ### Barrier

@@ -31,32 +31,71 @@ import tempfile
 from pathlib import Path
 
 
-PAIR_RE = re.compile(
-    r'(?m)^```turmeric\n(.*?)^```\n\s*^```sweet-exp\n(.*?)^```',
-    re.DOTALL | re.MULTILINE,
-)
-
-NO_CHECK_RE = re.compile(r'(?m)^```turmeric no-check\n')
-
-# Any turmeric block (with or without modifiers like "no-check"), captured so we
-# can identify ones that lack an adjacent sweet-exp sibling.
-TURMERIC_BLOCK_RE = re.compile(
-    r'(?m)^```turmeric(?P<mods>[^\n]*)\n(?P<body>.*?)^```',
-    re.DOTALL | re.MULTILINE,
-)
-
-SWEET_AFTER_RE = re.compile(r'\A\s*\n?```sweet-exp\n', re.MULTILINE)
+TURMERIC_OPEN_RE = re.compile(r'(?m)^```turmeric(?P<mods>[^\n]*)\n')
+# Matched with .match(text, pos); the match is anchored at pos (no \A needed).
+SWEET_AFTER_RE = re.compile(r'\s*```sweet-exp\n')
 
 SPICES_ROOT = Path('../turmeric-spices/spices')
 
 
+def _read_fenced_block(text: str, pos: int) -> tuple[str, int]:
+    """Read a markdown fenced block whose opening fence's newline is at `pos`.
+
+    Returns (content, end) where `end` is just past the closing fence line.
+
+    A markdown block closes at a column-0 bare ``` line. Turmeric inline-C
+    blocks use ``` to toggle a C span (```c opens; ``` or ```) closes) and may
+    be indented or written inline, so we track the C span by scanning ``` runs
+    and only treat a bare ``` as the block close when not inside a C span. This
+    avoids the non-greedy-regex bug where a standalone turmeric block (or a
+    nested ```c fence) merged content across real block boundaries.
+    """
+    n = len(text)
+    i = pos
+    line_start = pos
+    in_c = False
+    while i < n:
+        if text.startswith('```', i):
+            at_col0 = (i == line_start)
+            after = text[i + 3] if i + 3 < n else '\n'
+            if in_c:
+                in_c = False
+                i += 3
+                continue
+            if after.isalnum():           # info string -> opens a (C) span
+                in_c = True
+                i += 3
+                continue
+            if at_col0:                   # bare ``` at column 0 -> block close
+                j = text.find('\n', i)
+                end = (j + 1) if j != -1 else n
+                return text[pos:i], end
+            i += 3
+            continue
+        if text[i] == '\n':
+            line_start = i + 1
+        i += 1
+    return text[pos:], n
+
+
 def find_pairs(text: str) -> list[tuple[str, str, int]]:
-    """Return list of (turmeric_src, sweet_exp_src, line_number) for each pair."""
+    """Return list of (turmeric_src, sweet_exp_src, line_number) for each pair.
+
+    A pair is a ```turmeric block (no modifiers) immediately followed -- only
+    blank lines between -- by a ```sweet-exp block. Blocks are delimited with a
+    fence-aware scanner so nested ```c inline-C and standalone turmeric blocks
+    do not corrupt the boundaries.
+    """
     pairs = []
-    for m in PAIR_RE.finditer(text):
+    for m in TURMERIC_OPEN_RE.finditer(text):
+        if (m.group('mods') or '').strip():
+            continue  # e.g. ```turmeric no-check -- opted out
         line_no = text[:m.start()].count('\n') + 1
-        tur_src = m.group(1)
-        sweet_src = m.group(2)
+        tur_src, after = _read_fenced_block(text, m.end())
+        sm = SWEET_AFTER_RE.match(text, after)
+        if not sm:
+            continue
+        sweet_src, _ = _read_fenced_block(text, sm.end())
         pairs.append((tur_src, sweet_src, line_no))
     return pairs
 
@@ -116,13 +155,13 @@ def find_unpaired_turmeric(text: str) -> list[tuple[int, str]]:
     `no-check`.
     """
     unpaired = []
-    for m in TURMERIC_BLOCK_RE.finditer(text):
+    for m in TURMERIC_OPEN_RE.finditer(text):
         mods = (m.group('mods') or '').strip()
         if 'no-check' in mods.split():
             continue
-        # Adjacent means only whitespace between the closing ``` and the next ```sweet-exp.
-        rest = text[m.end():]
-        if SWEET_AFTER_RE.match(rest):
+        _, after = _read_fenced_block(text, m.end())
+        # Adjacent means only whitespace between the closing ``` and ```sweet-exp.
+        if SWEET_AFTER_RE.match(text, after):
             continue
         line_no = text[:m.start()].count('\n') + 1
         unpaired.append((line_no, mods))

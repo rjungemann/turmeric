@@ -133,7 +133,7 @@ hash(:foo)
 With `-Xdata-literals` as well, a keyword key in a map literal is a
 first-class `:Sym` key rather than a content-hashed string:
 
-```turmeric
+```turmeric no-check
 (let [m #map{:foo 10 :bar 20}]
   (map-get m :foo)      ; => 10
   (map-has? m :missing) ; => false (0))

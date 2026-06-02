@@ -43,7 +43,7 @@ Then in your `build.tur`:
 (import frame/select :refer [select-cols drop-cols rename with-col
                                map-col mutate])
 (import frame/filter :refer [filter drop-nulls distinct sample])
-(import frame/sort   :refer [arrange]]
+(import frame/sort   :refer [arrange])
 (import frame/group  :refer [group-by agg agg-sum agg-mean agg-count
                                agg-min agg-max summarize])
 (import frame/join   :refer [inner-join left-join join])
@@ -267,9 +267,9 @@ Pass a predicate `(fn [frame row-index] :int)` -- return non-zero to keep the ro
 ```
 
 ```sweet-exp
-let [seniors filter(df fn([f i]
-                      let [age column-int64-at(frame-column(f "age") i)]
-                        >= age 30))]
+let [seniors (filter df (fn [f i]
+                          (let [age (column-int64-at (frame-column f "age") i)]
+                            (>= age 30))))]
   print-frame(seniors)
 ```
 
@@ -308,11 +308,11 @@ let [uniq distinct(df list("name"))]
 ```
 
 ```sweet-exp
-let [df2 mutate(df "grade" type-utf8()
-          fn([f i]
-            let [s column-float64-at(frame-column(f "score") i)]
-              if >= s 9.0 "A"
-              if >= s 7.0 "B" "C"))]
+let [df2 (mutate df "grade" (type-utf8)
+           (fn [f i]
+             (let [s (column-float64-at (frame-column f "score") i)]
+               (if (>= s 9.0) "A"
+               (if (>= s 7.0) "B" "C")))))]
   print-frame(df2)
 ```
 
@@ -475,14 +475,14 @@ of column names -- left-side key names and right-side key names.
 let [orders   read-csv("orders.csv"   default-csv-opts())
      products read-csv("products.csv" default-csv-opts())]
   match cons(orders products)
-    [cons(ok(o) ok(p))
-     let [result inner-join(o p
-                   list("product_id")
-                   list("id"))]
-       match result
-         [ok(df) print-frame(df)]
-         [err(e) println("join error:" e)]]
-    [_ println("csv read error")]
+    [(cons (ok o) (ok p))
+     (let [result (inner-join o p
+                    (list "product_id")
+                    (list "id"))]
+       (match result
+         [(ok df) (print-frame df)]
+         [(err e) (println "join error:" e)]))]
+    [_ (println "csv read error")]
 ```
 
 The convenience `join` function takes a `how` string and a single key list (for
@@ -550,12 +550,14 @@ their value in `value-name`:
 
 ```sweet-exp
 let [df   read-csv("quarterly.csv" default-csv-opts())
-     long melt $ match df [ok(f) f] [_ 0]
-               list("name")
-               "quarter"
-               "sales"]
-  when long
-    print-frame(long)
+     long (melt df
+            (list "name")
+            "quarter"
+            "sales")]
+  match cons(df long)
+    [(cons (ok wide) melted)
+     (when melted (print-frame melted))]
+    [_ 0]
 ```
 
 All non-identity columns must share the same type. `melt` returns `0` if they
@@ -591,7 +593,7 @@ directly.
 ```sweet-exp
 let [ptrs     arrow-export(df)
      schema-p head(ptrs)
-     array-p  head tail(ptrs)]
+     array-p  head(tail(ptrs))]
   println("schema ptr:" schema-p)
   println("array ptr:"  array-p)
 ```

@@ -17,7 +17,7 @@ dataframes and raw float64 columns.
 
 Add `tur-stats` as a dependency in your `build.tur`:
 
-```turmeric
+```turmeric no-check
 :spices {
   "frame" {:url    "https://github.com/rjungemann/turmeric-spices"
            :ref    "frame-v0.1.0"

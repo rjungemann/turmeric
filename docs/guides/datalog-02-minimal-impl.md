@@ -55,7 +55,7 @@ Constructors wrap the raw int:
 defn long-val [n :int] :int
   LongVal(n)
 defn str-val [s :cstr] :int
-  StrVal $ cstr->int(s)
+  StrVal(cstr->int(s))
 defn entity-val [e :int] :int
   EntityVal(e)
 ```
@@ -72,10 +72,10 @@ The printer dispatches on the constructor:
 
 ```sweet-exp
 defn print-value [v :int] :nil
-  match v
+  match(v
     (LongVal n)   println(n)
     (StrVal s)    println-cstr(s)
-    (EntityVal e) println(e)
+    (EntityVal e) println(e))
 ```
 
 ---
@@ -105,7 +105,7 @@ defn datum-new [entity :int attr :int value :int tx :int] :int
   int64_t *d = malloc(4 * sizeof(int64_t));
   d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
   return (int64_t)(intptr_t)d;
-  ```)
+  ```
 ```
 
 Accessors project individual fields:
@@ -123,13 +123,13 @@ Accessors project individual fields:
 
 ```sweet-exp
 defn datum-entity [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```
 defn datum-attr [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```
 defn datum-value [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```
 defn datum-tx [d :int] :int
-  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```
 ```
 
 Note the `return (int64_t)(intptr_t)d` pattern -- this is the canonical way to
@@ -170,13 +170,13 @@ defn db-new [] :int
   db[0] = (int64_t)(intptr_t)v;
   db[1] = 0;
   return (int64_t)(intptr_t)db;
-  ```)
+  ```
 ```
 
 `db-assert!` increments `next-tx`, allocates a new datum, appends it to the
 vector, and returns the transaction number:
 
-```turmeric
+```turmeric no-check
 (defn db-assert! [db :int entity :int attr :int value :int] :int
   ...
   p[1] += 1;
@@ -242,12 +242,12 @@ Attribute names are C string literals. Two helpers convert between Turmeric
 
 ```sweet-exp
 defn cstr->int [s :cstr] :int
-  ```c return (int64_t)(intptr_t)s; ```)
+  ```c return (int64_t)(intptr_t)s; ```
 
 defn cstr-eq? [a :int b :int] :bool
   ```c
   return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
-  ```)
+  ```
 ```
 
 `cstr->int` turns a string literal (whose address is stable for the lifetime of
@@ -316,7 +316,7 @@ let [names db-q(db q-attr(":user/name"))
      ^mut i 0]
   while {i < rvec-len(names)}
     do
-      print-value $ datum-value $ rvec-get(names i)
+      print-value(datum-value(rvec-get(names i)))
       set! i {i + 1}
 ```
 

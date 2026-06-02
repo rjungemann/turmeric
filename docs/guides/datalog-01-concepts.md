@@ -261,9 +261,12 @@ Use `match` to inspect a value:
 
 ```sweet-exp
 match some-value
-  (LongVal n)   println(n)
-  (StrVal s)    println-cstr(s)
-  (EntityVal e) println(e)
+  (LongVal n)
+  println(n)
+  (StrVal s)
+  println-cstr(s)
+  (EntityVal e)
+  println(e)
 ```
 
 Constructors:

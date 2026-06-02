@@ -108,10 +108,10 @@ The plaintext version:
 ```
 ```sweet-exp
 load("stdlib/httpd.tur")
-defn my-handler [conn:ptr<void>] :nil
+defn my-handler [conn :ptr<void>] :nil
   httpd-resp-status!(conn 200)
   httpd-resp-body!(conn "Hello over HTTP")
-let [h(httpd-new8080my-handler)]
+let [h httpd-new(8080 my-handler)]
   httpd-run(h)
   httpd-free(h)
 ```
@@ -141,20 +141,20 @@ The HTTPS version differs only in the constructor + a tiny preamble:
 ```
 ```sweet-exp
 load("stdlib/httpd.tur")
-import tls/ctx :refer [tls-ctx-newtls-ctx-free
-tls-ctx-load-cert-pemtls-ctx-load-key-pem]
+import tls/ctx :refer [tls-ctx-new tls-ctx-free
+                       tls-ctx-load-cert-pem tls-ctx-load-key-pem]
 import tls/httpd :refer [tls-httpd-init]
-defn my-handler [conn:ptr<void>] :nil
+defn my-handler [conn :ptr<void>] :nil
   httpd-resp-status!(conn 200)
   httpd-resp-body!(conn "Hello over HTTPS")
 defn main [] :int
   tls-httpd-init()
   ;; (a)
-  let [ctx(tls-ctx-new)]
+  let [ctx tls-ctx-new()]
     ;; (b)
     tls-ctx-load-cert-pem(ctx "/etc/letsencrypt/live/example.com/fullchain.pem")
     tls-ctx-load-key-pem(ctx "/etc/letsencrypt/live/example.com/privkey.pem")
-    let [h(httpd-new-tls84434my-handlerctx)]
+    let [h httpd-new-tls(8443 4 my-handler ctx)]
       ;; (c)
       httpd-run(h)
       httpd-free(h)

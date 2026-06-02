@@ -41,10 +41,14 @@ Note: all guide content must be ASCII-only. Use `--` (double hyphen), never em d
 
 ## Coverage
 
-Run `just check-guides` to verify all pairs and see current coverage. As of the last
-update, paired guides include: `quickstart.md`, `repl-tutorial.md`,
-`effects-system-guide.md`. Remaining guides are being converted incrementally --
-see the task plan for progress.
+Every `turmeric` + `sweet-exp` toggle pair is **machine-verified**: the two sides
+must read to the same AST. `tools/check-guide-pairs.py` extracts each pair and
+runs `tur parse-check <turmeric> <sweet-exp>` (exit 0 = same AST), so a drifted
+sweet-exp block fails the check.
+
+Run `just check-guides` (or `python3 tools/check-guide-pairs.py docs/guides/`) to
+verify all pairs and see current coverage. A pair that is genuinely illustrative
+pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check ````.
 
 ## Getting Started
 

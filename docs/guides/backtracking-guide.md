@@ -55,10 +55,10 @@ classic nondeterministic/backtracking semantics with a familiar monadic API.
 ```sweet-exp
 ;; Return all even numbers from 1..10
 let [evens mbind(fresh(1 11)
-                 fn [x]
-                   if {mod(x 2) = 0}
-                     mreturn x
-                     mzero())]
+                 (fn [x]
+                   (if (= (mod x 2) 0)
+                     (mreturn x)
+                     (mzero))))]
   bt-print(run-backtrack(evens))
 
 ; Outputs:
@@ -90,11 +90,15 @@ the backtracking monad:
 ```sweet-exp
 ;; Pythagorean triples with a+b+c = 24
 backtrack-do
-  a fresh(1 24)
-  b fresh(a 24)
-  c mreturn $ {24 - {a + b}}
-  _ guard $ {{a * a} = {{b * b} + {c * c}}}
-  mreturn $ list(a b c)
+  a
+  fresh(1 24)
+  b
+  fresh(a 24)
+  c
+  mreturn({24 - {a + b}})
+  _
+  guard((= (* a a) (+ (* b b) (* c c))))
+  mreturn(list(a b c))
 ```
 
 Each `var expr` line binds `var` to each alternative produced by `expr`. The
@@ -114,7 +118,7 @@ Use `run-backtrack-depth` when you only need the first N results:
 
 ```sweet-exp
 ;; Take only the first 5 solutions
-bt-print $ run-backtrack-depth(all-solutions 5)
+bt-print(run-backtrack-depth(all-solutions 5))
 ```
 
 You can also pass `--backtrack-depth N` to the compiler as a flag, which emits
@@ -147,9 +151,10 @@ defn safe? [col row packed n] :bool
 
 defn queens [n] :int
   let [result mreturn(0)]  ;; start with empty board (encoded as 0)
-    let [board mbind(result fn [packed]
-      ;; for each row 0..n-1, expand the board
-      ...)]
+    let [board mbind(result
+                     (fn [packed]
+                       ;; for each row 0..n-1, expand the board
+                       ...))]
       board
 ```
 
@@ -185,9 +190,9 @@ defn make-choice [] :int
     mreturn({x * 2})
 
 defn main []
-  let [result
-        handle make-choice()
-          (Choose [a b] k)  resume(k a)]   ;; always pick 'a'
+  let [result (handle (make-choice)
+                (Choose [a b] k)
+                (resume k a))]   ;; always pick 'a'
     bt-print(result)
 ```
 

@@ -148,11 +148,9 @@ a `TY_APP` like `Option[int]`, or an ADT -- is **carrier-erased to
 (defstruct HasOpt [o : (Option int)])  ;; field o
 ```
 ```sweet-exp
-defstruct Vec2 [x:inty:int]
-defstruct HasVec [p:Vec2]
-;; field p
-defstruct HasOpt [o:(Optionint)]
-;; field o
+defstruct Vec2 [x :int y :int]
+defstruct HasVec [p :Vec2]           ;; field p
+defstruct HasOpt [o : (Option int)]  ;; field o
 ```
 
 lowers (via `struct_field_c_type`, `src/compiler/types.c`) to:

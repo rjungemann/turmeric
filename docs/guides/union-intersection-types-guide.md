@@ -62,9 +62,12 @@ deftype IntOrString []
 ;; Inline in a function signature
 defn print-value [x : (int | cstr | bool)] : unit
   match x
-    (i : int)  println(i)
-    (s : cstr) println(s)
-    (b : bool) println(if b "true" "false")
+    (i : int)
+    println(i)
+    (s : cstr)
+    println(s)
+    (b : bool)
+    println((if b "true" "false"))
 ```
 
 Nested unions are flattened: `(int | (cstr | bool))` becomes `(int | cstr | bool)`.
@@ -84,8 +87,10 @@ all union members:
 ```sweet-exp
 defn describe [x : (int | cstr)] : cstr
   match x
-    (n : int)  str("number: " n)
-    (s : cstr) str("string: " s)
+    (n : int)
+    str("number: " n)
+    (s : cstr)
+    str("string: " s)
 ```
 
 Omitting any member is a compile-time error (`TUR_E0301`).
@@ -131,8 +136,10 @@ show(x)   ;; ok -- in the instance intersection
 
 ;; Arithmetic is only on int; requires narrowing
 match x
-  (n : int)  {n + 1}
-  (s : cstr) ...
+  (n : int)
+  {n + 1}
+  (s : cstr)
+  ...
 ```
 
 ---

@@ -67,7 +67,7 @@ definstance Show [int]
     ```
 
 defn main [] :int
-  let [e pack(42 exists [a] [(Show a)] a)]
+  let [e pack(42 (exists [a] [(Show a)] a))]
     0
 ```
 
@@ -78,7 +78,7 @@ is a pure information-hiding boundary:
 (pack 42 (exists [a] a))   ; opaque -- nothing you can do with the inner value
 ```
 ```sweet-exp
-pack(42 exists [a] a)   ; opaque -- nothing you can do with the inner value
+pack(42 (exists [a] a))   ; opaque -- nothing you can do with the inner value
 ```
 
 ## `open` -- eliminate an existential
@@ -169,10 +169,10 @@ definstance Show [bool]
       "false"
 
 defn main [] :int
-  let [e1 pack(42 exists [a] [(Show a)] a)
-       e2 pack(true exists [a] [(Show a)] a)]
-    println $ open(e1 [a v] .show(v))
-    println $ open(e2 [a v] .show(v))
+  let [e1 pack(42   (exists [a] [(Show a)] a))
+       e2 pack(true (exists [a] [(Show a)] a))]
+    println(open(e1 [a v] .show(v)))
+    println(open(e2 [a v] .show(v)))
   0
 ```
 

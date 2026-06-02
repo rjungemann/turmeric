@@ -40,15 +40,24 @@ no way to compare Values. `query.tur` adds `value-eq?`:
 ```sweet-exp
 defn value-eq? [a :int b :int] :bool
   match a
-    (LongVal x)   match b
-                    (LongVal y)   {x = y}
-                    _ false
-    (StrVal x)    match b
-                    (StrVal y)    cstr-eq?(x y)
-                    _ false
-    (EntityVal x) match b
-                    (EntityVal y) {x = y}
-                    _ false
+    (LongVal x)
+    match b
+      (LongVal y)
+      = x y
+      _
+      false
+    (StrVal x)
+    match b
+      (StrVal y)
+      cstr-eq?(x y)
+      _
+      false
+    (EntityVal x)
+    match b
+      (EntityVal y)
+      = x y
+      _
+      false
 ```
 
 The outer `match` dispatches on `a`'s constructor; the inner `match` checks that
@@ -177,13 +186,13 @@ transaction number ascending:
 
 ```sweet-exp
 defn history [db :int entity :int attr :cstr] :ptr<void>
-  let [raw db-q(db fn([d]
-                       and({datum-entity(d) = entity}
-                           cstr-eq?(datum-attr(d) cstr->int(attr)))))]
+  let [raw db-q(db (fn [d]
+                     and({datum-entity(d) = entity}
+                         cstr-eq?(datum-attr(d) cstr->int(attr)))))]
     ; Insertion sort by tx
     let [n rvec-len(raw)]
       ...
-    raw
+      raw
 ```
 
 The sort is insertion sort -- O(n^2) but adequate for the tutorial scale
@@ -259,9 +268,11 @@ defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
                    cstr-eq?(datum-attr(d) cstr->int(":db/retract"))
                    {datum-tx(d) <= as-of-tx})
             match datum-value(d)
-              (StrVal s) when cstr-eq?(s cstr->int(attr))
-                           set! found true
-              _ nil
+              (StrVal s)
+              when cstr-eq?(s cstr->int(attr))
+                set! found true
+              _
+              nil
         set! i {i + 1}
     found
 ```
@@ -276,7 +287,7 @@ Usage -- retract Bob's email and verify:
 
 ```sweet-exp
 db-retract!(db 2 ":user/email")
-println $ retracted?(db 2 ":user/email" db-count(db))
+println(retracted?(db 2 ":user/email" db-count(db)))
 ; => true
 ```
 

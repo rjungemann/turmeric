@@ -36,7 +36,7 @@ For a conceptual walkthrough and worked examples, see the [STM Tutorial](stm-tut
 ```
 
 ```sweet-exp
-require ["stdlib/stm.tur"]
+import("stdlib/stm.tur")
 
 ;; Create a TVar with an initial value
 def counter tvar/new(0)
@@ -189,7 +189,7 @@ A defer fires at the end of a transaction, after commit or abort. Register them 
 
 ```turmeric
 (defn register-commit-defer [env-ptr fn-ptr] :void
-  ```
+  ```c
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_commit(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
   ```)
@@ -203,16 +203,16 @@ A defer fires at the end of a transaction, after commit or abort. Register them 
 
 ```sweet-exp
 defn register-commit-defer [env-ptr fn-ptr] :void
-  ```
+  ```c
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_commit(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
-  ```)
+  ```
 
 defn register-abort-defer [env-ptr fn-ptr] :void
   ```c
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_abort(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
-  ```)
+  ```
 ```
 
 Commit defers run once, in registration order, after the write set is applied. Abort defers run on every failed attempt, including retries -- design them to be idempotent.

@@ -58,9 +58,9 @@ serial-resume(k 100)  ; Resumes computation with x=42, returns 142
 Not all values can be serialized. Types must opt-in via the `Serializable` typeclass:
 
 ```turmeric
-defclass Serializable [a]
+(defclass Serializable [a]
   (serialize   [x : a] : bytes)
-  (deserialize [b : bytes] : (Result a cstr))
+  (deserialize [b : bytes] : (Result a cstr)))
 ```
 ```sweet-exp
 defclass Serializable [a]
@@ -107,14 +107,14 @@ Types that **do not** implement `Serializable` (file handles, raw pointers, `Mut
 System resources like file handles can implement custom marshal/unmarshal logic:
 
 ```turmeric
-defclass ResourceSerializable [a]
+(defclass ResourceSerializable [a]
   (marshal   [x : a] : value)
-  (unmarshal [v : value] : a)
+  (unmarshal [v : value] : a))
 
 ;; Example: serialize a file handle by its path, reopen on resume
-definstance ResourceSerializable FileHandle
+(definstance ResourceSerializable FileHandle
   (marshal [fh] (file-handle-path fh))
-  (unmarshal [path] (open-file path ReadOnly))
+  (unmarshal [path] (open-file path ReadOnly)))
 ```
 ```sweet-exp
 defclass ResourceSerializable [a]
@@ -131,7 +131,7 @@ definstance ResourceSerializable FileHandle
 
 ### Core Functions
 
-```turmeric
+```turmeric no-check
 ;; Delimit a serializable region
 (serial-reset body)
 
@@ -167,11 +167,11 @@ serial-resume(k v) : T
 ### The `serial-continuation<T>` Type
 
 ```turmeric
-defalias serial-continuation<T>
+(defalias serial-continuation<T>
   (struct
     [resume    : (-> T (serial-continuation<T>))
      to-bytes  : (-> bytes)
-     schema-id : cstr])  ; Stable hash of frame chain shape
+     schema-id : cstr]))  ; Stable hash of frame chain shape
 ```
 ```sweet-exp
 defalias serial-continuation<T>
@@ -211,10 +211,10 @@ A multi-step business process that survives crashes:
     (fulfill order charge-result)))
 
 ;; Resume from last checkpoint
-defn resume-order [order-id : int64] : unit
+(defn resume-order [order-id : int64] : unit
   (let? [checkpoint (load-latest-checkpoint order-id)
          k (bytes->serial-cont checkpoint.bytes)]
-    (serial-resume k checkpoint.value))
+    (serial-resume k checkpoint.value)))
 ```
 ```sweet-exp
 defn process-order [order-id : int64] : unit
@@ -284,7 +284,7 @@ def result
 defn handle-migration [bytes : bytes, input : any] : bytes
   let? [k bytes->serial-cont(bytes)]
     def result serial-resume(k input)
-    serial-cont->bytes(serial-shift [k'] continue(k' result))
+    serial-cont->bytes $ serial-shift [k'] (continue k' result)
 ```
 
 ### Web Continuations (Racket-style)
@@ -321,10 +321,10 @@ defn get-checkout [req : HttpRequest] : HttpResponse
       ;; Save continuation, return URL with token
       def token save-continuation(k)
       render-page
-        form(:action str("/checkout-submit?token=" token))
-          label("Credit Card")
-          input(:type "text" :name "cc")
-          submit()
+        (form :action str("/checkout-submit?token=" token))
+        label("Credit Card")
+        input(:type "text" :name "cc")
+        submit()
 
 ;; Handle form submission
 defn post-checkout-submit [req : HttpRequest] : HttpResponse
@@ -340,7 +340,7 @@ defn post-checkout-submit [req : HttpRequest] : HttpResponse
 Periodic snapshots for crash recovery:
 
 ```turmeric
-defn analyze-dataset [data : (Vec Record)] : Report
+(defn analyze-dataset [data : (Vec Record)] : Report
   (defn checkpoint-every [n : int64, items : (Vec Record)] : Report
     (let [processed (Vec.new)]
       (for-each-with-index items
@@ -349,16 +349,16 @@ defn analyze-dataset [data : (Vec Record)] : Report
           (when (= (mod (+ i 1) n) 0)
             (serial-shift [k]
               (save-checkpoint (str "checkpoint-" i) k)
-              (continue k))))))
+              (continue k)))))
       (compute-report processed)))
   
-  (checkpoint-every 1000 data)
+  (checkpoint-every 1000 data))
 
 ;; On restart: find latest checkpoint and resume
-defn recover-analysis [] : Report
+(defn recover-analysis [] : Report
   (def latest (find-latest-checkpoint))
   (let? [k (bytes->serial-cont latest.bytes)]
-    (serial-resume k))
+    (serial-resume k)))
 ```
 ```sweet-exp
 defn analyze-dataset [data : (Vec Record)] : Report
@@ -407,10 +407,13 @@ try-with
     serial-resume(k value)
   fn [e k]
     match e
-      SchemaMismatch(old new) ->
-        error("Cannot resume: checkpoint uses schema " old
-              "but current code uses schema " new)
-      _ -> raise(e)
+      (SchemaMismatch old new)
+      ->
+      error("Cannot resume: checkpoint uses schema " old
+            "but current code uses schema " new)
+      _
+      ->
+      raise(e)
 ```
 
 ### Handling Unserializable Types
@@ -434,7 +437,7 @@ To fix: either implement `Serializable`/`ResourceSerializable` for the type, or 
 Serialization performs a **deep copy** of all captured state. Circular reference structures are detected and produce an error:
 
 ```turmeric
-def circular : (Option (Box circular))
+(def circular : (Option (Box circular)))
 (set-box! circular (Some (Box.new circular)))
 
 ;; This will fail with a circular reference error
@@ -494,11 +497,11 @@ serial-reset
 
 ```turmeric
 ;; File I/O helpers
-defn cont-to-file [k : serial-continuation<T>, path : cstr] : (Result unit cstr)
-  (write-file path (serial-cont->bytes k))
+(defn cont-to-file [k : serial-continuation<T>, path : cstr] : (Result unit cstr)
+  (write-file path (serial-cont->bytes k)))
 
-defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
-  (bytes->serial-cont (read-file path))
+(defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
+  (bytes->serial-cont (read-file path)))
 ```
 ```sweet-exp
 ;; File I/O helpers
@@ -515,19 +518,19 @@ A higher-level API for persistent workflows:
 
 ```turmeric
 ;; Define a workflow step that can be suspended and resumed
-defworkflow-step process-approval [order-id : int64] : bool
+(defworkflow-step process-approval [order-id : int64] : bool
   (def approved?
     (serial-shift [k]
       (db-save-continuation order-id k)
       false))
   (when approved?
     (fulfill-order! order-id))
-  approved?
+  approved?)
 
 ;; Resume a workflow from the database
-defn resume-approval [order-id : int64, approved? : bool] : unit
+(defn resume-approval [order-id : int64, approved? : bool] : unit
   (let? [k (db-load-continuation order-id)]
-    (serial-resume k approved?))
+    (serial-resume k approved?)))
 ```
 ```sweet-exp
 ;; Define a workflow step that can be suspended and resumed
@@ -593,21 +596,21 @@ If storing continuations long-term, consider implementing custom schema evolutio
 
 ```turmeric
 ;; Wrap continuation with version info
-defn save-versioned [k : serial-continuation<T>, version : int64] : unit
+(defn save-versioned [k : serial-continuation<T>, version : int64] : unit
   (def bytes (serial-cont->bytes k))
-  (save-to-disk (struct [version version, data bytes]))
+  (save-to-disk (struct [version version, data bytes])))
 
 ;; On load, verify version compatibility
-defn load-versioned [path : cstr] : (Result (serial-continuation<T>) cstr)
+(defn load-versioned [path : cstr] : (Result (serial-continuation<T>) cstr)
   (def stored (load-from-disk path))
   (when (= stored.version CURRENT_VERSION)
-    (bytes->serial-cont stored.data))
+    (bytes->serial-cont stored.data)))
 ```
 ```sweet-exp
 ;; Wrap continuation with version info
 defn save-versioned [k : serial-continuation<T>, version : int64] : unit
   def bytes serial-cont->bytes(k)
-  save-to-disk(struct [version version, data bytes])
+  save-to-disk $ struct [version version, data bytes]
 
 ;; On load, verify version compatibility
 defn load-versioned [path : cstr] : (Result (serial-continuation<T>) cstr)

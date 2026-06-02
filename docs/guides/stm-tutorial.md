@@ -37,8 +37,8 @@ atomically
     let [from-balance read-tvar(from-account)
          to-balance   read-tvar(to-account)]
       when {from-balance >= amount}
-        write-tvar!(from-account {from-balance - amount})
-        write-tvar!(to-account {to-balance + amount})
+        write-tvar(from-account {from-balance - amount})
+        write-tvar(to-account {to-balance + amount})
 ```
 
 ### Transactional Variables: TVar
@@ -63,7 +63,7 @@ def counter new-tvar(0)
 atomically
   fn []
     let [value read-tvar(counter)]
-      write-tvar!(counter {value + 1})
+      write-tvar(counter {value + 1})
 ```
 
 ### Properties
@@ -105,9 +105,9 @@ def counter new-tvar(0)
 atomically
   fn []
     let [v read-tvar(counter)]
-      write-tvar!(counter {v + 1})
+      write-tvar(counter {v + 1})
 
-println(atomically(fn [] read-tvar(counter)))  ; => 1
+println $ atomically $ fn [] read-tvar(counter)  ; => 1
 ```
 
 ### Bank Transfer (No Deadlock!)
@@ -143,14 +143,14 @@ defn transfer [from to amount]
     fn []
       let [from-balance read-tvar(from)]
         when {from-balance >= amount}
-          write-tvar!(from {from-balance - amount})
-          write-tvar!(to {read-tvar(to) + amount})
+          write-tvar(from {from-balance - amount})
+          write-tvar(to {read-tvar(to) + amount})
 
 transfer(account-a account-b 30)
 
 ;; Concurrent transfers never deadlock!
-thread(fn [] transfer(account-a account-b 10))
-thread(fn [] transfer(account-b account-a 5))
+thread $ fn [] transfer(account-a account-b 10)
+thread $ fn [] transfer(account-b account-a 5)
 ```
 
 ## Core API
@@ -188,7 +188,7 @@ atomically
 ;; Write (only inside atomically)
 atomically
   fn []
-    write-tvar!(tvar 100)
+    write-tvar(tvar 100)
 
 ;; Value is now 100
 atomically
@@ -219,7 +219,7 @@ def result
   atomically
     fn []
       let [x read-tvar(counter)]
-        write-tvar!(counter {x + 1})
+        write-tvar(counter {x + 1})
         {x + 1}
 ```
 
@@ -299,7 +299,7 @@ atomically
 ;; Write (blocks if full, retries)
 atomically
   fn []
-    write-tmvar!(mvar 42)
+    write-tmvar(mvar 42)
 ```
 
 ### TChan: FIFO Channel
@@ -325,7 +325,7 @@ def chan new-tchan()
 ;; Write to channel
 atomically
   fn []
-    write-tchan!(chan "hello")
+    write-tchan(chan "hello")
 
 ;; Read from channel (blocks if empty, retries)
 atomically
@@ -377,7 +377,7 @@ thread
         atomically
           fn []
             def q read-tmvar(queue)
-            write-tmvar!(queue conj(q i))
+            write-tmvar(queue conj(q i))
         sleep(100)
 
 thread
@@ -390,7 +390,7 @@ thread
           when empty?(q)
             retry()
           def item car(q)
-          write-tmvar!(queue cdr(q))
+          write-tmvar(queue cdr(q))
           println(item)
 ```
 
@@ -422,7 +422,7 @@ defn with-write-lock [f]
     fn []
       read-tmvar(write-lock)  ; Acquire
       let [result f()]
-        write-tmvar!(write-lock true)  ; Release
+        write-tmvar(write-lock true)  ; Release
         result
 
 with-write-lock
@@ -462,10 +462,10 @@ defn barrier-wait [barrier]
       def waiting {get(state :waiting) + 1}
       if {waiting = get(state :count)}
         ;; All threads arrived
-        write-tmvar!(barrier assoc(state :waiting 0))
+        write-tmvar(barrier assoc(state :waiting 0))
         ;; Wait for others
         do
-          write-tmvar!(barrier assoc(state :waiting waiting))
+          write-tmvar(barrier assoc(state :waiting waiting))
           retry()
 ```
 
@@ -482,8 +482,8 @@ defn barrier-wait [barrier]
   (if (<= (len vec) 1)
     vec
     (let [mid (/ (len vec) 2)
-          left-result (new-tmvar #f)
-          right-result (new-tmvar #f)]
+          left-result (new-tmvar false)
+          right-result (new-tmvar false)]
       
       ;; Sort left half in parallel
       (thread
@@ -515,15 +515,15 @@ defn merge-sort-stm [vec]
   if {len(vec) <= 1}
     vec
     let [mid {len(vec) / 2}
-         left-result  new-tmvar(#f)
-         right-result new-tmvar(#f)]
+         left-result  new-tmvar(false)
+         right-result new-tmvar(false)]
 
       ;; Sort left half in parallel
       thread
         fn []
           atomically
             fn []
-              write-tmvar!(left-result
+              write-tmvar(left-result
                 merge-sort-stm(slice(vec 0 mid)))
 
       ;; Sort right half in parallel
@@ -531,7 +531,7 @@ defn merge-sort-stm [vec]
         fn []
           atomically
             fn []
-              write-tmvar!(right-result
+              write-tmvar(right-result
                 merge-sort-stm(slice(vec mid len(vec))))
 
       ;; Merge results

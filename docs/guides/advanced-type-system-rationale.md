@@ -140,14 +140,10 @@ first-class.
 ```
 ```sweet-exp
 ;; Typed: this function may perform Io and nothing else.
-defn read-file [path:cstr] :cstr
-  @
-  {Io}
+defn read-file [path :cstr] :cstr @ {Io}
   ...
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
-defn ask-and-add [x:int] :int
-  @
-  {Ask|e}
+defn ask-and-add [x :int] :int @ {Ask | e}
   +(x perform(Ask()))
 ```
 
@@ -189,10 +185,16 @@ separate features but modes of the existing continuation representation.
 ```
 ```sweet-exp
 ;; Union: a value that may be int, cstr, or bool.
-defn print-any [x:(int|cstr|bool)] :unit
-  match(x i(:int) println(i) s(:cstr) println(s) b(:bool) println(if(b "true" "false")))
+defn print-any [x : (int | cstr | bool)] :unit
+  match x
+    (i :int)
+    println(i)
+    (s :cstr)
+    println(s)
+    (b :bool)
+    println $ if b "true" "false"
 ;; Intersection: a value that is both Serializable and Printable.
-defn log-and-save [^Serializable^Printablex:a] :unit
+defn log-and-save [^Serializable ^Printable x :a] :unit
   ...
 ```
 
@@ -242,9 +244,8 @@ infrastructure) track container dimensions as type-level compile-time integers.
 ```
 ```sweet-exp
 ;; Matrix multiplication: dimensions must be compatible.
-defn mat-mul [a:(Matrixmnfloat)
-b:(Matrixnpfloat)] :
-  Matrix(m p float)
+defn mat-mul [a : (Matrix m n float)
+              b : (Matrix n p float)] : (Matrix m p float)
   ...
 ;; Compile-time error if you pass incompatible shapes:
 ;; (mat-mul (Matrix 3 4) (Matrix 5 6))
@@ -280,7 +281,7 @@ elaborator machinery beyond what G0--G4 already built.
 Contract types (`-Xcontracts`) attach runtime-checked predicates to types and
 function boundaries.
 
-```turmeric
+```turmeric no-check
 (defn vec-get [v :(vec a)
                i :{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
   (vec/get-unsafe v i))
@@ -288,10 +289,10 @@ function boundaries.
 (defn sqrt [x :{ y :double | (>= y 0) }] :double ...)
 ```
 ```sweet-exp
-defn vec-get [v:(veca)
-i:{j:int|(and(>=j0)(<j(vec/lenv)))}] :a
+defn vec-get [v : (vec a)
+              i : { j :int | (and (>= j 0) (< j (vec/len v))) }] :a
   vec/get-unsafe(v i)
-defn sqrt [x:{y:double|(>=y0)}] :double
+defn sqrt [x : { y :double | (>= y 0) }] :double
   ...
 ```
 
@@ -342,10 +343,9 @@ caller is allowed to do with it.
 ```
 ```sweet-exp
 ;; A boxed value paired with evidence that its type implements Show.
-defn box-it [x:a] :
-  exists([a] [(Showa)] a)
-  pack(x exists([a] [(Showa)] a))
-defn print-it [e:(exists[a][(Showa)]a)] :unit
+defn box-it [x :a] : (exists [a] [(Show a)] a)
+  pack(x (exists [a] [(Show a)] a))
+defn print-it [e : (exists [a] [(Show a)] a)] :unit
   open(e [x] println(show(x)))
 ```
 

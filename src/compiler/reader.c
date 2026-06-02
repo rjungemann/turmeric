@@ -2045,6 +2045,7 @@ static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket) {
     }
     free(items);
     
+    Form *result;
     if (bracket == '[' && n == 1) {
         /* Special case: f[x] -> (bracketapply f x) */
         const Symbol *bracketapply_sym = symtab_intern(r->st, strslice("bracketapply", 12));
@@ -2053,10 +2054,22 @@ static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket) {
         ba_items[1] = atom;
         ba_items[2] = call_items[1]; /* the single argument */
         free(call_items);
-        return form_list(r->arena, span, ba_items, 3);
+        result = form_list(r->arena, span, ba_items, 3);
+    } else {
+        result = form_list(r->arena, span, call_items, n + 1);
     }
-    
-    return form_list(r->arena, span, call_items, n + 1);
+
+    /* Phase S2: neoteric chaining. Per SRFI-105, application chains:
+     * f(x)(y) -> ((f x) y), not ((f x) (y)). If another neoteric bracket
+     * immediately follows (no whitespace), apply the just-built form to it. */
+    if (r->neoteric_enabled) {
+        int next = peek_neoteric_bracket(r);
+        if (next != -1) {
+            return read_neoteric_bracket(r, result, next);
+        }
+    }
+
+    return result;
 }
 
 /* Phase S1: Read curly-infix expression {a + b} -> (+ a b) */
@@ -2114,52 +2127,44 @@ static Form *read_curly_infix(Reader *r) {
         return result;
     }
 
-    /* Check if all operators are the same (homogeneous infix) */
-    /* Per SRFI-105: {a + b + c} -> (+ a b c) if all operators are + */
-    /* Mixed operators: {a + b * c} -> ($nfx$ a + b * c) */
-    bool all_same_op = true;
+    /* Per SRFI-105, a "simple" infix list {a op b op c ...} has odd length
+     * with the operators at the odd indices (1, 3, 5, ...) and operands at
+     * the even indices (0, 2, 4, ...). When every operator slot holds the
+     * same symbol it lowers to a prefix call (op a b c ...); anything else
+     * (even length, a non-symbol in an operator slot, or mixed operators)
+     * falls back to the $nfx$ marker.
+     *
+     * Detecting operators positionally is essential: scanning for the first
+     * F_SYM anywhere would mistake a symbol *operand* (e.g. the `x` in
+     * {x * x} or the `width` in {width * height}) for the operator and
+     * spuriously emit $nfx$. */
+    bool simple_infix = (n % 2 == 1);
     const Symbol *first_op = NULL;
-    
-    for (uint32_t i = 0; i < n; i++) {
-        if (items[i]->tag == F_SYM) {
+
+    if (simple_infix) {
+        for (uint32_t i = 1; i < n; i += 2) {
+            if (items[i]->tag != F_SYM) { simple_infix = false; break; }
             if (first_op == NULL) {
                 first_op = items[i]->as.sym;
             } else if (items[i]->as.sym != first_op) {
-                all_same_op = false;
+                simple_infix = false;
                 break;
             }
         }
     }
 
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
-    
-    if (all_same_op && first_op != NULL) {
-        /* Homogeneous: all operators are the same */
-        /* Rearrange: {a + b + c} where + is the operator
-         * We need to identify which items are operators vs operands
-         * In SRFI-105, operators alternate with operands: a + b + c
-         * So operators are at odd indices (1, 3, ...) if we start with operand
-         * But we need to handle both cases */
-        
-        /* Collect all operator positions */
-        Form **operands = (Form **)arena_alloc(r->arena, n * sizeof(Form *));
-        uint32_t op_count = 0;
-        
-        for (uint32_t i = 0; i < n; i++) {
-            if (items[i]->tag == F_SYM && items[i]->as.sym == first_op) {
-                /* This is the operator - skip it, it's the same for all */
-            } else {
-                operands[op_count++] = items[i];
-            }
-        }
-        
-        /* Create the call: (op arg1 arg2 ...) */
+
+    if (simple_infix && first_op != NULL) {
+        /* Homogeneous simple infix: operands are the even-indexed items. */
+        uint32_t op_count = (n + 1) / 2;
         Form **call_items = (Form **)arena_alloc(r->arena, (op_count + 1) * sizeof(Form *));
         call_items[0] = form_sym(r->arena, span, first_op);
-        for (uint32_t i = 0; i < op_count; i++) {
-            call_items[i + 1] = operands[i];
+        uint32_t k = 1;
+        for (uint32_t i = 0; i < n; i += 2) {
+            call_items[k++] = items[i];
         }
-        
+
         free(items);
         return form_list(r->arena, span, call_items, op_count + 1);
     } else {
@@ -2994,8 +2999,11 @@ static int try_consume_use_directive(Reader *r,
  * non-blank content; using them for indent grouping is undefined.
  * =========================================================================*/
 
-/* Map builder shared by the emitter to record xform→original byte runs. */
-static void sweet_map_add_run(SweetMap *m, size_t xform_off,
+/* Map builder shared by the emitter to record xform→original byte runs.
+ * Runs grow from the arena (freed wholesale at arena_free) rather than the
+ * heap, so the map -- which lives for the file's diagnostic lifetime and has
+ * no dedicated teardown -- does not leak. */
+static void sweet_map_add_run(Arena *arena, SweetMap *m, size_t xform_off,
                                size_t orig_off, size_t n) {
     if (n == 0 || !m) return;
     if (m->n_runs > 0) {
@@ -3008,9 +3016,11 @@ static void sweet_map_add_run(SweetMap *m, size_t xform_off,
     }
     if (m->n_runs == m->cap_runs) {
         size_t new_cap = m->cap_runs ? m->cap_runs * 2 : 64;
-        SweetMapRun *grown = (SweetMapRun *)realloc(m->runs,
+        SweetMapRun *grown = (SweetMapRun *)arena_alloc(arena,
                                   new_cap * sizeof *grown);
         if (!grown) return;
+        if (m->runs && m->n_runs > 0)
+            memcpy(grown, m->runs, m->n_runs * sizeof *grown);
         m->runs = grown;
         m->cap_runs = new_cap;
     }
@@ -3042,16 +3052,17 @@ size_t sweet_map_translate_offset(const SweetMap *m, size_t xform_off) {
 typedef struct SweetEmit {
     Buf      *out;
     SweetMap *map;
+    Arena    *arena;
 } SweetEmit;
 
 static void emit_copy_(SweetEmit *e, const char *src, size_t orig_off, size_t n) {
     if (n == 0) return;
-    sweet_map_add_run(e->map, e->out->len, orig_off, n);
+    sweet_map_add_run(e->arena, e->map, e->out->len, orig_off, n);
     buf_write(e->out, src + orig_off, n);
 }
 
 static void emit_copy_char_(SweetEmit *e, const char *src, size_t orig_off) {
-    sweet_map_add_run(e->map, e->out->len, orig_off, 1);
+    sweet_map_add_run(e->arena, e->map, e->out->len, orig_off, 1);
     buf_putc(e->out, src[orig_off]);
 }
 
@@ -3145,14 +3156,28 @@ static bool sweet_line_is_blank(const char *s, size_t i, size_t end) {
  * Bracket groups, strings, and block comments are each one element.
  * Line comments end the count.  `$` followed by whitespace consumes
  * the rest of the line into a single element. */
+/* True if a triple-backtick (```) inline-C fence opens/closes at offset i. */
+static inline bool sweet_at_fence(const char *src, size_t i, size_t end) {
+    return i + 2 < end && src[i] == '`' && src[i + 1] == '`' && src[i + 2] == '`';
+}
+
 static int sweet_count_elements(const char *src, size_t start, size_t end) {
     int count = 0;
     bool in_tok = false;   /* mid-token at bd == 0 */
     int  bd = 0;
-    bool in_str = false, in_bc = false;
+    bool in_str = false, in_bc = false, in_cb = false;
     size_t i = start;
     while (i < end) {
         char c = src[i];
+        if (in_cb) {
+            /* Inside a ```c ... ``` block: opaque, part of the current token. */
+            if (sweet_at_fence(src, i, end)) { in_cb = false; i += 3; continue; }
+            i++; continue;
+        }
+        if (!in_str && !in_bc && sweet_at_fence(src, i, end)) {
+            if (bd == 0 && !in_tok) { count++; in_tok = true; }
+            in_cb = true; i += 3; continue;
+        }
         if (in_str) {
             if (c == '\\' && i + 1 < end) { i += 2; continue; }
             if (c == '"') {
@@ -3180,7 +3205,13 @@ static int sweet_count_elements(const char *src, size_t start, size_t end) {
             if (c == '(' || c == '[' || c == '{') { bd++; i++; continue; }
             if (c == ')' || c == ']' || c == '}') {
                 bd--; i++;
-                if (bd == 0) in_tok = false;
+                if (bd == 0) {
+                    /* Neoteric chaining: f(x)(y) is a single element, so a
+                     * bracket immediately following a closed group continues
+                     * the same token rather than starting a new element. */
+                    in_tok = (i < end && (src[i] == '(' ||
+                                          src[i] == '[' || src[i] == '{'));
+                }
                 continue;
             }
             i++; continue;
@@ -3249,11 +3280,20 @@ static SweetLine *sweet_collect_lines(const char *src, size_t len,
          * marker (`\\`), step past it before the scanner runs so the bare
          * `\\` is not misread as a `\\`-line-continuation. */
         int bd = 0;
-        bool in_str = false, in_bc = false;
+        bool in_str = false, in_bc = false, in_cb = false;
         size_t j = content_start;
         if (is_group) j = sweet_skip_group_marker(src, j, len);
         while (j < len) {
             char c = src[j];
+            if (in_cb) {
+                /* Inside a ```c ... ``` block: opaque, and newlines do not
+                 * end the logical line (the fence spans physical lines). */
+                if (sweet_at_fence(src, j, len)) { in_cb = false; j += 3; continue; }
+                j++; continue;
+            }
+            if (!in_str && !in_bc && sweet_at_fence(src, j, len)) {
+                in_cb = true; j += 3; continue;
+            }
             if (in_str) {
                 if (c == '\\' && j + 1 < len) { j += 2; continue; }
                 if (c == '"') in_str = false;
@@ -3373,10 +3413,26 @@ static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
 static void sweet_emit_content(SweetEmit *e, const char *src,
                                 size_t start, size_t end) {
     int bd = 0;
-    bool in_str = false, in_bc = false;
+    bool in_str = false, in_bc = false, in_cb = false;
     size_t i = start;
     while (i < end) {
         char c = src[i];
+        if (in_cb) {
+            /* Inside a ```c ... ``` block: copy verbatim, no `$`/paren logic. */
+            if (sweet_at_fence(src, i, end)) {
+                emit_copy_char_(e, src, i);
+                emit_copy_char_(e, src, i + 1);
+                emit_copy_char_(e, src, i + 2);
+                in_cb = false; i += 3; continue;
+            }
+            emit_copy_char_(e, src, i); i++; continue;
+        }
+        if (!in_str && !in_bc && sweet_at_fence(src, i, end)) {
+            emit_copy_char_(e, src, i);
+            emit_copy_char_(e, src, i + 1);
+            emit_copy_char_(e, src, i + 2);
+            in_cb = true; i += 3; continue;
+        }
         if (in_str) {
             emit_copy_char_(e, src, i);
             if (c == '\\' && i + 1 < end) {
@@ -3462,6 +3518,53 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
     }
 }
 
+/* Find the offset within [start, end) just past the last "code" byte --
+ * i.e. trimming any trailing whitespace and any trailing `;` line comment.
+ * Implicit closing parens must be emitted at this point, not at content_end,
+ * otherwise a `)` lands after a trailing `; comment` and gets commented out
+ * (producing a spurious "unterminated list"). Block comments and string
+ * contents count as code (they self-terminate), so only `;` line comments
+ * are trimmed. */
+static size_t sweet_code_end(const char *src, size_t start, size_t end) {
+    size_t code_end = start;
+    bool in_str = false, in_bc = false, in_cb = false;
+    size_t i = start;
+    while (i < end) {
+        char c = src[i];
+        if (in_cb) {
+            /* ```c ... ``` block: opaque code (the fence self-terminates). */
+            if (sweet_at_fence(src, i, end)) { code_end = i + 3; in_cb = false; i += 3; continue; }
+            code_end = i + 1; i++; continue;
+        }
+        if (!in_str && !in_bc && sweet_at_fence(src, i, end)) {
+            in_cb = true; code_end = i + 3; i += 3; continue;
+        }
+        if (in_str) {
+            if (c == '\\' && i + 1 < end) { code_end = i + 2; i += 2; continue; }
+            if (c == '"') in_str = false;
+            code_end = i + 1; i++; continue;
+        }
+        if (in_bc) {
+            if (c == '|' && i + 1 < end && src[i + 1] == '#') {
+                in_bc = false; code_end = i + 2; i += 2; continue;
+            }
+            code_end = i + 1; i++; continue;
+        }
+        if (c == '"') { in_str = true; code_end = i + 1; i++; continue; }
+        if (c == '#' && i + 1 < end && src[i + 1] == '|') {
+            in_bc = true; code_end = i + 2; i += 2; continue;
+        }
+        if (c == ';') {
+            /* Line comment -- skip to EOL without advancing code_end. */
+            while (i < end && src[i] != '\n') i++;
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { i++; continue; }
+        code_end = i + 1; i++;
+    }
+    return code_end;
+}
+
 static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
                                size_t *out_len, SweetMap *out_map) {
     size_t n_lines = 0;
@@ -3475,7 +3578,7 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
     sweet_analyze_top(lines, n_lines, src);
 
     Buf b; buf_init(&b);
-    SweetEmit emit = { .out = &b, .map = out_map };
+    SweetEmit emit = { .out = &b, .map = out_map, .arena = arena };
     size_t cur = 0;
     for (size_t i = 0; i < n_lines; i++) {
         SweetLine *L = &lines[i];
@@ -3498,10 +3601,18 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
         size_t cstart = L->content_start;
         if (L->is_group)
             cstart = sweet_skip_group_marker(src, cstart, L->content_end);
-        sweet_emit_content(&emit, src, cstart, L->content_end);
+
+        /* Split off any trailing line comment so the implicit closes land
+         * before it (a `)` after a `; comment` would be commented out). */
+        size_t code_end = sweet_code_end(src, cstart, L->content_end);
+        sweet_emit_content(&emit, src, cstart, code_end);
 
         /* Implicit closes (inserted). */
         for (int k = 0; k < L->close_count; k++) emit_insert_char_(&emit, ')');
+
+        /* Trailing whitespace + line comment, copied verbatim after closes. */
+        if (code_end < L->content_end)
+            emit_copy_(&emit, src, code_end, L->content_end - code_end);
 
         /* Trailing newline (copied from original). */
         cur = L->content_end;

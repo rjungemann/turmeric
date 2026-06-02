@@ -3793,6 +3793,106 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
     return rc;
 }
 
+/* tur parse-check <a> <b>
+ * Read two files and compare the form trees they produce. The first file is
+ * read as turmeric s-expressions, the second as sweet-exp, unless an explicit
+ * `#lang` directive on either file overrides the forced reader. Used by
+ * tools/check-guide-pairs.py to verify a guide's turmeric+sweet-exp toggle
+ * pair reads to the same AST.
+ *
+ * Exit codes: 0 = ASTs equal, 1 = mismatch, 2 = read/parse error. */
+
+/* Read `path`, select the reader (forced unless a `#lang` directive is
+ * present), parse all top-level forms, and serialize each with form_print into
+ * `out` (one per line). Returns 0 on success, non-zero on read/parse error. */
+static int parse_check_read(const char *path, ReaderType forced, Buf *out) {
+    char  *src = NULL;
+    size_t len = 0;
+    if (read_entire_file(path, &src, &len) != 0) return 2;
+
+    /* Honour an explicit `#lang` directive; otherwise force by position.
+     * detect_lang leaves out_rest == src when no directive is present, and
+     * otherwise advances past the directive so the reader does not choke on
+     * the leading '#'. */
+    const char *rest = src;
+    size_t      rest_len = len;
+    ReaderType  detected = detect_lang(src, len, &rest, &rest_len);
+    ReaderType  reader   = forced;
+    if (rest != src) {
+        /* A `#lang` directive was present -- honour it and use the
+         * directive-stripped source. */
+        if (!reader_type_is_implemented(detected)) {
+            fprintf(stderr, "tur: %s: unknown or unimplemented #lang directive\n",
+                    path);
+            free(src);
+            return 2;
+        }
+        reader = detected;
+    } else {
+        /* No directive: read the whole source with the forced reader. */
+        rest     = src;
+        rest_len = len;
+    }
+
+    SourceFile file = {0};
+    file.path        = path;
+    file.src         = rest;
+    file.len         = rest_len;
+    file.file_id     = 0;
+    file.reader_type = reader;
+    diag_register_file(&file);
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&arena, &st, &file, NULL, &nforms);
+
+    int rc = 0;
+    if (!forms || diag_had_error()) {
+        rc = 2;
+    } else {
+        for (uint32_t i = 0; i < nforms; i++) {
+            form_print(out, forms[i]);
+            buf_putc(out, '\n');
+        }
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    free(src);
+    return rc;
+}
+
+static int cmd_parse_check(const char *path_a, const char *path_b) {
+    Buf sa, sb;
+    buf_init(&sa);
+    buf_init(&sb);
+
+    int rc;
+    if (parse_check_read(path_a, READER_TURMERIC, &sa) != 0 ||
+        parse_check_read(path_b, READER_SWEET, &sb) != 0) {
+        rc = 2;
+    } else if (sa.len == sb.len &&
+               (sa.len == 0 || memcmp(sa.data, sb.data, sa.len) == 0)) {
+        rc = 0;
+    } else {
+        fprintf(stderr, "tur: parse-check mismatch between %s and %s\n",
+                path_a, path_b);
+        fprintf(stderr, "--- %s ---\n%.*s", path_a, (int)sa.len,
+                sa.data ? sa.data : "");
+        fprintf(stderr, "--- %s ---\n%.*s", path_b, (int)sb.len,
+                sb.data ? sb.data : "");
+        rc = 1;
+    }
+
+    buf_free(&sa);
+    buf_free(&sb);
+    return rc;
+}
+
 /* ---------------------------------------------------------------------------
  * tur fmt -- formatter with directory walking and in-place writes
  * ---------------------------------------------------------------------------
@@ -6428,6 +6528,7 @@ static void list_external_subcommands(void) {
     static const char *const builtins[] = {
         "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "format", "fmt",
+        "parse-check",
         "init", "add", "add-cmake", "fetch",
         "install", "uninstall", "list", "upgrade",
         NULL,
@@ -6531,6 +6632,7 @@ static int usage(void) {
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
         "  tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking\n"
+        "  tur parse-check <a> <b>           exit 0 if both files read to the same AST\n"
         "\n"
         "package management (Spice, Phase PKG-1):\n"
         "  tur init [--bin|--lib] <name>     create a new project\n"
@@ -6764,6 +6866,18 @@ static int usage_format(void) {
         "  tur format [file.tur]          format a source file (stdin if no file given)\n"
         "  tur format --check [file.tur]  exit 1 if formatting would change the file\n"
         "  tur format --diff [file.tur]   print unified diff of formatting changes\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_parse_check(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur parse-check <a> <b>   exit 0 if both files read to the same AST\n"
+        "\n"
+        "  <a> is read as turmeric, <b> as sweet-exp, unless an explicit\n"
+        "  #lang directive overrides. Exit codes: 0 equal, 1 mismatch, 2 error.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -7909,6 +8023,13 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "fmt") == 0)
         return cmd_fmt(argc, argv);
+    if (strcmp(cmd, "parse-check") == 0) {
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 ||
+                          strcmp(argv[2], "-h") == 0))
+            return usage_parse_check();
+        if (argc != 4) return usage_parse_check();
+        return cmd_parse_check(argv[2], argv[3]);
+    }
     if (strcmp(cmd, "test") == 0) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_test();

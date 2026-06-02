@@ -53,7 +53,7 @@ defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
 
 The continuation store (`conts.tur`) must satisfy:
 
-```turmeric
+```turmeric no-check
 ;; Store k and return a token that can be used to resume it.
 (store-continuation k)  : cstr
 
@@ -98,9 +98,9 @@ The tutorial implementation does not evict tokens automatically. For a productio
 ```sweet-exp
 defn evict-expired-conts [] : unit
   def dir-entries dir-list("data/conts/")
-  Vec.for-each dir-entries fn [entry]
-    when {(- unix-now() file-mtime(entry)) > CONT-TTL-SECONDS}
-      file-delete(entry)
+  Vec.for-each(dir-entries fn([entry]
+    when(>(-(unix-now() file-mtime(entry)) CONT-TTL-SECONDS)
+      file-delete(entry))))
 ```
 
 Alternatively use the `StoredCont` struct (tutorial Step 9) to embed the creation timestamp inside the file itself, making expiry checks independent of filesystem mtime.
@@ -134,19 +134,19 @@ Any value captured inside a `serial-reset` boundary must implement `Serializable
 ;; Pattern: serialize as a Vec cstr (one field per element).
 definstance Serializable MyStruct
   serialize [s]
-    serialize $ Vec.of([s.field-a
-                        s.field-b
-                        int64->cstr(s.field-c)])
+    serialize(Vec.of([s.field-a
+                      s.field-b
+                      int64->cstr(s.field-c)]))
   deserialize [b]
-    match deserialize(b) : (Result (Vec cstr) cstr)
+    match(deserialize(b : (Result (Vec cstr) cstr))
       (Err msg) -> Err(msg)
       (Ok parts) ->
-        if {Vec.len(parts) < 3}
+        if({Vec.len(parts) < 3}
           Err("MyStruct: not enough fields")
-          Ok(MyStruct
-              :field-a Vec.get(parts 0)
-              :field-b Vec.get(parts 1)
-              :field-c cstr->int64 $ Vec.get(parts 2))
+          Ok((MyStruct
+               :field-a Vec.get(parts 0)
+               :field-b Vec.get(parts 1)
+               :field-c cstr->int64(Vec.get(parts 2))))))
 ```
 
 **Rules:**
@@ -160,7 +160,7 @@ definstance Serializable MyStruct
 
 The router maps `POST /submit?k=TOKEN` to `serial-resume`:
 
-```turmeric
+```turmeric no-check
 POST /submit?k=TOKEN
   -> parse TOKEN from query string
   -> verify HMAC signature (if signing enabled)
@@ -219,7 +219,7 @@ A helper function that calls `send-form-and-wait` internally can be called from 
 ```sweet-exp
 ;; Sub-flow: collect a name and return it.
 defn collect-name [] : cstr
-  def body send-form-and-wait(fn [a] render-name-form(a))
+  def body send-form-and-wait(fn([a] render-name-form(a)))
   or(parse-form-field(body "name") "Anonymous")
 
 ;; Main flow: call sub-flows in sequence.
