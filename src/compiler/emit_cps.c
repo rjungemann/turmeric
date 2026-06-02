@@ -26,6 +26,7 @@
 
 #include "emit_internal.h"
 #include "builtins.h"
+#include "typeclass.h"
 #include "types.h"
 
 /* ---- program scan: does it use base delimited control? ---------------- */
@@ -481,7 +482,53 @@ typedef struct {
     bool           hole_left;/* true iff the hole is the left operand/arg */
     const Expr    *other;    /* the non-hole operand (captured into the frame env) */
     TypeKind       env_kind; /* type kind of `other` -- for typed serial marshaling */
+    /* cps-transform-plan (a): when the env is a nominal type with a Serializable
+     * instance (not the inline int/cstr kinds), the instance's method C names;
+     * NULL for inline-marshaled envs. */
+    const char    *env_ser;
+    const char    *env_deser;
 } ClFrame;
+
+/* cps-transform-plan (a): find a Serializable instance for `t` and return its
+ * serialize/deserialize method C names. Restricted to nominal (TY_STRUCT, incl.
+ * opaque) types -- primitive int/cstr envs use the inline codec. Scans the
+ * program's instance definitions (codegen has no typeclass env). */
+static bool sk_find_serializable(const Expr *program, Type t,
+                                 const char **ser_out, const char **deser_out) {
+    if (!program || program->kind != EX_PROGRAM) return false;
+    if (t.kind != TY_STRUCT || !t.as.struct_.def || !t.as.struct_.def->name)
+        return false;
+    const char *tname = t.as.struct_.def->name;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *it = program->as.program.items[i];
+        if (!it || it->kind != EX_INSTANCE_DEF) continue;
+        const TypeClassInstance *inst = it->as.instance_def_.instance;
+        if (!inst || !inst->typeclass || !inst->typeclass->name) continue;
+        if (strcmp(inst->typeclass->name->name, "Serializable") != 0) continue;
+        if (inst->n_type_args < 1) continue;
+        Type at = inst->type_args[0];
+        if (at.kind != TY_STRUCT || !at.as.struct_.def || !at.as.struct_.def->name)
+            continue;
+        if (strcmp(at.as.struct_.def->name, tname) != 0) continue;
+        /* Found the matching instance. When the caller only wants existence
+         * (NULL out-params, e.g. a feasibility check), don't allocate names. */
+        if (!ser_out || !deser_out) return true;
+        const char *ser = NULL, *deser = NULL;
+        const TypeClass *tc = inst->typeclass;
+        for (uint8_t j = 0; j < tc->n_methods && j < inst->n_method_impls; j++) {
+            if (!inst->method_impls[j] || !inst->method_impls[j]->binding) continue;
+            const char *mn = tc->methods[j].name ? tc->methods[j].name->name : "";
+            char *cn = raw_name_for_binding(inst->method_impls[j]->binding);
+            if (strcmp(mn, "serialize") == 0) ser = cn;
+            else if (strcmp(mn, "deserialize") == 0) deser = cn;
+            else free(cn);
+        }
+        if (ser && deser) { *ser_out = ser; *deser_out = deser; return true; }
+        free((void *)ser); free((void *)deser);
+        return false;
+    }
+    return false;
+}
 
 /* The C cast applied to an intptr-carried env/value when handed to a frame's
  * call target. Only int- and cstr-kinded operands are supported (both fit in an
@@ -575,7 +622,8 @@ static const char *frame_c_expr(const char *op, bool hole_left) {
 static bool env_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR; }
 
 static const Expr *collect_ctx(const Expr *rb, ExprKind target,
-                               ClFrame *frames, uint32_t *n_out) {
+                               ClFrame *frames, uint32_t *n_out,
+                               const Expr *program, bool want_names) {
     uint32_t n = 0;
     const Expr *cur = rb;
     for (;;) {
@@ -600,33 +648,50 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             frames[n].hole_left = h0;
             frames[n].other = other;
             frames[n].env_kind = TY_INT;
+            frames[n].env_ser = NULL;
+            frames[n].env_deser = NULL;
             n++;
             cur = h0 ? a0 : a1;
         } else if (cur && cur->kind == EX_CALL && cur->as.call_.n_args == 2 &&
                    cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             /* Call frame: a 2-arg call to a resolved top-level function with one
-             * hole arg and one pure int-or-cstr env arg. Enables non-arithmetic
-             * (e.g. cstr) contexts and -- crucially -- non-int env types. */
+             * hole arg and one pure env arg. The env may be int/cstr (inline) or
+             * -- when `program` is supplied (serial path) -- a nominal type with
+             * a Serializable instance (marshaled via that instance, CPS step a). */
             const Binding *fb = cur->as.call_.fn_binding;
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
             if (fb->closure_fn_binding) return NULL;   /* needs hidden env arg */
-            if (!env_kind_ok(fb->type.as.fn.arg_kinds[0]) ||
-                !env_kind_ok(fb->type.as.fn.arg_kinds[1])) return NULL;
-            if (!env_kind_ok(cur->type.kind)) return NULL;
+            if (!env_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
             const Expr *a0 = cur->as.call_.args[0];
             const Expr *a1 = cur->as.call_.args[1];
             bool h0 = reaches_shift_kind(a0, target);
             bool h1 = reaches_shift_kind(a1, target);
             if (h0 == h1) return NULL;
-            const Expr *other = h0 ? a1 : a0;
-            if (!env_kind_ok(other->type.kind)) return NULL;
+            /* the hole slot's param must be a carrier scalar (the resume value) */
+            TypeKind hole_param = h0 ? fb->type.as.fn.arg_kinds[0]
+                                     : fb->type.as.fn.arg_kinds[1];
+            if (!env_kind_ok(hole_param)) return NULL;
+            const Expr *other = h0 ? a1 : a0;   /* the env operand */
             if (reaches_shift_kind(other, target)) return NULL;
             if (expr_contains_return_or_throw(other)) return NULL;
+            const char *eser = NULL, *edeser = NULL;
+            if (env_kind_ok(other->type.kind)) {
+                /* int/cstr env -- inline codec */
+            } else if (program &&
+                       sk_find_serializable(program, other->type,
+                                            want_names ? &eser : NULL,
+                                            want_names ? &edeser : NULL)) {
+                /* nominal env with a Serializable instance -- instance codec */
+            } else {
+                return NULL;
+            }
             frames[n].c_op = NULL;
             frames[n].call_fn = fb;
             frames[n].hole_left = h0;
             frames[n].other = other;
             frames[n].env_kind = other->type.kind;
+            frames[n].env_ser = eser;
+            frames[n].env_deser = edeser;
             n++;
             cur = h0 ? a0 : a1;
         } else {
@@ -648,7 +713,7 @@ static bool cl_can_lower(const Expr *e) {
     if (!ty_intptr_safe(e->type.kind)) return false;
     ClFrame frames[CL_MAX_CTX_FRAMES];
     uint32_t nf = 0;
-    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf);
+    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false);
     if (!shift || nf == 0) return false;
     if (shift->as.cloneable_shift_.n_live_captures != 0) return false;
     if (!shift->as.cloneable_shift_.k_fn) return false;
@@ -688,7 +753,7 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     ClFrame frames[CL_MAX_CTX_FRAMES];
     uint32_t nf = 0;
-    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf);
+    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false);
     const Expr *k_fn = shift->as.cloneable_shift_.k_fn;
     Buf *hb = ctx->pending_handler_fns;
     int id = ctx->tmp_n++;
@@ -871,13 +936,13 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 /* Pure feasibility check (NO emission) for a serial-reset. Unlike the cloneable
  * path, an empty context (serial-shift IS the whole body) is allowed -- serial
  * continuations are an all-new feature with no legacy snapshots to preserve. */
-static bool sk_can_lower(const Expr *e) {
+static bool sk_can_lower(const Expr *e, const Expr *program) {
     if (!e || e->kind != EX_SERIAL_RESET) return false;
     if (!ty_intptr_safe(e->type.kind)) return false;
     ClFrame frames[CL_MAX_CTX_FRAMES];
     uint32_t nf = 0;
     const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
-                                    frames, &nf);
+                                    frames, &nf, program, /*want_names=*/false);
     if (!shift) return false;
     if (!shift->as.serial_shift_.k_fn) return false;
     return true;
@@ -897,13 +962,13 @@ static int sk_tag_for_frame(const ClFrame *f) {
 }
 
 char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
-    if (!sk_can_lower(e)) return NULL;
+    if (!sk_can_lower(e, ctx->program_root)) return NULL;
     if (!ctx->pending_handler_fns) return NULL;
 
     ClFrame frames[CL_MAX_CTX_FRAMES];
     uint32_t nf = 0;
     const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
-                                    frames, &nf);
+                                    frames, &nf, ctx->program_root, /*want_names=*/true);
     const Expr *k_fn = shift->as.serial_shift_.k_fn;
     Buf *hb = ctx->pending_handler_fns;
     int id = ctx->tmp_n++;
@@ -953,14 +1018,30 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
             snprintf(frame_fn[i], sizeof frame_fn[i], "__sk_call_%d_%u", id, i);
             cl_emit_frame_body(hb, frame_fn[i], &frames[i]);
             char *rn = raw_name_for_binding(frames[i].call_fn);
-            buf_printf(hb,
-                "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d, 0 };\n"
-                "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
-                "{ __sk_register(&__sk_reg_%d_%u); }\n",
-                id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i],
-                (frames[i].env_kind == TY_CSTR) ? 1 : 0,
-                id, i, id, i);
+            /* env_kind code + Serializable instance fn pointers (SER envs only). */
+            int ekc = frames[i].env_ser ? 2                       /* SK_ENV_SER  */
+                    : (frames[i].env_kind == TY_CSTR) ? 1         /* SK_ENV_CSTR */
+                    : 0;                                          /* SK_ENV_INT  */
+            if (frames[i].env_ser) {
+                buf_printf(hb,
+                    "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d,"
+                    " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
+                    "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
+                    "{ __sk_register(&__sk_reg_%d_%u); }\n",
+                    id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i], ekc,
+                    frames[i].env_ser, frames[i].env_deser,
+                    id, i, id, i);
+            } else {
+                buf_printf(hb,
+                    "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d, 0, 0, 0 };\n"
+                    "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
+                    "{ __sk_register(&__sk_reg_%d_%u); }\n",
+                    id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i], ekc,
+                    id, i, id, i);
+            }
             free(rn);
+            free((void *)frames[i].env_ser);
+            free((void *)frames[i].env_deser);
         }
     }
     char *k_fn_val = emit_value(ctx, body, k_fn);
@@ -991,9 +1072,11 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
 
 /* Program scan: does any serial-reset lower onto the DK machine? Gates the DK
  * runtime prelude + the serial marshaling runtime. Mirrors sk_can_lower. */
+static const Expr *g_sk_scan_root = NULL;  /* whole program, for the instance scan */
+
 static bool uses_serial_dk(const Expr *e) {
     if (!e) return false;
-    if (e->kind == EX_SERIAL_RESET && sk_can_lower(e)) return true;
+    if (e->kind == EX_SERIAL_RESET && sk_can_lower(e, g_sk_scan_root)) return true;
     switch (e->kind) {
         case EX_PROGRAM:
             for (uint32_t i = 0; i < e->as.program.n; i++)
@@ -1046,7 +1129,10 @@ static bool uses_serial_dk(const Expr *e) {
 }
 
 bool emit_cps_program_uses_serial_dk(const Expr *program) {
-    return uses_serial_dk(program);
+    g_sk_scan_root = program;   /* so sk_can_lower can scan for Serializable instances */
+    bool r = uses_serial_dk(program);
+    g_sk_scan_root = NULL;
+    return r;
 }
 
 /* Serial marshaling runtime: the fixed tagged context frames + the resume /
@@ -1095,13 +1181,26 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 " * constructor) a stable name <-> DKFrame mapping, so a call frame marshals as\n"
 " * its name rather than a code address -- the same name-keyed scheme the\n"
 " * interpreter's serial.c uses, here with the emitted C function name. */\n"
-"/* env_kind: 0 = int (inline int64), 1 = cstr (length-prefixed bytes). */\n"
-"typedef struct SkReg { const char *name; DKFrame fn; int env_kind; struct SkReg *next; } SkReg;\n"
+"/* env_kind: 0 = int (inline int64), 1 = cstr (length-prefixed bytes),\n"
+" * 2 = serializable (marshaled via the env type's Serializable instance). For a\n"
+" * serializable env, ser/deser point at __inst_Serializable_{serialize,\n"
+" * deserialize}_<T>: ser(env) -> a `bytes` {int64 len; data} buffer; deser(bytes)\n"
+" * -> the env value. */\n"
+"typedef struct SkReg {\n"
+"    const char *name; DKFrame fn; int env_kind;\n"
+"    void *(*ser)(int64_t); int64_t (*deser)(void *);\n"
+"    struct SkReg *next;\n"
+"} SkReg;\n"
 "static SkReg *__sk_registry = NULL;\n"
 "static void __sk_register(SkReg *r) { r->next = __sk_registry; __sk_registry = r; }\n"
 "static DKFrame __sk_call_for_name(const char *name) {\n"
 "    for (SkReg *r = __sk_registry; r; r = r->next)\n"
 "        if (strcmp(r->name, name) == 0) return r->fn;\n"
+"    return NULL;\n"
+"}\n"
+"static SkReg *__sk_reg_by_name(const char *name) {\n"
+"    for (SkReg *r = __sk_registry; r; r = r->next)\n"
+"        if (strcmp(r->name, name) == 0) return r;\n"
 "    return NULL;\n"
 "}\n"
 "static SkReg *__sk_reg_for_frame(DKFrame f) {\n"
@@ -1111,7 +1210,8 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "}\n"
 "#define SK_TAG_CALL 100\n"
 "#define SK_ENV_INT  0\n"
-"#define SK_ENV_CSTR 1\n");
+"#define SK_ENV_CSTR 1\n"
+"#define SK_ENV_SER  2\n");
     buf_puts(out,
 "/* Resume a (possibly deserialized) serial continuation on a value. */\n"
 "static int64_t tur_serial_cont_resume(int64_t k, int64_t v) {\n"
@@ -1135,6 +1235,10 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "        if (r && r->env_kind == SK_ENV_CSTR) {\n"
 "            const char *s = (const char *)(intptr_t)q->env;\n"
 "            sz += 8 + (int64_t)(s ? strlen(s) : 0);  /* str_len + bytes */\n"
+"        } else if (r && r->env_kind == SK_ENV_SER && r->ser) {\n"
+"            void *b = r->ser((int64_t)q->env);       /* instance bytes {len;data} */\n"
+"            int64_t bl = b ? ((int64_t *)b)[0] : 0;\n"
+"            sz += 8 + bl; free(b);                    /* len + data */\n"
 "        } else { sz += 8; }                            /* inline int64 */\n"
 "    }\n"
 "    uint8_t *buf = (uint8_t *)malloc((size_t)(8 + sz));\n"
@@ -1162,6 +1266,12 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "            int64_t sl = (int64_t)(s ? strlen(s) : 0);\n"
 "            memcpy(c, &sl, 8); c += 8;\n"
 "            if (sl) { memcpy(c, s, (size_t)sl); c += sl; }\n"
+"        } else if (ek == SK_ENV_SER && r && r->ser) {\n"
+"            void *b = r->ser((int64_t)q->env);\n"
+"            int64_t bl = b ? ((int64_t *)b)[0] : 0;\n"
+"            memcpy(c, &bl, 8); c += 8;\n"
+"            if (bl) { memcpy(c, (int64_t *)b + 1, (size_t)bl); c += bl; }\n"
+"            free(b);\n"
 "        } else {\n"
 "            int64_t env = (int64_t)q->env;\n"
 "            memcpy(c, &env, 8); c += 8;\n"
@@ -1188,7 +1298,8 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "            if (!nm) abort();\n"
 "            if (L) memcpy(nm, c, (size_t)L);\n"
 "            nm[L] = 0; c += L;\n"
-"            fns[i] = __sk_call_for_name(nm); free(nm);\n"
+"            fns[i] = __sk_call_for_name(nm);\n"
+"            SkReg *reg = __sk_reg_by_name(nm); free(nm);\n"
 "            int64_t ek; memcpy(&ek, c, 8); c += 8;\n"
 "            if (ek == SK_ENV_CSTR) {\n"
 "                int64_t sl; memcpy(&sl, c, 8); c += 8;\n"
@@ -1197,6 +1308,15 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "                if (sl) memcpy(s, c, (size_t)sl);\n"
 "                s[sl] = 0; c += sl;\n"
 "                envs[i] = (intptr_t)s;\n"
+"            } else if (ek == SK_ENV_SER) {\n"
+"                int64_t bl; memcpy(&bl, c, 8); c += 8;\n"
+"                int64_t *bb = (int64_t *)malloc(sizeof(int64_t) + (size_t)bl);\n"
+"                if (!bb) abort();\n"
+"                bb[0] = bl;\n"
+"                if (bl) memcpy(bb + 1, c, (size_t)bl);\n"
+"                c += bl;\n"
+"                envs[i] = (reg && reg->deser) ? (intptr_t)reg->deser(bb) : 0;\n"
+"                free(bb);\n"
 "            } else {\n"
 "                int64_t env; memcpy(&env, c, 8); c += 8;\n"
 "                envs[i] = (intptr_t)env;\n"

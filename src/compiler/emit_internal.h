@@ -163,6 +163,9 @@ typedef struct EmitCtx {
      * malloc (process-lifetime), preserving the old behavior for any context
      * that does not own an arena. */
     Arena       *type_arena;
+    /* cps-transform-plan (a): the whole program, so the serial env codec can
+     * scan for Serializable instances when marshaling a struct/nominal env. */
+    const Expr  *program_root;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */

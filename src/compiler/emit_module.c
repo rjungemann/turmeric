@@ -1141,6 +1141,7 @@ int emit_program(Buf *out, const Expr *program) {
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs;
     ctx.indent = 4;
     ctx.tmp_n = 0;
@@ -4908,6 +4909,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs2;
     ctx.indent = 4;
     ctx.tmp_n = 0;
