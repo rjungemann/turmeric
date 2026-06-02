@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JSON in Turmeric: the `#json(...)` reader macro and `tur/json` | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <hr class="sidebar-divider">
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#json-in-turmeric-the-json-reader-macro-and-turjson" style="">JSON in Turmeric: the #json(...) reader macro and tur/json</a></li>
+<li style=""><a href="#the-json-reader-macro" style="">The #json(...) reader macro</a></li>
+<li style="padding-left:0.75rem;"><a href="#what-the-reader-produces" style="color:var(--text-sec);">What the reader produces</a></li>
+<li style="padding-left:0.75rem;"><a href="#why-a-tagged-node-tree-and-not-a-hamtvec" style="color:var(--text-sec);">Why a tagged node tree (and not a HAMT/vec)?</a></li>
+<li style="padding-left:0.75rem;"><a href="#errors" style="color:var(--text-sec);">Errors</a></li>
+<li style="padding-left:0.75rem;"><a href="#optional-type-hint" style="color:var(--text-sec);">Optional type hint</a></li>
+<li style=""><a href="#runtime-json-turjson" style="">Runtime JSON: tur/json</a></li>
+<li style=""><a href="#when-to-use-which" style="">When to use which</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="json-in-turmeric-the-json-reader-macro-and-turjson">JSON in Turmeric: the <code>#json(...)</code> reader macro and <code>tur/json</code></h1>
+<blockquote>
+<p><strong>Status:</strong> the <code>#json(...)</code> reader macro is experimental, opt-in behind
+<code>-Xjson-reader</code>. The runtime <code>tur/json</code> library is stable.</p>
+</blockquote>
+<p>Turmeric handles JSON two ways:</p>
+<ul>
+<li><strong>Compile time</strong> -- the <code>#json(...)</code> reader macro embeds a verbatim JSON blob
+  in source, validates it while compiling, and lowers it to a <code>tur/json</code>
+  tagged-node tree (the same value <code>json/decode</code> produces). No runtime parse
+  step.</li>
+<li><strong>Runtime</strong> -- the <code>tur/json</code> library (<code>json/decode</code>, <code>json/encode</code>) parses
+  and serializes JSON strings whose contents are not known until the program
+  runs.</li>
+</ul>
+<p>Because both produce the <em>same</em> node tree, <code>#json(...)</code> is effectively a
+<code>json/decode</code> whose input is validated by the compiler.</p>
+<h2 id="the-json-reader-macro">The <code>#json(...)</code> reader macro</h2>
+<p>Enable it with the <code>-Xjson-reader</code> flag:</p>
+<pre><code class="language-sh">tur -Xjson-reader build   src/app.tur
+tur -Xjson-reader emit-c  src/app.tur
+tur -Xjson-reader run     src/app.tur
+</code></pre>
+<p>The macro uses round parens as the outer fence, so a top-level object reads
+without a doubled brace and a top-level array has no doubled bracket:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#json({&quot;a&quot;: 1, &quot;b&quot;: 2})   ; object
+#json([1, 2, 3])          ; array
+#json(42)                 ; scalar
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#json({&quot;a&quot;: 1, &quot;b&quot;: 2})   ; object
+#json([1, 2, 3])          ; array
+#json(42)                 ; scalar
+</code></pre></div></div></div>
+<h3 id="what-the-reader-produces">What the reader produces</h3>
+<p>The JSON is parsed at compile time and emitted as <code>tur/json</code> constructor calls,
+which the normal typechecker elaborates:</p>
+<table>
+<thead>
+<tr>
+<th>JSON</th>
+<th>Emitted constructor call</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{"a": 1}</code></td>
+<td><code>(json/object-put (json/object-new) "a" (json/int 1))</code></td>
+</tr>
+<tr>
+<td><code>[1, 2, 3]</code></td>
+<td><code>(json/array-push (json/array-push (json/array-new) (json/int 1)) ...)</code></td>
+</tr>
+<tr>
+<td><code>"hello"</code></td>
+<td><code>(json/string "hello")</code></td>
+</tr>
+<tr>
+<td><code>42</code></td>
+<td><code>(json/int 42)</code></td>
+</tr>
+<tr>
+<td><code>3.14</code></td>
+<td><code>(json/float 3.14)</code></td>
+</tr>
+<tr>
+<td><code>true</code> / <code>false</code></td>
+<td><code>(json/bool 1)</code> / <code>(json/bool 0)</code></td>
+</tr>
+<tr>
+<td><code>null</code></td>
+<td><code>(json/null)</code> -- a real null node</td>
+</tr>
+</tbody>
+</table>
+<p>Every node is a uniform handle (<code>:int</code>), so values can be <strong>heterogeneous and
+nested</strong> -- the type of each value is carried as a runtime tag, recoverable with
+<code>json/type</code> and the <code>json/get-*</code> accessors. This is the key difference from the
+<code>#map{...}</code> / <code>[...]</code> data literals, which are monomorphic <code>:int</code> collections.</p>
+<p>Retrieve object fields by key with <code>json/get!</code> (returns the value node) and
+extract the scalar with the typed accessor:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(json/get-string (json/get! #json({&quot;name&quot;: &quot;alice&quot;, &quot;age&quot;: 30}) &quot;name&quot;))  ; =&gt; &quot;alice&quot;
+(json/get-int    (json/get! #json({&quot;name&quot;: &quot;alice&quot;, &quot;age&quot;: 30}) &quot;age&quot;))   ; =&gt; 30
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">json/get-string(json/get!(#json({&quot;name&quot;: &quot;alice&quot;, &quot;age&quot;: 30}) &quot;name&quot;))  ; =&gt; &quot;alice&quot;
+json/get-int(json/get!(#json({&quot;name&quot;: &quot;alice&quot;, &quot;age&quot;: 30}) &quot;age&quot;))      ; =&gt; 30
+</code></pre></div></div></div>
+<p>(<code>json/get</code> is the total variant -- it returns an <code>Option</code> node; <code>json/get!</code>
+panics on a missing key.)</p>
+<p>Index into arrays with <code>json/array-get</code> / <code>json/array-len</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(json/array-len #json([10, &quot;x&quot;, true]))                    ; =&gt; 3
+(json/get-int    (json/array-get #json([10, &quot;x&quot;, true]) 0)) ; =&gt; 10
+(json/get-string (json/array-get #json([10, &quot;x&quot;, true]) 1)) ; =&gt; &quot;x&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">json/array-len(#json([10, &quot;x&quot;, true]))                      ; =&gt; 3
+json/get-int(json/array-get(#json([10, &quot;x&quot;, true]) 0))     ; =&gt; 10
+json/get-string(json/array-get(#json([10, &quot;x&quot;, true]) 1))  ; =&gt; &quot;x&quot;
+</code></pre></div></div></div>
+<p><code>null</code> is genuinely distinct from <code>0</code>/<code>false</code> -- it is a node whose
+<code>(json/type node)</code> is <code>0</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(json/type #json(null))   ; =&gt; 0  (null)
+(json/type #json(false))  ; =&gt; 1  (bool)
+(json/type #json(0))      ; =&gt; 2  (int)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">json/type(#json(null))   ; =&gt; 0  (null)
+json/type(#json(false))  ; =&gt; 1  (bool)
+json/type(#json(0))      ; =&gt; 2  (int)
+</code></pre></div></div></div>
+<h3 id="why-a-tagged-node-tree-and-not-a-hamtvec">Why a tagged node tree (and not a HAMT/vec)?</h3>
+<p>A Vec/HAMT stores <code>int64</code> slots, and <code>vec-of</code>/<code>hamt-of</code> are <strong>monomorphic</strong> in
+a single <code>:int</code> carrier -- so a collection's elements must all share one type
+(the <code>vec-of</code> docstring spells this out). JSON, by contrast, is heterogeneous
+(<code>[1, "x", true, null]</code>, mixed-type objects). Representing that on top of
+homogeneous storage requires a <strong>boxed/tagged value</strong>: each value becomes the
+same type -- a JSON node handle -- with the variation moved into a runtime tag.
+That is exactly the <code>tur/json</code> node, which is why <code>#json(...)</code> targets it
+rather than collapsing everything to <code>:int</code> (and <code>null</code> to a misleading <code>0</code>).</p>
+<h3 id="errors">Errors</h3>
+<p>Malformed JSON is reported at compile time with line/column pointing into the
+<code>#json(...)</code> block:</p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TUR-E0270</code></td>
+<td>Malformed JSON inside a <code>#json(...)</code> block</td>
+</tr>
+<tr>
+<td><code>TUR-E0271</code></td>
+<td>Unexpected EOF inside a <code>#json(...)</code> block</td>
+</tr>
+</tbody>
+</table>
+<h3 id="optional-type-hint">Optional type hint</h3>
+<p>The <code>#json&lt;Type&gt;(...)</code> form wraps its node tree in an ascription
+<code>(:: &lt;node&gt; Type)</code>. For a literal blob this is a compile-time type check on the
+node's own representation; the typed-decode path lives in the <code>tur/schema</code>
+reader family <code>#json-str&lt;T&gt;(expr)</code>, which desugars to
+<code>(:: (decode! (json/decode expr)) T)</code> under <code>-Xschema-reader</code>. See the
+<a href="schema-guide.md">schema guide</a> for <code>HasSchema</code> and typed decoding.</p>
+<h2 id="runtime-json-turjson">Runtime JSON: <code>tur/json</code></h2>
+<p>When the JSON is not known at compile time (read from a file, a socket, user
+input), use the runtime library:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [node (json/decode &quot;{\&quot;x\&quot;: 1, \&quot;y\&quot;: 2}&quot;)]
+  ...)                        ; node is a heap JSON value tree
+(json/encode node)            ; =&gt; &quot;{\&quot;x\&quot;:1,\&quot;y\&quot;:2}&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [node json/decode(&quot;{\&quot;x\&quot;: 1, \&quot;y\&quot;: 2}&quot;)]
+  ...                        ; node is a heap JSON value tree
+json/encode(node)            ; =&gt; &quot;{\&quot;x\&quot;:1,\&quot;y\&quot;:2}&quot;
+</code></pre></div></div></div>
+<p><code>json/decode</code> returns a node tree (null / bool / int / float / string / array /
+object); see <code>stdlib/json.tur</code> for the accessor API. Use the reader macro for
+fixed, source-embedded data and <code>tur/json</code> for dynamic data.</p>
+<h2 id="when-to-use-which">When to use which</h2>
+<table>
+<thead>
+<tr>
+<th>Need</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Embed a fixed JSON blob, validated at compile</td>
+<td><code>#json(...)</code></td>
+</tr>
+<tr>
+<td>Parse a JSON string only known at runtime</td>
+<td><code>json/decode</code></td>
+</tr>
+<tr>
+<td>Serialize a value to a JSON string</td>
+<td><code>json/encode</code></td>
+</tr>
+<tr>
+<td>Build a collection with computed slot values</td>
+<td><code>#map{...}</code> / <code>#set{...}</code> / <code>[...]</code> data literals</td>
+</tr>
+</tbody>
+</table>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/json-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

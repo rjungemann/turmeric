@@ -168,8 +168,36 @@ class SiteFooter extends HTMLElement {
   }
 }
 
+class SiteSidebar extends HTMLElement {
+  connectedCallback() {
+    const back = this.getAttribute('back') ?? '/';
+    const backLabel = this.getAttribute('back-label') ?? '← Back to home';
+    const tocHtml = this.innerHTML.trim();
+    this.innerHTML = `
+      <a class="sidebar-back" href="${back}">${backLabel}</a>
+      ${tocHtml ? `<hr class="sidebar-divider"><div class="sidebar-toc">${tocHtml}</div>` : ''}
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>`;
+  }
+}
+
 customElements.define('site-nav', SiteNav);
 customElements.define('site-footer', SiteFooter);
+customElements.define('site-sidebar', SiteSidebar);
 
 // ── REVEAL ON SCROLL ────────────────────────────────────────────────────────
 

@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTTP Server with stdlib/httpd | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <hr class="sidebar-divider">
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#http-server-with-stdlibhttpd" style="">HTTP Server with stdlib/httpd</a></li>
+<li style=""><a href="#quick-start" style="">Quick start</a></li>
+<li style="padding-left:0.75rem;"><a href="#handler-calling-convention" style="color:var(--text-sec);">Handler calling convention</a></li>
+<li style=""><a href="#constructors" style="">Constructors</a></li>
+<li style=""><a href="#lifecycle" style="">Lifecycle</a></li>
+<li style=""><a href="#routing-h6" style="">Routing (H6)</a></li>
+<li style=""><a href="#middleware-h7" style="">Middleware (H7)</a></li>
+<li style=""><a href="#keep-alive-h4" style="">Keep-alive (H4)</a></li>
+<li style=""><a href="#threading-model" style="">Threading model</a></li>
+<li style=""><a href="#common-patterns" style="">Common patterns</a></li>
+<li style="padding-left:0.75rem;"><a href="#tests-with-a-kernel-assigned-port" style="color:var(--text-sec);">Tests with a kernel-assigned port</a></li>
+<li style="padding-left:0.75rem;"><a href="#graceful-shutdown-from-a-signal" style="color:var(--text-sec);">Graceful shutdown from a signal</a></li>
+<li style=""><a href="#non-goals" style="">Non-goals</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="http-server-with-stdlibhttpd">HTTP Server with <code>stdlib/httpd</code></h1>
+<p><code>stdlib/httpd</code> is a lightweight HTTP/1.0 and HTTP/1.1 server that ships
+with the Turmeric tree. It pairs a <code>tur/reactor</code> listener thread with a
+worker pool and a <code>Mutex&lt;Queue&gt;</code> of accepted sockets. Keep-alive,
+routing, and middleware are built in. TLS is delivered separately via
+the <a href="httpd-tls-guide.md"><code>tur-tls</code> spice</a>.</p>
+<p>This guide covers the plaintext server. For HTTPS, layer it with
+<a href="httpd-tls-guide.md">httpd-tls-guide.md</a>. For the underlying event loop,
+see <a href="reactor-guide.md">reactor-guide.md</a>.</p>
+<hr />
+<h2 id="quick-start">Quick start</h2>
+<pre><code class="language-turmeric">(load &quot;stdlib/httpd.tur&quot;)
+(load &quot;stdlib/chan.tur&quot;)
+
+(defn main [] :int
+  (let [h (httpd-new 8080
+            (fn [conn :ptr&lt;void&gt;] :nil
+              (httpd-resp-status! conn 200)
+              (httpd-resp-body!   conn &quot;Hello, world!&quot;)))]
+    (httpd-run h)
+    (httpd-free h)
+    0))
+</code></pre>
+<p><code>httpd-run</code> blocks the calling thread until <code>httpd-stop</code> is signalled
+from another thread. The handler runs on a worker thread, not the
+listener.</p>
+<h3 id="handler-calling-convention">Handler calling convention</h3>
+<p>The handler closure <strong>must capture at least one variable</strong> so it is
+heap-allocated as a fat closure. A bare top-level <code>defn</code> will not work
+as a handler -- wrap it:</p>
+<pre><code class="language-turmeric">(let [_     0
+      h     (httpd-new 8080
+              (fn [conn :ptr&lt;void&gt;] :nil
+                (handle-request conn _)))]
+  ...)
+</code></pre>
+<p>Inside the handler:</p>
+<ul>
+<li><code>httpd-req-method</code>, <code>httpd-req-path</code>, <code>httpd-req-version</code>,
+  <code>httpd-req-body</code>, <code>httpd-req-body-len</code> read the parsed request.</li>
+<li><code>httpd-resp-status!</code> and <code>httpd-resp-body!</code> set the response.</li>
+<li><code>httpd-resp-status-get</code> reads back the status set so far (useful for
+  middleware).</li>
+</ul>
+<hr />
+<h2 id="constructors">Constructors</h2>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(httpd-new port handler)</code></td>
+<td>4-worker plaintext server</td>
+</tr>
+<tr>
+<td><code>(httpd-new-pool port workers handler)</code></td>
+<td>Custom worker count</td>
+</tr>
+<tr>
+<td><code>(httpd-new-tls port workers handler ctx)</code></td>
+<td>HTTPS termination -- see <a href="httpd-tls-guide.md">httpd-tls-guide.md</a></td>
+</tr>
+</tbody>
+</table>
+<p>A <code>port</code> of <code>0</code> lets the kernel choose; read it back with
+<code>(httpd-port h)</code>. This is the recommended pattern for tests.</p>
+<hr />
+<h2 id="lifecycle">Lifecycle</h2>
+<pre><code class="language-turmeric">(let [h (httpd-new 0 handler)]
+  ;; run on a background thread so the main thread can signal shutdown
+  (let [server (spawn-server h)]
+    ...                            ; do work, wait for a signal, etc.
+    (httpd-stop h)                 ; thread-safe; wakes the listener
+    (join-thread server)
+    (httpd-free h)))               ; releases reactor + worker pool
+</code></pre>
+<p><code>httpd-stop</code> delegates to <code>reactor-stop</code> on the listener's reactor and
+is safe to call from a signal handler, another worker, or the main
+thread. In-flight requests complete; new connections are refused once
+<code>reactor-run</code> returns.</p>
+<hr />
+<h2 id="routing-h6">Routing (H6)</h2>
+<p><code>stdlib/httpd</code> ships a small router that matches on method and path
+pattern, with support for <code>:name</code> path parameters:</p>
+<pre><code class="language-turmeric">(let [r (router-new)]
+  (defroute r &quot;GET&quot;  &quot;/&quot;           home-handler)
+  (defroute r &quot;GET&quot;  &quot;/users/:id&quot;  user-handler)
+  (defroute r &quot;POST&quot; &quot;/users&quot;      create-user-handler)
+  (let [h (httpd-new 8080
+            (fn [conn :ptr&lt;void&gt;] :nil
+              (router-dispatch r conn)))]
+    (httpd-run h)
+    (router-free r)
+    (httpd-free h)))
+</code></pre>
+<p>Inside a route handler, <code>(httpd-param conn "id")</code> returns the captured
+segment as a <code>:cstr</code>. Unmatched requests receive a 404 automatically.</p>
+<p><code>defroute</code> is a thin macro over <code>router-add</code>; either form works.</p>
+<hr />
+<h2 id="middleware-h7">Middleware (H7)</h2>
+<p>Middleware wraps a handler and can short-circuit, mutate the response,
+or log. The pattern is plain function composition -- no framework
+machinery:</p>
+<pre><code class="language-turmeric">(defn log-mw [next :int]
+  (fn [conn :ptr&lt;void&gt;] :nil
+    (println (httpd-req-path conn))
+    (httpd-call next conn)
+    (println-status (httpd-resp-status-get conn))))
+
+(let [h (httpd-new 8080
+          (log-mw (router-mw r)))]
+  ...)
+</code></pre>
+<p><code>httpd-call</code> invokes a captured handler closure on a connection -- it is
+how a middleware passes control through to the next layer.</p>
+<hr />
+<h2 id="keep-alive-h4">Keep-alive (H4)</h2>
+<p>HTTP/1.1 keep-alive is on by default. A worker loops on the same socket
+until:</p>
+<ul>
+<li>The client sends <code>Connection: close</code>.</li>
+<li>A 5-second <code>SO_RCVTIMEO</code> fires (no data within the idle window).</li>
+<li>The peer closes the socket.</li>
+</ul>
+<p>HTTP/1.0 connections close after one request unless the client sends
+<code>Connection: keep-alive</code>. No tuning knobs are exposed in v1; if you need
+a different idle bound, set it on the listen socket before calling
+<code>httpd-run</code>.</p>
+<hr />
+<h2 id="threading-model">Threading model</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Thread</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Listener</td>
+<td>One thread runs <code>reactor-run</code> on the listen fd</td>
+</tr>
+<tr>
+<td>Worker pool</td>
+<td>N threads (default 4); each pops from a shared <code>Mutex&lt;Queue&lt;int&gt;&gt;</code></td>
+</tr>
+<tr>
+<td>Handler closure</td>
+<td>Runs on whichever worker popped the connection</td>
+</tr>
+</tbody>
+</table>
+<p>The listener thread does <em>not</em> call user code. Workers do. Handlers may
+block; long-running handlers tie up a worker for the duration.</p>
+<p>For TLS termination, the worker drives the handshake after popping the
+fd -- see <a href="httpd-tls-guide.md">httpd-tls-guide.md</a>.</p>
+<hr />
+<h2 id="common-patterns">Common patterns</h2>
+<h3 id="tests-with-a-kernel-assigned-port">Tests with a kernel-assigned port</h3>
+<pre><code class="language-turmeric">(let [donech (chan-new 1)
+      h      (httpd-new 0
+               (fn [conn :ptr&lt;void&gt;] :nil
+                 (httpd-resp-status! conn 200)
+                 (httpd-resp-body!   conn &quot;ok&quot;)
+                 (chan-send donech 1)))
+      port   (httpd-port h)
+      server (spawn-server h)
+      client (spawn-client port)]
+  (chan-recv donech)
+  (httpd-stop h)
+  (join-thread server)
+  (join-thread client)
+  (httpd-free h))
+</code></pre>
+<p>This is the shape used by every fixture under
+<code>tests/fixtures/httpd-h*</code>.</p>
+<h3 id="graceful-shutdown-from-a-signal">Graceful shutdown from a signal</h3>
+<p>Pair <code>httpd-stop</code> with <code>reactor-add-signal</code> on a separate reactor, or
+keep a shared <code>chan</code> that any thread (including a SIGINT handler set up
+manually) can write to.</p>
+<hr />
+<h2 id="non-goals">Non-goals</h2>
+<ul>
+<li><strong>No HTTP/2.</strong> HTTP/1.1 only; HTTP/2 is not on the roadmap.</li>
+<li><strong>No async DNS.</strong> <code>getaddrinfo</code> is blocking.</li>
+<li><strong>No built-in TLS.</strong> Use <a href="httpd-tls-guide.md"><code>tur-tls</code></a> via
+  <code>httpd-new-tls</code>.</li>
+<li><strong>No rate limiting or auth.</strong> Compose via middleware.</li>
+</ul>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="httpd-tls-guide.md">httpd-tls-guide.md</a> -- HTTPS termination via <code>tur-tls</code></li>
+<li><a href="reactor-guide.md">reactor-guide.md</a> -- the event loop the listener runs on</li>
+<li><a href="threading-guide.md">threading-guide.md</a> -- the <code>Mutex&lt;Queue&gt;</code> worker dispatch primitive</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/httpd-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

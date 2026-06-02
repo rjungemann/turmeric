@@ -269,9 +269,9 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
     )
 
     intro = (
-        '<p>First-party spices for the Turmeric ecosystem. Each spice has its '
-        'own docs -- click through for a front page and a per-spice API '
-        'reference.</p>'
+        f'<p>{len(metas)} first-party spices for the Turmeric ecosystem. '
+        'Each spice has its own docs -- click through for a front page and '
+        'a per-spice API reference.</p>'
     )
 
     sidebar_html = (
