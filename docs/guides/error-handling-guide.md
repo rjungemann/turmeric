@@ -412,6 +412,30 @@ ignore!(some-fn-returning-result())
 `ignore!` expands to `(do expr nil)` -- the expression is evaluated for its side
 effects and the value is dropped.
 
+### Linting unused results
+
+Pass `--warn-unused-result` to have the compiler warn when a `result`-shaped
+value (a `ptr<void>`) is computed in statement position and its value is thrown
+away:
+
+```turmeric
+(defn main [] :int
+  (write-record r)   ;; warning: discarded result value of type ptr<void>;
+                     ;;          use ignore! to suppress this warning
+  0)
+```
+
+The warning is **off by default** and is silenced three ways:
+
+- **`ignore!`** -- `(ignore! (write-record r))` expands to `(do expr nil)`, so
+  the discarded value is `nil`, not a result. Use this when discarding is
+  intentional.
+- **Binding it** -- `(let [_ (write-record r)] ...)`. A `let` binding (even to
+  `_`) is an explicit discard and never warns.
+- **Using the value** -- e.g. propagating it with the [`?` operator](#query-operator-).
+  Because `(? expr)` binds its operand in a `let`, a `?`-wrapped call is never
+  in statement position and never triggers the warning.
+
 ---
 
 ## Contract macros
@@ -546,7 +570,6 @@ The following features are planned but not yet implemented:
 | Feature | Phase | Notes |
 |---|---|---|
 | `catch-unwind` | R2 | Catch a panic at a safe boundary |
-| `--warn-unused-result` compiler flag | R6 | Lint for dropped results |
 | `--lint-panic` compiler flag | R6 | Audit panic call sites |
 
 ### Panic inside effect handlers and continuations (Phase R6)
