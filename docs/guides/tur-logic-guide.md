@@ -363,7 +363,7 @@ inspect terms:
           (if (and (>= v lo) (<= v hi))
             (mreturn state)
             (mzero)))
-        (mzero)))))                             ; not ground — fail
+        (mzero)))))                             ; not ground -- fail
 ```
 ```sweet-exp
 ;; goal: t must walk to an integer in the range [lo, hi]
@@ -378,7 +378,7 @@ defn range-goal [t lo hi] :ptr<void>
             mreturn(state)
             mzero()
         mzero()
-; not ground — fail
+; not ground -- fail
 ```
 
 ### Reification helpers
@@ -485,7 +485,7 @@ For recursive relations that diverge under depth-first search, add a memo
 table keyed on `(goal-id, substitution)`:
 
 ```turmeric
-;; memo-table: map from (goal-name × subs-hash) → result-list
+;; memo-table: map from (goal-name x subs-hash) -> result-list
 ;; Use tur/hamt for the persistent map.
 (import tur/hamt :refer [hamt-empty hamt-insert hamt-lookup])
 
@@ -499,7 +499,7 @@ table keyed on `(goal-id, substitution)`:
         result))))
 ```
 ```sweet-exp
-;; memo-table: map from (goal-name × subs-hash) → result-list
+;; memo-table: map from (goal-name x subs-hash) -> result-list
 ;; Use tur/hamt for the persistent map.
 import tur/hamt :refer [hamt-empty hamt-insert hamt-lookup]
 defn tabled [name goal-fn args subs] :int

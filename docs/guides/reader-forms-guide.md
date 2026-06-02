@@ -180,7 +180,7 @@ compile-time constant).
 Any name that starts with a letter or one of `+ - * / = < > ! ? _ $ & . ^ |`
 or a UTF-8 code-point in the symbol-start set (includes `λ`, `∀`, `∃`).
 
-```turmeric
+```turmeric no-check
 foo
 my-var
 +
