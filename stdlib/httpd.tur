@@ -60,6 +60,8 @@
 ;;   httpd-req-body-len [conn :ptr<void>]                -- int
 ;;   httpd-resp-status! [conn :ptr<void> status :int]    -- nil
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
+;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
+(load "stdlib/json.tur")
 ;;; httpd/autolink-hint -- ensure programs using httpd link against libturi + pthreads.
 ;;; Also hoists the file-scope httpd_tls_ops struct and instance used by the H5
 ;;; TLS hook registry (see httpd-register-tls-impl and httpd-new-tls).
@@ -160,6 +162,7 @@
       int64_t tls;
       void *req_headers;
       void *resp_headers;
+      int64_t req_json_cache;  /* M3: lazily-parsed json/decode tree, freed in cleanup */
   } HttpdConn;
   typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
@@ -465,6 +468,11 @@
               rh = nx;
           }
           conn->resp_headers = NULL;
+      }
+      /* M3: free any cached JSON body parsed by httpd-req-json / mw-json-body. */
+      if (conn->req_json_cache) {
+          json_free(conn->req_json_cache);
+          conn->req_json_cache = 0;
       }
   }
   if (tls && httpd_tls_ops.shutdown) {
@@ -1430,6 +1438,216 @@
   if (opts.http_only)      n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; HttpOnly");
   if (*csame)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; SameSite=%s", csame);
   httpd_resp_header_add_((void *)conn, "Set-Cookie", buf);
+  ```)
+;; =============================================================================
+;; M3: Body parsers -- URL-encoded forms + JSON
+;; =============================================================================
+;;
+;; Both parsers branch on the request's `Content-Type:` header (read via
+;; httpd-req-header) and operate over the already-buffered body.
+;;
+;; URL-encoded (application/x-www-form-urlencoded):
+;;   (httpd-req-form conn field)        -- single value, decoded; "" if absent
+;;   (See http-mw-form fixture for usage; key percent-decoding is not yet
+;;    supported -- field names should be plain ASCII.)
+;;
+;; JSON (application/json):
+;;   (httpd-req-json conn)              -- json/decode tree, cached per-iteration
+;;   (mw-json-body next)                -- pre-parse middleware; 400 on malformed
+;;
+;; Both surfaces are pure Turmeric on top of M0; only the JSON cache field
+;; on HttpdConn (req_json_cache) and its iteration-cleanup hook touch the
+;; C core (see httpd-handle).
+;;; httpd-req-form -- look up a single URL-encoded form field by name.
+;;;
+;;; Walks the request body (which must already have been received -- the
+;;; worker reads Content-Length bytes) looking for `name=value` separated
+;;; by `&`. The value is percent-decoded and `+` is converted to ` ` per
+;;; the application/x-www-form-urlencoded convention.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   field -- form field name (case-sensitive, plain ASCII)
+;;;
+;;; Returns:
+;;;   The decoded value as a heap-allocated cstr (per-call ownership;
+;;;   do not free explicitly -- the runtime drops it after the handler
+;;;   returns).  Empty string "" when the field is absent or the body
+;;;   is empty.
+;;;
+;;; Example:
+;;;   (let [user (httpd-req-form c "username")
+;;;         pw   (httpd-req-form c "password")] ...)
+;;;
+;;; Since: Phase H8 (M3)
+
+(defn httpd-req-form [conn :ptr<void> field :cstr] :cstr
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+  } HttpdConn;
+  if (!conn || !field || !*field) return "";
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->body || c->body_len <= 0) return "";
+  size_t flen = strlen(field);
+  const char *p   = c->body;
+  const char *end = c->body + c->body_len;
+  while (p < end) {
+      const char *kstart = p;
+      while (p < end && *p != '=' && *p != '&') p++;
+      size_t klen = (size_t)(p - kstart);
+      const char *vstart = NULL;
+      const char *vend   = NULL;
+      if (p < end && *p == '=') {
+          p++;
+          vstart = p;
+          while (p < end && *p != '&') p++;
+          vend = p;
+      }
+      if (klen == flen && strncmp(kstart, field, flen) == 0) {
+          size_t vlen = vend ? (size_t)(vend - vstart) : 0;
+          char *out = (char *)malloc(vlen + 1);
+          if (!out) return "";
+          size_t oi = 0;
+          for (size_t i = 0; i < vlen; i++) {
+              char ch = vstart[i];
+              if (ch == '+') {
+                  out[oi++] = ' ';
+              } else if (ch == '%' && i + 2 < vlen) {
+                  char hex[3] = { vstart[i+1], vstart[i+2], '\0' };
+                  /* strtoul rejects bad hex -> 0; that's fine here. */
+                  unsigned long uv = strtoul(hex, NULL, 16);
+                  out[oi++] = (char)uv;
+                  i += 2;
+              } else {
+                  out[oi++] = ch;
+              }
+          }
+          out[oi] = '\0';
+          return out;
+      }
+      if (p < end && *p == '&') p++;
+  }
+  return "";
+  ```)
+;;; httpd-req-json -- lazily parse the request body as JSON.
+;;;
+;;; First call invokes `json/decode` on the request body and caches the
+;;; resulting node tree on the connection (req_json_cache).  Subsequent
+;;; calls return the cached pointer.  The iteration cleanup in
+;;; httpd-handle calls `json/free` so handlers never free explicitly.
+;;;
+;;; Returns 0 (nil tree) when the body is absent or json/decode fails
+;;; on the input; use `mw-json-body` if you want a 400 short-circuit on
+;;; malformed JSON.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   The parsed JSON node tree as an :int (the json stdlib carrier), or
+;;;   0 when there is no body / parse failed.
+;;;
+;;; Example:
+;;;   (let [doc (httpd-req-json c)
+;;;         nm  (json/get-string (json/get! doc "name"))]
+;;;     (httpd-resp-body! c nm))
+;;;
+;;; Since: Phase H8 (M3)
+
+(defn httpd-req-json [conn :ptr<void>] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+  } HttpdConn;
+  if (!conn) return 0;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->req_json_cache) return c->req_json_cache;
+  if (!c->body || c->body_len <= 0) return 0;
+  /* json_decode is the C name for json/decode. */
+  int64_t tree = json_decode(c->body);
+  c->req_json_cache = tree;
+  return tree;
+  ```)
+;;; mw-json-body -- pre-parse the JSON body, 400 on failure.
+;;;
+;;; Wraps a base handler so that, before `next` runs, the request body is
+;;; parsed via httpd-req-json.  On parse failure (json/decode returned 0
+;;; AND the body is non-empty) the middleware sets status 400 with a
+;;; small text body and does NOT call `next`.  On success the cached
+;;; tree is available to the inner handler via httpd-req-json, which
+;;; returns the same pointer.
+;;;
+;;; Tip: only wrap routes that genuinely require a JSON body; an empty
+;;; body or a route that does not expect JSON should not 400.  Check
+;;; `(= "application/json" (httpd-req-header c "Content-Type"))` at the
+;;; route layer if you want stricter gating.
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware base mw-json-body)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M3)
+
+(defn mw-json-body [next :int] :ptr<void>
+  (let [_n next]
+    (fn [c :ptr<void>] :nil
+      (if (= 1 (httpd-mw-json-body-precheck c))
+        (do
+          (httpd-resp-status! c 400)
+          (httpd-resp-body! c "malformed JSON body"))
+        (httpd-call _n c)))))
+;;; httpd-mw-json-body-precheck -- internal: returns 1 when the body is
+;;; non-empty but json/decode failed, 0 otherwise. Used by mw-json-body
+;;; to drive the 400 short-circuit; lives as a fixed-arity helper so the
+;;; if-form inside mw-json-body can stay in Turmeric.
+
+(defn httpd-mw-json-body-precheck [conn :ptr<void>] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+  } HttpdConn;
+  if (!conn) return 0;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->body || c->body_len <= 0) return 0;  /* empty body -> not malformed */
+  if (c->req_json_cache) return 0;             /* already parsed once -> ok */
+  int64_t tree = json_decode(c->body);
+  if (tree == 0) return 1;                     /* parse failed -> malformed */
+  c->req_json_cache = tree;
+  return 0;
   ```)
 ;; =============================================================================
 ;; H6: Routing DSL

@@ -1,0 +1,145 @@
+;; M3: httpd-mw-json -- pre-parse JSON body, 400 on malformed.
+;;
+;; Two consecutive requests on the same keep-alive socket:
+;;
+;;   1. Valid JSON body: {"name":"alice","level":7}. The handler reads
+;;      the cached tree via httpd-req-json and prints the name + level.
+;;   2. Malformed body: `not-json{`. mw-json-body short-circuits before
+;;      `next`, sets status 400, body "malformed JSON body". The handler
+;;      MUST NOT be called.
+;;
+;; The client receives both responses and prints the response status line
+;; from each so we can verify the 400 path. Then the test prints "done".
+;;
+;; Expected output:
+;;   name=alice
+;;   level=7
+;;   status=200
+;;   status=400
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-pair [k :cstr v :cstr] :nil
+  ```c printf("%s=%s\n", k, v); ```)
+
+(defn print-int [k :cstr v :int] :nil
+  ```c printf("%s=%d\n", k, (int)v); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+
+  /* Request 1: valid JSON, keep-alive on. */
+  {
+    const char *body = "{\"name\":\"alice\",\"level\":7}";
+    char req[512];
+    int rl = snprintf(req, sizeof(req),
+        "POST /thing HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %d\r\n"
+        "\r\n"
+        "%s", (int)strlen(body), body);
+    send(fd, req, (size_t)rl, 0);
+    char drain[1024];
+    int total = 0;
+    while (total < (int)sizeof(drain) - 1) {
+        ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+        if (r <= 0) break;
+        total += (int)r;
+        if (strstr(drain, "\r\n\r\nok") != NULL) break;  /* response has Content-Length 2 + "ok" */
+    }
+    drain[total] = '\0';
+    /* Print just the status code from the status line. */
+    if (strncmp(drain, "HTTP/1.1 ", 9) == 0)
+        printf("status=%c%c%c\n", drain[9], drain[10], drain[11]);
+  }
+
+  /* Request 2: malformed JSON, expect 400. */
+  {
+    const char *body = "not-json{";
+    char req[512];
+    int rl = snprintf(req, sizeof(req),
+        "POST /thing HTTP/1.0\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %d\r\n"
+        "\r\n"
+        "%s", (int)strlen(body), body);
+    send(fd, req, (size_t)rl, 0);
+    char drain[1024];
+    int total = 0;
+    while (total < (int)sizeof(drain) - 1) {
+        ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+        if (r <= 0) break;
+        total += (int)r;
+    }
+    drain[total] = '\0';
+    if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+        printf("status=%c%c%c\n", drain[9], drain[10], drain[11]);
+  }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 2)
+        base   (fn [c :ptr<void>] :nil
+                 (let [doc (httpd-req-json c)]
+                   (print-pair "name"  (json/get-string (json/get! doc "name")))
+                   (print-int  "level" (json/get-int    (json/get! doc "level"))))
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body! c "ok")
+                 (chan-send donech 1))
+        composed (compose-middleware base mw-json-body)
+        h      (httpd-new-pool 0 1 composed)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    ;; Wait for both requests to drain through the worker.
+    (chan-recv donech)  ;; valid request fires base -> sends 1
+    ;; The malformed request short-circuits inside mw-json-body and never
+    ;; reaches base, so we don't expect a second chan-send. The keep-alive
+    ;; loop closes after the second response and the client thread exits.
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))
