@@ -1621,15 +1621,22 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                       "internal: continuation resume builtin missing");
             return NULL;
         }
-        Type res_type = (fn_type.as.cont.returns != TY_UNKNOWN)
-                        ? type_from_kind(fn_type.as.cont.returns) : TYPE_INT;
+        TypeKind res_kind = (fn_type.as.cont.returns != TY_UNKNOWN)
+                            ? fn_type.as.cont.returns : TY_INT;
+        /* The resume builtins are int64-carried. For a value-typed cont<T> with
+         * T != int (e.g. cstr), bit-cast the resume value into the int carrier on
+         * the way in and bit-cast the int result back to T on the way out, so the
+         * emitted C is clean (no -Wint-conversion). */
+        Expr *karg_c = call_wrap_reinterpret(e, karg, TY_INT, call->span);
         Expr **bargs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
         bargs[0] = kvar;
-        bargs[1] = karg;
-        Expr *out = expr_new(e->arena, EX_BUILTIN, res_type, call->span);
+        bargs[1] = karg_c;
+        Expr *out = expr_new(e->arena, EX_BUILTIN, TYPE_INT, call->span);
         out->as.builtin.spec = rspec;
         out->as.builtin.args = bargs;
         out->as.builtin.n = 2;
+        if (res_kind != TY_INT)
+            out = call_wrap_reinterpret(e, out, res_kind, call->span);
         return out;
     }
 

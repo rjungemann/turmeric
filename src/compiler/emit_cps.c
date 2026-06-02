@@ -568,12 +568,11 @@ static const char *frame_c_expr(const char *op, bool hole_left) {
  * Returns the shift expr and *n_out frames (>= 0), or NULL if the body is not a
  * supported context chain. Shared by the cloneable (CPS9) and serial (CPS10)
  * lowerings. */
-/* Env/result kinds a context frame can carry today. Restricted to int: a
- * non-int continuation value (e.g. cstr) cannot be expressed at the surface yet
- * -- the resume builtins and the shift node are int-typed -- so cstr/struct
- * envs are gated on continuation value-typing (CC4). The marshaler and casts are
- * written to widen cleanly once that lands. */
-static bool env_kind_ok(TypeKind k) { return k == TY_INT; }
+/* Env/result kinds a context frame can carry: int and cstr (both fit an
+ * intptr_t; the serial marshaler encodes each by kind -- int inline, cstr
+ * length-prefixed). With value-typed cont<T> the surface can now express a
+ * cstr-valued continuation, so cstr contexts (e.g. (cat "hi " [])) type-check. */
+static bool env_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR; }
 
 static const Expr *collect_ctx(const Expr *rb, ExprKind target,
                                ClFrame *frames, uint32_t *n_out) {
@@ -955,10 +954,11 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
             cl_emit_frame_body(hb, frame_fn[i], &frames[i]);
             char *rn = raw_name_for_binding(frames[i].call_fn);
             buf_printf(hb,
-                "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, 0 };\n"
+                "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d, 0 };\n"
                 "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
                 "{ __sk_register(&__sk_reg_%d_%u); }\n",
                 id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i],
+                (frames[i].env_kind == TY_CSTR) ? 1 : 0,
                 id, i, id, i);
             free(rn);
         }
@@ -1095,7 +1095,8 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 " * constructor) a stable name <-> DKFrame mapping, so a call frame marshals as\n"
 " * its name rather than a code address -- the same name-keyed scheme the\n"
 " * interpreter's serial.c uses, here with the emitted C function name. */\n"
-"typedef struct SkReg { const char *name; DKFrame fn; struct SkReg *next; } SkReg;\n"
+"/* env_kind: 0 = int (inline int64), 1 = cstr (length-prefixed bytes). */\n"
+"typedef struct SkReg { const char *name; DKFrame fn; int env_kind; struct SkReg *next; } SkReg;\n"
 "static SkReg *__sk_registry = NULL;\n"
 "static void __sk_register(SkReg *r) { r->next = __sk_registry; __sk_registry = r; }\n"
 "static DKFrame __sk_call_for_name(const char *name) {\n"
@@ -1103,32 +1104,38 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "        if (strcmp(r->name, name) == 0) return r->fn;\n"
 "    return NULL;\n"
 "}\n"
-"static const char *__sk_name_for_frame(DKFrame f) {\n"
+"static SkReg *__sk_reg_for_frame(DKFrame f) {\n"
 "    for (SkReg *r = __sk_registry; r; r = r->next)\n"
-"        if (r->fn == f) return r->name;\n"
+"        if (r->fn == f) return r;\n"
 "    return NULL;\n"
 "}\n"
-"#define SK_TAG_CALL 100\n");
+"#define SK_TAG_CALL 100\n"
+"#define SK_ENV_INT  0\n"
+"#define SK_ENV_CSTR 1\n");
     buf_puts(out,
 "/* Resume a (possibly deserialized) serial continuation on a value. */\n"
 "static int64_t tur_serial_cont_resume(int64_t k, int64_t v) {\n"
 "    return (int64_t)dk_invoke((DK *)(intptr_t)k, (intptr_t)v);\n"
 "}\n"
 "/* Marshal to a length-prefixed buffer ([int64 payload_len][int64 n][records]).\n"
-" * Each record is self-describing: an arithmetic frame is [tag(1..6)][env]; a\n"
-" * call frame is [SK_TAG_CALL][name_len][name bytes][env]. All scalars are\n"
-" * memcpy'd, so no alignment assumptions. Frames are written front-to-back. */\n"
+" * Each record is self-describing. An arithmetic frame is [tag(1..6)][int64 env].\n"
+" * A call frame is [SK_TAG_CALL][name_len][name][env_kind][env]: an int env is an\n"
+" * inline int64; a cstr env is [int64 len][bytes] -- so a non-int (cstr) env is\n"
+" * marshaled by value, not as a code/heap address. All scalars are memcpy'd. */\n"
 "static int64_t tur_serial_cont_serialize(int64_t k) {\n"
 "    DK *p = (DK *)(intptr_t)k;\n"
 "    int64_t n = 0, sz = 8;  /* 8 bytes for the frame count */\n"
 "    for (DK *q = p; q && q->kind == DKK_FRAME; q = q->next) {\n"
 "        n++;\n"
-"        if (__sk_tag_for_frame(q->fn)) { sz += 16; }\n"
-"        else {\n"
-"            const char *nm = __sk_name_for_frame(q->fn);\n"
-"            int64_t L = nm ? (int64_t)strlen(nm) : 0;\n"
-"            sz += 8 + 8 + L + 8;  /* tag + name_len + name + env */\n"
-"        }\n"
+"        if (__sk_tag_for_frame(q->fn)) { sz += 16; continue; }\n"
+"        SkReg *r = __sk_reg_for_frame(q->fn);\n"
+"        const char *nm = r ? r->name : \"\";\n"
+"        int64_t L = (int64_t)strlen(nm);\n"
+"        sz += 8 + 8 + L + 8;  /* tag + name_len + name + env_kind */\n"
+"        if (r && r->env_kind == SK_ENV_CSTR) {\n"
+"            const char *s = (const char *)(intptr_t)q->env;\n"
+"            sz += 8 + (int64_t)(s ? strlen(s) : 0);  /* str_len + bytes */\n"
+"        } else { sz += 8; }                            /* inline int64 */\n"
 "    }\n"
 "    uint8_t *buf = (uint8_t *)malloc((size_t)(8 + sz));\n"
 "    if (!buf) abort();\n"
@@ -1140,21 +1147,33 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "        if (t) {\n"
 "            int64_t tag = t, env = (int64_t)q->env;\n"
 "            memcpy(c, &tag, 8); c += 8; memcpy(c, &env, 8); c += 8;\n"
+"            continue;\n"
+"        }\n"
+"        SkReg *r = __sk_reg_for_frame(q->fn);\n"
+"        const char *nm = r ? r->name : \"\";\n"
+"        int64_t tag = SK_TAG_CALL, L = (int64_t)strlen(nm);\n"
+"        int64_t ek = r ? r->env_kind : SK_ENV_INT;\n"
+"        memcpy(c, &tag, 8); c += 8;\n"
+"        memcpy(c, &L, 8); c += 8;\n"
+"        if (L) { memcpy(c, nm, (size_t)L); c += L; }\n"
+"        memcpy(c, &ek, 8); c += 8;\n"
+"        if (ek == SK_ENV_CSTR) {\n"
+"            const char *s = (const char *)(intptr_t)q->env;\n"
+"            int64_t sl = (int64_t)(s ? strlen(s) : 0);\n"
+"            memcpy(c, &sl, 8); c += 8;\n"
+"            if (sl) { memcpy(c, s, (size_t)sl); c += sl; }\n"
 "        } else {\n"
-"            int64_t tag = SK_TAG_CALL, env = (int64_t)q->env;\n"
-"            const char *nm = __sk_name_for_frame(q->fn);\n"
-"            int64_t L = nm ? (int64_t)strlen(nm) : 0;\n"
-"            memcpy(c, &tag, 8); c += 8;\n"
-"            memcpy(c, &L, 8); c += 8;\n"
-"            if (L) { memcpy(c, nm, (size_t)L); c += L; }\n"
+"            int64_t env = (int64_t)q->env;\n"
 "            memcpy(c, &env, 8); c += 8;\n"
 "        }\n"
 "    }\n"
 "    return (int64_t)(intptr_t)buf;\n"
-"}\n"
+"}\n");
+    buf_puts(out,
 "/* Rebuild a runnable chain [frames..., prompt, done] from a marshaled buffer.\n"
 " * Records are parsed forward, then prepended in reverse so the first-written\n"
-" * frame stays at the front of the chain. */\n"
+" * frame stays at the front of the chain. A cstr env is rematerialized as a\n"
+" * fresh heap string. */\n"
 "static int64_t tur_serial_cont_deserialize(int64_t bytes) {\n"
 "    uint8_t *c = (uint8_t *)(intptr_t)bytes + 8;  /* skip the length prefix */\n"
 "    int64_t n; memcpy(&n, c, 8); c += 8;\n"
@@ -1170,11 +1189,23 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "            if (L) memcpy(nm, c, (size_t)L);\n"
 "            nm[L] = 0; c += L;\n"
 "            fns[i] = __sk_call_for_name(nm); free(nm);\n"
+"            int64_t ek; memcpy(&ek, c, 8); c += 8;\n"
+"            if (ek == SK_ENV_CSTR) {\n"
+"                int64_t sl; memcpy(&sl, c, 8); c += 8;\n"
+"                char *s = (char *)malloc((size_t)sl + 1);\n"
+"                if (!s) abort();\n"
+"                if (sl) memcpy(s, c, (size_t)sl);\n"
+"                s[sl] = 0; c += sl;\n"
+"                envs[i] = (intptr_t)s;\n"
+"            } else {\n"
+"                int64_t env; memcpy(&env, c, 8); c += 8;\n"
+"                envs[i] = (intptr_t)env;\n"
+"            }\n"
 "        } else {\n"
 "            fns[i] = __sk_frame_for_tag((int)tag);\n"
+"            int64_t env; memcpy(&env, c, 8); c += 8;\n"
+"            envs[i] = (intptr_t)env;\n"
 "        }\n"
-"        int64_t env; memcpy(&env, c, 8); c += 8;\n"
-"        envs[i] = (intptr_t)env;\n"
 "    }\n"
 "    DK *chain = dk_prompt(1, dk_done());\n"
 "    for (int64_t i = n - 1; i >= 0; i--) chain = dk_frame(fns[i], envs[i], chain);\n"

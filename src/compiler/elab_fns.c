@@ -79,6 +79,19 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
         if (has_pipe || has_amp) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
+        /* CC4 / value-typed cont: (cont T) / (escape-cont T) / (serial-cont T)
+         * -- a flavored continuation whose result type is T. `cont` is not a
+         * generic arrow-kind constructor, so handle the application here. */
+        {
+            int cflav = cont_flavor_from_name(head->name);
+            if (cflav >= 0 && form->as.list.len == 2) {
+                Type *arg = fn_type_from_form(e, form->as.list.items[1],
+                                              type_params, type_param_kinds, n_type_params);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_cont_flavored(arg ? arg->kind : TY_INT, (ContFlavor)cflav);
+                return t;
+            }
+        }
         Type *cur = fn_type_from_form(e, form->as.list.items[0],
                                       type_params, type_param_kinds, n_type_params);
         if (!cur) return NULL;
