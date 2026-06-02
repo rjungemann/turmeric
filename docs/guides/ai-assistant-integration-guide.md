@@ -26,7 +26,7 @@ The MCP server exposes eight tools:
 | `symbols` | `path` | Lists all top-level symbols (name, type, docstring, location) |
 | `hover` | `path`, `line`, `col` | Returns type and docstring for the symbol at a 0-based position |
 | `definition` | `path`, `line`, `col` | Returns the file, line, and column where a symbol is defined |
-| `complete` | `path`, `line`, `col` | Returns completion candidates (symbols or module names in `import` context) |
+| `complete` | `path`, `line`, `col` | Returns completion candidates (symbols or module names in `import` context). **Note:** the stdlib module list (e.g. `stdlib/args`, `stdlib/contract`, `stdlib/fix`, …) is hardcoded in the MCP server and will drift as stdlib evolves; see [Known limitations](#known-limitations-and-open-issues). |
 | `doc` | `path`, `name` | Returns the `;;;` docstring for a named symbol |
 | `format` | `path` | Runs `tur format` on a file; returns the formatted text |
 | `build` | `dir` | Runs `tur build` on a project directory; returns output and exit status |
@@ -310,6 +310,53 @@ A clean file produces `"content":[{"type":"text","text":"[]"}]` in the response
 | Empty tool responses | File path not absolute | Use full `/path/to/file.tur` paths |
 | `tur mcp: disabled by TUR_NO_MCP` | Env variable set | `unset TUR_NO_MCP` |
 | Diagnostics but no symbols | File has parse errors | Fix errors first; `tur_collect_symbols` requires a successful elaboration pass |
+
+---
+
+## Known limitations and open issues
+
+These are tracked concerns carried into the current release. They are
+documented here so AI assistants and contributors are aware of them when
+working with this integration.
+
+### No automated tests for MCP tools or new LSP handlers
+
+The existing test file `tests/lsp/docscanner_test.c` predates this feature
+branch. There are currently no fixtures or unit tests that exercise the new MCP
+tools (`check_file`, `symbols`, `hover`, `definition`, `complete`, `doc`,
+`format`, `build`) or the new LSP `hover`/`definition`/`documentSymbol`
+handlers. All smoke-test coverage comes from the manual CLI examples in the
+[Raw CLI smoke tests](#raw-cli-smoke-tests) section above. Automated test
+coverage is planned for a future phase.
+
+### `complete` tool stdlib list is hardcoded
+
+The `complete` tool's list of known stdlib modules (e.g. `stdlib/args`,
+`stdlib/contract`, `stdlib/fix`, …) is hardcoded in the MCP server
+implementation. It will drift as the standard library grows. Until this is
+resolved by deriving the list from the installed stdlib at runtime, treat
+completions for `import stdlib/…` as best-effort rather than authoritative.
+
+### Doc-purge commits should be reviewed separately
+
+The branch that introduced MCP+LSP support also deletes approximately 25
+`docs/guides/*-plan.md` and `docs/upcoming/*-plan.md` files (~9,645 lines
+removed). If you are reviewing a PR that bundles both changes, consider
+requesting that the doc purge be split into its own PR so the MCP/LSP feature
+diff stays focused.
+
+### Build and test status
+
+These docs were written ahead of a full local build and test pass. Before
+relying on the MCP or LSP integration in production, run:
+
+```sh
+cmake --build build -j
+bash tests/run.sh
+```
+
+and confirm zero `FAIL` lines. The [Raw CLI smoke tests](#raw-cli-smoke-tests)
+above provide a quick sanity check without a full test suite run.
 
 ---
 
