@@ -34,7 +34,8 @@
 > serialize/deserialize round-trips). Remaining: parametric containers that
 > monomorphize to a by-value struct need carrier<->concrete ABI bridging to be
 > usable as a CPS env; and broadening contexts past single-hole binops/2-arg
-> calls (lets, if-branches). This is the substrate that
+> calls (pure `let` preludes now supported; `if`-branches still pending). This is
+> the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -760,14 +761,34 @@ no shipped snapshot regenerated):
   deserializer. Scope: carrier-fitting nominal envs (opaque/pointer-backed).
   Fixture: `serial-struct-env` (a boxed two-int `Rec` env round-tripped through
   serialize/deserialize before resume = 35; resumed directly = 108).
+- **Broaden the context subset: pure `let` bindings.** The delimited-context
+  walk (`collect_ctx`, shared by the cloneable CPS9 and serial CPS10 paths) now
+  descends through a `let` whose body carries the hole and whose every binding
+  init is pure (does not reach the shift) and a simple scalar local. The
+  let-bound locals are emitted once at the reset site -- ahead of the
+  captured-operand evaluation -- so the surrounding context frames may reference
+  them by name; the operand values are still captured by value at capture time,
+  so the marshaling story is unchanged (a `let`-bound int env serializes exactly
+  like a literal one). This mirrors the abortive base-shift path (CPS8's
+  `emit_first_shift`), which already walked `let`/`do` preludes; the increment
+  brings the *resumable* cloneable/serial walks up to the same grammar. Selective
+  + safe: `collect_ctx` returns NULL (legacy fallback, byte-identical) for a
+  `let` with an impure init, a non-scalar binding, or a body that does not reach
+  the shift, so no shipped snapshot regenerates. Fixtures:
+  `cloneable-context-let` (single `let`, nested two-binding `let`, and a `let`
+  whose init is a pure expression computed once -- multi-shot, = 23/46/197) and
+  `serial-context-let` (a `let`-built context that still serialize/deserialize
+  round-trips, = 15/10).
 
   *Remaining:* parametric containers that monomorphize to a **by-value** struct
   (concrete `Pair[int int]`) need carrier<->concrete ABI bridging at the env
   store + frame call to be usable as a CPS env (the carrier-fitting opaque path
   works today). The handle<->cont bridging for the *explicit* `tur_serial_cont_*`
   builtins still needs a `::` ascribe at the call site (the `(k v)` sugar is
-  seamless). Broadening contexts past single-hole binops / 2-arg calls (lets,
-  if-branches) remains a separate grammar extension.
+  seamless). Broadening contexts past single-hole binops / 2-arg calls now
+  covers pure `let` preludes; `if`-branches (genuine runtime branching, not
+  statically pin-pointable on the abort-value/frame-chain model) remain a
+  separate grammar extension.
 
 ---
 

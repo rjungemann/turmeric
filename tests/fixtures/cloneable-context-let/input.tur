@@ -1,0 +1,26 @@
+;; cps-transform-plan (grammar extension): the delimited-context walk now
+;; descends through a pure `let` binding -- one whose init does not reach the
+;; shift.  The let-bound locals are emitted once at the reset site (at capture
+;; time) and the surrounding context frames may reference them, so a captured
+;; cloneable continuation replays a context built with `let`, multi-shot.
+;; Previously a `let` in the context fell back to the legacy lowering.
+
+;; sum-two: resume the captured continuation twice (clone for the first use).
+(defn sum-two [k] :int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
+     (tur_cloneable_cont_resume k 2)))
+
+(defn main [] :int
+  ;; single let, context (+ a []) with a = 10: (10+1) + (10+2)        = 23
+  (println (cloneable-reset (let [a 10] (+ a (cloneable-shift sum-two 0)))))
+  ;; two lets, nested context (* a (+ b [])) with a=2 b=10:
+  ;;   2*(10+1) + 2*(10+2)                                             = 46
+  (println (cloneable-reset
+             (let [a 2 b 10]
+               (* a (+ b (cloneable-shift sum-two 0))))))
+  ;; let init is a pure expression (computed once at capture time),
+  ;; context (- base []) with base = (* 50 2) = 100: (100-1) + (100-2) = 197
+  (println (cloneable-reset
+             (let [base (* 50 2)]
+               (- base (cloneable-shift sum-two 0)))))
+  0)

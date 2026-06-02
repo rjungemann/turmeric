@@ -489,6 +489,16 @@ typedef struct {
     const char    *env_deser;
 } ClFrame;
 
+/* cps-transform-plan (grammar extension): a pure `let` binding the context walk
+ * descended through. Its init does not reach the shift, so it is emitted once at
+ * the reset site as a plain C local ahead of the captured-operand evaluation;
+ * the context frames' non-hole operands may then reference it by name. */
+#define CL_MAX_CTX_LETS 16
+typedef struct {
+    const Binding *binding;  /* the let-bound variable */
+    const Expr    *init;     /* its pure initializer */
+} CtxLet;
+
 /* cps-transform-plan (a): find a Serializable instance for `t` and return its
  * serialize/deserialize method C names. Restricted to nominal (TY_STRUCT, incl.
  * opaque) types -- primitive int/cstr envs use the inline codec. Scans the
@@ -623,11 +633,36 @@ static bool env_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR; }
 
 static const Expr *collect_ctx(const Expr *rb, ExprKind target,
                                ClFrame *frames, uint32_t *n_out,
-                               const Expr *program, bool want_names) {
+                               const Expr *program, bool want_names,
+                               CtxLet *lets, uint32_t *n_lets_out) {
     uint32_t n = 0;
+    uint32_t nl = 0;
     const Expr *cur = rb;
     for (;;) {
         if (n >= CL_MAX_CTX_FRAMES) return NULL;
+        if (cur && cur->kind == EX_LET) {
+            /* A pure `let` in the context: each init must not reach the shift
+             * (it is prelude, evaluated once at capture time) and must be a
+             * simple scalar local; the body carries the hole. The bindings are
+             * recorded so the emit site can lay them down as C locals ahead of
+             * the captured-operand evaluation. */
+            if (!lets || !n_lets_out) return NULL;
+            const Expr *body = cur->as.let_.body;
+            if (!reaches_shift_kind(body, target)) return NULL;
+            for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                const Expr *init = cur->as.let_.bindings[i].init;
+                const Binding *b = cur->as.let_.bindings[i].binding;
+                if (reaches_shift_kind(init, target)) return NULL;
+                if (!b || !ty_simple_local(b->type.kind)) return NULL;
+                if (expr_contains_return_or_throw(init)) return NULL;
+                if (nl >= CL_MAX_CTX_LETS) return NULL;
+                lets[nl].binding = b;
+                lets[nl].init = init;
+                nl++;
+            }
+            cur = body;
+            continue;
+        }
         if (cur && cur->kind == EX_BUILTIN) {
             /* Arithmetic frame: a single-hole int binop (+, -, *, /). */
             const BuiltinSpec *spec = cur->as.builtin.spec;
@@ -700,6 +735,7 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
     }
     if (cur && cur->kind == target) {
         *n_out = n;
+        if (n_lets_out) *n_lets_out = nl;
         return cur;
     }
     return NULL;
@@ -712,8 +748,9 @@ static bool cl_can_lower(const Expr *e) {
     if (!e || e->kind != EX_CLONEABLE_RESET) return false;
     if (!ty_intptr_safe(e->type.kind)) return false;
     ClFrame frames[CL_MAX_CTX_FRAMES];
-    uint32_t nf = 0;
-    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false);
+    CtxLet lets[CL_MAX_CTX_LETS];
+    uint32_t nf = 0, nl = 0;
+    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false, lets, &nl);
     if (!shift || nf == 0) return false;
     if (shift->as.cloneable_shift_.n_live_captures != 0) return false;
     if (!shift->as.cloneable_shift_.k_fn) return false;
@@ -752,8 +789,9 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (!ctx->pending_handler_fns) return NULL;   /* need file scope for helpers */
 
     ClFrame frames[CL_MAX_CTX_FRAMES];
-    uint32_t nf = 0;
-    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false);
+    CtxLet lets[CL_MAX_CTX_LETS];
+    uint32_t nf = 0, nl = 0;
+    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false, lets, &nl);
     const Expr *k_fn = shift->as.cloneable_shift_.k_fn;
     Buf *hb = ctx->pending_handler_fns;
     int id = ctx->tmp_n++;
@@ -796,8 +834,21 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
             "((int64_t)(intptr_t)__k);\n}\n");
     }
 
-    /* 3. At the reset site: evaluate the non-hole operands (once, in source
-     *    order) and the receiver's env, build the DK chain, and run it. */
+    /* 3. At the reset site: emit any pure prelude `let` bindings as C locals so
+     *    the captured operands (which may reference them) resolve, then evaluate
+     *    the non-hole operands (once, in source order) and the receiver's env,
+     *    build the DK chain, and run it. */
+    for (uint32_t i = 0; i < nl; i++) {
+        char *bn = name_for_binding(ctx, lets[i].binding);
+        char *iv = emit_value(ctx, body, lets[i].init);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = %s;\n",
+                   emit_type_c_name(ctx, lets[i].binding->type), bn, iv);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "(void)%s;\n", bn);
+        free(bn);
+        free(iv);
+    }
     char *op_vals[CL_MAX_CTX_FRAMES];
     for (uint32_t i = 0; i < nf; i++)
         op_vals[i] = emit_value(ctx, body, frames[i].other);
@@ -940,9 +991,11 @@ static bool sk_can_lower(const Expr *e, const Expr *program) {
     if (!e || e->kind != EX_SERIAL_RESET) return false;
     if (!ty_intptr_safe(e->type.kind)) return false;
     ClFrame frames[CL_MAX_CTX_FRAMES];
-    uint32_t nf = 0;
+    CtxLet lets[CL_MAX_CTX_LETS];
+    uint32_t nf = 0, nl = 0;
     const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
-                                    frames, &nf, program, /*want_names=*/false);
+                                    frames, &nf, program, /*want_names=*/false,
+                                    lets, &nl);
     if (!shift) return false;
     if (!shift->as.serial_shift_.k_fn) return false;
     return true;
@@ -966,9 +1019,11 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (!ctx->pending_handler_fns) return NULL;
 
     ClFrame frames[CL_MAX_CTX_FRAMES];
-    uint32_t nf = 0;
+    CtxLet lets[CL_MAX_CTX_LETS];
+    uint32_t nf = 0, nl = 0;
     const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
-                                    frames, &nf, ctx->program_root, /*want_names=*/true);
+                                    frames, &nf, ctx->program_root, /*want_names=*/true,
+                                    lets, &nl);
     const Expr *k_fn = shift->as.serial_shift_.k_fn;
     Buf *hb = ctx->pending_handler_fns;
     int id = ctx->tmp_n++;
@@ -1006,6 +1061,19 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      * per-site wrapper that self-registers (name -> fn) so the marshaler can map
      * the frame to a stable name and back. frame_fn[i] is the C expression naming
      * the DKFrame to install. */
+    /* Emit any pure prelude `let` bindings as C locals first, so captured
+     * operands that reference them resolve (mirrors the cloneable path). */
+    for (uint32_t i = 0; i < nl; i++) {
+        char *bn = name_for_binding(ctx, lets[i].binding);
+        char *iv = emit_value(ctx, body, lets[i].init);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = %s;\n",
+                   emit_type_c_name(ctx, lets[i].binding->type), bn, iv);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "(void)%s;\n", bn);
+        free(bn);
+        free(iv);
+    }
     char *op_vals[CL_MAX_CTX_FRAMES];
     char  frame_fn[CL_MAX_CTX_FRAMES][48];
     for (uint32_t i = 0; i < nf; i++) {
