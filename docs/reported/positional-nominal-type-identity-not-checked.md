@@ -110,9 +110,24 @@ Contrast:
   (`types.c:108`), so the machinery to tell `P` from `Q` exists; it is simply
   not invoked for positional `defn` args.
 
+**Availability gap (key subtlety).** The full per-parameter types are *not*
+actually present for the nominal case: `fn_type.as.fn.arg_full_types` is
+allocated only `if (any_poly)` (`src/compiler/elab_fns.c:2125-2129`), so for
+an ordinary `:Chan`/`:P` parameter the array is NULL. Fix direction #1 below
+therefore has a prerequisite -- populate `arg_full_types` for all params --
+which the implementation plan handles as its Phase 1.
+
 ---
 
 ## Proposed fix directions
+
+> A fully elaborated, spike-validated implementation plan for these directions
+> lives at
+> [docs/upcoming/positional-nominal-type-identity-fix-plan.md](../upcoming/positional-nominal-type-identity-fix-plan.md).
+> A throwaway spike (always-populate `arg_full_types` + nominal demotion at
+> `elab_call.c:2035`) was measured to **pass the entire suite unchanged --
+> 1322 passed, 0 failed** -- while correctly rejecting the `B`-at-`A` and
+> `Q`-at-`P` cases. In-repo blast radius is zero.
 
 1. **Consult `arg_full_types` in the positional check.** When
    `expected_arg_kind` is a nominal kind (`TY_STRUCT`, `TY_ADT`, and the
