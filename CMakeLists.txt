@@ -54,6 +54,13 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# HttpdConn single-definition invariant: no inline-C block may reintroduce a
+# local redeclaration of the consolidated httpd connection structs.
+add_test(
+  NAME tur_httpd_conn_single_def
+  COMMAND bash tests/check-httpd-conn-single-def.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests

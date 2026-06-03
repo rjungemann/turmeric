@@ -1,8 +1,31 @@
 # HttpdConn Struct Consolidation Plan
 
-> **Status:** Draft Plan
+> **Status:** Implemented (2026-06-03)
 > **Last Updated:** 2026-06-03
 > **Type:** stdlib / inline-C maintainability + memory safety
+
+---
+
+## Implementation notes (2026-06-03)
+
+- The canonical `HttpdConn` / `HttpdHeader` / `HttpdAttr` definitions are
+  now hoisted exactly once via `__tur_include__` in `httpd/autolink-hint`
+  (`stdlib/httpd.tur`); all 30 local redeclarations were removed.
+- Regression guard: `tests/check-httpd-conn-single-def.sh` (ctest target
+  `tur_httpd_conn_single_def`) fails if any local `} HttpdConn;` /
+  `} HttpdHeader;` / `} HttpdAttr;` reappears outside the hoisted directive.
+- Guard fixture: `tests/fixtures/httpd-async-mw-attr` drives
+  `httpd-set-attr!` / `httpd-req-attr` through the async fiber path. Built
+  against the pre-consolidation tree it fails with
+  `stack-buffer-overflow on '_conn'` (the exact `attr_list` OOB); against
+  the consolidated tree it passes.
+- While building that fixture, a **separate, pre-existing** bug surfaced:
+  inline-C fat-closure dispatchers (e.g. the verifier call in
+  `httpd-mw-basic-auth-check`) crash when handed a closure that captures
+  nothing. It is unrelated to the struct layout and is tracked in
+  [noncapturing-closure-inline-c-dispatch-plan.md](noncapturing-closure-inline-c-dispatch-plan.md).
+  The guard fixture therefore sets the attribute directly rather than
+  through `mw-basic-auth`.
 
 ---
 
