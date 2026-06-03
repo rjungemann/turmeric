@@ -41,8 +41,8 @@
 (defn mul2 [x] :int (* x 2))
 
 (defn main [] :int
-  ;; arr is identity for function arrows: (arr add1) = add1; add1(5) = 6
-  (println (__arrow_call1 (arr add1) 5))
+  ;; arr normalizes a function to a fat closure; (arr add1) applied to 5 = 6
+  (println (tur-call-closure1 (arr add1) 5))
 
   ;; >>>: (add1 >>> mul2)(3) = mul2(add1(3)) = 2*(3+1) = 8
   (println (tur-call-closure1 (>>> add1 mul2) 3))

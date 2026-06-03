@@ -127,14 +127,14 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-map [o :int f]
+(defn option-map [o :int ^fat f]
   #{}
   :int
   ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)f)(opt->value);
+  r->value = TUR_APPLY1(f, opt->value);
   return (int64_t)(intptr_t)r;
   ```)
 ;;; option-eq? -- compare two Option[A] values using a comparator.

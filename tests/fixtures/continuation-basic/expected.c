@@ -2645,7 +2645,7 @@ static int64_t none();
 static bool some_(int64_t);
 static int64_t unwrap_or(int64_t, int64_t);
 static void option_free(int64_t);
-static int64_t option_map(int64_t, int64_t);
+static int64_t option_map(int64_t, void *);
 static bool option_eq_(int64_t, int64_t, int64_t);
 static int64_t ok(int64_t);
 static int64_t err(int64_t);
@@ -3661,12 +3661,12 @@ static void option_free(int64_t o) {
   
 }
 
-static int64_t option_map(int64_t o, int64_t f) {
+static int64_t option_map(int64_t o, void * f) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)f)(opt->value);
+  r->value = TUR_APPLY1(f, opt->value);
   return (int64_t)(intptr_t)r;
   
 }

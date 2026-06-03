@@ -2559,7 +2559,7 @@ static int64_t none();
 static bool some_(int64_t);
 static int64_t unwrap_or(int64_t, int64_t);
 static void option_free(int64_t);
-static int64_t option_map(int64_t, int64_t);
+static int64_t option_map(int64_t, void *);
 static bool option_eq_(int64_t, int64_t, int64_t);
 static int64_t ok(int64_t);
 static int64_t err(int64_t);
@@ -2613,7 +2613,7 @@ static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, int64_t);
 static void mutmap_free(int64_t);
 static double dbl_impl(double);
-static double call_fat(int64_t, double);
+static double call_fat(void *, double);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3570,12 +3570,12 @@ static void option_free(int64_t o) {
   
 }
 
-static int64_t option_map(int64_t o, int64_t f) {
+static int64_t option_map(int64_t o, void * f) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)f)(opt->value);
+  r->value = TUR_APPLY1(f, opt->value);
   return (int64_t)(intptr_t)r;
   
 }
@@ -4231,7 +4231,7 @@ static double dbl_impl(double x) {
         return (x) * (2.0);
 }
 
-static double call_fat(int64_t g, double x) {
+static double call_fat(void * g, double x) {
         return TUR_APPLY1_T(double, double, g, x);
   
 }
@@ -4250,7 +4250,7 @@ int main(int argc, char **argv) {
         __t7[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
         __t7[1] = (int64_t)(intptr_t)__fn_859;
         void *__t8 = __t7;
-        printf("%g\n", (double)(call_fat((int64_t)(intptr_t)(__t8), 3.5)));
+        printf("%g\n", (double)(call_fat((void *)(intptr_t)(__t8), 3.5)));
         int64_t __t9;
         __t9 = INT64_C(0);
         return (int)__t9;
