@@ -140,7 +140,7 @@ Each sub-phase is independently mergeable.
 - Added fixture `tests/fixtures/named-let-loop-spaced-types/` (mirrors `named-let-loop` using `: int`). Codegen verified byte-identical to the fused-form fixture.
 - Suite: 1310 pass / 1 pre-existing fail (`tur-apply-t-fatshim-float`, unrelated, confirmed via `git stash` baseline).
 
-**Phase 1a-bis: plain `let` / `let*` binding type slot** *(prerequisite for codemod; not yet started)*
+**Phase 1a-bis: plain `let` / `let*` binding type slot** *(DONE — commits 0c9cfd30, 6bc00459)*
 
 Plain `(let [name init ...])` and `(let* ...)` currently have no type-annotation grammar at all. To support `(let [x : int 5] ...)` (and the fused form `(let [x :int 5] ...)` for symmetry with named-let), `elab_let` must learn an optional type slot between the binding name and its initializer.
 

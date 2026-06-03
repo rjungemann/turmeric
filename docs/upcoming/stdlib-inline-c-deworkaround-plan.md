@@ -1,7 +1,7 @@
 # Stdlib Inline-C De-Workaround Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-02
+> **Status:** Phase 1 complete (2026-06-03); Phases 2-4 outstanding
+> **Last Updated:** 2026-06-03
 > **Type:** stdlib hygiene -- replace inline-C workarounds with idiomatic Turmeric
 > **Sibling plans:**
 > - [stdlib-opaque-handle-types-plan.md](stdlib-opaque-handle-types-plan.md) -- handle nominal typing
@@ -148,14 +148,15 @@ workarounds, but they belong in this plan so they are tracked somewhere:
 
 ## Phasing
 
-### Phase 1 -- `list.tur` cleanup
+### Phase 1 -- `list.tur` cleanup  **[DONE 2026-06-03, PR #196]**
 
-1. Rewrite `list-eq?` as a tail-recursive Turmeric fn over `tcons`/`tnil`.
-2. Rewrite `__cons-fmap` similarly; rename to drop the `__` prefix once it
-   is no longer the unsafe escape hatch.
-3. Regenerate `tests/fixtures/*/expected.c` per the snapshot rule.
-4. Confirm `bash tests/run.sh` clean.
-5. Single PR. Block advanced-typing T's `Functor [Cons]` on this landing.
+1. ~~Rewrite `list-eq?` as a tail-recursive Turmeric fn over `tcons`/`tnil`.~~ DONE
+2. ~~Rewrite `__cons-fmap` similarly; rename to drop the `__` prefix once it
+   is no longer the unsafe escape hatch.~~ DONE (now `^fat`-dispatched via the
+   typed closure ABI; see `stdlib/list.tur:164`).
+3. ~~Regenerate `tests/fixtures/*/expected.c` per the snapshot rule.~~ DONE
+4. ~~Confirm `bash tests/run.sh` clean.~~ DONE
+5. ~~Single PR.~~ DONE. Block advanced-typing T's `Functor [Cons]` on this landing.
 
 ### Phase 2 -- `httpd-mw-fold` and `re/union-patterns`
 
