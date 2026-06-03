@@ -6,7 +6,18 @@ description: A capturing (fn [...] :cstr ...) closure's thunk function is emitte
 
 # cstr-returning Closure Thunk Emitted with int64_t Return -- Reported Bug
 
-> **Status:** Reported (not yet fixed)
+> **Status:** RESOLVED (2026-06-03). Root cause was upstream as predicted:
+>   the `fn`-literal return-type parser in `elab_fn` (`elab_fns.c`) handled
+>   `int`/`float`/`bool`/`void`/`ptr<void>`/`nil`/`ptr`/`rc`/`weak`/`!` but had
+>   **no `cstr` case** (unlike `elab_defn`, which handles it), so a `(fn [...]
+>   :cstr ...)` literal's `:cstr` return fell into the tyvar fallback and was
+>   carried as a named type variable that lowers to the int64 carrier. Added the
+>   missing `cstr` keyword branch so the closure's fn-type result is `TY_CSTR`;
+>   the thunk now emits as `const char * (*)(void *, ...)` with no
+>   `-Wint-conversion` warning. Regression fixture:
+>   `tests/fixtures/cstr-returning-closure-thunk` (a `:cstr`-*returning*
+>   capturing closure round-tripped through `TUR_APPLY1_T`). `bash tests/run.sh`:
+>   0 FAIL.
 > **Found:** 2026-06-03, during Phase 1 of the Typed Closure Invocation ABI work
 > **Severity:** Low-Medium -- compiles and runs correctly today (a pointer
 >   fits in the int64 register), but emits a `-Wint-conversion` warning and

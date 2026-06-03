@@ -6,9 +6,22 @@ description: A directly-called bare ^fat parameter (no fn-type annotation) is :p
 
 # Bare ^fat Parameter Silently Miscompiles a Non-int Closure Result -- Reported Bug
 
-> **Status:** Reported. Annotated form works; bare form is an int-result
->   limitation. Tracked under
->   [closure-representation-unification-plan.md](../upcoming/closure-representation-unification-plan.md).
+> **Status:** RESOLVED (2026-06-03) via fix direction 1 (diagnose). The silent
+>   miscompile is gone: a bare `^fat g` call in the **result position** of a
+>   `:float` function -- where the int64-typed call would be returned through the
+>   wrong register (rax vs xmm0) -- is now a hard error directing the user to the
+>   annotated form `^fat g :(fn [...] :float)`, which threads the correct result
+>   type and prints `7`. The diagnostic (`elab_fns.c`, `bare_fat_int_tail_call`
+>   + the check in `elab_defn`) only fires when the bare-`^fat` call is the
+>   tail/result expression of a `:float` function, so legitimate non-tail uses
+>   (e.g. `(int->float (g x))`, or a genuinely int-returning closure) are not
+>   rejected. `:cstr`/`:ptr` returns share the integer register and continue to
+>   round-trip, so they are intentionally not diagnosed. Bare `^fat` int and the
+>   annotated form are unchanged. Regression fixture:
+>   `tests/fixtures/errors/bare-fat-float-result`. Directions 2 (infer the result
+>   type from context) and 3 (first-class closure type) remain the end-states for
+>   making the *bare* form work for `:float` without annotation; until then the
+>   annotated form is the supported non-int path. `bash tests/run.sh`: 0 FAIL.
 > **Found:** 2026-06-03, Phase 0 of the closure-representation work
 >   (blocker 3).
 > **Severity:** Medium -- silent wrong value (no crash, no diagnostic) for

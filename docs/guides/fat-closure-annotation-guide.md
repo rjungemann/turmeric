@@ -121,6 +121,43 @@ combinator library, that is essentially every public constructor
 (`pfail`, `item`, `pure`, `or-parser`, the `*-ref` thunks for
 mutually recursive non-terminals).
 
+## 4a. Result type: bare `^fat` is int-carrier only
+
+There are two ways to spell a `^fat` *parameter*, and they differ in what
+they know about the closure's **result type**:
+
+```turmeric
+(defn run-with [^fat g x :int] :int (g x))                     ;; bare
+(defn run-with [^fat g :(fn [:float] #{} :float) x :float] :float (g x))  ;; annotated
+```
+
+A **bare** `^fat g` records no signature, so the compiler has no result
+type to thread: a direct call `(g x)` is typed as the `int64` carrier.
+That is correct for the int-carrier generic combinators (`>>>`,
+`option-map`, and friends), where every value is an `int64` at runtime.
+
+But a closure that returns a **non-int register class** -- `:float` is the
+one that bites -- cannot go through the bare form. A `double` is returned
+in a floating-point register (xmm0), while the bare-`^fat` call reads the
+integer register (rax). The bits do not line up, and you get garbage. (A
+`:cstr` or `:ptr<void>` result happens to share the integer register, so
+it round-trips -- but do not rely on that; annotate non-int results.)
+
+For any non-int result, use the **annotated** form -- it carries the
+result type, and the compiler dispatches through a typed thunk that uses
+the right register:
+
+```turmeric
+(defn run-with [^fat g :(fn [:float] #{} :float) x :float] :float
+  (g x))                       ;; returns a real double
+```
+
+The compiler enforces this: calling a bare `^fat g` in the result position
+of a `:float` function is a hard error directing you to the annotated
+form, rather than silently miscompiling. (Making the *bare* form infer the
+result type from context is tracked in
+`docs/upcoming/bare-fat-result-type-inference-plan.md`.)
+
 ## 5. When you do *not* need `^fat`
 
 - The function value is called with the normal `f(arg)` syntax (direct
@@ -158,6 +195,8 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
 | Situation | Annotation |
 |---|---|
 | Your function calls a callback via `apply-fat` / `TUR_APPLY1` | `[cb ^fat fn-type]` on the parameter |
+| The callback returns a non-int type (`:float`, ...) | `[cb ^fat :(fn [argtypes] #{} :RetType)]` -- annotate so the result type is threaded |
+| The callback is int-carrier (generic combinator) | bare `[cb ^fat]` is fine |
 | Your function returns a `(fn ...)` that downstream code will fat-call | `^fat :ptr<void>` on the return type |
 | Both of the above | Mark both positions |
 | Pure direct invocation only | No annotation needed |
