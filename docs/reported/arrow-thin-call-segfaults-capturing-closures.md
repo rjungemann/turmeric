@@ -6,7 +6,18 @@ description: __arrow_call1 / __arrow_call2 and the __arrow_pair_* helpers invoke
 
 # stdlib/arrow.tur Thin-call Helpers Segfault on Capturing Closures -- Reported Bug
 
-> **Status:** Reported (not yet fixed)
+> **Status:** RESOLVED (2026-06-03) in closure-representation-unification
+>   Phase 1. Every arrow combinator now takes `^fat` closure parameters and
+>   dispatches through the fat protocol: `arr`, `>>>`, `arrow-first`,
+>   `arrow-second`, `par-comp`, and `arrow-split` are `^fat`, and the
+>   `__arrow_pair_*` helpers invoke their (already-fat) function arguments via
+>   `TUR_APPLY1` rather than the old bare `int64_t(*)(int64_t)` thin cast. A
+>   captureless function auto-shims into a fat box at the `^fat` call site; a
+>   capturing closure is already a fat box -- both flow through the same path.
+>   The `__arrow_call1/__arrow_call2` thin helpers are gone. Regression fixture:
+>   `tests/fixtures/arrow-capturing-closure` composes *capturing* closures
+>   through every combinator (the latent segfault pre-fix); `stdlib-arrow` keeps
+>   the captureless coverage. `bash tests/run.sh`: 0 FAIL.
 > **Found:** 2026-06-03, confirming a risk flagged in the Typed Closure
 >   Invocation ABI plan ("Thin-vs-fat cast discrepancy in current
 >   stdlib... Today's code works for reasons not fully understood").

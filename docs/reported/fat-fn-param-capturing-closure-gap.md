@@ -6,9 +6,16 @@ description: A ^fat parameter cannot both accept a capturing closure value and b
 
 # Capturing Closure Cannot Reach a fn-typed ^fat Parameter -- Reported Bug
 
-> **Status:** Core FIXED 2026-06-03 (cases A and B); cases C and the plain
->   `:ptr<void>` direct call tracked in
->   [closure-representation-unification-plan.md](../upcoming/closure-representation-unification-plan.md).
+> **Status:** RESOLVED 2026-06-03. Cases A and B were fixed first; case C (a
+>   bare `^fat g` with no fn-type annotation is now directly callable, defaulting
+>   to a `:ptr<void>` fat box and dispatching through the fat protocol) and the
+>   plain raw-`:ptr<void>` direct call (now a hard error -- raw pointer is not
+>   callable, CRU B-4) landed via the closure-representation-unification /
+>   closure-first-class-type work. Verified against the current build: case C
+>   (`(run-with (make-adder 10) 5)` through a bare `^fat g` param) prints `15`.
+>   The remaining bare-`^fat` *non-int-result* nuance is tracked (and now
+>   diagnosed) in
+>   [bare-fat-param-non-int-result-miscompiles.md](bare-fat-param-non-int-result-miscompiles.md).
 > **Found:** 2026-06-03, during the Typed Closure Invocation ABI work
 > **Severity:** Medium -- a real expressiveness hole in the ^fat parameter
 >   surface; no silent miscompile (every broken combination is a hard
