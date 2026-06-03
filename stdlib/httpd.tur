@@ -65,6 +65,7 @@
 ;;; httpd/autolink-hint -- ensure programs using httpd link against libturi + pthreads.
 ;;; Also hoists the file-scope httpd_tls_ops struct and instance used by the H5
 ;;; TLS hook registry (see httpd-register-tls-impl and httpd-new-tls).
+
 (defn httpd/autolink-hint [] :int
   ```c /* __tur_autolink__: -lturi -pthread */
   /* __tur_include__: #include <stdint.h> */
@@ -1413,14 +1414,22 @@
 ;;; Since: Phase H8 (M2)
 
 (defstruct CookieOpts
-  [name      :cstr
-   value     :cstr
-   path      :cstr
-   domain    :cstr
-   max-age   :int
-   secure    :int
-   http-only :int
-   same-site :cstr])
+  [name
+   :cstr
+   value
+   :cstr
+   path
+   :cstr
+   domain
+   :cstr
+   max-age
+   :int
+   secure
+   :int
+   http-only
+   :int
+   same-site
+   :cstr])
 ;;; cookie -- construct a CookieOpts with sensible defaults.
 ;;;
 ;;; Defaults: Path=/, no Domain, no Max-Age (session cookie), not Secure
@@ -1450,9 +1459,31 @@
 ;;;
 ;;; Since: Phase H8 (M2)
 
-(defn cookie-full [name :cstr value :cstr path :cstr domain :cstr
-                   max-age :int secure :int http-only :int same-site :cstr] :CookieOpts
-  (make-struct CookieOpts name value path domain max-age secure http-only same-site))
+(defn cookie-full [name
+                   :cstr
+                   value
+                   :cstr
+                   path
+                   :cstr
+                   domain
+                   :cstr
+                   max-age
+                   :int
+                   secure
+                   :int
+                   http-only
+                   :int
+                   same-site
+                   :cstr] :CookieOpts
+  (make-struct CookieOpts
+    name
+    value
+    path
+    domain
+    max-age
+    secure
+    http-only
+    same-site))
 ;;; httpd-set-cookie! -- emit a Set-Cookie response header from a CookieOpts.
 ;;;
 ;;; Serialises the opts into a single `Set-Cookie` value and appends it
@@ -1470,8 +1501,7 @@
 ;;;        docs/upcoming/defstruct-inline-c-byvalue-callsite-plan.md.
 
 (defn httpd-set-cookie! [conn :ptr<void> opts :CookieOpts] :nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   const char *cname  = opts.name      ? opts.name      : "";
   const char *cval   = opts.value     ? opts.value     : "";
   const char *cpath  = opts.path      ? opts.path      : "";
@@ -1731,12 +1761,18 @@
 ;;; Since: Phase H8 (M4)
 
 (defstruct CorsOpts
-  [allow-origin      :cstr
-   allow-methods     :cstr
-   allow-headers     :cstr
-   expose-headers    :cstr
-   allow-credentials :int
-   max-age           :int])
+  [allow-origin
+   :cstr
+   allow-methods
+   :cstr
+   allow-headers
+   :cstr
+   expose-headers
+   :cstr
+   allow-credentials
+   :int
+   max-age
+   :int])
 ;;; default-cors-opts -- permissive defaults suitable for development.
 ;;;
 ;;; allow-origin = "*", standard set of methods, Content-Type allowed,
@@ -1755,8 +1791,7 @@
 ;;; httpd-mw-cors-is-preflight -- internal: 1 iff this is a CORS preflight.
 
 (defn httpd-mw-cors-is-preflight [conn :ptr<void>] :int
-  ```c
-  if (!conn) return 0;
+  ```c if (!conn) return 0;
   const char *m = httpd_req_method((void *)conn);
   if (!m || strcmp(m, "OPTIONS") != 0) return 0;
   return httpd_req_header_((void *)conn, "Access-Control-Request-Method");
@@ -1768,12 +1803,19 @@
 ;;; mw-cors destructures opts into primitives so the inner closure env
 ;;; stays scalar-only.
 
-(defn httpd-mw-cors-emit-preflight [conn :ptr<void>
-                                    allow-origin :cstr allow-methods :cstr
-                                    allow-headers :cstr allow-credentials :int
-                                    max-age :int] :nil
-  ```c
-  if (!conn) return;
+(defn httpd-mw-cors-emit-preflight [conn
+                                    :ptr<void>
+                                    allow-origin
+                                    :cstr
+                                    allow-methods
+                                    :cstr
+                                    allow-headers
+                                    :cstr
+                                    allow-credentials
+                                    :int
+                                    max-age
+                                    :int] :nil
+  ```c if (!conn) return;
   httpd_resp_status_((void *)conn, 204);
   httpd_resp_body_((void *)conn, "");
   const char *ao = allow_origin  ? allow_origin  : "*";
@@ -1793,11 +1835,15 @@
   ```)
 ;;; httpd-mw-cors-decorate -- internal: decorate a normal-flow response.
 
-(defn httpd-mw-cors-decorate [conn :ptr<void>
-                              allow-origin :cstr expose-headers :cstr
-                              allow-credentials :int] :nil
-  ```c
-  if (!conn) return;
+(defn httpd-mw-cors-decorate [conn
+                              :ptr<void>
+                              allow-origin
+                              :cstr
+                              expose-headers
+                              :cstr
+                              allow-credentials
+                              :int] :nil
+  ```c if (!conn) return;
   const char *ao = allow_origin   ? allow_origin   : "*";
   const char *eh = expose_headers ? expose_headers : "";
   httpd_resp_header_((void *)conn, "Access-Control-Allow-Origin", ao);
@@ -1832,9 +1878,20 @@
 ;;;
 ;;; Since: Phase H8 (M4)
 
-(defn mw-cors-with [allow-origin :cstr allow-methods :cstr allow-headers :cstr
-                    expose-headers :cstr allow-credentials :int max-age :int
-                    next :int] :ptr<void>
+(defn mw-cors-with [allow-origin
+                    :cstr
+                    allow-methods
+                    :cstr
+                    allow-headers
+                    :cstr
+                    expose-headers
+                    :cstr
+                    allow-credentials
+                    :int
+                    max-age
+                    :int
+                    next
+                    :int] :ptr<void>
   (let [_ao allow-origin
         _am allow-methods
         _ah allow-headers
@@ -1845,9 +1902,7 @@
     (fn [c :ptr<void>] :nil
       (if (= 1 (httpd-mw-cors-is-preflight c))
         (httpd-mw-cors-emit-preflight c _ao _am _ah _ac _ma)
-        (do
-          (httpd-call _n c)
-          (httpd-mw-cors-decorate c _ao _eh _ac))))))
+        (do (httpd-call _n c) (httpd-mw-cors-decorate c _ao _eh _ac))))))
 ;;; mw-cors -- CORS middleware with permissive defaults.
 ;;;
 ;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
@@ -1861,12 +1916,12 @@
 
 (defn mw-cors [next :int] :ptr<void>
   (mw-cors-with "*"
-                "GET, POST, PUT, DELETE, OPTIONS"
-                "Content-Type"
-                ""
-                0
-                -1
-                next))
+    "GET, POST, PUT, DELETE, OPTIONS"
+    "Content-Type"
+    ""
+    0
+    -1
+    next))
 ;; =============================================================================
 ;; M5: HTTP Basic Auth middleware
 ;; =============================================================================
@@ -1898,8 +1953,7 @@
 ;;; Since: Phase H8 (M5)
 
 (defn cstr-eq-const-time [a :cstr b :cstr] :int
-  ```c
-  if (!a || !b) return 0;
+  ```c if (!a || !b) return 0;
   size_t la = strlen(a);
   size_t lb = strlen(b);
   if (la != lb) return 0;
@@ -1910,8 +1964,7 @@
 ;;; httpd-mw-basic-auth-check -- internal: decode + dispatch the verifier.
 
 (defn httpd-mw-basic-auth-check [conn :ptr<void> verifier :int] :int
-  ```c
-  if (!conn || !verifier) return 0;
+  ```c if (!conn || !verifier) return 0;
   const char *hdr = httpd_req_header((void *)conn, "Authorization");
   if (!hdr || !*hdr) return 0;
   /* Must start with "Basic ", case-insensitive. */
@@ -1971,8 +2024,7 @@
 ;;; httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate.
 
 (defn httpd-mw-basic-auth-challenge [conn :ptr<void> realm :cstr] :nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   httpd_resp_status_((void *)conn, 401);
   httpd_resp_body_((void *)conn, "Unauthorized");
   char buf[256];
@@ -2003,9 +2055,7 @@
 ;;; Since: Phase H8 (M5)
 
 (defn mw-basic-auth [realm :cstr verifier :int next :int] :ptr<void>
-  (let [_r realm
-        _v verifier
-        _n next]
+  (let [_r realm _v verifier _n next]
     (fn [c :ptr<void>] :nil
       (if (= 1 (httpd-mw-basic-auth-check c _v))
         (httpd-call _n c)
@@ -2823,8 +2873,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-run-async [h :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -2849,8 +2898,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-stop-async [h :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -2880,8 +2928,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-async-free [h :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -2909,8 +2956,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-async-port [h :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -3311,8 +3357,7 @@
 ;;; httpd-mw-mono-ms -- monotonic clock helper (milliseconds). Internal.
 
 (defn httpd-mw-mono-ms [] :int
-  ```c
-  #include <time.h>
+  ```c #include <time.h>
   struct timespec __ts;
   clock_gettime(CLOCK_MONOTONIC, &__ts);
   return (int64_t)__ts.tv_sec * 1000LL + (int64_t)__ts.tv_nsec / 1000000LL;
@@ -3396,7 +3441,6 @@
 ;;;     (httpd-new 0 composed))
 ;;;
 ;;; Since: Phase H8 (M8 core)
-
 ;;; compose-middleware -- nest multiple middlewares around a base handler.
 ;;;
 ;;; Macro: `(compose-middleware base mw1 mw2 mw3)` expands to
@@ -3422,18 +3466,17 @@
 ;;;
 ;;; Since: Phase H8 (M8 core)
 
+
 (defmacro compose-middleware [base & mws]
   (if (empty? mws)
     base
-    (list (first mws)
-      (list compose-middleware base ~@(rest mws)))))
+    (list (first mws) (list compose-middleware base ~@(rest mws)))))
 ;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
 ;;; middlewares over a base handler. Each rest cell must hold a fat
 ;;; closure value of shape (fn [next :int] :ptr<void> ...).
 
 (defn httpd-mw-fold [base :int mws :int] :int
-  ```c
-  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  ```c typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t buf[64];
   int n = 0;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
@@ -3485,7 +3528,9 @@
 ;;; Since: Phase H8 (M8 core); requires the V1 cast fix in
 ;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
 
-(defn compose-middleware-of [A] [base :int & mws :A] :int
+(defn compose-middleware-of [A]
+  [base :int & mws :A]
+  :int
   (httpd-mw-fold base mws))
 ;; =============================================================================
 ;; MW1: mw-body-size -- Content-Length cap (per docs/upcoming/httpd-middleware-plan.md)
@@ -3506,8 +3551,7 @@
 ;;; return value is the announced body size in bytes.
 
 (defn httpd-mw-content-length [conn :ptr<void>] :int
-  ```c
-  if (!conn) return -1;
+  ```c if (!conn) return -1;
   if (!httpd_req_header_((void *)conn, "Content-Length")) return -1;
   const char *v = httpd_req_header((void *)conn, "Content-Length");
   if (!v || !*v) return -1;
@@ -3548,14 +3592,13 @@
 ;;; Since: Phase H8 (MW1)
 
 (defn mw-body-size [max-bytes :int next :int] :ptr<void>
-  (let [_max max-bytes
-        _n   next]
+  (let [_max max-bytes _n next]
     (fn [c :ptr<void>] :nil
       (let [n (httpd-mw-content-length c)]
         (if (> n _max)
           (do
             (httpd-resp-status! c 413)
-            (httpd-resp-body!   c "Payload Too Large"))
+            (httpd-resp-body! c "Payload Too Large"))
           (httpd-call _n c))))))
 ;; =============================================================================
 ;; MW2: Request attributes (per docs/upcoming/httpd-middleware-plan.md)
@@ -3694,8 +3737,7 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-req-remote-ip [conn :ptr<void>] :cstr
-  ```c
-  #include <arpa/inet.h>
+  ```c #include <arpa/inet.h>
   #include <sys/socket.h>
   typedef struct {
       int fd; int64_t handler;
@@ -3759,14 +3801,11 @@
 ;;;
 ;;; Since: Phase H8 (MW2)
 
-(defstruct RateLimitOpts
-  [requests :int
-   window-s :int])
+(defstruct RateLimitOpts [requests :int window-s :int])
 ;;; httpd-mw-ratelimit-new -- internal: allocate a fresh RL state struct.
 
 (defn httpd-mw-ratelimit-new [requests :int window-s :int] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       uint32_t ip_hash;
       int64_t  window_start_s;
       int32_t  count;
@@ -3793,8 +3832,7 @@
 ;;; ends when the request must be rejected.
 
 (defn httpd-mw-ratelimit-check [state :int ip :cstr] :int
-  ```c
-  #include <time.h>
+  ```c #include <time.h>
   typedef struct {
       uint32_t ip_hash;
       int64_t  window_start_s;
@@ -3860,8 +3898,7 @@
 ;;; httpd-mw-ratelimit-emit-429 -- internal: write the 429 response.
 
 (defn httpd-mw-ratelimit-emit-429 [conn :ptr<void> retry-s :int] :nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   httpd_resp_status_((void *)conn, 429);
   httpd_resp_body_((void *)conn, "Too Many Requests");
   char buf[32];
@@ -3893,16 +3930,10 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn mw-rate-limit [opts :RateLimitOpts next :int] :ptr<void>
-  (let [_st (httpd-mw-ratelimit-new
-              (.requests opts)
-              (.window-s opts))
-        _n  next]
+  (let [_st (httpd-mw-ratelimit-new (.requests opts) (.window-s opts)) _n next]
     (fn [c :ptr<void>] :nil
-      (let [ip    (httpd-req-remote-ip c)
-            retry (httpd-mw-ratelimit-check _st ip)]
-        (if (> retry 0)
-          (httpd-mw-ratelimit-emit-429 c retry)
-          (httpd-call _n c))))))
+      (let [ip (httpd-req-remote-ip c) retry (httpd-mw-ratelimit-check _st ip)]
+        (if (> retry 0) (httpd-mw-ratelimit-emit-429 c retry) (httpd-call _n c))))))
 ;; =============================================================================
 ;; MW2: mw-static -- serve files from a root directory.
 ;; =============================================================================
@@ -3918,8 +3949,7 @@
 ;;; httpd-mw-static-mime -- internal: map an extension to a Content-Type.
 
 (defn httpd-mw-static-mime [path :cstr] :cstr
-  ```c
-  if (!path) return "application/octet-stream";
+  ```c if (!path) return "application/octet-stream";
   const char *dot = strrchr(path, '.');
   if (!dot || !dot[1]) return "application/octet-stream";
   const char *ext = dot + 1;
@@ -3941,8 +3971,7 @@
 ;;; written), 0 if the file is not found / forbidden.
 
 (defn httpd-mw-static-try [conn :ptr<void> root :cstr] :int
-  ```c
-  #include <sys/stat.h>
+  ```c #include <sys/stat.h>
   #include <fcntl.h>
   #include <unistd.h>
   typedef struct __HttpdHeader {
@@ -4053,20 +4082,18 @@
 ;;;     (httpd-new 0 composed))
 ;;;
 ;;; Since: Phase H8 (MW2)
-
 ;;; httpd-mw-static-fallback -- internal: when the response status is 404,
 ;;; try to serve a file from root; otherwise no-op. Always returns nil.
 
+
 (defn httpd-mw-static-fallback [conn :ptr<void> root :cstr] :nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   if (httpd_resp_status_get((void *)conn) != 404) return;
   (void)httpd_mw_static_try((void *)conn, root);
   ```)
 
 (defn mw-static [root-dir :cstr next :int] :ptr<void>
-  (let [_root root-dir
-        _n    next]
+  (let [_root root-dir _n next]
     (fn [c :ptr<void>] :nil
       (httpd-call _n c)
       (httpd-mw-static-fallback c _root))))

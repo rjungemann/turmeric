@@ -22,9 +22,9 @@
 (extern-c tur_hamt_has [m :ptr hash :int key :ptr] :bool)
 
 (extern-c tur_hamt_get [m :ptr hash :int key :ptr] :ptr)
-
 ; TCE4: key-equality-aware variants -- eq is an opaque closure handle
 ; (bool(*)(int64_t,int64_t)) consulted when two keys share a hash.
+
 (extern-c tur_hamt_set_eq [m :ptr hash :int key :ptr val :ptr eq :ptr] :ptr)
 
 (extern-c tur_hamt_del_eq [m :ptr hash :int key :ptr eq :ptr] :ptr)
@@ -32,19 +32,23 @@
 (extern-c tur_hamt_has_eq [m :ptr hash :int key :ptr eq :ptr] :bool)
 
 (extern-c tur_hamt_get_eq [m :ptr hash :int key :ptr eq :ptr] :ptr)
-
 ; WKC2/WKC3: boxed-key carrier + ownership-aware operations.  tur_hamt_box_key
 ; heap-copies `n` key bytes behind a refcount header and returns the payload
 ; pointer; the *_eq_o variants take an `owned` flag selecting the standard
 ; boxed-key ownership (so the box is freed exactly once across structural
 ; sharing) for multi-word struct/ADT keys.
+
 (extern-c tur_hamt_box_key [src :ptr n :int] :ptr)
 
-(extern-c tur_hamt_set_eq_o [m :ptr hash :int key :ptr val :ptr eq :ptr owned :int] :ptr)
+(extern-c tur_hamt_set_eq_o
+  [m :ptr hash :int key :ptr val :ptr eq :ptr owned :int]
+  :ptr)
 
 (extern-c tur_hamt_del_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
 
-(extern-c tur_hamt_has_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :bool)
+(extern-c tur_hamt_has_eq_o
+  [m :ptr hash :int key :ptr eq :ptr owned :int]
+  :bool)
 
 (extern-c tur_hamt_get_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
 

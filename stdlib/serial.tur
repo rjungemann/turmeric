@@ -330,9 +330,7 @@
 
 
 (definstance Serializable [Pair] [(Serializable A) (Serializable B)]
-  (serialize [x]
-    ```c
-    struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
+  (serialize [x] ```c struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Pair: oom\n"); exit(1); }
     buf[0] = 16;
@@ -340,9 +338,7 @@
     buf[2] = p ? p->snd : 0;
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 16) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 16) {
       fprintf(stderr, "deserialize Pair: short buffer\n"); exit(1);
     }
     int64_t *d = (int64_t*)b + 1;
@@ -358,9 +354,7 @@
 ;;; Since: cps-transform-plan (value-typed cont env codec)
 
 (definstance Serializable [Option] [(Serializable A)]
-  (serialize [x]
-    ```c
-    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
+  (serialize [x] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Option: oom\n"); exit(1); }
     buf[0] = 16;
@@ -368,9 +362,7 @@
     buf[2] = (o && o->is_some) ? o->value : 0;
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 16) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 16) {
       fprintf(stderr, "deserialize Option: short buffer\n"); exit(1);
     }
     int64_t *d = (int64_t*)b + 1;

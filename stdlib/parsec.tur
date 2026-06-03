@@ -342,8 +342,7 @@
 ;;;   (run-parser (pfail) "abc")  ; => 0  (no results)
 
 
-(defn pfail [] ^fat :ptr<void>
-  (fn [inp] (mzero)))
+(defn pfail [] ^fat :ptr<void> (fn [inp] (mzero)))
 ;; pure v: succeed with v, consume no input
 ;;; pure-impl -- internal implementation for pure.
 ;;; Parameters:
@@ -382,8 +381,7 @@
 ;;; Example:
 ;;;   (parse-value (run-parser (item) "A"))  ; => 65  ; 'A'
 
-(defn item [] ^fat :ptr<void>
-  (fn [inp] (item-impl inp)))
+(defn item [] ^fat :ptr<void> (fn [inp] (item-impl inp)))
 ;; pchar c: consume if current char equals c (c is ASCII int)
 ;;; pchar-impl -- internal implementation for pchar.
 ;;; Parameters:
