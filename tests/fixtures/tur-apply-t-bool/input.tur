@@ -1,0 +1,19 @@
+;; Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1):
+;; round-trip a :int -> :bool closure through TUR_APPLY1_T.  The macro casts
+;; slot 0 to bool (*)(void *, int64_t) and coerces the argument with
+;; (int64_t)(value) -- the closure's declared :bool return is preserved at the
+;; C invocation site instead of being erased to int64_t.
+
+(defn call-pred [f :ptr<void> x :int] :bool
+  ```c
+  return TUR_APPLY1_T(bool, int64_t, f, x);
+  ```)
+
+(defn make-gt [n :int] :ptr<void>
+  (fn [x :int] :bool (> x n)))
+
+(defn main [] :int
+  (let [gt5 (make-gt 5)]
+    (println (call-pred gt5 8))
+    (println (call-pred gt5 2))
+    0))

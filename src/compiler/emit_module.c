@@ -1986,23 +1986,43 @@ int emit_program(Buf *out, const Expr *program) {
      * The closure handle f and the arguments are taken as int64_t (the polymorphic
      * carrier type used throughout the runtime). */
     buf_puts(out, "#define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]\n");
-    /* Phase R2: nullary fat-closure apply -- a (fn [] :int) thunk is invoked
-     * through the standard closure protocol (thunk = slot 0, env = the box). */
-    buf_puts(out, "#define TUR_APPLY0(f) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    /* Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1).
+     * TUR_APPLYn_T speaks the closure's *declared* C types instead of forcing
+     * everything through int64_t.  R is the closure's C return type; A0,A1,...
+     * are its C argument types in order.  An inline-C block that knows the
+     * concrete signature of a closure (e.g. a (fn [x :float] :float ...) signal
+     * body, or a (fn [p :ptr<T>] :ptr<T> ...) iterator step) invokes it through
+     * the matching _T form so the value never round-trips through an int64_t
+     * bit-cast.  The thunk is still read from slot 0 and called with the closure
+     * box as its env -- only the function-pointer cast changes.  Each argument
+     * is coerced with (Ai)(value) at the call site. */
+    buf_puts(out, "#define TUR_APPLY0_T(R, f) \\\n");
+    buf_puts(out, "    (((R (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
     buf_puts(out, "        ((void *)(intptr_t)(f)))\n");
-    buf_puts(out, "#define TUR_APPLY1(f, a) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a)))\n");
-    buf_puts(out, "#define TUR_APPLY2(f, a, b) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b)))\n");
+    buf_puts(out, "#define TUR_APPLY1_T(R, A0, f, a) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a)))\n");
+    buf_puts(out, "#define TUR_APPLY2_T(R, A0, A1, f, a, b) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b)))\n");
+    buf_puts(out, "#define TUR_APPLY3_T(R, A0, A1, A2, f, a, b, c) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1, A2))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c)))\n");
+    buf_puts(out, "#define TUR_APPLY4_T(R, A0, A1, A2, A3, f, a, b, c, d) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1, A2, A3))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c), (A3)(d)))\n");
+    /* Phase R2: nullary fat-closure apply -- a (fn [] :int) thunk is invoked
+     * through the standard closure protocol (thunk = slot 0, env = the box).
+     * The legacy TUR_APPLYn macros are the all-int64_t case of TUR_APPLYn_T,
+     * kept as literal-equivalent shorthands so existing hand-written inline-C
+     * (stdlib/arrow.tur et al.) compiles unchanged. */
+    buf_puts(out, "#define TUR_APPLY0(f)          TUR_APPLY0_T(int64_t, f)\n");
+    buf_puts(out, "#define TUR_APPLY1(f, a)       TUR_APPLY1_T(int64_t, int64_t, f, a)\n");
+    buf_puts(out, "#define TUR_APPLY2(f, a, b)    TUR_APPLY2_T(int64_t, int64_t, int64_t, f, a, b)\n");
     buf_puts(out, "#define TUR_APPLY3(f, a, b, c) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c)))\n");
+    buf_puts(out, "    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)\n");
     buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))\n");
+    buf_puts(out, "    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)\n");
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
      * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
      * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
