@@ -24,17 +24,17 @@ do not collapse phases, do not reword entries into prose, and update the
 1. `positional-nominal-type-identity-fix-plan.md`
    - Goal: Enforce nominal type identity for struct/ADT/opaque args at call sites
    - Deps: independent
-   - Status: Ready to implement (spike-validated; all phases pre-resolved with evidence)
+   - Status: Complete (landed in commit 2ae2b6d4)
 
 2. `ptr-generic-parameterised-type-plan.md`
    - Goal: Make `:ptr<T>` a first-class parameterised type for any T
    - Deps: independent
-   - Status: Draft (P0-P5 phases designed, not started)
+   - Status: Complete (landed in commit def6724f; G5 spike validated)
 
 3. `spaced-type-annotation-migration-plan.md`
    - Goal: Migrate codebase from fused `(name:type)` to spaced `(name : type)`
    - Deps: independent
-   - Status: In progress (Phase 1a, 1a-bis complete; 1b-1c pending; 2-7 outstanding)
+   - Status: In progress (Phase 1a-bis complete; compiler readiness done; Phase 1b-1c pending; Phases 2-7 outstanding)
 
 ## Phase 1 -- Compiler & closure ABI fixes
 
@@ -65,7 +65,7 @@ do not collapse phases, do not reword entries into prose, and update the
 8. `language-readiness-for-typed-signal-plan.md`
    - Goal: Spike-validate that the type system can support a typed signal library; gate remaining gaps
    - Deps: 2, 4, 5, 6, 7
-   - Status: In progress (G1-G8 spikes complete with verdicts; summary current as of 2026-06-03)
+   - Status: Draft (G1-G8 spikes designed with verdict template; no verdicts filled yet)
 
 ## Phase 4 -- Stdlib hardening
 
