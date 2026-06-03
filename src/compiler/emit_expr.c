@@ -3310,17 +3310,37 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit the bare fn pointer value (typically the lifted fn's C name). */
             char *fnptr = emit_value(ctx, body, inner);
 
-            /* Heap-allocate { __tur_fatshim<arity>, orig_fn_ptr }.  The shim thunk
-             * lives in the runtime preamble (file scope, always valid) and uses the
-             * int64_t carrier ABI shared with TUR_APPLY and the reactor's fat-call
-             * casts, so no per-site C function is generated. */
+            /* Heap-allocate { shim, orig_fn_ptr }.  For an all-int64_t closure
+             * signature the preamble __tur_fatshim<arity> shim (int64_t carrier
+             * ABI, shared with TUR_APPLY and the reactor's fat-call casts) is
+             * used.  For a non-int64 signature (closure-typed-invocation-abi-plan)
+             * a per-signature typed shim is emitted so slot 0 matches the typed-
+             * thunk cast the call site applies -- otherwise a :float/:cstr/:ptr
+             * closure would be invoked through a mismatched int64_t ABI. */
+            Type fnt_result = (fnty.kind == TY_FN && fnty.as.fn.result_full_type)
+                                  ? *fnty.as.fn.result_full_type
+                                  : emit_type_from_kind(fnty.kind == TY_FN
+                                                            ? fnty.as.fn.result_kind
+                                                            : TY_INT);
+            Type fnt_params[MAX_FN_ARITY];
+            for (uint8_t i = 0; i < arity && i < MAX_FN_ARITY; i++) {
+                fnt_params[i] = (fnty.as.fn.arg_full_types && fnty.as.fn.arg_full_types[i])
+                                    ? *fnty.as.fn.arg_full_types[i]
+                                    : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
+            }
+            char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
+
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t *%s = (int64_t *)malloc(2 * sizeof(int64_t));\n",
                        fat_tmp);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_fatshim%u;\n",
-                       fat_tmp, (unsigned)arity);
+            if (typed_shim) {
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", fat_tmp, typed_shim);
+            } else {
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_fatshim%u;\n",
+                           fat_tmp, (unsigned)arity);
+            }
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s[1] = (int64_t)(intptr_t)%s;\n", fat_tmp, fnptr);
             char *ptr_tmp = fresh_tmp(ctx);
@@ -3328,6 +3348,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "void *%s = %s;\n", ptr_tmp, fat_tmp);
             free(fnptr);
             free(fat_tmp);
+            free(typed_shim);
             return ptr_tmp;
         }
         case EX_POLY_TO_FAT: {
