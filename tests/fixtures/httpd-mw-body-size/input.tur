@@ -1,0 +1,132 @@
+;; MW1: httpd-mw-body-size -- reject oversize Content-Length with 413.
+;;
+;; Two requests on one keep-alive socket:
+;;
+;;   1. POST / with Content-Length: 1000 (well over the 100-byte cap).
+;;      mw-body-size should short-circuit with 413 WITHOUT calling base.
+;;
+;;   2. POST / with Content-Length: 5 ("hello"). mw-body-size passes through
+;;      to base, which prints "base" and replies 200.
+;;
+;; Expected output:
+;;   over-status=413
+;;   base
+;;   ok-status=200
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+
+  /* Request 1: oversize -- claim 1000-byte body but send only a small chunk;
+   * mw-body-size rejects on Content-Length before any body read. We close
+   * the socket and re-connect for the second request because the server's
+   * keep-alive path would otherwise wait for the full 1000-byte body. */
+  {
+      const char *req =
+          "POST / HTTP/1.0\r\n"
+          "Host: localhost\r\n"
+          "Content-Length: 1000\r\n"
+          "\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("over-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      close(fd);
+  }
+
+  /* Request 2: within the cap -- handler runs, replies 200. */
+  {
+      fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (fd < 0) return NULL;
+      if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+      const char *req =
+          "POST / HTTP/1.0\r\n"
+          "Host: localhost\r\n"
+          "Content-Length: 5\r\n"
+          "\r\n"
+          "hello";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("ok-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      close(fd);
+  }
+
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech   (chan-new 1)
+        base     (fn [c :ptr<void>] :nil
+                   (print-tag "base")
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body! c "ok")
+                   (chan-send donech 1))
+        composed (mw-body-size 100 base)
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (chan-recv donech)   ;; only the ok-size path runs the base handler
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

@@ -192,6 +192,12 @@ let [h httpd-new(8080
 `httpd-call` invokes a captured handler closure on a connection -- it is
 how a middleware passes control through to the next layer.
 
+See [httpd-middleware-guide.md](httpd-middleware-guide.md) for the
+full catalog of shipped middleware (logging, CORS, basic auth, body
+size, rate limiting, static files, ...), the request-attribute side
+channel (`httpd-set-attr!` / `httpd-req-attr`), and the rules for
+composing or writing your own.
+
 ---
 
 ## Keep-alive (H4)

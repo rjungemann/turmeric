@@ -1,0 +1,5 @@
+r1-status=200
+r1-body=hello, world
+r2-status=304
+r3-status=404
+done

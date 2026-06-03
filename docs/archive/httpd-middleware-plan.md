@@ -1,7 +1,7 @@
 # httpd Middleware Plan
 
 > **Status:** Partially shipped -- forward-looking items remain
-> **Last Updated:** 2026-06-02
+> **Last Updated:** 2026-06-02 (MW1 body-size + MW2 request attrs, rate-limit, static shipped; mw-recover and mw-timeout deferred)
 > **Type:** Networking / stdlib
 > **Supersedes (historically):** the bulk of the original v0 surface was
 > reframed and shipped under the now-archived
@@ -48,12 +48,13 @@ typed variadic `compose-middleware-of`), not `compose-mw`.
 | Multipart parser           | Shipped (bonus) | `httpd-req-multipart-parse` (M7)                       |
 | Request/response headers   | Shipped (bonus) | `httpd-req-header(?)`, `httpd-resp-header(-add)!` (M0) |
 | Async handlers + middleware compose | Shipped (bonus) | Track A (A0-A4); see `httpd-async-guide.md`      |
-| **Body-size middleware**   | **Pending**| --                                                          |
-| **Rate-limit middleware**  | **Pending**| --                                                          |
-| **Static-file middleware** | **Pending**| --                                                          |
-| **Timeout middleware**     | **Pending**| --                                                          |
-| **Panic-recovery middleware** | **Pending** | --                                                       |
-| **Request attributes** (`httpd-set-attr!` / `httpd-req-attr`) | **Pending** | -- |
+| Body-size middleware       | Shipped    | `mw-body-size` in `stdlib/httpd.tur` (MW1); fixture `httpd-mw-body-size` |
+| Rate-limit middleware      | Shipped    | `mw-rate-limit` + `RateLimitOpts` (MW2); fixture `httpd-mw-rate-limit` |
+| Static-file middleware     | Shipped    | `mw-static` (MW2); fixture `httpd-mw-static`               |
+| **Timeout middleware**     | **Pending** (blocked) | -- needs handler/timer race via async fiber primitives; worker-thread cancellation is not portable (no `pthread_timedjoin_np` on macOS) |
+| **Panic-recovery middleware** | **Pending** (blocked) | -- requires usable `catch-unwind` over fat-closure thunks (today's lowering passes `NULL` env -- see `src/compiler/emit_expr.c` `EX_CATCH_UNWIND`) |
+| Request attributes (`httpd-set-attr!` / `httpd-req-attr`) | Shipped | MW2; `attr_list` field on `HttpdConn`; `mw-basic-auth` publishes `"user"`; fixture `httpd-mw-basic-auth-attr` |
+| Remote-IP helper (`httpd-req-remote-ip`) | Shipped (bonus) | MW2; backs `mw-rate-limit`; cached on the request attr `__remote_ip` |
 | Compression middleware     | Spun out   | See [httpd-compression-zlib-spice-plan](httpd-compression-zlib-spice-plan.md) |
 
 Fixtures landed alongside each shipped middleware under
@@ -232,29 +233,66 @@ negligible for single-digit key counts.
 
 ### Phase MW1 -- Simple wrappers (no C changes)
 
-- `mw-body-size`, `mw-recover` in `stdlib/httpd.tur` (or a new
-  `stdlib/httpd-mw.tur` if the file is getting long).
-- Fixtures: `tests/fixtures/httpd-mw-body-size/`,
-  `tests/fixtures/httpd-mw-recover/`.
+- **Shipped:** `mw-body-size` in `stdlib/httpd.tur` rejects requests
+  whose `Content-Length` exceeds the configured cap with a 413
+  short-circuit. Internal helper `httpd-mw-content-length` parses the
+  header to int (or -1 when absent / unparseable). Fixture
+  `tests/fixtures/httpd-mw-body-size/` covers both the over-cap (413)
+  and within-cap (200) paths and asserts the base handler is bypassed
+  on the over-cap request.
+- **Deferred:** `mw-recover`. The Turmeric primitive `(catch-unwind
+  thunk)` exists at the surface level, but its current lowering
+  (`EX_CATCH_UNWIND` in `src/compiler/emit_expr.c`) passes `NULL` as the
+  thunk env and casts the closure value directly as `tur_thunk_fn`.
+  That works for nullary literal C functions but not for fat closures
+  that capture `next` -- which is exactly what a middleware needs. The
+  cleanest unblock is to teach the catch-unwind lowering to invoke the
+  fat-closure dispatcher (mirroring `httpd-call`) so the thunk can
+  capture state; revisit `mw-recover` after that lands.
 
 ### Phase MW2 -- State-carrying middleware + request attrs
 
-- Request attrs (`httpd-set-attr!` / `httpd-req-attr`) added to
-  `stdlib/httpd`; requires one new field on `httpd_conn` + cleanup in
-  the per-request free path (same shape as the M0 header list).
-- `mw-rate-limit` with `Mutex<hamt>` sliding window.
-- `mw-static` with ETag (`mtime` + size as hex string).
-- `mw-timeout` built on `httpd-await-timer` (Track A, already shipped).
-- Wire `mw-basic-auth` to publish `"user"` via `httpd-set-attr!`.
-- Fixtures for each, plus an integration fixture that demonstrates
-  `mw-basic-auth -> handler reads attr "user"`.
+- **Shipped:** request attrs (`httpd-set-attr!` / `httpd-req-attr`) +
+  `attr_list` field on `HttpdConn` + per-request cleanup in the worker
+  loop (same shape as the M0 header list).
+- **Shipped:** `httpd-req-remote-ip` (uses `getpeername` + `inet_ntop`;
+  result cached on the `__remote_ip` request attr) -- the foundation
+  for IP-based rate-limiting.
+- **Shipped:** `mw-rate-limit` with a per-instance heap-allocated
+  table (linear probing, 1024 slots) protected by a `pthread_mutex`.
+  Sliding window per IP (FNV-1a hash); 429 + `Retry-After` on
+  exhaustion. Note: the plan called for `Mutex<hamt>`; the shipped
+  implementation uses a simpler fixed-size table that's easier to
+  reason about and avoids dragging in stdlib/hamt into the closure
+  environment. Capacity is fixed at 1024 -- the table fails open when
+  full, which is acceptable for a v1 limiter.
+- **Shipped:** `mw-static` with ETag (`"<size>-<mtime>"` in hex). Path
+  traversal guard rejects any `..` segment. Content-Type from a small
+  built-in extension table (`html`, `css`, `js`, `json`, `txt`, `png`,
+  `jpg`/`jpeg`, `gif`, `svg`, `ico`, `wasm`). Composes after a router:
+  serves a file only when `next` returned 404.
+- **Shipped:** `mw-basic-auth` now publishes the verified username via
+  `httpd-set-attr! "user"`; integration fixture
+  `httpd-mw-basic-auth-attr` demonstrates the handler reading it back.
+- **Deferred:** `mw-timeout`. The plan suggested building on
+  `httpd-await-timer`, but enforcing a per-request budget requires
+  racing the handler against a timer. The async path
+  (`local-fiber-group` + `tur-local-spawn`) has the primitives to
+  spawn the handler and cancel it on timeout, but composing that into
+  a generic middleware that works under both `httpd-new-pool` (worker
+  threads) and `httpd-new-async` (fibers) is non-trivial.
+  Worker-thread cancellation via `pthread_timedjoin_np` is not
+  portable (macOS lacks it) and would not unwind handler state
+  cleanly. Revisit after the async path adds a `with-deadline` /
+  `race` combinator.
 
 ### Phase MW3 -- Documentation
 
-- `docs/guides/httpd-middleware-guide.md` -- overview, each shipped
-  middleware (existing + pending) with an example, `compose-middleware`
-  usage, writing custom middleware, async interop.
-- Update `httpd-guide.md` §Middleware to point at the new guide.
+- **Shipped:** `docs/guides/httpd-middleware-guide.md` -- catalog of
+  every shipped middleware with usage example, the request-attribute
+  side channel, the rules for writing your own, async interop, and
+  the deferred items.
+- **Shipped:** `httpd-guide.md` §Middleware now links to the catalog.
 
 ---
 

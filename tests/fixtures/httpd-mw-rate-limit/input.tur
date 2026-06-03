@@ -1,0 +1,110 @@
+;; MW2: httpd-mw-rate-limit -- sliding-window per-IP limiter.
+;;
+;; Limit = 2 requests per 60-second window. The client sends 3 requests
+;; sequentially from the loopback address. Expected:
+;;   - Requests 1 & 2 pass through (base prints "base", status 200)
+;;   - Request 3 is rejected with 429
+;;
+;; Expected output:
+;;   base
+;;   r1-status=200
+;;   base
+;;   r2-status=200
+;;   r3-status=429
+;;   r3-retry-after=60
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  for (int i = 0; i < 3; i++) {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (fd < 0) return NULL;
+      if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+      const char *req = "GET / HTTP/1.0\r\n\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("r%d-status=%c%c%c\n", i+1, drain[9], drain[10], drain[11]);
+      if (i == 2) {
+          const char *needle = "\r\nRetry-After: ";
+          const char *p = strstr(drain, needle);
+          if (p) {
+              p += strlen(needle);
+              const char *eol = strstr(p, "\r\n");
+              if (eol) printf("r3-retry-after=%.*s\n", (int)(eol - p), p);
+          }
+      }
+      close(fd);
+  }
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech   (chan-new 2)
+        base     (fn [c :ptr<void>] :nil
+                   (print-tag "base")
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body! c "ok")
+                   (chan-send donech 1))
+        opts     (make-struct RateLimitOpts 2 60)
+        composed (mw-rate-limit opts base)
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (chan-recv donech)
+    (chan-recv donech)
+    ;; Wait for the client to finish all 3 requests (the 3rd is 429-rejected
+    ;; and does not chan-send) BEFORE stopping the server.
+    (join-thread client)
+    (httpd-stop h)
+    (join-thread server)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

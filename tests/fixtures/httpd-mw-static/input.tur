@@ -1,0 +1,153 @@
+;; MW2: httpd-mw-static -- serve files from a root directory when next 404s.
+;;
+;; Setup: at startup, write a small file to a temp directory and serve it
+;; via mw-static composed AFTER a base handler that always returns 404.
+;;
+;; Three requests:
+;;   1. GET /hello.txt  -- mw-static serves it; Content-Type=text/plain;...
+;;      and ETag header is present.
+;;   2. GET /hello.txt with If-None-Match: <etag>  -- 304 short-circuit.
+;;   3. GET /does-not-exist.txt -- mw-static cannot serve, base 404 stays.
+;;
+;; Expected output:
+;;   r1-status=200
+;;   r1-body=hello, world
+;;   r2-status=304
+;;   r3-status=404
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn setup-fs [] :nil
+  ```c
+  mkdir("/tmp/turmeric-mw-static-test", 0755);
+  FILE *f = fopen("/tmp/turmeric-mw-static-test/hello.txt", "w");
+  if (f) { fwrite("hello, world", 1, 12, f); fclose(f); }
+  ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+
+  char saved_etag[128] = "";
+
+  /* Request 1: fetch the file. */
+  {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+      const char *req = "GET /hello.txt HTTP/1.0\r\n\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[2048];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("r1-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      const char *body = strstr(drain, "\r\n\r\n");
+      if (body) printf("r1-body=%s\n", body + 4);
+      const char *needle = "\r\nETag: ";
+      const char *p = strstr(drain, needle);
+      if (p) {
+          p += strlen(needle);
+          const char *eol = strstr(p, "\r\n");
+          if (eol && (size_t)(eol - p) < sizeof(saved_etag)) {
+              memcpy(saved_etag, p, (size_t)(eol - p));
+              saved_etag[eol - p] = '\0';
+          }
+      }
+      close(fd);
+  }
+
+  /* Request 2: same file with If-None-Match -> expect 304. */
+  {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+      char req[256];
+      snprintf(req, sizeof(req),
+               "GET /hello.txt HTTP/1.0\r\nIf-None-Match: %s\r\n\r\n", saved_etag);
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("r2-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      close(fd);
+  }
+
+  /* Request 3: missing file -> 404 from base, no fallback. */
+  {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+      const char *req = "GET /does-not-exist.txt HTTP/1.0\r\n\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("r3-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      close(fd);
+  }
+
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void> ```c httpd_run(h); return NULL; ```)
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t; ```)
+(defn spawn-client [port :int] :ptr<void>
+  ```c int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t; ```)
+(defn join-thread [t :ptr<void>] :nil ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (setup-fs)
+  (let [donech   (chan-new 3)
+        ;; base ALWAYS returns 404 -- mw-static handles the rest.
+        base     (fn [c :ptr<void>] :nil
+                   (httpd-resp-status! c 404)
+                   (httpd-resp-body! c "Not Found")
+                   (chan-send donech 1))
+        composed (mw-static "/tmp/turmeric-mw-static-test" base)
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (chan-recv donech)
+    (chan-recv donech)
+    (chan-recv donech)
+    (join-thread client)
+    (httpd-stop h)
+    (join-thread server)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

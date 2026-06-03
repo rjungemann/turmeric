@@ -1,0 +1,7 @@
+base
+r1-status=200
+base
+r2-status=200
+r3-status=429
+r3-retry-after=60
+done

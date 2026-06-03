@@ -175,6 +175,7 @@
       int64_t req_json_cache;     /* M3: lazily-parsed json/decode tree, freed in cleanup */
       void *req_multipart_parts;  /* M7: lazily-parsed multipart head (HttpdPart linked list) */
       void *fiber_group;          /* A0: bound local-fiber-group for await-* primitives */
+      void *attr_list;            /* MW2: per-request attribute list (HttpdAttr linked list) */
   } HttpdConn;
   typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
@@ -506,6 +507,21 @@
               pp = nx;
           }
           conn->req_multipart_parts = NULL;
+      }
+      /* MW2: free per-request attribute list. */
+      if (conn->attr_list) {
+          typedef struct __HttpdAttr {
+              char *key; char *value; struct __HttpdAttr *next;
+          } HttpdAttr;
+          HttpdAttr *ap = (HttpdAttr *)conn->attr_list;
+          while (ap) {
+              HttpdAttr *nx = ap->next;
+              if (ap->key)   free(ap->key);
+              if (ap->value) free(ap->value);
+              free(ap);
+              ap = nx;
+          }
+          conn->attr_list = NULL;
       }
   }
   if (tls && httpd_tls_ops.shutdown) {
@@ -1946,6 +1962,9 @@
   int64_t *fat = (int64_t *)(intptr_t)verifier;
   typedef int64_t (*fn2_t)(void *, const char *, const char *);
   int64_t ok = ((fn2_t)(intptr_t)fat[0])((void *)fat, user, pass);
+  /* MW2: on success, publish the verified username via httpd-set-attr!
+   * so downstream handlers can read it back through (httpd-req-attr c "user"). */
+  if (ok) httpd_set_attr_((void *)conn, "user", user);
   free(raw);
   return (int)(ok ? 1 : 0);
   ```)
@@ -3468,3 +3487,586 @@
 
 (defn compose-middleware-of [A] [base :int & mws :A] :int
   (httpd-mw-fold base mws))
+;; =============================================================================
+;; MW1: mw-body-size -- Content-Length cap (per docs/upcoming/httpd-middleware-plan.md)
+;; =============================================================================
+;;
+;; Pre-handler middleware that consults the request's `Content-Length` header
+;; and short-circuits with `413 Payload Too Large` when it exceeds the
+;; configured ceiling. Requests with no `Content-Length` (e.g. simple GET)
+;; or with a value at or below the cap pass through unchanged.
+;;
+;; The check is header-only: it does not attempt to enforce the limit on a
+;; chunked request body, because the existing httpd C layer buffers bodies
+;; up-front using the declared Content-Length. Once the response is short-
+;; circuited the downstream handler is never invoked.
+;;; httpd-mw-content-length -- internal: read Content-Length as int64, or -1.
+;;;
+;;; Returns -1 when the header is absent or unparseable. A non-negative
+;;; return value is the announced body size in bytes.
+
+(defn httpd-mw-content-length [conn :ptr<void>] :int
+  ```c
+  if (!conn) return -1;
+  if (!httpd_req_header_((void *)conn, "Content-Length")) return -1;
+  const char *v = httpd_req_header((void *)conn, "Content-Length");
+  if (!v || !*v) return -1;
+  /* Skip leading whitespace; require at least one digit. */
+  while (*v == ' ' || *v == '\t') v++;
+  if (*v < '0' || *v > '9') return -1;
+  int64_t n = 0;
+  while (*v >= '0' && *v <= '9') {
+      n = n * 10 + (int64_t)(*v - '0');
+      v++;
+  }
+  return n;
+  ```)
+;;; mw-body-size -- reject requests with Content-Length > max-bytes with 413.
+;;;
+;;; When the request advertises a Content-Length greater than `max-bytes`
+;;; this middleware responds with status 413 ("Payload Too Large") and a
+;;; short plain-text body, and does NOT invoke `next`. Requests without a
+;;; Content-Length header, or with a value at or below the cap, are passed
+;;; through unchanged.
+;;;
+;;; The cap is on the announced size, not on chunked-transfer bodies; the
+;;; existing httpd layer buffers bodies by Content-Length, so rejecting at
+;;; this stage prevents the body read entirely.
+;;;
+;;; Parameters:
+;;;   max-bytes -- maximum accepted Content-Length in bytes (>= 0)
+;;;   next      -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
+;;;   compose-middleware.
+;;;
+;;; Example:
+;;;   (let [composed (mw-body-size 1048576 base)]  ; 1 MiB cap
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (MW1)
+
+(defn mw-body-size [max-bytes :int next :int] :ptr<void>
+  (let [_max max-bytes
+        _n   next]
+    (fn [c :ptr<void>] :nil
+      (let [n (httpd-mw-content-length c)]
+        (if (> n _max)
+          (do
+            (httpd-resp-status! c 413)
+            (httpd-resp-body!   c "Payload Too Large"))
+          (httpd-call _n c))))))
+;; =============================================================================
+;; MW2: Request attributes (per docs/upcoming/httpd-middleware-plan.md)
+;; =============================================================================
+;;
+;; A small per-request key/value side-channel attached to httpd_conn.
+;; Middleware uses it to pass context downstream (e.g. mw-basic-auth
+;; publishes the authenticated user name; the handler reads it back via
+;; (httpd-req-attr conn "user")). Stored as a singly-linked list of
+;; HttpdAttr cells on the conn struct; freed (shallow) after the handler
+;; returns, alongside the request/response header lists.
+;;; httpd-set-attr! -- attach a key/value pair to the current request.
+;;;
+;;; Overwrites any previously-set value for the same key (case-sensitive).
+;;; The key and value are copied into per-request storage; the original
+;;; cstrings can be reused or freed by the caller. The attribute lives
+;;; until the handler returns, then is freed alongside the request /
+;;; response header lists.
+;;;
+;;; Parameters:
+;;;   conn -- httpd connection pointer
+;;;   key  -- attribute name (cstr)
+;;;   val  -- attribute value (cstr)
+;;;
+;;; Example:
+;;;   (httpd-set-attr! c "user" "alice")
+;;;
+;;; Since: Phase H8 (MW2)
+
+(defn httpd-set-attr! [conn :ptr<void> key :cstr val :cstr] :nil
+  ```c typedef struct __HttpdAttr {
+      char *key; char *value; struct __HttpdAttr *next;
+  } HttpdAttr;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+      void *attr_list;
+  } HttpdConn;
+  if (!conn || !key) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  /* Overwrite if the key already exists. */
+  HttpdAttr *ap = (HttpdAttr *)c->attr_list;
+  while (ap) {
+      if (ap->key && strcmp(ap->key, key) == 0) {
+          if (ap->value) free(ap->value);
+          ap->value = strdup(val ? val : "");
+          return;
+      }
+      ap = ap->next;
+  }
+  /* Prepend new cell. */
+  HttpdAttr *na = (HttpdAttr *)calloc(1, sizeof(HttpdAttr));
+  if (!na) return;
+  na->key   = strdup(key);
+  na->value = strdup(val ? val : "");
+  na->next  = (HttpdAttr *)c->attr_list;
+  c->attr_list = na;
+  ```)
+;;; httpd-req-attr -- retrieve a previously set request attribute.
+;;;
+;;; Returns the empty string ("") if the key has not been set.  The
+;;; returned pointer is into per-request storage and is only valid until
+;;; the handler returns.
+;;;
+;;; Parameters:
+;;;   conn -- httpd connection pointer
+;;;   key  -- attribute name (cstr, case-sensitive)
+;;;
+;;; Returns:
+;;;   The attribute value as a cstr, or "" when absent.
+;;;
+;;; Example:
+;;;   (let [u (httpd-req-attr c "user")] ...)
+;;;
+;;; Since: Phase H8 (MW2)
+
+(defn httpd-req-attr [conn :ptr<void> key :cstr] :cstr
+  ```c typedef struct __HttpdAttr {
+      char *key; char *value; struct __HttpdAttr *next;
+  } HttpdAttr;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+      void *attr_list;
+  } HttpdConn;
+  if (!conn || !key) return "";
+  HttpdAttr *ap = (HttpdAttr *)((HttpdConn *)conn)->attr_list;
+  while (ap) {
+      if (ap->key && strcmp(ap->key, key) == 0) {
+          return ap->value ? ap->value : "";
+      }
+      ap = ap->next;
+  }
+  return "";
+  ```)
+;; =============================================================================
+;; MW2: httpd-req-remote-ip -- look up the client's IP address.
+;; =============================================================================
+;;; httpd-req-remote-ip -- return the client's IP address as a cstr.
+;;;
+;;; Uses getpeername(2) on the connection fd. IPv4 addresses are returned
+;;; in dotted-quad form ("203.0.113.4"); IPv6 in colon-hex form. Returns
+;;; the empty string ("") on lookup failure. The returned pointer is into
+;;; per-request storage and is valid only for the duration of the handler
+;;; call.
+;;;
+;;; Parameters:
+;;;   conn -- httpd connection pointer
+;;;
+;;; Returns:
+;;;   The client IP as a cstr, or "" on failure.
+;;;
+;;; Example:
+;;;   (let [ip (httpd-req-remote-ip c)] ...)
+;;;
+;;; Since: Phase H8 (MW2)
+
+(defn httpd-req-remote-ip [conn :ptr<void>] :cstr
+  ```c
+  #include <arpa/inet.h>
+  #include <sys/socket.h>
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+      void *attr_list;
+  } HttpdConn;
+  if (!conn) return "";
+  HttpdConn *c = (HttpdConn *)conn;
+  /* Stash the formatted address on an attr so it lives as long as the
+   * request and gets freed in the cleanup path automatically. */
+  const char *cached = httpd_req_attr((void *)conn, "__remote_ip");
+  if (cached && *cached) return cached;
+  struct sockaddr_storage ss;
+  socklen_t sl = (socklen_t)sizeof(ss);
+  if (getpeername(c->fd, (struct sockaddr *)&ss, &sl) != 0) return "";
+  char ipbuf[64];
+  ipbuf[0] = '\0';
+  if (ss.ss_family == AF_INET) {
+      struct sockaddr_in *sa = (struct sockaddr_in *)&ss;
+      inet_ntop(AF_INET, &sa->sin_addr, ipbuf, sizeof(ipbuf));
+  } else if (ss.ss_family == AF_INET6) {
+      struct sockaddr_in6 *sa = (struct sockaddr_in6 *)&ss;
+      inet_ntop(AF_INET6, &sa->sin6_addr, ipbuf, sizeof(ipbuf));
+  }
+  if (!ipbuf[0]) return "";
+  httpd_set_attr_((void *)conn, "__remote_ip", ipbuf);
+  return httpd_req_attr((void *)conn, "__remote_ip");
+  ```)
+;; =============================================================================
+;; MW2: mw-rate-limit -- sliding-window per-IP rate limiter
+;; =============================================================================
+;;
+;; State: a heap-allocated table of (ip_hash, window_start, count) slots
+;; protected by a pthread_mutex. Slots are addressed by linear probing on
+;; the FNV-1a hash of the client IP. Each mw-rate-limit closure has its
+;; OWN table; multiple instances do not share state.
+;;
+;; Sliding window semantics: each slot remembers when its current window
+;; started. A request bumps the count; if (now - window_start) > window_s
+;; the window resets first. When count > requests, the request is rejected
+;; with 429 and a `Retry-After` header carrying the seconds until the
+;; current window ends.
+;;
+;; This is a single-process limiter -- it does not coordinate across
+;; multiple server instances. Share the table only within one process.
+;;; RateLimitOpts -- mw-rate-limit configuration.
+;;;
+;;; Field conventions:
+;;;   requests -- max requests per window (>= 1)
+;;;   window-s -- window length in seconds (>= 1)
+;;;
+;;; Since: Phase H8 (MW2)
+
+(defstruct RateLimitOpts
+  [requests :int
+   window-s :int])
+;;; httpd-mw-ratelimit-new -- internal: allocate a fresh RL state struct.
+
+(defn httpd-mw-ratelimit-new [requests :int window-s :int] :int
+  ```c
+  typedef struct {
+      uint32_t ip_hash;
+      int64_t  window_start_s;
+      int32_t  count;
+  } RLEntry;
+  typedef struct {
+      pthread_mutex_t mtx;
+      RLEntry        *entries;
+      int             capacity;
+      int             window_s;
+      int             max_requests;
+  } RLState;
+  RLState *st = (RLState *)calloc(1, sizeof(RLState));
+  if (!st) return 0;
+  st->capacity     = 1024;
+  st->window_s     = window_s > 0 ? (int)window_s : 1;
+  st->max_requests = requests > 0 ? (int)requests : 1;
+  st->entries      = (RLEntry *)calloc((size_t)st->capacity, sizeof(RLEntry));
+  if (!st->entries) { free(st); return 0; }
+  pthread_mutex_init(&st->mtx, NULL);
+  return (int64_t)(intptr_t)st;
+  ```)
+;;; httpd-mw-ratelimit-check -- internal: bump the counter for ip; return
+;;; 0 if the request is allowed, or N>0 = the seconds until the window
+;;; ends when the request must be rejected.
+
+(defn httpd-mw-ratelimit-check [state :int ip :cstr] :int
+  ```c
+  #include <time.h>
+  typedef struct {
+      uint32_t ip_hash;
+      int64_t  window_start_s;
+      int32_t  count;
+  } RLEntry;
+  typedef struct {
+      pthread_mutex_t mtx;
+      RLEntry        *entries;
+      int             capacity;
+      int             window_s;
+      int             max_requests;
+  } RLState;
+  if (!state || !ip || !*ip) return 0;
+  RLState *st = (RLState *)(intptr_t)state;
+  /* FNV-1a 32-bit hash of the IP cstr. */
+  uint32_t h = 2166136261u;
+  for (const char *p = ip; *p; p++) {
+      h ^= (uint8_t)*p;
+      h *= 16777619u;
+  }
+  if (h == 0) h = 1;  /* reserve 0 for "empty slot" */
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  int64_t now = (int64_t)ts.tv_sec;
+  pthread_mutex_lock(&st->mtx);
+  /* Linear probe up to capacity slots. */
+  int idx = (int)(h % (uint32_t)st->capacity);
+  for (int probe = 0; probe < st->capacity; probe++) {
+      RLEntry *e = &st->entries[idx];
+      if (e->ip_hash == 0) {
+          /* Fresh slot. */
+          e->ip_hash        = h;
+          e->window_start_s = now;
+          e->count          = 1;
+          pthread_mutex_unlock(&st->mtx);
+          return 0;
+      }
+      if (e->ip_hash == h) {
+          /* Existing window for this IP. */
+          int64_t age = now - e->window_start_s;
+          if (age >= (int64_t)st->window_s) {
+              e->window_start_s = now;
+              e->count          = 1;
+              pthread_mutex_unlock(&st->mtx);
+              return 0;
+          }
+          e->count++;
+          if (e->count > st->max_requests) {
+              int retry = (int)((int64_t)st->window_s - age);
+              if (retry < 1) retry = 1;
+              pthread_mutex_unlock(&st->mtx);
+              return retry;
+          }
+          pthread_mutex_unlock(&st->mtx);
+          return 0;
+      }
+      idx = (idx + 1) % st->capacity;
+  }
+  /* Table full -- fail-open (allow). */
+  pthread_mutex_unlock(&st->mtx);
+  return 0;
+  ```)
+;;; httpd-mw-ratelimit-emit-429 -- internal: write the 429 response.
+
+(defn httpd-mw-ratelimit-emit-429 [conn :ptr<void> retry-s :int] :nil
+  ```c
+  if (!conn) return;
+  httpd_resp_status_((void *)conn, 429);
+  httpd_resp_body_((void *)conn, "Too Many Requests");
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%lld", (long long)retry_s);
+  httpd_resp_header_((void *)conn, "Retry-After", buf);
+  ```)
+;;; mw-rate-limit -- sliding-window IP-based rate limiter middleware.
+;;;
+;;; Each mw-rate-limit instance allocates its own counter table. When the
+;;; same client IP exceeds `requests` requests within `window-s` seconds
+;;; the middleware responds with `429 Too Many Requests` plus a
+;;; `Retry-After: <seconds>` header without invoking `next`.
+;;;
+;;; Multiple mw-rate-limit instances get independent counters; share by
+;;; reusing the same wrapped closure across compositions.
+;;;
+;;; Parameters:
+;;;   opts -- RateLimitOpts
+;;;   next -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
+;;;   compose-middleware.
+;;;
+;;; Example:
+;;;   (let [composed (mw-rate-limit (make-struct RateLimitOpts 60 60) base)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (MW2)
+
+(defn mw-rate-limit [opts :RateLimitOpts next :int] :ptr<void>
+  (let [_st (httpd-mw-ratelimit-new
+              (.requests opts)
+              (.window-s opts))
+        _n  next]
+    (fn [c :ptr<void>] :nil
+      (let [ip    (httpd-req-remote-ip c)
+            retry (httpd-mw-ratelimit-check _st ip)]
+        (if (> retry 0)
+          (httpd-mw-ratelimit-emit-429 c retry)
+          (httpd-call _n c))))))
+;; =============================================================================
+;; MW2: mw-static -- serve files from a root directory.
+;; =============================================================================
+;;
+;; Defers to `next` first; only serves a file when next returned 404. The
+;; file path is the request path joined onto root-dir; `..` segments are
+;; rejected to prevent traversal out of root-dir. Content-Type comes from
+;; the extension (small built-in table). ETag is `"<size>-<mtime>"`; a
+;; matching `If-None-Match` produces 304 without resending the body.
+;;
+;; Files are read fully into memory; this is not suitable for very large
+;; files (use a streaming backend for that).
+;;; httpd-mw-static-mime -- internal: map an extension to a Content-Type.
+
+(defn httpd-mw-static-mime [path :cstr] :cstr
+  ```c
+  if (!path) return "application/octet-stream";
+  const char *dot = strrchr(path, '.');
+  if (!dot || !dot[1]) return "application/octet-stream";
+  const char *ext = dot + 1;
+  if (strcasecmp(ext, "html") == 0 || strcasecmp(ext, "htm") == 0) return "text/html; charset=utf-8";
+  if (strcasecmp(ext, "css") == 0)  return "text/css; charset=utf-8";
+  if (strcasecmp(ext, "js")  == 0)  return "application/javascript; charset=utf-8";
+  if (strcasecmp(ext, "json")== 0)  return "application/json";
+  if (strcasecmp(ext, "txt") == 0)  return "text/plain; charset=utf-8";
+  if (strcasecmp(ext, "png") == 0)  return "image/png";
+  if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0) return "image/jpeg";
+  if (strcasecmp(ext, "gif") == 0)  return "image/gif";
+  if (strcasecmp(ext, "svg") == 0)  return "image/svg+xml";
+  if (strcasecmp(ext, "ico") == 0)  return "image/x-icon";
+  if (strcasecmp(ext, "wasm")== 0)  return "application/wasm";
+  return "application/octet-stream";
+  ```)
+;;; httpd-mw-static-try -- internal: attempt to serve `path` from `root`
+;;; relative to the request `req-path`. Returns 1 on success (response
+;;; written), 0 if the file is not found / forbidden.
+
+(defn httpd-mw-static-try [conn :ptr<void> root :cstr] :int
+  ```c
+  #include <sys/stat.h>
+  #include <fcntl.h>
+  #include <unistd.h>
+  typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !root || !*root) return 0;
+  HttpdConn *c = (HttpdConn *)conn;
+  const char *rp = c->path;
+  if (!rp || !*rp) return 0;
+  if (strstr(rp, "..")) return 0;          /* path-traversal guard */
+  /* Build "<root>/<reqpath>" with at most one slash. */
+  char full[2048];
+  size_t rl = strlen(root);
+  if (rl >= sizeof(full) - 2) return 0;
+  memcpy(full, root, rl);
+  size_t off = rl;
+  if (off > 0 && full[off-1] == '/' && rp[0] == '/') {
+      /* Skip one of the slashes */
+      size_t pl = strlen(rp + 1);
+      if (off + pl + 1 >= sizeof(full)) return 0;
+      memcpy(full + off, rp + 1, pl);
+      off += pl;
+  } else if (off == 0 || full[off-1] == '/' || rp[0] == '/') {
+      size_t pl = strlen(rp);
+      if (off + pl + 1 >= sizeof(full)) return 0;
+      memcpy(full + off, rp, pl);
+      off += pl;
+  } else {
+      size_t pl = strlen(rp);
+      if (off + pl + 2 >= sizeof(full)) return 0;
+      full[off++] = '/';
+      memcpy(full + off, rp, pl);
+      off += pl;
+  }
+  full[off] = '\0';
+  struct stat sb;
+  if (stat(full, &sb) != 0)        return 0;
+  if (!S_ISREG(sb.st_mode))        return 0;
+  /* ETag = "<size>-<mtime>" */
+  char etag[64];
+  snprintf(etag, sizeof(etag), "\"%llx-%llx\"",
+           (unsigned long long)sb.st_size,
+           (unsigned long long)sb.st_mtime);
+  /* Conditional request: If-None-Match. */
+  const char *inm = httpd_req_header((void *)conn, "If-None-Match");
+  if (inm && *inm && strcmp(inm, etag) == 0) {
+      httpd_resp_status_((void *)conn, 304);
+      httpd_resp_body_((void *)conn, "");
+      httpd_resp_header_((void *)conn, "ETag", etag);
+      return 1;
+  }
+  /* Read the file into a heap buffer. */
+  int ffd = open(full, O_RDONLY);
+  if (ffd < 0) return 0;
+  size_t sz = (size_t)sb.st_size;
+  char  *buf = (char *)malloc(sz + 1);
+  if (!buf) { close(ffd); return 0; }
+  size_t got = 0;
+  while (got < sz) {
+      ssize_t r = read(ffd, buf + got, sz - got);
+      if (r <= 0) break;
+      got += (size_t)r;
+  }
+  close(ffd);
+  if (got != sz) { free(buf); return 0; }
+  buf[got] = '\0';
+  /* Hand the buffer to httpd_resp_body_ which strdups its arg; free ours. */
+  httpd_resp_status_((void *)conn, 200);
+  /* httpd_resp_body_ uses strlen so binary files with embedded NULs are
+   * truncated. The mw-static API ships as a "small static files" surface;
+   * binary safety is a future enhancement. */
+  httpd_resp_body_((void *)conn, buf);
+  free(buf);
+  httpd_resp_header_((void *)conn, "Content-Type", httpd_mw_static_mime(c->path));
+  httpd_resp_header_((void *)conn, "ETag", etag);
+  return 1;
+  ```)
+;;; mw-static -- serve files from a root directory when next returns 404.
+;;;
+;;; Composes after a router: `next` is consulted first; only when `next`
+;;; sets the response status to 404 (the default-handler signal that no
+;;; route matched) does mw-static attempt to serve a file. The request
+;;; path is joined onto `root-dir` and `..` segments are rejected as a
+;;; path-traversal guard. The `Content-Type` is inferred from the file
+;;; extension; an ETag of `"<size>-<mtime>"` is emitted and honoured
+;;; (`If-None-Match` matching returns 304 without resending the body).
+;;;
+;;; Parameters:
+;;;   root-dir -- filesystem path to serve files from
+;;;   next     -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>).
+;;;
+;;; Example:
+;;;   (let [composed (mw-static "./public" router-handler)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (MW2)
+
+;;; httpd-mw-static-fallback -- internal: when the response status is 404,
+;;; try to serve a file from root; otherwise no-op. Always returns nil.
+
+(defn httpd-mw-static-fallback [conn :ptr<void> root :cstr] :nil
+  ```c
+  if (!conn) return;
+  if (httpd_resp_status_get((void *)conn) != 404) return;
+  (void)httpd_mw_static_try((void *)conn, root);
+  ```)
+
+(defn mw-static [root-dir :cstr next :int] :ptr<void>
+  (let [_root root-dir
+        _n    next]
+    (fn [c :ptr<void>] :nil
+      (httpd-call _n c)
+      (httpd-mw-static-fallback c _root))))
