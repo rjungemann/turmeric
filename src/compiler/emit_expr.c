@@ -1774,8 +1774,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (fn_binding->type.kind == TY_PTR_VOID) {
                 char *fn_ptr = name_for_binding(ctx, fn_binding);
                 uint32_t n = e->as.call_.n_args;
-                if (n == 0) {
-                    /* Original 0-arg path: treat fn_ptr as a function pointer directly */
+                if (n == 0 && !fn_binding->is_fat) {
+                    /* Raw :ptr<void> callback (NOT a fat sink): treat fn_ptr as a
+                     * bare function pointer and call it directly.  CRU B-2: a
+                     * *fat* :ptr<void> sink (is_fat -- a ^fat param or a closure
+                     * param) instead falls through to the fat-dispatch branch
+                     * below, which reads slot 0 of the box.  This is_fat gate is
+                     * the disambiguator the nullary :ptr<void> direct call lacked:
+                     * a captureless bare fn through a plain :ptr<void> stays thin
+                     * (the test-runner-callback case), while a closure/^fat sink
+                     * dispatches fat -- both correct at n==0. */
                     Buf out; buf_init(&out);
                     buf_printf(&out, "((%s (*)(void))%s)()",
                                type_c_name(e->type), fn_ptr);

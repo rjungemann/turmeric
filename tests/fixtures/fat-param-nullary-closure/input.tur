@@ -1,0 +1,37 @@
+;; CRU B-2: a ^fat closure parameter must be directly callable with ZERO
+;; arguments -- for both a captureless top-level fn (auto-shimmed into a fat box
+;; at the call site) and a capturing closure value (already a fat box).  Before
+;; the fix, a nullary call through a ^fat/:ptr<void> sink took the thin path --
+;; ((R (*)(void))box)() -- treating the fat box's address as code and jumping to
+;; garbage (segfault).  The n==0 path now honors is_fat: a fat sink reads slot 0
+;; of the box, while a raw :ptr<void> callback still thin-calls.
+;;
+;; The :(fn [] :T) annotation on the ^fat param carries the RESULT type, so a
+;; non-int (:float) nullary result is read through the correctly-typed thunk
+;; (tur_thunk_double_t) rather than an int64 thunk -- register-class-distinct.
+
+(defn run0 [^fat f :(fn [] #{} :int)] :int
+  (f))
+
+(defn run0f [^fat f :(fn [] #{} :float)] :float
+  (f))
+
+(defn froundx [x :float] :int
+  ```c
+  return (int64_t)(x * 10.0 + 0.5);
+  ```)
+
+(defn t-pass [] :int 1)
+(defn t-zero [] :int 0)
+
+(defn main [] :int
+  (println (run0 t-pass))                          ;; 1   captureless, auto-boxed
+  (println (run0 t-zero))                          ;; 0   captureless
+  (let [n 42
+        cap (fn [] :int n)]
+    (println (run0 cap)))                          ;; 42  capturing closure value
+  (let [base 1.5
+        capf (fn [] :float (+ base 2.0))]
+    (println (froundx (run0f capf))))              ;; 35  capturing, float result
+  (println (froundx (run0f (fn [] :float 9.9))))   ;; 99  captureless, float result
+  0)

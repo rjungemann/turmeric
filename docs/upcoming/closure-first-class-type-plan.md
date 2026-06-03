@@ -106,17 +106,37 @@ carrier) so the pervasive existing stdlib that still types closures as
 `:ptr<void>` keeps compiling unchanged. This is the load-bearing step; gate it
 hard on the full suite.
 
-### B-2 -- closure-typed parameters without `^fat`
+### B-2 -- nullary fat dispatch + the typed closure-param spelling  *(DONE)*
 
-Make a parameter written `:(fn [...] :T)` default to **boxed** (a first-class
-closure), so `^fat` is no longer required to fat-dispatch + auto-box. A bare
-function argument auto-shims (`EX_FN_TO_FAT`); a closure value passes through.
-Audit every existing `:(fn ...)` parameter in stdlib (currently thin-call,
-captureless-only) -- each becomes a closure param. Provide an explicit
-**raw C-callback** spelling (`:cfn<...>` or keep `:ptr<void>` + an `extern-c`
-boundary cast) for the `contract.tur` handler so it stays bare. `^fat` becomes a
-deprecated alias for "this `:(fn ...)` param is boxed" (already the default),
-kept for source compat.
+**Load-bearing fix (shipped).** A direct call through a fat sink (an `is_fat`
+parameter -- `^fat`, with or without a `:(fn ...)` annotation) now dispatches
+through the fat protocol (slot 0 of the box) for **all** arities, including
+`n == 0`. The `n == 0` `:ptr<void>` path is gated on `is_fat`: a fat sink reads
+slot 0, while a *raw* `:ptr<void>` callback still thin-calls. This is the
+disambiguator the nullary `:ptr<void>` direct call lacked -- it is the correct
+realization of the held "Phase 2," fixing both halves of report
+[ptr-void-direct-call-representation-split.md](../reported/ptr-void-direct-call-representation-split.md)
+at `n == 0` (captureless-bare-fn-stays-thin AND closure/`^fat`-dispatches-fat)
+without the unconditional-fat regression that held Phase 2. The typed
+`^fat f :(fn [] :T)` spelling carries the **result type**, so a non-int (`:float`)
+nullary result is read through the correctly-typed thunk (`tur_thunk_double_t`),
+sidestepping the bare-`^fat` result-type-blindness of
+[bare-fat-param-non-int-result-miscompiles.md](../reported/bare-fat-param-non-int-result-miscompiles.md).
+Regression fixture: `tests/fixtures/fat-param-nullary-closure`.
+
+**Proven dead end (do NOT retry): blanket `:(fn ...)` ⇒ boxed.** Making *every*
+parameter written `:(fn [...] :T)` implicitly fat is **not viable**: an
+effect-typed higher-order parameter `:(fn [...] #{E} :T)` is *also* a `TY_FN`
+and cannot be distinguished from a closure sink by type alone. The blanket
+pre-pass boxed those effect params, breaking effect-row subtyping and
+suppressing expected effect-mismatch errors -- 106 fixtures failed (effect
+`build failed` / `errors/effect-*` no-longer-erroring), plus ~194 codegen
+snapshots churned (far more `:(fn ...)` params exist than a stdlib grep
+suggests). The first-class closure *parameter* spelling therefore stays the
+explicit, opt-in `^fat f :(fn [...] :T)` (typed, carries the result type), not a
+silent default flip. A dedicated raw-C-callback spelling and any wholesale
+migration off `:ptr<void>` are deferred to B-4 behind an explicit marker, never
+an implicit reinterpretation of `:(fn ...)`.
 
 ### B-3 -- migrate the Phase 1 holdouts + synthesis dispatcher
 
