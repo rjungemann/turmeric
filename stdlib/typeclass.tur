@@ -87,6 +87,20 @@
 (defclass Show [a] (show [x] :cstr))
 ;; Instances for primitive types
 ;;; Show [int] -- Show instance for int.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [int]
+  (show [x] :cstr "<int>"))
+=======
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    // TODO: use scratch arena once arena infrastructure lands
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [int] (show [x] :cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -94,53 +108,168 @@
     ```))
 ;;; Show [cstr] -- Show instance for cstr (identity).
 
+<<<<<<< Updated upstream
 (definstance Show [cstr] (show [x] x))
 ;;; Show [bool] -- Show instance for bool.
 
 (definstance Show [bool] (show [x] :cstr (if x "true" "false")))
+||||||| Stash base
+;; Phase N4: Show instances for new numeric types (placeholder, same as int)
+=======
+;;; Show [bool] -- Show instance for bool.
+(definstance Show [bool]
+  (show [x] :cstr
+    (if x "true" "false")))
+
+;; Phase N4: Show instances for new numeric types
+>>>>>>> Stashed changes
 ;;; Show [int8] -- Show instance for int8.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [int8]
+  (show [x] :cstr "<int8>"))
+=======
+(definstance Show [int8]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%d", (int)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [int8] (show [x] :cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int16] -- Show instance for int16.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [int16]
+  (show [x] :cstr "<int16>"))
+=======
+(definstance Show [int16]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%d", (int)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [int16] (show [x] :cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int32] -- Show instance for int32.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [int32]
+  (show [x] :cstr "<int32>"))
+=======
+(definstance Show [int32]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%d", (int)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [int32] (show [x] :cstr ```c char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%d", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint8] -- Show instance for uint8.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [uint8]
+  (show [x] :cstr "<uint8>"))
+=======
+(definstance Show [uint8]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%u", (unsigned)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [uint8] (show [x] :cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint16] -- Show instance for uint16.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [uint16]
+  (show [x] :cstr "<uint16>"))
+=======
+(definstance Show [uint16]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%u", (unsigned)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [uint16] (show [x] :cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint32] -- Show instance for uint32.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [uint32]
+  (show [x] :cstr "<uint32>"))
+=======
+(definstance Show [uint32]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%u", (unsigned)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [uint32] (show [x] :cstr ```c char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%u", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint64] -- Show instance for uint64.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [uint64]
+  (show [x] :cstr "<uint64>"))
+=======
+(definstance Show [uint64]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%llu", (unsigned long long)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [uint64] (show [x] :cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%llu", (unsigned long long)x);
     return (const char *)buf;
     ```))
 ;;; Show [float32] -- Show instance for float32.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Show [float32]
+  (show [x] :cstr "<float32>"))
+=======
+(definstance Show [float32]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", (double)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Show [float32] (show [x] :cstr ```c char *buf = (char *)malloc(32);
     snprintf(buf, 32, "%g", (double)x);
@@ -434,12 +563,40 @@
 (defclass Error [a] (error-message [x] :cstr) (error-cause [x] :ptr<void>))
 ;; Instances for primitive types (Display/Debug)
 ;;; Display [int] -- Display instance for int.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Display [int]
+  (display [x] :cstr "<int>"))
+=======
+(definstance Display [int]
+  (display [x] :cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
+<<<<<<< Updated upstream
 (definstance Display [int] (display [x] :cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 ;;; Debug [int] -- Debug instance for int.
+||||||| Stash base
+;;; Debug [int] -- Debug instance for int.
+(definstance Debug [int]
+  (debug [x] :cstr "<int>"))
+=======
+;;; Debug [int] -- Debug instance for int: annotated as "int(v)".
+(definstance Debug [int]
+  (debug [x] :cstr
+    ```c
+    char *buf = (char *)malloc(40);
+    snprintf(buf, 40, "int(%lld)", (long long)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Debug [int] (debug [x] :cstr ```c char *buf = (char *)malloc(32);
     snprintf(buf, 32, "int(%lld)", (long long)x);
@@ -448,6 +605,37 @@
 ;;; Display [ptr<void>] -- Display instance for result<T,E> represented as ptr<void>.
 ;; Phase R1: Display, Debug, Error instances for result<T, E>
 ;; In v1, result is represented as ptr<void>
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Display [ptr<void>]
+  (display [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL) return "err";
+    if (res->is_ok) {
+        /* For simplicity, just return a placeholder - proper formatting requires type info */
+        return "ok";
+    } else {
+        return "err";
+    }
+    ```))
+=======
+(definstance Display [ptr<void>]
+  (display [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void *)x;
+    if (res == NULL) return "err";
+    if (res->is_ok) {
+        char *buf = (char *)malloc(48);
+        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
+        return (int64_t)(intptr_t)buf;
+    } else {
+        char *buf = (char *)malloc(48);
+        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
+        return (int64_t)(intptr_t)buf;
+    }
+    ```))
+>>>>>>> Stashed changes
 
 
 (definstance Display [ptr<void>] (display [x] :cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
@@ -461,6 +649,36 @@
     return (const char *)buf;
     ```))
 ;;; Debug [ptr<void>] -- Debug instance for result<T,E> represented as ptr<void>.
+<<<<<<< Updated upstream
+||||||| Stash base
+(definstance Debug [ptr<void>]
+  (debug [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL) return "err";
+    if (res->is_ok) {
+        return "ok(...)";
+    } else {
+        return "err(...)";
+    }
+    ```))
+=======
+(definstance Debug [ptr<void>]
+  (debug [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void *)x;
+    if (res == NULL) return "Result::err";
+    if (res->is_ok) {
+        char *buf = (char *)malloc(64);
+        snprintf(buf, 64, "Result::ok(%lld)", (long long)res->ok_val);
+        return (int64_t)(intptr_t)buf;
+    } else {
+        char *buf = (char *)malloc(64);
+        snprintf(buf, 64, "Result::err(%lld)", (long long)res->err_val);
+        return (int64_t)(intptr_t)buf;
+    }
+    ```))
+>>>>>>> Stashed changes
 
 (definstance Debug [ptr<void>] (debug [x] :cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "Result::err";

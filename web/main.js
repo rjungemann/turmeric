@@ -27,6 +27,7 @@ let executionQueue = [];
 let isExecuting = false;
 let replHistory = [];
 let replHistoryIndex = -1;
+let currentLangMode = 'turmeric'; // tracks active #lang mode
 
 // ============================================================================
 // Configuration
@@ -363,7 +364,47 @@ async function initWasm() {
 }
 
 /**
+<<<<<<< Updated upstream
  * Evaluate Turmeric code via the eval Worker.
+||||||| Stash base
+ * Evaluate Turmeric code using WASM
+=======
+ * Strip a leading #lang directive from code and return the detected language
+ * name plus the remaining source.  The #lang line must be the first non-
+ * blank line (leading spaces/tabs are allowed but not newlines).
+ *
+ * Returns { lang: string|null, body: string }
+ *   lang — the language name (e.g. "sweet-exp") or null if no directive found
+ *   body — source text with the #lang line removed
+ */
+function parseLangDirective(code) {
+    // Allow leading horizontal whitespace before #lang
+    const m = code.match(/^[ \t]*#lang[ \t]+(\S+)([ \t]*\r?\n?|$)/);
+    if (!m) return { lang: null, body: code };
+    return { lang: m[1], body: code.slice(m[0].length) };
+}
+
+/**
+ * Tell the WASM runtime which reader mode to use.
+ * Calls turi_wasm_set_lang if available (new WASM builds); silently ignores
+ * the call on older builds that don't export the function.
+ */
+function wasmSetLang(lang) {
+    try {
+        if (typeof turiModule._turi_wasm_set_lang !== 'function') return;
+        const len = turiModule.lengthBytesUTF8(lang) + 1;
+        const ptr = turiModule._malloc(len);
+        turiModule.stringToUTF8(lang, ptr, len);
+        turiModule._turi_wasm_set_lang(ptr);
+        turiModule._free(ptr);
+    } catch (_) {
+        // turi_wasm_set_lang not exported in this WASM build — no-op
+    }
+}
+
+/**
+ * Evaluate Turmeric code using WASM
+>>>>>>> Stashed changes
  */
 function evaluateCode(code) {
     return new Promise((resolve, reject) => {
@@ -386,6 +427,40 @@ function processQueue() {
     isExecuting = true;
 
     const { code, resolve, reject } = executionQueue.shift();
+<<<<<<< Updated upstream
+||||||| Stash base
+    
+    try {
+        if (wasmState !== WASM_STATE.READY) {
+            throw new Error('WASM not ready');
+        }
+        
+        // Write input string into WASM memory using the exported helper
+        const inputLen = turiModule.lengthBytesUTF8(code) + 1;
+        const inputPtr = turiModule._malloc(inputLen);
+        turiModule.stringToUTF8(code, inputPtr, inputLen);
+=======
+    
+    try {
+        if (wasmState !== WASM_STATE.READY) {
+            throw new Error('WASM not ready');
+        }
+
+        // Strip #lang directive before it reaches the WASM reader.
+        // The reader doesn't handle '#' as a line-comment character, so a
+        // bare #lang line causes a parse error.  We strip it here and
+        // forward the language name to the WASM runtime separately.
+        const { lang, body: evalCode } = parseLangDirective(code);
+        if (lang !== null) {
+            currentLangMode = lang;
+            wasmSetLang(lang);
+        }
+
+        // Write input string into WASM memory using the exported helper
+        const inputLen = turiModule.lengthBytesUTF8(evalCode) + 1;
+        const inputPtr = turiModule._malloc(inputLen);
+        turiModule.stringToUTF8(evalCode, inputPtr, inputLen);
+>>>>>>> Stashed changes
 
     if (wasmState !== WASM_STATE.READY) {
         reject(new Error('WASM not ready'));
@@ -404,6 +479,7 @@ function processQueue() {
  */
 function resetWasm() {
     if (wasmState !== WASM_STATE.READY) return;
+<<<<<<< Updated upstream
 
     const id = ++evalCallId;
     pendingCalls.set(id, {
@@ -413,6 +489,28 @@ function resetWasm() {
         isEval: false,
     });
     evalWorker.postMessage({ type: 'reset', id });
+||||||| Stash base
+    
+    try {
+        turiModule._turi_wasm_reset();
+        clearConsole();
+        showStatus('Environment reset', 'success');
+    } catch (error) {
+        console.error('Reset error:', error);
+        showStatus('Failed to reset', 'error');
+    }
+=======
+    
+    try {
+        turiModule._turi_wasm_reset();
+        currentLangMode = 'turmeric'; // turi_env_new() always starts in default mode
+        clearConsole();
+        showStatus('Environment reset', 'success');
+    } catch (error) {
+        console.error('Reset error:', error);
+        showStatus('Failed to reset', 'error');
+    }
+>>>>>>> Stashed changes
 }
 
 // ============================================================================

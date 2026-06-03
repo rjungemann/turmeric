@@ -77,8 +77,419 @@
 ;;;
 ;;; Since: Phase TC1
 
+<<<<<<< Updated upstream
 (defn tnil? [l :int] :bool (= l 0))
 ;;; thead -- return the head element of a non-empty typed list.
+||||||| Stash base
+;; Phase B1: Clone instance for Cons
+;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
+;; Shallow-copies a single Cons cell into a new heap allocation (does NOT recursively
+;; clone the tail -- use clone-list for a deep list clone).
+;; x has type Cons (struct value) inside the generated C method.
+;;; Typeclass instance for Cons -- shallow Clone for a single Cons cell.
+(definstance Clone [Cons]
+  (clone [x] :int
+    ```c
+    struct { int64_t value; int64_t next; } *dst = malloc(sizeof(Cons));
+    dst->value = x.value;
+    dst->next  = x.next;
+    return (int64_t)(intptr_t)dst;
+    ```))
+
+;;; SINCE: Phase HKT §6 — Stdlib HKT migration
+;; HKT typeclass instances for singly-linked list (Cons/nil).
+
+;; Functor instance for list.
+;; fmap :: (a -> b) -> list a -> list b
+;; Maps fn over every element, building a new list.
+;;; __functor_list_fmap -- fmap implementation for the list Functor instance.
+(defn __functor_list_fmap [container fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)container;
+  if (!cell) return 0; /* nil -> nil */
+  /* Build result list in reverse, then reverse it */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+      n->value = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      n->next = (int64_t)(intptr_t)rev;
+      rev = n;
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+;;; Typeclass instance for list -- Functor: fmap over every element.
+(definstance Functor [list]
+  (fmap [container fn] (__functor_list_fmap container fn)))
+
+;; Foldable instance for list.
+;; foldl :: (b -> a -> b) -> b -> list a -> b
+;; foldr :: (a -> b -> b) -> b -> list a -> b
+;;; __foldable_list_foldl -- foldl implementation for the list Foldable instance.
+(defn __foldable_list_foldl [ta init fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  int64_t acc = init;
+  while (cell) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, cell->value);
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  return acc;
+  ```)
+
+;;; __foldable_list_foldr -- foldr implementation for the list Foldable instance.
+(defn __foldable_list_foldr [ta init fn] :int
+  ```c
+  /* Count elements first, then process in reverse order via stack */
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  /* Count */
+  size_t count = 0;
+  struct { int64_t value; int64_t next; } *tmp = cell;
+  while (tmp) { count++; tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next; }
+  if (count == 0) return init;
+  /* Collect values into stack array */
+  int64_t *vals = malloc(sizeof(int64_t) * count);
+  tmp = cell;
+  for (size_t i = 0; i < count; i++) {
+      vals[i] = tmp->value;
+      tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next;
+  }
+  /* Fold from right */
+  int64_t acc = init;
+  for (size_t i = count; i-- > 0; ) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(vals[i], acc);
+  }
+  free(vals);
+  return acc;
+  ```)
+
+;;; Typeclass instance for list -- Foldable: foldl and foldr over all elements.
+(definstance Foldable [list]
+  (foldl [ta init fn] (__foldable_list_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_list_foldr ta init fn)))
+
+;; Applicative instance for list.
+;;   pure x = cons(x, nil)
+;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, ...]
+;;; __applicative_list_pure -- pure implementation for the list Applicative instance.
+(defn __applicative_list_pure [x] :int
+  (cons x (nil-value)))
+
+;;; __applicative_list_ap -- ap implementation for the list Applicative instance.
+(defn __applicative_list_ap [ff fa] :int
+  ```c
+  struct { int64_t value; int64_t next; } *fs =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ff;
+  struct { int64_t value; int64_t next; } *as =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)fa;
+  if (!fs || !as) return 0;
+  /* Build result in reverse, then reverse */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  struct { int64_t value; int64_t next; } *fc = fs;
+  while (fc) {
+      struct { int64_t value; int64_t next; } *ac = as;
+      while (ac) {
+          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          n->value = ((int64_t(*)(int64_t))(intptr_t)fc->value)(ac->value);
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          ac = (struct { int64_t value; int64_t next; } *)(intptr_t)ac->next;
+      }
+      fc = (struct { int64_t value; int64_t next; } *)(intptr_t)fc->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+;;; Typeclass instance for list -- Applicative: pure and ap.
+(definstance Applicative [list]
+  (pure [x] (__applicative_list_pure x))
+  (ap [ff fa] (__applicative_list_ap ff fa)))
+
+;; Monad instance for list.
+;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
+;;; __monad_list_bind -- bind implementation for the list Monad instance.
+(defn __monad_list_bind [ma fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
+  if (!cell) return 0;
+  /* For each element, apply fn (returns a list), then concat all results */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      int64_t sub_list = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      struct { int64_t value; int64_t next; } *sub =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
+      while (sub) {
+          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          n->value = sub->value;
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
+      }
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+;;; Typeclass instance for list -- Monad: bind (concat-map).
+(definstance Monad [list]
+  (bind [ma fn] (__monad_list_bind ma fn)))
+
+;; Phase E1: list-eq? -- compare two singly-linked lists element-wise using a comparator fn.
+;; cmp-fn must be a fn [a :int b :int] :bool
+;;; list-eq? -- compare two lists element-wise using a caller-supplied comparator.
+=======
+;;; Show [Cons] -- show a non-empty list as "[v1, v2, ...]".
+;; x is the first Cons cell (struct value). Follows next pointers to build
+;; the full list string. Values are formatted as integers (%lld).
+;; TODO: use scratch arena once arena infrastructure lands.
+(definstance Show [Cons]
+  (show [x] :cstr
+    ```c
+    typedef struct { int64_t value; int64_t next; } Cons_;
+    // Count elements
+    size_t count = 1;
+    Cons_ *cur = (Cons_ *)(intptr_t)x.next;
+    while (cur) { count++; cur = (Cons_ *)(intptr_t)cur->next; }
+    // Allocate: "[" + count*(21+2) + "]" + NUL
+    size_t bufsize = 2 + count * 24 + 2;
+    char *buf = (char *)malloc(bufsize);
+    size_t pos = 0;
+    buf[pos++] = '[';
+    int bytes = snprintf(buf + pos, bufsize - pos, "%lld", (long long)x.value);
+    pos += (size_t)bytes;
+    cur = (Cons_ *)(intptr_t)x.next;
+    while (cur && pos + 26 < bufsize) {
+        buf[pos++] = ','; buf[pos++] = ' ';
+        bytes = snprintf(buf + pos, bufsize - pos, "%lld", (long long)cur->value);
+        pos += (size_t)bytes;
+        cur = (Cons_ *)(intptr_t)cur->next;
+    }
+    buf[pos++] = ']';
+    buf[pos] = '\0';
+    return (const char *)(intptr_t)buf;
+    ```))
+
+;; Phase B1: Clone instance for Cons
+;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
+;; Shallow-copies a single Cons cell into a new heap allocation (does NOT recursively
+;; clone the tail -- use clone-list for a deep list clone).
+;; x has type Cons (struct value) inside the generated C method.
+;;; Typeclass instance for Cons -- shallow Clone for a single Cons cell.
+(definstance Clone [Cons]
+  (clone [x] :int
+    ```c
+    struct { int64_t value; int64_t next; } *dst = malloc(sizeof(Cons));
+    dst->value = x.value;
+    dst->next  = x.next;
+    return (int64_t)(intptr_t)dst;
+    ```))
+
+;;; SINCE: Phase HKT §6 — Stdlib HKT migration
+;; HKT typeclass instances for singly-linked list (Cons/nil).
+
+;; Functor instance for list.
+;; fmap :: (a -> b) -> list a -> list b
+;; Maps fn over every element, building a new list.
+;;; __functor_list_fmap -- fmap implementation for the list Functor instance.
+(defn __functor_list_fmap [container fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)container;
+  if (!cell) return 0; /* nil -> nil */
+  /* Build result list in reverse, then reverse it */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+      n->value = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      n->next = (int64_t)(intptr_t)rev;
+      rev = n;
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+;;; Typeclass instance for list -- Functor: fmap over every element.
+(definstance Functor [list]
+  (fmap [container fn] (__functor_list_fmap container fn)))
+
+;; Foldable instance for list.
+;; foldl :: (b -> a -> b) -> b -> list a -> b
+;; foldr :: (a -> b -> b) -> b -> list a -> b
+;;; __foldable_list_foldl -- foldl implementation for the list Foldable instance.
+(defn __foldable_list_foldl [ta init fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  int64_t acc = init;
+  while (cell) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, cell->value);
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  return acc;
+  ```)
+
+;;; __foldable_list_foldr -- foldr implementation for the list Foldable instance.
+(defn __foldable_list_foldr [ta init fn] :int
+  ```c
+  /* Count elements first, then process in reverse order via stack */
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  /* Count */
+  size_t count = 0;
+  struct { int64_t value; int64_t next; } *tmp = cell;
+  while (tmp) { count++; tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next; }
+  if (count == 0) return init;
+  /* Collect values into stack array */
+  int64_t *vals = malloc(sizeof(int64_t) * count);
+  tmp = cell;
+  for (size_t i = 0; i < count; i++) {
+      vals[i] = tmp->value;
+      tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next;
+  }
+  /* Fold from right */
+  int64_t acc = init;
+  for (size_t i = count; i-- > 0; ) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(vals[i], acc);
+  }
+  free(vals);
+  return acc;
+  ```)
+
+;;; Typeclass instance for list -- Foldable: foldl and foldr over all elements.
+(definstance Foldable [list]
+  (foldl [ta init fn] (__foldable_list_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_list_foldr ta init fn)))
+
+;; Applicative instance for list.
+;;   pure x = cons(x, nil)
+;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, ...]
+;;; __applicative_list_pure -- pure implementation for the list Applicative instance.
+(defn __applicative_list_pure [x] :int
+  (cons x (nil-value)))
+
+;;; __applicative_list_ap -- ap implementation for the list Applicative instance.
+(defn __applicative_list_ap [ff fa] :int
+  ```c
+  struct { int64_t value; int64_t next; } *fs =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ff;
+  struct { int64_t value; int64_t next; } *as =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)fa;
+  if (!fs || !as) return 0;
+  /* Build result in reverse, then reverse */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  struct { int64_t value; int64_t next; } *fc = fs;
+  while (fc) {
+      struct { int64_t value; int64_t next; } *ac = as;
+      while (ac) {
+          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          n->value = ((int64_t(*)(int64_t))(intptr_t)fc->value)(ac->value);
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          ac = (struct { int64_t value; int64_t next; } *)(intptr_t)ac->next;
+      }
+      fc = (struct { int64_t value; int64_t next; } *)(intptr_t)fc->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+;;; Typeclass instance for list -- Applicative: pure and ap.
+(definstance Applicative [list]
+  (pure [x] (__applicative_list_pure x))
+  (ap [ff fa] (__applicative_list_ap ff fa)))
+
+;; Monad instance for list.
+;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
+;;; __monad_list_bind -- bind implementation for the list Monad instance.
+(defn __monad_list_bind [ma fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
+  if (!cell) return 0;
+  /* For each element, apply fn (returns a list), then concat all results */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      int64_t sub_list = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      struct { int64_t value; int64_t next; } *sub =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
+      while (sub) {
+          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          n->value = sub->value;
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
+      }
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+;;; Typeclass instance for list -- Monad: bind (concat-map).
+(definstance Monad [list]
+  (bind [ma fn] (__monad_list_bind ma fn)))
+
+;; Phase E1: list-eq? -- compare two singly-linked lists element-wise using a comparator fn.
+;; cmp-fn must be a fn [a :int b :int] :bool
+;;; list-eq? -- compare two lists element-wise using a caller-supplied comparator.
+>>>>>>> Stashed changes
 ;;;
 ;;; Parameters:
 ;;;   l -- Cons[A]

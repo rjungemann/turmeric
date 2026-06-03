@@ -92,6 +92,7 @@
 ;;;
 ;;; Since: Phase B1
 
+<<<<<<< Updated upstream
 (defn str-concat [a :cstr b :cstr] :cstr
   ```c const char *sa = (const char*)a;
   const char *sb = (const char*)b;
@@ -102,6 +103,38 @@
   out[la + lb] = '\0';
   return (int64_t)(intptr_t)out;
   ```)
+||||||| Stash base
+=======
+;;; str-concat -- concatenate two C strings into a new heap-allocated string.
+;;;
+;;; Parameters:
+;;;   a -- first :cstr
+;;;   b -- second :cstr
+;;;
+;;; Returns:
+;;;   A new malloc'd :cstr containing a followed by b. Caller is responsible
+;;;   for freeing. TODO: switch to scratch arena once arena infrastructure lands.
+;;;
+;;; Example:
+;;;   (str-concat "hello" " world")  ; => "hello world"
+;;;
+;;; Since: SI2
+(defn str-concat [a b] :cstr
+  ```c
+  const char *s1 = (const char *)(intptr_t)a;
+  const char *s2 = (const char *)(intptr_t)b;
+  if (!s1) s1 = "";
+  if (!s2) s2 = "";
+  size_t len1 = strlen(s1);
+  size_t len2 = strlen(s2);
+  char *result = (char *)malloc(len1 + len2 + 1);
+  memcpy(result, s1, len1);
+  memcpy(result + len1, s2, len2);
+  result[len1 + len2] = '\0';
+  return (const char *)(intptr_t)result;
+  ```)
+
+>>>>>>> Stashed changes
 ;;; Eq [str] -- eq? delegates to str-eq? for byte-level string equality.
 ;; Phase E1: Eq instance for str -- wires eq? to str-eq?
 

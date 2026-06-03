@@ -10,6 +10,7 @@
 ;; modules under the `tur/` namespace as implicitly imported, so the macros
 ;; below remain visible globally just like in pre-module code.
 (defmodule tur/macros
+<<<<<<< Updated upstream
   (export cond
     when
     unless
@@ -234,3 +235,872 @@
         (vec __p)
         :cstr
         (list derive-display-body__ TypeName ~@fields)))))
+||||||| Stash base
+  (export cond when unless must! must-msg! ignore! do-m for doc
+          assert! assert-msg! require! require-msg!
+          ensure! ensure-msg! invariant! invariant-msg!
+          curry)
+
+;;; cond -- variadic conditional branching via nested if chains.
+;;;
+;;; Parameters:
+;;;   & clauses -- alternating test/expression pairs, with optional :else at end
+;;;
+;;; Returns:
+;;;   The expression corresponding to the first truthy test, or the :else
+;;;   expression if present, or nil if no clause matches.
+;;;
+;;; Example:
+;;;   (cond (> x 0) :pos (< x 0) :neg :else :zero)  ; => :pos/:neg/:zero
+;;;
+;;; Since: Phase 7
+(defmacro cond [& clauses]
+  (if (empty? clauses)
+    nil
+    (if (= (first clauses) :else)
+      (second clauses)
+      (list if (first clauses) (second clauses)
+            (list cond ~@(rest (rest clauses)))))))
+
+;;; when -- evaluate body only if test is truthy.
+;;;
+;;; Parameters:
+;;;   test -- the condition to evaluate
+;;;   body -- expression to evaluate when test is truthy
+;;;
+;;; Returns:
+;;;   The value of body if test is truthy, otherwise nil.
+;;;
+;;; Example:
+;;;   (when (> x 0) (print "positive"))  ; => prints if x > 0
+;;;
+;;; Since: Phase 7
+(defmacro when [test body]
+  (if test (do body)))
+
+;;; unless -- evaluate body only if test is falsy.
+;;;
+;;; Parameters:
+;;;   test -- the condition to evaluate
+;;;   body -- expression to evaluate when test is falsy
+;;;
+;;; Returns:
+;;;   The value of body if test is falsy, otherwise nil.
+;;;
+;;; Example:
+;;;   (unless (= x 0) (/ 1 x))  ; => evaluates only when x is non-zero
+;;;
+;;; Since: Phase 7
+(defmacro unless [test body]
+  (if test nil (do body)))
+
+;;; must! -- unwrap an option or result value, panicking if absent.
+;;;
+;;; Parameters:
+;;;   expr -- an option or result expression to unwrap
+;;;
+;;; Returns:
+;;;   The unwrapped inner value.
+;;;
+;;; Example:
+;;;   (must! (option-some 42))  ; => 42
+;;;
+;;; Since: Phase R4
+(defmacro must! [expr]
+  (option-must expr))
+
+;;; must-msg! -- unwrap an option or result value with a custom panic message.
+;;;
+;;; Parameters:
+;;;   expr -- an option or result expression to unwrap
+;;;   msg  -- the message to panic with if the value is absent
+;;;
+;;; Returns:
+;;;   The unwrapped inner value.
+;;;
+;;; Example:
+;;;   (must-msg! (option-some 42) "expected a value")  ; => 42
+;;;
+;;; Since: Phase R4
+(defmacro must-msg! [expr msg]
+  (option-expect expr msg))
+
+;;; ignore! -- explicitly discard a result value.
+;;;
+;;; Parameters:
+;;;   expr -- the expression whose value should be discarded
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (ignore! (some-fn-with-result))  ; => nil
+;;;
+;;; Since: Phase R6
+(defmacro ignore! [expr]
+  (do expr nil))
+
+;;; do-m -- monadic do-notation using .bind dispatch.
+;;;
+;;; Parameters:
+;;;   & forms -- alternating variable/monadic-action pairs followed by a body;
+;;;              the last form is the body expression
+;;;
+;;; Returns:
+;;;   A nested .bind chain that threads variable bindings through monadic actions,
+;;;   ending with the body expression.
+;;;
+;;; Example:
+;;;   (do-m x (option-some 5) y (option-some 3) (option-some (+ x y)))
+;;;   ; => (.bind (option-some 5) (fn [x] (.bind (option-some 3) (fn [y] (option-some (+ x y))))))
+;;;
+;;; Since: Phase HKT H6
+(defmacro do-m [& forms]
+  (if (empty? forms)
+    nil
+    (if (empty? (rest forms))
+      (first forms)
+      (list .bind (second forms) (list fn `[~(first forms)] (list do-m ~@(rest (rest forms))))))))
+
+;;; for -- monadic comprehension with optional guards.
+;;;
+;;; Parameters:
+;;;   binding-vec -- flat vector of alternating var/collection pairs,
+;;;                  with optional :when guard clauses interspersed
+;;;   & body      -- the body expression(s) to lift into the monad
+;;;
+;;; Returns:
+;;;   A nested .bind/.pure chain that iterates over the collections,
+;;;   filters via :when guards, and lifts the body into the monad.
+;;;
+;;; Example:
+;;;   (for [x coll] (* x 2))
+;;;   ; => (.bind coll (fn [x] (.pure (* x 2))))
+;;;
+;;;   (for [x coll :when (> x 0) y other] (+ x y))
+;;;   ; => (.bind coll (fn [x] (if (> x 0) (.bind other (fn [y] (.pure (+ x y)))) (.empty x))))
+;;;
+;;; Since: Phase HKT H7
+(defmacro for [binding-vec & body]
+  (if (empty? binding-vec)
+    ;; No bindings: wrap body in pure
+    (list .pure (list do ~@body))
+    (let [first-b (first binding-vec)
+          rest-bv  (rest binding-vec)]
+      (if (= first-b :when)
+        ;; :when guard at the head of the binding vector
+        (let [pred (first rest-bv)
+              more (rest rest-bv)]
+          (if (empty? more)
+            (list if pred (list .pure (list do ~@body)) (list .empty 0))
+            (list if pred (list for (list ~@more) ~@body) (list .empty 0))))
+        ;; var/coll pair -- var is first-b, coll is next element
+        (let [var  first-b
+              coll (first rest-bv)
+              more (rest rest-bv)]
+          (if (empty? more)
+            ;; Last binding: .bind coll (fn [var] (.pure body))
+            (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
+            ;; More bindings remain -- check if next is :when
+            (let [next-first (first more)
+                  next-rest  (rest more)]
+              (if (= next-first :when)
+                ;; Inline :when -- use var as type witness for .empty dispatch
+                (let [pred  (first next-rest)
+                      after (rest next-rest)]
+                  (if (empty? after)
+                    (list .bind coll (list fn `[~var]
+                      (list if pred (list .pure (list do ~@body)) (list .empty var))))
+                    (list .bind coll (list fn `[~var]
+                      (list if pred (list for (list ~@after) ~@body) (list .empty var))))))
+                ;; More var/coll bindings remain
+                (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
+
+;;; Phase C1: Runtime contract macros
+;; contract-enabled?, tur-contract-check, and tur-contract-check-inv are
+;; defined in stdlib/contract.tur (tur/contract module), which is auto-loaded
+;; before this file. The macros below expand to calls to those helpers.
+
+;;; assert! -- unconditional sanity check, panics with "Assertion failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean expression to check
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (assert! (= x 1))  ; => panics if x != 1
+;;;
+;;; Since: Phase C1
+(defmacro assert! [condition]
+  (tur-contract-check condition "Assertion failed"))
+
+;;; assert-msg! -- unconditional sanity check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean expression to check
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (assert-msg! (= x 1) "x must be 1")  ; => panics with message if x != 1
+;;;
+;;; Since: Phase C1
+(defmacro assert-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;;; require! -- precondition check at function entry, panics with "Precondition failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean precondition to enforce
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (require! (> n 0))  ; => panics if n <= 0
+;;;
+;;; Since: Phase C1
+(defmacro require! [condition]
+  (tur-contract-check condition "Precondition failed"))
+
+;;; require-msg! -- precondition check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean precondition to enforce
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (require-msg! (> n 0) "n must be positive")  ; => panics with message if n <= 0
+;;;
+;;; Since: Phase C1
+(defmacro require-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;;; ensure! -- postcondition check, panics with "Postcondition failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean postcondition to enforce
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (ensure! (>= result 0))  ; => panics if result is negative
+;;;
+;;; Since: Phase C1
+(defmacro ensure! [condition]
+  (tur-contract-check condition "Postcondition failed"))
+
+;;; ensure-msg! -- postcondition check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean postcondition to enforce
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (ensure-msg! (>= result 0) "result must be non-negative")
+;;;
+;;; Since: Phase C1
+(defmacro ensure-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;;; invariant! -- check a structural invariant on a value, panics with "Invariant failed" if false.
+;;;
+;;; Parameters:
+;;;   obj       -- the value to check
+;;;   predicate -- a single-argument function that returns true if the invariant holds
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (invariant! my-list non-empty?)  ; => panics if my-list fails non-empty?
+;;;
+;;; Since: Phase C1
+(defmacro invariant! [obj predicate]
+  (tur-contract-check-inv obj predicate "Invariant failed"))
+
+;;; invariant-msg! -- check a structural invariant with custom panic message.
+;;;
+;;; Parameters:
+;;;   obj       -- the value to check
+;;;   predicate -- a single-argument function that returns true if the invariant holds
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (invariant-msg! my-list non-empty? "list must not be empty")
+;;;
+;;; Since: Phase C1
+(defmacro invariant-msg! [obj predicate msg]
+  (tur-contract-check-inv obj predicate msg))
+
+;;; curry -- convert a 2-argument function to its curried form.
+;;;
+;;; Parameters:
+;;;   f -- a 2-argument function
+;;;
+;;; Returns:
+;;;   A 1-argument function that, given its first argument, returns a
+;;;   1-argument function that applies f to both.
+;;;
+;;; Example:
+;;;   (defn add [a b] :int (+ a b))
+;;;   (let [add1 ((curry add) 1)]
+;;;     (add1 41))  ; => 42
+;;;
+;;; Since: CY3
+(defmacro curry [f]
+  `(fn [a] (fn [b] (~f a b))))
+
+;;; doc -- print documentation for a function, macro, or struct at the REPL.
+;;;
+;;; Parameters:
+;;;   name -- symbol whose documentation to display
+;;;
+;;; Returns:
+;;;   Prints the doc string to stdout; returns nil.
+;;;
+;;; Example:
+;;;   (doc cons)    ; prints: cons -- prepend a value to a list. ...
+;;;   (doc when)    ; prints: when -- evaluate body only if test is truthy. ...
+;;;
+;;; Since: Phase D1 (auto-docs)
+(defmacro doc [name]
+  (let [entry (doc-lookup name)]
+    (if (not (= entry 0))
+      (println entry)
+      (println "No documentation found."))))
+)
+=======
+  (export cond when unless must! must-msg! ignore! do-m for doc
+          assert! assert-msg! require! require-msg!
+          ensure! ensure-msg! invariant! invariant-msg!
+          curry derive-show derive-debug derive-display)
+
+;;; cond -- variadic conditional branching via nested if chains.
+;;;
+;;; Parameters:
+;;;   & clauses -- alternating test/expression pairs, with optional :else at end
+;;;
+;;; Returns:
+;;;   The expression corresponding to the first truthy test, or the :else
+;;;   expression if present, or nil if no clause matches.
+;;;
+;;; Example:
+;;;   (cond (> x 0) :pos (< x 0) :neg :else :zero)  ; => :pos/:neg/:zero
+;;;
+;;; Since: Phase 7
+(defmacro cond [& clauses]
+  (if (empty? clauses)
+    nil
+    (if (= (first clauses) :else)
+      (second clauses)
+      (list if (first clauses) (second clauses)
+            (list cond ~@(rest (rest clauses)))))))
+
+;;; when -- evaluate body only if test is truthy.
+;;;
+;;; Parameters:
+;;;   test -- the condition to evaluate
+;;;   body -- expression to evaluate when test is truthy
+;;;
+;;; Returns:
+;;;   The value of body if test is truthy, otherwise nil.
+;;;
+;;; Example:
+;;;   (when (> x 0) (print "positive"))  ; => prints if x > 0
+;;;
+;;; Since: Phase 7
+(defmacro when [test body]
+  (if test (do body)))
+
+;;; unless -- evaluate body only if test is falsy.
+;;;
+;;; Parameters:
+;;;   test -- the condition to evaluate
+;;;   body -- expression to evaluate when test is falsy
+;;;
+;;; Returns:
+;;;   The value of body if test is falsy, otherwise nil.
+;;;
+;;; Example:
+;;;   (unless (= x 0) (/ 1 x))  ; => evaluates only when x is non-zero
+;;;
+;;; Since: Phase 7
+(defmacro unless [test body]
+  (if test nil (do body)))
+
+;;; must! -- unwrap an option or result value, panicking if absent.
+;;;
+;;; Parameters:
+;;;   expr -- an option or result expression to unwrap
+;;;
+;;; Returns:
+;;;   The unwrapped inner value.
+;;;
+;;; Example:
+;;;   (must! (option-some 42))  ; => 42
+;;;
+;;; Since: Phase R4
+(defmacro must! [expr]
+  (option-must expr))
+
+;;; must-msg! -- unwrap an option or result value with a custom panic message.
+;;;
+;;; Parameters:
+;;;   expr -- an option or result expression to unwrap
+;;;   msg  -- the message to panic with if the value is absent
+;;;
+;;; Returns:
+;;;   The unwrapped inner value.
+;;;
+;;; Example:
+;;;   (must-msg! (option-some 42) "expected a value")  ; => 42
+;;;
+;;; Since: Phase R4
+(defmacro must-msg! [expr msg]
+  (option-expect expr msg))
+
+;;; ignore! -- explicitly discard a result value.
+;;;
+;;; Parameters:
+;;;   expr -- the expression whose value should be discarded
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (ignore! (some-fn-with-result))  ; => nil
+;;;
+;;; Since: Phase R6
+(defmacro ignore! [expr]
+  (do expr nil))
+
+;;; do-m -- monadic do-notation using .bind dispatch.
+;;;
+;;; Parameters:
+;;;   & forms -- alternating variable/monadic-action pairs followed by a body;
+;;;              the last form is the body expression
+;;;
+;;; Returns:
+;;;   A nested .bind chain that threads variable bindings through monadic actions,
+;;;   ending with the body expression.
+;;;
+;;; Example:
+;;;   (do-m x (option-some 5) y (option-some 3) (option-some (+ x y)))
+;;;   ; => (.bind (option-some 5) (fn [x] (.bind (option-some 3) (fn [y] (option-some (+ x y))))))
+;;;
+;;; Since: Phase HKT H6
+(defmacro do-m [& forms]
+  (if (empty? forms)
+    nil
+    (if (empty? (rest forms))
+      (first forms)
+      (list .bind (second forms) (list fn `[~(first forms)] (list do-m ~@(rest (rest forms))))))))
+
+;;; for -- monadic comprehension with optional guards.
+;;;
+;;; Parameters:
+;;;   binding-vec -- flat vector of alternating var/collection pairs,
+;;;                  with optional :when guard clauses interspersed
+;;;   & body      -- the body expression(s) to lift into the monad
+;;;
+;;; Returns:
+;;;   A nested .bind/.pure chain that iterates over the collections,
+;;;   filters via :when guards, and lifts the body into the monad.
+;;;
+;;; Example:
+;;;   (for [x coll] (* x 2))
+;;;   ; => (.bind coll (fn [x] (.pure (* x 2))))
+;;;
+;;;   (for [x coll :when (> x 0) y other] (+ x y))
+;;;   ; => (.bind coll (fn [x] (if (> x 0) (.bind other (fn [y] (.pure (+ x y)))) (.empty x))))
+;;;
+;;; Since: Phase HKT H7
+(defmacro for [binding-vec & body]
+  (if (empty? binding-vec)
+    ;; No bindings: wrap body in pure
+    (list .pure (list do ~@body))
+    (let [first-b (first binding-vec)
+          rest-bv  (rest binding-vec)]
+      (if (= first-b :when)
+        ;; :when guard at the head of the binding vector
+        (let [pred (first rest-bv)
+              more (rest rest-bv)]
+          (if (empty? more)
+            (list if pred (list .pure (list do ~@body)) (list .empty 0))
+            (list if pred (list for (list ~@more) ~@body) (list .empty 0))))
+        ;; var/coll pair -- var is first-b, coll is next element
+        (let [var  first-b
+              coll (first rest-bv)
+              more (rest rest-bv)]
+          (if (empty? more)
+            ;; Last binding: .bind coll (fn [var] (.pure body))
+            (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
+            ;; More bindings remain -- check if next is :when
+            (let [next-first (first more)
+                  next-rest  (rest more)]
+              (if (= next-first :when)
+                ;; Inline :when -- use var as type witness for .empty dispatch
+                (let [pred  (first next-rest)
+                      after (rest next-rest)]
+                  (if (empty? after)
+                    (list .bind coll (list fn `[~var]
+                      (list if pred (list .pure (list do ~@body)) (list .empty var))))
+                    (list .bind coll (list fn `[~var]
+                      (list if pred (list for (list ~@after) ~@body) (list .empty var))))))
+                ;; More var/coll bindings remain
+                (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
+
+;;; Phase C1: Runtime contract macros
+;; contract-enabled?, tur-contract-check, and tur-contract-check-inv are
+;; defined in stdlib/contract.tur (tur/contract module), which is auto-loaded
+;; before this file. The macros below expand to calls to those helpers.
+
+;;; assert! -- unconditional sanity check, panics with "Assertion failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean expression to check
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (assert! (= x 1))  ; => panics if x != 1
+;;;
+;;; Since: Phase C1
+(defmacro assert! [condition]
+  (tur-contract-check condition "Assertion failed"))
+
+;;; assert-msg! -- unconditional sanity check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean expression to check
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (assert-msg! (= x 1) "x must be 1")  ; => panics with message if x != 1
+;;;
+;;; Since: Phase C1
+(defmacro assert-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;;; require! -- precondition check at function entry, panics with "Precondition failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean precondition to enforce
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (require! (> n 0))  ; => panics if n <= 0
+;;;
+;;; Since: Phase C1
+(defmacro require! [condition]
+  (tur-contract-check condition "Precondition failed"))
+
+;;; require-msg! -- precondition check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean precondition to enforce
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (require-msg! (> n 0) "n must be positive")  ; => panics with message if n <= 0
+;;;
+;;; Since: Phase C1
+(defmacro require-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;;; ensure! -- postcondition check, panics with "Postcondition failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean postcondition to enforce
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (ensure! (>= result 0))  ; => panics if result is negative
+;;;
+;;; Since: Phase C1
+(defmacro ensure! [condition]
+  (tur-contract-check condition "Postcondition failed"))
+
+;;; ensure-msg! -- postcondition check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean postcondition to enforce
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (ensure-msg! (>= result 0) "result must be non-negative")
+;;;
+;;; Since: Phase C1
+(defmacro ensure-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;;; invariant! -- check a structural invariant on a value, panics with "Invariant failed" if false.
+;;;
+;;; Parameters:
+;;;   obj       -- the value to check
+;;;   predicate -- a single-argument function that returns true if the invariant holds
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (invariant! my-list non-empty?)  ; => panics if my-list fails non-empty?
+;;;
+;;; Since: Phase C1
+(defmacro invariant! [obj predicate]
+  (tur-contract-check-inv obj predicate "Invariant failed"))
+
+;;; invariant-msg! -- check a structural invariant with custom panic message.
+;;;
+;;; Parameters:
+;;;   obj       -- the value to check
+;;;   predicate -- a single-argument function that returns true if the invariant holds
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (invariant-msg! my-list non-empty? "list must not be empty")
+;;;
+;;; Since: Phase C1
+(defmacro invariant-msg! [obj predicate msg]
+  (tur-contract-check-inv obj predicate msg))
+
+;;; curry -- convert a 2-argument function to its curried form.
+;;;
+;;; Parameters:
+;;;   f -- a 2-argument function
+;;;
+;;; Returns:
+;;;   A 1-argument function that, given its first argument, returns a
+;;;   1-argument function that applies f to both.
+;;;
+;;; Example:
+;;;   (defn add [a b] :int (+ a b))
+;;;   (let [add1 ((curry add) 1)]
+;;;     (add1 41))  ; => 42
+;;;
+;;; Since: CY3
+(defmacro curry [f]
+  `(fn [a] (fn [b] (~f a b))))
+
+;;; doc -- print documentation for a function, macro, or struct at the REPL.
+;;;
+;;; Parameters:
+;;;   name -- symbol whose documentation to display
+;;;
+;;; Returns:
+;;;   Prints the doc string to stdout; returns nil.
+;;;
+;;; Example:
+;;;   (doc cons)    ; prints: cons -- prepend a value to a list. ...
+;;;   (doc when)    ; prints: when -- evaluate body only if test is truthy. ...
+;;;
+;;; Since: Phase D1 (auto-docs)
+(defmacro doc [name]
+  (let [entry (doc-lookup name)]
+    (if (not (= entry 0))
+      (println entry)
+      (println "No documentation found."))))
+
+;; ---------------------------------------------------------------------------
+;; SI2: Struct inspection derive macros
+;;
+;; __str-concat -- private string concatenation helper for derive macros.
+;; Concatenates two :cstr values into a new heap-allocated string.
+(defn __str-concat [a :cstr b :cstr] :cstr
+  ```c
+  const char *s1 = (const char *)(intptr_t)a;
+  const char *s2 = (const char *)(intptr_t)b;
+  if (!s1) s1 = "";
+  if (!s2) s2 = "";
+  int len1 = snprintf(NULL, 0, "%s", s1);
+  int len2 = snprintf(NULL, 0, "%s", s2);
+  if (len1 < 0) len1 = 0;
+  if (len2 < 0) len2 = 0;
+  char *result = (char *)malloc((size_t)(len1 + len2 + 1));
+  snprintf(result, (size_t)(len1 + 1), "%s", s1);
+  snprintf(result + len1, (size_t)(len2 + 1), "%s", s2);
+  return (const char *)(intptr_t)result;
+  ```)
+
+;; __dsf -- Show helper (private, accessible via macro_expansion_module).
+;; tstr: string for first call (TypeName), nil for continuation calls.
+;; p: the parameter symbol bound in the show method.
+;; fields: remaining field descriptors (bare symbol or [label accessor]).
+(defmacro __dsf [tstr p & fields]
+  (if (empty? fields)
+    (if (nil? tstr)
+      " }"
+      (list __str-concat tstr " { }"))
+    (let [f (first fields)
+          rest-fs (rest fields)
+          is-vec (vec? f)
+          label-sym (if is-vec (first f) f)
+          label-str (sym->str label-sym)
+          acc-sym (if is-vec (second f) (dot-sym f))
+          acc (list acc-sym p)]
+      (if (nil? tstr)
+        (list __str-concat ", "
+          (list __str-concat label-str
+            (list __str-concat " = "
+              (list __str-concat (list .show acc)
+                (list __dsf nil p ~@rest-fs)))))
+        (list __str-concat tstr
+          (list __str-concat " { "
+            (list __str-concat label-str
+              (list __str-concat " = "
+                (list __str-concat (list .show acc)
+                  (list __dsf nil p ~@rest-fs))))))))))
+
+;; __ddf -- Debug helper (private).
+;; tstr: TypeName string for first call, nil for continuation.
+;; Format: "(TypeName (field1 v1) (field2 v2))".
+(defmacro __ddf [tstr p & fields]
+  (if (empty? fields)
+    (if (nil? tstr)
+      ")"
+      (list __str-concat "(" (list __str-concat tstr ")")))
+    (let [f (first fields)
+          rest-fs (rest fields)
+          is-vec (vec? f)
+          label-sym (if is-vec (first f) f)
+          label-str (sym->str label-sym)
+          acc-sym (if is-vec (second f) (dot-sym f))
+          acc (list acc-sym p)]
+      (if (nil? tstr)
+        (list __str-concat " ("
+          (list __str-concat label-str
+            (list __str-concat " "
+              (list __str-concat (list .debug acc)
+                (list __str-concat ")"
+                  (list __ddf nil p ~@rest-fs))))))
+        (list __str-concat "("
+          (list __str-concat tstr
+            (list __str-concat " ("
+              (list __str-concat label-str
+                (list __str-concat " "
+                  (list __str-concat (list .debug acc)
+                    (list __str-concat ")"
+                      (list __ddf nil p ~@rest-fs))))))))))))
+
+;; __dspf -- Display helper (private, same format as Show).
+(defmacro __dspf [tstr p & fields]
+  (if (empty? fields)
+    (if (nil? tstr)
+      " }"
+      (list __str-concat tstr " { }"))
+    (let [f (first fields)
+          rest-fs (rest fields)
+          is-vec (vec? f)
+          label-sym (if is-vec (first f) f)
+          label-str (sym->str label-sym)
+          acc-sym (if is-vec (second f) (dot-sym f))
+          acc (list acc-sym p)]
+      (if (nil? tstr)
+        (list __str-concat ", "
+          (list __str-concat label-str
+            (list __str-concat " = "
+              (list __str-concat (list .display acc)
+                (list __dspf nil p ~@rest-fs)))))
+        (list __str-concat tstr
+          (list __str-concat " { "
+            (list __str-concat label-str
+              (list __str-concat " = "
+                (list __str-concat (list .display acc)
+                  (list __dspf nil p ~@rest-fs))))))))))
+
+;;; derive-show -- generate a Show instance for a struct.
+;;;
+;;; Parameters:
+;;;   TypeName -- the struct type name (symbol)
+;;;   fields   -- bare symbols or [label accessor] pairs
+;;;
+;;; Returns:
+;;;   A definstance Show form for TypeName.
+;;;
+;;; Example:
+;;;   (derive-show Point x y)
+;;;   ; (show (make-struct Point 3 4)) => "Point { x = 3, y = 4 }"
+;;;
+;;;   (derive-show MyStruct name [display-name .internal-label] count)
+;;;   ; uses (.name s), (.internal-label s) as "display-name", (.count s)
+;;;
+;;; Since: SI2
+(defmacro derive-show [TypeName & fields]
+  (let [tstr (sym->str TypeName)]
+    (list definstance Show [TypeName]
+      (list show [__p] :cstr
+        (list __dsf tstr __p ~@fields)))))
+
+;;; derive-debug -- generate a Debug instance for a struct.
+;;;
+;;; Parameters:
+;;;   TypeName -- the struct type name (symbol)
+;;;   fields   -- bare symbols or [label accessor] pairs
+;;;
+;;; Returns:
+;;;   A definstance Debug form for TypeName.
+;;;
+;;; Example:
+;;;   (derive-debug Point x y)
+;;;   ; (debug (make-struct Point 3 4)) => "(Point (x 3) (y 4))"
+;;;
+;;; Since: SI2
+(defmacro derive-debug [TypeName & fields]
+  (let [tstr (sym->str TypeName)]
+    (list definstance Debug [TypeName]
+      (list debug [__p] :cstr
+        (list __ddf tstr __p ~@fields)))))
+
+;;; derive-display -- generate a Display instance for a struct.
+;;;
+;;; Parameters:
+;;;   TypeName -- the struct type name (symbol)
+;;;   fields   -- bare symbols or [label accessor] pairs
+;;;
+;;; Returns:
+;;;   A definstance Display form for TypeName.
+;;;
+;;; Example:
+;;;   (derive-display Point x y)
+;;;   ; (display (make-struct Point 3 4)) => "Point { x = 3, y = 4 }"
+;;;
+;;; Since: SI2
+(defmacro derive-display [TypeName & fields]
+  (let [tstr (sym->str TypeName)]
+    (list definstance Display [TypeName]
+      (list display [__p] :cstr
+        (list __dspf tstr __p ~@fields)))))
+)
+>>>>>>> Stashed changes
