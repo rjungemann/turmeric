@@ -1436,9 +1436,12 @@ Expr *elab_named_let(Elab *e, const Form *call) {
         }
         fn_param_items[n_params++] = cur;  /* the param name */
         bi++;
-        /* Optional :type annotation */
-        if (bi < blen && bvec->as.list.items[bi]->tag == F_KEYWORD) {
-            fn_param_items[n_params++] = bvec->as.list.items[bi++]; /* :type */
+        /* Optional :type annotation -- accept both fused `:type` (F_KEYWORD)
+         * and spaced `: type` (F_TYPE_ANN); fn elaboration handles both. */
+        if (bi < blen &&
+            (bvec->as.list.items[bi]->tag == F_KEYWORD ||
+             bvec->as.list.items[bi]->tag == F_TYPE_ANN)) {
+            fn_param_items[n_params++] = bvec->as.list.items[bi++];
         }
         /* Mandatory initializer */
         if (bi >= blen) {

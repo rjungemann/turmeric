@@ -1,0 +1,10 @@
+;; Per-file defmodule scoping: helper.tur (bare defn) then
+;; wrapped.tur (defmodule).  Both calls must succeed.
+
+(load "tests/fixtures/elab-defmodule-after-load/helper.tur")
+(load "tests/fixtures/elab-defmodule-after-load/wrapped.tur")
+
+(defn main [] :int
+  (helper-tag)
+  (wrapped-tag)
+  0)

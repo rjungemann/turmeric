@@ -60,7 +60,12 @@ defmodule geom/vector
 
 **Rules:**
 
-- `defmodule` must be the first form in the file (after stdlib auto-loads).
+- `defmodule` must be the first form in **the file containing it** -- not
+  the first form of the whole compilation unit. A `(load ...)` chain may
+  bring in flat helper files before a defmodule-wrapped file; each
+  `(load ...)`-spliced file gets its own scope for the check, and the
+  defmodule remains valid as long as nothing precedes it in its own
+  source file.
 - Only one `defmodule` per file.
 - The module name is a symbol; it may contain `/` to express nesting
   (`geom/vector`, `db/postgres/conn`).
@@ -355,6 +360,12 @@ own dependencies' headers.
 
 Move any other top-level forms inside the `defmodule` body, or below it (the
 latter is also rejected -- `defmodule` must wrap everything).
+
+"The file" here means the source file containing the `defmodule`, not the
+entire compilation unit -- a separate `(load ...)`-spliced file may
+contribute earlier forms without triggering the diagnostic. The note
+attached to the error points at the offending earlier form *in the same
+file*, which is always the right place to fix.
 
 ### `symbol 'foo' is private to module 'mymod'`
 
