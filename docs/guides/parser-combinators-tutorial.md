@@ -176,27 +176,26 @@ three monad operations.
 The simplest parser ignores its input and returns no results.
 
 ```turmeric
-(defn pfail-impl [dummy inp] :int (let [_ dummy] (mzero)))
+(defn pfail-impl [inp] :int (mzero))
 
-(defn pfail [] :ptr<void>
-  (let [dummy 0] (fn [inp] (pfail-impl dummy inp))))
+(defn pfail [] ^fat :ptr<void>
+  (fn [inp] (pfail-impl inp)))
 ```
 
 ```sweet-exp
-defn pfail-impl [dummy inp] :int
-  let [_ dummy]
-    mzero()
+defn pfail-impl [inp] :int
+  mzero()
 
-defn pfail [] :ptr<void>
-  let [dummy 0]
-    fn [inp]
-      pfail-impl(dummy inp)
+defn pfail [] ^fat :ptr<void>
+  fn [inp]
+    pfail-impl(inp)
 ```
 
-The `let [dummy 0]` is not cosmetic: it ensures the inner `fn` captures a
-free variable, so the compiler emits a fat closure rather than a bare
-function pointer. We will see this idiom repeatedly. (Section 8 explains
-why.)
+The `^fat` marker on the return type is not cosmetic: the inner `fn` captures
+nothing, so the compiler would otherwise emit it as a bare C function pointer,
+which is *not* callable through `apply-fat`. `^fat` makes the compiler box the
+bare pointer into a fat closure at the tail, so consumers can fat-call it. We
+will see this marker repeatedly. (Section 8 explains why.)
 
 ### `item` -- consume one character
 
@@ -204,27 +203,24 @@ If the input is at end, fail. Otherwise return the current character paired
 with the advanced input.
 
 ```turmeric
-(defn item-impl [dummy inp] :int
-  (let [_ dummy]
-    (if (input-at-end inp)
-      (mzero)
-      (mreturn (pair-new (input-current-char inp) (input-advance inp))))))
+(defn item-impl [inp] :int
+  (if (input-at-end inp)
+    (mzero)
+    (mreturn (pair-new (input-current-char inp) (input-advance inp)))))
 
-(defn item [] :ptr<void>
-  (let [dummy 0] (fn [inp] (item-impl dummy inp))))
+(defn item [] ^fat :ptr<void>
+  (fn [inp] (item-impl inp)))
 ```
 
 ```sweet-exp
-defn item-impl [dummy inp] :int
-  let [_ dummy]
-    if input-at-end(inp)
-      mzero()
-      mreturn $ pair-new input-current-char(inp) input-advance(inp)
+defn item-impl [inp] :int
+  if input-at-end(inp)
+    mzero()
+    mreturn $ pair-new input-current-char(inp) input-advance(inp)
 
-defn item [] :ptr<void>
-  let [dummy 0]
-    fn [inp]
-      item-impl(dummy inp)
+defn item [] ^fat :ptr<void>
+  fn [inp]
+    item-impl(inp)
 ```
 
 ### `satisfy` -- one character matching a predicate
@@ -346,7 +342,7 @@ returns instead of just returning a list.
     (mbind (apply-parser lp inp)
       (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
 
-(defn bind-parser [p f] :ptr<void>
+(defn bind-parser [p ^fat f] :ptr<void>
   (let [lp p
         lf f]
     (fn [inp] (bind-parser-impl lp lf inp))))
@@ -364,12 +360,18 @@ defn bind-parser-impl [lp lf inp] :int
         let [_ lf2]
           bind-parser-inner(lf2 pair)
 
-defn bind-parser [p f] :ptr<void>
+defn bind-parser [p ^fat f] :ptr<void>
   let [lp p
        lf f]
     fn [inp]
       bind-parser-impl(lp lf inp)
 ```
+
+The `^fat` marker on `f` tells the compiler that `bind-parser` calls its
+continuation through the fat-closure ABI (`apply-fat`). When a caller passes
+a captureless `(fn ...)`, the compiler boxes it into a one-cell fat closure
+at the call site, so the continuation dispatches correctly with no manual
+workaround. (Section 8 explains the underlying ABI.)
 
 `or-parser` and `bind-parser` are everything. Every other combinator is a
 short, mechanical definition on top of them, and `mzero`/`mreturn` give us
@@ -587,27 +589,22 @@ and wrap it as `ENum`.
 
 ```turmeric
 (defn number [] :ptr<void>
-  (let [sentinel 0]
-    (bind-parser (many1 (digit))
-      (fn [digs]
-        (let [_ sentinel]
-          (pure (mk-enum (digits->int digs))))))))
+  (bind-parser (many1 (digit))
+    (fn [digs]
+      (pure (mk-enum (digits->int digs))))))
 ```
 
 ```sweet-exp
 defn number [] :ptr<void>
-  let [sentinel 0]
-    bind-parser many1(digit())
-      fn [digs]
-        let [_ sentinel]
-          pure $ mk-enum digits->int(digs)
+  bind-parser many1(digit())
+    fn [digs]
+      pure $ mk-enum digits->int(digs)
 ```
 
-The `sentinel` capture is the same trick from section 4 -- it forces the
-continuation lambda to compile as a fat closure so that `bind-parser` can
-call it through `apply-fat`. Without it, the compiler optimises the
-captureless lambda into a bare function pointer with the wrong call ABI
-and you get a segfault at run time. See section 8.
+The continuation `(fn [digs] ...)` captures nothing, but we no longer need a
+dead capture to coerce it into a fat closure: `bind-parser` declares its
+continuation `^fat` (section 5), so the compiler boxes this captureless
+lambda at the call site automatically. See section 8.
 
 ### `factor`, `term`, `expr`
 
@@ -615,11 +612,11 @@ and you get a segfault at run time. See section 8.
 a closure that, when invoked, calls `(expr)` and runs the result.
 
 ```turmeric
-(defn expr-thunk-impl [dummy inp] :int
-  (let [_ dummy] (apply-parser (expr) inp)))
+(defn expr-thunk-impl [inp] :int
+  (apply-parser (expr) inp))
 
-(defn expr-ref [] :ptr<void>
-  (let [dummy 0] (fn [inp] (expr-thunk-impl dummy inp))))
+(defn expr-ref [] ^fat :ptr<void>
+  (fn [inp] (expr-thunk-impl inp)))
 
 (defn factor [] :ptr<void>
   (or-parser
@@ -633,27 +630,23 @@ and then `fold-bin-tail` walks them left-to-right, growing an `EBin` AST.
 
 ```turmeric
 (defn term-tail-pair [] :ptr<void>
-  (let [sentinel 0]
-    (bind-parser (term-op)
-      (fn [op]
-        (let [_ sentinel
-              _op op]
-          (bind-parser (factor)
-            (fn [rhs] (let [_ _op] (pure (pair-new _op rhs))))))))))
+  (bind-parser (term-op)
+    (fn [op]
+      (bind-parser (factor)
+        (fn [rhs] (pure (pair-new op rhs)))))))
 
 (defn term [] :ptr<void>
-  (let [sentinel 0]
-    (bind-parser (factor)
-      (fn [lhs]
-        (let [_ sentinel
-              _lhs lhs]
-          (bind-parser (many (term-tail-pair))
-            (fn [tails] (let [_ _lhs] (pure (fold-bin-tail _lhs tails))))))))))
+  (bind-parser (factor)
+    (fn [lhs]
+      (bind-parser (many (term-tail-pair))
+        (fn [tails] (pure (fold-bin-tail lhs tails)))))))
 ```
 
 `expr` is the same shape with `expr-op` and `term` instead of `term-op`
-and `factor`. Every continuation lambda binds at least one captured
-variable so that it compiles as a fat closure.
+and `factor`. The continuations capture `op`/`lhs` (or nothing at all);
+either way `bind-parser`'s `^fat` continuation parameter boxes them
+correctly, and inner lambdas can reference an enclosing `fn`'s parameter
+directly without rebinding it to a local first.
 
 ### Evaluation
 
@@ -707,20 +700,22 @@ Our tutorial calls `mbind` through `bind-parser-inner`, which adds two
 function calls per result. For a JSON-sized parse this matters; for a
 forty-character arithmetic expression it does not.
 
-**Captured-parameter discipline.** The header comment on `stdlib/parsec`
-warns: *"function parameters used in inner lambdas MUST be bound to local
-variables first."* This is the same rule we hit at section 4. The reason
-is mechanical: when a `fn` body has no free variables referencing its
-enclosing scope, the compiler optimises it to a bare C function. That
-function has signature `void *(int64_t)` and is *not* callable through
-`apply-fat` (which expects `int64_t *(void*, int64_t)`). Capturing a
-variable -- even a dead sentinel -- forces the compiler to emit a fat
-closure with the expected layout.
+**Captureless-lambda ABI.** A `fn` body that captures no free variables is
+optimised to a bare C function pointer (`int64_t (*)(int64_t)`), which is
+*not* callable through `apply-fat` (which expects a fat closure laid out as
+`int64_t (*)(void*, int64_t)` in slot 0). Feed a bare pointer to `apply-fat`
+and it reads the first instruction byte as a thunk address and segfaults.
 
-In `stdlib/parsec` the rule is enforced uniformly with explicit `let
-[_x x]` bindings before every inner `fn`. In the tutorial we use the same
-idiom, occasionally with a captured `sentinel 0` when no real value is in
-scope. See [c-integration-guide.md](c-integration-guide.md#closures-and-fat-pointers)
+The compiler tracks this representation in the type system and boxes a
+captureless lambda into a one-cell fat closure wherever a *fat-expecting
+sink* is annotated `^fat` -- either a parameter (`[p ^fat f]`, as on
+`bind-parser`) or a constructor's return type (`^fat :ptr<void>`, as on
+`pfail`/`item`). Earlier versions of this tutorial (and `stdlib/parsec`)
+forced the fat ABI by hand with a dead `(let [sentinel 0] ...)` capture;
+that workaround is obsolete now that the sinks carry `^fat`. Inner lambdas
+may also reference an enclosing `fn`'s parameter directly -- the old "bind
+parameters to locals first" rule no longer applies. See
+[c-integration-guide.md](c-integration-guide.md#closures-and-fat-pointers)
 for the underlying calling convention.
 
 **Pointer-to-int casting.** Both the tutorial and the production library

@@ -16,8 +16,10 @@
 ;; Calling conventions:
 ;;   • Parser constructors return :ptr<void>  (fat closure pointer)
 ;;   • Functions accepting parsers take :int  (the int64_t of the pointer)
-;;   • Function parameters used in inner lambdas MUST be bound to local
-;;     variables first (params are not captured by collect_free_vars).
+;;   • A constructor whose body is a captureless `(fn ...)` annotates its
+;;     return as `^fat :ptr<void>` so the compiler boxes the bare function
+;;     pointer into a one-cell fat closure at the tail. This replaces the
+;;     old dead-`sentinel`-capture trick that forced the fat ABI by hand.
 ;;; ── Backtracking monad (inlined from backtrack.tur) ──────────────────────────
 ;;; mzero -- return the empty backtracking result (failure).
 ;;;
@@ -340,8 +342,8 @@
 ;;;   (run-parser (pfail) "abc")  ; => 0  (no results)
 
 
-(defn pfail [] :ptr<void>
-  (let [sentinel 0] (fn [inp] (let [_ sentinel] (mzero)))))
+(defn pfail [] ^fat :ptr<void>
+  (fn [inp] (mzero)))
 ;; pure v: succeed with v, consume no input
 ;;; pure-impl -- internal implementation for pure.
 ;;; Parameters:
@@ -380,8 +382,8 @@
 ;;; Example:
 ;;;   (parse-value (run-parser (item) "A"))  ; => 65  ; 'A'
 
-(defn item [] :ptr<void>
-  (let [sentinel 0] (fn [inp] (let [_ sentinel] (item-impl inp)))))
+(defn item [] ^fat :ptr<void>
+  (fn [inp] (item-impl inp)))
 ;; pchar c: consume if current char equals c (c is ASCII int)
 ;;; pchar-impl -- internal implementation for pchar.
 ;;; Parameters:
