@@ -1313,7 +1313,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint32_t ci = 0; ci < n_caps; ci++) {
                     Binding *cap = caps[ci];
                     char *rn = raw_name_for_binding(cap);
-                    buf_printf(pbuf, "%s %s; ", type_c_name(cap->type), rn);
+                    /* A captured fn value is the int64_t fn-ABI carrier, not its
+                     * result type's C name (type_c_name(TY_FN) -> "double" for a
+                     * :float result would alias the closure pointer through a
+                     * floating-point field). */
+                    const char *cap_ctype = cap->type.kind == TY_FN
+                        ? "int64_t"
+                        : type_c_name(cap->type);
+                    buf_printf(pbuf, "%s %s; ", cap_ctype, rn);
                     free(rn);
                 }
                 buf_printf(pbuf, "} __try_env_%d;\n", thunk_id);
@@ -2326,8 +2333,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint8_t i = 0; i < closure->n_captures; i++) {
                     Binding *captured = closure->captures[i];
                     char *field = raw_name_for_binding(captured);
-                    buf_printf(ctx->file, "%s %s; ",
-                               type_c_name(captured->type), field);
+                    /* A captured function value (fat closure or bare fn ptr) is
+                     * carried as the int64_t fn-ABI carrier -- the same C type
+                     * fn-typed parameters use (see emit_fns.c, TY_FN param
+                     * branch).  type_c_name(TY_FN) returns the *result* type's C
+                     * name (e.g. "double" for a :float-returning closure), which
+                     * would store the closure pointer in a floating-point field
+                     * and reinterpret it through a double on read -- a latent
+                     * miscompile that only survives because valid pointers fit
+                     * exactly in a double's 53-bit integer range.  Pin the field
+                     * to the carrier so the stored bits and the fat-dispatch
+                     * read-back agree. */
+                    const char *field_ctype = captured->type.kind == TY_FN
+                        ? "int64_t"
+                        : type_c_name(captured->type);
+                    buf_printf(ctx->file, "%s %s; ", field_ctype, field);
                     free(field);
                 }
                 buf_puts(ctx->file, "};\n");

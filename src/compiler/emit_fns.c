@@ -335,9 +335,19 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             for (uint8_t i = 0; i < fd->closure->n_captures; i++) {
                 Binding *captured = fd->closure->captures[i];
                 /* CY4: rank-2 captures must live as tur_poly_fn_t. */
+                /* A captured fn value (fat closure or bare fn ptr) is carried as
+                 * the int64_t fn-ABI carrier -- the same C type fn-typed
+                 * parameters use.  type_c_name(TY_FN) returns the *result*
+                 * type's C name (e.g. "double" for a :float-returning closure),
+                 * which would alias the closure pointer through a floating-point
+                 * field and reinterpret it via a double on read -- a latent
+                 * miscompile that only survives because valid pointers fit
+                 * exactly in a double's 53-bit integer range. */
                 const char *cap_ctype = captured->is_poly_fn
                                           ? "tur_poly_fn_t"
-                                          : type_c_name(captured->type);
+                                          : (captured->type.kind == TY_FN
+                                               ? "int64_t"
+                                               : type_c_name(captured->type));
                 char *field = raw_name_for_binding(captured);
                 buf_printf(file, "%s %s; ", cap_ctype, field);
                 free(field);
