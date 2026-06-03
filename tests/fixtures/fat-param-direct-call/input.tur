@@ -1,0 +1,24 @@
+;; Direct invocation of a fn-typed ^fat parameter must dispatch through the
+;; fat-closure protocol (thunk = slot 0, env = the box), not treat the fat box
+;; pointer as a bare function address.  Before the fix, (g x) on a ^fat param
+;; emitted a thin ((R (*)(A...))g)(args) call and jumped to garbage; for a
+;; :float closure it also mismatched the register class.  Each call below boxes
+;; a captureless lambda (EX_FN_TO_FAT) and invokes it directly.
+
+(defn first-byte [s :cstr] :int
+  ```c return (int64_t)(unsigned char)((const char *)(intptr_t)s)[0]; ```)
+
+(defn run-float [^fat g :(fn [:float] #{} :float) x :float] :float
+  (g x))
+
+(defn run-nullary [^fat g :(fn [] #{} :int)] :int
+  (g))
+
+(defn run-cstr [^fat g :(fn [:cstr] #{} :int) s :cstr] :int
+  (g s))
+
+(defn main [] :int
+  (println (run-float (fn [x :float] :float (* x 2.0)) 3.5))   ;; 7
+  (println (run-nullary (fn [] :int 42)))                       ;; 42
+  (println (run-cstr (fn [s :cstr] :int (first-byte s)) "hello")) ;; 'h' = 104
+  0)

@@ -1,5 +1,26 @@
 # Turmeric 2 -- Claude Code Guide
 
+## Reporting Bugs -- STRICT RULE
+
+When you come across a real bug, latent defect, or expressiveness hole
+while working on something else -- **do not sweep it under the rug.** Do
+not dismiss it as "a pre-existing quirk," "out of scope," "works anyway,"
+or "a malformed test" and move on. The moment you notice it, write a
+report under `docs/reported/<short-slug>.md` capturing:
+
+- a one-line summary and a severity assessment (is it a silent
+  miscompile, a hard error, an ergonomics gap?),
+- a minimal repro and the observed vs. expected behavior,
+- root-cause analysis with file:line pointers when you have them,
+- proposed fix directions and how to validate a fix.
+
+"Works by luck because the register classes happen to match" is a bug,
+not a non-issue. A test that surfaces real broken behavior is a finding,
+not a malformed test -- fix the bug or report it; never silently rewrite
+the test to dodge the breakage. If you fix the bug in the same session,
+the report can become the commit/PR description instead; otherwise it
+stays in `docs/reported/` so it is never forgotten.
+
 ## Locating Referenced Files -- STRICT RULE
 
 When asked to act on a doc, plan, or file by path, **look before concluding it

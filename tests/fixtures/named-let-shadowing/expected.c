@@ -131,21 +131,28 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_UNTAG(x)   ((x).val)
 #define TUR_GETTAG(x)  ((x).tag)
 #define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]
-#define TUR_APPLY0(f) \
-    (((int64_t (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \
+#define TUR_APPLY0_T(R, f) \
+    (((R (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \
         ((void *)(intptr_t)(f)))
-#define TUR_APPLY1(f, a) \
-    (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a)))
-#define TUR_APPLY2(f, a, b) \
-    (((int64_t (*)(void *, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b)))
+#define TUR_APPLY1_T(R, A0, f, a) \
+    (((R (*)(void *, A0))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a)))
+#define TUR_APPLY2_T(R, A0, A1, f, a, b) \
+    (((R (*)(void *, A0, A1))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a), (A1)(b)))
+#define TUR_APPLY3_T(R, A0, A1, A2, f, a, b, c) \
+    (((R (*)(void *, A0, A1, A2))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c)))
+#define TUR_APPLY4_T(R, A0, A1, A2, A3, f, a, b, c, d) \
+    (((R (*)(void *, A0, A1, A2, A3))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c), (A3)(d)))
+#define TUR_APPLY0(f)          TUR_APPLY0_T(int64_t, f)
+#define TUR_APPLY1(f, a)       TUR_APPLY1_T(int64_t, int64_t, f, a)
+#define TUR_APPLY2(f, a, b)    TUR_APPLY2_T(int64_t, int64_t, int64_t, f, a, b)
 #define TUR_APPLY3(f, a, b, c) \
-    (((int64_t (*)(void *, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c)))
+    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)
 #define TUR_APPLY4(f, a, b, c, d) \
-    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))
+    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)
 typedef struct { bool is_some; int64_t value; } tur_option_t;
 typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;
 #define TUR_NONE ((int64_t)0)

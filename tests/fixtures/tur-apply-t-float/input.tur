@@ -1,0 +1,21 @@
+;; Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1):
+;; round-trip a :float -> :float closure through TUR_APPLY1_T without the
+;; historical int64_t bit-cast.  A *capturing* closure stores the real typed
+;; thunk (double (*)(void *, double)) in slot 0, so the double argument and
+;; return value travel in their natural register class -- the macro cast
+;; (double (*)(void *, double)) matches the thunk's C signature exactly.
+
+(defn call-f [f :ptr<void> x :float] :float
+  ```c
+  return TUR_APPLY1_T(double, double, f, x);
+  ```)
+
+;; Captures n, so the result is a fat closure with a typed thunk in slot 0.
+(defn make-adder [n :float] :ptr<void>
+  (fn [x :float] :float (+ x n)))
+
+(defn main [] :int
+  (let [add (make-adder 10.0)
+        r   (call-f add 3.5)]
+    (println r)
+    0))

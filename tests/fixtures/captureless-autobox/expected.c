@@ -131,21 +131,28 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_UNTAG(x)   ((x).val)
 #define TUR_GETTAG(x)  ((x).tag)
 #define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]
-#define TUR_APPLY0(f) \
-    (((int64_t (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \
+#define TUR_APPLY0_T(R, f) \
+    (((R (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \
         ((void *)(intptr_t)(f)))
-#define TUR_APPLY1(f, a) \
-    (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a)))
-#define TUR_APPLY2(f, a, b) \
-    (((int64_t (*)(void *, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b)))
+#define TUR_APPLY1_T(R, A0, f, a) \
+    (((R (*)(void *, A0))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a)))
+#define TUR_APPLY2_T(R, A0, A1, f, a, b) \
+    (((R (*)(void *, A0, A1))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a), (A1)(b)))
+#define TUR_APPLY3_T(R, A0, A1, A2, f, a, b, c) \
+    (((R (*)(void *, A0, A1, A2))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c)))
+#define TUR_APPLY4_T(R, A0, A1, A2, A3, f, a, b, c, d) \
+    (((R (*)(void *, A0, A1, A2, A3))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c), (A3)(d)))
+#define TUR_APPLY0(f)          TUR_APPLY0_T(int64_t, f)
+#define TUR_APPLY1(f, a)       TUR_APPLY1_T(int64_t, int64_t, f, a)
+#define TUR_APPLY2(f, a, b)    TUR_APPLY2_T(int64_t, int64_t, int64_t, f, a, b)
 #define TUR_APPLY3(f, a, b, c) \
-    (((int64_t (*)(void *, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c)))
+    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)
 #define TUR_APPLY4(f, a, b, c, d) \
-    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
-        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))
+    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)
 typedef struct { bool is_some; int64_t value; } tur_option_t;
 typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;
 #define TUR_NONE ((int64_t)0)
@@ -2606,7 +2613,7 @@ static void mutmap_free(int64_t);
 static int64_t apply_fat(int64_t, int64_t);
 static int64_t dbl_impl(int64_t);
 static void * make_dbl();
-static int64_t run_with(int64_t, int64_t);
+static int64_t run_with(void *, int64_t);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -4243,8 +4250,8 @@ static void * make_dbl() {
         return __t8;
 }
 
-static int64_t run_with(int64_t g, int64_t arg) {
-        return apply_fat(g, arg);
+static int64_t run_with(void * g, int64_t arg) {
+        return apply_fat((int64_t)(intptr_t)(g), arg);
 }
 
 int main(int argc, char **argv) {
@@ -4266,7 +4273,7 @@ int main(int argc, char **argv) {
             __t9[0] = (int64_t)(intptr_t)__tur_fatshim1;
             __t9[1] = (int64_t)(intptr_t)__fn_868;
             void *__t10 = __t9;
-            int64_t via_arg_870 = run_with((int64_t)(intptr_t)(__t10), INT64_C(50));
+            int64_t via_arg_870 = run_with((void *)(intptr_t)(__t10), INT64_C(50));
             (void)via_arg_870;
             printf("%lld\n", (long long)(via_ret_866));
             printf("%lld\n", (long long)(via_arg_870));

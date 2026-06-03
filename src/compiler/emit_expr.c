@@ -303,6 +303,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         if (is_gen_field) {
             buf_printf(body, "%s = %s;\n", bn, iv);
+        } else if (b->is_fat && b->type.kind == TY_FN) {
+            /* closure-representation-unification (Phase 0): a fn-typed ^fat alias
+             * holds a fat-closure box, not a bare function pointer.  Declare it
+             * as the int64_t carrier so the fat-dispatch call site (the ER2
+             * is_fat path) casts it back to void * and reads slot 0 -- declaring
+             * it as a thin fn pointer (the TY_FN branch below) both mistypes the
+             * box and trips -Wint-conversion.  A bare ^fat alias is :ptr<void>
+             * and is handled cleanly by the fallback below. */
+            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
         } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
             buf_printf(body, "%s (*%s)(",
@@ -1807,6 +1816,58 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * int).  Calling it requires the same cast-and-invoke pattern as TY_PTR_VOID
              * callbacks.  Only applies to non-global bindings (local params). */
             if (fn_binding->type.kind == TY_FN && !fn_binding->is_global) {
+                /* A#1: a ^fat parameter holds a fat closure ({ thunk, env... }),
+                 * not a bare function pointer.  Invoking it directly via (g x)
+                 * must dispatch through slot 0 with the box as the env argument
+                 * -- the same fat-call protocol as the TY_PTR_VOID path above.
+                 * Emitting a thin ((R (*)(A...))g)(args) call here would treat the
+                 * fat box's address as code and jump to garbage. */
+                if (fn_binding->is_fat) {
+                    char *raw_ptr = name_for_binding(ctx, fn_binding);
+                    /* A TY_FN parameter is stored as int64_t in C; the fat-call
+                     * protocol wants the box as a void *, so coerce once. */
+                    Buf fnb; buf_init(&fnb);
+                    buf_printf(&fnb, "(void *)(intptr_t)(%s)", raw_ptr);
+                    buf_putc(&fnb, '\0');
+                    char *fn_ptr = strdup(fnb.data);
+                    buf_free(&fnb);
+                    free(raw_ptr);
+                    uint32_t n = e->as.call_.n_args;
+                    const char *ret_c = type_c_name(e->type);
+                    Type arg_types[MAX_FN_ARITY];
+                    char **arg_strs = (n > 0)
+                        ? (char **)malloc(n * sizeof(char *)) : NULL;
+                    if (n > 0 && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    for (uint32_t i = 0; i < n; i++) {
+                        arg_types[i] = e->as.call_.args[i]->type;
+                        arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                    }
+                    char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
+                        e->type, n > 0 ? arg_types : NULL, (uint8_t)n);
+                    Buf out; buf_init(&out);
+                    if (thunk_typedef) {
+                        /* TS1: typed fat-closure layout -- slot 0 is a typed thunk ptr. */
+                        buf_printf(&out, "(*( %s *)(%s))(%s", thunk_typedef, fn_ptr, fn_ptr);
+                    } else {
+                        buf_printf(&out, "((%s (*)(void*", ret_c);
+                        for (uint32_t i = 0; i < n; i++) {
+                            buf_printf(&out, ", %s", type_c_name(arg_types[i]));
+                        }
+                        buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
+                    }
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", %s", arg_strs[i]);
+                    }
+                    buf_puts(&out, ")");
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    free(thunk_typedef);
+                    for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+                    free(arg_strs);
+                    free(fn_ptr);
+                    return result;
+                }
                 char *fn_ptr = name_for_binding(ctx, fn_binding);
                 uint32_t n = e->as.call_.n_args;
                 const char *ret_c = type_c_name(e->type);
@@ -3310,17 +3371,37 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit the bare fn pointer value (typically the lifted fn's C name). */
             char *fnptr = emit_value(ctx, body, inner);
 
-            /* Heap-allocate { __tur_fatshim<arity>, orig_fn_ptr }.  The shim thunk
-             * lives in the runtime preamble (file scope, always valid) and uses the
-             * int64_t carrier ABI shared with TUR_APPLY and the reactor's fat-call
-             * casts, so no per-site C function is generated. */
+            /* Heap-allocate { shim, orig_fn_ptr }.  For an all-int64_t closure
+             * signature the preamble __tur_fatshim<arity> shim (int64_t carrier
+             * ABI, shared with TUR_APPLY and the reactor's fat-call casts) is
+             * used.  For a non-int64 signature (closure-typed-invocation-abi-plan)
+             * a per-signature typed shim is emitted so slot 0 matches the typed-
+             * thunk cast the call site applies -- otherwise a :float/:cstr/:ptr
+             * closure would be invoked through a mismatched int64_t ABI. */
+            Type fnt_result = (fnty.kind == TY_FN && fnty.as.fn.result_full_type)
+                                  ? *fnty.as.fn.result_full_type
+                                  : emit_type_from_kind(fnty.kind == TY_FN
+                                                            ? fnty.as.fn.result_kind
+                                                            : TY_INT);
+            Type fnt_params[MAX_FN_ARITY];
+            for (uint8_t i = 0; i < arity && i < MAX_FN_ARITY; i++) {
+                fnt_params[i] = (fnty.as.fn.arg_full_types && fnty.as.fn.arg_full_types[i])
+                                    ? *fnty.as.fn.arg_full_types[i]
+                                    : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
+            }
+            char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
+
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t *%s = (int64_t *)malloc(2 * sizeof(int64_t));\n",
                        fat_tmp);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_fatshim%u;\n",
-                       fat_tmp, (unsigned)arity);
+            if (typed_shim) {
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", fat_tmp, typed_shim);
+            } else {
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_fatshim%u;\n",
+                           fat_tmp, (unsigned)arity);
+            }
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s[1] = (int64_t)(intptr_t)%s;\n", fat_tmp, fnptr);
             char *ptr_tmp = fresh_tmp(ctx);
@@ -3328,6 +3409,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "void *%s = %s;\n", ptr_tmp, fat_tmp);
             free(fnptr);
             free(fat_tmp);
+            free(typed_shim);
             return ptr_tmp;
         }
         case EX_POLY_TO_FAT: {
