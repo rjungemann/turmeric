@@ -240,7 +240,16 @@ run_happy() {
         hook_tmp=$(mktemp -d)
         local hook_log="$hook_tmp/hook.log"
         local actual_hook_stdout="$hook_tmp/actual.stdout"
-        TUR="$TUR" CC="$BUILD_CC" TUR_CC_FLAGS="$TUR_CC_FLAGS" \
+        # requires.no-leak-check: honor the marker on the hook.sh path too.
+        # LeakSanitizer aborts via _exit(), which skips stdio flushing -- a
+        # buffered final line (e.g. "done") would be lost and the snapshot
+        # would mismatch.  Disable leak detection for the spawned program,
+        # mirroring the standard runner below.
+        local hook_asan="$ASAN_OPTIONS"
+        if [ -f "$dir/requires.no-leak-check" ]; then
+            hook_asan="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0"
+        fi
+        TUR="$TUR" CC="$BUILD_CC" TUR_CC_FLAGS="$TUR_CC_FLAGS" ASAN_OPTIONS="$hook_asan" \
             bash "$dir/hook.sh" "$hook_tmp" > "$actual_hook_stdout" 2> "$hook_log"
         local hook_rc=$?
         if [ $hook_rc -ne 0 ]; then

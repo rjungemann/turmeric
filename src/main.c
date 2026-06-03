@@ -1343,6 +1343,17 @@ static void hoist_tur_include_directives(Buf *csrc) {
     if (hdr.len > 0) {
         Buf new_csrc;
         buf_init(&new_csrc);
+        /* Feature-test macros must precede any hoisted system #include.  A
+         * hoisted header (e.g. <stdint.h> from an autolink __tur_include__)
+         * pulls in <features.h>, which locks in the feature set on first
+         * inclusion; a later `#define _DEFAULT_SOURCE` in the main preamble
+         * then has no effect.  Under -std=c99 (strict ANSI) that leaves POSIX
+         * functions like strdup() unprototyped, so the compiler assumes an
+         * implicit `int` return and truncates the 64-bit pointer to 32 bits
+         * -- corrupting, e.g., httpd request-attribute storage (SEGV on a
+         * later strcmp/free).  Emitting the macro here guarantees it is seen
+         * before any hoisted include. */
+        buf_puts(&new_csrc, "#define _DEFAULT_SOURCE 1\n");
         buf_write(&new_csrc, hdr.data, hdr.len);
         buf_write(&new_csrc, csrc->data, csrc->len);
         buf_free(csrc);
