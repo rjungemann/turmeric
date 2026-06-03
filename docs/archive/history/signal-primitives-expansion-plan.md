@@ -1,10 +1,42 @@
 ---
-title: Signal Primitives Expansion Plan
-category: Planning
-description: Plan to flesh out tur-signal with resonant filters, bitcrusher, saturation, comb filter, real wavetable oscillator, generic lookup table, scale, a working FM synth example, and FFT primitives.
+title: Signal Primitives Expansion Plan (SUPERSEDED)
+category: Archive
+description: Original plan to flesh out tur-signal with resonant filters, bitcrusher, saturation, comb filter, real wavetable oscillator, generic lookup table, scale, a working FM synth example, and FFT primitives. Archived after the tur-signal spice was found to no longer build against the current type system; superseded by language-readiness-for-typed-signal-plan + tur-signal-rebuild-plan + stdlib-arrow-scaleback-plan.
 ---
 
-# `tur/signal` Primitives Expansion -- Plan
+# `tur/signal` Primitives Expansion -- Plan (SUPERSEDED)
+
+> **Status: superseded and archived.**
+>
+> This plan assumed the existing `tur-signal` spice was a working baseline
+> that just needed a `:float` sample migration (Phase 0) plus a long list
+> of new primitives. Execution attempts revealed that the spice did not
+> compile against the current `tur` / stdlib at all -- the underlying
+> ABI it depended on (raw `int64_t(*)(int64_t)` arrow casts, untyped pair
+> handles, removed stdlib symbols) had moved on. Patching the spice
+> forward reintroduced exactly the patterns the typeclass + fat-closure
+> work eliminated.
+>
+> The spice was removed; the rebuild and the language work it depends on
+> are now tracked separately:
+>
+> - `docs/upcoming/language-readiness-for-typed-signal-plan.md` --
+>   the spike-style investigation of language/stdlib gaps that any
+>   typed signal library needs.
+> - `docs/upcoming/tur-signal-rebuild-plan.md` -- the rebuild,
+>   gated on the readiness plan's verdicts.
+> - `docs/upcoming/stdlib-arrow-scaleback-plan.md` -- removes the
+>   disabled Arrow typeclass scaffolding from stdlib while keeping the
+>   bare-function combinators the rebuild depends on.
+> - `docs/reported/signal-spice-broken-build.md` -- the report that
+>   triggered the rescope.
+>
+> Below is the original plan text, preserved for reference. Do not
+> execute it.
+
+---
+
+
 
 ## Goal
 
