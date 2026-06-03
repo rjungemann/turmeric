@@ -2396,13 +2396,20 @@ typedef struct MutableMap {
     void * storage;
 } MutableMap;
 
+typedef struct Box {
+    int64_t n;
+} Box;
+
+typedef struct ArrW {
+    int64_t raw;
+} ArrW;
+
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
-typedef double (*tur_thunk_double_double_t)(void *, double);
-typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
@@ -2494,8 +2501,8 @@ static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
 static bool __fn_853(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
-static double __fn_858(void *, double);
-static double __fn_868(void *, double);
+static int64_t __fn_860(void *, int64_t);
+static int64_t __inst_HasArr_arr_of_ArrW(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2615,9 +2622,7 @@ static bool mutmap_has_(int64_t, int64_t, int64_t);
 static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, void *);
 static void mutmap_free(int64_t);
-static void * make_scaler(double);
-static void * compose(int64_t, int64_t);
-static double run_with(int64_t, double);
+static int64_t call1(int64_t, int64_t);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3183,17 +3188,33 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
 };
 
-struct __env_860 { tur_thunk_double_double_t __fn; double k; };
-static double __fn_858(void * __env_p_861, double x) {
-        struct __env_860 *__env___env_860 = (struct __env_860 *)__env_p_861;
-        return (x) * (__env___env_860->k);
+struct __env_862 { tur_thunk_int64_t_int64_t_t __fn; Box b; };
+static int64_t __fn_860(void * __env_p_863, int64_t x) {
+        struct __env_862 *__env___env_862 = (struct __env_862 *)__env_p_863;
+        return (x) + ((__env___env_862->b).n);
 }
 
-struct __env_870 { tur_thunk_double_double_t __fn; int64_t gv; int64_t fv; };
-static double __fn_868(void * __env_p_871, double x) {
-        struct __env_870 *__env___env_870 = (struct __env_870 *)__env_p_871;
-        return (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_870->gv)))((void *)(intptr_t)(__env___env_870->gv), (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_870->fv)))((void *)(intptr_t)(__env___env_870->fv), x));
+static int64_t __inst_HasArr_arr_of_ArrW(int64_t self, int64_t n) {
+        void * __t20;
+        {
+            Box b_858 = (Box){.n = n};
+            (void)b_858;
+            struct __env_862 *__t21 = (struct __env_862 *)malloc(sizeof(struct __env_862));
+            __t21->__fn = (tur_thunk_int64_t_int64_t_t)__fn_860;
+            __t21->b = b_858;
+            void *__t22 = __t21;
+            __t20 = __t22;
+        }
+        return __t20;
 }
+
+typedef struct dict_HasArr_ArrW {
+    int64_t (*arr_of)(int64_t, int64_t);
+} dict_HasArr_ArrW;
+
+static dict_HasArr_ArrW dict_HasArr_ArrW_singleton = {
+    .arr_of = __inst_HasArr_arr_of_ArrW,
+};
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -3767,35 +3788,35 @@ static int64_t list_length(int64_t l) {
 }
 
 static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        bool __t20;
+        bool __t23;
         if (tnil_(l1)) {
-            __t20 = tnil_(l2);
+            __t23 = tnil_(l2);
         } else {
-            bool __t21;
+            bool __t24;
             if (tnil_(l2)) {
-                __t21 = false;
+                __t24 = false;
             } else {
-                bool __t22;
+                bool __t25;
                 if ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), list_head(l1), list_head(l2))) {
-                    __t22 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
+                    __t25 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
                 } else {
-                    __t22 = false;
+                    __t25 = false;
                 }
-                __t21 = __t22;
+                __t24 = __t25;
             }
-            __t20 = __t21;
+            __t23 = __t24;
         }
-        return __t20;
+        return __t23;
 }
 
 static int64_t __cons_fmap(int64_t cell, void * f) {
-        int64_t __t23;
+        int64_t __t26;
         if (tnil_(cell)) {
-            __t23 = INT64_C(0);
+            __t26 = INT64_C(0);
         } else {
-            __t23 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
+            __t26 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
         }
-        return __t23;
+        return __t26;
 }
 
 static int64_t list_head(int64_t l) {
@@ -3811,13 +3832,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t24;
+        int64_t __t27;
         if (tnil_(l1)) {
-            __t24 = l2;
+            __t27 = l2;
         } else {
-            __t24 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t27 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t24;
+        return __t27;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4287,33 +4308,8 @@ static void mutmap_free(int64_t m) {
   
 }
 
-static void * make_scaler(double k) {
-        struct __env_860 *__t25 = (struct __env_860 *)malloc(sizeof(struct __env_860));
-        __t25->__fn = (tur_thunk_double_double_t)__fn_858;
-        __t25->k = k;
-        void *__t26 = __t25;
-        return __t26;
-}
-
-static void * compose(int64_t f, int64_t g) {
-        void * __t27;
-        {
-            int64_t fv = (int64_t)(intptr_t)(f);
-            (void)fv;
-            int64_t gv = (int64_t)(intptr_t)(g);
-            (void)gv;
-            struct __env_870 *__t28 = (struct __env_870 *)malloc(sizeof(struct __env_870));
-            __t28->__fn = (tur_thunk_double_double_t)__fn_868;
-            __t28->gv = gv;
-            __t28->fv = fv;
-            void *__t29 = __t28;
-            __t27 = __t29;
-        }
-        return __t27;
-}
-
-static double run_with(int64_t h, double x) {
-        return (*( tur_thunk_double_double_t *)((void *)(intptr_t)(h)))((void *)(intptr_t)(h), x);
+static int64_t call1(int64_t f, int64_t x) {
+        return TUR_APPLY1(f, x); 
 }
 
 int main(int argc, char **argv) {
@@ -4327,19 +4323,15 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            void * f2_875 = make_scaler(2.0);
-            (void)f2_875;
-            void * f3_876 = make_scaler(3.0);
-            (void)f3_876;
-            void * f6_877 = compose((int64_t)(intptr_t)(f2_875), (int64_t)(intptr_t)(f3_876));
-            (void)f6_877;
-            printf("%g\n", (double)(run_with((int64_t)(intptr_t)(f2_875), 1.5)));
-            printf("%g\n", (double)(run_with((int64_t)(intptr_t)(f3_876), 1.5)));
-            printf("%g\n", (double)(run_with((int64_t)(intptr_t)(f6_877), 1.0)));
+            int64_t w_868 = (int64_t)(INT64_C(0));
+            (void)w_868;
+            int64_t g = (int64_t)(intptr_t)(__inst_HasArr_arr_of_ArrW(w_868, INT64_C(100)));
+            (void)g;
+            printf("%lld\n", (long long)(call1((int64_t)(intptr_t)(g), INT64_C(21))));
         }
-        int64_t __t30;
-        __t30 = INT64_C(0);
-        return (int)__t30;
+        int64_t __t28;
+        __t28 = INT64_C(0);
+        return (int)__t28;
 }
 
 

@@ -2124,7 +2124,22 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             param_kinds[j] = method_param_types[j].kind;
         }
         Type fn_type = type_fn(param_kinds, n_method_params, return_type.kind);
-        
+        /* Closure-returning instance methods: a method whose declared return
+         * type is a function type (e.g. (arr-of [f] : (fn [:int] :int))) must
+         * carry the full TY_FN through result_full_type, exactly like the
+         * regular defn path (elab_fns.c "Issue 1b").  Without it, codegen falls
+         * back to emit_type_from_kind(TY_FN) -- a zeroed fn shell whose result
+         * kind is TY_UNKNOWN -- and the dict-field / impl-signature return type
+         * lowers to an unknown-void carrier, silently dropping the returned fat
+         * closure handle.  Attaching the full type makes type_c_name lower the
+         * fn carrier to int64_t (the fat-closure handle the rest of the
+         * language and TUR_APPLY* expect). */
+        if (return_type.kind == TY_FN) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = return_type;
+            fn_type.as.fn.result_full_type = rft;
+        }
+
         /* Create FnDef for the method implementation */
         FnDef *method_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
         memset(method_fd, 0, sizeof(FnDef));

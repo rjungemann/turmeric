@@ -1917,6 +1917,17 @@ const char *type_c_name(Type t) {
              * TY_PTR_VOID carrier, so closures and legacy :ptr<void> sinks
              * share one C declaration. */
             if (t.as.fn.boxed) return "void *";
+            /* Closure-returning-instance-method codegen: a curried closure
+             * return -- a function whose result is itself a function (e.g.
+             * (fn [:int] (fn [:int] :int))) -- is a single fat-closure handle
+             * at runtime, carried as int64_t.  Recursing into the result kind
+             * here would unwrap to a zeroed TY_FN shell (result kind
+             * TY_UNKNOWN) and emit an unknown-void carrier, silently dropping
+             * the handle.  A bare TY_UNKNOWN result reaches this path the same way.
+             * Carry both as the int64_t handle.  Non-curried bare function
+             * references keep returning their result type's C name below. */
+            if (t.as.fn.result_kind == TY_FN || t.as.fn.result_kind == TY_UNKNOWN)
+                return "int64_t";
             /* For bare function references, return the result type's C name. */
             return type_c_name(type_from_kind(t.as.fn.result_kind));
         }

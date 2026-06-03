@@ -1,0 +1,28 @@
+;; instance-closure-return-capture-struct -- a closure-returning method whose
+;; returned closure captures a struct value and reads one of its fields.
+;;
+;; Regression for closure-returning-instance-method-codegen.  Exercises the
+;; same int64_t closure-handle carrier with a by-value struct capture in the
+;; closure environment.
+
+(defstruct Box [n :int])
+
+(defclass HasArr [a]
+  (arr-of [self n :int] : (fn [:int] :int)))
+
+(defstruct ArrW [a]
+  (raw :int))
+
+(definstance HasArr [ArrW]
+  (arr-of [self n :int]
+    (let [b (make-struct Box n)]
+      (fn [x :int] :int (+ x (.n b))))))   ;; captures struct b
+
+(defn call1 [f x] :int
+  ```c return TUR_APPLY1(f, x); ```)
+
+(defn main [] :int
+  (let [w (:: (make-struct ArrW 0) (ArrW int))
+        g (.arr-of w 100)]
+    (println (call1 g 21)))   ;; 121
+  0)

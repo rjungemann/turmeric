@@ -92,6 +92,16 @@ error-handling sites currently using two-of-tuple workarounds.
 
 #### A2. Closure-returning instance method codegen
 
+> **Superseded for execution by
+> [closure-returning-instance-method-codegen-plan](closure-returning-instance-method-codegen-plan.md)
+> -- LANDED 2026-06-03.** Closure-returning `definstance` methods now carry the
+> `int64_t` fat-closure handle through the dict field, the method impl
+> signature, and the call-result let-binding; curried (closure-returning-closure)
+> returns are covered too. Coverage lives in
+> `tests/fixtures/instance-closure-return-*`. The `mw-cors` struct-in-`__pap`-env
+> case (A5) was confirmed a **separate** root cause and is left standing. This
+> subsection remains as a coordinating index.
+
 The "dict field resolved as `void *` instead of `int64_t`" bug. Fixing it
 unblocks every Tier-1 typeclass instance for arrow, and the `mw-cors`
 currying case in httpd.

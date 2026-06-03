@@ -318,6 +318,18 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * -Wint-conversion.  A bare ^fat alias is :ptr<void> and is handled
              * cleanly by the fallback below. */
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+        } else if (b->type.kind == TY_FN
+                   && (b->type.as.fn.result_kind == TY_FN
+                       || b->type.as.fn.result_kind == TY_UNKNOWN)) {
+            /* Closure-returning-instance-method codegen: a let-bound *curried*
+             * closure -- the result of calling a method whose return type is a
+             * function-returning-function (e.g. (.adder w) : (fn [:int] (fn
+             * [:int] :int))) -- is a single fat-closure handle, not a thin
+             * function pointer.  The thin-fn-pointer declaration below would
+             * unwrap the result kind to an unknown-void return type and mistype
+             * the handle; carry it as the int64_t handle instead, mirroring the
+             * is_fat/boxed branch above. */
+            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
         } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
             buf_printf(body, "%s (*%s)(",

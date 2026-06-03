@@ -1,0 +1,27 @@
+;; instance-closure-return-capture-int -- a closure-returning method whose
+;; returned closure captures an int parameter.
+;;
+;; Regression for closure-returning-instance-method-codegen.  The returned
+;; closure captures `n`, so it is a fat-closure box; apply it through the
+;; standard fat protocol (TUR_APPLY1).  This proves the int64_t carrier the
+;; fix emits is the same handle TUR_APPLY1 expects.
+
+(defclass HasArr [a]
+  (arr-of [self n :int] : (fn [:int] :int)))
+
+(defstruct ArrW [a]
+  (raw :int))
+
+(definstance HasArr [ArrW]
+  (arr-of [self n :int]
+    (fn [x :int] :int (+ x n))))   ;; captures n
+
+;; Apply a fat (capturing) closure through the standard closure protocol.
+(defn call1 [f x] :int
+  ```c return TUR_APPLY1(f, x); ```)
+
+(defn main [] :int
+  (let [w (:: (make-struct ArrW 0) (ArrW int))
+        g (.arr-of w 100)]
+    (println (call1 g 21)))   ;; 121
+  0)

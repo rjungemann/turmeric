@@ -27,6 +27,7 @@ description: __arrow_call1 / __arrow_call2 and the __arrow_pair_* helpers invoke
 > **Related:**
 > - [closure-typed-invocation-abi-plan.md](../upcoming/closure-typed-invocation-abi-plan.md) (Risks: thin-vs-fat cast discrepancy)
 > - [stdlib-arrow-scaleback-plan.md](../upcoming/stdlib-arrow-scaleback-plan.md) -- follow-up that scaled `stdlib/arrow.tur` back to its bare-function combinators after this fix landed, removing the dead Arrow typeclass declarations that had no working instances.
+> - [closure-returning-instance-method-codegen-plan.md](../upcoming/closure-returning-instance-method-codegen-plan.md) -- the *separate* codegen bug that blocked giving those Arrow declarations real instances (a closure-returning `definstance` method's dict-field/impl/return carrier erased instead of carrying the `int64_t` closure handle). Fixed 2026-06-03; the Arrow reintroduction is now unblocked.
 
 ---
 
