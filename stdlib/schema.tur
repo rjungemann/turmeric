@@ -33,46 +33,59 @@
 ;;;
 ;;; Since: Phase SC0
 ;; tur/schema -- schema discriminants + constructors + decoder.
-
 ;;; SCHEMA_STR -- discriminant for the :cstr scalar schema.
-(def SCHEMA_STR       0)
+(def SCHEMA_STR 0)
 ;;; SCHEMA_INT -- discriminant for the :int scalar schema.
-(def SCHEMA_INT       1)
+
+(def SCHEMA_INT 1)
 ;;; SCHEMA_FLOAT -- discriminant for the :float scalar schema.
-(def SCHEMA_FLOAT     2)
+
+(def SCHEMA_FLOAT 2)
 ;;; SCHEMA_BOOL -- discriminant for the :bool scalar schema.
-(def SCHEMA_BOOL      3)
+
+(def SCHEMA_BOOL 3)
 ;;; SCHEMA_NIL -- discriminant for the null schema.
-(def SCHEMA_NIL       4)
+
+(def SCHEMA_NIL 4)
 ;;; SCHEMA_LITERAL -- discriminant for an exact-value schema.
-(def SCHEMA_LITERAL   5)
+
+(def SCHEMA_LITERAL 5)
 ;;; SCHEMA_OBJECT -- discriminant for an object (field-list) schema.
-(def SCHEMA_OBJECT    6)
+
+(def SCHEMA_OBJECT 6)
 ;;; SCHEMA_ARRAY -- discriminant for a homogeneous array schema.
-(def SCHEMA_ARRAY     7)
+
+(def SCHEMA_ARRAY 7)
 ;;; SCHEMA_OPTIONAL -- discriminant for an optional (nullable) schema.
-(def SCHEMA_OPTIONAL  8)
+
+(def SCHEMA_OPTIONAL 8)
 ;;; SCHEMA_UNION -- discriminant for a first-match union schema.
-(def SCHEMA_UNION     9)
+
+(def SCHEMA_UNION 9)
 ;;; SCHEMA_TRANSFORM -- discriminant for a decode-then-map schema.
+
 (def SCHEMA_TRANSFORM 10)
 ;;; SCHEMA_REC -- discriminant for a recursive (self-referential) schema.
-(def SCHEMA_REC       11)
-;;; SCHEMA_ALWAYS -- discriminant for a schema that always succeeds (backs pure).
-(def SCHEMA_ALWAYS    12)
-;;; SCHEMA_NEVER -- discriminant for a schema that always fails (backs empty).
-(def SCHEMA_NEVER     13)
-;;; SCHEMA_AP -- discriminant for the Validation applicative (apply + accumulate).
-(def SCHEMA_AP        14)
-;;; SCHEMA_FIELD -- discriminant for an extract-one-field schema.
-(def SCHEMA_FIELD     15)
-;;; SCHEMA_AP_FAT -- discriminant for a closure-aware applicative apply.
-(def SCHEMA_AP_FAT    16)
 
+(def SCHEMA_REC 11)
+;;; SCHEMA_ALWAYS -- discriminant for a schema that always succeeds (backs pure).
+
+(def SCHEMA_ALWAYS 12)
+;;; SCHEMA_NEVER -- discriminant for a schema that always fails (backs empty).
+
+(def SCHEMA_NEVER 13)
+;;; SCHEMA_AP -- discriminant for the Validation applicative (apply + accumulate).
+
+(def SCHEMA_AP 14)
+;;; SCHEMA_FIELD -- discriminant for an extract-one-field schema.
+
+(def SCHEMA_FIELD 15)
+;;; SCHEMA_AP_FAT -- discriminant for a closure-aware applicative apply.
+
+(def SCHEMA_AP_FAT 16)
 ;; ---------------------------------------------------------------------------
 ;; SC0 -- scalar + literal constructors
 ;; ---------------------------------------------------------------------------
-
 ;;; schema/str -- a schema that matches JSON strings (:cstr).
 ;;;
 ;;; Returns:
@@ -82,12 +95,13 @@
 ;;;   (schema-decode (schema/str) (json/string "hi"))  ; => ok("hi")
 ;;;
 ;;; Since: Phase SC0
+
+
 (defn schema/str [] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/int -- a schema that matches JSON integers (:int).
 ;;;
 ;;; Returns:
@@ -97,48 +111,48 @@
 ;;;   (schema-decode (schema/int) (json/int 42))  ; => ok(42)
 ;;;
 ;;; Since: Phase SC0
+
 (defn schema/int [] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 1; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/float -- a schema that matches JSON floats (:float).
 ;;;
 ;;; Returns:
 ;;;   A scalar float schema; decodes to the underlying float bits.
 ;;;
 ;;; Since: Phase SC0
+
 (defn schema/float [] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 2; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/bool -- a schema that matches JSON booleans (:bool).
 ;;;
 ;;; Returns:
 ;;;   A scalar bool schema; decodes to 0 or 1.
 ;;;
 ;;; Since: Phase SC0
+
 (defn schema/bool [] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 3; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/nil -- a schema that matches JSON null.
 ;;;
 ;;; Returns:
 ;;;   A null schema; decodes to 0.
 ;;;
 ;;; Since: Phase SC0
+
 (defn schema/nil [] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 4; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/literal-int -- a schema matching one exact integer value.
 ;;;
 ;;; Parameters:
@@ -151,12 +165,12 @@
 ;;;   (schema-decode (schema/literal-int 7) (json/int 7))  ; => ok(7)
 ;;;
 ;;; Since: Phase SC0
+
 (defn schema/literal-int [v :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 5; s[1] = 2; s[2] = v; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/literal-str -- a schema matching one exact string value.
 ;;;
 ;;; Parameters:
@@ -169,6 +183,7 @@
 ;;;   (schema-decode (schema/literal-str "active") (json/string "active"))
 ;;;
 ;;; Since: Phase SC0
+
 (defn schema/literal-str [v :cstr] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 5; s[1] = 4;
@@ -176,11 +191,9 @@
   s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;; ---------------------------------------------------------------------------
 ;; SC1/SC2 -- composite + combinator constructors
 ;; ---------------------------------------------------------------------------
-
 ;;; schema/object-new -- start an empty object schema.
 ;;;
 ;;; Returns:
@@ -192,12 +205,13 @@
 ;;;                 "age" (schema/int))
 ;;;
 ;;; Since: Phase SC1
+
+
 (defn schema/object-new [] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 6; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/field -- add a declared field to an object schema.
 ;;;
 ;;; Parameters:
@@ -213,6 +227,7 @@
 ;;;   (schema/field (schema/object-new) "name" (schema/str))
 ;;;
 ;;; Since: Phase SC1
+
 (defn schema/field [obj :int key :cstr inner :int] :int
   ```c int64_t *s = (int64_t*)(intptr_t)obj;
   int64_t count = s[1];
@@ -229,7 +244,6 @@
   s[1] = count + 1;
   return obj;
   ```)
-
 ;;; schema/array -- a schema for a homogeneous JSON array.
 ;;;
 ;;; Parameters:
@@ -242,12 +256,12 @@
 ;;;   (schema/array (schema/int))  ; matches [1, 2, 3]
 ;;;
 ;;; Since: Phase SC2
+
 (defn schema/array [elem :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 7; s[1] = elem; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/optional -- a schema where null / absent is acceptable.
 ;;;
 ;;; Parameters:
@@ -261,12 +275,12 @@
 ;;;   (schema/optional (schema/str))
 ;;;
 ;;; Since: Phase SC2
+
 (defn schema/optional [inner :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 8; s[1] = inner; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/union -- a schema where the first matching arm wins.
 ;;;
 ;;; Parameters:
@@ -280,12 +294,12 @@
 ;;;   (schema/union (vec-of (schema/int) (schema/str)))
 ;;;
 ;;; Since: Phase SC2
+
 (defn schema/union [arms :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 9; s[1] = arms; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/transform -- decode with a schema, then map the result.
 ;;;
 ;;; Parameters:
@@ -301,6 +315,7 @@
 ;;;   (let [k 100] (schema/transform (schema/int) (fn [x] (+ x k))))  ; captures k
 ;;;
 ;;; Since: Phase SC2
+
 (defn schema/transform [inner :int ^fat f] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   /* SC7/obstacle-3: f is a fat closure (the standard { thunk, env } layout, a
@@ -313,7 +328,6 @@
   s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/rec -- a self-referential schema for recursive data.
 ;;;
 ;;; Parameters:
@@ -333,6 +347,7 @@
 ;;;       "children" (schema/array self))))
 ;;;
 ;;; Since: Phase SC4
+
 (defn schema/rec [f] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 11;
@@ -341,7 +356,6 @@
   s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/kind -- return the SCHEMA_* discriminant of a schema value.
 ;;;
 ;;; Parameters:
@@ -351,11 +365,11 @@
 ;;;   The integer discriminant (SCHEMA_STR .. SCHEMA_REC).
 ;;;
 ;;; Since: Phase SC0
+
 (defn schema/kind [s :int] :int
   ```c int64_t *p = (int64_t*)(intptr_t)s;
   return p ? p[0] : -1;
   ```)
-
 ;; ---------------------------------------------------------------------------
 ;; SC7 -- Validation applicative combinators (pure / empty / apply / field)
 ;; ---------------------------------------------------------------------------
@@ -369,7 +383,6 @@
 ;; can be written applicatively with `fmap`/`ap`/`alt-or` and chains across
 ;; operators.  The wrapper is a *transparent int newtype* (one int64
 ;; representation everywhere), which is what lets HKT dispatch chain it.
-
 ;;; schema/always -- a pure schema that ignores its input, decoding to a fixed value.
 ;;;
 ;;; Parameters:
@@ -383,12 +396,13 @@
 ;;;   (schema-decode! (schema/always 42) (json/null))  ; => 42
 ;;;
 ;;; Since: Phase SC7
+
+
 (defn schema/always [value :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 12; s[1] = value; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/never -- the empty schema: always fails with a fixed message (identity of schema/union).
 ;;;
 ;;; Parameters:
@@ -401,6 +415,7 @@
 ;;;   (schema-decode (schema/never "no match") (json/int 1))  ; => err
 ;;;
 ;;; Since: Phase SC7
+
 (defn schema/never [message :cstr] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 13;
@@ -408,7 +423,6 @@
   s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/ap -- the Validation applicative: apply sf's decoded function to sa's decoded value, accumulating both arms' errors.
 ;;;
 ;;; Decodes the function arm `sf` and the argument arm `sa` against the *same*
@@ -431,12 +445,12 @@
 ;;;              (schema/field-of "n" (schema/int)))
 ;;;
 ;;; Since: Phase SC7
+
 (defn schema/ap [sf :int sa :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 14; s[1] = sf; s[2] = sa; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/field-of -- decode a JSON object and extract one key's decoded value via an inner schema.
 ;;;
 ;;; Yields the key's decoded value (not the whole object), so it composes with
@@ -454,6 +468,7 @@
 ;;;   (schema/field-of "age" (schema/int))  ; on {"age":30} => 30
 ;;;
 ;;; Since: Phase SC7
+
 (defn schema/field-of [key :cstr inner :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 15;
@@ -461,7 +476,6 @@
   s[2] = inner; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/fmap -- the Functor map for schemas: decode with `inner`, then map the result with `f` (alias for schema/transform).
 ;;;
 ;;; Parameters:
@@ -476,6 +490,7 @@
 ;;;   (schema/fmap (schema/int) double-it)
 ;;;
 ;;; Since: Phase SC7
+
 (defn schema/fmap [inner :int ^fat f] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   /* SC7: the Functor map -- identical node to schema/transform (kind 10).
@@ -486,7 +501,6 @@
   s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; schema/alt -- the Alternative `<|>`: a two-arm first-match union (try `a`, then `b`).
 ;;;
 ;;; Parameters:
@@ -500,9 +514,8 @@
 ;;;   (schema/alt (schema/int) (schema/str))
 ;;;
 ;;; Since: Phase SC7
-(defn schema/alt [a :int b :int] :int
-  (schema/union (vec-of a b)))
 
+(defn schema/alt [a :int b :int] :int (schema/union (vec-of a b)))
 ;;; schema/ap-fat -- closure-aware Validation applicative (kind 16).
 ;;;
 ;;; Like schema/ap, but applies the decoded function arm to the decoded
@@ -521,12 +534,12 @@
 ;;;   An applicative schema decoding to (f a).
 ;;;
 ;;; Since: Phase SC7
+
 (defn schema/ap-fat [sf :int sa :int] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 16; s[1] = sf; s[2] = sa; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;; ---------------------------------------------------------------------------
 ;; SC7 -- phantom (Schema a) wrapper + Functor/Applicative/Alternative
 ;; ---------------------------------------------------------------------------
@@ -537,14 +550,15 @@
 ;; C representation at every site -- which is what lets HKT dispatch chain a
 ;; result across operators (`ap (fmap ctor f) g`).  The instances delegate to the
 ;; plain combinators above and re-wrap, so dispatch keys on the `Schema` head.
-
 ;; The Functor class is auto-loaded globally; pull in the Applicative and
 ;; Alternative class stubs here (rather than globally) so only schema-using
 ;; programs see them -- and so fixtures that declare their own Applicative /
 ;; Alternative classes are unaffected.
-(load "stdlib/typeclass-applicative.tur")
-(load "stdlib/typeclass-alternative.tur")
 
+
+(load "stdlib/typeclass-applicative.tur")
+
+(load "stdlib/typeclass-alternative.tur")
 ;;; Schema -- phantom wrapper over an int-carrier schema, for HKT dispatch.
 ;;;
 ;;; Parameters:
@@ -552,36 +566,37 @@
 ;;;   raw -- the underlying SC0 schema pointer (int-carrier)
 ;;;
 ;;; Since: Phase SC7
+
 (defstruct Schema [A] (raw :int))
-
 ;;; Functor [Schema] -- map a function over a schema's decoded value.
-(definstance Functor [Schema]
-  (fmap [container fn]
-    (:: (make-struct Schema (schema/fmap (.raw container) fn)) (Schema int))))
 
+(definstance Functor [Schema] (fmap [container fn]
+                                (:: (make-struct Schema
+                                      (schema/fmap (.raw container) fn))
+                                  (Schema int))))
 ;;; Applicative [Schema] -- Validation applicative: pure + accumulating ap.
 ;;;
 ;;; `pure` lifts a value (schema/always); `ap` applies a decoded function arm to
 ;;; a decoded argument arm via the closure-aware schema/ap-fat, accumulating both
 ;;; arms' errors (Validation, not fail-fast).  Monad is deliberately omitted: the
 ;;; lawful fail-fast >>= contradicts this accumulating <*> (see schema/ap).
-(definstance Applicative [Schema]
-  (pure [x]
-    (:: (make-struct Schema (schema/always x)) (Schema int)))
+
+(definstance Applicative [Schema] (pure [x]
+                                    (:: (make-struct Schema (schema/always x))
+                                      (Schema int)))
   (ap [ff fa]
     (:: (make-struct Schema (schema/ap-fat (.raw ff) (.raw fa))) (Schema int))))
-
 ;;; Alternative [Schema] -- first-match choice (`alt-or`) + the empty schema.
-(definstance Alternative [Schema]
-  (empty [a]
-    (:: (make-struct Schema (schema/never "no alternative matched")) (Schema int)))
+
+(definstance Alternative [Schema] (empty [a]
+                                    (:: (make-struct Schema
+                                          (schema/never "no alternative matched"))
+                                      (Schema int)))
   (alt-or [a b]
     (:: (make-struct Schema (schema/alt (.raw a) (.raw b))) (Schema int))))
-
 ;; ---------------------------------------------------------------------------
 ;; SC3 -- SchemaError accessors + formatting
 ;; ---------------------------------------------------------------------------
-
 ;;; schema-error-path -- the dot-separated field path of a SchemaError.
 ;;;
 ;;; Parameters:
@@ -591,11 +606,12 @@
 ;;;   The path cstr, e.g. "user.address.zip" (empty string at the root).
 ;;;
 ;;; Since: Phase SC3
+
+
 (defn schema-error-path [e :int] :cstr
   ```c int64_t *p = (int64_t*)(intptr_t)e;
   return (char*)(intptr_t)p[0];
   ```)
-
 ;;; schema-error-text -- the human-readable message of a SchemaError.
 ;;;
 ;;; Parameters:
@@ -605,11 +621,11 @@
 ;;;   The message cstr, e.g. "expected :cstr, got :int".
 ;;;
 ;;; Since: Phase SC3
+
 (defn schema-error-text [e :int] :cstr
   ```c int64_t *p = (int64_t*)(intptr_t)e;
   return (char*)(intptr_t)p[1];
   ```)
-
 ;;; schema-error-count -- number of errors in an error Vec.
 ;;;
 ;;; Parameters:
@@ -619,11 +635,11 @@
 ;;;   The error count (0 if errs is null).
 ;;;
 ;;; Since: Phase SC3
+
 (defn schema-error-count [errs :int] :int
   ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   return v ? (int)v->len : 0;
   ```)
-
 ;;; schema-error-at -- the i-th SchemaError in an error Vec.
 ;;;
 ;;; Parameters:
@@ -634,12 +650,12 @@
 ;;;   The SchemaError at index i (0 if out of bounds).
 ;;;
 ;;; Since: Phase SC3
+
 (defn schema-error-at [errs :int i :int] :int
   ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   if (!v || i < 0 || (size_t)i >= v->len) return 0;
   return v->data[i];
   ```)
-
 ;;; schema-error-message -- format an error Vec into one human-readable cstr.
 ;;;
 ;;; Parameters:
@@ -653,6 +669,7 @@
 ;;;   (schema-error-message errs)  ; => "user.age: expected :int, got :cstr"
 ;;;
 ;;; Since: Phase SC3
+
 (defn schema-error-message [errs :int] :cstr
   ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   if (!v || v->len == 0) {
@@ -678,11 +695,9 @@
   }
   return out;
   ```)
-
 ;; ---------------------------------------------------------------------------
 ;; SC1-SC4 -- the decoder
 ;; ---------------------------------------------------------------------------
-
 ;;; schema-decode -- validate a JSON node against a schema.
 ;;;
 ;;; Parameters:
@@ -704,6 +719,7 @@
 ;; Private helpers for schema-decode.
 ;; tur_sch_t  = { kind, a, b, c } schema node
 ;; tur_sch_vec_t = { data, len, cap } growing int64_t array
+
 
 (defn sch-vpush- [v :ptr x :int] :void
   ```c typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
@@ -955,7 +971,6 @@
   }
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; schema-decode-ok? -- whether a schema-decode Result succeeded.
 ;;;
 ;;; Parameters:
@@ -965,11 +980,11 @@
 ;;;   true if decoding succeeded, false otherwise.
 ;;;
 ;;; Since: Phase SC1
+
 (defn schema-decode-ok? [r :int] :bool
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res && res->is_ok;
   ```)
-
 ;;; schema-decode-value -- the decoded value of a successful Result.
 ;;;
 ;;; Parameters:
@@ -979,11 +994,11 @@
 ;;;   The decoded value (see the module docstring for per-kind shape).
 ;;;
 ;;; Since: Phase SC1
+
 (defn schema-decode-value [r :int] :int
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res ? res->ok_val : 0;
   ```)
-
 ;;; schema-decode-errors -- the error Vec of a failed Result.
 ;;;
 ;;; Parameters:
@@ -993,12 +1008,13 @@
 ;;;   The Vec of SchemaError (0 if r is ok).
 ;;;
 ;;; Since: Phase SC1
+
 (defn schema-decode-errors [r :int] :int
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res ? res->err_val : 0;
   ```)
-
 ;;; schema-decode-abort -- internal: print an error Vec to stderr and abort.
+
 (defn schema-decode-abort [errs :int] :int
   ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   fprintf(stderr, "schema-decode!: validation failed\n");
@@ -1012,7 +1028,6 @@
   abort();
   return 0;
   ```)
-
 ;;; schema-decode! -- decode against a schema, panicking on any violation.
 ;;;
 ;;; Parameters:
@@ -1027,16 +1042,15 @@
 ;;;   (schema-decode! (schema/int) (json/int 5))  ; => 5
 ;;;
 ;;; Since: Phase SC1
+
 (defn schema-decode! [schema :int node :int] :int
   (let [r (schema-decode schema node)]
     (if (schema-decode-ok? r)
       (schema-decode-value r)
       (schema-decode-abort (schema-decode-errors r)))))
-
 ;; ---------------------------------------------------------------------------
 ;; SC5 -- HasSchema: return-type-directed typed decoding
 ;; ---------------------------------------------------------------------------
-
 ;;; HasSchema -- a type that knows how to validate-and-build itself from a
 ;;; tagged JSON node.
 ;;;
@@ -1066,8 +1080,6 @@
 ;;; schema-decode against the type's schema and branch on schema-decode-ok?.
 ;;;
 ;;; Since: Phase SC5
-(defclass HasSchema [a]
-  ;;; decode! -- validate `node` against a's schema and build a typed `a`,
-  ;;; panicking on any violation.  Return-type-directed: resolve `a` from the
-  ;;; ascription at the call site.
-  (decode! [node :int] :a))
+
+
+(defclass HasSchema [a] (decode! [node :int] :a))

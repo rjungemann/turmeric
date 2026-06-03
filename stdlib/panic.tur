@@ -18,11 +18,9 @@
 ;;;
 ;;; Since: Phase R2
 ;; Panic-inspection surface for catch-unwind.
-
 ;; Opaque wrapper around the runtime tur_panic_payload pointer (OQ#2). Keeping
 ;; it opaque prevents callers from accidentally dereferencing the raw pointer.
 (defopaque Panic :ptr<void>)
-
 ;;; result-panic -- extract the Panic handle from a caught (err ...) result.
 ;;;
 ;;; Parameters:
@@ -36,13 +34,12 @@
 ;;;     (panic-message (result-panic r)))  ; => "boom"
 ;;;
 ;;; Since: Phase R2
+
 (defn result-panic [r :int] :Panic
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (void *)(intptr_t)r;
   return (res && !res->is_ok) ? (int64_t)res->err_val : 0;
   ```)
-
 ;;; panic-message -- the message string carried by a caught Panic.
 ;;;
 ;;; Parameters:
@@ -52,13 +49,12 @@
 ;;;   The panic message for a string panic, or "" when none is available.
 ;;;
 ;;; Since: Phase R2
+
 (defn panic-message [p :Panic] :cstr
-  ```c
-  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   const char *m = pp ? (const char *)tur_panic_payload_value(pp) : 0;
   return m ? m : "";
   ```)
-
 ;;; panic-file -- source file of the panic call site.
 ;;;
 ;;; Parameters:
@@ -68,13 +64,12 @@
 ;;;   The source file path, or "" when unknown.
 ;;;
 ;;; Since: Phase R2
+
 (defn panic-file [p :Panic] :cstr
-  ```c
-  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   const char *f = pp ? tur_panic_payload_file(pp) : 0;
   return f ? f : "";
   ```)
-
 ;;; panic-line -- source line of the panic call site.
 ;;;
 ;;; Parameters:
@@ -84,12 +79,11 @@
 ;;;   The source line, or 0 when unknown.
 ;;;
 ;;; Since: Phase R2
+
 (defn panic-line [p :Panic] :int
-  ```c
-  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   return pp ? tur_panic_payload_line(pp) : 0;
   ```)
-
 ;;; panic-type -- the TypeKind tag of the panic payload.
 ;;;
 ;;; Parameters:
@@ -100,8 +94,8 @@
 ;;;   plain string panic), or 0 when unknown.
 ;;;
 ;;; Since: Phase R2
+
 (defn panic-type [p :Panic] :int
-  ```c
-  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   return pp ? tur_panic_payload_type(pp) : 0;
   ```)

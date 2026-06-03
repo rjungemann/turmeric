@@ -388,9 +388,9 @@
 ;;;   (json/encode (json/int 42))  ; => "42"
 ;;;
 ;;; Since: Phase B2
-
 ;; Private helpers for json/encode.
 ;; State is a tur_json_buf { char *data; size_t len; size_t cap; } passed as :ptr.
+
 
 (defn json-enc-ensure- [b :ptr extra :int] :void
   ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
@@ -499,9 +499,9 @@
 ;;;   (json/decode "{\"x\":1}")  ; => <object node>
 ;;;
 ;;; Since: Phase B2
-
 ;; Private helpers for json/decode.
 ;; State is a tur_json_ctx { const char *s; size_t pos; int err; } passed as :ptr.
+
 
 (defn json-dec-skip-ws- [c :ptr] :void
   ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
@@ -509,8 +509,8 @@
   while (cp->s[cp->pos] == ' ' || cp->s[cp->pos] == '\n' ||
          cp->s[cp->pos] == '\r' || cp->s[cp->pos] == '\t') cp->pos++;
   ```)
-
 ;; Returns a heap-allocated mutable char* (caller owns) or NULL on error.
+
 (defn json-dec-parse-string- [c :ptr] :ptr
   ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
@@ -664,8 +664,8 @@
 ;;;   (json/free my-node)
 ;;;
 ;;; Since: Phase B2
-
 ;; Private recursive helper for json/free.
+
 (defn json-free-node- [node :int] :void
   ```c if (!node) return;
   int64_t *np = (int64_t*)(intptr_t)node;
