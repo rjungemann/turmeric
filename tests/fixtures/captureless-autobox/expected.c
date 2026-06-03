@@ -2613,7 +2613,7 @@ static void mutmap_free(int64_t);
 static int64_t apply_fat(int64_t, int64_t);
 static int64_t dbl_impl(int64_t);
 static void * make_dbl();
-static int64_t run_with(int64_t, int64_t);
+static int64_t run_with(void *, int64_t);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -4250,8 +4250,8 @@ static void * make_dbl() {
         return __t8;
 }
 
-static int64_t run_with(int64_t g, int64_t arg) {
-        return apply_fat(g, arg);
+static int64_t run_with(void * g, int64_t arg) {
+        return apply_fat((int64_t)(intptr_t)(g), arg);
 }
 
 int main(int argc, char **argv) {
@@ -4273,7 +4273,7 @@ int main(int argc, char **argv) {
             __t9[0] = (int64_t)(intptr_t)__tur_fatshim1;
             __t9[1] = (int64_t)(intptr_t)__fn_868;
             void *__t10 = __t9;
-            int64_t via_arg_870 = run_with((int64_t)(intptr_t)(__t10), INT64_C(50));
+            int64_t via_arg_870 = run_with((void *)(intptr_t)(__t10), INT64_C(50));
             (void)via_arg_870;
             printf("%lld\n", (long long)(via_ret_866));
             printf("%lld\n", (long long)(via_arg_870));

@@ -2669,7 +2669,7 @@ static int64_t or_parser_impl(int64_t, int64_t, int64_t);
 static void * or_parser(int64_t, int64_t);
 static int64_t bind_parser_inner(int64_t, int64_t);
 static int64_t bind_parser_impl(int64_t, int64_t, int64_t);
-static void * bind_parser(int64_t, int64_t);
+static void * bind_parser(int64_t, void *);
 static int64_t then_parser_impl(int64_t, int64_t, int64_t);
 static void * then_parser(int64_t, int64_t);
 static int64_t many_c_impl(int64_t, int64_t);
@@ -3293,10 +3293,10 @@ static int64_t __fn_1020(void * __env_p_1023, int64_t pair) {
         return __t3;
 }
 
-struct __env_1032 { tur_thunk_int64_t_int64_t_t __fn; int64_t lp; int64_t lf; };
+struct __env_1032 { tur_thunk_int64_t_int64_t_t __fn; int64_t lp; void * lf; };
 static int64_t __fn_1030(void * __env_p_1033, int64_t inp) {
         struct __env_1032 *__env___env_1032 = (struct __env_1032 *)__env_p_1033;
-        return bind_parser_impl(__env___env_1032->lp, __env___env_1032->lf, inp);
+        return bind_parser_impl(__env___env_1032->lp, (int64_t)(intptr_t)(__env___env_1032->lf), inp);
 }
 
 struct __env_1043 { tur_thunk_int64_t_int64_t_t __fn; int64_t lq2; };
@@ -3358,7 +3358,7 @@ static void * __fn_1104(void * __env_p_1107, int64_t x) {
             __t7->__fn = (tur_thunk_void___int64_t_t)__fn_1099;
             __t7->x = x;
             void *__t8 = __t7;
-            __t6 = bind_parser((int64_t)(intptr_t)(many((int64_t)(intptr_t)(then_parser(__env___env_1106->_sep, __env___env_1106->_p)))), (int64_t)(intptr_t)(__t8));
+            __t6 = bind_parser((int64_t)(intptr_t)(many((int64_t)(intptr_t)(then_parser(__env___env_1106->_sep, __env___env_1106->_p)))), (void *)(intptr_t)(__t8));
         }
         return __t6;
 }
@@ -3384,7 +3384,7 @@ static void * __fn_1150(int64_t op) {
         __t9->__fn = (tur_thunk_void___int64_t_t)__fn_1145;
         __t9->op = op;
         void *__t10 = __t9;
-        return bind_parser((int64_t)(intptr_t)(factor()), (int64_t)(intptr_t)(__t10));
+        return bind_parser((int64_t)(intptr_t)(factor()), (void *)(intptr_t)(__t10));
 }
 
 struct __env_1156 { tur_thunk_void___int64_t_t __fn; int64_t lhs; };
@@ -3398,7 +3398,7 @@ static void * __fn_1159(int64_t lhs) {
         __t11->__fn = (tur_thunk_void___int64_t_t)__fn_1154;
         __t11->lhs = lhs;
         void *__t12 = __t11;
-        return bind_parser((int64_t)(intptr_t)(many((int64_t)(intptr_t)(term_tail_pair()))), (int64_t)(intptr_t)(__t12));
+        return bind_parser((int64_t)(intptr_t)(many((int64_t)(intptr_t)(term_tail_pair()))), (void *)(intptr_t)(__t12));
 }
 
 struct __env_1165 { tur_thunk_void___int64_t_t __fn; int64_t op; };
@@ -3412,7 +3412,7 @@ static void * __fn_1168(int64_t op) {
         __t13->__fn = (tur_thunk_void___int64_t_t)__fn_1163;
         __t13->op = op;
         void *__t14 = __t13;
-        return bind_parser((int64_t)(intptr_t)(term()), (int64_t)(intptr_t)(__t14));
+        return bind_parser((int64_t)(intptr_t)(term()), (void *)(intptr_t)(__t14));
 }
 
 struct __env_1174 { tur_thunk_void___int64_t_t __fn; int64_t lhs; };
@@ -3426,7 +3426,7 @@ static void * __fn_1177(int64_t lhs) {
         __t15->__fn = (tur_thunk_void___int64_t_t)__fn_1172;
         __t15->lhs = lhs;
         void *__t16 = __t15;
-        return bind_parser((int64_t)(intptr_t)(many((int64_t)(intptr_t)(expr_tail_pair()))), (int64_t)(intptr_t)(__t16));
+        return bind_parser((int64_t)(intptr_t)(many((int64_t)(intptr_t)(expr_tail_pair()))), (void *)(intptr_t)(__t16));
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -4835,12 +4835,12 @@ static int64_t bind_parser_impl(int64_t lp, int64_t lf, int64_t inp) {
         return __t52;
 }
 
-static void * bind_parser(int64_t p, int64_t f) {
+static void * bind_parser(int64_t p, void * f) {
         void * __t55;
         {
             int64_t lp_1027 = p;
             (void)lp_1027;
-            int64_t lf_1028 = f;
+            void * lf_1028 = f;
             (void)lf_1028;
             struct __env_1032 *__t56 = (struct __env_1032 *)malloc(sizeof(struct __env_1032));
             __t56->__fn = (tur_thunk_int64_t_int64_t_t)__fn_1030;
@@ -4978,7 +4978,7 @@ static void * between(int64_t open, int64_t close, int64_t p) {
             __t74->__fn = (tur_thunk_void___int64_t_t)__fn_1085;
             __t74->_close = _close_1081;
             void *__t75 = __t74;
-            __t73 = then_parser(_open_1080, (int64_t)(intptr_t)(bind_parser(_p_1082, (int64_t)(intptr_t)(__t75))));
+            __t73 = then_parser(_open_1080, (int64_t)(intptr_t)(bind_parser(_p_1082, (void *)(intptr_t)(__t75))));
         }
         return __t73;
 }
@@ -5002,7 +5002,7 @@ static void * sepBy1(int64_t p, int64_t sep) {
             __t77->_sep = _sep_1095;
             __t77->_p = _p_1094;
             void *__t78 = __t77;
-            __t76 = bind_parser(_p_1094, (int64_t)(intptr_t)(__t78));
+            __t76 = bind_parser(_p_1094, (void *)(intptr_t)(__t78));
         }
         return __t76;
 }
@@ -5116,7 +5116,7 @@ static void * number() {
         __t85[0] = (int64_t)(intptr_t)__tur_fatshim_void___int64_t;
         __t85[1] = (int64_t)(intptr_t)__fn_1125;
         void *__t86 = __t85;
-        return bind_parser((int64_t)(intptr_t)(many1((int64_t)(intptr_t)(digit()))), (int64_t)(intptr_t)(__t86));
+        return bind_parser((int64_t)(intptr_t)(many1((int64_t)(intptr_t)(digit()))), (void *)(intptr_t)(__t86));
 }
 
 static int64_t expr_thunk_impl(int64_t dummy, int64_t inp) {
@@ -5179,7 +5179,7 @@ static void * term_tail_pair() {
         __t93[0] = (int64_t)(intptr_t)__tur_fatshim_void___int64_t;
         __t93[1] = (int64_t)(intptr_t)__fn_1150;
         void *__t94 = __t93;
-        return bind_parser((int64_t)(intptr_t)(term_op()), (int64_t)(intptr_t)(__t94));
+        return bind_parser((int64_t)(intptr_t)(term_op()), (void *)(intptr_t)(__t94));
 }
 
 static void * term() {
@@ -5187,7 +5187,7 @@ static void * term() {
         __t95[0] = (int64_t)(intptr_t)__tur_fatshim_void___int64_t;
         __t95[1] = (int64_t)(intptr_t)__fn_1159;
         void *__t96 = __t95;
-        return bind_parser((int64_t)(intptr_t)(factor()), (int64_t)(intptr_t)(__t96));
+        return bind_parser((int64_t)(intptr_t)(factor()), (void *)(intptr_t)(__t96));
 }
 
 static void * expr_op() {
@@ -5199,7 +5199,7 @@ static void * expr_tail_pair() {
         __t97[0] = (int64_t)(intptr_t)__tur_fatshim_void___int64_t;
         __t97[1] = (int64_t)(intptr_t)__fn_1168;
         void *__t98 = __t97;
-        return bind_parser((int64_t)(intptr_t)(expr_op()), (int64_t)(intptr_t)(__t98));
+        return bind_parser((int64_t)(intptr_t)(expr_op()), (void *)(intptr_t)(__t98));
 }
 
 static void * expr() {
@@ -5207,7 +5207,7 @@ static void * expr() {
         __t99[0] = (int64_t)(intptr_t)__tur_fatshim_void___int64_t;
         __t99[1] = (int64_t)(intptr_t)__fn_1177;
         void *__t100 = __t99;
-        return bind_parser((int64_t)(intptr_t)(term()), (int64_t)(intptr_t)(__t100));
+        return bind_parser((int64_t)(intptr_t)(term()), (void *)(intptr_t)(__t100));
 }
 
 static int64_t run_parser(int64_t p, const char * s) {

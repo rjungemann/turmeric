@@ -1202,9 +1202,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
             next_param_relevant = false;
         }
         /* A#1: If the previous ^fat annotation applied to this parameter, mark it
-         * as a fat-closure consumer so call sites auto-shim bare fn arguments. */
+         * as a fat-closure consumer so call sites auto-shim bare fn arguments.
+         * closure-representation-unification (Phase 0): a bare ^fat parameter
+         * (no fn-type annotation) defaults to TY_INT, which is not directly
+         * callable -- (g x) then errors "not a function".  A ^fat parameter
+         * holds a fat-closure box, so default it to :ptr<void>, which routes
+         * (g x) through the fat-dispatch path.  An explicit type annotation
+         * (e.g. ^fat g :(fn [...] ...)) still overrides this default below. */
         if (next_param_fat) {
             b->is_fat = true;
+            b->type = TYPE_PTR_VOID;
+            param_kinds[n_params] = TY_PTR_VOID;
             next_param_fat = false;
         }
         if (n_params == 0) {
