@@ -1,0 +1,102 @@
+;; httpd-async-mw-attr -- request attributes through the ASYNC server path.
+;;
+;; Regression test for the HttpdConn struct-drift bug (see
+;; docs/upcoming/httpd-conn-struct-consolidation-plan.md). The async worker
+;; used to allocate its HttpdConn with a truncated 17-field layout that omitted
+;; the trailing `attr_list` field. Calling (httpd-set-attr! ...) on such a
+;; connection wrote the attribute pointer past the end of the stack object,
+;; corrupting the adjacent frame -- a latent SEGV. With the struct consolidated
+;; to a single canonical layout, the async connection carries `attr_list` and
+;; set/read round-trips cleanly.
+;;
+;; The handler yields via await-timer (proving it runs on the fiber substrate /
+;; async path), sets an attribute, reads it back, and writes it as the body.
+;;
+;; Expected output:
+;;   handler-ran=1
+;;   attr=alice
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr v :int] :nil
+  ```c printf("%s=%d\n", s, (int)v); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req = "GET /me HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[1024];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  /* Body sits after the "\r\n\r\n" terminator. */
+  const char *body = strstr(drain, "\r\n\r\n");
+  if (body) printf("attr=%s\n", body + 4);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server-async [h :ptr<void>] :ptr<void>
+  ```c httpd_run_async(h); return NULL; ```)
+
+(defn spawn-server-async [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech  (chan-new 1)
+        handler (fn [c :ptr<void>] :nil
+                  ;; Yield ~10 ms to prove this runs on the async fiber path.
+                  (httpd-await-timer c 10)
+                  ;; Writes attr_list -- the field the async layout used to omit.
+                  (httpd-set-attr! c "user" "alice")
+                  (httpd-resp-status! c 200)
+                  (httpd-resp-body! c (httpd-req-attr c "user"))
+                  (chan-send donech 1))
+        h       (httpd-new-async 0 handler)
+        port    (httpd-async-port h)
+        server  (spawn-server-async h)
+        client  (spawn-client port)]
+    (let [r (chan-recv donech)]
+      (print-tag "handler-ran" r))
+    (httpd-stop-async h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-async-free h)
+    (chan-free donech)
+    0))

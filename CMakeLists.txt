@@ -54,6 +54,14 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Single-source-of-truth guard for the HttpdConn struct: fails if any local
+# redeclaration of HttpdConn/HttpdHeader/HttpdAttr reappears in stdlib/httpd.tur
+# (the canonical layout is hoisted once via __tur_include__).
+add_test(
+  NAME tur_httpd_conn_single_def_tests
+  COMMAND bash tests/check-httpd-conn-single-def.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests

@@ -70,6 +70,9 @@
   /* __tur_include__: #include <stdint.h> */
   /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
+  /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
+  /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
+  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; } HttpdConn; */
   return 0;
   ```)
 ;;; httpd-register-tls-impl -- install TLS function pointers into the H5 hook table.
@@ -151,32 +154,8 @@
 ;;; Since: Phase H1 (TLS path: Phase H5)
 
 (defn httpd-handle [fd :int handler :int tls :int] :nil
-  ```c typedef struct __HttpdHeader {
-      char *name;
-      char *value;
-      struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd;
-      int64_t handler;
-      char method[16];
-      char path[1024];
-      char version[16];
-      char *body;
-      int body_len;
-      int resp_status;
-      char *resp_body;
-      int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;     /* M3: lazily-parsed json/decode tree, freed in cleanup */
-      void *req_multipart_parts;  /* M7: lazily-parsed multipart head (HttpdPart linked list) */
-      void *fiber_group;          /* A0: bound local-fiber-group for await-* primitives */
-      void *attr_list;            /* MW2: per-request attribute list (HttpdAttr linked list) */
-  } HttpdConn;
+  ```c
+
   typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
   /* 5 second receive timeout bounds idle keep-alive connections. */
@@ -510,9 +489,7 @@
       }
       /* MW2: free per-request attribute list. */
       if (conn->attr_list) {
-          typedef struct __HttpdAttr {
-              char *key; char *value; struct __HttpdAttr *next;
-          } HttpdAttr;
+
           HttpdAttr *ap = (HttpdAttr *)conn->attr_list;
           while (ap) {
               HttpdAttr *nx = ap->next;
@@ -949,13 +926,7 @@
 ;;; Since: Phase H1
 
 (defn httpd-req-method [conn :ptr<void>] :cstr
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   return ((HttpdConn *)conn)->method;
   ```)
 ;;; httpd-req-path -- return the request-target path from the parsed request.
@@ -963,13 +934,7 @@
 ;;; Since: Phase H1
 
 (defn httpd-req-path [conn :ptr<void>] :cstr
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   return ((HttpdConn *)conn)->path;
   ```)
 ;;; httpd-req-version -- return the HTTP version from the parsed request line.
@@ -980,13 +945,7 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-version [conn :ptr<void>] :cstr
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   return ((HttpdConn *)conn)->version;
   ```)
 ;;; httpd-req-body -- return the request body (NUL-terminated copy).
@@ -1001,13 +960,7 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-body [conn :ptr<void>] :cstr
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   HttpdConn *c = (HttpdConn *)conn;
   return c->body ? c->body : "";
   ```)
@@ -1019,13 +972,7 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-body-len [conn :ptr<void>] :int
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   return (int64_t)((HttpdConn *)conn)->body_len;
   ```)
 ;;; httpd-resp-status-get -- return the currently-set response status code.
@@ -1036,13 +983,7 @@
 ;;; Since: Phase H6
 
 (defn httpd-resp-status-get [conn :ptr<void>] :int
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   return (int64_t)((HttpdConn *)conn)->resp_status;
   ```)
 ;;; httpd-resp-status! -- set the HTTP response status code.
@@ -1050,13 +991,7 @@
 ;;; Since: Phase H1
 
 (defn httpd-resp-status! [conn :ptr<void> status :int] :nil
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   ((HttpdConn *)conn)->resp_status = (int)status;
   ```)
 ;;; httpd-resp-body! -- set the HTTP response body (copies the string).
@@ -1064,13 +999,7 @@
 ;;; Since: Phase H1
 
 (defn httpd-resp-body! [conn :ptr<void> body :cstr] :nil
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   HttpdConn *c = (HttpdConn *)conn;
   if (c->resp_body) { free(c->resp_body); c->resp_body = NULL; c->resp_body_len = 0; }
   if (!body) return;
@@ -1115,20 +1044,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-req-header [conn :ptr<void> name :cstr] :cstr
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-  } HttpdConn;
+  ```c
+
   if (!conn || !name) return "";
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   while (h) {
@@ -1154,20 +1071,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-req-header? [conn :ptr<void> name :cstr] :int
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-  } HttpdConn;
+  ```c
+
   if (!conn || !name) return 0;
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   while (h) {
@@ -1193,20 +1098,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-resp-header! [conn :ptr<void> name :cstr value :cstr] :nil
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-  } HttpdConn;
+  ```c
+
   if (!conn || !name) return;
   HttpdConn *c = (HttpdConn *)conn;
   /* Replace if name already present. */
@@ -1264,20 +1157,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-resp-header-add! [conn :ptr<void> name :cstr value :cstr] :nil
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-  } HttpdConn;
+  ```c
+
   if (!conn || !name) return;
   HttpdConn *c = (HttpdConn *)conn;
   HttpdHeader *nh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
@@ -1348,20 +1229,8 @@
 ;;; Since: Phase H8 (M2)
 
 (defn httpd-req-cookie [conn :ptr<void> name :cstr] :cstr
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-  } HttpdConn;
+  ```c
+
   if (!conn || !name || !*name) return "";
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   const char *cookie_hdr = NULL;
@@ -1531,21 +1400,8 @@
 ;;; Since: Phase H8 (M3)
 
 (defn httpd-req-form [conn :ptr<void> field :cstr] :cstr
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-  } HttpdConn;
+  ```c
+
   if (!conn || !field || !*field) return "";
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->body || c->body_len <= 0) return "";
@@ -1616,21 +1472,8 @@
 ;;; Since: Phase H8 (M3)
 
 (defn httpd-req-json [conn :ptr<void>] :int
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-  } HttpdConn;
+  ```c
+
   if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (c->req_json_cache) return c->req_json_cache;
@@ -1674,21 +1517,8 @@
 ;;; if-form inside mw-json-body can stay in Turmeric.
 
 (defn httpd-mw-json-body-precheck [conn :ptr<void>] :int
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-  } HttpdConn;
+  ```c
+
   if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->body || c->body_len <= 0) return 0;  /* empty body -> not malformed */
@@ -2043,27 +1873,13 @@
 ;;; / non-multipart content.
 
 (defn httpd-req-multipart-parse [conn :ptr<void>] :int
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
+  ```c
   typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
   } HttpdPart;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-  } HttpdConn;
+
   if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (c->req_multipart_parts) return 1;
@@ -2202,27 +2018,13 @@
 ;;; Since: Phase H8 (M7)
 
 (defn httpd-req-file [conn :ptr<void> field :cstr] :ptr<void>
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
+  ```c
   typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
   } HttpdPart;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-  } HttpdConn;
+
   if (!conn || !field || !*field) return NULL;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->req_multipart_parts) {
@@ -2337,23 +2139,8 @@
   #include <errno.h>
   (void)self;
   /* HttpdAsync layout (kept in sync with httpd-new-async below). */
-  typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-      void *fiber_group;
-  } HttpdConn;
+
+
   typedef struct {
       int   fd;
       int64_t handler;
@@ -2939,23 +2726,8 @@
 ;;; Since: Phase H8 (A0)
 
 (defn httpd-await-readable [conn :ptr<void>] :nil
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-      void *fiber_group;
-  } HttpdConn;
+  ```c
+
   if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
@@ -2964,23 +2736,8 @@
 ;;; httpd-await-writable -- suspend until conn fd is writable.
 
 (defn httpd-await-writable [conn :ptr<void>] :nil
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-      void *fiber_group;
-  } HttpdConn;
+  ```c
+
   if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
@@ -2996,23 +2753,8 @@
 ;;; Since: Phase H8 (A0)
 
 (defn httpd-await-timer [conn :ptr<void> ms :int] :nil
-  ```c typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-      void *fiber_group;
-  } HttpdConn;
+  ```c
+
   if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
@@ -3135,14 +2877,7 @@
   typedef struct { Route *routes; } Router;
   typedef struct RouteParam RouteParam;
   struct RouteParam { char name[64]; char value[256]; RouteParam *next; };
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-  } HttpdConn;
+
   Router *router = (Router *)r;
   HttpdConn *c   = (HttpdConn *)conn;
   for (Route *route = router->routes; route; route = route->next) {
@@ -3227,14 +2962,7 @@
 (defn httpd-param [conn :ptr<void> name :cstr] :cstr
   ```c typedef struct RouteParam RouteParam;
   struct RouteParam { char name[64]; char value[256]; RouteParam *next; };
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-  } HttpdConn;
+
   HttpdConn *c = (HttpdConn *)conn;
   RouteParam *p = (RouteParam *)c->route_params;
   while (p) {
@@ -3320,13 +3048,7 @@
 ;;; httpd-mw-log-emit -- emit one log line for a completed request. Internal.
 
 (defn httpd-mw-log-emit [c :ptr<void> elapsed-ms :int] :nil
-  ```c typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-  } HttpdConn;
+  ```c
   HttpdConn *cn = (HttpdConn *)c;
   int status = cn->resp_status ? cn->resp_status : 200;
   fprintf(stdout, "%s %s -> %d %d %lldms\n",
@@ -3586,24 +3308,8 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-set-attr! [conn :ptr<void> key :cstr val :cstr] :nil
-  ```c typedef struct __HttpdAttr {
-      char *key; char *value; struct __HttpdAttr *next;
-  } HttpdAttr;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-      void *fiber_group;
-      void *attr_list;
-  } HttpdConn;
+  ```c
+
   if (!conn || !key) return;
   HttpdConn *c = (HttpdConn *)conn;
   /* Overwrite if the key already exists. */
@@ -3643,24 +3349,8 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-req-attr [conn :ptr<void> key :cstr] :cstr
-  ```c typedef struct __HttpdAttr {
-      char *key; char *value; struct __HttpdAttr *next;
-  } HttpdAttr;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-      void *fiber_group;
-      void *attr_list;
-  } HttpdConn;
+  ```c
+
   if (!conn || !key) return "";
   HttpdAttr *ap = (HttpdAttr *)((HttpdConn *)conn)->attr_list;
   while (ap) {
@@ -3697,21 +3387,7 @@
   ```c
   #include <arpa/inet.h>
   #include <sys/socket.h>
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-      int64_t req_json_cache;
-      void *req_multipart_parts;
-      void *fiber_group;
-      void *attr_list;
-  } HttpdConn;
+
   if (!conn) return "";
   HttpdConn *c = (HttpdConn *)conn;
   /* Stash the formatted address on an attr so it lives as long as the
@@ -3945,20 +3621,8 @@
   #include <sys/stat.h>
   #include <fcntl.h>
   #include <unistd.h>
-  typedef struct __HttpdHeader {
-      char *name; char *value; struct __HttpdHeader *next;
-  } HttpdHeader;
-  typedef struct {
-      int fd; int64_t handler;
-      char method[16]; char path[1024]; char version[16];
-      char *body; int body_len;
-      int resp_status; char *resp_body; int resp_body_len;
-      int client_keep_alive;
-      void *route_params;
-      int64_t tls;
-      void *req_headers;
-      void *resp_headers;
-  } HttpdConn;
+
+
   if (!conn || !root || !*root) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   const char *rp = c->path;
