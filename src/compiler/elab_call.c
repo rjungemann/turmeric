@@ -1675,9 +1675,24 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     if (fn_binding->closure_fn_binding) {
         /* This is a closure - get the thunk function type */
         fn_type = fn_binding->closure_fn_binding->type;
+    } else if (fn_binding->type.kind == TY_PTR_VOID && !fn_binding->is_fat) {
+        /* CRU B-4: retire the :ptr<void>-as-closure overload.  A *raw*
+         * :ptr<void> (not a fat sink) is a plain pointer, not a callable
+         * closure -- calling it directly is the representation-split hazard
+         * (report ptr-void-direct-call-representation-split).  Closures are now
+         * boxed TY_FN (B-1); a fat-closure parameter must be spelled ^fat (or
+         * ^fat :(fn [...] :T)).  This makes :ptr<void> raw-pointer-only again. */
+        diag_emit(DIAG_ERROR, call->span,
+                  "'%s' has type :ptr<void> (a raw pointer), which is not "
+                  "directly callable; declare it as a fat closure parameter "
+                  "(^fat %s, or ^fat %s :(fn [...] :T)) to call it",
+                  fn_binding->name->name, fn_binding->name->name,
+                  fn_binding->name->name);
+        return NULL;
     } else if (fn_binding->type.kind == TY_PTR_VOID) {
-        /* CY2: fat-closure dynamic dispatch through ptr<void> binding.
-         * Supports 0-arg (original behavior) and n-arg (new fat-closure call). */
+        /* CY2: fat-closure dynamic dispatch through a ^fat :ptr<void> sink.
+         * Supports 0-arg and n-arg fat-closure calls (emit_expr.c reads slot 0
+         * of the box for all arities). */
         Expr **cb_args = NULL;
         if (n_args > 0) {
             cb_args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));

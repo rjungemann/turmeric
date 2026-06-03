@@ -84,7 +84,7 @@
 ;;; Example:
 ;;;   (assert-error (fn [] (error "boom")))  ; => true
 
-(defn assert-error [thunk :ptr<void>] :bool
+(defn assert-error [^fat thunk] :bool
   (if (= (try (do (thunk) 0) (catch [e] 1)) 1)
     true
     (do (println "Assertion failed: expected error") false)))
@@ -103,7 +103,7 @@
 ;;; Example:
 ;;;   (run-test "my test" (fn [] (assert 1 1)))  ; => 1
 
-(defn run-test [name :cstr test-fn :ptr<void>] :int
+(defn run-test [name :cstr ^fat test-fn] :int
   (if (= (test-fn) 1) (do (println ".") 1) (do (println "F") (println name) 0)))
 ;; Register a named test callback for later execution via run-tests!.
 ;; Returns nonzero on success.

@@ -6,7 +6,7 @@ description: Implementation plan for Option B of the closure-representation-unif
 
 # First-Class Closure Type -- Plan (Phase 3, Option B)
 
-> **Status:** Draft Plan
+> **Status:** COMPLETE -- B-0 through B-4 all shipped (suite green)
 > **Last Updated:** 2026-06-03
 > **Type:** compiler -- closure ABI / type system
 > **Parent:** [closure-representation-unification-plan.md](closure-representation-unification-plan.md)
@@ -162,13 +162,46 @@ plan were never created in Phase 1 (planned, deferred), so there was nothing to
 re-add; the consolidated fixture covers the regression. 97 prelude snapshots
 regenerated (benign boxing churn). `bash tests/run.sh`: 0 FAIL.
 
-### B-4 -- retire the `:ptr<void>`-as-closure overload
+### B-4 -- retire the `:ptr<void>`-as-closure overload  *(DONE)*
 
-Migrate the remaining stdlib closure-callback `:ptr<void>` params to the
-closure type, then make a direct call on a *raw* `:ptr<void>` an error again
-(it is no longer a closure). `:ptr<void>` is raw-pointer-only. Delete the
-arity-dependent `:ptr<void>` direct-call paths in `emit_expr.c`. This is the
-clean end-state; it can trail the others.
+Shipped. A direct call through a *raw* `:ptr<void>` binding (not a fat sink) is
+now a compile error (`elab_call.c`: the `:ptr<void> && !is_fat` direct-call
+branch emits "has type :ptr<void> (a raw pointer), which is not directly
+callable; declare it as a fat closure parameter"). `:ptr<void>` is
+raw-pointer-only again; a fat-closure parameter is spelled `^fat` (or
+`^fat f :(fn [...] :T)`).
+
+Migration was far smaller than the parent plan's 2117-test estimate feared:
+after B-1 capturing closures are boxed `TY_FN` (not `:ptr<void>`), so only the
+genuinely closure-*calling* `:ptr<void>` params remained, and the initial
+1062-failure blast radius was a *cascade* from a single core prelude function
+(`__cons-fmap`). The complete set of directly-called `:ptr<void>` params:
+
+- `stdlib/list.tur`     `__cons-fmap`            -> `^fat f`
+- `stdlib/gadt-vec.tur` `__gvec-call-fn1`        -> `^fat f`
+- `stdlib/test.tur`     `run-test`, `assert-error` -> `^fat`
+- fixtures `currying-point-free` (`apply-to`) and `stdlib-test-runner-callback`
+  (`run-test`) -> `^fat`
+
+`register-test` keeps its raw `:ptr<void>` param: it *stores* the callback for
+the runtime to invoke, it does not call it -- a genuine raw-callback, not a
+closure sink. An authoritative per-module `tur check` sweep (which elaborates
+all bodies, unlike a `load`-only probe) confirms **0** remaining gated sites
+across every stdlib module. Migrating `:ptr<void>` closure params to `^fat`
+produced **no** codegen churn -- both spell the same `void *` carrier and the
+n>0 dispatch was already fat; only the n==0 behavior (now correctly fat) and the
+type gate changed.
+
+Note: `future.tur`'s `future-map`/`future-then` call their callback inside
+*inline-C* via a thin cast; that is a B-3-class fat-dispatch concern, not a
+Turmeric direct call, so it is outside B-4's gate (no error) and is left as-is.
+The arity-dependent `:ptr<void>` direct-call paths in `emit_expr.c` are kept:
+they now exclusively serve `^fat` (`is_fat`) sinks -- the raw overload is closed
+at the elaboration gate, which is the semantically meaningful end-state;
+deleting the residual emit branches is optional dead-code cleanup deferred to
+avoid risking the `is_fat`-sink paths. Negative fixture:
+`tests/fixtures/errors/ptr-void-raw-not-callable`. `bash tests/run.sh`: 0 FAIL
+(modulo the documented `httpd-async-echo` flake).
 
 ## Migration strategy
 

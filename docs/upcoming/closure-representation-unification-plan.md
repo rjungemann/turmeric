@@ -168,6 +168,19 @@ fat dispatch. Box it. The sink must be distinguished from a raw C-callback:
   separate type; `:ptr<void>` reverts to "raw pointer only." Larger, but
   removes the overload at its root and subsumes Phases 1-3.
 
+**Phase 3 / Option B is COMPLETE (2026-06-03).** Sub-phases B-0..B-4 all
+shipped, suite green; see
+[closure-first-class-type-plan.md](closure-first-class-type-plan.md). Capturing
+closures are a first-class boxed `TY_FN` value (B-1); `^fat` sinks fat-dispatch
+for all arities incl. nullary (B-2); the `*-eq?` carrier helpers + the Eq
+synthesis dispatcher fat-dispatch their comparators (B-3); and a raw
+`:ptr<void>` is no longer directly callable -- `:ptr<void>` is raw-pointer-only
+(B-4). The reports
+[ptr-void-direct-call-representation-split.md](../reported/ptr-void-direct-call-representation-split.md)
+and
+[eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md](../reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md)
+are resolved.
+
 **Decision (2026-06-03): pursue Option B for Phase 3.** Rather than papering
 over the `:ptr<void>` overload with an implicit-`^fat` heuristic (Option A),
 introduce the first-class closure type so closures are uniformly fat and
