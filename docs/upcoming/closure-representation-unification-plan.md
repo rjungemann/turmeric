@@ -179,7 +179,9 @@ pointers (see
 [eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md](../reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md))
 -- without needing a per-call-site boxing heuristic that has to enumerate
 every fat sink. Option A remains documented above as the smaller incremental
-fallback if Option B proves too large to land in one piece.
+fallback if Option B proves too large to land in one piece. The Option B
+implementation is scoped into sub-phases in
+[closure-first-class-type-plan.md](closure-first-class-type-plan.md).
 
 ## Phasing summary
 

@@ -463,6 +463,16 @@ typedef struct Type {
              * -1 when the return is not a lifetime-tied borrow.  Used by the
              * inter-procedural borrow-escape check at call sites. */
             int8_t result_borrow_arg;
+            /* CRU Phase 3 / Option B (first-class closure type): true when this
+             * TY_FN denotes a *closure value* -- a fat box { thunk, env... } --
+             * rather than a bare function reference (captureless fn / C function
+             * pointer address).  A boxed TY_FN is always called through the fat
+             * protocol (thunk = slot 0, env = the box) for all arities; a bare
+             * TY_FN coerces to a boxed one of the same signature via the
+             * EX_FN_TO_FAT auto-shim, never the reverse.  See
+             * docs/upcoming/closure-first-class-type-plan.md.  B-0 only plumbs
+             * the bit; nothing sets it true yet. */
+            bool boxed;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
