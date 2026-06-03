@@ -510,13 +510,17 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                  * EX_VAR for free-var purposes: if it's not a param, not a
                  * global, and not a let-local, count it as captured. */
                 if (cur->as.call_.fn_binding &&
-                    cur->as.call_.fn_binding->closure_fn_binding) {
-                    /* Restrict to bindings that hold a closure VALUE (fat
-                     * closure pointer).  A let-bound non-capturing fn binding
-                     * is lifted as a global and does not need to be captured;
-                     * checking closure_fn_binding avoids regressing
-                     * letrec/named-let self-recursion, where the binding is
-                     * still in scope but not (yet) a closure value. */
+                    (cur->as.call_.fn_binding->closure_fn_binding ||
+                     cur->as.call_.fn_binding->type.kind == TY_PTR_VOID ||
+                     cur->as.call_.fn_binding->is_fat)) {
+                    /* Restrict to bindings that hold a closure VALUE.  Three
+                     * forms qualify: a let-bound closure (closure_fn_binding),
+                     * a :ptr<void> binding being invoked as a fat closure, and a
+                     * ^fat binding -- all are callable values that the inner
+                     * closure must capture by env, not bare function references.
+                     * A let-bound non-capturing fn is lifted as a global and is
+                     * excluded by the is_global check below (which also avoids
+                     * regressing letrec/named-let self-recursion). */
                     Binding *fb = cur->as.call_.fn_binding;
                     bool fb_is_param = false;
                     for (uint8_t i = 0; i < n_params; i++) {
