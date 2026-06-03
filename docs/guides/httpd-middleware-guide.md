@@ -28,6 +28,15 @@ Every middleware in this guide has the shape
       )))
 ```
 
+```sweet-exp
+defn mw-foo [next :int] :ptr<void>
+  let [_n next ...]
+    fn [c :ptr<void>] :nil
+      ;; pre-processing here ...
+      httpd-call(_n c)
+      ;; post-processing here ...
+```
+
 Pre-processing runs before `(httpd-call _n c)`; post-processing runs
 after. A middleware can short-circuit by setting the response and
 *not* calling `_n` -- that is how `mw-basic-auth` emits a 401, how
@@ -48,6 +57,14 @@ Use `compose-middleware` to nest:
                                    mw-cors
                                    (mw-basic-auth "app" verify))]
   (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [composed compose-middleware(base
+                                 mw-log
+                                 mw-cors
+                                 mw-basic-auth("app" verify))]
+  httpd-new(0 composed)
 ```
 
 The macro expands to `(mw-log (mw-cors ((mw-basic-auth "app" verify) base)))`
@@ -88,6 +105,11 @@ authoritative.
   (httpd-new 0 composed))
 ```
 
+```sweet-exp
+let [composed mw-body-size(1048576 base)]   ; 1 MiB cap
+  httpd-new(0 composed)
+```
+
 ### mw-rate-limit (MW2)
 
 Sliding-window per-IP rate limiter. Each `mw-rate-limit` instance
@@ -101,6 +123,12 @@ middleware responds with `429 Too Many Requests` plus a
 (let [opts     (make-struct RateLimitOpts 100 60)   ; 100 req / 60 s
       composed (mw-rate-limit opts base)]
   (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [opts     make-struct(RateLimitOpts 100 60)   ; 100 req / 60 s
+     composed mw-rate-limit(opts base)]
+  httpd-new(0 composed)
 ```
 
 Multiple `mw-rate-limit` instances do not share state. Two
@@ -123,6 +151,11 @@ is rejected as a path-traversal guard.
 ```turmeric
 (let [composed (mw-static "./public" (router-mw r))]
   (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [composed mw-static("./public" router-mw(r))]
+  httpd-new(0 composed)
 ```
 
 The response carries a `Content-Type` derived from the file extension
@@ -157,6 +190,20 @@ section for the full surface.
   (httpd-new 0 composed))
 ```
 
+```sweet-exp
+let [verify   (fn [u :cstr p :cstr] :int
+                (let [_t "_force-fat-closure"]
+                  (if (= 1 (cstr-eq-const-time u "admin"))
+                    (cstr-eq-const-time p "s3cret")
+                    0)))
+     base     (fn [c :ptr<void>] :nil
+                (let [u (httpd-req-attr c "user")]
+                  (httpd-resp-status! c 200)
+                  (httpd-resp-body!   c u)))
+     composed mw-basic-auth("app" verify base)]
+  httpd-new(0 composed)
+```
+
 ## Request attributes (MW2)
 
 A small per-request key/value side channel attached to the connection.
@@ -171,6 +218,12 @@ same keep-alive connection.
 (let [x (httpd-req-attr c "missing")] ...) ; => ""
 ```
 
+```sweet-exp
+httpd-set-attr!(c "user" "alice")
+let [u httpd-req-attr(c "user")] ...   ; => "alice"
+let [x httpd-req-attr(c "missing")] ... ; => ""
+```
+
 Attribute keys are case-sensitive plain cstrings. Both `key` and
 `val` are copied into per-request storage; the caller may reuse or
 free the originals. Keys starting with `__` are conventionally
@@ -181,6 +234,10 @@ IP); user code should pick its own non-`__` keys.
 
 ```turmeric
 (let [ip (httpd-req-remote-ip c)] ...)
+```
+
+```sweet-exp
+let [ip httpd-req-remote-ip(c)] ...
 ```
 
 Returns the client's IP as a cstr, derived from `getpeername(2)` on
@@ -209,6 +266,16 @@ fat-shaped (which the `httpd-call` dispatcher requires):
       (httpd-resp-header! c _k _v))))
 ```
 
+```sweet-exp
+defn mw-add-header [name :cstr value :cstr next :int] :ptr<void>
+  let [_n next
+       _k name
+       _v value]
+    fn [c :ptr<void>] :nil
+      httpd-call(_n c)
+      httpd-resp-header!(c _k _v)
+```
+
 Short-circuit by *not* calling `(httpd-call _n c)`:
 
 ```turmeric
@@ -222,6 +289,17 @@ Short-circuit by *not* calling `(httpd-call _n c)`:
           (httpd-resp-body!   c "HTTPS required"))))))
 ```
 
+```sweet-exp
+defn mw-require-https [next :int] :ptr<void>
+  let [_n next]
+    fn [c :ptr<void>] :nil
+      if {1 = httpd-req-header?(c "X-Forwarded-Proto")}
+        httpd-call(_n c)
+        do
+          httpd-resp-status!(c 400)
+          httpd-resp-body!(c "HTTPS required")
+```
+
 Use request attrs to thread context downstream:
 
 ```turmeric
@@ -232,6 +310,16 @@ Use request attrs to thread context downstream:
         (httpd-set-attr! c "request_id" id)
         (httpd-call _n c)
         (httpd-resp-header! c "X-Request-Id" (httpd-req-attr c "request_id"))))))
+```
+
+```sweet-exp
+defn mw-request-id [next :int] :ptr<void>
+  let [_n next]
+    fn [c :ptr<void>] :nil
+      let [id httpd-req-header(c "X-Request-Id")]
+        httpd-set-attr!(c "request_id" id)
+        httpd-call(_n c)
+        httpd-resp-header!(c "X-Request-Id" httpd-req-attr(c "request_id"))
 ```
 
 ## Async interop
