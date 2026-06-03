@@ -1,0 +1,120 @@
+;; MW2 (async path): exercise httpd-set-attr! / httpd-req-attr over an
+;; ASYNC (fiber-per-request) server. This locks in the HttpdConn struct
+;; consolidation fix.
+;;
+;; Before consolidation, the async worker (httpd-async-fiber-body)
+;; allocated a SHORT 17-field HttpdConn on its fiber stack -- a layout
+;; with no `attr_list` slot. httpd-set-attr! writes the attribute-list
+;; head at the *full* 19-field offset, so on the async path it wrote past
+;; the end of the stack object and corrupted the adjacent frame. With the
+;; single canonical 19-field HttpdConn (hoisted once via __tur_include__),
+;; the async stack conn has the slot and the round-trip is in-bounds.
+;;
+;; The base handler yields on the reactor via httpd-await-timer (the
+;; suspend that forces the fiber path), then sets and reads back an
+;; attribute, writing the value as the response body.
+;;
+;; NOTE: this fixture deliberately does NOT use mw-basic-auth. Routing the
+;; attribute round-trip through mw-basic-auth would also exercise a
+;; separate, pre-existing bug -- inline-C fat-closure dispatchers (e.g.
+;; the verifier call in httpd-mw-basic-auth-check) crash when handed a
+;; closure that captures nothing, because such a closure is lowered to a
+;; bare function pointer rather than the [code, env] fat layout the
+;; dispatcher assumes. That bug is independent of this struct work and is
+;; tracked in docs/upcoming/noncapturing-closure-inline-c-dispatch-plan.md.
+;; Setting the attribute directly keeps this fixture focused on the struct
+;; consolidation it is meant to guard.
+;;
+;; Expected output:
+;;   base
+;;   user-from-attr=admin
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req =
+      "GET /me HTTP/1.0\r\n"
+      "\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[1024];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  const char *body = strstr(drain, "\r\n\r\n");
+  if (body) {
+      body += 4;
+      printf("user-from-attr=%s\n", body);
+  }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server-async [h :ptr<void>] :ptr<void>
+  ```c httpd_run_async(h); return NULL; ```)
+
+(defn spawn-server-async [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        base   (fn [c :ptr<void>] :nil
+                 ;; Yield on the reactor for ~10 ms to force the fiber
+                 ;; suspend/resume path before touching the attribute.
+                 (httpd-await-timer c 10)
+                 (print-tag "base")
+                 (httpd-set-attr! c "user" "admin")
+                 (let [u (httpd-req-attr c "user")]
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body! c u))
+                 (chan-send donech 1))
+        h      (httpd-new-async 0 base)
+        port   (httpd-async-port h)
+        server (spawn-server-async h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop-async h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-async-free h)
+    (chan-free donech)
+    0))
