@@ -1,8 +1,50 @@
 # Non-Capturing Closures vs Inline-C Fat-Closure Dispatch Plan
 
-> **Status:** Draft Plan
+> **Status:** Implemented (2026-06-03)
 > **Last Updated:** 2026-06-03
 > **Type:** codegen / runtime ABI -- closure calling convention
+
+---
+
+## Outcome
+
+Implemented via the existing `^fat` parameter marker rather than a wholesale
+codegen change (Option A) or per-site runtime tagging (Option B).
+
+A blanket "always box `:int`-erased closures" (Option A) was rejected after
+audit: a large set of stdlib higher-order functions (`option.tur`,
+`result.tur`, `list.tur`, `vec.tur`, `rc.tur`, `arrow.tur`, the `cmp_fn`
+equality paths, ...) deliberately receive a closure as an `:int` handle and
+call it as a **bare** function pointer (`((fn_t)(intptr_t)f)(x)`), *not* via
+`fat[0]`. Always boxing would break every one of those. The two conventions
+(bare-ptr vs fat) genuinely coexist; `^fat` is the per-parameter discriminator
+that already distinguishes them.
+
+Changes:
+
+- **Marked the closure-entry boundary params `^fat`** in `stdlib/httpd.tur`:
+  `mw-basic-auth` (`verifier`, `next`); `httpd-new` / `httpd-new-pool` /
+  `httpd-new-async` / `httpd-new-async-with-limit` / `httpd-new-tls`
+  (`handler`); `router-add` (`handler`); `compose-middleware-of` (`base`);
+  and every `mw-*` factory (`next`). At each of these the bare non-capturing
+  fn first appears as a `TY_FN`, so the call site auto-shims it into a fat
+  `{ thunk, env }` box (`EX_FN_TO_FAT`). Internal `fat[0]` dispatchers
+  (`httpd-call`, `httpd-mw-fold`, the handler/verifier inline-C) are left
+  untouched -- by the time a handle reaches them it is already fat.
+- **Extended the `^fat` call-site logic** (`src/compiler/elab_call.c`) to pass
+  through a *computed* `:int` argument (a non-literal -- an already-erased fat
+  handle, e.g. the result of `compose-middleware`) unchanged, instead of
+  rejecting it. This is what lets a `^fat` boundary sit on the same plumbing
+  that threads composed handlers as `:int`. A non-zero `:int` *literal* still
+  errors (the diagnostic half), and a bare `TY_FN` is still shimmed.
+- **Retired the "must capture a free variable" folklore** in the httpd module
+  docstrings / comments (`mw-basic-auth`, `httpd-call`, `compose-middleware`,
+  the module header) and dropped the incidental `_dummy 0` capture from the
+  `mw-basic-auth` example.
+- **Added fixture** `tests/fixtures/httpd-mw-basic-auth-noncapture` -- a
+  verifier that captures nothing; previously SEGV (async) / hang (pool), now
+  prints the authorized body. The capturing `httpd-mw-basic-auth-attr` fixture
+  is unchanged and still passes. Full suite: 1299 passed, 0 failed.
 
 ---
 

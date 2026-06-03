@@ -2408,9 +2408,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     args[i] = shim;
                 } else if (ak == TY_PTR_VOID || ak == TY_NIL ||
                            (ak == TY_INT && args[i]->kind == EX_INT_LIT &&
-                            args[i]->as.i == 0)) {
-                    /* already a fat closure, nil, or a null (0) callback -- pass
-                     * through unchanged */
+                            args[i]->as.i == 0) ||
+                           (ak == TY_INT && args[i]->kind != EX_INT_LIT)) {
+                    /* Pass through unchanged: a fat closure (TY_PTR_VOID), nil, a
+                     * null (literal 0) callback, or an already-erased :int
+                     * fat-closure handle (a computed value, e.g. a handler that
+                     * compose-middleware/compose-middleware-of has already boxed).
+                     * The :int-handle case lets a ^fat boundary param sit on the
+                     * same plumbing that threads composed handlers as :int without
+                     * re-boxing them; a bare non-capturing fn still arrives as
+                     * TY_FN at its first boundary and is shimmed above. */
                 } else {
                     Buf gb; buf_init(&gb);
                     type_print(&gb, args[i]->type);
