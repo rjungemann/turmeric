@@ -21,6 +21,23 @@
 (defn print-body [s :cstr] :nil
   ```c printf("body=%s\n", s); ```)
 
+;; Shared body buffer. A single function owns the static storage: call with
+;; do-write=1 to stash the body (client side), do-write=0 to read it back
+;; (main side). inline-C reaches it by its mangled C name, async_echo_body.
+(defn async-echo-body [do-write :int src :cstr] :cstr
+  ```c
+  static char buf[2048];
+  if (do_write) { snprintf(buf, sizeof(buf), "%s", src); }
+  return buf;
+  ```)
+
+;; The client captures the response body into the shared buffer rather than
+;; printing it directly. Printing from the client thread races against the
+;; main thread's "handler-ran=1" print on stdout, which produced a flaky
+;; line-ordering failure under parallel suite load (the two lines swapped).
+;; main reads the buffer and prints it in a fixed order after join-thread,
+;; whose pthread_join provides the happens-before. See
+;; docs/reported/httpd-async-echo-flaky-stdout-ordering.md.
 (defn client-worker [arg :ptr<void>] :ptr<void>
   ```c
   #include <time.h>
@@ -46,12 +63,17 @@
       total += (int)r;
   }
   drain[total] = '\0';
-  /* Print just the body (after blank line). */
+  /* Capture just the body (after blank line); main prints it in order. */
   const char *blank = strstr(drain, "\r\n\r\n");
-  if (blank) printf("body=%s\n", blank + 4);
+  if (blank) { async_echo_body(1, blank + 4); }
   close(fd);
   return NULL;
   ```)
+
+;; Printer the main thread calls after joining the client (happens-before via
+;; pthread_join), so the body line is emitted in a fixed order on one thread.
+(defn print-client-body [] :nil
+  ```c printf("body=%s\n", async_echo_body(0, "")); ```)
 
 (defn run-server-async [h :ptr<void>] :ptr<void>
   ```c httpd_run_async(h); return NULL; ```)
@@ -99,6 +121,9 @@
     (httpd-stop-async h)
     (join-thread server)
     (join-thread client)
+    ;; Client thread has joined: its captured body is now visible here, and
+    ;; printing it on the main thread fixes the handler-ran / body order.
+    (print-client-body)
     (println "done")
     (httpd-async-free h)
     (chan-free donech)

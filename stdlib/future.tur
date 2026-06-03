@@ -226,7 +226,7 @@
   while (!fc->is_set)
       pthread_cond_wait(&fc->ready, &fc->lock);
 
-  ;; Build a Result to return
+  /* Build a Result to return */
   typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
   Result *result = (Result *)malloc(sizeof(Result));
   if (!result) { pthread_mutex_unlock(&fc->lock); fprintf(stderr, "future-get: oom\n"); abort(); }
@@ -358,7 +358,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-map [f :ptr<void> fn :ptr<void>] :ptr<void>
+(defn future-map [f :ptr<void> ^fat fn :ptr<void>] :ptr<void>
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -373,7 +373,9 @@
   pthread_cond_init(&out->ready, NULL);
   out->is_set = true;
   if (ok) {
-      out->value = ((int64_t (*)(int64_t))fn)(val);
+      /* fn is a fat closure box: slot 0 = thunk R(*)(void*env, int64_t). */
+      out->value = ((int64_t (*)(void *, int64_t))(intptr_t)
+                       ((int64_t *)(intptr_t)fn)[0])((void *)(intptr_t)fn, val);
       out->exn   = 0;
       out->is_ok = true;
   } else {
@@ -396,7 +398,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-then [f :ptr<void> fn :ptr<void>] :ptr<void>
+(defn future-then [f :ptr<void> ^fat fn :ptr<void>] :ptr<void>
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -413,8 +415,10 @@
       out->value = 0; out->exn = exn; out->is_set = true; out->is_ok = false;
       return (void *)out;
   }
-  /* Call fn(val) which returns a new FutureCell ptr<void> */
-  return (void *)(intptr_t)((int64_t (*)(int64_t))fn)(val);
+  /* Call fn(val) which returns a new FutureCell ptr<void>.
+     fn is a fat closure box: slot 0 = thunk R(*)(void*env, int64_t). */
+  return (void *)(intptr_t)((int64_t (*)(void *, int64_t))(intptr_t)
+              ((int64_t *)(intptr_t)fn)[0])((void *)(intptr_t)fn, val);
   ```)
 ;; ---- AW-007: Multi-combinators ----
 ;; Race two futures: return a new future that resolves to whichever settles first.

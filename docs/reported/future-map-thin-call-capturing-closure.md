@@ -2,7 +2,7 @@
 title: future-map / future-then thin-call their callback (capturing closure segfaults)
 category: Reported Bug
 severity: medium (latent segfault on a capturing-closure argument; captureless works)
-status: open
+status: resolved
 ---
 
 # future.tur `future-map` / `future-then` thin-call their callback
@@ -72,3 +72,21 @@ invoked via inline-C).
   closes over a local, asserting the captured value is used (would segfault
   pre-fix). Cover int and float results (register-class-distinct).
 - `bash tests/run.sh`: 0 FAIL.
+
+## Resolution (2026-06-03)
+
+Fixed in `stdlib/future.tur`: `future-map` and `future-then` now take a
+`^fat fn` parameter and fat-dispatch the callback through slot 0 of the box
+inside their inline-C bodies (`((int64_t (*)(void *, int64_t))box[0])(box,
+val)`), exactly the proposed fix. A captureless argument auto-boxes at the
+`^fat` call site; a capturing closure passes through as a box. Regression
+fixture `tests/fixtures/future-capturing-closure/` maps and flat-maps futures
+with closures that close over a local (would have segfaulted pre-fix) and
+covers the error-propagation path. Full suite green (1312 passed, 0 failed).
+
+While wiring the fixture (the first consumer to `(load "stdlib/future.tur")`
+and actually emit `future-get`) a separate latent defect surfaced: `future-get`
+had a Turmeric `;;` comment *inside* its inline-C block, which emitted invalid
+C (`;; Build a Result to return`). It had never been compiled because every
+prior fixture defined its own local `future-get`. Fixed by switching it to a C
+`/* ... */` comment.
