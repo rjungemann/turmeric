@@ -1,0 +1,111 @@
+;; Non-capturing verifier regression (noncapturing-closure-inline-c-dispatch-plan):
+;; the verifier closure captures NOTHING, so codegen lowers it to a bare
+;; function pointer rather than a heap fat closure. The `^fat verifier`
+;; parameter on mw-basic-auth auto-shims it into a fat closure at the call
+;; site, so httpd-mw-basic-auth-check's `fat[0]` dispatch reads a valid
+;; { thunk, env } layout instead of dereferencing .text (which used to SEGV
+;; on the async server and hang on the pool server).
+;;
+;; Verifier accepts "admin:s3cret". After successful auth, the base handler
+;; reads the "user" attribute back via (httpd-req-attr c "user") and writes
+;; it as the response body. The client extracts the body and prints it.
+;;
+;; Expected output:
+;;   base
+;;   user-from-attr=admin
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+
+  /* base64("admin:s3cret") = "YWRtaW46czNjcmV0" */
+  const char *req =
+      "GET /me HTTP/1.0\r\n"
+      "Authorization: Basic YWRtaW46czNjcmV0\r\n"
+      "\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[1024];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  /* Body sits after the "\r\n\r\n" terminator. */
+  const char *body = strstr(drain, "\r\n\r\n");
+  if (body) {
+      body += 4;
+      printf("user-from-attr=%s\n", body);
+  }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech   (chan-new 1)
+        base     (fn [c :ptr<void>] :nil
+                   (print-tag "base")
+                   (let [u (httpd-req-attr c "user")]
+                     (httpd-resp-status! c 200)
+                     (httpd-resp-body! c u))
+                   (chan-send donech 1))
+        ;; Verifier captures nothing -- a bare non-capturing fn (TY_FN).
+        verify   (fn [u :cstr p :cstr] :int
+                   (if (= 1 (cstr-eq-const-time u "admin"))
+                     (cstr-eq-const-time p "s3cret")
+                     0))
+        composed (mw-basic-auth "app" verify base)
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

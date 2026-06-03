@@ -7,10 +7,14 @@
 ;;; HTTP/1.1 keep-alive is supported: a worker loops on the same socket
 ;;; until the client requests Connection: close or a read timeout fires.
 ;;;
-;;; Handler calling convention: the handler closure MUST capture at least
-;;; one variable so it is heap-allocated as a fat closure. Inside the
-;;; handler, use httpd-req-* to read the parsed request and httpd-resp-*!
-;;; to set the response.
+;;; Handler calling convention: the server dispatches a handler through the
+;;; fat-closure protocol (read slot 0 as the thunk, pass the record itself
+;;; as the env). The closure-entry parameters that take a handler, verifier,
+;;; or middleware `next` are annotated `^fat`, so a bare *non-capturing* fn
+;;; is auto-shimmed into a fat closure at the call site -- you no longer have
+;;; to capture a dummy variable to force heap allocation. Inside the handler,
+;;; use httpd-req-* to read the parsed request and httpd-resp-*! to set the
+;;; response.
 ;;;
 ;;; Since: Phase H1
 ;; stdlib/httpd.tur -- Lightweight HTTP server (Phase H1-H7)
@@ -634,7 +638,7 @@
 ;;;
 ;;; Since: Phase H3
 
-(defn httpd-new-pool [port :int workers :int handler :int] :ptr<void>
+(defn httpd-new-pool [port :int workers :int ^fat handler :int] :ptr<void>
   ```c #include <fcntl.h>
   /* Ignore SIGPIPE so a peer closing early returns EPIPE from send()
    * instead of terminating the process. signal() is declared manually
@@ -729,7 +733,7 @@
 ;;;
 ;;; Since: Phase H1
 
-(defn httpd-new [port :int handler :int] :ptr<void>
+(defn httpd-new [port :int ^fat handler :int] :ptr<void>
   (httpd-new-pool port 4 handler))
 ;;; httpd-new-tls -- create an httpd instance with TLS termination.
 ;;;
@@ -766,7 +770,7 @@
 ;;;
 ;;; Since: Phase H5
 
-(defn httpd-new-tls [port :int workers :int handler :int ctx :int] :ptr<void>
+(defn httpd-new-tls [port :int workers :int ^fat handler :int ctx :int] :ptr<void>
   ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
@@ -1524,7 +1528,7 @@
 ;;;
 ;;; Since: Phase H8 (M3)
 
-(defn mw-json-body [next :int] :ptr<void>
+(defn mw-json-body [^fat next :int] :ptr<void>
   (let [_n next]
     (fn [c :ptr<void>] :nil
       (if (= 1 (httpd-mw-json-body-precheck c))
@@ -1710,7 +1714,7 @@
                     :int
                     max-age
                     :int
-                    next
+                    ^fat next
                     :int] :ptr<void>
   (let [_ao allow-origin
         _am allow-methods
@@ -1734,7 +1738,7 @@
 ;;;
 ;;; Since: Phase H8 (M4)
 
-(defn mw-cors [next :int] :ptr<void>
+(defn mw-cors [^fat next :int] :ptr<void>
   (mw-cors-with "*"
     "GET, POST, PUT, DELETE, OPTIONS"
     "Content-Type"
@@ -1855,17 +1859,18 @@
 ;;; mw-basic-auth -- HTTP Basic Auth middleware factory.
 ;;;
 ;;; `realm` is the value placed in the `WWW-Authenticate: Basic
-;;; realm="..."` challenge.  `verifier` is a fat closure of type
+;;; realm="..."` challenge.  `verifier` is a closure of type
 ;;; `(fn [user :cstr pass :cstr] :int)` returning 1 to authorise and
 ;;; 0 to reject.  Use `cstr-eq-const-time` in the verifier body for the
-;;; password check.
+;;; password check.  The `verifier` parameter is `^fat`, so a bare
+;;; non-capturing verifier is auto-shimmed into a fat closure -- it need
+;;; not capture a free variable to be dispatched safely.
 ;;;
 ;;; ALWAYS run Basic Auth behind TLS (see `httpd-new-tls`); the encoding
 ;;; is reversible and traverses the wire in clear text otherwise.
 ;;;
 ;;; Example:
-;;;   (let [_dummy 0
-;;;         verify (fn [u :cstr p :cstr] :int
+;;;   (let [verify (fn [u :cstr p :cstr] :int   ; captures nothing -- fine
 ;;;                  (if (= 1 (cstr-eq-const-time u "admin"))
 ;;;                    (cstr-eq-const-time p "s3cret")
 ;;;                    0))
@@ -1874,7 +1879,7 @@
 ;;;
 ;;; Since: Phase H8 (M5)
 
-(defn mw-basic-auth [realm :cstr verifier :int next :int] :ptr<void>
+(defn mw-basic-auth [realm :cstr ^fat verifier :int ^fat next :int] :ptr<void>
   (let [_r realm _v verifier _n next]
     (fn [c :ptr<void>] :nil
       (if (= 1 (httpd-mw-basic-auth-check c _v))
@@ -2568,7 +2573,7 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-new-async-with-limit [port :int handler :int max-in-flight :int] :ptr<void>
+(defn httpd-new-async-with-limit [port :int ^fat handler :int max-in-flight :int] :ptr<void>
   ```c #include <fcntl.h>
   typedef void (*tur_sig_fn)(int);
   extern tur_sig_fn signal(int, tur_sig_fn);
@@ -2635,7 +2640,7 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-new-async [port :int handler :int] :ptr<void>
+(defn httpd-new-async [port :int ^fat handler :int] :ptr<void>
   (httpd-new-async-with-limit port handler 0))
 ;;; httpd-run-async -- drive the async server until stopped.
 ;;;
@@ -2840,7 +2845,7 @@
 ;;;
 ;;; Since: Phase H6
 
-(defn router-add [r :ptr<void> method :cstr pattern :cstr handler :int] :nil
+(defn router-add [r :ptr<void> method :cstr pattern :cstr ^fat handler :int] :nil
   ```c typedef struct Route Route;
   struct Route {
       char method[16];
@@ -3022,9 +3027,12 @@
 ;;     (httpd-new 0 (mw-log base)))
 ;;; httpd-call -- invoke a Turmeric handler closure on a connection.
 ;;;
-;;; The closure must follow the fat-closure calling convention (i.e. it
-;;; must capture at least one variable -- the same constraint as for the
-;;; top-level handler passed to httpd-new).
+;;; `handler` is an already-erased fat-closure handle (:int) -- typically a
+;;; captured `next` threaded through a middleware, or a value produced by
+;;; compose-middleware. Handlers entering the server from user code arrive
+;;; through a `^fat` parameter (httpd-new, the mw-* factories, mw-basic-auth)
+;;; that auto-shims a bare non-capturing fn, so by the time it reaches
+;;; httpd-call it already carries a valid { thunk, env } layout.
 ;;;
 ;;; Parameters:
 ;;;   handler -- handler closure value (int)
@@ -3105,7 +3113,7 @@
 ;;;
 ;;; Since: Phase H8 (M1)
 
-(defn mw-log [next :int] :ptr<void>
+(defn mw-log [^fat next :int] :ptr<void>
   (let [_n next]
     (fn [c :ptr<void>] :nil
       (let [t0 (httpd-mw-mono-ms)]
@@ -3125,10 +3133,11 @@
 ;;   (compose-middleware base mw-log mw-cors mw-auth)
 ;;   ;; is equivalent to (mw-log (mw-cors (mw-auth base)))
 ;;
-;; Note: each middleware argument must itself be a fat closure (i.e. must
-;; capture at least one variable). A bare top-level defn cannot be passed by
-;; name; wrap it in `(fn [n :int] :int (... n))` first, or define it the way
-;; mw-log is defined here (the outer `let` over `next` forces a fat closure).
+;; Note: each middleware argument is a factory `(fn [next :int] :int ...)`
+;; whose returned wrapper naturally captures `next`, so it is already a fat
+;; closure. The base handler itself need NOT capture anything: it enters
+;; through the factory's `^fat next` parameter (or compose-middleware-of's
+;; `^fat base`), which auto-shims a bare non-capturing fn into a fat closure.
 ;;; compose-middleware -- wrap a base handler with multiple middlewares.
 ;;;
 ;;; Parameters:
@@ -3232,7 +3241,7 @@
 ;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
 
 (defn compose-middleware-of [A]
-  [base :int & mws :A]
+  [^fat base :int & mws :A]
   :int
   (httpd-mw-fold base mws))
 ;; =============================================================================
@@ -3294,7 +3303,7 @@
 ;;;
 ;;; Since: Phase H8 (MW1)
 
-(defn mw-body-size [max-bytes :int next :int] :ptr<void>
+(defn mw-body-size [max-bytes :int ^fat next :int] :ptr<void>
   (let [_max max-bytes _n next]
     (fn [c :ptr<void>] :nil
       (let [n (httpd-mw-content-length c)]
@@ -3583,7 +3592,7 @@
 ;;;
 ;;; Since: Phase H8 (MW2)
 
-(defn mw-rate-limit [opts :RateLimitOpts next :int] :ptr<void>
+(defn mw-rate-limit [opts :RateLimitOpts ^fat next :int] :ptr<void>
   (let [_st (httpd-mw-ratelimit-new (.requests opts) (.window-s opts)) _n next]
     (fn [c :ptr<void>] :nil
       (let [ip (httpd-req-remote-ip c) retry (httpd-mw-ratelimit-check _st ip)]
@@ -3732,7 +3741,7 @@
   (void)httpd_mw_static_try((void *)conn, root);
   ```)
 
-(defn mw-static [root-dir :cstr next :int] :ptr<void>
+(defn mw-static [root-dir :cstr ^fat next :int] :ptr<void>
   (let [_root root-dir _n next]
     (fn [c :ptr<void>] :nil
       (httpd-call _n c)

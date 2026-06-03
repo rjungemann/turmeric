@@ -431,7 +431,7 @@
     {"cstr-eq-const-time", "cstr-eq-const-time -- length-then-constant-time XOR cstring compare.\n\nSince: Phase H8 (M5)"},
     {"httpd-mw-basic-auth-check", "httpd-mw-basic-auth-check -- internal: decode + dispatch the verifier."},
     {"httpd-mw-basic-auth-challenge", "httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate."},
-    {"mw-basic-auth", "mw-basic-auth -- HTTP Basic Auth middleware factory.\n\nExample:\n  (let [_dummy 0\n          verify (fn [u :cstr p :cstr] :int\n                   (if (= 1 (cstr-eq-const-time u \"admin\"))\n                     (cstr-eq-const-time p \"s3cret\")\n                     0))\n          composed (compose-middleware base (mw-basic-auth \"app\" verify))]\n      (httpd-new 0 composed))\n\nSince: Phase H8 (M5)"},
+    {"mw-basic-auth", "mw-basic-auth -- HTTP Basic Auth middleware factory.\n\nExample:\n  (let [verify (fn [u :cstr p :cstr] :int   ; captures nothing -- fine\n                   (if (= 1 (cstr-eq-const-time u \"admin\"))\n                     (cstr-eq-const-time p \"s3cret\")\n                     0))\n          composed (compose-middleware base (mw-basic-auth \"app\" verify))]\n      (httpd-new 0 composed))\n\nSince: Phase H8 (M5)"},
     {"httpd-req-multipart-parse", "httpd-req-multipart-parse -- internal: parse the body on first access."},
     {"httpd-req-file", "httpd-req-file -- look up a multipart part by form field name.\n\nExample:\n  (let [p (httpd-req-file c \"upload\")]\n      (when (not= 0 p)\n        (println (httpd-part-filename p))\n        (println (int->cstr (httpd-part-data-len p)))))\n\nSince: Phase H8 (M7)"},
     {"httpd-part-name", "httpd-part-name -- form field name of a part (or \"\" if missing)."},
