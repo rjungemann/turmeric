@@ -2,6 +2,63 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.18.0] -- 2026-06-02
+
+### Added
+
+- **`tur/httpd` standard middleware library (M0-M8)** -- headers (M0), request
+  logging + composition (M1/M8), cookies and `Set-Cookie` (M2), urlencoded +
+  JSON body parsers (M3), CORS and HTTP Basic Auth (M4/M5), multipart/form-data
+  (M7), and body-size, rate-limit, and static-file middleware. Includes
+  `docs/guides/httpd-middleware-guide.md`.
+- **`tur/httpd` async server (A0-A4)** -- async accept loop and `await`
+  primitives (A0/A1), Track-M middleware composes over async handlers (A3),
+  in-flight cap with throughput fixtures and `docs/guides/httpd-async-guide.md`
+  (A4).
+- **`?` query operator and CPS error handling (#187)** -- `?` short-circuits on
+  `Result` errors with a dedicated `TUR-E0001` message; `*-must`/`*-expect`
+  route through `tur_panic_with` so `catch-unwind` can intercept them;
+  `--no-contracts` strips runtime contract checks; `--lint-panic`
+  soft-deprecates `*-unwrap` call sites.
+- **`catch-unwind` and panic handling on the compiled path (R2 + R6c, #189)**
+  -- compiled programs can intercept panics via `catch-unwind`; the
+  effect-handler/continuation panic semantics are now normative.
+- **CPS transform unification and full `call/cc`** -- continuation-passing
+  phases consolidated; `call/cc` works end-to-end on the compiled path.
+- **Intersection and union types** -- new type-system constructors for
+  combining and alternating type constraints.
+- **MCP LSP integration (#173)** -- ships an MCP server that exposes
+  Turmeric's LSP for editor agents.
+- **`parse-check` subcommand and syntax guide (#182)** -- standalone
+  syntax-validation pass and a comprehensive surface-syntax guide.
+- **Tourist routing composition** -- `tourist/routing` (sibling spices repo)
+  adds `url-map!`, `cascade!`, `cascade-with!`, and `req-full-path` for
+  mounting sub-apps and cascading on configurable statuses. See
+  `docs/guides/tourist-routing-guide.md`.
+- **GitHub Codespaces entry points (#174)** -- homepage and README link
+  directly to a configured Codespaces environment.
+
+### Changed
+
+- **`^fat` ABI markers replace sentinel-capture workaround (#190)** --
+  function-pointer marshalling now uses explicit `^fat` markers instead of
+  the prior closure-sentinel detour; spice code referencing the old path
+  may need to migrate.
+- **Compiler: variadic-rest function-pointer args (V0-V2)** -- function-typed
+  variadic rests are cast correctly at call sites, removing per-call
+  adapter shims.
+- **Compiler: inline-C by-value struct params (DS0-DS2)** -- call sites for
+  inline-C functions taking by-value structs now match the C signature
+  directly.
+
+### Fixed
+
+- **Neoteric bracket chaining and curly-infix operator detection (#188)** --
+  `f(x)(y)` chains parse correctly under sweet-exp and `{a + b}` operator
+  scanning is no longer confused by adjacent identifiers.
+- **Sweet-exp polish** -- residual indentation and reader edge cases
+  addressed across guides and fixtures.
+
 ## [0.17.0] -- 2026-06-01
 
 ### Added

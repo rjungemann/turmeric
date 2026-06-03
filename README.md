@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.17.0` -- adds `tur/httpd` HTTP/1.1 server, `tur/schema` runtime validation, first-class `:Sym` symbols, typed `Map[K V]` surface with `MapKey` carrier, data literals, and `#json(...)` reader macro.
+**Latest release:** `v0.18.0` -- ships the `tur/httpd` standard middleware library and async server, the `?` query operator with `catch-unwind` panic handling on the compiled path, intersection/union types, and an MCP LSP integration.
 
 ## What
 
