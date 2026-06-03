@@ -303,6 +303,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         if (is_gen_field) {
             buf_printf(body, "%s = %s;\n", bn, iv);
+        } else if (b->is_fat && b->type.kind == TY_FN) {
+            /* closure-representation-unification (Phase 0): a fn-typed ^fat alias
+             * holds a fat-closure box, not a bare function pointer.  Declare it
+             * as the int64_t carrier so the fat-dispatch call site (the ER2
+             * is_fat path) casts it back to void * and reads slot 0 -- declaring
+             * it as a thin fn pointer (the TY_FN branch below) both mistypes the
+             * box and trips -Wint-conversion.  A bare ^fat alias is :ptr<void>
+             * and is handled cleanly by the fallback below. */
+            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
         } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
             buf_printf(body, "%s (*%s)(",

@@ -643,6 +643,15 @@ Expr *elab_let(Elab *e, const Form *call) {
          * (let [g id] ...) where id is a global TY_FN → g.source_binding = id. */
         if (init && init->kind == EX_VAR) {
             Binding *init_b = init->as.var.binding;
+            /* closure-representation-unification (Phase 0): propagate the ^fat
+             * marker through a let alias so (let [gv g] ... (gv x)) on a
+             * fn-typed ^fat parameter still fat-dispatches instead of taking the
+             * thin ER2 path (which casts the fat box to a bare fn pointer and
+             * crashes).  A bare ^fat alias is :ptr<void> and fat-dispatches
+             * regardless, but carrying is_fat keeps the two forms consistent. */
+            if (init_b->is_fat) {
+                b->is_fat = true;
+            }
             if (init_b->is_poly_fn) {
                 b->is_poly_fn = true;
                 b->poly_type  = init_b->poly_type;
