@@ -1,80 +1,12 @@
-;;; tur/arrow -- Haskell-style Arrow typeclass hierarchy for signal processing.
+;;; tur/arrow -- bare-function arrow combinators over the (->) function arrow.
 ;;;
-;;; Provides Category, Arrow, ArrowChoice, and ArrowLoop typeclasses.
+;;; Provides arr, >>>, arrow-first, arrow-second, par-comp, arrow-split,
+;;; arrow-const, and arrow-dup as plain functions. The Haskell-style Arrow
+;;; typeclass hierarchy was scaled back in docs/upcoming/stdlib-arrow-scaleback-plan.md
+;;; -- see that plan for the rationale and the conditions under which it would
+;;; be reintroduced.
 ;;;
 ;;; Since: Phase CA0
-;; Signal Processing Arrows Library
-;; Haskell-style Arrow typeclass hierarchy for Turmeric
-;;
-;; This module implements the Arrow typeclass hierarchy for building
-;; composable signal processing pipelines.
-;;
-;; Note: Full Arrow typeclass dispatch requires Turmeric features still in
-;; development (Either/Left/Right sum types, vector literals in expression
-;; position). The defclass declarations are provided for documentation and
-;; future compatibility. Plain function implementations are provided for
-;; immediate use.
-;; =============================================================================
-;; Arrow Typeclass Declarations
-;; =============================================================================
-;;; Arrow -- base typeclass for arrow-like structures.
-;;;
-;;; An Arrow arr is a type constructor that takes two type parameters (input and
-;;; output) and supports lifting, sequential composition, and product-component
-;;; application.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor (kind * -> * -> *)
-;;;
-;;; Example:
-;;;   (arr (fn [x] (* x 2)))  ; => a function arrow that doubles its input
-(defclass Arrow [^arr]
-  (arr [f] :int)
-  (>>> [f g] :int)
-  (first [f] :int)
-  (second [f] :int))
-;;; ArrowZero -- arrows with an empty/zero element.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-;;;
-;;; Returns:
-;;;   zeroArrow produces an arrow that yields no output.
-
-(defclass ArrowZero [^arr] (zeroArrow [] :int))
-;;; ArrowPlus -- arrows that can be combined with choice.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-;;;
-;;; Returns:
-;;;   <+> combines two arrows in parallel.
-
-(defclass ArrowPlus [^arr] (<+> [f g] :int))
-;;; ArrowChoice -- arrows with choice over sum types (Either).
-;;;
-;;; Note: requires Either/Left/Right sum types (future Turmeric feature).
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-
-(defclass ArrowChoice [^arr]
-  (left [f] :int)
-  (right [f] :int)
-  (+++ [f g] :int)
-  (||| [f g] :int))
-;;; ArrowLoop -- arrows with feedback loops for recursive signal processing.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-
-(defclass ArrowLoop [^arr] (loop [f] :int))
-;;; ArrowApply -- arrows that support first-class application.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-
-(defclass ArrowApply [^arr] (app [f] :int))
 ;; =============================================================================
 ;; Closure dispatch convention
 ;; =============================================================================
@@ -87,22 +19,6 @@
 ;; direct call already fat-dispatches).  This replaces the former
 ;; __arrow_call1/__arrow_call2 thin int64 casts, which segfaulted on capturing
 ;; closures.  See docs/upcoming/closure-representation-unification-plan.md.
-;; =============================================================================
-;; Instances for Function Arrow (->) -- omitted
-;; =============================================================================
-;; The typeclass instances (Arrow [->], ArrowChoice [->], ArrowZero [->],
-;; ArrowPlus [->], ArrowLoop [->], ArrowApply [->]) are intentionally omitted.
-;; They tripped codegen bugs around closure-returning instance methods (dict
-;; field types resolved to void * rather than int64_t) and several stub bodies
-;; relied on language features (Either/Left/Right, full Tuple feedback) that
-;; aren't available yet. The free function implementations below cover the
-;; (->) case; reintroduce instances once those gaps are closed. See
-;; docs/stdlib-arrow-typeclass-plan.md.
-;; =============================================================================
-;; Plain Function Implementations
-;; =============================================================================
-;; These provide direct, non-dispatched versions of the Arrow combinators
-;; for use when Arrow typeclass dispatch is not needed.
 ;;; arr -- lift a function to an arrow (identity for function arrows).
 ;;;
 ;;; Parameters:

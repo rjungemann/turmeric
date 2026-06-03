@@ -26,6 +26,7 @@ description: __arrow_call1 / __arrow_call2 and the __arrow_pair_* helpers invoke
 >   suite exercises captureless arrows exclusively.
 > **Related:**
 > - [closure-typed-invocation-abi-plan.md](../upcoming/closure-typed-invocation-abi-plan.md) (Risks: thin-vs-fat cast discrepancy)
+> - [stdlib-arrow-scaleback-plan.md](../upcoming/stdlib-arrow-scaleback-plan.md) -- follow-up that scaled `stdlib/arrow.tur` back to its bare-function combinators after this fix landed, removing the dead Arrow typeclass declarations that had no working instances.
 
 ---
 
