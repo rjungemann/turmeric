@@ -476,6 +476,44 @@ tourist(3000 serve-static!("/assets" "./public") get!("/" fn([ctx] html("<h1>Hel
 `serve-static!` matches `GET /assets/**` paths and serves files from
 `./public/` on disk. It rejects path-traversal attempts (`..`).
 
+### Routing composition
+
+`tourist/routing` provides two Rack-inspired combinators for composing
+larger applications out of independently-defined sub-apps:
+
+| Combinator       | Behaviour |
+|------------------|-----------|
+| `url-map!`       | Mount sub-apps at path prefixes; longest-prefix-first |
+| `cascade!`       | Try apps in order; fall through on 404/405 |
+| `cascade-with!`  | Cascade with an explicit pass-through status list |
+
+A `mount!` helper boxes a `(prefix, sub-app)` pair into a single handle so
+`url-map!` can accept them through Turmeric's single-typed variadic rest.
+
+```turmeric
+(import tourist/routing :refer [url-map! cascade! mount!])
+
+(defn api-routes [] :int
+  (url-map! (mount! "/users" (get! "/" users-handler))
+            (mount! "/items" (get! "/" items-handler))))
+
+(tourist 3000
+  (cascade! (url-map! (mount! "/api" (api-routes))
+                      (mount! "/"    (get! "/" home-handler)))
+            (serve-static! "/" "./public")))
+```
+
+`url-map!` strips the matched prefix from `ctx->path` before dispatching
+the inner sub-app, so handlers see paths relative to their mount point
+(e.g. a request for `/api/users` arrives at the `/users` sub-app as `/`).
+The original path is preserved on the ctx and is available via
+`req-full-path` from `tourist/param`. `cascade!` frees pass-through
+responses (default 404 and 405) and tries the next app; the first non-pass
+response wins.
+
+See [tourist-routing-guide.md](tourist-routing-guide.md) for the full
+composition guide, semantics, and patterns.
+
 ---
 
 ## Template rendering in tourist handlers

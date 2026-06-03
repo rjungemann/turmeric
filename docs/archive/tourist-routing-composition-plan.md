@@ -364,8 +364,27 @@ consequence of tourist's function-composition middleware model.
 
 | Phase | Title | Status |
 |-------|-------|--------|
-| TR0 | Context struct extension | Pending |
-| TR1 | `url-map!` | Pending |
-| TR2 | `cascade!` and `cascade-with!` | Pending |
-| TR3 | Nested composition tests | Pending |
-| TR4 | Documentation | Pending |
+| TR0 | Context struct extension | Done |
+| TR1 | `url-map!` | Done |
+| TR2 | `cascade!` and `cascade-with!` | Done |
+| TR3 | Nested composition tests | Done |
+| TR4 | Documentation | Done |
+
+## Implementation notes (post-build)
+
+- The plan envisioned new `tourist/context.tur` and `tourist/request.tur`
+  modules. The actual tourist layout keeps the ctx in `tourist/param.tur`
+  (its first 8 fields shadow `__httpd_req` so the httpd accessors --
+  including `req-path` -- work unchanged on a ctx handle). TR0 instead
+  added a `full_path` field to `__tourist_ctx` and a
+  `tourist-ctx-strip-path` mutator; the existing `req-path` from
+  `httpd/request` automatically sees the stripped value because we
+  swap `ctx->path` in place.
+- The plan's `(url-map! "/api" handler "/" handler)` form mixes `:cstr`
+  and `:int` in a variadic rest, which Turmeric's single-typed rest
+  rejects. The implementation introduces a small `mount!` helper that
+  boxes the pair into a single `:int` handle, so `url-map!` is declared
+  `& mounts :int`.
+- Tests live in the existing `tests/fixtures/<name>/` convention used by
+  the rest of the tourist suite (no `tests/tourist/` directory was
+  introduced).
