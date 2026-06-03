@@ -24,8 +24,6 @@
     {"args/spec-free", "args/spec-free -- free a spec created by args/spec-new.\n\nParameters:\n  spec -- arg spec pointer to free\n\nExample:\n  (args/spec-free spec)\n\nSince: Phase A1"},
     {"args/result-free", "args/result-free -- free a result created by args/parse (including sub-results).\n\nParameters:\n  result -- result pointer to free\n\nExample:\n  (args/result-free result)\n\nSince: Phase A1"},
     {"tur/args", "tur/args -- CLI argument parser with a builder-pattern API.\n\nSince: Phase B1"},
-    {"__arrow_call1", "__arrow_call1 -- call a function stored as int64 with one argument."},
-    {"__arrow_call2", "__arrow_call2 -- call a function stored as int64 with two arguments."},
     {"arr", "arr -- lift a function to an arrow (identity for function arrows).\n\nParameters:\n  f -- the function to lift\n\nReturns:\n  The function itself.\n\nExample:\n  (arr (fn [x] (+ x 1)))  ; => identity for functions"},
     {">>>", ">>> -- compose two function arrows sequentially.\n\nParameters:\n  f -- first arrow (a -> b)\n  g -- second arrow (b -> c)\n\nReturns:\n  A function (a -> c) that applies f then g.\n\nExample:\n  ((>>> (fn [x] (+ x 1)) (fn [x] (* x 2))) 3)  ; => 8"},
     {"__arrow_pair_first", "__arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,"},

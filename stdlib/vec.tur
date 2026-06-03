@@ -238,14 +238,16 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-eq? [v1 :int v2 :int cmp-fn]
+(defn vec-eq? [v1 :int v2 :int ^fat cmp-fn]
   #{}
   :bool
   ```c struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
+  /* CRU B-3: cmp-fn is a fat closure box; fat-dispatch via slot 0 (a capturing
+     element comparator works; captureless lambdas are boxed at the call site). */
   for (size_t i = 0; i < a->len; i++) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->data[i], b->data[i]))
+      if (!((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])((void*)(intptr_t)cmp_fn, a->data[i], b->data[i]))
           return false;
   }
   return true;

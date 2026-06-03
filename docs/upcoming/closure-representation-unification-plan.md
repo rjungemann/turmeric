@@ -168,15 +168,44 @@ fat dispatch. Box it. The sink must be distinguished from a raw C-callback:
   separate type; `:ptr<void>` reverts to "raw pointer only." Larger, but
   removes the overload at its root and subsumes Phases 1-3.
 
-Pick A for incremental delivery; keep B as the eventual clean end-state.
+**Phase 3 / Option B is COMPLETE (2026-06-03).** Sub-phases B-0..B-4 all
+shipped, suite green; see
+[closure-first-class-type-plan.md](closure-first-class-type-plan.md). Capturing
+closures are a first-class boxed `TY_FN` value (B-1); `^fat` sinks fat-dispatch
+for all arities incl. nullary (B-2); the `*-eq?` carrier helpers + the Eq
+synthesis dispatcher fat-dispatch their comparators (B-3); and a raw
+`:ptr<void>` is no longer directly callable -- `:ptr<void>` is raw-pointer-only
+(B-4). The reports
+[ptr-void-direct-call-representation-split.md](../reported/ptr-void-direct-call-representation-split.md)
+and
+[eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md](../reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md)
+are resolved.
+
+**Decision (2026-06-03): pursue Option B for Phase 3.** Rather than papering
+over the `:ptr<void>` overload with an implicit-`^fat` heuristic (Option A),
+introduce the first-class closure type so closures are uniformly fat and
+C-callbacks are a distinct type. This removes the bare/fat representation
+split at its root and subsumes the remaining Phase 1 holdouts -- the
+`option-eq?` / `pair-eq-carrier?` / `mutmap-eq?` comparators that the
+constrained-`Eq` per-call-site synthesis dispatcher feeds bare captureless
+pointers (see
+[eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md](../reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md))
+-- without needing a per-call-site boxing heuristic that has to enumerate
+every fat sink. Option A remains documented above as the smaller incremental
+fallback if Option B proves too large to land in one piece. The Option B
+implementation is scoped into sub-phases in
+[closure-first-class-type-plan.md](closure-first-class-type-plan.md).
 
 ## Phasing summary
 
 1. Migrate stdlib thin-call consumers to `^fat` + fat dispatch (no
    compiler change; uses the now-complete `^fat` surface).
 2. Fat-dispatch the nullary `:ptr<void>` call path.
-3. Box captureless fns at fat-dispatched `:ptr<void>` sinks, distinguished
-   from raw C-callbacks (Option A), or unify the closure type (Option B).
+3. Unify the closure type (Option B -- chosen): a first-class closure type
+   distinct from `:ptr<void>` makes closures uniformly fat and C-callbacks a
+   separate type, boxing captureless fns at fat-dispatched sinks at the root.
+   (Option A -- per-call-site implicit-`^fat` boxing -- is the documented
+   incremental fallback.)
 
 Each phase is independently mergeable and suite-gated.
 

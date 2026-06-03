@@ -29,7 +29,7 @@
       (println "Assertion failed: expected nil")
       false)))
 
-(defn run-test [name :cstr test-fn :ptr<void>] :int
+(defn run-test [name :cstr ^fat test-fn] :int
   (if (= (test-fn) 1)
     (do
       (println ".")

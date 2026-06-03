@@ -1087,7 +1087,12 @@ bool tur_hamt_eq_dynamic(int64_t a_handle, int64_t b_handle, int64_t val_cmp) {
             ? tur_hamt_get_eq(b, hash_out, key_out, keyeq)
             : tur_hamt_get(b, hash_out, key_out);
         if (!val_in_b) { tur_hamt_iter_free(&iter_buf); return false; }
-        bool vals_eq = ((bool (*)(int64_t, int64_t))(intptr_t)val_cmp)(
+        /* CRU B-3: val_cmp is a fat closure box { thunk, env... }; fat-dispatch
+         * via slot 0 so a capturing value comparator works (the Eq[Map] instance
+         * and the dispatcher both box the comparator now). */
+        bool vals_eq = ((bool (*)(void *, int64_t, int64_t))(intptr_t)
+                            ((int64_t *)(intptr_t)val_cmp)[0])(
+            (void *)(intptr_t)val_cmp,
             (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
         if (!vals_eq) { tur_hamt_iter_free(&iter_buf); return false; }
     }

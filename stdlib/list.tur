@@ -148,7 +148,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn list-eq? [l1 :int l2 :int cmp-fn : (fn [int int] :bool)] :bool
+(defn list-eq? [l1 :int l2 :int ^fat cmp-fn : (fn [int int] :bool)] :bool
   (if (tnil? l1)
     (tnil? l2)
     (if (tnil? l2)
@@ -177,7 +177,7 @@
 ;;;
 ;;; Since: Phase TS5
 
-(defn __cons-fmap [cell :int f :ptr<void>] :int
+(defn __cons-fmap [cell :int ^fat f] :int
   (if (tnil? cell)
     0
     (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f))))

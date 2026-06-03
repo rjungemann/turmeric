@@ -101,7 +101,7 @@
 ;;; __gvec-call-fn1 -- apply a ptr<void> closure to one int argument.
 ;; Internal helper for gvmap; dispatches through the fat-closure ABI.
 
-(defn __gvec-call-fn1 [f :ptr<void> x :int] :int (f x))
+(defn __gvec-call-fn1 [^fat f x :int] :int (f x))
 ;;; gvmap -- apply an int->int function to every element of a GVec.
 ;;;
 ;;; Parameters:

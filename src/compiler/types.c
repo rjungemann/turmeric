@@ -22,6 +22,19 @@ static bool lifetimes_eq(LifetimeId a_lifetimes[], uint8_t a_n,
 }
 
 int type_eq(Type a, Type b) {
+    /* CRU Phase 3 / Option B (B-1): a boxed TY_FN (a first-class closure
+     * value) and TY_PTR_VOID share the same C carrier -- a void* holding the
+     * { thunk, env... } box.  Treat them as interchangeable so closures flow
+     * through legacy :ptr<void> sinks (params, returns, lets, struct fields)
+     * with no explicit coercion node and no codegen change.  This preserves
+     * the pre-B-1 world, where capturing closures *were* TY_PTR_VOID, so any
+     * site that accepted TY_PTR_VOID accepted closures. */
+    {
+        bool a_box = (a.kind == TY_FN && a.as.fn.boxed);
+        bool b_box = (b.kind == TY_FN && b.as.fn.boxed);
+        if ((a_box && b.kind == TY_PTR_VOID) || (b_box && a.kind == TY_PTR_VOID))
+            return 1;
+    }
     if (a.kind != b.kind) return 0;
     /* Phase 13: Check lifetime annotations - only if either has lifetimes */
     if (a.n_lifetimes > 0 || b.n_lifetimes > 0) {
@@ -1830,7 +1843,12 @@ const char *type_c_name(Type t) {
         case TY_PTR_VOID: return "void *";
         case TY_NEVER:   return "void";  /* never type has no values, use void */
         case TY_FN: {
-            /* For function types, return the result type's C name. */
+            /* CRU B-1: a boxed TY_FN (first-class closure value) is carried as
+             * a void* holding the { thunk, env... } box -- identical to the
+             * TY_PTR_VOID carrier, so closures and legacy :ptr<void> sinks
+             * share one C declaration. */
+            if (t.as.fn.boxed) return "void *";
+            /* For bare function references, return the result type's C name. */
             return type_c_name(type_from_kind(t.as.fn.result_kind));
         }
         case TY_REF: {

@@ -6,7 +6,19 @@ description: Calling a :ptr<void> parameter directly via (f ...) assumes one of 
 
 # Direct Call of a :ptr<void> Callback Crashes Half the Time -- Reported Bug
 
-> **Status:** Reported (not locally fixable -- see analysis)
+> **Status:** RESOLVED (2026-06-03) by closure-representation-unification
+>   Phase 3 / Option B (sub-phases B-1, B-2, B-4). The representation split is
+>   gone: capturing closures are now a first-class boxed `TY_FN` value (B-1) that
+>   shares `:ptr<void>`'s carrier; a fat-closure *sink* is the `^fat` parameter,
+>   which fat-dispatches for ALL arities including `n == 0` (B-2) and auto-boxes
+>   a captureless argument; and a *raw* `:ptr<void>` is no longer directly
+>   callable -- doing so is a compile error (B-4), so `:ptr<void>` is
+>   raw-pointer-only again. The four arity x capture combinations now all
+>   dispatch correctly through the `^fat` sink (or are a typed error for a raw
+>   pointer). Fixtures: `fat-param-nullary-closure`, `fat-param-capturing-closure`,
+>   `stdlib-test-runner-callback` (migrated to `^fat`), and negative
+>   `errors/ptr-void-raw-not-callable`. See
+>   [closure-first-class-type-plan.md](../upcoming/closure-first-class-type-plan.md).
 > **Found:** 2026-06-03, during the Typed Closure Invocation ABI work
 > **Severity:** High -- silent **segfault** on two of the four
 >   arity x capture combinations, with no diagnostic.
