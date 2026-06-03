@@ -87,6 +87,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
 - **[cli-args-guide.md](cli-args-guide.md)** -- CLI argument passing via `*args*` and structured parsing with `stdlib/args.tur`
 - **[binding-forms-guide.md](binding-forms-guide.md)** -- `define`, `letrec`, and named let: local binding forms beyond `let`
+- **[fat-closure-annotation-guide.md](fat-closure-annotation-guide.md)** -- When and why to mark function-typed parameters and return positions `^fat`
 
 ### Type System
 
