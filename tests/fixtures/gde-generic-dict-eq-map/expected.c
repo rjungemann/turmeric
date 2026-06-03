@@ -2390,6 +2390,8 @@ typedef struct MutableMap {
 } MutableMap;
 
 
+typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
 extern void * tur_hamt_retain(void *);
@@ -2566,7 +2568,7 @@ static int64_t tnil();
 static bool tnil_(int64_t);
 static int64_t list_length(int64_t);
 static bool list_eq_(int64_t, int64_t, int64_t);
-static int64_t __cons_fmap(int64_t, int64_t);
+static int64_t __cons_fmap(int64_t, void *);
 static int64_t list_head(int64_t);
 static int64_t list_tail(int64_t);
 static int64_t list_concat(int64_t, int64_t);
@@ -3709,37 +3711,35 @@ static int64_t list_length(int64_t l) {
 }
 
 static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *a = (void*)(intptr_t)l1;
-  struct __tur_cons_t *b = (void*)(intptr_t)l2;
-  while (a && b) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
-      a = (void*)(intptr_t)a->tail;
-      b = (void*)(intptr_t)b->tail;
-  }
-  return (void*)a == (void*)b;
-  
+        bool __t2;
+        if (tnil_(l1)) {
+            __t2 = tnil_(l2);
+        } else {
+            bool __t3;
+            if (tnil_(l2)) {
+                __t3 = false;
+            } else {
+                bool __t4;
+                if (((bool (*)(int64_t, int64_t))(intptr_t)cmp_fn)(list_head(l1), list_head(l2))) {
+                    __t4 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
+                } else {
+                    __t4 = false;
+                }
+                __t3 = __t4;
+            }
+            __t2 = __t3;
+        }
+        return __t2;
 }
 
-static int64_t __cons_fmap(int64_t cell, int64_t f) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
-  if (!c) return 0;
-  int64_t *_fat = (int64_t*)(intptr_t)f;
-  tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  struct __tur_cons_t *head_node = NULL;
-  struct __tur_cons_t *prev = NULL;
-  while (c) {
-    struct __tur_cons_t *r = malloc(sizeof(*r));
-    r->head = _f.fn(_f.env, c->head);
-    r->tail = 0;
-    if (!head_node) head_node = r;
-    if (prev) prev->tail = (int64_t)(intptr_t)r;
-    prev = r;
-    c = (struct __tur_cons_t *)(intptr_t)c->tail;
-  }
-  return (int64_t)(intptr_t)head_node;
-  
+static int64_t __cons_fmap(int64_t cell, void * f) {
+        int64_t __t5;
+        if (tnil_(cell)) {
+            __t5 = INT64_C(0);
+        } else {
+            __t5 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
+        }
+        return __t5;
 }
 
 static int64_t list_head(int64_t l) {
@@ -3755,13 +3755,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t2;
+        int64_t __t6;
         if (tnil_(l1)) {
-            __t2 = l2;
+            __t6 = l2;
         } else {
-            __t2 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t6 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t2;
+        return __t6;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4251,88 +4251,88 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            int64_t __t3;
+            int64_t __t7;
             {
                 const char * __tur_mk___858 = "age";
                 (void)__tur_mk___858;
-                int64_t __t4;
+                int64_t __t8;
                 {
                     const char * __tur_mk___859 = "name";
                     (void)__tur_mk___859;
-                    __t4 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___859), __inst_Hash_hash_cstr(__tur_mk___859), __inst_MapKey_mk_box_cstr(__tur_mk___859), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___859), __inst_MapKey_mk_owned__cstr(__tur_mk___859));
+                    __t8 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___859), __inst_Hash_hash_cstr(__tur_mk___859), __inst_MapKey_mk_box_cstr(__tur_mk___859), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___859), __inst_MapKey_mk_owned__cstr(__tur_mk___859));
                 }
-                __t3 = map_assoc_eq_o(tur_map_kcheck(__t4, &__tur_mk___858), __inst_Hash_hash_cstr(__tur_mk___858), __inst_MapKey_mk_box_cstr(__tur_mk___858), INT64_C(2), __inst_MapKey_mk_cmp_cstr(__tur_mk___858), __inst_MapKey_mk_owned__cstr(__tur_mk___858));
+                __t7 = map_assoc_eq_o(tur_map_kcheck(__t8, &__tur_mk___858), __inst_Hash_hash_cstr(__tur_mk___858), __inst_MapKey_mk_box_cstr(__tur_mk___858), INT64_C(2), __inst_MapKey_mk_cmp_cstr(__tur_mk___858), __inst_MapKey_mk_owned__cstr(__tur_mk___858));
             }
-            int64_t mapX_860 = __t3;
+            int64_t mapX_860 = __t7;
             (void)mapX_860;
-            int64_t __t5;
+            int64_t __t9;
             {
                 const char * __tur_mk___861 = dupe("age");
                 (void)__tur_mk___861;
-                int64_t __t6;
+                int64_t __t10;
                 {
                     const char * __tur_mk___862 = dupe("name");
                     (void)__tur_mk___862;
-                    __t6 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___862), __inst_Hash_hash_cstr(__tur_mk___862), __inst_MapKey_mk_box_cstr(__tur_mk___862), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___862), __inst_MapKey_mk_owned__cstr(__tur_mk___862));
+                    __t10 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___862), __inst_Hash_hash_cstr(__tur_mk___862), __inst_MapKey_mk_box_cstr(__tur_mk___862), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___862), __inst_MapKey_mk_owned__cstr(__tur_mk___862));
                 }
-                __t5 = map_assoc_eq_o(tur_map_kcheck(__t6, &__tur_mk___861), __inst_Hash_hash_cstr(__tur_mk___861), __inst_MapKey_mk_box_cstr(__tur_mk___861), INT64_C(2), __inst_MapKey_mk_cmp_cstr(__tur_mk___861), __inst_MapKey_mk_owned__cstr(__tur_mk___861));
+                __t9 = map_assoc_eq_o(tur_map_kcheck(__t10, &__tur_mk___861), __inst_Hash_hash_cstr(__tur_mk___861), __inst_MapKey_mk_box_cstr(__tur_mk___861), INT64_C(2), __inst_MapKey_mk_cmp_cstr(__tur_mk___861), __inst_MapKey_mk_owned__cstr(__tur_mk___861));
             }
-            int64_t mapY_863 = __t5;
+            int64_t mapY_863 = __t9;
             (void)mapY_863;
-            int64_t __t7;
+            int64_t __t11;
             {
                 const char * __tur_mk___864 = "age";
                 (void)__tur_mk___864;
-                int64_t __t8;
+                int64_t __t12;
                 {
                     const char * __tur_mk___865 = "name";
                     (void)__tur_mk___865;
-                    __t8 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___865), __inst_Hash_hash_cstr(__tur_mk___865), __inst_MapKey_mk_box_cstr(__tur_mk___865), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___865), __inst_MapKey_mk_owned__cstr(__tur_mk___865));
+                    __t12 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___865), __inst_Hash_hash_cstr(__tur_mk___865), __inst_MapKey_mk_box_cstr(__tur_mk___865), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___865), __inst_MapKey_mk_owned__cstr(__tur_mk___865));
                 }
-                __t7 = map_assoc_eq_o(tur_map_kcheck(__t8, &__tur_mk___864), __inst_Hash_hash_cstr(__tur_mk___864), __inst_MapKey_mk_box_cstr(__tur_mk___864), INT64_C(99), __inst_MapKey_mk_cmp_cstr(__tur_mk___864), __inst_MapKey_mk_owned__cstr(__tur_mk___864));
+                __t11 = map_assoc_eq_o(tur_map_kcheck(__t12, &__tur_mk___864), __inst_Hash_hash_cstr(__tur_mk___864), __inst_MapKey_mk_box_cstr(__tur_mk___864), INT64_C(99), __inst_MapKey_mk_cmp_cstr(__tur_mk___864), __inst_MapKey_mk_owned__cstr(__tur_mk___864));
             }
-            int64_t mapZ_866 = __t7;
+            int64_t mapZ_866 = __t11;
             (void)mapZ_866;
-            int64_t __t9;
+            int64_t __t13;
             {
                 const char * __tur_mk___867 = "name";
                 (void)__tur_mk___867;
-                __t9 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___867), __inst_Hash_hash_cstr(__tur_mk___867), __inst_MapKey_mk_box_cstr(__tur_mk___867), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___867), __inst_MapKey_mk_owned__cstr(__tur_mk___867));
+                __t13 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___867), __inst_Hash_hash_cstr(__tur_mk___867), __inst_MapKey_mk_box_cstr(__tur_mk___867), INT64_C(1), __inst_MapKey_mk_cmp_cstr(__tur_mk___867), __inst_MapKey_mk_owned__cstr(__tur_mk___867));
             }
-            int64_t mapW_868 = __t9;
+            int64_t mapW_868 = __t13;
             (void)mapW_868;
-            int64_t __t10;
+            int64_t __t14;
             if (eq2__spec__bool_int64_t_int64_t(mapX_860, mapY_863)) {
-                __t10 = INT64_C(1);
+                __t14 = INT64_C(1);
             } else {
-                __t10 = INT64_C(0);
+                __t14 = INT64_C(0);
             }
-            printf("%lld\n", (long long)(__t10));
-            int64_t __t11;
+            printf("%lld\n", (long long)(__t14));
+            int64_t __t15;
             if (eq2__spec__bool_int64_t_int64_t(mapX_860, mapZ_866)) {
-                __t11 = INT64_C(1);
+                __t15 = INT64_C(1);
             } else {
-                __t11 = INT64_C(0);
+                __t15 = INT64_C(0);
             }
-            printf("%lld\n", (long long)(__t11));
-            int64_t __t12;
+            printf("%lld\n", (long long)(__t15));
+            int64_t __t16;
             if (eq2__spec__bool_int64_t_int64_t(mapX_860, mapW_868)) {
-                __t12 = INT64_C(1);
+                __t16 = INT64_C(1);
             } else {
-                __t12 = INT64_C(0);
+                __t16 = INT64_C(0);
             }
-            printf("%lld\n", (long long)(__t12));
-            int64_t __t13;
+            printf("%lld\n", (long long)(__t16));
+            int64_t __t17;
             if (eq2__spec__bool_int64_t_int64_t(mapX_860, mapX_860)) {
-                __t13 = INT64_C(1);
+                __t17 = INT64_C(1);
             } else {
-                __t13 = INT64_C(0);
+                __t17 = INT64_C(0);
             }
-            printf("%lld\n", (long long)(__t13));
+            printf("%lld\n", (long long)(__t17));
         }
-        int64_t __t14;
-        __t14 = INT64_C(0);
-        return (int)__t14;
+        int64_t __t18;
+        __t18 = INT64_C(0);
+        return (int)__t18;
 }
 
 static bool eq2__spec__bool_int64_t_int64_t(int64_t a, int64_t b) {

@@ -2462,6 +2462,8 @@ typedef struct NoToken {
 } NoToken;
 
 
+typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
 extern void * tur_hamt_retain(void *);
@@ -2638,7 +2640,7 @@ static int64_t tnil();
 static bool tnil_(int64_t);
 static int64_t list_length(int64_t);
 static bool list_eq_(int64_t, int64_t, int64_t);
-static int64_t __cons_fmap(int64_t, int64_t);
+static int64_t __cons_fmap(int64_t, void *);
 static int64_t list_head(int64_t);
 static int64_t list_tail(int64_t);
 static int64_t list_concat(int64_t, int64_t);
@@ -3785,37 +3787,35 @@ static int64_t list_length(int64_t l) {
 }
 
 static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *a = (void*)(intptr_t)l1;
-  struct __tur_cons_t *b = (void*)(intptr_t)l2;
-  while (a && b) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
-      a = (void*)(intptr_t)a->tail;
-      b = (void*)(intptr_t)b->tail;
-  }
-  return (void*)a == (void*)b;
-  
+        bool __t5;
+        if (tnil_(l1)) {
+            __t5 = tnil_(l2);
+        } else {
+            bool __t6;
+            if (tnil_(l2)) {
+                __t6 = false;
+            } else {
+                bool __t7;
+                if (((bool (*)(int64_t, int64_t))(intptr_t)cmp_fn)(list_head(l1), list_head(l2))) {
+                    __t7 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
+                } else {
+                    __t7 = false;
+                }
+                __t6 = __t7;
+            }
+            __t5 = __t6;
+        }
+        return __t5;
 }
 
-static int64_t __cons_fmap(int64_t cell, int64_t f) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
-  if (!c) return 0;
-  int64_t *_fat = (int64_t*)(intptr_t)f;
-  tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  struct __tur_cons_t *head_node = NULL;
-  struct __tur_cons_t *prev = NULL;
-  while (c) {
-    struct __tur_cons_t *r = malloc(sizeof(*r));
-    r->head = _f.fn(_f.env, c->head);
-    r->tail = 0;
-    if (!head_node) head_node = r;
-    if (prev) prev->tail = (int64_t)(intptr_t)r;
-    prev = r;
-    c = (struct __tur_cons_t *)(intptr_t)c->tail;
-  }
-  return (int64_t)(intptr_t)head_node;
-  
+static int64_t __cons_fmap(int64_t cell, void * f) {
+        int64_t __t8;
+        if (tnil_(cell)) {
+            __t8 = INT64_C(0);
+        } else {
+            __t8 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
+        }
+        return __t8;
 }
 
 static int64_t list_head(int64_t l) {
@@ -3831,13 +3831,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t5;
+        int64_t __t9;
         if (tnil_(l1)) {
-            __t5 = l2;
+            __t9 = l2;
         } else {
-            __t5 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t9 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t5;
+        return __t9;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4311,13 +4311,13 @@ static int64_t k_identity(int64_t k) {
 }
 
 static int64_t make_resumable(NoToken nc, int64_t result) {
-        int64_t __t6;
+        int64_t __t10;
         {
             int64_t (*f)() = __fn_862;
             (void)f;
-            __t6 = tur_cloneable_cont_resume(((int64_t (*)(void))(intptr_t)f)(), result);
+            __t10 = tur_cloneable_cont_resume(((int64_t (*)(void))(intptr_t)f)(), result);
         }
-        return __t6;
+        return __t10;
 }
 
 int main(int argc, char **argv) {

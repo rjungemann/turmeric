@@ -2390,6 +2390,8 @@ typedef struct MutableMap {
 } MutableMap;
 
 
+typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
 extern void * tur_hamt_retain(void *);
@@ -2564,7 +2566,7 @@ static int64_t tnil();
 static bool tnil_(int64_t);
 static int64_t list_length(int64_t);
 static bool list_eq_(int64_t, int64_t, int64_t);
-static int64_t __cons_fmap(int64_t, int64_t);
+static int64_t __cons_fmap(int64_t, void *);
 static int64_t list_head(int64_t);
 static int64_t list_tail(int64_t);
 static int64_t list_concat(int64_t, int64_t);
@@ -2600,10 +2602,10 @@ static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, int64_t);
 static void mutmap_free(int64_t);
 
-struct __defer_env_7 {RcControlBlock * x; };
+struct __defer_env_11 {RcControlBlock * x; };
 
-static void __defer_8(void *__env) {
-    struct __defer_env_7 *__e = (struct __defer_env_7 *)__env;
+static void __defer_12(void *__env) {
+    struct __defer_env_11 *__e = (struct __defer_env_11 *)__env;
     rc_strong_decrement(__e->x);
     rc_free_queue_drain();
 }
@@ -3698,37 +3700,35 @@ static int64_t list_length(int64_t l) {
 }
 
 static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *a = (void*)(intptr_t)l1;
-  struct __tur_cons_t *b = (void*)(intptr_t)l2;
-  while (a && b) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
-      a = (void*)(intptr_t)a->tail;
-      b = (void*)(intptr_t)b->tail;
-  }
-  return (void*)a == (void*)b;
-  
+        bool __t2;
+        if (tnil_(l1)) {
+            __t2 = tnil_(l2);
+        } else {
+            bool __t3;
+            if (tnil_(l2)) {
+                __t3 = false;
+            } else {
+                bool __t4;
+                if (((bool (*)(int64_t, int64_t))(intptr_t)cmp_fn)(list_head(l1), list_head(l2))) {
+                    __t4 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
+                } else {
+                    __t4 = false;
+                }
+                __t3 = __t4;
+            }
+            __t2 = __t3;
+        }
+        return __t2;
 }
 
-static int64_t __cons_fmap(int64_t cell, int64_t f) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
-  if (!c) return 0;
-  int64_t *_fat = (int64_t*)(intptr_t)f;
-  tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  struct __tur_cons_t *head_node = NULL;
-  struct __tur_cons_t *prev = NULL;
-  while (c) {
-    struct __tur_cons_t *r = malloc(sizeof(*r));
-    r->head = _f.fn(_f.env, c->head);
-    r->tail = 0;
-    if (!head_node) head_node = r;
-    if (prev) prev->tail = (int64_t)(intptr_t)r;
-    prev = r;
-    c = (struct __tur_cons_t *)(intptr_t)c->tail;
-  }
-  return (int64_t)(intptr_t)head_node;
-  
+static int64_t __cons_fmap(int64_t cell, void * f) {
+        int64_t __t5;
+        if (tnil_(cell)) {
+            __t5 = INT64_C(0);
+        } else {
+            __t5 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
+        }
+        return __t5;
 }
 
 static int64_t list_head(int64_t l) {
@@ -3744,13 +3744,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t2;
+        int64_t __t6;
         if (tnil_(l1)) {
-            __t2 = l2;
+            __t6 = l2;
         } else {
-            __t2 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t6 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t2;
+        return __t6;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4230,38 +4230,38 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            int64_t *__t3 = (int64_t *)malloc(sizeof(int64_t));
-            *__t3 = INT64_C(100);
-            RcControlBlock *__t4 = rc_cb_alloc(0, 3, NULL);
-            __t4->value = __t3;
-            RcControlBlock * x_853 = __t4;
+            int64_t *__t7 = (int64_t *)malloc(sizeof(int64_t));
+            *__t7 = INT64_C(100);
+            RcControlBlock *__t8 = rc_cb_alloc(0, 3, NULL);
+            __t8->value = __t7;
+            RcControlBlock * x_853 = __t8;
             (void)x_853;
-            tur_frame __frame_5;
-            tur_frame_init(&__frame_5, NULL);
-            int64_t __t6 = rc_strong_count(x_853);
-            printf("%lld\n", (long long)(__t6));
-            struct __defer_env_7 __t9 = {.x = x_853};
-            tur_frame_push_defer(&__frame_5, __defer_8, &__t9);
-            tur_frame_fire_lifo(&__frame_5);
+            tur_frame __frame_9;
+            tur_frame_init(&__frame_9, NULL);
+            int64_t __t10 = rc_strong_count(x_853);
+            printf("%lld\n", (long long)(__t10));
+            struct __defer_env_11 __t13 = {.x = x_853};
+            tur_frame_push_defer(&__frame_9, __defer_12, &__t13);
+            tur_frame_fire_lifo(&__frame_9);
         }
         {
-            int64_t *__t10 = (int64_t *)malloc(sizeof(int64_t));
-            *__t10 = INT64_C(200);
-            RcControlBlock *__t11 = rc_cb_alloc(0, 3, NULL);
-            __t11->value = __t10;
-            RcControlBlock * x_854 = __t11;
+            int64_t *__t14 = (int64_t *)malloc(sizeof(int64_t));
+            *__t14 = INT64_C(200);
+            RcControlBlock *__t15 = rc_cb_alloc(0, 3, NULL);
+            __t15->value = __t14;
+            RcControlBlock * x_854 = __t15;
             (void)x_854;
             {
-                void *__t12 = tur_ref_from_rc(x_854);
-                void * r_855 = __t12;
+                void *__t16 = tur_ref_from_rc(x_854);
+                void * r_855 = __t16;
                 (void)r_855;
-                int64_t __t13 = *((int64_t *)r_855);
-                printf("%lld\n", (long long)(__t13));
+                int64_t __t17 = *((int64_t *)r_855);
+                printf("%lld\n", (long long)(__t17));
             }
         }
-        int64_t __t14;
-        __t14 = INT64_C(0);
-        return (int)__t14;
+        int64_t __t18;
+        __t18 = INT64_C(0);
+        return (int)__t18;
 }
 
 
