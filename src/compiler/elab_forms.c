@@ -486,6 +486,27 @@ Expr *elab_let(Elab *e, const Form *call) {
         const Symbol *name = cur->as.sym;
         Span name_span = cur->span;
         i++;
+        /* Optional type annotation between name and init:
+         *   fused:  (let [x :int 5] ...)
+         *   spaced: (let [x : int 5] ...)
+         * Spaced (F_TYPE_ANN) is unambiguous and always consumed.  Fused
+         * (F_KEYWORD) overlaps with keyword *values* (e.g. a macro template
+         * `(let [__k ~k] ...)` where `k` is bound to `:foo`), so only consume
+         * a bare keyword when it resolves to a known TypeKind.  Anything else
+         * is treated as the initializer. */
+        const Form *type_ann_form = NULL;
+        if (i < bindings_form->as.list.len) {
+            Form *maybe_ann = bindings_form->as.list.items[i];
+            if (maybe_ann->tag == F_TYPE_ANN) {
+                type_ann_form = maybe_ann;
+                i++;
+            } else if (maybe_ann->tag == F_KEYWORD &&
+                       maybe_ann->as.sym != NULL &&
+                       typekind_from_symbol(maybe_ann->as.sym->name) != TY_UNKNOWN) {
+                type_ann_form = maybe_ann;
+                i++;
+            }
+        }
         if (i >= bindings_form->as.list.len) {
             diag_emit(DIAG_ERROR, cur->span,
                       "let binding for '%s' is missing its initializer",
@@ -522,6 +543,30 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         if (!init) { rc = -1; break; }
+
+        /* Verify the optional type annotation against the elaborated init type.
+         * For now we compare TypeKind for the common primitive cases (int,
+         * float, bool, cstr, nil/void, ptr) -- enough to reject obvious
+         * mistakes like `(let [x : int "hello"] ...)`.  Complex types
+         * (structs, ADTs, arrows) parse but skip the equality check;
+         * downstream typing rules still apply to the init expression. */
+        if (type_ann_form) {
+            Type *ann_ty = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
+            if (ann_ty) {
+                TypeKind ak = ann_ty->kind, ik = init->type.kind;
+                bool primitive = (ak == TY_INT || ak == TY_FLOAT ||
+                                  ak == TY_BOOL || ak == TY_CSTR ||
+                                  ak == TY_NIL || ak == TY_PTR_VOID);
+                if (primitive && ak != ik) {
+                    diag_emit(DIAG_ERROR, type_ann_form->span,
+                        "let binding '%s': type annotation does not match "
+                        "initializer (annotated %s, got %s)",
+                        name->name,
+                        typekind_to_string(ak), typekind_to_string(ik));
+                    rc = -1; break;
+                }
+            }
+        }
 
         /* Phase 11: Move tracking - if init is a CK_MOVE binding reference, poison it */
         if (init->kind == EX_VAR && type_is_move(init->as.var.binding->type)) {
@@ -1114,6 +1159,19 @@ Expr *elab_letstar(Elab *e, const Form *call) {
             return NULL;
         }
         i++; /* the name symbol or destructuring pattern */
+        /* Optional type annotation between name and init (mirrors elab_let).
+         * F_TYPE_ANN is unambiguous; F_KEYWORD only consumed if it names a
+         * known type (otherwise it's a keyword value, e.g. macro-expanded). */
+        if (i < blen) {
+            Form *maybe_ann = bindings->as.list.items[i];
+            if (maybe_ann->tag == F_TYPE_ANN) {
+                i++;
+            } else if (maybe_ann->tag == F_KEYWORD &&
+                       maybe_ann->as.sym != NULL &&
+                       typekind_from_symbol(maybe_ann->as.sym->name) != TY_UNKNOWN) {
+                i++;
+            }
+        }
         if (i >= blen) {
             diag_emit(DIAG_ERROR, bindings->as.list.items[i - 1]->span,
                       "let* binding is missing its initializer");

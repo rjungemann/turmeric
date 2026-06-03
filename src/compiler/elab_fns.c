@@ -16,10 +16,10 @@ static bool fn_type_param_index(const Symbol **type_params, uint8_t n_type_param
     return false;
 }
 
-static Type *fn_type_from_form(Elab *e, const Form *form,
-                               const Symbol **type_params,
-                               Kind *type_param_kinds,
-                               uint8_t n_type_params) {
+Type *fn_type_from_form(Elab *e, const Form *form,
+                        const Symbol **type_params,
+                        Kind *type_param_kinds,
+                        uint8_t n_type_params) {
     if (!form) return NULL;
     if (form->tag == F_TYPE_ANN && form->as.list.len > 0) {
         return fn_type_from_form(e, form->as.list.items[0],

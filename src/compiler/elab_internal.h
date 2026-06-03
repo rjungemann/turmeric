@@ -899,6 +899,16 @@ Expr *elab_defalias(Elab *e, const Form *call);
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
     const Symbol **type_params, Kind *type_param_kinds,
     uint8_t n_type_params);
+/* Resolve a type-annotation form (F_KEYWORD `:int`, spaced F_TYPE_ANN
+ * wrapping any form, or a list constructor like `(-> a b)`) into a Type*.
+ * Unwraps F_TYPE_ANN and delegates to type_expr_from_form for the inner
+ * form, with arrow / borrow / handler / session / role heads routed
+ * through their constructor paths.  Used by defn, fn, defstruct, and
+ * let-bindings to share one type-form parser. */
+Type *fn_type_from_form(Elab *e, const Form *form,
+                        const Symbol **type_params,
+                        Kind *type_param_kinds,
+                        uint8_t n_type_params);
 /* MF4: separate struct / GADT namespaces. Resolves a type name by walking
  * the ADT registry first, then the struct registry. Returns an
  * arena-allocated Type* (TY_ADT or TY_STRUCT) when found, else NULL.
