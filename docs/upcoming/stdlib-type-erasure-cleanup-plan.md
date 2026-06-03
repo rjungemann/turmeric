@@ -66,24 +66,107 @@ The same compiler bugs that block arrow's instances surface elsewhere:
 
 ### Phase A -- compiler prerequisites
 
-Nothing in stdlib can be cleanly fixed until these land. Each is a separate
-plan; this document just enumerates the dependency edges.
+Nothing in stdlib can be cleanly fixed until these land. Each sub-phase is a
+separate plan; this document enumerates the dependency edges and the concrete
+tasks each sub-phase contains.
 
-1. **Sum types (`Either`, `Left`, `Right`) end-to-end** -- unblocks
-   `ArrowChoice` (`left`, `right`, `+++`, `|||`) and tightens many
-   error-handling sites currently using two-of-tuple workarounds.
-2. **Closure-returning instance method codegen** -- the "dict field resolved
-   as `void *` instead of `int64_t`" bug. Fixing it unblocks every Tier-1
-   typeclass instance for arrow, and the `mw-cors` currying case in httpd.
-3. **Operator-name C identifier mangling** -- `>>>` and `<<<` both mangle to
-   `___`. Needed for `Category` (both compositions) and for any future
-   typeclass that wants symmetric operator pairs.
-4. **Effect-handler closure capture** -- a closure analysis pass over the
-   bodies of `fn`s passed to effect handlers. Likely shares machinery with
-   the existing fat-closure work.
-5. **Struct-in-`__pap` env codegen** -- store struct values in `__pap` env
-   fields without truncating to `int64_t` (the `CorsOpts` case). Likely a
-   sibling of #2.
+#### A1. Sum types (`Either`, `Left`, `Right`) end-to-end
+
+Unblocks `ArrowChoice` (`left`, `right`, `+++`, `|||`) and tightens many
+error-handling sites currently using two-of-tuple workarounds.
+
+1. Design the tagged-union memory layout for binary sums (`Either L R`) --
+   reuse the `Option`/`Result` discriminant convention.
+2. Add parser/AST support for `defdata`-style sum declarations (or extend the
+   existing ADT surface) covering nullary and unary constructors.
+3. Implement constructor lowering: `Left x` / `Right y` to a tagged struct
+   literal, with pattern-match destructuring in `case`.
+4. Implement exhaustiveness checking for `Either` matches; emit a warning on
+   non-exhaustive patterns.
+5. Wire `Either` into the typeclass instance resolver so `Functor`,
+   `Applicative`, `Monad` instances can be written by hand against it.
+6. Add fixtures: `tests/fixtures/sum-either-basic/`, `.../sum-either-match/`,
+   `.../sum-either-nested/` and corresponding `expected.c` snapshots.
+7. Migrate one existing two-of-tuple error site in stdlib to `Either` as a
+   smoke test before B1 starts.
+
+#### A2. Closure-returning instance method codegen
+
+The "dict field resolved as `void *` instead of `int64_t`" bug. Fixing it
+unblocks every Tier-1 typeclass instance for arrow, and the `mw-cors`
+currying case in httpd.
+
+1. Reproduce the bug in a minimal fixture: a `definstance` whose method
+   returns a closure capturing a free variable.
+2. Locate the dict-field type resolution site in the typeclass lowering pass;
+   identify why the return type erases to `void *`.
+3. Fix the type propagation so closure-returning dict fields carry their
+   `int64_t` (fat-closure handle) type through to C emission.
+4. Audit other dict field types (struct returns, opaque returns) for the same
+   bug class; document findings as a note for A5.
+5. Add fixtures covering: closure return, nested closure return, closure
+   capturing a struct, closure returning another instance method.
+6. Regenerate affected `expected.c` snapshots and confirm `bash tests/run.sh`
+   is clean.
+
+#### A3. Operator-name C identifier mangling
+
+`>>>` and `<<<` both mangle to `___`. Needed for `Category` (both
+compositions) and for any future typeclass that wants symmetric operator
+pairs.
+
+1. Inventory current operator-to-identifier mapping in the mangler; list all
+   operators that collide today.
+2. Design a stable, reversible mangling scheme (e.g. `>>>` -> `__gt_gt_gt`,
+   `<<<` -> `__lt_lt_lt`) -- pick a prefix that cannot collide with
+   user-defined identifiers.
+3. Implement the new mangler and gate it behind a single helper function so
+   every emission site stays consistent.
+4. Update the demangler / error-reporting path to invert the scheme so user
+   diagnostics still show `>>>` rather than `__gt_gt_gt`.
+5. Add a fixture defining both `>>>` and `<<<` in the same module and
+   asserting both are callable.
+6. Regenerate all snapshots that contain operator-name symbols; review the
+   diff for unintended renames.
+
+#### A4. Effect-handler closure capture
+
+A closure analysis pass over the bodies of `fn`s passed to effect handlers.
+Likely shares machinery with the existing fat-closure work (commit
+`bfab8c4c`).
+
+1. Identify the AST node(s) where handler `fn`s are introduced; tag them so
+   the closure-analysis pass can find them.
+2. Extend the existing fat-closure free-variable analysis to recurse into
+   handler bodies.
+3. Allocate and thread the fat-closure env through the handler dispatch
+   trampoline; ensure the env survives across the resume boundary.
+4. Confirm interaction with `resume` / one-shot continuations -- a captured
+   variable must not be freed before the continuation fires.
+5. Add fixtures: handler capturing a loop counter, handler capturing a
+   struct, nested handlers each capturing distinct vars.
+6. Stress-test with the existing effects suite under ASan to catch
+   use-after-free regressions.
+
+#### A5. Struct-in-`__pap` env codegen
+
+Store struct values in `__pap` env fields without truncating to `int64_t`
+(the `CorsOpts` case). Likely a sibling of A2 -- see open question 2.
+
+1. Reproduce the `mw-cors` failure in a minimal fixture: a curried function
+   whose first argument is a struct.
+2. Inspect the `__pap` env struct emission: confirm the field is being
+   declared as `int64_t` when the captured value is a struct.
+3. Extend the `__pap` env layout to carry the real struct type (by value or
+   by boxed pointer -- decide based on size threshold).
+4. Update the `__pap` apply trampoline to read the struct field with the
+   correct type rather than reinterpreting an `int64_t`.
+5. Decide (with A2 findings in hand) whether this is a separate codepath or
+   the same fix; collapse if possible.
+6. Add fixtures for: small struct capture, large struct capture, struct +
+   primitive mixed capture.
+7. Regenerate snapshots and verify the httpd suite passes once `mw-cors`
+   currying is re-enabled (the B5 smoke test).
 
 ### Phase B -- per-module follow-throughs (one PR each, gated on Phase A)
 
