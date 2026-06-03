@@ -178,7 +178,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-eq? [r1 :int r2 :int ok-cmp err-cmp]
+(defn result-eq? [r1 :int r2 :int ^fat ok-cmp ^fat err-cmp]
   #{}
   :bool
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
@@ -186,10 +186,11 @@
   if (!a && !b) return true;
   if (!a || !b) return false;
   if (a->is_ok != b->is_ok) return false;
+  /* CRU B-3: ok-cmp/err-cmp are fat closure boxes; fat-dispatch via slot 0. */
   if (a->is_ok)
-      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
+      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)ok_cmp)[0])((void*)(intptr_t)ok_cmp, a->ok_val, b->ok_val);
   else
-      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
+      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)err_cmp)[0])((void*)(intptr_t)err_cmp, a->err_val, b->err_val);
   ```)
 ;;; __tur-q-is-err? -- ? operator helper; checks if a Result value is an error.
 

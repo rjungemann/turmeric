@@ -90,15 +90,16 @@
   `(if (~fst-cmp (.fst ~p1) (.fst ~p2)) (~snd-cmp (.snd ~p1) (.snd ~p2)) false))
 ;;; pair-eq-carrier? -- legacy carrier-ABI helper used inside Pair's Eq instance.
 
-(defn pair-eq-carrier? [p1 :int p2 :int fst-cmp snd-cmp]
+(defn pair-eq-carrier? [p1 :int p2 :int ^fat fst-cmp ^fat snd-cmp]
   #{}
   :bool
   ```c struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
   struct { int64_t fst; int64_t snd; } *b = (void*)(intptr_t)p2;
   if (!a && !b) return true;
   if (!a || !b) return false;
-  bool fst_eq = ((bool(*)(int64_t, int64_t))(intptr_t)fst_cmp)(a->fst, b->fst);
-  bool snd_eq = ((bool(*)(int64_t, int64_t))(intptr_t)snd_cmp)(a->snd, b->snd);
+  /* CRU B-3: fst-cmp/snd-cmp are fat closure boxes; fat-dispatch via slot 0. */
+  bool fst_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)fst_cmp)[0])((void*)(intptr_t)fst_cmp, a->fst, b->fst);
+  bool snd_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)snd_cmp)[0])((void*)(intptr_t)snd_cmp, a->snd, b->snd);
   return fst_eq && snd_eq;
   ```)
 ;;; Eq [Pair] -- element-wise equality using each component's Eq instance.

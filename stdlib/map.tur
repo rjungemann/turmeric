@@ -569,7 +569,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-eq-raw? [m1 :int m2 :int val-cmp]
+(defn map-eq-raw? [m1 :int m2 :int ^fat val-cmp]
   #{}
   :bool
   ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
@@ -583,8 +583,9 @@
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
-      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
-          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0. */
+      bool vals_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
+          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -603,7 +604,7 @@
 ;;; Since: Phase TM0 (typed surface: TMS3)
 
 (defn map-eq? [K V]
-  [m1 (Map K V) m2 (Map K V) val-cmp]
+  [m1 (Map K V) m2 (Map K V) ^fat val-cmp]
   :bool
   (map-eq-raw? m1 m2 val-cmp))
 ;;; map-eq-raw-k? -- like map-eq-raw? but compares keys with an explicit
@@ -611,7 +612,7 @@
 ;;; MapKey[K] comparator here is what makes structural equality content-correct
 ;;; for :cstr keys (distinct pointers with equal text match).
 
-(defn map-eq-raw-k? [m1 :int m2 :int keyeq val-cmp]
+(defn map-eq-raw-k? [m1 :int m2 :int keyeq ^fat val-cmp]
   #{}
   :bool
   ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
@@ -626,8 +627,10 @@
       void *val_in_b = tur_hamt_get_eq(map2->hamt, (int64_t)hash_out, key_out,
                                        (void *)(intptr_t)keyeq);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
-      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
-          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0.
+         keyeq stays a thin MapKey carrier (not a user closure). */
+      bool vals_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
+          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -642,7 +645,7 @@
 ;;; distinct pointers/boxes compare equal.
 
 (defn map-eq-k? [K V]
-  [m1 (Map K V) m2 (Map K V) keyeq val-cmp]
+  [m1 (Map K V) m2 (Map K V) keyeq ^fat val-cmp]
   :bool
   (map-eq-raw-k? m1 m2 keyeq val-cmp))
 ;;; Eq [Map] -- structural equality using the value type's Eq instance.
@@ -660,7 +663,9 @@
 ;;; is used -- which is correct for :int keys.
 
 
-(defn map-eq-dynamic [m1 :int m2 :int val-cmp] :bool
+(defn map-eq-dynamic [m1 :int m2 :int ^fat val-cmp] :bool
+  ;; CRU B-3: val-cmp is a fat closure box; threaded as int64 to the runtime,
+  ;; which fat-dispatches it (tur_hamt_eq_dynamic reads slot 0).
   ```c return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); ```)
 
 (definstance Eq [Map] [(Eq K) (Eq V)]

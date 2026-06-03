@@ -138,16 +138,29 @@ silent default flip. A dedicated raw-C-callback spelling and any wholesale
 migration off `:ptr<void>` are deferred to B-4 behind an explicit marker, never
 an implicit reinterpretation of `:(fn ...)`.
 
-### B-3 -- migrate the Phase 1 holdouts + synthesis dispatcher
+### B-3 -- migrate the Phase 1 holdouts + synthesis dispatcher  *(DONE)*
 
-Type the comparator parameters of `option-eq?`, `pair-eq-carrier?`,
-`mutmap-eq?` (and the comonad `extend` helpers) as closures. Update the
-constrained-`Eq` per-call-site synthesis dispatcher to emit a boxed closure
-value (box the synthesized `__fn_NNN` via the per-signature `__tur_fatshim_*`)
-instead of a bare `(void*)(intptr_t)` cast -- closing
+Shipped. All the `*-eq?` carrier helpers now take `^fat` value/element
+comparators and fat-dispatch through slot 0 of the box: `option-eq?`,
+`vec-eq?`, `list-eq?`, `result-eq?`, `pair-eq-carrier?`, `set-eq-cmp?`,
+`mutmap-eq?`, and the map family (`map-eq?` / `map-eq-raw?` / `map-eq-k?` /
+`map-eq-raw-k?` / `map-eq-dynamic`), including `tur_hamt_eq_dynamic` in the C
+runtime (one value-comparator call site). The constrained-`Eq` per-call-site
+synthesis dispatcher boxes every synthesized comparator
+(`box_synth_comparator` -> `EX_FN_TO_FAT`) before building its direct
+`EX_CALL`, so the captureless synthesized lambda arrives as a fat box rather
+than a bare `(void*)(intptr_t)` pointer -- closing
 [eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md](../reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md).
-Re-add the capturing-comparator fixtures (`pair-eq-capturing-closure`,
-`mutmap-eq-capturing-closure`, option-eq portion) retired in Phase 1.
+The MapKey `keyeq` carrier stays thin (a constant carrier-ABI fn pointer, not a
+user closure), so only *value* comparators are boxed. Both the instance-body
+path and the synthesis path now agree on the fat box representation. New
+regression fixture `tests/fixtures/eq-carrier-capturing-comparator` passes a
+genuine *capturing* comparator directly to `option-eq?` / `vec-eq?` /
+`mutmap-eq?` (the latent crash these helpers had). The named
+`pair-eq-capturing-closure` / `mutmap-eq-capturing-closure` fixtures from the
+plan were never created in Phase 1 (planned, deferred), so there was nothing to
+re-add; the consolidated fixture covers the regression. 97 prelude snapshots
+regenerated (benign boxing churn). `bash tests/run.sh`: 0 FAIL.
 
 ### B-4 -- retire the `:ptr<void>`-as-closure overload
 

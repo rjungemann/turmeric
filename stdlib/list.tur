@@ -148,7 +148,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn list-eq? [l1 :int l2 :int cmp-fn : (fn [int int] :bool)] :bool
+(defn list-eq? [l1 :int l2 :int ^fat cmp-fn : (fn [int int] :bool)] :bool
   (if (tnil? l1)
     (tnil? l2)
     (if (tnil? l2)

@@ -6,7 +6,20 @@ description: The constrained-Eq per-call-site synthesis dispatcher (F3-5/F3-6) l
 
 # Eq Per-Call-Site Synthesis Passes a Bare Comparator Pointer to a ^fat Sink -- Reported Bug
 
-> **Status:** Reported (deferred to closure-representation-unification Phase 3)
+> **Status:** RESOLVED (2026-06-03) in closure-representation-unification
+>   Phase 3 / Option B, sub-phase B-3. The synthesis dispatcher now boxes every
+>   synthesized value/element comparator (`box_synth_comparator` ->
+>   `EX_FN_TO_FAT`) before building its direct `EX_CALL`, and the `*-eq?`
+>   carrier helpers (`option-eq?`, `vec-eq?`, `list-eq?`, `result-eq?`,
+>   `pair-eq-carrier?`, `set-eq-cmp?`, `mutmap-eq?`, `map-eq?` / `map-eq-k?` /
+>   `map-eq-dynamic`) take `^fat` value comparators and fat-dispatch through
+>   slot 0 -- including `tur_hamt_eq_dynamic` in the C runtime. Both the
+>   instance-body path and the synthesis path now agree on the fat box
+>   representation. Regression fixture:
+>   `tests/fixtures/eq-carrier-capturing-comparator` (a *capturing* comparator
+>   passed directly to `option-eq?` / `vec-eq?` / `mutmap-eq?`). The MapKey
+>   `keyeq` carrier stays thin (it is a constant carrier-ABI fn pointer, not a
+>   user closure). `bash tests/run.sh`: 0 FAIL.
 > **Found:** 2026-06-03, while executing Phase 1 of
 >   [closure-representation-unification-plan.md](../upcoming/closure-representation-unification-plan.md)
 > **Severity:** Medium -- not a defect in the current tree (the synthesis

@@ -152,7 +152,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-eq? [o1 :int o2 :int cmp-fn]
+(defn option-eq? [o1 :int o2 :int ^fat cmp-fn]
   #{}
   :bool
   ```c struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
@@ -161,7 +161,11 @@
   bool b_some = b && b->is_some;
   if (!a_some && !b_some) return true;
   if (a_some != b_some)   return false;
-  return ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value);
+  /* CRU B-3: cmp-fn is a fat closure box { thunk, env... }; fat-dispatch it
+     through slot 0 so a capturing comparator works (a bare thin cast would
+     read the box address as code).  Captureless lambdas are boxed at the call
+     site via the ^fat auto-shim. */
+  return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])((void*)(intptr_t)cmp_fn, a->value, b->value);
   ```)
 ;;; Eq [Option] -- equality using the inner type's Eq instance.
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].

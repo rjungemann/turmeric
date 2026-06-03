@@ -294,7 +294,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-eq? [m1 :int m2 :int val-cmp]
+(defn mutmap-eq? [m1 :int m2 :int ^fat val-cmp]
   #{}
   :bool
   ```c enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
@@ -326,7 +326,8 @@
           idx = (idx + 1) & mask;
       }
       if (!found) return false;
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(v_a, v_b)) return false;
+      /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0. */
+      if (!((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])((void*)(intptr_t)val_cmp, v_a, v_b)) return false;
   }
   return true;
   ```)

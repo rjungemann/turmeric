@@ -261,7 +261,7 @@
 ;;;
 ;;; Since: Phase F3-5 (cross-plan-followups)
 
-(defn set-eq-cmp? [a :int b :int cmp-fn]
+(defn set-eq-cmp? [a :int b :int ^fat cmp-fn]
   #{}
   :bool
   ```c /* O(n*m) comparison: iterate a's elements, scan b for a structural
@@ -284,8 +284,8 @@
       uint64_t hash_b;
       void *key_b = NULL, *val_b = NULL;
       while (tur_hamt_iter_next((void*)iter_b, &hash_b, &key_b, &val_b)) {
-          if (((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(
-                (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
+          if (((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])(
+                (void*)(intptr_t)cmp_fn, (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
               found = true;
               break;
           }

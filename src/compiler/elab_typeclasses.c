@@ -335,6 +335,24 @@ static Form *build_mapkey_cmp_form(Elab *e, const Type *key_type, Span span) {
  * as the receiver, which (thanks to F3-7's sticky ascription) dispatches
  * to the right inner instance.  Recursion terminates at primitive
  * element types where F3-7's single-level path takes over. */
+/* CRU B-3: box a synthesized comparator expr into a fat closure.  The
+ * constrained-Eq synthesis dispatcher builds its helper call as an EX_CALL node
+ * directly, bypassing elab_call's ^fat auto-shim -- so a captureless comparator
+ * lambda would reach the (now ^fat) *-eq? value-comparator parameter as a bare
+ * function pointer and be misread as a fat box (segfault, per
+ * docs/reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md).
+ * Wrapping it in EX_FN_TO_FAT here boxes a captureless lambda via the
+ * per-signature __tur_fatshim_*, and is a pass-through for an already-fat
+ * (capturing) closure -- matching the fat dispatch the helper bodies now use.
+ * Only *value/element* comparators are boxed; the MapKey `keyeq` carrier stays
+ * thin (it is a constant carrier-ABI fn pointer, not a user closure). */
+static Expr *box_synth_comparator(Elab *e, Expr *inner) {
+    if (!inner) return NULL;
+    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, inner->span);
+    shim->as.fn_to_fat_.inner = inner;
+    return shim;
+}
+
 static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
                                      Expr *obj, Expr *other_arg, Span span) {
     if (!outer_inst || outer_inst->n_type_args == 0) return NULL;
@@ -410,7 +428,8 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
             Binding *mek_b = scope_lookup(&e->global, intern_cstr(e->st, "map-eq-k?"));
             if (!mek_b) return NULL;
             Expr **ca = (Expr **)arena_alloc(e->arena, 4 * sizeof(Expr *));
-            ca[0] = obj; ca[1] = other_arg; ca[2] = kcmp; ca[3] = vcmp;
+            ca[0] = obj; ca[1] = other_arg; ca[2] = kcmp;
+            ca[3] = box_synth_comparator(e, vcmp);   /* value comparator: ^fat */
             Expr *out = expr_new(e->arena, EX_CALL, TYPE_BOOL, span);
             out->as.call_.fn_binding = mek_b;
             out->as.call_.fn_expr    = NULL;
@@ -493,7 +512,10 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
     call_args[0] = obj;
     call_args[1] = other_arg;
     for (uint8_t i = 0; i < n_comparators; i++) {
-        call_args[2 + i] = lambdas[i];
+        /* CRU B-3: the *-eq? carrier helpers now fat-dispatch their value/element
+         * comparator(s); box each synthesized comparator so the captureless
+         * lambda arrives as a fat closure rather than a bare pointer. */
+        call_args[2 + i] = box_synth_comparator(e, lambdas[i]);
     }
 
     Expr *out = expr_new(e->arena, EX_CALL, TYPE_BOOL, span);
