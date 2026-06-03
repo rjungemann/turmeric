@@ -1,0 +1,33 @@
+;; Smallest standalone test of a :float-returning fat closure passing through
+;; composition.
+;;
+;; `compose` takes two ^fat callbacks and returns a NEW closure that captures
+;; both of them and returns :float -- i.e. a :float-returning fat closure whose
+;; environment itself holds two fat closures.  The composed closure is then
+;; fat-dispatched through a ^fat sink (`call-f`).
+;;
+;; This exercises the capture-env field type for a captured *function* value.
+;; type_c_name(TY_FN) returns the closure's RESULT type's C name ("double" for
+;; a :float result), so the captured fat-closure pointers `f`/`g` were being
+;; stored in `double` env fields and reinterpreted as pointers on read.  That
+;; only round-trips by luck (valid pointers fit in a double's 53-bit integer
+;; range); the fields must be the int64_t fn-ABI carrier instead.  See
+;; docs/reported/captured-fn-stored-in-double-env-field.md.
+
+(defn call-f [^fat f :(fn [:float] #{} :float) x :float] :float
+  (f x))
+
+(defn compose [^fat f :(fn [:float] #{} :float)
+               ^fat g :(fn [:float] #{} :float)] :ptr<void>
+  (fn [x :float] :float (f (g x))))   ;; captures f and g -> fat, returns :float
+
+(defn make-scale [k :float] :ptr<void>
+  (fn [x :float] :float (* x k)))
+
+(defn make-add [n :float] :ptr<void>
+  (fn [x :float] :float (+ x n)))
+
+(defn main [] :int
+  (let [h (compose (make-scale 2.0) (make-add 1.0))]   ;; h(x) = (x + 1) * 2
+    (println (call-f h 3.0)))                            ;; (3 + 1) * 2 = 8
+  0)

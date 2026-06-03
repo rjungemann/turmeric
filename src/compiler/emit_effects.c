@@ -1099,7 +1099,14 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
                  ci < shift->as.cloneable_shift_.n_live_captures; ci++) {
                 Binding *cap = shift->as.cloneable_shift_.live_captures[ci];
                 char *rn = raw_name_for_binding(cap);
-                buf_printf(hb, "%s %s; ", type_c_name(cap->type), rn);
+                /* A captured fn value is the int64_t fn-ABI carrier, not its
+                 * result type's C name (type_c_name(TY_FN) -> "double" for a
+                 * :float result would alias the closure pointer through a
+                 * floating-point field). */
+                const char *cap_ctype = cap->type.kind == TY_FN
+                    ? "int64_t"
+                    : type_c_name(cap->type);
+                buf_printf(hb, "%s %s; ", cap_ctype, rn);
                 free(rn);
             }
             buf_printf(hb, "} __clenv_%d;\n", cont_id);
