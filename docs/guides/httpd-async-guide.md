@@ -168,8 +168,10 @@ let [base    (fn [c :ptr<void>] :nil
 ```
 
 The same applies to `mw-basic-auth`, `mw-json-body`, `mw-cors-with`,
-and `compose-middleware-of` (the runtime form).  See
-[`httpd-guide.md`](httpd-guide.md) for the full middleware library.
+`mw-compress` (from `stdlib/httpd-compress.tur`, depends on the
+`tur/zlib` spice), and `compose-middleware-of` (the runtime form).
+See [`httpd-middleware-guide.md`](httpd-middleware-guide.md) for the
+full middleware library.
 
 ---
 

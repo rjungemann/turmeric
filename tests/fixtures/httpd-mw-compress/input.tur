@@ -1,0 +1,213 @@
+;; M6: mw-compress -- gzip response when Accept-Encoding: gzip is present.
+;;
+;; Two requests on one keep-alive socket:
+;;
+;;   1. GET / with Accept-Encoding: gzip.  The handler responds with a
+;;      >256-byte body; mw-compress gzips it, sets Content-Encoding: gzip
+;;      and Vary: Accept-Encoding.  The client decompresses via the spice
+;;      and verifies recovery of the original bytes.
+;;
+;;   2. GET / WITHOUT Accept-Encoding.  mw-compress is a no-op; body is
+;;      sent verbatim and is not encoded.
+;;
+;; Expected output:
+;;   gzip-status=200
+;;   gzip-content-encoding=gzip
+;;   gzip-vary=Accept-Encoding
+;;   gzip-decoded-ok=1
+;;   plain-status=200
+;;   plain-content-encoding=(none)
+;;   done
+
+(load "stdlib/httpd-compress.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+;; A >256 byte payload so the threshold is crossed.  "hello world\n" x 30 = 360 bytes.
+(defn big-body [] :cstr
+  ```c
+  static char buf[512];
+  static int built = 0;
+  if (!built) {
+      buf[0] = '\0';
+      for (int i = 0; i < 30; i++) strcat(buf, "hello world\n");
+      built = 1;
+  }
+  return buf;
+  ```)
+
+(defn big-body-len [] :int
+  ```c return (int64_t)(12 * 30); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+
+  /* ----- Helper: read until headers + Content-Length bytes are in. ----- */
+  char buf[8192];
+  int total;
+  int hdr_end_off;
+
+  /* ===== Request 1: Accept-Encoding: gzip ===== */
+  {
+      const char *req =
+          "GET / HTTP/1.1\r\n"
+          "Host: localhost\r\n"
+          "Accept-Encoding: gzip\r\n"
+          "\r\n";
+      send(fd, req, strlen(req), 0);
+      total = 0;
+      hdr_end_off = -1;
+      while (total < (int)sizeof(buf) - 1) {
+          ssize_t r = recv(fd, buf + total, sizeof(buf) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+          buf[total] = '\0';
+          char *he = strstr(buf, "\r\n\r\n");
+          if (he) {
+              hdr_end_off = (int)(he - buf) + 4;
+              /* Find Content-Length. */
+              int clen = 0;
+              const char *cl = strcasestr(buf, "\r\nContent-Length: ");
+              if (cl) clen = atoi(cl + 18);
+              if (total >= hdr_end_off + clen) break;
+          }
+      }
+
+      /* Status. */
+      if (strncmp(buf, "HTTP/1.1 ", 9) == 0)
+          printf("gzip-status=%c%c%c\n", buf[9], buf[10], buf[11]);
+
+      /* Content-Encoding. */
+      {
+          const char *p = strcasestr(buf, "\r\nContent-Encoding: ");
+          if (p) {
+              p += 20;
+              const char *eol = strstr(p, "\r\n");
+              if (eol) printf("gzip-content-encoding=%.*s\n", (int)(eol - p), p);
+          } else {
+              printf("gzip-content-encoding=(none)\n");
+          }
+      }
+      /* Vary. */
+      {
+          const char *p = strcasestr(buf, "\r\nVary: ");
+          if (p) {
+              p += 8;
+              const char *eol = strstr(p, "\r\n");
+              if (eol) printf("gzip-vary=%.*s\n", (int)(eol - p), p);
+          } else {
+              printf("gzip-vary=(none)\n");
+          }
+      }
+      /* Decompress and compare. */
+      {
+          int clen = 0;
+          const char *cl = strcasestr(buf, "\r\nContent-Length: ");
+          if (cl) clen = atoi(cl + 18);
+          void *dec = gzip_decode((void *)(buf + hdr_end_off), clen);
+          if (!dec) { printf("gzip-decoded-ok=0\n"); }
+          else {
+              const char *dd = (const char *)gzip_buf_data(dec);
+              int dl = (int)gzip_buf_len(dec);
+              const char *want = big_body();
+              int wlen = (int)big_body_len();
+              int ok = (dl == wlen) && (memcmp(dd, want, (size_t)dl) == 0);
+              printf("gzip-decoded-ok=%d\n", ok ? 1 : 0);
+              gzip_buf_free(dec);
+          }
+      }
+  }
+
+  /* ===== Request 2: no Accept-Encoding ===== */
+  {
+      const char *req =
+          "GET / HTTP/1.1\r\n"
+          "Host: localhost\r\n"
+          "Connection: close\r\n"
+          "\r\n";
+      send(fd, req, strlen(req), 0);
+      total = 0;
+      while (total < (int)sizeof(buf) - 1) {
+          ssize_t r = recv(fd, buf + total, sizeof(buf) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+          buf[total] = '\0';
+      }
+      if (strncmp(buf, "HTTP/1.1 ", 9) == 0)
+          printf("plain-status=%c%c%c\n", buf[9], buf[10], buf[11]);
+      {
+          const char *p = strcasestr(buf, "\r\nContent-Encoding: ");
+          if (p) {
+              p += 20;
+              const char *eol = strstr(p, "\r\n");
+              if (eol) printf("plain-content-encoding=%.*s\n", (int)(eol - p), p);
+          } else {
+              printf("plain-content-encoding=(none)\n");
+          }
+      }
+  }
+
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn done-tick [ch :ptr<void>] :nil
+  (chan-send ch 1))
+
+(defn main [] :int
+  (let [donech   (chan-new 2)
+        base     (fn [c :ptr<void>] :nil
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body!   c (big-body))
+                   (done-tick donech))
+        composed (compose-middleware base mw-compress)
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (chan-recv donech)
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

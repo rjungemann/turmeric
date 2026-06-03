@@ -91,6 +91,7 @@ entry links to its docstring in the source for the full surface.
 | `mw-body-size`            | Reject requests with Content-Length above a cap (413) | MW1 |
 | `mw-rate-limit`           | Sliding-window per-IP rate limiter (429 + Retry-After) | MW2 |
 | `mw-static`               | Fall back to static files when `next` returned 404 (with ETag + 304) | MW2 |
+| `mw-compress` / `mw-compress-with` | gzip the response body when client sends `Accept-Encoding: gzip` (requires `tur/zlib` spice) | M6 |
 
 ### mw-body-size (MW1)
 
@@ -203,6 +204,54 @@ let [verify   (fn [u :cstr p :cstr] :int
      composed mw-basic-auth("app" verify base)]
   httpd-new(0 composed)
 ```
+
+### mw-compress (M6)
+
+`mw-compress` gzips the response body when the client sends
+`Accept-Encoding: gzip`, sets `Content-Encoding: gzip` plus
+`Vary: Accept-Encoding`, and is otherwise a no-op. The codec lives in
+the `tur/zlib` spice (`../turmeric-spices/spices/zlib`); install it
+into your workspace, then `(load "stdlib/httpd-compress.tur")` from
+your program.
+
+```turmeric
+(load "stdlib/httpd-compress.tur")
+
+(let [base     (fn [c :ptr<void>] :nil
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body!   c large-html))
+      composed (compose-middleware base mw-log mw-compress)]
+  (httpd-new 0 composed))
+```
+
+```sweet-exp
+load "stdlib/httpd-compress.tur"
+
+let [base     fn(c :ptr<void> :nil
+                 httpd-resp-status!(c 200)
+                 httpd-resp-body!(c large-html))
+     composed compose-middleware(base mw-log mw-compress)]
+  httpd-new(0 composed)
+```
+
+Notes:
+
+- Install as the OUTERMOST post-processing middleware (leftmost in
+  `compose-middleware`) so it sees the final body produced by inner
+  layers.
+- The default threshold is 256 bytes; bodies smaller than that pass
+  through uncompressed. Use `mw-compress-with` to pick a different
+  minimum (`(mw-compress-with 1024 base)` for a 1 KiB floor).
+- Handlers that already set `Content-Encoding` (e.g. served a
+  precomputed `.gz` blob) pass through untouched -- mw-compress never
+  double-gzips.
+- Binary-safe: replaces the response body via
+  `httpd-resp-body-bytes!`, so gzip output (which contains embedded
+  NUL bytes) is emitted exactly as produced.
+- Only `Content-Encoding: gzip` is negotiated. Brotli, zstd, and raw
+  deflate are out of scope for v0.1.
+
+See also: the [`tur-zlib` README](https://github.com/rjungemann/turmeric-spices/tree/main/spices/zlib).
 
 ## Request attributes (MW2)
 

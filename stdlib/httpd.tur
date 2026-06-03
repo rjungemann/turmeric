@@ -1012,6 +1012,35 @@
   memcpy(c->resp_body, body, len + 1);
   c->resp_body_len = (int)len;
   ```)
+;;; httpd-resp-body-bytes! -- binary-safe response body setter.
+;;;
+;;; Like httpd-resp-body! but takes a (ptr, byte-count) pair instead of a
+;;; NUL-terminated cstr, so the body may contain embedded NUL bytes
+;;; (e.g. gzip output, raw binary payloads).  Copies `len` bytes from
+;;; `bytes` into a fresh response-body allocation; the writer emits
+;;; exactly `len` bytes regardless of any embedded NULs.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   bytes -- pointer to raw payload (may contain NUL bytes)
+;;;   len   -- byte count to copy
+;;;
+;;; Example:
+;;;   (httpd-resp-body-bytes! c gzip-data gzip-len)
+;;;
+;;; Since: Phase H8 (M6)
+
+(defn httpd-resp-body-bytes! [conn :ptr<void> bytes :ptr<void> len :int] :nil
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->resp_body) { free(c->resp_body); c->resp_body = NULL; c->resp_body_len = 0; }
+  if (!bytes || len <= 0) return;
+  c->resp_body = (char *)malloc((size_t)len + 1);
+  if (!c->resp_body) return;
+  memcpy(c->resp_body, bytes, (size_t)len);
+  c->resp_body[len] = '\0';
+  c->resp_body_len = (int)len;
+  ```)
 ;; =============================================================================
 ;; M0: Arbitrary request / response header access
 ;; =============================================================================

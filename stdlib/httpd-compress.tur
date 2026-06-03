@@ -1,0 +1,121 @@
+;;; stdlib/httpd-compress.tur -- gzip response compression middleware.
+;;;
+;;; Optional add-on to stdlib/httpd.tur.  Loads the tur/zlib spice from
+;;; ../turmeric-spices and fails at module-resolution time when the spice
+;;; is absent -- users who do not want a zlib dependency simply do not
+;;; (load) this file.
+;;;
+;;; Layers on top of the M0 response-header surface
+;;; (httpd-resp-header! / httpd-req-header) and the M6 binary-body setter
+;;; httpd-resp-body-bytes! from stdlib/httpd.tur.
+;;;
+;;; Since: Phase H8 (M6)
+
+(load "stdlib/httpd.tur")
+(load "../turmeric-spices/spices/zlib/src/tur/zlib.tur")
+
+;; -----------------------------------------------------------------------------
+;; Internal: single-shot post-processing step.
+;;
+;; Everything lives in one inline-C helper because the work is naturally C:
+;; read the request header, read the response body+headers, decide, call
+;; into the spice's gzip-encode (resolved via the manifest export), and
+;; mutate the conn in place.  Going through Turmeric-level glue would
+;; require a NULL test on a :ptr<void>, which is awkward in surface syntax.
+;; -----------------------------------------------------------------------------
+
+;;; httpd-mw-compress-step -- internal: post-processing gzip pass.
+;;;
+;;; When the client accepts gzip AND the response is not already encoded
+;;; AND the body is at least `min-bytes`, gzip the body and set the
+;;; Content-Encoding + Vary headers.  All other cases are no-ops.
+;;;
+;;; Delegates the actual gzip work to the tur/zlib spice's gzip-encode +
+;;; gzip-buf-data/-len/-free, so the spice owns the codec lifetime.
+;;;
+;;; Since: Phase H8 (M6)
+
+(defn httpd-mw-compress-step [conn :ptr<void> min-bytes :int] :nil
+  ```c
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->resp_body_len < (int)min_bytes) return;
+  /* Skip if handler already produced an encoded body. */
+  HttpdHeader *h = (HttpdHeader *)c->resp_headers;
+  while (h) {
+      if (h->name && strcasecmp(h->name, "Content-Encoding") == 0) return;
+      h = h->next;
+  }
+  /* Negotiate: substring "gzip" in Accept-Encoding (case-insensitive).
+   * Full RFC 7231 q-value parsing is M6-OQ5 and deferred. */
+  if (!httpd_req_header_((void *)conn, "Accept-Encoding")) return;
+  const char *ae = httpd_req_header((void *)conn, "Accept-Encoding");
+  if (!ae || !*ae) return;
+  int found = 0;
+  for (const char *p = ae; *p; p++) {
+      if ((p[0]=='g'||p[0]=='G') && (p[1]=='z'||p[1]=='Z') &&
+          (p[2]=='i'||p[2]=='I') && (p[3]=='p'||p[3]=='P')) { found = 1; break; }
+  }
+  if (!found) return;
+  /* Hand off to the spice. */
+  void *buf = gzip_encode((void *)c->resp_body, c->resp_body_len);
+  if (!buf) return;
+  void *data = gzip_buf_data(buf);
+  int64_t dlen = gzip_buf_len(buf);
+  /* Replace the response body with the compressed bytes (binary-safe). */
+  httpd_resp_body_bytes_((void *)conn, data, dlen);
+  httpd_resp_header_((void *)conn, "Content-Encoding", "gzip");
+  httpd_resp_header_add_((void *)conn, "Vary", "Accept-Encoding");
+  gzip_buf_free(buf);
+  ```)
+
+;; -----------------------------------------------------------------------------
+;; The middleware factories
+;; -----------------------------------------------------------------------------
+
+;;; mw-compress-with -- gzip the response body when the client accepts gzip.
+;;;
+;;; Inspects Accept-Encoding for "gzip"; when present AND the response body
+;;; length exceeds `min-bytes` AND the response is not already compressed,
+;;; gzips the body via tur/zlib, sets Content-Encoding: gzip + Vary:
+;;; Accept-Encoding, and rewrites the response body to the compressed
+;;; bytes.  Content-Length is recomputed by the writer from the new
+;;; resp_body_len.  Other paths pass through unchanged.
+;;;
+;;; Skips entries whose handler already set a Content-Encoding header
+;;; (preserves caller intent; do not double-gzip).
+;;;
+;;; Should be installed as the OUTERMOST post-processing middleware so it
+;;; sees the final body produced by the handler + any inner middleware.
+;;;
+;;; Parameters:
+;;;   min-bytes -- minimum response body size to compress (typical: 256)
+;;;   next      -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
+;;;   compose-middleware.
+;;;
+;;; Example:
+;;;   (compose-middleware base mw-log (mw-compress-with 256))
+;;;
+;;; Since: Phase H8 (M6)
+
+(defn mw-compress-with [min-bytes :int ^fat next :int] :ptr<void>
+  (let [_min min-bytes
+        _n   next]
+    (fn [c :ptr<void>] :nil
+      (httpd-call _n c)
+      (httpd-mw-compress-step c _min))))
+
+;;; mw-compress -- mw-compress-with default 256-byte threshold.
+;;;
+;;; `(mw-compress next)` is equivalent to `(mw-compress-with 256 next)`.
+;;;
+;;; Example:
+;;;   (compose-middleware base mw-log mw-compress)
+;;;
+;;; Since: Phase H8 (M6)
+
+(defn mw-compress [^fat next :int] :ptr<void>
+  (mw-compress-with 256 next))
