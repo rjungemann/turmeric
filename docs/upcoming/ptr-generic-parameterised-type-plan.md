@@ -6,12 +6,47 @@ description: Today `:ptr<T>` is hard-coded as a single keyword string `:ptr<void
 
 # Parameterised `:ptr<T>` Generic Pointer Type -- Plan
 
-> **Status:** Draft Plan
+> **Status:** Implemented (P1-P4 core)
 > **Last Updated:** 2026-06-03
 > **Type:** compiler -- type system / parser
 > **Surfaced by:**
 > - [language-readiness-for-typed-signal-plan.md](language-readiness-for-typed-signal-plan.md) G5 spike
 >   (`tests/fixtures/typed-state-cell/`)
+
+---
+
+## Implementation notes (landed)
+
+`:ptr<T>` is now a first-class typed raw pointer. The surface syntax carries
+**no inner colon** -- write `:ptr<float>`, `:ptr<MyStruct>`, `:ptr<ptr<float>>`
+(not `:ptr<:float>`). Such names lex as a single keyword token already, so no
+lexer change was needed.
+
+Design decision (P2): rather than introduce a new `TypeKind` (which would force
+a `case` into every `-Wswitch`/`-Werror` switch over `TypeKind`), the typed
+pointer is **folded onto the existing `TY_PTR_VOID`** with an optional pointee:
+
+- `Type.as.ptr.inner` (a `struct Type *`) holds the pointee `T`; `NULL` means
+  the legacy untyped `ptr<void>`. See `type_ptr()` in `types.h`.
+- Equality (`type_eq`): two typed pointers are equal iff their pointees are
+  equal; `ptr<void>` (NULL inner) stays interoperable with any pointer for
+  back-compat (the runtime threads raw handles through `ptr<void>` sinks).
+- Codegen (`type_c_name`): `ptr<T>` lowers to `T *` -- including from inline-C
+  bodies, so `(defn f [] :ptr<float> ```c ... ```)` declares `double *f(...)`
+  with no `(intptr_t)` round-trip. Compound C names are interned
+  (`intern_type_name`) so the string stays live and LeakSanitizer-clean.
+
+Resolution entry point: `ptr_type_from_keyword_name()` in `elab_types.c`,
+called from `type_expr_from_form` (both `F_SYM` spaced and `F_KEYWORD` compact
+forms) and from the inline keyword dispatch in `defn`/`fn` params and returns.
+The inner type is resolved recursively, so primitives, structs, ADTs, type
+variables (`ptr<A>` inside a `[A]` param list), and nested pointers all work.
+
+Acceptance: `tests/fixtures/typed-state-cell/` compiles and runs with
+`:ptr<float>` and no casts; `ptr<int>`/`ptr<bool>`/`ptr<Struct>`/`ptr<A>` and
+nested `ptr<ptr<float>>` (-> `double **`) all verified; full `tests/run.sh`
+green (the one unrelated `float-fat-closure` codegen-snapshot failure predates
+this work).
 
 ---
 
