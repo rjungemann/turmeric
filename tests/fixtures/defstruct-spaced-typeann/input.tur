@@ -1,0 +1,16 @@
+;; Phase 1b: spaced field-type annotations in defstruct.
+;; `(defstruct P [x : int y : int])` must elaborate the same as the fused
+;; form `(defstruct P [x :int y :int])`.
+
+(defstruct P [x : int y : int])
+
+(defstruct Mixed [a :int b : float c : int])
+
+(defn main [] :int
+  (let [p (make-struct P 3 4)]
+    (println (.x p))
+    (println (.y p))
+    (let [m (make-struct Mixed 1 2.5 7)]
+      (println (.a m))
+      (println (.c m))
+      0)))

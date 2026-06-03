@@ -1,0 +1,20 @@
+;; Phase 1c: keyword literals that look like type annotations must remain
+;; fused inside quote / quasiquote forms. The codemod will skip quoted
+;; code, but the reader still has to round-trip these correctly today.
+;;
+;; This pins two shapes:
+;;   * (quote :int)  -- bare keyword literal under quote
+;;   * ':float       -- reader shorthand for (quote :float)
+;;
+;; Both must elaborate to interned symbol values, NOT be misread as a
+;; spaced type annotation.
+
+(defn show-kw [k :int] :int k)
+
+(defn main [] :int
+  (let [a (quote :int)
+        b ':float]
+    (show-kw 0)
+    (println (sym->str a))
+    (println (sym->str b))
+    0))

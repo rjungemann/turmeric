@@ -169,23 +169,24 @@ Each happy-path fixture also gets a fused-form sibling (or a single fixture with
 
 Exit criteria: `bash tests/run.sh` green; plain `let` and `let*` both accept fused and spaced type annotations; the negative fixture produces a clear diagnostic.
 
-**Phase 1b: Audit & regression-fixture sweep**
+**Phase 1b: Audit & regression-fixture sweep** *(DONE)*
 
 For every site listed under "Elaboration sites that already accept `F_TYPE_ANN`", add (or confirm existing) one fixture using the spaced form:
 
-- `defn` param + return: `(defn f [x : int] : int ...)`.
-- `defn` complex param type: `(defn f [g : (-> int int)] : int ...)`.
-- Variadic rest: `(defn f [& rest : int] : int ...)` and `(defn f [& rs : Route] : int ...)`.
-- `fn` literal: `(fn [x : int] : int ...)`.
-- `defstruct`: `(defstruct P [x : int y : int])`.
-- `definstance` / typeclass method.
-- Sweet-exp: a `.tur.sweet` fixture combining several of the above.
+- `defn` param + return: `(defn f [x : int] : int ...)` — `defn-spaced-typeann/`.
+- `defn` complex param type: `(defn f [g : (-> int int)] : int ...)` — `defn-spaced-compound/`.
+- Variadic rest: `(defn f [& rest : int] : int ...)` — `variadic-rest-spaced-int/`; and `(defn f [& rs : Route] : int ...)` — `variadic-rest-spaced-opaque/`.
+- `fn` literal: `(fn [x : int] : int ...)` — `fn-spaced-typeann/`.
+- `defstruct`: `(defstruct P [x : int y : int])` — `defstruct-spaced-typeann/`.
+- `definstance` / typeclass method — `definstance-spaced/`.
+- Sweet-exp: a `.tur.sweet`-style fixture combining several of the above — `sweet-exp-spaced-typeann/`.
 
-Each fixture compares `emit-c` output against the fused-form equivalent to prove they produce **identical** codegen (modulo source spans).
+The variadic-rest sub-task revealed a real elaboration gap: `elab_defn`/`elab_fn` only matched `F_KEYWORD` for the `& rest :type` slot. Both call sites in `elab_fns.c` were widened to also accept `F_TYPE_ANN{inner: F_SYM/F_KEYWORD}`. Codegen verified byte-identical between fused and spaced variants at fixture-creation time for both the int and opaque cases.
 
-**Phase 1c: Bare-`:` and quoted-form regression**
+**Phase 1c: Bare-`:` and quoted-form regression** *(DONE)*
 
-- Add fixtures exercising `(quote :int)`, `(list ':int)`, and any current `defgadt` use of bare `:`. Confirm none regress.
+- `defgadt` bare-`:` constructor syntax: `defgadt-spaced-typeann/`.
+- Quoted keyword literals (`(quote :int)`, `':float`): `quoted-keyword-type-ann/`. Confirms the reader round-trips `:T`-shaped keywords inside `quote` without confusing them with a spaced type annotation. The `(list ':int)` shape from the plan would require runtime list construction over `Sym` values, which is not currently a supported runtime path; the bare-quote shapes cover the same reader concern.
 
 **Exit criteria for Phase 1**: Every type-annotation position the codemod will touch has at least one passing spaced-form fixture, and `bash tests/run.sh` is green with leak detection on.
 

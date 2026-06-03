@@ -697,8 +697,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
             rest_full_type = NULL;
             if (i + 2 < params_f->as.list.len) {
                 Form *type_p = params_f->as.list.items[i + 2];
-                if (type_p->tag == F_KEYWORD) {
-                    if (!resolve_variadic_rest_type(e, type_p,
+                /* Accept fused `& rest :int` (F_KEYWORD) and spaced
+                 * `& rest : int` (F_TYPE_ANN{inner: F_SYM/F_KEYWORD}). */
+                Form *type_eff = type_p;
+                if (type_p->tag == F_TYPE_ANN && type_p->as.list.len == 1 &&
+                    (type_p->as.list.items[0]->tag == F_SYM ||
+                     type_p->as.list.items[0]->tag == F_KEYWORD)) {
+                    type_eff = type_p->as.list.items[0];
+                }
+                if (type_eff->tag == F_KEYWORD || type_eff->tag == F_SYM) {
+                    if (!resolve_variadic_rest_type(e, type_eff,
                                                     fn_type_params, fn_type_param_kinds,
                                                     n_fn_type_params, "defn",
                                                     &rest_kind, &rest_full_type)) {
@@ -2536,8 +2544,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
             fn_rest_full_type = NULL;
             if (i + 2 < params_f->as.list.len) {
                 Form *type_p = params_f->as.list.items[i + 2];
-                if (type_p->tag == F_KEYWORD) {
-                    if (!resolve_variadic_rest_type(e, type_p,
+                /* Accept fused `& rest :int` and spaced `& rest : int`. */
+                Form *type_eff = type_p;
+                if (type_p->tag == F_TYPE_ANN && type_p->as.list.len == 1 &&
+                    (type_p->as.list.items[0]->tag == F_SYM ||
+                     type_p->as.list.items[0]->tag == F_KEYWORD)) {
+                    type_eff = type_p->as.list.items[0];
+                }
+                if (type_eff->tag == F_KEYWORD || type_eff->tag == F_SYM) {
+                    if (!resolve_variadic_rest_type(e, type_eff,
                                                     fn_type_params, fn_type_param_kinds,
                                                     n_fn_type_params, "fn",
                                                     &fn_rest_kind, &fn_rest_full_type)) {

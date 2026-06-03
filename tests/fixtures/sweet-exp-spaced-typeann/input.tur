@@ -1,0 +1,22 @@
+#lang sweet-exp
+
+;; Phase 1b: sweet-exp file exercising spaced annotations across several
+;; type-bearing positions in one file -- defn params + return, fn literal,
+;; defstruct fields, and let binding type slot.
+
+defstruct Pt [x : int y : int]
+
+defn add [a : int b : int] : int
+  +(a b)
+
+defn manhattan [p : Pt] : int
+  +(.x(p) .y(p))
+
+defn main [] :int
+  let [p make-struct(Pt 3 4)
+       sq fn([n : int] : int *(n n))
+       m : int manhattan(p)]
+    println(add(40 2))
+    println(sq(5))
+    println(m)
+    0
