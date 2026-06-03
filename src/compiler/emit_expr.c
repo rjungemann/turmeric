@@ -1807,6 +1807,58 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * int).  Calling it requires the same cast-and-invoke pattern as TY_PTR_VOID
              * callbacks.  Only applies to non-global bindings (local params). */
             if (fn_binding->type.kind == TY_FN && !fn_binding->is_global) {
+                /* A#1: a ^fat parameter holds a fat closure ({ thunk, env... }),
+                 * not a bare function pointer.  Invoking it directly via (g x)
+                 * must dispatch through slot 0 with the box as the env argument
+                 * -- the same fat-call protocol as the TY_PTR_VOID path above.
+                 * Emitting a thin ((R (*)(A...))g)(args) call here would treat the
+                 * fat box's address as code and jump to garbage. */
+                if (fn_binding->is_fat) {
+                    char *raw_ptr = name_for_binding(ctx, fn_binding);
+                    /* A TY_FN parameter is stored as int64_t in C; the fat-call
+                     * protocol wants the box as a void *, so coerce once. */
+                    Buf fnb; buf_init(&fnb);
+                    buf_printf(&fnb, "(void *)(intptr_t)(%s)", raw_ptr);
+                    buf_putc(&fnb, '\0');
+                    char *fn_ptr = strdup(fnb.data);
+                    buf_free(&fnb);
+                    free(raw_ptr);
+                    uint32_t n = e->as.call_.n_args;
+                    const char *ret_c = type_c_name(e->type);
+                    Type arg_types[MAX_FN_ARITY];
+                    char **arg_strs = (n > 0)
+                        ? (char **)malloc(n * sizeof(char *)) : NULL;
+                    if (n > 0 && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    for (uint32_t i = 0; i < n; i++) {
+                        arg_types[i] = e->as.call_.args[i]->type;
+                        arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                    }
+                    char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
+                        e->type, n > 0 ? arg_types : NULL, (uint8_t)n);
+                    Buf out; buf_init(&out);
+                    if (thunk_typedef) {
+                        /* TS1: typed fat-closure layout -- slot 0 is a typed thunk ptr. */
+                        buf_printf(&out, "(*( %s *)(%s))(%s", thunk_typedef, fn_ptr, fn_ptr);
+                    } else {
+                        buf_printf(&out, "((%s (*)(void*", ret_c);
+                        for (uint32_t i = 0; i < n; i++) {
+                            buf_printf(&out, ", %s", type_c_name(arg_types[i]));
+                        }
+                        buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
+                    }
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", %s", arg_strs[i]);
+                    }
+                    buf_puts(&out, ")");
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    free(thunk_typedef);
+                    for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+                    free(arg_strs);
+                    free(fn_ptr);
+                    return result;
+                }
                 char *fn_ptr = name_for_binding(ctx, fn_binding);
                 uint32_t n = e->as.call_.n_args;
                 const char *ret_c = type_c_name(e->type);
