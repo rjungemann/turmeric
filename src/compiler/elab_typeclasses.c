@@ -3079,9 +3079,11 @@ found_method:;
             Binding *inner_b = poly_arg_fn_binding(args[i]);
             if (!inner_b) {
                 /* Phase CCL: no named-function binding found.  If the argument
-                 * is a fat closure (TY_PTR_VOID — capturing or non-capturing
-                 * lambda), wrap it for tur_poly_fn_t packing in the emitter. */
-                if (args[i]->type.kind == TY_PTR_VOID) {
+                 * is a fat closure (TY_PTR_VOID, or CRU B-1's boxed TY_FN
+                 * closure value — capturing or non-capturing lambda), wrap it
+                 * for tur_poly_fn_t packing in the emitter. */
+                if (args[i]->type.kind == TY_PTR_VOID ||
+                    (args[i]->type.kind == TY_FN && args[i]->type.as.fn.boxed)) {
                     Expr *orig2 = args[i];
                     Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig2->span);
                     cwrap->as.poly_wrap_.inner = orig2;

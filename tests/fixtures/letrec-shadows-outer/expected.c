@@ -4245,13 +4245,13 @@ int main(int argc, char **argv) {
                 __t9->__fn = (tur_thunk_int64_t_t)__fn_855;
                 __t9->x = x_853;
                 void *__t10 = __t9;
-                void * f_854 = __t10;
+                int64_t f_854 = (int64_t)(intptr_t)(__t10);
                 (void)f_854;
-                printf("%lld\n", (long long)(__fn_855(f_854)));
+                printf("%lld\n", (long long)(__fn_855((void *)(intptr_t)(f_854))));
                 {
                     int64_t x_860 = INT64_C(99);
                     (void)x_860;
-                    printf("%lld\n", (long long)(__fn_855(f_854)));
+                    printf("%lld\n", (long long)(__fn_855((void *)(intptr_t)(f_854))));
                 }
                 int64_t __t11;
                 __t11 = INT64_C(0);

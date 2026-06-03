@@ -2897,8 +2897,21 @@ Expr *elab_fn(Elab *e, const Form *call) {
         fd->closure = closure;
         
         /* Create EX_CLOSURE expression */
-        /* The closure's type is void* (pointer to closure struct) */
-        Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, TYPE_PTR_VOID, call->span);
+        /* CRU Phase 3 / Option B (B-1): a capturing closure is a first-class
+         * closure *value* -- a fat box { thunk, env... } -- typed as a boxed
+         * TY_FN carrying the lambda's user-facing signature (param_kinds /
+         * return_kind, i.e. WITHOUT the prepended env param).  A boxed TY_FN
+         * shares TY_PTR_VOID's C carrier (a void* holding the box) and is
+         * type_eq-interchangeable with it, so it flows through every legacy
+         * :ptr<void> closure sink unchanged; the only new behavior is that a
+         * direct call on a value statically typed boxed TY_FN dispatches
+         * through the fat protocol for all arities (emit_expr.c).  See
+         * docs/upcoming/closure-first-class-type-plan.md. */
+        TypeKind clo_arg_kinds[MAX_FN_ARITY];
+        for (uint8_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
+        Type clo_ty = type_fn(clo_arg_kinds, n_params, return_kind);
+        clo_ty.as.fn.boxed = true;
+        Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, clo_ty, call->span);
         closure_expr->as.closure_.closure = closure;
 
         free(captures);

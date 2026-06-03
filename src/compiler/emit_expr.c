@@ -246,7 +246,11 @@ static Type emit_fn_arg_type_from_type(Type fn_type, uint8_t idx) {
 static void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null) {
     type = emit_resolve_type(ctx, type);
     indent_buf(body, ctx->indent);
-    if (type.kind == TY_FN) {
+    /* CRU B-1: a boxed TY_FN (first-class closure value) is carried as a void *
+     * holding the { thunk, env... } box -- declare it via the generic path
+     * (emit_type_c_name -> "void *"), not as a thin function pointer, which
+     * would mistype the box.  Only a *bare* TY_FN temp is a function pointer. */
+    if (type.kind == TY_FN && !type.as.fn.boxed) {
         buf_printf(body, "%s (*%s)(",
                    type_c_name(emit_type_from_kind(type.as.fn.result_kind)), name);
         if (type.as.fn.arity == 0) {
@@ -303,14 +307,16 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         if (is_gen_field) {
             buf_printf(body, "%s = %s;\n", bn, iv);
-        } else if (b->is_fat && b->type.kind == TY_FN) {
+        } else if (b->type.kind == TY_FN && (b->is_fat || b->type.as.fn.boxed)) {
             /* closure-representation-unification (Phase 0): a fn-typed ^fat alias
-             * holds a fat-closure box, not a bare function pointer.  Declare it
-             * as the int64_t carrier so the fat-dispatch call site (the ER2
-             * is_fat path) casts it back to void * and reads slot 0 -- declaring
-             * it as a thin fn pointer (the TY_FN branch below) both mistypes the
-             * box and trips -Wint-conversion.  A bare ^fat alias is :ptr<void>
-             * and is handled cleanly by the fallback below. */
+             * holds a fat-closure box, not a bare function pointer.  CRU B-1: a
+             * boxed TY_FN (a first-class closure value) is likewise a box, not a
+             * thin fn pointer.  Declare either as the int64_t carrier so the
+             * fat-dispatch call site (the ER2 is_fat/boxed path) casts it back to
+             * void * and reads slot 0 -- declaring it as a thin fn pointer (the
+             * TY_FN branch below) both mistypes the box and trips
+             * -Wint-conversion.  A bare ^fat alias is :ptr<void> and is handled
+             * cleanly by the fallback below. */
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
         } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
@@ -1702,14 +1708,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 Binding *thunk_binding = fn_binding->closure_fn_binding;
                 char *thunk_name = raw_name_for_binding(thunk_binding);
                 
-                /* Closure value is the env struct variable */
+                /* Closure value is the env struct variable. */
                 char *closure_val = name_for_binding(ctx, fn_binding);
-                
+
                 char **arg_strs = (char **)malloc((e->as.call_.n_args + 1) * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
-                
-                /* First arg is the closure value (env struct) - pass by address for now */
-                arg_strs[0] = closure_val;
+
+                /* First arg is the closure value (the box) passed as the thunk's
+                 * `void *` env param.  CRU B-1: a boxed-TY_FN closure binding is
+                 * declared as the int64_t carrier (not void *), so coerce the box
+                 * to void * here -- otherwise clang trips -Wint-conversion.  The
+                 * cast is a no-op for a TY_PTR_VOID closure binding. */
+                Buf env0; buf_init(&env0);
+                buf_printf(&env0, "(void *)(intptr_t)(%s)", closure_val);
+                buf_putc(&env0, '\0');
+                arg_strs[0] = strdup(env0.data);
+                buf_free(&env0);
+                free(closure_val);
                 
                 /* Rest of the args */
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
@@ -1822,7 +1837,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * -- the same fat-call protocol as the TY_PTR_VOID path above.
                  * Emitting a thin ((R (*)(A...))g)(args) call here would treat the
                  * fat box's address as code and jump to garbage. */
-                if (fn_binding->is_fat) {
+                if (fn_binding->is_fat || fn_binding->type.as.fn.boxed) {
                     char *raw_ptr = name_for_binding(ctx, fn_binding);
                     /* A TY_FN parameter is stored as int64_t in C; the fat-call
                      * protocol wants the box as a void *, so coerce once. */

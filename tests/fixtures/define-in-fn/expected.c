@@ -4238,9 +4238,9 @@ static int64_t make_adder(int64_t base) {
             __t9->__fn = (tur_thunk_int64_t_int64_t_t)__fn_856;
             __t9->base = base;
             void *__t10 = __t9;
-            void * f_861 = __t10;
+            int64_t f_861 = (int64_t)(intptr_t)(__t10);
             (void)f_861;
-            __t8 = __fn_856(f_861, INT64_C(5));
+            __t8 = __fn_856((void *)(intptr_t)(f_861), INT64_C(5));
         }
         return __t8;
 }

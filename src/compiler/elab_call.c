@@ -2408,7 +2408,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                           args[i]->span);
                     conv->as.poly_to_fat_.inner = args[i];
                     args[i] = conv;
-                } else if (ak == TY_FN) {
+                } else if (ak == TY_FN && !args[i]->type.as.fn.boxed) {
+                    /* A bare (non-capturing) fn reference -- auto-shim it into a
+                     * fat box.  A *boxed* TY_FN (CRU B-1: a capturing closure
+                     * value) is already a fat { thunk, env... } box, so it falls
+                     * through to the pass-through branch below exactly as a
+                     * TY_PTR_VOID closure did pre-B-1; shimming it here would
+                     * double-box and segfault. */
                     uint8_t inner_arity = args[i]->type.as.fn.arity;
                     if (inner_arity > 5) {
                         diag_emit(DIAG_ERROR, args[i]->span,
@@ -2421,7 +2427,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
                     args[i] = shim;
-                } else if (ak == TY_PTR_VOID || ak == TY_NIL ||
+                } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
+                           ak == TY_NIL ||
                            (ak == TY_INT && args[i]->kind == EX_INT_LIT &&
                             args[i]->as.i == 0) ||
                            (ak == TY_INT && args[i]->kind != EX_INT_LIT)) {
