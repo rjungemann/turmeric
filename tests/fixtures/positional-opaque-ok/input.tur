@@ -1,0 +1,7 @@
+;; positional-opaque-ok -- a correct handle flows through a positional :A
+;; parameter unchanged. Guards that the nominal-identity tightening accepts a
+;; matching opaque (regression complement to positional-opaque-mismatch).
+(defopaque A :int)
+(defn take-a [x :A] :int ```c return (int64_t)x; ```)
+(defn mk-a   []     :A   ```c return 0; ```)
+(defn main   []     :int (take-a (mk-a)))

@@ -1434,6 +1434,31 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
         const Symbol *cap_sym = symtab_intern(e->st, strslice(cap_name, (uint32_t)strlen(cap_name)));
         /* arg type from fn_type: skip index 0 if closure (env), so index = i+1 if closure, else i */
         TypeKind cap_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (i + 1) : i];
+        /* Phase 3: nominal identity for captured (partial-application) args.
+         * Mirror the saturated positional check: a same-kind struct/opaque/ADT
+         * argument captured here must be the *same* nominal type, not merely the
+         * same TypeKind.  Without this, `(two (mk-b))` -- binding a :B into a :A
+         * slot -- would slip through because the saturated path only re-checks
+         * the *remaining* params.  See
+         * docs/upcoming/positional-nominal-type-identity-fix-plan.md (Phase 3). */
+        {
+            Type *cap_full_chk = PAP_SLOT_FULL(i);
+            if (cap_full_chk &&
+                    (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT) &&
+                    elab_args[i]->type.kind == cap_full_chk->kind &&
+                    !type_eq(elab_args[i]->type, *cap_full_chk)) {
+                Buf eb; buf_init(&eb);
+                type_print(&eb, *cap_full_chk); buf_putc(&eb, '\0');
+                Buf ab; buf_init(&ab);
+                type_print(&ab, elab_args[i]->type); buf_putc(&ab, '\0');
+                diag_emit_with_code(DIAG_ERROR, elab_args[i]->span,
+                                    TUR_E0001_TYPE_MISMATCH,
+                                    "function '%s' arg %u: expected %s, got %s",
+                                    fn_binding->name->name, i + 1, eb.data, ab.data);
+                buf_free(&eb); buf_free(&ab);
+                return NULL;
+            }
+        }
         Type cap_type = type_from_kind(cap_kind);
         Binding *cap_b = binding_new(e, cap_sym, cap_type, false, false, call->span);
         /* CY4: rank-2 captured arg -- carry forall info onto the binding so
@@ -2033,6 +2058,23 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
+        /* Nominal identity: a same-kind struct/opaque/ADT argument must be the
+         * *same* type, not merely the same TypeKind.  Full param types come from
+         * arg_full_types (Phase 1).  Placed before the escape hatches: those only
+         * ever set arg_ok from false->true for cross-kind coercions, so demoting a
+         * spurious same-kind match here cannot resurrect a real coercion.
+         * See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+        if (arg_ok && (expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
+                fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (nidx < fn_type.as.fn.arity) {
+                Type *ef = fn_type.as.fn.arg_full_types[nidx];
+                if (ef && (ef->kind == TY_STRUCT || ef->kind == TY_ADT) &&
+                        !type_eq(args[i]->type, *ef)) {
+                    arg_ok = false;
+                }
+            }
+        }
         /* Phase HRT/G2: A TY_TYVAR parameter (named type variable like :a) accepts any argument.
          * The concrete type is resolved per-arm inside a GADT match. */
         if (!arg_ok && expected_arg_kind == TY_TYVAR) {
@@ -2316,7 +2358,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * includes member/row types. */
             Type expected_ty = type_from_kind(expected_arg_kind);
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
-                 expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER) &&
+                 expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER ||
+                 expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
