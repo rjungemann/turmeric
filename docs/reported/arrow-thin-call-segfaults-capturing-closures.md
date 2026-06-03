@@ -96,6 +96,25 @@ dispatch) would be right for the second and wrong for the first (a bare
 pointer has no slot-0 thunk to read). A correct fix has to make the
 representation uniform at the boundary.
 
+## Breadth update (2026-06-03)
+
+The same thin-call defect is **not arrow-specific**. A grep for inline-C
+that casts a closure parameter to a bare `int64_t (*)(...)` pointer (no
+slot-0 read) found the identical hazard in:
+
+- `stdlib/option.tur` `option-map` (`((int64_t(*)(int64_t))(intptr_t)f)(...)`),
+- `stdlib/comonad.tur`, `stdlib/pair.tur`, `stdlib/mutmap.tur`.
+
+All crash on a capturing closure for the same reason. This is a systemic
+stdlib pattern, so the fix is tracked centrally in
+[closure-representation-unification-plan.md](../upcoming/closure-representation-unification-plan.md)
+(Phase 1) rather than per file.
+
+Note also `contract.tur:65` passes a handler to a C function as a genuine
+raw function pointer (`(void (*)(const char *))(intptr_t)handler`) -- that
+one must stay bare, which is why blanket boxing is not a valid fix (see the
+plan's "proven dead ends").
+
 ## Proposed fix directions
 
 1. **Normalise arrows to fat closures at construction.** Make `arr`

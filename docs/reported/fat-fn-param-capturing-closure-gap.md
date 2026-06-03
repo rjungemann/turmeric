@@ -6,7 +6,9 @@ description: A ^fat parameter cannot both accept a capturing closure value and b
 
 # Capturing Closure Cannot Reach a fn-typed ^fat Parameter -- Reported Bug
 
-> **Status:** Reported (not yet fixed)
+> **Status:** Core FIXED 2026-06-03 (cases A and B); cases C and the plain
+>   `:ptr<void>` direct call tracked in
+>   [closure-representation-unification-plan.md](../upcoming/closure-representation-unification-plan.md).
 > **Found:** 2026-06-03, during the Typed Closure Invocation ABI work
 > **Severity:** Medium -- a real expressiveness hole in the ^fat parameter
 >   surface; no silent miscompile (every broken combination is a hard
@@ -131,6 +133,22 @@ callee-resolution refusal in (C).
   want to accept a user closure and apply it currently lean on
   `:ptr<void>` parameters plus inline-C `TUR_APPLY*`, which is exactly
   the erasure the Typed Closure Invocation ABI work is trying to retire.
+
+## Status update (2026-06-03)
+
+Cases **A** and **B** are fixed: a fn-typed `^fat` parameter now accepts a
+capturing closure value (`:ptr<void>`) -- `elab_call.c` allows a
+`TY_PTR_VOID` argument at a `TY_FN` parameter when that parameter is
+`^fat` -- and the earlier fat-dispatch direct-call fix makes `(g x)`
+correct. Verified for `:int` and `:float` by
+`tests/fixtures/fat-param-capturing-closure`.
+
+Case **C** (bare `^fat g` with no fn-type annotation is not directly
+callable) and the plain `:ptr<void>` direct-call hazard
+([ptr-void-direct-call-representation-split.md](ptr-void-direct-call-representation-split.md))
+remain open and are folded into
+[closure-representation-unification-plan.md](../upcoming/closure-representation-unification-plan.md)
+(Phase 0 blockers).
 
 ## Proposed directions
 

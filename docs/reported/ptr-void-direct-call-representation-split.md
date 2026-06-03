@@ -101,6 +101,25 @@ single, self-describing representation at a callable boundary, any code
 that invokes a `:ptr<void>`/untyped closure must know statically which
 form it holds.
 
+## Investigation update (2026-06-03)
+
+Two empirical findings constrain the fix:
+
+- **Plain `:ptr<void>` direct call is an intended, pervasive fat-dispatch
+  convention.** Making `(f x)` on a non-`^fat` `:ptr<void>` an error broke
+  **2117** tests: stdlib relies on it (e.g. `stdlib/list.tur` `__cons-fmap`
+  directly calls a plain `:ptr<void>` param). So the n>0 fat-dispatch shape
+  is "correct by convention"; the bug is that captureless inputs are not
+  boxed and the n==0 path is inconsistent.
+- **Blanket boxing of captureless fns at `:ptr<void>` sinks is unsafe.**
+  `contract.tur:65` passes a handler to a C function as a raw function
+  pointer; boxing it would hand C a fat box instead of a function pointer.
+
+The fix must therefore normalize only fat-dispatched closure sinks, not
+raw C-callback sinks, and is tracked in
+[closure-representation-unification-plan.md](../upcoming/closure-representation-unification-plan.md)
+(Phases 2-3).
+
 ## Proposed fix directions
 
 1. **Normalise to fat at the boundary.** Require closure-callback
