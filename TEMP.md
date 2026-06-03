@@ -34,7 +34,7 @@ do not collapse phases, do not reword entries into prose, and update the
 3. `spaced-type-annotation-migration-plan.md`
    - Goal: Migrate codebase from fused `(name:type)` to spaced `(name : type)`
    - Deps: independent
-   - Status: In progress (Phase 1a-bis complete; compiler readiness done; Phase 1b-1c pending; Phases 2-7 outstanding)
+   - Status: In progress (Phase 1 and 2 complete; Phases 3-7 outstanding)
 
 ## Phase 1 -- Compiler & closure ABI fixes
 

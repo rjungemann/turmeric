@@ -1,0 +1,4 @@
+(defn main [] :int
+  (let [sq (fn [x :int] :int (* x x))]
+    (println (sq 4))
+    0))

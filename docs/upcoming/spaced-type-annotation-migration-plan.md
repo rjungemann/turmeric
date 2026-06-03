@@ -190,9 +190,50 @@ The variadic-rest sub-task revealed a real elaboration gap: `elab_defn`/`elab_fn
 
 **Exit criteria for Phase 1**: Every type-annotation position the codemod will touch has at least one passing spaced-form fixture, and `bash tests/run.sh` is green with leak detection on.
 
-### Phase 2 — Codemod tooling
+### Phase 2 — Codemod tooling *(DONE)*
 
-Build a single rewriter that operates on parsed forms rather than text:
+Landed `tools/spaced-types-rewrite.py`, a structural rewriter operating on a
+trivia-preserving token tree (not regex):
+
+- Tokenizer recognises strings, `;`-comments, ` ```c ... ``` ` inline-C
+  fences, `#{...}` effect sets, `#map{...}`/`#set{...}`/`#vec{...}`
+  data-literal dispatches, quote/quasiquote/unquote prefixes, and the
+  `#lang sweet-exp` directive — each as opaque tokens that the walker
+  steps over rather than into.
+- Form tree is just paren/bracket/brace pairing with trivia kept as
+  in-line children, so serialisation round-trips byte-for-byte when no
+  rewrite fires.
+- Type-bearing position walker covers `defn`/`fn`/`defmacro` param vec
+  and return slot (including `& rest :T`), `defstruct` field vec,
+  `let`/`let*`/`loop`/named-let binding vec (including the type slot
+  enabled in Phase 1a-bis), and `defclass`/`defprotocol`/`definstance`
+  method signatures.
+- Sweet-exp handled by an implicit-form walker that scans the top-level
+  token sequence for unparenthesised `defn`/`fn`/`let`/etc. and applies
+  the same per-form rewriters (gated on a `#lang sweet-exp` directive).
+- Skip rules: `#{...}`, `#map{...}`/`#set{...}`/`#vec{...}`, string
+  literals, comments, ` ```c ... ``` ` blocks, and (by default) any form
+  inside `quote`/`quasiquote`. `--rewrite-quoted` opts back in.
+- `build.tur` files are skipped by name (CC-11). `--no-skip-build-tur`
+  opts back in.
+- CLI: `--write` (default), `--dry-run` (unified diff), `--check`
+  (exit 1 if any file would change).
+
+Test corpus under `tests/codemod/spaced-types/` has 14 hand-written
+before/after pairs covering CC-1 through CC-13. Run with
+`bash tests/codemod/run-spaced-types.sh`.
+
+Smoke-tested end-to-end: `python3 tools/spaced-types-rewrite.py --check
+stdlib/` reports 98 files / 2352 fused annotation sites needing rewrite
+across stdlib; `--write` on `stdlib/option.tur` produced byte-identical
+`emit-c` output to the fused-form original (codegen-invariance held). The
+named-let-loop and t-expression-sweet-exp fixtures also round-tripped
+through the rewriter with byte-identical codegen.
+
+Carry-over for Phase 6: the `--check` mode is the CI hook called out in
+that phase.
+
+#### Original design notes
 
 - New tool: `tools/spaced-types-rewrite.py` (or `tur fmt --spaced-types` if we prefer to land it inside the compiler — open question; Python keeps the migration off the critical path).
 - Input: a `.tur` or `.tur.sweet` file.

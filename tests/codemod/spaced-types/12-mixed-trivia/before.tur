@@ -1,0 +1,5 @@
+;; Trivia preservation: comments and blank lines between annotations.
+
+(defn classify [x :int]   ; the input
+                :int      ; the result
+  (if (> x 0) 1 -1))

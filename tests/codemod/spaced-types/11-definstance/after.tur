@@ -1,0 +1,6 @@
+(defclass MyEq [a]
+  (same? [x : int y : int] : bool))
+
+(definstance MyEq [int]
+  (same? [x : int y : int] : bool
+    (= x y)))

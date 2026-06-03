@@ -1,0 +1,3 @@
+;; CC-4: do not insert spaces inside #{...} effect sets.
+(defn perform-write [s :cstr] #{Write} :nil
+  (println s))

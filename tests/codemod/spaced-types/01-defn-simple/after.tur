@@ -1,0 +1,5 @@
+(defn square [x : int] : int
+  (* x x))
+
+(defn add [a : int b : int] : int
+  (+ a b))
