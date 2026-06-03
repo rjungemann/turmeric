@@ -2,7 +2,7 @@
 title: httpd-async-echo intermittently fails on stdout line ordering under parallel suite load
 category: Reported
 severity: low (flaky test / nondeterministic ordering -- not a miscompile)
-status: open
+status: resolved
 ---
 
 # httpd-async-echo -- flaky stdout ordering under parallel suite load
@@ -93,3 +93,18 @@ source and keeps the test exercising the async path.
   confirm zero `FAIL httpd-async-echo` lines.
 - Confirm the fixture still exercises the yield (the `await-timer` path is still
   taken and `handler-ran=1` still reflects a post-resume result).
+
+## Resolution (2026-06-03)
+
+Applied the preferred Option 2: the two racy lines are now emitted from the
+**same thread in a fixed order**, removing the partial-order/total-order
+mismatch at the source. The client worker no longer `printf`s `body=...`
+directly from its own thread; instead it stashes the response body into a
+shared static buffer (owned by a single `async-echo-body` function, written
+with `do-write=1`, read with `do-write=0`). `main` prints `handler-ran=1`,
+joins the client thread (whose `pthread_join` gives the happens-before for the
+buffer), then prints the body and `done` -- all on the main thread, in order.
+
+The `await-timer` yield is untouched: the handler still parks on the reactor
+for ~10ms and `handler-ran=1` still reflects a post-resume result. Verified
+with 8 isolated runs and a full `bash tests/run.sh` (1312 passed, 0 failed).

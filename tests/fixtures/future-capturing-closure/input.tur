@@ -1,0 +1,49 @@
+;; Regression fixture for closure-representation-unification.
+;; Maps/flat-maps *capturing* closures through stdlib future-map / future-then.
+;; Before the fix these inline-C bodies invoked their callback with a thin
+;; ((int64_t (*)(int64_t))fn)(val) cast: a captureless lambda is a bare C
+;; function pointer and worked, but a *capturing* closure is a fat box
+;; { thunk, env... } -- the thin cast jumped to the box address and segfaulted.
+;; The callback params are now ^fat and the bodies fat-dispatch through slot 0,
+;; so both representations flow through the same path.  See
+;; docs/reported/future-map-thin-call-capturing-closure.md.
+
+(load "stdlib/future.tur")
+
+;; Read the settled value (or error code) out of a future cell.
+(defn future-get-ok [f :ptr<void>] :int
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
+  int64_t v = fc->is_ok ? fc->value : fc->exn;
+  pthread_mutex_unlock(&fc->lock);
+  return v;
+  ```)
+
+(defn main [] :int
+  ;; future-map with a capturing closure (closes over k): 10 + 100 = 110
+  (let [k 100]
+    (let [f (future-of 10)
+          g (future-map f (fn [x :int] :int (+ x k)))]
+      (println (future-get-ok g))                ;; 110
+      (future-free f)
+      (future-free g)))
+
+  ;; future-map error propagation still works through the fat path: -5
+  (let [k 100]
+    (let [f (future-error-of -5)
+          g (future-map f (fn [x :int] :int (+ x k)))]
+      (println (future-get-ok g))                ;; -5
+      (future-free f)
+      (future-free g)))
+
+  ;; future-then with a capturing closure (closes over base): 7 + 1000 = 1007
+  (let [base 1000]
+    (let [f (future-of 7)
+          g (future-then f (fn [x :int] :ptr<void> (future-of (+ x base))))]
+      (println (future-get-ok g))                ;; 1007
+      (future-free f)
+      (future-free g)))
+  0)
