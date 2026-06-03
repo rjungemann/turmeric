@@ -2174,17 +2174,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
         fn_type.as.fn.result_borrow_arg = tied;
     }
 
-    /* Phase HRT1: attach full poly types for rank-2 params */
+    /* Phase HRT1: attach full poly types for rank-2 params.
+     *
+     * Populate arg_full_types for ALL params, not just polymorphic ones, so
+     * the saturated positional checker (elab_call.c) can enforce nominal
+     * type identity for struct/opaque/ADT args. For a non-poly param we fall
+     * back to the param binding's own full type. &params[i]->type is
+     * arena-stable (each binding is arena-allocated), so the pointer outlives
+     * the call. See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
     {
-        bool any_poly = false;
-        for (uint8_t i = 0; i < n_params; i++) {
-            if (param_poly_types[i]) { any_poly = true; break; }
-        }
-        if (any_poly) {
-            Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
-            for (uint8_t i = 0; i < n_params; i++) aFT[i] = param_poly_types[i];
-            fn_type.as.fn.arg_full_types = aFT;
-        }
+        Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
+        for (uint8_t i = 0; i < n_params; i++)
+            aFT[i] = param_poly_types[i] ? param_poly_types[i] : &params[i]->type;
+        fn_type.as.fn.arg_full_types = aFT;
     }
 
     /* LT2: Store arg_linear flags from param bindings into fn_type */

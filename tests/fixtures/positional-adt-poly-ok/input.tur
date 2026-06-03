@@ -1,0 +1,11 @@
+;; positional-adt-poly-ok -- a polymorphic ADT constructor field still accepts a
+;; concrete value (e.g. (Wrap 1.5) at an `a`-typed field). Guards that the
+;; nominal tightening did not disturb the TY_TYVAR poly-field path at the call
+;; site (the (Just 1.5)-style regression the report calls out).
+(defdata Box [a]
+  (Wrap a))
+
+(defn main [] :int
+  (let [b (Wrap 1.5)]
+    (match b
+      (Wrap v) 0)))

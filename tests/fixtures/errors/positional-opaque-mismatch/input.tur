@@ -1,0 +1,8 @@
+;; positional-opaque-mismatch -- passing a :B where a positional :A parameter
+;; is declared is a compile error: the two opaque types are distinct nominal
+;; identities, even though both lower to the same underlying kind.
+(defopaque A :int)
+(defopaque B :ptr<void>)
+(defn take-a [x :A] :int ```c return (int64_t)x; ```)
+(defn mk-b   []     :B   ```c return 0; ```)
+(defn main   []     :int (take-a (mk-b)))
