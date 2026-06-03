@@ -12,13 +12,13 @@ description: Two related codegen bugs surfaced by the httpd middleware plan -- a
 > **Related:**
 > - `src/compiler/elab_call.c:1310-1332` -- PAP capture-binding construction (Issue A site)
 > - `src/compiler/emit_expr.c` EX_CALL closure-thunk emission path (Issue B site)
-> - `docs/archive/variadic-rest-closure-cast-plan.md` -- the original "missing
+> - `docs/archive/history/variadic-rest-closure-cast-plan.md` -- the original "missing
 >   (intptr_t) cast" plan that fixed EX_CONS_LIST; this plan is the same
 >   family of bug in two other emit sites.
-> - `docs/archive/defstruct-inline-c-byvalue-callsite-plan.md` -- the
+> - `docs/archive/history/defstruct-inline-c-byvalue-callsite-plan.md` -- the
 >   companion call/formal-ABI sync plan; same general "two emitters need to
 >   agree" pattern.
-> - `docs/archive/httpd-middleware-async-plan.md` -- discovered during PR 5
+> - `docs/archive/history/httpd-middleware-async-plan.md` -- discovered during PR 5
 >   (M4 CORS + M5 Basic Auth); worked around by avoiding partial application
 >   and direct closure-value composition in the M5 fixture.
 

@@ -10,7 +10,7 @@ description: Break the M6 compression middleware out of the now-archived httpd-m
 > **Last Updated:** 2026-06-02
 > **Type:** Stdlib + spice authoring (cross-repo)
 > **Related:**
-> - `docs/archive/httpd-middleware-async-plan.md` -- the parent plan; M6
+> - `docs/archive/history/httpd-middleware-async-plan.md` -- the parent plan; M6
 >   was the one PR deferred because the `tur/zlib` spice didn't exist.
 >   All other phases of that plan shipped 2026-06-02.
 > - `../turmeric-spices/spices/png/build.tur`,

@@ -5,7 +5,7 @@
 > **Type:** Networking / stdlib
 > **Supersedes (historically):** the bulk of the original v0 surface was
 > reframed and shipped under the now-archived
-> [httpd-middleware-async-plan](../archive/httpd-middleware-async-plan.md)
+> [httpd-middleware-async-plan](../archive/history/httpd-middleware-async-plan.md)
 > Track M (M0-M8). This document tracks the remainder.
 
 ---
@@ -325,7 +325,7 @@ negligible for single-digit key counts.
 - [httpd-guide.md](../guides/httpd-guide.md) -- HTTP/1.1 server primitives
 - [httpd-tls-guide.md](../guides/httpd-tls-guide.md) -- TLS layer
 - [httpd-async-guide.md](../guides/httpd-async-guide.md) -- async handlers (Track A)
-- [httpd-middleware-async-plan.md](../archive/httpd-middleware-async-plan.md) -- archived plan that shipped M0-M8 + A0-A4
+- [httpd-middleware-async-plan.md](../archive/history/httpd-middleware-async-plan.md) -- archived plan that shipped M0-M8 + A0-A4
 - [httpd-compression-zlib-spice-plan.md](httpd-compression-zlib-spice-plan.md) -- compression middleware spun out into its own plan
 - [curried-call-cast-rough-edges-plan.md](curried-call-cast-rough-edges-plan.md) -- codegen rough edges surfaced during M4+M5
 - [websocket-server-plan.md](websocket-server-plan.md) -- WebSocket upgrade (compatible with middleware)

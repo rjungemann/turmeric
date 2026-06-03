@@ -145,6 +145,13 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [reactor-guide.md](../guides/reactor-guide.md) | `tur-reactor-plan.md` (history; R1-R8 shipped); `reactor-run-fibers-plan.md` (history; F1-F8 shipped) |
 | [httpd-tls-guide.md](../guides/httpd-tls-guide.md) | `tur-tls-plan.md` (history; T1-T6 complete) |
 | [developing-spices-guide.md](../guides/developing-spices-guide.md) | augmented by `tur-fetch-system-first-plan.md` (history; SF0-SF4 complete) |
+| [httpd-middleware-guide.md](../guides/httpd-middleware-guide.md) | `httpd-middleware-async-plan.md` (history; Track M, M0-M8) |
+| [httpd-async-guide.md](../guides/httpd-async-guide.md) | `httpd-middleware-async-plan.md` (history; Track A, A0-A4) |
+| [syntax-guide.md](../guides/syntax-guide.md) | `syntax-guide-plan.md` (history); `parse-check-subcommand-plan.md` (history); `sweet-exp-followups-plan.md` (history) |
+| [parser-combinators-tutorial.md](../guides/parser-combinators-tutorial.md) | `parser-combinators-tutorial-plan.md` (history) |
+| [tourist-routing-guide.md](../guides/tourist-routing-guide.md) | `tourist-routing-composition-plan.md` (history; TR0-TR4 complete) |
+| [lsp-guide.md](../guides/lsp-guide.md) | augmented by `ai-assistant-lsp-integration-plan.md` (history; LSP gap-fill + `tur mcp`) |
+| [ai-assistant-integration-guide.md](../guides/ai-assistant-integration-guide.md) | `ai-assistant-lsp-integration-plan.md` (history; MCP surface) |
 
 ## Historical Documents
 
@@ -217,6 +224,24 @@ Post-v0.16.0 sweep:
 - **[codegen-parentheses-warnings-plan.md](history/codegen-parentheses-warnings-plan.md)** -- BIN_INFIX/VARIADIC_FOLD paren trimming to silence `-Wparentheses-equality` (PW0--PW3); complete
 - **[codegen-cross-module-private-defn-collision-plan.md](history/codegen-cross-module-private-defn-collision-plan.md)** -- Fix for private same-named defns across modules collapsing to one C symbol (CC0--CC2); complete
 - **[fat-closure-return-position-plan.md](history/fat-closure-return-position-plan.md)** -- `^fat` return-type marker auto-shimming non-capturing lambdas at return sites; complete; documented in test-suite-idioms-plan.md
+
+Post-v0.18.0 sweep:
+
+- **[httpd-middleware-async-plan.md](history/httpd-middleware-async-plan.md)** -- `tur/httpd` standard middleware library and async server; M0-M8 + A0-A4 shipped; see [httpd-middleware-guide.md](../guides/httpd-middleware-guide.md) and [httpd-async-guide.md](../guides/httpd-async-guide.md). Remaining items tracked in [httpd-middleware-plan.md](httpd-middleware-plan.md)
+- **[error-handling-deferred-plan.md](history/error-handling-deferred-plan.md)** -- `?` query operator, contracts, panic lints, `catch-unwind` (R1, C2, R6a-d, R2 + R6c); complete; see [error-handling-guide.md](../guides/error-handling-guide.md)
+- **[cps-transform-plan.md](history/cps-transform-plan.md)** -- Whole-program CPS transform (CPS0-CPS11); complete; backs `call/cc`, `escape`, and the delimited-control substrate; see [delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md)
+- **[call-cc-completion-plan.md](history/call-cc-completion-plan.md)** -- Undelimited `call/cc` / `escape` on the CPS substrate (CC0-CC6); complete; enabled by default; see [delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md)
+- **[ai-assistant-lsp-integration-plan.md](history/ai-assistant-lsp-integration-plan.md)** -- LSP capability gap-fill + MCP server (`tur mcp`); shipped in #173; see [lsp-guide.md](../guides/lsp-guide.md) and [ai-assistant-integration-guide.md](../guides/ai-assistant-integration-guide.md)
+- **[parse-check-subcommand-plan.md](history/parse-check-subcommand-plan.md)** -- `tur parse-check` subcommand backing the guide toggle-pair AST checker; shipped in #182; see [syntax-guide.md](../guides/syntax-guide.md)
+- **[syntax-guide-plan.md](history/syntax-guide-plan.md)** -- Unified syntax guide covering s-expressions and sweet-expression mode; shipped in #182; see [syntax-guide.md](../guides/syntax-guide.md)
+- **[sweet-exp-followups-plan.md](history/sweet-exp-followups-plan.md)** -- SRFI-110 preprocessor follow-ups (curly-infix operator detection, neoteric bracket chaining); all landed (#188); see [syntax-guide.md](../guides/syntax-guide.md)
+- **[parser-combinators-tutorial-plan.md](history/parser-combinators-tutorial-plan.md)** -- Parser-combinators tutorial outline; shipped as [parser-combinators-tutorial.md](../guides/parser-combinators-tutorial.md)
+- **[tourist-routing-composition-plan.md](history/tourist-routing-composition-plan.md)** -- `tourist/routing` (`url-map!`, `cascade!`, `cascade-with!`, `req-full-path`) in `turmeric-spices/spices/tourist`; TR0-TR4 complete; see [tourist-routing-guide.md](../guides/tourist-routing-guide.md)
+- **[tursweet-extension-rename-plan.md](history/tursweet-extension-rename-plan.md)** -- Global rename of `.tursweet` -> `.tur.sweet` and `--lang tursweet` -> `--lang sweet-exp`; complete
+- **[drop-just-dependency-plan.md](history/drop-just-dependency-plan.md)** -- Replace `just` invocations in docs/bootstrap with plain CMake + `tur run`; complete; see [tur-run-guide.md](../guides/tur-run-guide.md)
+- **[defstruct-inline-c-byvalue-callsite-plan.md](history/defstruct-inline-c-byvalue-callsite-plan.md)** -- Compiler: sync call-site to inline-C by-value struct params (DS0-DS2); complete
+- **[variadic-rest-closure-cast-plan.md](history/variadic-rest-closure-cast-plan.md)** -- Compiler: cast variadic-rest function-pointer args at call sites (V0-V2); complete
+- **[curried-call-cast-rough-edges-plan.md](history/curried-call-cast-rough-edges-plan.md)** -- Compiler: partial-application + closure-call `(intptr_t)` cast fixes surfaced by the httpd middleware work; complete
 
 Earlier additions:
 

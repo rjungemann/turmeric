@@ -129,6 +129,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** -- Building the snake game example
 - **[web-continuations-tutorial.md](web-continuations-tutorial.md)** -- Multi-page web forms using serializable continuations (guestbook example)
 - **[web-emscripten-tutorial.md](web-emscripten-tutorial.md)** -- Compile Turmeric to WebAssembly with Emscripten and run it in a browser
+- **[parser-combinators-tutorial.md](parser-combinators-tutorial.md)** -- Build parser combinators from scratch on top of the backtracking (list) monad
 
 ### EAVT Database (multi-chapter)
 
@@ -140,6 +141,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Networking
 
 - **[httpd-guide.md](httpd-guide.md)** -- `stdlib/httpd`: HTTP/1.1 server with handlers, routing, middleware, keep-alive
+- **[httpd-middleware-guide.md](httpd-middleware-guide.md)** -- `stdlib/httpd` standard middleware: headers, cookies, body parsers, CORS, basic auth, multipart, body-size, rate-limit, static
+- **[httpd-async-guide.md](httpd-async-guide.md)** -- Async handlers on `stdlib/httpd`: `await` primitives, in-flight cap, composing with middleware
 - **[httpd-tls-guide.md](httpd-tls-guide.md)** -- HTTPS termination on `stdlib/httpd` via the `tur-tls` spice
 - **[reactor-guide.md](reactor-guide.md)** -- `tur/reactor`: lightweight evented reactor for fds, timers, signals, channels
 
@@ -150,6 +153,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[notebook-guide.md](notebook-guide.md)** -- `tur-notebook`: interactive Turmeric notebooks with Markdown + live cells
 - **[tur-watch-guide.md](tur-watch-guide.md)** -- `tur-watch`: cross-platform filesystem watching with debounce and coalescing
 - **[web-stack-guide.md](web-stack-guide.md)** -- `tur-httpd`, `tur-template`, `tur-tourist`: composable HTTP server + templating + routing stack
+- **[tourist-routing-guide.md](tourist-routing-guide.md)** -- `tur-tourist` routing composition: `url-map!` prefix mounting, `cascade!` fall-through, sub-app nesting
 
 ## Package Management
 
@@ -164,6 +168,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[devcontainer-guide.md](devcontainer-guide.md)** -- Dev container: open the project in a ready-to-build environment from VS Code or the CLI
 - **[formatter-guide.md](formatter-guide.md)** -- `tur format` CLI and web REPL Format button
 - **[lsp-guide.md](lsp-guide.md)** -- Language server (`tur lsp`): editor setup for diagnostics
+- **[ai-assistant-integration-guide.md](ai-assistant-integration-guide.md)** -- `tur mcp` server: exposing the Turmeric LSP to Claude Code, Copilot, and other AI assistants
 - **[vscode-guide.md](vscode-guide.md)** -- VS Code extension installation and configuration
 - **[vim-guide.md](vim-guide.md)** -- Vim / Neovim syntax highlighting installation and configuration
 
