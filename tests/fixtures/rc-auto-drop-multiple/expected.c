@@ -2390,6 +2390,8 @@ typedef struct MutableMap {
 } MutableMap;
 
 
+typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
 extern void * tur_hamt_retain(void *);
@@ -2564,7 +2566,7 @@ static int64_t tnil();
 static bool tnil_(int64_t);
 static int64_t list_length(int64_t);
 static bool list_eq_(int64_t, int64_t, int64_t);
-static int64_t __cons_fmap(int64_t, int64_t);
+static int64_t __cons_fmap(int64_t, void *);
 static int64_t list_head(int64_t);
 static int64_t list_tail(int64_t);
 static int64_t list_concat(int64_t, int64_t);
@@ -2601,18 +2603,18 @@ static bool mutmap_eq_(int64_t, int64_t, int64_t);
 static void mutmap_free(int64_t);
 static int64_t test_rc_auto_drop_multiple();
 
-struct __defer_env_12 {RcControlBlock * y; };
+struct __defer_env_16 {RcControlBlock * y; };
 
-struct __defer_env_9 {RcControlBlock * x; };
+struct __defer_env_13 {RcControlBlock * x; };
 
-static void __defer_13(void *__env) {
-    struct __defer_env_12 *__e = (struct __defer_env_12 *)__env;
+static void __defer_17(void *__env) {
+    struct __defer_env_16 *__e = (struct __defer_env_16 *)__env;
     rc_strong_decrement(__e->y);
     rc_free_queue_drain();
 }
 
-static void __defer_10(void *__env) {
-    struct __defer_env_9 *__e = (struct __defer_env_9 *)__env;
+static void __defer_14(void *__env) {
+    struct __defer_env_13 *__e = (struct __defer_env_13 *)__env;
     rc_strong_decrement(__e->x);
     rc_free_queue_drain();
 }
@@ -3707,37 +3709,35 @@ static int64_t list_length(int64_t l) {
 }
 
 static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *a = (void*)(intptr_t)l1;
-  struct __tur_cons_t *b = (void*)(intptr_t)l2;
-  while (a && b) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
-      a = (void*)(intptr_t)a->tail;
-      b = (void*)(intptr_t)b->tail;
-  }
-  return (void*)a == (void*)b;
-  
+        bool __t2;
+        if (tnil_(l1)) {
+            __t2 = tnil_(l2);
+        } else {
+            bool __t3;
+            if (tnil_(l2)) {
+                __t3 = false;
+            } else {
+                bool __t4;
+                if (((bool (*)(int64_t, int64_t))(intptr_t)cmp_fn)(list_head(l1), list_head(l2))) {
+                    __t4 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
+                } else {
+                    __t4 = false;
+                }
+                __t3 = __t4;
+            }
+            __t2 = __t3;
+        }
+        return __t2;
 }
 
-static int64_t __cons_fmap(int64_t cell, int64_t f) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
-  if (!c) return 0;
-  int64_t *_fat = (int64_t*)(intptr_t)f;
-  tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  struct __tur_cons_t *head_node = NULL;
-  struct __tur_cons_t *prev = NULL;
-  while (c) {
-    struct __tur_cons_t *r = malloc(sizeof(*r));
-    r->head = _f.fn(_f.env, c->head);
-    r->tail = 0;
-    if (!head_node) head_node = r;
-    if (prev) prev->tail = (int64_t)(intptr_t)r;
-    prev = r;
-    c = (struct __tur_cons_t *)(intptr_t)c->tail;
-  }
-  return (int64_t)(intptr_t)head_node;
-  
+static int64_t __cons_fmap(int64_t cell, void * f) {
+        int64_t __t5;
+        if (tnil_(cell)) {
+            __t5 = INT64_C(0);
+        } else {
+            __t5 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
+        }
+        return __t5;
 }
 
 static int64_t list_head(int64_t l) {
@@ -3753,13 +3753,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t2;
+        int64_t __t6;
         if (tnil_(l1)) {
-            __t2 = l2;
+            __t6 = l2;
         } else {
-            __t2 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t6 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t2;
+        return __t6;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4229,34 +4229,34 @@ static void mutmap_free(int64_t m) {
 }
 
 static int64_t test_rc_auto_drop_multiple() {
-        int64_t __t3;
+        int64_t __t7;
         {
-            int64_t *__t4 = (int64_t *)malloc(sizeof(int64_t));
-            *__t4 = INT64_C(10);
-            RcControlBlock *__t5 = rc_cb_alloc(0, 3, NULL);
-            __t5->value = __t4;
-            RcControlBlock * x_853 = __t5;
+            int64_t *__t8 = (int64_t *)malloc(sizeof(int64_t));
+            *__t8 = INT64_C(10);
+            RcControlBlock *__t9 = rc_cb_alloc(0, 3, NULL);
+            __t9->value = __t8;
+            RcControlBlock * x_853 = __t9;
             (void)x_853;
-            int64_t *__t6 = (int64_t *)malloc(sizeof(int64_t));
-            *__t6 = INT64_C(20);
-            RcControlBlock *__t7 = rc_cb_alloc(0, 3, NULL);
-            __t7->value = __t6;
-            RcControlBlock * y_854 = __t7;
+            int64_t *__t10 = (int64_t *)malloc(sizeof(int64_t));
+            *__t10 = INT64_C(20);
+            RcControlBlock *__t11 = rc_cb_alloc(0, 3, NULL);
+            __t11->value = __t10;
+            RcControlBlock * y_854 = __t11;
             (void)y_854;
-            tur_frame __frame_8;
-            tur_frame_init(&__frame_8, NULL);
-            struct __defer_env_9 __t11 = {.x = x_853};
-            tur_frame_push_defer(&__frame_8, __defer_10, &__t11);
-            struct __defer_env_12 __t14 = {.y = y_854};
-            tur_frame_push_defer(&__frame_8, __defer_13, &__t14);
-            int64_t __t15;
-            int64_t __t16 = rc_strong_count(x_853);
-            int64_t __t17 = rc_strong_count(y_854);
-            __t15 = (__t16) + (__t17);
-            tur_frame_fire_lifo(&__frame_8);
-            __t3 = __t15;
+            tur_frame __frame_12;
+            tur_frame_init(&__frame_12, NULL);
+            struct __defer_env_13 __t15 = {.x = x_853};
+            tur_frame_push_defer(&__frame_12, __defer_14, &__t15);
+            struct __defer_env_16 __t18 = {.y = y_854};
+            tur_frame_push_defer(&__frame_12, __defer_17, &__t18);
+            int64_t __t19;
+            int64_t __t20 = rc_strong_count(x_853);
+            int64_t __t21 = rc_strong_count(y_854);
+            __t19 = (__t20) + (__t21);
+            tur_frame_fire_lifo(&__frame_12);
+            __t7 = __t19;
         }
-        return __t3;
+        return __t7;
 }
 
 

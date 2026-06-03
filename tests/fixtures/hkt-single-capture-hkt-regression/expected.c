@@ -2570,7 +2570,7 @@ static int64_t tnil();
 static bool tnil_(int64_t);
 static int64_t list_length(int64_t);
 static bool list_eq_(int64_t, int64_t, int64_t);
-static int64_t __cons_fmap(int64_t, int64_t);
+static int64_t __cons_fmap(int64_t, void *);
 static int64_t list_head(int64_t);
 static int64_t list_tail(int64_t);
 static int64_t list_concat(int64_t, int64_t);
@@ -3735,37 +3735,35 @@ static int64_t list_length(int64_t l) {
 }
 
 static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *a = (void*)(intptr_t)l1;
-  struct __tur_cons_t *b = (void*)(intptr_t)l2;
-  while (a && b) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
-      a = (void*)(intptr_t)a->tail;
-      b = (void*)(intptr_t)b->tail;
-  }
-  return (void*)a == (void*)b;
-  
+        bool __t2;
+        if (tnil_(l1)) {
+            __t2 = tnil_(l2);
+        } else {
+            bool __t3;
+            if (tnil_(l2)) {
+                __t3 = false;
+            } else {
+                bool __t4;
+                if (((bool (*)(int64_t, int64_t))(intptr_t)cmp_fn)(list_head(l1), list_head(l2))) {
+                    __t4 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
+                } else {
+                    __t4 = false;
+                }
+                __t3 = __t4;
+            }
+            __t2 = __t3;
+        }
+        return __t2;
 }
 
-static int64_t __cons_fmap(int64_t cell, int64_t f) {
-        struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
-  if (!c) return 0;
-  int64_t *_fat = (int64_t*)(intptr_t)f;
-  tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  struct __tur_cons_t *head_node = NULL;
-  struct __tur_cons_t *prev = NULL;
-  while (c) {
-    struct __tur_cons_t *r = malloc(sizeof(*r));
-    r->head = _f.fn(_f.env, c->head);
-    r->tail = 0;
-    if (!head_node) head_node = r;
-    if (prev) prev->tail = (int64_t)(intptr_t)r;
-    prev = r;
-    c = (struct __tur_cons_t *)(intptr_t)c->tail;
-  }
-  return (int64_t)(intptr_t)head_node;
-  
+static int64_t __cons_fmap(int64_t cell, void * f) {
+        int64_t __t5;
+        if (tnil_(cell)) {
+            __t5 = INT64_C(0);
+        } else {
+            __t5 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
+        }
+        return __t5;
 }
 
 static int64_t list_head(int64_t l) {
@@ -3781,13 +3779,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t2;
+        int64_t __t6;
         if (tnil_(l1)) {
-            __t2 = l2;
+            __t6 = l2;
         } else {
-            __t2 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t6 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t2;
+        return __t6;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4306,12 +4304,12 @@ int main(int argc, char **argv) {
             int64_t delta_872 = INT64_C(100);
             (void)delta_872;
             {
-                struct __env_876 *__t3 = (struct __env_876 *)malloc(sizeof(struct __env_876));
-                __t3->__fn = (tur_thunk_int64_t_int64_t_t)__fn_874;
-                __t3->delta = delta_872;
-                void *__t4 = __t3;
-                void *__t5 = __t4;
-                int64_t result_879 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(23)), (tur_poly_fn_t){ __t5, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t5)) });
+                struct __env_876 *__t7 = (struct __env_876 *)malloc(sizeof(struct __env_876));
+                __t7->__fn = (tur_thunk_int64_t_int64_t_t)__fn_874;
+                __t7->delta = delta_872;
+                void *__t8 = __t7;
+                void *__t9 = __t8;
+                int64_t result_879 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(23)), (tur_poly_fn_t){ __t9, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t9)) });
                 (void)result_879;
                 puts((__opt_some_(result_879)) ? "true" : "false");
                 printf("%lld\n", (long long)(__opt_unwrap(result_879)));
@@ -4320,16 +4318,16 @@ int main(int argc, char **argv) {
         {
             int64_t delta_880 = INT64_C(100);
             (void)delta_880;
-            struct __env_884 *__t6 = (struct __env_884 *)malloc(sizeof(struct __env_884));
-            __t6->__fn = (tur_thunk_int64_t_int64_t_t)__fn_882;
-            __t6->delta = delta_880;
-            void *__t7 = __t6;
-            void *__t8 = __t7;
-            puts((__opt_some_(__inst_TestFunctor_fmap_option(__opt_none(), (tur_poly_fn_t){ __t8, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t8)) }))) ? "true" : "false");
+            struct __env_884 *__t10 = (struct __env_884 *)malloc(sizeof(struct __env_884));
+            __t10->__fn = (tur_thunk_int64_t_int64_t_t)__fn_882;
+            __t10->delta = delta_880;
+            void *__t11 = __t10;
+            void *__t12 = __t11;
+            puts((__opt_some_(__inst_TestFunctor_fmap_option(__opt_none(), (tur_poly_fn_t){ __t12, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t12)) }))) ? "true" : "false");
         }
-        int64_t __t9;
-        __t9 = INT64_C(0);
-        return (int)__t9;
+        int64_t __t13;
+        __t13 = INT64_C(0);
+        return (int)__t13;
 }
 
 

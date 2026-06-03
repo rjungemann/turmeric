@@ -148,19 +148,14 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn list-eq? [l1 :int l2 :int cmp-fn]
-  #{}
-  :bool
-  ```c struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *a = (void*)(intptr_t)l1;
-  struct __tur_cons_t *b = (void*)(intptr_t)l2;
-  while (a && b) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
-      a = (void*)(intptr_t)a->tail;
-      b = (void*)(intptr_t)b->tail;
-  }
-  return (void*)a == (void*)b;
-  ```)
+(defn list-eq? [l1 :int l2 :int cmp-fn : (fn [int int] :bool)] :bool
+  (if (tnil? l1)
+    (tnil? l2)
+    (if (tnil? l2)
+      false
+      (if (cmp-fn (list-head l1) (list-head l2))
+        (list-eq? (list-tail l1) (list-tail l2) cmp-fn)
+        false))))
 ;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
 ;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
 ;; Note: element comparison uses integer equality; correct for all primitive A.
@@ -182,27 +177,10 @@
 ;;;
 ;;; Since: Phase TS5
 
-(defn __cons-fmap [cell :int f :fn]
-  #{Unsafe}
-  :int
-  ```c struct __tur_cons_t { int64_t head; int64_t tail; };
-  struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
-  if (!c) return 0;
-  int64_t *_fat = (int64_t*)(intptr_t)f;
-  tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  struct __tur_cons_t *head_node = NULL;
-  struct __tur_cons_t *prev = NULL;
-  while (c) {
-    struct __tur_cons_t *r = malloc(sizeof(*r));
-    r->head = _f.fn(_f.env, c->head);
-    r->tail = 0;
-    if (!head_node) head_node = r;
-    if (prev) prev->tail = (int64_t)(intptr_t)r;
-    prev = r;
-    c = (struct __tur_cons_t *)(intptr_t)c->tail;
-  }
-  return (int64_t)(intptr_t)head_node;
-  ```)
+(defn __cons-fmap [cell :int f :ptr<void>] :int
+  (if (tnil? cell)
+    0
+    (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f))))
 ;;; list -- construct a list from N values via nested tcons.
 ;;;
 ;;; Parameters:
