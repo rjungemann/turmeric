@@ -93,27 +93,39 @@ The plan is to **move every fat-dispatching closure consumer onto `^fat`**
 and make the consumer dispatch through the fat protocol, leaving raw
 C-callback params as plain `:ptr<void>`.
 
-### Phase 0 -- compiler prerequisites (blockers found during spiking)
+### Phase 0 -- compiler prerequisites (DONE 2026-06-03)
 
-A spike showed the stdlib migration cannot proceed until three
-type-propagation gaps in the `^fat` surface are closed:
+A spike found the gaps below; all are now resolved and the suite is green,
+so the Phase 1 migration is unblocked.
 
-- **Bare `^fat g` (no fn-type annotation) is not directly callable.**
-  `(g x)` reports "'g' is not a function or continuation": a bare `^fat`
-  param is neither `TY_FN` nor reaches the `TY_PTR_VOID` direct-call path.
-  Needed so a generic combinator can call a `^fat` arrow without pinning
-  a concrete fn type.
-- **`is_fat` is not preserved through `let`.** `(let [fv f] (fv x))` with
-  `f` a fn-typed `^fat` param drops the fat marker, so `(fv x)` takes the
-  thin ER2 path and crashes on a fat box. Either propagate `is_fat` onto
-  let-aliases of fat bindings, or have such aliases carry `:ptr<void>`
-  (which fat-dispatches).
-- **The `:ptr<void>` direct-call result type is hard-coded `TYPE_INT`**
-  (`elab_call.c:1689`), so a `:float`/pointer-returning arrow called this
-  way is mistyped. Needs the result type threaded from the `^fat`
-  parameter's declared signature.
+- **[FIXED] Bare `^fat g` (no fn-type annotation) was not directly
+  callable.** It defaulted to `TY_INT`; `(g x)` reported "not a function".
+  A bare `^fat` param now defaults to `:ptr<void>` (a fat box), routing
+  `(g x)` through fat dispatch. An explicit annotation still overrides.
+- **[FIXED] `is_fat` was not preserved through `let`.** `(let [fv f] (fv x))`
+  on a fn-typed `^fat` param dropped the marker and crashed. `is_fat` now
+  propagates through let aliases, and a fn-typed `^fat` alias is declared
+  as the int64 carrier (not a thin fn pointer).
+- **[FIXED, pre-existing] A called `:ptr<void>`/`^fat` binding was not
+  captured by an enclosing closure.** `collect_free_vars` ignored call
+  heads without `closure_fn_binding`, so `(fn [x] (gv (fv x)))` -- the
+  migration's exact shape -- emitted an undeclared reference. Now such
+  call heads are captured. (This was the actual blocker for the arrow
+  pattern; surfaced once bare `^fat` became `:ptr<void>`.)
+- **[PARTIAL] `:ptr<void>` direct-call result type is hard-coded
+  `TYPE_INT`.** The **annotated** form (`^fat g :(fn [...] :T)`) threads
+  the correct result type and works for non-int closures (verified for
+  `:float`). The **bare** form has no signature to thread, so it is
+  int-result only; a non-int closure through a bare `^fat` param silently
+  miscompiles -- tracked in
+  [bare-fat-param-non-int-result-miscompiles.md](../reported/bare-fat-param-non-int-result-miscompiles.md).
+  Not a Phase 1 blocker: the stdlib migration is int-carrier (bare `^fat`
+  int is correct) and non-int closures use the annotated form.
 
-These are small, targeted compiler changes but they gate Phase 1.
+Net: typed `^fat` parameters now support both captureless and capturing
+closures, are directly callable, survive `let` aliasing, and can be called
+from within an enclosing closure -- the full set of capabilities the
+Phase 1 combinator rewrites need.
 
 ### Phase 1 -- stdlib thin-call consumers -> fat dispatch
 
