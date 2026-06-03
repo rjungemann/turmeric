@@ -1,0 +1,32 @@
+;; instance-closure-return-simple -- a typeclass method whose declared return
+;; type is a closure, with no captures.
+;;
+;; Regression for closure-returning-instance-method-codegen: the method
+;; `arr-of` returns a value of function type `(fn [:int] :int)`.  Before the
+;; fix the dict-field and impl-signature return type erased to an unknown-void
+;; carrier (the zeroed TY_FN shell), silently dropping the returned closure
+;; handle and miscompiling.  Now the closure return is carried as the int64_t
+;; fat-closure handle, matching the rest of the language.
+;;
+;; The returned closure captures nothing, so it is a bare function pointer;
+;; apply it through a thin (captureless) cast.
+
+(defclass HasArr [a]
+  (arr-of [self] : (fn [:int] :int)))
+
+(defstruct ArrW [a]
+  (raw :int))
+
+(definstance HasArr [ArrW]
+  (arr-of [self]
+    (fn [x :int] :int (+ x 1))))
+
+;; Apply a captureless closure (a bare int64_t(*)(int64_t) function pointer).
+(defn call-thin [f x] :int
+  ```c return ((int64_t(*)(int64_t))(intptr_t)f)(x); ```)
+
+(defn main [] :int
+  (let [w (:: (make-struct ArrW 0) (ArrW int))
+        g (.arr-of w)]
+    (println (call-thin g 41)))   ;; 42
+  0)

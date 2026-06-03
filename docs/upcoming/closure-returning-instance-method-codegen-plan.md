@@ -170,16 +170,103 @@ If either smoke test fails, the fix is incomplete -- iterate on T4.
 
 ## Acceptance checklist
 
-- [ ] T1 repro fixture exists and (initially) demonstrates the bug.
-- [ ] T2 root-cause note appended to this plan.
-- [ ] T3 sibling-case audit completed and recorded.
-- [ ] T4 fix landed; dict-field type for closure returns is `int64_t`.
-- [ ] T4 decision recorded on whether A5 (struct-in-`__pap`-env) shares
-      the fix.
-- [ ] T5: skip marker removed; fixture in live suite.
-- [ ] All T6 fixtures pass with snapshot-stable `expected.c`.
-- [ ] T7 smoke tests pass in a throwaway worktree.
-- [ ] Docs updated; A2 marked superseded.
+- [x] T1 repro fixture exists and (initially) demonstrates the bug. *(Fixed
+      in-session, so the repros land directly as passing fixtures in T6 rather
+      than as skip-marked failing fixtures; see Implementation Notes.)*
+- [x] T2 root-cause note appended to this plan.
+- [x] T3 sibling-case audit completed and recorded.
+- [x] T4 fix landed; dict-field type for closure returns is `int64_t`.
+- [x] T4 decision recorded on whether A5 (struct-in-`__pap`-env) shares
+      the fix. *(It does not -- separate root cause; A5 left standing.)*
+- [x] T5: no skip marker needed (fixed in-session); fixtures in live suite.
+- [x] All T6 fixtures pass with snapshot-stable `expected.c`.
+- [x] T7 smoke test passes (throwaway `Arrow`-style `arr` instance compiles
+      and runs -> 42; not committed).
+- [x] Docs updated; A2 marked superseded.
+
+## Implementation Notes (landed 2026-06-03)
+
+### T2 -- Root cause
+
+The bug is **not** a `void *` fallback in a single type-map helper but a
+**dropped return Type** in the instance-method elaborator, which then erases to
+an unknown-void carrier at every codegen site.
+
+`elab_definstance` (`src/compiler/elab_typeclasses.c`) builds each method's
+function type with `type_fn(param_kinds, n, return_type.kind)`. `type_fn` stores
+only the return **kind** (`TY_FN`) and drops the full return Type. The regular
+`defn` path attaches the full `TY_FN` as `result_full_type` ("Issue 1b" in
+`elab_fns.c`); the instance path never did. With no `result_full_type`, codegen
+falls back to `emit_type_from_kind(TY_FN)` -- a zeroed `TY_FN` shell whose result
+kind is `TY_UNKNOWN` -- and `type_c_name` lowers it to `/*unknown*/ void`
+(`src/compiler/types.c` `TY_FN` arm: `boxed` -> `void *`, else recurse into the
+result kind, which here is `TY_UNKNOWN`).
+
+Net effect: the dict field, the `__inst_*` impl signature, **and** the call-site
+let-binding all declared a `void`-returning function and silently dropped the
+returned closure handle -- a miscompile, surfacing as `-Wint-conversion` /
+"return with a value in function returning void" and, for curried returns, a
+hard C error.
+
+The fix touches three sites:
+
+1. `elab_typeclasses.c` (`elab_definstance`): when `return_type.kind == TY_FN`,
+   attach `fn_type.as.fn.result_full_type = &return_type`, mirroring the regular
+   `defn` path. Fixes the single-level dict field + impl signature.
+2. `types.c` (`type_c_name`, `TY_FN` arm): a bare `TY_FN` whose result kind is
+   itself `TY_FN` (curried) or `TY_UNKNOWN` is a single closure handle -> carry
+   it as `int64_t` instead of recursing to an unknown-void carrier.
+3. `emit_expr.c` (`EX_LET`): a let-bound *curried* closure (the result of
+   `(.method ...)` whose return is a function-returning-function) is declared as
+   the `int64_t` handle, not a malformed thin function pointer.
+
+### T3 -- Sibling dict-field-type audit
+
+For each kind a method return / dict field can take, does the resolver handle it
+correctly **after** the fix?
+
+| Return shape | Carrier | Status |
+| --- | --- | --- |
+| primitive `:int`/`:bool`/`:cstr` | `int64_t`/`bool`/`const char *` | OK (always was) |
+| dispatch tyvar `: a` -> instance type | concrete (struct/int64_t) | OK (`emit_carrier_return_override` / RT substitution) |
+| by-value struct | struct name | OK |
+| opaque newtype / ADT / `TY_APP` | `int64_t` | OK |
+| **closure `(fn [..] :T)`** (single level) | `int64_t` handle | **FIXED** (site 1) |
+| **curried `(fn [..] (fn [..] :T))`** | `int64_t` handle | **FIXED** (sites 2 + 3) |
+| closure return whose result is a struct/ADT | result-type name | unchanged; not exercised by a known instance -- left as-is |
+
+### T4 -- Decision on A5 (`mw-cors` struct-in-`__pap`-env)
+
+**Separate root cause; A5 left standing.** This fix lives entirely in the
+`definstance` dict-field / method-return type resolution and in `type_c_name`'s
+`TY_FN` carrier rule. The `mw-cors` failure is in the **partial-application**
+(`__pap`) wrapper, which packs a `CorsOpts` *struct* into an `int64_t` env slot
+-- a different code path with no `TY_FN` return involved. Nothing in this fix
+touches `__pap`. A5 remains tracked in
+[stdlib-type-erasure-cleanup-plan](stdlib-type-erasure-cleanup-plan.md).
+
+### Coverage (T6) and two orthogonal bugs found en route
+
+Five fixtures land under `tests/fixtures/`:
+`instance-closure-return-simple`, `-capture-int`, `-capture-struct`, `-nested`
+(curried), and `-compose-methods` (two closure-returning methods composed at the
+call site). Each is end-to-end (`expected.stdout`) **and** a codegen snapshot
+(`expected.c`); every closure-returning dict field is `int64_t`.
+
+The 5th fixture composes at the call site rather than via `(.other self ...)`
+because **intra-instance method dispatch is unsupported** -- filed as
+`docs/reported/intra-instance-method-dispatch-unsupported.md`. The "nested"
+fixture's inner closure references only its immediate parent's parameter because
+**nested closures do not transitively capture grandparent variables** -- filed
+as `docs/reported/nested-closure-transitive-capture.md`. Both reproduce in plain
+`defn` (no typeclasses) and are independent of the carrier-type fix.
+
+### Pre-existing stale snapshot fixed
+
+`tests/fixtures/float-fat-closure/expected.c` was already drifting on this
+branch (a captured `^fat` closure env field showed `double` instead of the
+correct `int64_t` handle) before any change here. Its `expected.c` was
+regenerated and the runtime output verified (`3 / 4.5 / 6`).
 
 ## Non-goals
 

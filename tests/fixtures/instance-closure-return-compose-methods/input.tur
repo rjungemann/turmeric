@@ -1,0 +1,36 @@
+;; instance-closure-return-compose-methods -- two closure-returning methods on
+;; the same instance, whose results are composed at the call site.
+;;
+;; Regression for closure-returning-instance-method-codegen.  Both `inc-by` and
+;; `mul-by` declare a closure return type; the dict carries two int64_t
+;; closure-handle fields.  Composing g(f(x)) proves the handles round-trip
+;; through ordinary let-bindings and fat dispatch.
+;;
+;; (Note: building one method's closure by dispatching to *another* method via
+;; `(.other self ...)` inside the instance body is a separate, currently
+;; unsupported feature -- intra-instance method dispatch -- tracked in
+;; docs/reported/intra-instance-method-dispatch-unsupported.md.  This fixture
+;; composes the two closures at the *call* site instead.)
+
+(defclass HasArr [a]
+  (inc-by [self n :int] : (fn [:int] :int))
+  (mul-by [self k :int] : (fn [:int] :int)))
+
+(defstruct ArrW [a]
+  (raw :int))
+
+(definstance HasArr [ArrW]
+  (inc-by [self n :int]
+    (fn [x :int] :int (+ x n)))
+  (mul-by [self k :int]
+    (fn [x :int] :int (* x k))))
+
+(defn call1 [f x] :int
+  ```c return TUR_APPLY1(f, x); ```)
+
+(defn main [] :int
+  (let [w (:: (make-struct ArrW 0) (ArrW int))
+        f (.inc-by w 10)
+        g (.mul-by w 3)]
+    (println (call1 g (call1 f 5))))   ;; (5 + 10) * 3 = 45
+  0)

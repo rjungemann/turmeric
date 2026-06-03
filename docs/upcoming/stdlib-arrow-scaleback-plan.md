@@ -6,6 +6,15 @@ description: Scale stdlib/arrow.tur back to a minimal pragmatic core. Remove the
 
 # `stdlib/arrow` Scale-back -- Plan
 
+> **Codegen prerequisite has landed (2026-06-03).** The closure-returning
+> instance-method codegen bug referenced below (dict field types resolving to a
+> non-`int64_t` carrier) is **fixed** -- see
+> [closure-returning-instance-method-codegen-plan](closure-returning-instance-method-codegen-plan.md).
+> Closure-returning `definstance` methods now carry the `int64_t` fat-closure
+> handle at all three codegen sites, and a throwaway `Arrow`-style `arr`
+> instance compiles and runs. Reintroducing the real Arrow typeclass hierarchy
+> is unblocked.
+
 ## Why
 
 `stdlib/arrow.tur` currently mixes two layers:

@@ -1,0 +1,37 @@
+;; instance-closure-return-nested -- a method that returns a curried closure:
+;; a closure that itself returns a closure.
+;;
+;; Regression for closure-returning-instance-method-codegen.  The method's
+;; declared return type is a function-returning-function,
+;; `(fn [:int] (fn [:int] :int))`.  A curried closure return erased to an
+;; unknown-void carrier at three codegen sites (dict field, impl signature,
+;; and the let-binding declaration of the call result); each is now carried as
+;; the int64_t fat-closure handle.
+;;
+;; Dispatch detail: the *outer* closure references only its own parameter `x`,
+;; so it is captureless (a bare function pointer) -- apply it thinly.  The
+;; *inner* closure captures `x`, so it is a fat box -- apply it through the fat
+;; protocol.
+
+(defclass HasAdder [a]
+  (adder [self] : (fn [:int] #{} (fn [:int] :int))))
+
+(defstruct AddW [a]
+  (raw :int))
+
+(definstance HasAdder [AddW]
+  (adder [self]
+    (fn [x :int] : (fn [:int] :int)
+      (fn [y :int] :int (+ x y)))))
+
+(defn call-thin [f x] :int
+  ```c return ((int64_t(*)(int64_t))(intptr_t)f)(x); ```)
+(defn call-fat [f x] :int
+  ```c return TUR_APPLY1(f, x); ```)
+
+(defn main [] :int
+  (let [w  (:: (make-struct AddW 0) (AddW int))
+        f1 (.adder w)            ;; captureless outer closure
+        f2 (call-thin f1 20)]    ;; -> inner closure capturing x = 20
+    (println (call-fat f2 3)))   ;; (20 + 3) = 23
+  0)
