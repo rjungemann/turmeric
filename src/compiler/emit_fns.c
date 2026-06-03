@@ -385,8 +385,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_puts(file, emit_type_c_name(ctx, carrier_override));
         } else if (e->type.as.fn.result_full_type) {
             bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
-            if (!body_is_inline_c) {
-                buf_puts(file, emit_type_c_name(ctx, *e->type.as.fn.result_full_type));
+            Type rft = *e->type.as.fn.result_full_type;
+            /* ptr-generic-parameterised-type: a typed ptr<T> return lowers to
+             * `T *` even from an inline-C body, so the C body's `return ptr;`
+             * type-checks against the declared pointer type with no cast. */
+            bool typed_ptr = (rft.kind == TY_PTR_VOID && rft.as.ptr.inner);
+            if (!body_is_inline_c || typed_ptr) {
+                buf_puts(file, emit_type_c_name(ctx, rft));
             } else {
                 buf_puts(file, "int64_t");
             }

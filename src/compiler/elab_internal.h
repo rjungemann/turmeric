@@ -899,6 +899,13 @@ Expr *elab_defalias(Elab *e, const Form *call);
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
     const Symbol **type_params, Kind *type_param_kinds,
     uint8_t n_type_params);
+/* ptr-generic-parameterised-type: resolve a "ptr<T>" type-name string to a
+ * typed raw pointer (TY_PTR_VOID with non-NULL pointee).  Returns NULL when
+ * the name is not a typed "ptr<...>" form (e.g. "ptr<void>" or a non-ptr
+ * name), so callers can fall through to their existing handling. */
+Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+    Span span, const Symbol *rec_name, const Symbol **type_params,
+    Kind *type_param_kinds, uint8_t n_type_params);
 /* Resolve a type-annotation form (F_KEYWORD `:int`, spaced F_TYPE_ANN
  * wrapping any form, or a list constructor like `(-> a b)`) into a Type*.
  * Unwraps F_TYPE_ANN and delegates to type_expr_from_form for the inner

@@ -1070,6 +1070,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     continue;
                 }
             }
+            /* ptr-generic-parameterised-type: a typed `:ptr<T>` parameter. */
+            {
+                Type *pt = ptr_type_from_keyword_name(e, kw->name, kw->len,
+                                                      p->span, NULL,
+                                                      fn_type_params,
+                                                      fn_type_param_kinds,
+                                                      n_fn_type_params);
+                if (pt) {
+                    param_kinds[n_params - 1] = TY_PTR_VOID;
+                    params[n_params - 1]->type = *pt;
+                    continue;
+                }
+            }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
              * type-variable path.  The fast-path checks below are kept for the
@@ -1342,6 +1355,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
         if (ret_f->tag == F_KEYWORD) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;
+            /* ptr-generic-parameterised-type: a typed `:ptr<T>` return type. */
+            Type *ptr_ret = ptr_type_from_keyword_name(e, kw->name, kw->len,
+                                                       ret_f->span, NULL,
+                                                       fn_type_params,
+                                                       fn_type_param_kinds,
+                                                       n_fn_type_params);
+            if (ptr_ret) {
+                return_kind = TY_PTR_VOID;
+                return_app_type = ptr_ret;  /* threads result_full_type for codegen */
+                body_start++;
+                goto done_return_annotation;
+            }
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_kind = TY_INT;
             } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
@@ -2341,6 +2366,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * borrow checker see the programmer's &'a T annotation, not a
              * lifetime-stripped type_from_kind() shell. */
             fd->param_types[i] = params[i]->type;
+        } else if (param_kinds[i] == TY_PTR_VOID
+                   && params[i]->type.kind == TY_PTR_VOID
+                   && params[i]->type.as.ptr.inner) {
+            /* ptr-generic-parameterised-type: preserve the pointee type so
+             * emit.c lowers a `:ptr<T>` parameter to `T *`, not `void *`. */
+            fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
         }
@@ -2615,7 +2646,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;
             uint8_t type_param_idx = 0;
-            if (fn_type_param_index(fn_type_params, n_fn_type_params, kw, &type_param_idx)) {
+            Type *ptr_ret = ptr_type_from_keyword_name(e, kw->name, kw->len,
+                                                       ret_f->span, NULL,
+                                                       fn_type_params,
+                                                       fn_type_param_kinds,
+                                                       n_fn_type_params);
+            if (ptr_ret) {
+                return_kind = TY_PTR_VOID;
+                return_full_type = ptr_ret;
+            } else if (fn_type_param_index(fn_type_params, n_fn_type_params, kw, &type_param_idx)) {
                 return_kind = TY_TYVAR;
                 return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *return_full_type = type_tyvar_named(kw->name);

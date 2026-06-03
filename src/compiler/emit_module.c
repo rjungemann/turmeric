@@ -1157,7 +1157,10 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             } else if (e->type.as.fn.result_full_type) {
                 bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
                 const struct Type *rft = e->type.as.fn.result_full_type;
-                if (!body_is_inline_c && rft) {
+                /* ptr-generic-parameterised-type: a typed ptr<T> return lowers
+                 * to `T *` even for inline-C bodies; mirror emit_fns.c. */
+                bool typed_ptr = rft && rft->kind == TY_PTR_VOID && rft->as.ptr.inner;
+                if (rft && (!body_is_inline_c || typed_ptr)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {
                     buf_puts(out, "int64_t");
