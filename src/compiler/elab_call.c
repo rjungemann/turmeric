@@ -2037,6 +2037,21 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             /* Allow nil as a null pointer for ptr<void> parameters. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_FN && args[i]->type.kind == TY_PTR_VOID) {
+            /* A#1: a fat (^fat) parameter consumes a closure in fat-box form.  A
+             * capturing closure value (EX_CLOSURE, TY_PTR_VOID) is already a fat
+             * box, so accept it at a fn-typed ^fat parameter -- the ^fat call
+             * site fat-dispatches through slot 0.  Without this, a capturing
+             * closure could not be passed to a directly-callable closure
+             * parameter at all (only captureless lambda literals, which are
+             * auto-shimmed via EX_FN_TO_FAT).  Gated on arg_fat so a plain fn
+             * parameter still rejects a bare :ptr<void>. */
+            uint32_t fn_arg_idx_fp = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_arg_idx_fp < fn_type.as.fn.arity &&
+                fn_type.as.fn.arg_fat[fn_arg_idx_fp]) {
+                arg_ok = true;
+            }
+        }
         /* TS4P1: For a polymorphic ADT constructor, the field is stored as TY_INT
          * but its full_type is TY_TYVAR.  Accept any concrete type for such a field
          * so that e.g. (Just 1.5) at :float does not produce a type error.
