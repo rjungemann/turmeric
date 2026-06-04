@@ -1,0 +1,27 @@
+;; closure-transitive-grandparent-capture -- a three-level curried closure
+;; whose *innermost* body reads a variable bound by the *outermost* function
+;; (skipping the middle closure).  The middle closure must transitively
+;; capture that grandparent binding so it can forward it into the inner env.
+;;
+;; Regression for docs/reported/nested-closure-transitive-capture.md:
+;; collect_free_vars did not fold a nested EX_CLOSURE's capture set into the
+;; enclosing closure, so the middle closure captured `x` (its own param,
+;; trivially in scope) but never `n` (the grandparent binding).  The middle
+;; closure's emitted env-forwarding then referenced an undeclared local
+;; (`n_NNN`), and the generated C failed to compile.
+;;
+;; Both levels are fat closures here (the middle now captures `n`), so apply
+;; each through the fat protocol.
+
+(defn adder [n :int] : (fn [:int] (fn [:int] :int))
+  (fn [x :int] : (fn [:int] :int)
+    (fn [y :int] :int (+ (+ x y) n))))   ;; inner reads x (parent) AND n (grandparent)
+
+(defn call-fat [f x] :int
+  ```c return TUR_APPLY1(f, x); ```)
+
+(defn main [] :int
+  (let [f1 (adder 100)            ;; middle closure, capturing n = 100
+        f2 (call-fat f1 20)]      ;; inner closure, capturing x = 20 and n = 100
+    (println (call-fat f2 3)))    ;; (20 + 3) + 100 = 123
+  0)
