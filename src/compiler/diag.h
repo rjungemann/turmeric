@@ -129,6 +129,12 @@ typedef enum DiagCode {
     TUR_E0702_YIELD_IN_MATCH_ARM,        /* yield/yield* inside a match arm (1.0 limitation) */
     TUR_E0703_YIELD_IN_RECURSIVE_GEN,    /* yield/yield* inside a recursive generator (1.0 limitation) */
     TUR_E0704_HANDLER_COMPOSE_UNIMPL,    /* first-class handler composition (compose-handlers) not yet implemented (gated) */
+    /* poly-defn-shares-inner-closure-body-across-monomorphizations: a generic
+     * defn that returns an (fn ...) whose result type is one of the defn's type
+     * parameters emits a single shared inner closure body (integer thunk ABI);
+     * a floating-point specialization dispatches through the wrong register and
+     * silently miscompiles.  Rejected until per-A inner-body specialization lands. */
+    TUR_E0705_POLY_CLOSURE_RESULT_TYVAR,
 } DiagCode;
 
 typedef enum DiagLevel {

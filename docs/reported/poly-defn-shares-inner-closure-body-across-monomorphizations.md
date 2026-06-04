@@ -6,6 +6,27 @@ description: A polymorphic defn that returns an inner `(fn ...)` whose result ty
 
 # Polymorphic defn shares one inner closure body across monomorphizations
 
+> **Status:** RESOLVED (2026-06-04) via fix direction 3 (diagnose). The silent
+>   miscompile is gone: a call that specializes a closure-returning generic
+>   `defn` at a **floating-point** result type -- where the shared inner thunk's
+>   integer-register return (`rax`) is read back through a `double (*)(...)`
+>   dispatch pointer (`xmm0`) -- is now a hard error (`TUR-E0705`) at the call
+>   site, directing the user to write a monomorphic `defn` per concrete result
+>   type. `cstr`/`ptr`/`int` specializations share the integer register and
+>   round-trip correctly, so they are intentionally not diagnosed (same
+>   register-class scoping as the sibling `bare-fat` and `cstr-returning-closure`
+>   fixes). The check lives in `elab_call.c` (right before the `EX_CALL` node is
+>   built), keying off `fn_binding->returns_closure_fn_binding` whose `TY_FN`
+>   result is a bare `TY_TYVAR` bound by the call to a floating type. Regression
+>   fixture: `tests/fixtures/errors/poly-closure-result-tyvar-float`. Fix
+>   directions 1 (per-A clone of the inner body) and 2 (type the env field by A)
+>   remain the end-state for making the float case *work* without a rewrite;
+>   until then the monomorphic-per-type form is the supported float path.
+>   `bash tests/run.sh`: 0 FAIL.
+> **Found:** surfaced by spike G2 of `language-readiness-for-typed-signal-plan`.
+> **Severity:** silent miscompile (no diagnostic, wrong runtime result), now a
+>   hard error for the float case.
+
 ## Summary
 
 Severity: **silent miscompile** (no diagnostic, wrong runtime result).
