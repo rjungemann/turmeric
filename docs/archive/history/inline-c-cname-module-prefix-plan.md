@@ -1,6 +1,6 @@
 # Inline-C `__TUR_CNAME_` Module-Prefix Plan
 
-> **Status:** Proposed (not started).
+> **Status:** Implemented (Option A, resolve-with-fallback). 2026-06-04.
 > **Last Updated:** 2026-06-04
 > **Type:** compiler / inline-C ergonomics -- generality follow-up
 > **Predecessor:** the `__TUR_CNAME_<name>__` splice landed 2026-06-04
@@ -9,6 +9,51 @@
 > **Sibling plans:**
 > - [stdlib-inline-c-deworkaround-plan.md](stdlib-inline-c-deworkaround-plan.md) -- removing inline-C that shouldn't exist
 > - [stdlib-type-erasure-cleanup-plan.md](stdlib-type-erasure-cleanup-plan.md) -- carrier/MapKey machinery that uses the splice
+
+---
+
+## Implementation notes (2026-06-04)
+
+Option A was implemented with one deliberate divergence: **unresolved splice
+names are not a hard error**. Instead they fall through to the existing
+emit-time mangle-only path (the "kept as a fallback" branch this plan already
+sanctioned in Option A).
+
+Why the fallback rather than a hard `TUR-Exxxx`: existing stdlib splice sites
+reference a global in another translation unit *without importing it* --
+`stdlib/sym.tur`'s `MapKey [Sym]` instance splices
+`__TUR_CNAME_tur-int-carrier-eq?__`, a global defined in `stdlib/map.tur` that
+`sym.tur` does not `import`. `elab_lookup_sym` cannot see it (it is not in
+scope), so a hard error would break the stdlib build. The unprefixed mangle of
+such a name still links across TUs because the callee is a non-static global,
+which is exactly why the mangle-only path existed. Keeping it as the
+unresolved-name fallback preserves that behavior while making *resolvable*
+(module-prefixed, in-scope) callees correct.
+
+Net effect: strictly more correct than before, zero behavior change for the
+unprefixed in-module and cross-TU cases (the existing `inline-c-cname-splice`
+snapshot is byte-identical), and the new `inline-c-cname-module-prefix` fixture
+guards the prefix case that previously failed to link.
+
+Because the unresolved case is now an intentional fallback rather than an
+error, the planned `errors/` fixture for an unresolved splice name was *not*
+added -- there is no diagnostic to assert.
+
+### What landed
+
+- `src/compiler/elab_toplevel.c` -- new `elab_cblock_resolve_cnames` helper,
+  called from the `F_CBLOCK` arm. It scans the body, resolves each
+  `__TUR_CNAME_<name>__` via `elab_lookup_sym`, dedups resolved bindings into
+  the node's `captures[]`, and rewrites those splices to `__TUR_CAP_N__`
+  (which the emitter lowers through `name_for_binding` -> prefix + alias for
+  free). Unresolved names are copied verbatim for the emit-time fallback.
+- `src/compiler/emit_core.c` -- unchanged; the mangle-only `__TUR_CNAME_`
+  branch in `inline_c_substitute` is retained as the fallback.
+- `tests/fixtures/inline-c-cname-module-prefix/` -- regression guard: a named
+  module whose inline-C body splices a prefixed sibling; asserts it links,
+  runs, and snapshots `geom__helper_qu` in the emitted C.
+- `docs/guides/c-integration-guide.md` -- splice section updated to describe
+  exact-name resolution + the unresolved fallback.
 
 ---
 
