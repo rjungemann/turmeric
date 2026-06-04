@@ -34,31 +34,31 @@ do not collapse phases, do not reword entries into prose, and update the
 3. `spaced-type-annotation-migration-plan.md`
    - Goal: Migrate codebase from fused `(name:type)` to spaced `(name : type)`
    - Deps: independent
-   - Status: In progress (Phase 1 and 2 complete; Phases 3-7 outstanding)
+   - Status: Complete
 
 ## Phase 1 -- Compiler & closure ABI fixes
 
 4. `closure-returning-instance-method-codegen-plan.md`
    - Goal: Fix dict-field type resolution (void* -> int64_t) for closure-returning instance methods
    - Deps: independent
-   - Status: Draft (T1-T8 tasks defined, not started)
+   - Status: Complete
 
 5. `bare-fat-result-type-inference-plan.md`
    - Goal: Infer result type for bare-^fat closures so they can return non-int (`:float`, etc.)
    - Deps: independent (external closure-rep prereqs not in this set)
-   - Status: Draft (Phase A & B described, not implemented)
+   - Status: Complete - Phase B is a bigger change that can be done another time
 
 6. `poly-to-fat-typed-shim-plan.md`
    - Goal: Generalize poly-to-fat shim for non-int64 typeclass method signatures
    - Deps: 5
-   - Status: Draft (Phase 0 & 1 designed, not implemented)
+   - Status: In Progress
 
 ## Phase 2 -- Type system expansion
 
 7. `sum-types-either-plan.md`
    - Goal: Land binary sum types (`Either L R`) with constructors, pattern matching, exhaustiveness, typeclass support
    - Deps: independent
-   - Status: Draft (T1-T10 tasks defined, not implemented)
+   - Status: Complete
 
 ## Phase 3 -- Readiness investigation
 
@@ -72,7 +72,7 @@ do not collapse phases, do not reword entries into prose, and update the
 9. `stdlib-opaque-handle-types-plan.md`
    - Goal: Wrap bare `:int`/`:ptr<void>` resource handles in `defopaque` newtypes
    - Deps: 1
-   - Status: Draft (Tier 1-3 inventory defined; Phase 1-3 rollout not started)
+   - Status: In Progress
 
 10. `stdlib-inline-c-deworkaround-plan.md`
     - Goal: Replace inline-C workarounds in stdlib with idiomatic Turmeric
@@ -109,3 +109,12 @@ do not collapse phases, do not reword entries into prose, and update the
     - Goal: Rebuild the tur-signal spice on top of the modern typed infrastructure
     - Deps: 8, 12
     - Status: Draft, blocked on plan 8 (Phases 1-6 designed)
+
+## Other notes
+
+One cosmetic note: re-canonicalizing surfaced some pre-existing top-level
+blank-line/section-comment shuffling in httpd-compress.tur (e.g. an extra blank
+before a docstring'd defn). I confirmed it's lossless, idempotent, and that
+gendocs.py still associates those docstrings (blank lines don't reset its doc
+buffer). Tightening that top-level blank-line handling would be a separate,
+larger change — happy to take it on if you'd like it cleaner.

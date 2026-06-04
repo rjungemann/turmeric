@@ -12,6 +12,8 @@
     "test:prod": "playwright test --config playwright.config.prod.js"
   },
   "dependencies": {
+    "@fontsource/cormorant-garamond": "^5.2.11",
+    "@fontsource/dm-sans": "^5.2.8",
     "@fontsource/iosevka": "^5.2.5",
     "monaco-editor": "^0.45.0",
     "prismjs": "^1.30.0"

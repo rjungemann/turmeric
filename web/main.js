@@ -34,7 +34,9 @@ let currentLangMode = 'turmeric'; // tracks active #lang mode
 // ============================================================================
 
 const CONFIG = {
-    DEFAULT_CODE: `(println "Hello, Turmeric!")
+    DEFAULT_CODE: `#lang sweet-exp
+
+println "Hello, Turmeric!"
 `,
     EXECUTION_TIMEOUT: 5000, // 5 seconds
     MAX_OUTPUT_LENGTH: 10000,
@@ -76,14 +78,17 @@ const EXAMPLES = {
 
 (println (handle (use-ask)
   (Ask [] k) (resume k 41)))`,
-    rc: `;; Reference Counting
-defn main [] :int
-  (let [r (rc/of 42)]
-    (println (rc/strong-count r))
-    (let [r2 (rc/clone r)]
-      (println (rc/strong-count r)))
-    (rc/drop r)
-    0)`
+    sweet: `#lang sweet-exp
+;; Sweet-exp syntax: indentation, curly-infix, neoteric, $
+
+defn square [x : int] : int
+  {x * x}
+
+defn sum-squares [a : int b : int] : int
+  +(square(a) square(b))
+
+println $ sum-squares 3 4
+`
 };
 
 // ============================================================================
@@ -410,16 +415,16 @@ function processQueue() {
         return;
     }
 
-    // Strip #lang directive before it reaches the WASM reader. The reader
-    // doesn't handle '#' as a line-comment character, so a bare #lang line
-    // causes a parse error. Forward the language name to the Worker
-    // separately so it can call _turi_wasm_set_lang before eval.
-    const { lang, body: evalCode } = parseLangDirective(code);
+    // turi_eval_typed detects and strips an inline #lang directive itself, so
+    // pass the raw source through. Still parse it locally to keep the UI's
+    // mode indicator (currentLangMode) in sync; also forward `lang` to the
+    // Worker as a hint for runtimes that export _turi_wasm_set_lang.
+    const { lang } = parseLangDirective(code);
     if (lang !== null) currentLangMode = lang;
 
     const id = ++evalCallId;
     pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
-    evalWorker.postMessage({ type: 'eval', id, input: evalCode, lang });
+    evalWorker.postMessage({ type: 'eval', id, input: code, lang });
 }
 
 /**
@@ -614,6 +619,9 @@ async function initEditor() {
         language: 'turmeric',
         theme: 'turmeric-dark',
         automaticLayout: true,
+        tabSize: 2,
+        insertSpaces: true,
+        detectIndentation: false,
         minimap: {
             enabled: false
         },
