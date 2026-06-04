@@ -1,0 +1,13 @@
+;; threadpool-wrong-handle -- passing a static ThreadPoolHandle to a dynamic-pool
+;; operation is a compile error. Acceptance test for the Tier-1 handle newtypes
+;; introduced by the stdlib-opaque-handle-types plan: thread-pool-new returns a
+;; ThreadPoolHandle (static pool) while thread-pool-dynamic-shutdown expects a
+;; DynThreadPoolHandle. The two pools have different block layouts, so the swap
+;; that used to be a silent runtime hazard now fails at compile time even though
+;; both lower to :ptr<void>.
+(load "stdlib/threadpool.tur")
+
+(defn main [] : int
+  (let [tp (thread-pool-new 2)]
+    (thread-pool-dynamic-shutdown tp)
+    0))

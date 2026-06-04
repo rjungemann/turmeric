@@ -69,7 +69,7 @@ Wrapping these handles in `defopaque` newtypes:
 
 | Module          | Newtypes to introduce                                | Notes |
 |-----------------|------------------------------------------------------|-------|
-| `tur/threadpool`| `WorkQueueHandle`, `ThreadPoolHandle`, `FutureHandle`| Pool and submitted future are both `:ptr<void>` today |
+| `tur/threadpool`| `WorkQueueHandle`, `ThreadPoolHandle`, `DynThreadPoolHandle`, `FutureHandle`| Pool and submitted future are both `:ptr<void>` today; static vs. dynamic pool blocks differ |
 | `tur/future`    | `Promise`, `Future`                                  | Write end vs read end currently indistinguishable |
 | `tur/chan`      | `Chan`, `AsyncChan`                                  | Sync and async channels share a type |
 
@@ -179,10 +179,24 @@ The variadic checker now compares opaque types by identity, so passing a
 > `tur/chan` now exposes `Chan`/`AsyncChan` `defopaque` newtypes and all
 > sync/async channel signatures are handle-typed. The acceptance fixture
 > `tests/fixtures/errors/chan-wrong-handle` proves the swap (`AsyncChan`
-> into `chan-send`) is now a compile-time `TUR-E0001`. `threadpool` and
-> `future` remain to do. Implementing this surfaced a codegen bug --
-> `(:: captured-var :T)` inside a closure defeats the capture rewrite --
-> recorded in `docs/reported/ascribe-captured-var-in-closure.md`.
+> into `chan-send`) is now a compile-time `TUR-E0001`. Implementing this
+> surfaced a codegen bug -- `(:: captured-var :T)` inside a closure defeats
+> the capture rewrite -- recorded in
+> `docs/reported/ascribe-captured-var-in-closure.md`.
+>
+> **Status update (2026-06-04, threadpool):** the `threadpool` slice has
+> landed. `tur/threadpool` now exposes four `defopaque` newtypes --
+> `WorkQueueHandle`, `ThreadPoolHandle`, `DynThreadPoolHandle`, and
+> `FutureHandle`. Beyond the plan's original three, a separate
+> `DynThreadPoolHandle` was added because the static and dynamic pools have
+> *different* block layouts (`ThreadPoolBlock` vs `DynThreadPoolBlock`), so
+> feeding a static pool to a dynamic-pool op was a latent miscast the
+> checker now rejects. Every `work-queue-*`, `thread-pool-*`, and
+> `thread-pool-dynamic-*` signature is handle-typed; the inline-C bodies are
+> unchanged since all newtypes lower to `:ptr<void>`. Acceptance fixture
+> `tests/fixtures/errors/threadpool-wrong-handle` proves passing a
+> `ThreadPoolHandle` to `thread-pool-dynamic-shutdown` is a compile-time
+> `TUR-E0001`. `future` remains to do.
 
 1. Land `defopaque` declarations + signature updates in each module.
 2. Update intra-stdlib callers (`tur/taskgroup`, `tur/scheduler`, etc.).
