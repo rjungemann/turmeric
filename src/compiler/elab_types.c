@@ -953,6 +953,17 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Type *fn_t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *fn_t = type_fn(fn_arg_kinds, n_fn_args, ret_kind);
             if (fn_effect_row) fn_t->as.fn.effect_row = fn_effect_row;
+            /* fat-closure-dispatch-aggregate-return: an aggregate/applied result
+             * type (a TY_APP like (Pair A B), a concrete TY_STRUCT, or a TY_ADT)
+             * cannot be reconstructed from its bare TypeKind -- type_from_kind
+             * drops the def/args and lowers it to the int64_t carrier.  Preserve
+             * the full type so a call through this fat-closure param (and its
+             * typed-thunk dispatch) emit the real C return type, not int64_t. */
+            if (ret_t &&
+                (ret_t->kind == TY_APP || ret_t->kind == TY_ADT ||
+                 (ret_t->kind == TY_STRUCT && ret_t->as.struct_.def != NULL))) {
+                fn_t->as.fn.result_full_type = ret_t;
+            }
             return fn_t;
         }
 
@@ -1067,22 +1078,33 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
 
             TypeKind result_kind;
             bool poly_result = false;
+            /* fat-closure-dispatch-aggregate-return: an aggregate/applied result
+             * type (a TY_APP like (Pair A B), a concrete TY_STRUCT, or a TY_ADT)
+             * cannot be reconstructed from its bare TypeKind -- type_from_kind
+             * drops the def/args and lowers it to the int64_t carrier.  Preserve
+             * the full type so the call site (and the typed-thunk dispatch) emit
+             * the real C return type instead of int64_t. */
+            bool aggregate_result = false;
             if (result_type->kind == TY_STRUCT && result_type->as.struct_.def == NULL) {
                 result_kind = TY_INT;
                 poly_result = true;
             } else {
                 result_kind = result_type->kind;
+                aggregate_result =
+                    result_type->kind == TY_APP ||
+                    result_type->kind == TY_ADT ||
+                    (result_type->kind == TY_STRUCT && result_type->as.struct_.def != NULL);
             }
 
             Type *fn_t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *fn_t = type_fn(arg_kinds, n_args, result_kind);
 
-            /* Store full type info if any polymorphic args or result */
-            if (any_poly_arg || poly_result) {
+            /* Store full type info if any polymorphic args or an aggregate/poly result */
+            if (any_poly_arg || poly_result || aggregate_result) {
                 Type **aFT = (Type **)arena_alloc(e->arena, n_args * sizeof(Type *));
                 for (uint8_t i = 0; i < n_args; i++) aFT[i] = arg_full_types_local[i];
                 fn_t->as.fn.arg_full_types = aFT;
-                if (poly_result) fn_t->as.fn.result_full_type = result_type;
+                if (poly_result || aggregate_result) fn_t->as.fn.result_full_type = result_type;
             }
 
             /* LT2: Store arg_linear flags if any were annotated */

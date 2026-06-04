@@ -1,0 +1,33 @@
+;; G4 (language-readiness-for-typed-signal-plan): a closure whose declared
+;; return type is a typed aggregate -- (Pair float float) -- builds the
+;; struct inside the (fn ...) body via make-struct and survives the
+;; fat-dispatch boundary.  Callers read it back with pair-fst / pair-snd,
+;; both typed :float, with no :int round-trip.
+;;
+;; Regression for docs/reported/fat-closure-dispatch-does-not-handle-struct
+;; -return.md: the fat-closure result type (Pair float float) is now
+;; preserved through the fn-type annotation and the lambda return so the
+;; lifted thunk's C return type matches its struct-returning body and the
+;; dispatch site invokes it with the right signature.
+
+(defn make-scaler [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+
+(defn pair-signals
+  [^fat sa :(fn [:float] #{} :float)
+   ^fat sb :(fn [:float] #{} :float)] : ptr<void>
+  (let [av sa bv sb]
+    (fn [t : float] : (Pair float float)
+      (make-struct Pair (av t) (bv t)))))
+
+(defn call-pair
+  [^fat f :(fn [:float] #{} :(Pair float float)) t : float] : (Pair float float)
+  (f t))
+
+(defn main [] : int
+  (let [s2 (make-scaler 2.0)
+        s3 (make-scaler 3.0)
+        p  (call-pair (pair-signals s2 s3) 1.0)]
+    (println (pair-fst p))                 ;; 2
+    (println (pair-snd p)))                ;; 3
+  0)

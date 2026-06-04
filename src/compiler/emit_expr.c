@@ -49,6 +49,26 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     return NULL;
 }
 
+/* fat-closure-dispatch-aggregate-return: true when a direct call returns a
+ * carrier-ABI aggregate *by value* rather than as the int64_t carrier.  A
+ * non-generic defn whose declared result is a concrete carrier-ABI aggregate
+ * (e.g. (Pair A B), (Vec int)) is emitted by emit_fns.c with a by-value C
+ * return type (it threads result_full_type through and the body is not
+ * inline-C).  Such a result must be bound and consumed by value -- declaring
+ * the binding as int64_t would fail to type-check against the struct the call
+ * returns.  Results carried as a tyvar (generic) or returned from an inline-C
+ * body still come back as the int64_t carrier and are excluded here. */
+static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
+    if (!call || call->kind != EX_CALL) return false;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN || fb->body_is_inline_c) return false;
+    const Type *rft = fb->type.as.fn.result_full_type;
+    if (!rft) return false;
+    Type r = emit_resolve_type(ctx, *rft);
+    if (!type_uses_carrier_abi(r)) return false;
+    return strcmp(emit_type_c_name(ctx, r), "int64_t") != 0;
+}
+
 /* KB-021: the C type of the value that `emit_value(e)` produces, used to declare
  * a let binding so its declared type matches its initialiser's representation.
  *
@@ -79,7 +99,10 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
             find_matched_abi_spec(ctx, p, p->as.call_.fn_binding);
         bool returns_concrete =
             spec && type_uses_carrier_abi(emit_resolve_type(ctx, spec->result_type));
-        if (!returns_concrete) return "int64_t";
+        /* A concrete-aggregate-returning defn (no ABI spec) yields the struct
+         * by value -- fall through to the by-value representation below. */
+        if (!returns_concrete && !call_returns_byvalue_aggregate(ctx, p))
+            return "int64_t";
     } else if (p->kind == EX_VAR) {
         if (!(p->as.var.binding && p->as.var.binding->emit_byvalue_carrier_abi))
             return "int64_t";
@@ -107,7 +130,9 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (e->kind == EX_CALL) {
         const EmitAbiSpecialization *spec =
             find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
-        return spec && type_uses_carrier_abi(emit_resolve_type(ctx, spec->result_type));
+        if (spec && type_uses_carrier_abi(emit_resolve_type(ctx, spec->result_type)))
+            return true;
+        return call_returns_byvalue_aggregate(ctx, e);
     }
     return false;
 }

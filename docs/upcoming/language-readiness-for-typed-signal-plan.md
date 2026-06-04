@@ -40,17 +40,19 @@ Spike status:
 | G1 | green | `tests/fixtures/float-fat-closure/`, `.../fat-closure-float-compose/` | Both PASS, stable `expected.c` snapshots. |
 | G2 | **red** | repro in `docs/reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md` (fixture stub kept) | Polymorphic `(defn f [A] ... (fn ... : A val))` emits one shared inner C body. Float specialisation reads result from xmm0 (parameter register) -- silent miscompile. |
 | G3 | green | `tests/fixtures/sf-vec-of/` | Three `(fn [:int] :int)` closures with different captured envs go into one `vec-of` without manual `:int` boxing; `tur-vec-homog__` accepts them. |
-| G4 | **red** | repro in `docs/reported/fat-closure-dispatch-does-not-handle-struct-return.md` (fixture stub kept) | Closure declared `: (Pair float float)` emits an inner body returning the struct directly but a dispatcher that casts to `int64_t (*)(...)`. `cc` rejects the generated C outright. |
+| G4 | green | `tests/fixtures/pair-signals-typed/` | Fixed: the fat-closure result type `(Pair float float)` is now preserved through the fn-type annotation and the lambda return, so the lifted thunk's C return type matches its struct-returning body and the dispatch site invokes it with the right signature. |
 | G5 | green | `tests/fixtures/typed-state-cell/` | Inline-C body uses `double *` directly, no `(intptr_t)` cast on the state pointer. ABI signature is `void *` (acceptable). |
 | G6 | green | `tests/fixtures/vec-get-closure/` | `(vec-get v i)` ascribed `:ptr<void>` is directly usable as a `^fat` closure argument. |
 | G7 | green | `tests/fixtures/sf-compose-typed/` | Local typed-compose over two `(fn [:float] :float)` closures composes cleanly; result is itself composable. **Amber edge**: `stdlib/arrow.tur`'s `>>>` itself is still int-typed; use a local typed-compose until the stdlib is generalised. |
 | G8 | green | `tests/fixtures/typed-signal-smoke/` | Two-oscillator + filter chain with all `:float` fat closures evaluates cleanly at four sample positions; output matches hand-computed reference. |
 
-Two reds (G2 and G4) are reportable codegen bugs and gate any
-typed-signal rebuild that wants polymorphic constructors or
-struct-returning combinators. The remaining greens give six fewer
-unknowns than at plan time: composition, vec-of, vec-get on closures,
-typed state cells, and the integration smoke all work today.
+G2 remains the one open red (polymorphic inner-closure return). G4 is
+now fixed: a closure declared `: (Pair float float)` builds the struct
+inside its body and survives the fat-dispatch boundary, with callers
+reading it back via `pair-fst` / `pair-snd`. The remaining greens give
+seven fewer unknowns than at plan time: composition, vec-of, vec-get on
+closures, typed state cells, struct-returning combinators, and the
+integration smoke all work today.
 
 Next step for [[tur-signal-rebuild-plan]]: confirm with the maintainers
 whether the rebuild needs G2 (polymorphic `constant`) and G4 (typed
@@ -291,20 +293,25 @@ closure boundary.
 body, or the typed `Pair[Float Float]` may not be a valid return type for
 a closure. Either is a real compiler/stdlib bug to file.
 
-**Status**: **red**.
-**Fixture**: `tests/fixtures/pair-signals-typed/` is intentionally kept as
-a stub; the runnable repro lives in the filed report so the suite stays
-green.
+**Status**: green.
+**Fixture**: `tests/fixtures/pair-signals-typed/`. PASSes; expected
+stdout `2\n3\n`.
 **Filed report**:
-`docs/reported/fat-closure-dispatch-does-not-handle-struct-return.md`.
-**Notes**: A closure declared `: (Pair float float)` returning
-`(make-struct Pair ...)` emits an inner body whose C return type is
-`Pair__float__float` (the actual struct), but the fat-dispatch site at
-the caller casts the function pointer to `int64_t (*)(void*, double)`.
-`cc` rejects the generated C outright (`returning 'Pair__float__float'
-from a function with incompatible result type 'int64_t'`). The
-typed-thunk family that fixed scalar (`:float`, `:cstr`) closure returns
-does not yet cover aggregate returns.
+`docs/reported/fat-closure-dispatch-does-not-handle-struct-return.md`
+(resolved -- see its Resolution section).
+**Notes**: The root cause was a dropped result type, not a missing
+typed-thunk family. Three sites lowered an aggregate/applied fat-closure
+result to the bare `int64_t` carrier: (1) the `(fn [...] #{} :ret)`
+fat-fn-type parser and (2) the `elab_fn` lambda-return parser both
+preserved `result_full_type` only for tyvar/poly results, not for a
+concrete `(Pair float float)` TY_APP; and (3) `let`-binding a call whose
+declared result is a concrete carrier-ABI aggregate mis-declared the
+binding as `int64_t` even though `emit_fns` returns the struct by value.
+With all three preserving/recovering the real type, the lifted thunk's C
+return type matches its struct-returning body and the dispatch site casts
+to the correct signature. The `:float`/`:cstr` typed-thunk machinery
+already covered struct (`TY_STRUCT`) results; it just was never reached
+because the type never arrived.
 
 ---
 
