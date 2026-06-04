@@ -189,6 +189,112 @@ static Form *dl_normalize_map_key(Elab *e, Form *key) {
     return dl_build_call(e, key->span, "hamt/hash-str", items, 1);
 }
 
+/* inline-c-cname-module-prefix-plan (Option A): resolve __TUR_CNAME_<name>__
+ * splices in an inline-C body at elaboration time.
+ *
+ * The bare __TUR_CNAME_ emit-time path is mangle-only -- it reproduces the
+ * name-mangling scheme but cannot reproduce the *module prefix* a global
+ * defined inside a named module carries in its C name (raw_name_for_binding).
+ * To make the splice resolve to the callee's exact emitted C name (prefix +
+ * any (export-as ...) alias), we resolve each name here through the same
+ * elab_lookup_sym path ordinary calls use, attach the resolved Binding to the
+ * node's captures[], and rewrite the placeholder to the corresponding
+ * __TUR_CAP_N__ -- which the emitter already lowers via name_for_binding
+ * (prefix + alias for free).
+ *
+ * Names that do NOT resolve in scope are left as __TUR_CNAME_<name>__ verbatim
+ * and fall through to the emit-time mangle-only path. This preserves the
+ * established escape hatch for referencing an unprefixed global in another
+ * translation unit that the current module does not import (e.g. stdlib
+ * carrier helpers referenced across files without an explicit import).
+ *
+ * Returns the (possibly rewritten) code slice; on resolution it allocates the
+ * captures array from the arena and writes it back through the out params. */
+static StrSlice elab_cblock_resolve_cnames(Elab *e, StrSlice code, Span span,
+                                           Binding ***out_caps, uint8_t *out_n) {
+    *out_caps = NULL;
+    *out_n = 0;
+    const char *src = code.p;
+    uint32_t len = code.len;
+    if (!src || len < 14) return code;
+
+    /* First pass: does the body contain any resolvable __TUR_CNAME_ splice?
+     * If not, return the slice untouched (no copy, no captures). */
+    Binding *caps[255];
+    uint8_t n_caps = 0;
+    bool any_rewrite = false;
+    for (uint32_t i = 0; i + 14 <= len; ) {
+        if (memcmp(src + i, "__TUR_CNAME_", 12) != 0) { i++; continue; }
+        uint32_t name_start = i + 12;
+        uint32_t j = name_start;
+        while (j + 1 < len && !(src[j] == '_' && src[j + 1] == '_')) j++;
+        if (!(j + 1 < len && src[j] == '_' && src[j + 1] == '_' && j > name_start)) {
+            i = name_start; continue;
+        }
+        uint32_t name_len = j - name_start;
+        const Symbol *sym = symtab_intern(e->st, strslice(src + name_start, name_len));
+        bool qual_err = false;
+        Binding *b = elab_lookup_sym(e, sym, span, &qual_err);
+        if (b && n_caps < 255) {
+            /* Dedup so a name used N times shares one capture slot. */
+            bool seen = false;
+            for (uint8_t k = 0; k < n_caps; k++) {
+                if (caps[k] == b) { seen = true; break; }
+            }
+            if (!seen) caps[n_caps++] = b;
+            any_rewrite = true;
+        }
+        i = j + 2;
+    }
+    if (!any_rewrite) return code;
+
+    /* Second pass: rebuild the body, substituting resolvable splices with
+     * their capture placeholder and leaving the rest byte-for-byte. */
+    Buf out; buf_init(&out);
+    for (uint32_t i = 0; i < len; ) {
+        if (i + 14 <= len && memcmp(src + i, "__TUR_CNAME_", 12) == 0) {
+            uint32_t name_start = i + 12;
+            uint32_t j = name_start;
+            while (j + 1 < len && !(src[j] == '_' && src[j + 1] == '_')) j++;
+            if (j + 1 < len && src[j] == '_' && src[j + 1] == '_' && j > name_start) {
+                uint32_t name_len = j - name_start;
+                const Symbol *sym = symtab_intern(e->st,
+                                                  strslice(src + name_start, name_len));
+                bool qual_err = false;
+                Binding *b = elab_lookup_sym(e, sym, span, &qual_err);
+                int cap_idx = -1;
+                if (b) {
+                    for (uint8_t k = 0; k < n_caps; k++) {
+                        if (caps[k] == b) { cap_idx = k; break; }
+                    }
+                }
+                if (cap_idx >= 0) {
+                    buf_printf(&out, "__TUR_CAP_%d__", cap_idx);
+                    i = j + 2;
+                    continue;
+                }
+                /* Unresolved: copy the splice verbatim for the emit-time
+                 * mangle-only fallback. */
+                buf_write(&out, src + i, (size_t)(j + 2 - i));
+                i = j + 2;
+                continue;
+            }
+        }
+        buf_putc(&out, src[i++]);
+    }
+
+    char *copied = arena_strdup(e->arena, out.data, out.len);
+    uint32_t new_len = (uint32_t)out.len;
+    buf_free(&out);
+
+    Binding **caps_arena = (Binding **)arena_alloc(e->arena,
+                                                   n_caps * sizeof(Binding *));
+    for (uint8_t k = 0; k < n_caps; k++) caps_arena[k] = caps[k];
+    *out_caps = caps_arena;
+    *out_n = n_caps;
+    return strslice(copied, new_len);
+}
+
 Expr *elab_form(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
@@ -468,12 +574,18 @@ Expr *elab_form(Elab *e, Form *f) {
                     }
                 }
             }
-            /* For now, we don't support captures, so the InlineC has no captures */
+            /* inline-c-cname-module-prefix-plan: resolve __TUR_CNAME_<name>__
+             * splices into captures so module-prefixed callees get their exact
+             * C name (prefix + (export-as ...) alias). Unresolved names stay as
+             * the mangle-only splice for the emit-time fallback. */
             InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
-            ic->code = f->as.cblock;
+            Binding **cname_caps = NULL;
+            uint8_t   cname_n_caps = 0;
+            ic->code = elab_cblock_resolve_cnames(e, f->as.cblock, f->span,
+                                                  &cname_caps, &cname_n_caps);
             ic->return_type = TYPE_NIL; /* Will be inferred from context or default to void */
-            ic->captures = NULL;
-            ic->n_captures = 0;
+            ic->captures = cname_caps;
+            ic->n_captures = cname_n_caps;
             ic->val_exprs = NULL;
             ic->n_val_exprs = 0;
             

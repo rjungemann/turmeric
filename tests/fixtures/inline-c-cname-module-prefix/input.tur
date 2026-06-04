@@ -1,0 +1,26 @@
+;; Regression guard for the __TUR_CNAME_<name>__ inline-C splice resolving the
+;; *module prefix* of a callee defined inside a named module.
+;;
+;; A global defined inside (defmodule geom ...) is emitted under a
+;; module-prefixed C name (geom__helper_qu). The mangle-only splice path could
+;; only reproduce the bare mangled spelling (helper_qu), so an inline-C body
+;; that referenced a prefixed sibling expanded to an unprefixed name and failed
+;; to link. With elab-time resolution the splice now lowers to the callee's
+;; exact emitted C name -- prefix included.
+;;
+;; Sigil-named defns (`?`) also exercise the mnemonic mangling (`?` -> `_qu`).
+
+(defmodule geom
+  (export main)
+
+  (defn helper? [a : int b : int] : int
+    (if (= a b) 1 0))
+
+  (defn use-it [] : int
+    ```c
+    /* call a module-prefixed sibling via the spliced C name */
+    return (int)__TUR_CNAME_helper?__(7, 7);
+    ```)
+
+  (defn main [] : int
+    (println (use-it))))

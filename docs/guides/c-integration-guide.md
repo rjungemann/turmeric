@@ -260,9 +260,27 @@ current scheme:
 ```
 
 The source name between `__TUR_CNAME_` and the trailing `__` may contain sigils
-(`-`, `?`, `!`, `=`, ...); it is terminated by the first `__`. The result
-carries no module prefix, so it resolves to the unprefixed C name of a
-module-local global (the common case for stdlib internal helpers).
+(`-`, `?`, `!`, `=`, ...); it is terminated by the first `__`.
+
+The splice resolves to the callee's **exact emitted C name**. When the name
+resolves to a binding visible in scope, the expansion matches that binding's
+full C identifier -- including the module prefix a global defined inside a named
+module carries (`geom__helper_qu`), and any `(export-as "...")` C alias. So a
+sibling `defn` inside `(defmodule geom ...)` is spliced correctly:
+
+```turmeric
+(defmodule geom
+  (defn helper? [a : int b : int] : int (if (= a b) 1 0))
+  (defn use-it [] : int
+    ;; expands to geom__helper_qu (prefix included)
+    ```c return (int)__TUR_CNAME_helper?__(7, 7); ```))
+```
+
+When the name does **not** resolve to a visible binding, the splice falls back
+to the mangle-only spelling (no module prefix). This preserves the escape hatch
+for referencing an unprefixed global in another translation unit that the
+current module does not import -- e.g. stdlib carrier helpers referenced across
+files without an explicit `import`.
 
 ### 2.3 Capability structs -- The idiomatic pattern for C APIs
 
