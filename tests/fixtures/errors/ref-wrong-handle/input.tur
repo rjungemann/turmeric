@@ -1,0 +1,10 @@
+;; ref-wrong-handle -- a bare integer cannot stand in for a RefHandle.
+;; Acceptance test for the tail RefHandle newtype from the
+;; stdlib-opaque-handle-types plan: ref-new returns a RefHandle (an opaque
+;; over the heap pointer), and ref-get / ref-free accept only that -- so a
+;; fabricated integer, which used to type-check and then dereference an
+;; arbitrary address, is now a compile-time error.
+(load "stdlib/ref.tur")
+
+(defn main [] : int
+  (ref-get 42))

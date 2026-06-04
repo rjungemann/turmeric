@@ -1,0 +1,12 @@
+;; filestream-wrong-handle -- a DirListing cannot be measured as a FileStream.
+;; Acceptance test for the tail FileStream newtype from the
+;; stdlib-opaque-handle-types plan: file-stream-open returns a FileStream and
+;; file-size now requires one, so passing an unrelated handle (here the char**
+;; array from list-dir) -- which type-checked when file-size took a raw FILE*
+;; cast as a bare integer -- is now a compile-time error rather than an ftell on
+;; a non-FILE* pointer.
+(load "stdlib/io.tur")
+
+(defn main [] : int
+  (let [d (list-dir "/tmp")]
+    (file-size d)))

@@ -350,11 +350,28 @@ co-evolve (`condvar-wait` needs both newtypes simultaneously).
 > consumes it), so the two free functions reject an unrelated pointer.
 > Acceptance fixture `errors/io-wrong-handle`.
 >
-> **Still deferred:** `async_pipe` (its stdin/stdout helpers take no fd
-> arguments) and `io/file-size`, which takes a *raw* `FILE*` (the bare
-> `fopen` extern's `:ptr`, not a wrapped handle) -- typing it cleanly would
-> need a `FileStream` wrapper around `fopen`, a larger change than this
-> signature pass.
+> **Tail finished (2026-06-04):** the two documented follow-ups have landed.
+>
+> - **io `FileStream`** -- `tur/io` now has `(defopaque FileStream
+>   :ptr<void>)` plus `file-stream-open` / `file-stream-ok?` /
+>   `file-stream-close` wrappers around `fopen`/`fclose`, and `file-size`
+>   takes a `FileStream` (it previously took a raw `FILE*` as a bare,
+>   untyped `:int`). Acceptance fixture `errors/filestream-wrong-handle`.
+> - **`tur/ref` `RefHandle`** -- `(defopaque RefHandle :int)` wraps the heap
+>   pointer from `ref-new`; `ref-get` / `ref-free` now take it instead of an
+>   unannotated (int-defaulting) parameter. This is independent of the `Ref`
+>   *struct* and its `Clone` instance: the `Clone` typeclass fixes
+>   `clone`'s return at `:int`, so that deep-copy path keeps the raw int.
+>   Acceptance fixture `errors/ref-wrong-handle`.
+>
+> **Genuinely nothing to do:** `async_pipe` -- its stdin/stdout helpers take
+> no fd arguments (the descriptors 0/1 are fixed internally), so there is no
+> handle to type.
+>
+> Noted in passing (not fixed): `io/file-open`'s `[path mode]` parameters
+> are unannotated and the checker defaults them to `:int`, so the linear
+> `FileHandle` open path does not accept a `:cstr` path as written -- a
+> pre-existing latent defect orthogonal to the handle-typing work.
 >
 > Implementing the taskgroup slice (Tier 2) had already surfaced the
 > pre-existing `task-group-with*` macro bug
