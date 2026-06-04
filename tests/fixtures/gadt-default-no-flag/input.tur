@@ -1,0 +1,20 @@
+;; range-gadt-typeclass-migration-plan A1: defgadt + GADT pattern matching
+;; must work with NO -Xgadt flag (the flag graduated to default-on, and is now
+;; a deprecated no-op). This fixture deliberately carries no `flags` file.
+(defgadt Bound [A]
+  :copy
+  (Inclusive int : (Bound int))
+  (Exclusive int : (Bound int))
+  (Unbounded     : (Bound int)))
+
+(defn describe [b : Bound] : int
+  (match b
+    (Inclusive v) v
+    (Exclusive v) (+ v 100)
+    (Unbounded)   -1))
+
+(defn main [] : int
+  (println (if (= (describe (Inclusive 5)) 5) "inclusive ok" "inclusive BAD"))
+  (println (if (= (describe (Exclusive 5)) 105) "exclusive ok" "exclusive BAD"))
+  (println (if (= (describe (Unbounded)) -1) "unbounded ok" "unbounded BAD"))
+  0)

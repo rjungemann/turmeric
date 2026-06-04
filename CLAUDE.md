@@ -107,6 +107,23 @@ bash tests/run.sh                                                               
 
 The built compiler lands at `./build/tur`.
 
+### Test suite size and runtime -- READ BEFORE ASSUMING A HANG
+
+`bash tests/run.sh` runs **~1442 fixtures** and a **clean** run completes in
+**~4-5 minutes** (≈265s measured on a 4-core box; it parallelizes across
+`nproc`). Expect roughly this number and this duration.
+
+- A wall-clock far above ~5 min (e.g. 15-20 min) almost always means **CPU
+  contention** -- another suite run, build, or sweep competing for the same
+  cores -- **not** a hang. Check for concurrent `tur`/`run.sh` processes before
+  concluding anything is stuck, and don't launch overlapping full-suite runs.
+- Each fixture's *run* phase has a 10s timeout (`expected.timeout` overrides),
+  so a genuine runtime infinite loop surfaces as a **FAIL**, not an indefinite
+  stall. An indefinite stall would have to be in an *untimed* compile phase
+  (`emit-c`/`build`); those are rare and worth pinpointing with a timeout sweep.
+- The expected result is `summary: 1442 passed, 0 failed` (the exact count
+  shifts as fixtures are added/removed -- treat it as "~1440", not a hard gate).
+
 Release build:
 
 ```sh

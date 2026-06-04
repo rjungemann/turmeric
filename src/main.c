@@ -4536,7 +4536,7 @@ static void wk_apply_flags(const char *flags_str) {
     copy[sizeof(copy) - 1] = '\0';
     char *tok = strtok(copy, " \t");
     while (tok) {
-        if      (strcmp(tok, "-Xgadt")             == 0) g_gadt_enabled            = true;
+        if      (strcmp(tok, "-Xgadt")             == 0) { /* range-gadt-typeclass-migration-plan A1: deprecated no-op (GADTs are enabled by default) */ }
         else if (strcmp(tok, "-Xdata-literals")     == 0) g_data_literals_enabled = true;
         else if (strcmp(tok, "-Xjson-reader")       == 0) g_json_reader_enabled = true;
         else if (strcmp(tok, "-Xschema-reader")     == 0) { g_schema_reader_enabled = true; g_json_reader_enabled = true; }
@@ -6738,7 +6738,7 @@ static int usage(void) {
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
         "  --no-contracts                   strip contract checks; predicates not evaluated (Phase C2)\n"
         "  -Xeffect-types                   enable full effect typing: TY_HANDLER, ET4 checks (ET4)\n"
-        "  -Xgadt                           enable defgadt syntax and GADT type checking (G1-G4)\n"
+        "  -Xgadt                           DEPRECATED no-op; defgadt syntax and GADT type checking are enabled by default (G1-G4)\n"
         "  -Xsized-types                    enable sized types: type-level size indices (SZ4+; implies -Xgadt)\n"
         "  --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8; needs -Xsized-types)\n"
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
@@ -7508,8 +7508,12 @@ int main(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "-Xgadt") == 0) {
-            /* Phase G1: enable defgadt syntax */
-            g_gadt_enabled = true;
+            /* range-gadt-typeclass-migration-plan A1: -Xgadt is a deprecated
+             * no-op. defgadt syntax and GADT pattern matching are enabled by
+             * default (g_gadt_enabled defaults true); the token is still
+             * accepted for source compatibility, mirroring -Xcallcc. */
+            fprintf(stderr, "warning: -Xgadt is deprecated and has no effect; "
+                            "GADTs are enabled by default\n");
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

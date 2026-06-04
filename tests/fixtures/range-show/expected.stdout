@@ -1,0 +1,13 @@
+[1, 5]
+[1, 5)
+(2, 8)
+(-inf, 5]
+[3, +inf)
+(-inf, +inf)
+[3
+(3
+unbounded
+eq-incl-incl
+ne-incl-excl
+eq-unb-unb
+lower-eq

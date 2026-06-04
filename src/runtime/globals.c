@@ -53,8 +53,11 @@ bool g_needs_regex_h = false;
 /* AR8: Variadic rest parameters -- track if any variadic defn is compiled */
 bool g_has_variadics = false;
 
-/* Phase G1: -Xgadt flag — enable defgadt syntax */
-bool g_gadt_enabled = false;
+/* Phase G1: -Xgadt flag — enable defgadt syntax.
+ * range-gadt-typeclass-migration-plan A1: graduated to default-on. defgadt and
+ * GADT pattern matching now work without a flag; -Xgadt is a deprecated no-op
+ * (still accepted, mirroring the -Xcallcc graduation). */
+bool g_gadt_enabled = true;
 
 /* DL0 (data-literals-plan): -Xdata-literals flag — enable map/vec/set data
  * literal syntax (#map{...}, #set{...}, and [...] in expression position).

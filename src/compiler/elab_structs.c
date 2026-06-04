@@ -1692,12 +1692,9 @@ static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
  * Codegen is identical to defdata (tagged union).
  */
 Expr *elab_defgadt(Elab *e, const Form *call) {
-    if (!g_gadt_enabled) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "defgadt requires the -Xgadt flag to enable GADT support\n"
-                  "  hint: recompile with -Xgadt");
-        return NULL;
-    }
+    /* range-gadt-typeclass-migration-plan A1: GADTs are enabled by default
+     * (g_gadt_enabled defaults true), so the former -Xgadt gate is gone.
+     * -Xsized-types still implies GADTs; both are on unconditionally now. */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
                   "defgadt requires a name, type-params, and constructors: "
