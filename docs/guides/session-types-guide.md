@@ -26,6 +26,7 @@ the `-Xsessions` compiler flag.
     - [make-protocol, send-to, recv-from, close](#make-protocol-send-to-recv-from-close)
     - [Three or more roles](#three-or-more-roles)
     - [Projection algorithm](#projection-algorithm)
+  - [Session-Typed Channel Wrappers (stdlib/schan.tur)](#session-typed-channel-wrappers-stdlibschantur)
   - [Error Codes](#error-codes)
   - [Getting More Help](#getting-more-help)
 
@@ -415,6 +416,82 @@ elaborated.
 | `TUR-E0221` | Role not declared in the protocol |
 | `TUR-E0222` | Role implementation type mismatch |
 | `TUR-E0223` | Global protocol not well-formed (undeclared role used) |
+
+---
+
+## Session-Typed Channel Wrappers (stdlib/schan.tur)
+
+The built-in session types above are their own typed-channel runtime. When you
+instead want to put a protocol discipline over an ordinary buffered channel --
+e.g. a worker-pool request/response, or an RPC pipe -- `stdlib/schan.tur`
+provides a thin generic wrapper, `SChan<p>`, that carries a protocol *phantom*
+`p` advanced by each operation:
+
+```turmeric
+(import schan :refer [SChan SSend SRecv SClose
+                      schan-new schan-send schan-recv schan-close
+                      schan-cell-new schan-cell-get schan-cell-free])
+```
+
+The phantom is built from three type-level tags (the session-type names `Send` /
+`Recv` / `Close` are reserved primitive constructors, so the wrapper uses the
+`S`-prefixed spellings):
+
+| Tag | Meaning |
+|-----|---------|
+| `(SSend T R)` | send a `T`, then continue as `R` |
+| `(SRecv T R)` | receive a `T`, then continue as `R` |
+| `SClose`      | the protocol terminus |
+
+Each operation consumes the channel at one protocol state and returns it at the
+next, so the phantom is threaded through the result type:
+
+```turmeric
+schan-send  : SChan<SSend T R> -> T    -> SChan<R>
+schan-recv  : SChan<SRecv T R> -> cell -> SChan<R>   ;; value written to cell
+schan-close : SChan<SClose>            -> nil
+```
+
+A round trip of `SSend int (SRecv int SClose)`:
+
+```turmeric
+(let [cell (schan-cell-new)
+      c0   (:: (schan-new 2) (SChan (SSend int (SRecv int SClose))))
+      c1   (schan-send c0 7)        ;; c1 : SChan<SRecv int SClose>
+      c2   (schan-recv c1 cell)     ;; c2 : SChan<SClose>
+      v    (schan-cell-get cell)]   ;; v  : int  (= 7)
+  (schan-close c2)
+  (schan-cell-free cell))
+```
+
+Because the phantom advances with every step, **skipping or reordering a step is
+a compile-time type error**. Calling `schan-close` while the channel is still at
+`SChan<SRecv int SClose>` fails with a `TUR-E0001` phantom mismatch:
+
+```
+error [TUR-E0001]: function 'schan-close' arg 1:
+  expected (type-app SChan SClose),
+  got (type-app SChan (type-app (type-app SRecv int) SClose))
+```
+
+`SChan` is `:linear`, so under `-Xlinear` the protocol additionally cannot be
+*replayed* -- each step consumes its handle exactly once.
+
+Runnable examples: `tests/fixtures/schan-roundtrip` (single round trip),
+`tests/fixtures/schan-worker-pool` (a request/response served by worker threads
+reading from the wrapped channel), and `tests/fixtures/errors/schan-skip-step`
+(the phantom-mismatch failure). The wrapper sits on top of the low-level
+[`tur/chan`](../../stdlib/chan.tur) channels, which keep their untyped surface
+for callers that do not want the protocol discipline.
+
+> **Note on `schan-recv`.** The natural signature is
+> `SChan<SRecv T R> -> Pair<T SChan<R>>`. That is currently blocked by a
+> monomorphizer limitation around parametric aggregates whose element is an
+> opaque/phantom type (see
+> `docs/reported/generic-struct-opaque-element-miscompile.md`). Until it is
+> fixed, `schan-recv` returns the *typed* continuation directly and delivers the
+> received value through a caller-provided cell -- which keeps the continuation
+> protocol fully checked.
 
 ---
 

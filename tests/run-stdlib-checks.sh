@@ -65,6 +65,8 @@ STDLIB_FILES=(
     # KB-029: session.tur checks under -Xsessions now that the un-expressible
     # tuple return annotation on echo-client-call is left to inference.
     stdlib/session.tur
+    # S1: session-typed channel wrappers (parameterized defopaque phantoms).
+    stdlib/schan.tur
 )
 STDLIB_FLAGS=(
     ""
@@ -102,6 +104,7 @@ STDLIB_FLAGS=(
     ""
     ""
     "-Xsessions"
+    ""
 )
 
 PASS=0

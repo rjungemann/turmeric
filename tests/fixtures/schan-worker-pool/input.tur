@@ -1,0 +1,79 @@
+;; S2: schan-worker-pool -- session-typed request/response over a worker pool.
+;;
+;; Three worker threads each own one request channel and one response channel,
+;; both wrapped as session-typed SChans.  Each worker runs the protocol
+;;   request side : SRecv int SClose   (receive one request, then close)
+;;   reply side   : SSend int SClose   (send one response)
+;; squaring the request it receives.  The main thread runs the dual protocol on
+;; each pair (SSend int SClose to submit, SRecv int SClose to collect) and sums
+;; the three responses.
+;;
+;; Requests 2, 3, 4 -> squares 4, 9, 16 -> sum 29.
+;;
+;; Demonstrates stdlib/schan.tur driving a real worker loop reading from the
+;; wrapped channel.  Built without -Xlinear: the phantom alone enforces protocol
+;; ordering; the terminal SClose continuations on the producing side are dropped
+;; (each underlying channel is freed exactly once by its consuming side).
+
+(defmodule app
+  (import schan :refer [SChan SSend SRecv SClose
+                        schan-new schan-send schan-recv schan-close
+                        schan-cell-new schan-cell-get schan-cell-free])
+
+  ;; ---- thread + arg plumbing ----------------------------------------------
+  (defn wp-null [] : ptr<void> ```c return (void *)0; ```)
+
+  (defn wp-arg-new [rq : ptr<void> rs : ptr<void>] : ptr<void>
+    ```c void **a = (void **)malloc(2 * sizeof(void *));
+    if (!a) { fprintf(stderr, "wp-arg-new: oom\n"); abort(); }
+    a[0] = rq; a[1] = rs; return (void *)a; ```)
+  (defn wp-arg-rq [a : ptr<void>] : ptr<void> ```c return ((void **)a)[0]; ```)
+  (defn wp-arg-rs [a : ptr<void>] : ptr<void> ```c return ((void **)a)[1]; ```)
+  (defn wp-arg-free [a : ptr<void>] : nil ```c free(a); ```)
+
+  (defn wp-spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
+    ```c pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+    if (!t) { fprintf(stderr, "wp-spawn: oom\n"); abort(); }
+    pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+    return (void *)t; ```)
+  (defn wp-join [t : ptr<void>] : nil
+    ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+  ;; ---- worker: recv one request, square it, send the response -------------
+  (defn worker [arg : ptr<void>] : ptr<void>
+    (let [cell (schan-cell-new)
+          rq   (:: (wp-arg-rq arg) (SChan (SRecv int SClose)))
+          rs   (:: (wp-arg-rs arg) (SChan (SSend int SClose)))
+          rq2  (schan-recv rq cell)
+          req  (schan-cell-get cell)
+          rs2  (schan-send rs (* req req))]
+      (schan-close rq2)            ;; this side owns + frees the request channel
+      (schan-cell-free cell)
+      (wp-null)))                  ;; rs2 (SClose) dropped; main frees rs
+
+  ;; ---- client side: submit a request to a worker, collect the response ----
+  ;; Returns the response value.  Creates the channel pair, spawns the worker,
+  ;; runs the dual protocol, joins, and releases everything it owns.
+  (defn client-call [req : int] : int
+    (let [cell (schan-cell-new)
+          rq   (:: (schan-new 1) (SChan (SSend int SClose)))
+          rs   (:: (schan-new 1) (SChan (SRecv int SClose)))
+          arg  (wp-arg-new (:: rq :ptr<void>) (:: rs :ptr<void>))
+          t    (wp-spawn worker arg)
+          rq2  (schan-send rq req)         ;; rq2 (SClose) dropped; worker frees rq
+          rs2  (schan-recv rs cell)
+          resp (schan-cell-get cell)]
+      (wp-join t)
+      (schan-close rs2)            ;; this side owns + frees the response channel
+      (wp-arg-free arg)
+      (schan-cell-free cell)
+      resp))
+
+  (defn main [] : int
+    ;; Three request/response exchanges, each served by its own worker thread
+    ;; (the worker runs concurrently with main for the duration of the call).
+    (let [a (client-call 2)
+          b (client-call 3)
+          c (client-call 4)]
+      (println (+ a (+ b c)))     ;; 4 + 9 + 16 = 29
+      0)))
