@@ -1,0 +1,31 @@
+;; Happy-path fixture for log-capability-vtable-uncompilable (log.tur half).
+;; Loads the full stdlib/log.tur and drives the hoisted Logger vtables through
+;; their file-scope function pointers: Simple-Logger writes to stdout, and
+;; Null-Logger discards. Real-Logger is intentionally NOT exercised here -- its
+;; ctime timestamp is nondeterministic and would break the snapshot; that it
+;; compiles + links is covered by loading the module at all.
+;;
+;; Expected output:
+;;   [DEBUG] alpha
+;;   [INFO] beta
+(load "stdlib/log.tur")
+
+(defn logger-debug [lg : int msg : cstr] : nil
+  ```c typedef struct { void (*d)(const char*); void (*i)(const char*);
+                        void (*w)(const char*); void (*e)(const char*); } L;
+  ((L*)(intptr_t)lg)->d(msg); ```)
+
+(defn logger-info [lg : int msg : cstr] : nil
+  ```c typedef struct { void (*d)(const char*); void (*i)(const char*);
+                        void (*w)(const char*); void (*e)(const char*); } L;
+  ((L*)(intptr_t)lg)->i(msg); ```)
+
+(defn main [] #{Unsafe} : int
+  (let [s (Simple-Logger)]
+    (logger-debug s "alpha")
+    (logger-info s "beta")
+    (Simple-Logger-free s))
+  (let [n (Null-Logger)]
+    (logger-info n "discarded")
+    (Null-Logger-free n))
+  0)

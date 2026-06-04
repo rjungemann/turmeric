@@ -1171,9 +1171,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 /* ptr-generic-parameterised-type: a typed ptr<T> return lowers
                  * to `T *` even for inline-C bodies; mirror emit_fns.c. */
                 bool typed_ptr = rft && rft->kind == TY_PTR_VOID && rft->as.ptr.inner;
+                /* inline-c-struct-return: mirror emit_fns.c -- a by-value struct
+                 * return lowers to the struct's C name even for inline-C bodies. */
+                bool typed_struct = rft && rft->kind == TY_STRUCT;
                 if (fn_ret_td && !body_is_inline_c) {
                     buf_puts(out, fn_ret_td);
-                } else if (rft && (!body_is_inline_c || typed_ptr)) {
+                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {
                     buf_puts(out, "int64_t");
@@ -1262,6 +1265,11 @@ int emit_program(Buf *out, const Expr *program) {
     Buf fwd_decls;   buf_init(&fwd_decls);
     Buf extern_decls; buf_init(&extern_decls);
     Buf defer_thunks; buf_init(&defer_thunks);
+    /* file-scope-c-block: verbatim text of top-level ```c ... ``` blocks, emitted
+     * at file scope (after typedefs/fwd-decls, before function definitions) so
+     * they can define file-scope helper functions/structs that Turmeric defns
+     * reference -- e.g. the capability vtables in stdlib/io.tur and log.tur. */
+    Buf cprelude; buf_init(&cprelude);
 
     EmitCtx ctx;
     ctx.file = &file;
@@ -1823,6 +1831,15 @@ int emit_program(Buf *out, const Expr *program) {
             buf_printf(&body, "_dynvar_root_%s = %s;\n", mname, rv);
             free(rv);
             free(mname);
+        } else if (e->kind == EX_INLINE_C) {
+            /* file-scope-c-block: a top-level ```c ... ``` block is raw C emitted
+             * verbatim at file scope, not a statement in main().  It carries no
+             * captures/val-exprs, so emit its text directly. */
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (ic && ic->code.p && ic->code.len > 0) {
+                buf_write(&cprelude, ic->code.p, ic->code.len);
+                buf_putc(&cprelude, '\n');
+            }
         } else {
             emit_stmt(&ctx, &body, e);
         }
@@ -4675,11 +4692,16 @@ int emit_program(Buf *out, const Expr *program) {
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
     if (defer_thunks.len){ buf_write(out, defer_thunks.data, defer_thunks.len); buf_putc(out, '\n'); }
+    /* file-scope-c-block: top-level raw-C prelude -- after fwd_decls (so it may
+     * call Turmeric functions) and before handler fns / file (so function defs
+     * may reference the file-scope helpers it declares). */
+    if (cprelude.len)    { buf_write(out, cprelude.data, cprelude.len); buf_putc(out, '\n'); }
     buf_free(&early_file);
     buf_free(&thunk_typedefs);
     buf_free(&extern_decls);
     buf_free(&fwd_decls);
     buf_free(&defer_thunks);
+    buf_free(&cprelude);
     buf_free(&concrete_struct_apps);
     buf_free(&concrete_adt_apps);
     buf_free(&concrete_fn_ptr_typedefs);
@@ -5411,6 +5433,15 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
                 buf_puts(&file, type_c_name(ec->param_types[j]));
             }
             buf_puts(&file, ");\n");
+        } else if (e->kind == EX_INLINE_C) {
+            /* file-scope-c-block: a top-level ```c ... ``` block is raw C emitted
+             * at file scope (parity with emit_program). Emitted in source order
+             * into `file`, so it must precede any defn that references it. */
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (ic && ic->code.p && ic->code.len > 0) {
+                buf_write(&file, ic->code.p, ic->code.len);
+                buf_putc(&file, '\n');
+            }
         } else {
             emit_stmt(&ctx, &body, e);
         }

@@ -403,9 +403,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * `T *` even from an inline-C body, so the C body's `return ptr;`
              * type-checks against the declared pointer type with no cast. */
             bool typed_ptr = (rft.kind == TY_PTR_VOID && rft.as.ptr.inner);
+            /* inline-c-struct-return: a by-value struct return (e.g. the linear
+             * FileHandle from io's file-open) lowers to the struct's C name even
+             * from an inline-C body, so `return fh;` agrees with the declared
+             * type.  Carrier-ABI structs are handled by carrier_override above. */
+            bool typed_struct = (rft.kind == TY_STRUCT);
             if (fn_ret_td && !body_is_inline_c) {
                 buf_puts(file, fn_ret_td);
-            } else if (!body_is_inline_c || typed_ptr) {
+            } else if (!body_is_inline_c || typed_ptr || typed_struct) {
                 buf_puts(file, emit_type_c_name(ctx, rft));
             } else {
                 buf_puts(file, "int64_t");

@@ -6,16 +6,11 @@
 ;; Phase 16: Real Logger implementation
 ;;
 ;; Implementation of Logger capability using stderr/stdout
-(extern-c fprintf [^ptr ^cstr] :int)
-
-(extern-c stderr [^] :ptr)
-
-(extern-c stdout [^] :ptr)
-
-(extern-c time [^ptr] :ptr)
-
-(extern-c ctime [^ptr] :cstr)
-
+;; stdout/stderr/fprintf come from the preamble's <stdio.h>, and time/ctime from
+;; an explicit <time.h> include in the timestamped logger's c-block below -- so
+;; they are NOT extern-c-declared here. A hand-rolled `extern int64_t stderr(...)`
+;; redeclares the stdio macros, and time/ctime would get the wrong C prototypes
+;; versus <time.h> (matches the stdlib/io.tur and fs.tur style).
 (extern-c malloc [^ptr size] :ptr)
 
 (extern-c free [^ptr p] :void)
@@ -38,67 +33,63 @@
 ;; Real-Logger implementation
 ;; Writes to stderr with timestamps
 
+;; file-scope-c-block: the Logger capability is a struct of function pointers,
+;; so its implementations must be FILE-SCOPE C functions (a returned vtable
+;; cannot point at functions nested inside the constructor body). The shared
+;; struct, the timestamp helpers, and every logger's method set are hoisted here.
+```c
+#include <time.h>
+
+typedef struct __tur_logger {
+    void (*debug)(const char* msg);
+    void (*info)(const char* msg);
+    void (*warn)(const char* msg);
+    void (*error)(const char* msg);
+} __tur_logger;
+
+/* Real-Logger: timestamped, debug/info -> stdout, warn/error -> stderr. */
+static const char* __tur_log_timestamp(void) {
+    time_t now = time(NULL);
+    return ctime(&now);
+}
+static void __tur_log_with_level(FILE* stream, const char* level, const char* msg) {
+    const char* ts = __tur_log_timestamp();
+    /* Remove newline from ctime */
+    char ts_buf[32];
+    size_t len = strlen(ts);
+    if (len > 0 && ts[len-1] == '\n') {
+        memcpy(ts_buf, ts, len - 1);
+        ts_buf[len - 1] = '\0';
+    } else {
+        strcpy(ts_buf, ts);
+    }
+    fprintf(stream, "[%s] [%s] %s\n", ts_buf, level, msg);
+    fflush(stream);
+}
+static void __tur_log_real_debug(const char* msg) { __tur_log_with_level(stdout, "DEBUG", msg); }
+static void __tur_log_real_info(const char* msg)  { __tur_log_with_level(stdout, "INFO",  msg); }
+static void __tur_log_real_warn(const char* msg)  { __tur_log_with_level(stderr, "WARN",  msg); }
+static void __tur_log_real_error(const char* msg) { __tur_log_with_level(stderr, "ERROR", msg); }
+
+/* Simple-Logger: same routing, no timestamps. */
+static void __tur_log_simple_debug(const char* msg) { fprintf(stdout, "[DEBUG] %s\n", msg); fflush(stdout); }
+static void __tur_log_simple_info(const char* msg)  { fprintf(stdout, "[INFO] %s\n",  msg); fflush(stdout); }
+static void __tur_log_simple_warn(const char* msg)  { fprintf(stderr, "[WARN] %s\n",  msg); fflush(stderr); }
+static void __tur_log_simple_error(const char* msg) { fprintf(stderr, "[ERROR] %s\n", msg); fflush(stderr); }
+
+/* Null-Logger: discard everything. */
+static void __tur_log_null(const char* msg) { (void)msg; }
+```
+
 (defn Real-Logger []
   #{Unsafe}
   : int
-  ```c /* Define the Logger struct */
-  typedef struct Logger Logger;
-  struct Logger {
-      void (*debug)(const char* msg);
-      void (*info)(const char* msg);
-      void (*warn)(const char* msg);
-      void (*error)(const char* msg);
-  };
-
-  /* Helper to get current timestamp */
-  static const char* get_timestamp(void) {
-      time_t now = time(NULL);
-      return ctime(&now);
-  }
-
-  /* Log with timestamp */
-  static void log_with_level(FILE* stream, const char* level, const char* msg) {
-      const char* ts = get_timestamp();
-      /* Remove newline from ctime */
-      char ts_buf[32];
-      size_t len = strlen(ts);
-      if (len > 0 && ts[len-1] == '\n') {
-          memcpy(ts_buf, ts, len - 1);
-          ts_buf[len - 1] = '\0';
-      } else {
-          strcpy(ts_buf, ts);
-      }
-      fprintf(stream, "[%s] [%s] %s\n", ts_buf, level, msg);
-      fflush(stream);
-  }
-
-  /* debug implementation */
-  static void logger_debug(const char* msg) {
-      log_with_level(stdout, "DEBUG", msg);
-  }
-
-  /* info implementation */
-  static void logger_info(const char* msg) {
-      log_with_level(stdout, "INFO", msg);
-  }
-
-  /* warn implementation */
-  static void logger_warn(const char* msg) {
-      log_with_level(stderr, "WARN", msg);
-  }
-
-  /* error implementation */
-  static void logger_error(const char* msg) {
-      log_with_level(stderr, "ERROR", msg);
-  }
-
-  /* Create and populate the capability struct */
-  Logger* logger = (Logger*)malloc(sizeof(Logger));
-  logger->debug = logger_debug;
-  logger->info = logger_info;
-  logger->warn = logger_warn;
-  logger->error = logger_error;
-  return (void*)logger;
+  ```c __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
+  logger->debug = __tur_log_real_debug;
+  logger->info  = __tur_log_real_info;
+  logger->warn  = __tur_log_real_warn;
+  logger->error = __tur_log_real_error;
+  return (int64_t)(intptr_t)logger;
   ```)
 ;;; Real-Logger-free -- release a Logger capability created by Real-Logger.
 ;;;
@@ -111,7 +102,7 @@
 (defn Real-Logger-free [log]
   #{Unsafe}
   : nil
-  ```c free(log);
+  ```c free((void*)(intptr_t)log);
   ```)
 ;; ============================================================================
 ;; Simple logger without timestamps (faster)
@@ -134,45 +125,12 @@
 (defn Simple-Logger []
   #{Unsafe}
   : int
-  ```c typedef struct Logger Logger;
-  struct Logger {
-      void (*debug)(const char* msg);
-      void (*info)(const char* msg);
-      void (*warn)(const char* msg);
-      void (*error)(const char* msg);
-  };
-
-  /* debug implementation */
-  static void simple_debug(const char* msg) {
-      fprintf(stdout, "[DEBUG] %s\n", msg);
-      fflush(stdout);
-  }
-
-  /* info implementation */
-  static void simple_info(const char* msg) {
-      fprintf(stdout, "[INFO] %s\n", msg);
-      fflush(stdout);
-  }
-
-  /* warn implementation */
-  static void simple_warn(const char* msg) {
-      fprintf(stderr, "[WARN] %s\n", msg);
-      fflush(stderr);
-  }
-
-  /* error implementation */
-  static void simple_error(const char* msg) {
-      fprintf(stderr, "[ERROR] %s\n", msg);
-      fflush(stderr);
-  }
-
-  /* Create and populate the capability struct */
-  Logger* logger = (Logger*)malloc(sizeof(Logger));
-  logger->debug = simple_debug;
-  logger->info = simple_info;
-  logger->warn = simple_warn;
-  logger->error = simple_error;
-  return (void*)logger;
+  ```c __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
+  logger->debug = __tur_log_simple_debug;
+  logger->info  = __tur_log_simple_info;
+  logger->warn  = __tur_log_simple_warn;
+  logger->error = __tur_log_simple_error;
+  return (int64_t)(intptr_t)logger;
   ```)
 ;;; Simple-Logger-free -- release a Logger capability created by Simple-Logger.
 ;;;
@@ -185,7 +143,7 @@
 (defn Simple-Logger-free [log]
   #{Unsafe}
   : nil
-  ```c free(log);
+  ```c free((void*)(intptr_t)log);
   ```)
 ;; ============================================================================
 ;; Null logger (silent)
@@ -207,24 +165,12 @@
 (defn Null-Logger []
   #{Unsafe}
   : int
-  ```c typedef struct Logger Logger;
-  struct Logger {
-      void (*debug)(const char* msg);
-      void (*info)(const char* msg);
-      void (*warn)(const char* msg);
-      void (*error)(const char* msg);
-  };
-
-  /* All implementations are no-ops */
-  static void null_log(const char* msg) {}
-
-  /* Create and populate the capability struct */
-  Logger* logger = (Logger*)malloc(sizeof(Logger));
-  logger->debug = null_log;
-  logger->info = null_log;
-  logger->warn = null_log;
-  logger->error = null_log;
-  return (void*)logger;
+  ```c __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
+  logger->debug = __tur_log_null;
+  logger->info  = __tur_log_null;
+  logger->warn  = __tur_log_null;
+  logger->error = __tur_log_null;
+  return (int64_t)(intptr_t)logger;
   ```)
 ;;; Null-Logger-free -- release a Logger capability created by Null-Logger.
 ;;;
@@ -237,7 +183,7 @@
 (defn Null-Logger-free [log]
   #{Unsafe}
   : nil
-  ```c free(log);
+  ```c free((void*)(intptr_t)log);
   ```)
 ;; ============================================================================
 ;; Helper functions for direct logging (without capabilities)
@@ -255,7 +201,7 @@
 ;; Log a debug message
 
 
-(defn log-debug-direct [msg]
+(defn log-debug-direct [msg : cstr]
   #{Unsafe IO}
   : nil
   ```c fprintf(stdout, "[DEBUG] %s\n", msg);
@@ -273,7 +219,7 @@
 ;;; Since: Phase 16
 ;; Log an info message
 
-(defn log-info-direct [msg]
+(defn log-info-direct [msg : cstr]
   #{Unsafe IO}
   : nil
   ```c fprintf(stdout, "[INFO] %s\n", msg);
@@ -291,7 +237,7 @@
 ;;; Since: Phase 16
 ;; Log a warning message
 
-(defn log-warn-direct [msg]
+(defn log-warn-direct [msg : cstr]
   #{Unsafe IO}
   : nil
   ```c fprintf(stderr, "[WARN] %s\n", msg);
@@ -309,7 +255,7 @@
 ;;; Since: Phase 16
 ;; Log an error message
 
-(defn log-error-direct [msg]
+(defn log-error-direct [msg : cstr]
   #{Unsafe IO}
   : nil
   ```c fprintf(stderr, "[ERROR] %s\n", msg);
