@@ -10,6 +10,20 @@ description: Promote stdlib resource-handle newtypes (Mutex, Chan, Promise, Futu
 > **Prerequisite:** the corresponding handle is already a `defopaque` newtype
 > (see [[stdlib-opaque-handle-types-plan]]); this plan layers on top.
 
+> **Status (2026-06-04, update 4):** `Future` promoted to `:affine` -- the last
+> inventory item. The Promise/Future shared-cell aliasing (previously the sole
+> blocker) is resolved by reference-counting the `FutureCell`: `future-handle`
+> borrows a `Promise` and mints an additional `Future` (refcount bump), and
+> every consuming op (`promise-fulfill`/`-fail`/`-free`, `future-free`) drops a
+> ref via `__atomic_sub_fetch`, tearing the cell down on the last drop. Read
+> accessors and combinators are `^borrow`. This also fixed a compiler bug where
+> the call-site move checker poisoned a `^borrow` argument of a `CK_MOVE`
+> (`:affine`) type; `^borrow` now suppresses the move-mark. Fixtures:
+> `future-linear`, `future-split-free`, and the `future-linear-double-free` /
+> `-use-after-free` negatives. See
+> [[../reported/stdlib-future-linearity-aliasing]] (now RESOLVED). The entire
+> inventory table below is now promoted.
+>
 > **Status (2026-06-04, update 3):** L2/L3 inventory completed. `Reactor`
 > (`:linear`; all accessors `^borrow`, `reactor-free` consumes -- the thin
 > extern wrappers coerce with `(:: r :ptr<void>)` at the C boundary),

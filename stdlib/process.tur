@@ -7,6 +7,13 @@
 ;;
 ;; Wrappers around unistd.h / sys/wait.h primitives.
 ;; process/capture uses popen(3) for capturing stdout.
+;;
+;; NOTE on argv: the argv parameter is a raw cons list. The (cons ...) examples
+;; in the docstrings below are interpreter idioms -- `cons` is an interpreter
+;; native and is NOT available when you `tur build` / `tur emit-c`. In compiled
+;; programs, pass 0 for an empty argv, build the list with an inline-C cons stub,
+;; or use a stdlib list helper. See the "Interpreter-only natives" section of
+;; docs/guides/c-integration-guide.md.
 ;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, I/O sweep) ----
 ;; Pid wraps a process id (an :int) with a nominally distinct type, so the
 ;; checker rejects passing an exit code, a byte count, or any unrelated integer

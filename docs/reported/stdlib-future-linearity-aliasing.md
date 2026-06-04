@@ -1,22 +1,25 @@
 ---
 title: Future cannot be promoted to :affine while it aliases the Promise cell
 category: Reported
-description: Promise and Future are two opaque views over one shared FutureCell pointer; linearity's single-owner discipline is incompatible with handing out both views (promise-pair / future-of-cell), so Future stays a plain opaque until the shared cell is untangled.
+description: Promise and Future are two opaque views over one shared FutureCell pointer; linearity's single-owner discipline was incompatible with handing out both views. RESOLVED by reference-counting the shared cell (fix direction 1), so Future is now :affine.
 ---
 
 # Future cannot be promoted to `:affine` while it aliases the Promise cell
 
+**Status:** RESOLVED -- `Future` is now `:affine`. Fixed via **direction 1**
+(reference-count the shared cell); see the Resolution section at the end.
+
 **Summary:** `stdlib/future.tur` models `Promise` and `Future` as two nominally
 distinct opaque newtypes that are, at runtime, *the same `FutureCell *`
 pointer*. Promoting `Future` to `:affine` (as the
-[[stdlib-linearity-affinity-plan]] inventory calls for) is blocked because
+[[stdlib-linearity-affinity-plan]] inventory calls for) was blocked because
 linearity/affinity tracks single ownership, and the public API deliberately
 hands out two owning handles to one cell.
 
 **Severity:** expressiveness gap / design tension. Not a miscompile -- `Promise`
-*was* promoted to `:linear` in the same pass (producer-end settle-exactly-once
-is sound). This report records why `Future` was deliberately left as a plain
-`defopaque` so the remaining inventory item is not silently forgotten.
+was promoted to `:linear` first (producer-end settle-exactly-once is sound),
+and this report tracked the remaining `Future` inventory item until it was
+resolved.
 
 ## Observed vs. expected
 
@@ -90,12 +93,52 @@ both handles to the same cell at once, which single-ownership forbids.
    after this pass and is arguably the cleanest: the producer is checked,
    reads are unrestricted, and `promise-free` is the single consumer.
 
-Direction 3 is what shipped (Promise `:linear`, Future plain opaque). Revisit
-1/2 only if checked read-end ownership is genuinely required.
+Direction 3 shipped first (Promise `:linear`, Future plain opaque). The
+checked read end was then implemented via **direction 1** (refcount).
 
-## Validation of a future fix
+## Resolution (direction 1: reference-counted cell)
+
+`stdlib/future.tur` now gives `FutureCell` a `refcount` field and promotes
+`Future` to `:affine`:
+
+- `promise-new` mints a cell with `refcount = 1`, handed out as a `Promise`.
+- `future-handle [^borrow p : Promise] : Future` borrows the `Promise` and
+  mints an *additional* `Future` over the same cell, bumping the count to 2
+  (`__atomic_add_fetch`). This is the both-ends split; the producer keeps the
+  `Promise`, the consumer gets the `Future`. (`future-of-cell` remains the
+  ownership *transfer* form -- consume the `Promise`, hand back a `Future`,
+  count unchanged -- for the read-only case.)
+- `promise-fulfill` / `promise-fail` / `promise-free` / `future-cell-free` and
+  `future-free` each drop one reference (`__atomic_sub_fetch`); whichever drop
+  takes the count to 0 destroys the mutex/condvar and frees the cell. The two
+  aliases therefore can no longer double-free it, and the decrement is atomic
+  so a `Promise` fulfilled on one thread and a `Future` freed on another tear
+  the cell down race-free.
+- `Future` is `:affine` (not `:linear`): an uncollected future may be dropped
+  (matching its fire-and-forget role) but cannot be used after `future-free`.
+  The read accessors `future-get` / `future-done?` / `future-cancelled?` /
+  `future-cancel` and every combinator (`future-map`/`-then`/`-race`/`-all2`/
+  `-any2`/`-join`/`-with-timeout`) take their `Future` argument `^borrow`, so
+  reads, cancellation, and combinator chaining never consume the input; only
+  `future-free` consumes.
+
+This also required a compiler fix: the call-site **move checker** poisoned a
+`CK_MOVE` (`:affine`) argument even when the parameter was `^borrow`, so a
+borrowing accessor could not read an affine handle and then have the caller
+use it again (`TUR-E0005`). A `^borrow` parameter now suppresses the move-mark
+(`src/compiler/elab_call.c`), the move-checker half of the borrow form. See
+[[borrow-param-forwarding-drop]] for the sibling consumption-side fix.
+
+### Validating the fix
 
 - `bash tests/run.sh` green with leak detection on.
-- A positive fixture exercising fulfill + read + free under `-Xlinear`.
-- A negative fixture proving double-free across the Promise/Future alias is
-  caught (the very bug class this would buy us).
+- Positive `tests/fixtures/future-linear` (fulfill + borrow-read + free under
+  `-Xlinear`) and `tests/fixtures/future-split-free` (both ends explicitly
+  released; the refcount yields exactly one teardown -- the historical
+  cross-alias double-free is now memory-safe). Both run leak-clean.
+- Negative `tests/fixtures/errors/future-linear-double-free` and
+  `future-linear-use-after-free` prove that reusing a single `Future` handle
+  after `future-free` is caught at compile time (`TUR-E0005`, the affine
+  use-after-move). The cross-alias double-free is *prevented* by the refcount
+  rather than diagnosed, since `promise-free p` and `future-free f` are each a
+  single legal consumption of distinct handles.

@@ -1,0 +1,17 @@
+;; stdlib-linearity-affinity-plan: the Promise/Future aliasing fix. A Promise
+;; and a Future over the same cell can both be explicitly released -- the
+;; reference count ensures exactly one teardown, so the historical double-free
+;; hazard (both ends free()ing the shared cell) can no longer occur. promise-free
+;; drops the Promise's ref (2 -> 1, no teardown); future-free drops the last
+;; ref (1 -> 0, teardown).
+;;
+;; Expected output: split ok
+(load "stdlib/future.tur")
+
+(defn main [] : int
+  (let [p (promise-new)]
+    (let [f (future-handle p)]
+      (promise-free p)
+      (future-free f)
+      (println "split ok")
+      0)))

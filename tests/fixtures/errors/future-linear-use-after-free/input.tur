@@ -1,0 +1,13 @@
+;; stdlib-linearity-affinity-plan: reading an :affine Future after free.
+;; future-free consumes the Future, so a subsequent future-done? is a
+;; use-after-move.
+;; Expected: TUR-E0005 (use-after-move).
+(load "stdlib/future.tur")
+
+(defn main [] : int
+  (let [p (promise-new)]
+    (let [f (future-handle p)]
+      (promise-fulfill p 1)
+      (future-free f)
+      (future-done? f)))
+  0)
