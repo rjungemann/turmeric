@@ -43,16 +43,11 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn zipper-new [left
-                  : ptr<void>
-                  left-len
-                  : int
-                  focus
-                  : int
-                  right
-                  : ptr<void>
-                  right-len
-                  : int]
+(defn zipper-new [left : ptr<void>
+                  left-len : int
+                  focus : int
+                  right : ptr<void>
+                  right-len : int]
   #{}
   : int
   ```c struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));

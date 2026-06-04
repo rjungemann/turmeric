@@ -204,6 +204,44 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: comments that live *inside* a form (between a defn signature and
+# its body) must survive a format pass -- they used to be silently dropped.
+# ---------------------------------------------------------------------------
+NAME="fmt-preserves-interior-comment"
+read -r -d '' INTERIOR_INPUT <<'EOF'
+(defn f [x : int] : int
+  ;; this comment must survive
+  (+ x 1))
+EOF
+ACTUAL=$(printf '%s\n' "$INTERIOR_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qF ";; this comment must survive" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "comment dropped or not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
+# Regression: a defn parameter list that overflows the line width must break
+# one parameter per line, keeping each `name : type` pair together -- it used
+# to split the name and its annotation onto separate lines.
+# ---------------------------------------------------------------------------
+NAME="fmt-param-vector-no-split"
+PARAM_INPUT='(defn g [alpha : ptr<void> beta : ptr<void> gamma : ptr<void> delta : ptr<void>] : int (do-thing alpha))'
+ACTUAL=$(printf '%s\n' "$PARAM_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+# A correctly-grouped break keeps "alpha : ptr<void>" on one line; a split
+# would leave a line that is just ": ptr<void>".
+if printf '%s\n' "$ACTUAL" | grep -qE "alpha : ptr<void>" \
+   && ! printf '%s\n' "$ACTUAL" | grep -qE "^[[:space:]]*: ptr<void>" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "param name/type split or not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
 # FT7: bootstrap -- every hand-authored stdlib file is already self-formatted.
 # docstrings.tur is excluded: it is an auto-generated artifact (gendocs.py
 # --emit-tur) whose inline-C literal bodies the formatter does not round-trip,

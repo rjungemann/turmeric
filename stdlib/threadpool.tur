@@ -411,7 +411,9 @@
 ;; task_fn is a C function: void *(*)(void *)
 ;; The return value from task_fn is stored as the Future result.
 
-(defn thread-pool-submit [tp : ptr<void> task_fn : ptr<void> task_arg : ptr<void>] : ptr<void>
+(defn thread-pool-submit [tp : ptr<void>
+                          task_fn : ptr<void>
+                          task_arg : ptr<void>] : ptr<void>
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -736,12 +738,9 @@
 ;;; Since: Phase T20-D
 ;; Submit a task to the dynamic thread pool. Returns a Future cell.
 
-(defn thread-pool-dynamic-submit [tp
-                                  : ptr<void>
-                                  task_fn
-                                  : ptr<void>
-                                  task_arg
-                                  : ptr<void>] : ptr<void>
+(defn thread-pool-dynamic-submit [tp : ptr<void>
+                                  task_fn : ptr<void>
+                                  task_arg : ptr<void>] : ptr<void>
   ```c typedef struct {
       void *queue;
       pthread_t *threads;

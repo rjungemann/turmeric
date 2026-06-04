@@ -331,7 +331,10 @@
 ;;;
 ;;; Since: WKC (float32-map-key-carrier-plan)
 
-(defclass MapKey [a] (mk-box [x] : int) (mk-cmp [x] : int) (mk-owned? [x] : int))
+(defclass MapKey [a]
+  (mk-box [x] : int)
+  (mk-cmp [x] : int)
+  (mk-owned? [x] : int))
 ;;; MapKey [int] -- one-word identity carrier; integer-equality comparator.
 
 (definstance MapKey [int] (mk-box [x] x)

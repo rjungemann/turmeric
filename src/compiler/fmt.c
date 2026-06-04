@@ -345,11 +345,102 @@ static SpecialForm classify_list(const Form *f) {
 
 static void fmt_form(FmtState *s, const Form *f);
 static void fmt_list(FmtState *s, const Form *f);
+static uint32_t emit_comments_indented(FmtState *s, uint32_t from_off,
+                                       uint32_t to_off, uint32_t col);
+static bool span_has_comment(FmtState *s, const Form *f);
+
+/* ---------------------------------------------------------------------------
+ * Body-form emission with interior-comment preservation
+ * ---------------------------------------------------------------------------
+ */
+
+/* Emit f's tail forms (indices [start, len)) one per line at body_col,
+ * re-emitting any source comments that sit in the gaps between consecutive
+ * forms (and between the last header item and the first body form).  This is
+ * what keeps comments that live *inside* a form -- e.g. a ';;' note between a
+ * defn signature and its body -- from being dropped, since the parsed AST
+ * carries no comment nodes. */
+static void fmt_body_forms(FmtState *s, const Form *f, uint32_t start,
+                           uint32_t body_col) {
+    uint32_t n = f->as.list.len;
+    bool have_src = (s->opts.src != NULL) && (start >= 1) && (start <= n);
+    uint32_t prev_end = have_src ? f->as.list.items[start - 1]->span.off_end : 0;
+    for (uint32_t i = start; i < n; i++) {
+        const Form *child = f->as.list.items[i];
+        if (have_src) emit_comments_indented(s, prev_end, child->span.off_start, body_col);
+        fs_newline_indent(s, body_col);
+        fmt_form(s, child);
+        if (have_src) prev_end = child->span.off_end;
+    }
+}
 
 /* ---------------------------------------------------------------------------
  * Special-form layouts
  * ---------------------------------------------------------------------------
  */
+
+/* A parameter-vector element that annotates the *preceding* parameter and so
+ * must stay on the same line as it (rather than being pushed to its own line
+ * by the generic vector breaker).  Covers spaced `: T` (F_TYPE_ANN), fused
+ * `:T` (F_KEYWORD), contract types `{v : T | p}`, and complex type forms
+ * written as a list/vector -- matching how elaboration reads param annotations
+ * (see elab_fns.c). */
+static bool param_is_annotation(const Form *f) {
+    switch (f->tag) {
+        case F_TYPE_ANN:
+        case F_KEYWORD:
+        case F_CONTRACT_TYPE:
+        case F_LIST:
+        case F_VEC:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* A leading modifier that prefixes the *following* parameter name and so keeps
+ * that name on the same line: `&` (rest) or any `^...` metadata symbol
+ * (^fat, ^mut, ^linear, ...). */
+static bool param_is_leading_modifier(const Form *f) {
+    if (f->tag != F_SYM) return false;
+    if (f->as.sym->len >= 1 && f->as.sym->name[0] == '^') return true;
+    if (f->as.sym->len == 1 && f->as.sym->name[0] == '&') return true;
+    return false;
+}
+
+/* [name : T\n name2 : T\n ^fat name3] -- one parameter (with its annotation)
+ * per line.  Unlike fmt_vec_broken this never splits a `name`/`: type` pair
+ * across lines, honoring the CLAUDE.md rule against splitting name/type/value
+ * triples. */
+static void fmt_vec_params_broken(FmtState *s, const Form *f) {
+    uint32_t inner = s->col + 1; /* one past '[' */
+    uint32_t n = f->as.list.len;
+    fs_putc(s, '[');
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *cur = f->as.list.items[i];
+        if (i == 0) {
+            /* first element sits right after '[' */
+        } else if (param_is_annotation(cur)
+                   || param_is_leading_modifier(f->as.list.items[i - 1])) {
+            fs_putc(s, ' ');
+        } else {
+            fs_newline_indent(s, inner);
+        }
+        fmt_form(s, cur);
+    }
+    fs_putc(s, ']');
+}
+
+/* Format a defn/fn parameter vector: inline if it fits, else one parameter
+ * per line via fmt_vec_params_broken. */
+static void fmt_param_vec(FmtState *s, const Form *vec) {
+    uint32_t w = fmt_measure(vec);
+    if (w != UINT32_MAX && s->col + w <= s->opts.line_width) {
+        fmt_emit_inline(s, vec);
+    } else {
+        fmt_vec_params_broken(s, vec);
+    }
+}
 
 /* (defn name [params] :ret\n  body...) */
 static void fmt_defn(FmtState *s, const Form *f) {
@@ -366,13 +457,13 @@ static void fmt_defn(FmtState *s, const Form *f) {
 
     for (uint32_t i = 0; i < header_end && i < n; i++) {
         if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
+        if (i == 2 && f->as.list.items[i]->tag == F_VEC)
+            fmt_param_vec(s, f->as.list.items[i]);
+        else
+            fmt_form(s, f->as.list.items[i]);
     }
 
-    for (uint32_t i = header_end; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, header_end, body_col);
 
     fs_putc(s, ')');
 }
@@ -392,13 +483,13 @@ static void fmt_fn(FmtState *s, const Form *f) {
 
     for (uint32_t i = 0; i < header_end && i < n; i++) {
         if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
+        if (i == 1 && f->as.list.items[i]->tag == F_VEC)
+            fmt_param_vec(s, f->as.list.items[i]);
+        else
+            fmt_form(s, f->as.list.items[i]);
     }
 
-    for (uint32_t i = header_end; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, header_end, body_col);
 
     fs_putc(s, ')');
 }
@@ -467,10 +558,7 @@ static void fmt_let(FmtState *s, const Form *f) {
         }
     }
 
-    for (uint32_t i = 2; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, 2, body_col);
 
     fs_putc(s, ')');
 }
@@ -490,10 +578,7 @@ static void fmt_if(FmtState *s, const Form *f) {
     }
 
     /* then and optional else on separate indented lines */
-    for (uint32_t i = 2; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, 2, body_col);
 
     fs_putc(s, ')');
 }
@@ -511,10 +596,7 @@ static void fmt_when(FmtState *s, const Form *f) {
         fmt_form(s, f->as.list.items[i]);
     }
 
-    for (uint32_t i = 2; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, 2, body_col);
 
     fs_putc(s, ')');
 }
@@ -529,10 +611,7 @@ static void fmt_do(FmtState *s, const Form *f) {
 
     if (n >= 1) fmt_form(s, f->as.list.items[0]); /* "do" */
 
-    for (uint32_t i = 1; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, 1, body_col);
 
     fs_putc(s, ')');
 }
@@ -580,10 +659,7 @@ static void fmt_handle(FmtState *s, const Form *f) {
         fmt_form(s, f->as.list.items[i]);
     }
 
-    for (uint32_t i = 2; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, 2, body_col);
 
     fs_putc(s, ')');
 }
@@ -601,10 +677,7 @@ static void fmt_defclass(FmtState *s, const Form *f) {
         fmt_form(s, f->as.list.items[i]);
     }
 
-    for (uint32_t i = 3; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, 3, body_col);
 
     fs_putc(s, ')');
 }
@@ -622,10 +695,7 @@ static void fmt_definstance(FmtState *s, const Form *f) {
         fmt_form(s, f->as.list.items[i]);
     }
 
-    for (uint32_t i = 4; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, 4, body_col);
 
     fs_putc(s, ')');
 }
@@ -651,10 +721,7 @@ static void fmt_call(FmtState *s, const Form *f) {
     }
 
     /* Remaining args on indented lines */
-    for (uint32_t i = on_first_line; i < n; i++) {
-        fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_body_forms(s, f, on_first_line, body_col);
 
     fs_putc(s, ')');
 }
@@ -779,9 +846,11 @@ static void fmt_defpackage(FmtState *s, const Form *f) {
  */
 
 static void fmt_list(FmtState *s, const Form *f) {
-    /* Always try inline first */
+    /* Always try inline first -- but never collapse a form whose source span
+     * contains a comment, since the flat printer has no way to re-emit it and
+     * the comment would be silently dropped. */
     uint32_t w = fmt_measure(f);
-    if (s->col + w <= s->opts.line_width) {
+    if (s->col + w <= s->opts.line_width && !span_has_comment(s, f)) {
         fmt_emit_inline(s, f);
         return;
     }
@@ -994,6 +1063,140 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
         break;
     }
     return emitted;
+}
+
+/* Emit ';' line / '#| |#' block / '#;' datum comments found in
+ * src[from_off .. to_off), each on its own line indented to `col`.  Used for
+ * comments that live *inside* a form (between body sub-forms), which the
+ * top-level emit_comments_in_gap never sees.  Returns the number emitted. */
+static uint32_t emit_comments_indented(FmtState *s, uint32_t from_off,
+                                       uint32_t to_off, uint32_t col) {
+    const char *src = s->opts.src;
+    if (!src || from_off >= to_off) return 0;
+
+    const char *p   = src + from_off;
+    const char *end = src + to_off;
+    uint32_t count = 0;
+
+    while (p < end) {
+        if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') { p++; continue; }
+
+        /* Line comment */
+        if (*p == ';') {
+            const char *line_end = p;
+            while (line_end < end && *line_end != '\n') line_end++;
+            const char *trim_end = line_end;
+            while (trim_end > p && trim_end[-1] == '\r') trim_end--;
+            fs_newline_indent(s, col);
+            fs_write(s, p, (size_t)(trim_end - p));
+            count++;
+            p = line_end;
+            continue;
+        }
+
+        /* Block comment #| ... |# (written verbatim, including any newlines) */
+        if (*p == '#' && p + 1 < end && p[1] == '|') {
+            const char *blk = p;
+            p += 2;
+            while (p + 1 < end && !(p[0] == '|' && p[1] == '#')) p++;
+            if (p + 1 < end) p += 2;
+            fs_newline_indent(s, col);
+            fs_write(s, blk, (size_t)(p - blk));
+            count++;
+            continue;
+        }
+
+        /* Datum comment #;datum -- re-emit verbatim */
+        if (*p == '#' && p + 1 < end && p[1] == ';') {
+            const char *blk = p;
+            p += 2;
+            while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+            if (p < end) {
+                if (*p == '(' || *p == '[' || *p == '{') {
+                    char open = *p;
+                    char close = (open == '(') ? ')' : (open == '[') ? ']' : '}';
+                    int depth = 0;
+                    while (p < end) {
+                        if (*p == '"') {
+                            p++;
+                            while (p < end && *p != '"') {
+                                if (*p == '\\' && p + 1 < end) p++;
+                                p++;
+                            }
+                            if (p < end) p++;
+                        } else if (*p == open) {
+                            depth++; p++;
+                        } else if (*p == close) {
+                            depth--; p++;
+                            if (depth == 0) break;
+                        } else {
+                            p++;
+                        }
+                    }
+                } else if (*p == '"') {
+                    p++;
+                    while (p < end && *p != '"') {
+                        if (*p == '\\' && p + 1 < end) p++;
+                        p++;
+                    }
+                    if (p < end) p++;
+                } else {
+                    while (p < end && *p != ' ' && *p != '\t' && *p != '\r'
+                           && *p != '\n' && *p != '(' && *p != ')' && *p != '['
+                           && *p != ']' && *p != '{' && *p != '}') {
+                        p++;
+                    }
+                }
+            }
+            fs_newline_indent(s, col);
+            fs_write(s, blk, (size_t)(p - blk));
+            count++;
+            continue;
+        }
+
+        /* Anything else is part of a form — stop */
+        break;
+    }
+    return count;
+}
+
+/* True if f's source span contains a line/block/datum comment (ignoring any
+ * ';' or '#' that appears inside a string or an inline-C ```...``` block).
+ * Used to keep fmt_list from collapsing such a form onto one line, which would
+ * drop the comment. */
+static bool span_has_comment(FmtState *s, const Form *f) {
+    const char *src = s->opts.src;
+    if (!src) return false;
+    uint32_t a = f->span.off_start;
+    uint32_t b = f->span.off_end;
+    if (b > (uint32_t)s->opts.src_len) b = (uint32_t)s->opts.src_len;
+    if (a >= b) return false;
+
+    const char *p   = src + a;
+    const char *end = src + b;
+    while (p < end) {
+        char c = *p;
+        if (c == '\\' && p + 1 < end) { p += 2; continue; } /* escaped char */
+        if (c == '"') {                                     /* string literal */
+            p++;
+            while (p < end && *p != '"') {
+                if (*p == '\\' && p + 1 < end) p++;
+                p++;
+            }
+            if (p < end) p++;
+            continue;
+        }
+        if (c == '`' && p + 2 < end && p[1] == '`' && p[2] == '`') { /* ```...``` */
+            p += 3;
+            while (p + 2 < end && !(p[0] == '`' && p[1] == '`' && p[2] == '`')) p++;
+            if (p + 2 < end) p += 3; else p = end;
+            continue;
+        }
+        if (c == ';') return true;
+        if (c == '#' && p + 1 < end && (p[1] == '|' || p[1] == ';')) return true;
+        p++;
+    }
+    return false;
 }
 
 /* Count blank lines in src[from_off .. to_off), capped at max. */

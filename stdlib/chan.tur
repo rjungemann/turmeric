@@ -32,7 +32,8 @@
 ;; are nominally distinct so the type checker rejects passing a synchronous
 ;; Chan where an AsyncChan is expected (and vice versa). Both lower to the
 ;; underlying :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
-(defopaque Chan      :ptr<void>)
+(defopaque Chan :ptr<void>)
+
 (defopaque AsyncChan :ptr<void>)
 ;; ---- Chan (synchronous blocking) ----
 ;;; chan-new -- allocate a new synchronous blocking channel with the given capacity.
@@ -47,6 +48,7 @@
 ;;;   (let [ch (chan-new 8)] ...)  ; => Chan
 ;;;
 ;;; Since: Phase T19-C
+
 (defn chan-new [cap : int] : Chan
   ```c typedef struct {
       pthread_mutex_t lock;
