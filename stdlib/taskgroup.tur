@@ -44,7 +44,8 @@
 ;; distinct so the checker rejects mixing them up -- e.g. passing a TaskHandle
 ;; where a TaskGroup is expected, or vice versa in task-group-join. Both lower
 ;; to :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
-(defopaque TaskGroup  :ptr<void>)
+(defopaque TaskGroup :ptr<void>)
+
 (defopaque TaskHandle :ptr<void>)
 ;; ---- TaskGroup lifecycle ----
 ;;; task-group-new -- create a new empty TaskGroup.
@@ -57,6 +58,7 @@
 ;;;
 ;;; Since: Phase T22
 ;; Create a new TaskGroup
+
 (defn task-group-new [] : TaskGroup
   ```c typedef struct {
       pthread_mutex_t lock;

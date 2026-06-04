@@ -31,6 +31,7 @@
 ;;;   (let [rw (rwlock-new)] ...)  ; => RwLock
 ;;;
 ;;; Since: Phase T19-C
+
 (defn rwlock-new [] : RwLock
   ```c pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
   if (!rw) { fprintf(stderr, "rwlock-new: out of memory\n"); abort(); }

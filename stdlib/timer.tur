@@ -35,6 +35,7 @@
 ;;; Since: Phase T24
 ;; Schedule a callback to fire after ms milliseconds.
 ;; Returns a TimerId that can be passed to timer-cancel.
+
 (defn timer-set [ms : int callback : ptr<void> arg : ptr<void>] : TimerId
   ```c if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
   int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;

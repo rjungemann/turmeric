@@ -14,6 +14,7 @@
 ;; distinct type, so the checker rejects passing a boxed VALUE (also a :ptr)
 ;; where a TVar handle is expected, or vice versa. It lowers to :ptr in the C
 ;; ABI, so the inline-C bodies are unchanged.
+
 (defopaque TVar :ptr)
 ;;; ptr/null -- return a null pointer constant.
 ;;;
