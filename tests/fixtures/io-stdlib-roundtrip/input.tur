@@ -1,0 +1,43 @@
+;; Happy-path fixture for io-real-filesystem-and-list-dir-uncompilable:
+;; loads the full stdlib/io.tur and compiles+runs the runtime path that used to
+;; be uncompilable. Exercises a file round-trip through file-open / file-read /
+;; file-close, the directory listing helpers (list-dir / free-dir-listing), and
+;; the FileSystem capability vtable (Real-FileSystem / Real-FileSystem-free) --
+;; the last two are what triggered the nested-static-function and missing
+;; <dirent.h> codegen errors before the fix.
+;;
+;; Expected output: io stdlib ok
+(load "stdlib/io.tur")
+
+(defn cstr->ptr [s : cstr] : ptr<void>
+  ```c return (void*)s; ```)
+
+(defn make-buf [n : int] : ptr<void>
+  ```c return malloc((size_t)n); ```)
+
+(defn free-buf [p : ptr<void>] : void
+  ```c free(p); ```)
+
+(defn term-buf [p : ptr<void> n : int] : void
+  ```c ((char*)p)[n] = '\0'; ```)
+
+(defn emit [p : ptr<void>] : void
+  ```c fputs((const char*)p, stdout); ```)
+
+(defn main [] : int
+  (let [path "/tmp/tur-io-stdlib-fixture.txt"
+        msg  "io stdlib ok\n"
+        wr   (write-file path (cstr->ptr msg) 13)
+        ex   (file-exists? path)
+        fh   (file-open path "rb")
+        buf  (make-buf 64)
+        n    (file-read fh buf 63)]
+    (file-close fh)
+    (term-buf buf n)
+    (emit buf)
+    (free-buf buf)
+    (let [fs (Real-FileSystem)]
+      (Real-FileSystem-free fs))
+    (let [entries (list-dir "/tmp")]
+      (free-dir-listing entries))
+    0))

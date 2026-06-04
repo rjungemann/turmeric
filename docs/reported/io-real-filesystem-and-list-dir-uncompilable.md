@@ -1,5 +1,25 @@
 # `stdlib/io.tur` runtime path is uncompilable: `Real-FileSystem` nested `static` functions + `list-dir` missing `<dirent.h>` (and conflicting `extern-c` decls)
 
+> **Resolved (this session).** All three defects are fixed and `stdlib/io.tur`
+> now compiles + runs through the C backend:
+> - **Defect 1:** Top-level ` ```c ... ``` ` blocks now emit verbatim at *file
+>   scope* (a new "C prelude" hook in `emit_program` / `emit_implementation`).
+>   `Real-FileSystem`'s vtable struct and its four libc helpers were hoisted into
+>   such a block, so the returned capability points at stable file-scope
+>   functions instead of `static` functions nested in the enclosing body.
+> - **Defect 2:** `list-dir` and the hoisted `fs_list` helper now `#include
+>   <dirent.h>` in their inline-C (matching `stdlib/fs.tur`'s `fs/glob`).
+> - **Defect 3:** The hand-rolled `extern-c` `opendir`/`readdir`/`closedir`
+>   declarations were removed so the real libc prototypes win.
+>
+> Validated by the new leak-checked happy-path fixture
+> `tests/fixtures/io-stdlib-roundtrip` (loads `stdlib/io.tur`; round-trips a file
+> through `file-open`/`file-read`/`file-close` and exercises `list-dir` /
+> `Real-FileSystem`). The same capability-vtable-with-nested-functions pattern
+> also affects `stdlib/log.tur` and `stdlib/test/capability.tur`, tracked
+> separately in
+> [log-capability-vtable-uncompilable.md](log-capability-vtable-uncompilable.md).
+
 **Summary.** Loading `stdlib/io.tur` into any program that actually goes through
 the C backend (`tur build` / `emit-c` then `cc`) fails to compile. The module's
 type-checking is fine, but its generated C has three independent, latent
