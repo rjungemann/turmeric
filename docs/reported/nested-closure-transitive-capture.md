@@ -6,7 +6,7 @@ description: A closure nested two levels deep that references a variable bound i
 
 # Nested Closures Fail to Transitively Capture Grandparent Variables -- Reported Bug
 
-> **Status:** OPEN (found 2026-06-03)
+> **Status:** FIXED (found 2026-06-03, fixed 2026-06-04)
 > **Severity:** High -- a hard C **compile error** (`'n_854' undeclared`), not a
 >   warning. Any genuinely curried closure whose innermost body reads an
 >   outermost binding fails to build. Latent because most curried closures in
@@ -62,18 +62,45 @@ over variables needed by *nested* closures it constructs. A variable read only
 by a grandchild closure must still be captured by every intermediate closure on
 the path from its binder, so each frame can forward it inward.
 
-Likely sites to inspect: the closure free-variable collection pass (where
-`EX_FN` capture sets are computed) and the env-struct/env-forwarding emission in
-`src/compiler/emit_fns.c` / `emit_expr.c`. The fix is to propagate a nested
-closure's capture requirements up to each enclosing closure (union the child's
-free-set, minus the child's own params, into the parent's capture set).
+### Root cause (confirmed)
+
+Closures are elaborated inner-first. By the time `collect_free_vars`
+(`src/compiler/elab_core.c`) runs on the *middle* closure's body, the *inner*
+closure has already been elaborated into an `EX_CLOSURE` node -- its body no
+longer exposes `x`/`n` as bare `EX_VAR`s (they are accessed through the inner
+env at emit time). `collect_free_vars` had **no `EX_CLOSURE` case** in its
+traversal switch, so the inner closure's free variables were invisible to the
+middle closure's analysis. The middle closure ended up capturing only `x`
+(which is its own parameter, so it was already in scope at emit time and
+"worked by luck") and never `n`. At emit time the middle closure's
+env-forwarding (`emit_expr.c:2397`, `name_for_binding` in `emit_core.c:734`)
+emitted `__env->n = n_854;`, referencing a name that lives in the outer
+`adder` frame and is undeclared in the middle thunk.
+
+Descending into the inner `EX_CLOSURE`'s `fn->body` is *not* the right fix: that
+would also collect the inner closure's own params (`y`, plus its env param) as
+free variables of the middle closure. Instead the fix folds in the inner
+closure's *already-computed capture set* (`closure->captures`), which by
+construction excludes the inner's own params/locals, subject to the same
+param/global/local filtering used for `EX_VAR`.
+
+## Fix
+
+`src/compiler/elab_core.c` -- added an `EX_CLOSURE` case to the
+`collect_free_vars` traversal that unions the nested closure's capture set
+(minus the enclosing scope's params and locals) into the enclosing closure's
+free-variable set. No emit-side change was needed: once `n` is in the middle
+closure's capture set, `name_for_binding` resolves it to `__env->n` and the
+env struct/forwarding code carries it through automatically.
 
 ## Validation
 
 - The repro above compiles cleanly and prints `123` from
-  `((adder 100) 20) 3`.
-- A regression fixture exercising transitive capture through two closure levels
-  passes end-to-end.
+  `((adder 100) 20) 3` (applied through the fat protocol -- see the fixture).
+- Regression fixture: `tests/fixtures/closure-transitive-grandparent-capture`
+  exercises transitive capture through two closure levels and passes
+  end-to-end (`expected.stdout` = `123`).
+- Full suite green: `bash tests/run.sh` -> 1354 passed, 0 failed.
 
 ## Workaround in the meantime
 

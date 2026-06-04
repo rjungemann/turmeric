@@ -1,0 +1,12 @@
+;; bare-fat-lambda-param-plan.md (Phase 2): an annotated `^fat g :(fn [...])`
+;; binder on a lambda pins the closure signature, mirroring the defn analogue.
+;; The annotation overrides the bare :ptr<void> default while is_fat stays set,
+;; so (g x) still dispatches through the fat protocol.
+(defn make-adder [n : int] : ptr<void>
+  (fn [x : int] : int (+ x n)))
+
+(defn main [] : int
+  (let [run (fn [^fat g :(fn [:int] #{} :int) x : int] : int
+              (g x))]
+    (println (run (make-adder 10) 5)))   ;; (5 + 10) => 15
+  0)

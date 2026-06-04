@@ -1,0 +1,45 @@
+;; instance-intra-method-dispatch -- a method body dispatches to a *sibling*
+;; method of the same instance via (.sibling self ...).
+;;
+;; Regression for docs/reported/intra-instance-method-dispatch-unsupported.md.
+;; Previously the instance was registered only AFTER all method bodies were
+;; elaborated, so (.base self ...) inside `twice` failed with
+;; "no typeclass method found for 'base'".  The instance is now registered (and
+;; its method-impl slots filled in incrementally) before/while the bodies are
+;; elaborated, so a method defined in terms of an earlier sibling resolves.
+
+(defclass HasN [a]
+  (base  [self n :int] :int)
+  (twice [self n :int] :int))
+
+(defstruct ArrW [a]
+  (raw :int))
+
+(definstance HasN [ArrW]
+  (base  [self n :int] (+ n 1))
+  (twice [self n :int] (.base self (* n 2))))   ;; sibling dispatch on self
+
+;; A closure-returning method that builds its closure by calling a sibling
+;; (.base self ...) on the receiver -- the "via other method" idiom.
+(defclass HasArr [a]
+  (bump  [self d :int] :int)
+  (adder [self] : (fn [:int] :int)))
+
+(defstruct Box [a]
+  (raw :int))
+
+(definstance HasArr [Box]
+  (bump  [self d :int] (+ d 100))
+  (adder [self]
+    (fn [x :int] :int (+ x (.bump self 0)))))   ;; closure captures sibling result
+
+(defn call1 [f x] :int
+  ```c return TUR_APPLY1(f, x); ```)
+
+(defn main [] :int
+  (let [w (:: (make-struct ArrW 0) (ArrW int))
+        b (:: (make-struct Box 0) (Box int))
+        f (.adder b)]
+    (println (.twice w 41))        ;; (41 * 2) + 1 = 83
+    (println (call1 f 5)))         ;; 5 + (0 + 100) = 105
+  0)

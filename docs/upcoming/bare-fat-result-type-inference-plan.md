@@ -6,7 +6,9 @@ description: Close the missing functionality behind bare-fat-param-non-int-resul
 
 # Bare `^fat` Result-Type Inference -- Plan
 
-> **Status:** Phase A implemented (Phase B pending, separate PR)
+> **Status:** Phase A implemented and merged (#208) -- reported gap closed.
+> Phase B **deferred until a real non-tail consumer exists** (see "Phase B
+> feasibility & decision" below); the plan is functionally delivered.
 > **Last Updated:** 2026-06-04
 > **Type:** compiler -- closure ABI / type inference
 > **Resolves the missing functionality flagged in:**
@@ -307,15 +309,114 @@ Use it in A2/A3/A4 instead of the bare `== TY_FLOAT`.
 - [x] `bash tests/run.sh`: **1347 passed, 0 failed**, leak detection on.
       New fixtures carry regenerated `expected.c` snapshots.
 
-> **A3 note:** the `elab_fn` (lambda) retype call is in place for symmetry,
-> but a `^fat` parameter on a *lambda* (`(fn [^fat g ...] ...)`) is not yet
-> accepted by the elaborator (`'g' is not a function`), so the lambda path is
-> currently dormant -- it will activate for free once bare-`^fat` lambda
-> params are supported. No fixture is added for the unsupported syntax.
+> **A3 note (updated 2026-06-04):** the `elab_fn` (lambda) retype call is in
+> place for symmetry. `^fat` on a *lambda* binder (`(fn [^fat g ...] ...)`) is
+> now accepted -- the pass fires on `fn` binders too, per
+> [bare-fat-lambda-param-plan.md](bare-fat-lambda-param-plan.md). The lambda
+> path is no longer dormant; fixtures under
+> `tests/fixtures/{bare-fat-lambda-param,annotated-fat-lambda-param,
+> bare-fat-lambda-closure-returning}` exercise it.
 
 ---
 
-## Phase B -- first-class closure result type (end-state, subsumes A)
+## Phase B feasibility & decision (2026-06-04)
+
+Phase B was investigated end-to-end before committing to it. The conclusion:
+**its only sound general delivery is a new monomorphization mechanism, and
+there is no current consumer that needs it.** It is therefore *deferred*, not
+abandoned -- the design sketch below is ready to pick up the moment a real
+non-tail float-result consumer appears.
+
+### What the investigation found
+
+1. **Codegen is already result-type-correct.** The CY2 bare-`^fat` dispatch in
+   `emit_expr.c` (the `n_args > 0` fat-call branch, ~`emit_expr.c:1815-1852`)
+   reads the call's `e->type` and builds a typed thunk via
+   `ensure_typed_thunk_typedef(ctx, ctx->file, e->type, ...)`. A `:float`
+   result lands in xmm0 the moment `e->type` is `TY_FLOAT`.
+2. **The only defect is in elaboration.** The CY2 branch in `elab_call.c`
+   (`fn_binding->type.kind == TY_PTR_VOID` fat-dispatch, ~`elab_call.c:1717`)
+   hard-stamps the call `TYPE_INT` (~`elab_call.c:1729`). Phase A re-stamps
+   that `e->type` *post-hoc* in tail positions (`retype_bare_fat_tail_calls`,
+   `elab_fns.c:378`).
+3. **The non-tail gap is the entire remaining delta.** A bare-`^fat` float call
+   in a non-tail position -- e.g. `(let [y (g x)] (use-float y))` where `y`
+   carries no annotation -- is left int64 by Phase A's tail-only walk. This is
+   the one thing Phase B set out to add.
+4. **No closure-result monomorphization infra exists.** There is per-use-site
+   *ADT* monomorphisation (`elab_call.c:~1219`, TY_APP) and binding-name
+   mangling (`elab_mangle_binding_name`, `elab_core.c:1621`), but nothing that
+   specializes a *function body* over an incoming closure's result kind.
+
+### Why a value-typed binding (B1 as literally written) does not work
+
+B1 says "thread the incoming closure's `result_kind` onto the parameter
+binding." But a bare `^fat g` is **generic over any closure signature**, and the
+body of (e.g.) `run-with` is compiled **once**. The closure's concrete result
+kind only exists at each *call site* of `run-with`, never inside its single
+compiled body. Float is exactly the case that **cannot** share a uniform
+representation (integer register vs xmm), so the body cannot be made
+representation-agnostic the way an int-carrier combinator can. There is no
+honest in-body source for `g`'s result kind, so any "store it on the binding"
+scheme degenerates back to the contextual return-type heuristic Phase A already
+implements -- which is tail-only and would be **unsound** if naively extended to
+non-tail positions (the function's declared return need not equal the closure's
+result type off the tail).
+
+### The only sound general mechanism: monomorphize over closure result-kind
+
+To type `(g x)` as `:float` in *any* position, a bare-`^fat` function must be
+**specialized per call site** to the incoming closure's result kind:
+
+- At a call `(run-with <closure> ...)`, read the boxed-`TY_FN` argument's
+  `result_full_type`/`result_kind` (CRU B-1 already carries these on a
+  first-class closure value).
+- Clone + mangle a specialized body `run-with$float` whose `^fat g` binding
+  records `result_kind = TY_FLOAT`. Dedup specializations by (callee, result
+  kind) so each distinct kind is emitted once.
+- Then the **B2** call-site typing falls out: the CY2 branch at
+  `elab_call.c:~1717` prefers, in order, (1) the binding's recorded result kind
+  (now present in the specialized clone), (2) the Phase A contextual retype, (3)
+  the `TYPE_INT` default. Because (1) is set at the call site, the call types
+  correctly **regardless of position** -- delivering the non-tail case.
+- **B3** then retires the Phase A tail-retype pass for any call whose binding
+  carries a result kind, keeping it only for the residual "opaque int64 carrier
+  with no result type" case (e.g. a closure handed in from inline-C as a raw
+  `int64`).
+
+Open issues this mechanism must handle (the reason it is *large*): recursive and
+mutually-recursive bare-`^fat` callees, interaction with exported bindings and
+the existing poly-call / `is_poly_fn` paths, specialization-set dedup across
+modules, and snapshot churn from the newly emitted specialized C functions.
+
+### Decision: deferred until a real consumer exists
+
+Phase B is **not built now**, on cost/value grounds:
+
+- Phase A already closed the reported gap; the repro prints `7`
+  (`tests/fixtures/bare-fat-float-result`).
+- There is **no current consumer** that needs the non-tail float case. Every
+  real bare-`^fat` combinator in the tree (arrow `>>>`, `option-map`) is
+  int-carrier; the only float-result use is the tail-position repro, which
+  already works. Per the Phase A note above, even bare-`^fat` *lambda* params
+  are still dormant/unsupported.
+- The cost -- a whole new monomorphization pass on the closure ABI -- is
+  disproportionate to demonstrated need and is pure new ABI risk.
+
+**Re-open trigger:** a real (non-fixture) caller that needs a bare-`^fat`
+`:float` (or any future non-int register-class) result in a non-tail position,
+or bare-`^fat` lambda params becoming supported and surfacing the same need.
+When that lands, implement the monomorphization mechanism sketched above
+(B1'/B2/B3/B4), gate with a non-tail float fixture
+(`(let [y (g x)] (use-float y))`), regenerate snapshots, and keep the suite
+green.
+
+The remainder of this section is the original B1-B4 sketch, retained for
+reference; B1 is superseded by the monomorphization framing above.
+
+---
+
+## Phase B (original sketch) -- first-class closure result type (end-state, subsumes A)
 
 `closure-first-class-type-plan.md` (CRU Phase 3 / Option B) already made a
 capturing closure a first-class boxed `TY_FN` value that knows its
@@ -407,5 +508,7 @@ arise.
 1. A1 helper -> A2 `defn` -> A6 gate fixture -> A7 predicate -> A5 demote
    diagnostic -> A3 `fn` -> Phase A validation -> regenerate snapshots.
    (A4 `let` optional, same PR or a follow-up.)
-2. B1 -> B2 -> B3 -> B4 -> Phase B validation. Separate PR; only after
-   Phase A is green in `main`.
+2. **Phase B is deferred** (see "Phase B feasibility & decision"). When a real
+   non-tail consumer appears: monomorphize bare-`^fat` callees over the
+   closure's result kind (B1') -> B2 call-site typing -> B3 retire the tail
+   pass -> B4 generalize -> Phase B validation. Separate PR.

@@ -345,6 +345,11 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
                         ls[lsp++] = cur->as.set_lit_.items[i-1];
                     break;
+                /* (:: expr T) is type-erased; descend into the inner expr so any
+                 * `let` bindings under an ascription are still collected. */
+                case EX_ASCRIBE:
+                    if (cur->as.ascribe_.inner) ls[lsp++] = cur->as.ascribe_.inner;
+                    break;
                 /* GF1: Generator body -- traverse to find local defs */
                 case EX_GEN:
                     if (cur->as.gen_.def && cur->as.gen_.def->body)
@@ -560,6 +565,47 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_FN_DEF:
                 stack[sp++] = cur->as.fn_def_.fn->body;
                 break;
+            /* Transitive capture: a nested closure that has already been
+             * elaborated is an EX_CLOSURE node whose body no longer exposes
+             * its free variables as bare EX_VARs (they are accessed through
+             * the inner env at emit time).  Descending into fn->body here
+             * would also wrongly collect the inner closure's own params.
+             * Instead, fold in the inner closure's precomputed capture set:
+             * every variable the inner closure needs that is bound *outside*
+             * this enclosing scope must also be captured by this scope so the
+             * frame can forward it inward.  The inner capture set already
+             * excludes the inner's own params/locals, so the param/global/
+             * local filtering below is all that's required. */
+            case EX_CLOSURE:
+                if (cur->as.closure_.closure) {
+                    struct Closure *inner = cur->as.closure_.closure;
+                    for (uint32_t ci = 0; ci < inner->n_captures; ci++) {
+                        Binding *icap = inner->captures[ci];
+                        if (!icap || icap->is_global) continue;
+                        bool is_param = false;
+                        for (uint8_t i = 0; i < n_params; i++) {
+                            if (params[i] == icap) { is_param = true; break; }
+                        }
+                        if (is_param) continue;
+                        bool is_local = false;
+                        for (uint32_t i = 0; i < n_local; i++) {
+                            if (local_defs[i] == icap) { is_local = true; break; }
+                        }
+                        if (is_local) continue;
+                        bool found = false;
+                        for (uint32_t i = 0; i < n; i++) {
+                            if (result[i] == icap) { found = true; break; }
+                        }
+                        if (!found) {
+                            if (n >= cap) {
+                                cap = cap ? cap * 2 : 8;
+                                result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                            }
+                            result[n++] = icap;
+                        }
+                    }
+                }
+                break;
             case EX_RC_DROP:
                 stack[sp++] = cur->as.rc_drop_.expr;
                 break;
@@ -697,6 +743,14 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             case EX_GEN_DONE:
                 if (cur->as.gen_done_.gen_expr) stack[sp++] = cur->as.gen_done_.gen_expr;
+                break;
+            /* (:: expr T) is type-erased at codegen; descend into the inner
+             * expr so a variable that only appears under an ascription is still
+             * seen as a free variable and captured by the enclosing closure.
+             * Without this, `(use-raw (:: ch :ptr<void>))` inside a `(fn ...)`
+             * misses `ch` and emits the bare local instead of the env access. */
+            case EX_ASCRIBE:
+                if (cur->as.ascribe_.inner) stack[sp++] = cur->as.ascribe_.inner;
                 break;
             default:
                 break;

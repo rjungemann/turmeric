@@ -280,6 +280,10 @@ regenerated and the runtime output verified (`3 / 4.5 / 6`).
 
 ## Cross-references
 
+- **Lambda retype now has reachable input**:
+  [[bare-fat-lambda-param-plan]] (Implemented 2026-06-04) makes a bare
+  `(fn [^fat g ...] (g ...))` binder elaborate, so a user-written lambda can
+  now exercise the lambda-side retype step this plan introduced.
 - **Supersedes** section A2 of [[stdlib-type-erasure-cleanup-plan]].
 - **Unblocks** [[stdlib-arrow-typeclass-reintroduction-plan]] (hard
   prerequisite).

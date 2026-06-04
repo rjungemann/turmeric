@@ -170,16 +170,11 @@
 ;;; Since: Phase R2
 
 
-(defn reactor-add-fd [r
-                      : ptr<void>
-                      fd
-                      : int
-                      events
-                      : int
-                      cb
-                      : int
-                      user-data
-                      : ptr<void>]
+(defn reactor-add-fd [r : ptr<void>
+                      fd : int
+                      events : int
+                      cb : int
+                      user-data : ptr<void>]
   #{}
   : EventSourceId
   (:: (tur_reactor_add_fd r fd events cb user-data) :EventSourceId))
@@ -244,14 +239,10 @@
 ;;;
 ;;; Since: Phase R4
 
-(defn reactor-add-timer [r
-                         : ptr<void>
-                         delay-ms
-                         : int
-                         cb
-                         : int
-                         user-data
-                         : ptr<void>]
+(defn reactor-add-timer [r : ptr<void>
+                         delay-ms : int
+                         cb : int
+                         user-data : ptr<void>]
   #{}
   : EventSourceId
   (:: (tur_reactor_add_timer r delay-ms cb user-data) :EventSourceId))
@@ -280,16 +271,11 @@
 ;;;
 ;;; Since: Phase R4
 
-(defn reactor-add-interval [r
-                            : ptr<void>
-                            first-ms
-                            : int
-                            interval-ms
-                            : int
-                            cb
-                            : int
-                            user-data
-                            : ptr<void>]
+(defn reactor-add-interval [r : ptr<void>
+                            first-ms : int
+                            interval-ms : int
+                            cb : int
+                            user-data : ptr<void>]
   #{}
   : EventSourceId
   (:: (tur_reactor_add_interval r first-ms interval-ms cb user-data) :EventSourceId))
@@ -320,7 +306,10 @@
 ;;; Since: Phase R5
 
 
-(defn reactor-add-signal [r : ptr<void> signum : int cb : int user-data : ptr<void>]
+(defn reactor-add-signal [r : ptr<void>
+                          signum : int
+                          cb : int
+                          user-data : ptr<void>]
   #{}
   : EventSourceId
   (:: (tur_reactor_add_signal r signum cb user-data) :EventSourceId))
@@ -350,7 +339,10 @@
 ;;;
 ;;; Since: Phase R6
 
-(defn reactor-add-chan [r : ptr<void> ch : ptr<void> cb : int user-data : ptr<void>]
+(defn reactor-add-chan [r : ptr<void>
+                        ch : ptr<void>
+                        cb : int
+                        user-data : ptr<void>]
   #{}
   : EventSourceId
   (:: (tur_reactor_add_chan r ch cb user-data) :EventSourceId))

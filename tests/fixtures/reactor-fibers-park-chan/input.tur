@@ -27,15 +27,14 @@
 (defn main [] : int
   (let [r   (reactor-new)
         g   (local-fiber-group-new r)
-        ch  (chan-new 4)
-        ;; local-park-chan (tur/reactor) is not yet handle-typed (Tier 2);
-        ;; unwrap the Chan to its ptr<void> representation here so the receiver
-        ;; closure captures the raw pointer directly.
-        chp (:: ch :ptr<void>)]
-    ;; Receiver: park until a value arrives.
+        ch  (chan-new 4)]
+    ;; Receiver: park until a value arrives.  local-park-chan (tur/reactor) is
+    ;; not yet handle-typed (Tier 2), so the Chan is unwrapped to its ptr<void>
+    ;; representation inline -- the (:: ch :ptr<void>) ascription is the closure's
+    ;; only use of ch and must still be captured by env.
     (local-spawn g
       (fn [user] : nil
-        (print-got (local-park-chan g chp)))
+        (print-got (local-park-chan g (:: ch :ptr<void>))))
       (null-ptr))
     ;; Sender: send then wake so the poll returns and the bridge fires.
     (local-spawn g

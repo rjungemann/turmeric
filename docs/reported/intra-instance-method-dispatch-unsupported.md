@@ -6,7 +6,7 @@ description: Calling one typeclass method from inside another method's body of t
 
 # Intra-Instance Method Dispatch (`.method self`) Is Unsupported -- Reported Bug
 
-> **Status:** OPEN (found 2026-06-03)
+> **Status:** FIXED (found 2026-06-03, fixed 2026-06-04)
 > **Severity:** Medium -- an **ergonomics / expressiveness gap** that surfaces
 >   as a hard elaboration error, not a miscompile. It blocks the natural
 >   "method B is defined in terms of method A" idiom, forcing a shared
@@ -74,9 +74,41 @@ elaborating any body, or let `.method` fall back to the class's method table
 - A fixture where one closure-returning method builds its closure by calling a
   sibling method on `self` compiles and runs.
 
-## Workaround in the meantime
+## Fix
+
+`elab_definstance` (`src/compiler/elab_typeclasses.c`) used to register the
+instance into `e->typeclass_env.instances` only *after* the loop that
+elaborates every method body had finished, so a `(.sibling self ...)` call in
+one body could not see the instance and the dispatcher in `elab_method_call`
+reported "no typeclass method found".
+
+The registration was hoisted to *before* the body-elaboration loop: the
+instance is registered and its `type_args` / `method_impls` slots wired up
+(all impls initially `NULL`), then each `method_impls[i]` is filled in as that
+method's body is elaborated. A method dispatching to an earlier sibling now
+sees a populated slot, and the instance itself is already on the env list so
+the type-based dispatch selects it.
+
+This resolves the natural "method B is defined in terms of method A" idiom,
+including a closure-returning method that builds its closure by calling a
+sibling on `self`.
+
+Validation: `tests/fixtures/instance-intra-method-dispatch` exercises both the
+simple `(.base self ...)` case (prints `83`) and the closure-returning
+"via sibling" case (prints `105`).
+
+### Known limitation: forward references
+
+A method that dispatches to a sibling defined *later* in the same
+`definstance` (or two mutually recursive methods) still fails, because the
+later method's `method_impls` slot is still `NULL` when the earlier body is
+elaborated. Order the methods so callees precede callers, or factor the shared
+logic into a top-level `defn`. A full fix would pre-create every method's
+`FnDef`/binding before elaborating any body (a two-pass split of the loop).
+
+## Workaround for the forward-reference case
 
 Factor the shared logic into a top-level `defn` and call it from both methods,
 or compose the methods' results at the call site. The
 `tests/fixtures/instance-closure-return-compose-methods` fixture takes the
-call-site-composition route for exactly this reason.
+call-site-composition route.

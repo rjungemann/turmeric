@@ -7,10 +7,10 @@
 ;; through ordinary let-bindings and fat dispatch.
 ;;
 ;; (Note: building one method's closure by dispatching to *another* method via
-;; `(.other self ...)` inside the instance body is a separate, currently
-;; unsupported feature -- intra-instance method dispatch -- tracked in
-;; docs/reported/intra-instance-method-dispatch-unsupported.md.  This fixture
-;; composes the two closures at the *call* site instead.)
+;; `(.other self ...)` inside the instance body -- intra-instance method
+;; dispatch -- is now supported; see
+;; tests/fixtures/instance-intra-method-dispatch.  This fixture deliberately
+;; keeps composing the two closures at the *call* site to exercise that path.)
 
 (defclass HasArr [a]
   (inc-by [self n :int] : (fn [:int] :int))

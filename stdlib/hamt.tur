@@ -315,14 +315,10 @@
 ;; Advance iterator. Returns true if a pair was found.
 ;; hash-out, key-out, val-out must be pre-allocated pointers.
 
-(defn hamt/iter-next [iter
-                      : ptr<void>
-                      hash-out
-                      : ptr<void>
-                      key-out
-                      : ptr<void>
-                      val-out
-                      : ptr<void>]
+(defn hamt/iter-next [iter : ptr<void>
+                      hash-out : ptr<void>
+                      key-out : ptr<void>
+                      val-out : ptr<void>]
   #{}
   : bool
   (tur_hamt_iter_next iter hash-out key-out val-out))
@@ -395,7 +391,10 @@
 ;;; Since: Phase P1
 ;; Reduce: fold all entries; returns final accumulator (as ptr).
 
-(defn hamt/reduce [m : ptr<void> fn : ptr<void> init : ptr<void> ctx : ptr<void>]
+(defn hamt/reduce [m : ptr<void>
+                   fn : ptr<void>
+                   init : ptr<void>
+                   ctx : ptr<void>]
   #{}
   : ptr<void>
   (tur_hamt_reduce m fn init ctx))
@@ -416,7 +415,10 @@
 ;;; Since: Phase P1
 ;; Merge-with: merge a and b; resolve conflicts with fn(val_a, val_b, ctx).
 
-(defn hamt/merge-with [a : ptr<void> b : ptr<void> fn : ptr<void> ctx : ptr<void>]
+(defn hamt/merge-with [a : ptr<void>
+                       b : ptr<void>
+                       fn : ptr<void>
+                       ctx : ptr<void>]
   #{}
   : ptr<void>
   (tur_hamt_merge_with a b fn ctx))
@@ -494,7 +496,10 @@
 ;;; Since: Phase P1
 ;; Mutate a transient: insert/update key (hash, key, val).
 
-(defn hamt/transient-set! [t : ptr<void> hash : int key : ptr<void> val : ptr<void>]
+(defn hamt/transient-set! [t : ptr<void>
+                           hash : int
+                           key : ptr<void>
+                           val : ptr<void>]
   #{}
   : void
   (tur_hamt_transient_set t hash key val))

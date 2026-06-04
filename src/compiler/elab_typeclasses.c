@@ -1709,7 +1709,36 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      * codegen would generate dictionary structs. For now, we validate syntax.
      */
     FnDef **method_impls = NULL;
-    
+    if (tc->n_methods > 0) {
+        method_impls = (FnDef **)arena_alloc(e->arena, tc->n_methods * sizeof(FnDef *));
+        for (uint8_t i = 0; i < tc->n_methods; i++) method_impls[i] = NULL;
+    }
+
+    /* Intra-instance method dispatch: register the instance and wire up its
+     * type args / method-impl slots BEFORE elaborating any method body, so that
+     * a `(.sibling self ...)` call inside one method's body can resolve to
+     * another method of the *same* instance.  The slots are filled in as each
+     * body is elaborated below; a method that dispatches to an earlier sibling
+     * sees a populated slot, while the instance itself is already visible to
+     * the `.method` dispatcher.  Post-registration bookkeeping (orphan check,
+     * INSTANCE_DEF expr) still happens after the loop. */
+    TypeClassInstance *inst = typeclass_env_register_instance(&e->typeclass_env, tc);
+    if (!inst) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "failed to register instance for '%s'", tc_name->name);
+        return NULL;
+    }
+    inst->type_args = type_args;
+    inst->n_type_args = n_type_args;
+    inst->type_arg_syms = type_arg_syms;  /* Phase HKT §1: store for dict naming */
+    inst->method_impls = method_impls;
+    inst->n_method_impls = tc->n_methods;
+    /* Phase PTC1: Store type parameter constraints */
+    inst->type_param_constraints = type_param_constraints;
+    inst->n_type_param_constraints = n_type_param_constraints;
+    /* Phase HKT-P4: record the file that defined this instance. */
+    inst->origin_file_id = call->span.file_id;
+
     for (uint8_t i = 0; i < tc->n_methods; i++) {
         Form *impl_form = call->as.list.items[impls_start + i];
         if (impl_form->tag != F_LIST || impl_form->as.list.len < 3) {
@@ -1736,10 +1765,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         
         /* Elaborate the method implementation as a function */
         /* The form is (method-name [params...] body...) */
-        if (!method_impls) {
-            method_impls = (FnDef **)arena_alloc(e->arena, tc->n_methods * sizeof(FnDef *));
-        }
-        
+
         /* Create a synthetic name for this method implementation */
         /* Format: __inst_<typeclass>_<method>_<typeargs> e.g. __inst_MyEq_eq_int */
         enum {
@@ -2188,25 +2214,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         
         method_impls[i] = method_fd;
     }
-    
-    /* Register the instance */
-    TypeClassInstance *inst = typeclass_env_register_instance(&e->typeclass_env, tc);
-    if (!inst) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "failed to register instance for '%s'", tc_name->name);
-        return NULL;
-    }
-    
-    inst->type_args = type_args;
-    inst->n_type_args = n_type_args;
-    inst->type_arg_syms = type_arg_syms;  /* Phase HKT §1: store for dict naming */
-    inst->method_impls = method_impls;
-    inst->n_method_impls = tc->n_methods;
-    /* Phase PTC1: Store type parameter constraints */
-    inst->type_param_constraints = type_param_constraints;
-    inst->n_type_param_constraints = n_type_param_constraints;
-    /* Phase HKT-P4: record the file that defined this instance. */
-    inst->origin_file_id = call->span.file_id;
+
+    /* Instance was registered and its fields wired up before the body loop
+     * (see above) so intra-instance `.sibling self` dispatch resolves.  The
+     * method_impls slots are now fully populated. */
 
     /* Phase HKT-P4: Orphan instance check.
      *

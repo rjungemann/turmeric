@@ -747,12 +747,9 @@
 ;;; Since: Phase T20-D
 ;; Submit a task to the dynamic thread pool. Returns a Future cell.
 
-(defn thread-pool-dynamic-submit [tp
-                                  : DynThreadPoolHandle
-                                  task_fn
-                                  : ptr<void>
-                                  task_arg
-                                  : ptr<void>] : FutureHandle
+(defn thread-pool-dynamic-submit [tp : DynThreadPoolHandle
+                                  task_fn : ptr<void>
+                                  task_arg : ptr<void>] : FutureHandle
   ```c typedef struct {
       void *queue;
       pthread_t *threads;

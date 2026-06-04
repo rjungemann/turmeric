@@ -2553,6 +2553,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * LT1 drop check below mirrors elab_defn.  This lets (call/cc (fn [^linear k]
      * ...)) opt into one-shot-by-contract continuations (OQ3). */
     bool next_param_linear = false;
+    /* A#1 (bare-fat-lambda-param-plan): ^fat marks the next lambda param as a
+     * fat-closure consumer, mirroring the defn-param path.  A bare ^fat binder
+     * (no fn-type annotation) defaults to :ptr<void> + is_fat so (g x) inside
+     * the body dispatches through the fat protocol instead of erroring "'g' is
+     * not a function".  An explicit `:(fn [...] :T)` annotation overrides the
+     * :ptr<void> default below. */
+    bool next_param_fat = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -2639,6 +2646,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
             next_param_linear = true;
             continue;
         }
+        /* A#1 (bare-fat-lambda-param-plan): ^fat marks the next param as a
+         * fat-closure consumer (see next_param_fat declaration above). */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_fat) {
+            next_param_fat = true;
+            continue;
+        }
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
                       "fn: parameter name must be a symbol or type annotation");
@@ -2658,6 +2671,16 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (g_linear_enabled && next_param_linear) {
             b->is_linear = true;
             next_param_linear = false;
+        }
+        /* A#1 (bare-fat-lambda-param-plan): a bare ^fat lambda param holds a
+         * fat-closure box.  Default it to :ptr<void> + is_fat so (g x) routes
+         * through the fat-dispatch path; a later `:(fn [...] :T)` annotation
+         * overrides the type (is_fat stays set, exactly as on defn params). */
+        if (next_param_fat) {
+            b->is_fat = true;
+            b->type = TYPE_PTR_VOID;
+            param_kinds[n_params] = TY_PTR_VOID;
+            next_param_fat = false;
         }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
@@ -2929,6 +2952,20 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     if (return_fn_type) {
         fn_type.as.fn.result_full_type = return_fn_type;
+    }
+    /* A#1 (bare-fat-lambda-param-plan): propagate ^fat param flags into the
+     * lambda's fn_type so call sites auto-shim bare fn arguments into fat
+     * closures, mirroring the defn path. */
+    {
+        bool any_fat = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_fat) { any_fat = true; break; }
+        }
+        if (any_fat) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_fat[i] = params[i]->is_fat;
+            }
+        }
     }
 
     /* Check if we're at top level */
