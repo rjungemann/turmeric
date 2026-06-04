@@ -1,5 +1,14 @@
 # Polymorphic accessor return type collapses to the wrong tyvar when consumed without an expected type
 
+> **Status:** FIXED 2026-06-04. Root cause and fix below; regression coverage
+> in `tests/fixtures/poly-nested-tuple-accessor`.
+>
+> **Correction to the original title/summary:** the result did not collapse to
+> "the wrong tyvar" (A vs B). The instantiation was actually *correct* (B bound
+> to its concrete composite); the bug was a later step that discarded the full
+> composite type and reported the int *carrier*, which only happened to render
+> as "int" -- the same kind A held here. See the root cause.
+
 **Summary:** `tuple2-2nd : [A B] (Tuple2 A B) -> B` infers its result as `A`
 (not `B`) when the call result is consumed *without* an explicit expected type
 (e.g. as an argument to another call, or as a `let` binding later re-used).
@@ -81,3 +90,45 @@ Pointers to chase:
   position) still yields `cstr`.
 - Add a fixture chaining `tuple2-2nd`/`tuple2-1st` over a nested tuple and
   asserting the extracted value.
+
+## Resolution (FIXED)
+
+Root cause (`elab_call.c`, the EX_CALL result-type step, ~line 2680): the
+declared result of a polymorphic accessor like `tuple2-2nd` is a *bare type
+variable* (`:B`), so `fn_type.as.fn.result_kind == TY_TYVAR`. The call path
+already instantiated the *full* result type correctly via
+`call_instantiate_type` (`result_type` came out as the concrete
+`(Tuple2 cstr int)`, kind `TY_APP` -- verified by tracing). But a downstream
+guard then unconditionally did:
+
+```c
+call_result_type = TYPE_INT;                       /* int64 carrier */
+wrap_generic_result = (result_type.kind != TY_INT);
+...
+return call_wrap_reinterpret(e, out, result_type.kind, ...);
+```
+
+This is correct for a *scalar* instantiation (e.g. B = float): the ABI carries
+the result as int64 and the reinterpret bitcasts it back to the scalar's
+register class. But for a *composite* (`TY_APP` / struct / ADT),
+`type_size_bytes` is 0, so `call_wrap_reinterpret` no-ops and returns the call
+with type `TYPE_INT` -- the full `(Tuple2 cstr int)` is silently discarded. The
+outer accessor then sees an `int` argument where it expects a `Tuple2` and
+errors. With an explicit return annotation the loss was masked: the body was
+checked top-down against the declared composite type, which drove unification
+before the lossy carrier collapse mattered.
+
+Fix: collapse to the int carrier (and emit the reinterpret) only when the
+instantiated `result_type` is a scalar. When it is a concrete composite
+(`TY_APP`, or a `TY_ADT`/`TY_STRUCT` with a non-NULL def), keep the full
+`result_type` as the call's type -- the carrier is already int64 at the ABI
+level, and the ABI-specialization bindings saved on the call drive emit to
+produce the concrete-by-value clone. (This is also why the sibling TupleN
+by-parameter ABI fix had to land first: chained accessors now genuinely pass a
+`TupleN` result to the next accessor.)
+
+Validation: `deep-2nd` returns `2`, `deep-1st` returns `"hi"`, the mirror
+`tuple2-1st`-returning-composite case works, let-bound intermediates work, and
+the primitive-`B`-in-arg-position case is unchanged. Full suite 1432 passed /
+0 failed; `run-turi` (124), `run-flags` (77), `run-stdlib-checks` (31) all
+green.

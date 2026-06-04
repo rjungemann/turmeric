@@ -2681,8 +2681,28 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     bool wrap_generic_result = false;
     if (fn_type.kind == TY_FN &&
         fn_type.as.fn.result_kind == TY_TYVAR) {
-        call_result_type = TYPE_INT;
-        wrap_generic_result = (result_type.kind != TY_INT);
+        /* The declared result is a bare type variable, lowered to the int64
+         * carrier at the ABI level.  When the instantiation resolves to a
+         * scalar (float/cstr/bool/...), keep the call's C type as the int64
+         * carrier and record a reinterpret so emit bitcasts it back to the
+         * scalar's register class.  But when it resolves to a *concrete
+         * composite* carrier-ABI type (a parameterised TY_APP, or a monomorphic
+         * struct/ADT with a def), the carrier IS already int64 and the full
+         * type must be preserved for downstream type checking: collapsing to
+         * int discards the payload (e.g. (Tuple2 cstr int) -> int) and breaks
+         * chained generic accessors like (tuple2-2nd (tuple2-2nd t)).  A
+         * reinterpret cannot carry a composite anyway -- type_size_bytes is 0
+         * for TY_APP/struct/ADT, so call_wrap_reinterpret would no-op and the
+         * collapse to int would be pure loss.  See
+         * docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md */
+        bool result_is_concrete_composite =
+            (result_type.kind == TY_APP) ||
+            (result_type.kind == TY_ADT && result_type.as.adt_.def) ||
+            (result_type.kind == TY_STRUCT && result_type.as.struct_.def);
+        if (!result_is_concrete_composite) {
+            call_result_type = TYPE_INT;
+            wrap_generic_result = (result_type.kind != TY_INT);
+        }
     }
 
     /* Report guard (poly-defn-shares-inner-closure-body-across-monomorphizations):

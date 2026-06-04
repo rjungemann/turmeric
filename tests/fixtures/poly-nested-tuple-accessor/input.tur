@@ -1,0 +1,37 @@
+;; Regression for the polymorphic-return-type instantiation bug
+;; (docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md):
+;; `tuple2-2nd : [A B] (Tuple2 A B) -> B` collapsed its result to the int
+;; carrier (losing the full type) when the declared return is a bare tyvar and
+;; the instantiation is a *concrete composite* (here B = (Tuple2 cstr int)).
+;; That broke any chained generic accessor consumed without an expected type.
+
+;; Chain tuple2-2nd twice over a nested tuple: B of the inner call is itself a
+;; Tuple2, so the result type must survive to feed the outer accessor.
+(defn deep-2nd [t : (Tuple2 int (Tuple2 cstr int))] : int
+  (tuple2-2nd (tuple2-2nd t)))
+
+;; Mix accessors: 1st of the inner (B) tuple is a cstr.
+(defn deep-1st [t : (Tuple2 int (Tuple2 cstr int))] : cstr
+  (tuple2-1st (tuple2-2nd t)))
+
+;; tuple2-1st returning a composite A (mirror case): A = (Tuple2 cstr int).
+(defn head-2nd [t : (Tuple2 (Tuple2 cstr int) int)] : int
+  (tuple2-2nd (tuple2-1st t)))
+
+;; let-bound intermediate (also previously broken).
+(defn via-let [t : (Tuple2 int (Tuple2 cstr int))] : int
+  (let [inner (tuple2-2nd t)]
+    (tuple2-2nd inner)))
+
+;; primitive B in argument position must still work (no regression).
+(defn snd-of [p : (Tuple2 cstr int)] : int (tuple2-2nd p))
+(defn prim-arg [t : (Tuple2 int (Tuple2 cstr int))] : int
+  (snd-of (tuple2-2nd t)))
+
+(let [t (tuple2 9 (tuple2 "hi" 2))
+      h (tuple2 (tuple2 "yo" 5) 7)]
+  (println (deep-2nd t))     ; 2
+  (println (deep-1st t))     ; hi
+  (println (head-2nd h))     ; 5
+  (println (via-let t))      ; 2
+  (println (prim-arg t)))    ; 2
