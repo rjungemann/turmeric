@@ -232,6 +232,10 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic);
  * marker. emit_abi_register_call uses this to gate ABI specialization on
  * inline-C bodies (only the opt-in template form is safe to specialize). */
 bool inline_c_has_ty_template(const InlineC *ic);
+/* True when the inline-C body contains a __TUR_CNAME_<name>__ template marker,
+ * which expands to the mangled C identifier of the named binding (so inline-C
+ * never hardcodes the name-mangling scheme). */
+bool inline_c_has_cname_template(const InlineC *ic);
 const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
