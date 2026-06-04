@@ -2465,6 +2465,19 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID,
                                           args[i]->span);
                     conv->as.poly_to_fat_.inner = args[i];
+                    /* poly-to-fat-typed-shim-plan: thread the sink's declared
+                     * ^fat fn signature (when it is a concrete TY_FN) so the
+                     * emitter can select a typed slot-0 shim matching the
+                     * typed-thunk cast the sink applies on invocation.  For an
+                     * int64/pointer-carrier ^fat param (no concrete fn type) this
+                     * stays NULL and the int64 __tur_poly_to_fat1 shim is used. */
+                    {
+                        const Type *eft = (fn_type.as.fn.arg_full_types &&
+                                           fn_arg_idx_fat < fn_type.as.fn.arity)
+                            ? fn_type.as.fn.arg_full_types[fn_arg_idx_fat] : NULL;
+                        conv->as.poly_to_fat_.sink_fn_type =
+                            (eft && eft->kind == TY_FN) ? eft : NULL;
+                    }
                     args[i] = conv;
                 } else if (ak == TY_FN && !args[i]->type.as.fn.boxed) {
                     /* A bare (non-capturing) fn reference -- auto-shim it into a

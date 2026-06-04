@@ -6,8 +6,8 @@ description: Close the remaining int64-only fat-shim gap in the Typed Closure In
 
 # Typed poly-to-fat Shim -- Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-03
+> **Status:** Implemented (capturing-closure path); follow-up reported
+> **Last Updated:** 2026-06-04
 > **Type:** compiler ABI -- closure invocation
 > **Sibling plans:**
 > - [closure-typed-invocation-abi-plan.md](closure-typed-invocation-abi-plan.md) -- the parent plan; this finishes the one shim family it left on the int64 carrier
@@ -225,12 +225,37 @@ through `type_c_name`, so primitives (`double`, `bool`, `const char *`,
 
 ## Acceptance checklist
 
-- [ ] Phase 0 guard rejects a non-int64 poly-to-fat boxing with a clear
-      `TUR-E` diagnostic; negative fixture passes.
-- [ ] `ensure_typed_poly_to_fat` lands, keyed by `(R, A0)`, deduped, and
+- [x] `ensure_typed_poly_to_fat` lands, keyed by `(R, A0)`, deduped, and
       freed at both cleanup sites (leak detection on).
-- [ ] `EX_POLY_TO_FAT` selects the typed shim for non-int64 signatures
+      (`src/compiler/emit_module.c`, `EmitCtx.poly_fatshim_names`.)
+- [x] `EX_POLY_TO_FAT` selects the typed shim for non-int64 signatures
       and keeps `__tur_poly_to_fat1` for the int64 case (churn-free).
-- [ ] `:float` instance-method round-trip fixture passes; slot 0 carries
-      the typed poly shim.
-- [ ] `bash tests/run.sh` zero `FAIL`.
+      The `(R, A0)` is sourced from the sink's declared `^fat` fn signature
+      (`fn_type.arg_full_types[idx]`, a concrete `TY_FN`), threaded onto the
+      node as `poly_to_fat_.sink_fn_type` in `elab_call.c`.
+- [x] `:float` instance-method round-trip fixture passes; slot 0 carries
+      the typed poly shim (`tests/fixtures/poly-to-fat-float-roundtrip/`,
+      prints `7`, slot 0 = `__tur_poly_to_fat1_double_double`).
+- [x] `bash tests/run.sh` zero `FAIL` (1349 passed).
+
+### Implementation notes / deviations
+
+- **Phase 0 guard subsumed.** Rather than land a compile-time guard first
+  and replace it in Phase 1, the typed shim was implemented directly, so
+  the silent mismatch is *fixed* (not merely defused) for the path the
+  plan targets. No separate negative fixture is needed for that path.
+- **`(R, A0)` source.** The plan's "source from `inner->type`" is not
+  reachable inside the (signature-erased) generic method body -- the
+  method param is erased to `ptr<void>`. The robust source is the **sink's**
+  declared `^fat` fn signature, which is exactly the typed-thunk cast the
+  sink applies on invocation (the plan's "Consistency invariant"). This is
+  threaded onto the `EX_POLY_TO_FAT` node at the box site.
+- **Named-fn / non-capturing path (Risk #3, reported).** The typed shim is
+  correct when the producer stores the method's real typed thunk into the
+  carrier -- true for the *capturing-closure* pass-through. The
+  *named-function* / non-capturing path instead routes through
+  `make_poly_wrapper`, which forces the wrapper's argument params to
+  `int64_t`; that is a second erasure point and miscompiles a non-int64
+  argument regardless of slot 0. Documented in
+  [docs/reported/poly-wrapper-forces-int64-args-non-int-fat-sink.md](../reported/poly-wrapper-forces-int64-args-non-int-fat-sink.md)
+  with repro, root cause, and fix directions.
