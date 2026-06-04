@@ -1,0 +1,13 @@
+;; bare-fat-lambda-param-plan.md (Phase 1): a bare `^fat g` binder on a
+;; lambda is now accepted, mirroring the same surface on a top-level defn.
+;; The binder defaults to :ptr<void> + is_fat, so (g x) inside the lambda
+;; body dispatches through the fat protocol instead of erroring "'g' is not
+;; a function".
+(defn make-adder [n : int] : ptr<void>
+  (fn [x : int] : int (+ x n)))
+
+(defn main [] : int
+  (let [run (fn [^fat g x : int] : int
+              (g x))]
+    (println (run (make-adder 10) 5)))   ;; (5 + 10) => 15
+  0)

@@ -1,13 +1,18 @@
 ---
 title: Bare `^fat` Parameter on Lambda Binders
 category: Plan
-status: Proposed
-description: Allow a bare `^fat g` parameter binder in a `(fn [...] ...)` lambda, matching the surface already supported on top-level `defn` params. Today the elaborator rejects calls of `g` inside the lambda body with "'g' is not a function", which blocks the lambda-retype path added for closure-returning instance methods from ever firing.
+status: Implemented
+description: Allow a bare `^fat g` parameter binder in a `(fn [...] ...)` lambda, matching the surface already supported on top-level `defn` params. Previously the elaborator rejected calls of `g` inside the lambda body with "'g' is not a function", which blocked the lambda-retype path added for closure-returning instance methods from ever firing. Implemented: lambda binders now run the same `^fat` normalization as `defn` params.
 ---
 
 # Bare `^fat` Parameter on Lambda Binders -- Plan
 
-> **Status:** Proposed.
+> **Status:** Implemented (2026-06-04). `elab_fn` now mirrors the `defn`-param
+>   `^fat` path: a bare `^fat g` binder defaults to `:ptr<void>` + `is_fat`,
+>   and an annotated `^fat g :(fn [...] :T)` binder pins the signature. The
+>   `arg_fat` flags propagate into the lambda's `fn_type` for call-site
+>   shimming. Fixtures: `tests/fixtures/{bare-fat-lambda-param,
+>   annotated-fat-lambda-param,bare-fat-lambda-closure-returning}`.
 > **Found:** 2026-06-03, while wiring the lambda retype step in
 >   [closure-returning-instance-method-codegen-plan.md](closure-returning-instance-method-codegen-plan.md).
 > **Severity:** Medium -- expressiveness hole. The retype is correct but

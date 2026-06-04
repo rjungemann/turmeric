@@ -309,11 +309,13 @@ Use it in A2/A3/A4 instead of the bare `== TY_FLOAT`.
 - [x] `bash tests/run.sh`: **1347 passed, 0 failed**, leak detection on.
       New fixtures carry regenerated `expected.c` snapshots.
 
-> **A3 note:** the `elab_fn` (lambda) retype call is in place for symmetry,
-> but a `^fat` parameter on a *lambda* (`(fn [^fat g ...] ...)`) is not yet
-> accepted by the elaborator (`'g' is not a function`), so the lambda path is
-> currently dormant -- it will activate for free once bare-`^fat` lambda
-> params are supported. No fixture is added for the unsupported syntax.
+> **A3 note (updated 2026-06-04):** the `elab_fn` (lambda) retype call is in
+> place for symmetry. `^fat` on a *lambda* binder (`(fn [^fat g ...] ...)`) is
+> now accepted -- the pass fires on `fn` binders too, per
+> [bare-fat-lambda-param-plan.md](bare-fat-lambda-param-plan.md). The lambda
+> path is no longer dormant; fixtures under
+> `tests/fixtures/{bare-fat-lambda-param,annotated-fat-lambda-param,
+> bare-fat-lambda-closure-returning}` exercise it.
 
 ---
 
