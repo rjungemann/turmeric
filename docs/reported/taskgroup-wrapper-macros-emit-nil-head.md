@@ -1,5 +1,12 @@
 # `task-group-*` wrapper macros expand to an uncallable `nil` head
 
+> **Status: FIXED.** All four macros in `stdlib/taskgroup.tur` now construct
+> their expansion with quasiquote/unquote-splicing instead of calling
+> `do`/`if`/`let` at expansion time. A regression fixture,
+> `tests/fixtures/taskgroup-with-macro-real/`, drives the real
+> `task-group-with` macro from the stdlib (not a hand-inlined expansion) and
+> asserts the body runs and the group is awaited.
+
 **Summary.** Every convenience macro in `stdlib/taskgroup.tur` --
 `task-group-with`, `task-group-with-timeout`, `task-group-with-cancellation`,
 and `task-group-async` -- is broken at macro-expansion time. Any program that

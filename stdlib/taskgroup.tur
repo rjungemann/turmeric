@@ -559,15 +559,15 @@
 
 
 (defmacro task-group-with [group & body]
-  (list (do body (task-group-wait group))))
+  `(do ~@body (task-group-wait ~group)))
 ;; ---- TaskGroup::with-timeout macro (Phase T22) ----
 ;; TaskGroup::with-timeout [group ms & body] - runs body, auto-cancels after ms milliseconds
 ;; Uses a background thread to sleep and then cancel the group
 
 
 (defmacro task-group-with-timeout [group ms & body]
-  (list (let [timeout_thread (spawn-timeout-thread group ms)]
-          (do body (task-group-wait group) (join-timeout-thread timeout_thread)))))
+  `(let [timeout_thread (spawn-timeout-thread ~group ~ms)]
+     (do ~@body (task-group-wait ~group) (join-timeout-thread timeout_thread))))
 ;;; spawn-timeout-thread -- spawn a background thread that cancels the group after ms milliseconds.
 ;;;
 ;;; Parameters:
@@ -656,9 +656,9 @@
 
 
 (defmacro task-group-with-cancellation [group & body]
-  (list (if (task-group-should-exit? group)
-          nil
-          (do body (task-group-wait group)))))
+  `(if (task-group-should-exit? ~group)
+     nil
+     (do ~@body (task-group-wait ~group))))
 ;; ---- TG-006: Integration with async/await ----
 ;;
 ;; Fiber-based async integration: task-group-spawn-async creates a real fiber
@@ -741,4 +741,4 @@
 ;; Returns a future that can be awaited to drive the fiber to completion.
 
 (defmacro task-group-async [group async-thunk]
-  (list (task-group-spawn-async group async-thunk)))
+  `(task-group-spawn-async ~group ~async-thunk))

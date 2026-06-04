@@ -1,0 +1,23 @@
+;; taskgroup-wrapper-macros-emit-nil-head: drive the real task-group-with
+;; macro from stdlib/taskgroup.tur (not a hand-inlined expansion).
+;;
+;; Regression: the wrapper macros used to *call* do/if/let on their args at
+;; expansion time and wrap the result in a spurious (list ...), producing an
+;; expansion whose call head was a `nil`/result value -- "expression in call
+;; head has type `nil`, which is not callable". They now quasiquote the form,
+;; so (task-group-with g body...) expands to (do body... (task-group-wait g)).
+;;
+;; This asserts the body runs (prints) and the group is awaited. The body
+;; cancels the group so task-group-wait returns promptly (a bare group with no
+;; spawned tasks is never marked `done`).
+;;
+;; Expected output: with-body-ran
+(load "stdlib/taskgroup.tur")
+
+(defn main [] : int
+  (let [g (task-group-new)]
+    (task-group-with g
+      (println "with-body-ran")
+      (task-group-cancel g))
+    (task-group-free g)
+    0))
