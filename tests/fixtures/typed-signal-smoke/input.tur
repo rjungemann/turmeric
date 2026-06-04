@@ -1,0 +1,35 @@
+;; G8 (language-readiness-for-typed-signal-plan): integration smoke. Two
+;; oscillators (constant-value stand-ins for sine), summed and scaled,
+;; all wired through :float-typed fat closures. Evaluates the chain at
+;; 4 sample positions.
+
+(defn make-const [v : float] : ptr<void>
+  (fn [t : float] : float v))
+
+(defn make-scale [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+
+(defn sum2
+  [^fat a :(fn [:float] #{} :float)
+   ^fat b :(fn [:float] #{} :float)] : ptr<void>
+  (let [av a bv b]
+    (fn [t : float] : float (+ (av t) (bv t)))))
+
+(defn compose-f
+  [^fat f :(fn [:float] #{} :float)
+   ^fat g :(fn [:float] #{} :float)] : ptr<void>
+  (let [fv f gv g] (fn [x : float] : float (gv (fv x)))))
+
+(defn call-f [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+
+(defn main [] : int
+  (let [osc1   (make-const 1.0)
+        osc2   (make-const 2.5)
+        mixed  (sum2 osc1 osc2)      ;; 3.5
+        filt   (make-scale 0.5)
+        chain  (compose-f mixed filt)]
+    (println (call-f chain 0.0))      ;; 1.75
+    (println (call-f chain 0.25))     ;; 1.75
+    (println (call-f chain 0.5))      ;; 1.75
+    (println (call-f chain 0.75)))    ;; 1.75
+  0)

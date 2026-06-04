@@ -91,17 +91,29 @@ do not collapse phases, do not reword entries into prose, and update the
     - Kind: report
     - Goal: `(.other self ...)` from inside another method's body of the same instance fails elaboration with "no typeclass method found"; external dispatch on the receiver works
     - Deps: independent (touches dispatch logic adjacent to 6)
-    - Status: In Progress
+    - Status: Complete
 
 12. `reported/fn-typed-return-lowered-to-result-type.md`
     - Kind: report
     - Goal: A `defn` whose declared return type is `(fn [...] T)` emits a C signature using the inner `T` instead of a closure-box pointer -- register-class miscompile risk (e.g. `(fn [:float] :float)` → `double` while body returns `void *`)
-    - Deps: independent (surfaced by 14 / G2 spike)
+    - Deps: independent (surfaced by 16 / G2 spike)
+    - Status: Complete
+
+13 `reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md`
+    - Kind: report
+    - Goal: A polymorphic `(defn f [A] ... (fn ... : A val))` emits one shared inner C body returning `int64_t`; the `:float` specialisation invokes it through a `double (*)(...)` pointer and reads the parameter (xmm0) instead of the captured value -- silent miscompile
+    - Deps: independent (surfaced by 16 / G2 spike; same family as 7 and 12)
+    - Status: In Progress
+
+14. `reported/fat-closure-dispatch-does-not-handle-struct-return.md`
+    - Kind: report
+    - Goal: A closure declared `: (Pair float float)` emits an inner body returning the struct directly but a dispatcher that casts to `int64_t (*)(...)`; `cc` rejects the generated C outright. Typed-thunk family covers `:float`/`:cstr` but not aggregates
+    - Deps: independent (surfaced by 16 / G4 spike; same family as 7 but for aggregate returns)
     - Status: Open
 
 ## Phase 2 -- Type system expansion
 
-13. `upcoming/sum-types-either-plan.md`
+15. `upcoming/sum-types-either-plan.md`
     - Kind: plan
     - Goal: Land binary sum types (`Either L R`) with constructors, pattern matching, exhaustiveness, typeclass support
     - Deps: independent
@@ -109,67 +121,67 @@ do not collapse phases, do not reword entries into prose, and update the
 
 ## Phase 3 -- Readiness investigation
 
-14. `upcoming/language-readiness-for-typed-signal-plan.md`
+16. `upcoming/language-readiness-for-typed-signal-plan.md`
     - Kind: plan
     - Goal: Spike-validate that the type system can support a typed signal library; gate remaining gaps
-    - Deps: 4, 6, 7, 9, 13
-    - Status: Draft (G1-G8 spikes designed with verdict template; no verdicts filled yet)
+    - Deps: 4, 6, 7, 9, 15
+    - Status: In Progress (G1, G3, G5, G6, G7, G8 green; G2 red → 13; G4 red → 14)
 
 ## Phase 4 -- Stdlib hardening
 
-15. `upcoming/stdlib-opaque-handle-types-plan.md`
+17. `upcoming/stdlib-opaque-handle-types-plan.md`
     - Kind: plan
     - Goal: Wrap bare `:int`/`:ptr<void>` resource handles in `defopaque` newtypes
     - Deps: 1
     - Status: In Progress
 
-16. `upcoming/stdlib-inline-c-deworkaround-plan.md`
+18. `upcoming/stdlib-inline-c-deworkaround-plan.md`
     - Kind: plan
     - Goal: Replace inline-C workarounds in stdlib with idiomatic Turmeric
-    - Deps: 15
+    - Deps: 17
     - Status: In progress (Phase 1 complete as of 2026-06-03; Phases 2-4 outstanding)
 
-17. `upcoming/stdlib-advanced-typing-plan.md`
+19. `upcoming/stdlib-advanced-typing-plan.md`
     - Kind: plan
     - Goal: Add linearity/affinity, session types, effects, refinement, typeclass consolidation to stdlib
-    - Deps: 15
+    - Deps: 17
     - Status: Draft (Phases L, S, E, R, T designed, not implemented)
 
 ## Phase 5 -- Stdlib API cleanup
 
-18. `upcoming/stdlib-arrow-scaleback-plan.md`
+20. `upcoming/stdlib-arrow-scaleback-plan.md`
     - Kind: plan
     - Goal: Remove disabled Arrow typeclass scaffolding; keep only bare-function combinators
-    - Deps: 14
-    - Status: Draft (mechanical steps defined, awaiting approval)
+    - Deps: 16
+    - Status: Complete (mechanical steps defined, awaiting approval)
 
-19. `upcoming/stdlib-type-erasure-cleanup-plan.md`
+21. `upcoming/stdlib-type-erasure-cleanup-plan.md`
     - Kind: plan
     - Goal: Replace int64-erased typeclass stubs with real instances
-    - Deps: 6, 13 (plus operator-name mangling fix tracked inside the plan)
-    - Status: Draft (Phases A-C with subtasks defined, not implemented)
+    - Deps: 6, 15 (plus operator-name mangling fix tracked inside the plan)
+    - Status: In Progress (Phases A-C with subtasks defined, not implemented)
 
 ## Phase 6 -- Typeclass reintroduction
 
-20. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
+22. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
     - Kind: plan
     - Goal: Reintroduce Arrow / ArrowChoice / ArrowLoop typeclasses on `(->)`
-    - Deps: 6, 13, 19
+    - Deps: 6, 15, 21
     - Status: Draft, blocked on prerequisites (T1-T12 tasks defined)
 
 ## Phase 7 -- Signal rebuild
 
-21. `reported/signal-spice-broken-build.md`
+23. `reported/signal-spice-broken-build.md`
     - Kind: report
     - Goal: tur-signal spice does not compile -- references removed `__arrow_call1` plus un-imported stdlib symbols; the existing rebuild plan understates the scope by assuming a half-done `:float` migration baseline
-    - Deps: independent (prerequisite finding for 22)
-    - Status: Open (severity: high)
+    - Deps: independent (prerequisite finding for 24)
+    - Status: Obsolete (severity: high)
 
-22. `upcoming/tur-signal-rebuild-plan.md`
+24. `upcoming/tur-signal-rebuild-plan.md`
     - Kind: plan
     - Goal: Rebuild the tur-signal spice on top of the modern typed infrastructure
-    - Deps: 14, 18, 21
-    - Status: Draft, blocked on plan 14 (Phases 1-6 designed)
+    - Deps: 13, 14, 16, 20, 23
+    - Status: Draft, blocked on 13 + 14 (polymorphic `constant` and struct-returning closures) if needed on critical path; otherwise blocked only on 16 + 20 (Phases 1-6 designed)
 
 ## Other notes
 
@@ -191,5 +203,7 @@ Investigate Phase B of upcoming/bare-fat-result-type-inference-plan.md later
     a signature pass.
 
 docs/reported/poly-to-fat-drops-args-beyond-first-multiarg-method.md
+docs/reported/taskgroup-wrapper-macros-emit-nil-head.md
+docs/reported/io-file-open-untyped-params-default-to-int.md
 
-
+docs/archive/httpd-conn-struct-consolidation-plan.md

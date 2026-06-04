@@ -1,0 +1,29 @@
+;; G7 (language-readiness-for-typed-signal-plan): compose two float SFs
+;; via a typed compose form. stdlib/arrow.tur's `>>>` currently routes
+;; through an :int-typed fat dispatch path, so this spike spells out a
+;; local typed-compose to verify the float case end-to-end. If the
+;; stdlib `>>>` is ever generalised to :float, swap it in.
+
+(defn make-scale [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+
+(defn make-add [n : float] : ptr<void>
+  (fn [x : float] : float (+ x n)))
+
+(defn compose-f
+  [^fat f :(fn [:float] #{} :float)
+   ^fat g :(fn [:float] #{} :float)] : ptr<void>
+  (let [fv f gv g] (fn [x : float] : float (gv (fv x)))))
+
+(defn call-f [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+
+(defn main [] : int
+  (let [add1   (make-add   1.0)
+        mul2   (make-scale 2.0)
+        ;; (mul2 . add1)(x) = 2 * (x + 1)
+        h1     (compose-f add1 mul2)
+        ;; ((mul2 . add1) . add1)(x) = 2 * ((x + 1) + 1) = 2x + 4
+        h2     (compose-f add1 h1)]
+    (println (call-f h1 3.0))    ;; 8
+    (println (call-f h2 3.0)))   ;; 10
+  0)

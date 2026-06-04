@@ -6,6 +6,60 @@ description: A spike-style investigation plan that enumerates the concrete langu
 
 # Language Readiness for a Typed Signal Library -- Plan
 
+## Status (as of 2026-06-04)
+
+Several prerequisite compiler/stdlib plans this spike originally guarded
+against have since landed on `main`:
+
+- **Closure-returning instance-method codegen** (the exact
+  `stdlib/arrow.tur:91-101` "dict field resolved to `void *`" gap flagged
+  under G1's failure modes): fixed in #205; plan archived as
+  `docs/archive/closure-returning-instance-method-codegen-plan.md`.
+- **Bare `^fat` result-type inference** (G1, G7 surface): #208 (Phase A)
+  + #212 (Phase B feasibility); plan archived as
+  `docs/archive/bare-fat-result-type-inference-plan.md`. Companion fix
+  `docs/archive/history/bare-fat-param-non-int-result-miscompiles.md`
+  and `docs/archive/history/cstr-returning-closure-thunk-int64-return.md`.
+- **Typed closure invocation ABI / first-class closure type** (G1, G6,
+  G7): #197 + #198; plans archived as
+  `docs/archive/closure-typed-invocation-abi-plan.md`,
+  `docs/archive/closure-first-class-type-plan.md`,
+  `docs/archive/closure-representation-unification-plan.md`.
+- **`ptr<T>` generic pointer** (G5): #204; plan archived as
+  `docs/upcoming/ptr-generic-parameterised-type-plan.md` (now superseded).
+- **Bare/annotated `^fat` lambda binders** (G1, G7): #215.
+- **Ascribed-variable closure capture fix** (G1): #214.
+- **Partial-application captured-arg type-check** (G7): #213.
+- **Transitive grandparent capture through nested closures** (G1, G7):
+  #219.
+
+Spike status:
+
+| Gap | Verdict | Fixture | Notes |
+|-----|---------|---------|-------|
+| G1 | green | `tests/fixtures/float-fat-closure/`, `.../fat-closure-float-compose/` | Both PASS, stable `expected.c` snapshots. |
+| G2 | **red** | repro in `docs/reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md` (fixture stub kept) | Polymorphic `(defn f [A] ... (fn ... : A val))` emits one shared inner C body. Float specialisation reads result from xmm0 (parameter register) -- silent miscompile. |
+| G3 | green | `tests/fixtures/sf-vec-of/` | Three `(fn [:int] :int)` closures with different captured envs go into one `vec-of` without manual `:int` boxing; `tur-vec-homog__` accepts them. |
+| G4 | **red** | repro in `docs/reported/fat-closure-dispatch-does-not-handle-struct-return.md` (fixture stub kept) | Closure declared `: (Pair float float)` emits an inner body returning the struct directly but a dispatcher that casts to `int64_t (*)(...)`. `cc` rejects the generated C outright. |
+| G5 | green | `tests/fixtures/typed-state-cell/` | Inline-C body uses `double *` directly, no `(intptr_t)` cast on the state pointer. ABI signature is `void *` (acceptable). |
+| G6 | green | `tests/fixtures/vec-get-closure/` | `(vec-get v i)` ascribed `:ptr<void>` is directly usable as a `^fat` closure argument. |
+| G7 | green | `tests/fixtures/sf-compose-typed/` | Local typed-compose over two `(fn [:float] :float)` closures composes cleanly; result is itself composable. **Amber edge**: `stdlib/arrow.tur`'s `>>>` itself is still int-typed; use a local typed-compose until the stdlib is generalised. |
+| G8 | green | `tests/fixtures/typed-signal-smoke/` | Two-oscillator + filter chain with all `:float` fat closures evaluates cleanly at four sample positions; output matches hand-computed reference. |
+
+Two reds (G2 and G4) are reportable codegen bugs and gate any
+typed-signal rebuild that wants polymorphic constructors or
+struct-returning combinators. The remaining greens give six fewer
+unknowns than at plan time: composition, vec-of, vec-get on closures,
+typed state cells, and the integration smoke all work today.
+
+Next step for [[tur-signal-rebuild-plan]]: confirm with the maintainers
+whether the rebuild needs G2 (polymorphic `constant`) and G4 (typed
+pair returns from closures) on the critical path. If yes, both reports
+under `docs/reported/` need fixes first. If no -- e.g. the rebuild can
+spell `constant-float` / `constant-int` separately and route pair returns
+through a boxed `:ptr<Pair>` -- the rebuild can proceed with the current
+language.
+
 ## Why this plan exists
 
 The previous signal-processing effort (now archived as
@@ -103,6 +157,16 @@ closure-returning typeclass instance methods. The same bug may bite
 free functions that return `:float`-valued closures. If so, file
 `docs/reported/float-fat-closure-codegen.md` with this exact repro.
 
+**Status**: green.
+**Fixture**: `tests/fixtures/float-fat-closure/` (plus a sibling
+`tests/fixtures/fat-closure-float-compose/` exercising compose of two
+`:float -> :float` capturing closures via `^fat`).
+**Notes**: both PASS with stable `expected.c` snapshots as of
+2026-06-04. The original `stdlib/arrow.tur` "dict field resolved to
+`void *`" failure mode was fixed in #205 + the bare-^fat result-type
+work (#208/#212), so the failure path the spike was designed to catch
+no longer exists.
+
 ---
 
 ### G2. Polymorphic `constant` over a type parameter
@@ -137,6 +201,22 @@ a signal" call needs a per-type wrapper, which defeats the typing point.
 which case the workaround is "spell out the type". File a feature request,
 mark amber.
 
+**Status**: **red**.
+**Fixture**: `tests/fixtures/signal-constant-poly/` is intentionally kept
+as a stub; the runnable repro lives in the filed report (below) so the
+suite stays green.
+**Filed report**:
+`docs/reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md`.
+**Notes**: A polymorphic `(defn constant [A] [val :A] : ptr<void> (fn [t :float] : A val))`
+emits *one* C body for the inner closure (returning `int64_t`). The outer
+`constant` is monomorphised correctly, but at the `:float` call site the
+dispatcher invokes that single body through a `double (*)(void*, double)`
+function pointer. The body writes `rax`; the caller reads `xmm0`, which
+still holds the parameter `t`. Result: float specialisations return their
+argument instead of the captured value -- a silent miscompile. Same
+family as `bare-fat-param-non-int-result-miscompiles` / `cstr-returning-
+closure-thunk-int64-return` (both archived) but for polymorphic-A returns.
+
 ---
 
 ### G3. Heterogeneous-by-spelling but homogeneous-by-intent `vec-of`
@@ -170,6 +250,18 @@ loses one of its core idioms.
 - If even with manual `:ptr<void>` boxing the vec-walker can't dispatch
   cleanly, that's a deeper gap. Document either way.
 
+**Status**: green.
+**Fixture**: `tests/fixtures/sf-vec-of/`. PASSes.
+**Notes**: Three capturing closures with declared type `(fn [:int] :int)`
+but different captured environments (two `make-add`, one `make-mul`) go
+into a single `(vec-of ...)` without manual `:int` boxing.
+`tur-vec-homog__` accepts them. Reading back with
+`(:: (vec-get v i) :ptr<void>)` and dispatching through a `^fat` sink
+works. The `:ptr<void>` ascription on `vec-get` is the only ergonomic
+sharp edge -- without it the call site would need to spell the full
+function type; mild amber if the [[stdlib-arrow-scaleback-plan]] wants
+this implicit.
+
 ---
 
 ### G4. Typed `Pair[A B]` through closure-returning code
@@ -198,6 +290,21 @@ closure boundary.
 **Failure modes**: `make-struct Pair` may not be allowed inside a closure
 body, or the typed `Pair[Float Float]` may not be a valid return type for
 a closure. Either is a real compiler/stdlib bug to file.
+
+**Status**: **red**.
+**Fixture**: `tests/fixtures/pair-signals-typed/` is intentionally kept as
+a stub; the runnable repro lives in the filed report so the suite stays
+green.
+**Filed report**:
+`docs/reported/fat-closure-dispatch-does-not-handle-struct-return.md`.
+**Notes**: A closure declared `: (Pair float float)` returning
+`(make-struct Pair ...)` emits an inner body whose C return type is
+`Pair__float__float` (the actual struct), but the fat-dispatch site at
+the caller casts the function pointer to `int64_t (*)(void*, double)`.
+`cc` rejects the generated C outright (`returning 'Pair__float__float'
+from a function with incompatible result type 'int64_t'`). The
+typed-thunk family that fixed scalar (`:float`, `:cstr`) closure returns
+does not yet cover aggregate returns.
 
 ---
 
@@ -228,6 +335,18 @@ still mint `int64_t state` in the wrapper, forcing the cast back in.
 Document the gap; this becomes a stdlib/codegen improvement plan rather
 than a hard blocker.
 
+**Status**: green.
+**Fixture**: `tests/fixtures/typed-state-cell/`. PASSes; expected stdout
+matches.
+**Notes**: Codegen emits `static double read_state(void * p)` with the
+inline-C body `double *s = (double *)p; return *s;` -- the parameter is
+generic `void *` at the C ABI boundary (because `ptr<T>` is a generic
+pointer carrier), but the body uses `double *` directly and never round-
+trips through `int64_t` / `(intptr_t)`. No leak under ASan. Acceptable
+for the typed-signal rebuild; if the cosmetic `void *` -> `double *`
+narrowing in the signature ever becomes a problem, file a follow-up
+under stdlib/codegen.
+
 ---
 
 ### G6. Vec[Closure] walking via `vec-get` typing
@@ -252,6 +371,13 @@ without an explicit `:: :ptr<void>` cast at every read?
 **Failure modes**: closure call on a `vec-get` result may need an
 intervening `^fat` shim or explicit cast. Document the workaround;
 likely amber.
+
+**Status**: green.
+**Fixture**: `tests/fixtures/vec-get-closure/`. PASSes.
+**Notes**: A `(vec-of ...)` of three capturing closures, read back with
+`(:: (vec-get v i) :ptr<void>)`, dispatches cleanly through `^fat`
+without an intervening shim. The `:ptr<void>` ascription is the only
+ceremony.
 
 ---
 
@@ -279,6 +405,19 @@ without manual annotation at the caller.
 fails, something deeper changed between those fixtures and the typed
 shape; investigate in isolation.
 
+**Status**: green (with amber note on the stdlib `>>>`).
+**Fixture**: `tests/fixtures/sf-compose-typed/`. PASSes.
+**Notes**: The spike uses a *local* `compose-f` (an annotated `^fat`
+typed compose over `:float -> :float`) rather than `stdlib/arrow.tur`'s
+`>>>`. The stdlib `>>>` is still declared without explicit `^fat`
+result-type ascription and routes through the int-default dispatch, so
+calling it on `:float` SFs would re-encounter the G1-family bug at the
+boundary. The local typed-compose pattern is straightforward and the
+result is itself composable (`h2 = compose-f add1 h1`). When the
+[[stdlib-arrow-scaleback-plan]] lands, it should generalise `>>>` to
+the typed form -- at which point this fixture can be updated to call
+stdlib `>>>` directly.
+
 ---
 
 ### G8. `tur-signal-rebuild` ABI sanity end-to-end
@@ -304,6 +443,21 @@ matches.
 
 **Failure modes**: anything that surfaces here that isn't already
 captured by G1-G7 gets backported into this plan as a new gap.
+
+**Status**: green.
+**Fixture**: `tests/fixtures/typed-signal-smoke/`. PASSes.
+**Notes**: The smoke fixture wires two constant "oscillators"
+(stand-ins for sine/square -- the real waveforms need `sin`/`cos`
+externs from libm, out of scope for a language-readiness spike), a
+two-input mixer (`sum2`), and a scalar filter (`make-scale` = `* 0.5`)
+into one chain via the same typed `compose-f` pattern G7 uses. The
+chain is `(compose-f (sum2 osc1 osc2) filt)`. All values flow as
+`:float` through annotated `^fat` interfaces with no `:int`
+round-trips. Output `1.75\n1.75\n1.75\n1.75\n` matches the
+hand-computed reference `(1.0 + 2.5) * 0.5`. The remaining DSP work
+(non-constant oscillators, ADSR with the G5 typed state cell, the G3
+effects vec) all rest on greens; nothing G1-G7 didn't already cover
+surfaced here.
 
 ## Phasing
 
