@@ -1,0 +1,11 @@
+;; chan-wrong-handle -- passing an AsyncChan where chan-send expects a
+;; synchronous Chan is a compile error. Acceptance test for the Tier-1 handle
+;; newtypes introduced by the stdlib-opaque-handle-types plan: Chan and
+;; AsyncChan are nominally distinct even though both lower to :ptr<void>, so
+;; the swap that used to be a silent runtime hazard now fails at compile time.
+(load "stdlib/chan.tur")
+
+(defn main [] : int
+  (let [ach (async-chan-new 1)]
+    (chan-send ach 1)
+    0))

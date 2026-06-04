@@ -25,13 +25,17 @@
   ```c return NULL; ```)
 
 (defn main [] : int
-  (let [r  (reactor-new)
-        g  (local-fiber-group-new r)
-        ch (chan-new 4)]
+  (let [r   (reactor-new)
+        g   (local-fiber-group-new r)
+        ch  (chan-new 4)
+        ;; local-park-chan (tur/reactor) is not yet handle-typed (Tier 2);
+        ;; unwrap the Chan to its ptr<void> representation here so the receiver
+        ;; closure captures the raw pointer directly.
+        chp (:: ch :ptr<void>)]
     ;; Receiver: park until a value arrives.
     (local-spawn g
       (fn [user] : nil
-        (print-got (local-park-chan g ch)))
+        (print-got (local-park-chan g chp)))
       (null-ptr))
     ;; Sender: send then wake so the poll returns and the bridge fires.
     (local-spawn g

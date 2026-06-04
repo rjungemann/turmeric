@@ -175,6 +175,15 @@ The variadic checker now compares opaque types by identity, so passing a
 
 ### Phase 1 -- Tier 1 (threadpool, future, chan)
 
+> **Status update (2026-06-04):** the `chan` slice has landed --
+> `tur/chan` now exposes `Chan`/`AsyncChan` `defopaque` newtypes and all
+> sync/async channel signatures are handle-typed. The acceptance fixture
+> `tests/fixtures/errors/chan-wrong-handle` proves the swap (`AsyncChan`
+> into `chan-send`) is now a compile-time `TUR-E0001`. `threadpool` and
+> `future` remain to do. Implementing this surfaced a codegen bug --
+> `(:: captured-var :T)` inside a closure defeats the capture rewrite --
+> recorded in `docs/reported/ascribe-captured-var-in-closure.md`.
+
 1. Land `defopaque` declarations + signature updates in each module.
 2. Update intra-stdlib callers (`tur/taskgroup`, `tur/scheduler`, etc.).
 3. Regenerate all `tests/fixtures/*/expected.c` snapshots per the

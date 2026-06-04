@@ -188,7 +188,7 @@
 (defn join-thread [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn done-tick [ch : ptr<void>] : nil
+(defn done-tick [ch : Chan] : nil
   (chan-send ch 1))
 
 (defn main [] : int
