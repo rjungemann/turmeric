@@ -1,0 +1,18 @@
+;; taskgroup-wrong-handle -- passing the arguments to task-group-join in the
+;; wrong order is a compile error. Acceptance test for the Tier-2 TaskGroup /
+;; TaskHandle newtypes from the stdlib-opaque-handle-types plan: task-group-new
+;; returns a TaskGroup and task-group-spawn returns a TaskHandle. They are
+;; nominally distinct even though both lower to :ptr<void>, so the transposed
+;; call (task-group-join handle group) -- which used to type-check when both
+;; were bare pointers -- now fails at compile time.
+(load "stdlib/taskgroup.tur")
+
+(defn worker [] : nil
+  ```c return; ```)
+
+(defn main [] : int
+  (let [g (task-group-new)
+        h (task-group-spawn g worker)]
+    (task-group-join h g)
+    (task-group-free g))
+  0)

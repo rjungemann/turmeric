@@ -229,6 +229,42 @@ The variadic checker now compares opaque types by identity, so passing a
 Same procedure. Mutex/condvar/rwlock can ship as a single PR since they
 co-evolve (`condvar-wait` needs both newtypes simultaneously).
 
+> **Status update (2026-06-04, Tier 2 complete):** all four Tier-2 slices
+> have landed.
+>
+> - **mutex/condvar/rwlock** (one commit): `Mutex`, `CondVar`, `RwLock`
+>   newtypes. The headline win is `condvar-wait [c :CondVar m :Mutex]` --
+>   the transposed `(condvar-wait m c)` is now a compile-time `TUR-E0001`
+>   (fixture `errors/condvar-wrong-handle`). `condvar.tur` `(load "stdlib/
+>   mutex.tur")` to bring `Mutex` into scope; `load` is idempotent.
+> - **timer**: `TimerId` (a `defopaque` over `:int`). `timer-set ->
+>   TimerId`, `timer-cancel [id :TimerId]`; a bare int to `timer-cancel`
+>   is rejected (fixture `errors/timer-wrong-handle`).
+> - **reactor**: `EventSourceId` (over `:int`) for the `reactor-add-*`
+>   family; `reactor-modify-fd` / `reactor-remove` take it. Wrappers
+>   ascribe the C return `(:: ... :EventSourceId)` and unwrap `(:: id
+>   :int)` at the extern-c boundary. The `-1` error sentinel still rides
+>   in the id; callers compare via `(:: id :int)`. Fixture
+>   `errors/reactor-wrong-handle`. The reactor / fiber-group / channel
+>   handles stay `:ptr<void>` (out of scope).
+> - **taskgroup**: `TaskGroup` (group) and `TaskHandle` (spawned-task)
+>   newtypes; `task-group-join [group :TaskGroup handle :TaskHandle]` so
+>   the transposed call is rejected (fixture `errors/taskgroup-wrong-
+>   handle`). `task-group-spawn-async` keeps its `:ptr<void>` return (a
+>   C-level `TurFuture`, distinct from `tur/future`'s `Future`).
+>
+> No in-tree caller loads the timer / mutex / condvar / rwlock / taskgroup
+> stdlib modules (every fixture defines its own inline helpers), and the
+> one reactor caller that loads the stdlib (`reactor-fibers-park-chan`)
+> uses none of the source-id family, so no callers needed updating.
+> Implementing the taskgroup slice surfaced a pre-existing latent bug --
+> the `task-group-with*` / `task-group-async` wrapper macros expand to an
+> uncallable `nil` head -- reported in
+> `docs/reported/taskgroup-wrapper-macros-emit-nil-head.md`.
+>
+> Tier 2 is now complete; Tier 3 (`tur/atomic`) + the re-audit sweep is
+> next.
+
 ### Phase 3 -- Tier 3 + sweep
 
 - `tur/atomic`.
