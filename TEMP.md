@@ -163,7 +163,7 @@ do not collapse phases, do not reword entries into prose, and update the
     - Kind: plan
     - Goal: Replace inline-C workarounds in stdlib with idiomatic Turmeric
     - Deps: 21
-    - Status: In progress (Phase 1 complete as of 2026-06-03; Phases 2-4 outstanding)
+    - Status: Complete
 
 23. `upcoming/stdlib-linearity-affinity-plan.md`
     - Kind: plan
@@ -289,3 +289,24 @@ IN PROGRESS docs/reported/stdlib-future-linearity-aliasing.md
 IN PROGRESS docs/reported/defgadt-copy-and-shared-bounds.md
 docs/reported/defgadt-malformed-pattern-segfault.md
 docs/reported/parameterized-defopaque.md
+
+docs/reported/
+  - ascribing-fat-closure-value-to-fn-type-double-shims.md → relates to upcoming/stdlib-inline-c-deworkaround-plan.md
+  (blocks idiomatic rewrite of httpd-mw-fold-many)
+  - borrow-param-forwarding-drop.md → no doc cross-refs; blocks linearity-plan inventory promotions
+  - io-real-filesystem-and-list-dir-uncompilable.md → no doc cross-refs; blocks compiling whole stdlib/io.tur
+  - log-capability-vtable-uncompilable.md → no doc cross-refs (standalone codegen bug)
+  - stale-pair-signals-typed-snapshot.md → no doc cross-refs; pre-existing on clean origin/main
+  - stdlib-linear-handle-borrows.md → relates to upcoming/stdlib-linearity-affinity-plan.md (borrows blocker for that
+  plan)
+
+docs/upcoming/
+  - range-gadt-typeclass-migration-plan.md → depends on reported/defgadt-copy-and-shared-bounds.md (shipped
+  2026-06-04, prerequisite met) and reported/defgadt-malformed-pattern-segfault.md (must fix before A1 because A1
+  makes -Xgadt default-on, raising the SEGV's severity); also touches guides/gadts-guide.md
+
+
+
+
+IN PROGRESS tuplen-struct-param-passed-by-pointer-codegen-mismatch.md
+polymorphic-return-type-instantiation-collapses-to-first-tyvar.md

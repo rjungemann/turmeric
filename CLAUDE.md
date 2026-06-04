@@ -343,7 +343,7 @@ a given expression:
 | Neoteric | `f(x y)` replaces `(f x y)` | inline calls, especially single-result expressions |
 | Rest-of-line | `$ expr` replaces the surrounding outer `(...)` | a single nested call that would otherwise need wrapping parens |
 
-### Indentation -- no outer parens for forms and bodies
+### Sweet-Exp Indentation -- no outer parens for forms and bodies
 
 The primary rule: drop the outer `(...)` of any form whose body can be expressed
 as an indented block.
@@ -373,7 +373,7 @@ while not(window-should-close?(w))
     poll-events()
 ```
 
-### Neoteric -- `f(x)` for inline function calls
+### Sweet-Exp Neoteric -- `f(x)` for inline function calls
 
 Use `f(args...)` wherever a function call is embedded inside another expression
 and the neoteric form is more readable than the equivalent s-expression.
@@ -395,7 +395,7 @@ not(done?())
 Prefer neoteric over traditional parens for any call that fits on one line and
 has a clear, short argument list.
 
-### `$` -- rest-of-line as argument
+### Sweet-Exp `$` -- rest-of-line as argument
 
 Use `$` to avoid one level of wrapping parens when a line has a single nested
 call as its only argument.
@@ -414,7 +414,7 @@ println $ normalize $ vec3(1.0 0.0 0.0)
 Prefer `$` over neoteric when the outer call takes exactly one argument that is
 itself a call with multiple space-separated arguments.
 
-### Curly-infix -- `{a + b}` for arithmetic
+### Sweet-Exp Curly-infix -- `{a + b}` for arithmetic
 
 Use `{...}` for arithmetic expressions to make operator precedence visual.
 
