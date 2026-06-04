@@ -2498,6 +2498,24 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             uint32_t fn_arg_idx_fat = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_arg_idx_fat < fn_type.as.fn.arity &&
                 fn_type.as.fn.arg_fat[fn_arg_idx_fat]) {
+                /* fat-closure-ascription: an *already-fat* closure value that is
+                 * carried as a one-word :int/:ptr<void> (e.g. a list-head result,
+                 * or a handler threaded around as :int) and ascribed to a (fn ...)
+                 * type via (:: v T) is already in fat { thunk, env } form.  The
+                 * ascription is erased at codegen, but it re-types the value to
+                 * TY_FN, which would otherwise drive the bare-fn auto-shim below
+                 * and wrap the closure-record pointer in a __tur_fatshim adapter
+                 * -- so dispatch later calls the record's first 8 bytes as code
+                 * and BUS/SEGV-faults.  Strip the erased ascription so the raw
+                 * carrier flows to the already-fat pass-through branch (the same
+                 * plumbing that threads a computed :int handle untouched). */
+                if (args[i]->kind == EX_ASCRIBE && args[i]->as.ascribe_.inner &&
+                    args[i]->type.kind == TY_FN) {
+                    TypeKind carrier_k = args[i]->as.ascribe_.inner->type.kind;
+                    if (carrier_k == TY_INT || carrier_k == TY_PTR_VOID) {
+                        args[i] = args[i]->as.ascribe_.inner;
+                    }
+                }
                 TypeKind ak = args[i]->type.kind;
                 bool arg_is_poly_fn = (args[i]->kind == EX_VAR &&
                                        args[i]->as.var.binding &&

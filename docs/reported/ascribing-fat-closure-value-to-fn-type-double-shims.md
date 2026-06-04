@@ -153,10 +153,22 @@ Relevant pointers:
 
 ## Status
 
-Open. Worked around in
+**Fixed** via proposed fix direction 1 (provenance-aware ascription).
+`elab_call.c`'s `^fat` argument-adaptation path now strips an erased
+`(:: v T)` ascription whose underlying value is a one-word `:int`/
+`:ptr<void>` carrier before the bare-fn auto-shim test. The carrier value
+flows through the already-fat pass-through branch (the same plumbing that
+threads a computed `:int` handle untouched) instead of being wrapped in a
+`__tur_fatshim` adapter. The minimal repro now dispatches correctly and
+emits no shim; the regression is locked in by
+`tests/fixtures/fat-closure-ascription` (folds five fat-closure adders
+through an ascribed `^fat` dispatch, prints `115`).
+
+Earlier worked around in
 [stdlib-inline-c-deworkaround-plan](../upcoming/stdlib-inline-c-deworkaround-plan.md)
 Phase 2 by keeping a single inline-C `httpd-mw-apply` dispatch (the same
 ABI glue as the pre-existing `httpd-call`) and doing the *cons walk* in
-pure Turmeric. The walk -- the actual target of that plan -- is now
-idiomatic; only the one-instruction fat dispatch remains inline-C, blocked
-on this hole.
+pure Turmeric. With this hole closed, the one-instruction fat dispatch can
+now be expressed by ascribing the `:int` handle to its `(fn ...)` type and
+handing it to a `^fat` parameter (the inline-C ABI glue is still needed to
+read `{ thunk, env }` and forward args, but the mis-shim hazard is gone).
