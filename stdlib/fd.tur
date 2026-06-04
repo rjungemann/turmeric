@@ -1,0 +1,55 @@
+;;; tur/fd -- Fd: an opaque newtype over a POSIX file descriptor.
+;;;
+;;; A shared handle type for the I/O modules (tur/async_socket, tur/async_file,
+;;; tur/net). Wrapping the raw :int fd in a nominally distinct type means the
+;;; checker rejects passing an arbitrary integer -- a byte count, a length, an
+;;; unrelated handle -- where a file descriptor is expected. Fd lowers to :int
+;;; in the C ABI, so inline-C bodies that take or return an fd are unchanged.
+;;;
+;;; The OS error convention rides in the value: a returned Fd of -1 means
+;;; failure. Use fd-valid? to test it, or fd->int to recover the raw integer
+;;; (e.g. to compare against a specific errno-style sentinel).
+;;;
+;;; Since: stdlib-opaque-handle-types-plan, I/O sweep
+;; tur/fd -- shared file-descriptor handle newtype.
+(defopaque Fd :int)
+;;; fd->int -- recover the raw :int file descriptor from an Fd.
+;;;
+;;; Parameters:
+;;;   fd -- the Fd handle to unwrap
+;;;
+;;; Returns:
+;;;   The underlying file descriptor as a plain :int.
+;;;
+;;; Example:
+;;;   (if (< (fd->int fd) 0) (handle-error))
+;;;
+;;; Since: I/O sweep
+(defn fd->int [fd : Fd] : int (:: fd :int))
+;;; int->fd -- wrap a raw :int file descriptor as an Fd.
+;;;
+;;; Parameters:
+;;;   n -- a raw file descriptor (e.g. 0/1/2 for stdin/stdout/stderr)
+;;;
+;;; Returns:
+;;;   An Fd wrapping n.
+;;;
+;;; Example:
+;;;   (def stdin-fd (int->fd 0))
+;;;
+;;; Since: I/O sweep
+(defn int->fd [n : int] : Fd (:: n :Fd))
+;;; fd-valid? -- return true if the Fd is a real descriptor (>= 0).
+;;;
+;;; Parameters:
+;;;   fd -- the Fd handle to test
+;;;
+;;; Returns:
+;;;   true when the underlying fd is non-negative; false for the -1 error value.
+;;;
+;;; Example:
+;;;   (let [fd (async-socket-accept listen)]
+;;;     (when (fd-valid? fd) (serve fd)))
+;;;
+;;; Since: I/O sweep
+(defn fd-valid? [fd : Fd] : bool (>= (:: fd :int) 0))

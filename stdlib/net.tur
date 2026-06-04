@@ -20,20 +20,25 @@
 ;;;
 ;;; Since: LT4
 (defstruct Socket :linear [fd : int])
-;;; socket-fd -- return the raw file descriptor from a Socket.
+;; ---- File-descriptor handle newtype (stdlib-opaque-handle-types-plan, I/O sweep) ----
+;; socket-fd hands back the underlying descriptor as a shared Fd handle (from
+;; tur/fd) so it composes with the async-socket-* operations -- e.g.
+;; (async-socket-send (socket-fd s) ...). load is idempotent.
+(load "stdlib/fd.tur")
+;;; socket-fd -- return the underlying file descriptor from a Socket as an Fd.
 ;;;
 ;;; Parameters:
 ;;;   s -- a Socket value.
 ;;;
 ;;; Returns:
-;;;   The underlying file descriptor (int).
+;;;   The underlying file descriptor wrapped as an Fd.
 ;;;
 ;;; Example:
-;;;   (socket-fd my-socket)  ; => 5
+;;;   (socket-fd my-socket)  ; => Fd wrapping 5
 ;;;
 ;;; Since: LT4
 
-(defn socket-fd [s : Socket] : int
+(defn socket-fd [s : Socket] : Fd
   ```c return s.fd;
   ```)
 ;;; socket-valid? -- return true if the Socket wraps a non-negative fd.

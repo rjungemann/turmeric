@@ -1,0 +1,13 @@
+;; reactor-wrong-handle -- passing an arbitrary integer to reactor-remove is a
+;; compile error. Acceptance test for the Tier-2 EventSourceId newtype from the
+;; stdlib-opaque-handle-types plan: the reactor-add-* family returns an
+;; EventSourceId (an opaque over :int), and reactor-modify-fd / reactor-remove
+;; accept only that -- not any stray :int -- so a fabricated or stale source id
+;; is caught at compile time.
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)]
+    (reactor-remove r 7)
+    (reactor-free r))
+  0)

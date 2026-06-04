@@ -10,11 +10,14 @@
 ;; parked and an IO waiter is registered; the scheduler polls and resumes
 ;; the fiber when the fd becomes ready.
 ;;
-;; API:
-;;   async-file-open  [path flags]    -> fd (int), -1 on error
-;;   async-file-read  [fd buf-size]   -> bytes-read (int), 0 on EOF, -1 on error
-;;   async-file-write [fd data len]   -> bytes-written (int), -1 on error
-;;   async-file-close [fd]            -> 0 on success, -1 on error
+;; API (stdlib-opaque-handle-types-plan, I/O sweep):
+;;   async-file-open  [path flags]      -> Fd, -1 on error
+;;   async-file-read  [fd :Fd buf-size] -> bytes-read (int), 0 on EOF, -1 on error
+;;   async-file-write [fd :Fd data len] -> bytes-written (int), -1 on error
+;;   async-file-close [fd :Fd]          -> 0 on success, -1 on error
+;; The fd returned by async-file-open is an Fd handle (a :int newtype); a
+;; returned -1 still signals failure -- test with fd-valid? or fd->int.
+(load "stdlib/fd.tur")
 ;; Open a file with O_NONBLOCK set.
 ;; flags: 0 = O_RDONLY, 1 = O_WRONLY|O_CREAT|O_TRUNC, 2 = O_RDWR
 ;;; async-file-open -- open a file with O_NONBLOCK and return its file descriptor.
@@ -32,7 +35,7 @@
 ;;; Since: Phase T24
 (defn async-file-open [path : cstr flags : int]
   #{Unsafe}
-  : int
+  : Fd
   ```c int oflags;
   switch ((int)flags) {
     case 1:  oflags = O_WRONLY | O_CREAT | O_TRUNC; break;
@@ -59,7 +62,7 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-file-read [fd : int buf-size : int]
+(defn async-file-read [fd : Fd buf-size : int]
   #{Unsafe}
   : int
   ```c char *buf = (char *)malloc((size_t)buf_size);
@@ -104,7 +107,7 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-file-write [fd : int data : cstr len : int]
+(defn async-file-write [fd : Fd data : cstr len : int]
   #{Unsafe}
   : int
   ```c int64_t total = 0;
@@ -141,7 +144,7 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-file-close [fd : int]
+(defn async-file-close [fd : Fd]
   #{Unsafe}
   : int
   ```c tur_io_unregister((int)fd);

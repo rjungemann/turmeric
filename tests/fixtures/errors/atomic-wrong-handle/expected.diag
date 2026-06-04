@@ -1,0 +1,1 @@
+function 'atomic-load' arg 1: expected AtomicCell, got ptr<void>

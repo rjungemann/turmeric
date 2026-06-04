@@ -1,0 +1,14 @@
+;; fiber-wrong-handle -- a raw ptr<void> cannot stand in for a FiberHandle.
+;; Acceptance test for the Tier-3 FiberHandle newtype from the
+;; stdlib-opaque-handle-types plan: fiber-new returns a FiberHandle, and the
+;; fiber-* operations (and a scheduler's spawn/unpark) accept only that -- so
+;; handing fiber-resume some other ptr<void> (here a bare malloc'd pointer) is
+;; caught at compile time rather than resuming through an unrelated FiberBlock.
+(load "stdlib/fiber.tur")
+
+(defn raw-ptr [] : ptr<void>
+  ```c return malloc(8); ```)
+
+(defn main [] : int
+  (println (fiber-resume (raw-ptr) 0))
+  0)

@@ -12,16 +12,16 @@
 ;; exiting promptly.
 ;;
 ;; API:
-;;   task-group-new       []                              -- ptr<void>
-;;   task-group-spawn     [group :ptr<void> f :ptr<void>] -- ptr<void>  (fiber handle)
-;;   task-group-join      [group :ptr<void> handle :ptr<void>] -- nil  (Phase TG-002)
-;;   task-group-cancel    [group :ptr<void>]            -- nil
-;;   task-group-cancelled? []                            -- bool  (checks current fiber)
-;;   task-group-cancelled? [group :ptr<void>]           -- bool  (checks specific group)
-;;   task-handle-done?    [handle :ptr<void>]            -- bool  (Phase TG-002)
-;;   task-group-done?      [group :ptr<void>]           -- bool
-;;   task-group-wait      [group :ptr<void>]           -- nil  (blocks until done)
-;;   task-group-free      [group :ptr<void>]           -- nil
+;;   task-group-new       []                              -- TaskGroup
+;;   task-group-spawn     [group :TaskGroup f :ptr<void>] -- TaskHandle
+;;   task-group-join      [group :TaskGroup handle :TaskHandle] -- nil  (Phase TG-002)
+;;   task-group-cancel    [group :TaskGroup]            -- nil
+;;   fiber-cancelled?     []                             -- bool  (checks current fiber)
+;;   task-group-cancelled? [group :TaskGroup]           -- bool  (checks specific group)
+;;   task-handle-done?    [handle :TaskHandle]           -- bool  (Phase TG-002)
+;;   task-group-done?      [group :TaskGroup]           -- bool
+;;   task-group-wait      [group :TaskGroup]           -- nil  (blocks until done)
+;;   task-group-free      [group :TaskGroup]           -- nil
 ;;
 ;; TaskGroupBlock layout:
 ;;   { pthread_mutex_t lock;
@@ -38,18 +38,26 @@
 ;;
 ;; Cancellation is cooperative: tasks must periodically check `task-group-cancelled?`
 ;; or `fiber-cancelled?` and exit if cancelled.
+;; ---- Opaque handle newtypes (stdlib-opaque-handle-types-plan, Tier 2) ----
+;; TaskGroup is the group handle returned by task-group-new; TaskHandle is the
+;; per-task fiber handle returned by task-group-spawn. They are nominally
+;; distinct so the checker rejects mixing them up -- e.g. passing a TaskHandle
+;; where a TaskGroup is expected, or vice versa in task-group-join. Both lower
+;; to :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
+(defopaque TaskGroup  :ptr<void>)
+(defopaque TaskHandle :ptr<void>)
 ;; ---- TaskGroup lifecycle ----
 ;;; task-group-new -- create a new empty TaskGroup.
 ;;;
 ;;; Returns:
-;;;   An opaque ptr<void> handle to the TaskGroupBlock.
+;;;   A TaskGroup handle to the TaskGroupBlock.
 ;;;
 ;;; Example:
-;;;   (let [g (task-group-new)] ...)  ; => ptr<void>
+;;;   (let [g (task-group-new)] ...)  ; => TaskGroup
 ;;;
 ;;; Since: Phase T22
 ;; Create a new TaskGroup
-(defn task-group-new [] : ptr<void>
+(defn task-group-new [] : TaskGroup
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -106,7 +114,7 @@
 ;;; Since: Phase T22
 ;; Check if a specific task group has been cancelled
 
-(defn task-group-cancelled? [group : ptr<void>] : bool
+(defn task-group-cancelled? [group : TaskGroup] : bool
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -137,7 +145,7 @@
 ;; PR-TG-003-2: Combines fiber-level and group-level cancellation checks
 ;; Returns true if either the current fiber was cancelled or the group was cancelled
 
-(defn task-group-should-exit? [group : ptr<void>] : bool
+(defn task-group-should-exit? [group : TaskGroup] : bool
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -184,7 +192,7 @@
 ;;; Since: Phase T22
 ;; Check if all tasks in the group have completed
 
-(defn task-group-done? [group : ptr<void>] : bool
+(defn task-group-done? [group : TaskGroup] : bool
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -210,7 +218,7 @@
 ;;; Since: Phase T22
 ;; Signal that a task has completed. Must be called by each spawned task.
 
-(defn task-group-task-done [group : ptr<void>] : nil
+(defn task-group-task-done [group : TaskGroup] : nil
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -240,7 +248,7 @@
 ;;; Since: Phase T22
 ;; Wait for all tasks in the group to complete
 
-(defn task-group-wait [group : ptr<void>] : nil
+(defn task-group-wait [group : TaskGroup] : nil
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -268,7 +276,7 @@
 ;; Sets the cancelled flag and marks the group as done
 ;; Tasks must check `fiber-cancelled?` or `task-group-cancelled?` and exit
 
-(defn task-group-cancel [group : ptr<void>] : nil
+(defn task-group-cancel [group : TaskGroup] : nil
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -302,7 +310,7 @@
 ;; Phase TG-004-2: Extended cancel with reason parameter
 ;;   reason: 0=manual, 1=panic, 2=timeout, 3=error
 
-(defn task-group-cancel-with-reason [group : ptr<void> reason : int] : nil
+(defn task-group-cancel-with-reason [group : TaskGroup reason : int] : nil
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -332,7 +340,7 @@
 ;;; Since: Phase T22
 ;; Convenience: cancel with panic reason (1)
 
-(defn task-group-cancel-panic [group : ptr<void>] : nil
+(defn task-group-cancel-panic [group : TaskGroup] : nil
   (task-group-cancel-with-reason group 1))
 ;;; task-group-cancel-timeout -- cancel the group with reason 2 (timeout).
 ;;;
@@ -345,7 +353,7 @@
 ;;; Since: Phase T22
 ;; Convenience: cancel with timeout reason (2)
 
-(defn task-group-cancel-timeout [group : ptr<void>] : nil
+(defn task-group-cancel-timeout [group : TaskGroup] : nil
   (task-group-cancel-with-reason group 2))
 ;;; task-group-cancel-error -- cancel the group with reason 3 (error).
 ;;;
@@ -358,7 +366,7 @@
 ;;; Since: Phase T22
 ;; Convenience: cancel with error reason (3)
 
-(defn task-group-cancel-error [group : ptr<void>] : nil
+(defn task-group-cancel-error [group : TaskGroup] : nil
   (task-group-cancel-with-reason group 3))
 ;;; task-group-cancel-reason -- return the reason code why the group was cancelled.
 ;;;
@@ -379,7 +387,7 @@
 ;;   2 = timeout
 ;;   3 = error/exception in a child task
 
-(defn task-group-cancel-reason [group : ptr<void>] : int
+(defn task-group-cancel-reason [group : TaskGroup] : int
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -411,7 +419,7 @@
 ;; Spawn a fiber in the task group
 ;; Returns a fiber handle that can be used with task-group-join (Phase TG-002)
 
-(defn task-group-spawn [group : ptr<void> f : ptr<void>] : ptr<void>
+(defn task-group-spawn [group : TaskGroup f : ptr<void>] : TaskHandle
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -451,7 +459,7 @@
 ;; Wait for a specific task (fiber handle) to complete
 ;; Phase TG-002: task-group-join [group handle] — await specific task completion
 
-(defn task-group-join [group : ptr<void> handle : ptr<void>] : nil
+(defn task-group-join [group : TaskGroup handle : TaskHandle] : nil
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -500,7 +508,7 @@
 ;; Check if a specific task (fiber handle) has completed
 ;; Phase TG-002: Helper for non-blocking check
 
-(defn task-handle-done? [handle : ptr<void>] : bool
+(defn task-handle-done? [handle : TaskHandle] : bool
   ```c typedef struct FiberBlock FiberBlock;
   FiberBlock *f = (FiberBlock *)handle;
   return f ? f->done : true;  /* NULL handle is considered "done" */
@@ -516,7 +524,7 @@
 ;;; Since: Phase T22
 ;; Free the task group
 
-(defn task-group-free [group : ptr<void>] : nil
+(defn task-group-free [group : TaskGroup] : nil
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -556,7 +564,7 @@
 ;;; Since: Phase T22
 ;; Helper: spawn a timeout thread that cancels the group
 
-(defn spawn-timeout-thread [group : ptr<void> ms : int] : ptr<void>
+(defn spawn-timeout-thread [group : TaskGroup ms : int] : ptr<void>
   ```c pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "spawn-timeout: oom\n"); abort(); }
 
@@ -678,7 +686,7 @@
 ;; The fiber runs when the scheduler is driven (e.g., by (await future)).
 ;; TG-006: Fiber-based async integrated with TaskGroup lifecycle.
 
-(defn task-group-spawn-async [group : ptr<void> f : ptr<void>] : ptr<void>
+(defn task-group-spawn-async [group : TaskGroup f : ptr<void>] : ptr<void>
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t  done_cond;

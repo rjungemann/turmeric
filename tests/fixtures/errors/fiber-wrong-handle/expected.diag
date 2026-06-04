@@ -1,0 +1,1 @@
+function 'fiber-resume' arg 1: expected FiberHandle, got ptr<void>

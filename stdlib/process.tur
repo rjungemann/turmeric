@@ -7,30 +7,38 @@
 ;;
 ;; Wrappers around unistd.h / sys/wait.h primitives.
 ;; process/capture uses popen(3) for capturing stdout.
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, I/O sweep) ----
+;; Pid wraps a process id (an :int) with a nominally distinct type, so the
+;; checker rejects passing an exit code, a byte count, or any unrelated integer
+;; to process/wait -- only a pid produced by process/pid / -ppid / -spawn is
+;; accepted. process/spawn still encodes its error case as pid -1; recover the
+;; raw integer with (:: pid :int) to compare against it. Pid lowers to :int in
+;; the C ABI, so the inline-C bodies are unchanged.
+(defopaque Pid :int)
 ;;; process/pid -- return the current process ID.
 ;;;
 ;;; Returns:
-;;;   The PID of the calling process as :int.
+;;;   The PID of the calling process as a Pid.
 ;;;
 ;;; Example:
 ;;;   (process/pid)  ; => 12345
 ;;;
 ;;; Since: Phase B2
-(defn process/pid [] : int
+(defn process/pid [] : Pid
   ```c #include <unistd.h>
   return (int64_t)getpid();
   ```)
 ;;; process/ppid -- return the parent process ID.
 ;;;
 ;;; Returns:
-;;;   The PPID of the calling process as :int.
+;;;   The PPID of the calling process as a Pid.
 ;;;
 ;;; Example:
 ;;;   (process/ppid)  ; => 1
 ;;;
 ;;; Since: Phase B2
 
-(defn process/ppid [] : int
+(defn process/ppid [] : Pid
   ```c #include <unistd.h>
   return (int64_t)getppid();
   ```)
@@ -88,7 +96,7 @@
 ;;;   argv -- cons list of cstr arguments (head = argv[0])
 ;;;
 ;;; Returns:
-;;;   The child PID on success, -1 on fork failure.
+;;;   The child PID as a Pid on success, or a Pid wrapping -1 on fork failure.
 ;;;
 ;;; Example:
 ;;;   (let [pid (process/spawn "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))]
@@ -96,7 +104,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/spawn [path : cstr argv : int] : int
+(defn process/spawn [path : cstr argv : int] : Pid
   ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -128,7 +136,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/wait [pid : int] : int
+(defn process/wait [pid : Pid] : int
   ```c #include <sys/wait.h>
   int status = 0;
   if (waitpid((pid_t)pid, &status, 0) < 0) return -1;

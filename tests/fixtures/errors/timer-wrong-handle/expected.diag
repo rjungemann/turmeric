@@ -1,0 +1,1 @@
+function 'timer-cancel' arg 1: expected TimerId, got int

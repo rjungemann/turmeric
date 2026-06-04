@@ -10,6 +10,14 @@
 ;;;
 ;;; Since: Phase B1
 (defstruct Ref [value : int])
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, tail) ----
+;; RefHandle wraps the heap pointer (an :int) handed out by ref-new so the
+;; checker rejects passing an arbitrary integer to ref-get / ref-free -- only a
+;; handle minted by ref-new is accepted. It lowers to :int in the C ABI, so the
+;; inline-C bodies are unchanged. (This is distinct from the Ref struct above
+;; and its Clone instance, which deep-copy a by-value Ref; the Clone typeclass
+;; fixes clone's return type at :int, so that path keeps the raw int.)
+(defopaque RefHandle :int)
 ;; Create a new Ref from a value (takes ownership of the pointer)
 ;; The caller is responsible for ensuring the value is heap-allocated
 ;; if it needs to outlive the Ref.
@@ -19,14 +27,14 @@
 ;;;   value -- the int64 value to store inside the Ref
 ;;;
 ;;; Returns:
-;;;   An opaque :int handle (pointer cast) to the new Ref cell.
+;;;   A RefHandle (an opaque :int pointer cast) to the new Ref cell.
 ;;;
 ;;; Example:
-;;;   (def r (ref-new 42))  ; => handle to Ref{42}
+;;;   (def r (ref-new 42))  ; => RefHandle to Ref{42}
 ;;;
 ;;; Since: Phase B1
 
-(defn ref-new [value] : int
+(defn ref-new [value : int] : RefHandle
   ```c struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
   ref->value = value;
   return (int64_t)(intptr_t)ref;
@@ -45,7 +53,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn ref-get [r] : int
+(defn ref-get [r : RefHandle] : int
   ```c struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
   if (!ref) {
     fprintf(stderr, "ref-get: null ref\n");
@@ -61,7 +69,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn ref-free [r]
+(defn ref-free [r : RefHandle] : void
   ```c free((void*)(intptr_t)r);
   ```)
 ;; Phase B1: Clone instance for Ref

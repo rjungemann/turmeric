@@ -8,6 +8,15 @@
 ;; Higher-level wrappers around sys/stat.h, dirent.h, fnmatch.h, and
 ;; standard libc file functions.  These complement the low-level I/O
 ;; primitives in io.tur.
+;; ---- Opaque handle newtypes (stdlib-opaque-handle-types-plan, I/O sweep) ----
+;; StatInfo and TmpFile wrap the opaque :int pointers handed out by fs/stat and
+;; fs/tmpfile so the checker rejects passing one where the other (or any bare
+;; integer) is expected -- e.g. handing a TmpFile to fs/stat-size. Both lower to
+;; :int in the C ABI, so the inline-C bodies are unchanged. fs/tmpfile-fd hands
+;; back the open descriptor as the shared Fd handle (from tur/fd).
+(load "stdlib/fd.tur")
+(defopaque StatInfo :int)
+(defopaque TmpFile  :int)
 ;;; fs/stat -- return file metadata for a path.
 ;;;
 ;;; Parameters:
@@ -22,7 +31,7 @@
 ;;;   (let [s (fs/stat "/etc/hosts")] (fs/stat-size s))
 ;;;
 ;;; Since: Phase B2
-(defn fs/stat [path : cstr] : int
+(defn fs/stat [path : cstr] : StatInfo
   ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return 0;
@@ -42,7 +51,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-free [s : int] : void
+(defn fs/stat-free [s : StatInfo] : void
   ```c if (s) free((void*)(intptr_t)s);
   ```)
 ;;; fs/stat-size -- extract file size from a stat result.
@@ -58,7 +67,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-size [s : int] : int
+(defn fs/stat-size [s : StatInfo] : int
   ```c return ((int64_t*)(intptr_t)s)[0];
   ```)
 ;;; fs/stat-mtime -- extract modification time from a stat result.
@@ -74,7 +83,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-mtime [s : int] : int
+(defn fs/stat-mtime [s : StatInfo] : int
   ```c return ((int64_t*)(intptr_t)s)[1];
   ```)
 ;;; fs/stat-mode -- extract file mode bits from a stat result.
@@ -90,7 +99,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-mode [s : int] : int
+(defn fs/stat-mode [s : StatInfo] : int
   ```c return ((int64_t*)(intptr_t)s)[2];
   ```)
 ;;; fs/exists? -- test whether a path exists.
@@ -347,7 +356,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile [] : int
+(defn fs/tmpfile [] : TmpFile
   ```c char *tmpl = strdup("/tmp/tur_XXXXXX");
   int fd = mkstemp(tmpl);
   if (fd < 0) { free(tmpl); return 0; }
@@ -369,7 +378,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-path [t : int] : cstr
+(defn fs/tmpfile-path [t : TmpFile] : cstr
   ```c return (const char*)(intptr_t)((int64_t*)(intptr_t)t)[0];
   ```)
 ;;; fs/tmpfile-fd -- extract the file descriptor from an fs/tmpfile pair.
@@ -385,7 +394,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-fd [t : int] : int
+(defn fs/tmpfile-fd [t : TmpFile] : Fd
   ```c return ((int64_t*)(intptr_t)t)[1];
   ```)
 ;;; fs/tmpfile-free -- close the fd and free the tmpfile pair.
@@ -398,7 +407,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-free [t : int] : void
+(defn fs/tmpfile-free [t : TmpFile] : void
   ```c #include <unistd.h>
   if (!t) return;
   int64_t *pair = (int64_t*)(intptr_t)t;

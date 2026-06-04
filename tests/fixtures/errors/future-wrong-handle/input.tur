@@ -1,0 +1,12 @@
+;; future-wrong-handle -- calling promise-fulfill (a write-end operation) on a
+;; read-end Future is a compile error. Acceptance test for the Tier-1 handle
+;; newtypes introduced by the stdlib-opaque-handle-types plan: Promise and
+;; Future are nominally distinct views over the same shared FutureCell, so
+;; fulfilling a Future (which has no producer end) -- a silent runtime hazard
+;; when both were bare :ptr<void> -- now fails at compile time.
+(load "stdlib/future.tur")
+
+(defn main [] : int
+  (let [f (future-of 1)]
+    (promise-fulfill f 2)
+    0))
