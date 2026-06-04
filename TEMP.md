@@ -102,24 +102,30 @@ do not collapse phases, do not reword entries into prose, and update the
 13. `reported/fn-typed-return-lowered-to-result-type.md`
     - Kind: report
     - Goal: A `defn` whose declared return type is `(fn [...] T)` emits a C signature using the inner `T` instead of a closure-box pointer -- register-class miscompile risk (e.g. `(fn [:float] :float)` → `double` while body returns `void *`)
-    - Deps: independent (surfaced by 17 / G2 spike)
+    - Deps: independent (surfaced by 18 / G2 spike)
     - Status: Complete
 
 14. `reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md`
     - Kind: report
     - Goal: A polymorphic `(defn f [A] ... (fn ... : A val))` emits one shared inner C body returning `int64_t`; the `:float` specialisation invokes it through a `double (*)(...)` pointer and reads the parameter (xmm0) instead of the captured value -- silent miscompile
-    - Deps: independent (surfaced by 17 / G2 spike; same family as 8 and 13)
+    - Deps: independent (surfaced by 18 / G2 spike; same family as 8 and 13)
     - Status: In Progress
 
 15. `reported/fat-closure-dispatch-does-not-handle-struct-return.md`
     - Kind: report
     - Goal: A closure declared `: (Pair float float)` emits an inner body returning the struct directly but a dispatcher that casts to `int64_t (*)(...)`; `cc` rejects the generated C outright. Typed-thunk family covers `:float`/`:cstr` but not aggregates
-    - Deps: independent (surfaced by 17 / G4 spike; same family as 8 but for aggregate returns)
+    - Deps: independent (surfaced by 18 / G4 spike; same family as 8 but for aggregate returns)
+    - Status: Open
+
+16. `reported/instance-method-closure-return-lowered-to-result-type.md`
+    - Kind: report
+    - Goal: A `definstance` method declared `(fn [...] T)` lowers BOTH its dict-field type AND its C impl signature to the function's *result* type `T`, not a function-pointer type. Impl body returns a bare `T (*)(...)`. For non-`int64_t`-compatible `T` (e.g. `:float`) this is a hard `cc` error; for `int64_t`-compatible `T` (e.g. `:int`) it "works by luck" with `-Wint-conversion`. Instance-method mirror of 13
+    - Deps: independent (adjacent to 7; found 2026-06-04 while fixing 13)
     - Status: Open
 
 ## Phase 2 -- Type system expansion
 
-16. `upcoming/sum-types-either-plan.md`
+17. `upcoming/sum-types-either-plan.md`
     - Kind: plan
     - Goal: Land binary sum types (`Either L R`) with constructors, pattern matching, exhaustiveness, typeclass support
     - Deps: independent
@@ -127,67 +133,67 @@ do not collapse phases, do not reword entries into prose, and update the
 
 ## Phase 3 -- Readiness investigation
 
-17. `upcoming/language-readiness-for-typed-signal-plan.md`
+18. `upcoming/language-readiness-for-typed-signal-plan.md`
     - Kind: plan
     - Goal: Spike-validate that the type system can support a typed signal library; gate remaining gaps
-    - Deps: 4, 7, 8, 10, 16
+    - Deps: 4, 7, 8, 10, 17
     - Status: Done (G1, G3, G5, G6, G7, G8 green; G2 red → 14; G4 red → 15)
 
 ## Phase 4 -- Stdlib hardening
 
-18. `upcoming/stdlib-opaque-handle-types-plan.md`
+19. `upcoming/stdlib-opaque-handle-types-plan.md`
     - Kind: plan
     - Goal: Wrap bare `:int`/`:ptr<void>` resource handles in `defopaque` newtypes
     - Deps: 1
     - Status: In Progress
 
-19. `upcoming/stdlib-inline-c-deworkaround-plan.md`
+20. `upcoming/stdlib-inline-c-deworkaround-plan.md`
     - Kind: plan
     - Goal: Replace inline-C workarounds in stdlib with idiomatic Turmeric
-    - Deps: 18
+    - Deps: 19
     - Status: In progress (Phase 1 complete as of 2026-06-03; Phases 2-4 outstanding)
 
-20. `upcoming/stdlib-advanced-typing-plan.md`
+21. `upcoming/stdlib-advanced-typing-plan.md`
     - Kind: plan
     - Goal: Add linearity/affinity, session types, effects, refinement, typeclass consolidation to stdlib
-    - Deps: 18
+    - Deps: 19
     - Status: Draft (Phases L, S, E, R, T designed, not implemented)
 
 ## Phase 5 -- Stdlib API cleanup
 
-21. `upcoming/stdlib-arrow-scaleback-plan.md`
+22. `upcoming/stdlib-arrow-scaleback-plan.md`
     - Kind: plan
     - Goal: Remove disabled Arrow typeclass scaffolding; keep only bare-function combinators
-    - Deps: 17
+    - Deps: 18
     - Status: Complete (mechanical steps defined, awaiting approval)
 
-22. `upcoming/stdlib-type-erasure-cleanup-plan.md`
+23. `upcoming/stdlib-type-erasure-cleanup-plan.md`
     - Kind: plan
     - Goal: Replace int64-erased typeclass stubs with real instances
-    - Deps: 7, 16 (plus operator-name mangling fix tracked inside the plan)
+    - Deps: 7, 17 (plus operator-name mangling fix tracked inside the plan)
     - Status: In Progress (Phases A-C with subtasks defined, not implemented)
 
 ## Phase 6 -- Typeclass reintroduction
 
-23. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
+24. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
     - Kind: plan
     - Goal: Reintroduce Arrow / ArrowChoice / ArrowLoop typeclasses on `(->)`
-    - Deps: 7, 16, 22
+    - Deps: 7, 17, 23
     - Status: Draft, blocked on prerequisites (T1-T12 tasks defined)
 
 ## Phase 7 -- Signal rebuild
 
-24. `reported/signal-spice-broken-build.md`
+25. `reported/signal-spice-broken-build.md`
     - Kind: report
     - Goal: tur-signal spice does not compile -- references removed `__arrow_call1` plus un-imported stdlib symbols; the existing rebuild plan understates the scope by assuming a half-done `:float` migration baseline
-    - Deps: independent (prerequisite finding for 25)
+    - Deps: independent (prerequisite finding for 26)
     - Status: Obsolete (severity: high)
 
-25. `upcoming/tur-signal-rebuild-plan.md`
+26. `upcoming/tur-signal-rebuild-plan.md`
     - Kind: plan
     - Goal: Rebuild the tur-signal spice on top of the modern typed infrastructure
-    - Deps: 14, 15, 17, 21, 24
-    - Status: Draft, blocked on 14 + 15 (polymorphic `constant` and struct-returning closures) if needed on critical path; otherwise blocked only on 17 + 21 (Phases 1-6 designed)
+    - Deps: 14, 15, 18, 22, 25
+    - Status: Draft, blocked on 14 + 15 (polymorphic `constant` and struct-returning closures) if needed on critical path; otherwise blocked only on 18 + 22 (Phases 1-6 designed)
 
 ## Other notes
 
@@ -213,6 +219,3 @@ docs/reported/taskgroup-wrapper-macros-emit-nil-head.md
 docs/reported/io-file-open-untyped-params-default-to-int.md
 
 docs/archive/httpd-conn-struct-consolidation-plan.md
-
-docs/reported/instance-method-closure-return-lowered-to-result-type.md
-NEEDS REVIEW
