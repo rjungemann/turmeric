@@ -76,5 +76,5 @@
 (definstance MapKey [Sym] (mk-box [x]
                             : int
                             ```c return (int64_t)(intptr_t)x; ```)
-  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_qu; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)__TUR_CNAME_tur-int-carrier-eq?__; ```)
   (mk-owned? [x] 0))

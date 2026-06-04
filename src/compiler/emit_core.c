@@ -1028,6 +1028,17 @@ bool inline_c_has_ty_template(const InlineC *ic) {
     return false;
 }
 
+bool inline_c_has_cname_template(const InlineC *ic) {
+    if (!ic || !ic->code.p) return false;
+    const char *code = ic->code.p;
+    uint32_t len = ic->code.len;
+    if (len < 12) return false;
+    for (uint32_t i = 0; i + 12 <= len; i++) {
+        if (memcmp(code + i, "__TUR_CNAME_", 12) == 0) return true;
+    }
+    return false;
+}
+
 /* SS2: Perform __TUR_CAP_N__ / __TUR_VAL_N__ substitution on an InlineC node.
  * Emits val_exprs[N] into temp vars in body, then returns a malloc'd C string
  * with all __TUR_CAP_N__ and __TUR_VAL_N__ placeholders substituted.
@@ -1040,9 +1051,11 @@ bool inline_c_has_ty_template(const InlineC *ic) {
  * C width rather than the generic carrier width. */
 char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
     bool has_ty_template = inline_c_has_ty_template(ic);
+    bool has_cname_template = inline_c_has_cname_template(ic);
 
     /* Fast path: no substitution needed. */
-    if (ic->n_captures == 0 && ic->n_val_exprs == 0 && !has_ty_template) {
+    if (ic->n_captures == 0 && ic->n_val_exprs == 0 && !has_ty_template &&
+        !has_cname_template) {
         return strndup(ic->code.p, ic->code.len);
     }
 
@@ -1147,6 +1160,31 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
                     buf_puts(&result, resolved);
                     i = j + 2; matched = true;
                 }
+            }
+        }
+        /* Name-reference splice: __TUR_CNAME_<source-name>__ expands to the
+         * mangled C identifier of <source-name>, routed through the same
+         * tur_mangle_append helper the emitter uses for binding names. This
+         * lets inline-C call a sibling defn without hardcoding the mangled
+         * spelling (e.g. write __TUR_CNAME_tur-int-carrier-eq?__ rather than
+         * the literal tur_int_carrier_eq_qu). <source-name> may contain sigils
+         * (-, ?, !, =, ...); it is terminated by the first "__" after the
+         * prefix. The result carries no module prefix, matching the unprefixed
+         * C names of module-local stdlib globals. */
+        if (!matched && i + 14 <= len && memcmp(code + i, "__TUR_CNAME_", 12) == 0) {
+            uint32_t name_start = i + 12;
+            uint32_t j = name_start;
+            while (j + 1 < len && !(code[j] == '_' && code[j+1] == '_')) j++;
+            if (j + 1 < len && code[j] == '_' && code[j+1] == '_' && j > name_start) {
+                uint32_t name_len = j - name_start;
+                size_t k = 0;
+                char *mangled = (char *)malloc(tur_mangle_bound(name_len) + 1);
+                if (!mangled) { fprintf(stderr, "tur: oom\n"); abort(); }
+                tur_mangle_append(mangled, &k, code + name_start, name_len);
+                mangled[k] = '\0';
+                buf_puts(&result, mangled);
+                free(mangled);
+                i = j + 2; matched = true;
             }
         }
         if (!matched) { buf_putc(&result, code[i++]); }

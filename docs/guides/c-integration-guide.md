@@ -239,6 +239,31 @@ documentation.
 - `static` helpers defined inside an inline block work, but be aware of ODR
   if the same function name is used in multiple inline blocks across files.
 
+**Calling a sibling `defn` from inline C -- `__TUR_CNAME_<name>__`:**
+
+When an inline-C body needs to call (or take the address of) another Turmeric
+`defn`, do **not** hand-write that defn's mangled C identifier -- the mangling
+scheme (`mangle.c`) is an internal detail that can change, and a stale spelling
+fails silently at the C-compile stage (`implicit declaration of function ...`)
+with no Turmeric-level warning. Instead, splice the name with the
+`__TUR_CNAME_<source-name>__` placeholder. The emitter expands it through the
+same mangler the rest of the compiler uses, so the reference always tracks the
+current scheme:
+
+```turmeric
+(defn tur-int-carrier-eq? [a : int b : int] : bool (= a b))
+
+(definstance MapKey [int] (mk-box [x] x)
+  ;; expands to the current mangled spelling of `tur-int-carrier-eq?`
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)__TUR_CNAME_tur-int-carrier-eq?__; ```)
+  (mk-owned? [x] 0))
+```
+
+The source name between `__TUR_CNAME_` and the trailing `__` may contain sigils
+(`-`, `?`, `!`, `=`, ...); it is terminated by the first `__`. The result
+carries no module prefix, so it resolves to the unprefixed C name of a
+module-local global (the common case for stdlib internal helpers).
+
 ### 2.3 Capability structs -- The idiomatic pattern for C APIs
 
 The stdlib uses **capability structs** to wrap C APIs behind a Turmeric-visible

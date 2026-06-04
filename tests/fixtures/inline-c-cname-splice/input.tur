@@ -1,0 +1,21 @@
+;; Regression guard for the __TUR_CNAME_<name>__ inline-C splice.
+;;
+;; The splice expands to the mangled C identifier of a sibling defn, so an
+;; inline-C body can call (or take the address of) another Turmeric function
+;; without hardcoding the name-mangling scheme. Sigil-named defns (`?`, `!`)
+;; exercise the mnemonic mangling (`?` -> `_qu`, `!` -> `_ex`).
+
+(defn carrier-eq? [a : int b : int] : int
+  (if (= a b) 1 0))
+
+(defn bump! [x : int] : int (+ x 1))
+
+(defn main [] : int
+  ```c
+  /* call sibling defns via the spliced mangled names */
+  int eq = (int)__TUR_CNAME_carrier-eq?__(41, 41);
+  int hi = (int)__TUR_CNAME_bump!__(41);
+  printf("%d\n", eq);
+  printf("%d\n", hi);
+  return 0;
+  ```)
