@@ -1,5 +1,7 @@
 # `make_poly_wrapper` forces int64 arg params -- non-int64 named-fn poly arg miscompiles into a `^fat` sink
 
+> **Status:** Fixed (2026-06-04) -- fix direction 1, see Resolution below.
+
 **One-line summary:** A typeclass-method closure supplied as a *named
 function* or *non-capturing lambda* (lowered through `make_poly_wrapper`)
 and handed to a non-int64 `^fat` sink is silently miscompiled: the
@@ -142,3 +144,32 @@ violated in the suite.
   emit `__tur_poly_to_fat1` and int64-arg `__poly_N` wrappers).
 - For direction 2: a negative fixture under `tests/fixtures/errors/`
   asserting the diagnostic fires on the named-fn non-int64 form.
+
+## Resolution (fix direction 1, scoped to the float register class)
+
+Implemented in `make_poly_wrapper` (`src/compiler/elab_call.c`). The
+wrapper's argument params are retyped to the inner function's real kind
+**only for float-class kinds** (`TY_FLOAT`/`TY_FLOAT32`/`TY_FLOAT64`) of a
+*plain* named inner fn; every int64-register-class kind (int/ptr/cstr/bool)
+keeps the int64 carrier, so existing fixtures stay churn-free.
+
+This scoping sidesteps the dual-ABI risk noted under direction 1: the int64
+carrier invoke (`TUR_APPLY1`) only ever round-trips int64-register-class
+payloads, and a float payload *already* could not survive that path, so
+retyping float args cannot regress a previously-correct int64 invoke -- it
+only makes the carrier's stored thunk agree with the typed slot-0 shim that
+a `:float` `^fat` sink applies. A closure inner fn never reaches this
+wrapper (it lowers through the `is_closure` tur_poly_fn_t pass-through,
+which already stores its real typed thunk), so the change is limited to the
+named-fn / non-capturing-lambda path that was broken.
+
+Result: for `scale2 : (:float) -> :float` the wrapper is now
+`double __poly_N(void *, double)`; the repro prints the correct value.
+
+**Regression coverage:** `tests/fixtures/poly-to-fat-float-named-fn/`
+exercises both a named top-level fn and a non-capturing lambda handed to a
+`:float` `^fat` sink through a typeclass method (prints `7` and `7`).
+`tests/fixtures/poly-to-fat-float-roundtrip/` (capturing-closure form) is
+unchanged. `bash tests/run.sh` is clean (1350 passed, 0 failed);
+int64/pointer poly boxes remain churn-free (int64-arg `__poly_N` wrappers,
+`__tur_poly_to_fat1`).

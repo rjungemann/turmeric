@@ -250,12 +250,14 @@ through `type_c_name`, so primitives (`double`, `bool`, `const char *`,
   declared `^fat` fn signature, which is exactly the typed-thunk cast the
   sink applies on invocation (the plan's "Consistency invariant"). This is
   threaded onto the `EX_POLY_TO_FAT` node at the box site.
-- **Named-fn / non-capturing path (Risk #3, reported).** The typed shim is
-  correct when the producer stores the method's real typed thunk into the
-  carrier -- true for the *capturing-closure* pass-through. The
+- **Named-fn / non-capturing path (Risk #3, fixed follow-up).** The typed
+  shim is correct when the producer stores the method's real typed thunk
+  into the carrier -- true for the *capturing-closure* pass-through. The
   *named-function* / non-capturing path instead routes through
-  `make_poly_wrapper`, which forces the wrapper's argument params to
-  `int64_t`; that is a second erasure point and miscompiles a non-int64
-  argument regardless of slot 0. Documented in
+  `make_poly_wrapper`, which originally forced the wrapper's argument params
+  to `int64_t` -- a second erasure point that miscompiled a non-int64
+  argument regardless of slot 0. Fixed by retyping the wrapper's
+  float-class argument params to their real kind (scoped to the float
+  register class to stay churn-free for int64-register kinds). See
   [docs/reported/poly-wrapper-forces-int64-args-non-int-fat-sink.md](../reported/poly-wrapper-forces-int64-args-non-int-fat-sink.md)
-  with repro, root cause, and fix directions.
+  (Resolution) and `tests/fixtures/poly-to-fat-float-named-fn/`.

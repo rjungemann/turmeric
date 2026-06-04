@@ -1,0 +1,36 @@
+;; poly-wrapper-forces-int64-args-non-int-fat-sink.md (fix): a typeclass
+;; instance method hands a *named function* (and a *non-capturing lambda*) to a
+;; ^fat sink whose declared signature is :float -> :float.  Unlike a capturing
+;; closure (which lowers through the tur_poly_fn_t closure pass-through), a
+;; named fn / non-capturing lambda is bridged by make_poly_wrapper.  That
+;; wrapper previously forced its argument param to int64_t, so the :float
+;; argument was read from the integer register file instead of xmm0 -- a silent
+;; miscompile (the repro printed garbage instead of 7).
+;;
+;; The fix retypes the wrapper's float-class argument params to their real kind,
+;; so the carrier's stored thunk speaks `double (*)(void *, double)` and matches
+;; the typed slot-0 shim (__tur_poly_to_fat1_double_double) the sink invokes:
+;; (* 3.5 2.0) = 7 for both forms.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defn call-ff [^fat f :(fn [:float] #{} :float) x : float] : float
+  (f x))
+
+(defstruct BoxW [A]
+  (raw :int))
+
+(definstance Functor [BoxW]
+  (fmap [container fn]
+    (call-ff fn 3.5)))
+
+(defn scale2 [x : float] : float (* x 2.0))
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    ;; named top-level function through make_poly_wrapper
+    (println (.fmap b scale2))
+    ;; non-capturing lambda, also through make_poly_wrapper
+    (println (.fmap b (fn [x : float] : float (* x 2.0)))))
+  0)

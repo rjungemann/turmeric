@@ -2661,15 +2661,42 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     wparams[0] = env_pb;
     wparam_types[0] = TYPE_PTR_VOID;
 
+    /* poly-wrapper-forces-int64-args-non-int-fat-sink.md: by default the
+     * wrapper carries each argument as the int64_t carrier, which is correct
+     * for every int64-register-class kind (int/ptr/cstr/bool).  A *float*-class
+     * argument lives in a different register class (xmm0), so an int64-typed
+     * wrapper param would read it from the wrong register -- and the carrier's
+     * stored thunk would then mismatch the typed slot-0 poly-to-fat shim that a
+     * non-int64 ^fat sink invokes.  Retype only float-class args of a *plain*
+     * named inner fn (a closure inner_b stores its real thunk through the
+     * is_closure pass-through and never reaches this wrapper), keeping
+     * int64-register kinds churn-free. */
+    bool inner_is_plain_fn = (inner_b->type.kind == TY_FN &&
+                              inner_b->closure_fn_binding == NULL);
+    TypeKind real_arg_kinds[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < inner_arity; i++) {
+        TypeKind rk = TY_INT;
+        if (inner_is_plain_fn && i < inner_b->type.as.fn.arity) {
+            TypeKind k = inner_b->type.as.fn.arg_kinds[i];
+            const Type *aft = inner_b->type.as.fn.arg_full_types
+                ? inner_b->type.as.fn.arg_full_types[i] : NULL;
+            bool is_poly = aft && aft->kind == TY_FORALL;
+            bool is_float = (k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64);
+            if (is_float && !is_poly) rk = k;
+        }
+        real_arg_kinds[i] = rk;
+    }
+
     /* Arg params x0, x1, ... */
     Binding *arg_bs[MAX_FN_ARITY];
     for (uint8_t i = 0; i < inner_arity; i++) {
         char apname[40];
         snprintf(apname, sizeof(apname), "__poly_x%u_%u", i, e->next_id++);
         const Symbol *apsym = symtab_intern(e->st, strslice(apname, (uint32_t)strlen(apname)));
-        Binding *apb = binding_new(e, apsym, TYPE_INT, false, false, span);
+        Type apt = type_from_kind(real_arg_kinds[i]);
+        Binding *apb = binding_new(e, apsym, apt, false, false, span);
         wparams[i + 1] = apb;
-        wparam_types[i + 1] = TYPE_INT;
+        wparam_types[i + 1] = apt;
         arg_bs[i] = apb;
     }
 
@@ -2679,7 +2706,7 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     Expr **call_args = (Expr **)arena_alloc(e->arena, (inner_arity ? inner_arity : 1) * sizeof(Expr *));
     uint32_t call_poly_mask = 0;
     for (uint8_t i = 0; i < inner_arity; i++) {
-        Expr *av = expr_new(e->arena, EX_VAR, TYPE_INT, span);
+        Expr *av = expr_new(e->arena, EX_VAR, type_from_kind(real_arg_kinds[i]), span);
         av->as.var.binding = arg_bs[i];
         call_args[i] = av;
         /* Phase HRT3: if inner_b's param i is a poly fn, the wrapper receives it as int64_t
@@ -2703,7 +2730,7 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     /* Build wrapper fn type */
     TypeKind warg_kinds[MAX_FN_ARITY];
     warg_kinds[0] = TY_PTR_VOID;
-    for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[i + 1] = TY_INT;
+    for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[i + 1] = real_arg_kinds[i];
     Type wfn_type = type_fn(warg_kinds, w_arity, inner_result_kind);
 
     Binding *wb = binding_new(e, wsym, wfn_type, false, true, span);
