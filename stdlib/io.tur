@@ -27,6 +27,16 @@
 (extern-c free [^ptr p] :void)
 
 (extern-c memset [^ptr ^int ^int] :ptr)
+;; ---- Opaque handle newtypes (stdlib-opaque-handle-types-plan, I/O sweep) ----
+;; DirListing is the NULL-terminated char** array handed out by list-dir and
+;; consumed by free-dir-listing; FileSystem is the capability struct from
+;; Real-FileSystem, consumed by Real-FileSystem-free. Wrapping each producer's
+;; output in a nominally distinct type means the matching free function rejects
+;; an unrelated pointer. Both lower to :ptr<void> in the C ABI, so the inline-C
+;; bodies are unchanged. (FileHandle, the linear FILE* wrapper below, already
+;; handle-types the per-file read/close path.)
+(defopaque DirListing :ptr<void>)
+(defopaque FileSystem :ptr<void>)
 ;;; file-size -- return the byte size of an already-open file.
 ;;;
 ;;; Parameters:
@@ -61,7 +71,7 @@
 ;; Real-FileSystem implementation
 ;; Returns a FileSystem capability struct with libc-based implementations
 
-(defn Real-FileSystem []
+(defn Real-FileSystem [] : FileSystem
   ```c /* Define the FileSystem struct */
   typedef struct FileSystem FileSystem;
   struct FileSystem {
@@ -133,7 +143,7 @@
 ;;; Since: Phase 16
 ;; Free a Real-FileSystem
 
-(defn Real-FileSystem-free [fs]
+(defn Real-FileSystem-free [fs : FileSystem] : void
   ```c free(fs);
   ```)
 ;; ============================================================================
@@ -230,7 +240,7 @@
 ;; Get current directory listing
 ;; Returns array of strings (NULL-terminated), caller must free each string and the array
 
-(defn list-dir [path]
+(defn list-dir [path : cstr] : DirListing
   ```c DIR* d = opendir(path);
   if (!d) return NULL;
 
@@ -264,7 +274,7 @@
 ;;; Since: Phase 16
 ;; Free directory listing returned by list-dir
 
-(defn free-dir-listing [entries]
+(defn free-dir-listing [entries : DirListing] : void
   ```c if (!entries) return;
   char** e = (char**)entries;
   for (int i = 0; e[i]; i++) {

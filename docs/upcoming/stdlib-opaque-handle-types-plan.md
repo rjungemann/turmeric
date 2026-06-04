@@ -334,11 +334,27 @@ co-evolve (`condvar-wait` needs both newtypes simultaneously).
 > its error as pid `-1`, recovered with `(:: pid :int)`). Acceptance fixture
 > `errors/process-wrong-handle`.
 >
+> **fs (StatInfo / TmpFile):** landed. `tur/fs` now wraps the two opaque
+> `:int` pointers it hands out -- `fs/stat -> StatInfo` (with `stat-free` /
+> `-size` / `-mtime` / `-mode` taking it) and `fs/tmpfile -> TmpFile` (with
+> `tmpfile-path` / `-fd` / `-free` taking it) -- so a `StatInfo` and a
+> `TmpFile` can no longer be transposed. `fs/tmpfile-fd` now returns the
+> shared `Fd` (fs `(load "stdlib/fd.tur")`). `fs/glob` is intentionally left
+> as a bare cons list: it is walkable data, not a resource handle.
+> Acceptance fixture `errors/fs-wrong-handle`.
+>
+> **io (DirListing / FileSystem):** landed. `tur/io` already handle-typed
+> the per-file path via the linear `FileHandle`; this slice adds
+> `DirListing` (`list-dir` returns it, `free-dir-listing` consumes it) and
+> `FileSystem` (`Real-FileSystem` returns it, `Real-FileSystem-free`
+> consumes it), so the two free functions reject an unrelated pointer.
+> Acceptance fixture `errors/io-wrong-handle`.
+>
 > **Still deferred:** `async_pipe` (its stdin/stdout helpers take no fd
-> arguments), `tur/fs` (the `:int` stat / tmpfile / glob handles are
-> heterogeneous opaque-struct handles, each its own newtype), and `tur/io`
-> (already partly handle-typed via `FileHandle`; the `FILE*`-based path and
-> the dir-listing handles remain).
+> arguments) and `io/file-size`, which takes a *raw* `FILE*` (the bare
+> `fopen` extern's `:ptr`, not a wrapped handle) -- typing it cleanly would
+> need a `FileStream` wrapper around `fopen`, a larger change than this
+> signature pass.
 >
 > Implementing the taskgroup slice (Tier 2) had already surfaced the
 > pre-existing `task-group-with*` macro bug

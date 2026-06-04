@@ -1,0 +1,13 @@
+;; io-wrong-handle -- a DirListing cannot be freed as a FileSystem capability.
+;; Acceptance test for the I/O-sweep io newtypes from the
+;; stdlib-opaque-handle-types plan: list-dir returns a DirListing (a char**
+;; array) and Real-FileSystem returns a FileSystem capability struct. Both used
+;; to be bare pointers, so crossing their free functions type-checked and then
+;; freed the wrong structure; the nominal newtypes now reject the mismatch at
+;; compile time.
+(load "stdlib/io.tur")
+
+(defn main [] : int
+  (let [d (list-dir "/tmp")]
+    (Real-FileSystem-free d))
+  0)
