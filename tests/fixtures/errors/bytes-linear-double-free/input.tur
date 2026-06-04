@@ -1,0 +1,10 @@
+;; stdlib-linearity-affinity-plan (L3): freeing a :linear Bytes twice. bytes-free
+;; consumes the buffer, so a second bytes-free is a use-after-consume.
+;; Expected: TUR-E0101 (linear value used after being consumed).
+(load "stdlib/serial.tur")
+
+(defn main [] : int
+  (let [b (bytes-alloc 8)]
+    (bytes-free b)
+    (bytes-free b))
+  0)

@@ -21,6 +21,22 @@
 ;; ---------------------------------------------------------------------------
 ;; bytes -- a length-prefixed heap buffer: { int64 len; uint8_t data[]; }
 ;; ---------------------------------------------------------------------------
+;; ---- Opaque handle newtype + linearity (stdlib-linearity-affinity-plan, L3) ----
+;; Bytes wraps the length-prefixed heap buffer handed out by bytes-alloc /
+;; bytes-concat with a nominally distinct type, so the checker rejects passing
+;; an unrelated pointer where a bytes value is expected. It is :linear: the
+;; buffer is owned and must be released exactly once with bytes-free. Under
+;; -Xlinear the checker rejects dropping a Bytes (TUR-E0100) or freeing it twice
+;; (TUR-E0101); the read accessors bytes-len / bytes-data declare their handle
+;; ^borrow, and bytes-concat borrows both operands (it allocates a fresh buffer
+;; rather than consuming its inputs). Bytes lowers to :ptr<void> in the C ABI,
+;; so the inline-C bodies are unchanged.
+;;
+;; The Serializable typeclass below (serialize / deserialize) and the
+;; cont-to-file / cont-from-file helpers continue to traffic in raw :ptr<void>
+;; marshalled buffers -- they are a separate, return-type-polymorphic surface
+;; that is not part of the owned-buffer resource discipline.
+(defopaque Bytes :ptr<void> :linear)
 ;; Allocate a fresh bytes value of `n` bytes (zeroed).
 ;;; bytes-alloc -- allocate a zeroed length-prefixed byte buffer of n bytes.
 ;;;
@@ -36,7 +52,7 @@
 ;;; Since: Phase 21
 
 
-(defn bytes-alloc [n : int] : ptr<void>
+(defn bytes-alloc [n : int] : Bytes
   ```c int64_t *buf = malloc(sizeof(int64_t) + (size_t)n);
   if (!buf) { fprintf(stderr, "bytes-alloc: out of memory\n"); exit(1); }
   buf[0] = (int64_t)n;
@@ -54,7 +70,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-len [b : ptr<void>] : int
+(defn bytes-len [^borrow b : Bytes] : int
   ```c if (!b) return 0;
   return (int64_t)(((int64_t*)b)[0]);
   ```)
@@ -69,7 +85,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-data [b : ptr<void>] : ptr<void>
+(defn bytes-data [^borrow b : Bytes] : ptr<void>
   ```c if (!b) return NULL;
   return (void*)((int64_t*)b + 1);
   ```)
@@ -81,7 +97,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-free [b : ptr<void>] : void
+(defn bytes-free [b : Bytes] : void
   ```c free(b);
   ```)
 ;; Concatenate two bytes values into a new one.
@@ -99,7 +115,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-concat [a : ptr<void> b : ptr<void>] : ptr<void>
+(defn bytes-concat [^borrow a : Bytes ^borrow b : Bytes] : Bytes
   ```c int64_t la = a ? ((int64_t*)a)[0] : 0;
   int64_t lb = b ? ((int64_t*)b)[0] : 0;
   int64_t total = la + lb;

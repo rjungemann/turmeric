@@ -1,1 +1,1 @@
-function 'process/wait' arg 1: expected Pid, got int
+function 'process/wait' arg 1: expected ChildHandle, got int

@@ -10,6 +10,22 @@ description: Promote stdlib resource-handle newtypes (Mutex, Chan, Promise, Futu
 > **Prerequisite:** the corresponding handle is already a `defopaque` newtype
 > (see [[stdlib-opaque-handle-types-plan]]); this plan layers on top.
 
+> **Status (2026-06-04, update 3):** L2/L3 inventory completed. `Reactor`
+> (`:linear`; all accessors `^borrow`, `reactor-free` consumes -- the thin
+> extern wrappers coerce with `(:: r :ptr<void>)` at the C boundary),
+> `ChildHandle` (new `:linear` newtype distinct from `Pid`; `process/spawn`
+> returns it, `process/wait` consumes it, so a forgotten or doubled reap is a
+> compile error), and `Bytes` (`:linear`; `bytes-alloc`/`bytes-concat` produce,
+> `bytes-len`/`bytes-data` `^borrow`, `bytes-free` consumes -- the `Serializable`
+> typeclass surface stays raw `ptr<void>` and is untouched) are now promoted,
+> each with positive + negative fixtures. With L1 (update 2) this clears the
+> entire inventory table below. `Pid` remains a non-linear opaque (it is a
+> freely-copied identifier from `process/pid`/`-ppid`, not a freed resource);
+> the `LocalFiberGroup` handle in `tur/reactor` stays a plain `ptr<void>` (out
+> of scope -- the plan names only `Reactor`). `Future` remains the one
+> deliberate non-promotion; see update-2 note and
+> [[../reported/stdlib-future-linearity-aliasing]].
+>
 > **Status (2026-06-04, update 2):** L1/L2 inventory largely promoted. On top
 > of the foundational slice below, `Chan` + `AsyncChan` (`:linear`; send/recv/
 > try/count accessors `^borrow`, `*-free` consumes), `TaskGroup` (`:linear`; all

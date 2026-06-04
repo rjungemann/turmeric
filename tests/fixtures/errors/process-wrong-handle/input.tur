@@ -1,9 +1,10 @@
-;; process-wrong-handle -- an exit code (a plain :int) cannot stand in for a Pid.
-;; Acceptance test for the I/O-sweep Pid newtype from the
-;; stdlib-opaque-handle-types plan: process/spawn / process/pid return a Pid,
-;; and process/wait accepts only a Pid -- so passing a bare integer (here an
-;; exit code) to process/wait, which type-checked when pids were bare :int, is
-;; now a compile-time error.
+;; process-wrong-handle -- an exit code (a plain :int) cannot stand in for a
+;; ChildHandle. Acceptance test for the ChildHandle newtype from the
+;; stdlib-linearity-affinity plan: process/spawn returns a linear ChildHandle
+;; and process/wait accepts (and consumes) only a ChildHandle -- so passing a
+;; bare integer (here an exit code) to process/wait, which type-checked when
+;; children were bare pids, is now a compile-time error. A self/parent Pid from
+;; process/pid is likewise rejected: it is not a spawned child to reap.
 (load "stdlib/process.tur")
 
 (defn main [] : int

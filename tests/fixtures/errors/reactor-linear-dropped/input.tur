@@ -1,0 +1,10 @@
+;; stdlib-linearity-affinity-plan (L2): dropping a :linear Reactor. Polling
+;; (reactor-poll) borrows the handle and never discharges the consumption
+;; obligation, so a reactor that is polled but never reactor-free'd leaks.
+;; Expected: TUR-E0100 (linear value dropped without being consumed).
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)]
+    (reactor-poll r 0))
+  0)
