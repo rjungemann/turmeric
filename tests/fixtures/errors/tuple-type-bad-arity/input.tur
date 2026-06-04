@@ -1,0 +1,8 @@
+;; A 1-element bracket type `[int]` is not a valid tuple type: TupleN exists
+;; only for N in 2..8. The elaborator must reject it with a clear message
+;; rather than the old generic "unsupported type expression form".
+(defn f [x : int] : [int]
+  x)
+
+(defn main [] : int
+  (f 0))

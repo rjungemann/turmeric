@@ -1465,6 +1465,41 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             t = app;
         }
         return t;
+    } else if (form->tag == F_VEC) {
+        /* TupleN surface sugar: a bracketed type list `[T1 T2 ... Tn]` in
+         * type position lowers to the stdlib `TupleN` struct application
+         * `(TupleN T1 T2 ... Tn)`.  This mirrors the value-level tuple
+         * destructure surface (`(let [[a b] e] ...)`) so a tuple *type*
+         * reads like a tuple *pattern*.  Supported arities are 2..8
+         * (Tuple2..Tuple8 in stdlib/tuple.tur); for other counts the user
+         * should write `(TupleN ...)` or a named struct directly.
+         *
+         * Closes the KB-029 "residual parser-surface gap": type position
+         * previously rejected every `[...]` form outright. */
+        uint32_t n = form->as.list.len;
+        if (n < 2 || n > 8) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "tuple type `[...]` must have 2 to 8 element types "
+                      "(got %u); use (TupleN ...) or a named struct instead",
+                      n);
+            return NULL;
+        }
+        char tuple_name[16];
+        int tuple_name_len = snprintf(tuple_name, sizeof(tuple_name),
+                                      "Tuple%u", n);
+        const Symbol *tuple_sym =
+            symtab_intern(e->st, strslice(tuple_name, (uint32_t)tuple_name_len));
+        /* Synthesize `(TupleN T1 ... Tn)` and reuse the type-application
+         * path (which resolves the struct def and derives the HKT kind). */
+        Form **items =
+            (Form **)arena_alloc(e->arena, sizeof(Form *) * (n + 1));
+        items[0] = form_sym(e->arena, form->span, tuple_sym);
+        for (uint32_t i = 0; i < n; i++) {
+            items[i + 1] = form->as.list.items[i];
+        }
+        Form *app = form_list(e->arena, form->span, items, n + 1);
+        return type_expr_from_form(e, app, rec_name, type_params,
+                                   type_param_kinds, n_type_params);
     } else if (form->tag == F_KEYWORD) {
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */
         const Symbol *sym = form->as.sym;
