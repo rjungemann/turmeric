@@ -1,5 +1,5 @@
 (defmodule app
   (import db/postgres/conn :as conn)
-  (defn main [] :int
+  (defn main [] : int
     (println (conn/connect 42))
     0))

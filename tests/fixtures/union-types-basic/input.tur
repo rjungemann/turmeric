@@ -2,7 +2,7 @@
 ; A function accepting (int | bool) can be called with an int or bool arg.
 ; The body ignores the parameter to avoid union-match codegen (IT4).
 
-(defn accept-int-or-bool [x : (int | bool)] :int
+(defn accept-int-or-bool [x : (int | bool)] : int
   99)
 
 ; Subtyping: int <: (int | bool)

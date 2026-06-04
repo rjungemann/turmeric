@@ -1,2 +1,2 @@
-(defn loop [] :int (loop))
+(defn loop [] : int (loop))
 (loop)

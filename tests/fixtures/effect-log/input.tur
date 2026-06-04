@@ -12,7 +12,7 @@
   (handle body
     (Log [level msg] k) (resume k nil)))
 
-(defn process [x :int] :int
+(defn process [x : int] : int
   (do
     (perform (Log "info" "starting"))
     (let [result (* x 2)]
@@ -20,7 +20,7 @@
         (perform (Log "info" "done"))
         result))))
 
-(defn main [] :int
+(defn main [] : int
   ;; with-stderr-log: both log lines visible
   (let [r1 (with-stderr-log (process 21))]
     (println r1))

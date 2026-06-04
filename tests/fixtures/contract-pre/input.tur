@@ -1,10 +1,10 @@
 ;; CT1: :pre clause on defn -- precondition checks at function entry
 
-(defn square-positive [n :int] :int
+(defn square-positive [n : int] : int
   :pre (> n 0)
   (* n n))
 
-(defn main [] :int
+(defn main [] : int
   (println (square-positive 5))
   (println (square-positive 3))
   (println "pre-pass")

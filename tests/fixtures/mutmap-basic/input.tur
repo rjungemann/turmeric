@@ -1,7 +1,7 @@
 ;; Phase F5 (cross-plan-followups): MutableMap basic operations.
 ;; insert, lookup (has? + get), len, free.
 
-(defn main [] :int
+(defn main [] : int
   (let [mm (mutmap-new)]
     (println (mutmap-len mm))         ; 0
     (mutmap-set! mm 1 1 100)

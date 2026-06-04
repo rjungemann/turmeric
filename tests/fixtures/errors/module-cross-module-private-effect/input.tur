@@ -4,11 +4,11 @@
 (defmodule myapp
   (export run)
   (import effects/ask :as ea)
-  (defn run [] :int
+  (defn run [] : int
     (handle
       (ea/ask-effect)
       (Ask [] k)
       (resume k 99)))
-  (defn main [] :int
+  (defn main [] : int
     (println (run))
     0))

@@ -12,7 +12,7 @@
 ;; an accompanying vec-of-vec-eq fixture (F3-6) should replace
 ;; this one (or sit alongside it as the typeclass-dispatch version).
 
-(defn main [] :int
+(defn main [] : int
   (let [inner-a (vec-new)
         inner-b (vec-new)
         inner-c (vec-new)]

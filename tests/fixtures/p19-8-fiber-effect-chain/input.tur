@@ -13,39 +13,39 @@
 
 (defeffect Ask [] :int)
 
-(defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
-(defn fiber-resume-fn [f :ptr<void> arg :int] :int
+(defn fiber-resume-fn [f : ptr<void> arg : int] : int
   ```c
   return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 
-(defn fiber-free-fn [f :ptr<void>] :nil
+(defn fiber-free-fn [f : ptr<void>] : nil
   ```c
   tur_fiber_block_free((FiberBlock *)f);
   ```)
 
-(defn fiber-yield-fn [v :int] :nil
+(defn fiber-yield-fn [v : int] : nil
   ```c
   tur_fiber_block_yield((int64_t)v);
   ```)
 
 ;; fiber-1 body: installs handler returning 20, yields result
-(defn fiber1-body [] :nil
+(defn fiber1-body [] : nil
   (let [r (handle (perform (Ask))
             (Ask [] k) (resume k 20))]
     (fiber-yield-fn r)))
 
 ;; fiber-2 body: installs handler returning 30, yields result
-(defn fiber2-body [] :nil
+(defn fiber2-body [] : nil
   (let [r (handle (perform (Ask))
             (Ask [] k) (resume k 30))]
     (fiber-yield-fn r)))
 
-(defn main [] :int
+(defn main [] : int
   (let [f1 (fiber-new-fn fiber1-body 0)]
     (let [v1 (fiber-resume-fn f1 0)]
       (fiber-free-fn f1)

@@ -3,6 +3,6 @@
 
 (load "stdlib/seq/consume.tur")
 
-(defn main [] :void
+(defn main [] : void
   (println (seq-opt-unwrap (seq/nth 2 (seq/range 10 15))))
   (println (seq-opt-some? (seq/nth 10 (seq/range 10 15)))))

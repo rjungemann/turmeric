@@ -5,9 +5,9 @@
 
   (defeffect Write [s :cstr] :nil)
 
-  (defn run [] :int
+  (defn run [] : int
     (handle
       (do (perform (Write "hello")) 0)
       (Write [s] k) (do (println s) (resume k nil)))))
 
-(defn main [] :int (run))
+(defn main [] : int (run))

@@ -1,3 +1,3 @@
 (defmodule tc/functor
   (defclass TestFunctor [^f]
-    (fmap [container fn] :int)))
+    (fmap [container fn] : int)))

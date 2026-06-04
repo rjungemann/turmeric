@@ -6,32 +6,32 @@
   (-> A B int)
   (-> B A int))
 
-(defn spawn [f :ptr<void>] :ptr<void>
+(defn spawn [f : ptr<void>] : ptr<void>
   ```c
   pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(tid, NULL, tur_session_thread_wrapper, f);
   return (void *)tid;
   ```)
 
-(defn join [t :ptr<void>] :int
+(defn join [t : ptr<void>] : int
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   return 0;
   ```)
 
-(defn role-a [^linear ch :(project Ping A)] :nil
+(defn role-a [^linear ch :(project Ping A)] : nil
   (let [ch (send ch 42)]
     (let [[v ch] (recv ch)]
       (println v)
       (close ch))))
 
-(defn role-b [^linear ch :(project Ping B)] :nil
+(defn role-b [^linear ch :(project Ping B)] : nil
   (let [[v ch] (recv ch)]
     (let [ch (send ch v)]
       (close ch))))
 
-(defn main [] :int
+(defn main [] : int
   (let [[ca cb] (make-session (Send int (Recv int Close)))]
     (let [t (spawn (fn [] (role-b cb)))]
       (role-a ca)

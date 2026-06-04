@@ -2,7 +2,7 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn main [] #{} :int
+(defn main [] #{} : int
   ;; Write is not handled -- it leaks out of main
   (perform (Write "oops"))
   0)

@@ -12,7 +12,7 @@ defn add [a : int b : int] : int
 defn manhattan [p : Pt] : int
   +(.x(p) .y(p))
 
-defn main [] :int
+defn main [] : int
   let [p make-struct(Pt 3 4)
        sq fn([n : int] : int *(n n))
        m : int manhattan(p)]

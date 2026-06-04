@@ -4,7 +4,7 @@
 ;; __atomic_fetch_add / __atomic_fetch_sub refcount pattern.
 ;; No expected.stdout; only expected.c is checked.
 
-(defn arc-new [val :int] :ptr<void>
+(defn arc-new [val : int] : ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)malloc(sizeof(ArcCell));
@@ -15,7 +15,7 @@
   return (void *)b;
   ```)
 
-(defn arc-clone [p :ptr<void>] :ptr<void>
+(defn arc-clone [p : ptr<void>] : ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
@@ -23,13 +23,13 @@
   return (void *)b;
   ```)
 
-(defn arc-get [p :ptr<void>] :int
+(defn arc-get [p : ptr<void>] : int
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   return (int64_t)((ArcCell *)p)->value;
   ```)
 
-(defn arc-drop [p :ptr<void>] :nil
+(defn arc-drop [p : ptr<void>] : nil
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
@@ -40,7 +40,7 @@
   }
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [a (arc-new 42)]
     (let [b (arc-clone a)]
       (arc-drop b))

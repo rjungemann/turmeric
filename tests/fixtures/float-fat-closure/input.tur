@@ -7,20 +7,20 @@
 ;; annotated form `^fat g :(fn [:float] #{} :float)` threads the result
 ;; type through.
 
-(defn make-scaler [k :float] :ptr<void>
-  (fn [x :float] :float (* x k)))
+(defn make-scaler [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
 
 (defn compose
   [^fat f :(fn [:float] #{} :float)
-   ^fat g :(fn [:float] #{} :float)] :ptr<void>
+   ^fat g :(fn [:float] #{} :float)] : ptr<void>
   (let [fv f gv g]
-    (fn [x :float] :float (gv (fv x)))))
+    (fn [x : float] : float (gv (fv x)))))
 
 (defn run-with
-  [^fat h :(fn [:float] #{} :float) x :float] :float
+  [^fat h :(fn [:float] #{} :float) x : float] : float
   (h x))
 
-(defn main [] :int
+(defn main [] : int
   (let [f2  (make-scaler 2.0)
         f3  (make-scaler 3.0)
         f6  (compose f2 f3)]

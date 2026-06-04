@@ -3,9 +3,9 @@
 ;; Verifies the kind ladder (KIND_ARROW3..KIND_ARROW5) supports
 ;; defstruct families of arity 3..5.
 
-(defn t3-mid [] :cstr (tuple3-2nd (tuple3 1 "two" 3.0)))
-(defn t4-thd [] :int  (tuple4-3rd (tuple4 1 2 3 4)))
-(defn t5-last [] :int (tuple5-5th (tuple5 10 20 30 40 50)))
+(defn t3-mid [] : cstr (tuple3-2nd (tuple3 1 "two" 3.0)))
+(defn t4-thd [] : int  (tuple4-3rd (tuple4 1 2 3 4)))
+(defn t5-last [] : int (tuple5-5th (tuple5 10 20 30 40 50)))
 
 (println (t3-mid))
 (println (t4-thd))

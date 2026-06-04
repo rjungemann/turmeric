@@ -4,5 +4,5 @@
 ; forall quantifier is recognized and stored in the AST.
 (deftype PolyId (forall [a] a))
 
-(defn main [] :int
+(defn main [] : int
   0)

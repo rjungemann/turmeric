@@ -18,13 +18,13 @@
   (fmap [container fn]
     (schema/transform (.raw container) fn)))
 
-(defn double-it [x :int] :int (* x 2))
+(defn double-it [x : int] : int (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   (let [delta 100
         s (:: (make-struct SchemaW (schema/int)) (SchemaW int))]
     ;; capturing closure through the instance method: 21 -> 121
-    (println (schema-decode! (.fmap s (fn [x :int] :int (+ x delta)))
+    (println (schema-decode! (.fmap s (fn [x : int] : int (+ x delta)))
                              (json/int 21)))
     ;; top-level function through the same instance method: 21 -> 42
     (println (schema-decode! (.fmap s double-it)

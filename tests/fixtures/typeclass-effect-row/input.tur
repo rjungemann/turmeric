@@ -1,12 +1,12 @@
 ;; Phase 15: Typeclass method with effect-row annotation (#{} advisory, ignored in v1)
 
 (defclass IOShow [a]
-  (io-show [x] #{Write} :cstr))
+  (io-show [x] #{Write} : cstr))
 
 (definstance IOShow [int]
-  (io-show [x] :cstr
+  (io-show [x] : cstr
     "int"))
 
-(defn main [] :int
+(defn main [] : int
   (println (.io-show 42))
   0)

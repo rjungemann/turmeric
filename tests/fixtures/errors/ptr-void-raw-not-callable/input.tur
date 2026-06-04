@@ -2,7 +2,7 @@
 ;; Calling one directly must be an error -- a fat-closure parameter must be
 ;; spelled ^fat (or ^fat f :(fn [...] :T)).  This re-closes the :ptr<void>
 ;; representation overload: :ptr<void> is raw-pointer-only again.
-(defn apply-raw [f :ptr<void> x :int] :int
+(defn apply-raw [f : ptr<void> x : int] : int
   (f x))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

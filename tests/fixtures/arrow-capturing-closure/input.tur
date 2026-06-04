@@ -11,21 +11,21 @@
 (load "stdlib/arrow.tur")
 
 ;; Apply a fat closure (heap box: { int64_t __fn; ...env... }) to one argument.
-(defn call1 [f x] :int
+(defn call1 [f x] : int
   ```c return TUR_APPLY1(f, x); ```)
 
 ;; Heap pair of two int64 fields, matching the Tuple2 layout arrow.tur expects.
-(defn pair-new [a b] :int
+(defn pair-new [a b] : int
   ```c struct { int64_t e1, e2; } *p = malloc(sizeof(*p));
   p->e1 = a; p->e2 = b; return (int64_t)(intptr_t)p; ```)
-(defn pair-e1 [p] :int ```c return ((int64_t *)(intptr_t)p)[0]; ```)
-(defn pair-e2 [p] :int ```c return ((int64_t *)(intptr_t)p)[1]; ```)
+(defn pair-e1 [p] : int ```c return ((int64_t *)(intptr_t)p)[0]; ```)
+(defn pair-e2 [p] : int ```c return ((int64_t *)(intptr_t)p)[1]; ```)
 
 ;; Capturing closure constructors: each closes over a free variable.
-(defn make-add [n :int] :ptr<void> (fn [x :int] :int (+ x n)))
-(defn make-mul [k :int] :ptr<void> (fn [x :int] :int (* x k)))
+(defn make-add [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn make-mul [k : int] : ptr<void> (fn [x : int] : int (* x k)))
 
-(defn main [] :int
+(defn main [] : int
   (let [add10 (make-add 10)
         mul3  (make-mul 3)]
     ;; arr normalizes a capturing closure to a fat box; applied directly.

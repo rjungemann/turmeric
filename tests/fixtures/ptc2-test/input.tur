@@ -1,7 +1,7 @@
 ;; PTC2 Test: Constraint validation for primitive types
 
 (defclass TC [a]
-  (method [x] :int))
+  (method [x] : int))
 
 (definstance TC [int]
   (method [x] x))
@@ -14,5 +14,5 @@
   [TC int]
   (method [x] 42))
 
-(defn main [] :int
+(defn main [] : int
   0)

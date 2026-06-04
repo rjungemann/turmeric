@@ -1,8 +1,8 @@
 ;; Nested objects and arrays compose; retrieve through both levels.
-(defn nums-len [] :int
+(defn nums-len [] : int
   (json/array-len
     (json/get! #json({"nums": [1, 2, 3], "meta": {"ok": true}}) "nums")))
-(defn meta-ok [] :bool
+(defn meta-ok [] : bool
   (json/get-bool
     (json/get!
       (json/get! #json({"nums": [1, 2, 3], "meta": {"ok": true}}) "meta")

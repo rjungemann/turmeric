@@ -1,7 +1,7 @@
 ;; RC wrapping a struct with primitive fields - verify struct typedef emitted
-(defstruct Point :copy [x :int y :int])
+(defstruct Point :copy [x : int y : int])
 
-(defn main [] :int
+(defn main [] : int
   (let [p (rc/of (make-struct Point 42 99))]
     (println (rc/strong-count p))
     0))

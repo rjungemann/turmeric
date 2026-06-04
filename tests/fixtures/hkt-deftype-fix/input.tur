@@ -12,4 +12,4 @@
 (deftype Free [^f ^a] (f ((Free f) a)))
 
 ;; Verify that Fix and Free can be used as types in definitions
-(defn main [] :int 0)
+(defn main [] : int 0)

@@ -1,5 +1,5 @@
 ;; Phase R2: basic panic test
-(defn main [] :int
+(defn main [] : int
   (do
     (panic "something went wrong")
     0))

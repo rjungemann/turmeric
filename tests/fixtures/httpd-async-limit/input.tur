@@ -14,10 +14,10 @@
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
-(defn print-tag [s :cstr v :int] :nil
+(defn print-tag [s : cstr v : int] : nil
   ```c printf("%s=%d\n", s, (int)v); ```)
 
-(defn client-worker [arg :ptr<void>] :ptr<void>
+(defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   struct timespec ts = { 0, 30000000L };
@@ -54,26 +54,26 @@
   return NULL;
   ```)
 
-(defn run-server-async [h :ptr<void>] :ptr<void>
+(defn run-server-async [h : ptr<void>] : ptr<void>
   ```c httpd_run_async(h); return NULL; ```)
 
-(defn spawn-server-async [h :ptr<void>] :ptr<void>
+(defn spawn-server-async [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
   return (void *)t;
   ```)
 
-(defn alloc-counter [] :ptr<void>
+(defn alloc-counter [] : ptr<void>
   ```c return (void *)calloc(1, sizeof(int64_t)); ```)
 
-(defn read-counter [p :ptr<void>] :int
+(defn read-counter [p : ptr<void>] : int
   ```c return p ? *(int64_t *)p : 0; ```)
 
-(defn free-counter [p :ptr<void>] :nil
+(defn free-counter [p : ptr<void>] : nil
   ```c free(p); ```)
 
-(defn spawn-client [port :int ok :ptr<void> busy :ptr<void>] :ptr<void>
+(defn spawn-client [port : int ok : ptr<void> busy : ptr<void>] : ptr<void>
   ```c
   int64_t *args = (int64_t *)malloc(3 * sizeof(int64_t));
   args[0] = (int64_t)port;
@@ -84,14 +84,14 @@
   return (void *)t;
   ```)
 
-(defn join-thread [t :ptr<void>] :nil
+(defn join-thread [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [donech    (chan-new 4)
         ok        (alloc-counter)
         busy      (alloc-counter)
-        handler   (fn [c :ptr<void>] :nil
+        handler   (fn [c : ptr<void>] : nil
                     (httpd-await-timer c 100)
                     (httpd-resp-status! c 200)
                     (httpd-resp-body! c "served")

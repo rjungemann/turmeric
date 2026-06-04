@@ -1,7 +1,7 @@
 ;;
 ;; Phase P1: HAMT large-scale test - 1000 unique keys
 
-(defn test-large [] :int
+(defn test-large [] : int
   ```c
   int n = 1000;
   void **keys = malloc(n * sizeof(void *));

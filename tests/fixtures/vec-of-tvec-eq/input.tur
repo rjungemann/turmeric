@@ -12,7 +12,7 @@
 ;; demonstrates the manual rewrite that F3-5 now performs
 ;; auok?matically.
 
-(defn main [] :int
+(defn main [] : int
   (let [inner-a []:int
         inner-b []:int
         inner-c []:int]

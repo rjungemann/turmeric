@@ -1,4 +1,4 @@
 (defmodule myapp
   (export foo)
-  (defn (export-as 42) foo [] :int 1)
-  (defn main [] :int 0))
+  (defn (export-as 42) foo [] : int 1)
+  (defn main [] : int 0))

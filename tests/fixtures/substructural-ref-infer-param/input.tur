@@ -1,7 +1,7 @@
 ;; ST2: ref<T> defn param inferred as SK_LINEAR under -Xsubstructural.
 ;; A function that receives a :ref param must consume it exactly once.
 ;; Dropping the ref explicitly satisfies the linear constraint.
-(defn consume-ref [r :ref] :int
+(defn consume-ref [r : ref] : int
   (drop! r)
   42)
 (println (consume-ref (ref 10)))

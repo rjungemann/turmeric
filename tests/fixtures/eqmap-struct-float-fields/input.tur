@@ -5,10 +5,10 @@
 ;; (make-struct FPoint 0.0 0.0) -- zero_form_for_field emits form_float(0.0)
 ;; for TY_FLOAT32 fields, lifting the previous all-:int restriction.
 
-(defstruct FPoint [x :float32 y :float32])
+(defstruct FPoint [x : float32 y : float32])
 
 (definstance Hash [FPoint]
-  (hash [p] :int
+  (hash [p] : int
     ```c
     uint32_t ix, iy;
     memcpy(&ix, &p.x, sizeof ix);
@@ -19,16 +19,16 @@
 (definstance Eq [FPoint]
   (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
 
-(defn fpoint-carrier-eq? [a :int b :int] :bool
+(defn fpoint-carrier-eq? [a : int b : int] : bool
   ```c FPoint *pa = (FPoint *)(intptr_t)a; FPoint *pb = (FPoint *)(intptr_t)b;
   return (pa->x == pb->x) && (pa->y == pb->y); ```)
 
 (definstance MapKey [FPoint]
-  (mk-box [p] :int ```c return (int64_t)(intptr_t)tur_hamt_box_key(&p, sizeof(p)); ```)
+  (mk-box [p] : int ```c return (int64_t)(intptr_t)tur_hamt_box_key(&p, sizeof(p)); ```)
   (mk-cmp [p] fpoint-carrier-eq?)
   (mk-owned? [p] 1))
 
-(defn main [] :int
+(defn main [] : int
   (let [a  (map-assoc (map-assoc (:: (map-new) (Map FPoint int)) (make-struct FPoint 1.5f32 2.5f32) 100)
                                               (make-struct FPoint 3.5f32 4.5f32) 200)
         ;; same content, all keys distinct boxes

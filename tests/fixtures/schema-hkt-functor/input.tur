@@ -4,10 +4,10 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defn double-it [x :int] :int (* x 2))
-(defn inc-it    [x :int] :int (+ x 1))
+(defn double-it [x : int] : int (* x 2))
+(defn inc-it    [x : int] : int (+ x 1))
 
-(defn main [] :int
+(defn main [] : int
   (let [s (:: (make-struct Schema (schema/int)) (Schema int))]
     ;; single map: 5 -> 10
     (println (schema-decode! (.raw (fmap s double-it)) (json/int 5)))

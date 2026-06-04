@@ -1,7 +1,7 @@
-(defn add1 [x :int] :int
+(defn add1 [x : int] : int
   (+ x 1))
 
-(defn main [] :int
+(defn main [] : int
   (let [x 5]
     (println (add1 x))
     (println x))

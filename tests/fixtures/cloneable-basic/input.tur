@@ -5,19 +5,19 @@
 ;; (cloneable-reset body) evaluates body and returns k_fn's return value.
 
 ;; k-returns-15: receives the continuation k (as int64_t), ignores it, returns 15
-(defn k-returns-15 [k] :int 15)
+(defn k-returns-15 [k] : int 15)
 
 ;; test-basic: shift creates a trivial continuation and calls k-returns-15(cont).
 ;; k-returns-15 ignores the continuation and returns 15.
-(defn test-basic [] :int
+(defn test-basic [] : int
   (cloneable-reset
     (cloneable-shift k-returns-15 0)))
 
 ;; cloneable-reset with no shift just evaluates its body.
-(defn test-reset-passthrough [] :int
+(defn test-reset-passthrough [] : int
   (cloneable-reset 42))
 
-(defn main [] :int
+(defn main [] : int
   (println (test-basic))
   (println (test-reset-passthrough))
   0)

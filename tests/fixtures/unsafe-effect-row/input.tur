@@ -1,7 +1,7 @@
-(defn unsafe-id [x :int] @{Unsafe} :int
+(defn unsafe-id [x : int] @{Unsafe} :int
   x)
 
-(defn main [] :int
+(defn main [] : int
   (let [v (unsafe (unsafe-id 41))]
     (println v)
     0))

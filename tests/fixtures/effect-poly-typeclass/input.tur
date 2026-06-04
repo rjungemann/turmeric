@@ -5,10 +5,10 @@
 
 (defeffect Tick [] :int)
 
-(defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+(defn run-twice [f :(fn [] #{e} :int)] #{e} : int
   (+ (f) (f)))
 
-(defn main [] :int
+(defn main [] : int
   (let [counter (handle
     (run-twice (fn [] (perform (Tick))))
     (Tick [] k) (resume k 1))]

@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [o (:: (make-struct Option true 2.5) (Option float))
         p (:: (make-struct Pair 1 2.5) (Pair int float))
         r (:: (make-struct Result true 3.75 "err") (Result float cstr))]

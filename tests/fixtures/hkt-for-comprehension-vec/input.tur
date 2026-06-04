@@ -12,25 +12,25 @@
 ;; ---- Typeclass declarations -------------------------------------------------
 
 (defclass Applicative [^f]
-  (pure [a] :int))
+  (pure [a] : int))
 
 (defclass Monad [^m]
-  (bind [m f] :int))
+  (bind [m f] : int))
 
 (defclass Alternative [^f]
-  (empty [a] :int)
-  (alt-or [a b] :int))
+  (empty [a] : int)
+  (alt-or [a b] : int))
 
 ;; ---- Vec helpers (inline C) ------------------------------------------------
 
-(defn __vec_new [] :int
+(defn __vec_new [] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   return (int64_t)(intptr_t)v;
   ```)
 
-(defn __vec_push [v val] :int
+(defn __vec_push [v val] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
@@ -44,7 +44,7 @@
   return v;
   ```)
 
-(defn __vec_len [v] :int
+(defn __vec_len [v] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
@@ -64,7 +64,7 @@
 
 ;; Monad.bind: flatMap -- apply f to each element, concatenate results.
 ;; f is a non-capturing closure (raw function pointer) for single-binding for.
-(defn __vec_bind [ma f] :int
+(defn __vec_bind [ma f] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
@@ -91,7 +91,7 @@
   ```)
 
 ;; Applicative.pure: wrap a single value in a vec.
-(defn __vec_pure [a] :int
+(defn __vec_pure [a] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->len = 1; v->cap = 1;
@@ -101,7 +101,7 @@
   ```)
 
 ;; Alternative.empty: return an empty vec (zero element for alt-or).
-(defn __vec_empty [_] :int
+(defn __vec_empty [_] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
@@ -120,7 +120,7 @@
 
 ;; ---- Tests -----------------------------------------------------------------
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; T1: map (* 2) over [1 2 3] => [2 4 6]
     ;; (for [x [1 2 3]] (* x 2)) = bind [1 2 3] (fn [x] (pure (* x 2)))

@@ -13,7 +13,7 @@
 
 ;; ---- Option helpers (inline C) ---------------------------------------------
 
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -21,7 +21,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_none [] :int
+(defn __opt_none [] : int
   ```c return 0; ```)
 
 ;; ---- Peano naturals as Fix option ------------------------------------------
@@ -29,7 +29,7 @@
 ;; make-nat: build n-deep option nesting (the anamorphism)
 ;;   make-nat 0 = none
 ;;   make-nat n = some(make-nat(n-1))
-(defn make-nat [n] :int
+(defn make-nat [n] : int
   (if (= n 0)
     (__opt_none)
     (__opt_some (make-nat (- n 1)))))
@@ -37,7 +37,7 @@
 ;; cata-nat: catamorphism -- count depth of some-nesting
 ;;   cata-nat none      = 0
 ;;   cata-nat (some n)  = 1 + cata-nat n
-(defn cata-nat [n] :int
+(defn cata-nat [n] : int
   ```c
   typedef struct { bool is_some; int64_t value; } opt_node;
   int64_t count = 0;
@@ -56,14 +56,14 @@
 ;;   option has kind * -> *
 ;;   (Fix option) has kind *
 (defclass Container [^c]
-  (extract [container] :int))
+  (extract [container] : int))
 
 (definstance Container [(Fix option)]
   (extract [container] (cata-nat container)))
 
 ;; ---- Tests -----------------------------------------------------------------
 
-(defn main [] :int
+(defn main [] : int
   (let [zero  (make-nat 0)]
     (let [one   (make-nat 1)]
       (let [two   (make-nat 2)]

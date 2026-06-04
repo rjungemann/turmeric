@@ -2,7 +2,7 @@
 ; &x  → (& x)    immutable borrow prefix
 ; &mut x → (&mut x)  mutable borrow prefix
 
-(defn main [] :int
+(defn main [] : int
   (let [x 10]
     ; Immutable borrow sugar
     (let [r &x]

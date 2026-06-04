@@ -4,7 +4,7 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(defn bracket [body :(fn [] #{e} :int)] #{e} :int
+(defn bracket [body :(fn [] #{e} :int)] #{e} : int
   (do
     (println "acquire")
     (let [result (body)]
@@ -12,7 +12,7 @@
         (println "release")
         result))))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (bracket (fn [] (do (perform (Log "inside")) 42))) 0)
     (Log [msg] k) (do (println msg) (resume k nil))))

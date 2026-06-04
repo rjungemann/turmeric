@@ -5,21 +5,21 @@
 ;; surrounding context was lost.
 
 ;; resume once through the captured (+ 10 []) context.
-(defn use1 [k] :int (tur_cloneable_cont_resume k 5))
+(defn use1 [k] : int (tur_cloneable_cont_resume k 5))
 
 ;; multi-shot: resume a clone and the original handle.
-(defn use2 [k] :int
+(defn use2 [k] : int
   (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
      (tur_cloneable_cont_resume k 2)))
 
 ;; nested context (* 2 (+ 1 [])).
-(defn use3 [k] :int (tur_cloneable_cont_resume k 4))
+(defn use3 [k] : int (tur_cloneable_cont_resume k 4))
 
 ;; no enclosing reset: the captured continuation is the identity (fresh-delimiter
 ;; sugar -- the original call/cc* behavior, preserved).
-(defn grab [k] :int k)
+(defn grab [k] : int k)
 
-(defn main [] :int
+(defn main [] : int
   (println (cloneable-reset (+ 10 (call/cc* use1))))        ; 10+5          = 15
   (println (cloneable-reset (+ 10 (call/cc* use2))))        ; (10+1)+(10+2) = 23
   (println (cloneable-reset (* 2 (+ 1 (call/cc* use3)))))   ; 2*(1+4)       = 10

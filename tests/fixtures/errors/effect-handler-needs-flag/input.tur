@@ -1,6 +1,6 @@
 ;; ET4: (handler E V R) type syntax requires -Xeffect-types.
 ;; Without the flag, this should produce an error.
 (defeffect Write [s :cstr] :nil)
-(defn run-with-handler [h :(handler Write cstr nil)] :nil
+(defn run-with-handler [h :(handler Write cstr nil)] : nil
   nil)
-(defn main [] :int 0)
+(defn main [] : int 0)

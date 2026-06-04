@@ -6,10 +6,10 @@
 (defdata Pair2 [a b]
   (MkPair2 a b))
 
-(defn fst [p :(Pair2 int int)] :int
+(defn fst [p :(Pair2 int int)] : int
   (match p
     (MkPair2 x y) x))
 
-(defn main [] :int
+(defn main [] : int
   (println (fst (MkPair2 10 20)))
   0)

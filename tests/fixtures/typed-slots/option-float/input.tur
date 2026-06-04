@@ -2,7 +2,7 @@
 ;; slot.  The `value` field is read as a `double` from the Option__float
 ;; layout -- no user-side bit-cast.
 
-(defn main [] :int
+(defn main [] : int
   (let [o (:: (make-struct Option true 2.5) (Option float))]
     (println (.is-some o))
     (println (.value o))

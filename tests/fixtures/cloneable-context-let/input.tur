@@ -6,11 +6,11 @@
 ;; Previously a `let` in the context fell back to the legacy lowering.
 
 ;; sum-two: resume the captured continuation twice (clone for the first use).
-(defn sum-two [k] :int
+(defn sum-two [k] : int
   (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
      (tur_cloneable_cont_resume k 2)))
 
-(defn main [] :int
+(defn main [] : int
   ;; single let, context (+ a []) with a = 10: (10+1) + (10+2)        = 23
   (println (cloneable-reset (let [a 10] (+ a (cloneable-shift sum-two 0)))))
   ;; two lets, nested context (* a (+ b [])) with a=2 b=10:

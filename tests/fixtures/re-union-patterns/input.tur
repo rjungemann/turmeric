@@ -3,7 +3,7 @@
 (load "stdlib/re.tur")
 
 ; Build a cons list of three patterns: alphas, digits, and a literal token.
-(defn make-pats [] :int
+(defn make-pats [] : int
   ```c
   typedef struct { int64_t head; int64_t tail; } cell;
   cell *c3 = malloc(sizeof(cell));
@@ -15,7 +15,7 @@
   return (int64_t)(intptr_t)c1;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [pats   (make-pats)
         joined (re/union-patterns pats)
         r      (re/compile-union pats)]

@@ -3,12 +3,12 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a :ptr b :ptr] :bool
+(defn ptr= [a : ptr b : ptr] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-int [x :int] :ptr
+(defn alloc-int [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
@@ -16,7 +16,7 @@
   ```)
 
 ;; Test: insert multiple keys with the same hash; all retrievable
-(defn test-collision [] :int
+(defn test-collision [] : int
   (let [fixed-hash 0x123456789ABCDEF0]
     (let [k1 (alloc-int 1)]
       (let [k2 (alloc-int 2)]

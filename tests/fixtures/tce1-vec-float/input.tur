@@ -2,7 +2,7 @@
 ;; vec-of infers A = float; vec-push! stores the double bits through the
 ;; int64 carrier; vec-get returns :A, read back with `::`.
 
-(defn main [] :int
+(defn main [] : int
   (let [v (vec-of 1.5 2.25)]
     (vec-push! v 3.75)
     (vec-set! v 0 0.5)

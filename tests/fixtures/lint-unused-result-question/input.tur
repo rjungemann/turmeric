@@ -1,17 +1,17 @@
 ;; Phase R6a / OQ#3: the ? operator binds its operand via let, so a
 ;; ?-wrapped result call is never in statement position and must not warn.
-(defn mk [] :ptr<void>
+(defn mk [] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = 1; r->err_val = 0; return r;
   ```)
-(defn u-ok-val [r :ptr<void>] :int
+(defn u-ok-val [r : ptr<void>] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r2 = (void*)r; return r2->ok_val;
   ```)
-(defn use-q [] :ptr<void>
+(defn use-q [] : ptr<void>
   (let [v (? (mk))]
     (mk)))
-(defn main [] :int
+(defn main [] : int
   (println (u-ok-val (use-q)))
   0)

@@ -2,7 +2,7 @@
 ;; erased at runtime (Phase H4 complete).  The :a return type keyword is
 ;; not a built-in type; using it produces a clear "unsupported" diagnostic.
 (defclass Eq [a]
-  (eq? [a a] :bool))
+  (eq? [a a] : bool))
 
-(defn map [^f a x] :a
+(defn map [^f a x] : a
   x)

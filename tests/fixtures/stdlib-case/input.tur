@@ -1,6 +1,6 @@
 ;; Test case built-in form
 
-(defn main [] :int
+(defn main [] : int
   ;; Basic integer case
   (let [x 2]
     (case x

@@ -5,4 +5,4 @@
 (defn bad [x : &'a &'b int y : &'b &'a int] : int
   0)
 
-(defn main [] :int 0)
+(defn main [] : int 0)

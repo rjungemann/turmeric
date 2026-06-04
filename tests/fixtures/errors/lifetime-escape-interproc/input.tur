@@ -8,4 +8,4 @@
   (let [a 5]
     (idb (& a))))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

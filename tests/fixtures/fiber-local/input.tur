@@ -1,37 +1,37 @@
 ;; Phase T21: fiber-local storage test
 ;; Test that fiber-local values are isolated between fibers
 
-(defn fiber-a [] :nil
+(defn fiber-a [] : nil
   ```c
   tur_fiber_local_set(tur_current_fiber, 42, 100);
   ```)
 
-(defn fiber-b [] :nil
+(defn fiber-b [] : nil
   ```c
   tur_fiber_local_set(tur_current_fiber, 42, 200);
   ```)
 
-(defn fiber-local-get-fn [f :ptr<void> key :int] :int
+(defn fiber-local-get-fn [f : ptr<void> key : int] : int
   ```c
   return tur_fiber_local_get((FiberBlock *)f, (int64_t)key);
   ```)
 
-(defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
-(defn fiber-resume-fn [f :ptr<void> arg :int] :int
+(defn fiber-resume-fn [f : ptr<void> arg : int] : int
   ```c
   return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 
-(defn fiber-free-fn [f :ptr<void>] :nil
+(defn fiber-free-fn [f : ptr<void>] : nil
   ```c
   tur_fiber_block_free((FiberBlock *)f);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [fa (fiber-new-fn fiber-a 0)]
     (let [fb (fiber-new-fn fiber-b 0)]
       (fiber-resume-fn fa 0)

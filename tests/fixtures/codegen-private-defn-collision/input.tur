@@ -8,7 +8,7 @@
 (defmodule prog
   (import alpha :refer [alpha-val])
   (import beta :refer [beta-val])
-  (defn main [] :int
+  (defn main [] : int
     (println (alpha-val))
     (println (beta-val))
     0))

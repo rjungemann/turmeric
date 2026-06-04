@@ -3,7 +3,7 @@
 
 (defeffect Ask [] :int)
 
-(defn main [] :int
+(defn main [] : int
   (let [offset 100]
     (let [r
       (handle (perform (Ask))

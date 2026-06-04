@@ -2,12 +2,12 @@
 
 (load "stdlib/args.tur")
 
-(defn cstr->int [s :cstr] :int
+(defn cstr->int [s : cstr] : int
   ```c
   return (int64_t)(intptr_t)s;
   ```)
 
-(defn main [] :void
+(defn main [] : void
   (let [spec (args/spec-new)]
     (args/spec-option spec "--count" "int" (cstr->int "42"))
     (let [res (args/parse spec *args*)]

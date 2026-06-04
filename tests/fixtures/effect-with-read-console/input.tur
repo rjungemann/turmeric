@@ -1,7 +1,7 @@
 ;; Phase 19: with-read-console handler — reads integers from stdin.
 (defeffect Read [] :int)
 
-(defn read-int-console [] :int
+(defn read-int-console [] : int
   ```c
   int _v = 0;
   scanf("%d", &_v);

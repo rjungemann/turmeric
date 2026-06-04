@@ -1,11 +1,11 @@
 ;; CF2: shift0 result typing.  shift0 differs from shift only in delimiter
 ;; behavior at runtime; the local result-typing rule is identical -- the
 ;; expression has f's codomain type.  Here f : int -> bool.
-(defn is-zero [n :int] :bool
+(defn is-zero [n : int] : bool
   (reset
-    (shift0 (fn [v :int] (= v 0)) n)))
+    (shift0 (fn [v : int] (= v 0)) n)))
 
-(defn main [] :int
+(defn main [] : int
   (if (is-zero 0) (println 1) (println 0))
   (if (is-zero 7) (println 1) (println 0))
   0)

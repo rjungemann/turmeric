@@ -5,7 +5,7 @@
 (defeffect AskOuter [] :int)
 (defeffect AskInner [] :int)
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (handle (perform (AskOuter))
       (AskOuter [] ^linear k1)

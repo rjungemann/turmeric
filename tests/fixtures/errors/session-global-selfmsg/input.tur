@@ -3,4 +3,4 @@
 (defprotocol Bad [A B]
   (-> A A int))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

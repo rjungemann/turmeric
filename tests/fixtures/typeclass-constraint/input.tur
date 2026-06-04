@@ -1,7 +1,7 @@
 ;; Phase 15: Typeclass constraints on functions
 
 (defclass MyEq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (definstance MyEq [int]
   (eq? [x y] (= x y)))
@@ -10,8 +10,8 @@
 ;; Syntax: (defn foo [^Eq a x : a, y : a] : bool ...)
 ;; This requires Eq instance for the type of x and y
 ;; For v1, we just verify the syntax is accepted
-(defn my-eq [^MyEq a x y] :bool
+(defn my-eq [^MyEq a x y] : bool
   true)
 
-(defn main [] :int
+(defn main [] : int
   0)

@@ -7,4 +7,4 @@
 (reader-macros/define 'sum :datum-bracket '(+ $body))
 (reader-macros/define 'sum :datum-bracket '(* $body))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

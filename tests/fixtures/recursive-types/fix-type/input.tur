@@ -4,7 +4,7 @@
   (Roll :int))
 
 ;; Unroll a Fix value to get the inner layer.
-(defn unroll [fix :int] :int
+(defn unroll [fix : int] : int
   (match fix
     (Roll inner) inner))
 
@@ -13,7 +13,7 @@
   (NoStep)
   (OneStep :int))
 
-(defn main [] :int
+(defn main [] : int
   ;; Build a Fix-encoded chain: Roll(OneStep(Roll(NoStep)))
   (let [inner  (Roll (NoStep))
         outer  (Roll (OneStep inner))]

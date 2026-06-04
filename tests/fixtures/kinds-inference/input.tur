@@ -3,23 +3,23 @@
 ;; The kind of f is inferred as * -> * from the definstance [option] declaration.
 
 (defclass TestFunctor [f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true; r->value = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int64_t)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -35,9 +35,9 @@
 (definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
-(defn double-it [x] :int (* x 2))
+(defn double-it [x] : int (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (let [o (__opt_some 7)]
       (let [o2 (.fmap o double-it)]

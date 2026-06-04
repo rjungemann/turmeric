@@ -10,7 +10,7 @@
 ;; Call a Turmeric closure (heap struct: { int64_t __fn; ...env... }) with
 ;; one argument. TUR_APPLY1 (runtime preamble) reads the __fn slot and invokes
 ;; it with (env, arg), replacing the hand-written fat-closure cast.
-(defn tur-call-closure1 [f x] :int
+(defn tur-call-closure1 [f x] : int
   ```c
   return TUR_APPLY1(f, x);
   ```)
@@ -19,7 +19,7 @@
 ;; inline-C helpers expect (a struct of two int64 fields). The stdlib's
 ;; typed (tuple2 a b) returns a struct value, not an int64 pointer, so it
 ;; can't be threaded through the closure-calling helper above.
-(defn pair-new [a b] :int
+(defn pair-new [a b] : int
   ```c
   struct { int64_t e1; int64_t e2; } *p = malloc(sizeof(*p));
   p->e1 = a;
@@ -27,20 +27,20 @@
   return (int64_t)(intptr_t)p;
   ```)
 
-(defn pair-e1 [p] :int
+(defn pair-e1 [p] : int
   ```c
   return ((int64_t *)(intptr_t)p)[0];
   ```)
 
-(defn pair-e2 [p] :int
+(defn pair-e2 [p] : int
   ```c
   return ((int64_t *)(intptr_t)p)[1];
   ```)
 
-(defn add1 [x] :int (+ x 1))
-(defn mul2 [x] :int (* x 2))
+(defn add1 [x] : int (+ x 1))
+(defn mul2 [x] : int (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   ;; arr normalizes a function to a fat closure; (arr add1) applied to 5 = 6
   (println (tur-call-closure1 (arr add1) 5))
 

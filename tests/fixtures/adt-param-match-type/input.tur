@@ -8,12 +8,12 @@
   (Nope)
   (Yep a))
 
-(defn double-if-some [x :int] :int
+(defn double-if-some [x : int] : int
   (let [v (Yep x)]
     (match v
       (Nope)  0
       (Yep n) (* n 2))))
 
-(defn main [] :int
+(defn main [] : int
   (println (double-if-some 21))
   0)

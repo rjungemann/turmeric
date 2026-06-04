@@ -2,5 +2,5 @@
 ;; This fixture documents the rule: panics must not cross extern-c boundaries
 ;; without catch-unwind or #[no-unwind].
 
-(defn main [] :int
+(defn main [] : int
   0)

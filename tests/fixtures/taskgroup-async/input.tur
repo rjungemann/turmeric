@@ -21,7 +21,7 @@
 ;; This entry function reads that pair, calls fn(), and fulfills the future.
 ;; tur_fiber_shim sets tur_current_fiber before calling entry_fn, so
 ;; tur_current_fiber is valid here.
-(defn __tg-async-entry [] :nil
+(defn __tg-async-entry [] : nil
   ```c
   typedef struct { int64_t (*fn)(void); void *future; } TgAsyncArg;
   FiberBlock *self = tur_current_fiber;
@@ -36,7 +36,7 @@
 
 ;; ---- TaskGroup core (matching stdlib/taskgroup.tur layout) ----
 
-(defn tg-new [] :ptr<void>
+(defn tg-new [] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -57,7 +57,7 @@
   return (void *)g;
   ```)
 
-(defn tg-done? [group :ptr<void>] :bool
+(defn tg-done? [group : ptr<void>] : bool
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t done_cond;
@@ -71,7 +71,7 @@
   return d;
   ```)
 
-(defn tg-free [group :ptr<void>] :nil
+(defn tg-free [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t done_cond;
@@ -90,7 +90,7 @@
 ;; as its entry point, and enqueues it in the scheduler. Sets fiber->task_group
 ;; so tur_fiber_shim calls tur_task_group_notify_done on completion.
 ;; Returns the (pending) TurFuture* for the caller to await.
-(defn tg-spawn-async [group :ptr<void> f :ptr<void>] :ptr<void>
+(defn tg-spawn-async [group : ptr<void> f : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t done_cond;
@@ -127,12 +127,12 @@
 
 ;; ---- Async computations ----
 
-(defn compute-a [] :int
+(defn compute-a [] : int
   ```c
   return (int64_t)10;
   ```)
 
-(defn compute-b [] :int
+(defn compute-b [] : int
   ```c
   return (int64_t)20;
   ```)
@@ -141,7 +141,7 @@
 ;;
 ;; Spawn two async computations into a task group. Each (await) drives the
 ;; scheduler until that computation's fiber completes.
-(defn main [] :int
+(defn main [] : int
   (let [tg (tg-new)]
     (let [fut-a (tg-spawn-async tg compute-a)]
       (let [fut-b (tg-spawn-async tg compute-b)]

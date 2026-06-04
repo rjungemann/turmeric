@@ -4,10 +4,10 @@
 ; uniformly int in this test (heterogeneous payloads require the full
 ; EX1e-3 vtable-indirected dispatch, which is deferred).
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -18,7 +18,7 @@
 ; flows directly into open (passing through a fn param typed
 ; `(exists [a] ...)` is treated as a rank-2 argument by Turmeric and is
 ; out of scope for this fixture).
-(defn main [] :int
+(defn main [] : int
   (let [e1 (pack 11 (exists [a] [(Show a)] a))
         e2 (pack 22 (exists [a] [(Show a)] a))
         e3 (pack 33 (exists [a] [(Show a)] a))]

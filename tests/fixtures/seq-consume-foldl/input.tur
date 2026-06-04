@@ -3,7 +3,7 @@
 
 (load "stdlib/seq/consume.tur")
 
-(defn main [] :void
+(defn main [] : void
   ;; non-capturing fn auto-shimmed via seq/foldl's ^fat parameter
   (let [sum (fn [a b] (+ a b))]
     (println (seq/foldl 0 sum (seq/range 1 6)))))

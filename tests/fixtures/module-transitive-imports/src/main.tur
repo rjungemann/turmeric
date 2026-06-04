@@ -1,5 +1,5 @@
 (defmodule main
   (import lib/cli :refer [run])
-  (defn main [] :int
+  (defn main [] : int
     (println (run))
     0))

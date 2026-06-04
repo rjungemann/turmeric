@@ -1,5 +1,5 @@
 ;; list macro type-mismatch: mixing int and cstr in (list ...) should
 ;; fail with TUR-E0001 because tcons arg 1 expects :int.
-(defn main [] :int
+(defn main [] : int
   (let [_ (list 1 "hello" 3)]
     0))

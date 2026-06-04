@@ -1,8 +1,8 @@
 ; Phase EX1c: constraint referencing a variable that is not one of the
 ; bound variables must be rejected.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
-(defn main [] :int
+(defn main [] : int
   (let [e (pack 42 (exists [a] [(Show b)] a))]
     0))

@@ -1,4 +1,4 @@
-(defn main [] :int
-  (let [x :int 5
-        y :int 7]
+(defn main [] : int
+  (let [x : int 5
+        y : int 7]
     (println (+ x y)) 0))

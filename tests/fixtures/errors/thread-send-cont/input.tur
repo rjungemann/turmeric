@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [r (rc/of 42)]
     (thread-spawn (fn [] (println (rc/strong-count r)))))
   0)

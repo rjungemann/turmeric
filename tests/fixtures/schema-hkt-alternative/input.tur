@@ -3,7 +3,7 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defn main [] :int
+(defn main [] : int
   (let [lit1 (:: (make-struct Schema (schema/literal-int 1)) (Schema int))
         anyi (:: (make-struct Schema (schema/int)) (Schema int))
         choice (alt-or lit1 anyi)]

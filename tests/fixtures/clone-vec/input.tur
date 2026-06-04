@@ -5,10 +5,10 @@
 ;; giving the clone independent ownership of its data.
 
 ;; HVec stores a heap data pointer (as int64_t) and element count.
-(defstruct HVec [ptr :int len :int])
+(defstruct HVec [ptr : int len : int])
 
 (defclass TestClone [a]
-  (clone [x] :int))
+  (clone [x] : int))
 
 (definstance TestClone [int]
   (clone [x] x))
@@ -17,7 +17,7 @@
 ;; x has type HVec (struct value) in the generated C function;
 ;; x.ptr is the int64_t-cast data pointer, x.len is element count.
 (definstance TestClone [HVec]
-  (clone [x] :int
+  (clone [x] : int
     ```c
     int64_t *src = (int64_t *)(intptr_t)x.ptr;
     int64_t *dst_data = (int64_t *)malloc(sizeof(int64_t) * (size_t)x.len);
@@ -30,7 +30,7 @@
     ```))
 
 ;; Allocate a 3-element heap array and return its address as int64_t.
-(defn make-data [a b c] :int
+(defn make-data [a b c] : int
   ```c
   int64_t *data = (int64_t *)malloc(3 * sizeof(int64_t));
   data[0] = a; data[1] = b; data[2] = c;
@@ -38,14 +38,14 @@
   ```)
 
 ;; Access element i of a heap HVec pointer (returned by TestClone.clone).
-(defn heap-vec-get [p i] :int
+(defn heap-vec-get [p i] : int
   ```c
   struct { int64_t ptr; int64_t len; } *v = (void *)(intptr_t)p;
   int64_t *data = (int64_t *)(intptr_t)v->ptr;
   return data[i];
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Build HVec([10, 20, 30]), clone it, verify the clone's element sum is 60.
   (let [data (make-data 10 20 30)]
     (let [v  (make-struct HVec data 3)]

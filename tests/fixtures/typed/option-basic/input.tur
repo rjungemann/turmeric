@@ -1,31 +1,31 @@
 ;;
 ;; Phase TC1: option basic operations test
 
-(defn test-some-some? [] :bool
+(defn test-some-some? [] : bool
   (some? (some 42)))
 
-(defn test-none-some? [] :bool
+(defn test-none-some? [] : bool
   (some? (none)))
 
-(defn test-unwrap [] :int
+(defn test-unwrap [] : int
   (unwrap (make-struct Option true 99)))
 
-(defn test-unwrap-or-some [] :int
+(defn test-unwrap-or-some [] : int
   (unwrap-or (some 7) 0))
 
-(defn test-unwrap-or-none [] :int
+(defn test-unwrap-or-none [] : int
   (unwrap-or (none) 42))
 
-(defn test-option-eq-same [] :bool
+(defn test-option-eq-same [] : bool
   (option-eq? (some 1) (some 1) (fn [a b] (= a b))))
 
-(defn test-option-eq-diff [] :bool
+(defn test-option-eq-diff [] : bool
   (option-eq? (some 1) (some 2) (fn [a b] (= a b))))
 
-(defn test-option-eq-nones [] :bool
+(defn test-option-eq-nones [] : bool
   (option-eq? (none) (none) (fn [a b] (= a b))))
 
-(defn test-option-map [] :int
+(defn test-option-map [] : int
   (unwrap-or (option-map (some 5) (fn [x] (* x 3))) 0))
 
 (println (test-some-some?))

@@ -18,7 +18,7 @@
 ;;   queue-length: 0
 ;;   deque-empty: true
 
-(defn run-metrics-test [] :int
+(defn run-metrics-test [] : int
   ```c
   /* Metrics counters -- mirrors TurSchedulerMTMetrics from scheduler.h */
   int64_t push_count   = 0;
@@ -97,6 +97,6 @@
                    && queue_length == 0 && deque_empty);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (run-metrics-test)
   0)

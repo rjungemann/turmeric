@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   ; left-to-right closed [0, 10]
   (println (range-contains? #r{0 <= n <= 10} 0))    ; true
   (println (range-contains? #r{0 <= n <= 10} 10))   ; true

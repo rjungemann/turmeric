@@ -1,12 +1,12 @@
 ;; Phase R6: Test --panic-trace flag
 ;; When --panic-trace is enabled, panics should print scope chain
 
-(defn inner [] :! 
+(defn inner [] : ! 
   (panic "test panic"))
 
-(defn outer [] :!
+(defn outer [] : !
   (inner))
 
-(defn main [] :int
+(defn main [] : int
   (outer)
   0)

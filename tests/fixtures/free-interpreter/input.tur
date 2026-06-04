@@ -13,19 +13,19 @@
   (CalcMul :int :int))
 
 ;; Smart constructors: lift each operation into Free
-(defn calc-add [a :int b :int] :int
+(defn calc-add [a : int b : int] : int
   (free-lift (CalcAdd a b)))
 
-(defn calc-mul [a :int b :int] :int
+(defn calc-mul [a : int b : int] : int
   (free-lift (CalcMul b a)))
 
 ;; Interpreter: evaluate one CalcOp
-(defn run-calc-op [op :int] :int
+(defn run-calc-op [op : int] : int
   (match op
     (CalcAdd a b) (+ a b)
     (CalcMul a b) (* a b)))
 
-(defn main [] :int
+(defn main [] : int
   ;; Build a program: add(3,4) => 7, mul(7,2) => 14
   ;; The interpreter lambdas don't capture, so ^fat auto-shims them.
   (unsafe

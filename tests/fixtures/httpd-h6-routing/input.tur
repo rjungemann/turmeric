@@ -18,13 +18,13 @@
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
-(defn print-line [s :cstr] :nil
+(defn print-line [s : cstr] : nil
   ```c printf("%s\n", s); ```)
 
-(defn print-user [id :cstr] :nil
+(defn print-user [id : cstr] : nil
   ```c printf("user %s\n", id); ```)
 
-(defn client-worker [arg :ptr<void>] :ptr<void>
+(defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   struct timespec ts = { 0, 30000000L };
@@ -59,17 +59,17 @@
   return NULL;
   ```)
 
-(defn run-server [h :ptr<void>] :ptr<void>
+(defn run-server [h : ptr<void>] : ptr<void>
   ```c httpd_run(h); return NULL; ```)
 
-(defn spawn-server [h :ptr<void>] :ptr<void>
+(defn spawn-server [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
   return (void *)t;
   ```)
 
-(defn spawn-client [port :int] :ptr<void>
+(defn spawn-client [port : int] : ptr<void>
   ```c
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
@@ -78,36 +78,36 @@
   return (void *)t;
   ```)
 
-(defn join-thread [t :ptr<void>] :nil
+(defn join-thread [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [donech (chan-new 8)
         router (router-new)]
     ;; GET / -- prints "home"
     (defroute router "GET" "/"
-      (fn [conn :ptr<void>] :nil
+      (fn [conn : ptr<void>] : nil
         (print-line "home")
         (httpd-resp-status! conn 200)
         (httpd-resp-body! conn "home")
         (chan-send donech 1)))
     ;; GET /users/:id -- prints "user N"
     (defroute router "GET" "/users/:id"
-      (fn [conn :ptr<void>] :nil
+      (fn [conn : ptr<void>] : nil
         (print-user (httpd-param conn "id"))
         (httpd-resp-status! conn 200)
         (httpd-resp-body! conn "user")
         (chan-send donech 1)))
     ;; POST /users -- prints "created"
     (defroute router "POST" "/users"
-      (fn [conn :ptr<void>] :nil
+      (fn [conn : ptr<void>] : nil
         (print-line "created")
         (httpd-resp-status! conn 201)
         (httpd-resp-body! conn "created")
         (chan-send donech 1)))
     ;; Dispatching handler -- looks up route then signals 404 if missed.
     (let [h      (httpd-new-pool 0 1
-                    (fn [conn :ptr<void>] :nil
+                    (fn [conn : ptr<void>] : nil
                       (router-dispatch router conn)
                       (when (= 404 (httpd-resp-status-get conn))
                         (do

@@ -3,6 +3,6 @@
 
 (load "stdlib/seq/consume.tur")
 
-(defn main [] :void
+(defn main [] : void
   (println (seq/count (seq/range 0 7)))
   (println (seq/count (empty-seq))))

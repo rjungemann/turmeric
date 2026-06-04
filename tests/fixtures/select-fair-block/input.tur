@@ -12,7 +12,7 @@
 ;; ChanBlock struct with waiter fields (Phase SEL0).
 ;; Must match the layout expected by tur_select_blocking in the emitted preamble.
 
-(defn chan-new [cap :int] :ptr<void>
+(defn chan-new [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -38,7 +38,7 @@
   return (void *)ch;
   ```)
 
-(defn chan-free [ch :ptr<void>] :nil
+(defn chan-free [ch : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -54,7 +54,7 @@
   ```)
 
 ;; Producer A: sends 10, 20, 30 to the channel.
-(defn producer-a [ch :ptr<void>] :ptr<void>
+(defn producer-a [ch : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -78,7 +78,7 @@
   ```)
 
 ;; Producer B: sends 100, 200, 300 to the channel.
-(defn producer-b [ch :ptr<void>] :ptr<void>
+(defn producer-b [ch : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -101,7 +101,7 @@
   return NULL;
   ```)
 
-(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
@@ -109,7 +109,7 @@
   return (void *)t;
   ```)
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
@@ -117,14 +117,14 @@
 
 ;; Accumulate 6 values from two channels via (select ...) into a running sum.
 ;; Uses tail recursion (iter decrements to 0).
-(defn select-loop [ch-a :ptr<void> ch-b :ptr<void> iter :int acc :int] :int
+(defn select-loop [ch-a : ptr<void> ch-b : ptr<void> iter : int acc : int] : int
   (if (= iter 0)
     acc
     (let [v (select ((ch-a :recv x) x)
                     ((ch-b :recv x) x))]
       (select-loop ch-a ch-b (- iter 1) (+ acc v)))))
 
-(defn main [] :int
+(defn main [] : int
   (let [ch-a (chan-new 4)
         ch-b (chan-new 4)]
     (let [tp-a (thread-spawn-fn producer-a ch-a)

@@ -4,15 +4,15 @@
 
 (defdata Shape (Circle :int) (Square :int))
 
-(defn area [s :Shape] :int
+(defn area [s : Shape] : int
   (match s
     (Circle r) (* r r)
     (Square w) (* w w)))
 
-(defn box-shape [s :Shape] : any
+(defn box-shape [s : Shape] : any
   s)
 
-(defn main [] :int
+(defn main [] : int
   (let [a (box-shape (Circle 5))]
     (println (type-of a))
     (let [s (cast a Shape)]

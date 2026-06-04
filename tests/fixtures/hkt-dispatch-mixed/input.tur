@@ -5,19 +5,19 @@
 
 ;; HKT typeclass (kind * -> *) — declared, not instantiated.
 (defclass MyFunctor [^f]
-  (fmap [x] :int))
+  (fmap [x] : int))
 
 ;; Regular KIND_STAR typeclass with two instances.
 (defclass MyLabel [a]
-  (label [x] :cstr))
+  (label [x] : cstr))
 
 (definstance MyLabel [int]
-  (label [x] :cstr "number"))
+  (label [x] : cstr "number"))
 
 (definstance MyLabel [bool]
-  (label [x] :cstr "flag"))
+  (label [x] : cstr "flag"))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (println (.label 0))
     (println (.label true))

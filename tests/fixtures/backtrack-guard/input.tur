@@ -2,10 +2,10 @@
 ;; guard returns mreturn(0) when pred is true, mzero otherwise.
 ;; backtrack-do ensures all lambdas are fat closures.
 
-(defn mzero [] :int
+(defn mzero [] : int
   ```c return 0; ```)
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
@@ -13,7 +13,7 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn mplus [xs ys] :int
+(defn mplus [xs ys] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
@@ -30,7 +30,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn mbind [ma fn] :int
+(defn mbind [ma fn] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
@@ -59,7 +59,7 @@
   return (int64_t)(intptr_t)result;
   ```)
 
-(defn guard [pred :bool] :int
+(defn guard [pred : bool] : int
   (if pred (mreturn 0) (mzero)))
 
 (defn bt-print [xs]

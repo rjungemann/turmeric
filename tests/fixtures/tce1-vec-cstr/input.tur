@@ -1,7 +1,7 @@
 ;; TCE1: Vec[cstr] via the [A]-generic stdlib ops.
 ;; The string pointer flows through the int64 carrier unchanged.
 
-(defn main [] :int
+(defn main [] : int
   (let [v (vec-of "alpha" "beta")]
     (vec-push! v "gamma")
     (println (:: (vec-get v 0) :cstr))

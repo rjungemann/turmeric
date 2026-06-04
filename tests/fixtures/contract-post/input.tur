@@ -1,10 +1,10 @@
 ;; CT1: :post clause on defn -- postcondition checks on return value
 
-(defn double-nonneg [n :int] :int
+(defn double-nonneg [n : int] : int
   :post (>= result 0)
   (* n 2))
 
-(defn main [] :int
+(defn main [] : int
   (println (double-nonneg 5))
   (println (double-nonneg 0))
   (println "post-pass")

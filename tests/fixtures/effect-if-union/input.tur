@@ -5,12 +5,12 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Log [msg :cstr] :nil)
 
-(defn either [flag :int] #{Write Log} :nil
+(defn either [flag : int] #{Write Log} : nil
   (if (> flag 0)
     (perform (Write "from write branch"))
     (perform (Log "from log branch"))))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (handle
       (do (either 1) (either 0) 0)

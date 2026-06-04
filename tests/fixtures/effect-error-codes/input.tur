@@ -6,11 +6,11 @@
 (defeffect Write [msg :cstr] :nil)
 (defeffect Read [] :int)
 
-(defn do-write-read [] #{Write Read} :int
+(defn do-write-read [] #{Write Read} : int
   (do (perform (Write "test"))
       (perform (Read))))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (handle
       (do-write-read)

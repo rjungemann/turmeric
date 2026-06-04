@@ -3,7 +3,7 @@
 (defmodule b
   (import a :refer [triple])
   (export run main)
-  (defn run [] :int
+  (defn run [] : int
     (println (triple 4.0))
     0)
-  (defn main [] :int (run)))
+  (defn main [] : int (run)))

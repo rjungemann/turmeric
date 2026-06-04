@@ -15,16 +15,16 @@
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
-(defn print-tag [s :cstr v :int] :nil
+(defn print-tag [s : cstr v : int] : nil
   ```c printf("%s=%d\n", s, (int)v); ```)
 
-(defn print-body [s :cstr] :nil
+(defn print-body [s : cstr] : nil
   ```c printf("body=%s\n", s); ```)
 
 ;; Shared body buffer. A single function owns the static storage: call with
 ;; do-write=1 to stash the body (client side), do-write=0 to read it back
 ;; (main side). inline-C reaches it by its mangled C name, async_echo_body.
-(defn async-echo-body [do-write :int src :cstr] :cstr
+(defn async-echo-body [do-write : int src : cstr] : cstr
   ```c
   static char buf[2048];
   if (do_write) { snprintf(buf, sizeof(buf), "%s", src); }
@@ -38,7 +38,7 @@
 ;; main reads the buffer and prints it in a fixed order after join-thread,
 ;; whose pthread_join provides the happens-before. See
 ;; docs/reported/httpd-async-echo-flaky-stdout-ordering.md.
-(defn client-worker [arg :ptr<void>] :ptr<void>
+(defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   struct timespec ts = { 0, 30000000L };
@@ -72,20 +72,20 @@
 
 ;; Printer the main thread calls after joining the client (happens-before via
 ;; pthread_join), so the body line is emitted in a fixed order on one thread.
-(defn print-client-body [] :nil
+(defn print-client-body [] : nil
   ```c printf("body=%s\n", async_echo_body(0, "")); ```)
 
-(defn run-server-async [h :ptr<void>] :ptr<void>
+(defn run-server-async [h : ptr<void>] : ptr<void>
   ```c httpd_run_async(h); return NULL; ```)
 
-(defn spawn-server-async [h :ptr<void>] :ptr<void>
+(defn spawn-server-async [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
   return (void *)t;
   ```)
 
-(defn spawn-client [port :int] :ptr<void>
+(defn spawn-client [port : int] : ptr<void>
   ```c
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
@@ -94,19 +94,19 @@
   return (void *)t;
   ```)
 
-(defn join-thread [t :ptr<void>] :nil
+(defn join-thread [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn fmt-echo [path :cstr] :cstr
+(defn fmt-echo [path : cstr] : cstr
   ```c
   static char buf[2048];
   snprintf(buf, sizeof(buf), "echo:%s", path);
   return buf;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [donech (chan-new 1)
-        handler (fn [c :ptr<void>] :nil
+        handler (fn [c : ptr<void>] : nil
                   ;; Yield ~10 ms to prove fiber park/resume works.
                   (httpd-await-timer c 10)
                   (httpd-resp-status! c 200)

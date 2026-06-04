@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (unsafe
     ;; Allocate memory, write a value, then dereference to read it back
     (let [p (raw-malloc 16)]

@@ -7,7 +7,7 @@
 ;; (double-returning) clone was wrapped in a union int64_t-to-double cast, truncating
 ;; the result.
 
-(defn main [] :int
+(defn main [] : int
   (let [xs (tcons-of 3.14 0)
         a (thead xs)
         b (thead xs)]

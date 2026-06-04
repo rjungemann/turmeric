@@ -13,7 +13,7 @@
 ;;   steal-count: 4
 ;;   deque-empty: true
 
-(defn run-steal-test [] :int
+(defn run-steal-test [] : int
   ```c
   /* Minimal work-stealing deque — mirrors scheduler.c WSD implementation.
    * Fields use plain size_t; atomic builtins receive (size_t *) casts,
@@ -71,6 +71,6 @@
   return (int64_t)(stolen == 4 && emp);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (run-steal-test)
   0)

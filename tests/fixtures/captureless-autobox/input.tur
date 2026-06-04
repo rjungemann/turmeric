@@ -17,14 +17,14 @@
 
 ;; Standard fat-closure caller: load the thunk from slot 0 and invoke it with the
 ;; closure pointer as the environment argument.
-(defn apply-fat [f arg] :int
+(defn apply-fat [f arg] : int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, arg);
   ```)
 
-(defn dbl-impl [x] :int (* x 2))
+(defn dbl-impl [x] : int (* x 2))
 
 ;; (1) Return-position ^fat: the captureless `(fn [x] (dbl-impl x))` is boxed
 ;; into a fat closure at the tail, so `apply-fat` can fat-call the result.
@@ -33,7 +33,7 @@
 
 ;; (2) Parameter-position ^fat: a captureless lambda passed directly as an
 ;; argument is shimmed into a fat closure at the call site.
-(defn run-with [^fat g arg] :int
+(defn run-with [^fat g arg] : int
   (apply-fat g arg))
 
 (defn main []

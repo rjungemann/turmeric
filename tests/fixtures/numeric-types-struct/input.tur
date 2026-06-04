@@ -1,9 +1,9 @@
 ; Phase N6: struct fields with new numeric types
-(defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8])
-(defstruct Vec2 [x :float32 y :float32])
-(defstruct Counts [lo :int16 hi :int32])
+(defstruct Pixel [r : uint8 g : uint8 b : uint8 a : uint8])
+(defstruct Vec2 [x : float32 y : float32])
+(defstruct Counts [lo : int16 hi : int32])
 
-(defn main [] :int
+(defn main [] : int
   (let [p (make-struct Pixel 255u8 128u8 64u8 255u8)]
     (println (.r p))
     (println (.g p))

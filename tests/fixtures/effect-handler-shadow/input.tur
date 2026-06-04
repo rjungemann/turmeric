@@ -4,7 +4,7 @@
 
 (defeffect Scale [x :int] :int)
 
-(defn main [] :int
+(defn main [] : int
   ;; Outer x = 1000; handler's x = effect argument (7)
   ;; If shadowing works, result should be 7 * 2 = 14, not 1000 * 2.
   (let [x 1000]

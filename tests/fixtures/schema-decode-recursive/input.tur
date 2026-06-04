@@ -5,7 +5,7 @@
 (load "stdlib/schema.tur")
 
 ;; A tree node: { "value": int, "children": [ <node>, ... ] }
-(defn tree-schema [] :int
+(defn tree-schema [] : int
   (schema/rec
     (fn [self]
       (schema/field
@@ -13,7 +13,7 @@
         "children" (schema/array self)))))
 
 ;; three levels deep, all valid -> ok
-(defn test-valid [] :int
+(defn test-valid [] : int
   (let [r (schema-decode
             (tree-schema)
             (json/decode
@@ -21,7 +21,7 @@
     (if (schema-decode-ok? r) 1 0)))
 
 ;; a deep node has the wrong type for "value" -> error with a deep path
-(defn test-deep-error [] :cstr
+(defn test-deep-error [] : cstr
   (let [r (schema-decode
             (tree-schema)
             (json/decode

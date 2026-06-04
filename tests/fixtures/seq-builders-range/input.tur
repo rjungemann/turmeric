@@ -2,6 +2,6 @@
 
 (load "stdlib/seq/builders.tur")
 
-(defn main [] :void
+(defn main [] : void
   (seq-for-each println (seq/range 0 5))
   (println (gen-arr-len (seq-collect (seq/range 3 3)))))

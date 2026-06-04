@@ -4,9 +4,9 @@
 
 (defstruct P [x : int y : int])
 
-(defstruct Mixed [a :int b : float c : int])
+(defstruct Mixed [a : int b : float c : int])
 
-(defn main [] :int
+(defn main [] : int
   (let [p (make-struct P 3 4)]
     (println (.x p))
     (println (.y p))

@@ -1,6 +1,6 @@
 ;; Phase T19: atomic-basic — test atomic integer operations using __atomic builtins.
 
-(defn atomic-new [init :int] :ptr<void>
+(defn atomic-new [init : int] : ptr<void>
   ```c
   int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
   if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }
@@ -8,38 +8,38 @@
   return (void *)cell;
   ```)
 
-(defn atomic-load [p :ptr<void>] :int
+(defn atomic-load [p : ptr<void>] : int
   ```c
   int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_load_n(cell, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-store! [p :ptr<void> v :int] :nil
+(defn atomic-store! [p : ptr<void> v : int] : nil
   ```c
   int64_t *cell = (int64_t *)p;
   __atomic_store_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-add! [p :ptr<void> delta :int] :int
+(defn atomic-add! [p : ptr<void> delta : int] : int
   ```c
   int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_fetch_add(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-sub! [p :ptr<void> delta :int] :int
+(defn atomic-sub! [p : ptr<void> delta : int] : int
   ```c
   int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_fetch_sub(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-swap! [p :ptr<void> new-val :int] :int
+(defn atomic-swap! [p : ptr<void> new-val : int] : int
   ```c
   int64_t *cell = (int64_t *)p;
   int64_t tmp = (int64_t)new_val;
   return (int64_t)__atomic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-cas! [p :ptr<void> expected :int desired :int] :bool
+(defn atomic-cas! [p : ptr<void> expected : int desired : int] : bool
   ```c
   int64_t *cell = (int64_t *)p;
   int64_t exp_v = (int64_t)expected;
@@ -48,12 +48,12 @@
       cell, &exp_v, des_v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-free [p :ptr<void>] :nil
+(defn atomic-free [p : ptr<void>] : nil
   ```c
   free(p);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [a (atomic-new 10)]
     (println (atomic-load a))
 

@@ -2,7 +2,7 @@
 ;; is inferred from the ascribed type via the return-type-directed expected-type
 ;; channel, so (:: (make-struct Schema 7) (Schema cstr)) type-checks.
 (defstruct Schema [A] (raw :int))
-(defn main [] :int
+(defn main [] : int
   (let [s (:: (make-struct Schema 7) (Schema cstr))]
     (println (.raw s)))
   0)

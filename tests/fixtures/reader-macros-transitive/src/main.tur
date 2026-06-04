@@ -2,7 +2,7 @@
 ;; come from the spice manifest's :reader-macros entry.
 (defmodule main
   (import lib/util :refer [doubled-pi sum-of-first-five])
-  (defn main [] :int
+  (defn main [] : int
     (println (sum-of-first-five))   ; 15
     (println (doubled-pi))          ; 6.28318
     (println #sum[10 20 30])        ; 60

@@ -5,7 +5,7 @@
 ;; strong and weak are accessed via __atomic_* builtins.
 ;; weak has a sentinel +1 while strong > 0 to keep the block alive.
 
-(defn arc-new [val :int] :ptr<void>
+(defn arc-new [val : int] : ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
   ArcBlock *b = (ArcBlock *)malloc(sizeof(ArcBlock));
@@ -16,14 +16,14 @@
   return (void *)b;
   ```)
 
-(defn arc-get [p :ptr<void>] :int
+(defn arc-get [p : ptr<void>] : int
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
   ArcBlock *b = (ArcBlock *)p;
   return (int64_t)b->value;
   ```)
 
-(defn arc-clone [p :ptr<void>] :ptr<void>
+(defn arc-clone [p : ptr<void>] : ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
   ArcBlock *b = (ArcBlock *)p;
@@ -31,14 +31,14 @@
   return (void *)b;
   ```)
 
-(defn arc-strong-count [p :ptr<void>] :int
+(defn arc-strong-count [p : ptr<void>] : int
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
   ArcBlock *b = (ArcBlock *)p;
   return (int64_t)__atomic_load_n(&b->strong, __ATOMIC_SEQ_CST);
   ```)
 
-(defn arc-drop [p :ptr<void>] :nil
+(defn arc-drop [p : ptr<void>] : nil
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
   ArcBlock *b = (ArcBlock *)p;
@@ -52,7 +52,7 @@
   }
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; create
   (let [a (arc-new 42)]
     (println (arc-get a))

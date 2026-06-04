@@ -5,7 +5,7 @@
   (Open :int)
   (Closed))
 
-(defn main [] :int
+(defn main [] : int
   (let [h (Open 42)]
     (let [h2 h]
       ; h was moved into h2 -- using h here is a use-after-move error.

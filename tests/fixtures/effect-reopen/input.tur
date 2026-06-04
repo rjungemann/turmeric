@@ -12,10 +12,10 @@
 (defeffect Counter [] :int)
 
 ;; Computes a counter value, logging each step.
-(defn counted-sum [n :int] :int
+(defn counted-sum [n : int] : int
   (+ (perform (Counter)) n))
 
-(defn main [] :int
+(defn main [] : int
   ;; Outer handler handles Write (re-opened by the Log handler case below).
   (handle
     ;; Inner handler handles Log; its case body re-opens Write.

@@ -749,6 +749,17 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     }
     if (method_form->as.list.len > ret_idx) {
         Form *ret_form = method_form->as.list.items[ret_idx];
+        /* Spaced `: T` over a single symbol/keyword: normalise to F_KEYWORD
+         * so the class-type-param match below runs. */
+        if (ret_form->tag == F_TYPE_ANN && ret_form->as.list.len == 1 &&
+            (ret_form->as.list.items[0]->tag == F_KEYWORD ||
+             ret_form->as.list.items[0]->tag == F_SYM)) {
+            Form *inner = ret_form->as.list.items[0];
+            Form *kf = (Form *)arena_alloc(e->arena, sizeof(Form));
+            *kf = *inner;
+            kf->tag = F_KEYWORD;
+            ret_form = kf;
+        }
         if (ret_form->tag == F_MAP) {
             /* another effect row or #{} after the params — skip silently */
             /* (ignore the rest; return type stays TYPE_NIL) */
@@ -1862,9 +1873,17 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         /* Check for return type annotation after params */
         if (impl_form->as.list.len >= 3) {
             Form *ret_or_body = impl_form->as.list.items[2];
+            /* Accept both fused `:T` (F_KEYWORD) and spaced `: T` (F_TYPE_ANN). */
+            const Symbol *kw = NULL;
             if (ret_or_body->tag == F_KEYWORD) {
-                /* This is a return type annotation */
-                const Symbol *kw = ret_or_body->as.sym;
+                kw = ret_or_body->as.sym;
+            } else if (ret_or_body->tag == F_TYPE_ANN &&
+                       ret_or_body->as.list.len == 1 &&
+                       (ret_or_body->as.list.items[0]->tag == F_SYM ||
+                        ret_or_body->as.list.items[0]->tag == F_KEYWORD)) {
+                kw = ret_or_body->as.list.items[0]->as.sym;
+            }
+            if (kw) {
                 if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                     return_type = TYPE_INT;
                 } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {

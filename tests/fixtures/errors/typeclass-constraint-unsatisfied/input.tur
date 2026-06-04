@@ -1,5 +1,5 @@
 (defclass TC [a]
-  (method [x] :int))
+  (method [x] : int))
 
 (definstance TC [int]
   (method [x] x))
@@ -9,4 +9,4 @@
   [TC bool]
   (method [x] 42))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

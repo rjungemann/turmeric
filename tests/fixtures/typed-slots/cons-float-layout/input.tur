@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [xs (:: (make-struct Cons 1.5 0) (Cons float))]
     (println (.head xs))
     (println (.tail xs))

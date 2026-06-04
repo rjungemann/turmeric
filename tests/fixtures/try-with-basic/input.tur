@@ -3,11 +3,11 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Read [] :int)
 
-(defn effectful [] #{Write Read} :int
+(defn effectful [] #{Write Read} : int
   (do (perform (Write "asking"))
       (perform (Read))))
 
-(defn main [] :int
+(defn main [] : int
   (let [result
     (try-with
       (effectful)

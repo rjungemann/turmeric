@@ -2,7 +2,7 @@
 
 (load "stdlib/seq/transform.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [two 2
         double (fn [x] (* x two))]
     (seq-for-each println (seq/map double (seq/range 0 4)))))

@@ -1,6 +1,6 @@
 ;; FH6: a ^linear continuation that is never resumed/discontinued is rejected.
 (defeffect Choose [] :int)
-(defn main [] :int
+(defn main [] : int
   (with-handler
     (handler (Choose [] ^linear k) 0)
     (perform (Choose))))

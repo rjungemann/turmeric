@@ -13,28 +13,28 @@
 
 ;; ---- Free monad (inline C, tag-based struct) --------------------------------
 
-(defn free-pure [x] :int
+(defn free-pure [x] : int
   ```c
   struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
   r->tag = 0; r->val = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn free-lift [x] :int
+(defn free-lift [x] : int
   ```c
   struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
   r->tag = 1; r->val = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn free-pure? [m] :bool
+(defn free-pure? [m] : bool
   ```c
   struct { int tag; int64_t val; } *r =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
   return r->tag == 0;
   ```)
 
-(defn free-run [interp m] :int
+(defn free-run [interp m] : int
   ```c
   struct { int tag; int64_t val; } *fr =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
@@ -45,7 +45,7 @@
   return TUR_APPLY1(fat, fr->val);
   ```)
 
-(defn free-bind [m kont] :int
+(defn free-bind [m kont] : int
   ```c
   struct { int tag; int64_t val; } *fr =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
@@ -59,7 +59,7 @@
 ;; free-fmap: functor map for Free.
 ;;   free-fmap (PureFree a) f = PureFree (f a)   (f is a fat closure)
 ;;   free-fmap (Suspend  x) f = Suspend x         (pass through)
-(defn free-fmap [m f] :int
+(defn free-fmap [m f] : int
   ```c
   struct { int tag; int64_t val; } *fr =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
@@ -76,7 +76,7 @@
 
 ;; ---- Tests ------------------------------------------------------------------
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; Test 1: free-pure? is true for PureFree
     (println (free-pure? (free-pure 42)))   ;; true

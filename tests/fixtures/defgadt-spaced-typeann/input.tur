@@ -3,6 +3,6 @@
 (defgadt Expr [a]
   (Wrap : (Expr int)))
 
-(defn main [] :int
+(defn main [] : int
   (println "ok")
   0)

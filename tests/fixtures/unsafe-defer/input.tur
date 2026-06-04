@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [r (rc/of 9)]
     (let [p (rc->ptr r)]
       (unsafe

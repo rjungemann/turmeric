@@ -9,7 +9,7 @@
 ;; TY_APP spine to the Sbox struct and selects this instance.
 
 (defclass Wrap [^f]
-  (unwrap [c] :int))
+  (unwrap [c] : int))
 
 (defstruct Sbox [A]
   (raw :int))
@@ -17,7 +17,7 @@
 (definstance Wrap [Sbox]
   (unwrap [c] (.raw c)))
 
-(defn main [] :int
+(defn main [] : int
   (let [b (:: (make-struct Sbox 99) (Sbox int))]
     (println (.unwrap b)))
   0)

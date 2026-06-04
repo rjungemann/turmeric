@@ -7,13 +7,13 @@
 ;; Now EX_FN_TO_FAT selects a per-signature __tur_fatshim_double_double whose
 ;; ABI matches the cast, so the round-trip is correct.
 
-(defn dbl-impl [x :float] :float (* x 2.0))
+(defn dbl-impl [x : float] : float (* x 2.0))
 
-(defn call-fat [^fat g x :float] :float
+(defn call-fat [^fat g x : float] : float
   ```c
   return TUR_APPLY1_T(double, double, g, x);
   ```)
 
-(defn main [] :int
-  (println (call-fat (fn [x :float] :float (dbl-impl x)) 3.5))  ;; 3.5 * 2 = 7
+(defn main [] : int
+  (println (call-fat (fn [x : float] : float (dbl-impl x)) 3.5))  ;; 3.5 * 2 = 7
   0)

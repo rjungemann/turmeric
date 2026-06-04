@@ -2,7 +2,7 @@
 
 (load "stdlib/seq/core.tur")
 
-(defn main [] :void
+(defn main [] : void
   (seq-for-each println (seq-of 5))
   (seq-for-each println (seq-of 6))
   (seq-for-each println (seq-of 7)))

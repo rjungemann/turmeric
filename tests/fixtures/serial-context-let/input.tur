@@ -5,14 +5,14 @@
 ;; at capture time and rides in the frame env exactly like a literal operand.
 
 ;; round-trip the captured continuation through bytes, then resume it.
-(defn rt5 [k] :int
+(defn rt5 [k] : int
   (tur_serial_cont_resume
     (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
 
 ;; resume directly, without marshaling.
-(defn direct4 [k] :int (tur_serial_cont_resume k 4))
+(defn direct4 [k] : int (tur_serial_cont_resume k 4))
 
-(defn main [] :int
+(defn main [] : int
   ;; let in context, round-tripped: a = 10; (10 + 5)                 = 15
   (println (serial-reset (let [a 10] (+ a (serial-shift rt5 0)))))
   ;; nested let context (* a (+ b [])) with a=2 b=1, direct resume:

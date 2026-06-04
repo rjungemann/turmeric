@@ -5,12 +5,12 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a :ptr b :ptr] :bool
+(defn ptr= [a : ptr b : ptr] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-key [x :int] :ptr
+(defn alloc-key [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
@@ -18,14 +18,14 @@
   ```)
 
 ;; Test: hamt/new creates empty map
-(defn test-new [] :int
+(defn test-new [] : int
   (let [m (hamt/new)]
     (let [c (hamt/count m)]
       (hamt/free m)
       c)))
 
 ;; Test: hamt/set and hamt/get round-trip
-(defn test-set-get [] :int
+(defn test-set-get [] : int
   (let [k1 (alloc-key 42)]
     (let [v1 (alloc-key 100)]
       (let [m1 (hamt/new)]
@@ -38,7 +38,7 @@
             (if (ptr= result v1) 1 0)))))))
 
 ;; Test: hamt/has?
-(defn test-has [] :int
+(defn test-has [] : int
   (let [k1 (alloc-key 42)]
     (let [v1 (alloc-key 100)]
       (let [m1 (hamt/new)]
@@ -51,7 +51,7 @@
             (if result 1 0)))))))
 
 ;; Test: hamt/count
-(defn test-count [] :int
+(defn test-count [] : int
   (let [k1 (alloc-key 1)]
     (let [k2 (alloc-key 2)]
       (let [k3 (alloc-key 3)]
@@ -76,7 +76,7 @@
                         c))))))))))))
 
 ;; Test: hamt/del
-(defn test-del [] :int
+(defn test-del [] : int
   (let [k1 (alloc-key 42)]
     (let [v1 (alloc-key 100)]
       (let [m1 (hamt/new)]

@@ -6,7 +6,7 @@
 ;;
 ;; Arc layout: struct { uint64_t strong; uint64_t weak; int64_t value; }
 
-(defn arc-new [val :int] :ptr<void>
+(defn arc-new [val : int] : ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)malloc(sizeof(ArcCell));
@@ -17,7 +17,7 @@
   return (void *)b;
   ```)
 
-(defn arc-clone [p :ptr<void>] :ptr<void>
+(defn arc-clone [p : ptr<void>] : ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
@@ -25,13 +25,13 @@
   return (void *)b;
   ```)
 
-(defn arc-get [p :ptr<void>] :int
+(defn arc-get [p : ptr<void>] : int
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   return (int64_t)((ArcCell *)p)->value;
   ```)
 
-(defn arc-drop [p :ptr<void>] :nil
+(defn arc-drop [p : ptr<void>] : nil
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
@@ -42,7 +42,7 @@
   }
   ```)
 
-(defn arc-strong-count [p :ptr<void>] :int
+(defn arc-strong-count [p : ptr<void>] : int
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   return (int64_t)__atomic_load_n(&((ArcCell *)p)->strong, __ATOMIC_SEQ_CST);
@@ -50,7 +50,7 @@
 
 ;; Thread argument: contains the Arc clone and a result slot.
 ;; Layout: { ptr arc_clone; int64_t result; }
-(defn thread-arg-new [arc-clone-ptr :ptr<void>] :ptr<void>
+(defn thread-arg-new [arc-clone-ptr : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *arc; int64_t result; } ThreadArg;
   ThreadArg *a = (ThreadArg *)malloc(sizeof(ThreadArg));
@@ -60,19 +60,19 @@
   return (void *)a;
   ```)
 
-(defn thread-arg-result [a :ptr<void>] :int
+(defn thread-arg-result [a : ptr<void>] : int
   ```c
   typedef struct { void *arc; int64_t result; } ThreadArg;
   return (int64_t)((ThreadArg *)a)->result;
   ```)
 
-(defn thread-arg-free [a :ptr<void>] :nil
+(defn thread-arg-free [a : ptr<void>] : nil
   ```c
   free(a);
   ```)
 
 ;; Worker: reads value from Arc, multiplies by 2, stores in result slot.
-(defn thread-worker [arg :ptr<void>] :ptr<void>
+(defn thread-worker [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   typedef struct { void *arc; int64_t result; } ThreadArg;
@@ -82,7 +82,7 @@
   return NULL;
   ```)
 
-(defn thread-spawn [arg :ptr<void>] :ptr<void>
+(defn thread-spawn [arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
@@ -90,13 +90,13 @@
   return (void *)t;
   ```)
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [shared (arc-new 21)]
     ;; Two clones for the two threads
     (let [c1 (arc-clone shared)]

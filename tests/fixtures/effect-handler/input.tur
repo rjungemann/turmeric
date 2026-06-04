@@ -3,7 +3,7 @@
 (defeffect Add [x :int] :int)
 (defeffect Mul [x :int] :int)
 
-(defn compute [] :int
+(defn compute [] : int
   (* (perform (Add 3)) (perform (Mul 4))))
 
 ;; Add handler: resumes with x+10 = 13

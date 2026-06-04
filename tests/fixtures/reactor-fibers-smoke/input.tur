@@ -10,22 +10,22 @@
 
 (load "stdlib/reactor.tur")
 
-(defn say [msg :cstr] :nil
+(defn say [msg : cstr] : nil
   ```c printf("%s\n", (const char *)msg); ```)
 
-(defn print-completed [n :int] :nil
+(defn print-completed [n : int] : nil
   ```c printf("completed=%lld\n", (long long)n); ```)
 
-(defn null-ptr [] :ptr<void>
+(defn null-ptr [] : ptr<void>
   ```c return NULL; ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [sentinel 1
         r        (reactor-new)
         g        (local-fiber-group-new r)]
     ;; Capture sentinel so the body is emitted as a real fat closure.
     (local-spawn g
-      (fn [user] :nil
+      (fn [user] : nil
         (say (if (= sentinel 1) "fiber ran" "unreachable")))
       (null-ptr))
     (let [n (reactor-run-fibers g)]

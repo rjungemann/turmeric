@@ -2,6 +2,6 @@
 
 (extern-c puts [s : cstr] :int)
 
-(defn main [] :int
+(defn main [] : int
   (puts "hi")
   0)

@@ -1,4 +1,4 @@
-(defn str-from-cstr [cs :cstr] :ptr<void>
+(defn str-from-cstr [cs : cstr] : ptr<void>
   ```c
   const char *s = (const char*)cs;
   size_t len = 0;
@@ -9,13 +9,13 @@
   return str;
   ```)
 
-(defn str-len [s :ptr<void>] :int
+(defn str-len [s : ptr<void>] : int
   ```c
   struct { const char *p; size_t len; } *str = (void*)s;
   return (int)str->len;
   ```)
 
-(defn str-eq? [s1 :ptr<void> s2 :ptr<void>] :bool
+(defn str-eq? [s1 : ptr<void> s2 : ptr<void>] : bool
   ```c
   struct { const char *p; size_t len; } *a = (void*)s1;
   struct { const char *p; size_t len; } *b = (void*)s2;
@@ -27,12 +27,12 @@
   return true;
   ```)
 
-(defn str-free [s :ptr<void>]
+(defn str-free [s : ptr<void>]
   ```c
   free(s);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [a (str-from-cstr "abc")]
     (let [b (str-from-cstr "abc")]
       (let [c (str-from-cstr "abd")]

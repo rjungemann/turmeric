@@ -1,9 +1,9 @@
-(defn null-ptr [] :ptr<void> ```c return NULL; ```)
-(defn main [] :int
+(defn null-ptr [] : ptr<void> ```c return NULL; ```)
+(defn main [] : int
   (let [_tag 42
-        base (fn [c :ptr<void>] :nil
+        base (fn [c : ptr<void>] : nil
                (let [_t _tag] ```c (void)c; ```))
-        outer (fn [n :int] :nil
+        outer (fn [n : int] : nil
                 (let [_t _tag]
                   (base (null-ptr))))]
     (outer 1)

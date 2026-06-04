@@ -2,7 +2,7 @@
 ;; attempting to redefine it should produce a clear "already defined" diagnostic.
 ;; Defining Functor the first time succeeds; redefining it immediately fails.
 (defclass Functor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 ;; This second definition must fail.
 (defclass Functor [a]
-  (map [x fn] :int))
+  (map [x fn] : int))

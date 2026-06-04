@@ -10,27 +10,27 @@
 ;; Proves: content-keyed lookup, in-place update (re-assoc an equal key keeps
 ;; count at 2), has?, negative has?, and dissoc -- all by value, by content.
 
-(defstruct Point [x :int y :int])
+(defstruct Point [x : int y : int])
 
 (definstance Hash [Point]
-  (hash [p] :int ```c return (int64_t)(p.x * 1000003 + p.y); ```))
+  (hash [p] : int ```c return (int64_t)(p.x * 1000003 + p.y); ```))
 (definstance Eq [Point]
   (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
 
 ;; Carrier comparator: a and b are box payload pointers to Point; compare by
 ;; content (equivalent to Eq[Point]).
-(defn point-carrier-eq? [a :int b :int] :bool
+(defn point-carrier-eq? [a : int b : int] : bool
   ```c Point *pa = (Point *)(intptr_t)a; Point *pb = (Point *)(intptr_t)b;
   return (pa->x == pb->x) && (pa->y == pb->y);
   ```)
 
 ;; MapKey[Point]: heap-box the struct key; owned by the map.
 (definstance MapKey [Point]
-  (mk-box [p] :int ```c return (int64_t)(intptr_t)tur_hamt_box_key(&p, sizeof(p)); ```)
+  (mk-box [p] : int ```c return (int64_t)(intptr_t)tur_hamt_box_key(&p, sizeof(p)); ```)
   (mk-cmp [p] point-carrier-eq?)
   (mk-owned? [p] 1))
 
-(defn main [] :int
+(defn main [] : int
   (let [m  (map-assoc (map-assoc (:: (map-new) (Map Point int)) (make-struct Point 3 4) 100)
                                               (make-struct Point 5 6) 200)
         m2 (map-assoc m (make-struct Point 3 4) 999)]   ; update by content

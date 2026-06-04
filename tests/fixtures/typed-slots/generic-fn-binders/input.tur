@@ -4,10 +4,10 @@
 (defn id-explicit-spaced [A] [x : A] : A
   x)
 
-(defn id-implicit [a x :a] :a
+(defn id-implicit [a x : a] : a
   x)
 
-(defn main [] :int
+(defn main [] : int
   (println (id-explicit 3))
   (println (id-explicit-spaced 2.5))
   (println ((fn [A] [x :A] :A x) 4.5))

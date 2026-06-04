@@ -10,10 +10,10 @@
 ; If either piece is missing the program either leaks the inner
 ; allocation (no smart drop) or double-frees it (no move).
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [rc]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(32);
     int64_t v = *(int64_t *)((RcControlBlock *)x)->value;
@@ -21,7 +21,7 @@
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [r (rc/of 99)
         e (pack r (exists [a] [(Show a)] a))]
     (open e [_ v]

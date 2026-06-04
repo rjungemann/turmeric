@@ -1,7 +1,7 @@
-(defstruct Pair [first :int second :int])
+(defstruct Pair [first : int second : int])
 
 (defclass Clone [a]
-  (clone [x] :int))
+  (clone [x] : int))
 
 (definstance Clone [int]
   (clone [x] x))
@@ -10,4 +10,4 @@
   [Clone int]
   (clone [x] x))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

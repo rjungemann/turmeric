@@ -11,17 +11,17 @@
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
 
-(defn sized-vec-len [v :SizedVec] :int
+(defn sized-vec-len [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons _ xs) (+ 1 (sized-vec-len xs))))
 
-(defn sized-vec-sum [v :SizedVec] :int
+(defn sized-vec-sum [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons x xs) (+ x (sized-vec-sum xs))))
 
-(defn main [] :int
+(defn main [] : int
   ; Pack a length-3 SizedVec into an existential that hides the size index.
   ; The phantom binder [n] is in scope inside the open block but never
   ; referenced at the value level -- v has the concrete carrier type

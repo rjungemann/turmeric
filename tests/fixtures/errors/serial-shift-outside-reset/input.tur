@@ -1,10 +1,10 @@
 ;; Phase 21: Negative fixture for TUR-E0019.
 ;; serial-shift must appear inside a serial-reset boundary.
 
-(defn k-discard [k] :int 0)
+(defn k-discard [k] : int 0)
 
-(defn test [] :int
+(defn test [] : int
   (serial-shift k-discard 42))
 
-(defn main [] :int
+(defn main [] : int
   (test))

@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   ;; Test 1: RC auto-drop should fire for bindings not consumed by ref/from-rc
   ;; With auto-drop enabled, we shouldn't need explicit (rc/drop x) calls
   (let [x (rc/of 100)]

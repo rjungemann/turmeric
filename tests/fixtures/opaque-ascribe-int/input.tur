@@ -4,10 +4,10 @@
 
 (defopaque UserId :int)
 
-(defn uid->int [u :UserId] :int
+(defn uid->int [u : UserId] : int
   ```c return (int64_t)u; ```)
 
-(defn main [] :int
+(defn main [] : int
   (println (uid->int (:: 7 :UserId)))    ; 7
   (println (uid->int (:: 42 :UserId)))   ; 42
   (println (:: (:: 100 :UserId) :int))   ; 100 (relabel int->UserId->int)

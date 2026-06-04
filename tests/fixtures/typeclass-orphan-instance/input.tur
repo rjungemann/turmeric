@@ -11,11 +11,11 @@
 ;; P19-6 (module system) lands.
 
 (defclass Show [a]
-  (show-it [x] :int))
+  (show-it [x] : int))
 
 (definstance Show [:int]
   (show-it [x] (do (println x) x)))
 
-(defn main [] :int
+(defn main [] : int
   (.show-it 42)
   0)

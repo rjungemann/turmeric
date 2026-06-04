@@ -4,4 +4,4 @@
   (loop X
     (continue X)))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

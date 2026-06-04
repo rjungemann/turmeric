@@ -3,14 +3,14 @@
 
 (defdata Sign (Pos :int) (Neg :int) (Zero))
 
-(defn classify [s] :int
+(defn classify [s] : int
   (match s
     (Pos n) when (> n 100) (do (println "big") 0)
     (Pos n)                (do (println "pos") 0)
     (Neg n)                (do (println "neg") 0)
     (Zero)                 (do (println "zero") 0)))
 
-(defn main [] :int
+(defn main [] : int
   (classify (Pos 200))
   (classify (Pos 5))
   (classify (Neg 3))

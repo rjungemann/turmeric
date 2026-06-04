@@ -1,12 +1,12 @@
 ;; DL5: set-eq? interacts correctly with literal-built sets.  Regression guard
 ;; for the set-of expansion threading results through set-add1 -- the wrapper
 ;; must not expose a pointer identity that defeats structural equality.
-(defn lit-eq-lit [] :bool
+(defn lit-eq-lit [] : bool
   (set-eq? #set{1 2 3} #set{3 2 1}))
-(defn lit-eq-manual [] :bool
+(defn lit-eq-manual [] : bool
   (let [manual (set-add (set-add (set-add (set-new) 1 1) 2 2) 3 3)]
     (set-eq? #set{1 2 3} manual)))
-(defn lit-neq [] :bool
+(defn lit-neq [] : bool
   (set-eq? #set{1 2 3} #set{1 2}))
 (println (lit-eq-lit))
 (println (lit-eq-manual))

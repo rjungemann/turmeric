@@ -1,7 +1,7 @@
 ; Phase 12: Cannot assign through immutable borrow
 ; (set! (@ r) value) rejected when r: &T (not &mut T)
 
-(defn main [] :int
+(defn main [] : int
   (let [x 10]
     (let [r (& x)]
       (set! @r 99)))  ; ERROR: cannot assign through immutable borrow

@@ -1,16 +1,16 @@
 ;; SI1: Display [int] returns the decimal representation.
 (defclass Display [a]
-  (display [x] :cstr))
+  (display [x] : cstr))
 
 (definstance Display [int]
-  (display [x] :cstr
+  (display [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)(intptr_t)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (println (.display 42))
   (println (.display -7))
   (println (.display 0))

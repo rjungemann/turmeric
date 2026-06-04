@@ -3,8 +3,8 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn main [] :int
-  (let [bad-fn (fn [] #{} :nil
+(defn main [] : int
+  (let [bad-fn (fn [] #{} : nil
                  (perform (Write "oops")))]
     (handle
       (bad-fn)

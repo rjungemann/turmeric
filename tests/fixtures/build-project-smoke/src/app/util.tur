@@ -3,5 +3,5 @@
 (defmodule app/util
   (export double-it)
 
-  (defn double-it [x :int] :int
+  (defn double-it [x : int] : int
     (* x 2)))

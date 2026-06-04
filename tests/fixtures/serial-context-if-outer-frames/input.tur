@@ -6,11 +6,11 @@
 ;; pure path yields its arm's value through the outer frames with no capture.
 
 ;; round-trip the captured continuation through bytes, then resume it.
-(defn rt5 [k] :int
+(defn rt5 [k] : int
   (tur_serial_cont_resume
     (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
 
-(defn main [] :int
+(defn main [] : int
   ;; outer (+ 7 ...) frame, shift in THEN, cond true, round-tripped.
   ;;   context (+ 7 (+ 10 [])): 7+10+5                                = 22
   (println (serial-reset (+ 7 (if (< 0 1) (+ 10 (serial-shift rt5 0)) 42))))

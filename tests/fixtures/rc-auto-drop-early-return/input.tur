@@ -1,6 +1,6 @@
 ;; Phase 9 auto-drop: return should still fire rc auto-drop defer at scope exit.
 
-(defn rc-auto-drop-early-return [flag :bool]
+(defn rc-auto-drop-early-return [flag : bool]
   (let [x (rc/of 42)]
     (if flag
         (return (rc/strong-count x))

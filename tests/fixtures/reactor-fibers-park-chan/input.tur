@@ -12,30 +12,30 @@
 (load "stdlib/reactor.tur")
 (load "stdlib/chan.tur")
 
-(defn print-sent [n :int] :nil
+(defn print-sent [n : int] : nil
   ```c printf("sent %lld\n", (long long)n); ```)
 
-(defn print-got [n :int] :nil
+(defn print-got [n : int] : nil
   ```c printf("got %lld\n", (long long)n); ```)
 
-(defn print-completed [n :int] :nil
+(defn print-completed [n : int] : nil
   ```c printf("completed=%lld\n", (long long)n); ```)
 
-(defn null-ptr [] :ptr<void>
+(defn null-ptr [] : ptr<void>
   ```c return NULL; ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r  (reactor-new)
         g  (local-fiber-group-new r)
         ch (chan-new 4)]
     ;; Receiver: park until a value arrives.
     (local-spawn g
-      (fn [user] :nil
+      (fn [user] : nil
         (print-got (local-park-chan g ch)))
       (null-ptr))
     ;; Sender: send then wake so the poll returns and the bridge fires.
     (local-spawn g
-      (fn [user] :nil
+      (fn [user] : nil
         (chan-send ch 99)
         (print-sent 99)
         (reactor-wake r))

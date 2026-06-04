@@ -4,7 +4,7 @@
 
 (defeffect Choose [a :int b :int] :int)
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
@@ -23,7 +23,7 @@
   ```)
 
 ;; Compute a value using two Choose effects, then wrap in mreturn
-(defn make-choices [] :int
+(defn make-choices [] : int
   (let [x (perform (Choose 10 20))]
     (let [y (perform (Choose 1 2))]
       (mreturn (+ x y)))))

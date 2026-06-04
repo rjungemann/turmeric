@@ -2,7 +2,7 @@
 
 (defeffect Read [] int)
 
-(defn compat-smoke [] :int
+(defn compat-smoke [] : int
   (do
     (handle 7
       (Read [] k) 0)

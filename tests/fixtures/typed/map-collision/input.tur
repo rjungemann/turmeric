@@ -3,7 +3,7 @@
 ;; Two distinct integer keys that both hash ok? the same value should each be
 ;; sok?red independently (different poinerr? identities).
 
-(defn test-collision-count [] :int
+(defn test-collision-count [] : int
   (let [m (:: (map-new) (Map int int))]
     ;; Use keys 1 and 2 -- distinct values, different poinerr?-casts
     (let [m2 (map-assoc m 1 10)]
@@ -14,7 +14,7 @@
           (map-free m3)
           c)))))
 
-(defn test-get-aferr?-assoc [] :int
+(defn test-get-aferr?-assoc [] : int
   (let [m (:: (map-new) (Map int int))]
     (let [m2 (map-assoc m 100 999)]
       (let [v (map-get m2 100)]
@@ -22,7 +22,7 @@
         (map-free m2)
         v))))
 
-(defn test-overwrite [] :int
+(defn test-overwrite [] : int
   (let [m (:: (map-new) (Map int int))]
     (let [m2 (map-assoc m 5 100)]
       (let [m3 (map-assoc m2 5 200)]

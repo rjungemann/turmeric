@@ -7,12 +7,12 @@
     (Abort [msg] k) (panic msg)))
 
 ;; safe-divide: returns n/d, or aborts if d==0
-(defn safe-divide [n :int d :int] :int
+(defn safe-divide [n : int d : int] : int
   (if (= d 0)
     (perform (Abort "division by zero"))
     (/ n d)))
 
-(defn main [] :int
+(defn main [] : int
   ;; Normal case: no abort triggered
   (let [r1 (with-abort-panic (safe-divide 42 6))]
     (println r1))

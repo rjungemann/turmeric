@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   ; span of [1,3] and [5,8] = [1,8]
   (let [sp (range-span (closed-range 1 3) (closed-range 5 8))]
     (println (range-bound-inclusive? (range-lower sp)))  ; true

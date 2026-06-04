@@ -2,15 +2,15 @@
 ;; the file containing it. A defn above defmodule in the SAME
 ;; file is still an error even under the per-file scoping fix.
 
-(defn before-tag [] :nil
+(defn before-tag [] : nil
   ```c printf("before\n"); ```)
 
 (defmodule mod
   (export inside-tag)
-  (defn inside-tag [] :nil
+  (defn inside-tag [] : nil
     ```c printf("inside\n"); ```))
 
-(defn main [] :int
+(defn main [] : int
   (before-tag)
   (inside-tag)
   0)

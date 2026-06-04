@@ -3,9 +3,9 @@
 ;; identity of the parameter it fills, not merely its TypeKind.
 (defopaque A :int)
 (defopaque B :int)
-(defn two [x :A y :A] :int ```c return (int64_t)(x + y); ```)
-(defn mk-a [] :A ```c return 1; ```)
-(defn mk-b [] :B ```c return 1; ```)
-(defn main [] :int
+(defn two [x : A y : A] : int ```c return (int64_t)(x + y); ```)
+(defn mk-a [] : A ```c return 1; ```)
+(defn mk-b [] : B ```c return 1; ```)
+(defn main [] : int
   (let [f (two (mk-b))]
     (f (mk-a))))

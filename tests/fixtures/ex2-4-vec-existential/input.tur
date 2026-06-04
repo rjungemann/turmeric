@@ -8,7 +8,7 @@
 (load "stdlib/sized.tur")
 (load "stdlib/vec-existential.tur")
 
-(defn main [] :int
+(defn main [] : int
   ; Three-element vec: open and report the length.
   (let [v1 (vec-of-sized (SVCons 1 (SVCons 2 (SVCons 3 (SVNil)))))]
     (open-vec v1 n sv

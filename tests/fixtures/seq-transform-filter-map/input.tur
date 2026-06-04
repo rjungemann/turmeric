@@ -3,7 +3,7 @@
 (load "stdlib/seq/transform.tur")
 
 ;;; make-some -- allocate Some(v) for filter-map tests
-(defn make-some [v :int] :int
+(defn make-some [v : int] : int
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true; opt->value = v;
@@ -11,14 +11,14 @@
   ```)
 
 ;;; make-none -- allocate None for filter-map tests
-(defn make-none [] :int
+(defn make-none [] : int
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = false; opt->value = 0;
   return (int64_t)(intptr_t)opt;
   ```)
 
-(defn main [] :void
+(defn main [] : void
   (let [two 2
         f (fn [x] (if (= (mod x two) 0) (make-some (* x two)) (make-none)))]
     (seq-for-each println (seq/filter-map f (seq/range 0 6)))))

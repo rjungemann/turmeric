@@ -13,31 +13,31 @@
 
 ;; --- Inline scheduler + fiber wrappers (self-contained test) ---
 
-(defn mk-scheduler [] :ptr<void>
+(defn mk-scheduler [] : ptr<void>
   ```c
   TurScheduler *s = tur_scheduler_new();
   tur_scheduler = s;
   return (void *)s;
   ```)
 
-(defn mk-fiber [fn :ptr<void>] :ptr<void>
+(defn mk-fiber [fn : ptr<void>] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
   ```)
 
-(defn sched-spawn [s :ptr<void> f :ptr<void>] :nil
+(defn sched-spawn [s : ptr<void> f : ptr<void>] : nil
   ```c
   tur_scheduler_spawn((TurScheduler *)s, (FiberBlock *)f);
   ```)
 
-(defn sched-run [s :ptr<void>] :nil
+(defn sched-run [s : ptr<void>] : nil
   ```c
   tur_scheduler_run((TurScheduler *)s);
   ```)
 
 ;; --- Timer-based sleep (uses timer wheel + park/yield) ---
 
-(defn timer-sleep-ms [ms :int] :nil
+(defn timer-sleep-ms [ms : int] : nil
   ```c
   if (ms <= 0) return;
   FiberBlock *me = tur_current_fiber;
@@ -52,19 +52,19 @@
 
 ;; --- Fiber bodies ---
 
-(defn fiber-fast [] :nil
+(defn fiber-fast [] : nil
   (timer-sleep-ms 50)
   (println "fiber-fast done (50ms)"))
 
-(defn fiber-medium [] :nil
+(defn fiber-medium [] : nil
   (timer-sleep-ms 100)
   (println "fiber-medium done (100ms)"))
 
-(defn fiber-slow [] :nil
+(defn fiber-slow [] : nil
   (timer-sleep-ms 150)
   (println "fiber-slow done (150ms)"))
 
-(defn main [] :int
+(defn main [] : int
   (println "start")
   (let [s (mk-scheduler)]
     (sched-spawn s (mk-fiber fiber-fast))

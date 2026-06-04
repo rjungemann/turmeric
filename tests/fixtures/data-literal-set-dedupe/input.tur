@@ -1,3 +1,3 @@
 ;; DL3: #set{1 1 2} collapses duplicate elements (HAMT-merge behavior).
-(defn run [] :int (set-count #set{1 1 2}))
+(defn run [] : int (set-count #set{1 1 2}))
 (println (run))

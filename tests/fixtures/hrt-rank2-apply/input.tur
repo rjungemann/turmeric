@@ -1,12 +1,12 @@
 ; Phase HRT1: rank-2 apply — calls a rank-2 poly fn on two different arguments.
-(defn apply-twice [f (forall [a] (-> a a)) x :int y :int] :int
+(defn apply-twice [f (forall [a] (-> a a)) x : int y : int] : int
   (let [r1 (f x)
         r2 (f y)]
     (+ r1 r2)))
 
-(defn twice [x :int] :int
+(defn twice [x : int] : int
   (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   (println (apply-twice twice 3 5))
   0)

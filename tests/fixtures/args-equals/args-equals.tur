@@ -2,7 +2,7 @@
 
 (load "stdlib/args.tur")
 
-(defn print-cstr [s :cstr] :void
+(defn print-cstr [s : cstr] : void
   ```c
   printf("%s\n", s ? s : "");
   ```)

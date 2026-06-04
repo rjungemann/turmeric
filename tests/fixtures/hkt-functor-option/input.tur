@@ -4,10 +4,10 @@
 
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; Option helpers (inline layout: { bool is_some; int64_t value; })
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -15,19 +15,19 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_none [] :int
+(defn __opt_none [] : int
   ```c
   return 0;
   ```)
 
-(defn __opt_some? [o] :bool
+(defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
@@ -35,7 +35,7 @@
   ```)
 
 ;; TestFunctor[option]: apply fn to the inner value, wrap result in a new option.
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -50,9 +50,9 @@
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Helper function: double an integer (renamed to avoid C keyword conflict).
-(defn twice [x] :int (* x 2))
+(defn twice [x] : int (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; fmap twice (some 21) => some 42
     (let [opt1 (__opt_some 21)]

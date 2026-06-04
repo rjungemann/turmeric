@@ -4,7 +4,7 @@
 ;; Note: v1 uses nanosleep directly (blocks thread). Full scheduler-based
 ;; timeout is deferred to Phase T24 proper.
 
-(defn async-sleep [ms :int] :nil
+(defn async-sleep [ms : int] : nil
   ```c
   if (ms <= 0) return;
   struct timespec ts;
@@ -13,7 +13,7 @@
   nanosleep(&ts, NULL);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (println "Starting async-sleep test...")
   
   ;; Sleep for 100ms

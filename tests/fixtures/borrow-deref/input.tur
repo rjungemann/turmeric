@@ -1,7 +1,7 @@
 ; Phase 12: Borrow deref — @r on &T and &mut T
 ; Demonstrates zero-cost borrow dereferencing
 
-(defn main [] :int
+(defn main [] : int
   (let [x 42]
     (let [r (& x)]       ; &int — immutable borrow
       (println @r))      ; deref &int → 42

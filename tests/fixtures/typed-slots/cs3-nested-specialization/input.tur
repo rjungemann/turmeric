@@ -17,7 +17,7 @@
 (defn use-second [A B] [p :(Pair A B)] :B
   (pair-second p))
 
-(defn main [] :int
+(defn main [] : int
   (let [p (:: (make-struct Pair 10 3.14) (Pair int float))]
     (println (pair-second p))
     (println (use-second p))

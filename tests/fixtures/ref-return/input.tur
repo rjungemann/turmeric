@@ -2,10 +2,10 @@
 ; uses it to derive a return value, and the drop fires at function exit.
 ; The caller receives the int value; no dangling pointer.
 
-(defn use-ref [] :int
+(defn use-ref [] : int
   (let [r (ref 100)]
     @r))
 
-(defn main [] :int
+(defn main [] : int
   (println (use-ref))
   0)

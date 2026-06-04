@@ -4,8 +4,8 @@
 ;; my-unbox: renamed from `unbox` to avoid colliding with the auto-loaded
 ;; stdlib/safe.tur `unbox` (MF3 hard-errors on shadowing). This fixture
 ;; exercises the skolem-escape diagnostic, not the redef one.
-(defn my-unbox [b] :int
+(defn my-unbox [b] : int
   (match b
     (MkBox x) x))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

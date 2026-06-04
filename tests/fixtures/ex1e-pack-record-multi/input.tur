@@ -5,13 +5,13 @@
 ; array is populated but not yet consulted; the test verifies the record
 ; allocation path compiles and runs end-to-end).
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (defclass MyEq [a]
-  (my-eq? [x y] :bool))
+  (my-eq? [x y] : bool))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -19,12 +19,12 @@
     ```))
 
 (definstance MyEq [int]
-  (my-eq? [x y] :bool
+  (my-eq? [x y] : bool
     ```c
     return x == y;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [e (pack 5 (exists [a] [(Show a) (MyEq a)] a))]
     (open e [a v]
       (println (.show v))

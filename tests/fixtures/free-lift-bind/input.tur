@@ -2,7 +2,7 @@
 
 ;; RF3: free-lift and free-run -- lift a suspended value and interpret it.
 
-(defn main [] :int
+(defn main [] : int
   ;; free-lift wraps a value in Suspend(fx)
   (let [lifted (free-lift 10)]
     ;; free-run on a Suspend passes the inner value to interp.

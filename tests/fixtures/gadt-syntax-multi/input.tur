@@ -3,7 +3,7 @@
 (defgadt P2 [a b]
   (MkP2 int int : (P2 a b)))
 
-(defn main [] :int
+(defn main [] : int
   (let [p (MkP2 3 4)]
     (match p
       (MkP2 x y) (println (+ x y)))

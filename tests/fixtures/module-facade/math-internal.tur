@@ -1,4 +1,4 @@
 (defmodule math-internal
   (export mul2 mul3)
-  (defn mul2 [x] :int (* x 2))
-  (defn mul3 [x] :int (* x 3)))
+  (defn mul2 [x] : int (* x 2))
+  (defn mul3 [x] : int (* x 3)))

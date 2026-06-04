@@ -2,9 +2,9 @@
 ;; A function parameter annotated as (handler Write cstr nil) can be
 ;; passed a handler value; compose-handlers sees the types correctly.
 (defeffect Write [s :cstr] :nil)
-(defn run-with-handler [h1 :(handler Write cstr nil) h2 :(handler Write cstr nil)] :nil
+(defn run-with-handler [h1 :(handler Write cstr nil) h2 :(handler Write cstr nil)] : nil
   nil)
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (perform (Write "hello")) 0)
     (Write [s] k) (do (println s) (resume k nil))))

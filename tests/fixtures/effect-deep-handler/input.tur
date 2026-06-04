@@ -5,7 +5,7 @@
 (defeffect Step [] :int)
 
 ;; A computation that performs Step three times and accumulates the results.
-(defn three-steps [] :int
+(defn three-steps [] : int
   (let [a (perform (Step))
         b (perform (Step))
         c (perform (Step))]

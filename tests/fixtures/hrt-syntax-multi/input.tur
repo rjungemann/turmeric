@@ -4,5 +4,5 @@
 (deftype Pair (forall [a b] a))
 (deftype Triple (exists [a b c] a))
 
-(defn main [] :int
+(defn main [] : int
   0)

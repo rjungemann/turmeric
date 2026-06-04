@@ -1,9 +1,9 @@
 ;; MS0: tur_continuation_snapshot clones a CPS continuation for independent resumption.
 ;; Each snapshot can be resumed with a different value independently.
 
-(defn k-return [k] :int k)
+(defn k-return [k] : int k)
 
-(defn main [] :int
+(defn main [] : int
   (let [k (cloneable-reset (cloneable-shift k-return 0))]
     (let [snap (tur_continuation_snapshot k)]
       (println (tur_cloneable_cont_resume k 10))

@@ -13,13 +13,13 @@
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
-(defn print-pair [k :cstr v :cstr] :nil
+(defn print-pair [k : cstr v : cstr] : nil
   ```c printf("%s=%s\n", k, v); ```)
 
-(defn print-flag [k :cstr v :int] :nil
+(defn print-flag [k : cstr v : int] : nil
   ```c printf("%s=%d\n", k, (int)v); ```)
 
-(defn client-worker [arg :ptr<void>] :ptr<void>
+(defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   struct timespec ts = { 0, 30000000L };
@@ -46,17 +46,17 @@
   return NULL;
   ```)
 
-(defn run-server [h :ptr<void>] :ptr<void>
+(defn run-server [h : ptr<void>] : ptr<void>
   ```c httpd_run(h); return NULL; ```)
 
-(defn spawn-server [h :ptr<void>] :ptr<void>
+(defn spawn-server [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
   return (void *)t;
   ```)
 
-(defn spawn-client [port :int] :ptr<void>
+(defn spawn-client [port : int] : ptr<void>
   ```c
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
@@ -65,12 +65,12 @@
   return (void *)t;
   ```)
 
-(defn join-thread [t :ptr<void>] :nil
+(defn join-thread [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [donech (chan-new 1)
-        base   (fn [c :ptr<void>] :nil
+        base   (fn [c : ptr<void>] : nil
                  ;; Lookup is case-insensitive -- prove it on user-agent.
                  (print-pair "ua"          (httpd-req-header c "user-agent"))
                  (print-pair "x-test"      (httpd-req-header c "X-Test"))

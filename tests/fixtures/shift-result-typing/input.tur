@@ -5,16 +5,16 @@
 ;; when f's domain and codomain matched.
 
 ;; codomain != domain: f : int -> bool, body : int  ==>  shift expr is :bool
-(defn classify [n :int] :bool
+(defn classify [n : int] : bool
   (reset
-    (shift (fn [v :int] (> v 0)) n)))
+    (shift (fn [v : int] (> v 0)) n)))
 
 ;; matching answer types: f : int -> int, body : int  ==>  shift expr is :int
-(defn add-one [n :int] :int
+(defn add-one [n : int] : int
   (reset
-    (shift (fn [v :int] (+ v 1)) n)))
+    (shift (fn [v : int] (+ v 1)) n)))
 
-(defn main [] :int
+(defn main [] : int
   (if (classify 5) (println 1) (println 0))
   (if (classify -3) (println 1) (println 0))
   (println (add-one 41))

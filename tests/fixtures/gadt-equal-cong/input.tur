@@ -22,7 +22,7 @@
   (match eq
     (Refl) (Refl)))
 
-(defn main [] :int
+(defn main [] : int
   (let [pf (equal-cong (Refl))]
     (println "ok"))
   0)

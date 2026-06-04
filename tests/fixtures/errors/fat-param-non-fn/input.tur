@@ -1,9 +1,9 @@
 ;; A#1 diagnostic: passing a non-function value to a ^fat parameter is a typed
 ;; error instead of a silent runtime segfault.
-(defn apply-cb [^fat cb :int x :int] #{Unsafe} :int
+(defn apply-cb [^fat cb : int x : int] #{Unsafe} : int
   ```c
   return x;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (unsafe (apply-cb 42 7)))

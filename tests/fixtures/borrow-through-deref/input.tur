@@ -1,6 +1,6 @@
 ;; Phase 12: Borrow-through-deref — (& @r) where r: &T gives &T (not &&T)
 
-(defn main [] :int
+(defn main [] : int
   (let [x 10]
     ;; Immutable reborrow through deref
     (let [r1 &x]         ;; r1: &int

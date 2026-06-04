@@ -6,14 +6,14 @@
 ; not warn (the elaborator suppresses when the looked-up binding
 ; matches e->current_fn_name), so a deprecated function does not
 ; spam warnings on its own implementation.
-(defn ^deprecated "use new-add instead" old-add [a :int b :int] :int
+(defn ^deprecated "use new-add instead" old-add [a : int b : int] : int
   (+ a b))
 
-(defn ^deprecated bare-old [] :int
+(defn ^deprecated bare-old [] : int
   ; Internal recursion: no warning emitted.
   (if false (bare-old) 7))
 
-(defn main [] :int
+(defn main [] : int
   (println (old-add 1 2))     ; warns
   (println (bare-old))         ; warns (no message)
   (println (old-add 10 20))    ; warns again

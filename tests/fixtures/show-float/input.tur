@@ -1,16 +1,16 @@
 ;; SI1: Show [float] uses %g -- drops trailing zeros.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [float]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(32);
     snprintf(buf, 32, "%g", x);
     return (const char *)(intptr_t)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (println (.show 3.14))
   (println (.show 1.0))
   0)

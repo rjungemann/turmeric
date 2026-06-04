@@ -1,4 +1,4 @@
 (defmodule math/arith
   (export square cube)
-  (defn square [x] :int (* x x))
-  (defn cube [x] :int (* x (* x x))))
+  (defn square [x] : int (* x x))
+  (defn cube [x] : int (* x (* x x))))

@@ -1,5 +1,5 @@
 ;; LT4: `: (lref int)` type annotation marks param as linear.
 ;; The function must consume p exactly once.
-(defn consume-lref [p : (lref int)] :int
+(defn consume-lref [p : (lref int)] : int
   (deref p))
 (println (consume-lref (lref/new 55)))

@@ -5,12 +5,12 @@
   (Nil)
   (Cons :int :List))
 
-(defn list-sum [lst] :int
+(defn list-sum [lst] : int
   (match lst
     (Nil)       0
     (Cons n tl) (+ n (list-sum tl))))
 
-(defn main [] :int
+(defn main [] : int
   (let [lst (Cons 1 (Cons 2 (Cons 3 (Nil))))]
     (println (list-sum lst))
     0))
