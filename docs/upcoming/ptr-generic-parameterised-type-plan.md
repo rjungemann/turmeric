@@ -61,10 +61,10 @@ recognises a generic `:ptr<T>` for any other `T`.
 As a result:
 
 ```turmeric
-(defn alloc-state [] :ptr<float>          ;; (1) error
+(defn alloc-state [] : ptr<float>          ;; (1) error
   ```c return calloc(1, sizeof(double)); ```)
 
-(defn read-state [s :ptr<float>] :float    ;; (2) silently degrades
+(defn read-state [s : ptr<float>] : float    ;; (2) silently degrades
   ```c return *s; ```)
 ```
 
@@ -87,7 +87,7 @@ The supported workaround is to type the cell as `:ptr<void>` and cast
 inside the inline-C body of every accessor:
 
 ```turmeric
-(defn read-state [p :ptr<void>] :float
+(defn read-state [p : ptr<void>] : float
   ```c double *s = (double *)p; return *s; ```)
 ```
 

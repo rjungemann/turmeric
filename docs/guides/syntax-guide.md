@@ -113,7 +113,7 @@ These are the forms a newcomer meets immediately. This guide only shows their
 annotated with `:type`:
 
 ```turmeric
-(defn square [x :int] :int (* x x))
+(defn square [x : int] : int (* x x))
 
 (square 9)    ; => 81
 ```
@@ -136,7 +136,7 @@ let [x 10 y 20] {x + y}   ; => 30
 `if` -- an expression; both branches required:
 
 ```turmeric
-(defn abs [n :int] :int
+(defn abs [n : int] : int
   (if (< n 0) (- 0 n) n))
 ```
 ```sweet-exp
@@ -149,7 +149,7 @@ defn abs [n :int] :int
 `cond` -- ordered multi-way branch with an `:else` fallback:
 
 ```turmeric
-(defn sign [n :int] :int
+(defn sign [n : int] : int
   (cond (> n 0) 1
         (< n 0) -1
         :else   0))
@@ -178,7 +178,7 @@ when {x < 0}
 `fn` -- an anonymous function capturing its lexical scope:
 
 ```turmeric
-(let [add5 (fn [x :int] :int (+ x 5))]
+(let [add5 (fn [x : int] : int (+ x 5))]
   (add5 10))    ; => 15
 ```
 ```sweet-exp
@@ -210,7 +210,7 @@ parameter is followed by its type; the return type follows the closing `]` of
 the parameter vector:
 
 ```turmeric
-(defn add [a :int b :int] :int (+ a b))
+(defn add [a : int b : int] : int (+ a b))
 ```
 ```sweet-exp
 defn add [a :int b :int] :int
@@ -317,7 +317,7 @@ given expression; they compose freely.
 `(...)` of a form. Use it for top-level forms and multi-line bodies:
 
 ```turmeric
-(defn factorial [n :int] :int
+(defn factorial [n : int] : int
   (if (<= n 1) 1 (* n (factorial (- n 1)))))
 ```
 ```sweet-exp
@@ -395,7 +395,7 @@ Here is `make-adder` -- a function returning a closure -- shown in both
 dialects. (Lifted from the quickstart so it stays honest.)
 
 ```turmeric
-(defn make-adder [n :int] (fn [x :int] :int (+ x n)))
+(defn make-adder [n : int] (fn [x : int] : int (+ x n)))
 
 (let [add3 (make-adder 3)
       add7 (make-adder 7)]

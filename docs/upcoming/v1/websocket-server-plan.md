@@ -83,7 +83,7 @@ A companion plan, `websocket-client-plan.md`, covers `stdlib/ws-client`.
 ;;;             (ws-server-close ws))))))
 ;;;
 ;;; Since: Phase WS1
-(defn ws-upgrade [conn :ptr<void> handler :int] :int ...)
+(defn ws-upgrade [conn : ptr<void> handler : int] : int ...)
 
 ;;; ws-server-send -- send a UTF-8 text frame to the client.
 ;;;
@@ -95,7 +95,7 @@ A companion plan, `websocket-client-plan.md`, covers `stdlib/ws-client`.
 ;;;   Bytes written, or negative on error.
 ;;;
 ;;; Since: Phase WS1
-(defn ws-server-send [ws :int msg :cstr] :int ...)
+(defn ws-server-send [ws : int msg : cstr] : int ...)
 
 ;;; ws-server-send-bytes -- send a binary frame to the client.
 ;;;
@@ -108,7 +108,7 @@ A companion plan, `websocket-client-plan.md`, covers `stdlib/ws-client`.
 ;;;   Bytes written, or negative on error.
 ;;;
 ;;; Since: Phase WS1
-(defn ws-server-send-bytes [ws :int ptr :ptr<void> len :int] :int ...)
+(defn ws-server-send-bytes [ws : int ptr : ptr<void> len : int] : int ...)
 
 ;;; ws-server-recv -- receive the next frame from the client.
 ;;;
@@ -121,7 +121,7 @@ A companion plan, `websocket-client-plan.md`, covers `stdlib/ws-client`.
 ;;;   A WsFrame value.
 ;;;
 ;;; Since: Phase WS1
-(defn ws-server-recv [ws :int] :WsFrame ...)
+(defn ws-server-recv [ws : int] : WsFrame ...)
 
 ;;; ws-server-close -- initiate the WebSocket closing handshake.
 ;;;
@@ -129,7 +129,7 @@ A companion plan, `websocket-client-plan.md`, covers `stdlib/ws-client`.
 ;;;   ws -- WsConn handle (server side)
 ;;;
 ;;; Since: Phase WS1
-(defn ws-server-close [ws :int] :void ...)
+(defn ws-server-close [ws : int] : void ...)
 
 ;;; ws-set-server-timeout -- set receive timeout in milliseconds.
 ;;;
@@ -138,7 +138,7 @@ A companion plan, `websocket-client-plan.md`, covers `stdlib/ws-client`.
 ;;;   ms -- timeout in milliseconds (0 = no timeout)
 ;;;
 ;;; Since: Phase WS1
-(defn ws-set-server-timeout [ws :int ms :int] :void ...)
+(defn ws-set-server-timeout [ws : int ms : int] : void ...)
 ```
 
 `WsFrame` is shared with `stdlib/ws-client` (defined in
@@ -161,16 +161,16 @@ is called; the 101 response is written by `ws-upgrade` itself.
 (import stdlib/ws-server :refer [ws-upgrade ws-server-recv
                                   ws-server-send ws-server-close])
 
-(defn main [] :int
+(defn main [] : int
   (let [r (router-new)]
     (defroute r "GET" "/health"
-      (fn [conn :ptr<void>] :nil
+      (fn [conn : ptr<void>] : nil
         (httpd-resp-status! conn 200)
         (httpd-resp-body!   conn "ok")))
     (defroute r "GET" "/ws"
-      (fn [conn :ptr<void>] :nil
+      (fn [conn : ptr<void>] : nil
         (ws-upgrade conn
-          (fn [ws :int] :void
+          (fn [ws : int] : void
             (let loop []
               (let [f (ws-server-recv ws)]
                 (if (= (ws-frame-kind f) :close)

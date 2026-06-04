@@ -71,7 +71,7 @@ function.
 ```turmeric
 #lang turmeric
 
-(defn main [] :int
+(defn main [] : int
   (println "Hello from my-app!")
   0)
 ```

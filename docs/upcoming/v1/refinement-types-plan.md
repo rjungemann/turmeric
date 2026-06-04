@@ -695,7 +695,7 @@ proved statically. Otherwise the elaborator falls back to a bounds-checked
 (defn safe-div [n : int, d : NonZero] : int
   (/ n d))
 
-(defn main [] :void
+(defn main [] : void
   ;; This should compile and run with no runtime check for the divisor
   (println (safe-div 10 2)))
 ```

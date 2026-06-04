@@ -24,14 +24,14 @@ struct plus a `_next` dispatch function -- without continuations or per-step
 heap allocation.
 
 ```turmeric
-(defn integers-from [start :int] : (Generator :int)
+(defn integers-from [start : int] : (Generator :int)
   (gen []
     (let [^mut i start]
       (while true
         (yield i)
         (set! i (+ i 1))))))
 
-(defn range-gen [lo :int hi :int] : (Generator :int)
+(defn range-gen [lo : int hi : int] : (Generator :int)
   (gen []
     (let [^mut i lo]
       (while (< i hi)
@@ -126,7 +126,7 @@ The state machine needs to save and restore match-arm position across a
 
 ```turmeric
 ;; ERROR: TUR-E0702
-(defn broken [flag :int] : (Generator :int)
+(defn broken [flag : int] : (Generator :int)
   (gen []
     (match flag
       0 (yield 42)   ;; 'yield' is not supported inside a 'match' arm
@@ -136,7 +136,7 @@ The state machine needs to save and restore match-arm position across a
 Workaround -- yield before or after the `match`, or use `if`/`cond`:
 
 ```turmeric
-(defn ok [flag :int] : (Generator :int)
+(defn ok [flag : int] : (Generator :int)
   (gen []
     (let [v (if (= flag 0) 42 99)]
       (yield v))))
@@ -149,7 +149,7 @@ Suspending across a recursive call requires CPS; the compiler rejects it:
 
 ```turmeric
 ;; ERROR: TUR-E0703
-(defn count-down [n :int] : (Generator :int)
+(defn count-down [n : int] : (Generator :int)
   (gen []
     (yield n)
     (count-down (- n 1))))  ;; recursive call inside gen body
@@ -158,7 +158,7 @@ Suspending across a recursive call requires CPS; the compiler rejects it:
 Workaround -- unroll the recursion into an explicit loop:
 
 ```turmeric
-(defn count-down [start :int] : (Generator :int)
+(defn count-down [start : int] : (Generator :int)
   (gen []
     (let [^mut n start]
       (while (>= n 0)

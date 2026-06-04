@@ -57,9 +57,9 @@ expose only `entity=?`, `entity-alive?`, and constructors via the
 ```turmeric
 #lang sweet-exp
 
-defstruct Pos [x :float y :float]
-defstruct Vel [x :float y :float]
-defstruct Hp  [cur :int  max :int]
+defstruct Pos [x : float y : float]
+defstruct Vel [x : float y : float]
+defstruct Hp  [cur : int  max : int]
 
 ;; defcomponent picks a storage and registers the component name into
 ;; a compile-time component registry consulted by defworld.

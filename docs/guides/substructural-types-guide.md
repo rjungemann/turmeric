@@ -200,7 +200,7 @@ automatically inferred as `^linear`. You do not need an explicit `^linear`
 annotation -- but you must explicitly consume the ref.
 
 ```turmeric
-(defn consume [r :ref] :int
+(defn consume [r : ref] : int
   (drop! r)
   0)
 ```

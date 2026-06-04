@@ -143,8 +143,8 @@ a `TY_APP` like `Option[int]`, or an ADT -- is **carrier-erased to
 `int64_t`, not flat-embedded**. This is verifiable today:
 
 ```turmeric
-(defstruct Vec2 [x :int y :int])
-(defstruct HasVec [p :Vec2])           ;; field p
+(defstruct Vec2 [x : int y : int])
+(defstruct HasVec [p : Vec2])           ;; field p
 (defstruct HasOpt [o : (Option int)])  ;; field o
 ```
 ```sweet-exp

@@ -61,7 +61,7 @@ The simplest effect takes no parameters and returns nothing useful. It is a sign
 (defeffect Emit [] :nil)
 
 ;; A function that emits twice.
-(defn greet [] :nil
+(defn greet [] : nil
   (do
     (perform (Emit))
     (perform (Emit))))
@@ -165,7 +165,7 @@ A single `handle` block can match several different effects.
 (defeffect Tell [x :int] :nil)
 
 ;; Performs both effects: asks for a number, then tells the result.
-(defn use-both [] :int
+(defn use-both [] : int
   (let [result (+ 1 (perform (Ask)))]
     (perform (Tell result))
     result))
@@ -204,7 +204,7 @@ Multiple effects can also carry different result transforms:
 (defeffect Add [x :int] :int)
 (defeffect Mul [x :int] :int)
 
-(defn compute [] :int
+(defn compute [] : int
   (* (perform (Add 3)) (perform (Mul 4))))
 
 (println (handle (compute)
@@ -237,7 +237,7 @@ Handlers nest lexically. The innermost matching handler wins.
 ```turmeric
 (defeffect Val [] :int)
 
-(defn get-val [] :int
+(defn get-val [] : int
   (perform (Val)))
 
 ;; Outer handler supplies 10; inner overrides with 42 for its scope.
@@ -278,7 +278,7 @@ Each `perform` is an independent suspension. The handler is re-entered for every
 (defeffect Choose [n :int] :int)
 
 ;; Calls Choose twice sequentially.
-(defn pick-two [] :int
+(defn pick-two [] : int
   (+ (perform (Choose 1)) (perform (Choose 2))))
 
 (println (handle (pick-two)
@@ -314,7 +314,7 @@ Continuations are **one-shot**: you must call `resume k` exactly once per handle
 ```turmeric
 (defeffect Ask [] :int)
 
-(defn deferred-ask [] :int
+(defn deferred-ask [] : int
   (do
     (defer (println "cleanup"))
     (perform (Ask))))
@@ -352,7 +352,7 @@ Borrows and reference-counted values that are live at the point of `perform` rem
 ;; Refs are live during perform.
 (defeffect GetBase [] :int)
 
-(defn sum-with-base [] :int
+(defn sum-with-base [] : int
   (let [base (ref 100)]
     (+ (deref base) (perform (GetBase)))))
 
@@ -379,7 +379,7 @@ println
 ;; RC values are live during perform; no leaks.
 (defeffect GetCount [] :int)
 
-(defn use-rc [] :int
+(defn use-rc [] : int
   (let [r (rc/of 42)]
     (+ 0 (perform (GetCount)))))
 
@@ -503,7 +503,7 @@ Not calling `resume` at all is valid -- the computation past the `perform` is si
 ```turmeric
 (defeffect Ask [] :int)
 
-(defn ask-with-check [] :int
+(defn ask-with-check [] : int
   (perform (Ask)))
 
 (println (handle (ask-with-check)
@@ -541,7 +541,7 @@ Replace real I/O with a test double by swapping the handler. The business logic 
 (defeffect Write [s :cstr] :nil)
 
 ;; Pure business logic -- no I/O primitives.
-(defn echo-doubled [] :int
+(defn echo-doubled [] : int
   (let [n (perform (Read))]
     (perform (Write (int->cstr (* n 2))))
     0))
@@ -617,7 +617,7 @@ Define a `Log` effect with levels. Wire it to a real logger in production, suppr
 (defeffect Log [level :cstr msg :cstr] :nil)
 
 ;; Business logic
-(defn process [x :int] :int
+(defn process [x : int] : int
   (perform (Log "info" "starting"))
   (let [result (* x 2)]
     (perform (Log "info" "done"))

@@ -31,10 +31,10 @@ runs *outside* the fiber scheduler, or for dedicated non-fiber threads.
 ```turmeric
 (import reactor)
 
-(defn main [] :int
+(defn main [] : int
   (let [r (reactor-new)]
     (reactor-add-timer r 0
-      (fn [id user] :nil (println "hello from timer"))
+      (fn [id user] : nil (println "hello from timer"))
       nil)
     (reactor-run r)
     (reactor-free r)
@@ -66,7 +66,7 @@ This is the pattern used by the `tur/httpd` listener thread.
 (import reactor)
 
 ;; accept-loop is a plain OS thread entry point -- no fibers required.
-(defn start-listener [listen-fd :int stop-ch :ptr<void>] :nil
+(defn start-listener [listen-fd : int stop-ch : ptr<void>] : nil
   (let [r (reactor-new)]
     ;; Accept connections: each READ event means accept() will not block.
     (reactor-add-fd r listen-fd READ
@@ -77,7 +77,7 @@ This is the pattern used by the `tur/httpd` listener thread.
       nil)
     ;; Shutdown: one value on stop-ch ends the loop (one-shot).
     (reactor-add-chan r stop-ch
-      (fn [id v user] :nil
+      (fn [id v user] : nil
         (reactor-stop r))
       nil)
     ;; Block until stopped.
@@ -119,20 +119,20 @@ promptly.
 (import chan)
 
 ;; In the reactor thread:
-(defn run-with-stop [stop-ch :ptr<void>] :nil
+(defn run-with-stop [stop-ch : ptr<void>] : nil
   (let [r (reactor-new)]
     ;; ... register fd sources, timers, etc. ...
 
     ;; Register one-shot shutdown watcher.
     (reactor-add-chan r stop-ch
-      (fn [id v user] :nil (reactor-stop r))
+      (fn [id v user] : nil (reactor-stop r))
       nil)
 
     (reactor-run r)
     (reactor-free r)))
 
 ;; From any other thread (safe because reactor-wake is thread-safe):
-(defn request-shutdown [stop-ch :ptr<void> r :ptr<void>] :nil
+(defn request-shutdown [stop-ch : ptr<void> r : ptr<void>] : nil
   (chan-send stop-ch 1)
   (reactor-wake r))
 ```
@@ -165,9 +165,9 @@ The key constraint: `reactor-add-chan` is one-shot. If you need a
 persistent channel watcher, re-register from inside the callback:
 
 ```turmeric
-(defn watch-chan-loop [r :ptr<void> ch :ptr<void>] :nil
+(defn watch-chan-loop [r : ptr<void> ch : ptr<void>] : nil
   (reactor-add-chan r ch
-    (fn [id v user] :nil
+    (fn [id v user] : nil
       (handle-message v)
       ;; Re-register to watch the next value.
       (watch-chan-loop r ch))
@@ -205,18 +205,18 @@ remaining sources, or when `reactor-stop` is called.
 
 ;; Echo one line from each of two pipe read-ends, concurrently, on a single
 ;; thread -- no global scheduler involved.
-(defn serve [r :ptr<void> g :ptr<void> read-fd :int] :nil
+(defn serve [r : ptr<void> g : ptr<void> read-fd : int] : nil
   ;; Park until the fd is readable (or 5s elapses), then handle it.
   (let [ev (local-park-fd g read-fd READ 5000)]
     (if (= ev -2)
       (handle-timeout read-fd)
       (handle-readable read-fd))))
 
-(defn main [] :int
+(defn main [] : int
   (let [r (reactor-new)
         g (local-fiber-group-new r)]
-    (local-spawn g (fn [u] :nil (serve r g conn-a)) nil)
-    (local-spawn g (fn [u] :nil (serve r g conn-b)) nil)
+    (local-spawn g (fn [u] : nil (serve r g conn-a)) nil)
+    (local-spawn g (fn [u] : nil (serve r g conn-b)) nil)
     ;; Drives both fibers: each runs until it parks on its fd, the reactor
     ;; polls, and whichever fd fires first resumes its fiber.
     (reactor-run-fibers g)
@@ -299,16 +299,16 @@ Each source type uses a distinct callback arity:
 
 ```turmeric
 ;; reactor-add-fd, reactor-add-signal:
-(fn [id :int events :int user :ptr<void>] :nil ...)
+(fn [id : int events : int user : ptr<void>] : nil ...)
 
 ;; reactor-add-timer, reactor-add-interval:
-(fn [id :int user :ptr<void>] :nil ...)
+(fn [id : int user : ptr<void>] : nil ...)
 
 ;; reactor-add-chan:
-(fn [id :int value :int user :ptr<void>] :nil ...)
+(fn [id : int value : int user : ptr<void>] : nil ...)
 
 ;; local-spawn (fiber body):
-(fn [user :ptr<void>] :nil ...)
+(fn [user : ptr<void>] : nil ...)
 ```
 
 `id` is the source id returned at registration. `events` is a bitmask of
@@ -333,7 +333,7 @@ Programs that import `reactor` must link against `libturi`:
 ```turmeric
 ;; The autolink hint is included when you (import reactor).
 ;; For standalone files without import, add this defn:
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)

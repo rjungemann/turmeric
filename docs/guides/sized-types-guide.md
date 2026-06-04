@@ -455,7 +455,7 @@ calls a non-capturing function with the buffer. No `malloc`/`free` overhead;
 the buffer is reclaimed automatically when the enclosing function returns.
 
 ```turmeric
-(defn fill-and-sum [b] :int
+(defn fill-and-sum [b] : int
   (unsafe (sized-buf-set! b 0 10))
   (unsafe (sized-buf-set! b 1 20))
   (unsafe (sized-buf-set! b 2 30))
@@ -721,19 +721,19 @@ pointers, providing type-safe size information without any runtime cost.
 
 ```turmeric
 ; Wrapper that reports the byte size of a point struct via an inline-C accessor.
-(defn ffi-point-size [] #{Unsafe} :Size
+(defn ffi-point-size [] #{Unsafe} : Size
   ```c
   return ctor_Static(sizeof(struct { int64_t x; int64_t y; }));
   ```)
 
 ; Wrapper that reports the element count for a fixed-size C array.
-(defn ffi-array-size [] #{Unsafe} :Size
+(defn ffi-array-size [] #{Unsafe} : Size
   ```c
   return ctor_Static(16);
   ```)
 
 ; Wrapper that reports the field count of a struct.
-(defn ffi-struct-field-count [] #{Unsafe} :Size
+(defn ffi-struct-field-count [] #{Unsafe} : Size
   ```c
   return ctor_Static(3);
   ```)

@@ -132,7 +132,7 @@ handle import the relevant newtype.
 Public constructors return the newtype directly:
 
 ```turmeric
-(defn thread-pool-new [n :int] :ThreadPoolHandle
+(defn thread-pool-new [n : int] : ThreadPoolHandle
   ;; existing body returns :ptr<void>; wrap on return
   ...)
 ```
@@ -140,7 +140,7 @@ Public constructors return the newtype directly:
 Public operations take the newtype:
 
 ```turmeric
-(defn thread-pool-submit [tp :ThreadPoolHandle ...] :FutureHandle
+(defn thread-pool-submit [tp : ThreadPoolHandle ...] : FutureHandle
   ...)
 ```
 
@@ -152,7 +152,7 @@ working without edits.
 ### Interaction with `& rest`
 
 ```turmeric
-(defn future-race-n [& futures :FutureHandle] :int ...)
+(defn future-race-n [& futures : FutureHandle] : int ...)
 ```
 
 The variadic checker now compares opaque types by identity, so passing a

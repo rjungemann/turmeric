@@ -39,9 +39,9 @@ Turmeric declares typeclasses with `defclass`. Higher-kinded type constructor pa
 
 ```turmeric
 (defclass Comonad [^w]
-  (extract   [wa]     :int)
-  (extend    [wa fn]  :int)
-  (duplicate [wa]     :int))
+  (extract   [wa]     : int)
+  (extend    [wa fn]  : int)
+  (duplicate [wa]     : int))
 ```
 
 ```sweet-exp

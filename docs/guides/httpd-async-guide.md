@@ -46,8 +46,8 @@ group, one reactor; shard later if measurement demands it).
 ```turmeric
 (load "stdlib/httpd.tur")
 
-(defn main [] :int
-  (let [handler (fn [c :ptr<void>] :nil
+(defn main [] : int
+  (let [handler (fn [c : ptr<void>] : nil
                   (httpd-resp-status! c 200)
                   (httpd-resp-body! c "hello async"))
         h       (httpd-new-async 8080 handler)]
@@ -88,7 +88,7 @@ path (the conn's `fiber_group` field is NULL), so handlers that use
 them stay portable across both server types.
 
 ```turmeric
-(defn slow-handler [c :ptr<void>] :nil
+(defn slow-handler [c : ptr<void>] : nil
   ;; Suspend for ~50ms before responding. Under the blocking pool this
   ;; ties up a worker; under async it parks the fiber and frees the
   ;; reactor thread for other requests.
@@ -148,7 +148,7 @@ unchanged over async handlers.  `httpd-call` is a plain Turmeric call
 sitting on the fiber stack, so `next` can park transparently:
 
 ```turmeric
-(let [base    (fn [c :ptr<void>] :nil
+(let [base    (fn [c : ptr<void>] : nil
                 (httpd-await-timer c 10)
                 (httpd-resp-body! c "ok"))
       stack   (compose-middleware base mw-log mw-cors)
@@ -182,7 +182,7 @@ full middleware library.
 ```turmeric
 ;; Per-request timeout: race the work against a 5-second timer.
 ;; (Channels make the "first to fire" pattern straightforward.)
-(defn handler-with-deadline [c :ptr<void>] :nil
+(defn handler-with-deadline [c : ptr<void>] : nil
   (httpd-await-timer c 5000)
   ;; ... if the slow work didn't finish, set 504 ...
   )

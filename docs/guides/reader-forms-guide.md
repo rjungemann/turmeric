@@ -208,7 +208,7 @@ An ordered sequence of forms. The primary syntactic unit in Turmeric.
 ```turmeric
 (println "hello")
 (+ 1 2 3)
-(defn square [x :int] :int (* x x))
+(defn square [x : int] : int (* x x))
 ```
 ```sweet-exp
 println("hello")

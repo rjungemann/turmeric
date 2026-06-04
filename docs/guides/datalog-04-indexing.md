@@ -55,9 +55,9 @@ struct eavt_idx {
 The Turmeric wrappers for these structs are in `indexed.tur`:
 
 ```turmeric
-(defn eavt-idx-new  [] :ptr<void>  ...)
-(defn eavt-idx-insert! [idx entity attr datum] :nil  ...)
-(defn eavt-idx-lookup  [idx entity attr] :ptr<void>  ...)
+(defn eavt-idx-new  [] : ptr<void>  ...)
+(defn eavt-idx-insert! [idx entity attr datum] : nil  ...)
+(defn eavt-idx-lookup  [idx entity attr] : ptr<void>  ...)
 ```
 
 ```sweet-exp
@@ -89,7 +89,7 @@ hash map.
 `eavt-idx-insert!` prepends a new `eavt_entry` to the appropriate bucket chain:
 
 ```turmeric
-(defn eavt-idx-insert! [idx :ptr<void> entity :int attr :int datum :int] :nil
+(defn eavt-idx-insert! [idx : ptr<void> entity : int attr : int datum : int] : nil
   ```c
   struct eavt_idx *i = (struct eavt_idx *)idx;
   size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
@@ -122,7 +122,7 @@ Prepending is O(1) and maintains insertion order within each chain.
 entries that match `(entity, attr)` exactly:
 
 ```turmeric
-(defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
+(defn eavt-idx-lookup [idx : ptr<void> entity : int attr : int] : ptr<void>
   ```c
   ...
   size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
@@ -170,9 +170,9 @@ idb: int64_t[2] = [raw-db-ptr, eavt-idx-ptr]
 Three functions compose the indexed database:
 
 ```turmeric
-(defn idb-new   [] :int             ...)  ;; allocate db + index
-(defn idb-db    [idb :int] :int     ...)  ;; extract raw db pointer
-(defn idb-idx   [idb :int] :ptr<void> ...) ;; extract eavt idx pointer
+(defn idb-new   [] : int             ...)  ;; allocate db + index
+(defn idb-db    [idb : int] : int     ...)  ;; extract raw db pointer
+(defn idb-idx   [idb : int] : ptr<void> ...) ;; extract eavt idx pointer
 ```
 
 ```sweet-exp
@@ -185,7 +185,7 @@ defn idb-idx [idb :int] :ptr<void>  ... ; extract eavt idx pointer
 datum into the index:
 
 ```turmeric
-(defn idb-assert! [idb :int entity :int attr :int value :int] :int
+(defn idb-assert! [idb : int entity : int attr : int value : int] : int
   (let [db  (idb-db idb)]
     (let [idx (idb-idx idb)]
       (let [tx (db-assert! db entity attr value)]
@@ -209,7 +209,7 @@ defn idb-assert! [idb :int entity :int attr :int value :int] :int
 `idb-q-ea` is the indexed fast path for entity+attribute queries:
 
 ```turmeric
-(defn idb-q-ea [idb :int entity :int attr :cstr] :ptr<void>
+(defn idb-q-ea [idb : int entity : int attr : cstr] : ptr<void>
   (eavt-idx-lookup (idb-idx idb) entity (cstr->int attr)))
 ```
 

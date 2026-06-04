@@ -228,7 +228,7 @@ the `__tur-q-is-err?` helper fails to accept them.
 
 ```turmeric
 ;; parse-config threads three fallible steps; any err short-circuits.
-(defn parse-config [src :ptr<void>] :ptr<void>
+(defn parse-config [src : ptr<void>] : ptr<void>
   (let [raw    (? (read-source  src))]
     (let [toks (? (tokenize     raw))]
       (let [ast (? (parse-forms toks))]
@@ -372,7 +372,7 @@ The lint is **off by default**. Silence intentional sites with a
 - on the line **immediately preceding** a call it silences just that call.
 
 ```turmeric
-(defn supervisor [] :int
+(defn supervisor [] : int
   ;; #lint-panic-allow
   (panic "unrecoverable")   ;; not flagged
   0)
@@ -387,7 +387,7 @@ opaque `Panic` handle. Execution then continues after the boundary instead of
 aborting.
 
 ```turmeric
-(let [r (catch-unwind (fn [] :int (risky)))]
+(let [r (catch-unwind (fn [] : int (risky)))]
   (if (err? r)
     (recover)
     (use (ok-val r))))
@@ -414,7 +414,7 @@ opaque `Panic` wrapper:
 ```turmeric
 (load "stdlib/panic.tur")
 
-(let [r (catch-unwind (fn [] :int (panic "boom")))]
+(let [r (catch-unwind (fn [] : int (panic "boom")))]
   (when (err? r)
     (println (panic-message (result-panic r)))))  ; => boom
 ```
@@ -437,8 +437,8 @@ caught (matching Rust's `catch_unwind` + `Drop`-panic semantics).
 of any other type are re-raised to the next outer boundary.
 
 ```turmeric
-(catch-panic-of :cstr (fn [] :int (panic "string panic")))  ;; caught
-(catch-panic-of :int  (fn [] :int (panic "string panic")))  ;; re-raised
+(catch-panic-of :cstr (fn [] : int (panic "string panic")))  ;; caught
+(catch-panic-of :int  (fn [] : int (panic "string panic")))  ;; re-raised
 ```
 
 > See [docs/design/error-handling-rationale.md](../design/error-handling-rationale.md)
@@ -512,7 +512,7 @@ value (a `ptr<void>`) is computed in statement position and its value is thrown
 away:
 
 ```turmeric
-(defn main [] :int
+(defn main [] : int
   (write-record r)   ;; warning: discarded result value of type ptr<void>;
                      ;;          use ignore! to suppress this warning
   0)
@@ -578,12 +578,12 @@ assert-msg!({x = 1} "x must be 1")
 Precondition check at function entry:
 
 ```turmeric
-(defn sqrt [n :int] :int
+(defn sqrt [n : int] : int
   (require! (>= n 0))
   ...)
 ;; panics with "Precondition failed" if n < 0
 
-(defn sqrt [n :int] :int
+(defn sqrt [n : int] : int
   (require-msg! (>= n 0) "sqrt: n must be non-negative")
   ...)
 ```
@@ -603,7 +603,7 @@ defn sqrt [n :int] :int
 Postcondition check before returning from a function:
 
 ```turmeric
-(defn abs [n :int] :int
+(defn abs [n : int] : int
   (let [result (if (< n 0) (- 0 n) n)]
     (ensure! (>= result 0))
     result))

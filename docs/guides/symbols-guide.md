@@ -79,7 +79,7 @@ freely copyable (it is just an interned pointer).
 You can annotate parameters and returns with it:
 
 ```turmeric
-(defn label [tag :Sym] :cstr
+(defn label [tag : Sym] : cstr
   (sym->str tag))
 ```
 ```sweet-exp

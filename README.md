@@ -125,7 +125,7 @@ for C/CMake dependency details.
 **Closures:**
 
 ```lisp
-(defn main [] :int
+(defn main [] : int
   (let [x 10]
     (let [f (fn [] (+ x 1))]
       (println (f)))))
@@ -136,7 +136,7 @@ for C/CMake dependency details.
 ```lisp
 (defeffect Ask [] :int)
 
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 
 (println (handle (use-ask)
@@ -148,19 +148,19 @@ for C/CMake dependency details.
 
 ```lisp
 (defclass MyEq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (definstance MyEq [int]
   (eq? [x y] (= x y)))
 
-(defn main [] :int
+(defn main [] : int
   (if (.eq? 1 1) 0 1))
 ```
 
 **Contracts:**
 
 ```lisp
-(defn safe-div [a :int b :int] :int
+(defn safe-div [a : int b : int] : int
   (require! (not= b 0))
   (/ a b))
 ```
@@ -181,7 +181,7 @@ for C/CMake dependency details.
 **Defer:**
 
 ```lisp
-(defn main [] :int
+(defn main [] : int
   (let [f (open-file "log.txt")]
     (defer (close-file f))   ; runs on scope exit
     (write-file f "hello")
@@ -191,7 +191,7 @@ for C/CMake dependency details.
 **Reference counting:**
 
 ```lisp
-(defn main [] :int
+(defn main [] : int
   (let [r (rc/of 42)]
     (println (rc/strong-count r))
     (let [r2 (rc/clone r)]
@@ -234,7 +234,7 @@ for C/CMake dependency details.
 **Literal match patterns:**
 
 ```lisp
-(defn describe [x :int] :cstr
+(defn describe [x : int] : cstr
   (match x
     0 "zero"
     1 "one"
@@ -284,7 +284,7 @@ for C/CMake dependency details.
   (Add (Expr int) (Expr int)       : (Expr int))
   (Mul (Expr int) (Expr int)       : (Expr int)))
 
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))
@@ -300,7 +300,7 @@ for C/CMake dependency details.
 ; Requires: -Xunion-types
 
 ; Union type -- exhaustiveness-checked dispatch
-(defn describe [x : (int | bool)] :int
+(defn describe [x : (int | bool)] : int
   (match x
     (n : int)  (do (println n)   0)
     (b : bool) (do (println b)   0)))
@@ -309,7 +309,7 @@ for C/CMake dependency details.
 (describe true)  ; => true
 
 ; any top type -- every type is a subtype; tag recoverable at runtime
-(defn show-type [x : any] :int
+(defn show-type [x : any] : int
   (println (type-of x))
   0)
 
@@ -326,18 +326,18 @@ for C/CMake dependency details.
 (defeffect Read  []        :cstr)
 
 ; #{Write} in the function type is enforced at call sites
-(defn greet [name :cstr] #{Write} :nil
+(defn greet [name : cstr] #{Write} : nil
   (perform (Write name)))
 
 ; Effect-polymorphic: the caller's effect row propagates through
-(defn twice [f :(fn [] #{e} :nil)] #{e} :nil
+(defn twice [f :(fn [] #{e} :nil)] #{e} : nil
   (do (f) (f)))
 
 ; Effect hierarchy: Write ^extends IO; #{Write} satisfies #{IO}
 (defeffect IO [] :nil)
 (defeffect Log [s :cstr] :nil ^extends IO)
 
-(defn log-message [] #{IO} :nil
+(defn log-message [] #{IO} : nil
   (perform (Log "hello")))
 ```
 
@@ -346,13 +346,13 @@ for C/CMake dependency details.
 ```lisp
 ; Requires: -Xlinear
 ; ^linear: value must be used exactly once
-(defn use-once [^linear x :int] :int x)
+(defn use-once [^linear x : int] : int x)
 
 ; Requires: -Xsubstructural (implies -Xlinear)
 ; ^affine:   may be dropped, cannot be duplicated
 ; ^relevant: must be used, may be duplicated
-(defn consume-affine [^affine  x :int] :int x)
-(defn must-use       [^relevant x :int] :int x)
+(defn consume-affine [^affine  x : int] : int x)
+(defn must-use       [^relevant x : int] : int x)
 ```
 
 **Multi-shot continuations:**
@@ -361,7 +361,7 @@ for C/CMake dependency details.
 (defeffect Ask [] :int)
 
 ; ^multishot k: continuation may be resumed more than once
-(defn main [] :int
+(defn main [] : int
   (let [r (handle (perform (Ask))
             (Ask [] ^multishot k)
               (+ (resume k 10) (resume k 20)))]
@@ -375,7 +375,7 @@ for C/CMake dependency details.
 ; Requires: -Xsessions
 
 ; Binary: two-party echo -- one side sends int, other echoes it back
-(defn echo-client [^linear ch :(Session (Send int (Recv int Close)))] :int
+(defn echo-client [^linear ch :(Session (Send int (Recv int Close)))] : int
   (let [ch       (send ch 42)]
     (let [[v ch] (recv ch)]
       (close ch)
@@ -386,13 +386,13 @@ for C/CMake dependency details.
   (-> A B int)   ; A sends int to B
   (-> B A int))  ; B replies with int to A
 
-(defn role-a [^linear ch :(Role Ping A)] :nil
+(defn role-a [^linear ch :(Role Ping A)] : nil
   (let [ch (send-to ch B 42)]
     (let [[v ch] (recv-from ch B)]
       (println v)   ; => 42
       (close ch))))
 
-(defn main [] :int
+(defn main [] : int
   (let [[ra rb] (make-protocol Ping)]
     (let [t (spawn (fn [] (role-b rb)))]
       (role-a ra)
@@ -408,11 +408,11 @@ for C/CMake dependency details.
 
 (defdynamic *request-id* :cstr "none")
 
-(defn log-msg [msg :cstr] :int
+(defn log-msg [msg : cstr] : int
   (println *request-id*)
   (println msg))
 
-(defn handle-req [id :cstr] :int
+(defn handle-req [id : cstr] : int
   ; binding overrides *request-id* for the dynamic extent of its body
   ; -- visible to all code called from here, not just lexically enclosed code
   (binding [*request-id* id]
@@ -420,7 +420,7 @@ for C/CMake dependency details.
   0)
 
 ; spawn-conveying passes a snapshot of the current binding frame to the child
-(defn main [] :int
+(defn main [] : int
   (binding [*request-id* "req-1"]
     (let [t (spawn-conveying (fn [] (log-msg "child")))]
       (join t)))  ; child sees "req-1"
