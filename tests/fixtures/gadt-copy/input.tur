@@ -1,0 +1,19 @@
+;; defgadt :copy opts a GADT out of affine move tracking, so its values can be
+;; read repeatedly (e.g. shared range bounds).
+(defgadt Bound [A]
+  :copy
+  (Inclusive int : (Bound int))
+  (Exclusive int : (Bound int))
+  (Unbounded  : (Bound int)))
+
+(defn bound-value [b : Bound] : int
+  (match b (Inclusive v) v (Exclusive v) v (Unbounded) 0))
+
+(defn bound-inclusive? [b : Bound] : bool
+  (match b (Inclusive _) true (Exclusive _) false (Unbounded) false))
+
+(defn main [] : int
+  (let [b (Inclusive 7)]
+    (println (bound-value b))
+    (println (if (bound-inclusive? b) 1 0)))   ; <-- second use of b is allowed under :copy
+  0)

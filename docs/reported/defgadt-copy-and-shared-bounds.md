@@ -10,6 +10,11 @@ description: GADT values defined with defgadt are affine (move-tracked) and defg
 > **Found:** 2026-06-04, executing
 > [stdlib-refinement-collections-plan](../upcoming/stdlib-refinement-collections-plan.md)
 > phase R3 (and noted in R2).
+> **Resolved:** 2026-06-04 -- implemented fix direction 1. `elab_defgadt`
+> now parses an optional `:copy` / `:move` keyword after the type-parameter
+> vector and threads `is_copy` onto the `AdtDef` exactly as `elab_defdata`
+> does. Regression fixture: `tests/fixtures/gadt-copy/`. See
+> `src/compiler/elab_structs.c` (`elab_defgadt`).
 
 ## Summary
 
