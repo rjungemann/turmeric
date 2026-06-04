@@ -274,7 +274,7 @@ def parse_tur_file(path):
     # ------------------------------------------------------------------
     doc_buf = []  # accumulated ';;;' lines
     def_re = re.compile(
-        r'^\s*\(\s*(defn|defmacro|defstruct|definstance|defopaque)\s+'
+        r'^\s*\(\s*(defn|defmacro|defstruct|defdata|defgadt|definstance|defopaque|defeffect)\s+'
     )
 
     pending_module_doc = None   # most recently flushed ;;; block before first def
@@ -302,13 +302,23 @@ def parse_tur_file(path):
             kind = m.group(1)
             # Parse the name + rest from this line (may span lines)
             def_text = line
-            # Accumulate until we find the closing bracket of the params
             j = i + 1
-            open_brackets = def_text.count('[') - def_text.count(']')
-            while open_brackets > 0 and j < len(lines):
-                def_text += ' ' + lines[j].strip()
-                open_brackets += lines[j].count('[') - lines[j].count(']')
-                j += 1
+            if kind in ('defdata', 'defgadt'):
+                # A sum-type declaration's constructors live on following lines;
+                # accumulate until the top-level parentheses balance so the
+                # constructor arms are captured.
+                open_parens = def_text.count('(') - def_text.count(')')
+                while open_parens > 0 and j < len(lines):
+                    def_text += ' ' + lines[j].strip()
+                    open_parens += lines[j].count('(') - lines[j].count(')')
+                    j += 1
+            else:
+                # Accumulate until we find the closing bracket of the params
+                open_brackets = def_text.count('[') - def_text.count(']')
+                while open_brackets > 0 and j < len(lines):
+                    def_text += ' ' + lines[j].strip()
+                    open_brackets += lines[j].count('[') - lines[j].count(']')
+                    j += 1
 
             name, params, return_type, extra = _parse_def_line(kind, def_text)
             if name:
@@ -375,8 +385,10 @@ def _parse_def_line(kind, text):
     Returns (name, params, return_type, extra) where extra is a dict of kind-specific
     data (e.g. {'struct_ann': 'linear'} for defstruct with :linear annotation).
     """
-    # Match kind name
-    pattern = r'\(\s*' + kind + r'\s+([\w/\-!?<>*+]+)'
+    # Match kind name. defeffect may carry a leading ^private/^public visibility
+    # annotation before the effect name: (defeffect ^private Ask [] :int).
+    caret_prefix = r'(?:\^\w+\s+)?' if kind == 'defeffect' else ''
+    pattern = r'\(\s*' + kind + r'\s+' + caret_prefix + r'([\w/\-!?<>*+]+)'
     m = re.search(pattern, text)
     if not m:
         return None, [], None, {}
@@ -391,6 +403,27 @@ def _parse_def_line(kind, text):
         return name + '[' + type_param + ']', [], None, {}
 
     extra = {}
+
+    # Sum types: (defdata Name [:copy] [L R] (Left L) (Right R)) and the
+    # GADT form.  Capture the :copy/:move annotation, the optional type-param
+    # vector, and the constructor names so the module page can render a
+    # sum-type entry.
+    if kind in ('defdata', 'defgadt'):
+        ann_m = re.search(r':(copy|move)\b', rest)
+        if ann_m:
+            extra['struct_ann'] = ann_m.group(1)
+        # Optional type-param vector [L R ...] -- bare symbols, no ':' inside.
+        tp_m = re.search(r'\[([^\]]*)\]', rest)
+        if tp_m and ':' not in tp_m.group(1):
+            tp_names = tp_m.group(1).split()
+            if tp_names:
+                extra['type_params'] = tp_names
+        # Constructor arms: top-level (CtorName ...) groups.  The leading
+        # capitalised/symbol head of each parenthesised arm is the ctor name.
+        ctor_names = re.findall(r'\(\s*([\w\-!?<>*+/]+)', rest)
+        if ctor_names:
+            extra['ctors'] = ctor_names
+        return name, [], None, extra
 
     # LT4: For defstruct, detect :copy / :move / :linear annotation before the bracket.
     if kind == 'defstruct':
@@ -1108,6 +1141,15 @@ def _render_signature(defn):
             for p, t in params
         )
         return f"(defstruct {name}{ann_str} [{param_str}])"
+
+    if kind in ('defdata', 'defgadt'):
+        struct_ann = defn.get('struct_ann', '')
+        ann_str = f' :{struct_ann}' if struct_ann else ''
+        type_params = defn.get('type_params', [])
+        tp_str = f" [{' '.join(type_params)}]" if type_params else ''
+        ctors = defn.get('ctors', [])
+        ctor_str = ''.join(f" ({c})" for c in ctors)
+        return f"({kind} {name}{ann_str}{tp_str}{ctor_str})"
 
     if kind == 'definstance':
         # name is like 'Functor[list]'

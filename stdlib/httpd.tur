@@ -66,6 +66,11 @@
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
 ;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
 (load "stdlib/json.tur")
+(load "stdlib/effects.tur")
+;; stdlib-effect-rows: the httpd server constructors (which bind+listen) and
+;; the run/stop lifecycle functions carry the #{Net} capability tag.  The
+;; in-memory request/response accessors and middleware helpers operate on the
+;; connection struct only and stay untagged.
 ;;; httpd/autolink-hint -- ensure programs using httpd link against libturi + pthreads.
 ;;; Also hoists the file-scope httpd_tls_ops struct and instance used by the H5
 ;;; TLS hook registry (see httpd-register-tls-impl and httpd-new-tls).
@@ -631,7 +636,7 @@
 ;;;
 ;;; Since: Phase H3
 
-(defn httpd-new-pool [port :int workers :int ^fat handler :int] :ptr<void>
+(defn httpd-new-pool [port :int workers :int ^fat handler :int] #{Net} :ptr<void>
   ```c #include <fcntl.h>
   /* Ignore SIGPIPE so a peer closing early returns EPIPE from send()
    * instead of terminating the process. signal() is declared manually
@@ -726,7 +731,7 @@
 ;;;
 ;;; Since: Phase H1
 
-(defn httpd-new [port :int ^fat handler :int] :ptr<void>
+(defn httpd-new [port :int ^fat handler :int] #{Net} :ptr<void>
   (httpd-new-pool port 4 handler))
 ;;; httpd-new-tls -- create an httpd instance with TLS termination.
 ;;;
@@ -763,7 +768,7 @@
 ;;;
 ;;; Since: Phase H5
 
-(defn httpd-new-tls [port :int workers :int ^fat handler :int ctx :int] :ptr<void>
+(defn httpd-new-tls [port :int workers :int ^fat handler :int ctx :int] #{Net} :ptr<void>
   ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
@@ -827,7 +832,7 @@
 ;;;
 ;;; Since: Phase H1
 
-(defn httpd-run [h :ptr<void>] :nil
+(defn httpd-run [h :ptr<void>] #{Net} :nil
   ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
@@ -849,7 +854,7 @@
 ;;;
 ;;; Since: Phase H1
 
-(defn httpd-stop [h :ptr<void>] :nil
+(defn httpd-stop [h :ptr<void>] #{Net} :nil
   ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
@@ -2558,7 +2563,7 @@
 
 (defn httpd-new-async-with-limit [port :int
                                   ^fat handler :int
-                                  max-in-flight :int] :ptr<void>
+                                  max-in-flight :int] #{Net} :ptr<void>
   ```c #include <fcntl.h>
   typedef void (*tur_sig_fn)(int);
   extern tur_sig_fn signal(int, tur_sig_fn);
@@ -2625,7 +2630,7 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-new-async [port :int ^fat handler :int] :ptr<void>
+(defn httpd-new-async [port :int ^fat handler :int] #{Net} :ptr<void>
   (httpd-new-async-with-limit port handler 0))
 ;;; httpd-run-async -- drive the async server until stopped.
 ;;;
@@ -2635,7 +2640,7 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-run-async [h :ptr<void>] :nil
+(defn httpd-run-async [h :ptr<void>] #{Net} :nil
   ```c typedef struct {
       int   listen_fd;
       int64_t handler;
@@ -2660,7 +2665,7 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-stop-async [h :ptr<void>] :nil
+(defn httpd-stop-async [h :ptr<void>] #{Net} :nil
   ```c typedef struct {
       int   listen_fd;
       int64_t handler;
@@ -3164,29 +3169,35 @@
   (if (empty? mws)
     base
     (list (first mws) (list compose-middleware base ~@(rest mws)))))
+;;; httpd-mw-apply -- internal: apply one fat-closure middleware to a handler.
+;;;
+;;; The middleware is a fat closure of shape
+;;; (fn [next :int] :ptr<void> ...); this performs a single fat-closure
+;;; dispatch -- the same ABI glue as httpd-call -- and returns the wrapped
+;;; handler. It holds no cons-layout knowledge; the (pure-Turmeric) list
+;;; walk lives in httpd-mw-fold. The caller guards against a null mw, so a
+;;; bare dereference of fat[0] here is safe.
+
+(defn httpd-mw-apply [mw :int cur :int] :int
+  ```c int64_t *fat = (int64_t *)(intptr_t)mw;
+  typedef int64_t (*fn1_t)(void *, int64_t);
+  return ((fn1_t)(intptr_t)fat[0])((void *)fat, cur);
+  ```)
 ;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
-;;; middlewares over a base handler. Each rest cell must hold a fat
-;;; closure value of shape (fn [next :int] :ptr<void> ...).
+;;; middlewares over a base handler. Each cell holds a fat closure value of
+;;; shape (fn [next :int] :ptr<void> ...). Applied right-to-left so the list
+;;; head becomes the outermost wrapper. Null cells are skipped. Unbounded --
+;;; the walk recurses over the typed Cons abstraction (tnil?/list-head/
+;;; list-tail), so there is no fixed element cap.
 
 (defn httpd-mw-fold [base :int mws :int] :int
-  ```c typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
-  int64_t buf[64];
-  int n = 0;
-  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
-  while (p && n < 64) {
-      buf[n++] = p->head;
-      p = (__tur_cons_cell *)(intptr_t)p->tail;
-  }
-  int64_t cur = base;
-  typedef int64_t (*fn1_t)(void *, int64_t);
-  for (int i = n - 1; i >= 0; i--) {
-      int64_t mw = buf[i];
-      if (!mw) continue;
-      int64_t *fat = (int64_t *)(intptr_t)mw;
-      cur = ((fn1_t)(intptr_t)fat[0])((void *)fat, cur);
-  }
-  return cur;
-  ```)
+  (if (tnil? mws)
+    base
+    (let [inner (httpd-mw-fold base (list-tail mws))
+          mw    (list-head mws)]
+      (if (= mw 0)
+        inner
+        (httpd-mw-apply mw inner)))))
 ;;; compose-middleware-of -- runtime variadic form of compose-middleware.
 ;;;
 ;;; This is a defn, not a macro. Use when the chain is built at runtime

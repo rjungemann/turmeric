@@ -282,6 +282,22 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                 effect_row_contains(callee->binding->type.as.fn.effect_row, unsafe_eff)) {
                 row = effect_row_merge(a, row, effect_row_single(a, unsafe_eff));
             }
+            /* stdlib-effect-rows: capability tags (e.g. #{FS}) are never inferred
+             * from a callee's body, so propagate them from the callee's *declared*
+             * row into the caller's inferred row.  This makes a #{} (or
+             * mis-tagged) caller of an FS-tagged function fail row-checking. */
+            if (callee->binding &&
+                callee->binding->type.kind == TY_FN) {
+                EffectRow *cdecl = callee->binding->type.as.fn.effect_row;
+                if (cdecl && cdecl->kind == ERK_CONCRETE) {
+                    for (uint8_t ci = 0; ci < cdecl->as.concrete.n_effects; ci++) {
+                        Effect *ceff = cdecl->as.concrete.effects[ci];
+                        if (ceff && ceff->is_capability) {
+                            row = effect_row_merge(a, row, effect_row_single(a, ceff));
+                        }
+                    }
+                }
+            }
         } else if (e->as.call_.fn_binding) {
             /* Callee not in the top-level index (e.g., a higher-order param).
              * If the binding's declared effect row has been resolved via the
@@ -630,6 +646,10 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
     Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
     for (uint8_t i = 0; i < declared->as.concrete.n_effects; i++) {
         Effect *eff = declared->as.concrete.effects[i];
+        /* stdlib-effect-rows: a capability tag (e.g. #{FS}) marks a function's
+         * authority, not an effect it `perform`s, so it is justified by its
+         * annotation alone -- never flag it as over-annotated. */
+        if (eff->is_capability) continue;
         if (!effect_row_contains(inferred, eff)) {
             /* ET4: Also suppress if the inferred row contains a subeffect of `eff`.
              * A function declaring #{IO} that performs #{Write} (where Write extends IO)
@@ -1078,6 +1098,17 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         if (child_eff && parent_eff) {
             child_eff->parent = parent_eff;
         }
+    }
+    /* stdlib-effect-rows: propagate the ^capability flag onto each registered
+     * effect.  (The fresh env populated above does not carry it through
+     * effect_env_register, which predates the flag.) */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
+        EffectDef *def = item->as.effect_def_.def;
+        if (!def->is_capability) continue;
+        Effect *eff = effect_env_lookup(env, def->name);
+        if (eff) eff->is_capability = true;
     }
 
     /* --- Step 0: Resolve ERK_UNRESOLVED declared effect rows.

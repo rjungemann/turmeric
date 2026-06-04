@@ -6,6 +6,14 @@ description: Annotate I/O-touching stdlib modules (fs, process, env, net, random
 
 # Stdlib Effect Rows on I/O-Touching Modules -- Plan
 
+> **Status:** COMPLETED. Capability tags (`#{IO FS Net Proc Rand}`) ship in
+> `stdlib/effects.tur` via the new `^capability` `defeffect` marker; the
+> I/O-touching modules (`fs`, `process`, `env`, `random`, `net`, `async_socket`,
+> `httpd`, `log`, `csv`) carry their canonical tags. `path.tur` and `json.tur`
+> turned out to be pure (string / in-memory only) and are intentionally left
+> untagged. See
+> [docs/guides/effects-system-guide.md](../guides/effects-system-guide.md#capability-effect-tags-capability).
+>
 > **Type:** stdlib API hardening -- effect annotation
 > **Prerequisites:** none (uses existing `#{...}` effect-set syntax).
 

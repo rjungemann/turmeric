@@ -21,7 +21,67 @@
 ;;;   (defeffect Write [s :cstr] :nil ^extends IO)
 ;;;
 ;;; Since: ET4
-(defeffect IO [] :nil)
+(defeffect IO [] :nil ^capability)
+;; -- Capability tags (stdlib-effect-rows) -----------------------------------
+;; Coarse capability tags for I/O-touching stdlib modules.  Unlike the
+;; algebraic effects above (Write/Read/Log/...), these are never `perform`ed
+;; or `handle`d -- they annotate a function's *authority* to touch a resource
+;; class.  Declared with ^capability, they are:
+;;   - justified by their annotation alone (never flagged TUR-W0031), and
+;;   - propagated from a callee's declared row into the caller's inferred row,
+;;     so a #{} (pure) caller of an FS-tagged function fails effect-row
+;;     checking with TUR-E0009.
+;; Discipline stays opt-in: a function with NO effect-row annotation is never
+;; checked, so existing code that ignores effect rows keeps compiling.
+;;
+;; These tag names are STABLE after this change; downstream annotation churn
+;; should be purely additive, never a rename.
+;;
+;;   #{IO}    umbrella, parent of the others
+;;   #{FS}    fs.tur, path.tur, tmpfile
+;;   #{Net}   net.tur, async_socket.tur, httpd.tur
+;;   #{Proc}  process.tur, env.tur
+;;   #{Rand}  random.tur
+;;; FS -- capability tag for file-system access (fs, path, tmpfile).
+;;;
+;;; Returns:
+;;;   nil (never performed; used only as a #{FS} row annotation)
+;;;
+;;; Example:
+;;;   (defn read-config [p : cstr] #{FS} : cstr ...)
+;;;
+;;; Since: stdlib-effect-rows
+(defeffect FS [] :nil ^extends IO ^capability)
+;;; Net -- capability tag for network access (net, async_socket, httpd).
+;;;
+;;; Returns:
+;;;   nil (never performed; used only as a #{Net} row annotation)
+;;;
+;;; Example:
+;;;   (defn http-get [url : cstr] #{Net} : cstr ...)
+;;;
+;;; Since: stdlib-effect-rows
+(defeffect Net [] :nil ^extends IO ^capability)
+;;; Proc -- capability tag for process/environment access (process, env).
+;;;
+;;; Returns:
+;;;   nil (never performed; used only as a #{Proc} row annotation)
+;;;
+;;; Example:
+;;;   (defn spawn [cmd : cstr] #{Proc} : int ...)
+;;;
+;;; Since: stdlib-effect-rows
+(defeffect Proc [] :nil ^extends IO ^capability)
+;;; Rand -- capability tag for non-deterministic randomness (random).
+;;;
+;;; Returns:
+;;;   nil (never performed; used only as a #{Rand} row annotation)
+;;;
+;;; Example:
+;;;   (defn rand-u64 [] #{Rand} : int ...)
+;;;
+;;; Since: stdlib-effect-rows
+(defeffect Rand [] :nil ^extends IO ^capability)
 ;; -- Write ------------------------------------------------------------------
 ;; Perform a string write operation.
 ;;; Write -- declare an effect that writes a string to the environment.

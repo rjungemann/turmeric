@@ -10,6 +10,58 @@ description: Replace partial functions in list/vec/slice with total versions gua
 > **Prerequisites:** sized vectors / GADTs are already in tree
 > (`stdlib/sized.tur`, `stdlib/sized-buf.tur`, `stdlib/gadt-vec.tur`).
 
+## Status (2026-06-04): implemented
+
+All three phases shipped. New files:
+
+- `stdlib/refined.tur` -- **R1** `NonEmpty` (`ne-of`, `ne-singleton`,
+  `ne-head`, `ne-tail`, `ne->list`, `ne-len`, `ne-from?`, `ne-unwrap`) and
+  **R2** `BoundedIdx` (`bidx-of?`, `bidx->int`, `bidx-unwrap`,
+  `vec-get-checked`, `slice-get-checked`).
+- `stdlib/range-bound.tur` -- **R3** the `Bound A` GADT
+  (`Inclusive`/`Exclusive`/`Unbounded`) with constructors, accessors, the
+  `bound-range` builder, and the bidirectional compatibility shims
+  `bound->range-bound` / `range-bound->bound`.
+
+Fixtures: `tests/fixtures/refined-nonempty`,
+`tests/fixtures/refined-bounded-idx`, `tests/fixtures/range-bound-gadt`.
+
+### Deviations from the design block (and why)
+
+The design sketches used aspirational syntax that the compiler does not yet
+support; each was adapted to a working, idiomatic form and the underlying gap
+filed as a report:
+
+1. **`(defopaque NonEmpty A int)` / `(defopaque BoundedIdx n int)`** --
+   `defopaque` takes no type-parameter vector, so both are monomorphic
+   carrier-level opaques over `:int` (the element type `A` / length `n` live
+   at the value level, enforced by the smart constructors). The total-accessor
+   guarantee is unchanged. See
+   [docs/reported/parameterized-defopaque.md](../reported/parameterized-defopaque.md).
+2. **R2 checked indexing targets `Vec`/`Slice`, not `SizedVec`.** `SizedVec`
+   is a GADT and its values are move-tracked, so computing the length consumes
+   the vector and it can no longer be indexed -- exactly the "sized-vec
+   ergonomics" blocker the Risks section anticipated. `Vec`/`Slice` are
+   copyable int handles and directly address the stated motivation
+   (`vec-get`/`slice-get` accept unchecked indices). See
+   [docs/reported/defgadt-copy-and-shared-bounds.md](../reported/defgadt-copy-and-shared-bounds.md).
+3. **R3 is an opt-in layer, not an in-place rewrite of range.tur's
+   internals.** Two blockers: `defgadt` requires `-Xgadt` (putting the GADT in
+   range.tur would force the flag on every range consumer, including the `for`
+   macros), and GADT values are move-tracked while range bounds are freely
+   shared/re-read (`defgadt` has no `:copy`). The Bound GADT therefore lives in
+   `stdlib/range-bound.tur` (`-Xgadt`) and bridges to range.tur's untouched
+   pointer representation via the compatibility shims, so no existing caller
+   changes. Folding the GADT into range.tur's internals is unblocked once
+   `defgadt :copy` lands (see the report above).
+
+The internal-helper migration in `option.tur` / `list.tur` was intentionally
+**not** done: `refined.tur` depends on `list.tur`/`option.tur` (auto-loaded),
+so making those files call back into `refined.tur` would be a load cycle.
+
+A compiler crash found while probing `:copy` support is filed separately:
+[docs/reported/defgadt-malformed-pattern-segfault.md](../reported/defgadt-malformed-pattern-segfault.md).
+
 ## Motivation
 
 `sized.tur` / `sized-buf.tur` already model `SizedVec n` / `SizedBuf n`,

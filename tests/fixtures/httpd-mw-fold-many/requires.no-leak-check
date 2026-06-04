@@ -1,0 +1,1 @@
+Process-lifetime fat closures (70 middleware wrappers + base) are never freed; mirrors httpd-mw-compose-of.

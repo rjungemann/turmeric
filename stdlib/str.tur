@@ -139,3 +139,44 @@
   ```c const char *cs = (const char *)(intptr_t)s;
   return cs ? (int64_t)atoll(cs) : 0;
   ```)
+;; Sum-types plan T9: Either-based migration of a lossy "value or error" site.
+;; `str->int` / `cstr->parse-int` above both fold every failure -- a NULL
+;; pointer, an empty string, or trailing non-numeric garbage -- into the
+;; sentinel `0`, which is indistinguishable from a legitimately-parsed 0.
+;; `str->int-checked` keeps the error detail by returning a real binary sum:
+;; `(Right n)` on a fully-consumed parse, or `(Left code)` describing why the
+;; parse failed.  Callers `match` on it instead of guessing about 0.
+;;
+;; Requires the Either sum type; str.tur is not auto-loaded, so pulling in
+;; stdlib/either.tur here only affects programs that explicitly load str.tur.
+(load "stdlib/either.tur")
+;;; str->int-checked -- parse a cstr to an int, reporting failure via Either.
+;;;
+;;; Unlike str->int / cstr->parse-int (which return the sentinel 0 on any
+;;; failure), this distinguishes success from each failure mode by carrying an
+;;; error code in the Left arm.
+;;;
+;;; Parameters:
+;;;   s -- the source string (cstr; a NULL/empty string is a Left)
+;;;
+;;; Returns:
+;;;   (Right n)  -- s parsed cleanly to the integer n (whole string consumed).
+;;;   (Left 0)   -- s was NULL or empty.
+;;;   (Left 1)   -- s was non-empty but not a valid base-10 integer, or had
+;;;                 trailing non-numeric characters.
+;;;
+;;; Example:
+;;;   (from-right -1 (str->int-checked "42"))  ; => 42
+;;;   (left? (str->int-checked "12x"))         ; => true  (trailing garbage)
+;;;   (left? (str->int-checked ""))            ; => true  (empty)
+;;;
+;;; Since: Phase sum-types-either
+(defn str->int-checked [s : cstr] : int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  if (!cs || *cs == '\0') return ctor_Left((int64_t)0);
+  char *end = (char *)0;
+  long long v = strtoll(cs, &end, 10);
+  if (end == cs || *end != '\0') return ctor_Left((int64_t)1);
+  return ctor_Right((int64_t)v);
+  ```)

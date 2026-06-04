@@ -401,6 +401,8 @@ typedef struct EffectDef {
     const Symbol *defining_module_name; /* module that declared this effect, or NULL */
     /* ET4: effect hierarchy -- NULL if no ^extends */
     const Symbol *parent_name;          /* name of parent effect (for ^extends), or NULL */
+    /* stdlib-effect-rows: declared with ^capability -- a coarse capability tag. */
+    bool          is_capability;
 } EffectDef;
 
 /* DV0: Dynamic var metadata entry (-Xdynamic-vars).

@@ -1,0 +1,50 @@
+;; curried-fn-typed-param-application -- applying the result of a
+;; higher-order-returning value, e.g. ((f 1) 2).
+;;
+;; Regression for
+;; docs/reported/curried-fn-typed-param-second-application-not-callable.md.
+;; A value whose result type is itself a function type -- (fn [int] (fn
+;; [int] int)) and the (-> int (-> int int)) spelling -- must keep the
+;; inner function type at the application site so the *second* application
+;; ((f 1) 2) type-checks AND dispatches correctly at runtime.
+;;
+;; Three runtime shapes are pinned:
+;;   - a top-level defn that returns a capturing closure (chained inline)
+;;   - the same, with the intermediate closure bound by a let
+;;   - a local lambda that returns a capturing closure, applied inline
+;;   - a captureless ("thin") returned function, which must stay a direct
+;;     function-pointer call rather than a fat-closure dispatch.
+
+;; top-level defn returning a capturing closure
+(defn adder [a : int] : (fn [int] int)
+  (fn [b : int] : int (+ a b)))
+
+;; captureless returned function -- stays a thin function-pointer call
+(defn inc [x : int] : int (+ x 1))
+(defn pick [] : (fn [int] int) inc)
+(defn const-inc [a : int] : (fn [int] int) inc)
+
+;; arrow-spelled curried parameter, applied twice.  NOTE: a fn-typed
+;; parameter carries a *thin* function pointer, so the function passed in
+;; must itself return a thin (captureless) function -- const-inc does.
+;; Passing a function that returns a *fat* closure (e.g. adder) through a
+;; thin fn-typed parameter is a separate, pre-existing limitation; see the
+;; report's "Remaining limitation" section.
+(defn apply-arrow [f : (-> int (-> int int)) a : int b : int] : int
+  ((f a) b))
+
+(defn main [] : int
+  ;; chained inline application of a closure-returning defn
+  (println ((adder 1) 2))             ; => 3
+  ;; intermediate closure bound by a let, then applied
+  (let [g (adder 10)]
+    (println (g 20)))                 ; => 30
+  ;; local lambda returning a capturing closure, applied inline
+  (let [f (fn [a : int] : (fn [int] int)
+            (fn [b : int] : int (+ a b)))]
+    (println ((f 100) 5)))            ; => 105
+  ;; arrow-spelled curried parameter, thin-returning function passed in
+  (println (apply-arrow const-inc 7 8))  ; => 9  (inc 8)
+  ;; captureless returned function stays thin
+  (println ((pick) 41))               ; => 42
+  0)
