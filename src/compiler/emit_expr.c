@@ -2154,6 +2154,41 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
                 }
+                /* Phase D / tuplen-struct-param: a pass-by-pointer struct
+                 * *parameter* is materialized in C as `const T*`, but several
+                 * callee shapes take the struct *by value* even when it crosses
+                 * the >16-byte pass-by-ptr threshold:
+                 *   - an ABI specialization (concrete-by-value clone, e.g. a
+                 *     `tupleN-Nth` accessor) -- matched_spec;
+                 *   - an inline-C body (declares struct params by value, DS1);
+                 *   - an extern-C function (C ABI, by value).
+                 * The carrier bridge above only fires for an int64_t carrier
+                 * arg; a pbp param is a real pointer, not a carrier, so deref it
+                 * to pass a by-value copy and match the callee's formal.
+                 * Without this, a Tuple3+ parameter forwarded to such a callee
+                 * emitted `callee(const T*)` against a by-value formal -- a hard
+                 * cc type error.
+                 *
+                 * expr_is_pbp_param is checked first: it is side-effect-free,
+                 * whereas type_struct_pass_by_ptr registers the struct app as a
+                 * side effect (types.c:register_struct_app), which would emit a
+                 * spurious typedef for non-pbp aggregate args. A genuine pbp
+                 * param's struct type is already registered (its signature was
+                 * emitted with pass-by-ptr), so the guard adds no registration. */
+                else if (!needs_fn_cast && emit_arg &&
+                         expr_is_pbp_param(ctx, emit_arg) &&
+                         (matched_spec
+                          ? type_kind_is_aggregate(matched_spec->arg_types[i].kind)
+                          : (fn_binding->body_is_inline_c
+                             || fn_binding->is_extern_c)) &&
+                         type_struct_pass_by_ptr(e->as.call_.args[i]->type)) {
+                    Buf _db; buf_init(&_db);
+                    buf_printf(&_db, "(*(%s))", raw);
+                    buf_putc(&_db, '\0');
+                    free(raw);
+                    raw = strdup(_db.data);
+                    buf_free(&_db);
+                }
                 /* Phase H §1: direct call to a typeclass instance impl (dict_arg
                  * is set by elab to mark statically-resolved typeclass dispatch).
                  * Bridge concrete aggregate → carrier so the impl reads the

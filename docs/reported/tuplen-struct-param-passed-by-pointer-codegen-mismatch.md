@@ -1,5 +1,9 @@
 # TupleN (N>=3) struct parameter passed by pointer to a by-value callee
 
+> **Status:** FIXED 2026-06-04. Root cause and fix below; regression coverage
+> in `tests/fixtures/tuplen-struct-param-passing` and
+> `tests/fixtures/tuple-type-bracket-sugar`.
+
 **Summary:** A `TupleN` value (N >= 3) used as a function *parameter* and then
 forwarded to a stdlib accessor emits C that passes a `const TupleN*` where the
 accessor's specialization expects a `TupleN` by value -- a hard `cc` failure.
@@ -77,3 +81,43 @@ Pointers to chase:
   accessor and asserts the result. The existing
   `tests/fixtures/tuple-type-bracket-sugar` deliberately keeps Tuple3 to
   *inline* use for this reason; promote it to parameter passing once fixed.
+
+## Resolution (FIXED)
+
+Root cause: the >16-byte pass-by-pointer threshold (`elab_structs.c:949`,
+`def->pass_by_ptr = (_d_total > 16)`) makes a `TupleN` (N>=3) *parameter* a
+`const T*` in C, but three callee shapes take the struct *by value* regardless
+of size:
+
+- an ABI specialization (concrete-by-value clone, e.g. a `tupleN-Nth`
+  accessor) -- matched via `find_matched_abi_spec`;
+- an inline-C body (declares struct params by value, DS1);
+- an extern-C function.
+
+At the call site (`emit_expr.c`, EX_CALL arg loop) the pbp-param pointer was
+forwarded verbatim to these by-value formals. The existing carrier bridge only
+covered an `int64_t` *carrier* argument (heap-pointer handle); a pbp param is a
+real stack pointer, not a carrier, so nothing deref'd it.
+
+Fix: when the arg is a pbp param (`expr_is_pbp_param`) and the callee takes the
+struct by value (matched_spec with an aggregate formal, or inline-C, or
+extern-C), emit `(*(t))` to pass a by-value copy. Tuple2 (16 bytes) is by value
+on both sides and is unaffected.
+
+Two subtleties handled:
+- `expr_is_pbp_param` is tested *before* `type_struct_pass_by_ptr`, because the
+  latter calls `register_struct_app` as a side effect; testing it on every
+  aggregate arg spuriously registered (and emitted a typedef for) non-pbp
+  carrier structs like `Map[cstr int]`. A genuine pbp param's struct app is
+  already registered, so gating on it first is both correct and side-effect-free.
+- The deref is mutually exclusive with the existing "callee pbp + arg by-value
+  -> `&temp`" wrap and the carrier-bridge case, so no path double-processes.
+
+Validation: the `mid` repro prints `20`; Tuple3..Tuple8 by-parameter accessors,
+an inline-C-callee forward, and a pbp->pbp forward all run; full suite 1431
+passed / 0 failed (ASan/LSan on); `tuple-345-basic` unchanged.
+
+Not fixed here (separate report): the polymorphic-return-type instantiation bug
+(`docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md`),
+which is why the regression fixtures access tuples at a single level rather than
+chaining `tuple2-2nd` over a nested tuple.
