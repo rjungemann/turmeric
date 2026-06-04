@@ -1,16 +1,16 @@
 ;; SI1: Debug [int] returns "int(N)" for diagnostic output.
 (defclass Debug [a]
-  (debug [x] :cstr))
+  (debug [x] : cstr))
 
 (definstance Debug [int]
-  (debug [x] :cstr
+  (debug [x] : cstr
     ```c
     char *buf = (char *)malloc(32);
     snprintf(buf, 32, "int(%lld)", (long long)x);
     return (const char *)(intptr_t)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (println (.debug 42))
   (println (.debug -7))
   (println (.debug 0))

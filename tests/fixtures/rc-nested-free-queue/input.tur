@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   ;; Test 1: Simple nested RC free to validate queue is working
   (let [inner (rc/of 1)]
     (let [outer (rc/clone inner)]

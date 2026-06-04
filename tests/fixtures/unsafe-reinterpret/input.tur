@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (unsafe
     ;; Reinterpret an int as a float (same size on most platforms)
     (let [x 0x4048F5C3]  ; bit pattern for 3.14 as float32

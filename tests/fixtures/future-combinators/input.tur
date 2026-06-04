@@ -16,7 +16,7 @@
 ;; ---- Shared FutureCell type definition ----
 
 ;; Create a pre-fulfilled FutureCell
-(defn future-of [v :int] :ptr<void>
+(defn future-of [v : int] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
@@ -28,7 +28,7 @@
   ```)
 
 ;; Create a pre-rejected FutureCell
-(defn future-error-of [e :int] :ptr<void>
+(defn future-error-of [e : int] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
@@ -40,7 +40,7 @@
   ```)
 
 ;; Free a FutureCell
-(defn future-free [f :ptr<void>] :nil
+(defn future-free [f : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -50,7 +50,7 @@
   ```)
 
 ;; Block until ready, return ok_val or err_val depending on is_ok
-(defn future-get-ok [f :ptr<void>] :int
+(defn future-get-ok [f : ptr<void>] : int
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -61,7 +61,7 @@
   return ok ? val : exn;
   ```)
 
-(defn future-is-ok [f :ptr<void>] :bool
+(defn future-is-ok [f : ptr<void>] : bool
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -73,7 +73,7 @@
   ```)
 
 ;; Map fn (int64_t->int64_t) over a future; propagates errors.
-(defn future-map [f :ptr<void> fn :ptr<void>] :ptr<void>
+(defn future-map [f : ptr<void> fn : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -91,7 +91,7 @@
   ```)
 
 ;; Flat-map: fn receives value and returns a new future ptr<void>. Propagates errors.
-(defn future-then [f :ptr<void> fn :ptr<void>] :ptr<void>
+(defn future-then [f : ptr<void> fn : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -110,7 +110,7 @@
   ```)
 
 ;; Await both futures; if both ok, return ok(val_a). If either fails, return first error.
-(defn future-all2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
+(defn future-all2 [fa : ptr<void> fb : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *a = (FutureCell *)fa; FutureCell *b = (FutureCell *)fb;
@@ -131,7 +131,7 @@
 
 ;; Return first future to fulfill; if fa is already fulfilled, return it.
 ;; If fa rejects, try fb. If both reject, return fb's rejection.
-(defn future-any2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
+(defn future-any2 [fa : ptr<void> fb : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *a = (FutureCell *)fa; FutureCell *b = (FutureCell *)fb;
@@ -154,7 +154,7 @@
   ```)
 
 ;; Cancel a future: settle it with error -2 if not already settled.
-(defn future-cancel [f :ptr<void>] :nil
+(defn future-cancel [f : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -163,7 +163,7 @@
   pthread_mutex_unlock(&fc->lock);
   ```)
 
-(defn future-cancelled? [f :ptr<void>] :bool
+(defn future-cancelled? [f : ptr<void>] : bool
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -175,11 +175,11 @@
 
 ;; ---- Helper fns for map/then ----
 
-(defn double-fn [x :int] :int (* x 2))
-(defn times10-fn [x :int] :ptr<void> (future-of (* x 10)))
+(defn double-fn [x : int] : int (* x 2))
+(defn times10-fn [x : int] : ptr<void> (future-of (* x 10)))
 
 ;; future-cancel: cancel an unsettled future → cancelled? returns true
-(defn make-unsettled [] :ptr<void>
+(defn make-unsettled [] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
@@ -190,7 +190,7 @@
   return (void *)cell;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; future-of: pre-fulfilled future
   (let [f1 (future-of 42)]
     (println (future-get-ok f1))   ;; 42

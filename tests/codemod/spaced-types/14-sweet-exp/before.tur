@@ -1,0 +1,15 @@
+#lang sweet-exp
+
+;; Sweet-exp top-level forms have no enclosing paren.  The codemod
+;; recognises `defn`/`fn`/`let` at the top level and walks them as if
+;; implicitly parenthesised.
+
+defn add [x :int y :int] :int
+  +(x y)
+
+defstruct Pt [x :int y :int]
+
+defn main [] :int
+  let [p make-struct(Pt 3 4)]
+    println(.x(p))
+    0

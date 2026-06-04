@@ -1,10 +1,10 @@
 ;; UT2: Passing a borrowed value to a ^unique ^mut param must fail.
 ;; When an active &mut T borrow exists, ^unique ^mut access is forbidden.
-(defn modify! [^unique ^mut x] :int
+(defn modify! [^unique ^mut x] : int
   (set! x (+ x 1))
   x)
 
-(defn main [] :int
+(defn main [] : int
   (let [^mut v 10]
     (let [r (& v)]
       (modify! v))))

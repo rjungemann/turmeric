@@ -7,7 +7,7 @@
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defn size-eval [s :Size] :int
+(defn size-eval [s : Size] : int
   (match s
     (Static n)   n
     (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
@@ -17,33 +17,33 @@
   (SVNil : (SizedVec Size int))
   (SVCons int (SizedVec Size int) : (SizedVec Size int)))
 
-(defn sized-vec-nil [] :SizedVec (SVNil))
-(defn sized-vec-cons [x :int xs :SizedVec] :SizedVec (SVCons x xs))
+(defn sized-vec-nil [] : SizedVec (SVNil))
+(defn sized-vec-cons [x : int xs : SizedVec] : SizedVec (SVCons x xs))
 
-(defn sized-vec-len [v :SizedVec] :int
+(defn sized-vec-len [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons _ xs) (+ 1 (sized-vec-len xs))))
 
-(defn sized-vec-head-or [dflt :int v :SizedVec] :int
+(defn sized-vec-head-or [dflt : int v : SizedVec] : int
   (match v
     (SVNil)      dflt
     (SVCons x _) x))
 
-(defn sized-vec-tail [v :SizedVec] :SizedVec
+(defn sized-vec-tail [v : SizedVec] : SizedVec
   (match v
     (SVNil)       (SVNil)
     (SVCons _ xs) xs))
 
-(defn sized-vec-sum [v :SizedVec] :int
+(defn sized-vec-sum [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons x xs) (+ x (sized-vec-sum xs))))
 
-(defn sized-vec-size [v :SizedVec] :Size
+(defn sized-vec-size [v : SizedVec] : Size
   (Static (sized-vec-len v)))
 
-(defn main [] :int
+(defn main [] : int
   ; empty vec: len = 0
   (println (sized-vec-len (sized-vec-nil)))
   ; empty vec: head-or = 99

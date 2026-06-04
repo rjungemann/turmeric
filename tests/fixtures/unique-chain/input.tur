@@ -1,9 +1,9 @@
 ;; UT3: Chain of unique operations -- each step hands off exclusive ownership.
-(defn add1 [^unique ^mut x] :int
+(defn add1 [^unique ^mut x] : int
   (set! x (+ x 1))
   x)
 
-(defn dbl [^unique ^mut x] :int
+(defn dbl [^unique ^mut x] : int
   (set! x (* x 2))
   x)
 

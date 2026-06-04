@@ -3,10 +3,10 @@
 
 (defeffect Ask [] :int)
 
-(defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+(defn run-twice [f :(fn [] #{e} :int)] #{e} : int
   (+ (f) (f)))
 
-(defn main [] :int
+(defn main [] : int
   (let [result
     (handle
       (run-twice (fn [] (perform (Ask))))

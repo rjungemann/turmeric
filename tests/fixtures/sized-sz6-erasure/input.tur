@@ -10,11 +10,11 @@
   (SVNil : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 
-(defn svlen [v :SizedVec] :int
+(defn svlen [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons _ xs) (+ 1 (svlen xs))))
 
-(defn main [] :int
+(defn main [] : int
   (println (svlen (SVCons 7 (SVNil))))
   0)

@@ -2,7 +2,7 @@
 ;; Inner handler shadows the outer for the same effect.
 (defeffect Val [] :int)
 
-(defn get-val [] :int
+(defn get-val [] : int
   (perform (Val)))
 
 ;; Outer supplies 10; inner overrides with 42 for its scope.

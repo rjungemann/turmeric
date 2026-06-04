@@ -6,21 +6,21 @@
 ;; stdlib/typeclass-functor.tur; see KB-032.)
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 (defclass Applicative [^f]
-  (pure [x] :int)
-  (ap [ff fa] :int))
+  (pure [x] : int)
+  (ap [ff fa] : int))
 
 (defclass Monad [^m]
-  (bind [ma fn] :int))
+  (bind [ma fn] : int))
 
 (defclass Foldable [^t]
-  (foldl [ta init fn] :int)
-  (foldr [ta init fn] :int))
+  (foldl [ta init fn] : int)
+  (foldr [ta init fn] : int))
 
 (defclass Traversable [^t]
-  (traverse [ta fn] :int))
+  (traverse [ta fn] : int))
 
 ;; Minimal instances so the typeclasses are exercised.
 (definstance TestFunctor [option]
@@ -40,4 +40,4 @@
 (definstance Traversable [option]
   (traverse [ta fn] 0))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

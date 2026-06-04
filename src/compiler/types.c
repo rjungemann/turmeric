@@ -9,8 +9,35 @@
 #include <string.h>
 #include <ctype.h>
 
+/* ptr-generic-parameterised-type: intern compound type-name strings (e.g.
+ * "double *", "ptr<float>") so type_c_name/type_name can return a stable,
+ * reachable pointer.  Without this, building names with tur_strdup on every
+ * call both leaks (LeakSanitizer) and breaks the "returns a long-lived string"
+ * contract callers rely on.  Append-only + dedup keeps the table bounded. */
+static char    **g_interned_type_names = NULL;
+static uint32_t   g_n_interned_type_names = 0;
+static uint32_t   g_cap_interned_type_names = 0;
+
+static const char *intern_type_name(const char *s) {
+    for (uint32_t i = 0; i < g_n_interned_type_names; i++) {
+        if (strcmp(g_interned_type_names[i], s) == 0)
+            return g_interned_type_names[i];
+    }
+    if (g_n_interned_type_names >= g_cap_interned_type_names) {
+        uint32_t nc = g_cap_interned_type_names ? g_cap_interned_type_names * 2 : 16;
+        char **ni = (char **)realloc(g_interned_type_names, nc * sizeof(char *));
+        if (!ni) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_interned_type_names = ni;
+        g_cap_interned_type_names = nc;
+    }
+    char *d = tur_strdup(s);
+    if (!d) { fprintf(stderr, "tur: oom\n"); abort(); }
+    g_interned_type_names[g_n_interned_type_names++] = d;
+    return d;
+}
+
 /* Phase 13: Helper to compare lifetimes */
-static bool lifetimes_eq(LifetimeId a_lifetimes[], uint8_t a_n, 
+static bool lifetimes_eq(LifetimeId a_lifetimes[], uint8_t a_n,
                         LifetimeId b_lifetimes[], uint8_t b_n) {
     if (a_n != b_n) return false;
     for (uint8_t i = 0; i < a_n; i++) {
@@ -22,6 +49,19 @@ static bool lifetimes_eq(LifetimeId a_lifetimes[], uint8_t a_n,
 }
 
 int type_eq(Type a, Type b) {
+    /* CRU Phase 3 / Option B (B-1): a boxed TY_FN (a first-class closure
+     * value) and TY_PTR_VOID share the same C carrier -- a void* holding the
+     * { thunk, env... } box.  Treat them as interchangeable so closures flow
+     * through legacy :ptr<void> sinks (params, returns, lets, struct fields)
+     * with no explicit coercion node and no codegen change.  This preserves
+     * the pre-B-1 world, where capturing closures *were* TY_PTR_VOID, so any
+     * site that accepted TY_PTR_VOID accepted closures. */
+    {
+        bool a_box = (a.kind == TY_FN && a.as.fn.boxed);
+        bool b_box = (b.kind == TY_FN && b.as.fn.boxed);
+        if ((a_box && b.kind == TY_PTR_VOID) || (b_box && a.kind == TY_PTR_VOID))
+            return 1;
+    }
     if (a.kind != b.kind) return 0;
     /* Phase 13: Check lifetime annotations - only if either has lifetimes */
     if (a.n_lifetimes > 0 || b.n_lifetimes > 0) {
@@ -39,6 +79,14 @@ int type_eq(Type a, Type b) {
     }
     if (a.kind == TY_REF) {
         return a.as.ref.inner == b.as.ref.inner;
+    }
+    /* ptr-generic-parameterised-type: typed ptr<T>.  Two typed pointers are
+     * equal iff their pointee types are equal.  The untyped ptr<void> (inner
+     * NULL) stays interoperable with any pointer for back-compat -- the whole
+     * runtime threads raw handles through ptr<void> sinks. */
+    if (a.kind == TY_PTR_VOID) {
+        if (!a.as.ptr.inner || !b.as.ptr.inner) return 1;
+        return type_eq(*a.as.ptr.inner, *b.as.ptr.inner);
     }
     /* Phase 9: rc<T> and weak<T> */
     if (a.kind == TY_RC || a.kind == TY_WEAK) {
@@ -1026,7 +1074,20 @@ const char *type_name(Type t) {
         case TY_FLOAT32: return "float32";
         case TY_FLOAT64: return "float64";
         case TY_CSTR:    return "cstr";
-        case TY_PTR_VOID: return "ptr<void>";
+        case TY_PTR_VOID:
+            /* ptr-generic-parameterised-type: render typed pointers as ptr<T>. */
+            if (t.as.ptr.inner) {
+                const char *inner_n = type_name(*t.as.ptr.inner);
+                Buf tmp; buf_init(&tmp);
+                buf_puts(&tmp, "ptr<");
+                buf_puts(&tmp, inner_n);
+                buf_putc(&tmp, '>');
+                buf_putc(&tmp, '\0');
+                const char *r = intern_type_name(tmp.data);
+                buf_free(&tmp);
+                return r;
+            }
+            return "ptr<void>";
         case TY_NEVER:   return "!";
         case TY_TYVAR:   return "tyvar";
         /* IT4: Top type */
@@ -1445,7 +1506,15 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_FLOAT32: buf_puts(b, "float32"); break;
         case TY_FLOAT64: buf_puts(b, "float64"); break;
         case TY_CSTR:    buf_puts(b, "cstr"); break;
-        case TY_PTR_VOID: buf_puts(b, "ptr<void>"); break;
+        case TY_PTR_VOID:
+            if (t.as.ptr.inner) {
+                buf_puts(b, "ptr<");
+                type_name_buf(b, *t.as.ptr.inner);
+                buf_putc(b, '>');
+            } else {
+                buf_puts(b, "ptr<void>");
+            }
+            break;
         case TY_NEVER:   buf_puts(b, "!"); break;
         case TY_TYVAR:   buf_puts(b, "tyvar"); break;
         /* IT4: Top type */
@@ -1827,10 +1896,39 @@ const char *type_c_name(Type t) {
         case TY_FLOAT32: return "float";
         case TY_FLOAT64: return "double";
         case TY_CSTR:    return "const char *";
-        case TY_PTR_VOID: return "void *";
+        case TY_PTR_VOID:
+            /* ptr-generic-parameterised-type: a typed ptr<T> lowers to `T *`.
+             * The legacy untyped ptr<void> (inner == NULL) stays `void *`. */
+            if (t.as.ptr.inner) {
+                const char *inner_c = type_c_name(*t.as.ptr.inner);
+                Buf b; buf_init(&b);
+                buf_puts(&b, inner_c);
+                buf_puts(&b, " *");
+                buf_putc(&b, '\0');
+                const char *r = intern_type_name(b.data);
+                buf_free(&b);
+                return r;
+            }
+            return "void *";
         case TY_NEVER:   return "void";  /* never type has no values, use void */
         case TY_FN: {
-            /* For function types, return the result type's C name. */
+            /* CRU B-1: a boxed TY_FN (first-class closure value) is carried as
+             * a void* holding the { thunk, env... } box -- identical to the
+             * TY_PTR_VOID carrier, so closures and legacy :ptr<void> sinks
+             * share one C declaration. */
+            if (t.as.fn.boxed) return "void *";
+            /* Closure-returning-instance-method codegen: a curried closure
+             * return -- a function whose result is itself a function (e.g.
+             * (fn [:int] (fn [:int] :int))) -- is a single fat-closure handle
+             * at runtime, carried as int64_t.  Recursing into the result kind
+             * here would unwrap to a zeroed TY_FN shell (result kind
+             * TY_UNKNOWN) and emit an unknown-void carrier, silently dropping
+             * the handle.  A bare TY_UNKNOWN result reaches this path the same way.
+             * Carry both as the int64_t handle.  Non-curried bare function
+             * references keep returning their result type's C name below. */
+            if (t.as.fn.result_kind == TY_FN || t.as.fn.result_kind == TY_UNKNOWN)
+                return "int64_t";
+            /* For bare function references, return the result type's C name. */
             return type_c_name(type_from_kind(t.as.fn.result_kind));
         }
         case TY_REF: {

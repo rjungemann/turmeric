@@ -16,7 +16,7 @@
 ;;;   (term/width)  ; => 80
 ;;;
 ;;; Since: Phase B2
-(defn term/width [] :int
+(defn term/width [] : int
   ```c #include <sys/ioctl.h>
   struct winsize ws;
   if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return (int64_t)ws.ws_col;
@@ -32,7 +32,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/height [] :int
+(defn term/height [] : int
   ```c #include <sys/ioctl.h>
   struct winsize ws;
   if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) return (int64_t)ws.ws_row;
@@ -51,7 +51,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/is-tty? [fd :int] :bool
+(defn term/is-tty? [fd : int] : bool
   ```c #include <unistd.h>
   return isatty((int)fd) != 0;
   ```)
@@ -72,7 +72,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/set-raw [fd :int] :int
+(defn term/set-raw [fd : int] : int
   ```c #include <termios.h>
   static struct termios saved_termios;
   struct termios raw;
@@ -96,7 +96,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/set-cooked [fd :int] :int
+(defn term/set-cooked [fd : int] : int
   ```c #include <termios.h>
   static struct termios saved_termios;
   return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &saved_termios);
@@ -120,7 +120,7 @@
 ;;; Since: Phase B2
 
 
-(defn term/bold [s :cstr] :cstr
+(defn term/bold [s : cstr] : cstr
   ```c if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
   size_t slen = strlen(s);
   char *out = malloc(slen + 12);
@@ -140,7 +140,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/dim [s :cstr] :cstr
+(defn term/dim [s : cstr] : cstr
   ```c if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
   size_t slen = strlen(s);
   char *out = malloc(slen + 12);
@@ -160,7 +160,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/red [s :cstr] :cstr
+(defn term/red [s : cstr] : cstr
   ```c if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
   size_t slen = strlen(s);
   char *out = malloc(slen + 14);
@@ -180,7 +180,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/green [s :cstr] :cstr
+(defn term/green [s : cstr] : cstr
   ```c if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
   size_t slen = strlen(s);
   char *out = malloc(slen + 14);
@@ -200,7 +200,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/yellow [s :cstr] :cstr
+(defn term/yellow [s : cstr] : cstr
   ```c if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
   size_t slen = strlen(s);
   char *out = malloc(slen + 14);
@@ -220,7 +220,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/blue [s :cstr] :cstr
+(defn term/blue [s : cstr] : cstr
   ```c if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
   size_t slen = strlen(s);
   char *out = malloc(slen + 14);
@@ -240,7 +240,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/cyan [s :cstr] :cstr
+(defn term/cyan [s : cstr] : cstr
   ```c if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
   size_t slen = strlen(s);
   char *out = malloc(slen + 14);

@@ -9,7 +9,7 @@
 ;; the CORRECT behaviour that GDE1-GDE3 will deliver; today run.sh shows one FAIL.
 
 ;; dupe -- a freshly-allocated, DISTINCT pointer with the same text.
-(defn dupe [s :cstr] :cstr
+(defn dupe [s : cstr] : cstr
   ```c const char* p=(const char*)(intptr_t)s; size_t n=0; while(p[n])n++;
   char* d=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)d[i]=p[i];
   return (const char*)d; ```)
@@ -17,7 +17,7 @@
 ;; eq2 -- the generic-dict driver: dispatches eq? through the ^Eq constraint.
 (defn eq2 [^Eq A] [a :A b :A] :bool (eq? a b))
 
-(defn main [] :int
+(defn main [] : int
   (let [;; mapX: keys are direct string literals
         mapX (map-assoc (map-assoc (:: (map-new) (Map cstr int)) "name" 1) "age" 2)
         ;; mapY: same content, all key strings are distinct heap pointers

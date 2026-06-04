@@ -6,17 +6,17 @@
   (VNil : (MyVec int))
   (VCons int (MyVec int) : (MyVec int)))
 
-(defn lgvec-len [v] :int
+(defn lgvec-len [v] : int
   (match v
     (VNil)      0
     (VCons _ t) (+ 1 (lgvec-len t))))
 
-(defn lgvec-sum [v] :int
+(defn lgvec-sum [v] : int
   (match v
     (VNil)      0
     (VCons x t) (+ x (lgvec-sum t))))
 
-(defn main [] :int
+(defn main [] : int
   (println (lgvec-len (VCons 1 (VCons 2 (VCons 3 (VNil))))))
   (println (lgvec-sum (VCons 1 (VCons 2 (VCons 3 (VNil))))))
   (println (lgvec-len (VNil)))

@@ -4,12 +4,12 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defn box-user [name :int age :int] :int
+(defn box-user [name : int age : int] : int
   ```c return name + age; ```)
-(defn ->User [name :int] :ptr<void>
-  (let [_n name] (fn [age :int] :int (box-user _n age))))
+(defn ->User [name : int] : ptr<void>
+  (let [_n name] (fn [age : int] : int (box-user _n age))))
 
-(defn main [] :int
+(defn main [] : int
   (let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
         age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))
         s      (ap (fmap name-s ->User) age-s)

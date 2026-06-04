@@ -7,12 +7,12 @@
 ;; identity-keyed Eq[Map] could not do.
 
 ;; dupe -- a freshly-allocated, DISTINCT pointer with the same text.
-(defn dupe [s :cstr] :cstr
+(defn dupe [s : cstr] : cstr
   ```c const char* p=(const char*)(intptr_t)s; size_t n=0; while(p[n])n++;
   char* d=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)d[i]=p[i];
   return (const char*)d; ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [a  (map-assoc (map-assoc (:: (map-new) (Map cstr int)) "name" 1) "age" 2)
         ;; same content, all keys distinct pointers
         b  (map-assoc (map-assoc (:: (map-new) (Map cstr int)) (dupe "name") 1) (dupe "age") 2)

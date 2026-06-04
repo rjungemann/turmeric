@@ -2,40 +2,40 @@
 ;; Tests that do-m works with option<T> and short-circuits on none
 
 (defclass Monad [^m]
-  (bind [ma fn] :int))
+  (bind [ma fn] : int))
 
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true; r->value = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_none [] :int
+(defn __opt_none [] : int
   ```c
   return 0;
   ```)
 
-(defn __opt_some? [o] :bool
+(defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return p != NULL && p->is_some;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return p->value;
   ```)
 
-(defn __opt_free [o] :nil
+(defn __opt_free [o] : nil
   ```c
   free((void *)(intptr_t)o);
   ```)
 
-(defn __bind_option [ma fn] :int
+(defn __bind_option [ma fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
@@ -48,13 +48,13 @@
   (bind [ma fn] (__bind_option ma fn)))
 
 ;; Helper: add two options, propagating none
-(defn add-options [a b] :int
+(defn add-options [a b] : int
   (do-m
    x a
    y b
    (__opt_some (+ x y))))
 
-(defn main [] :int
+(defn main [] : int
   (let [o1 (add-options (__opt_some 10) (__opt_some 20))]
     (let [o2 (add-options (__opt_none) (__opt_some 20))]
       (let [o3 (add-options (__opt_some 10) (__opt_none))]

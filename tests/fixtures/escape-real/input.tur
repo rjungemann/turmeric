@@ -3,7 +3,7 @@
 ;; reset.  When nothing is positive, control falls through to the -1 default.
 (extern-c printf [^cstr fmt ^int v] :int)
 
-(defn first-positive [] :int
+(defn first-positive [] : int
   (escape (fn [k]
     (when (> -3 0) (k -3))
     (when (>  0 0) (k 0))
@@ -11,13 +11,13 @@
     (when (>  9 0) (k 9))
     -1)))
 
-(defn none-positive [] :int
+(defn none-positive [] : int
   (escape (fn [k]
     (when (> -3 0) (k -3))
     (when (> -1 0) (k -1))
     -1)))                     ; k never invoked -> default -1
 
-(defn main [] :int
+(defn main [] : int
   (printf "first=%lld\n" (first-positive))
   (printf "none=%lld\n" (none-positive))
   0)

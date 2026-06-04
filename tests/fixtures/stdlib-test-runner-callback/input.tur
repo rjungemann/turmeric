@@ -1,4 +1,4 @@
-(defn assert [expected actual] :bool
+(defn assert [expected actual] : bool
   (if (= expected actual)
     true
     (do
@@ -8,28 +8,28 @@
       (println actual)
       false)))
 
-(defn assert-true [x] :bool
+(defn assert-true [x] : bool
   (if (= x 1)
     true
     (do
       (println "Assertion failed: expected true")
       false)))
 
-(defn assert-false [x] :bool
+(defn assert-false [x] : bool
   (if (= x 1)
     (do
       (println "Assertion failed: expected false")
       false)
     true))
 
-(defn assert-nil [x] :bool
+(defn assert-nil [x] : bool
   (if (= x 0)
     true
     (do
       (println "Assertion failed: expected nil")
       false)))
 
-(defn run-test [name :cstr test-fn :ptr<void>] :int
+(defn run-test [name : cstr ^fat test-fn] : int
   (if (= (test-fn) 1)
     (do
       (println ".")
@@ -39,10 +39,10 @@
       (println name)
       0)))
 
-(defn t-pass [] :int 1)
-(defn t-fail [] :int 0)
+(defn t-pass [] : int 1)
+(defn t-fail [] : int 0)
 
-(defn main [] :int
+(defn main [] : int
   (println (run-test "pass" t-pass))
   (println (run-test "fail" t-fail))
   0)

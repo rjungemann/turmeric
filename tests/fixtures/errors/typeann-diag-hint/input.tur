@@ -1,2 +1,2 @@
-(defn square [n : nope] :int
+(defn square [n : nope] : int
   (* n n))

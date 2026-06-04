@@ -4,7 +4,7 @@
 ;; Designed as a TSan stress test; requires.tsan.
 
 ;; Atomic counter helpers (seq-cst __atomic builtins).
-(defn atomic-new [init :int] :ptr<void>
+(defn atomic-new [init : int] : ptr<void>
   ```c
   int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
   if (!cell) { fprintf(stderr, "atomic-new: oom\n"); abort(); }
@@ -12,18 +12,18 @@
   return (void *)cell;
   ```)
 
-(defn atomic-load [p :ptr<void>] :int
+(defn atomic-load [p : ptr<void>] : int
   ```c
   return (int64_t)__atomic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-free [p :ptr<void>] :nil
+(defn atomic-free [p : ptr<void>] : nil
   ```c
   free(p);
   ```)
 
 ;; Thread arg: { counter ptr, iterations }
-(defn as-arg-new [counter :ptr<void> iters :int] :ptr<void>
+(defn as-arg-new [counter : ptr<void> iters : int] : ptr<void>
   ```c
   typedef struct { int64_t *counter; int64_t iters; } ASArg;
   ASArg *a = (ASArg *)malloc(sizeof(ASArg));
@@ -34,7 +34,7 @@
   ```)
 
 ;; Worker: atomically increments counter iters times.
-(defn as-worker [arg :ptr<void>] :ptr<void>
+(defn as-worker [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct { int64_t *counter; int64_t iters; } ASArg;
   ASArg *a = (ASArg *)arg;
@@ -45,7 +45,7 @@
   ```)
 
 ;; Spawn N threads; each gets its own ASArg (freed in join loop).
-(defn as-spawn-all [fn-ptr :ptr<void> counter :ptr<void> n :int iters :int] :ptr<void>
+(defn as-spawn-all [fn-ptr : ptr<void> counter : ptr<void> n : int iters : int] : ptr<void>
   ```c
   typedef struct { int64_t *counter; int64_t iters; } ASArg;
   pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
@@ -64,7 +64,7 @@
   return (void *)handles;
   ```)
 
-(defn as-join-all [handles :ptr<void> n :int] :nil
+(defn as-join-all [handles : ptr<void> n : int] : nil
   ```c
   pthread_t **hs = (pthread_t **)handles;
   int64_t i;
@@ -75,7 +75,7 @@
   free(hs);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [counter (atomic-new 0)]
     (let [handles (as-spawn-all as-worker counter 100 100)]
       (as-join-all handles 100))

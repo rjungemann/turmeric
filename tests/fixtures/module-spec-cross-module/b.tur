@@ -4,11 +4,11 @@
 (defmodule b
   (import a :refer [double-it])
   (export run main)
-  (defn run [] :int
+  (defn run [] : int
     (let [f (double-it 3.0)
           i (double-it 5)]
       (println f)
       (println i)
       0))
-  (defn main [] :int
+  (defn main [] : int
     (run)))

@@ -2856,6 +2856,7 @@ int reader_macros_load_file(Arena *arena, SymbolTable *st,
     fclose(fp);
 
     SourceFile *sf = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
+    *sf = (SourceFile){0};  /* clear xform_map/orig_src so diag rendering is safe */
     sf->path        = arena_strdup(arena, abs_path, strlen(abs_path));
     sf->src         = buf;
     sf->len         = (uint32_t)got;

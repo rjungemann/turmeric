@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   ; [1,5] ∩ [3,8] = [3,5]
   (let [ix (range-intersection (closed-range 1 5) (closed-range 3 8))]
     (println (range-bound-inclusive? (range-lower ix)))  ; true

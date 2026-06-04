@@ -5,12 +5,12 @@
 (extern-c free [p :ptr] :void)
 (extern-c strlen [s :cstr] :int)
 
-(defn cstr-free [s :cstr] :void
+(defn cstr-free [s : cstr] : void
   ```c
   free((void *)s);
   ```)
 
-(defn alloc-key [x :int] :ptr
+(defn alloc-key [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
@@ -18,7 +18,7 @@
   ```)
 
 ;; Test: show empty map
-(defn test-show-empty [] :int
+(defn test-show-empty [] : int
   (let* [m   (hamt/new)
          s   (hamt/show m)
          len (strlen s)]
@@ -27,7 +27,7 @@
     (if (= len 2) 1 0)))
 
 ;; Test: show non-empty map has content > 2 chars
-(defn test-show-nonempty [] :int
+(defn test-show-nonempty [] : int
   (let* [k1  (alloc-key 1)
          v1  (alloc-key 100)
          m1  (hamt/new)

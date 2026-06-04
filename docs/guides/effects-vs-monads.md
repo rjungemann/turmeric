@@ -53,7 +53,7 @@ This is what 80% of "monad chaining" turns into.
 ```turmeric
 (defeffect Fail [] : a)
 
-(defn lookup-port [cfg-key :cstr] :int @ {Fail Read-Config}
+(defn lookup-port [cfg-key : cstr] : int @ {Fail Read-Config}
   (let [s (perform (Read-Config cfg-key))]
     (cond
       (empty? s) (perform (Fail))
@@ -85,10 +85,10 @@ through an effect.
 ### Result / Either with rich errors
 
 ```turmeric
-(defstruct Cfg-Error [what :cstr where :cstr])
+(defstruct Cfg-Error [what : cstr where : cstr])
 (defeffect Throw [e :Cfg-Error] : a)
 
-(defn read-config [path :cstr] :Config @ {Throw Io}
+(defn read-config [path : cstr] : Config @ {Throw Io}
   (let [text   (read-file path)
         parsed (parse-toml text)]
     (validate parsed)))
@@ -127,11 +127,11 @@ code. The handler is the only place errors are visible.
 (defeffect Get []       :int)
 (defeffect Set [v :int] :nil)
 
-(defn counter-step [] :nil @ {Get Set}
+(defn counter-step [] : nil @ {Get Set}
   (let [n (perform (Get))]
     (perform (Set (+ n 1)))))
 
-(defn run-with-state [init :int body] :(pair int a)
+(defn run-with-state [init : int body] :(pair int a)
   (let [s init
         r nil]
     (handle (set! r (body))
@@ -175,7 +175,7 @@ interpretation; callers of `counter-step` don't see the threading.
 (defeffect Parse-Take [] :char)
 (defeffect Parse-Fail [] :a)
 
-(defn digit [] :char @ {Parse-Peek Parse-Take Parse-Fail}
+(defn digit [] : char @ {Parse-Peek Parse-Take Parse-Fail}
   (let [c (perform (Parse-Peek))]
     (cond
       (none? c)     (perform (Parse-Fail))

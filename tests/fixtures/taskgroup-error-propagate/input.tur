@@ -9,7 +9,7 @@
 ;; Expected output: error-propagated
 
 ;; TaskGroupBlock inline definition with cancel_reason
-(defn tg-new [] :ptr<void>
+(defn tg-new [] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -32,7 +32,7 @@
   return (void *)g;
   ```)
 
-(defn tg-spawn [group :ptr<void>] :nil
+(defn tg-spawn [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -49,7 +49,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-task-done [group :ptr<void>] :nil
+(defn tg-task-done [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -71,7 +71,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-wait [group :ptr<void>] :nil
+(defn tg-wait [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -89,7 +89,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-cancel [group :ptr<void>] :nil
+(defn tg-cancel [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -109,7 +109,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-free [group :ptr<void>] :nil
+(defn tg-free [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -126,7 +126,7 @@
   free(g);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [tg (tg-new)]
     ;; Spawn 3 tasks
     (tg-spawn tg)

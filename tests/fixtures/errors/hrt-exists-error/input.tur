@@ -1,5 +1,5 @@
 ; Phase HRT2: error — opening a non-existential value (plain int).
-(defn main [] :int
+(defn main [] : int
   (let [x 42]
     (open x [a v] v))
   0)

@@ -3,7 +3,7 @@
 ;; Demonstrates that (definstance Clone [Cell] ...) can deep-copy a Cell
 ;; struct value (a singly-linked list cell) into a heap-allocated copy.
 
-(defstruct Cell [value :int next :int])
+(defstruct Cell [value : int next : int])
 
 ;; Clone typeclass and Clone [int] are provided by stdlib (auto-loaded).
 
@@ -11,7 +11,7 @@
 ;; x has type Cell (struct value) inside the generated C function;
 ;; field access uses x.value / x.next.
 (definstance Clone [Cell]
-  (clone [x] :int
+  (clone [x] : int
     ```c
     struct { int64_t value; int64_t next; } *dst = malloc(sizeof(Cell));
     dst->value = x.value;
@@ -20,13 +20,13 @@
     ```))
 
 ;; Accessor for a heap-allocated Cell pointer (returned by Clone.clone).
-(defn heap-cons-value [p] :int
+(defn heap-cons-value [p] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)p;
   return cell ? cell->value : 0;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Clone a Cell(42, 0) and verify the cloned cell has the same value.
   (let [cell (make-struct Cell 42 0)]
     (let [cell2 (.clone cell)]

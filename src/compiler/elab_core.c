@@ -29,6 +29,10 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "cstr") == 0) return TY_CSTR;
     if (strcmp(name, "nil") == 0) return TY_NIL;
     if (strcmp(name, "ptr-void") == 0 || strcmp(name, "ptr<void>") == 0) return TY_PTR_VOID;
+    /* Bare `ptr` -- same as ptr<void>.  Surfaces via spaced annotation `: ptr`
+     * (F_TYPE_ANN inner is the bare symbol `ptr`); fused `:ptr` is handled
+     * directly by the F_KEYWORD ladder in elab_fns.c. */
+    if (strcmp(name, "ptr") == 0) return TY_PTR_VOID;
     if (strcmp(name, "ref") == 0) return TY_REF;
     if (strcmp(name, "lref") == 0) return TY_LREF;
     if (strcmp(name, "rc") == 0) return TY_RC;
@@ -341,6 +345,11 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
                         ls[lsp++] = cur->as.set_lit_.items[i-1];
                     break;
+                /* (:: expr T) is type-erased; descend into the inner expr so any
+                 * `let` bindings under an ascription are still collected. */
+                case EX_ASCRIBE:
+                    if (cur->as.ascribe_.inner) ls[lsp++] = cur->as.ascribe_.inner;
+                    break;
                 /* GF1: Generator body -- traverse to find local defs */
                 case EX_GEN:
                     if (cur->as.gen_.def && cur->as.gen_.def->body)
@@ -510,13 +519,17 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                  * EX_VAR for free-var purposes: if it's not a param, not a
                  * global, and not a let-local, count it as captured. */
                 if (cur->as.call_.fn_binding &&
-                    cur->as.call_.fn_binding->closure_fn_binding) {
-                    /* Restrict to bindings that hold a closure VALUE (fat
-                     * closure pointer).  A let-bound non-capturing fn binding
-                     * is lifted as a global and does not need to be captured;
-                     * checking closure_fn_binding avoids regressing
-                     * letrec/named-let self-recursion, where the binding is
-                     * still in scope but not (yet) a closure value. */
+                    (cur->as.call_.fn_binding->closure_fn_binding ||
+                     cur->as.call_.fn_binding->type.kind == TY_PTR_VOID ||
+                     cur->as.call_.fn_binding->is_fat)) {
+                    /* Restrict to bindings that hold a closure VALUE.  Three
+                     * forms qualify: a let-bound closure (closure_fn_binding),
+                     * a :ptr<void> binding being invoked as a fat closure, and a
+                     * ^fat binding -- all are callable values that the inner
+                     * closure must capture by env, not bare function references.
+                     * A let-bound non-capturing fn is lifted as a global and is
+                     * excluded by the is_global check below (which also avoids
+                     * regressing letrec/named-let self-recursion). */
                     Binding *fb = cur->as.call_.fn_binding;
                     bool fb_is_param = false;
                     for (uint8_t i = 0; i < n_params; i++) {
@@ -689,6 +702,14 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             case EX_GEN_DONE:
                 if (cur->as.gen_done_.gen_expr) stack[sp++] = cur->as.gen_done_.gen_expr;
+                break;
+            /* (:: expr T) is type-erased at codegen; descend into the inner
+             * expr so a variable that only appears under an ascription is still
+             * seen as a free variable and captured by the enclosing closure.
+             * Without this, `(use-raw (:: ch :ptr<void>))` inside a `(fn ...)`
+             * misses `ch` and emits the bare local instead of the env access. */
+            case EX_ASCRIBE:
+                if (cur->as.ascribe_.inner) stack[sp++] = cur->as.ascribe_.inner;
                 break;
             default:
                 break;

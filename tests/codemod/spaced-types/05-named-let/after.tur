@@ -1,0 +1,3 @@
+(defn main [] : int
+  (let loop [n : int 10 acc : int 0]
+    (if (= n 0) acc (loop (- n 1) (+ acc n)))))

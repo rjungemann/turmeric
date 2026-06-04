@@ -1,4 +1,4 @@
 #!/usr/bin/env tur
-(defn main [] :int
+(defn main [] : int
   (println "shebang on .tur")
   0)

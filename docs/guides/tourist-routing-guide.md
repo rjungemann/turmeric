@@ -36,6 +36,15 @@ pair into a single `:int` handle, so `url-map!` can declare
           (mount! "/"      public-app))
 ```
 
+```sweet-exp
+import tourist/routing :refer [url-map! mount!]
+
+url-map!
+  mount! "/api"   api-app
+  mount! "/admin" admin-app
+  mount! "/"      public-app
+```
+
 `item` may be any of:
 
 - a `Route` (handle from `get!` / `post!` / ...);
@@ -45,6 +54,10 @@ pair into a single `:int` handle, so `url-map!` can declare
 
 ```turmeric
 (url-map! & mounts :int)  ;; => sub-app handle
+```
+
+```sweet-exp
+url-map! & mounts :int  ;; => sub-app handle
 ```
 
 Matching rules:
@@ -87,6 +100,28 @@ Matching rules:
             (mount! "/"    (get! "/" (fn [_] (text "home"))))))
 ```
 
+```sweet-exp
+import tourist/app     :refer [tourist]
+import tourist/dsl     :refer [get!]
+import tourist/helpers :refer [text]
+import tourist/routing :refer [url-map! mount!]
+import tourist/param   :refer [req-full-path]
+import httpd/request   :refer [req-path]
+
+defn echo [ctx]
+  text $ req-path ctx       ;; sees stripped path
+
+defn api-routes []
+  url-map!
+    mount! "/users" get!("/" echo)
+    mount! "/items" get!("/" echo)
+
+tourist 3000
+  url-map!
+    mount! "/api" api-routes()
+    mount! "/"    get!("/" fn([_] text("home")))
+```
+
 A request for `GET /api/users` hits `echo` with `req-path` = `/` and
 `req-full-path` = `/api/users`.
 
@@ -94,6 +129,10 @@ A request for `GET /api/users` hits `echo` with `req-path` = `/` and
 
 ```turmeric
 (import tourist/param :refer [req-full-path])
+```
+
+```sweet-exp
+import tourist/param :refer [req-full-path]
 ```
 
 Inside a sub-app mounted via `url-map!`, `(req-path ctx)` returns the
@@ -108,6 +147,11 @@ not rewrite redirect targets on the way out.
 ```turmeric
 (cascade!      & apps :int)                  ;; pass-through = {404, 405}
 (cascade-with! passes :int & apps :int)      ;; passes is a cons list of int
+```
+
+```sweet-exp
+cascade!      & apps :int                  ;; pass-through = {404, 405}
+cascade-with! passes :int & apps :int      ;; passes is a cons list of int
 ```
 
 `cascade!` runs each app in turn on the same ctx. If an app returns 0
@@ -128,6 +172,17 @@ dispatcher can continue.
     (serve-static! "/" "./public")))
 ```
 
+```sweet-exp
+import tourist/routing :refer [cascade!]
+import tourist/static  :refer [serve-static!]
+
+;; Dynamic routes first; fall back to static files on 404.
+tourist 3000
+  cascade!
+    get! "/about" fn([_] html("<h1>About</h1>"))
+    serve-static! "/" "./public"
+```
+
 `cascade-with!` takes an explicit pass-through list. Use it when the
 first app should also fall through on, say, 503 (maintenance):
 
@@ -136,6 +191,14 @@ first app should also fall through on, say, 503 (maintenance):
 (cascade-with! (cons 404 (cons 405 (cons 503 0)))
                primary
                fallback)
+```
+
+```sweet-exp
+;; Treat 404, 405, and 503 as fall-through statuses.
+cascade-with!
+  cons 404 (cons 405 (cons 503 0))
+  primary
+  fallback
 ```
 
 ## Composing the combinators
@@ -149,6 +212,13 @@ Sub-apps nest. Two patterns that come up often:
   (cascade!
     (url-map! (mount! "/v2" (v2-app)))
     (url-map! (mount! "/v1" (v1-app)))))
+```
+
+```sweet-exp
+defn api-app []
+  cascade!
+    url-map! $ mount! "/v2" v2-app()
+    url-map! $ mount! "/v1" v1-app()
 ```
 
 A request for `/v2/things` hits `v2-app`. A request for `/v1/things`
@@ -166,6 +236,14 @@ those routed through `url-map!` and `cascade!`:
   (use! auth-mw)              ;; runs for all paths
   (url-map! (mount! "/api"  api-app)
             (mount! "/"     public-app)))
+```
+
+```sweet-exp
+tourist 3000
+  use! auth-mw              ;; runs for all paths
+  url-map!
+    mount! "/api"  api-app
+    mount! "/"     public-app
 ```
 
 Middleware registered **inside a sub-app** runs only for that sub-app's

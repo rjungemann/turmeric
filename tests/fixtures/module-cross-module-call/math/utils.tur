@@ -1,4 +1,4 @@
 (defmodule math/utils
   (export twice thrice)
-  (defn twice [x] :int (* x 2))
-  (defn thrice [x] :int (* x 3)))
+  (defn twice [x] : int (* x 2))
+  (defn thrice [x] : int (* x 3)))

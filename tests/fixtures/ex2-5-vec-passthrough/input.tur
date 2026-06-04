@@ -13,12 +13,12 @@
 ; The Vec arrives as :ptr<void> at the C-level ABI -- the size index is
 ; gone -- but we re-ascribe it to the existential type so open-vec can
 ; recover the underlying SizedVec under a fresh abstract n.
-(defn describe-vec [v :ptr<void>] :int
+(defn describe-vec [v : ptr<void>] : int
   (let [vec (:: v (exists [n] (SizedVec n int)))]
     (open-vec vec n s
       (sized-vec-len s))))
 
-(defn main [] :int
+(defn main [] : int
   ; The caller has no static knowledge of the length: each Vec is treated as
   ; the same opaque type at this call site.
   (let [a (vec-of-sized (SVCons 1 (SVNil)))]

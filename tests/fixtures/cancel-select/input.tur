@@ -2,12 +2,12 @@
 ;; Exercises the cancel path in tur_select_blocking (waiter deregistration).
 ;; The cancelled thread exits cleanly; main prints "done".
 
-(defn sleep-ms [ms :int] :nil
+(defn sleep-ms [ms : int] : nil
   ```c
   usleep((unsigned int)ms * 1000);
   ```)
 
-(defn chan-alloc [cap :int] :ptr<void>
+(defn chan-alloc [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -28,7 +28,7 @@
 
 ;; Thread arg: pointer to two channels packed into a heap struct.
 ;; Thread function: blocks in tur_select_blocking on both channels.
-(defn blocking-select-thread [arg :ptr<void>] :ptr<void>
+(defn blocking-select-thread [arg : ptr<void>] : ptr<void>
   ```c
   void **pair = (void **)arg;
   TurSelectClause clauses[2];
@@ -38,7 +38,7 @@
   return NULL;
   ```)
 
-(defn make-chan-pair [ch1 :ptr<void> ch2 :ptr<void>] :ptr<void>
+(defn make-chan-pair [ch1 : ptr<void> ch2 : ptr<void>] : ptr<void>
   ```c
   void **pair = (void **)malloc(2 * sizeof(void *));
   if (!pair) abort();
@@ -47,7 +47,7 @@
   return (void *)pair;
   ```)
 
-(defn my-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn my-thread-spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
   if (!state) abort();
@@ -67,7 +67,7 @@
   return (void *)h;
   ```)
 
-(defn my-cancel-thread [t :ptr<void>] :nil
+(defn my-cancel-thread [t : ptr<void>] : nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
   __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
@@ -76,7 +76,7 @@
   pthread_mutex_unlock(&h->state->cancel_mutex);
   ```)
 
-(defn my-thread-join [t :ptr<void>] :nil
+(defn my-thread-join [t : ptr<void>] : nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_join(h->tid, NULL);
@@ -86,7 +86,7 @@
   free(h);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [ch1  (chan-alloc 4)
         ch2  (chan-alloc 4)
         pair (make-chan-pair ch1 ch2)

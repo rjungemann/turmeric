@@ -5,7 +5,7 @@
   (Just a)
   (Nothing))
 
-(defn main [] :int
+(defn main [] : int
   ;; Direct construction and match at :float.
   (match (Just 1.5)
     (Just x)   (println x)

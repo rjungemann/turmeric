@@ -5,7 +5,7 @@
 
   (defeffect ^private Ask [] :int)
 
-  (defn run [] :int
+  (defn run [] : int
     (handle
       (do
         (let [x (perform (Ask))]
@@ -13,4 +13,4 @@
       (Ask [] k)
       (resume k 42)))
 
-  (defn main [] :int (run)))
+  (defn main [] : int (run)))

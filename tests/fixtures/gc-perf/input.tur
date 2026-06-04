@@ -1,7 +1,7 @@
 ; gc-perf: performance baseline — 100 zombie allocations deferred to a single gc!.
 ; Zombies accumulate in the suspect buffer (up to threshold=128), then are
 ; all collected in one batch gc! at the end.
-(defn main [] :int
+(defn main [] : int
   (gc-enable!)
   (let [^mut i 0]
     (while (< i 100)

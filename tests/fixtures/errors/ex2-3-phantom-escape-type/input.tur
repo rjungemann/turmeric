@@ -12,7 +12,7 @@
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
 
-(defn main [] :int
+(defn main [] : int
   (let [sv (SVCons 1 (SVNil))]
     (let [e (pack sv (exists [n] (SizedVec n int)))]
       (open e [n v]

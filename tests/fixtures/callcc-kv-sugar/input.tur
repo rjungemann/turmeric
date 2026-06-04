@@ -3,11 +3,11 @@
 ;; desugaring to a cloneable continuation resume -- previously this had to be
 ;; spelled (tur_cloneable_cont_resume k v).  The handle carries as int64_t.
 
-(defn use1 [k :cont] :int (k 5))             ; resume once through the captured context
-(defn use2 [k :cont] :int (+ (k 1) (k 2)))   ; multi-shot: resume twice
-(defn use3 [k :cont] :int (k 4))
+(defn use1 [k : cont] : int (k 5))             ; resume once through the captured context
+(defn use2 [k : cont] : int (+ (k 1) (k 2)))   ; multi-shot: resume twice
+(defn use3 [k : cont] : int (k 4))
 
-(defn main [] :int
+(defn main [] : int
   (println (cloneable-reset (+ 10 (call/cc* use1))))   ; 10+5            = 15
   (println (cloneable-reset (+ 10 (call/cc* use2))))   ; (10+1)+(10+2)   = 23
   (println (cloneable-reset (* 2 (call/cc* use3))))    ; 2*4            = 8

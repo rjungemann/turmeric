@@ -2,6 +2,6 @@
 
 (load "stdlib/seq/builders.tur")
 
-(defn main [] :void
+(defn main [] : void
   (seq-for-each println (seq/range-step 0 10 3))
   (seq-for-each println (seq/range-step 10 0 -3)))

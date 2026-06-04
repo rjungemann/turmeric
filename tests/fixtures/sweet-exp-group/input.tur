@@ -8,24 +8,24 @@
 ;;   2. `\\` alone with children at a deeper indent
 ;;   3. `\\` followed by inline tokens
 
-defn pattern-1 [] :int
+defn pattern-1 [] : int
   \\
   println("p1-a")
   println("p1-b")
   println("p1-c")
   0
 
-defn pattern-2 [] :int
+defn pattern-2 [] : int
   \\
     println("p2-x")
     println("p2-y")
   0
 
-defn pattern-3 [] :int
+defn pattern-3 [] : int
   \\ println("p3-q") println("p3-r")
   0
 
-defn main [] :int
+defn main [] : int
   pattern-1()
   pattern-2()
   pattern-3()

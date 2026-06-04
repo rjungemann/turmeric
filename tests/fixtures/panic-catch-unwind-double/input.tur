@@ -1,11 +1,11 @@
 ;;; Phase R2: a defer thunk that itself panics while unwinding triggers the
 ;;; double-panic guard, which aborts (matches Rust catch_unwind + Drop panic).
-(defn dp [] :int
+(defn dp [] : int
   (defer (panic "defer panic"))
   (panic "first panic")
   0)
 
-(defn main [] :int
-  (let [r (catch-unwind (fn [] :int (dp)))]
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (dp)))]
     (println "should-not-reach"))
   0)

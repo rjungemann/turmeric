@@ -2,8 +2,8 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn call-pure [f :(fn [:cstr] #{} :nil)] #{} :nil
+(defn call-pure [f :(fn [:cstr] #{} :nil)] #{} : nil
   (f "test"))
 
-(defn main [] :int
+(defn main [] : int
   (call-pure (fn [s] (perform (Write s)))))

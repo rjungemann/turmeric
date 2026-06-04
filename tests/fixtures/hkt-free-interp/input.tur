@@ -17,21 +17,21 @@
 ;;   tag = 0 => PureFree val
 ;;   tag = 1 => Suspend  val
 
-(defn free-pure [x] :int
+(defn free-pure [x] : int
   ```c
   struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
   r->tag = 0; r->val = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn free-lift [x] :int
+(defn free-lift [x] : int
   ```c
   struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
   r->tag = 1; r->val = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn free-pure? [m] :bool
+(defn free-pure? [m] : bool
   ```c
   struct { int tag; int64_t val; } *r =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
@@ -41,7 +41,7 @@
 ;; free-run: run with a fat-closure interpreter.
 ;;   PureFree a -> a          (interp not called)
 ;;   Suspend  x -> interp(x)  (interp is a fat closure)
-(defn free-run [interp m] :int
+(defn free-run [interp m] : int
   ```c
   struct { int tag; int64_t val; } *fr =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
@@ -55,7 +55,7 @@
 ;; free-bind: monadic bind (fat-closure kont).
 ;;   PureFree a >>= kont = kont a
 ;;   Suspend  x >>= kont = Suspend x  (single-layer pass-through)
-(defn free-bind [m kont] :int
+(defn free-bind [m kont] : int
   ```c
   struct { int tag; int64_t val; } *fr =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
@@ -68,7 +68,7 @@
 
 ;; ---- Tests ------------------------------------------------------------------
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; Test 1: free-pure? identifies a PureFree value
     (println (free-pure? (free-pure 42)))   ;; true

@@ -4,17 +4,17 @@
 ; alive at the same time, and verifies the open scrutinee reads through
 ; the rc payload pointer correctly.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [a (pack 1 (exists [a] [(Show a)] a))]
     (let [b (pack 2 (exists [a] [(Show a)] a))]
       (let [c (pack 3 (exists [a] [(Show a)] a))]

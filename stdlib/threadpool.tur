@@ -53,7 +53,7 @@
 ;;;   (let [q (work-queue-new)] ...)  ; => ptr<void>
 ;;;
 ;;; Since: Phase T20-B
-(defn work-queue-new [] :ptr<void>
+(defn work-queue-new [] : ptr<void>
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -83,7 +83,7 @@
 ;;;
 ;;; Since: Phase T20-B
 
-(defn work-queue-new-bounded [cap :int] :ptr<void>
+(defn work-queue-new-bounded [cap : int] : ptr<void>
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -111,7 +111,7 @@
 ;;;
 ;;; Since: Phase T20-B
 
-(defn work-queue-push [q :ptr<void> v :int] :nil
+(defn work-queue-push [q : ptr<void> v : int] : nil
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -156,7 +156,7 @@
 ;;;
 ;;; Since: Phase T20-B
 
-(defn work-queue-pop [q :ptr<void>] :int
+(defn work-queue-pop [q : ptr<void>] : int
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -189,7 +189,7 @@
 ;;;
 ;;; Since: Phase T20-B
 
-(defn work-queue-close [q :ptr<void>] :nil
+(defn work-queue-close [q : ptr<void>] : nil
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -212,7 +212,7 @@
 ;;;
 ;;; Since: Phase T20-B
 
-(defn work-queue-free [q :ptr<void>] :nil
+(defn work-queue-free [q : ptr<void>] : nil
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -252,7 +252,7 @@
 ;; Worker thread function: pops tasks and executes them.
 
 
-(defn tp-worker [arg :ptr<void>] :ptr<void>
+(defn tp-worker [arg : ptr<void>] : ptr<void>
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -336,7 +336,7 @@
 ;;; Since: Phase T20-D
 ;; Create a new ThreadPool with n worker threads.
 
-(defn thread-pool-new [n :int] :ptr<void>
+(defn thread-pool-new [n : int] : ptr<void>
   ```c if (n <= 0) { fprintf(stderr, "thread-pool-new: n must be > 0\n"); abort(); }
 
   typedef struct {
@@ -411,7 +411,9 @@
 ;; task_fn is a C function: void *(*)(void *)
 ;; The return value from task_fn is stored as the Future result.
 
-(defn thread-pool-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] :ptr<void>
+(defn thread-pool-submit [tp : ptr<void>
+                          task_fn : ptr<void>
+                          task_arg : ptr<void>] : ptr<void>
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -483,7 +485,7 @@
 ;;; Since: Phase T20-D
 ;; Signal all workers to stop and join them.
 
-(defn thread-pool-shutdown [tp :ptr<void>] :nil
+(defn thread-pool-shutdown [tp : ptr<void>] : nil
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -519,7 +521,7 @@
 ;;; Since: Phase T20-D
 ;; Free the ThreadPool (must be called after shutdown).
 
-(defn thread-pool-free [tp :ptr<void>] :nil
+(defn thread-pool-free [tp : ptr<void>] : nil
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -563,7 +565,7 @@
 ;; Starts with min_threads workers, scales up to max_threads when all are busy.
 
 
-(defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
+(defn thread-pool-new-dynamic [min_threads : int max_threads : int] : ptr<void>
   ```c if (min_threads <= 0 || max_threads < min_threads) {
       fprintf(stderr, "thread-pool-new-dynamic: 0 < min_threads <= max_threads required\n");
       abort();
@@ -637,7 +639,7 @@
 ;;; Since: Phase T20-D
 ;; Worker for dynamic thread pool.
 
-(defn tp-dyn-worker [arg :ptr<void>] :ptr<void>
+(defn tp-dyn-worker [arg : ptr<void>] : ptr<void>
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -736,12 +738,9 @@
 ;;; Since: Phase T20-D
 ;; Submit a task to the dynamic thread pool. Returns a Future cell.
 
-(defn thread-pool-dynamic-submit [tp
-                                  :ptr<void>
-                                  task_fn
-                                  :ptr<void>
-                                  task_arg
-                                  :ptr<void>] :ptr<void>
+(defn thread-pool-dynamic-submit [tp : ptr<void>
+                                  task_fn : ptr<void>
+                                  task_arg : ptr<void>] : ptr<void>
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -823,7 +822,7 @@
 ;;; Since: Phase T20-D
 ;; Shutdown the dynamic thread pool.
 
-(defn thread-pool-dynamic-shutdown [tp :ptr<void>] :nil
+(defn thread-pool-dynamic-shutdown [tp : ptr<void>] : nil
   ```c typedef struct {
       void *queue;
       pthread_t *threads;
@@ -861,7 +860,7 @@
 ;;; Since: Phase T20-D
 ;; Free the dynamic thread pool (must be called after shutdown).
 
-(defn thread-pool-dynamic-free [tp :ptr<void>] :nil
+(defn thread-pool-dynamic-free [tp : ptr<void>] : nil
   ```c typedef struct {
       void *queue;
       pthread_t *threads;

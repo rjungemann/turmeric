@@ -1,14 +1,14 @@
 ;; UT3: vec mutable operations with ^unique ^mut exclusive ownership.
 ;; Inline vec implementation (self-contained fixture).
 
-(defn my-vec-new [] :int
+(defn my-vec-new [] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   return (int64_t)(intptr_t)v;
   ```)
 
-(defn my-vec-len [^unique ^mut v] :int
+(defn my-vec-len [^unique ^mut v] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;

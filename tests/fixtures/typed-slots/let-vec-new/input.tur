@@ -5,7 +5,7 @@
 ;; C-level type error (int64_t assigned to struct).  The bridge in the EX_ASCRIBE
 ;; emission path now inserts a pointer dereference so the declaration is correct.
 
-(defn main [] :int
+(defn main [] : int
   (let [v []:int]
     (println "allocated")
     0))

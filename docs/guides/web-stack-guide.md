@@ -92,11 +92,11 @@ request handle and returns a response handle.
 (import httpd/request  :refer [req-path])
 (import httpd/response :refer [resp-ok])
 
-(defn handler [req :int] :int
+(defn handler [req : int] : int
   (resp-ok "text/plain"
     (str-concat "You requested: " (req-path req))))
 
-(defn main [] :int
+(defn main [] : int
   (let [s (server-start 8080 handler)]
     ;; run until killed
     (server-stop s)
@@ -198,7 +198,7 @@ with-header(resp-ok("text/plain" "Not found") "x-reason" "missing")
 (import template/render :refer [render])
 (import template/env    :refer [env-new env-set env-free])
 
-(defn greet [name :cstr] :cstr
+(defn greet [name : cstr] : cstr
   (let [e (env-new)]
     (env-set e "name" name)
     (let [out (render "Hello, <%= name %>!" e)]
@@ -294,7 +294,7 @@ serving on top of `tur-httpd`.
 (import tourist/helpers :refer [text html])
 (import tourist/param   :refer [capture param])
 
-(defn main [] :int
+(defn main [] : int
   (let [s (tourist 3000
             (get! "/hello/:name"
               (fn [ctx]
@@ -440,7 +440,7 @@ function receives a request and returns `option<:int>`:
 (import tourist/middleware :refer [use!])
 (import stdlib/option      :refer [none-value some])
 
-(defn auth-mw [ctx :int] :int
+(defn auth-mw [ctx : int] : int
   (if (= (req-header ctx "x-api-key") 0)
     (some (status 401 (text "Unauthorized")))
     (none-value)))
@@ -493,7 +493,7 @@ A `mount!` helper boxes a `(prefix, sub-app)` pair into a single handle so
 ```turmeric
 (import tourist/routing :refer [url-map! cascade! mount!])
 
-(defn api-routes [] :int
+(defn api-routes [] : int
   (url-map! (mount! "/users" (get! "/" users-handler))
             (mount! "/items" (get! "/" items-handler))))
 
@@ -527,12 +527,12 @@ Using `tur-template` with `tur-tourist`:
 (import template/render  :refer [render])
 (import template/env     :refer [env-new env-set env-free])
 
-(defn render-view [name :cstr env :int] :cstr
+(defn render-view [name : cstr env : int] : cstr
   (let [out (render name env)]
     (env-free env)
     out))
 
-(defn main [] :int
+(defn main [] : int
   (let [s (tourist 3000
             (get! "/hello/:name"
               (fn [ctx]

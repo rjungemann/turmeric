@@ -829,7 +829,16 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                             }
                             if (f->as.list.len > ret_idx) {
                                 Form *ret_f = f->as.list.items[ret_idx];
-                                if (ret_f->tag == F_KEYWORD) {
+                                /* Accept spaced `: T` (F_TYPE_ANN of a single
+                                 * symbol/keyword) by treating the inner as a
+                                 * keyword.  Compound `: (-> a b)` still routes
+                                 * through the F_TYPE_ANN branch below. */
+                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                                    (ret_f->as.list.items[0]->tag == F_SYM ||
+                                     ret_f->as.list.items[0]->tag == F_KEYWORD)) {
+                                    ret_f = ret_f->as.list.items[0];
+                                }
+                                if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
                                     const Symbol *kw = ret_f->as.sym;
                                     if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                                         return_kind = TY_INT;
@@ -893,21 +902,47 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
 
-    /* Phase M0: Validate defmodule position — must be the first user form */
-    for (uint32_t i = stdlib_prefix; i < nforms; i++) {
-        Form *f = forms[i];
-        if (f->tag == F_LIST && f->as.list.len > 0) {
-            Form *head = f->as.list.items[0];
-            if (head->tag == F_SYM && head->as.sym == e.sym_defmodule) {
-                if (i != stdlib_prefix) {
-                    diag_emit(DIAG_ERROR, head->span,
-                              "defmodule must be the first form in the file");
-                    diag_emit(DIAG_NOTE, forms[stdlib_prefix]->span,
-                              "this form comes before defmodule; move it inside the defmodule body or below it");
-                    rc = -1;
-                }
-                break; /* only check the first occurrence */
+    /* Phase M0+: Validate defmodule position per source file.
+     *
+     * "defmodule must be the first form in the file" -- where "the file"
+     * is the source file that contributes the form, not the whole
+     * compilation unit.  Each (load ...)-spliced file gets its own
+     * scope for the check, so a defmodule-wrapped spice file loaded
+     * after a flat stdlib helper is accepted.
+     *
+     * The check uses forms[i]->span.file_id as the file-of-origin key;
+     * each loaded SourceFile is assigned a unique id at parse time
+     * (see the (load ...) preprocessing loop above, line ~668).
+     *
+     * Continues past the first defmodule so misplaced defmodules in
+     * later loaded files also surface. */
+    {
+        uint32_t cur_file       = (uint32_t)-1;
+        uint32_t file_start_idx = stdlib_prefix;
+        for (uint32_t i = stdlib_prefix; i < nforms; i++) {
+            Form *f = forms[i];
+            if (f->span.file_id != cur_file) {
+                cur_file       = f->span.file_id;
+                file_start_idx = i;
             }
+            if (f->tag != F_LIST || f->as.list.len == 0) continue;
+            Form *head = f->as.list.items[0];
+            if (head->tag != F_SYM || head->as.sym != e.sym_defmodule) continue;
+            if (i == file_start_idx) continue;
+            /* If the file-start form is itself a defmodule, defer to the
+             * "only one defmodule is allowed per file" check in
+             * elab_module.c -- that diagnostic is more specific. */
+            Form *first = forms[file_start_idx];
+            if (first->tag == F_LIST && first->as.list.len > 0) {
+                Form *fh = first->as.list.items[0];
+                if (fh->tag == F_SYM && fh->as.sym == e.sym_defmodule) continue;
+            }
+            diag_emit(DIAG_ERROR, head->span,
+                      "defmodule must be the first form in the file");
+            diag_emit(DIAG_NOTE, forms[file_start_idx]->span,
+                      "this form comes before defmodule in the same file; "
+                      "move it inside the defmodule body or below it");
+            rc = -1;
         }
     }
     if (rc != 0) {
@@ -927,11 +962,18 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         items[i] = elab_form(&e, forms[i]);
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
 
-        /* Phase M7: Each auto-loaded stdlib file is conceptually its own file,
-         * so reset has_defmodule after each stdlib defmodule. Otherwise the
-         * second stdlib (safe.tur after macros.tur) trips the "one defmodule
-         * per file" check. */
-        if (i < stdlib_prefix && items[i] && items[i]->kind == EX_DEFMODULE) {
+        /* Phase M7+: Each (load ...)-spliced file is conceptually its own
+         * file, so reset has_defmodule at every file boundary -- not just
+         * after stdlib defmodules.  Without this, a user program that
+         * loads two defmodule-wrapped files in sequence would trip the
+         * "one defmodule per file" check on the second file.
+         *
+         * The original M7 reset triggered on the defmodule form itself,
+         * which works for stdlib (every auto-loaded file has a
+         * defmodule).  Generalising to "any file boundary" subsumes that
+         * case and additionally handles user-loaded files. */
+        if (i + 1 < nforms &&
+            forms[i + 1]->span.file_id != forms[i]->span.file_id) {
             e.has_defmodule = false;
         }
 

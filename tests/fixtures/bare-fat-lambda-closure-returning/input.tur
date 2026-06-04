@@ -1,0 +1,16 @@
+;; bare-fat-lambda-param-plan.md (Phase 3): the closure-returning case from the
+;; instance-method retype plan.  A lambda with a bare `^fat` param consumes a
+;; closure returned from another function; the captured handle threads through
+;; the fat-dispatch path.  Exercises the lambda-retype step's reachable input.
+(defn adder-factory [base : int] : ptr<void>
+  (fn [y : int] : int (+ y base)))
+
+(defn apply-twice [^fat g x : int] : int
+  (g (g x)))
+
+(defn main [] : int
+  (let [bump (fn [^fat h start : int] : int
+               (h start))]
+    (println (bump (adder-factory 100) 7))      ;; (7 + 100) => 107
+    (println (apply-twice (adder-factory 3) 10)))  ;; ((10+3)+3) => 16
+  0)

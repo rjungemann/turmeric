@@ -6,10 +6,10 @@
 ;; initializer for the cstr root is emitted; see DV2 known limitation.
 (defdynamic *locale* :cstr "en-US")
 
-(defn show-locale [] :int
+(defn show-locale [] : int
   (println *locale*))
 
-(defn use-fr [] :int
+(defn use-fr [] : int
   (binding [*locale* "fr-FR"]
     (show-locale))   ; sees "fr-FR" from its callsite
   0)

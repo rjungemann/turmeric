@@ -4,20 +4,20 @@
 (defgadt StaticInt []
   (SInt (int) : (StaticInt)))
 
-(defn static-int [n :int] :StaticInt
+(defn static-int [n : int] : StaticInt
   (SInt n))
 
-(defn static-int-val [si :StaticInt] :int
+(defn static-int-val [si : StaticInt] : int
   (match si
     (SInt n) n))
 
-(defn static-int-add [a :StaticInt b :StaticInt] :StaticInt
+(defn static-int-add [a : StaticInt b : StaticInt] : StaticInt
   (SInt (+ (static-int-val a) (static-int-val b))))
 
-(defn static-int-mul [a :StaticInt b :StaticInt] :StaticInt
+(defn static-int-mul [a : StaticInt b : StaticInt] : StaticInt
   (SInt (* (static-int-val a) (static-int-val b))))
 
-(defn main [] :int
+(defn main [] : int
   ; round-trip: wrap then unwrap
   (println (static-int-val (static-int 0)))
   (println (static-int-val (static-int 1)))

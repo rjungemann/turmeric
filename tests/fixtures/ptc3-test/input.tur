@@ -1,7 +1,7 @@
 ;; PTC3 Test: Constraint-based instance selection
 
 (defclass TC [a]
-  (method [x] :int))
+  (method [x] : int))
 
 (definstance TC [int]
   (method [x] x))
@@ -15,7 +15,7 @@
   [TC int]
   (method [x] 42))
 
-(defn main [] :int
+(defn main [] : int
   (let [s "hello"]
     ;; This triggers a lookup of TC[cstr], which checks that TC[int] exists
     (let [result (.method s)]

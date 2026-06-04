@@ -2,10 +2,10 @@
 ; Returns true iff the any value's runtime tag is T. (is? requires an
 ; any-typed argument, mirroring type-of and cast.)
 
-(defn is-int? [x : any] :bool
+(defn is-int? [x : any] : bool
   (is? x int))
 
-(defn main [] :int
+(defn main [] : int
   (println (is-int? 42))
   (println (is-int? "hi"))
   (println (is-int? true))

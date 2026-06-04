@@ -1,11 +1,11 @@
 ;; SI3: MyShow [HCons] formats a linked list as "[v1, v2, ...]".
 (defclass MyShow [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
-(defstruct HCons :copy [value :int next :int])
+(defstruct HCons :copy [value : int next : int])
 
 (definstance MyShow [HCons]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     typedef struct { int64_t value; int64_t next; } Cons_t;
     char tmp[32];
@@ -28,7 +28,7 @@
     return (const char *)(intptr_t)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [c1 (make-struct HCons 1 0)]
     (println (.show c1)))
   0)

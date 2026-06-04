@@ -3,9 +3,9 @@
 
 ;; First, define a type constructor
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; Apply TestFunctor to option - this should create a TestFunctor[option] type
 (type-app TestFunctor option)
 
-(defn main [] :int 0)
+(defn main [] : int 0)

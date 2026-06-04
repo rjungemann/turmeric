@@ -6,7 +6,7 @@
 ;;   3. Wait for completion
 ;; Expected output: timed out
 
-(defn tg-new [] :ptr<void>
+(defn tg-new [] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -27,7 +27,7 @@
   return (void *)g;
   ```)
 
-(defn tg-cancel [group :ptr<void>] :nil
+(defn tg-cancel [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -45,7 +45,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-wait [group :ptr<void>] :nil
+(defn tg-wait [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -62,7 +62,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-free [group :ptr<void>] :nil
+(defn tg-free [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -79,7 +79,7 @@
   ```)
 
 ;; Spawn a timeout thread that will cancel the group
-(defn tg-timeout-fn [raw :ptr<void>] :ptr<void>
+(defn tg-timeout-fn [raw : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *tg; int ms; } TimeoutArg;
   typedef struct {
@@ -105,7 +105,7 @@
   return NULL;
   ```)
 
-(defn spawn-timeout-thread [tg :ptr<void> ms :int] :ptr<void>
+(defn spawn-timeout-thread [tg : ptr<void> ms : int] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "spawn-timeout: oom\n"); abort(); }
@@ -119,14 +119,14 @@
   return (void *)t;
   ```)
 
-(defn join-timeout-thread [t :ptr<void>] :nil
+(defn join-timeout-thread [t : ptr<void>] : nil
   ```c
   pthread_t *tid = (pthread_t *)t;
   /* Detached thread, just free the handle */
   free(tid);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [tg (tg-new)]
     (let [timeout (spawn-timeout-thread tg 100)]  ;; 100ms timeout
       (tg-wait tg)  ;; Will be woken by timeout thread

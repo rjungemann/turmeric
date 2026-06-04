@@ -1,6 +1,6 @@
 ;; Phase C1: assert! and assert-msg! macros -- passing assertions
 
-(defn main [] :int
+(defn main [] : int
   ;; assert! with no message -- condition is true, no panic
   (assert! (> 5 0))
   (println "assert-pass")

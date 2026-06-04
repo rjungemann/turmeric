@@ -6,13 +6,13 @@
 
 ;; ── Comonad typeclass ────────────────────────────────────────────────────────
 (defclass Comonad [^w]
-  (extract   [wa]     :int)
-  (extend    [wa fn]  :int)
-  (duplicate [wa]     :int))
+  (extract   [wa]     : int)
+  (extend    [wa fn]  : int)
+  (duplicate [wa]     : int))
 
 ;; ── GridCtx helpers ──────────────────────────────────────────────────────────
 
-(defn lgrid-new [width height] :int
+(defn lgrid-new [width height] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *g = malloc(sizeof(GCtx));
@@ -24,7 +24,7 @@
   return (int64_t)(intptr_t)g;
   ```)
 
-(defn grid-set [g x y val] :int
+(defn grid-set [g x y val] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -33,14 +33,14 @@
   return 0;
   ```)
 
-(defn grid-focus [g] :int
+(defn grid-focus [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
   return p->data[p->cy * p->width + p->cx];
   ```)
 
-(defn grid-print [g] :int
+(defn grid-print [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -54,7 +54,7 @@
   ```)
 
 ;; extend: for each cell (x,y), call fn with a temporary GCtx focused there.
-(defn __gridctx_extend [g fn] :int
+(defn __gridctx_extend [g fn] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
@@ -88,7 +88,7 @@
 ;; ── Conway's Game of Life rule ────────────────────────────────────────────────
 ;; Receives a GCtx focused at the cell to evaluate.
 
-(defn life-rule [g] :int
+(defn life-rule [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -117,7 +117,7 @@
 ;; Gen 1: .....  ..#..  ..#..  ..#..  .....  (vertical)
 ;; Gen 2: same as gen 0 (period 2)
 
-(defn main [] :int
+(defn main [] : int
   (let [g0 (lgrid-new 5 5)]
     (do
       (grid-set g0 1 2 1)

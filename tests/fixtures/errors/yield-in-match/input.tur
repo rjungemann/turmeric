@@ -3,10 +3,10 @@
 ;; yield inside a match arm is a 1.0 limitation: the gen/yield state-machine
 ;; lowering cannot save and restore match-arm position without the post-1.0
 ;; CPS pass.  The elaborator rejects this with TUR-E0702.
-(defn gen-by-flag [flag :int] :int
+(defn gen-by-flag [flag : int] : int
   (gen []
     (match flag
       0 (yield 42)
       _ (yield 99))))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

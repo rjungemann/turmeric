@@ -9,7 +9,7 @@
   return (__TUR_TY_T__)(v * v * v);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [a (cube 3)]      ;; T = int   -> carrier form,    3^3   = 27
     (println a))
   (let [b (cube 2.5)]    ;; T = float -> specialized form, 2.5^3 = 15.625

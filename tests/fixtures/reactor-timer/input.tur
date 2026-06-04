@@ -16,7 +16,7 @@
 ;;   interval-tick
 ;;   interval-tick
 
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)
@@ -29,31 +29,31 @@
 (extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
 (extern-c tur_reactor_free [r :ptr] :void)
 
-(defn main [] :int
+(defn main [] : int
   (let [r (tur_reactor_new)]
     ;; Part 1: four one-shot timers; reactor-run exits when all deactivate.
     ;; The callbacks are non-capturing fns; the ^fat cb parameter auto-shims
     ;; them into fat closures (no capture-forcing dummy needed).
     (tur_reactor_add_timer r 0
-      (fn [id ud] :nil
+      (fn [id ud] : nil
         (println "oneshot fired"))
       0)
     (tur_reactor_add_timer r 0
-      (fn [id ud] :nil
+      (fn [id ud] : nil
         (println "tick 1"))
       0)
     (tur_reactor_add_timer r 0
-      (fn [id ud] :nil
+      (fn [id ud] : nil
         (println "tick 2"))
       0)
     (tur_reactor_add_timer r 0
-      (fn [id ud] :nil
+      (fn [id ud] : nil
         (println "tick 3"))
       0)
     (tur_reactor_run r)
     ;; Part 2: interval timer fires on each poll call; remove after three polls.
     (let [iv-id (tur_reactor_add_interval r 0 0
-                  (fn [id ud] :nil
+                  (fn [id ud] : nil
                     (println "interval-tick"))
                   0)]
       (tur_reactor_poll r 0)

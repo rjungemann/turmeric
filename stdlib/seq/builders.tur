@@ -19,13 +19,13 @@
 ;;; seq-call-fn1 -- call a one-arg fat closure stored as int64_t.
 
 
-(defn seq-call-fn0 [f :int] :int
+(defn seq-call-fn0 [f : int] : int
   ```c int64_t *fat = (int64_t *)(intptr_t)f;
   int64_t fn_ptr = fat[0];
   return ((int64_t (*)(void *))(intptr_t)fn_ptr)((void *)fat);
   ```)
 
-(defn seq-call-fn1 [f :int x :int] :int
+(defn seq-call-fn1 [f : int x : int] : int
   ```c int64_t *fat = (int64_t *)(intptr_t)f;
   int64_t fn_ptr = fat[0];
   return ((int64_t (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
@@ -37,12 +37,12 @@
 ;;; seq-opt-unwrap -- extract the int64_t value from a some option.
 
 
-(defn seq-opt-some? [o :int] :bool
+(defn seq-opt-some? [o : int] : bool
   ```c struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
   return opt != NULL && opt->is_some;
   ```)
 
-(defn seq-opt-unwrap [o :int] :int
+(defn seq-opt-unwrap [o : int] : int
   ```c struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
   return opt->value;
   ```)
@@ -50,12 +50,12 @@
 ;;; seq-pair-first -- return the first element of a Tuple2 (legacy name).
 ;;; seq-pair-second -- return the second element of a Tuple2 (legacy name).
 
-(defn seq-pair-first [p :int] :int
+(defn seq-pair-first [p : int] : int
   ```c Tuple2 *pair = (Tuple2 *)(intptr_t)p;
   return pair->e1;
   ```)
 
-(defn seq-pair-second [p :int] :int
+(defn seq-pair-second [p : int] : int
   ```c Tuple2 *pair = (Tuple2 *)(intptr_t)p;
   return pair->e2;
   ```)
@@ -78,7 +78,7 @@
 ;;; Since: LZ1
 
 
-(defn seq/range [start :int end :int] :int
+(defn seq/range [start : int end : int] : int
   (seq-new (fn []
              (let [^mut i start]
                (gen [] (while (< i end) (yield i) (set! i (+ i 1))))))))
@@ -99,7 +99,7 @@
 ;;;
 ;;; Since: LZ1
 
-(defn seq/range-step [start :int end :int step :int] :int
+(defn seq/range-step [start : int end : int step : int] : int
   (seq-new (fn []
              (let [^mut i start]
                (gen []
@@ -120,7 +120,7 @@
 ;;;
 ;;; Since: LZ1
 
-(defn seq/repeat [v :int] :int
+(defn seq/repeat [v : int] : int
   (seq-new (fn [] (gen [] (while true (yield v))))))
 ;;; seq/repeatedly -- infinite sequence from repeated zero-arg function calls.
 ;;;
@@ -136,7 +136,7 @@
 ;;;
 ;;; Since: LZ1
 
-(defn seq/repeatedly [f :int] :int
+(defn seq/repeatedly [f : int] : int
   (seq-new (fn [] (gen [] (while true (yield (seq-call-fn0 f)))))))
 ;;; seq/cycle -- infinite sequence cycling over a finite Seq.
 ;;;
@@ -155,7 +155,7 @@
 ;;;
 ;;; Since: LZ1
 
-(defn seq/cycle [s :int] :int
+(defn seq/cycle [s : int] : int
   (let [arr (seq-collect s) n (gen-arr-len arr)]
     (if (= n 0)
       (empty-seq)
@@ -180,7 +180,7 @@
 ;;;
 ;;; Since: LZ1
 
-(defn seq/iterate [init :int f :int] :int
+(defn seq/iterate [init : int f : int] : int
   (seq-new (fn []
              (let [^mut cur init]
                (gen [] (while true (yield cur) (set! cur (seq-call-fn1 f cur))))))))
@@ -201,7 +201,7 @@
 ;;;
 ;;; Since: LZ1
 
-(defn seq/unfold [seed :int f :int] :int
+(defn seq/unfold [seed : int f : int] : int
   (seq-new (fn []
              (let [^mut s seed]
                (gen []

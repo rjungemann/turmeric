@@ -10,11 +10,11 @@
 ;; shape).  `count-down` is a plain self-recursive defn whose recursive call
 ;; sits in the `if` else-branch -- the lowered form is in expected.c.
 
-(defn count-down [n :int acc :int] :int
+(defn count-down [n : int acc : int] : int
   (if (= n 0)
     acc
     (count-down (- n 1) (+ acc 1))))
 
-(defn main [] :int
+(defn main [] : int
   (println (count-down 10000000 0))
   0)

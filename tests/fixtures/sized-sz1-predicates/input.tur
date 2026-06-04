@@ -7,25 +7,25 @@
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defn size-static [n :int] :Size (Static n))
-(defn size-add [s1 :Size s2 :Size] :Size (Add s1 s2))
-(defn size-mul [s1 :Size s2 :Size] :Size (Mul s1 s2))
+(defn size-static [n : int] : Size (Static n))
+(defn size-add [s1 : Size s2 : Size] : Size (Add s1 s2))
+(defn size-mul [s1 : Size s2 : Size] : Size (Mul s1 s2))
 
-(defn size-eval [s :Size] :int
+(defn size-eval [s : Size] : int
   (match s
     (Static n)   n
     (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
     (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
 
-(defn size-eq? [s1 :Size s2 :Size] :bool (= (size-eval s1) (size-eval s2)))
-(defn size-le? [s1 :Size s2 :Size] :bool (<= (size-eval s1) (size-eval s2)))
-(defn size-lt? [s1 :Size s2 :Size] :bool (< (size-eval s1) (size-eval s2)))
-(defn size-ge? [s1 :Size s2 :Size] :bool (>= (size-eval s1) (size-eval s2)))
-(defn size-gt? [s1 :Size s2 :Size] :bool (> (size-eval s1) (size-eval s2)))
+(defn size-eq? [s1 : Size s2 : Size] : bool (= (size-eval s1) (size-eval s2)))
+(defn size-le? [s1 : Size s2 : Size] : bool (<= (size-eval s1) (size-eval s2)))
+(defn size-lt? [s1 : Size s2 : Size] : bool (< (size-eval s1) (size-eval s2)))
+(defn size-ge? [s1 : Size s2 : Size] : bool (>= (size-eval s1) (size-eval s2)))
+(defn size-gt? [s1 : Size s2 : Size] : bool (> (size-eval s1) (size-eval s2)))
 
-(defn size-normalize [s :Size] :Size (Static (size-eval s)))
+(defn size-normalize [s : Size] : Size (Static (size-eval s)))
 
-(defn size-simplify [s :Size] :Size
+(defn size-simplify [s : Size] : Size
   (match s
     (Static n)  (Static n)
     (Add s1 s2)
@@ -43,7 +43,7 @@
                 (if (= n2 1) (Static n1)
                   (Static (* n1 n2))))))))))
 
-(defn main [] :int
+(defn main [] : int
   ; size-eq?: equal expressions
   (println (size-eq? (size-static 4) (size-add (size-static 1) (size-static 3))))
   ; size-eq?: unequal

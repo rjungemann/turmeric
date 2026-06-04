@@ -4,7 +4,7 @@
 ;; in particular, capturing a ref<T> is always safe (ref<T> is a managed
 ;; heap reference, not a stack borrow).
 
-(defn main [] :int
+(defn main [] : int
   (let [r (ref 5)]
     (let [a 10]
       (let [b 20]

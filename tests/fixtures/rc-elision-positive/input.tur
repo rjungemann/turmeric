@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   ;; Test case 1: Single clone-use-drop sequence (obvious last-use elision candidate)
   ;; The RC is cloned, used once for reading, then immediately dropped.
   ;; With elision, the clone increment and drop decrement can be skipped.

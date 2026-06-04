@@ -1,12 +1,12 @@
 ;; Phase R6b: a per-call allow comment silences only the next call; the
 ;; assert! below still warns.
-(defn risky [] :int
+(defn risky [] : int
   ;; #lint-panic-allow
   (panic "boom")
   0)
-(defn checked [x :int] :int
+(defn checked [x : int] : int
   (assert! (> x 0))
   x)
-(defn main [] :int
+(defn main [] : int
   (println (checked 5))
   0)

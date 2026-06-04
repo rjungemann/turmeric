@@ -1,0 +1,6 @@
+;; positional-struct-mismatch -- passing a Q where a positional :P parameter is
+;; declared is a compile error: distinct structs are distinct nominal types.
+(defstruct P [x : int])
+(defstruct Q [y : int])
+(defn take-p [p : P] : int 0)
+(defn main   []     : int (take-p (make-struct Q 5)))

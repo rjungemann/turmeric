@@ -3,11 +3,11 @@
 ;; Verifies that extend conway-rule leaves the block pattern unchanged.
 
 (defclass Comonad [^w]
-  (extract   [wa]     :int)
-  (extend    [wa fn]  :int)
-  (duplicate [wa]     :int))
+  (extract   [wa]     : int)
+  (extend    [wa fn]  : int)
+  (duplicate [wa]     : int))
 
-(defn gctx-new [width height] :int
+(defn gctx-new [width height] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *g = malloc(sizeof(GCtx));
@@ -16,7 +16,7 @@
   return (int64_t)(intptr_t)g;
   ```)
 
-(defn gctx-set [g x y val] :int
+(defn gctx-set [g x y val] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -24,14 +24,14 @@
   return 0;
   ```)
 
-(defn gctx-focus [g] :int
+(defn gctx-focus [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
   return p->data[p->cy * p->width + p->cx];
   ```)
 
-(defn gctx-print [g] :int
+(defn gctx-print [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -42,7 +42,7 @@
   return 0;
   ```)
 
-(defn __gridctx_extend [g fn] :int
+(defn __gridctx_extend [g fn] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
@@ -66,7 +66,7 @@
   (extend    [wa fn] (__gridctx_extend wa fn))
   (duplicate [wa]    (__gridctx_extend wa (fn [g] g))))
 
-(defn conway-rule [g] :int
+(defn conway-rule [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -87,7 +87,7 @@
   return 0;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [g0 (gctx-new 4 4)]
     (do
       (gctx-set g0 1 1 1)

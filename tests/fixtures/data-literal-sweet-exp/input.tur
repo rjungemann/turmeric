@@ -4,15 +4,15 @@
 ;; dispatch is below the sweet-exp layer.  Exercises #map{...}, [...], and
 ;; #set{...} alongside neoteric calls and curly-infix arithmetic.
 
-(defn build-payload [] :int
+(defn build-payload [] : int
   (let [m #map{:name 1 :age 2 :active 1}]
     map-count(m)))
 
-(defn three-points [] :int
+(defn three-points [] : int
   (let [v [10 20 30]]
     {vec-len(v) + vec-get(v 0)}))
 
-(defn watched-tags [] :int
+(defn watched-tags [] : int
   (let [s #set{10 20 10}]
     set-count(s)))
 

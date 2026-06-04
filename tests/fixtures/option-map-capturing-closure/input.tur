@@ -1,0 +1,19 @@
+;; Regression fixture for closure-representation-unification (Phase 1).
+;; option-map previously invoked its function argument through a bare
+;; int64_t(*)(...) thin cast, which segfaults on a capturing closure (a
+;; fat-closure box).  It now takes a ^fat closure parameter and dispatches
+;; through the fat protocol (TUR_APPLY1), so both a captureless lambda and a
+;; capturing closure work.  (Option is an auto-loaded prelude module.)
+
+;; Capturing closure: closes over the multiplier k.
+(defn make-scale [k : int] : ptr<void> (fn [x : int] : int (* x k)))
+
+(defn main [] : int
+  (let [scale4 (make-scale 4)]
+    ;; option-map with a capturing closure over some(5) -> some(20)
+    (println (unwrap-or (option-map (some 5) scale4) 0))     ;; 20
+    ;; option-map with a captureless lambda still works -> some(15)
+    (println (unwrap-or (option-map (some 5) (fn [x : int] : int (* x 3))) 0))  ;; 15
+    ;; option-map over none stays none
+    (println (unwrap-or (option-map (none) scale4) 99)))     ;; 99
+  0)

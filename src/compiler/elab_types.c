@@ -197,6 +197,51 @@ Expr *elab_defrec(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
+/* ptr-generic-parameterised-type: parse a "ptr<T>" type-name string into a
+ * typed raw pointer Type (kind TY_PTR_VOID with a non-NULL pointee).  The
+ * pointee spelling carries no leading colon -- e.g. "ptr<float>",
+ * "ptr<Pair>", "ptr<ptr<float>>".  The inner type is resolved recursively
+ * through type_expr_from_form so primitives, structs, ADTs, type variables,
+ * and nested pointers all work.
+ *
+ * Returns:
+ *   - a non-NULL Type* for a well-formed typed pointer,
+ *   - NULL when `name` is not a "ptr<...>" form, OR is the legacy "ptr<void>"
+ *     spelling (left to the existing TY_PTR_VOID code paths).
+ * Emits a diagnostic and returns NULL on a malformed/empty pointee. */
+Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+                                 Span span, const Symbol *rec_name,
+                                 const Symbol **type_params,
+                                 Kind *type_param_kinds, uint8_t n_type_params) {
+    /* shortest typed form is "ptr<x>" == 6 chars */
+    if (len < 6) return NULL;
+    if (memcmp(name, "ptr<", 4) != 0) return NULL;
+    if (name[len - 1] != '>') return NULL;
+    const char *inner = name + 4;
+    uint32_t inner_len = len - 5;            /* between "ptr<" and the final '>' */
+    /* Legacy untyped pointer: defer to the existing TY_PTR_VOID handling. */
+    if (inner_len == 4 && memcmp(inner, "void", 4) == 0) return NULL;
+    if (inner_len == 0) {
+        diag_emit(DIAG_ERROR, span, "empty pointee type in 'ptr<...>'");
+        return NULL;
+    }
+    /* Resolve the inner type by recursing on a synthetic symbol form whose
+     * name is the pointee spelling.  An F_SYM routes through the same
+     * primitive / type-param / struct / ADT / nested-ptr resolution. */
+    const Symbol *inner_sym = symtab_intern(e->st, strslice(inner, inner_len));
+    Form inner_form;
+    memset(&inner_form, 0, sizeof(inner_form));
+    inner_form.tag = F_SYM;
+    inner_form.span = span;
+    inner_form.as.sym = inner_sym;
+    Type *pointee = type_expr_from_form(e, &inner_form, rec_name,
+                                        type_params, type_param_kinds, n_type_params);
+    if (!pointee) return NULL;
+    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *t = type_ptr(pointee);
+    return t;
+}
+
 /* Helper: parse a type expression form into a Type for deftype body.
  * Supports:
  *   - Symbols: primitive types (int, bool, etc.) or type bindings
@@ -383,6 +428,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     return t;
                 }
             }
+        }
+
+        /* ptr-generic-parameterised-type: spaced/bare `ptr<T>` annotation. */
+        {
+            Type *pt = ptr_type_from_keyword_name(e, sym->name, sym->len, form->span,
+                                                  rec_name, type_params,
+                                                  type_param_kinds, n_type_params);
+            if (pt) return pt;
         }
 
         /* Unknown - return as opaque struct */
@@ -1418,6 +1471,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
             }
         }
+        /* ptr-generic-parameterised-type: `:ptr<T>` keyword annotation. */
+        {
+            Type *pt = ptr_type_from_keyword_name(e, sym->name, sym->len, form->span,
+                                                  rec_name, type_params,
+                                                  type_param_kinds, n_type_params);
+            if (pt) return pt;
+        }
+
         /* Unknown keyword type — return opaque struct placeholder */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));

@@ -4,10 +4,10 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn do-write [s :cstr] #{Write} :nil
+(defn do-write [s : cstr] #{Write} : nil
   (perform (Write s)))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (do-write "let subsumption ok") 0)
     (Write [s] k) (do (println s) (resume k nil))))

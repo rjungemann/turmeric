@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [^mut x 10]
     (defer (println x))  ; Should print 20, not 10
     (set! x 20))

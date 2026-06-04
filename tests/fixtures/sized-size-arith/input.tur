@@ -6,17 +6,17 @@
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defn size-static [n :int] :Size (Static n))
-(defn size-add [s1 :Size s2 :Size] :Size (Add s1 s2))
-(defn size-mul [s1 :Size s2 :Size] :Size (Mul s1 s2))
+(defn size-static [n : int] : Size (Static n))
+(defn size-add [s1 : Size s2 : Size] : Size (Add s1 s2))
+(defn size-mul [s1 : Size s2 : Size] : Size (Mul s1 s2))
 
-(defn size-eval [s :Size] :int
+(defn size-eval [s : Size] : int
   (match s
     (Static n)   n
     (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
     (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
 
-(defn main [] :int
+(defn main [] : int
   ; literal: 0, 1, 8
   (println (size-eval (size-static 0)))
   (println (size-eval (size-static 1)))

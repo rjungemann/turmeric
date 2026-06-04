@@ -1,0 +1,9 @@
+;; Inline-C fences are tokenized as a single opaque CODE_FENCE token and
+;; must not be touched.  Any ":foo"-looking string inside is C code.
+
+(defn file-size [f :int] :int
+  ```c
+  FILE* file = (FILE*)f;
+  int x = 0; // not :int -- just a C int
+  return (int)ftell(file);
+  ```)

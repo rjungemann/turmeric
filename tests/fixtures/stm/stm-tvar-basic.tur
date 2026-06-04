@@ -1,9 +1,9 @@
 ;; stm-tvar-basic.tur - Basic TVar operations test
 
-(defn test-tvar-new [] :ptr
+(defn test-tvar-new [] : ptr
   (tvar/new 42))
 
-(defn test-tvar-write-read [] :ptr
+(defn test-tvar-write-read [] : ptr
   (let [tv (tvar/new 0)]
     (atomically
      (stm

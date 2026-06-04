@@ -6,7 +6,7 @@
 
 ;; Use a custom C function so there's no conflict with system headers.
 ;; The #{IO} row annotation is accepted and silently discarded.
-(defn c-write-int [n :int] #{IO} :nil
+(defn c-write-int [n : int] #{IO} : nil
   ```c
   char buf[32];
   snprintf(buf, sizeof(buf), "%lld", (long long)n);
@@ -14,7 +14,7 @@
   fputc('\n', stdout);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Call the annotated function without a handler — annotation is advisory
   (c-write-int 42)
   (c-write-int 100)

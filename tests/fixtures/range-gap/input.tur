@@ -3,7 +3,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   ; gap between [1,3] and [5,8]: endpoints 3 inclusive and 5 inclusive
   ;   gap.lower = flip(3 inc) = 3 exclusive
   ;   gap.upper = flip(5 inc) = 5 exclusive  -> gap = (3,5)

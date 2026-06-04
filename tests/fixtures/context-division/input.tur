@@ -2,12 +2,12 @@
 ;; (/), across cloneable (CPS9), serial (CPS10), and call/cc* (CPS11).  Division
 ;; aborts on a zero divisor, matching the BS_DIV_CHECK lowering.
 
-(defn use4 [k] :int (tur_cloneable_cont_resume k 4))
-(defn srt4 [k] :int
+(defn use4 [k] : int (tur_cloneable_cont_resume k 4))
+(defn srt4 [k] : int
   (tur_serial_cont_resume
     (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 4))
 
-(defn main [] :int
+(defn main [] : int
   (println (cloneable-reset (/ 100 (cloneable-shift use4 0))))       ; 100/4      = 25
   (println (cloneable-reset (/ (cloneable-shift use4 0) 2)))         ; 4/2        = 2
   (println (cloneable-reset (+ 1 (/ 100 (cloneable-shift use4 0))))) ; 1 + 100/4  = 26

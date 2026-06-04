@@ -2,7 +2,7 @@
 
 (load "stdlib/seq/core.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [s (seq-of 99)
         arr (seq-collect s)]
     (println (gen-arr-len arr))

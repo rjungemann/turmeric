@@ -4,14 +4,14 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Log [msg :cstr] :nil)
 
-(defn inner [] #{Log} :nil
+(defn inner [] #{Log} : nil
   (handle
     (do
       (perform (Write "handled internally"))
       (perform (Log "propagated out")))
     (Write [s] k) (do (println s) (resume k nil))))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (inner) 0)
     (Log [msg] k) (do (println msg) (resume k nil))))

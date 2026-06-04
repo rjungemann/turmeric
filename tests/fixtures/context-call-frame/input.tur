@@ -5,17 +5,17 @@
 ;; serialize/deserialize round-trip.  Env values are int for now; cstr/struct
 ;; envs are gated on continuation value-typing (CC4).
 
-(defn scale-add [a :int b :int] :int (+ (* a 3) b))   ; a*3 + b
+(defn scale-add [a : int b : int] : int (+ (* a 3) b))   ; a*3 + b
 
-(defn use5 [k] :int (tur_cloneable_cont_resume k 5))
-(defn use2 [k] :int
+(defn use5 [k] : int (tur_cloneable_cont_resume k 5))
+(defn use2 [k] : int
   (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
      (tur_cloneable_cont_resume k 2)))
-(defn srt5 [k] :int
+(defn srt5 [k] : int
   (tur_serial_cont_resume
     (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
 
-(defn main [] :int
+(defn main [] : int
   (println (cloneable-reset (scale-add 10 (cloneable-shift use5 0))))  ; hole=b: 10*3+5  = 35
   (println (cloneable-reset (scale-add (cloneable-shift use5 0) 10)))  ; hole=a: 5*3+10  = 25
   (println (cloneable-reset (scale-add 10 (cloneable-shift use2 0))))  ; multishot: 31+32 = 63

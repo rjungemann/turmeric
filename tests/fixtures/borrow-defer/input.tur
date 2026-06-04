@@ -1,7 +1,7 @@
 ; Phase 12: Borrow used in defer body
 ; Borrows referenced in defer expressions — basic validity check
 
-(defn main [] :int
+(defn main [] : int
   (let [x 99]
     (let [r (& x)]         ; &int borrow
       (defer (println @r)) ; deref in defer fires on scope exit

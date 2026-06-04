@@ -3,10 +3,10 @@
 ;; should produce a TUR-E0012 kind mismatch error.
 
 (defclass Bifunctor [^^f]
-  (bimap [container fn-left fn-right] :int))
+  (bimap [container fn-left fn-right] : int))
 
 ;; int has kind '*', not '* -> * -> *' — should fail with TUR-E0012.
 (definstance Bifunctor [int]
   (bimap [container fn-left fn-right] 0))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

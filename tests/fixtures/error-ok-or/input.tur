@@ -1,33 +1,33 @@
 ;; Phase R3: error-ok-or — convert option to result using u-ok-or
 
 ;; ─── inline option helpers ───────────────────────────────────────────────────
-(defn u-some [x :int] :ptr<void>
+(defn u-some [x : int] : ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true; opt->value = x; return (void*)opt;
   ```)
 
-(defn u-none [] :ptr<void>
+(defn u-none [] : ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = false; opt->value = 0; return (void*)opt;
   ```)
 
 ;; ─── inline result helpers ───────────────────────────────────────────────────
-(defn u-ok? [r :ptr<void>] :bool
+(defn u-ok? [r : ptr<void>] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return res->is_ok;
   ```)
 
-(defn u-ok-val [r :ptr<void>] :int
+(defn u-ok-val [r : ptr<void>] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (int)res->ok_val;
   ```)
 
 ;; u-ok-or — convert option to result: u-some(v) → u-ok(v), u-none → u-err(e)
-(defn u-ok-or [opt :ptr<void> e :int] :ptr<void>
+(defn u-ok-or [opt : ptr<void> e : int] : ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *o = (void*)opt;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
@@ -44,7 +44,7 @@
   ```)
 
 ;; ─── inline show for a simple error code ────────────────────────────────────
-(defn show-err-code [code :int] :cstr
+(defn show-err-code [code : int] : cstr
   ```c
   switch (code) {
     case 1: return "not-found";
@@ -53,7 +53,7 @@
   }
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; u-some option → u-ok result
     (let [opt1 (u-some 42)]

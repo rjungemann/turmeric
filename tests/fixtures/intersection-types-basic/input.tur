@@ -3,11 +3,11 @@
 ; concrete type with a typeclass constraint (open type).  IT3 handles
 ; subtyping checks; here we only verify the annotations parse without error.
 
-(defn describe [x : (int & Printable)] :cstr
+(defn describe [x : (int & Printable)] : cstr
   "intersection")
 
 ; Also test a three-member intersection.
-(defn triple [x : (int & Printable & Serializable)] :int
+(defn triple [x : (int & Printable & Serializable)] : int
   0)
 
 (println "ok")

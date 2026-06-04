@@ -4,4 +4,4 @@
 
 (println #json(oops wrong delim))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

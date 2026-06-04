@@ -1,0 +1,3 @@
+;; CC-6: do not descend into quote/quasiquote unless --rewrite-quoted.
+(defmacro m [x : int] : int
+  (quote (defn inner [n :int] :int n)))

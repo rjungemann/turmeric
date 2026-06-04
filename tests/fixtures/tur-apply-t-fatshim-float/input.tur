@@ -1,0 +1,19 @@
+;; Typed Closure Invocation ABI (closure-typed-invocation-abi-plan): typed
+;; fat-shim path.  A *captureless* (fn [x :float] :float ...) passed to a ^fat
+;; sink is auto-boxed into a fat closure { shim, orig } by EX_FN_TO_FAT.  Before
+;; typed shims, slot 0 held the int64-only __tur_fatshim1, so dispatching the
+;; box through the typed-thunk cast (double (*)(void *, double)) mismatched the
+;; ABI and the double argument/return travelled in the wrong register class.
+;; Now EX_FN_TO_FAT selects a per-signature __tur_fatshim_double_double whose
+;; ABI matches the cast, so the round-trip is correct.
+
+(defn dbl-impl [x : float] : float (* x 2.0))
+
+(defn call-fat [^fat g x : float] : float
+  ```c
+  return TUR_APPLY1_T(double, double, g, x);
+  ```)
+
+(defn main [] : int
+  (println (call-fat (fn [x : float] : float (dbl-impl x)) 3.5))  ;; 3.5 * 2 = 7
+  0)

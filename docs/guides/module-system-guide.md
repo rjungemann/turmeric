@@ -31,13 +31,13 @@ A module is a single `.tur` file with a `defmodule` form at the top:
 (defmodule geom/vector
   (export Point make-vector vector-x vector-y magnitude)
 
-  (defn make-vector [x :int y :int] :ptr
+  (defn make-vector [x : int y : int] : ptr
     (...))
 
-  (defn vector-x [^Point p] :int (.x p))
-  (defn vector-y [^Point p] :int (.y p))
+  (defn vector-x [^Point p] : int (.x p))
+  (defn vector-y [^Point p] : int (.y p))
 
-  (defn magnitude [^Point p] :int
+  (defn magnitude [^Point p] : int
     (...)))
 ```
 
@@ -60,7 +60,12 @@ defmodule geom/vector
 
 **Rules:**
 
-- `defmodule` must be the first form in the file (after stdlib auto-loads).
+- `defmodule` must be the first form in **the file containing it** -- not
+  the first form of the whole compilation unit. A `(load ...)` chain may
+  bring in flat helper files before a defmodule-wrapped file; each
+  `(load ...)`-spliced file gets its own scope for the check, and the
+  defmodule remains valid as long as nothing precedes it in its own
+  source file.
 - Only one `defmodule` per file.
 - The module name is a symbol; it may contain `/` to express nesting
   (`geom/vector`, `db/postgres/conn`).
@@ -94,7 +99,7 @@ Use `(import ...)` inside `defmodule` to bring in another module:
   (import geom/vector :as v)
   (import math :refer [sqrt abs])
 
-  (defn main [] :int
+  (defn main [] : int
     (let [p (v/make-vector 3 4)]
       (println (v/magnitude p))
       0)))
@@ -146,11 +151,11 @@ listed in `(export ...)` are visible to other modules.
 (defmodule list-utils
   (export map filter)
 
-  (defn map [f xs] :ptr (...))
-  (defn filter [pred xs] :ptr (...))
+  (defn map [f xs] : ptr (...))
+  (defn filter [pred xs] : ptr (...))
 
   ;; private helper -- only visible inside list-utils
-  (defn -fold [f acc xs] :ptr (...)))
+  (defn -fold [f acc xs] : ptr (...)))
 ```
 
 ```sweet-exp
@@ -207,7 +212,7 @@ Top-level `(defer ...)` forms inside a module run at process exit via
 
   (defer (println "shutting down logger"))
 
-  (defn log [msg] :int (...)))
+  (defn log [msg] : int (...)))
 ```
 
 ```sweet-exp
@@ -262,7 +267,7 @@ the function name:
 (defmodule plugin
   (export init)
 
-  (defn (export-as "plugin_init_v2") init [] :int
+  (defn (export-as "plugin_init_v2") init [] : int
     (...)))
 ```
 
@@ -355,6 +360,12 @@ own dependencies' headers.
 
 Move any other top-level forms inside the `defmodule` body, or below it (the
 latter is also rejected -- `defmodule` must wrap everything).
+
+"The file" here means the source file containing the `defmodule`, not the
+entire compilation unit -- a separate `(load ...)`-spliced file may
+contribute earlier forms without triggering the diagnostic. The note
+attached to the error points at the offending earlier form *in the same
+file*, which is always the right place to fix.
 
 ### `symbol 'foo' is private to module 'mymod'`
 

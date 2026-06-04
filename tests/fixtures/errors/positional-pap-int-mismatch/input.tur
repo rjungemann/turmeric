@@ -1,0 +1,10 @@
+;; positional-pap-int-mismatch -- binding a bare int into an opaque :A slot
+;; during partial application is a compile error. The captured arg must satisfy
+;; the parameter's nominal type, not slip through unchecked because it differs
+;; in TypeKind. Mirrors the saturated control `(one 5)` => TUR-E0001.
+(defopaque A :int)
+(defn two [x : A y : A] : int ```c return (int64_t)(x + y); ```)
+(defn mk-a [] : A ```c return 1; ```)
+(defn main [] : int
+  (let [f (two 5)]
+    (f (mk-a))))

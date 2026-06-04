@@ -1,7 +1,7 @@
 ;; TCE5: [...] and #map{...} data literals carry non-int element types,
 ;; riding the [A]/[V]-generic vec-of/hamt-of from TCE1-TCE3.
 
-(defn main [] :int
+(defn main [] : int
   (let [fs [0.5 1.5 2.5]
         ss ["red" "green" "blue"]
         m  #map{1 "one" 2 "two"}]

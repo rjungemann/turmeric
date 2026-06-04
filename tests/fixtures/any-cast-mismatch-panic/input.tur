@@ -4,7 +4,7 @@
 (defn box-cstr [] : any
   "not an int")
 
-(defn main [] :int
+(defn main [] : int
   (println "before cast")
   (println (cast (box-cstr) int))
   (println "after cast -- should not reach here")

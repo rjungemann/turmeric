@@ -1,16 +1,16 @@
 ; GF1 fixture: outer generator that advances an inner generator and re-yields values.
 
-(defn ptr-some? [p] :bool
+(defn ptr-some? [p] : bool
   ```c
   return p != 0;
   ```)
 
-(defn ptr-unwrap [p] :int
+(defn ptr-unwrap [p] : int
   ```c
   return *(int64_t *)(intptr_t)p;
   ```)
 
-(defn main [] :void
+(defn main [] : void
   ; Inner generator: yields 1, 2, 3
   (let [inner (gen []
                 (yield 1)

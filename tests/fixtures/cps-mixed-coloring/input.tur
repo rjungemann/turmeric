@@ -9,15 +9,15 @@
 ;; Runtime result (via the existing fiber path): twice(reset(shift id 20)) = 40,
 ;; run adds 1 => 41.
 
-(defn twice [x :int] :int
+(defn twice [x : int] : int
   (* 2 x))
 
-(defn shift-then-twice [x :int] :int
+(defn shift-then-twice [x : int] : int
   (twice (reset (shift (fn [v] v) x))))
 
-(defn run [n :int] :int
+(defn run [n : int] : int
   (+ 1 (shift-then-twice n)))
 
-(defn main [] :int
+(defn main [] : int
   (println (run 20))
   0)

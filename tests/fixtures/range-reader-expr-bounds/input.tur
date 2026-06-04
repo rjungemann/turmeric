@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [lo 0
         hi 10]
     ; expression bounds pass through to constructor

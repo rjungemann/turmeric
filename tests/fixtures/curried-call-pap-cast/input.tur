@@ -1,7 +1,7 @@
-(defn callback [u :cstr p :cstr] :int 1)
-(defn use-fn [realm :cstr verifier :int next :int] :int next)
+(defn callback [u : cstr p : cstr] : int 1)
+(defn use-fn [realm : cstr verifier : int next : int] : int next)
 
-(defn main [] :int
+(defn main [] : int
   (let [p (use-fn "x" callback)]
     (println "ok")
     (p 0)))

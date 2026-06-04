@@ -1,16 +1,16 @@
 ; GF1 fixture: generator that terminates early with (return).
 
-(defn ptr-some? [p] :bool
+(defn ptr-some? [p] : bool
   ```c
   return p != 0;
   ```)
 
-(defn ptr-unwrap [p] :int
+(defn ptr-unwrap [p] : int
   ```c
   return *(int64_t *)(intptr_t)p;
   ```)
 
-(defn main [] :void
+(defn main [] : void
   (let [limit 3
         g (gen []
             (let [^mut i 0]

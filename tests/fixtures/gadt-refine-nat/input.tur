@@ -2,17 +2,17 @@
   (VNil : (MyVec int))
   (VCons int (MyVec int) : (MyVec int)))
 
-(defn vec-head [v] :int
+(defn vec-head [v] : int
   (match v
     (VNil)      -1
     (VCons x _) x))
 
-(defn vec-sum [v] :int
+(defn vec-sum [v] : int
   (match v
     (VNil)      0
     (VCons x t) (+ x (vec-sum t))))
 
-(defn main [] :int
+(defn main [] : int
   (println (vec-head (VCons 1 (VCons 2 (VCons 3 (VNil))))))
   (println (vec-sum  (VCons 1 (VCons 2 (VCons 3 (VNil))))))
   0)

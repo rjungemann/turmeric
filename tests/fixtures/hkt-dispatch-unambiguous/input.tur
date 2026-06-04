@@ -3,10 +3,10 @@
 ;; the fallback is unambiguous and must be accepted silently (no error).
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; Option helpers (inline layout: { bool is_some; int64_t value; })
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -14,21 +14,21 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_some? [o] :bool
+(defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int64_t)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -44,12 +44,12 @@
   (fmap [c f] (__fmap_option c f)))
 
 ;; mk returns :int (type erased) even though it produces an option value.
-(defn mk [] :int (__opt_some 42))
+(defn mk [] : int (__opt_some 42))
 
 ;; double the integer inside an option via the typeclass dispatch path
-(defn twice [x] :int (* x 2))
+(defn twice [x] : int (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   (let [obj (mk)]
     (let [result (.fmap obj twice)]
       (do

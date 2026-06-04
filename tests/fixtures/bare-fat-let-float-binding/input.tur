@@ -1,0 +1,11 @@
+;; bare-fat-result-type-inference-plan.md (Phase A4): a declared-typed `let`
+;; binding `[y : float (g x)]` whose init is a bare-^fat int64 call infers the
+;; closure's result type from the binding annotation and re-stamps the call.
+;; Without it, the annotation-vs-init kind check would reject :float vs int.
+(defn run-with [^fat g x : float] : float
+  (let [y : float (g x)]
+    y))
+(defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
+(defn main [] : int
+  (println (run-with (make-scale 2.0) 3.5))   ;; 7
+  0)

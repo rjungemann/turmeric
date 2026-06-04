@@ -6,9 +6,9 @@
 ;; await inside an async closure is therefore rejected with TUR-E0022.
 (load "stdlib/rc.tur")
 
-(defn zero [] :int 0)
+(defn zero [] : int 0)
 
-(defn main [] :nil
+(defn main [] : nil
   (let [fut (async
     (fn []
       (let [x (rc/of 42)]  ;; rc<int> -- not Send

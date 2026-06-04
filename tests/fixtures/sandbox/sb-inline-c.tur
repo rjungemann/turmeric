@@ -1,4 +1,4 @@
-(defn get-one [] :int
+(defn get-one [] : int
   ```c
   return 1;
   ```)

@@ -93,11 +93,11 @@ interface; each `definstance` supplies a concrete implementation. Resolution
 happens at compile time -- neither virtual dispatch nor runtime tag lookup is involved.
 
 ```turmeric
-(defclass Eq [a] (eq? [x y] :bool))
+(defclass Eq [a] (eq? [x y] : bool))
 
 (definstance Eq [int]  (eq? [x y] (= x y)))
 (definstance Eq [bool] (eq? [x y] (= x y)))
-(definstance Eq [cstr] (eq? [x y] :bool
+(definstance Eq [cstr] (eq? [x y] : bool
   ```c if (x == NULL && y == NULL) return true;
        if (x == NULL || y == NULL) return false;
        return strcmp((const char *)x, (const char *)y) == 0;
@@ -154,10 +154,10 @@ constructor). `^^f` is `* -> * -> *`.
 
 ```turmeric
 (defclass Functor [^f]
-  (fmap [container [fn :fn]] :int))
+  (fmap [container [fn :fn]] : int))
 
 (defclass Monad [^m]
-  (bind [ma fn] :int))
+  (bind [ma fn] : int))
 ```
 ```sweet-exp
 defclass Functor [^f]

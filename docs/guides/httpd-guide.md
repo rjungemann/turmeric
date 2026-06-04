@@ -24,9 +24,9 @@ see [reactor-guide.md](reactor-guide.md).
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
-(defn main [] :int
+(defn main [] : int
   (let [h (httpd-new 8080
-            (fn [conn :ptr<void>] :nil
+            (fn [conn : ptr<void>] : nil
               (httpd-resp-status! conn 200)
               (httpd-resp-body!   conn "Hello, world!")))]
     (httpd-run h)
@@ -60,7 +60,7 @@ as a handler -- wrap it:
 ```turmeric
 (let [_     0
       h     (httpd-new 8080
-              (fn [conn :ptr<void>] :nil
+              (fn [conn : ptr<void>] : nil
                 (handle-request conn _)))]
   ...)
 ```
@@ -134,7 +134,7 @@ pattern, with support for `:name` path parameters:
   (defroute r "GET"  "/users/:id"  user-handler)
   (defroute r "POST" "/users"      create-user-handler)
   (let [h (httpd-new 8080
-            (fn [conn :ptr<void>] :nil
+            (fn [conn : ptr<void>] : nil
               (router-dispatch r conn)))]
     (httpd-run h)
     (router-free r)
@@ -167,8 +167,8 @@ or log. The pattern is plain function composition -- no framework
 machinery:
 
 ```turmeric
-(defn log-mw [next :int]
-  (fn [conn :ptr<void>] :nil
+(defn log-mw [next : int]
+  (fn [conn : ptr<void>] : nil
     (println (httpd-req-path conn))
     (httpd-call next conn)
     (println-status (httpd-resp-status-get conn))))
@@ -239,7 +239,7 @@ fd -- see [httpd-tls-guide.md](httpd-tls-guide.md).
 ```turmeric
 (let [donech (chan-new 1)
       h      (httpd-new 0
-               (fn [conn :ptr<void>] :nil
+               (fn [conn : ptr<void>] : nil
                  (httpd-resp-status! conn 200)
                  (httpd-resp-body!   conn "ok")
                  (chan-send donech 1)))

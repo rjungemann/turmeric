@@ -1,7 +1,7 @@
 ;;
 ;; Phase TM0: tmap equality test
 
-(defn test-eq-empty [] :bool
+(defn test-eq-empty [] : bool
   (let [a (:: (map-new) (Map int int))]
     (let [b (:: (map-new) (Map int int))]
       (let [result (map-eq? a b (fn [x y] (= x y)))]
@@ -9,7 +9,7 @@
         (map-free b)
         result))))
 
-(defn test-eq-same [] :bool
+(defn test-eq-same [] : bool
   (let [a (:: (map-new) (Map int int))]
     (let [b (:: (map-new) (Map int int))]
       (let [a2 (map-assoc a 1 10)]
@@ -21,7 +21,7 @@
             (map-free b2)
             result))))))
 
-(defn test-eq-diff-val [] :bool
+(defn test-eq-diff-val [] : bool
   (let [a (:: (map-new) (Map int int))]
     (let [b (:: (map-new) (Map int int))]
       (let [a2 (map-assoc a 1 10)]

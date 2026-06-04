@@ -122,7 +122,7 @@ loop iteration:
 
 ```turmeric
 ;; Server: repeat (recv int, send int) until client closes
-(defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+(defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] : nil
   (match (offer ch)
     (Left ch)
       (let [[n ch] (recv ch)]
@@ -194,7 +194,7 @@ consumed exactly once along every code path:
 ```turmeric
 (defeffect Log [msg :cstr] :nil)
 
-(defn logged-send [^linear ch :(Session (Send int Close)) val :int] :int
+(defn logged-send [^linear ch :(Session (Send int Close)) val : int] : int
   (perform (Log "before send"))
   (let [ch (send ch val)]
     (close ch)
@@ -298,18 +298,18 @@ Full two-role ping example:
   (-> A B int)
   (-> B A int))
 
-(defn role-a [^linear ch :(Role Ping A)] :nil
+(defn role-a [^linear ch :(Role Ping A)] : nil
   (let [ch (send-to ch B 42)]
     (let [[v ch] (recv-from ch B)]
       (println v)
       (close ch))))
 
-(defn role-b [^linear ch :(Role Ping B)] :nil
+(defn role-b [^linear ch :(Role Ping B)] : nil
   (let [[v ch] (recv-from ch A)]
     (let [ch (send-to ch A v)]
       (close ch))))
 
-(defn main [] :int
+(defn main [] : int
   (let [[ra rb] (make-protocol Ping)]
     (let [t (spawn (fn [] (role-b rb)))]
       (role-a ra)
@@ -351,7 +351,7 @@ a three-role pipeline:
   (-> A B int)   ; A sends to B
   (-> B C int))  ; B forwards to C
 
-(defn main [] :int
+(defn main [] : int
   (let [[ra rb rc] (make-protocol Pipeline)]
     (let [ta (spawn (fn [] (role-a ra)))]
       (let [tb (spawn (fn [] (role-b rb)))]

@@ -1,4 +1,4 @@
 ;;; Phase R2: panic-with with typed payload
-(defn main [] :int
+(defn main [] : int
   (panic-with 42)
   0)

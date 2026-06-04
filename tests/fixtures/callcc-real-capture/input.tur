@@ -6,14 +6,14 @@
 
 (extern-c printf [^cstr fmt ^int v] :int)
 
-(defn t-capture [] :int
+(defn t-capture [] : int
   (+ 1 (call/cc (fn [k] (+ 100 (k 41))))))
 
 ;; f that ignores k returns its body value normally.
-(defn t-ignore [] :int
+(defn t-ignore [] : int
   (+ 1 (call/cc (fn [k] 10))))
 
-(defn main [] :int
+(defn main [] : int
   (printf "capture=%lld\n" (t-capture))
   (printf "ignore=%lld\n" (t-ignore))
   0)

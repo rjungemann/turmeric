@@ -29,7 +29,7 @@ argument string, in order.
 
 ```turmeric
 ;; script.tur
-(defn main [] :int
+(defn main [] : int
   (println "arg 0:" (head *args*))
   (println "arg 1:" (head (tail *args*)))
   0)
@@ -44,7 +44,7 @@ defn main [] :int
 
 ```turmeric
 ;; Walk all arguments
-(defn print-args [args :int] :void
+(defn print-args [args : int] : void
   (when (some? args)
     (println (head args))
     (print-args (tail args))))
@@ -64,7 +64,7 @@ For scripts that do not import stdlib, `head` and `tail` are available as
 stdlib natives automatically:
 
 ```turmeric
-(defn main [] :int
+(defn main [] : int
   (let [n (cstr->parse-int (head *args*))]
     (println "count:" n)
     0))
@@ -105,7 +105,7 @@ load("stdlib/args.tur")
 Build a spec with the `args/spec-*` functions, then call `args/parse`:
 
 ```turmeric
-(defn main [] :int
+(defn main [] : int
   (let [spec (-> (args/spec-new)
                  (args/spec-prog "mytool")
                  (args/spec-flag "--verbose")
@@ -205,7 +205,7 @@ Register subcommands with their own specs. Each subcommand can have its own
 flags, options, and nested subcommands:
 
 ```turmeric
-(defn main [] :int
+(defn main [] : int
   (let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
                        (args/spec-option "--output" "string" (cstr "a.out")))

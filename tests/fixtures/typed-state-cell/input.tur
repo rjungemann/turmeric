@@ -1,0 +1,25 @@
+;; G5 (language-readiness-for-typed-signal-plan): a heap-allocated
+;; double cell typed as :ptr<float>, read/written from inline-C
+;; without (intptr_t) casts on the cell pointer.
+
+(defn alloc-state [] : ptr<float>
+  ```c return calloc(1, sizeof(double)); ```)
+
+(defn read-state [s : ptr<float>] : float
+  ```c return *s; ```)
+
+(defn write-state [s : ptr<float> v : float] : void
+  ```c *s = v; ```)
+
+(defn free-state [s : ptr<float>] : void
+  ```c free(s); ```)
+
+(defn main [] : int
+  (let [s (alloc-state)]
+    (println (read-state s))      ;; 0
+    (write-state s 3.5)
+    (println (read-state s))      ;; 3.5
+    (write-state s (* 3.5 2.0))
+    (println (read-state s))      ;; 7
+    (free-state s))
+  0)

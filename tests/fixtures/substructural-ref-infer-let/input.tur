@@ -1,6 +1,6 @@
 ;; ST2: ref<T> let binding inferred as SK_LINEAR under -Xsubstructural.
 ;; Explicitly dropping the ref satisfies the linear constraint.
-(defn main [] :int
+(defn main [] : int
   (let [r (ref 42)]
     (drop! r)
     0))

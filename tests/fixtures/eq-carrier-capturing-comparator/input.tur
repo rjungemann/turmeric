@@ -1,0 +1,37 @@
+;; CRU B-3: the *-eq? carrier helpers now fat-dispatch their value/element
+;; comparator, so a *capturing* comparator (a fat box closing over state) can be
+;; passed directly.  Before B-3 the helpers thin-cast the comparator and reading
+;; slot 0 of a real capturing box jumped into garbage (segfault); the
+;; constrained-Eq instances and the recursive-Eq synthesis dispatcher passed
+;; bare captureless pointers, so the helpers could not move onto ^fat.  See
+;; docs/reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md.
+;;
+;; `cmp` closes over `k`, so it is a genuine capturing closure, not a captureless
+;; lambda that gets auto-boxed at the call site -- it exercises the helper's fat
+;; dispatch of an already-fat box.
+
+(defn main [] : int
+  (let [k   1000
+        cmp (fn [a b] (= (+ a k) (+ b k)))]   ;; capturing comparator (== semantics)
+    ;; option-eq? (raw :int handles)
+    (println (option-eq? (some 5) (some 5) cmp))   ;; true
+    (println (option-eq? (some 5) (some 9) cmp))   ;; false
+    ;; vec-eq?
+    (let [v1 (vec-new)
+          v2 (vec-new)]
+      (vec-push! v1 3) (vec-push! v1 4)
+      (vec-push! v2 3) (vec-push! v2 4)
+      (println (vec-eq? v1 v2 cmp))                ;; true
+      (vec-push! v2 5)
+      (println (vec-eq? v1 v2 cmp)))               ;; false
+    ;; mutmap-eq?
+    (let [a (mutmap-new)
+          b (mutmap-new)
+          c (mutmap-new)]
+      (mutmap-set! a 1 1 100) (mutmap-set! a 2 2 200)
+      (mutmap-set! b 2 2 200) (mutmap-set! b 1 1 100)
+      (mutmap-set! c 1 1 100) (mutmap-set! c 2 2 999)
+      (println (mutmap-eq? a b cmp))               ;; true
+      (println (mutmap-eq? a c cmp))               ;; false
+      (mutmap-free a) (mutmap-free b) (mutmap-free c)))
+  0)

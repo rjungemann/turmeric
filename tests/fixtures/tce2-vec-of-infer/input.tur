@@ -1,7 +1,7 @@
 ;; TCE2: vec-of infers a single element type A and stores it through the
 ;; carrier. Homogeneous float and cstr literals round-trip; reads ascribe A.
 
-(defn main [] :int
+(defn main [] : int
   (let [fs (vec-of 0.5 1.5 2.5)
         ss (vec-of "x" "y")]
     (println (:: (vec-get fs 0) :float))

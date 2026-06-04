@@ -24,9 +24,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn ok [x :int]
+(defn ok [x : int]
   #{}
-  :int
+  : int
   ```c return tur_ok(x);
   ```)
 ;;; err -- wrap an error value of type B in a Result[A B].
@@ -42,9 +42,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn err [e :int]
+(defn err [e : int]
   #{}
-  :int
+  : int
   ```c return tur_err(e);
   ```)
 ;;; ok? -- check whether a Result[A B] is ok.
@@ -61,9 +61,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn ok? [r :int]
+(defn ok? [r : int]
   #{}
-  :bool
+  : bool
   ```c return tur_is_ok(r);
   ```)
 ;;; err? -- check whether a Result[A B] is err.
@@ -79,9 +79,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn err? [r :int]
+(defn err? [r : int]
   #{}
-  :bool
+  : bool
   ```c return !tur_is_ok(r);
   ```)
 ;;; ok-val -- extract the ok value from a typed Result[A B].
@@ -124,9 +124,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-free [r :int]
+(defn result-free [r : int]
   #{}
-  :void
+  : void
   ```c if (r) free((void*)(intptr_t)r);
   ```)
 ;;; result-map -- apply a function to the ok value if ok.
@@ -146,9 +146,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-map [r :int f]
+(defn result-map [r : int f]
   #{}
-  :int
+  : int
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   if (!res) return 0;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
@@ -178,32 +178,33 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-eq? [r1 :int r2 :int ok-cmp err-cmp]
+(defn result-eq? [r1 : int r2 : int ^fat ok-cmp ^fat err-cmp]
   #{}
-  :bool
+  : bool
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
   if (!a && !b) return true;
   if (!a || !b) return false;
   if (a->is_ok != b->is_ok) return false;
+  /* CRU B-3: ok-cmp/err-cmp are fat closure boxes; fat-dispatch via slot 0. */
   if (a->is_ok)
-      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
+      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)ok_cmp)[0])((void*)(intptr_t)ok_cmp, a->ok_val, b->ok_val);
   else
-      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
+      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)err_cmp)[0])((void*)(intptr_t)err_cmp, a->err_val, b->err_val);
   ```)
 ;;; __tur-q-is-err? -- ? operator helper; checks if a Result value is an error.
 
-(defn __tur-q-is-err? [r :ptr<void>]
+(defn __tur-q-is-err? [r : ptr<void>]
   #{}
-  :bool
+  : bool
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
   return !res || !res->is_ok;
   ```)
 ;;; __tur-q-ok-val -- ? operator helper; extracts the ok payload from a Result value.
 
-(defn __tur-q-ok-val [r :ptr<void>]
+(defn __tur-q-ok-val [r : ptr<void>]
   #{}
-  :int
+  : int
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
   return res ? res->ok_val : 0;
   ```)

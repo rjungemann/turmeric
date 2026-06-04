@@ -3,8 +3,8 @@
 (defeffect Write [msg :cstr] :nil)
 (defeffect Read [] :int)
 
-(defn pure-but-annotated [] #{Write} :int
+(defn pure-but-annotated [] #{Write} : int
   42)
 
-(defn main [] :int
+(defn main [] : int
   0)

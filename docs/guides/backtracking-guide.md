@@ -131,11 +131,11 @@ runtime dispatch when the stdlib is extended to check this constant.
 
 ```turmeric
 ;; Count solutions to N-Queens for N=6 using backtrack-do
-(defn safe? [col row packed n] :bool
+(defn safe? [col row packed n] : bool
   ;; check if placing at col,row is safe given previous placements in packed
   ...)
 
-(defn queens [n] :int
+(defn queens [n] : int
   (let [result (mreturn 0)]  ;; start with empty board (encoded as 0)
     (let [board (mbind result (fn [packed]
       ;; for each row 0..n-1, expand the board
@@ -171,7 +171,7 @@ outside the monad boundary and the results are wrapped with `mreturn`:
 ```turmeric
 (defeffect Choose [a :int b :int] :int)
 
-(defn make-choice [] :int
+(defn make-choice [] : int
   (let [x (perform (Choose 10 20))]
     (mreturn (* x 2))))
 

@@ -20,7 +20,7 @@
 ;;
 ;; Expected codegen: no rc_strong_increment / rc_strong_decrement for c.
 ;; The strong count of x stays 1 throughout (the clone pair is skipped).
-(defn main [] :int
+(defn main [] : int
   (let [x (rc/of 42)
         c (rc/clone x)]
     (rc/drop c)

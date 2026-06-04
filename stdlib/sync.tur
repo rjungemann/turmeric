@@ -31,7 +31,7 @@
 ;;;   (def flag (once-flag-new))
 ;;;
 ;;; Since: Phase T19-C
-(defn once-flag-new [] :ptr<void>
+(defn once-flag-new [] : ptr<void>
   ```c pthread_once_t *o = (pthread_once_t *)malloc(sizeof(pthread_once_t));
   if (!o) { fprintf(stderr, "once-flag-new: out of memory\n"); abort(); }
   pthread_once_t init = PTHREAD_ONCE_INIT;
@@ -46,7 +46,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn once-call [flag :ptr<void> init-fn :ptr<void>] :nil
+(defn once-call [flag : ptr<void> init-fn : ptr<void>] : nil
   ```c pthread_once((pthread_once_t *)flag, (void (*)(void))init_fn);
   ```)
 ;;; once-flag-free -- free a once-flag allocated by once-flag-new.
@@ -56,7 +56,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn once-flag-free [flag :ptr<void>] :nil
+(defn once-flag-free [flag : ptr<void>] : nil
   ```c free(flag);
   ```)
 ;; ---- Semaphore ----
@@ -74,7 +74,7 @@
 ;;; Since: Phase T19-C
 
 
-(defn sem-new [initial :int] :ptr<void>
+(defn sem-new [initial : int] : ptr<void>
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *s = (SemBlock *)malloc(sizeof(SemBlock));
   if (!s) { fprintf(stderr, "sem-new: out of memory\n"); abort(); }
@@ -90,7 +90,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn sem-acquire [s :ptr<void>] :nil
+(defn sem-acquire [s : ptr<void>] : nil
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
   pthread_mutex_lock(&sb->lock);
@@ -106,7 +106,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn sem-release [s :ptr<void>] :nil
+(defn sem-release [s : ptr<void>] : nil
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
   pthread_mutex_lock(&sb->lock);
@@ -121,7 +121,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn sem-free [s :ptr<void>] :nil
+(defn sem-free [s : ptr<void>] : nil
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
   pthread_mutex_destroy(&sb->lock);

@@ -1,9 +1,9 @@
 ;; Phase R6b: --lint-panic warns on a (panic ...) call site (TUR-W0038).
 ;; risky is defined (so its body elaborates and warns) but never called,
 ;; so the program itself runs cleanly.
-(defn risky [] :int
+(defn risky [] : int
   (panic "boom")
   0)
-(defn main [] :int
+(defn main [] : int
   (println 1)
   0)

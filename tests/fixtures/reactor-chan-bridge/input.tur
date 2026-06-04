@@ -10,7 +10,7 @@
 ;;   received=42
 ;;   done
 
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi -pthread */
   return 0;
   ```)
@@ -22,7 +22,7 @@
 (extern-c tur_reactor_free [r :ptr] :void)
 
 ;; ChanBlock helpers -- same struct layout as chan.tur and reactor.c's TurChanBlock.
-(defn make-chan [] :ptr<void>
+(defn make-chan [] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -41,7 +41,7 @@
   return (void *)ch;
   ```)
 
-(defn chan-send-val [ch :ptr<void> val :int] :nil
+(defn chan-send-val [ch : ptr<void> val : int] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -57,7 +57,7 @@
   pthread_mutex_unlock(&c->lock);
   ```)
 
-(defn chan-free [ch :ptr<void>] :nil
+(defn chan-free [ch : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -73,7 +73,7 @@
 
 ;; Worker: unpacks args from a 3-slot int64_t array: [ch, r, val].
 ;; Sleeps 20 ms, sends val to chan, wakes the reactor.
-(defn sender-worker [arg :ptr<void>] :ptr<void>
+(defn sender-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   int64_t *a = (int64_t *)arg;
@@ -88,7 +88,7 @@
   return NULL;
   ```)
 
-(defn spawn-sender [ch :ptr<void> r :ptr<void> val :int] :ptr<void>
+(defn spawn-sender [ch : ptr<void> r : ptr<void> val : int] : ptr<void>
   ```c
   int64_t *a = (int64_t *)malloc(3 * sizeof(int64_t));
   a[0] = (int64_t)(intptr_t)ch;
@@ -99,19 +99,19 @@
   return (void *)t;
   ```)
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn print-received [n :int] :nil
+(defn print-received [n : int] : nil
   ```c printf("received=%lld\n", (long long)n); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r       (tur_reactor_new)
         ch      (make-chan)
 ]
     ;; One-shot channel watcher.
     (tur_reactor_add_chan r ch
-      (fn [id value ud] :nil
+      (fn [id value ud] : nil
         (print-received value))
       0)
     ;; Sender thread: 20ms delay, send 42, wake reactor.

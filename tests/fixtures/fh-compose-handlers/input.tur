@@ -4,7 +4,7 @@
 ;; the resumed value flows back, then main returns 0.
 (defeffect Ask [] :int)
 (defeffect Tell [s :cstr] :nil)
-(defn main [] :int
+(defn main [] : int
   (with-handler
     (compose-handlers
       (handler (Ask [] k) (do (println "ask-handled") (resume k 42)))

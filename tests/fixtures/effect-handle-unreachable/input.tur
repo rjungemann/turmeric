@@ -5,7 +5,7 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Log [msg :cstr] :nil)
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (perform (Log "logged")) 0)
     (Log [msg] k) (do (println msg) (resume k nil))

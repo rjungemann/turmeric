@@ -2,7 +2,7 @@
 ;;
 ;; Tests that we can await the first of multiple futures to complete.
 
-(defn async-done? [fut :ptr<void>] :bool
+(defn async-done? [fut : ptr<void>] : bool
   ```c
   typedef enum { FUTURE_PENDING, FUTURE_FULFILLED, FUTURE_REJECTED } TurFutureStatus;
   typedef struct TurFuture {
@@ -15,17 +15,17 @@
   return f && (f->status == FUTURE_FULFILLED || f->status == FUTURE_REJECTED);
   ```)
 
-(defn compute-42 [] :int
+(defn compute-42 [] : int
   ```c
   return (int64_t)42;
   ```)
 
-(defn compute-99 [] :int
+(defn compute-99 [] : int
   ```c
   return (int64_t)99;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [fut1 (async compute-42)
         fut2 (async compute-99)]
     ;; Wait for fut1, then check fut2

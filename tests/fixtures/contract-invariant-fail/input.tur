@@ -1,9 +1,9 @@
 ;; Phase C1: invariant-msg! -- failing invariant triggers panic
 
-(defn positive? [x :int] :bool
+(defn positive? [x : int] : bool
   (> x 0))
 
-(defn main [] :int
+(defn main [] : int
   (let [x -5]
     (invariant-msg! x positive? "Invariant failed: x must be positive")
     (println "should not reach here"))

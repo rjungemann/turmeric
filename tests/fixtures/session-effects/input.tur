@@ -17,14 +17,14 @@
 
 (defeffect SessionLog [msg :cstr] :nil)
 
-(defn spawn [f :ptr<void>] :ptr<void>
+(defn spawn [f : ptr<void>] : ptr<void>
   ```c
   pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(tid, NULL, tur_session_thread_wrapper, f);
   return (void *)tid;
   ```)
 
-(defn join [t :ptr<void>] :int
+(defn join [t : ptr<void>] : int
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
@@ -32,7 +32,7 @@
   ```)
 
 ;; exchange: perform a send+recv on a session channel while logging with effects.
-(defn exchange [^linear ch :(Session (Send int (Recv int Close))) val :int] :int
+(defn exchange [^linear ch :(Session (Send int (Recv int Close))) val : int] : int
   (perform (SessionLog "sending 99"))
   (let [ch (send ch val)]
     (let [[result ch] (recv ch)]
@@ -40,7 +40,7 @@
       (close ch)
       result)))
 
-(defn main [] :int
+(defn main [] : int
   (let [[s r] (make-session (Send int (Recv int Close)))]
     (let [t (spawn (fn []
                      (let [[v r] (recv r)]

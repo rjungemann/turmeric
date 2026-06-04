@@ -73,8 +73,8 @@
 ;;;
 ;;; Since: DV3
 
-(defn spawn-conveying [f :ptr<void>]
+(defn spawn-conveying [f : ptr<void>]
   #{Unsafe}
-  :ptr<void>
+  : ptr<void>
   ```c return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
   ```)

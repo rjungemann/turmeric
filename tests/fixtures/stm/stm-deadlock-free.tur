@@ -1,7 +1,7 @@
 ;; stm-deadlock-free.tur - Verify no deadlocks with complex multi-TVar transactions
 
 ;; Test nested transactions with different TVar access orders
-(defn test-nested-transactions [] :bool
+(defn test-nested-transactions [] : bool
   (let [tv1 (tvar/new 0)]
     (let [tv2 (tvar/new 0)]
       (let [tv3 (tvar/new 0)]

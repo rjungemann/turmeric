@@ -1,0 +1,25 @@
+;; Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1):
+;; round-trip a :cstr -> :int closure through TUR_APPLY1_T, exercising the
+;; *argument* type axis.  The macro casts slot 0 to int64_t (*)(void *, char *)
+;; and coerces the argument with (char *)(value); the closure thunk is emitted
+;; as int64_t (*)(void *, const char *), so the cstr argument is passed as a
+;; pointer rather than being forced through the int64_t carrier by hand.
+
+(defn first-byte [s : cstr] : int
+  ```c
+  return (int64_t)(unsigned char)((const char *)(intptr_t)s)[0];
+  ```)
+
+(defn call-s [f : ptr<void> s : cstr] : int
+  ```c
+  return TUR_APPLY1_T(int64_t, char *, f, s);
+  ```)
+
+(defn make-scorer [n : int] : ptr<void>
+  (fn [s : cstr] : int (+ n (first-byte s))))
+
+(defn main [] : int
+  (let [f (make-scorer 1)
+        r (call-s f "hello")]   ;; 1 + 'h'(104) = 105
+    (println r)
+    0))

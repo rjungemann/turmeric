@@ -5,21 +5,21 @@
 ; named function".  The fix gives constrained existentials their own
 ; value-typed param path with the full forall_ payload preserved.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn consume [e : (exists [a] [(Show a)] a)] :int
+(defn consume [e : (exists [a] [(Show a)] a)] : int
   (open e [_ v]
     (println (.show v)))
   0)
 
-(defn main [] :int
+(defn main [] : int
   (consume (pack 42 (exists [a] [(Show a)] a)))
   0)

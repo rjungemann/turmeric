@@ -780,8 +780,13 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
             }
         }
     }
-    /* If this is a function binding, use raw name without ID */
-    if (b->type.kind == TY_FN) {
+    /* If this is a bare function reference (captureless fn / top-level defn),
+     * use the raw name without ID -- its C name *is* the function symbol.
+     * CRU B-1: a *boxed* TY_FN is a first-class closure *value* (a local box),
+     * not a function symbol; fall through to the id-suffixed mangling path so
+     * distinct closures don't collide and a source name that is a C keyword
+     * (e.g. `double`) is disambiguated to `double_<id>`. */
+    if (b->type.kind == TY_FN && !b->type.as.fn.boxed) {
         return raw_name_for_binding(b);
     }
     /* Phase M6: If c_export_name is set, use it directly (bypasses mangling and id suffix). */

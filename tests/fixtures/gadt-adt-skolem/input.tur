@@ -7,7 +7,7 @@
   (Lit :int : (Expr int))
   (Box (Foo) : (Expr Foo)))
 
-(defn main [] :int
+(defn main [] : int
   (let [e (Box (FooVal 7))]
     (match e
       (Lit n)   (println n)

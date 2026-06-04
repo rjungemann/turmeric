@@ -2,7 +2,7 @@
 
 (extern-c printf [^cstr fmt ^int v] :int)
 
-(defn main [] :int
+(defn main [] : int
   (let [result (serial-reset 42)]
     (do
       (printf "result: %lld\n" result)

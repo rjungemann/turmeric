@@ -1,0 +1,5 @@
+(defn add1 [n : int] : int (+ n 1))
+
+(defn main [] : int
+  (let [f : (-> int int) add1]
+    (println (f 41)) 0))

@@ -30,7 +30,7 @@ The minimal implementation uses `cstr-eq?` to compare attribute strings but has
 no way to compare Values. `query.tur` adds `value-eq?`:
 
 ```turmeric
-(defn value-eq? [a :int b :int] :bool
+(defn value-eq? [a : int b : int] : bool
   (match a
     (LongVal x)   (match b (LongVal y)   (= x y)        _ false)
     (StrVal x)    (match b (StrVal y)    (cstr-eq? x y) _ false)
@@ -73,7 +73,7 @@ A wildcard arm `_ false` handles mismatched constructors (e.g. comparing a
 `q-av` finds all datums with a specific attribute name AND value:
 
 ```turmeric
-(defn q-av [a :cstr v :int]
+(defn q-av [a : cstr v : int]
   (fn [d]
     (and (cstr-eq? (datum-attr d) (cstr->int a))
          (value-eq? (datum-value d) v))))
@@ -106,7 +106,7 @@ This returns all datums where `attr = :user/age` AND `value = LongVal(31)`.
 before a given transaction number:
 
 ```turmeric
-(defn db-as-of [db :int as-of-tx :int] :ptr<void>
+(defn db-as-of [db : int as-of-tx : int] : ptr<void>
   (db-q db (fn [d] (<= (datum-tx d) as-of-tx))))
 ```
 
@@ -150,7 +150,7 @@ heap-allocated datum structs, which are immutable.
 Pull collects every datum for a single entity:
 
 ```turmeric
-(defn pull [db :int e :int] :ptr<void>
+(defn pull [db : int e : int] : ptr<void>
   (db-q db (fn [d] (= (datum-entity d) e))))
 ```
 
@@ -174,7 +174,7 @@ History returns all datums for a given entity and attribute, sorted by
 transaction number ascending:
 
 ```turmeric
-(defn history [db :int entity :int attr :cstr] :ptr<void>
+(defn history [db : int entity : int attr : cstr] : ptr<void>
   (let [raw (db-q db (fn [d]
                        (and (= (datum-entity d) entity)
                             (cstr-eq? (datum-attr d) (cstr->int attr)))))]
@@ -223,7 +223,7 @@ Each datum in `hist` carries its `tx`, so you can print `(datum-tx d)` next to
 Retraction is represented as a new fact, not a deletion:
 
 ```turmeric
-(defn db-retract! [db :int entity :int attr :cstr] :int
+(defn db-retract! [db : int entity : int attr : cstr] : int
   (db-assert! db entity (cstr->int ":db/retract") (StrVal (cstr->int attr))))
 ```
 
@@ -239,7 +239,7 @@ name of the attribute being retracted.
 transaction:
 
 ```turmeric
-(defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
+(defn retracted? [db : int entity : int attr : cstr as-of-tx : int] : bool
   (let [n (db-count db)
         ^mut i 0
         ^mut found false]

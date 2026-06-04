@@ -46,14 +46,27 @@ group, one reactor; shard later if measurement demands it).
 ```turmeric
 (load "stdlib/httpd.tur")
 
-(defn main [] :int
-  (let [handler (fn [c :ptr<void>] :nil
+(defn main [] : int
+  (let [handler (fn [c : ptr<void>] : nil
                   (httpd-resp-status! c 200)
                   (httpd-resp-body! c "hello async"))
         h       (httpd-new-async 8080 handler)]
     (httpd-run-async h)        ;; blocks until httpd-stop-async fires
     (httpd-async-free h)
     0))
+```
+
+```sweet-exp
+load("stdlib/httpd.tur")
+
+defn main [] :int
+  let [handler (fn [c :ptr<void>] :nil
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body! c "hello async"))
+       h       httpd-new-async(8080 handler)]
+    httpd-run-async(h)        ;; blocks until httpd-stop-async fires
+    httpd-async-free(h)
+    0
 ```
 
 ---
@@ -75,13 +88,23 @@ path (the conn's `fiber_group` field is NULL), so handlers that use
 them stay portable across both server types.
 
 ```turmeric
-(defn slow-handler [c :ptr<void>] :nil
+(defn slow-handler [c : ptr<void>] : nil
   ;; Suspend for ~50ms before responding. Under the blocking pool this
   ;; ties up a worker; under async it parks the fiber and frees the
   ;; reactor thread for other requests.
   (httpd-await-timer c 50)
   (httpd-resp-status! c 200)
   (httpd-resp-body! c "ok"))
+```
+
+```sweet-exp
+defn slow-handler [c :ptr<void>] :nil
+  ;; Suspend for ~50ms before responding. Under the blocking pool this
+  ;; ties up a worker; under async it parks the fiber and frees the
+  ;; reactor thread for other requests.
+  httpd-await-timer(c 50)
+  httpd-resp-status!(c 200)
+  httpd-resp-body!(c "ok")
 ```
 
 Need a channel? The underlying `local-park-chan` from
@@ -105,6 +128,13 @@ reactor thread and closes the connection without spawning a fiber:
   (httpd-async-free h))
 ```
 
+```sweet-exp
+;; Cap at 100 in-flight requests; the 101st through Nth get 503.
+let [h httpd-new-async-with-limit(8080 handler 100)]
+  httpd-run-async(h)
+  httpd-async-free(h)
+```
+
 `(httpd-new-async port handler)` is just sugar for the cap-0 case
 (unlimited).  In production you usually want a cap matched to your
 upstream's tolerance.
@@ -118,7 +148,7 @@ unchanged over async handlers.  `httpd-call` is a plain Turmeric call
 sitting on the fiber stack, so `next` can park transparently:
 
 ```turmeric
-(let [base    (fn [c :ptr<void>] :nil
+(let [base    (fn [c : ptr<void>] : nil
                 (httpd-await-timer c 10)
                 (httpd-resp-body! c "ok"))
       stack   (compose-middleware base mw-log mw-cors)
@@ -127,9 +157,21 @@ sitting on the fiber stack, so `next` can park transparently:
   (httpd-async-free h))
 ```
 
+```sweet-exp
+let [base    (fn [c :ptr<void>] :nil
+               (httpd-await-timer c 10)
+               (httpd-resp-body! c "ok"))
+     stack   compose-middleware(base mw-log mw-cors)
+     h       httpd-new-async(8080 stack)]
+  httpd-run-async(h)
+  httpd-async-free(h)
+```
+
 The same applies to `mw-basic-auth`, `mw-json-body`, `mw-cors-with`,
-and `compose-middleware-of` (the runtime form).  See
-[`httpd-guide.md`](httpd-guide.md) for the full middleware library.
+`mw-compress` (from `stdlib/httpd-compress.tur`, depends on the
+`tur/zlib` spice), and `compose-middleware-of` (the runtime form).
+See [`httpd-middleware-guide.md`](httpd-middleware-guide.md) for the
+full middleware library.
 
 ---
 
@@ -140,10 +182,18 @@ and `compose-middleware-of` (the runtime form).  See
 ```turmeric
 ;; Per-request timeout: race the work against a 5-second timer.
 ;; (Channels make the "first to fire" pattern straightforward.)
-(defn handler-with-deadline [c :ptr<void>] :nil
+(defn handler-with-deadline [c : ptr<void>] : nil
   (httpd-await-timer c 5000)
   ;; ... if the slow work didn't finish, set 504 ...
   )
+```
+
+```sweet-exp
+;; Per-request timeout: race the work against a 5-second timer.
+;; (Channels make the "first to fire" pattern straightforward.)
+defn handler-with-deadline [c :ptr<void>] :nil
+  httpd-await-timer(c 5000)
+  ;; ... if the slow work didn't finish, set 504 ...
 ```
 
 ### Async upstream fan-out

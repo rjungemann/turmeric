@@ -1,0 +1,12 @@
+;; A defmodule file. Loaded AFTER helper.tur, which under the old
+;; check would trigger "defmodule must be the first form in the
+;; file" because of helper-tag preceding it in the compilation
+;; unit. After the per-file fix, this is accepted: helper-tag is
+;; in a different source file, so this defmodule remains the
+;; first form of its own file.
+
+(defmodule wrapped
+  (export wrapped-tag)
+
+  (defn wrapped-tag [] : nil
+    ```c printf("wrapped\n"); ```))

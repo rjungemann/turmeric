@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (gc-enable!)
   (gc!)
   0)

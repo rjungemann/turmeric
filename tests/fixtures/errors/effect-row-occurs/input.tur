@@ -2,13 +2,13 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn run-e [f :(fn [] #{e} :nil)] #{e} :nil
+(defn run-e [f :(fn [] #{e} :nil)] #{e} : nil
   (f))
 
-(defn write-and-e [] #{Write e} :nil
+(defn write-and-e [] #{Write e} : nil
   (perform (Write "x")))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (run-e write-and-e) 0)
     (Write [s] k) (resume k nil)))

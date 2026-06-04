@@ -27,13 +27,16 @@ let executionQueue = [];
 let isExecuting = false;
 let replHistory = [];
 let replHistoryIndex = -1;
+let currentLangMode = 'turmeric'; // tracks active #lang mode
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 const CONFIG = {
-    DEFAULT_CODE: `(println "Hello, Turmeric!")
+    DEFAULT_CODE: `#lang sweet-exp
+
+println "Hello, Turmeric!"
 `,
     EXECUTION_TIMEOUT: 5000, // 5 seconds
     MAX_OUTPUT_LENGTH: 10000,
@@ -75,14 +78,17 @@ const EXAMPLES = {
 
 (println (handle (use-ask)
   (Ask [] k) (resume k 41)))`,
-    rc: `;; Reference Counting
-defn main [] :int
-  (let [r (rc/of 42)]
-    (println (rc/strong-count r))
-    (let [r2 (rc/clone r)]
-      (println (rc/strong-count r)))
-    (rc/drop r)
-    0)`
+    sweet: `#lang sweet-exp
+;; Sweet-exp syntax: indentation, curly-infix, neoteric, $
+
+defn square [x : int] : int
+  {x * x}
+
+defn sum-squares [a : int b : int] : int
+  +(square(a) square(b))
+
+println $ sum-squares 3 4
+`
 };
 
 // ============================================================================
@@ -363,6 +369,21 @@ async function initWasm() {
 }
 
 /**
+ * Strip a leading #lang directive from code and return the detected language
+ * name plus the remaining source.  The #lang line must be the first non-
+ * blank line (leading spaces/tabs are allowed but not newlines).
+ *
+ * Returns { lang: string|null, body: string }
+ *   lang -- the language name (e.g. "sweet-exp") or null if no directive found
+ *   body -- source text with the #lang line removed
+ */
+function parseLangDirective(code) {
+    const m = code.match(/^[ \t]*#lang[ \t]+(\S+)([ \t]*\r?\n?|$)/);
+    if (!m) return { lang: null, body: code };
+    return { lang: m[1], body: code.slice(m[0].length) };
+}
+
+/**
  * Evaluate Turmeric code via the eval Worker.
  */
 function evaluateCode(code) {
@@ -394,9 +415,16 @@ function processQueue() {
         return;
     }
 
+    // turi_eval_typed detects and strips an inline #lang directive itself, so
+    // pass the raw source through. Still parse it locally to keep the UI's
+    // mode indicator (currentLangMode) in sync; also forward `lang` to the
+    // Worker as a hint for runtimes that export _turi_wasm_set_lang.
+    const { lang } = parseLangDirective(code);
+    if (lang !== null) currentLangMode = lang;
+
     const id = ++evalCallId;
     pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
-    evalWorker.postMessage({ type: 'eval', id, input: code });
+    evalWorker.postMessage({ type: 'eval', id, input: code, lang });
 }
 
 /**
@@ -407,7 +435,11 @@ function resetWasm() {
 
     const id = ++evalCallId;
     pendingCalls.set(id, {
-        resolve: () => { clearConsole(); showStatus('Environment reset', 'success'); },
+        resolve: () => {
+            currentLangMode = 'turmeric'; // turi_env_new() always starts in default mode
+            clearConsole();
+            showStatus('Environment reset', 'success');
+        },
         reject:  (err) => { console.error('Reset error:', err); showStatus('Failed to reset', 'error'); },
         startTime: performance.now(),
         isEval: false,
@@ -587,6 +619,9 @@ async function initEditor() {
         language: 'turmeric',
         theme: 'turmeric-dark',
         automaticLayout: true,
+        tabSize: 2,
+        insertSpaces: true,
+        detectIndentation: false,
         minimap: {
             enabled: false
         },

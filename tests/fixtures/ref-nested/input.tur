@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [outer (ref 10)]
     (let [inner (ref 20)]
       (println @inner)

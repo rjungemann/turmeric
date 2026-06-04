@@ -16,7 +16,7 @@
 ;; is the missing piece to make the body recurse via .eq? on A.
 ;; See vec-of-vec-eq-manual for the manual recursive workaround.
 
-(defn main [] :int
+(defn main [] : int
   (let [a []:int
         b []:int
         c []:int]

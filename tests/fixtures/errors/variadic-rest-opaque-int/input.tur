@@ -1,7 +1,7 @@
 ;; variadic-rest-opaque-int -- a raw :int is rejected where an opaque Route rest
 ;; is declared.
 (defopaque Route :int)
-(defn mk-route [] :Route 0)
-(defn server [& items :Route] :int 0)
-(defn main [] :int
+(defn mk-route [] : Route 0)
+(defn server [& items : Route] : int 0)
+(defn main [] : int
   (server (mk-route) 42))

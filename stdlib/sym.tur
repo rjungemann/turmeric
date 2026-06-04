@@ -15,7 +15,6 @@
 ;; Auto-loaded (into the global namespace, like the other stdlib files) only
 ;; under -Xsymbols, so default builds and their codegen snapshots are
 ;; unaffected.
-
 ;;; sym->str -- return the embedded name of a symbol (no allocation).
 ;;;
 ;;; The returned cstr points directly into the symbol's static record, so it
@@ -31,11 +30,9 @@
 ;;;   (sym->str :hello)  ; => "hello"
 ;;;
 ;;; Since: Phase SYM4
-(defn sym->str [s :Sym] :cstr
-  ```c
-  return (const char *)((const struct __tur_sym *)s)->name;
+(defn sym->str [s : Sym] : cstr
+  ```c return (const char *)((const struct __tur_sym *)s)->name;
   ```)
-
 ;;; sym=? -- pointer-identity equality of two symbols.
 ;;;
 ;;; Because symbols are interned, two :Sym values are equal exactly when they
@@ -55,28 +52,29 @@
 ;;;   (sym=? :a :b)  ; => false
 ;;;
 ;;; Since: Phase SYM4
-(defn sym=? [a :Sym b :Sym] :bool
-  ```c
-  return (int64_t)(a == b);
-  ```)
 
+(defn sym=? [a : Sym b : Sym] : bool
+  ```c return (int64_t)(a == b);
+  ```)
 ;;; Eq [Sym] -- equality on interned symbols: pointer identity.
 ;;;
 ;;; Two symbols are equal iff they are the same interned pointer.
 
-(definstance Eq [Sym] (eq? [x y] :bool ```c return (int64_t)(x == y);
-    ```))
 
+(definstance Eq [Sym] (eq? [x y] : bool ```c return (int64_t)(x == y);
+    ```))
 ;;; Hash [Sym] -- hash a symbol via its precomputed hash field (a single load).
 
-(definstance Hash [Sym] (hash [x] :int ```c return (int64_t)((const struct __tur_sym *)x)->hash;
-    ```))
 
+(definstance Hash [Sym] (hash [x] : int ```c return (int64_t)((const struct __tur_sym *)x)->hash;
+    ```))
 ;;; MapKey [Sym] -- interned-symbol pointer carrier.  Symbols are deduplicated,
 ;;; so pointer identity is content equality; the carrier is the pointer-as-int
 ;;; and the comparator is plain integer (identity) equality.
 
-(definstance MapKey [Sym]
-  (mk-box [x] :int ```c return (int64_t)(intptr_t)x; ```)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+
+(definstance MapKey [Sym] (mk-box [x]
+                            : int
+                            ```c return (int64_t)(intptr_t)x; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
   (mk-owned? [x] 0))

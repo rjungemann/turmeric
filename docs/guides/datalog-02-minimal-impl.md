@@ -46,9 +46,9 @@ checker.
 Constructors wrap the raw int:
 
 ```turmeric
-(defn long-val [n :int] :int  (LongVal n))
-(defn str-val  [s :cstr] :int (StrVal (cstr->int s)))
-(defn entity-val [e :int] :int (EntityVal e))
+(defn long-val [n : int] : int  (LongVal n))
+(defn str-val  [s : cstr] : int (StrVal (cstr->int s)))
+(defn entity-val [e : int] : int (EntityVal e))
 ```
 
 ```sweet-exp
@@ -63,7 +63,7 @@ defn entity-val [e :int] :int
 The printer dispatches on the constructor:
 
 ```turmeric
-(defn print-value [v :int] :nil
+(defn print-value [v : int] : nil
   (match v
     (LongVal n)   (println n)
     (StrVal s)    (println-cstr s)
@@ -91,7 +91,7 @@ A datum is four 64-bit integers stored consecutively on the heap:
 The C helper allocates and fills the struct:
 
 ```turmeric
-(defn datum-new [entity :int attr :int value :int tx :int] :int
+(defn datum-new [entity : int attr : int value : int tx : int] : int
   ```c
   int64_t *d = malloc(4 * sizeof(int64_t));
   d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
@@ -111,13 +111,13 @@ defn datum-new [entity :int attr :int value :int tx :int] :int
 Accessors project individual fields:
 
 ```turmeric
-(defn datum-entity [d :int] :int
+(defn datum-entity [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[0]; ```)
-(defn datum-attr   [d :int] :int
+(defn datum-attr   [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[1]; ```)
-(defn datum-value  [d :int] :int
+(defn datum-value  [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[2]; ```)
-(defn datum-tx     [d :int] :int
+(defn datum-tx     [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[3]; ```)
 ```
 
@@ -150,7 +150,7 @@ pointers. `next-tx` is the transaction counter; each call to `db-assert!`
 increments it before stamping the new datum.
 
 ```turmeric
-(defn db-new [] :int
+(defn db-new [] : int
   ```c
   int64_t *db = malloc(2 * sizeof(int64_t));
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));

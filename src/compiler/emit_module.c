@@ -116,6 +116,84 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
     return name;
 }
 
+static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_params) {
+    Buf name;
+    buf_init(&name);
+    buf_puts(&name, "__tur_fatshim_");
+    append_sanitized_c_token(&name, type_c_name(result_type));
+    for (uint8_t i = 0; i < n_params; i++) {
+        buf_putc(&name, '_');
+        append_sanitized_c_token(&name, type_c_name(param_types[i]));
+    }
+    buf_putc(&name, '\0');
+    char *result = strdup(name.data);
+    buf_free(&name);
+    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return result;
+}
+
+char *ensure_typed_fatshim(EmitCtx *ctx,
+                           Type result_type, Type *param_types, uint8_t n_params) {
+    /* The call site invokes the boxed fn through the typed-thunk cast only when
+     * use_typed_thunk_abi holds; otherwise it falls back to the int64_t fat-call
+     * path that the preamble __tur_fatshim<arity> shim already satisfies. */
+    if (!use_typed_thunk_abi(result_type, param_types, n_params)) return NULL;
+    /* All-int64_t carrier signatures are likewise served by the preamble shim
+     * (its int64_t (*)(void *, int64_t...) ABI equals the typed-thunk cast),
+     * so emit nothing new and keep int64 fixtures churn-free. */
+    bool all_int64 = strcmp(type_c_name(result_type), "int64_t") == 0;
+    for (uint8_t i = 0; all_int64 && i < n_params; i++) {
+        if (strcmp(type_c_name(param_types[i]), "int64_t") != 0) all_int64 = false;
+    }
+    if (all_int64) return NULL;
+
+    char *name = typed_fatshim_name(result_type, param_types, n_params);
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    /* static R name(void *__e, A0 a0, ...) {
+     *     return ((R (*)(A0, ...))(intptr_t)((int64_t *)__e)[1])(a0, ...);
+     * }
+     * Slot 1 of the fat box holds the original bare fn pointer (EX_FN_TO_FAT);
+     * slot 0 holds this shim, invoked through the typed-thunk cast at the call
+     * site.  The -Wunused-function pragma in the preamble covers shims a TU
+     * boxes but never reaches. */
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    buf_printf(target, "static %s %s(void *__e", type_c_name(result_type), name);
+    for (uint8_t i = 0; i < n_params; i++) {
+        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+    }
+    buf_puts(target, ") {\n    ");
+    if (has_ret) buf_puts(target, "return ");
+    buf_printf(target, "((%s (*)(", type_c_name(result_type));
+    if (n_params == 0) {
+        buf_puts(target, "void");
+    } else {
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (i) buf_puts(target, ", ");
+            buf_puts(target, type_c_name(param_types[i]));
+        }
+    }
+    buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
+    for (uint8_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        buf_printf(target, "a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n}\n");
+    return name;
+}
+
 static bool emit_abi_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -1079,7 +1157,10 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             } else if (e->type.as.fn.result_full_type) {
                 bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
                 const struct Type *rft = e->type.as.fn.result_full_type;
-                if (!body_is_inline_c && rft) {
+                /* ptr-generic-parameterised-type: a typed ptr<T> return lowers
+                 * to `T *` even for inline-C bodies; mirror emit_fns.c. */
+                bool typed_ptr = rft && rft->kind == TY_PTR_VOID && rft->as.ptr.inner;
+                if (rft && (!body_is_inline_c || typed_ptr)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {
                     buf_puts(out, "int64_t");
@@ -1188,6 +1269,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.thunk_typedef_names = NULL;
     ctx.n_thunk_typedef_names = 0;
     ctx.cap_thunk_typedef_names = 0;
+    ctx.fatshim_names = NULL;
+    ctx.n_fatshim_names = 0;
+    ctx.cap_fatshim_names = 0;
     /* Phase 4 v1: frame tracking */
     ctx.frame_var = NULL;
     ctx.in_scope_with_defers = false;
@@ -1986,23 +2070,43 @@ int emit_program(Buf *out, const Expr *program) {
      * The closure handle f and the arguments are taken as int64_t (the polymorphic
      * carrier type used throughout the runtime). */
     buf_puts(out, "#define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]\n");
-    /* Phase R2: nullary fat-closure apply -- a (fn [] :int) thunk is invoked
-     * through the standard closure protocol (thunk = slot 0, env = the box). */
-    buf_puts(out, "#define TUR_APPLY0(f) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    /* Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1).
+     * TUR_APPLYn_T speaks the closure's *declared* C types instead of forcing
+     * everything through int64_t.  R is the closure's C return type; A0,A1,...
+     * are its C argument types in order.  An inline-C block that knows the
+     * concrete signature of a closure (e.g. a (fn [x :float] :float ...) signal
+     * body, or a (fn [p :ptr<T>] :ptr<T> ...) iterator step) invokes it through
+     * the matching _T form so the value never round-trips through an int64_t
+     * bit-cast.  The thunk is still read from slot 0 and called with the closure
+     * box as its env -- only the function-pointer cast changes.  Each argument
+     * is coerced with (Ai)(value) at the call site. */
+    buf_puts(out, "#define TUR_APPLY0_T(R, f) \\\n");
+    buf_puts(out, "    (((R (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
     buf_puts(out, "        ((void *)(intptr_t)(f)))\n");
-    buf_puts(out, "#define TUR_APPLY1(f, a) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a)))\n");
-    buf_puts(out, "#define TUR_APPLY2(f, a, b) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b)))\n");
+    buf_puts(out, "#define TUR_APPLY1_T(R, A0, f, a) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a)))\n");
+    buf_puts(out, "#define TUR_APPLY2_T(R, A0, A1, f, a, b) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b)))\n");
+    buf_puts(out, "#define TUR_APPLY3_T(R, A0, A1, A2, f, a, b, c) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1, A2))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c)))\n");
+    buf_puts(out, "#define TUR_APPLY4_T(R, A0, A1, A2, A3, f, a, b, c, d) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1, A2, A3))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c), (A3)(d)))\n");
+    /* Phase R2: nullary fat-closure apply -- a (fn [] :int) thunk is invoked
+     * through the standard closure protocol (thunk = slot 0, env = the box).
+     * The legacy TUR_APPLYn macros are the all-int64_t case of TUR_APPLYn_T,
+     * kept as literal-equivalent shorthands so existing hand-written inline-C
+     * (stdlib/arrow.tur et al.) compiles unchanged. */
+    buf_puts(out, "#define TUR_APPLY0(f)          TUR_APPLY0_T(int64_t, f)\n");
+    buf_puts(out, "#define TUR_APPLY1(f, a)       TUR_APPLY1_T(int64_t, int64_t, f, a)\n");
+    buf_puts(out, "#define TUR_APPLY2(f, a, b)    TUR_APPLY2_T(int64_t, int64_t, int64_t, f, a, b)\n");
     buf_puts(out, "#define TUR_APPLY3(f, a, b, c) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c)))\n");
+    buf_puts(out, "    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)\n");
     buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
-    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))\n");
+    buf_puts(out, "    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)\n");
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
      * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
      * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
@@ -4605,6 +4709,8 @@ int emit_program(Buf *out, const Expr *program) {
     free(items);
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
+    for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
+    free(ctx.fatshim_names);
     free(ctx.env_struct_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
@@ -5041,6 +5147,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.thunk_typedef_names = NULL;
     ctx.n_thunk_typedef_names = 0;
     ctx.cap_thunk_typedef_names = 0;
+    ctx.fatshim_names = NULL;
+    ctx.n_fatshim_names = 0;
+    ctx.cap_fatshim_names = 0;
     /* Phase 3/4: Track return emission */
     ctx.return_emitted = false;
     /* Phase 19: Pending effect handler function buffer */
@@ -5381,6 +5490,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     buf_free(&thunk_typedefs2);
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
+    for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
+    free(ctx.fatshim_names);
     free(ctx.env_struct_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);

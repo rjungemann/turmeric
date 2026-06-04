@@ -4,9 +4,9 @@
 ;; is a 1.0 limitation: the state-machine lowering cannot suspend across a
 ;; recursive call without the post-1.0 CPS pass.  The elaborator rejects this
 ;; with TUR-E0703.
-(defn count-down [n :int] :int
+(defn count-down [n : int] : int
   (gen []
     (yield n)
     (count-down (- n 1))))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

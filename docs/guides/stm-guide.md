@@ -188,13 +188,13 @@ The read set holds up to 256 entries; the write set holds up to 128. Transaction
 A defer fires at the end of a transaction, after commit or abort. Register them via inline C:
 
 ```turmeric
-(defn register-commit-defer [env-ptr fn-ptr] :void
+(defn register-commit-defer [env-ptr fn-ptr] : void
   ```c
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_commit(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
   ```)
 
-(defn register-abort-defer [env-ptr fn-ptr] :void
+(defn register-abort-defer [env-ptr fn-ptr] : void
   ```c
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_abort(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
@@ -225,7 +225,7 @@ Up to 32 defers per transaction; exceeding this panics.
 
 ```turmeric
 ;; An empty slot is represented as nil
-(defn tmvar/new [] :ptr  (tvar/new (ptr/null)))
+(defn tmvar/new [] : ptr  (tvar/new (ptr/null)))
 (defn tmvar/empty? [mv]  (nil? (tvar/read mv)))
 
 (defn tmvar/take [mv]
@@ -271,7 +271,7 @@ defn tmvar/put [mv val]
 
 ```turmeric
 ;; Backed by a TVar holding a list
-(defn tchan/new [] :ptr  (tvar/new '()))
+(defn tchan/new [] : ptr  (tvar/new '()))
 
 (defn tchan/write [ch val]
   (atomically

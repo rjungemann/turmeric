@@ -38,7 +38,7 @@
 ;;;   (str-len (str-from-cstr "hello"))  ; => 5
 ;; Get string length in bytes
 
-(defn str-len [s] :int
+(defn str-len [s] : int
   ```c struct { const char *p; size_t len; } *str = (void*)s;
   return (int)str->len;
   ```)
@@ -57,7 +57,7 @@
 ;;; Since: Phase E1
 ;; Check if two strings are equal
 
-(defn str-eq? [s1 s2] :bool
+(defn str-eq? [s1 s2] : bool
   ```c struct { const char *p; size_t len; } *a = (void*)s1;
   struct { const char *p; size_t len; } *b = (void*)s2;
   if (a == NULL || b == NULL) return a == b;
@@ -92,7 +92,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn str-concat [a :cstr b :cstr] :cstr
+(defn str-concat [a : cstr b : cstr] : cstr
   ```c const char *sa = (const char*)a;
   const char *sb = (const char*)b;
   size_t la = strlen(sa), lb = strlen(sb);
@@ -119,7 +119,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn str->int [s :cstr] :int
+(defn str->int [s : cstr] : int
   ```c return s ? (int64_t)atoll((const char *)(intptr_t)s) : 0;
   ```)
 ;;; cstr->parse-int -- parse a raw int (cstr pointer stored as int64) to int64.
@@ -135,7 +135,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn cstr->parse-int [s :int] :int
+(defn cstr->parse-int [s : int] : int
   ```c const char *cs = (const char *)(intptr_t)s;
   return cs ? (int64_t)atoll(cs) : 0;
   ```)

@@ -1,0 +1,3 @@
+(defn main [] : int
+  (let [x : int "hello"]
+    (println x) 0))

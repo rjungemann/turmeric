@@ -1,6 +1,6 @@
 ;; Phase 19: resuming the same continuation twice is a static error.
 (defeffect Ask [] :int)
-(defn bad [] :int
+(defn bad [] : int
   (handle (perform (Ask))
     (Ask [] k) (+ (resume k 1) (resume k 2))))
 (println (bad))

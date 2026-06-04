@@ -1,32 +1,32 @@
 ;; Phase R4: must-msg — u-option-expect/u-result-must-msg with custom message
 
-(defn u-some [x :int] :ptr<void>
+(defn u-some [x : int] : ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true; opt->value = x; return (void*)opt;
   ```)
 
-(defn u-option-expect [o :ptr<void> msg :cstr] :int
+(defn u-option-expect [o : ptr<void> msg : cstr] : int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) { tur_panic(msg); }
   return (int)opt->value;
   ```)
 
-(defn u-ok [x :int] :ptr<void>
+(defn u-ok [x : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; return (void*)r;
   ```)
 
-(defn u-result-must-msg [r :ptr<void> msg :cstr] :int
+(defn u-result-must-msg [r : ptr<void> msg : cstr] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) { tur_panic(msg); }
   return (int)res->ok_val;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (do
     (println (u-option-expect (u-some 55) "expect: failed"))
     (println (u-result-must-msg (u-ok 77) "u-result-must-msg: failed"))

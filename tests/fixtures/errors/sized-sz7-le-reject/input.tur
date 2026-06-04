@@ -8,19 +8,19 @@
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defn size-static [n :int] :Size (Static n))
+(defn size-static [n : int] : Size (Static n))
 
-(defn size-eval [s :Size] :int
+(defn size-eval [s : Size] : int
   (match s
     (Static n)  n
     (Add a b)   (+ (size-eval a) (size-eval b))
     (Mul a b)   (* (size-eval a) (size-eval b))))
 
-(defn size-assert-le! [s1 :Size s2 :Size] :nil
+(defn size-assert-le! [s1 : Size s2 : Size] : nil
   (require-msg! (<= (size-eval s1) (size-eval s2))
     "sized type mismatch: size exceeds upper bound"))
 
-(defn main [] :int
+(defn main [] : int
   ; ERROR: 12 does not fit within an upper bound of 8 -> TUR-E0260
   (size-assert-le! (size-static 12) (size-static 8))
   0)

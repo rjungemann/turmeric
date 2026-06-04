@@ -15,7 +15,7 @@
 ;; We encode the board as a flat array of 16 int64_t values
 ;; stored in a single malloc'd block. Solutions are pointers cast to int64.
 
-(defn solve-sudoku [] :int
+(defn solve-sudoku [] : int
   ```c
   /* 4x4 Sudoku: initial board, 0=empty */
   int64_t puzzle[16] = {

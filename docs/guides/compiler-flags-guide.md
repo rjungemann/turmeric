@@ -345,11 +345,11 @@ DV0--DV4 are shipped.
 
 (defdynamic *request-id* :cstr "none")
 
-(defn log [msg :cstr] :int
+(defn log [msg : cstr] : int
   (println *request-id*)
   (println msg))
 
-(defn handle [] :int
+(defn handle [] : int
   (binding [*request-id* "req-42"]
     (log "processing"))
   0)

@@ -1434,6 +1434,54 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
         const Symbol *cap_sym = symtab_intern(e->st, strslice(cap_name, (uint32_t)strlen(cap_name)));
         /* arg type from fn_type: skip index 0 if closure (env), so index = i+1 if closure, else i */
         TypeKind cap_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (i + 1) : i];
+        /* Type-check captured (partial-application) args against the slot they
+         * fill.  Mirror the saturated positional check, which for a
+         * struct/opaque/ADT parameter is strict: the captured argument must be
+         * the *same* nominal type -- not merely the same TypeKind, and not a
+         * value of a differing kind (e.g. a bare int) at all.  Two failure
+         * modes are folded together here:
+         *   - kind-level: a plain int (TY_INT) captured at a TY_STRUCT opaque
+         *     slot -- differing kinds.  Without this, `(two 5)` -- binding an
+         *     int into a :A slot -- slips through because the capture loop never
+         *     compared the provided arg's type to the parameter at all.
+         *   - nominal-identity: a :B captured at a :A slot -- same kind,
+         *     different nominal.  The saturated path only re-checks the
+         *     *remaining* params, so the captured slot must be validated here.
+         * See docs/reported/partial-application-skips-captured-arg-type-check.md
+         * and docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+        {
+            Type *cap_full_chk = PAP_SLOT_FULL(i);
+            bool slot_is_nominal =
+                (cap_full_chk &&
+                 (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) ||
+                cap_kind == TY_STRUCT || cap_kind == TY_ADT;
+            if (slot_is_nominal) {
+                /* Prefer the recorded full type for an exact nominal compare;
+                 * fall back to a kind-level compare when it is unavailable. */
+                bool mismatch;
+                Type expected_ty;
+                if (cap_full_chk &&
+                        (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) {
+                    mismatch = !type_eq(elab_args[i]->type, *cap_full_chk);
+                    expected_ty = *cap_full_chk;
+                } else {
+                    mismatch = (elab_args[i]->type.kind != cap_kind);
+                    expected_ty = type_from_kind(cap_kind);
+                }
+                if (mismatch) {
+                    Buf eb; buf_init(&eb);
+                    type_print(&eb, expected_ty); buf_putc(&eb, '\0');
+                    Buf ab; buf_init(&ab);
+                    type_print(&ab, elab_args[i]->type); buf_putc(&ab, '\0');
+                    diag_emit_with_code(DIAG_ERROR, elab_args[i]->span,
+                                        TUR_E0001_TYPE_MISMATCH,
+                                        "function '%s' arg %u: expected %s, got %s",
+                                        fn_binding->name->name, i + 1, eb.data, ab.data);
+                    buf_free(&eb); buf_free(&ab);
+                    return NULL;
+                }
+            }
+        }
         Type cap_type = type_from_kind(cap_kind);
         Binding *cap_b = binding_new(e, cap_sym, cap_type, false, false, call->span);
         /* CY4: rank-2 captured arg -- carry forall info onto the binding so
@@ -1675,9 +1723,24 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     if (fn_binding->closure_fn_binding) {
         /* This is a closure - get the thunk function type */
         fn_type = fn_binding->closure_fn_binding->type;
+    } else if (fn_binding->type.kind == TY_PTR_VOID && !fn_binding->is_fat) {
+        /* CRU B-4: retire the :ptr<void>-as-closure overload.  A *raw*
+         * :ptr<void> (not a fat sink) is a plain pointer, not a callable
+         * closure -- calling it directly is the representation-split hazard
+         * (report ptr-void-direct-call-representation-split).  Closures are now
+         * boxed TY_FN (B-1); a fat-closure parameter must be spelled ^fat (or
+         * ^fat :(fn [...] :T)).  This makes :ptr<void> raw-pointer-only again. */
+        diag_emit(DIAG_ERROR, call->span,
+                  "'%s' has type :ptr<void> (a raw pointer), which is not "
+                  "directly callable; declare it as a fat closure parameter "
+                  "(^fat %s, or ^fat %s :(fn [...] :T)) to call it",
+                  fn_binding->name->name, fn_binding->name->name,
+                  fn_binding->name->name);
+        return NULL;
     } else if (fn_binding->type.kind == TY_PTR_VOID) {
-        /* CY2: fat-closure dynamic dispatch through ptr<void> binding.
-         * Supports 0-arg (original behavior) and n-arg (new fat-closure call). */
+        /* CY2: fat-closure dynamic dispatch through a ^fat :ptr<void> sink.
+         * Supports 0-arg and n-arg fat-closure calls (emit_expr.c reads slot 0
+         * of the box for all arities). */
         Expr **cb_args = NULL;
         if (n_args > 0) {
             cb_args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
@@ -2018,6 +2081,23 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
+        /* Nominal identity: a same-kind struct/opaque/ADT argument must be the
+         * *same* type, not merely the same TypeKind.  Full param types come from
+         * arg_full_types (Phase 1).  Placed before the escape hatches: those only
+         * ever set arg_ok from false->true for cross-kind coercions, so demoting a
+         * spurious same-kind match here cannot resurrect a real coercion.
+         * See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+        if (arg_ok && (expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
+                fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (nidx < fn_type.as.fn.arity) {
+                Type *ef = fn_type.as.fn.arg_full_types[nidx];
+                if (ef && (ef->kind == TY_STRUCT || ef->kind == TY_ADT) &&
+                        !type_eq(args[i]->type, *ef)) {
+                    arg_ok = false;
+                }
+            }
+        }
         /* Phase HRT/G2: A TY_TYVAR parameter (named type variable like :a) accepts any argument.
          * The concrete type is resolved per-arm inside a GADT match. */
         if (!arg_ok && expected_arg_kind == TY_TYVAR) {
@@ -2036,6 +2116,21 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_NIL) {
             /* Allow nil as a null pointer for ptr<void> parameters. */
             arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_FN && args[i]->type.kind == TY_PTR_VOID) {
+            /* A#1: a fat (^fat) parameter consumes a closure in fat-box form.  A
+             * capturing closure value (EX_CLOSURE, TY_PTR_VOID) is already a fat
+             * box, so accept it at a fn-typed ^fat parameter -- the ^fat call
+             * site fat-dispatches through slot 0.  Without this, a capturing
+             * closure could not be passed to a directly-callable closure
+             * parameter at all (only captureless lambda literals, which are
+             * auto-shimmed via EX_FN_TO_FAT).  Gated on arg_fat so a plain fn
+             * parameter still rejects a bare :ptr<void>. */
+            uint32_t fn_arg_idx_fp = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_arg_idx_fp < fn_type.as.fn.arity &&
+                fn_type.as.fn.arg_fat[fn_arg_idx_fp]) {
+                arg_ok = true;
+            }
         }
         /* TS4P1: For a polymorphic ADT constructor, the field is stored as TY_INT
          * but its full_type is TY_TYVAR.  Accept any concrete type for such a field
@@ -2286,7 +2381,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * includes member/row types. */
             Type expected_ty = type_from_kind(expected_arg_kind);
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
-                 expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER) &&
+                 expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER ||
+                 expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
@@ -2393,7 +2489,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                           args[i]->span);
                     conv->as.poly_to_fat_.inner = args[i];
                     args[i] = conv;
-                } else if (ak == TY_FN) {
+                } else if (ak == TY_FN && !args[i]->type.as.fn.boxed) {
+                    /* A bare (non-capturing) fn reference -- auto-shim it into a
+                     * fat box.  A *boxed* TY_FN (CRU B-1: a capturing closure
+                     * value) is already a fat { thunk, env... } box, so it falls
+                     * through to the pass-through branch below exactly as a
+                     * TY_PTR_VOID closure did pre-B-1; shimming it here would
+                     * double-box and segfault. */
                     uint8_t inner_arity = args[i]->type.as.fn.arity;
                     if (inner_arity > 5) {
                         diag_emit(DIAG_ERROR, args[i]->span,
@@ -2406,11 +2508,19 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
                     args[i] = shim;
-                } else if (ak == TY_PTR_VOID || ak == TY_NIL ||
+                } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
+                           ak == TY_NIL ||
                            (ak == TY_INT && args[i]->kind == EX_INT_LIT &&
-                            args[i]->as.i == 0)) {
-                    /* already a fat closure, nil, or a null (0) callback -- pass
-                     * through unchanged */
+                            args[i]->as.i == 0) ||
+                           (ak == TY_INT && args[i]->kind != EX_INT_LIT)) {
+                    /* Pass through unchanged: a fat closure (TY_PTR_VOID), nil, a
+                     * null (literal 0) callback, or an already-erased :int
+                     * fat-closure handle (a computed value, e.g. a handler that
+                     * compose-middleware/compose-middleware-of has already boxed).
+                     * The :int-handle case lets a ^fat boundary param sit on the
+                     * same plumbing that threads composed handlers as :int without
+                     * re-boxing them; a bare non-capturing fn still arrives as
+                     * TY_FN at its first boundary and is shimmed above. */
                 } else {
                     Buf gb; buf_init(&gb);
                     type_print(&gb, args[i]->type);

@@ -9,7 +9,7 @@
 ;; Expected output: 42
 (defeffect Ping [] :int)
 
-(defn do-work [] :int
+(defn do-work [] : int
   (let [^linear x 42]
     (let [_ (perform (Ping))]
       x)))

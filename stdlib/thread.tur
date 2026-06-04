@@ -37,9 +37,9 @@
 ;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ptr<void>
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>]
+(defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>]
   #{Unsafe}
-  :ptr<void>
+  : ptr<void>
   ```c TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
   if (!state) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
   pthread_mutex_init(&state->cancel_mutex, NULL);
@@ -71,9 +71,9 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn thread-join [t :ptr<void>]
+(defn thread-join [t : ptr<void>]
   #{Unsafe}
-  :nil
+  : nil
   ```c TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_join(h->tid, NULL);
   pthread_mutex_destroy(&h->state->cancel_mutex);
@@ -91,9 +91,9 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn thread-detach [t :ptr<void>]
+(defn thread-detach [t : ptr<void>]
   #{Unsafe}
-  :nil
+  : nil
   ```c TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_detach(h->tid);
   /* state ownership: the thread still holds tur_current_thread_state pointing to
@@ -113,7 +113,7 @@
 
 (defn thread-id []
   #{Unsafe}
-  :int
+  : int
   ```c return (int64_t)(uintptr_t)pthread_self();
   ```)
 ;; ---- TC0-TC2: Cooperative thread cancellation ----
@@ -133,9 +133,9 @@
 ;;; Since: Phase TC0
 
 
-(defn cancel-thread [t :ptr<void>]
+(defn cancel-thread [t : ptr<void>]
   #{Unsafe}
-  :void
+  : void
   ```c TurThreadHandle *h = (TurThreadHandle *)t;
   __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
   pthread_mutex_lock(&h->state->cancel_mutex);
@@ -154,7 +154,7 @@
 
 (defn cancelled? []
   #{Unsafe}
-  :bool
+  : bool
   ```c return tur_thread_cancel_requested() != 0;
   ```)
 ;;; with-cancel-guard -- run a body closure; on cancellation, run cleanup and return nil.
@@ -179,9 +179,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn with-cancel-guard [cleanup :ptr<void> body :ptr<void>]
+(defn with-cancel-guard [cleanup : ptr<void> body : ptr<void>]
   #{Unsafe}
-  :nil
+  : nil
   ```c /* Save previous cancel jmpbuf state (supports nested guards) */
   int prev_valid = tur_cancel_jmpbuf_valid;
   jmp_buf prev_buf;
@@ -208,7 +208,7 @@
 
 (defn __yield-point-impl []
   #{Unsafe}
-  :void
+  : void
   ```c if (tur_thread_cancel_requested()) {
       tur_thread_do_cancel();
   }

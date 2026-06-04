@@ -19,13 +19,22 @@ writing your own.
 Every middleware in this guide has the shape
 
 ```turmeric
-(defn mw-foo [next :int] :ptr<void>
+(defn mw-foo [next : int] : ptr<void>
   (let [_n next ...]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       ;; pre-processing here ...
       (httpd-call _n c)
       ;; post-processing here ...
       )))
+```
+
+```sweet-exp
+defn mw-foo [next :int] :ptr<void>
+  let [_n next ...]
+    fn [c :ptr<void>] :nil
+      ;; pre-processing here ...
+      httpd-call(_n c)
+      ;; post-processing here ...
 ```
 
 Pre-processing runs before `(httpd-call _n c)`; post-processing runs
@@ -48,6 +57,14 @@ Use `compose-middleware` to nest:
                                    mw-cors
                                    (mw-basic-auth "app" verify))]
   (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [composed compose-middleware(base
+                                 mw-log
+                                 mw-cors
+                                 mw-basic-auth("app" verify))]
+  httpd-new(0 composed)
 ```
 
 The macro expands to `(mw-log (mw-cors ((mw-basic-auth "app" verify) base)))`
@@ -74,6 +91,7 @@ entry links to its docstring in the source for the full surface.
 | `mw-body-size`            | Reject requests with Content-Length above a cap (413) | MW1 |
 | `mw-rate-limit`           | Sliding-window per-IP rate limiter (429 + Retry-After) | MW2 |
 | `mw-static`               | Fall back to static files when `next` returned 404 (with ETag + 304) | MW2 |
+| `mw-compress` / `mw-compress-with` | gzip the response body when client sends `Accept-Encoding: gzip` (requires `tur/zlib` spice) | M6 |
 
 ### mw-body-size (MW1)
 
@@ -86,6 +104,11 @@ authoritative.
 ```turmeric
 (let [composed (mw-body-size 1048576 base)]   ; 1 MiB cap
   (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [composed mw-body-size(1048576 base)]   ; 1 MiB cap
+  httpd-new(0 composed)
 ```
 
 ### mw-rate-limit (MW2)
@@ -101,6 +124,12 @@ middleware responds with `429 Too Many Requests` plus a
 (let [opts     (make-struct RateLimitOpts 100 60)   ; 100 req / 60 s
       composed (mw-rate-limit opts base)]
   (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [opts     make-struct(RateLimitOpts 100 60)   ; 100 req / 60 s
+     composed mw-rate-limit(opts base)]
+  httpd-new(0 composed)
 ```
 
 Multiple `mw-rate-limit` instances do not share state. Two
@@ -125,6 +154,11 @@ is rejected as a path-traversal guard.
   (httpd-new 0 composed))
 ```
 
+```sweet-exp
+let [composed mw-static("./public" router-mw(r))]
+  httpd-new(0 composed)
+```
+
 The response carries a `Content-Type` derived from the file extension
 (small built-in table covering HTML / CSS / JS / JSON / TXT / common
 image formats / WASM) and an `ETag` of the form `"<size>-<mtime>"`
@@ -144,18 +178,80 @@ handlers can read it back. See the [request attributes](#request-attributes-mw2)
 section for the full surface.
 
 ```turmeric
-(let [verify   (fn [u :cstr p :cstr] :int
+(let [verify   (fn [u : cstr p : cstr] : int
                  (let [_t "_force-fat-closure"]
                    (if (= 1 (cstr-eq-const-time u "admin"))
                      (cstr-eq-const-time p "s3cret")
                      0)))
-      base     (fn [c :ptr<void>] :nil
+      base     (fn [c : ptr<void>] : nil
                  (let [u (httpd-req-attr c "user")]
                    (httpd-resp-status! c 200)
                    (httpd-resp-body!   c u)))
       composed (mw-basic-auth "app" verify base)]
   (httpd-new 0 composed))
 ```
+
+```sweet-exp
+let [verify   (fn [u :cstr p :cstr] :int
+                (let [_t "_force-fat-closure"]
+                  (if (= 1 (cstr-eq-const-time u "admin"))
+                    (cstr-eq-const-time p "s3cret")
+                    0)))
+     base     (fn [c :ptr<void>] :nil
+                (let [u (httpd-req-attr c "user")]
+                  (httpd-resp-status! c 200)
+                  (httpd-resp-body!   c u)))
+     composed mw-basic-auth("app" verify base)]
+  httpd-new(0 composed)
+```
+
+### mw-compress (M6)
+
+`mw-compress` gzips the response body when the client sends
+`Accept-Encoding: gzip`, sets `Content-Encoding: gzip` plus
+`Vary: Accept-Encoding`, and is otherwise a no-op. The codec lives in
+the `tur/zlib` spice (`../turmeric-spices/spices/zlib`); install it
+into your workspace, then `(load "stdlib/httpd-compress.tur")` from
+your program.
+
+```turmeric
+(load "stdlib/httpd-compress.tur")
+
+(let [base     (fn [c : ptr<void>] : nil
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body!   c large-html))
+      composed (compose-middleware base mw-log mw-compress)]
+  (httpd-new 0 composed))
+```
+
+```sweet-exp
+load "stdlib/httpd-compress.tur"
+
+let [base     fn(c :ptr<void> :nil
+                 httpd-resp-status!(c 200)
+                 httpd-resp-body!(c large-html))
+     composed compose-middleware(base mw-log mw-compress)]
+  httpd-new(0 composed)
+```
+
+Notes:
+
+- Install as the OUTERMOST post-processing middleware (leftmost in
+  `compose-middleware`) so it sees the final body produced by inner
+  layers.
+- The default threshold is 256 bytes; bodies smaller than that pass
+  through uncompressed. Use `mw-compress-with` to pick a different
+  minimum (`(mw-compress-with 1024 base)` for a 1 KiB floor).
+- Handlers that already set `Content-Encoding` (e.g. served a
+  precomputed `.gz` blob) pass through untouched -- mw-compress never
+  double-gzips.
+- Binary-safe: replaces the response body via
+  `httpd-resp-body-bytes!`, so gzip output (which contains embedded
+  NUL bytes) is emitted exactly as produced.
+- Only `Content-Encoding: gzip` is negotiated. Brotli, zstd, and raw
+  deflate are out of scope for v0.1.
+
+See also: the [`tur-zlib` README](https://github.com/rjungemann/turmeric-spices/tree/main/spices/zlib).
 
 ## Request attributes (MW2)
 
@@ -171,6 +267,12 @@ same keep-alive connection.
 (let [x (httpd-req-attr c "missing")] ...) ; => ""
 ```
 
+```sweet-exp
+httpd-set-attr!(c "user" "alice")
+let [u httpd-req-attr(c "user")] ...   ; => "alice"
+let [x httpd-req-attr(c "missing")] ... ; => ""
+```
+
 Attribute keys are case-sensitive plain cstrings. Both `key` and
 `val` are copied into per-request storage; the caller may reuse or
 free the originals. Keys starting with `__` are conventionally
@@ -181,6 +283,10 @@ IP); user code should pick its own non-`__` keys.
 
 ```turmeric
 (let [ip (httpd-req-remote-ip c)] ...)
+```
+
+```sweet-exp
+let [ip httpd-req-remote-ip(c)] ...
 ```
 
 Returns the client's IP as a cstr, derived from `getpeername(2)` on
@@ -200,21 +306,31 @@ Capture at least one variable in the outer `let` so the closure is
 fat-shaped (which the `httpd-call` dispatcher requires):
 
 ```turmeric
-(defn mw-add-header [name :cstr value :cstr next :int] :ptr<void>
+(defn mw-add-header [name : cstr value : cstr next : int] : ptr<void>
   (let [_n next
         _k name
         _v value]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (httpd-call _n c)
       (httpd-resp-header! c _k _v))))
+```
+
+```sweet-exp
+defn mw-add-header [name :cstr value :cstr next :int] :ptr<void>
+  let [_n next
+       _k name
+       _v value]
+    fn [c :ptr<void>] :nil
+      httpd-call(_n c)
+      httpd-resp-header!(c _k _v)
 ```
 
 Short-circuit by *not* calling `(httpd-call _n c)`:
 
 ```turmeric
-(defn mw-require-https [next :int] :ptr<void>
+(defn mw-require-https [next : int] : ptr<void>
   (let [_n next]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-req-header? c "X-Forwarded-Proto"))
         (httpd-call _n c)
         (do
@@ -222,16 +338,37 @@ Short-circuit by *not* calling `(httpd-call _n c)`:
           (httpd-resp-body!   c "HTTPS required"))))))
 ```
 
+```sweet-exp
+defn mw-require-https [next :int] :ptr<void>
+  let [_n next]
+    fn [c :ptr<void>] :nil
+      if {1 = httpd-req-header?(c "X-Forwarded-Proto")}
+        httpd-call(_n c)
+        do
+          httpd-resp-status!(c 400)
+          httpd-resp-body!(c "HTTPS required")
+```
+
 Use request attrs to thread context downstream:
 
 ```turmeric
-(defn mw-request-id [next :int] :ptr<void>
+(defn mw-request-id [next : int] : ptr<void>
   (let [_n next]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (let [id (httpd-req-header c "X-Request-Id")]
         (httpd-set-attr! c "request_id" id)
         (httpd-call _n c)
         (httpd-resp-header! c "X-Request-Id" (httpd-req-attr c "request_id"))))))
+```
+
+```sweet-exp
+defn mw-request-id [next :int] :ptr<void>
+  let [_n next]
+    fn [c :ptr<void>] :nil
+      let [id httpd-req-header(c "X-Request-Id")]
+        httpd-set-attr!(c "request_id" id)
+        httpd-call(_n c)
+        httpd-resp-header!(c "X-Request-Id" httpd-req-attr(c "request_id"))
 ```
 
 ## Async interop

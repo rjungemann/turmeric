@@ -3,7 +3,7 @@
 ;; (snapshot semantics via the dynamic dispatcher).  Matches the canonical
 ;; multishot-handler fixture's result (20).
 (defeffect Pick [] :int)
-(defn main [] :int
+(defn main [] : int
   (let [r (with-handler
             (handler (Pick [] ^multishot k) (+ (resume k 10) (resume k 20)))
             (perform (Pick)))]

@@ -1,9 +1,9 @@
 ;; CPS-CL9: Cloneable continuation capturing a Ref value.
 ;; Each clone has an independent copy via Clone [Ref].
 
-(defn k-identity [k] :int k)
+(defn k-identity [k] : int k)
 
-(defn main [] :int
+(defn main [] : int
   (let [k (cloneable-reset
             (cloneable-shift k-identity 0))]
     (println (tur_cloneable_cont_resume k 99)))

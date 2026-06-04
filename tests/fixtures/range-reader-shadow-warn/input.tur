@@ -6,15 +6,15 @@
 (load "stdlib/range.tur")
 
 ; n is a function parameter; using 'n' as the range variable should warn.
-(defn safe-lt [n :int limit :int] :bool
+(defn safe-lt [n : int limit : int] : bool
   (range-contains? #r{n < limit} n))
 
 ; i is a let binding; using 'i' as the range variable should warn.
-(defn check-bounds [v :int] :bool
+(defn check-bounds [v : int] : bool
   (let [i 5]
     (range-contains? #r{0 <= i < v} i)))
 
-(defn main [] :void
+(defn main [] : void
   (println (safe-lt 5 10))    ; true
   (println (safe-lt 10 10))   ; false
   (println (check-bounds 10)) ; true

@@ -8,7 +8,7 @@
 (defn id-box [b :(Box float)] :(Box float)
   b)
 
-(defn main [] :int
+(defn main [] : int
   (let [b (:: (make-struct Box 3.5) (Box float))
         p (:: (make-struct Duo2 1 2.5) (Duo2 int float))]
     (println (.value (id-box b)))

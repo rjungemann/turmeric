@@ -8,7 +8,7 @@
 ;;   writable
 ;;   poll-count=1
 
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)
@@ -18,28 +18,28 @@
 (extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
 (extern-c tur_reactor_free [r :ptr] :void)
 
-(defn make-pipe [] :ptr<void>
+(defn make-pipe [] : ptr<void>
   ```c
   int *fds = (int *)malloc(2 * sizeof(int));
   if (pipe(fds) < 0) { free(fds); return NULL; }
   return (void *)fds;
   ```)
 
-(defn pipe-write-fd [p :ptr<void>] :int
+(defn pipe-write-fd [p : ptr<void>] : int
   ```c return (int64_t)((int *)p)[1]; ```)
 
-(defn pipe-close [p :ptr<void>] :nil
+(defn pipe-close [p : ptr<void>] : nil
   ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
 
-(defn print-poll-count [n :int] :nil
+(defn print-poll-count [n : int] : nil
   ```c printf("poll-count=%lld\n", (long long)n); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [p (make-pipe)
         r (tur_reactor_new)]
     ;; non-capturing callback auto-shimmed via the ^fat cb parameter
     (tur_reactor_add_fd r (pipe-write-fd p) 2   ;; WRITE = 2
-      (fn [id events ud] :nil
+      (fn [id events ud] : nil
         (println "writable"))
       0)
     (let [n (tur_reactor_poll r 200)]

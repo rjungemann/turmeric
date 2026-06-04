@@ -1,4 +1,4 @@
 ;; ST3 E0151: must-use value dropped without being used.
-(defn main [] :int
+(defn main [] : int
   (let [r (must-use 42)]
     0))

@@ -21,7 +21,7 @@
 ;;;   (digest/sha256 buf 32)  ; => vec of 32 byte ints
 ;;;
 ;;; Since: Phase B2
-(defn digest/sha256 [data :int len :int] :int
+(defn digest/sha256 [data : int len : int] : int
   ```c #include <stdint.h>
   static void sha256_transform(uint32_t st[8], const uint8_t *blk) {
     static const uint32_t K[64] = {
@@ -90,7 +90,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn digest/sha256-hex [data :int len :int] :cstr
+(defn digest/sha256-hex [data : int len : int] : cstr
   ```c #include <stdint.h>
   static void sha256_transform_h(uint32_t st[8], const uint8_t *blk) {
     static const uint32_t K[64] = {
@@ -159,7 +159,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn digest/md5 [data :int len :int] :int
+(defn digest/md5 [data : int len : int] : int
   ```c #include <stdint.h>
   #define MD5_ROTL(x,n) (((x)<<(n))|((x)>>(32-(n))))
   static void md5_transform(uint32_t st[4], const uint8_t *blk) {
@@ -230,7 +230,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn digest/md5-hex [data :int len :int] :cstr
+(defn digest/md5-hex [data : int len : int] : cstr
   ```c #include <stdint.h>
   #define MD5_ROTL2(x,n) (((x)<<(n))|((x)>>(32-(n))))
   static void md5_transform_h(uint32_t st[4], const uint8_t *blk) {
@@ -296,7 +296,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn digest/bytes-free [v :int] :void
+(defn digest/bytes-free [v : int] : void
   ```c if (!v) return;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   free(vec->data);

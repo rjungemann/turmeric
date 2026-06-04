@@ -2,7 +2,7 @@
 
 (load "stdlib/gen.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [inner (gen []
                 (yield 1)
                 (yield 2)

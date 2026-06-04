@@ -317,17 +317,17 @@ Mirror of `stdlib/range.tur` using `float64` bounds.  The internal
 
 ```turmeric
 ;; float-range constructors (same shape as stdlib/range.tur)
-(defn float-closed-range [lo :float hi :float] :int ...)
-(defn float-open-range [lo :float hi :float] :int ...)
-(defn float-closed-open-range [lo :float hi :float] :int ...)
-(defn float-open-closed-range [lo :float hi :float] :int ...)
-(defn float-at-least-range [lo :float] :int ...)
-(defn float-greater-than-range [lo :float] :int ...)
-(defn float-at-most-range [hi :float] :int ...)
-(defn float-less-than-range [hi :float] :int ...)
-(defn float-singleton-range [v :float] :int ...)
-(defn float-unbounded-range [] :int ...)
-(defn float-range-contains? [r :int v :float] :bool ...)
+(defn float-closed-range [lo : float hi : float] : int ...)
+(defn float-open-range [lo : float hi : float] : int ...)
+(defn float-closed-open-range [lo : float hi : float] : int ...)
+(defn float-open-closed-range [lo : float hi : float] : int ...)
+(defn float-at-least-range [lo : float] : int ...)
+(defn float-greater-than-range [lo : float] : int ...)
+(defn float-at-most-range [hi : float] : int ...)
+(defn float-less-than-range [hi : float] : int ...)
+(defn float-singleton-range [v : float] : int ...)
+(defn float-unbounded-range [] : int ...)
+(defn float-range-contains? [r : int v : float] : bool ...)
 ```
 ```sweet-exp
 ;; float-range constructors (same shape as stdlib/range.tur)

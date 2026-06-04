@@ -1,4 +1,4 @@
-(defn u-ok [x] :ptr<void>
+(defn u-ok [x] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = true;
@@ -6,7 +6,7 @@
   return result;
   ```)
 
-(defn u-err [e] :ptr<void>
+(defn u-err [e] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = false;
@@ -14,13 +14,13 @@
   return result;
   ```)
 
-(defn u-ok? [r :ptr<void>] :bool
+(defn u-ok? [r : ptr<void>] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result != NULL && result->is_ok;
   ```)
 
-(defn u-result-unwrap [r :ptr<void>] :int
+(defn u-result-unwrap [r : ptr<void>] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   if (result == NULL || !result->is_ok) {
@@ -30,17 +30,17 @@
   return (int)result->ok_val;
   ```)
 
-(defn u-result-unwrap-or [r :ptr<void> default-val] :int
+(defn u-result-unwrap-or [r : ptr<void> default-val] : int
   (if (u-ok? r)
     (u-result-unwrap r)
     default-val))
 
-(defn u-result-free [r :ptr<void>]
+(defn u-result-free [r : ptr<void>]
   ```c
   free(r);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [a (u-ok 7)]
     (let [b (u-err 99)]
       (println (u-ok? a))

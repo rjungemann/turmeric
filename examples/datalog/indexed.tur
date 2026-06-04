@@ -24,30 +24,30 @@
 ;; Datum
 ;; ============================================================
 
-(defn datum-new [entity :int attr :int value :int tx :int] :int
+(defn datum-new [entity : int attr : int value : int tx : int] : int
   ```c
   int64_t *d = malloc(4 * sizeof(int64_t));
   d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
   return (int64_t)(intptr_t)d;
   ```)
 
-(defn datum-entity [d :int] :int
+(defn datum-entity [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[0]; ```)
 
-(defn datum-attr [d :int] :int
+(defn datum-attr [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[1]; ```)
 
-(defn datum-value [d :int] :int
+(defn datum-value [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[2]; ```)
 
-(defn datum-tx [d :int] :int
+(defn datum-tx [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[3]; ```)
 
 ;; ============================================================
 ;; Database
 ;; ============================================================
 
-(defn db-new [] :int
+(defn db-new [] : int
   ```c
   int64_t *db = malloc(2 * sizeof(int64_t));
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -57,21 +57,21 @@
   return (int64_t)(intptr_t)db;
   ```)
 
-(defn db-count [db :int] :int
+(defn db-count [db : int] : int
   ```c
   int64_t *p = (int64_t*)(intptr_t)db;
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
   return (int64_t)v->len;
   ```)
 
-(defn db-ref [db :int i :int] :int
+(defn db-ref [db : int i : int] : int
   ```c
   int64_t *p = (int64_t*)(intptr_t)db;
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
   return v->data[i];
   ```)
 
-(defn db-assert! [db :int entity :int attr :int value :int] :int
+(defn db-assert! [db : int entity : int attr : int value : int] : int
   ```c
   int64_t *p = (int64_t*)(intptr_t)db;
   p[1] += 1;
@@ -93,26 +93,26 @@
 ;; Result vec
 ;; ============================================================
 
-(defn rvec-new [] :ptr<void>
+(defn rvec-new [] : ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   return v;
   ```)
 
-(defn rvec-len [v :ptr<void>] :int
+(defn rvec-len [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->len;
   ```)
 
-(defn rvec-get [v :ptr<void> i :int] :int
+(defn rvec-get [v : ptr<void> i : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->data[i];
   ```)
 
-(defn rvec-push! [v :ptr<void> val :int]
+(defn rvec-push! [v : ptr<void> val : int]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len >= vec->cap) {
@@ -128,26 +128,26 @@
 ;; String helpers
 ;; ============================================================
 
-(defn cstr->int [s :cstr] :int
+(defn cstr->int [s : cstr] : int
   ```c return (int64_t)(intptr_t)s; ```)
 
-(defn cstr-eq? [a :int b :int] :bool
+(defn cstr-eq? [a : int b : int] : bool
   ```c
   return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
   ```)
 
-(defn println-cstr [s :int] :nil
+(defn println-cstr [s : int] : nil
   ```c printf("%s\n", (const char*)(intptr_t)s); ```)
 
 ;; ============================================================
 ;; Value constructors and printer
 ;; ============================================================
 
-(defn long-val [n :int] :int  (LongVal n))
-(defn str-val  [s :cstr] :int (StrVal (cstr->int s)))
-(defn entity-val [e :int] :int (EntityVal e))
+(defn long-val [n : int] : int  (LongVal n))
+(defn str-val  [s : cstr] : int (StrVal (cstr->int s)))
+(defn entity-val [e : int] : int (EntityVal e))
 
-(defn print-value [v :int] :nil
+(defn print-value [v : int] : nil
   (match v
     (LongVal n)   (println n)
     (StrVal s)    (println-cstr s)
@@ -173,7 +173,7 @@
 ;; ============================================================
 
 ;; Allocate a new 64-bucket EAVT index
-(defn eavt-idx-new [] :ptr<void>
+(defn eavt-idx-new [] : ptr<void>
   ```c
   struct eavt_entry { int64_t entity; int64_t attr; int64_t datum; struct eavt_entry *next; };
   struct eavt_idx { struct eavt_entry **buckets; size_t nbuckets; };
@@ -184,7 +184,7 @@
   ```)
 
 ;; Insert a datum into the EAVT index under (entity, attr)
-(defn eavt-idx-insert! [idx :ptr<void> entity :int attr :int datum :int] :nil
+(defn eavt-idx-insert! [idx : ptr<void> entity : int attr : int datum : int] : nil
   ```c
   struct eavt_entry { int64_t entity; int64_t attr; int64_t datum; struct eavt_entry *next; };
   struct eavt_idx { struct eavt_entry **buckets; size_t nbuckets; };
@@ -198,7 +198,7 @@
 
 ;; Lookup all datums in the EAVT index for (entity, attr).
 ;; Returns a fresh rvec of matching datum pointers.
-(defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
+(defn eavt-idx-lookup [idx : ptr<void> entity : int attr : int] : ptr<void>
   ```c
   struct eavt_entry { int64_t entity; int64_t attr; int64_t datum; struct eavt_entry *next; };
   struct eavt_idx { struct eavt_entry **buckets; size_t nbuckets; };
@@ -229,7 +229,7 @@
 ;; ============================================================
 
 ;; Create an indexed database wrapper
-(defn idb-new [] :int
+(defn idb-new [] : int
   ```c
   int64_t *idb = malloc(2 * sizeof(int64_t));
   /* db-new inline */
@@ -249,15 +249,15 @@
   ```)
 
 ;; Extract the raw db pointer from an idb
-(defn idb-db [idb :int] :int
+(defn idb-db [idb : int] : int
   ```c return ((int64_t*)(intptr_t)idb)[0]; ```)
 
 ;; Extract the eavt index pointer from an idb
-(defn idb-idx [idb :int] :ptr<void>
+(defn idb-idx [idb : int] : ptr<void>
   ```c return (void*)(intptr_t)((int64_t*)(intptr_t)idb)[1]; ```)
 
 ;; Assert a fact into the indexed database
-(defn idb-assert! [idb :int entity :int attr :int value :int] :int
+(defn idb-assert! [idb : int entity : int attr : int value : int] : int
   (let [db  (idb-db idb)]
     (let [idx (idb-idx idb)]
       (let [tx (db-assert! db entity attr value)]
@@ -268,14 +268,14 @@
             tx))))))
 
 ;; Query by entity and attribute using the EAVT index (fast path)
-(defn idb-q-ea [idb :int entity :int attr :cstr] :ptr<void>
+(defn idb-q-ea [idb : int entity : int attr : cstr] : ptr<void>
   (eavt-idx-lookup (idb-idx idb) entity (cstr->int attr)))
 
 ;; ============================================================
 ;; Demo
 ;; ============================================================
 
-(defn demo [] :nil
+(defn demo [] : nil
   (let [idb (idb-new)]
 
     ;; Build some data
@@ -315,6 +315,6 @@
 
     nil))
 
-(defn main [] :int
+(defn main [] : int
   (demo)
   0)

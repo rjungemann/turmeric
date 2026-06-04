@@ -1,0 +1,3 @@
+(defn sum [& xs :int] :int 0)
+
+(defn run [& items :Route] :int 0)

@@ -14,23 +14,23 @@
   (SVNil : (SizedVec (Static 0)))
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 
-(defn svlen [v :SizedVec] :int
+(defn svlen [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons _ xs) (+ 1 (svlen xs))))
 
-(defn svsum [v :SizedVec] :int
+(defn svsum [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons x xs) (+ x (svsum xs))))
 
 ; Length-polymorphic: (SizedVec n) ++ (SizedVec m) -> (SizedVec (n + m)).
-(defn svappend [a :SizedVec b :SizedVec] :SizedVec
+(defn svappend [a : SizedVec b : SizedVec] : SizedVec
   (match a
     (SVNil)       b
     (SVCons x xs) (SVCons x (svappend xs b))))
 
-(defn main [] :int
+(defn main [] : int
   ; length 2 ++ length 3 = length 5
   (println (svlen (svappend (SVCons 1 (SVCons 2 (SVNil)))
                             (SVCons 3 (SVCons 4 (SVCons 5 (SVNil)))))))   ; 5

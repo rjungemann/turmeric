@@ -1,10 +1,10 @@
 ; IT4: any type boxing -- values of any type are tagged with their TypeKind
 ; when passed to functions accepting the 'any' top type.
 
-(defn consume [x : any] :int
+(defn consume [x : any] : int
   0)
 
-(defn main [] :int
+(defn main [] : int
   (println (consume 42))
   (println (consume true))
   (println (consume "hello"))

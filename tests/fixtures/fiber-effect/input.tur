@@ -11,34 +11,34 @@
 
 (defeffect Ask [] :int)
 
-(defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
-(defn fiber-resume-fn [f :ptr<void> arg :int] :int
+(defn fiber-resume-fn [f : ptr<void> arg : int] : int
   ```c
   return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 
-(defn fiber-free-fn [f :ptr<void>] :nil
+(defn fiber-free-fn [f : ptr<void>] : nil
   ```c
   tur_fiber_block_free((FiberBlock *)f);
   ```)
 
-(defn fiber-yield-fn [v :int] :nil
+(defn fiber-yield-fn [v : int] : nil
   ```c
   tur_fiber_block_yield((int64_t)v);
   ```)
 
 ;; The fiber body installs its own handler for Ask (returns 10),
 ;; performs Ask, yields the result, then returns.
-(defn fiber-body [] :nil
+(defn fiber-body [] : nil
   (let [result (handle (perform (Ask))
                  (Ask [] k) (resume k 10))]
     (fiber-yield-fn result)))
 
-(defn main [] :int
+(defn main [] : int
   (let [f (fiber-new-fn fiber-body 0)]
     ;; Resume fiber once — it installs its own Ask handler, performs Ask,
     ;; yields the result (10), then the fiber is paused.

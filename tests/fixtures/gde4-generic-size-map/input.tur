@@ -13,14 +13,14 @@
 ;; should dispatch to Size [int] (-1), proving ABI-stable scalar bindings are
 ;; not over-specialised into the map instance.
 
-(defclass Size [a] (size [x] :int))
+(defclass Size [a] (size [x] : int))
 
 ;; Representative (int-carrier) instance.
 (definstance Size [int] (size [x] -1))
 
 ;; Map instance: reads the HAMT count via the internal layout.
 (definstance Size [Map] [(MapKey K) (Eq V)]
-  (size [x] :int
+  (size [x] : int
     ```c
     typedef struct { void *hamt; } tur_Map;
     tur_Map *m = (tur_Map *)(intptr_t)x;
@@ -30,7 +30,7 @@
 ;; count-it -- the generic-dict driver: dispatches size through ^Size A.
 (defn count-it [^Size A] [x :A] :int (size x))
 
-(defn main [] :int
+(defn main [] : int
   (let [m0 (:: (map-new) (Map cstr int))
         m1 (map-assoc m0 "a" 1)
         m2 (map-assoc m1 "b" 2)]

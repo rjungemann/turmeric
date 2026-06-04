@@ -3,6 +3,6 @@
 ;; This fixture verifies that the TY_APP infrastructure compiles without errors.
 
 (defclass BifMap [^^f]
-  (bimap [x fn-l fn-r] :int))
+  (bimap [x fn-l fn-r] : int))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

@@ -4,7 +4,7 @@
 ;; registry would be invisible at the module boundary.
 (defmodule lib/util
   (export doubled-pi sum-of-first-five)
-  (defn doubled-pi [] :float
+  (defn doubled-pi [] : float
     (+ #pi #pi))
-  (defn sum-of-first-five [] :int
+  (defn sum-of-first-five [] : int
     #sum[1 2 3 4 5]))

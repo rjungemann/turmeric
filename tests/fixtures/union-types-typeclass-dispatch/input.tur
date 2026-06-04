@@ -3,7 +3,7 @@
 ; instance based on the runtime tag.
 
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
   (show [x] "an-int"))
@@ -11,11 +11,11 @@
 (definstance Show [bool]
   (show [x] "a-bool"))
 
-(defn describe [x : (int | bool)] :int
+(defn describe [x : (int | bool)] : int
   (println (.show x))
   0)
 
-(defn main [] :int
+(defn main [] : int
   (describe 42)
   (describe true)
   0)

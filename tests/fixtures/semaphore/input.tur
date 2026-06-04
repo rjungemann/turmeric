@@ -11,7 +11,7 @@
 
 ;; ---- Semaphore (inlined matching SemBlock in stdlib/sync.tur) ----
 
-(defn sem-new [initial :int] :ptr<void>
+(defn sem-new [initial : int] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *s = (SemBlock *)malloc(sizeof(SemBlock));
@@ -22,7 +22,7 @@
   return (void *)s;
   ```)
 
-(defn sem-acquire [s :ptr<void>] :nil
+(defn sem-acquire [s : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
@@ -33,7 +33,7 @@
   pthread_mutex_unlock(&sb->lock);
   ```)
 
-(defn sem-release [s :ptr<void>] :nil
+(defn sem-release [s : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
@@ -43,7 +43,7 @@
   pthread_mutex_unlock(&sb->lock);
   ```)
 
-(defn sem-free [s :ptr<void>] :nil
+(defn sem-free [s : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
@@ -54,7 +54,7 @@
 
 ;; ---- Thread arg: { sem ptr, result slot } ----
 
-(defn sem-arg-new [s :ptr<void>] :ptr<void>
+(defn sem-arg-new [s : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *sem; int64_t result; } SemArg;
   SemArg *a = (SemArg *)malloc(sizeof(SemArg));
@@ -63,20 +63,20 @@
   return (void *)a;
   ```)
 
-(defn sem-arg-result [a :ptr<void>] :int
+(defn sem-arg-result [a : ptr<void>] : int
   ```c
   typedef struct { void *sem; int64_t result; } SemArg;
   return ((SemArg *)a)->result;
   ```)
 
-(defn sem-arg-free [a :ptr<void>] :nil
+(defn sem-arg-free [a : ptr<void>] : nil
   ```c
   free(a);
   ```)
 
 ;; ---- Worker: acquires semaphore, stores 42 in result ----
 
-(defn sem-worker [arg :ptr<void>] :ptr<void>
+(defn sem-worker [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   typedef struct { void *sem; int64_t result; } SemArg;
@@ -93,7 +93,7 @@
 
 ;; ---- Thread spawn/join ----
 
-(defn sem-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn sem-thread-spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "sem-thread-spawn: oom\n"); abort(); }
@@ -101,13 +101,13 @@
   return (void *)t;
   ```)
 
-(defn sem-thread-join [t :ptr<void>] :nil
+(defn sem-thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Test 1: basic acquire/release round-trip (no threads, count starts at 1).
   (let [s1 (sem-new 1)]
     (sem-acquire s1)

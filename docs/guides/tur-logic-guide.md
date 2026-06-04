@@ -291,7 +291,7 @@ Build a chain of goals with `conjoined`:
 
 ```turmeric
 ;; helper: (conjoin-all gs) folds a list of goals with conjoined
-(defn conjoin-all [gs] :ptr<void>
+(defn conjoin-all [gs] : ptr<void>
   (if (= (tail gs) 0)
     (head gs)
     (conjoined (head gs) (conjoin-all (tail gs)))))
@@ -308,7 +308,7 @@ defn conjoin-all [gs] :ptr<void>
 
 ```turmeric
 ;; Encode people as integers; 0=Alice, 1=Bob, 2=Carol, 3=Dave
-(defn parento [parent child] :ptr<void>
+(defn parento [parent child] : ptr<void>
   (disjoined (conjoined (lequal parent (term-int 0))
                         (lequal child  (term-int 1)))
              (disjoined (conjoined (lequal parent (term-int 0))
@@ -317,7 +317,7 @@ defn conjoin-all [gs] :ptr<void>
                                    (lequal child  (term-int 3))))))
 
 ;; grandparento via fresh intermediate variable
-(defn grandparento [grand child] :ptr<void>
+(defn grandparento [grand child] : ptr<void>
   (fresh (fn [mid]
     (conjoined (parento grand mid)
                (parento mid child)))))
@@ -354,7 +354,7 @@ inspect terms:
 
 ```turmeric
 ;; goal: t must walk to an integer in the range [lo, hi]
-(defn range-goal [t lo hi] :ptr<void>
+(defn range-goal [t lo hi] : ptr<void>
   (fn [state]
     (let [walked (logic-walk t state)
           tag    (term-tag walked)]
@@ -387,7 +387,7 @@ defn range-goal [t lo hi] :ptr<void>
 tree, walk recursively:
 
 ```turmeric
-(defn reify-term [t subs] :cstr
+(defn reify-term [t subs] : cstr
   (let [walked (logic-walk t subs)
         tag    (term-tag walked)]
     (cond
@@ -458,7 +458,7 @@ search replace `mplus` with an interleaving version:
 
 ```turmeric
 ;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
-(defn mplus-i [xs ys] :int
+(defn mplus-i [xs ys] : int
   ;; swap xs and ys for every cons cell so solutions alternate
   (if (= xs 0) ys
     (let [head-val (bt-head xs)
@@ -489,7 +489,7 @@ table keyed on `(goal-id, substitution)`:
 ;; Use tur/hamt for the persistent map.
 (import tur/hamt :refer [hamt-empty hamt-insert hamt-lookup])
 
-(defn tabled [name goal-fn args subs] :int
+(defn tabled [name goal-fn args subs] : int
   (let [key  (hash-key name args subs)
         memo (hamt-lookup *memo-table* key)]
     (if (option-some? memo)

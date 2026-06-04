@@ -14,7 +14,7 @@
 ;; we verify only that all 6 values are delivered: sum-a + sum-b = 21.
 ;; Expected output: 21
 
-(defn chan-new [cap :int] :ptr<void>
+(defn chan-new [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -40,7 +40,7 @@
   return (void *)ch;
   ```)
 
-(defn chan-free [ch :ptr<void>] :nil
+(defn chan-free [ch : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -56,7 +56,7 @@
   ```)
 
 ;; Consumer: receives n values from ch, returns their sum via a result channel.
-(defn consumer [arg :ptr<void>] :ptr<void>
+(defn consumer [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -84,7 +84,7 @@
   return NULL;
   ```)
 
-(defn carg-new [ch :ptr<void> n :int] :ptr<void>
+(defn carg-new [ch : ptr<void> n : int] : ptr<void>
   ```c
   typedef struct { void *ch; int64_t n; int64_t result; } CArg;
   CArg *a = (CArg *)malloc(sizeof(CArg));
@@ -93,18 +93,18 @@
   return (void *)a;
   ```)
 
-(defn carg-result [a :ptr<void>] :int
+(defn carg-result [a : ptr<void>] : int
   ```c
   typedef struct { void *ch; int64_t n; int64_t result; } CArg;
   return ((CArg *)a)->result;
   ```)
 
-(defn carg-free [a :ptr<void>] :nil
+(defn carg-free [a : ptr<void>] : nil
   ```c
   free(a);
   ```)
 
-(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
@@ -112,7 +112,7 @@
   return (void *)t;
   ```)
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
@@ -120,14 +120,14 @@
 
 ;; Send 6 values via select :send across two channels.
 ;; Consumers each drain exactly 3 values.
-(defn send-loop [ch-a :ptr<void> ch-b :ptr<void> iter :int v :int] :int
+(defn send-loop [ch-a : ptr<void> ch-b : ptr<void> iter : int v : int] : int
   (if (= iter 0)
     0
     (let [_ (select ((ch-a :send v) 0)
                     ((ch-b :send v) 0))]
       (send-loop ch-a ch-b (- iter 1) (+ v 1)))))
 
-(defn main [] :int
+(defn main [] : int
   (let [ch-a (chan-new 1)
         ch-b (chan-new 1)]
     (let [arg-a (carg-new ch-a 3)

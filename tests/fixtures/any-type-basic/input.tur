@@ -3,7 +3,7 @@
 ; Note: pointer-sized types (cstr) require boxing codegen (deferred to IT4 polish).
 ; This test uses int and bool, which fit in the int64_t representation.
 
-(defn ignore-value [x : any] :nil
+(defn ignore-value [x : any] : nil
   nil)
 
 ; int <: any
@@ -12,7 +12,7 @@
 (ignore-value true)
 
 ; Union simplification: (int | any) -> any
-(defn accept-any [x : (int | any)] :nil
+(defn accept-any [x : (int | any)] : nil
   nil)
 
 (accept-any 99)

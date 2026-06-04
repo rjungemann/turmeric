@@ -1,7 +1,7 @@
 ;; Phase C2: under --no-contracts, a failing assert! is stripped entirely,
 ;; so the program runs to completion instead of panicking. contract-enabled?
 ;; folds to false.
-(defn main [] :int
+(defn main [] : int
   (assert! (= 1 2))
   (if (contract-enabled?)
     (println "enabled")

@@ -26,9 +26,9 @@
 ;;;
 ;;; Since: Phase CA0
 (defclass Comonad [^w]
-  (extract [wa] :int)
-  (extend [wa fn] :int)
-  (duplicate [wa] :int))
+  (extract [wa] : int)
+  (extend [wa fn] : int)
+  (duplicate [wa] : int))
 ;; -- Identity comonad ────────────────────────────────────────────────────────
 ;; Identity w a = Identity a
 ;; Represented as a heap-allocated { int64_t value; } struct.
@@ -37,26 +37,26 @@
 ;;; __identity_new -- allocate a new Identity comonad cell wrapping x.
 
 
-(defn __identity_new [x] :int
+(defn __identity_new [x] : int
   ```c int64_t *p = malloc(sizeof(int64_t));
   *p = x;
   return (int64_t)(intptr_t)p;
   ```)
 ;;; __identity_get -- read the value stored in an Identity comonad cell.
 
-(defn __identity_get [wa] :int
+(defn __identity_get [wa] : int
   ```c int64_t *p = (int64_t *)(intptr_t)wa;
   return *p;
   ```)
 ;;; __identity_extract -- extract the value from an Identity comonad cell.
 
-(defn __identity_extract [wa] :int
+(defn __identity_extract [wa] : int
   ```c int64_t *p = (int64_t *)(intptr_t)wa;
   return *p;
   ```)
 ;;; __identity_extend -- apply fn to the Identity cell and wrap the result.
 
-(defn __identity_extend [wa fn] :int
+(defn __identity_extend [wa fn] : int
   ```c /* extend f w = Identity (f w) */
   int64_t result = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(wa, 0);
   int64_t *p = malloc(sizeof(int64_t));
@@ -65,7 +65,7 @@
   ```)
 ;;; __identity_duplicate -- wrap an Identity cell inside another Identity cell.
 
-(defn __identity_duplicate [wa] :int
+(defn __identity_duplicate [wa] : int
   ```c /* duplicate w = Identity w   (the outer Identity wraps the original) */
   int64_t *p = malloc(sizeof(int64_t));
   *p = wa;
@@ -84,7 +84,7 @@
 ;;; __pair_new -- allocate a new Pair comonad cell with environment and value.
 
 
-(defn __pair_new [env val] :int
+(defn __pair_new [env val] : int
   ```c Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
   p->e1 = env;
   p->e2 = val;
@@ -92,25 +92,25 @@
   ```)
 ;;; __pair_env -- read the environment component of a Pair comonad cell.
 
-(defn __pair_env [wa] :int
+(defn __pair_env [wa] : int
   ```c Tuple2 *p = (Tuple2 *)(intptr_t)wa;
   return p->e1;
   ```)
 ;;; __pair_val -- read the value component of a Pair comonad cell.
 
-(defn __pair_val [wa] :int
+(defn __pair_val [wa] : int
   ```c Tuple2 *p = (Tuple2 *)(intptr_t)wa;
   return p->e2;
   ```)
 ;;; __pair_extract -- extract the value from a Pair comonad cell.
 
-(defn __pair_extract [wa] :int
+(defn __pair_extract [wa] : int
   ```c Tuple2 *p = (Tuple2 *)(intptr_t)wa;
   return p->e2;
   ```)
 ;;; __pair_extend -- extend over a Pair cell: (e, a) -> (e, f (e, a)).
 
-(defn __pair_extend [wa fn] :int
+(defn __pair_extend [wa fn] : int
   ```c /* extend f (e, a) = (e, f (e, a)) */
   Tuple2 *src = (Tuple2 *)(intptr_t)wa;
   int64_t new_val = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(wa, 0);
@@ -121,7 +121,7 @@
   ```)
 ;;; __pair_duplicate -- duplicate a Pair cell: (e, a) -> (e, (e, a)).
 
-(defn __pair_duplicate [wa] :int
+(defn __pair_duplicate [wa] : int
   ```c /* duplicate (e, a) = (e, (e, a)) */
   Tuple2 *src = (Tuple2 *)(intptr_t)wa;
   Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));

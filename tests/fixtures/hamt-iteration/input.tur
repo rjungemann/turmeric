@@ -1,7 +1,7 @@
 ;;
 ;; Phase P1: HAMT iteration test
 
-(defn test-iteration [] :int
+(defn test-iteration [] : int
   ```c
   void *k1 = malloc(8), *k2 = malloc(8), *k3 = malloc(8);
   void *v1 = malloc(8), *v2 = malloc(8), *v3 = malloc(8);

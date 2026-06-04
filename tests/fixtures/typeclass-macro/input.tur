@@ -1,10 +1,10 @@
 ;; Phase 15: Macros generate typeclass-constrained code
 
 (defclass MyEq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (definstance MyEq [int]
   (eq? [x y] (= x y)))
 
-(defn main [] :int
+(defn main [] : int
   0)

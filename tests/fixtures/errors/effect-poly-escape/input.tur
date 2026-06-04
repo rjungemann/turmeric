@@ -4,13 +4,13 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn relay [f :(fn [] #{e} :nil)] #{e} :nil
+(defn relay [f :(fn [] #{e} :nil)] #{e} : nil
   (f))
 
-(defn write-relay [] #{Write e} :nil
+(defn write-relay [] #{Write e} : nil
   (perform (Write "escape")))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (relay write-relay) 0)
     (Write [s] k) (resume k nil)))

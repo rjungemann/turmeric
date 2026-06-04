@@ -7,7 +7,7 @@
   (MkBox2 a : (Box2 a))
   (EmptyBox : (Box2 a)))
 
-(defn main [] :int
+(defn main [] : int
   (let [b (MkBox2 99)]
     (match b
       (MkBox2 _x) (println "has-value")

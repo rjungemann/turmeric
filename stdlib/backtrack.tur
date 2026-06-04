@@ -17,7 +17,7 @@
 ;;;
 ;;; Returns:
 ;;;   0 (null pointer representing the empty list).
-(defn bt-nil [] :int ```c return 0; ```)
+(defn bt-nil [] : int ```c return 0; ```)
 ;;; bt-cons -- prepend a value to a backtrack result list.
 ;;;
 ;;; Parameters:
@@ -27,7 +27,7 @@
 ;;; Returns:
 ;;;   Pointer to the new cell (:int).
 
-(defn bt-cons [v next] :int
+(defn bt-cons [v next] : int
   ```c struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = v;
   cell->next = next;
@@ -44,7 +44,7 @@
 ;; mzero — the empty backtrack computation
 
 
-(defn mzero [] :int ```c return 0; ```)
+(defn mzero [] : int ```c return 0; ```)
 ;;; mreturn -- lift a single value into the backtrack monad.
 ;;;
 ;;; Parameters:
@@ -57,7 +57,7 @@
 ;;;   (mreturn 42)  ; => list containing 42
 ;; mreturn x — singleton result
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
   cell->next = 0;
@@ -76,7 +76,7 @@
 ;;;   (mplus (mreturn 1) (mreturn 2))  ; => list [1, 2]
 ;; mplus xs ys — concat (union) of two result lists
 
-(defn mplus [xs ys] :int
+(defn mplus [xs ys] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
   if (!xc) return ys;
@@ -109,7 +109,7 @@
 ;; fn MUST be a fat closure (struct { int64_t __fn; ... }).
 ;; Use backtrack-do which guarantees fat closures via forced capture.
 
-(defn mbind [ma fn] :int
+(defn mbind [ma fn] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
   if (!cell) return 0;
@@ -151,7 +151,7 @@
 ;; run-backtrack xs — return all results (identity; list monad is already eager)
 
 
-(defn run-backtrack [xs] :int xs)
+(defn run-backtrack [xs] : int xs)
 ;;; run-backtrack-depth -- return at most n results from a backtrack computation.
 ;;;
 ;;; Parameters:
@@ -165,7 +165,7 @@
 ;;;   (run-backtrack-depth my-results 5)  ; => first 5 results
 ;; run-backtrack-depth xs n — take at most n results
 
-(defn run-backtrack-depth [xs n] :int
+(defn run-backtrack-depth [xs n] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *head = NULL, *tail = NULL, *c = (Cell*)(intptr_t)xs;
   int64_t count = 0;
@@ -190,7 +190,7 @@
 ;; choice xs — identity; xs is already a list of alternatives
 
 
-(defn choice [xs] :int xs)
+(defn choice [xs] : int xs)
 ;;; guard -- succeed with a dummy value when pred is true, fail otherwise.
 ;;;
 ;;; Parameters:
@@ -203,7 +203,7 @@
 ;;;   (guard (> x 0))  ; => mreturn 0 or mzero
 ;; guard pred — (mreturn 0) when pred is true, else mzero
 
-(defn guard [pred :bool] :int (if pred (mreturn 0) (mzero)))
+(defn guard [pred : bool] : int (if pred (mreturn 0) (mzero)))
 ;;; fresh -- apply a fat closure to a fresh (unbound) logic variable.
 ;;;
 ;;; The fresh variable is represented by the sentinel INT64_MIN, which is
@@ -217,7 +217,7 @@
 ;;; Returns:
 ;;;   The result of applying f to the unbound sentinel (:int).
 
-(defn fresh [f] :int
+(defn fresh [f] : int
   ```c int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   int64_t unbound = INT64_MIN; /* sentinel: unbound logic variable, distinct from any valid value */
@@ -235,7 +235,7 @@
 ;;;   (once (mplus (mreturn 1) (mreturn 2)))  ; => list [1]
 ;; once xs — keep only the first result
 
-(defn once [xs] :int
+(defn once [xs] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)xs;
   if (!c) return 0;
@@ -256,7 +256,7 @@
 ;;;   (interleave (mreturn 1) (mreturn 2))  ; => list [1, 2] (interleaved)
 ;; interleave xs ys — fair interleaving of two result lists
 
-(defn interleave [xs ys] :int
+(defn interleave [xs ys] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
   Cell *yc = (Cell*)(intptr_t)ys;
@@ -294,7 +294,7 @@
 ;;;   (bt-length (mplus (mreturn 1) (mreturn 2)))  ; => 2
 
 
-(defn bt-length [xs] :int
+(defn bt-length [xs] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   int64_t n = 0;
   Cell *c = (Cell*)(intptr_t)xs;

@@ -5,7 +5,7 @@
 ;; then attempts to "resume" it from the main thread (tur_current_fiber==NULL).
 ;; The guard must abort with "continuation error: resume on wrong fiber" on stderr.
 
-(defn cross-resume-test [] :int
+(defn cross-resume-test [] : int
   ```c
   /* We are on the main thread: tur_current_fiber == NULL.
    * Create a fake TurContK with origin_fiber pointing to a dummy block. */
@@ -19,5 +19,5 @@
   return 0;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (cross-resume-test))

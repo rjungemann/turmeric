@@ -1,7 +1,7 @@
 ;; Phase R6b: without --lint-panic, panic sites are not flagged.
-(defn risky [] :int
+(defn risky [] : int
   (panic "boom")
   0)
-(defn main [] :int
+(defn main [] : int
   (println 1)
   0)

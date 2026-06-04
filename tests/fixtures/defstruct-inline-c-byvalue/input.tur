@@ -15,24 +15,24 @@
 ;;   a 1
 
 (defstruct Big
-  [a :cstr
-   b :cstr
-   c :cstr
-   d :cstr
-   e :int
-   f :int
-   g :int
-   h :cstr])
+  [a : cstr
+   b : cstr
+   c : cstr
+   d : cstr
+   e : int
+   f : int
+   g : int
+   h : cstr])
 
-(defn mk [] :Big
+(defn mk [] : Big
   (make-struct Big "a" "b" "c" "d" 1 2 3 "h"))
 
-(defn use-it [x :Big] :nil
+(defn use-it [x : Big] : nil
   ```c
   fprintf(stdout, "%s %d\n", x.a, (int)x.e);
   fflush(stdout);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (use-it (mk))
   0)

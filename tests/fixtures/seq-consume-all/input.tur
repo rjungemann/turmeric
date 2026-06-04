@@ -3,7 +3,7 @@
 
 (load "stdlib/seq/consume.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [five 5
         big? (fn [x] (> x five))]
     (println (seq/all? big? (seq/range 10 15)))

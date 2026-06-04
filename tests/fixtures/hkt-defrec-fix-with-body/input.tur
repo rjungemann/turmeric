@@ -4,4 +4,4 @@
 
 (deftype Fix [^f] (f (Fix f)))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

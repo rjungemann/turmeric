@@ -1,17 +1,17 @@
 ;; SI2: derive-show generates a Show instance for a struct.
 ;; Tests that (derive-show Point x y) expands to the correct Show instance.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(32);
     snprintf(buf, 32, "%lld", (long long)x);
     return (const char *)(intptr_t)buf;
     ```))
 
-(defn str-concat [a :cstr b :cstr] :cstr
+(defn str-concat [a : cstr b : cstr] : cstr
   ```c
   const char *sa = (const char*)(intptr_t)a;
   const char *sb = (const char*)(intptr_t)b;
@@ -23,10 +23,10 @@
   return (const char *)(intptr_t)out;
   ```)
 
-(defstruct Point :copy [x :int y :int])
+(defstruct Point :copy [x : int y : int])
 (derive-show Point x y)
 
-(defn main [] :int
+(defn main [] : int
   (let [p (make-struct Point 3 4)]
     (println (.show p)))
   0)

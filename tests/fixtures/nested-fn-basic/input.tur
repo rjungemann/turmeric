@@ -2,13 +2,13 @@
 ;; A defn inside a function body is lifted to file scope and callable
 ;; by name from the enclosing function.
 
-(defn outer [] :int
-  (defn inner [x] :int (+ x 1))
+(defn outer [] : int
+  (defn inner [x] : int (+ x 1))
   (inner 5))
 
-(defn outer-multi [] :int
-  (defn add [a b] :int (+ a b))
-  (defn mul [a b] :int (* a b))
+(defn outer-multi [] : int
+  (defn add [a b] : int (+ a b))
+  (defn mul [a b] : int (* a b))
   (add (mul 3 4) (mul 2 5)))
 
 (defn main []

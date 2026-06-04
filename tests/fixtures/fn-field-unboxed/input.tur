@@ -7,10 +7,10 @@
 (defstruct Callback :copy
   [op (fn [:int32] :int32)])
 
-(defn double-it [x :int32] :int32
+(defn double-it [x : int32] : int32
   (as int32 (* (as int x) (as int x))))
 
-(defn main [] :int
+(defn main [] : int
   (let [cb (make-struct Callback double-it)]
     (println (as int (.op cb 3i32)))
     (println (as int (.op cb 7i32))))

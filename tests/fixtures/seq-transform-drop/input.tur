@@ -2,6 +2,6 @@
 
 (load "stdlib/seq/transform.tur")
 
-(defn main [] :void
+(defn main [] : void
   (seq-for-each println (seq/drop 2 (seq/range 0 5)))
   (println (gen-arr-len (seq-collect (seq/drop 5 (seq/range 0 3))))))

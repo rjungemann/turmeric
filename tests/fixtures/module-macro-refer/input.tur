@@ -1,6 +1,6 @@
 (defmodule myapp
   (import math/ops :as mo :refer [add-one double-it])
-  (defn main [] :int
+  (defn main [] : int
     (println (add-one 5))
     (println (double-it 7))
     0))

@@ -4,10 +4,10 @@
 ;; that Write was discharged.  main handles Other and returns 0.
 (defeffect Write [s :cstr] :nil)
 (defeffect Other [] :int)
-(defn do-work [] #{Other} :int
+(defn do-work [] #{Other} : int
   (with-handler
     (handler (Write [s] k) (do (println s) (resume k nil)))
     (do (perform (Write "inner")) (perform (Other)))))
-(defn main [] :int
+(defn main [] : int
   (handle (do-work)
     (Other [] k) (do (resume k 7) 0)))

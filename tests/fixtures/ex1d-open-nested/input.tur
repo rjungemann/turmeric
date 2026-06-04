@@ -3,7 +3,7 @@
 ; This exercises the skolem-depth counter -- each open must mint its own
 ; fresh id so the escape check on the outer open cannot be confused by
 ; the inner open's binding.
-(defn main [] :int
+(defn main [] : int
   (let [e1 (pack 10 (exists [a] a))
         e2 (pack 20 (exists [b] b))]
     (open e1 [a v1]

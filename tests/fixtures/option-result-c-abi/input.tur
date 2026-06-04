@@ -10,28 +10,28 @@
 ;;     tur_err_value) inspect a value the same way.
 
 ;; lookup : k -> Option<int>   (700 when k == 7, else none)
-(defn lookup [k :int] :int
+(defn lookup [k : int] : int
   ```c
   if (k == 7) return tur_some(700);
   return TUR_NONE;
   ```)
 
 ;; opt-or : consume an Option<int> from inline-C
-(defn opt-or [o :int dflt :int] :int
+(defn opt-or [o : int dflt : int] : int
   ```c return tur_is_some(o) ? tur_opt_value(o) : dflt; ```)
 
 ;; safe-div : a b -> Result<int,int>   (err -1 on divide-by-zero)
-(defn safe-div [a :int b :int] :int
+(defn safe-div [a : int b : int] : int
   ```c
   if (b == 0) return tur_err(-1);
   return tur_ok(a / b);
   ```)
 
 ;; res-payload : consume a Result<int,int> from inline-C
-(defn res-payload [r :int] :int
+(defn res-payload [r : int] : int
   ```c return tur_is_ok(r) ? tur_ok_value(r) : tur_err_value(r); ```)
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; stdlib some? reads a C-built Option
     (println (some? (lookup 7)))             ;; true

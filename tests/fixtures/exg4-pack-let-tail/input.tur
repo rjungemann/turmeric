@@ -9,17 +9,17 @@
 ; check after the inner let exits would observe 0 (or an underflowed
 ; UINT64_MAX) on the broken implementation; the fix keeps it at 1.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [outer (let [e (pack 42 (exists [a] [(Show a)] a))] e)]
     (println (rc/strong-count outer))
     (open outer [_ v]

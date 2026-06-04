@@ -3,10 +3,10 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn bad-fn [] #{} :nil
+(defn bad-fn [] #{} : nil
   (perform (Write "oops")))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (bad-fn) 0)
     (Write [s] k) (do (println s) (resume k nil))))

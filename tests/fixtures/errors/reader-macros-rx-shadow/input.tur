@@ -2,4 +2,4 @@
 ; shadow it.
 (reader-macros/define 'rx :string '(println $body))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

@@ -13,10 +13,10 @@
 ;; or read the rc-block pointer as the bound value instead of
 ;; dereferencing through to the existential record.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -26,7 +26,7 @@
 (defstruct Box :move
   [payload (exists [a] [(Show a)] a)])
 
-(defn main [] :int
+(defn main [] : int
   (let [b (make-struct Box (pack 42 (exists [a] [(Show a)] a)))]
     (open (.payload b) [_ v]
       (println (.show v))))

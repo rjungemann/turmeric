@@ -6,18 +6,18 @@
 
 ;; sum-two: resume the captured continuation twice.  Clone the handle for the
 ;; first use so the original is still live for the second.
-(defn sum-two [k] :int
+(defn sum-two [k] : int
   (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
      (tur_cloneable_cont_resume k 2)))
 
 ;; thrice: resume the SAME handle three times -- dk_invoke copies internally,
 ;; so a single handle is repeatable without explicit cloning.
-(defn thrice [k] :int
+(defn thrice [k] : int
   (+ (+ (tur_cloneable_cont_resume k 1)
         (tur_cloneable_cont_resume k 10))
      (tur_cloneable_cont_resume k 100)))
 
-(defn main [] :int
+(defn main [] : int
   ;; context (+ 10 []):     (10+1) + (10+2)       = 23
   (println (cloneable-reset (+ 10 (cloneable-shift sum-two 0))))
   ;; context (* 2 []):      (2*1) + (2*2)         = 6

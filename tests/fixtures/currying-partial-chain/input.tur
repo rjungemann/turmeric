@@ -1,3 +1,3 @@
-(defn add [a b] :int (+ a b))
-(defn main [] :int
+(defn add [a b] : int (+ a b))
+(defn main [] : int
   (println ((add 3) 4)))

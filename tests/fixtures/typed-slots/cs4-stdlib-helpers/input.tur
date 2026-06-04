@@ -6,7 +6,7 @@
 
 ;;; Pair helpers
 
-(defn main [] :int
+(defn main [] : int
   (let [p (:: (pair 10 3.14) (Pair int float))]
     (println (pair-fst p))
     (println (pair-snd p)))

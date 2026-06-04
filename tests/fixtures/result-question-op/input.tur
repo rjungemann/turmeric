@@ -5,52 +5,52 @@
 ;; or returning early with the u-err value if u-err.
 
 ;; Define u-ok and u-err inline (self-contained, like result-basic fixture)
-(defn u-ok [x :int] :ptr<void>
+(defn u-ok [x : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = true; result->ok_val = x; result->err_val = 0; return result;
   ```)
 
-(defn u-err [e :int] :ptr<void>
+(defn u-err [e : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = false; result->ok_val = 0; result->err_val = e; return result;
   ```)
 
-(defn u-ok? [r :ptr<void>] :bool
+(defn u-ok? [r : ptr<void>] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result != NULL && result->is_ok;
   ```)
 
-(defn u-err? [r :ptr<void>] :bool
+(defn u-err? [r : ptr<void>] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result == NULL || !result->is_ok;
   ```)
 
-(defn u-ok-val [r :ptr<void>] :int
+(defn u-ok-val [r : ptr<void>] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->ok_val;
   ```)
 
-(defn u-err-val [r :ptr<void>] :int
+(defn u-err-val [r : ptr<void>] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->err_val;
   ```)
 
-(defn get-value [b :bool] :ptr<void>
+(defn get-value [b : bool] : ptr<void>
   (if b (u-ok 42) (u-err 1)))
 
-(defn use-question [b :bool] :ptr<void>
+(defn use-question [b : bool] : ptr<void>
   ;; The ? operator lowers through __tur-q-is-err? / __tur-q-ok-val in
   ;; stdlib/result.tur, which are #{} safe.  No (unsafe ...) wrapper needed.
   (let [x (? (get-value b))]
     (u-ok (* x 2))))
 
-(defn main [] :int
+(defn main [] : int
   (let [r1 (use-question true)]
     (let [v1 (u-ok-val r1)]
       (println v1)

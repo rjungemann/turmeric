@@ -2,7 +2,7 @@
 ;; The ref binding remains valid across the perform/resume boundary.
 (defeffect GetBase [] :int)
 
-(defn sum-with-base [] :int
+(defn sum-with-base [] : int
   (let [base (ref 100)]
     (+ (deref base) (perform (GetBase)))))
 

@@ -1,27 +1,27 @@
 ;;
 ;; Phase TC2: tgrid basic operations test
 
-(defn test-new-dims [] :int
+(defn test-new-dims [] : int
   (let [g (grid-new 4 3)]
     (let [w (grid-width g)]
       (let [h (grid-height g)]
         (grid-free g)
         (* w h)))))
 
-(defn test-set-get [] :int
+(defn test-set-get [] : int
   (let [g (grid-new 4 3)]
     (grid-set! g 1 2 99)
     (let [v (grid-get g 1 2)]
       (grid-free g)
       v)))
 
-(defn test-default-zero [] :int
+(defn test-default-zero [] : int
   (let [g (grid-new 4 3)]
     (let [v (grid-get g 0 0)]
       (grid-free g)
       v)))
 
-(defn test-multiple-cells [] :int
+(defn test-multiple-cells [] : int
   (let [g (grid-new 3 3)]
     (grid-set! g 0 0 1)
     (grid-set! g 1 1 2)

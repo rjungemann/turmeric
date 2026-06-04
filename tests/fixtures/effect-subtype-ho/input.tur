@@ -3,10 +3,10 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn run-twice [f :(fn [] #{Write} :nil)] #{Write} :nil
+(defn run-twice [f :(fn [] #{Write} :nil)] #{Write} : nil
   (do (f) (f)))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (run-twice (fn [] (println "ok"))) 0)
     (Write [msg] k) (do (println msg) (resume k 0))))

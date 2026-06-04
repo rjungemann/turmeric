@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (unsafe (raw-malloc 8))
   (unsafe (raw-malloc 8))
   0)

@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (defer (println "outer"))
   (if true
     (defer (println "inner-if")))

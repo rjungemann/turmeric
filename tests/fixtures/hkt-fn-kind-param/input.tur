@@ -6,24 +6,24 @@
 
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; Option helpers
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true; r->value = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -40,12 +40,12 @@
 ;; Kind-polymorphic function: ^f declares f as a type constructor of kind * -> *.
 ;; At runtime the kind annotation is erased; the function receives the container
 ;; and fn values as plain int64_t parameters and delegates to the fmap method.
-(defn apply-functor [^f container fn] :int
+(defn apply-functor [^f container fn] : int
   (.fmap container fn))
 
-(defn triple [x] :int (* x 3))
+(defn triple [x] : int (* x 3))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (let [opt (__opt_some 7)]
       (let [result (apply-functor opt triple)]

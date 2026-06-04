@@ -1,0 +1,20 @@
+;; cstr-returning-closure-thunk-int64-return.md: a capturing closure whose
+;; declared return type is :cstr was lowered to a C thunk with an int64_t
+;; return type (the :cstr return annotation was not surviving onto the fn
+;; type's result_kind in elab_fn, which lacked a `cstr` keyword case and so
+;; treated :cstr as a type variable -> int64 carrier).  That emitted a
+;; -Wint-conversion warning and left the thunk's C signature inconsistent with
+;; the typed-thunk typedef the call site computes.  Fixed by handling :cstr in
+;; the fn-literal return-type parser, so the thunk is emitted as
+;; `const char * (*)(void *, ...)` and round-trips through TUR_APPLY1_T cleanly.
+
+(defn call-s [f : ptr<void> s : cstr] : cstr
+  ```c return TUR_APPLY1_T(char *, char *, f, s); ```)
+
+(defn make-pick [n : int] : ptr<void>
+  (fn [s : cstr] : cstr (if (> n 0) s "other")))   ;; captures n -> fat closure
+
+(defn main [] : int
+  (println (call-s (make-pick 1) "hello"))        ;; n>0 -> "hello"
+  (println (call-s (make-pick 0) "hello"))        ;; n==0 -> "other"
+  0)

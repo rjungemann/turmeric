@@ -3,19 +3,19 @@
 ;; Main thread cancels it mid-run; thread exits at the next check.
 ;; main() joins and prints "done".
 
-(defn sleep-ms [ms :int] :nil
+(defn sleep-ms [ms : int] : nil
   ```c
   usleep((unsigned int)ms * 1000);
   ```)
 
-(defn null-ptr [] :ptr<void>
+(defn null-ptr [] : ptr<void>
   ```c
   return NULL;
   ```)
 
 ;; CPU-bound worker: spins checking cancel flag until cancelled.
 ;; Exercises the TC2 cooperative cancellation path via tur_thread_cancel_requested.
-(defn cpu-worker [arg :ptr<void>] :ptr<void>
+(defn cpu-worker [arg : ptr<void>] : ptr<void>
   ```c
   for (;;) {
       if (tur_thread_cancel_requested()) {
@@ -25,7 +25,7 @@
   return NULL;
   ```)
 
-(defn my-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn my-thread-spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
   if (!state) abort();
@@ -45,7 +45,7 @@
   return (void *)h;
   ```)
 
-(defn my-cancel-thread [t :ptr<void>] :nil
+(defn my-cancel-thread [t : ptr<void>] : nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
   __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
@@ -54,7 +54,7 @@
   pthread_mutex_unlock(&h->state->cancel_mutex);
   ```)
 
-(defn my-thread-join [t :ptr<void>] :nil
+(defn my-thread-join [t : ptr<void>] : nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_join(h->tid, NULL);
@@ -64,7 +64,7 @@
   free(h);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [t (my-thread-spawn cpu-worker (null-ptr))]
     (sleep-ms 30)
     (my-cancel-thread t)

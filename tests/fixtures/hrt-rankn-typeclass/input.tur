@@ -2,13 +2,13 @@
 ; `poly-apply` takes a rank-2 poly fn `f` and applies it to `x`.
 ; The call site passes `id` (a concrete function) which gets wrapped.
 (defclass PolyApply []
-  (poly-apply [[f (forall [a] (-> a a))] x] :int))
+  (poly-apply [[f (forall [a] (-> a a))] x] : int))
 
 (definstance PolyApply []
   (poly-apply [f x] (f x)))
 
-(defn id [x :int] :int x)
+(defn id [x : int] : int x)
 
-(defn main [] :int
+(defn main [] : int
   (println (.poly-apply id 55))
   0)

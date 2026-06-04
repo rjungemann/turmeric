@@ -8,7 +8,7 @@
 (defn longer [x : &'a int y : &'a int] : &'a int
   (if (> @x @y) x y))
 
-(defn main [] :int
+(defn main [] : int
   (let [a 3]
     (let [b 7]
       (println @(longer (& a) (& b)))

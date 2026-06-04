@@ -6,11 +6,11 @@
 ;; arm's value with no capture.
 
 ;; round-trip the captured continuation through bytes, then resume it.
-(defn rt5 [k] :int
+(defn rt5 [k] : int
   (tur_serial_cont_resume
     (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
 
-(defn main [] :int
+(defn main [] : int
   ;; cond true, shift path round-tripped, context (+ 10 []): (10+5)   = 15
   (println (serial-reset (if (< 0 1) (+ 10 (serial-shift rt5 0)) 42)))
   ;; cond false, no capture -> pure ELSE                              = 42

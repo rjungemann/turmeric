@@ -49,7 +49,7 @@ grammar it implements:
 ;; factor := number | '(' expr ')'
 ;; number := digit+
 
-(defn factor [] :ptr<void>
+(defn factor [] : ptr<void>
   (or-parser
     (between (pchar 40) (pchar 41) (expr-ref))
     (number)))
@@ -76,26 +76,26 @@ slicing -- that would allocate a new C string at every step. Instead, an
 struct with `position + 1`.
 
 ```turmeric
-(defn input-new [s :cstr pos] :int
+(defn input-new [s : cstr pos] : int
   ```c
   struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
   inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
   return (int64_t)(intptr_t)inp;
   ```)
 
-(defn input-at-end [inp] :bool
+(defn input-at-end [inp] : bool
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   return ((const char*)(intptr_t)i->str)[i->pos] == '\0';
   ```)
 
-(defn input-current-char [inp] :int
+(defn input-current-char [inp] : int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   return (int64_t)(unsigned char)((const char*)(intptr_t)i->str)[i->pos];
   ```)
 
-(defn input-advance [inp] :int
+(defn input-advance [inp] : int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
@@ -149,7 +149,7 @@ holding the parsed value and the leftover `Input`.
 We need one helper to actually *call* a parser:
 
 ```turmeric
-(defn apply-parser [p inp] :int
+(defn apply-parser [p inp] : int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)p;
   return TUR_APPLY1(fat, inp);
@@ -176,7 +176,7 @@ three monad operations.
 The simplest parser ignores its input and returns no results.
 
 ```turmeric
-(defn pfail-impl [inp] :int (mzero))
+(defn pfail-impl [inp] : int (mzero))
 
 (defn pfail [] ^fat :ptr<void>
   (fn [inp] (pfail-impl inp)))
@@ -203,7 +203,7 @@ If the input is at end, fail. Otherwise return the current character paired
 with the advanced input.
 
 ```turmeric
-(defn item-impl [inp] :int
+(defn item-impl [inp] : int
   (if (input-at-end inp)
     (mzero)
     (mreturn (pair-new (input-current-char inp) (input-advance inp)))))
@@ -229,13 +229,13 @@ defn item [] ^fat :ptr<void>
 of type `int -> int` (we use `0` for false, `1` for true).
 
 ```turmeric
-(defn apply-fat [f arg] :int
+(defn apply-fat [f arg] : int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
   return TUR_APPLY1(fat, arg);
   ```)
 
-(defn satisfy-impl [_pred inp] :int
+(defn satisfy-impl [_pred inp] : int
   (if (input-at-end inp)
     (mzero)
     (let [c (input-current-char inp)]
@@ -243,7 +243,7 @@ of type `int -> int` (we use `0` for false, `1` for true).
         (mzero)
         (mreturn (pair-new c (input-advance inp)))))))
 
-(defn satisfy [pred] :ptr<void>
+(defn satisfy [pred] : ptr<void>
   (let [_pred pred] (fn [inp] (satisfy-impl _pred inp))))
 ```
 
@@ -267,23 +267,23 @@ closure plumbing. `pchar` recognises a single literal character; `digit`
 recognises any ASCII digit:
 
 ```turmeric
-(defn pchar-impl [_c inp] :int
+(defn pchar-impl [_c inp] : int
   (if (input-at-end inp)
     (mzero)
     (if (= (input-current-char inp) _c)
       (mreturn (pair-new _c (input-advance inp)))
       (mzero))))
 
-(defn pchar [c] :ptr<void>
+(defn pchar [c] : ptr<void>
   (let [_c c] (fn [inp] (pchar-impl _c inp))))
 
-(defn is-digit [c] :int
+(defn is-digit [c] : int
   ```c return (c >= '0' && c <= '9') ? 1 : 0; ```)
 
-(defn digit-pred [] :ptr<void>
+(defn digit-pred [] : ptr<void>
   (let [dummy 0] (fn [c] (let [_ dummy] (is-digit c)))))
 
-(defn digit [] :ptr<void>
+(defn digit [] : ptr<void>
   (satisfy (digit-pred)))
 ```
 
@@ -305,10 +305,10 @@ input, with their result lists concatenated. Backtracking is free:
 unsuccessful alternatives become empty lists that `mplus` swallows.
 
 ```turmeric
-(defn or-parser-impl [lp lq inp] :int
+(defn or-parser-impl [lp lq inp] : int
   (mplus (apply-parser lp inp) (apply-parser lq inp)))
 
-(defn or-parser [p q] :ptr<void>
+(defn or-parser [p q] : ptr<void>
   (let [lp p
         lq q]
     (fn [inp] (or-parser-impl lp lq inp))))
@@ -333,16 +333,16 @@ lists, except the per-result computation has to *call* the parser that `f`
 returns instead of just returning a list.
 
 ```turmeric
-(defn bind-parser-inner [lf pair] :int
+(defn bind-parser-inner [lf pair] : int
   (let [lf2 lf]
     (apply-parser (apply-fat lf2 (pair-first pair)) (pair-second pair))))
 
-(defn bind-parser-impl [lp lf inp] :int
+(defn bind-parser-impl [lp lf inp] : int
   (let [lf2 lf]
     (mbind (apply-parser lp inp)
       (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
 
-(defn bind-parser [p ^fat f] :ptr<void>
+(defn bind-parser [p ^fat f] : ptr<void>
   (let [lp p
         lf f]
     (fn [inp] (bind-parser-impl lp lf inp))))
@@ -386,12 +386,12 @@ the unit and zero of the parser monoid.
 Useful for delimiters where the punctuation is consumed but not kept.
 
 ```turmeric
-(defn then-parser-impl [lp lq inp] :int
+(defn then-parser-impl [lp lq inp] : int
   (let [lq2 lq]
     (mbind (apply-parser lp inp)
       (fn [pair] (let [_ lq2] (apply-parser lq2 (pair-second pair)))))))
 
-(defn then-parser [p q] :ptr<void>
+(defn then-parser [p q] : ptr<void>
   (let [lp p
         lq q]
     (fn [inp] (then-parser-impl lp lq inp))))
@@ -415,9 +415,9 @@ defn then-parser [p q] :ptr<void>
 ### `pure` -- succeed with a fixed value, consuming nothing
 
 ```turmeric
-(defn pure-impl [_v inp] :int (mreturn (pair-new _v inp)))
+(defn pure-impl [_v inp] : int (mreturn (pair-new _v inp)))
 
-(defn pure [v] :ptr<void>
+(defn pure [v] : ptr<void>
   (let [_v v] (fn [inp] (pure-impl _v inp))))
 ```
 
@@ -440,7 +440,7 @@ fails, collecting matches into a `Cell` list and returning the final
 leftover input.
 
 ```turmeric
-(defn many-c-impl [p_raw inp] :int
+(defn many-c-impl [p_raw inp] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   typedef struct { int64_t first; int64_t second; } Pair;
@@ -473,7 +473,7 @@ leftover input.
   return (int64_t)(intptr_t)result_cell;
   ```)
 
-(defn many [p] :ptr<void>
+(defn many [p] : ptr<void>
   (let [_p p] (fn [inp] (many-c-impl _p inp))))
 ```
 
@@ -482,22 +482,22 @@ leftover input.
 The remaining combinators are pure derivations:
 
 ```turmeric
-(defn many1-impl [_p inp] :int
+(defn many1-impl [_p inp] : int
   (if (input-at-end inp)
     (mzero)
     (let [first-results (apply-parser _p inp)]
       (if (= first-results 0) (mzero) (many-c-impl _p inp)))))
 
-(defn many1 [p] :ptr<void>
+(defn many1 [p] : ptr<void>
   (let [_p p] (fn [inp] (many1-impl _p inp))))
 
-(defn optional-impl [_p inp] :int
+(defn optional-impl [_p inp] : int
   (mplus (apply-parser _p inp) (mreturn (pair-new 0 inp))))
 
-(defn optional [p] :ptr<void>
+(defn optional [p] : ptr<void>
   (let [_p p] (fn [inp] (optional-impl _p inp))))
 
-(defn between [open close p] :ptr<void>
+(defn between [open close p] : ptr<void>
   (let [_open  open
         _close close
         _p     p]
@@ -567,14 +567,14 @@ into a tiny AST:
 ;;   ENum int       -- tag = 0
 ;;   EBin op l r    -- tag = 1, op is ASCII '+', '-', '*', '/'
 
-(defn mk-enum [n] :int
+(defn mk-enum [n] : int
   ```c
   struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *e = malloc(sizeof(*e));
   e->tag = 0; e->a = n; e->b = 0; e->c = 0;
   return (int64_t)(intptr_t)e;
   ```)
 
-(defn mk-ebin [op l r] :int
+(defn mk-ebin [op l r] : int
   ```c
   struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *e = malloc(sizeof(*e));
   e->tag = 1; e->a = op; e->b = l; e->c = r;
@@ -588,7 +588,7 @@ into a tiny AST:
 and wrap it as `ENum`.
 
 ```turmeric
-(defn number [] :ptr<void>
+(defn number [] : ptr<void>
   (bind-parser (many1 (digit))
     (fn [digs]
       (pure (mk-enum (digits->int digs))))))
@@ -612,13 +612,13 @@ lambda at the call site automatically. See section 8.
 a closure that, when invoked, calls `(expr)` and runs the result.
 
 ```turmeric
-(defn expr-thunk-impl [inp] :int
+(defn expr-thunk-impl [inp] : int
   (apply-parser (expr) inp))
 
 (defn expr-ref [] ^fat :ptr<void>
   (fn [inp] (expr-thunk-impl inp)))
 
-(defn factor [] :ptr<void>
+(defn factor [] : ptr<void>
   (or-parser
     (between (pchar 40) (pchar 41) (expr-ref))
     (number)))
@@ -629,13 +629,13 @@ For `term` and `expr` we build the standard left-associative chain. Each
 and then `fold-bin-tail` walks them left-to-right, growing an `EBin` AST.
 
 ```turmeric
-(defn term-tail-pair [] :ptr<void>
+(defn term-tail-pair [] : ptr<void>
   (bind-parser (term-op)
     (fn [op]
       (bind-parser (factor)
         (fn [rhs] (pure (pair-new op rhs)))))))
 
-(defn term [] :ptr<void>
+(defn term [] : ptr<void>
   (bind-parser (factor)
     (fn [lhs]
       (bind-parser (many (term-tail-pair))
@@ -653,7 +653,7 @@ directly without rebinding it to a local first.
 The AST evaluator is a five-line recursive walk:
 
 ```turmeric
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (if (= (expr-tag e) 0)
     (expr-a e)
     (let [op (expr-a e)

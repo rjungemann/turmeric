@@ -10,7 +10,7 @@
     (println label)
     ~@body))
 
-(defn main [] :int
+(defn main [] : int
   ;; One rest arg
   (do-all (println 10))
 

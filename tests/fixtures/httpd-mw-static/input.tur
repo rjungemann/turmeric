@@ -19,14 +19,14 @@
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
-(defn setup-fs [] :nil
+(defn setup-fs [] : nil
   ```c
   mkdir("/tmp/turmeric-mw-static-test", 0755);
   FILE *f = fopen("/tmp/turmeric-mw-static-test/hello.txt", "w");
   if (f) { fwrite("hello, world", 1, 12, f); fclose(f); }
   ```)
 
-(defn client-worker [arg :ptr<void>] :ptr<void>
+(defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   struct timespec ts = { 0, 30000000L };
@@ -115,24 +115,24 @@
   return NULL;
   ```)
 
-(defn run-server [h :ptr<void>] :ptr<void> ```c httpd_run(h); return NULL; ```)
-(defn spawn-server [h :ptr<void>] :ptr<void>
+(defn run-server [h : ptr<void>] : ptr<void> ```c httpd_run(h); return NULL; ```)
+(defn spawn-server [h : ptr<void>] : ptr<void>
   ```c pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
   return (void *)t; ```)
-(defn spawn-client [port :int] :ptr<void>
+(defn spawn-client [port : int] : ptr<void>
   ```c int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
   return (void *)t; ```)
-(defn join-thread [t :ptr<void>] :nil ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+(defn join-thread [t : ptr<void>] : nil ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn main [] :int
+(defn main [] : int
   (setup-fs)
   (let [donech   (chan-new 3)
         ;; base ALWAYS returns 404 -- mw-static handles the rest.
-        base     (fn [c :ptr<void>] :nil
+        base     (fn [c : ptr<void>] : nil
                    (httpd-resp-status! c 404)
                    (httpd-resp-body! c "Not Found")
                    (chan-send donech 1))

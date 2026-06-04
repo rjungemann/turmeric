@@ -1,7 +1,7 @@
 ;; Phase C1: contract-enabled? reflects whether contracts are active.
 ;; In v1 contracts are always enabled (no --release stripping yet).
 
-(defn main [] :int
+(defn main [] : int
   (if (contract-enabled?)
     (println "contracts-enabled")
     (println "contracts-disabled"))

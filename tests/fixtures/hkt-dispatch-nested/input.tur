@@ -3,18 +3,18 @@
 ;; Verifies that methods from distinct typeclasses dispatch independently.
 
 (defclass MyEq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (definstance MyEq [int]
   (eq? [x y] (= x y)))
 
 (defclass MyOrd [a]
-  (lt? [x y] :bool))
+  (lt? [x y] : bool))
 
 (definstance MyOrd [int]
   (lt? [x y] (< x y)))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (println (.eq? 1 1))
     (println (.eq? 1 2))

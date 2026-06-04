@@ -9,14 +9,14 @@
 (extern-c printf [^cstr fmt ^int v] :int)
 
 ;; read the two int64 carrier fields of a Pair / the value of an Option
-(defn rd-pair [c :int] :int
+(defn rd-pair [c : int] : int
   ```c struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)c;
   return p ? p->fst * 1000 + p->snd : -1; ```)
-(defn rd-opt [c :int] :int
+(defn rd-opt [c : int] : int
   ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)c;
   return (o && o->is_some) ? o->value : -1; ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Pair[int int] round-trip: (7, 35) -> serialize -> deserialize -> 7*1000+35
   (let [p  (pair 7 35)
         b  (.serialize p)

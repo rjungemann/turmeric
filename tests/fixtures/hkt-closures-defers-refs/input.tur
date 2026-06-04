@@ -7,10 +7,10 @@
 ;;   4. The combined result is printed.
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; Option helpers
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -18,7 +18,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
@@ -26,7 +26,7 @@
   ```)
 
 ;; fmap using fat-closure calling convention
-(defn __fmap_option_clos [container fn] :int
+(defn __fmap_option_clos [container fn] : int
   ```c
   typedef struct { int64_t __fn; } __tur_fat_hdr;
   struct { bool is_some; int64_t value; } *c =
@@ -42,7 +42,7 @@
 (definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option_clos container fn)))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; ref holds the addend; closure captures it via borrow
     (let [addend (ref 7)]

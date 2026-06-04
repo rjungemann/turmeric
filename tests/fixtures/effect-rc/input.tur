@@ -2,7 +2,7 @@
 ;; rc value is live during the perform; no leaks.
 (defeffect GetCount [] :int)
 
-(defn use-rc [] :int
+(defn use-rc [] : int
   (let [r (rc/of 42)]
     (+ 0 (perform (GetCount)))))
 
