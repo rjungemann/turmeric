@@ -1717,11 +1717,35 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     /* Intra-instance method dispatch: register the instance and wire up its
      * type args / method-impl slots BEFORE elaborating any method body, so that
      * a `(.sibling self ...)` call inside one method's body can resolve to
-     * another method of the *same* instance.  The slots are filled in as each
-     * body is elaborated below; a method that dispatches to an earlier sibling
-     * sees a populated slot, while the instance itself is already visible to
-     * the `.method` dispatcher.  Post-registration bookkeeping (orphan check,
-     * INSTANCE_DEF expr) still happens after the loop. */
+     * another method of the *same* instance.
+     *
+     * Elaboration is split into two passes so that *forward* references and
+     * mutual recursion between siblings resolve too:
+     *   Pass 1 parses each method's signature (name / params / return type) and
+     *     creates its FnDef + binding shell, filling `method_impls[i]` and
+     *     registering the file-scope def -- but leaves the body as a nil
+     *     placeholder.  After pass 1 every sibling slot is non-NULL.
+     *   Pass 2 elaborates each method body against the now-complete instance,
+     *     so a call to a sibling defined *later* in the same `definstance`
+     *     (or a mutually recursive pair) sees a populated slot.
+     * The instance itself is registered on the env list up front so the
+     * type-based `.method` dispatcher selects it.  Post-registration
+     * bookkeeping (orphan check, INSTANCE_DEF expr) still happens after the
+     * loops. */
+    typedef struct {
+        Form     *impl_form;        /* (method-name [params...] body...) */
+        uint32_t  impl_body_start;  /* index of first body form within impl_form */
+        Binding **method_params;    /* param bindings to push into the body scope */
+        uint8_t   n_method_params;
+        FnDef    *method_fd;        /* shell whose ->body pass 2 fills in */
+    } InstMethodPass;
+    InstMethodPass *passes = NULL;
+    if (tc->n_methods > 0) {
+        passes = (InstMethodPass *)arena_alloc(e->arena,
+            tc->n_methods * sizeof(InstMethodPass));
+        memset(passes, 0, tc->n_methods * sizeof(InstMethodPass));
+    }
+
     TypeClassInstance *inst = typeclass_env_register_instance(&e->typeclass_env, tc);
     if (!inst) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2125,44 +2149,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             }
         }
         
-        /* Elaborate the body - push a scope with method parameters */
-        Scope method_scope;
-        scope_init(&method_scope, e->scope);
-        e->scope = &method_scope;
-
-        /* Add method parameters to scope */
-        for (uint8_t j = 0; j < n_method_params; j++) {
-            scope_add(&method_scope, method_params[j]);
-        }
-
-        /* ER3: Increment fn_body_depth so that (perform ...) inside an instance
-         * method body does not trigger TUR-E0008 (unhandled effect at top level).
-         * The handler is expected to be provided at the call site. */
-        e->fn_body_depth++;
-
+        /* Pass 2 (below) elaborates the body once every sibling slot is wired
+         * up.  For now the FnDef carries a nil placeholder body. */
         Expr *method_body = e_nil(e, impl_form->span);
-        uint32_t n_body = impl_form->as.list.len - impl_body_start;
-        if (n_body > 0) {
-            if (n_body == 1) {
-                method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
-            } else {
-                Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
-                for (uint32_t k = 0; k < n_body; k++) {
-                    items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
-                    if (!items[k]) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
-                }
-                method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
-                method_body->as.do_.items = items;
-                method_body->as.do_.n = n_body;
-            }
-        }
 
-        e->fn_body_depth--;
-
-        /* Pop method scope */
-        e->scope = method_scope.parent;
-        scope_free(&method_scope);
-        
         /* Create a proper function type for the method */
         TypeKind param_kinds[MAX_FN_ARITY];
         for (uint8_t j = 0; j < n_method_params; j++) {
@@ -2203,21 +2193,91 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * lifetime pass a clean context + return Type rather than garbage. */
         lifetime_context_init(&method_fd->lifetime_ctx);
         method_fd->return_type = type_simple(TY_UNKNOWN, CK_COPY);
-        
-        /* Register the method function at file scope */
-        scope_add(&e->global, method_binding);
-        
-        /* Create a file-scope definition expression */
-        Expr *method_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, impl_form->span);
-        method_def_expr->as.fn_def_.fn = method_fd;
-        elab_register_file_def(e, method_def_expr);
-        
+
+        /* method_impls[i] must be populated now so a sibling `.method self`
+         * dispatch (including forward / mutually-recursive references) resolves
+         * during pass 2.  The file-scope registration and global binding are
+         * deferred to pass 2, AFTER the body is elaborated, so they happen
+         * after the body's lifted lambdas are registered -- preserving the
+         * original `[body lambdas...][method def]` emit order.  Registering the
+         * method def first would emit the method ahead of its closure's lifted
+         * thunk; the closure's file-scope env struct (written while emitting the
+         * method body) would then land textually inside the method, out of
+         * scope for the later thunk -- an "undefined struct __env_N" miscompile. */
         method_impls[i] = method_fd;
+
+        /* Stash what pass 2 needs to elaborate this method's body. */
+        passes[i].impl_form       = impl_form;
+        passes[i].impl_body_start = impl_body_start;
+        passes[i].method_params   = method_params;
+        passes[i].n_method_params = n_method_params;
+        passes[i].method_fd       = method_fd;
     }
 
-    /* Instance was registered and its fields wired up before the body loop
-     * (see above) so intra-instance `.sibling self` dispatch resolves.  The
-     * method_impls slots are now fully populated. */
+    /* Pass 2: every sibling's FnDef shell and `method_impls` slot is now
+     * populated, so elaborate each method body.  A call to a sibling defined
+     * later in this same `definstance` -- or a mutually recursive pair --
+     * resolves because the dispatcher finds a non-NULL slot for it. */
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        InstMethodPass *mp = &passes[i];
+        Form *impl_form = mp->impl_form;
+        uint32_t impl_body_start = mp->impl_body_start;
+
+        /* Elaborate the body - push a scope with method parameters */
+        Scope method_scope;
+        scope_init(&method_scope, e->scope);
+        e->scope = &method_scope;
+
+        /* Add method parameters to scope */
+        for (uint8_t j = 0; j < mp->n_method_params; j++) {
+            scope_add(&method_scope, mp->method_params[j]);
+        }
+
+        /* ER3: Increment fn_body_depth so that (perform ...) inside an instance
+         * method body does not trigger TUR-E0008 (unhandled effect at top level).
+         * The handler is expected to be provided at the call site. */
+        e->fn_body_depth++;
+
+        Expr *method_body = e_nil(e, impl_form->span);
+        uint32_t n_body = impl_form->as.list.len - impl_body_start;
+        if (n_body > 0) {
+            if (n_body == 1) {
+                method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
+            } else {
+                Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+                for (uint32_t k = 0; k < n_body; k++) {
+                    items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
+                    if (!items[k]) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                }
+                method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
+                method_body->as.do_.items = items;
+                method_body->as.do_.n = n_body;
+            }
+        }
+
+        e->fn_body_depth--;
+
+        /* Pop method scope */
+        e->scope = method_scope.parent;
+        scope_free(&method_scope);
+
+        FnDef *method_fd = mp->method_fd;
+        method_fd->body = method_body;
+
+        /* Register the method now -- after its body's lifted lambdas were
+         * registered above -- so emit order is `[body lambdas...][method def]`,
+         * matching the original single-pass behaviour. */
+        scope_add(&e->global, method_fd->binding);
+        Expr *method_def_expr = expr_new(e->arena, EX_FN_DEF,
+                                         method_fd->binding->type, mp->impl_form->span);
+        method_def_expr->as.fn_def_.fn = method_fd;
+        elab_register_file_def(e, method_def_expr);
+    }
+
+    /* Instance was registered and its fields wired up before the body loops
+     * (see above) so intra-instance `.sibling self` dispatch resolves -- now
+     * including forward references and mutual recursion.  The method_impls
+     * slots are fully populated with elaborated bodies. */
 
     /* Phase HKT-P4: Orphan instance check.
      *
