@@ -11,7 +11,8 @@
 (load "stdlib/future.tur")
 
 ;; Read the settled value (or error code) out of a future cell.
-(defn future-get-ok [f : ptr<void>] : int
+;; Takes the stdlib Future handle (loaded above); the cell lowers to ptr<void>.
+(defn future-get-ok [f : Future] : int
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -42,7 +43,7 @@
   ;; future-then with a capturing closure (closes over base): 7 + 1000 = 1007
   (let [base 1000]
     (let [f (future-of 7)
-          g (future-then f (fn [x : int] : ptr<void> (future-of (+ x base))))]
+          g (future-then f (fn [x : int] : Future (future-of (+ x base))))]
       (println (future-get-ok g))                ;; 1007
       (future-free f)
       (future-free g)))

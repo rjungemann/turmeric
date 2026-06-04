@@ -197,6 +197,25 @@ The variadic checker now compares opaque types by identity, so passing a
 > `tests/fixtures/errors/threadpool-wrong-handle` proves passing a
 > `ThreadPoolHandle` to `thread-pool-dynamic-shutdown` is a compile-time
 > `TUR-E0001`. `future` remains to do.
+>
+> **Status update (2026-06-04, future):** the `future` slice has landed,
+> completing Phase 1 (Tier 1). `tur/future` now exposes `Promise` (write
+> end) and `Future` (read end) `defopaque` newtypes. Both are views over the
+> same shared `FutureCell`: a freshly allocated cell is handed out as a
+> `Promise` (the producer fulfills it) and the consumer's `Future` view is
+> derived with `future-of-cell` / `promise-pair`. Every `promise-*`
+> signature is `Promise`-typed and every `future-*` signature is
+> `Future`-typed (array combinators keep a `:ptr<void>` `FutureCell*[]`
+> param, and `future-get` keeps its `:ptr<void>` `Result` return). Because
+> nominal opaques do not implicitly coerce to their base, `future-of-cell`
+> reinterprets via `(:: (:: cell :ptr<void>) :Future)` and `future-free`
+> grew its own inline-C body instead of delegating to the now
+> `Promise`-typed `future-cell-free`. Acceptance fixture
+> `tests/fixtures/errors/future-wrong-handle` proves calling
+> `promise-fulfill` on a read-end `Future` is a compile-time `TUR-E0001`.
+> The one in-tree caller (`tests/fixtures/future-capturing-closure`) was
+> updated to the handle types. Tier 1 is now complete; Tier 2 (timer,
+> reactor, taskgroup, mutex/condvar/rwlock) is next.
 
 1. Land `defopaque` declarations + signature updates in each module.
 2. Update intra-stdlib callers (`tur/taskgroup`, `tur/scheduler`, etc.).

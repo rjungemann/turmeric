@@ -25,24 +25,34 @@
 ;;   bool              is_ok     (true = ok/fulfilled, false = err/failed)
 ;;
 ;; API:
-;;   promise-new            []                         -> ptr<void>  (returns FutureCell*; call promise-pair to get (Promise, Future))
-;;   promise-pair           [cell :ptr<void>]         -> (ptr<void> ptr<void>)  (Promise Future)
-;;   promise-fulfill        [p :ptr<void> v :int]     -> nil       (sets value, wakes waiters)
-;;   promise-fail           [p :ptr<void> e :int]     -> nil       (sets exn, wakes waiters)
-;;   promise-free           [p :ptr<void>]            -> nil
+;;   promise-new            []                         -> Promise  (write end; call promise-pair / future-of-cell for the Future)
+;;   promise-pair           [cell :Promise]           -> (Promise Future)
+;;   promise-fulfill        [p :Promise v :int]       -> nil       (sets value, wakes waiters)
+;;   promise-fail           [p :Promise e :int]       -> nil       (sets exn, wakes waiters)
+;;   promise-free           [p :Promise]              -> nil
 ;;
-;;   future-get             [f :ptr<void>]            -> ptr<void>  (blocks; returns Result<T>)
-;;   future-done?           [f :ptr<void>]            -> bool      (non-blocking check)
-;;   future-free            [f :ptr<void>]            -> nil
+;;   future-get             [f :Future]               -> ptr<void>  (blocks; returns Result<T>)
+;;   future-done?           [f :Future]               -> bool      (non-blocking check)
+;;   future-free            [f :Future]               -> nil
+;; ---- Opaque handle newtypes (stdlib-opaque-handle-types-plan, Tier 1) ----
+;; Promise is the write end (producer); Future is the read end (consumer). Both
+;; are views over the same shared FutureCell, but are nominally distinct so the
+;; checker rejects passing a Future where a Promise is expected (and vice versa)
+;; -- e.g. calling promise-fulfill on a read-end Future. Both lower to the
+;; underlying :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
+;; A freshly allocated cell is handed out as a Promise (the producer fulfills
+;; it); derive the consumer's Future view with future-of-cell / promise-pair.
+(defopaque Promise :ptr<void>)
+(defopaque Future  :ptr<void>)
 ;; ---- Shared FutureCell type and helpers ----
 ;; Allocate a new FutureCell (shared by Promise and Future)
 ;;; future-cell-new -- allocate and initialise a shared FutureCell (mutex, condvar, unset).
 ;;;
 ;;; Returns:
-;;;   A :ptr<void> to the new FutureCell; free with future-cell-free.
+;;;   A Promise (write-end view of the new FutureCell); free with future-cell-free.
 ;;;
 ;;; Since: Phase T20-C
-(defn future-cell-new [] : ptr<void>
+(defn future-cell-new [] : Promise
   ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t  ready;
@@ -69,7 +79,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-cell-free [cell : ptr<void>] : nil
+(defn future-cell-free [cell : Promise] : nil
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)cell;
   pthread_mutex_destroy(&fc->lock);
@@ -84,7 +94,7 @@
 ;;; promise-new -- allocate a new unsettled Promise/Future shared cell.
 ;;;
 ;;; Returns:
-;;;   A :ptr<void> FutureCell* usable as both a Promise and Future handle.
+;;;   A Promise (write end); derive the read-end Future with future-of-cell.
 ;;;
 ;;; Example:
 ;;;   (def p (promise-new))
@@ -93,7 +103,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn promise-new [] : ptr<void> (future-cell-new))
+(defn promise-new [] : Promise (future-cell-new))
 ;; Given a cell, return the Promise handle (same pointer as cell).
 ;; This is a convenience for API symmetry.
 ;;; promise-of-cell -- return the Promise handle for a FutureCell (identity; for API symmetry).
@@ -103,7 +113,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn promise-of-cell [cell : ptr<void>] : ptr<void> cell)
+(defn promise-of-cell [cell : Promise] : Promise cell)
 ;; Given a cell, return the Future handle (same pointer as cell).
 ;;; future-of-cell -- return the Future handle for a FutureCell (identity; for API symmetry).
 ;;;
@@ -112,7 +122,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-of-cell [cell : ptr<void>] : ptr<void> cell)
+(defn future-of-cell [cell : Promise] : Future (:: (:: cell :ptr<void>) :Future))
 ;; Return a (Promise Future) pair from a cell.
 ;; Both elements are the same pointer but conceptually distinct types.
 ;;; promise-pair -- expand to a (Promise Future) pair list from a single shared cell.
@@ -134,7 +144,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn promise-fulfill [p : ptr<void> v : int] : nil
+(defn promise-fulfill [p : Promise v : int] : nil
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)p;
   pthread_mutex_lock(&fc->lock);
@@ -159,7 +169,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn promise-fail [p : ptr<void> e : int] : nil
+(defn promise-fail [p : Promise e : int] : nil
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)p;
   pthread_mutex_lock(&fc->lock);
@@ -182,7 +192,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn promise-free [p : ptr<void>] : nil (future-cell-free p))
+(defn promise-free [p : Promise] : nil (future-cell-free p))
 ;; ---- Future API ----
 ;; Check if a future is done (non-blocking).
 ;;; future-done? -- non-blocking check: return true if the future has been settled.
@@ -196,7 +206,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-done? [f : ptr<void>] : bool
+(defn future-done? [f : Future] : bool
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -219,7 +229,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-get [f : ptr<void>] : ptr<void>
+(defn future-get [f : Future] : ptr<void>
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -249,7 +259,13 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-free [f : ptr<void>] : nil (future-cell-free f))
+(defn future-free [f : Future] : nil
+  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_destroy(&fc->lock);
+  pthread_cond_destroy(&fc->ready);
+  free(fc);
+  ```)
 ;; ---- AW-002: Pre-settled futures ----
 ;; Create a pre-fulfilled future with the given value.
 ;;; future-of -- create a pre-fulfilled future holding value v.
@@ -258,7 +274,7 @@
 ;;;   v -- value the future should carry
 ;;;
 ;;; Returns:
-;;;   A :ptr<void> FutureCell already settled as ok with value v.
+;;;   A Future already settled as ok with value v.
 ;;;
 ;;; Example:
 ;;;   (def f (future-of 42))  ; immediately done
@@ -266,7 +282,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-of [v : int] : ptr<void>
+(defn future-of [v : int] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
   if (!cell) { fprintf(stderr, "future-of: oom\n"); abort(); }
@@ -285,11 +301,11 @@
 ;;;   e -- error/exception code
 ;;;
 ;;; Returns:
-;;;   A :ptr<void> FutureCell already settled as failed with exn = e.
+;;;   A Future already settled as failed with exn = e.
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-error-of [e : int] : ptr<void>
+(defn future-error-of [e : int] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
   if (!cell) { fprintf(stderr, "future-error-of: oom\n"); abort(); }
@@ -310,7 +326,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-cancel [f : ptr<void>] : nil
+(defn future-cancel [f : Future] : nil
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -333,7 +349,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-cancelled? [f : ptr<void>] : bool
+(defn future-cancelled? [f : Future] : bool
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -358,7 +374,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-map [f : ptr<void> ^fat fn : ptr<void>] : ptr<void>
+(defn future-map [f : Future ^fat fn : ptr<void>] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -398,7 +414,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-then [f : ptr<void> ^fat fn : ptr<void>] : ptr<void>
+(defn future-then [f : Future ^fat fn : ptr<void>] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
@@ -435,7 +451,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-race [fa : ptr<void> fb : ptr<void>] : ptr<void>
+(defn future-race [fa : Future fb : Future] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
@@ -482,7 +498,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-all2 [fa : ptr<void> fb : ptr<void>] : ptr<void>
+(defn future-all2 [fa : Future fb : Future] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
@@ -518,7 +534,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-any2 [fa : ptr<void> fb : ptr<void>] : ptr<void>
+(defn future-any2 [fa : Future fb : Future] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
@@ -562,7 +578,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-join [fa : ptr<void> fb : ptr<void>] : ptr<void>
+(defn future-join [fa : Future fb : Future] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
@@ -632,7 +648,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn promise-new-pair [] : ptr<void> (promise-new))
+(defn promise-new-pair [] : Promise (promise-new))
 ;; ---- AW-007: Variadic multi-combinators ---
 ;; Race an array of futures. Returns a new future that resolves to the first settled future.
 ;; Takes a ptr<void> to an array of FutureCell* and a count.
@@ -648,7 +664,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-race-n [futures : ptr<void> n : int] : ptr<void>
+(defn future-race-n [futures : ptr<void> n : int] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell **arr = (FutureCell **)futures;
   for (int i = 0; i < (int)n; i++) {
@@ -697,7 +713,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-all-n [futures : ptr<void> n : int] : ptr<void>
+(defn future-all-n [futures : ptr<void> n : int] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell **arr = (FutureCell **)futures;
   bool all_ok = true;
@@ -730,7 +746,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-any-n [futures : ptr<void> n : int] : ptr<void>
+(defn future-any-n [futures : ptr<void> n : int] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell **arr = (FutureCell **)futures;
   for (int i = 0; i < (int)n; i++) {
@@ -762,7 +778,7 @@
 ;;;   ms -- timeout duration in milliseconds
 ;;;
 ;;; Returns:
-;;;   A :ptr<void> FutureCell that will be settled (is_ok = false, exn = -1) after ms ms.
+;;;   A Future that will be settled (is_ok = false, exn = -1) after ms ms.
 ;;;
 ;;; Example:
 ;;;   (def t (future-timeout 5000))  ; rejects after 5 seconds
@@ -770,7 +786,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-timeout [ms : int] : ptr<void>
+(defn future-timeout [ms : int] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)malloc(sizeof(FutureCell));
   if (!fc) { fprintf(stderr, "future-timeout: oom\n"); abort(); }
@@ -814,7 +830,7 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-with-timeout [f : ptr<void> ms : int] : ptr<void>
+(defn future-with-timeout [f : Future ms : int] : Future
   ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
