@@ -90,9 +90,9 @@
   `(if (~fst-cmp (.fst ~p1) (.fst ~p2)) (~snd-cmp (.snd ~p1) (.snd ~p2)) false))
 ;;; pair-eq-carrier? -- legacy carrier-ABI helper used inside Pair's Eq instance.
 
-(defn pair-eq-carrier? [p1 :int p2 :int ^fat fst-cmp ^fat snd-cmp]
+(defn pair-eq-carrier? [p1 : int p2 : int ^fat fst-cmp ^fat snd-cmp]
   #{}
-  :bool
+  : bool
   ```c struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
   struct { int64_t fst; int64_t snd; } *b = (void*)(intptr_t)p2;
   if (!a && !b) return true;

@@ -29,7 +29,7 @@
 ;;; Since: Phase SZ3
 (defn sized-matrix-new [rows cols]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
   m->rows = rows;
   m->cols = cols;
@@ -53,7 +53,7 @@
 
 (defn sized-matrix-new-zeroed [rows cols]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
   m->rows = rows;
   m->cols = cols;
@@ -76,7 +76,7 @@
 
 (defn sized-matrix-free [m]
   #{Unsafe}
-  :nil
+  : nil
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (mat->data) free(mat->data);
   free(mat);
@@ -98,7 +98,7 @@
 
 (defn sized-matrix-rows [m]
   #{Unsafe}
-  :int
+  : int
   ```c return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->rows;
   ```)
 ;;; sized-matrix-cols -- number of columns in the matrix.
@@ -116,7 +116,7 @@
 
 (defn sized-matrix-cols [m]
   #{Unsafe}
-  :int
+  : int
   ```c return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->cols;
   ```)
 ;;; sized-matrix-size -- return the total element count as a Size expression.
@@ -134,7 +134,7 @@
 
 (defn sized-matrix-size [m]
   #{Unsafe}
-  :Size
+  : Size
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   return ctor_Static(mat->rows * mat->cols);
   ```)
@@ -155,7 +155,7 @@
 
 (defn sized-matrix-row-size [m]
   #{Unsafe}
-  :Size
+  : Size
   ```c return ctor_Static(((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->cols);
   ```)
 ;;; sized-matrix-col-size -- return the number of rows as a Size expression.
@@ -173,7 +173,7 @@
 
 (defn sized-matrix-col-size [m]
   #{Unsafe}
-  :Size
+  : Size
   ```c return ctor_Static(((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->rows);
   ```)
 ;; ===== Element access =====
@@ -195,7 +195,7 @@
 
 (defn sized-matrix-get [m r c]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols)
     return mat->data[r * mat->cols + c];
@@ -222,7 +222,7 @@
 
 (defn sized-matrix-set! [m r c v]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols) {
     mat->data[r * mat->cols + c] = v;
@@ -251,7 +251,7 @@
 
 (defn sized-matrix-fill! [m v]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   int64_t n = mat->rows * mat->cols;
   for (int64_t i = 0; i < n; i++) mat->data[i] = v;
@@ -273,7 +273,7 @@
 
 (defn sized-matrix-row-sum [m r]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (r < 0 || r >= mat->rows) {
     fprintf(stderr, "sized-matrix-row-sum: row %lld out of bounds\n", (long long)r);
@@ -299,7 +299,7 @@
 
 (defn sized-matrix-col-sum [m c]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (c < 0 || c >= mat->cols) {
     fprintf(stderr, "sized-matrix-col-sum: col %lld out of bounds\n", (long long)c);
@@ -324,7 +324,7 @@
 
 (defn sized-matrix-total-sum [m]
   #{Unsafe}
-  :int
+  : int
   ```c struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   int64_t s = 0;
   int64_t n = mat->rows * mat->cols;
@@ -350,7 +350,7 @@
 
 (defn sized-matrix-assert-shape! [m expected-rows expected-cols]
   #{Unsafe}
-  :nil
+  : nil
   (let [actual-rows (sized-matrix-rows m)]
     (let [actual-cols (sized-matrix-cols m)]
       (require-msg! (= actual-rows (size-eval expected-rows))

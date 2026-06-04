@@ -22,7 +22,7 @@
 ;;; __functor_rc_fmap -- internal Functor fmap implementation for rc<T>.
 ;;;
 ;;; Since: Phase HKT H3
-(defn __functor_rc_fmap [container fn] :int
+(defn __functor_rc_fmap [container fn] : int
   ```c /* In v1, rc<T> is represented as RcControlBlock* (see src/rc.c)
    * We can't easily implement fmap without modifying the RcControlBlock
    * to store the actual value. For v1, we return a cloned rc with the
@@ -76,7 +76,7 @@
 ;;;
 ;;; Since: Phase HKT S6
 
-(defclass Foldable [^t] (foldl [ta init fn] :int) (foldr [ta init fn] :int))
+(defclass Foldable [^t] (foldl [ta init fn] : int) (foldr [ta init fn] : int))
 ;; Foldable instance for rc<T>.
 ;; An rc contains exactly one value, so:
 ;;   foldl init fn (rc v) = fn(init, v)
@@ -115,7 +115,7 @@
 ;; of this instance has been removed -- rc dispatches on its own TY_RC home
 ;; type, which is kind-correct and non-orphan.
 
-(definstance Clone [rc] (clone [x] :int ```c /* x is RcControlBlock *; increment refcount, return same pointer. */
+(definstance Clone [rc] (clone [x] : int ```c /* x is RcControlBlock *; increment refcount, return same pointer. */
     rc_strong_increment(x);
     return (int64_t)(intptr_t)x;
     ```))

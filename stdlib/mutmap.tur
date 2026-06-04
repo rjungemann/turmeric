@@ -41,7 +41,7 @@
 
 (defn mutmap-new []
   #{}
-  :int
+  : int
   ```c /* Backing storage layout:
    *   uint64_t cap;        capacity (power of two)
    *   uint64_t len;        live entry count (OCCUPIED slots only)
@@ -82,9 +82,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-len [m :int]
+(defn mutmap-len [m : int]
   #{}
-  :int
+  : int
   ```c struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
   struct { void *storage; } *mm = (void*)(intptr_t)m;
   struct __tur_mm_storage_l *s = (struct __tur_mm_storage_l *)mm->storage;
@@ -106,9 +106,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-set! [m :int h :int key :int val :int]
+(defn mutmap-set! [m : int h : int key : int val : int]
   #{}
-  :nil
+  : nil
   ```c enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -184,9 +184,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-get [m :int h :int key :int]
+(defn mutmap-get [m : int h : int key : int]
   #{}
-  :int
+  : int
   ```c enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -218,9 +218,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-has? [m :int h :int key :int]
+(defn mutmap-has? [m : int h : int key : int]
   #{}
-  :bool
+  : bool
   ```c enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -253,9 +253,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-delete! [m :int h :int key :int]
+(defn mutmap-delete! [m : int h : int key : int]
   #{}
-  :bool
+  : bool
   ```c enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -294,9 +294,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-eq? [m1 :int m2 :int ^fat val-cmp]
+(defn mutmap-eq? [m1 : int m2 : int ^fat val-cmp]
   #{}
-  :bool
+  : bool
   ```c enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -341,9 +341,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-free [m :int]
+(defn mutmap-free [m : int]
   #{}
-  :void
+  : void
   ```c struct { void *storage; } *mm = (void*)(intptr_t)m;
   if (mm->storage) free(mm->storage);
   free(mm);

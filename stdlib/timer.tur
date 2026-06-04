@@ -29,7 +29,7 @@
 ;;; Since: Phase T24
 ;; Schedule a callback to fire after ms milliseconds.
 ;; Returns a timer ID that can be passed to timer-cancel.
-(defn timer-set [ms :int callback :ptr<void> arg :ptr<void>] :int
+(defn timer-set [ms : int callback : ptr<void> arg : ptr<void>] : int
   ```c if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
   int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
   return tur_timer_wheel_insert(tur_global_timers, deadline,
@@ -47,7 +47,7 @@
 ;; Cancel a previously scheduled timer by ID.
 ;; If the timer has already fired, this is a no-op.
 
-(defn timer-cancel [id :int] :nil
+(defn timer-cancel [id : int] : nil
   ```c if (tur_global_timers) tur_timer_wheel_cancel(tur_global_timers, id);
   ```)
 ;;; timer-sleep -- park the current fiber for a given number of milliseconds.
@@ -63,7 +63,7 @@
 ;; Requires that a scheduler is active and the caller is running in a fiber.
 ;; For a version that falls back to nanosleep, use async-sleep from fiber.tur.
 
-(defn timer-sleep [ms :int] :nil
+(defn timer-sleep [ms : int] : nil
   ```c if (ms <= 0) return;
   FiberBlock *me = tur_current_fiber;
   if (!me || !tur_scheduler) {

@@ -22,7 +22,7 @@
 
 (defn vec-new []
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
@@ -42,9 +42,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-len [v :int]
+(defn vec-len [v : int]
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   ```)
@@ -150,9 +150,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-free [v :int]
+(defn vec-free [v : int]
   #{}
-  :void
+  : void
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->data) free(vec->data);
   free(vec);
@@ -238,9 +238,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-eq? [v1 :int v2 :int ^fat cmp-fn]
+(defn vec-eq? [v1 : int v2 : int ^fat cmp-fn]
   #{}
-  :bool
+  : bool
   ```c struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;

@@ -23,7 +23,7 @@
 
 (defn set-new []
   #{}
-  :int
+  : int
   ```c struct { void *hamt; } *s = malloc(sizeof(*s));
   s->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)s;
@@ -43,9 +43,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-add [s :int h :int x :int]
+(defn set-add [s : int h : int x : int]
   #{}
-  :int
+  : int
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -67,9 +67,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-remove [s :int h :int x :int]
+(defn set-remove [s : int h : int x : int]
   #{}
-  :int
+  : int
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_del(set->hamt, h, (void*)(intptr_t)x);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -91,9 +91,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-member? [s :int h :int x :int]
+(defn set-member? [s : int h : int x : int]
   #{}
-  :bool
+  : bool
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_has(set->hamt, h, (void*)(intptr_t)x);
   ```)
@@ -110,9 +110,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-count [s :int]
+(defn set-count [s : int]
   #{}
-  :int
+  : int
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_count(set->hamt);
   ```)
@@ -130,9 +130,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-union [a :int b :int]
+(defn set-union [a : int b : int]
   #{}
-  :int
+  : int
   ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(sa->hamt, sb->hamt);
@@ -154,9 +154,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-intersect [a :int b :int]
+(defn set-intersect [a : int b : int]
   #{}
-  :int
+  : int
   ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
@@ -189,9 +189,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-diff [a :int b :int]
+(defn set-diff [a : int b : int]
   #{}
-  :int
+  : int
   ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
@@ -224,9 +224,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-eq? [a :int b :int]
+(defn set-eq? [a : int b : int]
   #{}
-  :bool
+  : bool
   ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
@@ -261,9 +261,9 @@
 ;;;
 ;;; Since: Phase F3-5 (cross-plan-followups)
 
-(defn set-eq-cmp? [a :int b :int ^fat cmp-fn]
+(defn set-eq-cmp? [a : int b : int ^fat cmp-fn]
   #{}
-  :bool
+  : bool
   ```c /* O(n*m) comparison: iterate a's elements, scan b for a structural
    * match per element.  Bigger constant than set-eq?'s hash lookup
    * but correct for arbitrarily-structured element types.  Used by
@@ -309,9 +309,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-free [s :int]
+(defn set-free [s : int]
   #{}
-  :void
+  : void
   ```c free((void*)(intptr_t)s);
   ```)
 ;;; Eq [Set] -- membership equality using the HAMT structure.
@@ -327,7 +327,7 @@
 ;;; computed element is evaluated once and is not subject to the let-binding
 ;;; move check that a doubled (set-add s e e) would trip.
 
-(defn set-add1 [s :int x :int] :int (set-add s x x))
+(defn set-add1 [s : int x : int] : int (set-add s x x))
 ;;; set-add-each__ -- internal helper for the set-of macro.
 ;;;
 ;;; Threads (set-add1 s x) over the elements in xs.  Each element appears

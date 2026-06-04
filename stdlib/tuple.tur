@@ -428,9 +428,9 @@
 ;;;
 ;;; Since: Phase TP2
 
-(defn tuple2-eq-carrier? [t1 :int t2 :int e1-cmp e2-cmp]
+(defn tuple2-eq-carrier? [t1 : int t2 : int e1-cmp e2-cmp]
   #{}
-  :bool
+  : bool
   ```c struct { int64_t e1; int64_t e2; } *a = (void*)(intptr_t)t1;
   struct { int64_t e1; int64_t e2; } *b = (void*)(intptr_t)t2;
   if (!a && !b) return true;

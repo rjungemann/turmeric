@@ -19,7 +19,7 @@
 ;;;   (sqrt 2.0)  ; => 1.41421
 ;;;
 ;;; Since: Phase B1
-(defn sqrt [x :float] :float
+(defn sqrt [x : float] : float
   ```c double sqrt(double);
   return sqrt(x);
   ```)
@@ -36,7 +36,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn fabs [x :float] :float
+(defn fabs [x : float] : float
   ```c double fabs(double);
   return fabs(x);
   ```)
@@ -53,7 +53,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn floor [x :float] :float
+(defn floor [x : float] : float
   ```c double floor(double);
   return floor(x);
   ```)
@@ -70,7 +70,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn ceil [x :float] :float
+(defn ceil [x : float] : float
   ```c double ceil(double);
   return ceil(x);
   ```)
@@ -88,7 +88,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn pow [x :float y :float] :float
+(defn pow [x : float y : float] : float
   ```c double pow(double, double);
   return pow(x, y);
   ```)
@@ -105,7 +105,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn int->float [n :int] :float
+(defn int->float [n : int] : float
   ```c return (double)n;
   ```)
 ;;; float->int -- truncate a float to an integer.
@@ -121,7 +121,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn float->int [x :float] :int
+(defn float->int [x : float] : int
   ```c return (int64_t)x;
   ```)
 ;;; printf-float6 -- print a float to stdout with 6 decimal places followed by a
@@ -132,7 +132,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn printf-float6 [x :float] :nil
+(defn printf-float6 [x : float] : nil
   ```c printf("%.6f\n", x);
   ```)
 ;;; PI -- mathematical constant pi.

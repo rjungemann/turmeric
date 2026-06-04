@@ -24,7 +24,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn nat-zero [] :Nat (Zero))
+(defn nat-zero [] : Nat (Zero))
 ;;; nat-succ -- construct the successor of a natural number.
 ;;;
 ;;; Parameters:
@@ -38,7 +38,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn nat-succ [n :Nat] :Nat (Succ n))
+(defn nat-succ [n : Nat] : Nat (Succ n))
 ;;; nat-to-int -- convert a type-level Nat to a runtime integer.
 ;;;
 ;;; Parameters:
@@ -52,7 +52,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn nat-to-int [n :Nat] :int (match n (Zero) 0 (Succ p) (+ 1 (nat-to-int p))))
+(defn nat-to-int [n : Nat] : int (match n (Zero) 0 (Succ p) (+ 1 (nat-to-int p))))
 ;;; nat-add -- add two type-level Nat values.
 ;;;
 ;;; Parameters:
@@ -67,5 +67,5 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn nat-add [a :Nat b :Nat] :Nat
+(defn nat-add [a : Nat b : Nat] : Nat
   (match a (Zero) b (Succ p) (Succ (nat-add p b))))

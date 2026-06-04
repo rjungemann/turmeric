@@ -35,7 +35,7 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn result-panic [r :int] :Panic
+(defn result-panic [r : int] : Panic
   ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (void *)(intptr_t)r;
   return (res && !res->is_ok) ? (int64_t)res->err_val : 0;
@@ -50,7 +50,7 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn panic-message [p :Panic] :cstr
+(defn panic-message [p : Panic] : cstr
   ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   const char *m = pp ? (const char *)tur_panic_payload_value(pp) : 0;
   return m ? m : "";
@@ -65,7 +65,7 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn panic-file [p :Panic] :cstr
+(defn panic-file [p : Panic] : cstr
   ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   const char *f = pp ? tur_panic_payload_file(pp) : 0;
   return f ? f : "";
@@ -80,7 +80,7 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn panic-line [p :Panic] :int
+(defn panic-line [p : Panic] : int
   ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   return pp ? tur_panic_payload_line(pp) : 0;
   ```)
@@ -95,7 +95,7 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn panic-type [p :Panic] :int
+(defn panic-type [p : Panic] : int
   ```c tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
   return pp ? tur_panic_payload_type(pp) : 0;
   ```)
