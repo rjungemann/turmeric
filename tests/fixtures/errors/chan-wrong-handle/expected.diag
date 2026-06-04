@@ -1,0 +1,1 @@
+function 'chan-send' arg 1: expected Chan, got AsyncChan
