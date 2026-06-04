@@ -1,0 +1,18 @@
+;; G6 (language-readiness-for-typed-signal-plan): vec-get on a vec of
+;; closures. Verifies the value returned by (vec-get v i) is directly
+;; usable as a closure of the declared type without an extra cast at
+;; every use site.
+
+(defn make-add [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+
+(defn call1 [^fat f :(fn [:int] #{} :int) x : int] : int (f x))
+
+(defn main [] : int
+  (let [v   (vec-of (make-add 1) (make-add 2) (make-add 3))
+        f0  (:: (vec-get v 0) :ptr<void>)
+        f1  (:: (vec-get v 1) :ptr<void>)
+        f2  (:: (vec-get v 2) :ptr<void>)]
+    (println (call1 f0 10))   ;; 11
+    (println (call1 f1 10))   ;; 12
+    (println (call1 f2 10)))  ;; 13
+  0)

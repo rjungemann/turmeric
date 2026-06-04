@@ -1,0 +1,19 @@
+;; G3 (language-readiness-for-typed-signal-plan): vec-of with three
+;; capturing closures that share declared type (fn [:int] :int) but have
+;; different captured environments. Verifies that tur-vec-homog__ accepts
+;; them as a homogeneous vec.
+
+(defn make-add [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn make-mul [k : int] : ptr<void> (fn [x : int] : int (* x k)))
+
+(defn call1 [^fat f :(fn [:int] #{} :int) x : int] : int (f x))
+
+(defn main [] : int
+  (let [f1 (make-add 1)
+        f2 (make-add 10)
+        f3 (make-mul 3)
+        v  (vec-of f1 f2 f3)]
+    (println (call1 (:: (vec-get v 0) :ptr<void>) 5))   ;; 6
+    (println (call1 (:: (vec-get v 1) :ptr<void>) 5))   ;; 15
+    (println (call1 (:: (vec-get v 2) :ptr<void>) 5)))  ;; 15
+  0)

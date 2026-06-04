@@ -69,7 +69,7 @@ Wrapping these handles in `defopaque` newtypes:
 
 | Module          | Newtypes to introduce                                | Notes |
 |-----------------|------------------------------------------------------|-------|
-| `tur/threadpool`| `WorkQueueHandle`, `ThreadPoolHandle`, `FutureHandle`| Pool and submitted future are both `:ptr<void>` today |
+| `tur/threadpool`| `WorkQueueHandle`, `ThreadPoolHandle`, `DynThreadPoolHandle`, `FutureHandle`| Pool and submitted future are both `:ptr<void>` today; static vs. dynamic pool blocks differ |
 | `tur/future`    | `Promise`, `Future`                                  | Write end vs read end currently indistinguishable |
 | `tur/chan`      | `Chan`, `AsyncChan`                                  | Sync and async channels share a type |
 
@@ -179,10 +179,43 @@ The variadic checker now compares opaque types by identity, so passing a
 > `tur/chan` now exposes `Chan`/`AsyncChan` `defopaque` newtypes and all
 > sync/async channel signatures are handle-typed. The acceptance fixture
 > `tests/fixtures/errors/chan-wrong-handle` proves the swap (`AsyncChan`
-> into `chan-send`) is now a compile-time `TUR-E0001`. `threadpool` and
-> `future` remain to do. Implementing this surfaced a codegen bug --
-> `(:: captured-var :T)` inside a closure defeats the capture rewrite --
-> recorded in `docs/reported/ascribe-captured-var-in-closure.md`.
+> into `chan-send`) is now a compile-time `TUR-E0001`. Implementing this
+> surfaced a codegen bug -- `(:: captured-var :T)` inside a closure defeats
+> the capture rewrite -- recorded in
+> `docs/reported/ascribe-captured-var-in-closure.md`.
+>
+> **Status update (2026-06-04, threadpool):** the `threadpool` slice has
+> landed. `tur/threadpool` now exposes four `defopaque` newtypes --
+> `WorkQueueHandle`, `ThreadPoolHandle`, `DynThreadPoolHandle`, and
+> `FutureHandle`. Beyond the plan's original three, a separate
+> `DynThreadPoolHandle` was added because the static and dynamic pools have
+> *different* block layouts (`ThreadPoolBlock` vs `DynThreadPoolBlock`), so
+> feeding a static pool to a dynamic-pool op was a latent miscast the
+> checker now rejects. Every `work-queue-*`, `thread-pool-*`, and
+> `thread-pool-dynamic-*` signature is handle-typed; the inline-C bodies are
+> unchanged since all newtypes lower to `:ptr<void>`. Acceptance fixture
+> `tests/fixtures/errors/threadpool-wrong-handle` proves passing a
+> `ThreadPoolHandle` to `thread-pool-dynamic-shutdown` is a compile-time
+> `TUR-E0001`. `future` remains to do.
+>
+> **Status update (2026-06-04, future):** the `future` slice has landed,
+> completing Phase 1 (Tier 1). `tur/future` now exposes `Promise` (write
+> end) and `Future` (read end) `defopaque` newtypes. Both are views over the
+> same shared `FutureCell`: a freshly allocated cell is handed out as a
+> `Promise` (the producer fulfills it) and the consumer's `Future` view is
+> derived with `future-of-cell` / `promise-pair`. Every `promise-*`
+> signature is `Promise`-typed and every `future-*` signature is
+> `Future`-typed (array combinators keep a `:ptr<void>` `FutureCell*[]`
+> param, and `future-get` keeps its `:ptr<void>` `Result` return). Because
+> nominal opaques do not implicitly coerce to their base, `future-of-cell`
+> reinterprets via `(:: (:: cell :ptr<void>) :Future)` and `future-free`
+> grew its own inline-C body instead of delegating to the now
+> `Promise`-typed `future-cell-free`. Acceptance fixture
+> `tests/fixtures/errors/future-wrong-handle` proves calling
+> `promise-fulfill` on a read-end `Future` is a compile-time `TUR-E0001`.
+> The one in-tree caller (`tests/fixtures/future-capturing-closure`) was
+> updated to the handle types. Tier 1 is now complete; Tier 2 (timer,
+> reactor, taskgroup, mutex/condvar/rwlock) is next.
 
 1. Land `defopaque` declarations + signature updates in each module.
 2. Update intra-stdlib callers (`tur/taskgroup`, `tur/scheduler`, etc.).
@@ -196,11 +229,154 @@ The variadic checker now compares opaque types by identity, so passing a
 Same procedure. Mutex/condvar/rwlock can ship as a single PR since they
 co-evolve (`condvar-wait` needs both newtypes simultaneously).
 
+> **Status update (2026-06-04, Tier 2 complete):** all four Tier-2 slices
+> have landed.
+>
+> - **mutex/condvar/rwlock** (one commit): `Mutex`, `CondVar`, `RwLock`
+>   newtypes. The headline win is `condvar-wait [c :CondVar m :Mutex]` --
+>   the transposed `(condvar-wait m c)` is now a compile-time `TUR-E0001`
+>   (fixture `errors/condvar-wrong-handle`). `condvar.tur` `(load "stdlib/
+>   mutex.tur")` to bring `Mutex` into scope; `load` is idempotent.
+> - **timer**: `TimerId` (a `defopaque` over `:int`). `timer-set ->
+>   TimerId`, `timer-cancel [id :TimerId]`; a bare int to `timer-cancel`
+>   is rejected (fixture `errors/timer-wrong-handle`).
+> - **reactor**: `EventSourceId` (over `:int`) for the `reactor-add-*`
+>   family; `reactor-modify-fd` / `reactor-remove` take it. Wrappers
+>   ascribe the C return `(:: ... :EventSourceId)` and unwrap `(:: id
+>   :int)` at the extern-c boundary. The `-1` error sentinel still rides
+>   in the id; callers compare via `(:: id :int)`. Fixture
+>   `errors/reactor-wrong-handle`. The reactor / fiber-group / channel
+>   handles stay `:ptr<void>` (out of scope).
+> - **taskgroup**: `TaskGroup` (group) and `TaskHandle` (spawned-task)
+>   newtypes; `task-group-join [group :TaskGroup handle :TaskHandle]` so
+>   the transposed call is rejected (fixture `errors/taskgroup-wrong-
+>   handle`). `task-group-spawn-async` keeps its `:ptr<void>` return (a
+>   C-level `TurFuture`, distinct from `tur/future`'s `Future`).
+>
+> No in-tree caller loads the timer / mutex / condvar / rwlock / taskgroup
+> stdlib modules (every fixture defines its own inline helpers), and the
+> one reactor caller that loads the stdlib (`reactor-fibers-park-chan`)
+> uses none of the source-id family, so no callers needed updating.
+> Implementing the taskgroup slice surfaced a pre-existing latent bug --
+> the `task-group-with*` / `task-group-async` wrapper macros expand to an
+> uncallable `nil` head -- reported in
+> `docs/reported/taskgroup-wrapper-macros-emit-nil-head.md`.
+>
+> Tier 2 is now complete; Tier 3 (`tur/atomic`) + the re-audit sweep is
+> next.
+
 ### Phase 3 -- Tier 3 + sweep
 
 - `tur/atomic`.
 - Re-audit `tur/thread`, `tur/fiber`, `tur/stm`, `tur/ref`.
 - I/O module sweep (file descriptors, sockets).
+
+> **Status update (2026-06-04, Tier 3):** the headline `tur/atomic` slice
+> plus most of the re-audit sweep have landed.
+>
+> - **atomic** (own commit): `AtomicCell` over `:ptr<void>`; every
+>   `atomic-*` op is handle-typed (fixture `errors/atomic-wrong-handle`).
+> - **stm**: `TVar` over `:ptr` -- distinguishes the transactional-variable
+>   handle from the boxed `:ptr` values it holds. `tvar/new -> TVar`;
+>   `tvar/read` / `-write` / `-swap` / `-cas` take `[tv :TVar ...]`. No
+>   dedicated error fixture: the STM-block guard (`TUR-E0009`) fires before
+>   argument type-checking, so a standalone wrong-handle case can't reach
+>   the `TUR-E0001`; the typing is covered by compile + suite.
+> - **thread**: `ThreadHandle` over `:ptr<void>`; `thread-spawn-fn ->
+>   ThreadHandle`, `thread-join` / `-detach` / `cancel-thread` take it
+>   (fixture `errors/thread-wrong-handle`). `tur/dynvar`'s `spawn-conveying`
+>   now returns `ThreadHandle` too (it `(load "stdlib/thread.tur")`), so its
+>   documented `(thread-join (spawn-conveying ...))` contract still
+>   type-checks.
+> - **fiber**: `FiberHandle` over `:ptr<void>`; `fiber-new -> FiberHandle`,
+>   and `fiber-resume` / `-done?` / `-arg` / `-free` / `-local-get` /
+>   `-local-set!` / `scheduler-unpark!` take it (fixture
+>   `errors/fiber-wrong-handle`). The consumer `tur/scheduler_mt`
+>   (`scheduler-mt-spawn` / `-unpark`) now takes `FiberHandle` and
+>   `(load "stdlib/fiber.tur")`; the `scheduler-multithread` fixture (which
+>   loads both) flows a `FiberHandle` from `fiber-new` into
+>   `scheduler-mt-spawn` unchanged.
+>
+> **Deferred (documented, not done):**
+> - `tur/ref` -- its handle is an `:int` and its `ref-get`/`ref-free`
+>   parameters are *unannotated* (effectively polymorphic), plus a `Clone`
+>   instance returns the raw `:int`; newtyping it cleanly needs more than a
+>   signature pass, so it is left for a follow-up.
+> - The broad **I/O fd sweep** -- see the dedicated status update below.
+
+> **Status update (2026-06-04, I/O fd sweep):** the file-descriptor slice
+> of the sweep has landed. A new shared module `stdlib/fd.tur` defines
+> `(defopaque Fd :int)` plus `fd->int` / `int->fd` / `fd-valid?` helpers
+> (the `-1` OS error value still rides in the `Fd`; test it with
+> `fd-valid?` or recover the raw int with `fd->int`).
+>
+> - **async_socket**: `async-socket-listen` / `-accept` / `-connect` return
+>   `Fd`; `-accept` / `-send` / `-recv` / `-close` take `[fd :Fd ...]`
+>   (send/recv keep their `:int` byte-count returns).
+> - **async_file**: `async-file-open` returns `Fd`; `-read` / `-write` /
+>   `-close` take `[fd :Fd ...]`.
+> - **net**: `socket-fd [s :Socket]` now returns `Fd` so it composes with
+>   the async-socket ops (e.g. `(async-socket-send (socket-fd s) ...)`).
+>   The existing linear `Socket` struct is unchanged.
+>
+> All three `(load "stdlib/fd.tur")`; the inline-C bodies are unchanged
+> (they already `(int)`-cast the descriptor, and `Fd` lowers to `:int`).
+> Acceptance fixture `errors/fd-wrong-handle` proves that feeding an
+> `async-socket-recv` byte count back into `async-socket-close` -- the
+> classic fd/length mix-up -- is now a compile-time `TUR-E0001`. No fixture
+> or other stdlib module loads these I/O modules, so nothing else needed
+> updating.
+>
+> **process (Pid):** also landed in the same pass. `tur/process` now has
+> `(defopaque Pid :int)`; `process/pid` / `-ppid` / `-spawn` return `Pid`
+> and `process/wait` takes one, so an exit code or other bare integer can no
+> longer be passed where a pid is expected (`process/spawn` still encodes
+> its error as pid `-1`, recovered with `(:: pid :int)`). Acceptance fixture
+> `errors/process-wrong-handle`.
+>
+> **fs (StatInfo / TmpFile):** landed. `tur/fs` now wraps the two opaque
+> `:int` pointers it hands out -- `fs/stat -> StatInfo` (with `stat-free` /
+> `-size` / `-mtime` / `-mode` taking it) and `fs/tmpfile -> TmpFile` (with
+> `tmpfile-path` / `-fd` / `-free` taking it) -- so a `StatInfo` and a
+> `TmpFile` can no longer be transposed. `fs/tmpfile-fd` now returns the
+> shared `Fd` (fs `(load "stdlib/fd.tur")`). `fs/glob` is intentionally left
+> as a bare cons list: it is walkable data, not a resource handle.
+> Acceptance fixture `errors/fs-wrong-handle`.
+>
+> **io (DirListing / FileSystem):** landed. `tur/io` already handle-typed
+> the per-file path via the linear `FileHandle`; this slice adds
+> `DirListing` (`list-dir` returns it, `free-dir-listing` consumes it) and
+> `FileSystem` (`Real-FileSystem` returns it, `Real-FileSystem-free`
+> consumes it), so the two free functions reject an unrelated pointer.
+> Acceptance fixture `errors/io-wrong-handle`.
+>
+> **Tail finished (2026-06-04):** the two documented follow-ups have landed.
+>
+> - **io `FileStream`** -- `tur/io` now has `(defopaque FileStream
+>   :ptr<void>)` plus `file-stream-open` / `file-stream-ok?` /
+>   `file-stream-close` wrappers around `fopen`/`fclose`, and `file-size`
+>   takes a `FileStream` (it previously took a raw `FILE*` as a bare,
+>   untyped `:int`). Acceptance fixture `errors/filestream-wrong-handle`.
+> - **`tur/ref` `RefHandle`** -- `(defopaque RefHandle :int)` wraps the heap
+>   pointer from `ref-new`; `ref-get` / `ref-free` now take it instead of an
+>   unannotated (int-defaulting) parameter. This is independent of the `Ref`
+>   *struct* and its `Clone` instance: the `Clone` typeclass fixes
+>   `clone`'s return at `:int`, so that deep-copy path keeps the raw int.
+>   Acceptance fixture `errors/ref-wrong-handle`.
+>
+> **Genuinely nothing to do:** `async_pipe` -- its stdin/stdout helpers take
+> no fd arguments (the descriptors 0/1 are fixed internally), so there is no
+> handle to type.
+>
+> Noted in passing (not fixed): `io/file-open`'s `[path mode]` parameters
+> are unannotated and the checker defaults them to `:int`, so the linear
+> `FileHandle` open path does not accept a `:cstr` path as written -- a
+> pre-existing latent defect orthogonal to the handle-typing work.
+>
+> Implementing the taskgroup slice (Tier 2) had already surfaced the
+> pre-existing `task-group-with*` macro bug
+> (`docs/reported/taskgroup-wrapper-macros-emit-nil-head.md`); no new
+> defects were found in Tier 3.
 
 ### Out of scope
 

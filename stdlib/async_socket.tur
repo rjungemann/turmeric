@@ -8,13 +8,16 @@
 ;; Non-blocking TCP socket operations that integrate with the cooperative
 ;; scheduler via IO waiters and select()-based polling.
 ;;
-;; API:
-;;   async-socket-listen  [port backlog]  -> listen-fd
-;;   async-socket-accept  [listen-fd]     -> client-fd (parks until connection)
-;;   async-socket-connect [host port]     -> fd
-;;   async-socket-send    [fd data len]   -> bytes-sent
-;;   async-socket-recv    [fd buf-size]   -> bytes-read
-;;   async-socket-close   [fd]            -> nil
+;; API (stdlib-opaque-handle-types-plan, I/O sweep):
+;;   async-socket-listen  [port backlog]    -> Fd          (listen fd; -1 on error)
+;;   async-socket-accept  [listen-fd :Fd]   -> Fd          (client fd; parks)
+;;   async-socket-connect [host port]       -> Fd          (-1 on error)
+;;   async-socket-send    [fd :Fd data len] -> bytes-sent (int)
+;;   async-socket-recv    [fd :Fd buf-size] -> bytes-read (int)
+;;   async-socket-close   [fd :Fd]          -> int
+;; Fds returned by listen/accept/connect are Fd handles (a :int newtype); a
+;; returned -1 still signals failure -- test with fd-valid? or fd->int.
+(load "stdlib/fd.tur")
 ;; Create a listening TCP socket on the given port.
 ;; Returns the listen fd, or -1 on error.
 ;;; async-socket-listen -- create a non-blocking TCP listening socket on the given port.
@@ -32,7 +35,7 @@
 ;;; Since: Phase T24
 (defn async-socket-listen [port : int backlog : int]
   #{Unsafe}
-  : int
+  : Fd
   ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int opt = 1;
@@ -71,9 +74,9 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-accept [listen-fd : int]
+(defn async-socket-accept [listen-fd : Fd]
   #{Unsafe}
-  : int
+  : Fd
   ```c while (1) {
     int cfd = accept((int)listen_fd, NULL, NULL);
     if (cfd >= 0) {
@@ -114,7 +117,7 @@
 
 (defn async-socket-connect [host : cstr port : int]
   #{Unsafe}
-  : int
+  : Fd
   ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int flags = fcntl(fd, F_GETFL, 0);
@@ -160,7 +163,7 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-send [fd : int data : cstr len : int]
+(defn async-socket-send [fd : Fd data : cstr len : int]
   #{Unsafe}
   : int
   ```c int64_t total = 0;
@@ -202,7 +205,7 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-recv [fd : int buf-size : int]
+(defn async-socket-recv [fd : Fd buf-size : int]
   #{Unsafe}
   : int
   ```c char *buf = (char *)malloc((size_t)buf_size);
@@ -274,7 +277,7 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-close [fd : int]
+(defn async-socket-close [fd : Fd]
   #{Unsafe}
   : nil
   ```c tur_io_unregister((int)fd);

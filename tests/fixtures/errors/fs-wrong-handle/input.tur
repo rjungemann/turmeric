@@ -1,0 +1,11 @@
+;; fs-wrong-handle -- a TmpFile handle cannot stand in for a StatInfo handle.
+;; Acceptance test for the I/O-sweep fs newtypes from the
+;; stdlib-opaque-handle-types plan: fs/stat returns a StatInfo and fs/tmpfile
+;; returns a TmpFile. Both used to be bare :int pointers, so feeding one to the
+;; other's accessor (here a TmpFile to fs/stat-size) type-checked and then read
+;; the wrong struct layout; the nominal newtypes now reject it at compile time.
+(load "stdlib/fs.tur")
+
+(defn main [] : int
+  (let [t (fs/tmpfile)]
+    (fs/stat-size t)))

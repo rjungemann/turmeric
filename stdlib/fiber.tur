@@ -17,6 +17,12 @@
 ;
 ; Inside a fiber body (fn-ref is a zero-arg function taking no args):
 ;   (fiber-yield 42)            ; suspend and hand 42 back to caller
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 3) ----
+;; FiberHandle wraps the underlying :ptr<void> with a nominally distinct type so
+;; the checker rejects passing an unrelated handle to the fiber-* operations (or
+;; to a scheduler's spawn/unpark). It lowers to :ptr<void> in the C ABI, so the
+;; inline-C bodies are unchanged.
+(defopaque FiberHandle :ptr<void>)
 ;;; fiber-new -- create a new fiber from a function pointer and an optional stack size.
 ;;;
 ;;; Parameters:
@@ -24,13 +30,13 @@
 ;;;   stack-size -- requested stack size in bytes; 0 uses the default size
 ;;;
 ;;; Returns:
-;;;   An opaque ptr<void> handle to the FiberBlock.
+;;;   A FiberHandle to the FiberBlock.
 ;;;
 ;;; Example:
-;;;   (let [f (fiber-new my-fn 0)] ...)  ; => ptr<void>
+;;;   (let [f (fiber-new my-fn 0)] ...)  ; => FiberHandle
 ;;;
 ;;; Since: Phase T21-C
-(defn fiber-new [fn : ptr<void> stack-size : int] : ptr<void>
+(defn fiber-new [fn : ptr<void> stack-size : int] : FiberHandle
   ```c return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 ;;; fiber-resume -- resume a suspended fiber, passing it a value, and return the yielded or final value.
@@ -47,7 +53,7 @@
 ;;;
 ;;; Since: Phase T21-C
 
-(defn fiber-resume [f : ptr<void> arg : int] : int
+(defn fiber-resume [f : FiberHandle arg : int] : int
   ```c return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 ;;; fiber-yield -- suspend the current fiber and return a value to its caller.
@@ -76,7 +82,7 @@
 ;;;
 ;;; Since: Phase T21-C
 
-(defn fiber-done? [f : ptr<void>] : int
+(defn fiber-done? [f : FiberHandle] : int
   ```c FiberBlock *fb = (FiberBlock *)f;
   return fb ? (int64_t)fb->done : 1;
   ```)
@@ -93,7 +99,7 @@
 ;;;
 ;;; Since: Phase T21-C
 
-(defn fiber-arg [f : ptr<void>] : int
+(defn fiber-arg [f : FiberHandle] : int
   ```c FiberBlock *fb = (FiberBlock *)f;
   return fb ? fb->arg : 0;
   ```)
@@ -107,7 +113,7 @@
 ;;;
 ;;; Since: Phase T21-C
 
-(defn fiber-free [f : ptr<void>] : nil
+(defn fiber-free [f : FiberHandle] : nil
   ```c tur_fiber_block_free((FiberBlock *)f);
   ```)
 ;; Phase T21: Fiber-local storage
@@ -128,7 +134,7 @@
 ;;; Since: Phase T21
 
 
-(defn fiber-local-get [f : ptr<void> key : int] : int
+(defn fiber-local-get [f : FiberHandle key : int] : int
   ```c return tur_fiber_local_get((FiberBlock *)f, (int64_t)key);
   ```)
 ;;; fiber-local-set! -- store a fiber-local value by key in a specific fiber.
@@ -143,7 +149,7 @@
 ;;;
 ;;; Since: Phase T21
 
-(defn fiber-local-set! [f : ptr<void> key : int value : int] : nil
+(defn fiber-local-set! [f : FiberHandle key : int value : int] : nil
   ```c tur_fiber_local_set((FiberBlock *)f, (int64_t)key, (int64_t)value);
   ```)
 ;; Current fiber versions - use tur_current_fiber implicitly
@@ -217,7 +223,7 @@
 ;;; Since: Phase T21
 ;; Unpark a fiber: clear its parked flag and add it back to the scheduler queue.
 
-(defn scheduler-unpark! [f : ptr<void>] : nil
+(defn scheduler-unpark! [f : FiberHandle] : nil
   ```c tur_scheduler_unpark((FiberBlock *)f);
   ```)
 ;;; async-sleep -- sleep for approximately ms milliseconds without blocking the OS thread.

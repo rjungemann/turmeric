@@ -228,6 +228,10 @@ const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
+/* fn-typed-return: typedef name for a concrete thin function-value return type,
+ * or NULL when the return is not such a fn / is a dict-dispatched method impl
+ * (see emit_core.c). */
+const char *emit_fn_return_typedef(const FnDef *fd, const Type *rft);
 /* KB-021: arbiter of which struct-valued types may use the int64_t carrier ABI
  * (see emit_core.c). */
 bool type_uses_carrier_abi(Type t);

@@ -1,0 +1,1 @@
+function 'ref-get' arg 1: expected RefHandle, got int

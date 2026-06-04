@@ -1,0 +1,1 @@
+function 'fs/stat-size' arg 1: expected StatInfo, got TmpFile

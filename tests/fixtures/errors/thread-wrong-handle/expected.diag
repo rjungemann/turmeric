@@ -1,0 +1,1 @@
+function 'thread-join' arg 1: expected ThreadHandle, got ptr<void>

@@ -1,0 +1,14 @@
+;; thread-wrong-handle -- a raw ptr<void> cannot stand in for a ThreadHandle.
+;; Acceptance test for the Tier-3 ThreadHandle newtype from the
+;; stdlib-opaque-handle-types plan: thread-spawn-fn returns a ThreadHandle, and
+;; thread-join / thread-detach / cancel-thread accept only that -- so handing
+;; thread-join some other ptr<void> (here a bare malloc'd pointer) is caught at
+;; compile time rather than dereferencing unrelated memory as a TurThreadHandle.
+(load "stdlib/thread.tur")
+
+(defn raw-ptr [] : ptr<void>
+  ```c return malloc(8); ```)
+
+(defn main [] #{Unsafe} : int
+  (thread-join (raw-ptr))
+  0)

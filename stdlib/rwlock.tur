@@ -14,18 +14,24 @@
 ;;   rwlock-wrlock      [rw :ptr<void>]       -- nil
 ;;   rwlock-try-rdlock  [rw :ptr<void>]       -- bool
 ;;   rwlock-try-wrlock  [rw :ptr<void>]       -- bool
-;;   rwlock-unlock      [rw :ptr<void>]       -- nil
-;;   rwlock-free        [rw :ptr<void>]       -- nil
+;;   rwlock-unlock      [rw :RwLock]          -- nil
+;;   rwlock-free        [rw :RwLock]          -- nil
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 2) ----
+;; RwLock wraps the underlying :ptr<void> with a nominally distinct type so the
+;; checker rejects passing an unrelated handle (a Mutex, a CondVar) where an
+;; RwLock is expected. It lowers to :ptr<void> in the C ABI, so the inline-C
+;; bodies are unchanged.
+(defopaque RwLock :ptr<void>)
 ;;; rwlock-new -- allocate and initialise a new POSIX read-write lock.
 ;;;
 ;;; Returns:
-;;;   An opaque ptr<void> handle to a heap-allocated pthread_rwlock_t.
+;;;   An RwLock handle to a heap-allocated pthread_rwlock_t.
 ;;;
 ;;; Example:
-;;;   (let [rw (rwlock-new)] ...)  ; => ptr<void>
+;;;   (let [rw (rwlock-new)] ...)  ; => RwLock
 ;;;
 ;;; Since: Phase T19-C
-(defn rwlock-new [] : ptr<void>
+(defn rwlock-new [] : RwLock
   ```c pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
   if (!rw) { fprintf(stderr, "rwlock-new: out of memory\n"); abort(); }
   pthread_rwlock_init(rw, NULL);
@@ -41,7 +47,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn rwlock-rdlock [rw : ptr<void>] : nil
+(defn rwlock-rdlock [rw : RwLock] : nil
   ```c pthread_rwlock_rdlock((pthread_rwlock_t *)rw);
   ```)
 ;;; rwlock-wrlock -- acquire an exclusive write lock, blocking until available.
@@ -54,7 +60,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn rwlock-wrlock [rw : ptr<void>] : nil
+(defn rwlock-wrlock [rw : RwLock] : nil
   ```c pthread_rwlock_wrlock((pthread_rwlock_t *)rw);
   ```)
 ;;; rwlock-try-rdlock -- attempt to acquire a shared read lock without blocking.
@@ -70,7 +76,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn rwlock-try-rdlock [rw : ptr<void>] : bool
+(defn rwlock-try-rdlock [rw : RwLock] : bool
   ```c return pthread_rwlock_tryrdlock((pthread_rwlock_t *)rw) == 0;
   ```)
 ;;; rwlock-try-wrlock -- attempt to acquire an exclusive write lock without blocking.
@@ -86,7 +92,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn rwlock-try-wrlock [rw : ptr<void>] : bool
+(defn rwlock-try-wrlock [rw : RwLock] : bool
   ```c return pthread_rwlock_trywrlock((pthread_rwlock_t *)rw) == 0;
   ```)
 ;;; rwlock-unlock -- release a previously acquired read or write lock.
@@ -99,7 +105,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn rwlock-unlock [rw : ptr<void>] : nil
+(defn rwlock-unlock [rw : RwLock] : nil
   ```c pthread_rwlock_unlock((pthread_rwlock_t *)rw);
   ```)
 ;;; rwlock-free -- destroy the read-write lock and release its memory.
@@ -112,7 +118,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn rwlock-free [rw : ptr<void>] : nil
+(defn rwlock-free [rw : RwLock] : nil
   ```c pthread_rwlock_destroy((pthread_rwlock_t *)rw);
   free(rw);
   ```)

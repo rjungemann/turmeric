@@ -1,0 +1,14 @@
+;; condvar-wrong-handle -- swapping condvar-wait's arguments is a compile error.
+;; Acceptance test for the Tier-2 sync-primitive handle newtypes introduced by
+;; the stdlib-opaque-handle-types plan. condvar-wait takes [c :CondVar m :Mutex];
+;; with both ends formerly bare :ptr<void>, the call (condvar-wait m c) -- mutex
+;; and condvar transposed -- type-checked and then deadlocked at runtime. The
+;; CondVar / Mutex newtypes (which both still lower to :ptr<void>) now reject the
+;; swap at compile time.
+(load "stdlib/condvar.tur")
+
+(defn main [] : int
+  (let [m (mutex-new)
+        c (condvar-new)]
+    (condvar-wait m c)
+    0))

@@ -12,18 +12,24 @@
 ;;   mutex-new          []                    -- ptr<void>
 ;;   mutex-lock         [m :ptr<void>]        -- nil
 ;;   mutex-unlock       [m :ptr<void>]        -- nil
-;;   mutex-try-lock     [m :ptr<void>]        -- bool   (true = acquired)
-;;   mutex-free         [m :ptr<void>]        -- nil
+;;   mutex-try-lock     [m :Mutex]            -- bool   (true = acquired)
+;;   mutex-free         [m :Mutex]            -- nil
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 2) ----
+;; Mutex wraps the underlying :ptr<void> with a nominally distinct type so the
+;; checker rejects passing an unrelated handle (a CondVar, an RwLock, a channel)
+;; where a Mutex is expected. It lowers to :ptr<void> in the C ABI, so the
+;; inline-C bodies are unchanged.
+(defopaque Mutex :ptr<void>)
 ;;; mutex-new -- allocate and initialise a new POSIX mutex.
 ;;;
 ;;; Returns:
-;;;   An opaque ptr<void> handle to a heap-allocated pthread_mutex_t.
+;;;   A Mutex handle to a heap-allocated pthread_mutex_t.
 ;;;
 ;;; Example:
-;;;   (let [m (mutex-new)] ...)  ; => ptr<void>
+;;;   (let [m (mutex-new)] ...)  ; => Mutex
 ;;;
 ;;; Since: Phase T19-C
-(defn mutex-new [] : ptr<void>
+(defn mutex-new [] : Mutex
   ```c pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   if (!m) { fprintf(stderr, "mutex-new: out of memory\n"); abort(); }
   pthread_mutex_init(m, NULL);
@@ -39,7 +45,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn mutex-lock [m : ptr<void>] : nil
+(defn mutex-lock [m : Mutex] : nil
   ```c pthread_mutex_lock((pthread_mutex_t *)m);
   ```)
 ;;; mutex-unlock -- release the mutex.
@@ -52,7 +58,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn mutex-unlock [m : ptr<void>] : nil
+(defn mutex-unlock [m : Mutex] : nil
   ```c pthread_mutex_unlock((pthread_mutex_t *)m);
   ```)
 ;;; mutex-try-lock -- attempt to acquire the mutex without blocking.
@@ -68,7 +74,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn mutex-try-lock [m : ptr<void>] : bool
+(defn mutex-try-lock [m : Mutex] : bool
   ```c return pthread_mutex_trylock((pthread_mutex_t *)m) == 0;
   ```)
 ;;; mutex-free -- destroy the mutex and release its memory.
@@ -81,7 +87,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn mutex-free [m : ptr<void>] : nil
+(defn mutex-free [m : Mutex] : nil
   ```c pthread_mutex_destroy((pthread_mutex_t *)m);
   free(m);
   ```)

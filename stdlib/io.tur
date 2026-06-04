@@ -27,19 +27,80 @@
 (extern-c free [^ptr p] :void)
 
 (extern-c memset [^ptr ^int ^int] :ptr)
-;;; file-size -- return the byte size of an already-open file.
+;; ---- Opaque handle newtypes (stdlib-opaque-handle-types-plan, I/O sweep) ----
+;; DirListing is the NULL-terminated char** array handed out by list-dir and
+;; consumed by free-dir-listing; FileSystem is the capability struct from
+;; Real-FileSystem, consumed by Real-FileSystem-free. Wrapping each producer's
+;; output in a nominally distinct type means the matching free function rejects
+;; an unrelated pointer. Both lower to :ptr<void> in the C ABI, so the inline-C
+;; bodies are unchanged. (FileHandle, the linear FILE* wrapper below, already
+;; handle-types the per-file read/close path.)
+;; FileStream is a non-linear handle over a stdio FILE* for the file-size query
+;; path: open / size / close without the move-only obligations of FileHandle.
+(defopaque DirListing :ptr<void>)
+(defopaque FileSystem :ptr<void>)
+(defopaque FileStream :ptr<void>)
+;;; file-stream-open -- open a file as a non-linear FileStream handle.
 ;;;
 ;;; Parameters:
-;;;   f -- a FILE* cast to int64_t (as returned by fopen).
+;;;   path -- filesystem path to open (:cstr).
+;;;   mode -- fopen mode string, e.g. "rb" or "wb" (:cstr).
+;;;
+;;; Returns:
+;;;   A FileStream wrapping the opened FILE*, or a FileStream wrapping NULL on
+;;;   error.  Check with file-stream-ok? before using.
+;;;
+;;; Example:
+;;;   (let [s (file-stream-open "/etc/hostname" "rb")] (file-size s))
+;;;
+;;; Since: I/O sweep
+(defn file-stream-open [path : cstr mode : cstr] : FileStream
+  ```c return (void*)fopen(path, mode);
+  ```)
+;;; file-stream-ok? -- return true if the FileStream wraps a real FILE*.
+;;;
+;;; Parameters:
+;;;   f -- a FileStream.
+;;;
+;;; Returns:
+;;;   true if the underlying FILE* is non-NULL, false on open failure.
+;;;
+;;; Example:
+;;;   (file-stream-ok? (file-stream-open "/etc/hostname" "rb"))  ; => true
+;;;
+;;; Since: I/O sweep
+(defn file-stream-ok? [f : FileStream] : bool
+  ```c return f != NULL;
+  ```)
+;;; file-stream-close -- close a FileStream and release the underlying FILE*.
+;;;
+;;; Parameters:
+;;;   f -- a FileStream to close.
+;;;
+;;; Returns:
+;;;   0 on success, non-zero on error (mirrors fclose).
+;;;
+;;; Example:
+;;;   (file-stream-close s)  ; => 0
+;;;
+;;; Since: I/O sweep
+(defn file-stream-close [f : FileStream] : int
+  ```c if (!f) return -1;
+  return fclose((FILE*)f);
+  ```)
+;;; file-size -- return the byte size of an already-open FileStream.
+;;;
+;;; Parameters:
+;;;   f -- a FileStream (from file-stream-open).
 ;;;
 ;;; Returns:
 ;;;   The file size in bytes as an int.
 ;;;
 ;;; Example:
-;;;   (file-size my-file-ptr)  ; => 1024
+;;;   (file-size my-stream)  ; => 1024
 ;; Helper function to get file size
 
-(defn file-size [f]
+(defn file-size [f : FileStream] : int
   ```c FILE* file = (FILE*)f;
   long pos = ftell(file);
   fseek(file, 0, SEEK_END);
@@ -61,7 +122,7 @@
 ;; Real-FileSystem implementation
 ;; Returns a FileSystem capability struct with libc-based implementations
 
-(defn Real-FileSystem []
+(defn Real-FileSystem [] : FileSystem
   ```c /* Define the FileSystem struct */
   typedef struct FileSystem FileSystem;
   struct FileSystem {
@@ -133,7 +194,7 @@
 ;;; Since: Phase 16
 ;; Free a Real-FileSystem
 
-(defn Real-FileSystem-free [fs]
+(defn Real-FileSystem-free [fs : FileSystem] : void
   ```c free(fs);
   ```)
 ;; ============================================================================
@@ -230,7 +291,7 @@
 ;; Get current directory listing
 ;; Returns array of strings (NULL-terminated), caller must free each string and the array
 
-(defn list-dir [path]
+(defn list-dir [path : cstr] : DirListing
   ```c DIR* d = opendir(path);
   if (!d) return NULL;
 
@@ -264,7 +325,7 @@
 ;;; Since: Phase 16
 ;; Free directory listing returned by list-dir
 
-(defn free-dir-listing [entries]
+(defn free-dir-listing [entries : DirListing] : void
   ```c if (!entries) return;
   char** e = (char**)entries;
   for (int i = 0; e[i]; i++) {

@@ -119,6 +119,81 @@ const char *emit_type_c_name(EmitCtx *ctx, Type t) {
     return type_c_name(emit_resolve_type(ctx, t));
 }
 
+/* fn-typed-return: does this body statically evaluate to a *thin* (bare,
+ * non-capturing) function pointer?
+ *
+ * A non-capturing fn literal is lifted to a top-level function and the body
+ * becomes an EX_VAR referencing that global (non-boxed TY_FN) binding -- a
+ * bare C function pointer value.  By contrast a capturing EX_CLOSURE is a fat
+ * box, and a call/local-binding result is not statically known to be thin (it
+ * may be a fat box typed as a plain fn, e.g. the value a capturing-closure
+ * constructor returns).  Only the thin case may be typed as a fn pointer; the
+ * rest stay on the existing int64_t/void* carrier.  do/let/if/ascribe wrappers
+ * are transparent; an `if` is thin only when both arms are thin. */
+static bool body_yields_thin_fn(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_FN:
+            return true;
+        case EX_VAR:
+            return e->as.var.binding && e->as.var.binding->is_global &&
+                   e->as.var.binding->type.kind == TY_FN &&
+                   !e->as.var.binding->type.as.fn.boxed;
+        case EX_ASCRIBE:
+            return body_yields_thin_fn(e->as.ascribe_.inner);
+        case EX_DO:
+            for (int i = (int)e->as.do_.n - 1; i >= 0; i--)
+                if (e->as.do_.items[i]->kind != EX_DEFER)
+                    return body_yields_thin_fn(e->as.do_.items[i]);
+            return false;
+        case EX_LET:
+        case EX_LETREC:
+            return body_yields_thin_fn(e->as.let_.body);
+        case EX_IF:
+            return e->as.if_.else_or_null &&
+                   body_yields_thin_fn(e->as.if_.then_) &&
+                   body_yields_thin_fn(e->as.if_.else_or_null);
+        default:
+            return false;
+    }
+}
+
+/* fn-typed-return: a `defn` whose declared return type is a concrete,
+ * non-boxed function type returns a *function value* (a bare/thin function
+ * pointer), not a value of the function's result type.  type_c_name(TY_FN)
+ * lowers a non-boxed primitive-result fn to its result type's C name (the
+ * "bare function reference returns its result" convention used by inline-C
+ * function values), which is wrong for a producer that returns the closure:
+ * the C signature would say `double` while the body returns `double (*)(double)`.
+ *
+ * Return the matching fn-ptr typedef name (e.g. tur_fnptr_double_double_t) so
+ * the signature, forward declaration, and the thin-fn-pointer let binding at
+ * the consumer all agree.  Returns NULL when the return type is not a concrete
+ * thin function value (boxed closures, dict-dispatched method impls, bodies
+ * that do not statically yield a thin fn pointer, non-primitive arg/result
+ * kinds, and non-fn returns all fall back to the existing lowering). */
+const char *emit_fn_return_typedef(const FnDef *fd, const Type *rft) {
+    if (!fd || !rft || rft->kind != TY_FN) return NULL;
+    /* A boxed first-class closure is the void* carrier, not a thin fn ptr. */
+    if (rft->as.fn.boxed) return NULL;
+    /* A typeclass-method impl is reached through its dictionary, whose field
+     * type lowers the fn-typed return via type_c_name (the int64_t fn carrier)
+     * -- see the dict-struct emission in emit_stmt.c.  The impl signature must
+     * match that field type, so it must NOT use the thin fn-ptr typedef.  The
+     * generated impl name is `__inst_<class>_<method>_<typeargs>`. */
+    if (fd->binding && fd->binding->name && fd->binding->name->name &&
+        strncmp(fd->binding->name->name, "__inst_", 7) == 0)
+        return NULL;
+    /* Only a body that statically yields a thin (non-capturing) function
+     * pointer may be typed as one.  Capturing closures and other fn-typed
+     * values stay on the existing int64_t/void* carrier so the box is not
+     * mistyped as a bare function pointer. */
+    if (!body_yields_thin_fn(fd->body)) return NULL;
+    /* register_fn_ptr_typedef returns NULL unless every arg/result kind is a
+     * concrete primitive -- exactly the thin-fn-pointer case. */
+    return register_fn_ptr_typedef(rft);
+}
+
 /* KB-021: the single arbiter of which types may use the int64_t carrier ABI
  * (a heap-pointer handle) for dictionary-dispatched typeclass methods.
  *

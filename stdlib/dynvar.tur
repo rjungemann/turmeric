@@ -64,7 +64,7 @@
 ;;;   f -- zero-arg closure to run on the new thread
 ;;;
 ;;; Returns:
-;;;   A ptr<void> thread handle. Pass to thread-join or thread-detach.
+;;;   A ThreadHandle (from tur/thread). Pass to thread-join or thread-detach.
 ;;;
 ;;; Example:
 ;;;   (binding [*log-level* 2]
@@ -73,8 +73,13 @@
 ;;;
 ;;; Since: DV3
 
+;; spawn-conveying hands back a thread handle that the caller passes to
+;; thread-join / thread-detach; load tur/thread so its ThreadHandle newtype is
+;; in scope (load is idempotent).
+(load "stdlib/thread.tur")
+
 (defn spawn-conveying [f : ptr<void>]
   #{Unsafe}
-  : ptr<void>
+  : ThreadHandle
   ```c return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
   ```)
