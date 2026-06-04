@@ -1,7 +1,7 @@
 # Stdlib Inline-C De-Workaround Plan
 
-> **Status:** Phase 1 complete (2026-06-03); Phases 2-4 outstanding
-> **Last Updated:** 2026-06-03
+> **Status:** Phases 1-2 complete (Phase 2: 2026-06-04); Phases 3-4 outstanding
+> **Last Updated:** 2026-06-04
 > **Type:** stdlib hygiene -- replace inline-C workarounds with idiomatic Turmeric
 > **Sibling plans:**
 > - [stdlib-opaque-handle-types-plan.md](stdlib-opaque-handle-types-plan.md) -- handle nominal typing
@@ -158,15 +158,33 @@ workarounds, but they belong in this plan so they are tracked somewhere:
 4. ~~Confirm `bash tests/run.sh` clean.~~ DONE
 5. ~~Single PR.~~ DONE. Block advanced-typing T's `Functor [Cons]` on this landing.
 
-### Phase 2 -- `httpd-mw-fold` and `re/union-patterns`
+### Phase 2 -- `httpd-mw-fold` and `re/union-patterns`  **[DONE 2026-06-04]**
 
-1. Coordinate with opaque-handle Tier 1: if `Middleware` becomes a
-   `defopaque`, ship that first; otherwise proceed against the raw `:int`.
-2. Replace `httpd-mw-fold` with a typed `foldr`. Add a fixture that
-   exercises >64 middlewares to lock in the cap removal.
-3. Replace both `re/union-patterns` inline-C blocks with
-   `string-join`/`map`.
-4. Regenerate snapshots; one PR per module.
+1. ~~Coordinate with opaque-handle Tier 1: if `Middleware` becomes a
+   `defopaque`, ship that first; otherwise proceed against the raw `:int`.~~
+   `Middleware` is still raw `:int`, so this proceeded against `:int` (the
+   opaque-handle plan can re-type later for free; see Risks/coordination).
+2. ~~Replace `httpd-mw-fold` with a typed `foldr`. Add a fixture that
+   exercises >64 middlewares to lock in the cap removal.~~ DONE.
+   `httpd-mw-fold` is now a pure-Turmeric right fold over the typed `Cons`
+   abstraction (`tnil?`/`list-head`/`list-tail`) -- no `__tur_cons_cell`
+   redeclaration and no `buf[64]` cap. The single fat-closure dispatch is
+   isolated in `httpd-mw-apply` (the same ABI glue as `httpd-call`, which is
+   allowed by design principle 4). Fixture `tests/fixtures/httpd-mw-fold-many`
+   folds 70 middlewares + base and asserts all run (`71`), locking in the cap
+   removal (the old `buf[64]` silently dropped the 65th+ entry).
+3. ~~Replace both `re/union-patterns` inline-C blocks with
+   `string-join`/`map`.~~ DONE. Both `re/union-patterns` and `re/compile-union`
+   are pure Turmeric now: `re/wrap-paren` wraps one branch as `"(p)"` and
+   `re/union-acc` recursively joins with `|`, freeing intermediates as it
+   walks. (stdlib has no `string-join`/`map` over raw cons lists, so the join
+   is an explicit `str-concat` fold; `re.tur` now `(load "stdlib/str.tur")` for
+   `str-concat`/`str-free`, deduped by the load registry.) `re/compile-union`
+   is a thin wrapper over `re/union-patterns` + `re/compile`. The
+   `re-union-patterns` fixture still passes byte-for-byte.
+4. ~~Regenerate snapshots; one PR per module.~~ No `expected.c` snapshots
+   reference `re.tur` or the mw-fold path, so there was no snapshot churn;
+   shipped as one change.
 
 ### Phase 3 -- Tier 3 triage
 

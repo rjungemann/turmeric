@@ -1,0 +1,51 @@
+;; Phase 2 (stdlib-inline-c-deworkaround-plan): httpd-mw-fold is now a
+;; pure-Turmeric right fold over the typed Cons abstraction, with no fixed
+;; element cap (the old inline-C buf[64] silently dropped the 65th+ entry).
+;;
+;; This fixture builds a runtime chain of 70 fat-closure middlewares plus a
+;; base handler, folds them with httpd-mw-fold, and drives the composed
+;; onion once. Each middleware bumps a counter on the way in; the base bumps
+;; it once. With the cap removed, all 70 middlewares run: 70 + 1 = 71.
+;;
+;; (No server: the middlewares ignore the conn argument, so the composed
+;; handler can be invoked directly via httpd-call with a null conn.)
+
+(load "stdlib/httpd.tur")
+
+;; ctr -- shared counter backed by a file-local static. op 0 bumps and
+;; returns the new value; any other op reads the current value.
+(defn ctr [op : int] : int
+  ```c static int64_t c = 0;
+  if (op == 0) { c++; }
+  return c;
+  ```)
+
+;; mw-count -- middleware constructor returning a fat closure that captures
+;; `next`, bumps the counter on entry, then delegates downstream.
+(defn mw-count [next : int] : ptr<void>
+  (let [_n next]
+    (fn [conn : ptr<void>] : nil
+      (ctr 0)
+      (httpd-call _n conn))))
+
+;; make-mw -- returns a fat closure of the (fn [n :int] :ptr<void>) shape that
+;; httpd-mw-fold dispatches over. The closure captures `_d` (a runtime value,
+;; so it is a genuine fat closure rather than a bare fn pointer) and uses it,
+;; mirroring the capturing pattern the fold's fat dispatch requires.
+(defn make-mw [] : ptr<void>
+  (let [_d (ctr 1)]
+    (fn [n : int] : ptr<void> (mw-count (+ n _d)))))
+
+;; build-chain -- prepend `n` fresh middleware closures onto the cons list acc.
+(defn build-chain [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (build-chain (- n 1) (tcons (:: (make-mw) int) acc))))
+
+(defn main [] : int
+  (let [base     (let [_b (ctr 1)] (fn [conn : ptr<void>] : nil (ctr _b)))
+        chain    (build-chain 70 (tnil))
+        composed (httpd-mw-fold (:: base int) chain)]
+    (httpd-call composed (:: 0 ptr<void>))
+    (println (ctr 1))
+    0))
