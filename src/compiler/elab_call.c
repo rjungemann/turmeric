@@ -1483,6 +1483,19 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
             }
         }
         Type cap_type = type_from_kind(cap_kind);
+        /* A5: a captured struct/ADT slot must carry its *full* nominal type, not
+         * the kind-erased TY_STRUCT/TY_ADT.  Otherwise the env field is emitted
+         * as int64_t (type_c_name of a nameless struct kind), the let-binding
+         * init truncates the struct value, and the inner call passes an int64_t
+         * where the callee expects the nominal struct -- a hard C compile error.
+         * See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (A5). */
+        {
+            Type *cap_full_t = PAP_SLOT_FULL(i);
+            if (cap_full_t &&
+                    (cap_full_t->kind == TY_STRUCT || cap_full_t->kind == TY_ADT)) {
+                cap_type = *cap_full_t;
+            }
+        }
         Binding *cap_b = binding_new(e, cap_sym, cap_type, false, false, call->span);
         /* CY4: rank-2 captured arg -- carry forall info onto the binding so
          * the closure env field is emitted as tur_poly_fn_t. */

@@ -2394,7 +2394,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *cn = name_for_binding(ctx, captured);
                 char *field = raw_name_for_binding(captured);
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "%s->%s = %s;\n", fat_tmp, field, cn);
+                /* B5: a captured struct/ADT that is a pass-by-pointer parameter
+                 * of the *enclosing* function arrives as `const T *`, but the
+                 * env field is declared by value (type_c_name => `T`).  Deref so
+                 * the closure stores its own copy of the value rather than the
+                 * caller's pointer (which would dangle once the frame returns).
+                 * See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (B5). */
+                bool captured_is_pbp = false;
+                for (uint8_t _p = 0; _p < ctx->n_pbp_params; _p++) {
+                    if (ctx->pbp_param_ptrs[_p] == captured) {
+                        captured_is_pbp = true;
+                        break;
+                    }
+                }
+                buf_printf(body, "%s->%s = %s%s;\n",
+                           fat_tmp, field, captured_is_pbp ? "*" : "", cn);
                 free(field);
                 free(cn);
             }

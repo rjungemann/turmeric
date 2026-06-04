@@ -1619,10 +1619,13 @@
   ```)
 ;;; httpd-mw-cors-emit-preflight -- internal: write the preflight response.
 ;;;
-;;; Takes primitive fields rather than a CorsOpts value to side-step a
-;;; closure-capture codegen issue with by-pointer defstruct params --
-;;; mw-cors destructures opts into primitives so the inner closure env
-;;; stays scalar-only.
+;;; Takes primitive fields rather than a CorsOpts value.  This originally
+;;; side-stepped a closure-capture codegen bug with by-pointer defstruct
+;;; params (the inner closure env stored the caller's `const CorsOpts *`
+;;; into a by-value field).  That bug is now fixed (see
+;;; docs/upcoming/stdlib-type-erasure-cleanup-plan.md A5/B5), so a future
+;;; refactor may capture a `CorsOpts` directly; the primitive surface is
+;;; retained for now to keep this change scoped to the codegen fix.
 
 (defn httpd-mw-cors-emit-preflight [conn :ptr<void>
                                     allow-origin :cstr
@@ -1671,12 +1674,14 @@
 ;;; the normal response.
 ;;;
 ;;; The 7-arg shape (incl. `next`) is the positional equivalent of the
-;;; planned `(mw-cors opts :CorsOpts next)` signature.  The defstruct
-;;; surface compiles, but the curried partial application
-;;; `(mw-cors opts)` triggers a codegen bug -- the auto-generated `__pap`
-;;; wrapper stores a `CorsOpts` value into an `int64_t` env field and
-;;; the C compile fails.  Worth filing as a sibling of the
-;;; defstruct-inline-c-byvalue plan.
+;;; planned `(mw-cors opts :CorsOpts next)` signature.  The curried
+;;; partial application `(mw-cors opts)` previously triggered a codegen
+;;; bug -- the auto-generated `__pap` wrapper stored a `CorsOpts` value
+;;; into an `int64_t` env field and the C compile failed.  That codegen
+;;; bug is now fixed (stdlib-type-erasure-cleanup-plan A5); the remaining
+;;; barrier to a struct-valued `(mw-cors opts)` factory is that
+;;; compose-middleware needs to accept a partially-applied closure value
+;;; as a middleware (see the note near `compose-middleware`).
 ;;;
 ;;; See `CorsOpts` / `default-cors-opts` for field semantics.
 ;;;
