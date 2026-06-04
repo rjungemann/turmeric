@@ -960,7 +960,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
 
 /* SI4-C: defopaque -- named opaque int64_t newtype for REPL type tags.
  * Syntax: (defopaque Name :int)
- * Creates a StructDef with is_opaque=true; type_c_name → "int64_t" everywhere. */
+ *         (defopaque Name :ptr<void> :linear)   ;; exactly-once resource handle
+ *         (defopaque Name :ptr<void> :affine)   ;; at-most-once resource handle
+ * Creates a StructDef with is_opaque=true; type_c_name → "int64_t" everywhere.
+ * The optional trailing :linear / :affine keyword promotes the newtype to a
+ * substructural resource handle (enforced only under -Xlinear / -Xsubstructural;
+ * the C ABI is unaffected -- the handle still lowers to int64_t). */
 Expr *elab_defopaque(Elab *e, const Form *call) {
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -979,16 +984,54 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
                   "defopaque: '%s' is already defined", name->name);
         return NULL;
     }
-    StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
-    memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
+    /* Optional substructural discipline keyword after the base type. */
+    bool opaque_linear = false;
+    bool opaque_affine = false;
+    if (call->as.list.len >= 4) {
+        Form *attr = call->as.list.items[3];
+        if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
+            opaque_linear = true;
+        } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_affine) {
+            opaque_affine = true;
+        } else {
+            diag_emit(DIAG_ERROR, attr->span,
+                      "defopaque: unexpected attribute -- expected :linear or :affine");
+            return NULL;
+        }
+    }
+    StructDef *def;
+    Binding *b;
+    /* Phase RF0: the top-level pre-pass forward-registers every defopaque as a
+     * stub def (is_copy=true) and binds the type name to type_struct(stub). If
+     * we allocated a fresh def here, the type binding -- and every `: Name`
+     * annotation resolved through it -- would keep pointing at the stub, so the
+     * :linear / :affine discipline would silently never apply. Reuse the stub in
+     * place (mirroring elab_defstruct) and refresh the binding's cached type so
+     * copy_kind / substruct reflect the declared discipline. */
+    if (existing_b && elab_is_forward_type(e, name) &&
+            existing_b->type.kind == TY_STRUCT && existing_b->type.as.struct_.def) {
+        b = existing_b;
+        def = b->type.as.struct_.def;
+    } else {
+        def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
+        b = NULL;
+    }
     def->name = name->name;
-    def->is_copy = true;
+    /* A linear/affine handle is not freely copyable; only a plain opaque is. */
+    def->is_copy = !(opaque_linear || opaque_affine);
+    def->is_linear = opaque_linear;
+    def->is_affine = opaque_affine;
     def->is_opaque = true;
     def->origin_file_id = call->span.file_id;
     Type struct_type = type_struct(def);
-    Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);
-    scope_add(&e->global, b);
-    elab_register_struct_def(e, def);
+    if (b) {
+        b->type = struct_type;  /* refresh cached copy_kind / substruct */
+    } else {
+        b = binding_new(e, name, struct_type, false, true, name_form->span);
+        scope_add(&e->global, b);
+        elab_register_struct_def(e, def);
+    }
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = NULL;

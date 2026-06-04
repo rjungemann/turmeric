@@ -1,0 +1,10 @@
+;; stdlib-linearity-affinity-plan (L2): double-free of a :linear TmpFile.
+;; fs/tmpfile-free consumes the handle; a second free is a use-after-consume.
+;; Expected: TUR-E0101 (linear value used after being consumed).
+(load "stdlib/fs.tur")
+
+(defn main [] : int
+  (let [t (fs/tmpfile)]
+    (fs/tmpfile-free t)
+    (fs/tmpfile-free t))
+  0)

@@ -398,6 +398,14 @@ def _parse_def_line(kind, text):
         if ann_m:
             extra['struct_ann'] = ann_m.group(1)
 
+    # stdlib-linearity-affinity-plan: a defopaque resource handle may carry a
+    # trailing :linear / :affine discipline keyword, e.g.
+    #   (defopaque TmpFile :int :linear)
+    if kind == 'defopaque':
+        ann_m = re.search(r':(linear|affine)\b', rest)
+        if ann_m:
+            extra['struct_ann'] = ann_m.group(1)
+
     # Extract params bracket
     bracket_m = re.search(r'\[([^\]]*)\]', rest)
     params = []
@@ -1137,12 +1145,15 @@ def _render_def_card(defn, anchor_prefix=''):
         or any('lref<' in (t or '') for _, t in params)
         or 'lref<' in ret
     )
+    is_affine = defn.get('struct_ann') == 'affine'
 
     h = f'<div class="def-card" id="{html_module.escape(anchor)}">\n'
     h += f'  <div class="def-card-header">\n'
     h += f'    <span class="kind-badge {kind_cls}">{kind}</span>\n'
     if is_linear:
         h += f'    <span class="linear-badge">linear</span>\n'
+    elif is_affine:
+        h += f'    <span class="linear-badge">affine</span>\n'
     h += f'    <h2>{html_module.escape(name)}</h2>\n'
     h += f'  </div>\n'
     h += f'  <pre class="def-signature">{html_module.escape(sig)}</pre>\n'
@@ -1388,9 +1399,12 @@ def _build_doc_entry(defn):
         or any('lref<' in (t or '') for _, t in params)
         or 'lref<' in ret
     )
+    is_affine = defn.get('struct_ann') == 'affine'
     summary = doc['summary']
     if is_linear:
         summary = '[linear] ' + summary
+    elif is_affine:
+        summary = '[affine] ' + summary
 
     parts = [summary]
 

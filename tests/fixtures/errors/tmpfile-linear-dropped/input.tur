@@ -1,0 +1,9 @@
+;; stdlib-linearity-affinity-plan (L2): dropping a :linear TmpFile.
+;; The handle is created but never released, leaking the fd + temp file.
+;; Expected: TUR-E0100 (linear value dropped without being consumed).
+(load "stdlib/fs.tur")
+
+(defn main [] : int
+  (let [t (fs/tmpfile)]
+    0)
+  0)

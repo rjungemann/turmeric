@@ -2079,9 +2079,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
-    /* LT1: At function scope exit, verify all linear params were consumed */
+    /* LT1: At function scope exit, verify all linear params were consumed.
+     *
+     * Exception: an inline-C body is opaque to the linearity checker -- the C
+     * code is trusted to consume (free/close/hand off) the handle, and the
+     * exactly-once obligation is enforced at the Turmeric call site instead (a
+     * caller's linear binding is marked consumed when passed here). Without
+     * this carve-out every resource-handle accessor written in inline-C
+     * (file-close, promise-fulfill, ...) would spuriously report TUR-E0100 on
+     * its own linear parameter. See linear-ffi fixture for the call-site model. */
     bool lt1_param_fail = false;
-    if (g_linear_enabled && body) {
+    bool body_is_inline_c = (body && body->kind == EX_INLINE_C);
+    if (g_linear_enabled && body && !body_is_inline_c) {
         for (uint8_t _li = 0; _li < n_params; _li++) {
             if (params[_li]->is_linear && !params[_li]->is_linear_consumed && !params[_li]->is_moved) {
                 /* SS0b: Session channels get a distinct error code.
