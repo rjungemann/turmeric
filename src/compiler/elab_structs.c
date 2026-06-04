@@ -1730,6 +1730,21 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         ctors_start_idx = 3;
     }
 
+    /* Check for optional :copy / :move annotation after the type-param vector.
+     * Mirrors defdata: a GADT marked :copy opts out of affine move tracking so
+     * its values can be read repeatedly (e.g. shared range bounds). */
+    bool is_copy = false;
+    if (ctors_start_idx < call->as.list.len) {
+        Form *kw_form = call->as.list.items[ctors_start_idx];
+        if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
+            is_copy = true;
+            ctors_start_idx++;
+        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
+            is_copy = false;
+            ctors_start_idx++;
+        }
+    }
+
     if (call->as.list.len <= ctors_start_idx) {
         diag_emit(DIAG_ERROR, call->span,
                   "defgadt: '%s' must have at least one constructor", name->name);
@@ -1780,7 +1795,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def = adt_binding->type.as.adt_.def;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-        def->is_copy = false;
+        def->is_copy = is_copy;
         def->needs_drop_glue = false;
         def->is_gadt = true;
         def->type_params = type_params;
@@ -1805,6 +1820,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        def->is_copy = is_copy;
         def->is_gadt = true;
         def->type_params = type_params;
         def->n_type_params = n_type_params;

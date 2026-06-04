@@ -130,6 +130,22 @@ Each constructor line reads as: "field types ... `: return type`". Here:
 - `(Add (Expr int) (Expr int) : (Expr int))` -- `Add` takes two `(Expr int)`
   fields and also returns `(Expr int)`.
 
+Like `defdata`, a `defgadt` accepts an optional `:copy` modifier -- placed
+after the type-parameter vector -- to opt the type out of affine move
+tracking. Without it, GADT values follow move semantics (using one twice is a
+`TUR-E0005` use-after-move); with it, the values are plain, freely-readable
+value types (use this when the constructors carry only copyable payloads, e.g.
+shared range bounds):
+
+```turmeric
+; Requires: -Xgadt
+(defgadt Bound [A]
+  :copy
+  (Inclusive int : (Bound int))
+  (Exclusive int : (Bound int))
+  (Unbounded     : (Bound int)))
+```
+
 Without `-Xgadt` the compiler rejects `defgadt` entirely:
 
 ```text

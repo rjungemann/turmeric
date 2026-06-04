@@ -16,14 +16,17 @@
 ;;; working unchanged while new code can construct and destructure endpoints
 ;;; with exhaustive pattern matching.
 ;;;
+;;; Bound is declared `:copy`, so its endpoints are plain value types that can
+;;; be read repeatedly (a shared range bound is destructured by many
+;;; predicates). This relies on defgadt's `:copy` support; see
+;;; docs/reported/defgadt-copy-and-shared-bounds.md.
+;;;
 ;;; Opt-in: this layer requires -Xgadt. range.tur itself stays GADT-free so
 ;;; that its existing callers (the `for` macros, the range-* fixtures) need no
 ;;; flag. The full migration of range.tur's *internal* representation onto the
-;;; GADT is held back by two issues tracked in
-;;; docs/reported/defgadt-copy-and-shared-bounds.md: defgadt has no :copy form
-;;; (GADT values are move-tracked, but range bounds are shared/read many
-;;; times), and adopting the GADT in range.tur would force -Xgadt on every
-;;; range consumer.
+;;; GADT is held back by the remaining issue tracked in
+;;; docs/reported/defgadt-copy-and-shared-bounds.md: adopting the GADT in
+;;; range.tur would force -Xgadt on every range consumer.
 ;;;
 ;;; Since: stdlib-refinement-collections-plan (R3)
 (load "stdlib/range.tur")
@@ -32,6 +35,7 @@
 ;;; Since: R3
 (defgadt Bound
   [A]
+  :copy
   (Inclusive int : (Bound int))
   (Exclusive int : (Bound int))
   (Unbounded : (Bound int)))
@@ -78,7 +82,7 @@
 ;;;
 ;;; Lowers a Bound to range.tur's internal representation: a RangeBound
 ;;; pointer for Inclusive / Exclusive, or 0 (the unbounded sentinel) for
-;;; Unbounded. Consumes its argument (GADT values are move-tracked).
+;;; Unbounded.
 ;;;
 ;;; Parameters:
 ;;;   b -- the (Bound int) to lower
