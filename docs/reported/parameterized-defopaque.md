@@ -10,6 +10,10 @@ description: defopaque only accepts `(defopaque Name :basetype [:linear|:affine]
 > **Found:** 2026-06-04, executing
 > [stdlib-refinement-collections-plan](../upcoming/stdlib-refinement-collections-plan.md)
 > phases R1/R2.
+> **Status:** FIXED 2026-06-04 (fix direction #1). `defopaque` now accepts an
+> optional `[A ...]` phantom type-parameter vector; `stdlib/refined.tur`'s
+> `NonEmpty` is parameterized as `(NonEmpty A)`. Two latent codegen bugs that
+> the feature surfaced were fixed alongside it (see "Fix" below).
 
 ## Summary
 
@@ -66,3 +70,52 @@ the access total.
 `(defopaque NonEmpty [A] :int)` should parse, and
 `(defn ne-head [A] [ne : (NonEmpty A)] :A ...)` should typecheck, with
 `(ne-head (ne-of 1.5 (tnil)))` returning a `float`.
+
+## Fix (implemented)
+
+Fix direction #1 was taken.
+
+1. **Parsing (`src/compiler/elab_structs.c`, `elab_defopaque`)** -- an optional
+   `[A ...]` vector between the name and the base type is now parsed into
+   `def->type_params` / `def->n_type_params`; the binding's `hkt_kind` is set
+   to `kind_for_arity(n)` so `(Name A)` annotations kind-check. The carrier is
+   still int64_t. The top-level forward pre-pass
+   (`src/compiler/elab_toplevel.c`) records the arity on the stub so
+   annotations resolved before the full elaboration get the right arrow kind.
+
+2. **Two latent codegen bugs surfaced and fixed** (these were real defects, not
+   defopaque-specific, but a polymorphic `: A` return whose body is an
+   ascription to the carrier is the first thing to hit them):
+   - **Clobbered call-site instantiation** (`src/compiler/elab_call.c`): the
+     G3 ADT and LT4 struct return-type patches overwrote a call's already
+     *instantiated* result type with the function's *uninstantiated* declared
+     return type. They now only fire when `result_full_type` is actually a
+     `TY_ADT` / `TY_STRUCT` (a real def to recover), not when it is a bare
+     named tyvar.
+   - **Spurious carrier-bridge dereference** (`src/compiler/emit_expr.c`,
+     `EX_ASCRIBE`): `(:: <int> :A)` where `A` is a def-less `TY_STRUCT` /
+     `TY_TYVAR` carrier was treated as a by-value aggregate and emitted a
+     `*(int64_t *)(value)` deref (segfault). The opaque-relabel guard now also
+     covers the tyvar/def-less-struct carrier.
+
+3. **`stdlib/refined.tur`** -- `NonEmpty` is now `(defopaque NonEmpty [A] :int)`;
+   `ne-of` / `ne-singleton` / `ne-head` / `ne-tail` / `ne->list` / `ne-len`
+   carry the element type `A`, so `ne-head` returns `A` instead of a bare
+   `:int`. The smart-constructor recovery path (`ne-from?` / `ne-unwrap`)
+   operates on a bare int-carrier list, so it stays concrete at
+   `(NonEmpty int)`. `BoundedIdx` stays a bare carrier (its bound `n` is a
+   value-level fact, not a trackable type).
+
+Covered by the `defopaque-phantom-param` fixture and the existing
+`refined-nonempty` / `refined-bounded-idx` fixtures.
+
+### Known limitation
+
+A non-`int`/non-pointer element (e.g. a `float`) carried through a polymorphic
+carrier function still round-trips incorrectly at runtime, because the shared
+monomorphized body stores/loads the element through the int64 carrier with a C
+numeric conversion rather than a bit reinterpret. This is the pre-existing
+poly-carrier float-register-class limitation (cf. `TUR-E0705`), independent of
+the phantom-parameter spelling: the *type* `(ne-head (ne-of 1.5 (tnil)))` is
+`float` as required, but the value truncates. Integer/pointer element types
+round-trip correctly.

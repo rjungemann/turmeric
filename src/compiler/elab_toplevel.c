@@ -747,8 +747,17 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             stub->is_copy = true;
             stub->is_opaque = true;
             stub->origin_file_id = name_f->span.file_id;
+            /* Parameterized opaque: an optional [A ...] vector after the name
+             * makes this a type constructor.  Record the arity on the stub so
+             * `(Name A)` annotations resolved before the full defopaque
+             * elaboration kind-check against the right arrow kind. */
+            uint8_t opaque_arity = 0;
+            if (f->as.list.len >= 3 && f->as.list.items[2]->tag == F_VEC) {
+                opaque_arity = (uint8_t)f->as.list.items[2]->as.list.len;
+            }
             elab_register_struct_def(&e, stub);
             Type t = type_struct(stub);
+            t.hkt_kind = kind_for_arity(opaque_arity);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
         } else if (is_defstruct) {

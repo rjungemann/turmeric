@@ -1,0 +1,25 @@
+;; Parameterized defopaque: a phantom type parameter [A] makes the opaque
+;; newtype a type constructor.  The carrier stays int64_t, but `(NonEmpty A)`
+;; can be spelled in annotations and the accessor return type is the element
+;; type A -- so (ne-head (ne-of 7 (tnil))) is typed :int and round-trips.
+;; See docs/reported/parameterized-defopaque.md.
+
+(defopaque NonEmpty [A] :int)
+
+(defn ne-of [A] [x : A xs : int] : (NonEmpty A)
+  (:: (tcons (:: x :int) xs) :NonEmpty))
+
+(defn ne-head [A] [ne : (NonEmpty A)] : A
+  (:: (list-head (:: ne :int)) :A))
+
+(defn ne-len [A] [ne : (NonEmpty A)] : int
+  (__nlen (:: ne :int) 0))
+
+(defn __nlen [xs : int acc : int] : int
+  (if (tnil? xs) acc (__nlen (list-tail xs) (+ acc 1))))
+
+(defn main [] : int
+  (println (ne-head (ne-of 7 (tnil))))                 ; 7
+  (println (ne-head (ne-of 42 (tcons 9 (tnil)))))      ; 42
+  (println (ne-len (ne-of 1 (tcons 2 (tcons 3 (tnil)))))) ; 3
+  0)

@@ -3610,10 +3610,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * everywhere, so `(:: <int> :Opaque)` is a pure type relabel -- the
              * value is already the carrier.  Without this guard the bridge below
              * would treat it as a heap-pointer aggregate and emit a spurious
-             * `*(int64_t *)(value)` dereference (segfault). */
+             * `*(int64_t *)(value)` dereference (segfault).
+             *
+             * A bare type variable is represented the same way: a def-less
+             * TY_STRUCT (the int64 carrier for an unresolved param) or a
+             * TY_TYVAR.  Ascribing an int into such a generic slot
+             * (`(:: <int> :A)`, e.g. a phantom-parameterized opaque accessor)
+             * is likewise a pure relabel -- the value already IS the carrier --
+             * so it must not go through the by-value carrier bridge either.
+             * See docs/reported/parameterized-defopaque.md. */
             bool ascribe_to_opaque =
-                e->type.kind == TY_STRUCT && e->type.as.struct_.def &&
-                e->type.as.struct_.def->is_opaque;
+                (e->type.kind == TY_STRUCT && e->type.as.struct_.def &&
+                 e->type.as.struct_.def->is_opaque) ||
+                (e->type.kind == TY_STRUCT && e->type.as.struct_.def == NULL) ||
+                e->type.kind == TY_TYVAR;
             if (!ascribe_to_opaque &&
                 e->as.ascribe_.inner->type.kind == TY_INT &&
                 type_kind_is_aggregate(e->type.kind) &&

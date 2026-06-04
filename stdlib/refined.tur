@@ -17,8 +17,11 @@
 ;;;
 ;;; Both newtypes lower to :int in the C ABI (defopaque over :int), so they
 ;;; compose with the int-carrier Option and list/vec/slice helpers at zero
-;;; runtime cost. Element-type (A) and length (n) parameterization in the
-;;; type spelling awaits parameterized defopaque support; see
+;;; runtime cost. NonEmpty now carries a phantom element type A in its type
+;;; spelling -- (NonEmpty A) -- via parameterized defopaque, so ne-head /
+;;; ne-of are typed in terms of the element type instead of a bare :int.
+;;; BoundedIdx stays a bare carrier (its length n is a value-level fact the
+;;; smart constructor checks, not a type the checker can track). See
 ;;; docs/reported/parameterized-defopaque.md.
 ;;;
 ;;; Since: stdlib-refinement-collections-plan (R1, R2)
@@ -26,14 +29,17 @@
 ;; ===================================================================
 ;; R1: NonEmpty -- a non-empty cons list.
 ;; ===================================================================
-;;; NonEmpty -- a cons list proven to contain at least one element.
+;;; NonEmpty -- a cons list of element type A, proven to contain at least one
+;;; element.
 ;;;
-;;; Lowers to :int (the head cons-cell pointer, never 0). Construct it with
-;;; ne-of / ne-singleton (always non-empty by construction) or recover it
-;;; from an arbitrary list with the ne-from? smart constructor.
+;;; Lowers to :int (the head cons-cell pointer, never 0); the type parameter A
+;;; is a phantom that tracks the element type so ne-head returns A rather than a
+;;; bare :int. Construct it with ne-of / ne-singleton (always non-empty by
+;;; construction) or recover it from an arbitrary list with the ne-from? smart
+;;; constructor.
 ;;;
 ;;; Since: R1
-(defopaque NonEmpty :int)
+(defopaque NonEmpty [A] :int)
 ;;; ne-of -- build a NonEmpty by prepending a head to an existing list.
 ;;;
 ;;; Parameters:
@@ -48,7 +54,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-of [x : int xs : int] : NonEmpty (:: (tcons x xs) :NonEmpty))
+(defn ne-of [A] [x : A xs : int] : (NonEmpty A) (:: (tcons (:: x :int) xs) :NonEmpty))
 ;;; ne-singleton -- build a one-element NonEmpty.
 ;;;
 ;;; Parameters:
@@ -62,7 +68,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-singleton [x : int] : NonEmpty (ne-of x (tnil)))
+(defn ne-singleton [A] [x : A] : (NonEmpty A) (ne-of x (tnil)))
 ;;; ne-head -- the first element of a NonEmpty (total).
 ;;;
 ;;; Unlike list-head, this never panics: a NonEmpty is non-empty by
@@ -79,7 +85,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-head [ne : NonEmpty] : int (list-head (:: ne :int)))
+(defn ne-head [A] [ne : (NonEmpty A)] : A (:: (list-head (:: ne :int)) :A))
 ;;; ne-tail -- the elements after the head, as an ordinary (possibly empty) list.
 ;;;
 ;;; Parameters:
@@ -93,7 +99,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-tail [ne : NonEmpty] : int (list-tail (:: ne :int)))
+(defn ne-tail [A] [ne : (NonEmpty A)] : int (list-tail (:: ne :int)))
 ;;; ne->list -- view a NonEmpty as an ordinary cons list.
 ;;;
 ;;; Parameters:
@@ -107,7 +113,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne->list [ne : NonEmpty] : int (:: ne :int))
+(defn ne->list [A] [ne : (NonEmpty A)] : int (:: ne :int))
 ;;; ne-len -- the number of elements in a NonEmpty (always >= 1).
 ;;;
 ;;; Parameters:
@@ -121,7 +127,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-len [ne : NonEmpty] : int (__ne-len-acc (ne->list ne) 0))
+(defn ne-len [A] [ne : (NonEmpty A)] : int (__ne-len-acc (ne->list ne) 0))
 ;;; __ne-len-acc -- tail-recursive length accumulator over a cons list.
 
 (defn __ne-len-acc [xs : int acc : int] : int
@@ -163,7 +169,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-unwrap [o : int] : NonEmpty (:: (unwrap-or o 0) :NonEmpty))
+(defn ne-unwrap [o : int] : (NonEmpty int) (:: (unwrap-or o 0) :NonEmpty))
 ;; ===================================================================
 ;; R2: BoundedIdx -- an index proven to be in range for some length.
 ;; ===================================================================

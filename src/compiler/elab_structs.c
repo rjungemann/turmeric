@@ -960,12 +960,19 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
 
 /* SI4-C: defopaque -- named opaque int64_t newtype for REPL type tags.
  * Syntax: (defopaque Name :int)
+ *         (defopaque Name [A ...] :int)         ;; phantom type parameters
  *         (defopaque Name :ptr<void> :linear)   ;; exactly-once resource handle
  *         (defopaque Name :ptr<void> :affine)   ;; at-most-once resource handle
  * Creates a StructDef with is_opaque=true; type_c_name → "int64_t" everywhere.
  * The optional trailing :linear / :affine keyword promotes the newtype to a
  * substructural resource handle (enforced only under -Xlinear / -Xsubstructural;
- * the C ABI is unaffected -- the handle still lowers to int64_t). */
+ * the C ABI is unaffected -- the handle still lowers to int64_t).
+ *
+ * An optional type-parameter vector [A ...] between the name and the base type
+ * declares phantom type parameters: the carrier stays the declared base type
+ * (always int64_t at the C level), but the newtype becomes a type constructor
+ * of kind '* -> *' (etc.) so it can be spelled `(Name A)` in annotations and
+ * track an element/index type at the type level. */
 Expr *elab_defopaque(Elab *e, const Form *call) {
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -984,11 +991,46 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
                   "defopaque: '%s' is already defined", name->name);
         return NULL;
     }
+
+    /* Optional phantom type-parameter vector [A ...] immediately after the name.
+     * Stored on the StructDef as phantoms; the carrier stays int64_t. */
+    const char **type_params_arr = NULL;
+    uint8_t n_type_params_v = 0;
+    uint32_t base_idx = 2;
+    if (call->as.list.items[2]->tag == F_VEC) {
+        Form *tp_form = call->as.list.items[2];
+        n_type_params_v = (uint8_t)tp_form->as.list.len;
+        if (n_type_params_v == 0) {
+            diag_emit(DIAG_ERROR, tp_form->span,
+                      "defopaque: type-parameter vector cannot be empty");
+            return NULL;
+        }
+        type_params_arr = (const char **)arena_alloc(e->arena,
+            n_type_params_v * sizeof(char *));
+        for (uint8_t pi = 0; pi < n_type_params_v; pi++) {
+            Form *pf = tp_form->as.list.items[pi];
+            if (pf->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, pf->span,
+                          "defopaque: type parameter must be a symbol, e.g. A");
+                return NULL;
+            }
+            type_params_arr[pi] = pf->as.sym->name;
+        }
+        base_idx = 3;
+        /* With a type-param vector consumed, the base type is mandatory. */
+        if (call->as.list.len < base_idx + 1) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "defopaque requires a base type after the type-parameter "
+                      "vector: (defopaque Name [A] :int)");
+            return NULL;
+        }
+    }
+
     /* Optional substructural discipline keyword after the base type. */
     bool opaque_linear = false;
     bool opaque_affine = false;
-    if (call->as.list.len >= 4) {
-        Form *attr = call->as.list.items[3];
+    if (call->as.list.len >= base_idx + 2) {
+        Form *attr = call->as.list.items[base_idx + 1];
         if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
             opaque_linear = true;
         } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_affine) {
@@ -1024,9 +1066,15 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     def->is_affine = opaque_affine;
     def->is_opaque = true;
     def->origin_file_id = call->span.file_id;
+    /* Phantom type parameters: the carrier is still int64_t, but the newtype is
+     * a type constructor (kind '* -> *' etc.) so `(Name A)` annotations parse
+     * and the element/index type is tracked at the type level. */
+    def->type_params = type_params_arr;
+    def->n_type_params = n_type_params_v;
     Type struct_type = type_struct(def);
+    struct_type.hkt_kind = kind_for_arity(n_type_params_v);
     if (b) {
-        b->type = struct_type;  /* refresh cached copy_kind / substruct */
+        b->type = struct_type;  /* refresh cached copy_kind / substruct + hkt_kind */
     } else {
         b = binding_new(e, name, struct_type, false, true, name_form->span);
         scope_add(&e->global, b);

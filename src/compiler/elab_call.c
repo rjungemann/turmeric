@@ -1266,9 +1266,15 @@ Expr *elab_call(Elab *e, Form *call) {
             }
             return call_expr;
         }
-        /* Phase G3: Non-constructor function returning ADT — patch result from result_full_type */
+        /* Phase G3: Non-constructor function returning ADT — patch result from result_full_type.
+         * Only recover a genuine ADT result type here; when result_full_type is a
+         * bare named type variable (a polymorphic return whose body collapsed to
+         * the int64 carrier, so result_kind reads TY_ADT/TY_STRUCT), elab_call_fn
+         * has already instantiated the call's result from the argument types --
+         * clobbering it with the uninstantiated tyvar would erase that. */
         Expr *call_expr = elab_call_fn(e, call, fn_binding);
-        if (call_expr && fn_binding->type.as.fn.result_full_type) {
+        if (call_expr && fn_binding->type.as.fn.result_full_type &&
+            fn_binding->type.as.fn.result_full_type->kind == TY_ADT) {
             call_expr->type = *fn_binding->type.as.fn.result_full_type;
         }
         return call_expr;
@@ -1280,10 +1286,18 @@ Expr *elab_call(Elab *e, Form *call) {
         Expr *call_expr = elab_call_fn(e, call, fn_binding);
         /* LT4: patch struct return type with full type containing StructDef pointer,
          * mirroring the G3 patch for TY_ADT above. Without this, the call expression
-         * gets TY_STRUCT with def=NULL from type_from_kind(TY_STRUCT). */
+         * gets TY_STRUCT with def=NULL from type_from_kind(TY_STRUCT).
+         * Guard on result_full_type actually being a TY_STRUCT: a polymorphic
+         * return `: A` whose body is an ascription to the tyvar collapses to the
+         * TY_STRUCT int64 carrier (result_kind == TY_STRUCT) while result_full_type
+         * stays the named tyvar.  In that case elab_call_fn already produced the
+         * instantiated result type; overwriting it with the bare tyvar would
+         * discard the per-call-site substitution.  See
+         * docs/reported/parameterized-defopaque.md. */
         if (call_expr && fn_binding->type.kind == TY_FN &&
             fn_binding->type.as.fn.result_kind == TY_STRUCT &&
-            fn_binding->type.as.fn.result_full_type) {
+            fn_binding->type.as.fn.result_full_type &&
+            fn_binding->type.as.fn.result_full_type->kind == TY_STRUCT) {
             call_expr->type = *fn_binding->type.as.fn.result_full_type;
         }
         /* F1-1: patch TY_EXISTS / TY_FORALL return type with the full
