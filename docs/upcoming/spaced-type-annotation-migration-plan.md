@@ -299,9 +299,27 @@ pre-existing failures.
 
 Commit each step separately so a regression bisects cleanly.
 
-### Phase 4 — Mechanical rewrite (`../turmeric-spices`)
+### Phase 4 — Mechanical rewrite (`../turmeric-spices`) *(DONE)*
 
-Same process, in the sibling repo:
+Landed on the `spaced-types` branch in `../turmeric-spices` as commit
+`645710a` ("Migrate to spaced type annotations"). Same codemod invocation
+as Phase 3, scoped to `spices/`:
+
+- 341 tracked `.tur` files modified, 4101 lines (+4101 / -4101 --
+  whitespace-only changes).
+- `build.tur` manifests skipped automatically by the codemod (CC-11).
+- Codegen-invariance spot-checked on three representative files
+  (`ansi/src/ansi/style.tur`, `math/src/math/vec3.tur`,
+  `regex/src/regex/regex.tur`): `tur emit-c` output byte-identical for
+  fused and spaced.
+- Pre-existing per-spice build failures (`math` malloc shadowing,
+  `regex`/`c-dsl`/`stats` per-file C compile issues) reproduce on the
+  sibling repo's `main` unchanged.
+
+The branch is local; opening a PR upstream is left for whoever drives
+the migration on that repo's side.
+
+#### Original phase notes
 
 1. Run codemod on `spices/**/*.tur` and `spices/**/*.tur.sweet`.
 2. Run that repo's test suite.
