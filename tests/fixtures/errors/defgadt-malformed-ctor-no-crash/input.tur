@@ -1,0 +1,18 @@
+;; Regression: a malformed defgadt constructor (a stray keyword where a
+;; constructor list form is expected) must NOT leave a NULL CtorDef slot in
+;; the half-registered AdtDef. A later (match ...) on that type used to walk
+;; adt->ctors[ci]->name and segfault in elab_match.
+;; See docs/reported/defgadt-malformed-pattern-segfault.md
+;;
+;; The first error ("constructor must be a list form") is the real parse
+;; failure. The second ("is not a constructor of 'Bound'") only prints if
+;; elaboration survived past the malformed constructor instead of crashing,
+;; so requiring it locks the no-crash behavior in.
+(defgadt Bound [A]
+  :bogus
+  (Inclusive int : (Bound int)))
+
+(defn f [b : Bound] : int
+  (match b (Inclusive v) v))
+
+(defn main [] : int 0)
