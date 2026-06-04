@@ -77,6 +77,12 @@ struct Binding {
     bool          is_linear;
     /* LT1: whether the linear value has been consumed (moved/used) */
     bool          is_linear_consumed;
+    /* LB1: ^borrow -- whether this parameter borrows (reads without consuming)
+     * its linear/affine argument.  A non-consuming accessor (fs/tmpfile-path,
+     * mutex-lock, ...) declares its handle param ^borrow so a later consuming
+     * op (fs/tmpfile-free) remains the single legal consumption.  See
+     * docs/reported/stdlib-linear-handle-borrows.md. */
+    bool          is_borrow;
     /* UT0: Uniqueness type -- whether this binding holds a unique value */
     bool          is_unique;
     /* UT0: whether the unique value has been consumed (moved/aliased) */

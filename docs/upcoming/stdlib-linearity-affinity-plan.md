@@ -10,16 +10,21 @@ description: Promote stdlib resource-handle newtypes (Mutex, Chan, Promise, Futu
 > **Prerequisite:** the corresponding handle is already a `defopaque` newtype
 > (see [[stdlib-opaque-handle-types-plan]]); this plan layers on top.
 
-> **Status (2026-06-04):** foundational slice landed. The compiler now supports
-> `defopaque Name :base :linear` / `:affine` (previously the attribute was
-> silently dropped), inline-C accessor bodies no longer mis-report `TUR-E0100`
-> on their own linear params (consumption is enforced at the Turmeric call
-> site), and `TmpFile` is promoted to `:linear` as the representative handle
-> with positive + negative (double-free / drop) fixtures. The remaining
-> inventory is **blocked on a borrow form** for non-consuming accessors --
-> see [[../reported/stdlib-linear-handle-borrows]]. Multi-use handles
-> (`Mutex`, `Chan`, ...) cannot be promoted until borrows land, because every
-> use of a linear binding currently consumes it.
+> **Status (2026-06-04):** foundational slice + borrow form landed. The compiler
+> now supports `defopaque Name :base :linear` / `:affine` (previously the
+> attribute was silently dropped), inline-C accessor bodies no longer mis-report
+> `TUR-E0100` on their own linear params (consumption is enforced at the
+> Turmeric call site), and the **`^borrow` parameter attribute** (LB1) lets a
+> non-consuming accessor read a linear/affine handle without spending its single
+> consumption -- this unblocks multi-use handles. Promoted so far: `TmpFile`
+> (`:linear`; `fs/tmpfile-path` / `fs/tmpfile-fd` are `^borrow`) and `Mutex`
+> (`:linear`; `mutex-lock` / `mutex-unlock` / `mutex-try-lock` / `condvar-wait`
+> are `^borrow`, `mutex-free` consumes), each with positive + negative
+> (double-free / drop / use-after-free) fixtures. The borrow form is described
+> in [[../reported/stdlib-linear-handle-borrows]] (now RESOLVED). Remaining
+> inventory (`Chan`, `Promise`, `Future`, `TaskGroup`, `Reactor`,
+> `ChildHandle`, `Bytes`) can now be promoted the same way: mark consuming ops
+> by value and non-consuming accessors `^borrow`.
 
 ## Motivation
 

@@ -1,0 +1,11 @@
+;; stdlib-linearity-affinity-plan (L1): dropping a :linear Mutex. Borrowing the
+;; handle (mutex-lock/mutex-unlock) never discharges the consumption obligation,
+;; so a Mutex that is only ever borrowed -- never mutex-free'd -- leaks.
+;; Expected: TUR-E0100 (linear value dropped without being consumed).
+(load "stdlib/mutex.tur")
+
+(defn main [] : int
+  (let [m (mutex-new)]
+    (mutex-lock m)
+    (mutex-unlock m))
+  0)

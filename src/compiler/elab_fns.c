@@ -693,6 +693,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* ST0: ^affine / ^relevant annotations apply to the next parameter */
     bool next_param_affine    = false;
     bool next_param_relevant  = false;
+    /* LB1: ^borrow annotation marks the next parameter as a non-consuming borrow */
+    bool next_param_borrow    = false;
     /* A#1: ^fat annotation marks the next parameter as a fat-closure consumer */
     bool next_param_fat       = false;
     /* AR5: variadic rest parameter state */
@@ -838,6 +840,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* ST0: ^relevant annotation marks the next parameter as relevant (must be used) */
         if (p->tag == F_SYM && p->as.sym == e->sym_caret_relevant) {
             next_param_relevant = true;
+            continue;
+        }
+
+        /* LB1: ^borrow annotation marks the next parameter as a non-consuming
+         * borrow.  A linear/affine argument passed to this parameter is read
+         * without discharging its single-consumption obligation (see the
+         * call-site handling in elab_call.c).  Used by stdlib resource-handle
+         * accessors (fs/tmpfile-path, mutex-lock, ...). */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_borrow) {
+            next_param_borrow = true;
             continue;
         }
 
@@ -1287,6 +1299,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
             b->is_relevant = true;
             b->type.substruct = SK_RELEVANT;
             next_param_relevant = false;
+        }
+        /* LB1: If the previous ^borrow annotation applied to this parameter, mark
+         * it as a non-consuming borrow.  The parameter keeps its declared
+         * (nominal) handle type; the borrow semantics are enforced at the call
+         * site, where a linear/affine argument is read without being consumed. */
+        if (next_param_borrow) {
+            b->is_borrow = true;
+            next_param_borrow = false;
         }
         /* A#1: If the previous ^fat annotation applied to this parameter, mark it
          * as a fat-closure consumer so call sites auto-shim bare fn arguments.
@@ -2329,6 +2349,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* LB1: Store arg_borrow flags from param bindings into fn_type so call sites
+     * can borrow (read without consuming) a linear/affine argument. */
+    {
+        bool any_borrow = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_borrow) { any_borrow = true; break; }
+        }
+        if (any_borrow) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_borrow[i] = params[i]->is_borrow;
+            }
+        }
+    }
     /* A#1: Store arg_fat flags from param bindings into fn_type so call sites
      * can auto-shim bare fn arguments into fat closures. */
     {
@@ -2562,6 +2595,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * LT1 drop check below mirrors elab_defn.  This lets (call/cc (fn [^linear k]
      * ...)) opt into one-shot-by-contract continuations (OQ3). */
     bool next_param_linear = false;
+    /* LB1: ^borrow marks the next lambda param as a non-consuming borrow. */
+    bool next_param_borrow = false;
     /* A#1 (bare-fat-lambda-param-plan): ^fat marks the next lambda param as a
      * fat-closure consumer, mirroring the defn-param path.  A bare ^fat binder
      * (no fn-type annotation) defaults to :ptr<void> + is_fat so (g x) inside
@@ -2655,6 +2690,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
             next_param_linear = true;
             continue;
         }
+        /* LB1: ^borrow marks the next lambda param as a non-consuming borrow. */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_borrow) {
+            next_param_borrow = true;
+            continue;
+        }
         /* A#1 (bare-fat-lambda-param-plan): ^fat marks the next param as a
          * fat-closure consumer (see next_param_fat declaration above). */
         if (p->tag == F_SYM && p->as.sym == e->sym_caret_fat) {
@@ -2680,6 +2720,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (g_linear_enabled && next_param_linear) {
             b->is_linear = true;
             next_param_linear = false;
+        }
+        /* LB1: a ^borrow lambda param reads its linear/affine argument without
+         * consuming it (see call-site handling). */
+        if (next_param_borrow) {
+            b->is_borrow = true;
+            next_param_borrow = false;
         }
         /* A#1 (bare-fat-lambda-param-plan): a bare ^fat lambda param holds a
          * fat-closure box.  Default it to :ptr<void> + is_fat so (g x) routes
@@ -2984,6 +3030,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (any_fat) {
             for (uint8_t i = 0; i < n_params; i++) {
                 fn_type.as.fn.arg_fat[i] = params[i]->is_fat;
+            }
+        }
+    }
+    /* LB1: propagate ^borrow param flags into the lambda's fn_type. */
+    {
+        bool any_borrow = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_borrow) { any_borrow = true; break; }
+        }
+        if (any_borrow) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_borrow[i] = params[i]->is_borrow;
             }
         }
     }

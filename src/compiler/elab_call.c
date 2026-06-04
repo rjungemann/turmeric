@@ -2602,6 +2602,31 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 binding_mark_moved(arg_b2, args[i]->span);
             }
         }
+
+        /* LB1: ^borrow parameter -- the argument is read but NOT consumed.
+         * The var-use elaboration above already recorded a consumption on a
+         * fresh linear binding (or emitted TUR-E0101 and bailed if the handle
+         * was already consumed, e.g. a free-then-borrow ordering).  Reaching
+         * here means the borrow is legal, so roll back the consumption: the
+         * single-consumption obligation is preserved for a later consuming op
+         * (fs/tmpfile-free, mutex-free, ...).  This is the call-site half of
+         * the borrow form -- see docs/reported/stdlib-linear-handle-borrows.md. */
+        if (args[i]->kind == EX_VAR && fn_type.kind == TY_FN) {
+            uint32_t fn_borrow_idx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_borrow_idx < fn_type.as.fn.arity &&
+                    fn_type.as.fn.arg_borrow[fn_borrow_idx]) {
+                Binding *arg_b3 = args[i]->as.var.binding;
+                if (g_linear_enabled && arg_b3->is_linear) {
+                    arg_b3->is_linear_consumed = false;
+                }
+                /* Substructural affine: undo the single use the var-use path
+                 * recorded so the borrow does not spend the at-most-once budget. */
+                if (g_substructural_enabled && arg_b3->is_affine
+                        && arg_b3->usage_state == USAGE_USED_ONCE) {
+                    arg_b3->usage_state = USAGE_UNUSED;
+                }
+            }
+        }
     }
 
     /* Result type is the function's return type */

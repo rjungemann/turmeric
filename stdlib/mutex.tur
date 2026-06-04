@@ -9,17 +9,26 @@
 ;; multi-threaded use (default PTHREAD_MUTEX_DEFAULT attributes).
 ;;
 ;; API:
-;;   mutex-new          []                    -- ptr<void>
-;;   mutex-lock         [m :ptr<void>]        -- nil
-;;   mutex-unlock       [m :ptr<void>]        -- nil
-;;   mutex-try-lock     [m :Mutex]            -- bool   (true = acquired)
-;;   mutex-free         [m :Mutex]            -- nil
+;;   mutex-new          []                    -- Mutex
+;;   mutex-lock         [^borrow m :Mutex]    -- nil
+;;   mutex-unlock       [^borrow m :Mutex]    -- nil
+;;   mutex-try-lock     [^borrow m :Mutex]    -- bool   (true = acquired)
+;;   mutex-free         [m :Mutex]            -- nil    (consumes the handle)
 ;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 2) ----
 ;; Mutex wraps the underlying :ptr<void> with a nominally distinct type so the
 ;; checker rejects passing an unrelated handle (a CondVar, an RwLock, a channel)
 ;; where a Mutex is expected. It lowers to :ptr<void> in the C ABI, so the
 ;; inline-C bodies are unchanged.
-(defopaque Mutex :ptr<void>)
+;;
+;; ---- Linearity (stdlib-linearity-affinity-plan, L1) ----
+;; Mutex is :linear: it owns a heap-allocated pthread_mutex_t that must be
+;; destroyed exactly once with mutex-free. Under -Xlinear the checker rejects
+;; dropping a Mutex (TUR-E0100) or freeing it twice (TUR-E0101). The multi-use
+;; accessors mutex-lock / mutex-unlock / mutex-try-lock declare their handle
+;; parameter ^borrow, so locking and unlocking repeatedly reads the handle
+;; without consuming it; only mutex-free consumes. Locking a freed Mutex is a
+;; TUR-E0101. See docs/reported/stdlib-linear-handle-borrows.md.
+(defopaque Mutex :ptr<void> :linear)
 ;;; mutex-new -- allocate and initialise a new POSIX mutex.
 ;;;
 ;;; Returns:
@@ -46,7 +55,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn mutex-lock [m : Mutex] : nil
+(defn mutex-lock [^borrow m : Mutex] : nil
   ```c pthread_mutex_lock((pthread_mutex_t *)m);
   ```)
 ;;; mutex-unlock -- release the mutex.
@@ -59,7 +68,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn mutex-unlock [m : Mutex] : nil
+(defn mutex-unlock [^borrow m : Mutex] : nil
   ```c pthread_mutex_unlock((pthread_mutex_t *)m);
   ```)
 ;;; mutex-try-lock -- attempt to acquire the mutex without blocking.
@@ -75,7 +84,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn mutex-try-lock [m : Mutex] : bool
+(defn mutex-try-lock [^borrow m : Mutex] : bool
   ```c return pthread_mutex_trylock((pthread_mutex_t *)m) == 0;
   ```)
 ;;; mutex-free -- destroy the mutex and release its memory.

@@ -1,0 +1,23 @@
+;; stdlib-linearity-affinity-plan / stdlib-linear-handle-borrows: the
+;; non-consuming accessors fs/tmpfile-path and fs/tmpfile-fd declare their
+;; handle parameter ^borrow, so they may be called between fs/tmpfile and
+;; fs/tmpfile-free without consuming the handle. The single consumption stays
+;; with fs/tmpfile-free; dropping it would still be TUR-E0100 and a second free
+;; TUR-E0101 (see the errors/ fixtures).
+;;
+;; Expected output:
+;;   has fd
+;;   tmpfile released
+(load "stdlib/fs.tur")
+
+(defn main [] : int
+  (let [t (fs/tmpfile)]
+    ;; Borrow the handle for two reads -- neither consumes it.
+    (fs/tmpfile-path t)
+    (if (> (fd->int (fs/tmpfile-fd t)) 0)
+      (println "has fd")
+      (println "no fd"))
+    ;; The single legal consumption.
+    (fs/tmpfile-free t)
+    (println "tmpfile released")
+    0))

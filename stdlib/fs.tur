@@ -20,9 +20,11 @@
 ;; entry, so it must be released exactly once with fs/tmpfile-free. Under
 ;; -Xlinear the checker rejects dropping a TmpFile (TUR-E0100) or freeing it
 ;; twice (TUR-E0101). The discipline is purely a type-checker concern; the
-;; :int C ABI and inline-C bodies are unchanged. NOTE: the non-consuming
-;; accessors fs/tmpfile-path / fs/tmpfile-fd currently consume the handle
-;; under -Xlinear (no borrow form yet) -- see
+;; :int C ABI and inline-C bodies are unchanged. The non-consuming accessors
+;; fs/tmpfile-path / fs/tmpfile-fd declare their handle parameter ^borrow, so
+;; they read the handle without discharging the single-consumption obligation;
+;; a later fs/tmpfile-free is still the one legal consumption. Borrowing an
+;; already-freed handle is a TUR-E0101. See the (now resolved) report at
 ;; docs/reported/stdlib-linear-handle-borrows.md.
 (load "stdlib/fd.tur")
 
@@ -393,7 +395,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-path [t : TmpFile] : cstr
+(defn fs/tmpfile-path [^borrow t : TmpFile] : cstr
   ```c return (const char*)(intptr_t)((int64_t*)(intptr_t)t)[0];
   ```)
 ;;; fs/tmpfile-fd -- extract the file descriptor from an fs/tmpfile pair.
@@ -409,7 +411,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-fd [t : TmpFile] : Fd
+(defn fs/tmpfile-fd [^borrow t : TmpFile] : Fd
   ```c return ((int64_t*)(intptr_t)t)[1];
   ```)
 ;;; fs/tmpfile-free -- close the fd and free the tmpfile pair.
