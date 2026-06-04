@@ -1,0 +1,32 @@
+;; instance-closure-return-float -- a typeclass method whose declared return
+;; type is a closure with a non-int (:float) result kind, with no captures.
+;;
+;; Regression for instance-method-closure-return-lowered-to-result-type: the
+;; method `arr-of` returns a value of function type `(fn [:float] :float)`.
+;; Before the fix the dict-field and impl-signature return type lowered via
+;; `type_c_name` to the function's *result* type `double`, while the impl body
+;; returned a bare `double (*)(double)` function pointer -- a hard `cc` error
+;; (`incompatible types when returning ... but 'double' was expected`).  Now the
+;; thin closure return is carried as the matching fn-ptr typedef on both the
+;; dict field and the impl signature, so the bare pointer flows through cleanly.
+;;
+;; The returned closure captures nothing, so it is a bare function pointer;
+;; apply it through a thin (captureless) cast.
+
+(defclass HasArr [a]
+  (arr-of [self] : (fn [:float] :float)))
+
+(defstruct ArrW [a]
+  (raw :int))
+
+(definstance HasArr [ArrW]
+  (arr-of [self]
+    (fn [x :float] :float (*. x 2.0))))
+
+;; Apply a captureless closure (a bare double(*)(double) function pointer).
+(defn call-thin [f :int x :float] :float
+  ```c return ((double(*)(double))(intptr_t)f)(x); ```)
+
+(defn main [] :int
+  (println (call-thin (.arr-of (:: (make-struct ArrW 0) (ArrW int))) 1.5))   ;; 3.0
+  0)

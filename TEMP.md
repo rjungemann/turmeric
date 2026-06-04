@@ -59,7 +59,7 @@ do not collapse phases, do not reword entries into prose, and update the
    - Kind: plan
    - Goal: Drop leading `:` on types inside `(fn [...] ...)` type expressions -- `(fn [:float] :float)` → `(fn [float] float)`. Position already implies type; the colon is redundant noise. Parser-lenient transition then deprecation then removal, matching the spaced-type-annotation cadence
    - Deps: 5
-   - Status: Draft
+   - Status: Complete
 
 ## Phase 1 -- Compiler & closure ABI fixes
 
@@ -108,20 +108,20 @@ do not collapse phases, do not reword entries into prose, and update the
 14. `reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md`
     - Kind: report
     - Goal: A polymorphic `(defn f [A] ... (fn ... : A val))` emits one shared inner C body returning `int64_t`; the `:float` specialisation invokes it through a `double (*)(...)` pointer and reads the parameter (xmm0) instead of the captured value -- silent miscompile
-    - Deps: independent (surfaced by 18 / G2 spike; same family as 8 and 13)
-    - Status: In Progress
+    - Deps: independent (surfaced by 18 / G2 spike; same family as 8 and 13In Progress)
+    - Status: Complete
 
 15. `reported/fat-closure-dispatch-does-not-handle-struct-return.md`
     - Kind: report
     - Goal: A closure declared `: (Pair float float)` emits an inner body returning the struct directly but a dispatcher that casts to `int64_t (*)(...)`; `cc` rejects the generated C outright. Typed-thunk family covers `:float`/`:cstr` but not aggregates
     - Deps: independent (surfaced by 18 / G4 spike; same family as 8 but for aggregate returns)
-    - Status: Open
+    - Status: In Progress
 
 16. `reported/instance-method-closure-return-lowered-to-result-type.md`
     - Kind: report
     - Goal: A `definstance` method declared `(fn [...] T)` lowers BOTH its dict-field type AND its C impl signature to the function's *result* type `T`, not a function-pointer type. Impl body returns a bare `T (*)(...)`. For non-`int64_t`-compatible `T` (e.g. `:float`) this is a hard `cc` error; for `int64_t`-compatible `T` (e.g. `:int`) it "works by luck" with `-Wint-conversion`. Instance-method mirror of 13
     - Deps: independent (adjacent to 7; found 2026-06-04 while fixing 13)
-    - Status: Open
+    - Status: Complete
 
 ## Phase 2 -- Type system expansion
 
@@ -137,7 +137,7 @@ do not collapse phases, do not reword entries into prose, and update the
     - Kind: plan
     - Goal: Spike-validate that the type system can support a typed signal library; gate remaining gaps
     - Deps: 4, 7, 8, 10, 17
-    - Status: Done (G1, G3, G5, G6, G7, G8 green; G2 red → 14; G4 red → 15)
+    - Status: Complete (G1, G3, G5, G6, G7, G8 green; G2 red → 14; G4 red → 15)
 
 ## Phase 4 -- Stdlib hardening
 
@@ -145,7 +145,7 @@ do not collapse phases, do not reword entries into prose, and update the
     - Kind: plan
     - Goal: Wrap bare `:int`/`:ptr<void>` resource handles in `defopaque` newtypes
     - Deps: 1
-    - Status: In Progress
+    - Status: Complete
 
 20. `upcoming/stdlib-inline-c-deworkaround-plan.md`
     - Kind: plan
@@ -153,47 +153,71 @@ do not collapse phases, do not reword entries into prose, and update the
     - Deps: 19
     - Status: In progress (Phase 1 complete as of 2026-06-03; Phases 2-4 outstanding)
 
-21. `upcoming/stdlib-advanced-typing-plan.md`
+21. `upcoming/stdlib-linearity-affinity-plan.md`
     - Kind: plan
-    - Goal: Add linearity/affinity, session types, effects, refinement, typeclass consolidation to stdlib
+    - Goal: Promote stdlib resource-handle newtypes (Mutex, Chan, Promise, Future, TaskGroup, Reactor, TmpFile, ChildHandle, Bytes) to `:linear` / `:affine`. Catches double-free, use-after-free, missing-wait, and double-fulfill at compile time. Phases L1 (concurrency core) / L2 (taskgroup+reactor) / L3 (audit+serial)
     - Deps: 19
-    - Status: Draft (Phases L, S, E, R, T designed, not implemented)
+    - Status: Draft (split from former umbrella stdlib-advanced-typing plan)
+
+22. `upcoming/stdlib-session-typed-channels-plan.md`
+    - Kind: plan
+    - Goal: Thin generic `SChan<p>` wrapper over (opaque, linear) `Chan` that carries a protocol phantom advanced by each send/recv/close. Worker-pool and RPC-pipe protocols become compile-time checks
+    - Deps: 19, 21
+    - Status: Draft (split from former umbrella stdlib-advanced-typing plan)
+
+23. `upcoming/stdlib-effect-rows-plan.md`
+    - Kind: plan
+    - Goal: Annotate I/O-touching stdlib (fs, process, env, net, random, log, time, httpd, csv, json) with coarse effect tags (#{FS}, #{Net}, #{Proc}, #{Rand}). One-pass annotation -- no inference, no masking, opt-in checking
+    - Deps: independent
+    - Status: Draft (split from former umbrella stdlib-advanced-typing plan)
+
+24. `upcoming/stdlib-refinement-collections-plan.md`
+    - Kind: plan
+    - Goal: Replace partial functions in list/vec/slice with total versions guarded by `NonEmpty<A>` and `BoundedIdx<n>`. Rewrite `range.tur`'s bound-kind sentinel ints as a `Bound A` GADT. Smart constructors keep existing partial APIs working
+    - Deps: independent
+    - Status: Draft (split from former umbrella stdlib-advanced-typing plan)
+
+25. `upcoming/stdlib-hkt-consolidation-plan.md`
+    - Kind: plan
+    - Goal: Delete hand-rolled monad interfaces in parsec/logic/backtrack via real `Monad`/`Alternative` instances. Add `Bifunctor`/`MonadError` on `Result` so httpd/csv/json stop open-coding `result-map`. Pure consolidation -- no new typeclass hierarchies
+    - Deps: independent
+    - Status: Draft (split from former umbrella stdlib-advanced-typing plan)
 
 ## Phase 5 -- Stdlib API cleanup
 
-22. `upcoming/stdlib-arrow-scaleback-plan.md`
+26. `upcoming/stdlib-arrow-scaleback-plan.md`
     - Kind: plan
     - Goal: Remove disabled Arrow typeclass scaffolding; keep only bare-function combinators
     - Deps: 18
     - Status: Complete (mechanical steps defined, awaiting approval)
 
-23. `upcoming/stdlib-type-erasure-cleanup-plan.md`
+27. `upcoming/stdlib-type-erasure-cleanup-plan.md`
     - Kind: plan
     - Goal: Replace int64-erased typeclass stubs with real instances
     - Deps: 7, 17 (plus operator-name mangling fix tracked inside the plan)
-    - Status: In Progress (Phases A-C with subtasks defined, not implemented)
+    - Status: In Progress (Phase A complete; Phases B and C are WIP)
 
 ## Phase 6 -- Typeclass reintroduction
 
-24. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
+28. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
     - Kind: plan
     - Goal: Reintroduce Arrow / ArrowChoice / ArrowLoop typeclasses on `(->)`
-    - Deps: 7, 17, 23
+    - Deps: 7, 17, 27
     - Status: Draft, blocked on prerequisites (T1-T12 tasks defined)
 
 ## Phase 7 -- Signal rebuild
 
-25. `reported/signal-spice-broken-build.md`
+29. `reported/signal-spice-broken-build.md`
     - Kind: report
     - Goal: tur-signal spice does not compile -- references removed `__arrow_call1` plus un-imported stdlib symbols; the existing rebuild plan understates the scope by assuming a half-done `:float` migration baseline
-    - Deps: independent (prerequisite finding for 26)
+    - Deps: independent (prerequisite finding for 30)
     - Status: Obsolete (severity: high)
 
-26. `upcoming/tur-signal-rebuild-plan.md`
+30. `upcoming/tur-signal-rebuild-plan.md`
     - Kind: plan
     - Goal: Rebuild the tur-signal spice on top of the modern typed infrastructure
-    - Deps: 14, 15, 18, 22, 25
-    - Status: Draft, blocked on 14 + 15 (polymorphic `constant` and struct-returning closures) if needed on critical path; otherwise blocked only on 18 + 22 (Phases 1-6 designed)
+    - Deps: 14, 15, 18, 26, 29
+    - Status: Draft, blocked on 14 + 15 (polymorphic `constant` and struct-returning closures) if needed on critical path; otherwise blocked only on 18 + 26 (Phases 1-6 designed)
 
 ## Other notes
 
@@ -219,3 +243,15 @@ docs/reported/taskgroup-wrapper-macros-emit-nil-head.md
 docs/reported/io-file-open-untyped-params-default-to-int.md
 
 docs/archive/httpd-conn-struct-consolidation-plan.md
+
+* upcoming/stdlib-type-erasure-cleanup-plan.md
+  * `-  -> _hy        _  -> __ (or _us)        /  -> _sl`
+  * You chose the full reversible scheme; I implemented it but omitted a demangler
+because the -///_→_ folding makes the encoding non-self-delimiting (a general
+inverse would mis-decode foo_bar→foo|r), and diagnostics already report source
+names, not mangled ones. Documented in mangle.h. This resolves the plan's open
+question #1.
+  * If we ever do want that (pretty cc-error passthrough), the better fix is option
+(1) from my report — a name-reference splice so inline-C stops hardcoding
+mangled names at all — rather than making the whole scheme self-delimiting just
+to enable demangling.
