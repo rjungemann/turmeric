@@ -327,9 +327,28 @@ the migration on that repo's side.
 
 This phase can run concurrently with Phase 3 after Phase 1+2 land.
 
-### Phase 5 — Documentation
+### Phase 5 — Documentation *(DONE)*
 
-Update to prefer spaced syntax everywhere:
+Built `tools/spaced-types-rewrite-md.py`, a small wrapper that walks
+`turmeric` / `tur` / `scheme` / `clojure` / `lisp` code fences inside
+markdown files and pipes the contents through `rewrite_source` from the
+main codemod. Prose and non-Turmeric code blocks are left alone.
+
+Landed as a single commit covering 72 files / 555 line changes across
+`CLAUDE.md`, `README.md`, `docs/guides/**`, and `docs/upcoming/**`.
+Preserved fused examples on purpose:
+
+- The "current (fused)" motivation block in this plan (line 8), which
+  exists to contrast against the target spaced form.
+- The "old fused-keyword style is still accepted" demonstration in
+  `docs/guides/type-annotations-guide.md`.
+
+`docs/guides/type-annotations-guide.md` already existed and already
+called out that the legacy fused form remains a valid reader input but
+should not be used in new code, so the plan's "new short guide" step
+was a no-op.
+
+#### Original phase notes
 
 - `CLAUDE.md` — the function-arity, sweet-exp, indentation, and docstring sections. All `:int` examples become `: int`.
 - `README.md` — any code snippets.
