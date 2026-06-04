@@ -59,7 +59,7 @@ do not collapse phases, do not reword entries into prose, and update the
    - Kind: plan
    - Goal: Drop leading `:` on types inside `(fn [...] ...)` type expressions -- `(fn [:float] :float)` → `(fn [float] float)`. Position already implies type; the colon is redundant noise. Parser-lenient transition then deprecation then removal, matching the spaced-type-annotation cadence
    - Deps: 5
-   - Status: Draft
+   - Status: Complete
 
 ## Phase 1 -- Compiler & closure ABI fixes
 
@@ -108,20 +108,20 @@ do not collapse phases, do not reword entries into prose, and update the
 14. `reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md`
     - Kind: report
     - Goal: A polymorphic `(defn f [A] ... (fn ... : A val))` emits one shared inner C body returning `int64_t`; the `:float` specialisation invokes it through a `double (*)(...)` pointer and reads the parameter (xmm0) instead of the captured value -- silent miscompile
-    - Deps: independent (surfaced by 18 / G2 spike; same family as 8 and 13)
-    - Status: In Progress
+    - Deps: independent (surfaced by 18 / G2 spike; same family as 8 and 13In Progress)
+    - Status: Complete
 
 15. `reported/fat-closure-dispatch-does-not-handle-struct-return.md`
     - Kind: report
     - Goal: A closure declared `: (Pair float float)` emits an inner body returning the struct directly but a dispatcher that casts to `int64_t (*)(...)`; `cc` rejects the generated C outright. Typed-thunk family covers `:float`/`:cstr` but not aggregates
     - Deps: independent (surfaced by 18 / G4 spike; same family as 8 but for aggregate returns)
-    - Status: Open
+    - Status: In Progress
 
 16. `reported/instance-method-closure-return-lowered-to-result-type.md`
     - Kind: report
     - Goal: A `definstance` method declared `(fn [...] T)` lowers BOTH its dict-field type AND its C impl signature to the function's *result* type `T`, not a function-pointer type. Impl body returns a bare `T (*)(...)`. For non-`int64_t`-compatible `T` (e.g. `:float`) this is a hard `cc` error; for `int64_t`-compatible `T` (e.g. `:int`) it "works by luck" with `-Wint-conversion`. Instance-method mirror of 13
     - Deps: independent (adjacent to 7; found 2026-06-04 while fixing 13)
-    - Status: Open
+    - Status: Complete
 
 ## Phase 2 -- Type system expansion
 
@@ -145,7 +145,7 @@ do not collapse phases, do not reword entries into prose, and update the
     - Kind: plan
     - Goal: Wrap bare `:int`/`:ptr<void>` resource handles in `defopaque` newtypes
     - Deps: 1
-    - Status: In Progress
+    - Status: Complete
 
 20. `upcoming/stdlib-inline-c-deworkaround-plan.md`
     - Kind: plan
@@ -171,7 +171,7 @@ do not collapse phases, do not reword entries into prose, and update the
     - Kind: plan
     - Goal: Replace int64-erased typeclass stubs with real instances
     - Deps: 7, 17 (plus operator-name mangling fix tracked inside the plan)
-    - Status: In Progress (Phases A-C with subtasks defined, not implemented)
+    - Status: In Progress (Phase A complete; Phases B and C are WIP)
 
 ## Phase 6 -- Typeclass reintroduction
 
@@ -219,3 +219,15 @@ docs/reported/taskgroup-wrapper-macros-emit-nil-head.md
 docs/reported/io-file-open-untyped-params-default-to-int.md
 
 docs/archive/httpd-conn-struct-consolidation-plan.md
+
+* upcoming/stdlib-type-erasure-cleanup-plan.md
+  * `-  -> _hy        _  -> __ (or _us)        /  -> _sl`
+  * You chose the full reversible scheme; I implemented it but omitted a demangler
+because the -///_→_ folding makes the encoding non-self-delimiting (a general
+inverse would mis-decode foo_bar→foo|r), and diagnostics already report source
+names, not mangled ones. Documented in mangle.h. This resolves the plan's open
+question #1.
+  * If we ever do want that (pretty cc-error passthrough), the better fix is option
+(1) from my report — a name-reference splice so inline-C stops hardcoding
+mangled names at all — rather than making the whole scheme self-delimiting just
+to enable demangling.
