@@ -1,0 +1,12 @@
+;; stdlib-linearity-affinity-plan (L2): dropping a :linear TaskGroup. The group
+;; accessors (wait/cancel/cancelled?) borrow the handle and never discharge the
+;; consumption obligation, so a group that is waited on but never
+;; task-group-free'd leaks.
+;; Expected: TUR-E0100 (linear value dropped without being consumed).
+(load "stdlib/taskgroup.tur")
+
+(defn main [] : int
+  (let [g (task-group-new)]
+    (task-group-cancel g)
+    (task-group-wait g))
+  0)

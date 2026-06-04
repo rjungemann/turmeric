@@ -1,0 +1,17 @@
+;; stdlib-linearity-affinity-plan (L2): Reactor is a :linear resource handle.
+;;
+;; A reactor owns its platform I/O backend and must be torn down exactly once
+;; with reactor-free. The accessors (here reactor-poll) declare their handle
+;; ^borrow, so the reactor may be polled repeatedly without consuming it; only
+;; reactor-free consumes. Under -Xlinear this whole sequence type-checks.
+;;
+;; Expected output: reactor ok
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)]
+    (reactor-poll r 0)
+    (reactor-poll r 0)
+    (reactor-free r)
+    (println "reactor ok")
+    0))

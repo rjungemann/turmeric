@@ -52,6 +52,18 @@
 ;; ---- Source-id handle newtype ----
 
 (defopaque EventSourceId :int)
+;; ---- Reactor handle newtype + linearity (stdlib-linearity-affinity-plan, L2) ----
+;; Reactor wraps the :ptr<void> handle returned by reactor-new with a nominally
+;; distinct type. It is :linear: a reactor owns its platform I/O backend and
+;; must be torn down exactly once with reactor-free. Under -Xlinear the checker
+;; rejects dropping a Reactor (TUR-E0100) or freeing it twice / using it after
+;; free (TUR-E0101). Every reactor accessor (add-*/modify/remove/poll/run/stop/
+;; wake) and local-fiber-group-new declare their reactor parameter ^borrow, so a
+;; reactor may be registered against, polled, and run any number of times
+;; without consuming it; only reactor-free consumes. Reactor lowers to
+;; :ptr<void> in the C ABI -- the thin extern wrappers coerce with
+;; (:: r :ptr<void>) at the call boundary, so the C surface is unchanged.
+(defopaque Reactor :ptr<void> :linear)
 ;; ---- C surface declarations ----
 
 
@@ -129,7 +141,7 @@
 ;;; Since: Phase R1
 
 
-(defn reactor-new [] #{} : ptr<void> (tur_reactor_new))
+(defn reactor-new [] #{} : Reactor (:: (tur_reactor_new) :Reactor))
 ;;; reactor-free -- free a reactor and unregister all attached sources.
 ;;;
 ;;; Parameters:
@@ -140,7 +152,7 @@
 ;;;
 ;;; Since: Phase R1
 
-(defn reactor-free [r : ptr<void>] #{} : nil (tur_reactor_free r))
+(defn reactor-free [r : Reactor] #{} : nil (tur_reactor_free (:: r :ptr<void>)))
 ;; ---- Source registration ----
 ;;; reactor-add-fd -- watch a file descriptor for I/O events.
 ;;;
@@ -171,14 +183,14 @@
 ;;; Since: Phase R2
 
 
-(defn reactor-add-fd [r : ptr<void>
+(defn reactor-add-fd [^borrow r : Reactor
                       fd : int
                       events : int
                       cb : int
                       user-data : ptr<void>]
   #{}
   : EventSourceId
-  (:: (tur_reactor_add_fd r fd events cb user-data) :EventSourceId))
+  (:: (tur_reactor_add_fd (:: r :ptr<void>) fd events cb user-data) :EventSourceId))
 ;;; reactor-modify-fd -- change the watched event mask for a source.
 ;;;
 ;;; Parameters:
@@ -194,10 +206,10 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn reactor-modify-fd [r : ptr<void> id : EventSourceId new-events : int]
+(defn reactor-modify-fd [^borrow r : Reactor id : EventSourceId new-events : int]
   #{}
   : int
-  (tur_reactor_modify_fd r (:: id :int) new-events))
+  (tur_reactor_modify_fd (:: r :ptr<void>) (:: id :int) new-events))
 ;;; reactor-remove -- unregister a source by id.
 ;;;
 ;;; After this call the fd is no longer watched and the callback will
@@ -215,10 +227,10 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn reactor-remove [r : ptr<void> id : EventSourceId]
+(defn reactor-remove [^borrow r : Reactor id : EventSourceId]
   #{}
   : int
-  (tur_reactor_remove r (:: id :int)))
+  (tur_reactor_remove (:: r :ptr<void>) (:: id :int)))
 ;;; reactor-add-timer -- register a one-shot timer that fires once.
 ;;;
 ;;; The callback fires after delay-ms milliseconds on the thread that calls
@@ -243,13 +255,13 @@
 ;;;
 ;;; Since: Phase R4
 
-(defn reactor-add-timer [r : ptr<void>
+(defn reactor-add-timer [^borrow r : Reactor
                          delay-ms : int
                          cb : int
                          user-data : ptr<void>]
   #{}
   : EventSourceId
-  (:: (tur_reactor_add_timer r delay-ms cb user-data) :EventSourceId))
+  (:: (tur_reactor_add_timer (:: r :ptr<void>) delay-ms cb user-data) :EventSourceId))
 ;;; reactor-add-interval -- register a repeating interval timer.
 ;;;
 ;;; The callback fires first after first-ms milliseconds, then every
@@ -275,14 +287,14 @@
 ;;;
 ;;; Since: Phase R4
 
-(defn reactor-add-interval [r : ptr<void>
+(defn reactor-add-interval [^borrow r : Reactor
                             first-ms : int
                             interval-ms : int
                             cb : int
                             user-data : ptr<void>]
   #{}
   : EventSourceId
-  (:: (tur_reactor_add_interval r first-ms interval-ms cb user-data)
+  (:: (tur_reactor_add_interval (:: r :ptr<void>) first-ms interval-ms cb user-data)
     :EventSourceId))
 ;; ---- Running ----
 ;;; reactor-add-signal -- watch an OS signal via the reactor.
@@ -311,13 +323,13 @@
 ;;; Since: Phase R5
 
 
-(defn reactor-add-signal [r : ptr<void>
+(defn reactor-add-signal [^borrow r : Reactor
                           signum : int
                           cb : int
                           user-data : ptr<void>]
   #{}
   : EventSourceId
-  (:: (tur_reactor_add_signal r signum cb user-data) :EventSourceId))
+  (:: (tur_reactor_add_signal (:: r :ptr<void>) signum cb user-data) :EventSourceId))
 ;;; reactor-add-chan -- watch a channel for one incoming value (one-shot).
 ;;;
 ;;; Fires at most once: when a value is available the callback receives
@@ -344,13 +356,13 @@
 ;;;
 ;;; Since: Phase R6
 
-(defn reactor-add-chan [r : ptr<void>
+(defn reactor-add-chan [^borrow r : Reactor
                         ch : ptr<void>
                         cb : int
                         user-data : ptr<void>]
   #{}
   : EventSourceId
-  (:: (tur_reactor_add_chan r ch cb user-data) :EventSourceId))
+  (:: (tur_reactor_add_chan (:: r :ptr<void>) ch cb user-data) :EventSourceId))
 ;; ---- Running ----
 ;;; reactor-poll -- poll for events once, dispatching ready callbacks.
 ;;;
@@ -371,10 +383,10 @@
 ;;; Since: Phase R1
 
 
-(defn reactor-poll [r : ptr<void> timeout-ms : int]
+(defn reactor-poll [^borrow r : Reactor timeout-ms : int]
   #{}
   : int
-  (tur_reactor_poll r timeout-ms))
+  (tur_reactor_poll (:: r :ptr<void>) timeout-ms))
 ;;; reactor-run -- run the event loop until stopped or all sources removed.
 ;;;
 ;;; Calls reactor-poll in a loop until reactor-stop is called from a callback
@@ -388,7 +400,7 @@
 ;;;
 ;;; Since: Phase R1
 
-(defn reactor-run [r : ptr<void>] #{} : nil (tur_reactor_run r))
+(defn reactor-run [^borrow r : Reactor] #{} : nil (tur_reactor_run (:: r :ptr<void>)))
 ;;; reactor-stop -- ask reactor-run to return after the current dispatch round.
 ;;;
 ;;; Thread-safe: safe to call from a callback inside reactor-run or from
@@ -403,7 +415,7 @@
 ;;;
 ;;; Since: Phase R1
 
-(defn reactor-stop [r : ptr<void>] #{} : nil (tur_reactor_stop r))
+(defn reactor-stop [^borrow r : Reactor] #{} : nil (tur_reactor_stop (:: r :ptr<void>)))
 ;;; reactor-wake -- interrupt a reactor blocked in reactor-poll or reactor-run.
 ;;;
 ;;; Thread-safe: causes the blocking poll to return immediately so the
@@ -418,7 +430,7 @@
 ;;;
 ;;; Since: Phase R1
 
-(defn reactor-wake [r : ptr<void>] #{} : nil (tur_reactor_wake r))
+(defn reactor-wake [^borrow r : Reactor] #{} : nil (tur_reactor_wake (:: r :ptr<void>)))
 ;; ---- Local fiber driver (Phase F2-F7) ----
 ;;
 ;; A local fiber group runs cooperative fibers on top of one reactor without
@@ -467,10 +479,10 @@
 ;;;
 ;;; Since: Phase F2
 
-(defn local-fiber-group-new [r : ptr<void>]
+(defn local-fiber-group-new [^borrow r : Reactor]
   #{}
   : ptr<void>
-  (tur_local_fiber_group_new r))
+  (tur_local_fiber_group_new (:: r :ptr<void>)))
 ;;; local-fiber-group-free -- free a fiber group and cancel any parked fibers.
 ;;;
 ;;; Any fiber still parked is cancelled: its park source is removed from the

@@ -1,0 +1,11 @@
+;; stdlib-linearity-affinity-plan (L2): waiting on a :linear ChildHandle twice.
+;; process/wait consumes the handle, so a second wait is a use-after-consume --
+;; catching the double-reap bug class at compile time.
+;; Expected: TUR-E0101 (linear value used after being consumed).
+(load "stdlib/process.tur")
+
+(defn main [] : int
+  (let [child (process/spawn "/bin/true" 0)]
+    (process/wait child)
+    (process/wait child))
+  0)

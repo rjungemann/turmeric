@@ -1,0 +1,16 @@
+;; stdlib-linearity-affinity-plan (L1): AsyncChan is a :linear resource handle.
+;;
+;; The try/count/send/recv accessors declare their handle ^borrow; only
+;; async-chan-free consumes. Under -Xlinear this whole sequence type-checks.
+;;
+;; Expected output: async ok
+(load "stdlib/chan.tur")
+
+(defn main [] : int
+  (let [ch (async-chan-new 4)]
+    (async-chan-try-send ch 7)
+    (let [n (async-chan-count ch)
+          v (async-chan-try-recv ch)]
+      (async-chan-free ch)
+      (println "async ok")
+      0)))

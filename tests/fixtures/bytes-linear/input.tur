@@ -1,0 +1,22 @@
+;; stdlib-linearity-affinity-plan (L3): Bytes is a :linear resource handle.
+;;
+;; bytes-alloc returns an owned, length-prefixed buffer that must be released
+;; exactly once with bytes-free. The read accessors bytes-len / bytes-data
+;; declare their handle ^borrow, so the buffer may be inspected repeatedly
+;; without consuming it; only bytes-free consumes. Under -Xlinear this whole
+;; sequence type-checks.
+;;
+;; Expected output: bytes ok
+(load "stdlib/serial.tur")
+
+(defn main [] : int
+  (let [b (bytes-alloc 16)]
+    (let [n (bytes-len b)]
+      ;; borrow again -- still legal after an earlier borrow
+      (bytes-data b)
+      ;; the single consumption
+      (bytes-free b)
+      (if (= n 16)
+        (println "bytes ok")
+        (println "bytes BAD"))
+      0)))

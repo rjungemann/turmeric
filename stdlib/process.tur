@@ -7,6 +7,13 @@
 ;;
 ;; Wrappers around unistd.h / sys/wait.h primitives.
 ;; process/capture uses popen(3) for capturing stdout.
+;;
+;; NOTE on argv: the argv parameter is a raw cons list. The (cons ...) examples
+;; in the docstrings below are interpreter idioms -- `cons` is an interpreter
+;; native and is NOT available when you `tur build` / `tur emit-c`. In compiled
+;; programs, pass 0 for an empty argv, build the list with an inline-C cons stub,
+;; or use a stdlib list helper. See the "Interpreter-only natives" section of
+;; docs/guides/c-integration-guide.md.
 ;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, I/O sweep) ----
 ;; Pid wraps a process id (an :int) with a nominally distinct type, so the
 ;; checker rejects passing an exit code, a byte count, or any unrelated integer
@@ -15,6 +22,17 @@
 ;; raw integer with (:: pid :int) to compare against it. Pid lowers to :int in
 ;; the C ABI, so the inline-C bodies are unchanged.
 (defopaque Pid :int)
+;; ---- Linearity (stdlib-linearity-affinity-plan, L2) ----
+;; ChildHandle is the handle to a spawned child process. It is :linear: a
+;; spawned child must be reaped exactly once with process/wait, which consumes
+;; the handle. Under -Xlinear the checker rejects dropping a ChildHandle
+;; (TUR-E0100) -- forgetting to wait, which would leak a zombie -- or waiting on
+;; it twice (TUR-E0101). ChildHandle is nominally distinct from Pid so the
+;; checker also rejects passing a self/parent Pid (from process/pid /
+;; process/ppid) to process/wait, and vice versa. Like Pid it lowers to :int in
+;; the C ABI; process/spawn still encodes fork failure as a ChildHandle wrapping
+;; -1, recoverable with (:: child :int).
+(defopaque ChildHandle :int :linear)
 ;; stdlib-effect-rows: every process/* entry point touches OS process state, so
 ;; each carries the #{Proc} capability tag.  Callers that opt into effect-row
 ;; checking (by annotating their own row) must declare #{Proc} to use them.
@@ -101,15 +119,17 @@
 ;;;   argv -- cons list of cstr arguments (head = argv[0])
 ;;;
 ;;; Returns:
-;;;   The child PID as a Pid on success, or a Pid wrapping -1 on fork failure.
+;;;   The child as a ChildHandle on success, or a ChildHandle wrapping -1 on
+;;;   fork failure.  The handle is linear: reap it exactly once with
+;;;   process/wait.
 ;;;
 ;;; Example:
-;;;   (let [pid (process/spawn "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))]
-;;;     (process/wait pid))
+;;;   (let [child (process/spawn "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))]
+;;;     (process/wait child))
 ;;;
 ;;; Since: Phase B2
 
-(defn process/spawn [path : cstr argv : int] #{Proc} : Pid
+(defn process/spawn [path : cstr argv : int] #{Proc} : ChildHandle
   ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -128,23 +148,23 @@
   free(args);
   return (int64_t)pid;
   ```)
-;;; process/wait -- wait for a child process to exit.
+;;; process/wait -- wait for a child process to exit, consuming its handle.
 ;;;
 ;;; Parameters:
-;;;   pid -- child process ID returned by process/spawn
+;;;   child -- ChildHandle returned by process/spawn (consumed)
 ;;;
 ;;; Returns:
 ;;;   The exit status code (0 = clean exit), -1 on error.
 ;;;
 ;;; Example:
-;;;   (process/wait child-pid)  ; => 0
+;;;   (process/wait child)  ; => 0
 ;;;
 ;;; Since: Phase B2
 
-(defn process/wait [pid : Pid] #{Proc} : int
+(defn process/wait [child : ChildHandle] #{Proc} : int
   ```c #include <sys/wait.h>
   int status = 0;
-  if (waitpid((pid_t)pid, &status, 0) < 0) return -1;
+  if (waitpid((pid_t)child, &status, 0) < 0) return -1;
   if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
   return -1;
   ```)

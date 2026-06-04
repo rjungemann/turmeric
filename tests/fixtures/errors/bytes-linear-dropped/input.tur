@@ -1,0 +1,11 @@
+;; stdlib-linearity-affinity-plan (L3): dropping a :linear Bytes. Reading the
+;; buffer (bytes-len/bytes-data) borrows it and never discharges the
+;; consumption obligation, so a buffer that is only ever read -- never
+;; bytes-free'd -- leaks.
+;; Expected: TUR-E0100 (linear value dropped without being consumed).
+(load "stdlib/serial.tur")
+
+(defn main [] : int
+  (let [b (bytes-alloc 8)]
+    (bytes-len b))
+  0)

@@ -1,0 +1,11 @@
+;; stdlib-linearity-affinity-plan (L2): using a :linear Reactor after free.
+;; reactor-free consumes the handle, so a subsequent reactor-poll is a
+;; use-after-consume.
+;; Expected: TUR-E0101 (linear value used after being consumed).
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)]
+    (reactor-free r)
+    (reactor-poll r 0))
+  0)

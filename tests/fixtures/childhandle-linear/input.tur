@@ -1,0 +1,16 @@
+;; stdlib-linearity-affinity-plan (L2): ChildHandle is a :linear resource handle.
+;;
+;; process/spawn returns a linear ChildHandle that must be reaped exactly once
+;; with process/wait (which consumes it). Under -Xlinear, spawning then waiting
+;; type-checks, while forgetting to wait (a leaked zombie) is a TUR-E0100 and
+;; double-waiting is a TUR-E0101.
+;;
+;; Expected output: child ok
+(load "stdlib/process.tur")
+
+(defn main [] : int
+  (let [child (process/spawn "/bin/true" 0)]
+    ;; the single consumption -- reaps the child
+    (process/wait child)
+    (println "child ok")
+    0))

@@ -2609,7 +2609,19 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             bool param_is_unique_mut = g_unique_enabled && fn_type.kind == TY_FN &&
                 i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique_mut[i];
             bool arg_is_unique_mut = g_unique_enabled && arg_b2->is_unique && arg_b2->is_mut;
-            if (!param_is_unique_mut && !arg_is_unique_mut) {
+            /* LB1: a ^borrow parameter reads its argument without taking
+             * ownership, so it must NOT move (poison) the binding -- otherwise a
+             * move-typed (e.g. :affine) handle could not be read by a borrowing
+             * accessor and then used again (TUR-E0005). This is the move-checker
+             * half of the borrow form; the linear/affine usage rollback below
+             * handles the -Xlinear / substructural budgets. */
+            bool param_is_borrow = false;
+            if (fn_type.kind == TY_FN) {
+                uint32_t fn_borrow_idx = fn_binding->closure_fn_binding ? i + 1 : i;
+                if (fn_borrow_idx < fn_type.as.fn.arity)
+                    param_is_borrow = fn_type.as.fn.arg_borrow[fn_borrow_idx];
+            }
+            if (!param_is_unique_mut && !arg_is_unique_mut && !param_is_borrow) {
                 binding_mark_moved(arg_b2, args[i]->span);
             }
         }

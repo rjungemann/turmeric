@@ -1,0 +1,14 @@
+;; stdlib-linearity-affinity-plan: freeing an :affine Future twice. future-free
+;; consumes the Future handle, so a second future-free is a use-after-move --
+;; the affine discipline catches the double-free of a single handle at compile
+;; time (the reference count keeps the cross-alias case memory-safe at runtime).
+;; Expected: TUR-E0005 (use-after-move).
+(load "stdlib/future.tur")
+
+(defn main [] : int
+  (let [p (promise-new)]
+    (let [f (future-handle p)]
+      (promise-fulfill p 1)
+      (future-free f)
+      (future-free f)))
+  0)

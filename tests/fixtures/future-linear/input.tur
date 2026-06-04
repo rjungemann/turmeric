@@ -1,0 +1,21 @@
+;; stdlib-linearity-affinity-plan: Future is now :affine and the shared
+;; FutureCell is reference-counted, so the producer (Promise) and consumer
+;; (Future) ends can both be held and released without double-freeing the cell.
+;;
+;; future-handle borrows the Promise and mints a Future over the same cell
+;; (refcount 1 -> 2). promise-fulfill consumes the Promise and drops its ref
+;; (2 -> 1); future-done? borrows the Future to read; future-free consumes the
+;; Future and drops the last ref (1 -> 0), tearing the cell down exactly once.
+;;
+;; Expected output: future ok
+(load "stdlib/future.tur")
+
+(defn main [] : int
+  (let [p (promise-new)]
+    (let [f (future-handle p)]
+      (promise-fulfill p 42)
+      (if (future-done? f)
+        (println "future ok")
+        (println "future BAD"))
+      (future-free f)
+      0)))

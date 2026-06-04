@@ -45,6 +45,45 @@ To inspect the emitted C without building, use:
 This makes debugging integration problems much easier because you can see
 exactly what the C side of the equation looks like.
 
+### 1.1 Interpreter-only natives are not available to compiled code
+
+A handful of list primitives -- `cons`, `head`, `tail`, `nil-value`, and
+`cstr->parse-int` -- are **interpreter natives** registered by `tur run` / the
+REPL (in `src/main.c`), *not* compiled stdlib functions. They are unbound when
+you `tur build` / `tur emit-c` a file: you will see
+
+```text
+error: unknown function or operator 'cons'
+```
+
+even though the same program runs fine under `tur run`. This is why docstring
+examples that read `(cons "/bin/ls" (cons "-l" 0))` work at the REPL but fail to
+compile verbatim.
+
+In compiled programs, build raw cons lists by one of:
+
+- **Define local inline-C stubs** at the top of the file (the interpreter will
+  shadow them with its natives automatically, so the file still runs both ways):
+
+  ```turmeric
+  (defn cons [value : int next : int] : int
+    ```c typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+    __tur_cons_cell *c = malloc(sizeof(*c));
+    c->head = (int64_t)value; c->tail = (int64_t)next;
+    return (int64_t)(intptr_t)c;
+    ```)
+  ```
+
+- **Use a stdlib helper** that *is* compiled -- e.g. `stdlib/args.tur`'s
+  `args/parse` linearises the pre-declared `*args*` cons list for you, and
+  `stdlib/list.tur` provides typed `Cons`/`tcons` cells.
+- **Pass `0` (the empty list)** where an API accepts an empty cons list. For
+  example `(process/spawn "/bin/true" 0)` spawns with an empty argv -- the
+  idiomatic way to write a *compiled* `process/spawn` call without a list
+  builder. (See `stdlib/process.tur`.)
+
+See the "CLI Argument Parsing" rule in `CLAUDE.md` for the `*args*` conventions.
+
 ---
 
 ## 2. Calling C from Turmeric
@@ -582,6 +621,7 @@ shared `.tur` file.
 | Storing a `ref<T>` across an `extern-c` call | Borrow checker does not track C call boundaries | Use copy or `rc<T>` for data that outlives a single call |
 | Varadic `extern-c` with wrong arg types | UB at runtime | Check generated C with `emit-c`; cast explicitly in callers |
 | `static` name collision in multiple inline blocks | ODR violation / linker error | Prefix static helper names with a module-specific prefix |
+| Using `cons`/`head`/`tail` in compiled code | `error: unknown function or operator 'cons'` (they are interpreter-only natives) | Define inline-C stubs, use a stdlib list helper, or pass `0` for an empty list (see §1.1) |
 
 ---
 

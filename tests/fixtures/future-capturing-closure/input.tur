@@ -12,7 +12,9 @@
 
 ;; Read the settled value (or error code) out of a future cell.
 ;; Takes the stdlib Future handle (loaded above); the cell lowers to ptr<void>.
-(defn future-get-ok [f : Future] : int
+;; Reads the future without consuming it (^borrow) -- Future is :affine, so the
+;; caller still owns the handle and frees it afterwards.
+(defn future-get-ok [^borrow f : Future] : int
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;

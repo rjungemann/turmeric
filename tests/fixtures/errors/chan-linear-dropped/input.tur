@@ -1,0 +1,11 @@
+;; stdlib-linearity-affinity-plan (L1): dropping a :linear Chan. Borrowing the
+;; handle (chan-send/chan-recv) never discharges the consumption obligation, so
+;; a Chan that is only ever borrowed -- never chan-free'd -- leaks.
+;; Expected: TUR-E0100 (linear value dropped without being consumed).
+(load "stdlib/chan.tur")
+
+(defn main [] : int
+  (let [ch (chan-new 4)]
+    (chan-send ch 1)
+    (chan-recv ch))
+  0)
