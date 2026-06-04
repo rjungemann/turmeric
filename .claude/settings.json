@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | { read -r f; if [[ \"$f\" == *TEMP.md ]]; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"TEMP.md is the user scratchpad and is protected by a project hook. Never edit it without an explicit user request; if the user truly wants this, they must temporarily disable the hook in .claude/settings.json.\"}}'; fi; }"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "if git diff --cached --name-only 2>/dev/null | grep -qx 'TEMP.md'; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"TEMP.md is staged. Unstage it before committing: git restore --staged TEMP.md. TEMP.md is the user scratchpad and should never be committed by Claude.\"}}'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
