@@ -1853,19 +1853,24 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
      * (mirrors StructDef.origin_file_id). */
     def->origin_file_id = name_form->span.file_id;
 
-    /* Parse each constructor */
-    for (uint32_t ci = 0; ci < n_ctors; ci++) {
+    /* Parse each constructor.
+     * `ci` is declared outside the loop so the `ctor_parse_error` bail-out
+     * path below can truncate `def->n_ctors` to the number of slots we
+     * actually filled (every error path bails before `def->ctors[ci]` is
+     * assigned, so `ci` is exactly the populated-slot count). */
+    uint32_t ci = 0;
+    for (; ci < n_ctors; ci++) {
         Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
         if (ctor_form->tag != F_LIST || ctor_form->as.list.len < 1) {
             diag_emit(DIAG_ERROR, ctor_form->span,
                       "defgadt: constructor must be a list form");
-            return NULL;
+            goto ctor_parse_error;
         }
         Form *ctor_name_form = ctor_form->as.list.items[0];
         if (ctor_name_form->tag != F_SYM) {
             diag_emit(DIAG_ERROR, ctor_name_form->span,
                       "defgadt: constructor name must be a symbol");
-            return NULL;
+            goto ctor_parse_error;
         }
         const Symbol *ctor_name = ctor_name_form->as.sym;
 
@@ -1894,7 +1899,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                       "defgadt: constructor '%s' requires an explicit return-type annotation\n"
                       "  hint: add ': (return-type)' after the constructor name",
                       ctor_name->name);
-            return NULL;
+            goto ctor_parse_error;
         }
         /* For the F_TYPE_ANN case the return-type form is the inner form;
          * for the bare-':' case it is the item immediately after. */
@@ -1905,7 +1910,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, ann->span,
                           "defgadt: constructor '%s': missing return type after ':'",
                           ctor_name->name);
-                return NULL;
+                goto ctor_parse_error;
             }
             return_type_form = ann->as.list.items[0];
         } else {
@@ -1913,7 +1918,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, ctor_form->span,
                           "defgadt: constructor '%s': missing return type after ':'",
                           ctor_name->name);
-                return NULL;
+                goto ctor_parse_error;
             }
             return_type_form = ctor_form->as.list.items[colon_idx + 1];
         }
@@ -1932,7 +1937,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
             diag_emit(DIAG_ERROR, return_type_form->span,
                       "defgadt: constructor '%s' return type must be an application of '%s'",
                       ctor_name->name, name->name);
-            return NULL;
+            goto ctor_parse_error;
         }
 
         /* Change 3: Validate that the number of type args in the return type
@@ -1944,7 +1949,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                           "defgadt: constructor '%s' return type has %u type argument(s) "
                           "but '%s' has %u type parameter(s)",
                           ctor_name->name, n_rt_args, name->name, n_type_params);
-                return NULL;
+                goto ctor_parse_error;
             }
         }
 
@@ -1989,7 +1994,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                             "kind mismatch (TUR-E0012): type argument '%s' in constructor "
                             "'%s' return type has kind '* -> *' but kind '*' is expected",
                             an, ctor_name->name);
-                        return NULL;
+                        goto ctor_parse_error;
                     }
                     continue;
                 }
@@ -1998,7 +2003,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                           "defgadt: unknown type argument '%s' in return type of constructor '%s' "
                           "(must be a type parameter, primitive type, or defined type)",
                           an, ctor_name->name);
-                return NULL;
+                goto ctor_parse_error;
             }
         }
 
@@ -2067,6 +2072,17 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
     out->as.defgadt_.def = def;
     out->as.defgadt_.binding = adt_binding;
     return out;
+
+ctor_parse_error:
+    /* A constructor failed to parse after the AdtDef was pre-registered in
+     * scope. The slots `[ci, n_ctors)` are still NULL, but `def->n_ctors`
+     * advertises the full declared count, so a later `(match ...)` on this
+     * type would dereference a NULL CtorDef and crash (see
+     * docs/reported/defgadt-malformed-pattern-segfault.md). Truncate the
+     * count to the slots we actually filled. Compilation has already failed
+     * (a diagnostic was emitted), so this only prevents the crash. */
+    def->n_ctors = ci;
+    return NULL;
 }
 
 /* Phase G3: coerce — (coerce eq x) where eq : (Equal a b), x : a → x : b
