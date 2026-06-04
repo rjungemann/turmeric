@@ -2,6 +2,6 @@
 
 (load "stdlib/seq/core.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [s (seq-of 42)]
     (seq-for-each println s)))

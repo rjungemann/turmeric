@@ -11,10 +11,10 @@
 ;; reference.  The companion exg4-pack-into-struct fixture exercises the
 ;; inline form (pack consumed directly by make-struct, no let binding).
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -24,7 +24,7 @@
 (defstruct Box :move
   [payload (exists [a] [(Show a)] a)])
 
-(defn main [] :int
+(defn main [] : int
   (let [p (pack 42 (exists [a] [(Show a)] a))
         b (make-struct Box p)]
     (println (rc/strong-count (.payload b)))

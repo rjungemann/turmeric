@@ -2,8 +2,8 @@
 (defprotocol Ping [A B]
   (-> A B int))
 
-(defn role-a [^linear ch :(Role Ping A)] :nil
+(defn role-a [^linear ch :(Role Ping A)] : nil
   (let [ch (send-to ch C 42)]
     (close ch)))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

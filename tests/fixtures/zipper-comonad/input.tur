@@ -2,15 +2,15 @@
 
 ;; ── Comonad typeclass ────────────────────────────────────────────────────────
 (defclass Comonad [^w]
-  (extract   [wa]     :int)
-  (extend    [wa fn]  :int)
-  (duplicate [wa]     :int))
+  (extract   [wa]     : int)
+  (extend    [wa fn]  : int)
+  (duplicate [wa]     : int))
 
 ;; ── Zipper helpers ────────────────────────────────────────────────────────────
 ;; Struct layout (shared across all inline C):
 ;;   { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; }
 
-(defn zipper-from-array [arr len idx] :int
+(defn zipper-from-array [arr len idx] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   int64_t *src = (int64_t *)(intptr_t)arr;
@@ -26,20 +26,20 @@
   return (int64_t)(intptr_t)z;
   ```)
 
-(defn lz-focus [z] :int
+(defn lz-focus [z] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   return ((Zip *)(intptr_t)z)->focus;
   ```)
 
-(defn zipper-len [z] :int
+(defn zipper-len [z] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
   return (int64_t)(p->left_len + 1 + p->right_len);
   ```)
 
-(defn zipper-peek [z offset def-val] :int
+(defn zipper-peek [z offset def-val] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
@@ -48,7 +48,7 @@
   size_t k = (size_t)offset - 1; return k < p->right_len ? p->right[k] : def_val;
   ```)
 
-(defn zipper-to-array [z] :int
+(defn zipper-to-array [z] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
@@ -62,7 +62,7 @@
 
 ;; ── Comonad extend for zipper ────────────────────────────────────────────────
 
-(defn __zipper_extend [z fn] :int
+(defn __zipper_extend [z fn] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *src = (Zip *)(intptr_t)z;
@@ -117,7 +117,7 @@
 ;; ── 1D CA rule ───────────────────────────────────────────────────────────────
 ;; new[i] = (left + focus + right) mod 2 (XOR of 3 neighbours)
 
-(defn ca-rule [z] :int
+(defn ca-rule [z] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
@@ -128,18 +128,18 @@
 
 ;; ── Helpers ───────────────────────────────────────────────────────────────────
 
-(defn zap-array [n] :int
+(defn zap-array [n] : int
   ```c
   return (int64_t)(intptr_t)calloc((size_t)n, sizeof(int64_t));
   ```)
 
-(defn zap-set [arr i val] :int
+(defn zap-set [arr i val] : int
   ```c
   ((int64_t *)(intptr_t)arr)[i] = val;
   return 0;
   ```)
 
-(defn print-row [z] :int
+(defn print-row [z] : int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
@@ -153,7 +153,7 @@
   return 0;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [n   9
         arr (zap-array n)]
     (do

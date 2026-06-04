@@ -7,16 +7,16 @@
   (Lit  :int)
   (Add  :Expr :Expr))
 
-(defn eval-expr [e :int] :int
+(defn eval-expr [e : int] : int
   (match e
     (Expr node) (eval-node node)))
 
-(defn eval-node [n :int] :int
+(defn eval-node [n : int] : int
   (match n
     (Lit v)   v
     (Add l r) (+ (eval-expr l) (eval-expr r))))
 
-(defn main [] :int
+(defn main [] : int
   (let [prog (Expr (Add (Expr (Lit 3)) (Expr (Lit 4))))]
     (println (eval-expr prog))
     0))

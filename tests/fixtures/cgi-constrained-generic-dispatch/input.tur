@@ -3,11 +3,11 @@
 ;; the concrete instance per monomorphization -- the int key uses the base
 ;; clone (Hash[int] identity), while cstr/bool/float32 keys are re-resolved to
 ;; their own instances at emit time.
-(defn ghash [^Hash K x :K] :int (hash x))
-(defn geq [^Eq K a :K b :K] :bool (eq? a b))
-(defn pint [n :int] :void ```c printf("%lld\n", (long long)n); ```)
+(defn ghash [^Hash K x : K] : int (hash x))
+(defn geq [^Eq K a : K b : K] : bool (eq? a b))
+(defn pint [n : int] : void ```c printf("%lld\n", (long long)n); ```)
 
-(defn main [] :int
+(defn main [] : int
   (pint (ghash 5))            ; Hash[int]  -> 5 (identity)
   (pint (ghash true))         ; Hash[bool] -> 1
   (if (geq 1 1)       (println "int-eq")  (println "BAD"))

@@ -16,10 +16,10 @@ static bool fn_type_param_index(const Symbol **type_params, uint8_t n_type_param
     return false;
 }
 
-static Type *fn_type_from_form(Elab *e, const Form *form,
-                               const Symbol **type_params,
-                               Kind *type_param_kinds,
-                               uint8_t n_type_params) {
+Type *fn_type_from_form(Elab *e, const Form *form,
+                        const Symbol **type_params,
+                        Kind *type_param_kinds,
+                        uint8_t n_type_params) {
     if (!form) return NULL;
     if (form->tag == F_TYPE_ANN && form->as.list.len > 0) {
         return fn_type_from_form(e, form->as.list.items[0],
@@ -346,6 +346,72 @@ static uint8_t collect_implicit_fn_type_params(const Form *params_f, const Form 
     return n;
 }
 
+/* bare-fat-param-non-int-result inference
+ * (docs/upcoming/bare-fat-result-type-inference-plan.md, Phase A):
+ * A bare `^fat g` parameter (TY_PTR_VOID + is_fat, no fn-type annotation) has
+ * no recorded result type, so a direct call (g x) is elaborated with an
+ * int64_t result (elab_call.c, the bare-^fat dispatch path).  When such a call
+ * sits in a function's result position and the declared return type is a
+ * float-register-class type, emitting `return <int64 expr>;` into a
+ * double-returning C function would read the wrong register (rax vs xmm0).
+ * (cstr/ptr returns share the integer register and round-trip, so only the
+ * float-class case is wrong.)
+ *
+ * Codegen already lowers the bare-^fat dispatch using the call expression's
+ * `e->type` (emit_expr.c, ~1799), so it is correct for any result type -- the
+ * only thing wrong is that elaboration stamped the call TYPE_INT.  This pass
+ * re-stamps the call's result type from the declared (return / binding) type
+ * once it is known.  Soundness rests on the tail-only walk below: only result
+ * positions are visited, so a non-tail bare-^fat call (e.g. an argument to
+ * another call) is never retyped. */
+
+/* Integer-register carriers (int/cstr/ptr/rc/...) round-trip through the
+ * int64 slot; only xmm/by-value-distinct returns need retyping. */
+bool kind_is_non_int_register_class(TypeKind k) {
+    return k == TY_FLOAT /* || k == TY_FLOAT32 || ... (extend as carriers arise) */;
+}
+
+/* Re-stamp bare-^fat int64 calls in `tail`'s result position(s) to `target`
+ * (a concrete non-int register-class kind).  Returns true if any call was
+ * retyped.  Tail-precise: only result positions are visited, so a non-tail
+ * bare-^fat call is never touched. */
+bool retype_bare_fat_tail_calls(Expr *tail, TypeKind target) {
+    if (!tail) return false;
+    switch (tail->kind) {
+        case EX_DO: {
+            if (tail->as.do_.n == 0) return false;
+            Expr *last = tail->as.do_.items[tail->as.do_.n - 1];
+            bool changed = retype_bare_fat_tail_calls(last, target);
+            if (changed) tail->type = last->type;   /* keep wrapper consistent */
+            return changed;
+        }
+        case EX_LET:
+        case EX_LETREC: {
+            bool changed = retype_bare_fat_tail_calls(tail->as.let_.body, target);
+            if (changed) tail->type = tail->as.let_.body->type;
+            return changed;
+        }
+        case EX_IF: {
+            bool c1 = retype_bare_fat_tail_calls(tail->as.if_.then_, target);
+            bool c2 = retype_bare_fat_tail_calls(tail->as.if_.else_or_null, target);
+            /* The if's type follows its (now-consistent) then-branch. */
+            if ((c1 || c2) && tail->as.if_.then_) tail->type = tail->as.if_.then_->type;
+            return c1 || c2;
+        }
+        case EX_CALL: {
+            Binding *b = tail->as.call_.fn_binding;
+            if (b && b->is_fat && b->type.kind == TY_PTR_VOID &&
+                tail->type.kind == TY_INT) {
+                tail->type = type_from_kind(target);
+                return true;
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
 /* TY4: reject a function whose result is a borrow of one of its own locals
  * (params or let-locals).  Such a borrow dangles once the frame is gone --
  * today it only surfaces as a C -Wdangling-pointer warning.  Walk the body's
@@ -659,8 +725,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
             rest_full_type = NULL;
             if (i + 2 < params_f->as.list.len) {
                 Form *type_p = params_f->as.list.items[i + 2];
-                if (type_p->tag == F_KEYWORD) {
-                    if (!resolve_variadic_rest_type(e, type_p,
+                /* Accept fused `& rest :int` (F_KEYWORD) and spaced
+                 * `& rest : int` (F_TYPE_ANN{inner: F_SYM/F_KEYWORD}). */
+                Form *type_eff = type_p;
+                if (type_p->tag == F_TYPE_ANN && type_p->as.list.len == 1 &&
+                    (type_p->as.list.items[0]->tag == F_SYM ||
+                     type_p->as.list.items[0]->tag == F_KEYWORD)) {
+                    type_eff = type_p->as.list.items[0];
+                }
+                if (type_eff->tag == F_KEYWORD || type_eff->tag == F_SYM) {
+                    if (!resolve_variadic_rest_type(e, type_eff,
                                                     fn_type_params, fn_type_param_kinds,
                                                     n_fn_type_params, "defn",
                                                     &rest_kind, &rest_full_type)) {
@@ -1032,6 +1106,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     continue;
                 }
             }
+            /* ptr-generic-parameterised-type: a typed `:ptr<T>` parameter. */
+            {
+                Type *pt = ptr_type_from_keyword_name(e, kw->name, kw->len,
+                                                      p->span, NULL,
+                                                      fn_type_params,
+                                                      fn_type_param_kinds,
+                                                      n_fn_type_params);
+                if (pt) {
+                    param_kinds[n_params - 1] = TY_PTR_VOID;
+                    params[n_params - 1]->type = *pt;
+                    continue;
+                }
+            }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
              * type-variable path.  The fast-path checks below are kept for the
@@ -1202,9 +1289,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
             next_param_relevant = false;
         }
         /* A#1: If the previous ^fat annotation applied to this parameter, mark it
-         * as a fat-closure consumer so call sites auto-shim bare fn arguments. */
+         * as a fat-closure consumer so call sites auto-shim bare fn arguments.
+         * closure-representation-unification (Phase 0): a bare ^fat parameter
+         * (no fn-type annotation) defaults to TY_INT, which is not directly
+         * callable -- (g x) then errors "not a function".  A ^fat parameter
+         * holds a fat-closure box, so default it to :ptr<void>, which routes
+         * (g x) through the fat-dispatch path.  An explicit type annotation
+         * (e.g. ^fat g :(fn [...] ...)) still overrides this default below. */
         if (next_param_fat) {
             b->is_fat = true;
+            b->type = TYPE_PTR_VOID;
+            param_kinds[n_params] = TY_PTR_VOID;
             next_param_fat = false;
         }
         if (n_params == 0) {
@@ -1293,9 +1388,37 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
         Form *ret_f = call->as.list.items[body_start];
+        /* Spaced `: T` where T is a single symbol or keyword: treat as if
+         * fused so the full F_KEYWORD lookup ladder (alias / ADT / struct /
+         * sized prim / type-param / opaque-fallback) runs.  Compound
+         * `: (-> a b)` etc. still falls through to the F_TYPE_ANN branch. */
+        if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+            (ret_f->as.list.items[0]->tag == F_KEYWORD ||
+             ret_f->as.list.items[0]->tag == F_SYM)) {
+            Form *inner = ret_f->as.list.items[0];
+            ret_f = inner;
+            if (ret_f->tag == F_SYM) {
+                Form *kf = (Form *)arena_alloc(e->arena, sizeof(Form));
+                *kf = *ret_f;
+                kf->tag = F_KEYWORD;
+                ret_f = kf;
+            }
+        }
         if (ret_f->tag == F_KEYWORD) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;
+            /* ptr-generic-parameterised-type: a typed `:ptr<T>` return type. */
+            Type *ptr_ret = ptr_type_from_keyword_name(e, kw->name, kw->len,
+                                                       ret_f->span, NULL,
+                                                       fn_type_params,
+                                                       fn_type_param_kinds,
+                                                       n_fn_type_params);
+            if (ptr_ret) {
+                return_kind = TY_PTR_VOID;
+                return_app_type = ptr_ret;  /* threads result_full_type for codegen */
+                body_start++;
+                goto done_return_annotation;
+            }
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_kind = TY_INT;
             } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
@@ -1773,6 +1896,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
         body = elab_coerce_to_any(e, body);
     }
 
+    /* bare-fat-param-non-int-result: a bare `^fat g` call in result position
+     * has no recorded result type (typed int64).  When the function declares a
+     * non-int register-class return, infer the closure's result type from the
+     * declared return and re-stamp the tail call(s) so codegen reads the right
+     * register.  Tail-precise; sound under an honest signature (see
+     * docs/upcoming/bare-fat-result-type-inference-plan.md). */
+    if (kind_is_non_int_register_class(return_kind)) {
+        if (retype_bare_fat_tail_calls(body, return_kind) &&
+            body->type.kind == TY_INT) {
+            body->type = type_from_kind(return_kind);
+        }
+    }
+
     /* TY4: reject returning a borrow of a function-local (would dangle).  The
      * inner scope is still current here; binding depths were stamped at
      * creation, so the check only reads the elaborated body. */
@@ -2108,17 +2244,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
         fn_type.as.fn.result_borrow_arg = tied;
     }
 
-    /* Phase HRT1: attach full poly types for rank-2 params */
+    /* Phase HRT1: attach full poly types for rank-2 params.
+     *
+     * Populate arg_full_types for ALL params, not just polymorphic ones, so
+     * the saturated positional checker (elab_call.c) can enforce nominal
+     * type identity for struct/opaque/ADT args. For a non-poly param we fall
+     * back to the param binding's own full type. &params[i]->type is
+     * arena-stable (each binding is arena-allocated), so the pointer outlives
+     * the call. See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
     {
-        bool any_poly = false;
-        for (uint8_t i = 0; i < n_params; i++) {
-            if (param_poly_types[i]) { any_poly = true; break; }
-        }
-        if (any_poly) {
-            Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
-            for (uint8_t i = 0; i < n_params; i++) aFT[i] = param_poly_types[i];
-            fn_type.as.fn.arg_full_types = aFT;
-        }
+        Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
+        for (uint8_t i = 0; i < n_params; i++)
+            aFT[i] = param_poly_types[i] ? param_poly_types[i] : &params[i]->type;
+        fn_type.as.fn.arg_full_types = aFT;
     }
 
     /* LT2: Store arg_linear flags from param bindings into fn_type */
@@ -2275,6 +2413,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * borrow checker see the programmer's &'a T annotation, not a
              * lifetime-stripped type_from_kind() shell. */
             fd->param_types[i] = params[i]->type;
+        } else if (param_kinds[i] == TY_PTR_VOID
+                   && params[i]->type.kind == TY_PTR_VOID
+                   && params[i]->type.as.ptr.inner) {
+            /* ptr-generic-parameterised-type: preserve the pointee type so
+             * emit.c lowers a `:ptr<T>` parameter to `T *`, not `void *`. */
+            fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
         }
@@ -2409,6 +2553,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * LT1 drop check below mirrors elab_defn.  This lets (call/cc (fn [^linear k]
      * ...)) opt into one-shot-by-contract continuations (OQ3). */
     bool next_param_linear = false;
+    /* A#1 (bare-fat-lambda-param-plan): ^fat marks the next lambda param as a
+     * fat-closure consumer, mirroring the defn-param path.  A bare ^fat binder
+     * (no fn-type annotation) defaults to :ptr<void> + is_fat so (g x) inside
+     * the body dispatches through the fat protocol instead of erroring "'g' is
+     * not a function".  An explicit `:(fn [...] :T)` annotation overrides the
+     * :ptr<void> default below. */
+    bool next_param_fat = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -2437,8 +2588,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
             fn_rest_full_type = NULL;
             if (i + 2 < params_f->as.list.len) {
                 Form *type_p = params_f->as.list.items[i + 2];
-                if (type_p->tag == F_KEYWORD) {
-                    if (!resolve_variadic_rest_type(e, type_p,
+                /* Accept fused `& rest :int` and spaced `& rest : int`. */
+                Form *type_eff = type_p;
+                if (type_p->tag == F_TYPE_ANN && type_p->as.list.len == 1 &&
+                    (type_p->as.list.items[0]->tag == F_SYM ||
+                     type_p->as.list.items[0]->tag == F_KEYWORD)) {
+                    type_eff = type_p->as.list.items[0];
+                }
+                if (type_eff->tag == F_KEYWORD || type_eff->tag == F_SYM) {
+                    if (!resolve_variadic_rest_type(e, type_eff,
                                                     fn_type_params, fn_type_param_kinds,
                                                     n_fn_type_params, "fn",
                                                     &fn_rest_kind, &fn_rest_full_type)) {
@@ -2488,6 +2646,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
             next_param_linear = true;
             continue;
         }
+        /* A#1 (bare-fat-lambda-param-plan): ^fat marks the next param as a
+         * fat-closure consumer (see next_param_fat declaration above). */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_fat) {
+            next_param_fat = true;
+            continue;
+        }
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
                       "fn: parameter name must be a symbol or type annotation");
@@ -2507,6 +2671,16 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (g_linear_enabled && next_param_linear) {
             b->is_linear = true;
             next_param_linear = false;
+        }
+        /* A#1 (bare-fat-lambda-param-plan): a bare ^fat lambda param holds a
+         * fat-closure box.  Default it to :ptr<void> + is_fat so (g x) routes
+         * through the fat-dispatch path; a later `:(fn [...] :T)` annotation
+         * overrides the type (is_fat stays set, exactly as on defn params). */
+        if (next_param_fat) {
+            b->is_fat = true;
+            b->type = TYPE_PTR_VOID;
+            param_kinds[n_params] = TY_PTR_VOID;
+            next_param_fat = false;
         }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
@@ -2545,11 +2719,35 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
         Form *ret_f = call->as.list.items[body_start];
+        /* Spaced `: T` where T is a single symbol or keyword: treat as if
+         * fused so the full F_KEYWORD lookup ladder (alias / ADT / struct /
+         * sized prim / type-param / opaque-fallback) runs.  Compound
+         * `: (-> a b)` etc. still falls through to the F_TYPE_ANN branch. */
+        if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+            (ret_f->as.list.items[0]->tag == F_KEYWORD ||
+             ret_f->as.list.items[0]->tag == F_SYM)) {
+            Form *inner = ret_f->as.list.items[0];
+            ret_f = inner;
+            if (ret_f->tag == F_SYM) {
+                Form *kf = (Form *)arena_alloc(e->arena, sizeof(Form));
+                *kf = *ret_f;
+                kf->tag = F_KEYWORD;
+                ret_f = kf;
+            }
+        }
         if (ret_f->tag == F_KEYWORD) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;
             uint8_t type_param_idx = 0;
-            if (fn_type_param_index(fn_type_params, n_fn_type_params, kw, &type_param_idx)) {
+            Type *ptr_ret = ptr_type_from_keyword_name(e, kw->name, kw->len,
+                                                       ret_f->span, NULL,
+                                                       fn_type_params,
+                                                       fn_type_param_kinds,
+                                                       n_fn_type_params);
+            if (ptr_ret) {
+                return_kind = TY_PTR_VOID;
+                return_full_type = ptr_ret;
+            } else if (fn_type_param_index(fn_type_params, n_fn_type_params, kw, &type_param_idx)) {
                 return_kind = TY_TYVAR;
                 return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *return_full_type = type_tyvar_named(kw->name);
@@ -2562,6 +2760,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 return_kind = TY_BOOL;
             } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
                 return_kind = TY_NIL;
+            } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                return_kind = TY_CSTR;
             } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                 return_kind = TY_PTR_VOID;
             } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
@@ -2714,7 +2914,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
             return_fn_type = rft;
         }
     }
-    
+
+    /* bare-fat-param-non-int-result (Phase A): same retype as elab_defn, run on
+     * each lambda's own body so a `fn` whose declared result is non-int-class
+     * and whose tail is a bare-^fat call gets the correct call result type.
+     * Per-lambda scope -> no cross-lambda leakage. */
+    if (kind_is_non_int_register_class(return_kind)) {
+        if (retype_bare_fat_tail_calls(body, return_kind) &&
+            body->type.kind == TY_INT) {
+            body->type = type_from_kind(return_kind);
+        }
+    }
+
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {
@@ -2741,6 +2952,20 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     if (return_fn_type) {
         fn_type.as.fn.result_full_type = return_fn_type;
+    }
+    /* A#1 (bare-fat-lambda-param-plan): propagate ^fat param flags into the
+     * lambda's fn_type so call sites auto-shim bare fn arguments into fat
+     * closures, mirroring the defn path. */
+    {
+        bool any_fat = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_fat) { any_fat = true; break; }
+        }
+        if (any_fat) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_fat[i] = params[i]->is_fat;
+            }
+        }
     }
 
     /* Check if we're at top level */
@@ -2889,8 +3114,21 @@ Expr *elab_fn(Elab *e, const Form *call) {
         fd->closure = closure;
         
         /* Create EX_CLOSURE expression */
-        /* The closure's type is void* (pointer to closure struct) */
-        Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, TYPE_PTR_VOID, call->span);
+        /* CRU Phase 3 / Option B (B-1): a capturing closure is a first-class
+         * closure *value* -- a fat box { thunk, env... } -- typed as a boxed
+         * TY_FN carrying the lambda's user-facing signature (param_kinds /
+         * return_kind, i.e. WITHOUT the prepended env param).  A boxed TY_FN
+         * shares TY_PTR_VOID's C carrier (a void* holding the box) and is
+         * type_eq-interchangeable with it, so it flows through every legacy
+         * :ptr<void> closure sink unchanged; the only new behavior is that a
+         * direct call on a value statically typed boxed TY_FN dispatches
+         * through the fat protocol for all arities (emit_expr.c).  See
+         * docs/upcoming/closure-first-class-type-plan.md. */
+        TypeKind clo_arg_kinds[MAX_FN_ARITY];
+        for (uint8_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
+        Type clo_ty = type_fn(clo_arg_kinds, n_params, return_kind);
+        clo_ty.as.fn.boxed = true;
+        Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, clo_ty, call->span);
         closure_expr->as.closure_.closure = closure;
 
         free(captures);

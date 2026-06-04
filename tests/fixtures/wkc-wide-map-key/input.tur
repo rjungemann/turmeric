@@ -14,7 +14,7 @@
 ;; carrier-ABI bool(int64,int64) comparator from MapKey[K].mk-cmp, so the
 ;; runtime's one-word HAMT carrier never sees a numerically-converted float.
 
-(defn main [] :int
+(defn main [] : int
   ;; --- :float32 ---
   (let [mf  (map-assoc (map-assoc (:: (map-new) (Map float32 int)) 1.5f32 7) 1.7f32 8)
         mf2 (map-assoc mf 1.5f32 70)]          ; update, not insert

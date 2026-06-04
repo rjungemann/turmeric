@@ -3,10 +3,10 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn run-with-write [f :(fn [] #{Write} :nil)] #{Write} :nil
+(defn run-with-write [f :(fn [] #{Write} :nil)] #{Write} : nil
   (f))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (run-with-write (fn [] (println "pure"))) 0)
     (Write [msg] k) (do (println msg) (resume k 0))))

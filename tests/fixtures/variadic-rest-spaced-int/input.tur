@@ -1,0 +1,20 @@
+;; Phase 1b: spaced rest-type annotation `& xs : int` elaborates and
+;; preserves the typed-variadic fast path (primitive :int TypeKind compare).
+;; Codegen must match the fused-form sibling fixture `variadic-types-int`.
+
+(defn cons-list-len [lst : int] #{Unsafe} : int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t n = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  while (p) { n++; p = (__tur_cons_cell *)(intptr_t)p->tail; }
+  return (int)n;
+  ```)
+
+(defn sum-rest [& xs : int] #{Unsafe} : int
+  (cons-list-len xs))
+
+(defn main [] : int
+  (unsafe
+    (let [n (sum-rest 10 20 30 40)]
+      (if (= n 4) 0 1))))

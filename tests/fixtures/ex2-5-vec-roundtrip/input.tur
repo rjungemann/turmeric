@@ -8,7 +8,7 @@
 (load "stdlib/sized.tur")
 (load "stdlib/vec-existential.tur")
 
-(defn main [] :int
+(defn main [] : int
   (let [sv (SVCons 10 (SVCons 20 (SVCons 30 (SVNil))))]
     (let [v (vec-of-sized sv)]
       (open-vec v n s

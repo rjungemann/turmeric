@@ -5,12 +5,12 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(defn map-list [n :int f :(fn [:int] #{e} :int)] #{e} :int
+(defn map-list [n : int f :(fn [:int] #{e} :int)] #{e} : int
   (if (> n 0)
     (+ (f n) (map-list (- n 1) f))
     0))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do
       (map-list 3 (fn [x] (do (perform (Log "tick")) x)))

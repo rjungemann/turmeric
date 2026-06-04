@@ -1,7 +1,7 @@
 ;; Phase F3-5/F3-6: recursive `.eq?` on `Option[Vec[int]]` via
 ;; `option-eq?` per-call-site synthesis.
 
-(defn main [] :int
+(defn main [] : int
   (let [v1 []:int
         v2 []:int
         v3 []:int]

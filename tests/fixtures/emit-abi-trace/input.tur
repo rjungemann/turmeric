@@ -13,15 +13,15 @@
   ```)
 
 ;; A rank-2 function: f is invoked through the polymorphic-wrapper ABI.
-(defn apply-twice [f (forall [a] (-> a a)) x :int y :int] :int
+(defn apply-twice [f (forall [a] (-> a a)) x : int y : int] : int
   (let [r1 (f x)
         r2 (f y)]
     (+ r1 r2)))
 
-(defn twice [x :int] :int
+(defn twice [x : int] : int
   (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   ;; carrier: cube at :int keeps the int64_t carrier ABI
   (let [a (cube 3)]
     (println a))

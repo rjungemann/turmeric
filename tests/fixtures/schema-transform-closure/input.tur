@@ -10,14 +10,14 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defn main [] :int
+(defn main [] : int
   (let [delta 100
         ;; capturing closure through transform: 21 -> 121
-        a (schema-decode! (schema/transform (schema/int) (fn [x :int] :int (+ x delta)))
+        a (schema-decode! (schema/transform (schema/int) (fn [x : int] : int (+ x delta)))
                           (json/int 21))
         ;; capturing closure through fmap (Functor map alias): 5 -> 55
         scale 11
-        b (schema-decode! (schema/fmap (schema/int) (fn [x :int] :int (* x scale)))
+        b (schema-decode! (schema/fmap (schema/int) (fn [x : int] : int (* x scale)))
                           (json/int 5))]
     (println a)
     (println b))

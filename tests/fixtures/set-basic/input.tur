@@ -1,6 +1,6 @@
 ;; Phase X3: basic set operations -- construction, membership, count.
 
-(defn main [] :int
+(defn main [] : int
   (let [s0 (set-new)]
     (let [s1 (set-add s0 1 1)]
       (let [s2 (set-add s1 2 2)]

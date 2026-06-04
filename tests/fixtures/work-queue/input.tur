@@ -16,7 +16,7 @@
 
 ;; ---- WorkQueueBlock (matching stdlib/threadpool.tur) ----
 
-(defn work-queue-new-bounded [cap :int] :ptr<void>
+(defn work-queue-new-bounded [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -34,7 +34,7 @@
   return (void *)q;
   ```)
 
-(defn work-queue-new [] :ptr<void>
+(defn work-queue-new [] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -53,7 +53,7 @@
   return (void *)q;
   ```)
 
-(defn work-queue-push [q :ptr<void> v :int] :nil
+(defn work-queue-push [q : ptr<void> v : int] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -88,7 +88,7 @@
   pthread_mutex_unlock(&wq->lock);
   ```)
 
-(defn work-queue-pop [q :ptr<void>] :int
+(defn work-queue-pop [q : ptr<void>] : int
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -112,7 +112,7 @@
   return val;
   ```)
 
-(defn work-queue-close [q :ptr<void>] :nil
+(defn work-queue-close [q : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -127,7 +127,7 @@
   pthread_mutex_unlock(&wq->lock);
   ```)
 
-(defn work-queue-free [q :ptr<void>] :nil
+(defn work-queue-free [q : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -144,7 +144,7 @@
 
 ;; ---- Thread arg for producer/consumer ----
 
-(defn wq-arg-new [q :ptr<void>] :ptr<void>
+(defn wq-arg-new [q : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *q; int64_t result; } WQArg;
   WQArg *a = (WQArg *)malloc(sizeof(WQArg));
@@ -153,20 +153,20 @@
   return (void *)a;
   ```)
 
-(defn wq-arg-result [a :ptr<void>] :int
+(defn wq-arg-result [a : ptr<void>] : int
   ```c
   typedef struct { void *q; int64_t result; } WQArg;
   return ((WQArg *)a)->result;
   ```)
 
-(defn wq-arg-free [a :ptr<void>] :nil
+(defn wq-arg-free [a : ptr<void>] : nil
   ```c
   free(a);
   ```)
 
 ;; ---- Producer: pushes 1..5 then closes queue ----
 
-(defn wq-producer [arg :ptr<void>] :ptr<void>
+(defn wq-producer [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -201,7 +201,7 @@
 
 ;; ---- Consumer: pops until sentinel, accumulates sum ----
 
-(defn wq-consumer [arg :ptr<void>] :ptr<void>
+(defn wq-consumer [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -231,7 +231,7 @@
 
 ;; ---- Thread spawn/join ----
 
-(defn wq-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn wq-thread-spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "wq-thread-spawn: oom\n"); abort(); }
@@ -239,13 +239,13 @@
   return (void *)t;
   ```)
 
-(defn wq-thread-join [t :ptr<void>] :nil
+(defn wq-thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Test 1: bounded queue, producer/consumer threads, verify sum = 15.
   (let [q (work-queue-new-bounded 4)]
     (let [prod-arg (wq-arg-new q)]

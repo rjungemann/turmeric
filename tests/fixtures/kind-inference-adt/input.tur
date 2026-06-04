@@ -5,7 +5,7 @@
 (defdata Duo [a b]
   (MkDuo a b))
 
-(defn main [] :int
+(defn main [] : int
   (let [p (MkDuo 1 2)]
     (match p
       (MkDuo x y) (println (+ x y)))

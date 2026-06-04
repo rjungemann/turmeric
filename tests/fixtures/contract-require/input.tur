@@ -1,15 +1,15 @@
 ;; Phase C1: require! and require-msg! -- passing preconditions at function entry
 
-(defn check-positive [x :int] :int
+(defn check-positive [x : int] : int
   (require-msg! (> x 0) "x must be positive")
   x)
 
-(defn check-in-range [x :int lo :int hi :int] :int
+(defn check-in-range [x : int lo : int hi : int] : int
   (require-msg! (>= x lo) "x below lower bound")
   (require-msg! (<= x hi) "x above upper bound")
   x)
 
-(defn main [] :int
+(defn main [] : int
   (println (check-positive 5))
   (println (check-in-range 7 1 10))
   (println "require-pass")

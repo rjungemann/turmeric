@@ -2,7 +2,7 @@
 
 (load "stdlib/seq/transform.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [ten 10
         small? (fn [x] (< x ten))]
     (seq-for-each println (seq/drop-while small? (seq/range 8 13)))))

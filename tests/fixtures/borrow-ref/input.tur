@@ -1,7 +1,7 @@
 ; Phase 12: Borrow from ref<T>
 ; (& r) where r: ref<T> produces &T pointing to the owned value
 
-(defn main [] :int
+(defn main [] : int
   (let [r (ref 55)]
     (let [b (& r)]      ; &int from ref<int>
       (println @b))     ; 55

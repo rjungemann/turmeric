@@ -3,11 +3,11 @@
 ;; implementation at each call site.
 
 (defclass Functor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; --- option helpers ---
 
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -15,21 +15,21 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_some? [o] :bool
+(defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int64_t)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -42,7 +42,7 @@
 
 ;; --- vec helpers (single-element for this test) ---
 
-(defn __vec_of [x] :int
+(defn __vec_of [x] : int
   ```c
   struct { int64_t len; int64_t item; } *r = malloc(sizeof(*r));
   r->len = 1;
@@ -50,14 +50,14 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __vec_get0 [v] :int
+(defn __vec_get0 [v] : int
   ```c
   struct { int64_t len; int64_t item; } *p =
       (struct { int64_t len; int64_t item; } *)(intptr_t)v;
   return p->item;
   ```)
 
-(defn __fmap_vec [container fn] :int
+(defn __fmap_vec [container fn] : int
   ```c
   struct { int64_t len; int64_t item; } *c =
       (struct { int64_t len; int64_t item; } *)(intptr_t)container;
@@ -74,10 +74,10 @@
 (definstance Functor [vec]
   (fmap [container fn] (__fmap_vec container fn)))
 
-(defn add5 [x] :int (+ x 5))
-(defn twice [x] :int (* x 2))
+(defn add5 [x] : int (+ x 5))
+(defn twice [x] : int (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; Functor[option]: fmap add5 (some 10) => some 15
     (let [o (__opt_some 10)]

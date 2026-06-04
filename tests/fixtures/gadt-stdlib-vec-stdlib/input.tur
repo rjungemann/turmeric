@@ -7,12 +7,12 @@
 (load "stdlib/gadt-vec.tur")
 
 ; Helper function used by gvmap.
-(defn mul [a :int b :int] :int (* a b))
+(defn mul [a : int b : int] : int (* a b))
 
 ; Helper function used by gvzip-with.
-(defn add [a :int b :int] :int (+ a b))
+(defn add [a : int b : int] : int (+ a b))
 
-(defn main [] :int
+(defn main [] : int
   ; gvec-len of empty = 0
   (println (gvec-len (gvec-nil)))
   ; gvec-len of [1,2,3] = 3

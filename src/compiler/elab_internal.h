@@ -860,6 +860,10 @@ Expr *elab_escape(Elab *e, const Form *call);
 /* elab_fns.c */
 Expr *elab_defn(Elab *e, const Form *call);
 Expr *elab_fn(Elab *e, const Form *call);
+/* bare-fat-param-non-int-result inference (Phase A); see
+ * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+bool kind_is_non_int_register_class(TypeKind k);
+bool retype_bare_fat_tail_calls(Expr *tail, TypeKind target);
 Expr *elab_extern_c(Elab *e, const Form *call);
 Expr *elab_def(Elab *e, const Form *call);
 
@@ -899,6 +903,23 @@ Expr *elab_defalias(Elab *e, const Form *call);
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
     const Symbol **type_params, Kind *type_param_kinds,
     uint8_t n_type_params);
+/* ptr-generic-parameterised-type: resolve a "ptr<T>" type-name string to a
+ * typed raw pointer (TY_PTR_VOID with non-NULL pointee).  Returns NULL when
+ * the name is not a typed "ptr<...>" form (e.g. "ptr<void>" or a non-ptr
+ * name), so callers can fall through to their existing handling. */
+Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+    Span span, const Symbol *rec_name, const Symbol **type_params,
+    Kind *type_param_kinds, uint8_t n_type_params);
+/* Resolve a type-annotation form (F_KEYWORD `:int`, spaced F_TYPE_ANN
+ * wrapping any form, or a list constructor like `(-> a b)`) into a Type*.
+ * Unwraps F_TYPE_ANN and delegates to type_expr_from_form for the inner
+ * form, with arrow / borrow / handler / session / role heads routed
+ * through their constructor paths.  Used by defn, fn, defstruct, and
+ * let-bindings to share one type-form parser. */
+Type *fn_type_from_form(Elab *e, const Form *form,
+                        const Symbol **type_params,
+                        Kind *type_param_kinds,
+                        uint8_t n_type_params);
 /* MF4: separate struct / GADT namespaces. Resolves a type name by walking
  * the ADT registry first, then the struct registry. Returns an
  * arena-allocated Type* (TY_ADT or TY_STRUCT) when found, else NULL.

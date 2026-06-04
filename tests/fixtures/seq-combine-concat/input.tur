@@ -3,5 +3,5 @@
 
 (load "stdlib/seq/combine.tur")
 
-(defn main [] :void
+(defn main [] : void
   (seq-for-each println (seq/concat (seq/range 0 3) (seq/range 10 12))))

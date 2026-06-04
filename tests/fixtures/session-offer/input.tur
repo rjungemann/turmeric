@@ -6,21 +6,21 @@
 ;; learn the selected branch and recvs the value.
 ;;
 ;; Expected output: 7
-(defn spawn [f :ptr<void>] :ptr<void>
+(defn spawn [f : ptr<void>] : ptr<void>
   ```c
   pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(tid, NULL, tur_session_thread_wrapper, f);
   return (void *)tid;
   ```)
 
-(defn join [t :ptr<void>] :int
+(defn join [t : ptr<void>] : int
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   return 0;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [[s r] (make-session (Choose (Send int Close) Close))]
     (let [t (spawn (fn []
                      (let [s (choose-left s)]

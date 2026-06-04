@@ -4,12 +4,12 @@
 ;; pthread_create trampoline pattern emitted by the compiler.
 ;; No runtime execution (no expected.stdout); only expected.c is checked.
 
-(defn worker [arg :ptr<void>] :ptr<void>
+(defn worker [arg : ptr<void>] : ptr<void>
   ```c
   return NULL;
   ```)
 
-(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn-fn: oom\n"); abort(); }
@@ -17,13 +17,13 @@
   return (void *)t;
   ```)
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
-(defn make-arg [] :ptr<void>
+(defn make-arg [] : ptr<void>
   ```c
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   if (!p) abort();
@@ -31,12 +31,12 @@
   return (void *)p;
   ```)
 
-(defn free-arg [p :ptr<void>] :nil
+(defn free-arg [p : ptr<void>] : nil
   ```c
   free(p);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [arg (make-arg)]
     (let [t (thread-spawn-fn worker arg)]
       (thread-join t))

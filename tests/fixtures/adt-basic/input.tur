@@ -3,7 +3,7 @@
   (Green)
   (Blue))
 
-(defn main [] :int
+(defn main [] : int
   (let [c (Red)]
     (match c
       (Red)   (println "red")

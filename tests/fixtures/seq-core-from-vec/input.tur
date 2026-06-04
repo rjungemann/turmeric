@@ -3,7 +3,7 @@
 (load "stdlib/seq/core.tur")
 
 ;;; make-vec3 -- allocate a 3-element vec for testing
-(defn make-vec3 [a :int b :int c :int] :int
+(defn make-vec3 [a : int b : int c : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
     malloc(sizeof(*vec));
@@ -13,6 +13,6 @@
   return (int64_t)(intptr_t)vec;
   ```)
 
-(defn main [] :void
+(defn main [] : void
   (let [v (make-vec3 10 20 30)]
     (seq-for-each println (seq-from-vec v))))

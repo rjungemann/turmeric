@@ -6,14 +6,14 @@
 ;; Expected output:
 ;;   sum: 45
 
-(defn tp-identity [arg :ptr<void>] :ptr<void>
+(defn tp-identity [arg : ptr<void>] : ptr<void>
   ```c
   return arg;
   ```)
 
 ;; Worker thread for the custom thread pool.
 ;; Typedefs are repeated here (they are local to each C static function scope).
-(defn tp-worker-fn [arg :ptr<void>] :ptr<void>
+(defn tp-worker-fn [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       void *queue;
@@ -65,7 +65,7 @@
   ```)
 
 ;; All pool-management code is in C; tp_worker_fn is now a file-scope function.
-(defn main [] :int
+(defn main [] : int
   ```c
   typedef struct {
       void *queue;

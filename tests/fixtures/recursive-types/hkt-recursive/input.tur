@@ -5,7 +5,7 @@
   (More :int))
 
 ;; Convenience: unwrap the outer layer.
-(defn wrap-inner [w :int] :int
+(defn wrap-inner [w : int] : int
   (match w
     (Done v) v
     (More v) v))
@@ -15,7 +15,7 @@
   (Absent)
   (Present :int))
 
-(defn main [] :int
+(defn main [] : int
   ;; Build a two-layer wrapped value:
   ;; More(Present(Done(42)))
   (let [leaf    (Done 42)

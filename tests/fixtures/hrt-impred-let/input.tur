@@ -1,12 +1,12 @@
 ; Phase HRT4: let-binding of a global function used as a poly fn arg.
 ; `f` is let-bound to `id` and then passed to a rank-2 poly fn.
 ; The source_binding chain resolves `f` back to `id` for wrapper creation.
-(defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+(defn apply-poly [f (forall [a] (-> a a)) x : int] : int
   (f x))
 
-(defn id [x :int] :int x)
+(defn id [x : int] : int x)
 
-(defn main [] :int
+(defn main [] : int
   (let [f id]
     (println (apply-poly f 10))
     (println (apply-poly f 20)))

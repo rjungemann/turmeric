@@ -27,14 +27,14 @@ Typeclasses can be parameterised over type constructors using the `^f` or `^^f` 
 
 ```turmeric
 (defclass Functor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 (defclass Monad [^m]
-  (bind [ma fn] :int))
+  (bind [ma fn] : int))
 
 (defclass Foldable [^t]
-  (fold-left  [container acc fn] :int)
-  (fold-right [container acc fn] :int))
+  (fold-left  [container acc fn] : int)
+  (fold-right [container acc fn] : int))
 ```
 
 ```sweet-exp
@@ -68,7 +68,7 @@ definstance Functor [int]
 
 ```turmeric
 (defclass Bifunctor [^^f]
-  (bimap [container fn-left fn-right] :int))
+  (bimap [container fn-left fn-right] : int))
 ```
 
 ```sweet-exp
@@ -167,7 +167,7 @@ HKT container values (like `Option<int>`) are stored as opaque `int64_t` handles
 Use inline C blocks to allocate and dereference them:
 
 ```turmeric
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -175,7 +175,7 @@ Use inline C blocks to allocate and dereference them:
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_none [] :int
+(defn __opt_none [] : int
   ```c return 0; ```)
 ```
 
@@ -195,7 +195,7 @@ defn __opt_none [] :int
 Implement `fmap` and `bind` using inline C to call the closure function pointer:
 
 ```turmeric
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -206,7 +206,7 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __bind_option [ma fn] :int
+(defn __bind_option [ma fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
@@ -253,16 +253,16 @@ The standard library (`stdlib/typeclass.tur`) provides:
 
 ```turmeric
 (defclass Functor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
-(defn id [x] :int x)
-(defn times2 [x] :int (* x 2))
-(defn inc [x] :int (+ x 1))
+(defn id [x] : int x)
+(defn times2 [x] : int (* x 2))
+(defn inc [x] : int (+ x 1))
 
 (definstance Functor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; Identity law: fmap id x = x
     (let [opt    (__opt_some 42)
@@ -429,7 +429,7 @@ let [scale 3
 Named functions (non-closures) also work unchanged:
 
 ```turmeric
-(defn double [x] :int (* x 2))
+(defn double [x] : int (* x 2))
 
 (let [opt    (__opt_some 7)
       result (.fmap opt double)]
@@ -462,7 +462,7 @@ let [factor 3
 
 ```turmeric
 (defclass Bifunctor [^^f]
-  (bimap [container fn-left fn-right] :int))
+  (bimap [container fn-left fn-right] : int))
 
 (definstance Bifunctor [pair]
   (bimap [container fn-left fn-right]
@@ -571,7 +571,7 @@ elaborator simply recognises the type name and records it as `TY_INT`.
   (Cons :int :IntList)
   (Nil))
 
-(defn sum [lst :int] :int
+(defn sum [lst : int] : int
   (match lst
     (Cons h t) (+ h (sum t))
     (Nil)      0))
@@ -597,7 +597,7 @@ defn sum [lst :int] :int
   (Lit :int)
   (Add :Expr :Expr))
 
-(defn eval-expr [e :int] :int
+(defn eval-expr [e : int] : int
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))))
@@ -627,7 +627,7 @@ defn eval-expr [e :int] :int
   (ZeroF)
   (SuccF :int))
 
-(defn to-nat [n :int] :int
+(defn to-nat [n : int] : int
   (if (= n 0)
     (roll (ZeroF))
     (roll (SuccF (to-nat (- n 1))))))
@@ -662,15 +662,15 @@ without committing to a concrete effect type:
   (CalcMul :int :int))
 
 ;; Lift operations into Free
-(defn calc-add [a :int b :int] :int (free-lift (CalcAdd a b)))
+(defn calc-add [a : int b : int] : int (free-lift (CalcAdd a b)))
 
 ;; Interpret with free-run
-(defn run-op [op :int] :int
+(defn run-op [op : int] : int
   (match op
     (CalcAdd a b) (+ a b)
     (CalcMul a b) (* a b)))
 
-(defn main [] :int
+(defn main [] : int
   (let [prog (calc-add 3 4)]
     (println (free-run (fn [op] (let [_ prog] (run-op op))) prog))
     0))

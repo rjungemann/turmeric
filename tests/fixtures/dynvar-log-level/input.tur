@@ -5,7 +5,7 @@
 ;; initializer is emitted; see DV2 known limitation in dynamic-vars-plan.md.
 (defdynamic *log-level* :int 1)
 
-(defn print-level [] :int
+(defn print-level [] : int
   (println *log-level*))
 
 (print-level)                ; 1 (default)

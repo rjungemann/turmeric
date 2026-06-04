@@ -1,13 +1,13 @@
 ;;
 ;; Phase TC2: tset basic operations test
 
-(defn test-empty [] :int
+(defn test-empty [] : int
   (let [s (set-new)]
     (let [c (set-count s)]
       (set-free s)
       c)))
 
-(defn test-add-member [] :bool
+(defn test-add-member [] : bool
   (let [s (set-new)]
     (let [s2 (set-add s 42 42)]
       (let [found (set-member? s2 42 42)]
@@ -15,7 +15,7 @@
         (set-free s2)
         found))))
 
-(defn test-remove [] :bool
+(defn test-remove [] : bool
   (let [s (set-new)]
     (let [s2 (set-add s 42 42)]
       (let [s3 (set-remove s2 42 42)]
@@ -25,7 +25,7 @@
           (set-free s3)
           found)))))
 
-(defn test-count [] :int
+(defn test-count [] : int
   (let [s (set-new)]
     (let [s2 (set-add s 1 1)]
       (let [s3 (set-add s2 2 2)]
@@ -37,7 +37,7 @@
             (set-free s4)
             c))))))
 
-(defn test-union [] :int
+(defn test-union [] : int
   (let [a (set-new)]
     (let [b (set-new)]
       (let [a2 (set-add a 1 1)]
@@ -51,7 +51,7 @@
               (set-free u)
               c)))))))
 
-(defn test-intersect [] :int
+(defn test-intersect [] : int
   (let [a (set-new)]
     (let [b (set-new)]
       (let [a2 (set-add a 1 1)]
@@ -69,7 +69,7 @@
                   (set-free i)
                   c)))))))))
 
-(defn test-eq [] :bool
+(defn test-eq [] : bool
   (let [a (set-new)]
     (let [b (set-new)]
       (let [a2 (set-add a 1 1)]

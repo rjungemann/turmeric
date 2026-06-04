@@ -29,7 +29,7 @@ with nested `match`. Guards (`when`) handle conditional transitions.
 (defdata State (Idle) (Running :int) (Done))
 (defdata Event (Start) (Tick :int) (Stop))
 
-(defn transition [state :State event :Event] :State
+(defn transition [state : State event : Event] : State
   (match state
     (Idle)      (match event
                   (Start)   (Running 0)
@@ -80,7 +80,7 @@ making the machine testable with mock handlers.
 (defeffect Emit [msg :cstr] :nil ^extends IO)
 (defeffect Store [key :cstr val :int] :nil ^extends IO)
 
-(defn step [state :State event :Event] :State
+(defn step [state : State event : Event] : State
   (match state
     (Running n) (match event
                   (Tick x) (do

@@ -9,10 +9,10 @@
 (defgadt Equal [a b] (Refl : (Equal a a)))
 ; Symmetry: if a = a then a = a (trivially via Refl)
 
-(defn equal-sym [eq :Equal] :Equal (match eq (Refl) (Refl)))
+(defn equal-sym [eq : Equal] : Equal (match eq (Refl) (Refl)))
 ; Transitivity: if a = a and a = a then a = a (trivially via Refl)
 
-(defn equal-trans [eq1 :Equal eq2 :Equal] :Equal (match eq1 (Refl) eq2))
+(defn equal-trans [eq1 : Equal eq2 : Equal] : Equal (match eq1 (Refl) eq2))
 ;;; equal-cong -- congruence: if a = b then (f a) = (f b) for any f : * -> *.
 ;;;
 ;;; Parameters:

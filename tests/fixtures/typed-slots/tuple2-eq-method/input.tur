@@ -8,7 +8,7 @@
 ;; carrier bridge, the caller pushed two int64_t fields of the struct in four
 ;; registers while the callee read only two, misaligning all arguments.
 
-(defn main [] :int
+(defn main [] : int
   (let [t1 (tuple2 1 2)
         t2 (tuple2 1 2)
         t3 (tuple2 1 3)]

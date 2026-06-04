@@ -12,7 +12,7 @@
 ;; ===========================================================================
 
 ;; Compute one generation step (imperative, in-place)
-(defn life-step [grid :ptr<void>, w :int, h :int, out :ptr<void>] :nil
+(defn life-step [grid : ptr<void>, w : int, h : int, out : ptr<void>] : nil
   ```c
   int64_t *g = (int64_t *)grid;
   int64_t *o = (int64_t *)out;
@@ -39,7 +39,7 @@
   ```)
 
 ;; Print a flat int64_t[] grid to stdout in ASCII format
-(defn grid-print-raw [grid :ptr<void>, w :int, h :int] :nil
+(defn grid-print-raw [grid : ptr<void>, w : int, h : int] : nil
   ```c
   int64_t *g = (int64_t *)grid;
   for (int y = 0; y < h; y++) {
@@ -49,7 +49,7 @@
   ```)
 
 ;; Standard patterns
-(defn pattern-blinker [] :ptr<void>
+(defn pattern-blinker [] : ptr<void>
   ```c
   static int64_t p[25] = {
     0,0,0,0,0,
@@ -61,7 +61,7 @@
   return (void *)p;
   ```)
 
-(defn pattern-block [] :ptr<void>
+(defn pattern-block [] : ptr<void>
   ```c
   static int64_t p[16] = {
     0,0,0,0,
@@ -72,7 +72,7 @@
   return (void *)p;
   ```)
 
-(defn pattern-glider [] :ptr<void>
+(defn pattern-glider [] : ptr<void>
   ```c
   static int64_t p[25] = {
     0,1,0,0,0,
@@ -85,7 +85,7 @@
   ```)
 
 ;; Run Part 1 imperative demos
-(defn demo-imperative [] :int
+(defn demo-imperative [] : int
   ```c
   printf("=== Part 1: Imperative Conway's Game of Life ===\n\n");
 
@@ -127,13 +127,13 @@
 
 ;; ── Comonad typeclass ────────────────────────────────────────────────────────
 (defclass Comonad [^w]
-  (extract   [wa]     :int)
-  (extend    [wa fn]  :int)
-  (duplicate [wa]     :int))
+  (extract   [wa]     : int)
+  (extend    [wa fn]  : int)
+  (duplicate [wa]     : int))
 
 ;; ── GridCtx primitives ───────────────────────────────────────────────────────
 
-(defn gctx-new [width height] :int
+(defn gctx-new [width height] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *g = malloc(sizeof(GCtx));
@@ -145,7 +145,7 @@
   return (int64_t)(intptr_t)g;
   ```)
 
-(defn gctx-set [g x y val] :int
+(defn gctx-set [g x y val] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -154,14 +154,14 @@
   return 0;
   ```)
 
-(defn gctx-focus [g] :int
+(defn gctx-focus [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
   return p->data[p->cy * p->width + p->cx];
   ```)
 
-(defn gctx-print [g] :int
+(defn gctx-print [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -174,7 +174,7 @@
   ```)
 
 ;; extend: for each (x,y), call fn with a temporary GCtx focused there.
-(defn __gridctx_extend [g fn] :int
+(defn __gridctx_extend [g fn] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
@@ -203,7 +203,7 @@
 ;;
 ;; Receives a GCtx focused at the cell to update; reads Moore neighbourhood.
 
-(defn conway-rule [g] :int
+(defn conway-rule [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -225,7 +225,7 @@
   ```)
 
 ;; Run Part 2 comonadic demo
-(defn demo-comonadic [] :int
+(defn demo-comonadic [] : int
   (let [g0 (gctx-new 5 5)]
     (do
       (gctx-set g0 1 2 1)
@@ -249,7 +249,7 @@
 ;; Entry point
 ;; ===========================================================================
 
-(defn main [] :int
+(defn main [] : int
   (do
     (demo-imperative)
     (demo-comonadic)))

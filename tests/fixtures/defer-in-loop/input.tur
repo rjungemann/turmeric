@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [^mut i 0]
     (while (< i 3)
       (defer (println i))

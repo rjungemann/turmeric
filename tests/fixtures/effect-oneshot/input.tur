@@ -6,7 +6,7 @@
 ;; Result: 10 + 20 = 30
 (defeffect Choose [n :int] :int)
 
-(defn pick-two [] :int
+(defn pick-two [] : int
   (+ (perform (Choose 1)) (perform (Choose 2))))
 
 (println (handle (pick-two)

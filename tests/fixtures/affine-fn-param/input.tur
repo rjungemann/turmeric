@@ -1,6 +1,6 @@
 ;; ST1: ^affine annotation on a function parameter.
 ;; The parameter may be used at most once; using it once is valid.
-(defn use-affine [^affine x] :int
+(defn use-affine [^affine x] : int
   x)
 
 (println (use-affine 7))

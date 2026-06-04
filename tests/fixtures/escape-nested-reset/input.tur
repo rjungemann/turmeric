@@ -5,10 +5,10 @@
 ;; (k 7 -> (+ 100 7) -> reset 107 -> (+ 1000 107)); escape yields 7.
 (extern-c printf [^cstr fmt ^int v] :int)
 
-(defn t-undelimited [] :int
+(defn t-undelimited [] : int
   (escape (fn [k]
     (+ 1000 (reset (+ 100 (k 7)))))))
 
-(defn main [] :int
+(defn main [] : int
   (printf "undelimited=%lld\n" (t-undelimited))
   0)

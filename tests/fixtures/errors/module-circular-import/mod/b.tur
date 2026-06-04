@@ -1,4 +1,4 @@
 (defmodule mod/b
   (export fb)
   (import mod/a :as ma)
-  (defn fb [] :int (ma/fa)))
+  (defn fb [] : int (ma/fa)))

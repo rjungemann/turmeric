@@ -12,13 +12,13 @@
 ;; Expected output:
 ;;   ok
 
-(defn callable-a [n :int] :int (+ n 1))
-(defn callable-b [n :int] :int (* n 2))
+(defn callable-a [n : int] : int (+ n 1))
+(defn callable-b [n : int] : int (* n 2))
 
 ;; Fixed-arity helper that holds the inline-C (CLAUDE.md forbids inline-C
 ;; in variadic bodies). Walks the cons list and returns the head value as
 ;; an int -- enough to prove the cons cell was built without truncation.
-(defn rest-head [xs :int] :int
+(defn rest-head [xs : int] : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)xs;
@@ -32,7 +32,7 @@
 (defn first-of [A] [& xs :A] :int
   (rest-head xs))
 
-(defn main [] :int
+(defn main [] : int
   (let [_ (first-of callable-a callable-b)]
     (println "ok"))
   0)

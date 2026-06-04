@@ -5,7 +5,7 @@
   (Just a)
   (Nothing))
 
-(defn main [] :int
+(defn main [] : int
   ;; Construct, bind, and match at :float.
   (let [v (Just 1.5)]
     (match v

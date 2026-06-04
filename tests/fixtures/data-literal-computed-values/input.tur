@@ -1,5 +1,5 @@
 ;; DL3: #map{:k (+ 1 2)} evaluates the value slot.
-(defn run [] :int
+(defn run [] : int
   (let [m #map{:k (+ 1 2) :j (* 4 5)}
         kk (hamt/hash-str "k")
         kj (hamt/hash-str "j")]

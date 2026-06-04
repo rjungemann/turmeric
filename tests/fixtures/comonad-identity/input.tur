@@ -1,26 +1,26 @@
 ;; Test Comonad typeclass: Identity comonad with extract/extend/duplicate.
 
 (defclass Comonad [^w]
-  (extract   [wa]     :int)
-  (extend    [wa fn]  :int)
-  (duplicate [wa]     :int))
+  (extract   [wa]     : int)
+  (extend    [wa fn]  : int)
+  (duplicate [wa]     : int))
 
 ;; ── Identity comonad ─────────────────────────────────────────────────────────
 ;; Represented as a heap-allocated int64_t.
 
-(defn identity-new [x] :int
+(defn identity-new [x] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = x;
   return (int64_t)(intptr_t)p;
   ```)
 
-(defn identity-get [wa] :int
+(defn identity-get [wa] : int
   ```c
   return *(int64_t *)(intptr_t)wa;
   ```)
 
-(defn __identity_extend_impl [wa fn] :int
+(defn __identity_extend_impl [wa fn] : int
   ```c
   int64_t result = ((int64_t(*)(int64_t))(intptr_t)fn)(wa);
   int64_t *p = malloc(sizeof(int64_t));
@@ -28,7 +28,7 @@
   return (int64_t)(intptr_t)p;
   ```)
 
-(defn __identity_duplicate_impl [wa] :int
+(defn __identity_duplicate_impl [wa] : int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = wa;
@@ -40,7 +40,7 @@
   (extend    [wa fn] (__identity_extend_impl wa fn))
   (duplicate [wa]    (__identity_duplicate_impl wa)))
 
-(defn main [] :int
+(defn main [] : int
   (let [w (identity-new 42)]
     (do
       ;; extract returns the inner value

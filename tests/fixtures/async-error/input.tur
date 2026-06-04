@@ -8,12 +8,12 @@
 ;;   error: -42
 
 ;; An async function that returns a negative value indicating failure
-(defn compute-fail [] :int
+(defn compute-fail [] : int
   ```c
   return (int64_t)-42;
   ```)
 
-(defn main [] :nil
+(defn main [] : nil
   (let [fut (async compute-fail)]
     (let [result (await fut)]
       (if (< result 0)

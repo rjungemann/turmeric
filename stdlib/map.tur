@@ -38,7 +38,9 @@
 ;;;   (:: (map-new) (Map int int))  ; => empty Map[int int]
 ;;;
 ;;; Since: Phase TM0
-(defn map-new [K V] []
+
+(defn map-new [K V]
+  []
   #{}
   : (Map K V)
   ```c struct { void *hamt; } *m = malloc(sizeof(*m));
@@ -53,11 +55,11 @@
 ;;;
 ;;; Since: Phase TMS3
 
-(defn map-empty-for [^Hash K ^MapKey K V] [k :K v :V] : (Map K V)
-  (map-new))
+(defn map-empty-for [^Hash K ^MapKey K V] [k :K v :V] : (Map K V) (map-new))
 ;;; map-hamt -- internal accessor for the HAMT backing store.
 
-(defn map-hamt [K V] [m (Map K V)]
+(defn map-hamt [K V]
+  [m (Map K V)]
   #{}
   :ptr<void>
   ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
@@ -65,7 +67,8 @@
   ```)
 ;;; map-wrap -- internal constructor from a HAMT pointer.
 
-(defn map-wrap [K V] [h :ptr<void>]
+(defn map-wrap [K V]
+  [h :ptr<void>]
   #{}
   : (Map K V)
   ```c struct { void *hamt; } *m = malloc(sizeof(*m));
@@ -81,11 +84,13 @@
 ;;; typed (Map K V) so the public accessors thread K/V through them, but the
 ;;; carrier key is always :int.
 ;;; ============================================================================
-
 ;;; map-assoc-eq-o -- raw insert/update: explicit hash, boxed carrier key,
 ;;; comparator and ownership flag.
 
-(defn map-assoc-eq-o [K V] [m (Map K V) h :int key :int val :V keyeq owned :int] : (Map K V)
+
+(defn map-assoc-eq-o [K V]
+  [m (Map K V) h :int key :int val :V keyeq owned :int]
+  : (Map K V)
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                      (void *)(intptr_t)val, (void *)(intptr_t)keyeq,
@@ -96,7 +101,9 @@
   ```)
 ;;; map-get-eq-o -- raw lookup: explicit hash, boxed carrier key, comparator.
 
-(defn map-get-eq-o [K V] [m (Map K V) h :int key :int keyeq owned :int] :V
+(defn map-get-eq-o [K V]
+  [m (Map K V) h :int key :int keyeq owned :int]
+  :V
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
                                               (void *)(intptr_t)key,
@@ -104,14 +111,18 @@
   ```)
 ;;; map-has-eq-o? -- raw existence test: explicit hash, boxed carrier key.
 
-(defn map-has-eq-o? [K V] [m (Map K V) h :int key :int keyeq owned :int] :bool
+(defn map-has-eq-o? [K V]
+  [m (Map K V) h :int key :int keyeq owned :int]
+  :bool
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                            (void *)(intptr_t)keyeq, (int64_t)owned);
   ```)
 ;;; map-dissoc-eq-o -- raw removal: explicit hash, boxed carrier key, comparator.
 
-(defn map-dissoc-eq-o [K V] [m (Map K V) h :int key :int keyeq owned :int] : (Map K V)
+(defn map-dissoc-eq-o [K V]
+  [m (Map K V) h :int key :int keyeq owned :int]
+  : (Map K V)
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                      (void *)(intptr_t)keyeq, (int64_t)owned);
@@ -128,7 +139,6 @@
 ;;; keys sharing hash 0 stay distinct under the comparator).  The public
 ;;; map-assoc/map-get accessors are preferred for ordinary use.
 ;;; ----------------------------------------------------------------------------
-
 ;;; map-assoc-eq -- insert/update with an explicit hash and key-equality fn.
 ;;;
 ;;; Parameters:
@@ -147,7 +157,10 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-assoc-eq [K V] [m (Map K V) h :int key :K val :V keyeq] : (Map K V)
+
+(defn map-assoc-eq [K V]
+  [m (Map K V) h :int key :K val :V keyeq]
+  : (Map K V)
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                    (void *)(intptr_t)val,
@@ -172,7 +185,9 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-get-eq [K V] [m (Map K V) h :int key :K keyeq] :V
+(defn map-get-eq [K V]
+  [m (Map K V) h :int key :K keyeq]
+  :V
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get_eq(map->hamt, (uint64_t)h,
                                             (void *)(intptr_t)key,
@@ -194,7 +209,9 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-has-eq? [K V] [m (Map K V) h :int key :K keyeq] :bool
+(defn map-has-eq? [K V]
+  [m (Map K V) h :int key :K keyeq]
+  :bool
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   return tur_hamt_has_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                          (void *)(intptr_t)keyeq);
@@ -215,7 +232,9 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-dissoc-eq [K V] [m (Map K V) h :int key :K keyeq] : (Map K V)
+(defn map-dissoc-eq [K V]
+  [m (Map K V) h :int key :K keyeq]
+  : (Map K V)
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                    (void *)(intptr_t)keyeq);
@@ -237,11 +256,11 @@
 ;;;
 ;;; Since: TCE4
 
-(defn cstr-hash [s :cstr] :int
+(defn cstr-hash [s : cstr] : int
   ```c return (int64_t)tur_hamt_hash_str((const char *)(intptr_t)s); ```)
 ;;; tur-cstr-key-eq? -- internal: content equality of two string keys.
 
-(defn tur-cstr-key-eq? [a :cstr b :cstr] :bool
+(defn tur-cstr-key-eq? [a : cstr b : cstr] : bool
   ```c const char *p = (const char *)(intptr_t)a;
   const char *q = (const char *)(intptr_t)b;
   while (*p && (*p == *q)) { p++; q++; }
@@ -279,19 +298,19 @@
 ;;; Multi-word struct/ADT keys would need a heap-boxed carrier owned by the
 ;;; map (a runtime-ownership change); that remains a separate follow-up.
 ;;; ============================================================================
-
 ;;; tur-int-carrier-eq? -- carrier comparator for one-word integral keys.
 ;;;
 ;;; Used for :int and :bool keys, whose carrier word IS the value, so plain
 ;;; integer equality on the two carrier words is the key equality.
 
-(defn tur-int-carrier-eq? [a :int b :int] :bool (= a b))
+
+(defn tur-int-carrier-eq? [a : int b : int] : bool (= a b))
 ;;; tur-f32-carrier-eq? -- carrier comparator for :float32 keys.
 ;;;
 ;;; Reinterprets each int64 carrier word's low 32 bits back to a float and
 ;;; compares by value (NaN never matches, as with =).
 
-(defn tur-f32-carrier-eq? [a :int b :int] :bool
+(defn tur-f32-carrier-eq? [a : int b : int] : bool
   ```c union { float f; int64_t i; } ua, ub;
   ua.i = a; ub.i = b;
   return ua.f == ub.f;
@@ -300,7 +319,7 @@
 ;;;
 ;;; Reinterprets each int64 carrier word back to a double and compares by value.
 
-(defn tur-f64-carrier-eq? [a :int b :int] :bool
+(defn tur-f64-carrier-eq? [a : int b : int] : bool
   ```c union { double f; int64_t i; } ua, ub;
   ua.i = a; ub.i = b;
   return ua.f == ub.f;
@@ -311,39 +330,41 @@
 ;;;   a -- the key type
 ;;;
 ;;; Since: WKC (float32-map-key-carrier-plan)
+
 (defclass MapKey [a]
-  (mk-box [x] :int)
-  (mk-cmp [x] :int)
-  (mk-owned? [x] :int))
+  (mk-box [x] : int)
+  (mk-cmp [x] : int)
+  (mk-owned? [x] : int))
 ;;; MapKey [int] -- one-word identity carrier; integer-equality comparator.
 
-(definstance MapKey [int]
-  (mk-box [x] x)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+(definstance MapKey [int] (mk-box [x] x)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [bool] -- one-word 0/1 carrier; integer-equality comparator.
 
-(definstance MapKey [bool]
-  (mk-box [x] (if x 1 0))
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+(definstance MapKey [bool] (mk-box [x] (if x 1 0))
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [cstr] -- pointer carrier; content-equality comparator.
 
-(definstance MapKey [cstr]
-  (mk-box [x] :int ```c return (int64_t)(intptr_t)x; ```)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_cstr_key_eq_; ```)
+(definstance MapKey [cstr] (mk-box [x]
+                             : int
+                             ```c return (int64_t)(intptr_t)x; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_cstr_key_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [float32] -- bit-reinterpret carrier; float-value comparator.
 
-(definstance MapKey [float32]
-  (mk-box [x] :int ```c union { float f; int64_t i; } u; u.i = 0; u.f = x; return u.i; ```)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_f32_carrier_eq_; ```)
+(definstance MapKey [float32] (mk-box [x]
+                                : int
+                                ```c union { float f; int64_t i; } u; u.i = 0; u.f = x; return u.i; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_f32_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [float] -- bit-reinterpret carrier (float64); double-value comparator.
 
-(definstance MapKey [float]
-  (mk-box [x] :int ```c union { double f; int64_t i; } u; u.f = x; return u.i; ```)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_f64_carrier_eq_; ```)
+(definstance MapKey [float] (mk-box [x]
+                              : int
+                              ```c union { double f; int64_t i; } u; u.f = x; return u.i; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_f64_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; ============================================================================
 ;;; The typed Map[K V] accessor surface (TMS3).
@@ -374,13 +395,13 @@
 ;;; the map's Map[K V] -- so a wrong-typed key is a TUR-E0001.  Because they
 ;;; are macros they cannot be passed as first-class function values.
 ;;; ============================================================================
-
 ;;; tur-map-kcheck -- internal: enforce key type K against a Map[K V]; returns m.
 ;;;
 ;;; A typed identity on the map that unifies the key's type with the map's key
 ;;; type K. The accessor macros wrap their map argument in this so a
 ;;; wrong-typed key is rejected (TUR-E0001) even though the runtime dispatch
 ;;; goes through the type-erased int64 carrier.
+
 
 (defn tur-map-kcheck [K V] [m (Map K V) k (& K)] : (Map K V) m)
 ;;; map-assoc -- insert or update a key/value pair; returns a new map.
@@ -406,8 +427,11 @@
 (defmacro map-assoc [m k v]
   `(let [__tur_mk__ ~k]
      (map-assoc-eq-o (tur-map-kcheck ~m (& __tur_mk__))
-                     (hash __tur_mk__) (mk-box __tur_mk__) ~v
-                     (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+       (hash __tur_mk__)
+       (mk-box __tur_mk__)
+       ~v
+       (mk-cmp __tur_mk__)
+       (mk-owned? __tur_mk__))))
 ;;; map-get -- look up a key; returns the value or 0 (none) if absent.
 ;;;
 ;;; Parameters:
@@ -426,8 +450,10 @@
 (defmacro map-get [m k]
   `(let [__tur_mk__ ~k]
      (map-get-eq-o (tur-map-kcheck ~m (& __tur_mk__))
-                   (hash __tur_mk__) (mk-box __tur_mk__)
-                   (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+       (hash __tur_mk__)
+       (mk-box __tur_mk__)
+       (mk-cmp __tur_mk__)
+       (mk-owned? __tur_mk__))))
 ;;; map-has? -- check whether a key exists in the map.
 ;;;
 ;;; Parameters:
@@ -445,8 +471,10 @@
 (defmacro map-has? [m k]
   `(let [__tur_mk__ ~k]
      (map-has-eq-o? (tur-map-kcheck ~m (& __tur_mk__))
-                    (hash __tur_mk__) (mk-box __tur_mk__)
-                    (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+       (hash __tur_mk__)
+       (mk-box __tur_mk__)
+       (mk-cmp __tur_mk__)
+       (mk-owned? __tur_mk__))))
 ;;; map-dissoc -- remove a key from the map; returns a new map.
 ;;;
 ;;; Parameters:
@@ -464,8 +492,10 @@
 (defmacro map-dissoc [m k]
   `(let [__tur_mk__ ~k]
      (map-dissoc-eq-o (tur-map-kcheck ~m (& __tur_mk__))
-                      (hash __tur_mk__) (mk-box __tur_mk__)
-                      (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+       (hash __tur_mk__)
+       (mk-box __tur_mk__)
+       (mk-cmp __tur_mk__)
+       (mk-owned? __tur_mk__))))
 ;;; map-count -- return the number of entries in the map.
 ;;;
 ;;; Parameters:
@@ -479,7 +509,8 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-count [K V] [m (Map K V)]
+(defn map-count [K V]
+  [m (Map K V)]
   #{}
   :int
   ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
@@ -499,7 +530,8 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-merge [K V] [a (Map K V) b (Map K V)]
+(defn map-merge [K V]
+  [a (Map K V) b (Map K V)]
   #{}
   : (Map K V)
   ```c struct { void *hamt; } *ma = (void*)(intptr_t)a;
@@ -519,7 +551,8 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-free [K V] [m (Map K V)]
+(defn map-free [K V]
+  [m (Map K V)]
   #{}
   :void
   ```c free((void*)(intptr_t)m);
@@ -539,9 +572,9 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-eq-raw? [m1 :int m2 :int val-cmp]
+(defn map-eq-raw? [m1 : int m2 : int ^fat val-cmp]
   #{}
-  :bool
+  : bool
   ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
@@ -553,8 +586,9 @@
   while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
-      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
-          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0. */
+      bool vals_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
+          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -572,16 +606,18 @@
 ;;;
 ;;; Since: Phase TM0 (typed surface: TMS3)
 
-(defn map-eq? [K V] [m1 (Map K V) m2 (Map K V) val-cmp] :bool
+(defn map-eq? [K V]
+  [m1 (Map K V) m2 (Map K V) ^fat val-cmp]
+  :bool
   (map-eq-raw? m1 m2 val-cmp))
 ;;; map-eq-raw-k? -- like map-eq-raw? but compares keys with an explicit
 ;;; carrier comparator (tur_hamt_get_eq) instead of identity.  Threading the
 ;;; MapKey[K] comparator here is what makes structural equality content-correct
 ;;; for :cstr keys (distinct pointers with equal text match).
 
-(defn map-eq-raw-k? [m1 :int m2 :int keyeq val-cmp]
+(defn map-eq-raw-k? [m1 : int m2 : int keyeq ^fat val-cmp]
   #{}
-  :bool
+  : bool
   ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
@@ -594,8 +630,10 @@
       void *val_in_b = tur_hamt_get_eq(map2->hamt, (int64_t)hash_out, key_out,
                                        (void *)(intptr_t)keyeq);
       if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
-      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
-          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      /* CRU B-3: val-cmp is a fat closure box; fat-dispatch via slot 0.
+         keyeq stays a thin MapKey carrier (not a user closure). */
+      bool vals_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)val_cmp)[0])(
+          (void*)(intptr_t)val_cmp, (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
       if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
   tur_hamt_iter_free((void*)iter_buf);
@@ -609,7 +647,9 @@
 ;;; (mk-cmp (make-struct K 0 ...)) -- so keys equal by content but stored under
 ;;; distinct pointers/boxes compare equal.
 
-(defn map-eq-k? [K V] [m1 (Map K V) m2 (Map K V) keyeq val-cmp] :bool
+(defn map-eq-k? [K V]
+  [m1 (Map K V) m2 (Map K V) keyeq ^fat val-cmp]
+  :bool
   (map-eq-raw-k? m1 m2 keyeq val-cmp))
 ;;; Eq [Map] -- structural equality using the value type's Eq instance.
 ;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
@@ -617,7 +657,6 @@
 ;; Note: element comparison uses integer equality; correct for all primitive K/V.
 ;; The instance receives bare-Map (HKT) handles, which carry as int64, so it
 ;; delegates to the raw :int helper rather than the typed map-eq?.
-
 ;;; map-eq-dynamic -- internal: structural equality using each map's stamped
 ;;; key comparator (GDE3).  val-cmp compares values as int64 carriers.
 ;;;
@@ -626,8 +665,12 @@
 ;;; explicit comparator (identity keys) the stamp is NULL and pointer identity
 ;;; is used -- which is correct for :int keys.
 
-(defn map-eq-dynamic [m1 :int m2 :int val-cmp] :bool
+
+(defn map-eq-dynamic [m1 : int m2 : int ^fat val-cmp] : bool
+  ;; CRU B-3: val-cmp is a fat closure box; threaded as int64 to the runtime,
+  ;; which fat-dispatches it (tur_hamt_eq_dynamic reads slot 0).
   ```c return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); ```)
+
 (definstance Eq [Map] [(Eq K) (Eq V)]
   (eq? [x y] (map-eq-dynamic x y (fn [a b] (= a b)))))
 ;;; hamt-assoc-each__ -- internal helper for the hamt-of macro.
@@ -648,8 +691,7 @@
 ;;; differently-typed arguments is a TUR-E0001 at elaboration. No-op body,
 ;;; fixed arity (no allocation).
 
-(defn tur-map-homog__ [A] [a :A b :A] :nil
-  ```c (void)a; (void)b; ```)
+(defn tur-map-homog__ [A] [a :A b :A] :nil ```c (void)a; (void)b; ```)
 ;;; hamt-homog-chain__ -- internal: enforce homogeneous keys and values.
 ;;;
 ;;; kvs is k0 v0 k1 v1 ...  Chains tur-map-homog__ over adjacent keys and

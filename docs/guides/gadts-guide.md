@@ -25,7 +25,7 @@ Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
 ```turmeric
 (defdata Color :copy (Red) (Green) (Blue))
 
-(defn color-to-int [c] :int
+(defn color-to-int [c] : int
   (match c
     (Red)   1
     (Green) 2
@@ -52,7 +52,7 @@ Parameterized ADTs work the same way:
   (None)
   (Some a))
 
-(defn option-or [opt default] :int
+(defn option-or [opt default] : int
   (match opt
     (None)    default
     (Some x)  x))
@@ -81,7 +81,7 @@ Constructors can carry typed fields:
   (Circle int)
   (Rect   int int))
 
-(defn area [s] :int
+(defn area [s] : int
   (match s
     (Circle r)   (* r r)
     (Rect w h)   (* w h)))
@@ -139,7 +139,7 @@ error: unknown form 'defgadt' (pass -Xgadt to enable)
 Evaluation is written the same as for a plain ADT:
 
 ```turmeric
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))))
@@ -176,7 +176,7 @@ defgadt Tag [a]
 A function dispatching on the tag can return `a` without a cast:
 
 ```turmeric
-(defn default-value [t] :int
+(defn default-value [t] : int
   (match t
     (IntTag)  0
     (BoolTag) 0))
@@ -204,18 +204,18 @@ A larger example combining plain ADTs and GADTs in one program:
   (Lit int         : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
 
-(defn color-to-int [c] :int
+(defn color-to-int [c] : int
   (match c
     (Red)   1
     (Green) 2
     (Blue)  3))
 
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))))
 
-(defn main [] :int
+(defn main [] : int
   (println (color-to-int (Red)))            ; 1
   (println (eval-expr (Add (Lit 10) (Lit 20))))  ; 30
   (println (color-to-int (Green)))          ; 2
@@ -261,13 +261,13 @@ different ways:
   (Add (Expr int) (Expr int)       : (Expr int))
   (Mul (Expr int) (Expr int)       : (Expr int)))
 
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))
     (Mul l r) (* (eval-expr l) (eval-expr r))))
 
-(defn main [] :int
+(defn main [] : int
   ; (2 + (3 * 4)) = 14
   (let [e (Add (Lit 2) (Mul (Lit 3) (Lit 4)))]
     (println (eval-expr e))
@@ -323,7 +323,7 @@ Use `coerce` to convert a value across a proven equality:
 (defgadt Equal [a b]
   (Refl : (Equal a a)))
 
-(defn main [] :int
+(defn main [] : int
   (match (Refl)
     (Refl)
       (do
@@ -372,7 +372,7 @@ They work in both plain ADT and GADT matches:
 ```turmeric
 (defdata Sign (Pos int) (Neg int) (Zero))
 
-(defn classify [s] :int
+(defn classify [s] : int
   (match s
     (Pos n) when (> n 100) (do (println "big") 0)
     (Pos n)                (do (println "pos") 0)
@@ -444,7 +444,7 @@ features that can be used together.
 ### Declaring a union parameter
 
 ```turmeric
-(defn describe [x : (int | bool)] :int
+(defn describe [x : (int | bool)] : int
   (match x
     (n : int)  (do (println "int")  0)
     (b : bool) (do (println "bool") 0)))
@@ -474,7 +474,7 @@ the tag-dispatched call automatically:
 
 ```turmeric
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
   (show [x] "an-int"))
@@ -482,7 +482,7 @@ the tag-dispatched call automatically:
 (definstance Show [bool]
   (show [x] "a-bool"))
 
-(defn print-any [x : (int | bool)] :int
+(defn print-any [x : (int | bool)] : int
   (println (.show x))
   0)
 ```
@@ -511,11 +511,11 @@ call site naming the missing member.
 boxed into `any` carry a runtime tag so their type can be recovered:
 
 ```turmeric
-(defn consume [x : any] :int
+(defn consume [x : any] : int
   (println (type-of x))   ; prints "int", "bool", "cstr", etc.
   0)
 
-(defn main [] :int
+(defn main [] : int
   (consume 42)      ; prints "int"
   (consume true)    ; prints "bool"
   (consume "hello") ; prints "cstr"
@@ -539,7 +539,7 @@ to unsafely unbox an `any` value as type `T` (no runtime tag check -- use
 only when you know the type):
 
 ```turmeric
-(defn print-as-int [x : any] :int
+(defn print-as-int [x : any] : int
   (println (cast x int))
   0)
 ```
@@ -616,7 +616,7 @@ defn print-as-int [x : any] :int
   (Mul (Expr int) (Expr int)       : (Expr int)))
 
 ; Pattern match -- exhaustiveness checked, guards optional
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))
@@ -630,13 +630,13 @@ defn print-as-int [x : any] :int
 (coerce (Refl) some-value)
 
 ; Union type dispatch  (requires -Xunion-types)
-(defn describe [x : (int | bool)] :int
+(defn describe [x : (int | bool)] : int
   (match x
     (n : int)  0
     (b : bool) 1))
 
 ; Gradual typing  (requires -Xunion-types)
-(defn show-type [x : any] :int
+(defn show-type [x : any] : int
   (println (type-of x))
   0)
 ```

@@ -6,15 +6,15 @@
 ;; abandoned and v is returned at the call/cc site.
 
 ;; f ignores k: the body value (99) is the result.
-(defn test-callcc-no-resume [] :int
+(defn test-callcc-no-resume [] : int
   (call/cc (fn [k] 99)))
 
 ;; f invokes (k 41): the pending (+ 100 ...) is abandoned, 41 returns at the
 ;; call/cc site, and the outer (+ 1 ...) makes 42 -- with no explicit reset.
-(defn test-callcc-resume [] :int
+(defn test-callcc-resume [] : int
   (+ 1 (call/cc (fn [k] (+ 100 (k 41))))))
 
-(defn main [] :int
+(defn main [] : int
   (println (test-callcc-no-resume))
   (println (test-callcc-resume))
   0)

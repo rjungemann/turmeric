@@ -31,7 +31,7 @@
 ;;;   (scheduler-mt-new 4)  ; => sched-ptr
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-new [n_threads :int] :ptr<void>
+(defn scheduler-mt-new [n_threads : int] : ptr<void>
   ```c TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
   if (!s) { fprintf(stderr, "scheduler-mt-new: oom\n"); abort(); }
   return (void *)s;
@@ -47,7 +47,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-free [sched :ptr<void>] :nil
+(defn scheduler-mt-free [sched : ptr<void>] : nil
   ```c tur_scheduler_mt_free((TurSchedulerMT *)sched);
   ```)
 ;; Spawn a fiber on the scheduler
@@ -62,7 +62,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-spawn [sched :ptr<void> fiber :ptr<void>] :nil
+(defn scheduler-mt-spawn [sched : ptr<void> fiber : ptr<void>] : nil
   ```c tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
   ```)
 ;; Run the scheduler on the current thread
@@ -76,7 +76,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-run [sched :ptr<void>] :nil
+(defn scheduler-mt-run [sched : ptr<void>] : nil
   ```c tur_scheduler_mt_run((TurSchedulerMT *)sched);
   ```)
 ;; Get the current thread's ID (unique per OS thread)
@@ -90,7 +90,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-thread-id [] :int
+(defn scheduler-mt-thread-id [] : int
   ```c return (int64_t)tur_scheduler_mt_thread_id();
   ```)
 ;; Set the current scheduler for this thread (for testing)
@@ -104,7 +104,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-set-current [sched :ptr<void>] :nil
+(defn scheduler-mt-set-current [sched : ptr<void>] : nil
   ```c tur_scheduler_mt_set_current((TurSchedulerMT *)sched);
   ```)
 ;; Get the current scheduler for this thread
@@ -118,7 +118,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-current [] :ptr<void>
+(defn scheduler-mt-current [] : ptr<void>
   ```c return (void *)tur_scheduler_mt_current();
   ```)
 ;; Yield the current fiber to allow other fibers to run
@@ -129,7 +129,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-yield [] :nil
+(defn scheduler-mt-yield [] : nil
   ```c tur_scheduler_mt_yield();
   ```)
 ;; Park the current fiber until explicitly unparked
@@ -140,7 +140,7 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-park [] :nil
+(defn scheduler-mt-park [] : nil
   ```c tur_scheduler_mt_park();
   ```)
 ;; Unpark a specific fiber
@@ -154,6 +154,6 @@
 ;;;
 ;;; Since: Phase T23
 
-(defn scheduler-mt-unpark [fiber :ptr<void>] :nil
+(defn scheduler-mt-unpark [fiber : ptr<void>] : nil
   ```c tur_scheduler_mt_unpark((FiberBlock *)fiber);
   ```)

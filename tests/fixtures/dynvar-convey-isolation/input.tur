@@ -4,7 +4,7 @@
 ;; The child sees "req-1" (its snapshot); the parent sees "req-2" (current).
 (defdynamic *request-id* :cstr "none")
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_join(h->tid, NULL);
@@ -14,12 +14,12 @@
   free(h);
   ```)
 
-(defn spawn-conveying [f :ptr<void>] :ptr<void>
+(defn spawn-conveying [f : ptr<void>] : ptr<void>
   ```c
   return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (binding [*request-id* "req-1"]
     (let [t (spawn-conveying (fn [] (println *request-id*)))]
       ;; Mutate the parent binding after spawning -- child snapshot is unaffected

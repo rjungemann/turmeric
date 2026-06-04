@@ -1,5 +1,5 @@
 ; Phase HRT2: existential introduction (pack).
 ; Pack an int as an existential, then return 0 to confirm compilation succeeds.
-(defn main [] :int
+(defn main [] : int
   (let [e (pack 42 (exists [a] a))]
     0))

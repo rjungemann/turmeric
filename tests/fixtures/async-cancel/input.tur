@@ -9,7 +9,7 @@
 ;;   cancelled
 
 ;; FutureCell helpers (unsettled)
-(defn fc-new [] :ptr<void>
+(defn fc-new [] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
@@ -20,7 +20,7 @@
   return (void *)cell;
   ```)
 
-(defn fc-free [f :ptr<void>] :nil
+(defn fc-free [f : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -29,7 +29,7 @@
   free(fc);
   ```)
 
-(defn fc-done? [f :ptr<void>] :bool
+(defn fc-done? [f : ptr<void>] : bool
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -39,7 +39,7 @@
   return done;
   ```)
 
-(defn fc-cancel [f :ptr<void>] :nil
+(defn fc-cancel [f : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -48,7 +48,7 @@
   pthread_mutex_unlock(&fc->lock);
   ```)
 
-(defn fc-cancelled? [f :ptr<void>] :bool
+(defn fc-cancelled? [f : ptr<void>] : bool
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -58,7 +58,7 @@
   return c;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [fc (fc-new)]
     ;; Before cancellation: not done
     (if (fc-done? fc)

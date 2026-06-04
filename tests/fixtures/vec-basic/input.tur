@@ -1,20 +1,20 @@
 ;;
 ;; Phase TC1: tvec basic operations test
 
-(defn test-empty [] :int
+(defn test-empty [] : int
   (let [v (vec-new)]
     (let [len (vec-len v)]
       (vec-free v)
       len)))
 
-(defn test-push-get [] :int
+(defn test-push-get [] : int
   (let [v (vec-new)]
     (vec-push! v 42)
     (let [x (vec-get v 0)]
       (vec-free v)
       x)))
 
-(defn test-push-multi [] :int
+(defn test-push-multi [] : int
   (let [v (vec-new)]
     (vec-push! v 10)
     (vec-push! v 20)
@@ -23,7 +23,7 @@
       (vec-free v)
       len)))
 
-(defn test-pop [] :int
+(defn test-pop [] : int
   (let [v (vec-new)]
     (vec-push! v 100)
     (vec-push! v 200)

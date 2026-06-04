@@ -1,27 +1,27 @@
 ;;
 ;; Phase TC1: result basic operations test
 
-(defn test-ok [] :bool
+(defn test-ok [] : bool
   (ok? (ok 1)))
 
-(defn test-err-not-ok [] :bool
+(defn test-err-not-ok [] : bool
   (ok? (err 0)))
 
-(defn test-ok-val [] :int
+(defn test-ok-val [] : int
   (ok-val (make-struct Result true 42 0)))
 
-(defn test-err-val [] :int
+(defn test-err-val [] : int
   (err-val (make-struct Result false 0 404)))
 
-(defn test-result-eq-ok [] :bool
+(defn test-result-eq-ok [] : bool
   (let [eq (fn [a b] (= a b))]
     (result-eq? (ok 1) (ok 1) eq eq)))
 
-(defn test-result-eq-err [] :bool
+(defn test-result-eq-err [] : bool
   (let [eq (fn [a b] (= a b))]
     (result-eq? (err 5) (err 5) eq eq)))
 
-(defn test-result-neq [] :bool
+(defn test-result-neq [] : bool
   (let [eq (fn [a b] (= a b))]
     (result-eq? (ok 1) (ok 2) eq eq)))
 

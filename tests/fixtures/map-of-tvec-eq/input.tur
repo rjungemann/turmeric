@@ -7,7 +7,7 @@
 ;; the HAMT's hash lookup (correct for primitive keys); only the
 ;; value comparaok?r needs ok? be threaded recursively.
 
-(defn main [] :int
+(defn main [] : int
   (let [inner1 []:int
         inner2 []:int
         inner3 []:int]

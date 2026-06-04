@@ -2,7 +2,7 @@
 ;; Same key/value sets compare equal regardless of insertion order;
 ;; differing sets compare unequal.
 
-(defn main [] :int
+(defn main [] : int
   (let [a (mutmap-new)
         b (mutmap-new)
         c (mutmap-new)]

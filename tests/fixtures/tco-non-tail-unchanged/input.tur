@@ -8,11 +8,11 @@
 ;; This is the documented boundary: only *self-tail* calls are lowered for 1.0;
 ;; mutual/general tail calls and non-tail recursion are unchanged.
 
-(defn sum-to [n :int] :int
+(defn sum-to [n : int] : int
   (if (= n 0)
     0
     (+ n (sum-to (- n 1)))))
 
-(defn main [] :int
+(defn main [] : int
   (println (sum-to 100))
   0)

@@ -4,7 +4,7 @@
 (defmacro gpair-snd [p] `(.snd ~p))
 
 (defclass Eq2 [A]
-  (eq2? [A A] :bool))
+  (eq2? [A A] : bool))
 
 ;;; CS1b: definstance body with macro-expanded field access must elaborate
 ;;; without "no typeclass method found for 'fst'" (the previous bug).
@@ -15,7 +15,7 @@
          (= (gpair-snd x) (gpair-snd y)))))
 
 ;;; Direct field access via macro works on concrete typed-slot GPair values.
-(defn main [] :int
+(defn main [] : int
   (let [p (make-struct GPair 10 20)]
     (println (gpair-fst p))
     (println (gpair-snd p))

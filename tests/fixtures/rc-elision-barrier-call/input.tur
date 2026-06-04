@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   ;; Fixture: Call barrier blocks elision.
   ;; Even though the clone+drop pattern is present, a call (println) appears
   ;; before the drop in a do-block, creating a barrier. Elision must not fire.

@@ -1,9 +1,9 @@
 ;; #lint-panic-allow
 ;; Phase R6b: a top-of-file allow directive silences --lint-panic for the
 ;; whole file.
-(defn risky [] :int
+(defn risky [] : int
   (panic "boom")
   0)
-(defn main [] :int
+(defn main [] : int
   (println 1)
   0)

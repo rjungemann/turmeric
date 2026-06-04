@@ -17,14 +17,14 @@
 ;;; seq-make-none -- allocate None option.
 
 
-(defn seq-make-some [v :int] :int
+(defn seq-make-some [v : int] : int
   ```c struct { bool is_some; int64_t value; } *opt =
     (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
   opt->is_some = true; opt->value = v;
   return (int64_t)(intptr_t)opt;
   ```)
 
-(defn seq-make-none [] :int
+(defn seq-make-none [] : int
   ```c struct { bool is_some; int64_t value; } *opt =
     (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
   opt->is_some = false; opt->value = 0;
@@ -36,7 +36,7 @@
 ;;; seq-out-vec-new -- allocate an empty vec (same layout as stdlib/vec.tur).
 
 
-(defn seq-out-vec-new [] :int
+(defn seq-out-vec-new [] : int
   ```c struct { int64_t *data; size_t len; size_t cap; } *v =
     (struct { int64_t *data; size_t len; size_t cap; } *)malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
@@ -44,7 +44,7 @@
   ```)
 ;;; seq-out-vec-push! -- append val to the vec at v.
 
-(defn seq-out-vec-push! [v :int val :int] :void
+(defn seq-out-vec-push! [v : int val : int] : void
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec =
     (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
   if (vec->len == vec->cap) {
@@ -56,7 +56,7 @@
   ```)
 ;;; seq-make-cons -- allocate a cons cell { value, next }.
 
-(defn seq-make-cons [val :int nxt :int] :int
+(defn seq-make-cons [val : int nxt : int] : int
   ```c struct { int64_t value; int64_t next; } *cell =
     (struct { int64_t value; int64_t next; } *)malloc(sizeof(*cell));
   cell->value = val; cell->next = nxt;
@@ -74,7 +74,7 @@
 ;;; Since: LZ3
 
 
-(defn seq-call-void-fn1 [f :int x :int] :void
+(defn seq-call-void-fn1 [f : int x : int] : void
   ```c int64_t *fat = (int64_t *)(intptr_t)f;
   int64_t fn_ptr = fat[0];
   ((void (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
@@ -98,7 +98,7 @@
 ;;; Since: LZ3
 
 
-(defn seq/into-vec [s :int] :int
+(defn seq/into-vec [s : int] : int
   (let [g (seq-iter s) v (seq-out-vec-new)]
     (while (not (seq-gen-done g))
       (let [elem (seq-gen-next g)]
@@ -120,7 +120,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/into-list [s :int] :int
+(defn seq/into-list [s : int] : int
   (let [g (seq-iter s) ^mut lst 0]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -150,7 +150,7 @@
 ;;; Since: LZ3
 
 
-(defn seq/nth [n :int s :int] :int
+(defn seq/nth [n : int s : int] : int
   (let [g (seq-iter s) ^mut count 0]
     (while (and (< count n) (not (seq-gen-done g)))
       (let [_skip (seq-gen-next g)] (set! count (+ count 1))))
@@ -173,7 +173,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/first [s :int] :int
+(defn seq/first [s : int] : int
   (let [g (seq-iter s) v (seq-gen-next g)]
     (if (seq-val-some? v) (seq-make-some (seq-val-unwrap v)) (seq-make-none))))
 ;;; seq/last -- return the last element of s, or None if s is empty.
@@ -189,7 +189,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/last [s :int] :int
+(defn seq/last [s : int] : int
   (let [g (seq-iter s) ^mut result (seq-make-none)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -213,7 +213,7 @@
 ;;; Since: LZ3
 
 
-(defn seq/count [s :int] :int
+(defn seq/count [s : int] : int
   (let [g (seq-iter s) ^mut n 0]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)] (when (seq-val-some? v) (set! n (+ n 1)))))
@@ -234,7 +234,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/reduce [^fat f :int s :int] :int
+(defn seq/reduce [^fat f : int s : int] : int
   (let [g (seq-iter s)]
     (if (seq-gen-done g)
       (seq-make-none)
@@ -263,7 +263,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/foldl [init :int ^fat f :int s :int] :int
+(defn seq/foldl [init : int ^fat f : int s : int] : int
   (let [g (seq-iter s) ^mut acc init]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -282,7 +282,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/for-each [^fat f :int s :int] :void
+(defn seq/for-each [^fat f : int s : int] : void
   (let [g (seq-iter s)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -306,7 +306,7 @@
 ;;; Since: LZ3
 
 
-(defn seq/any? [pred :int s :int] :bool
+(defn seq/any? [pred : int s : int] : bool
   (let [g (seq-iter s)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -328,7 +328,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/all? [pred :int s :int] :bool
+(defn seq/all? [pred : int s : int] : bool
   (let [g (seq-iter s)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -355,7 +355,7 @@
 ;;; Since: LZ3
 
 
-(defn seq/find [^fat pred :int s :int] :int
+(defn seq/find [^fat pred : int s : int] : int
   (let [g (seq-iter s)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -378,7 +378,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/find-index [^fat pred :int s :int] :int
+(defn seq/find-index [^fat pred : int s : int] : int
   (let [g (seq-iter s) ^mut idx 0]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]

@@ -9,16 +9,16 @@
 
 ;; --- Backtracking monad primitives -------------------------------------------
 
-(defn mzero [] :int ```c return 0; ```)
+(defn mzero [] : int ```c return 0; ```)
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x; cell->next = 0;
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn mplus [xs ys] :int
+(defn mplus [xs ys] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
@@ -34,7 +34,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn mbind [ma fn] :int
+(defn mbind [ma fn] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
@@ -59,7 +59,7 @@
   return (int64_t)(intptr_t)result;
   ```)
 
-(defn bt-length [xs] :int
+(defn bt-length [xs] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
@@ -69,21 +69,21 @@
 
 ;; --- Pair --------------------------------------------------------------------
 
-(defn pair-new [a b] :int
+(defn pair-new [a b] : int
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
   p->first = a; p->second = b;
   return (int64_t)(intptr_t)p;
   ```)
 
-(defn pair-first [p] :int
+(defn pair-first [p] : int
   ```c
   struct { int64_t first; int64_t second; } *pp =
       (void*)(intptr_t)p;
   return pp->first;
   ```)
 
-(defn pair-second [p] :int
+(defn pair-second [p] : int
   ```c
   struct { int64_t first; int64_t second; } *pp =
       (void*)(intptr_t)p;
@@ -92,26 +92,26 @@
 
 ;; --- Input -------------------------------------------------------------------
 
-(defn input-new [s :cstr pos] :int
+(defn input-new [s : cstr pos] : int
   ```c
   struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
   inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
   return (int64_t)(intptr_t)inp;
   ```)
 
-(defn input-at-end [inp] :bool
+(defn input-at-end [inp] : bool
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   return ((const char*)(intptr_t)i->str)[i->pos] == '\0';
   ```)
 
-(defn input-current-char [inp] :int
+(defn input-current-char [inp] : int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   return (int64_t)(unsigned char)((const char*)(intptr_t)i->str)[i->pos];
   ```)
 
-(defn input-advance [inp] :int
+(defn input-advance [inp] : int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
@@ -121,13 +121,13 @@
 
 ;; --- Fat-closure / parser application ---------------------------------------
 
-(defn apply-fat [f arg] :int
+(defn apply-fat [f arg] : int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
   return TUR_APPLY1(fat, arg);
   ```)
 
-(defn apply-parser [p inp] :int
+(defn apply-parser [p inp] : int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)p;
   return TUR_APPLY1(fat, inp);
@@ -135,26 +135,26 @@
 
 ;; --- Primitive parsers -------------------------------------------------------
 
-(defn pfail-impl [dummy inp] :int (let [_ dummy] (mzero)))
+(defn pfail-impl [dummy inp] : int (let [_ dummy] (mzero)))
 
-(defn pfail [] :ptr<void>
+(defn pfail [] : ptr<void>
   (let [dummy 0] (fn [inp] (pfail-impl dummy inp))))
 
-(defn pure-impl [_v inp] :int (mreturn (pair-new _v inp)))
+(defn pure-impl [_v inp] : int (mreturn (pair-new _v inp)))
 
-(defn pure [v] :ptr<void>
+(defn pure [v] : ptr<void>
   (let [_v v] (fn [inp] (pure-impl _v inp))))
 
-(defn item-impl [dummy inp] :int
+(defn item-impl [dummy inp] : int
   (let [_ dummy]
     (if (input-at-end inp)
       (mzero)
       (mreturn (pair-new (input-current-char inp) (input-advance inp))))))
 
-(defn item [] :ptr<void>
+(defn item [] : ptr<void>
   (let [dummy 0] (fn [inp] (item-impl dummy inp))))
 
-(defn satisfy-impl [_pred inp] :int
+(defn satisfy-impl [_pred inp] : int
   (if (input-at-end inp)
     (mzero)
     (let [c (input-current-char inp)]
@@ -162,45 +162,45 @@
         (mzero)
         (mreturn (pair-new c (input-advance inp)))))))
 
-(defn satisfy [pred] :ptr<void>
+(defn satisfy [pred] : ptr<void>
   (let [_pred pred] (fn [inp] (satisfy-impl _pred inp))))
 
-(defn pchar-impl [_c inp] :int
+(defn pchar-impl [_c inp] : int
   (if (input-at-end inp)
     (mzero)
     (if (= (input-current-char inp) _c)
       (mreturn (pair-new _c (input-advance inp)))
       (mzero))))
 
-(defn pchar [c] :ptr<void>
+(defn pchar [c] : ptr<void>
   (let [_c c] (fn [inp] (pchar-impl _c inp))))
 
-(defn is-digit [c] :int
+(defn is-digit [c] : int
   ```c
   return (c >= '0' && c <= '9') ? 1 : 0;
   ```)
 
-(defn digit-pred [] :ptr<void>
+(defn digit-pred [] : ptr<void>
   (let [dummy 0] (fn [c] (let [_ dummy] (is-digit c)))))
 
-(defn digit [] :ptr<void>
+(defn digit [] : ptr<void>
   (satisfy (digit-pred)))
 
 ;; --- Core combinators --------------------------------------------------------
 
-(defn or-parser-impl [lp lq inp] :int
+(defn or-parser-impl [lp lq inp] : int
   (mplus (apply-parser lp inp) (apply-parser lq inp)))
 
-(defn or-parser [p q] :ptr<void>
+(defn or-parser [p q] : ptr<void>
   (let [lp p
         lq q]
     (fn [inp] (or-parser-impl lp lq inp))))
 
-(defn bind-parser-inner [lf pair] :int
+(defn bind-parser-inner [lf pair] : int
   (let [lf2 lf]
     (apply-parser (apply-fat lf2 (pair-first pair)) (pair-second pair))))
 
-(defn bind-parser-impl [lp lf inp] :int
+(defn bind-parser-impl [lp lf inp] : int
   (let [lf2 lf]
     (mbind (apply-parser lp inp)
       (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
@@ -209,17 +209,17 @@
 ;; compiler auto-box a captureless `(fn ...)` into a fat closure at the call
 ;; site, so callers no longer need a dead `sentinel` capture to force the fat
 ;; ABI by hand.
-(defn bind-parser [p ^fat f] :ptr<void>
+(defn bind-parser [p ^fat f] : ptr<void>
   (let [lp p
         lf f]
     (fn [inp] (bind-parser-impl lp lf inp))))
 
-(defn then-parser-impl [lp lq inp] :int
+(defn then-parser-impl [lp lq inp] : int
   (let [lq2 lq]
     (mbind (apply-parser lp inp)
       (fn [pair] (let [_ lq2] (apply-parser lq2 (pair-second pair)))))))
 
-(defn then-parser [p q] :ptr<void>
+(defn then-parser [p q] : ptr<void>
   (let [lp p
         lq q]
     (fn [inp] (then-parser-impl lp lq inp))))
@@ -228,7 +228,7 @@
 
 ;; many: greedy zero-or-more; produces a single result whose value is a
 ;; bt-cons-style Cell list of matched values.
-(defn many-c-impl [p_raw inp] :int
+(defn many-c-impl [p_raw inp] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   typedef struct { int64_t first; int64_t second; } Pair;
@@ -260,10 +260,10 @@
   return (int64_t)(intptr_t)result_cell;
   ```)
 
-(defn many [p] :ptr<void>
+(defn many [p] : ptr<void>
   (let [_p p] (fn [inp] (many-c-impl _p inp))))
 
-(defn many1-impl [_p inp] :int
+(defn many1-impl [_p inp] : int
   (if (input-at-end inp)
     (mzero)
     (let [first-results (apply-parser _p inp)]
@@ -271,11 +271,11 @@
         (mzero)
         (many-c-impl _p inp)))))
 
-(defn many1 [p] :ptr<void>
+(defn many1 [p] : ptr<void>
   (let [_p p] (fn [inp] (many1-impl _p inp))))
 
 ;; between open close p: open >> p >>= \x -> close >> pure x
-(defn between [open close p] :ptr<void>
+(defn between [open close p] : ptr<void>
   (let [_open  open
         _close close
         _p     p]
@@ -287,14 +287,14 @@
 
 ;; sepBy1 p sep: one-or-more p separated by sep.
 ;; Implemented as: p >>= \x -> many (sep >> p) >>= \xs -> pure (cons x xs)
-(defn cons-cell [v nxt] :int
+(defn cons-cell [v nxt] : int
   ```c
   struct { int64_t value; int64_t next; } *c = malloc(sizeof(*c));
   c->value = v; c->next = nxt;
   return (int64_t)(intptr_t)c;
   ```)
 
-(defn sepBy1 [p sep] :ptr<void>
+(defn sepBy1 [p sep] : ptr<void>
   (let [_p   p
         _sep sep]
     (bind-parser _p
@@ -304,14 +304,14 @@
             (fn [xs]
               (pure (cons-cell x xs)))))))))
 
-(defn cell-head [c] :int
+(defn cell-head [c] : int
   ```c
   struct { int64_t value; int64_t next; } *cc =
       (void*)(intptr_t)c;
   return cc->value;
   ```)
 
-(defn cell-tail [c] :int
+(defn cell-tail [c] : int
   ```c
   struct { int64_t value; int64_t next; } *cc =
       (void*)(intptr_t)c;
@@ -328,42 +328,42 @@
 ;; ENum: tag=0, a=value
 ;; EBin: tag=1, a=op, b=left, c=right
 
-(defn mk-enum [n] :int
+(defn mk-enum [n] : int
   ```c
   struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *e = malloc(sizeof(*e));
   e->tag = 0; e->a = n; e->b = 0; e->c = 0;
   return (int64_t)(intptr_t)e;
   ```)
 
-(defn mk-ebin [op l r] :int
+(defn mk-ebin [op l r] : int
   ```c
   struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *e = malloc(sizeof(*e));
   e->tag = 1; e->a = op; e->b = l; e->c = r;
   return (int64_t)(intptr_t)e;
   ```)
 
-(defn expr-tag [e] :int
+(defn expr-tag [e] : int
   ```c
   return ((struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *)(intptr_t)e)->tag;
   ```)
 
-(defn expr-a [e] :int
+(defn expr-a [e] : int
   ```c
   return ((struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *)(intptr_t)e)->a;
   ```)
 
-(defn expr-b [e] :int
+(defn expr-b [e] : int
   ```c
   return ((struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *)(intptr_t)e)->b;
   ```)
 
-(defn expr-c [e] :int
+(defn expr-c [e] : int
   ```c
   return ((struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *)(intptr_t)e)->c;
   ```)
 
 ;; Recursive AST evaluator.
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (if (= (expr-tag e) 0)
     (expr-a e)
     (let [op (expr-a e)
@@ -379,7 +379,7 @@
 ;; --- Number parser: many1 digit -> ENum --------------------------------------
 
 ;; Fold a bt-cons list of ASCII digits into an int.
-(defn digits->int [lst] :int
+(defn digits->int [lst] : int
   ```c
   struct Cell { int64_t value; int64_t next; };
   struct Cell *c = (void*)(intptr_t)lst;
@@ -391,7 +391,7 @@
   return acc;
   ```)
 
-(defn number [] :ptr<void>
+(defn number [] : ptr<void>
   (bind-parser (many1 (digit))
     (fn [digs]
       (pure (mk-enum (digits->int digs))))))
@@ -402,21 +402,21 @@
 ;; expr/term/factor are mutually recursive. We use a thunked parser:
 ;; expr-ref returns a fat closure that, when applied to input, runs (expr).
 
-(defn expr-thunk-impl [dummy inp] :int
+(defn expr-thunk-impl [dummy inp] : int
   (let [_ dummy] (apply-parser (expr) inp)))
 
-(defn expr-ref [] :ptr<void>
+(defn expr-ref [] : ptr<void>
   (let [dummy 0] (fn [inp] (expr-thunk-impl dummy inp))))
 
 ;; factor := number | '(' expr ')'
-(defn factor [] :ptr<void>
+(defn factor [] : ptr<void>
   (or-parser
     (between (pchar 40) (pchar 41) (expr-ref))
     (number)))
 
 ;; Fold a list of (op, expr) tail pairs into a left-associative EBin tree.
 ;; Each tail is built as pair-new(op, expr-ptr).
-(defn fold-bin-tail [acc tail-list] :int
+(defn fold-bin-tail [acc tail-list] : int
   (if (= tail-list 0)
     acc
     (let [head     (cell-head tail-list)
@@ -426,33 +426,33 @@
       (fold-bin-tail new-acc (cell-tail tail-list)))))
 
 ;; term := factor (('*' | '/') factor)*
-(defn term-op [] :ptr<void>
+(defn term-op [] : ptr<void>
   (or-parser (pchar 42) (pchar 47)))
 
-(defn term-tail-pair [] :ptr<void>
+(defn term-tail-pair [] : ptr<void>
   ;; (op factor) producing pair-new(op, factor-result)
   (bind-parser (term-op)
     (fn [op]
       (bind-parser (factor)
         (fn [rhs] (pure (pair-new op rhs)))))))
 
-(defn term [] :ptr<void>
+(defn term [] : ptr<void>
   (bind-parser (factor)
     (fn [lhs]
       (bind-parser (many (term-tail-pair))
         (fn [tails] (pure (fold-bin-tail lhs tails)))))))
 
 ;; expr := term (('+' | '-') term)*
-(defn expr-op [] :ptr<void>
+(defn expr-op [] : ptr<void>
   (or-parser (pchar 43) (pchar 45)))
 
-(defn expr-tail-pair [] :ptr<void>
+(defn expr-tail-pair [] : ptr<void>
   (bind-parser (expr-op)
     (fn [op]
       (bind-parser (term)
         (fn [rhs] (pure (pair-new op rhs)))))))
 
-(defn expr [] :ptr<void>
+(defn expr [] : ptr<void>
   (bind-parser (term)
     (fn [lhs]
       (bind-parser (many (expr-tail-pair))
@@ -460,10 +460,10 @@
 
 ;; --- Runners -----------------------------------------------------------------
 
-(defn run-parser [p s :cstr] :int
+(defn run-parser [p s : cstr] : int
   (let [inp (input-new s 0)] (apply-parser p inp)))
 
-(defn run-parser-full-c [results] :int
+(defn run-parser-full-c [results] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   typedef struct { int64_t first; int64_t second; } Pair;
@@ -482,10 +482,10 @@
   return 0;
   ```)
 
-(defn run-parser-full [p s :cstr] :int
+(defn run-parser-full [p s : cstr] : int
   (run-parser-full-c (run-parser p s)))
 
-(defn first-value [results] :int
+(defn first-value [results] : int
   ```c
   struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)results;
   if (!c) return 0;

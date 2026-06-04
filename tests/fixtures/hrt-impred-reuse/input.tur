@@ -1,14 +1,14 @@
 ; Phase HRT4: poly fn parameter forwarded to another rank-2 poly fn (pass-through).
 ; `apply-twice` receives `f` as a poly fn param and re-passes it to `apply-once`.
 ; The is_poly_fn binding is passed via EX_POLY_WRAP pass-through (no new wrapper).
-(defn apply-once [f (forall [a] (-> a a)) x :int] :int
+(defn apply-once [f (forall [a] (-> a a)) x : int] : int
   (f x))
 
-(defn apply-twice [f (forall [a] (-> a a)) x :int] :int
+(defn apply-twice [f (forall [a] (-> a a)) x : int] : int
   (apply-once f (apply-once f x)))
 
-(defn inc [x :int] :int (+ x 1))
+(defn inc [x : int] : int (+ x 1))
 
-(defn main [] :int
+(defn main [] : int
   (println (apply-twice inc 10))
   0)

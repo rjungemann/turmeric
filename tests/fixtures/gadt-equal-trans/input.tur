@@ -1,10 +1,10 @@
 (defgadt Equal [a b]
   (Refl : (Equal a a)))
 
-(defn equal-trans [eq1 :Equal eq2 :Equal] :Equal
+(defn equal-trans [eq1 : Equal eq2 : Equal] : Equal
   (match eq1
     (Refl) eq2))
 
-(defn main [] :int
+(defn main [] : int
   (match (equal-trans (Refl) (Refl))
     (Refl) (do (println 1) 0)))

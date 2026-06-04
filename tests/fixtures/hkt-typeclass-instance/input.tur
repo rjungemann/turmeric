@@ -4,14 +4,14 @@
 
 ;; HKT typeclass (kind * -> *) — declared but not yet instantiated here.
 (defclass MyFunctor [^f]
-  (fmap [x] :int))
+  (fmap [x] : int))
 
 ;; Regular KIND_STAR typeclass.
 (defclass MyEq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (definstance MyEq [int]
   (eq? [x y] (= x y)))
 
-(defn main [] :int
+(defn main [] : int
   (if (.eq? 1 1) 0 1))

@@ -3,18 +3,18 @@
 ;; Tests override *db* for their scope without modifying production code.
 (defdynamic *db* :int 0)
 
-(defn query [sql :cstr] :int
+(defn query [sql : cstr] : int
   *db*)
 
-(defn run-production [] :int
+(defn run-production [] : int
   (println (query "SELECT 1")))
 
-(defn run-tests [] :int
+(defn run-tests [] : int
   (binding [*db* 42]
     (println (query "SELECT 1")))
   0)
 
-(defn main [] :int
+(defn main [] : int
   (run-production)
   (run-tests)
   0)

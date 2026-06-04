@@ -2,7 +2,7 @@
 ;; Exercises many allocations in the list monad to verify memory safety.
 ;; Builds a list of 1..100 and takes the first 50 elements, then sums them.
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
@@ -10,7 +10,7 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn mplus [xs ys] :int
+(defn mplus [xs ys] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
@@ -27,7 +27,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn run-backtrack-depth [xs n] :int
+(defn run-backtrack-depth [xs n] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *head = NULL, *tail = NULL, *c = (Cell*)(intptr_t)xs;
@@ -43,7 +43,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn bt-sum [xs] :int
+(defn bt-sum [xs] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)xs;
@@ -53,7 +53,7 @@
   ```)
 
 ;; Build alternatives 1..100 by chaining mreturn and mplus
-(defn make-list [n] :int
+(defn make-list [n] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *head = NULL, *tail = NULL;

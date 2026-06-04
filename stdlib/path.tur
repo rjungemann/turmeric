@@ -21,7 +21,7 @@
 ;;;   (path/join "/usr" "local")  ; => "/usr/local"
 ;;;
 ;;; Since: Phase B2
-(defn path/join [base :cstr segment :cstr] :cstr
+(defn path/join [base : cstr segment : cstr] : cstr
   ```c size_t blen = strlen(base);
   size_t slen = strlen(segment);
   int add_sep = (blen > 0 && base[blen - 1] != '/') ? 1 : 0;
@@ -45,7 +45,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn path/basename [p :cstr] :cstr
+(defn path/basename [p : cstr] : cstr
   ```c const char *last = strrchr(p, '/');
   const char *name = last ? last + 1 : p;
   return strdup(name);
@@ -64,7 +64,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn path/dirname [p :cstr] :cstr
+(defn path/dirname [p : cstr] : cstr
   ```c const char *last = strrchr(p, '/');
   if (!last) return strdup(".");
   if (last == p) return strdup("/");
@@ -89,7 +89,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn path/extension [p :cstr] :cstr
+(defn path/extension [p : cstr] : cstr
   ```c const char *base = strrchr(p, '/');
   base = base ? base + 1 : p;
   const char *dot = strrchr(base, '.');
@@ -111,7 +111,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn path/stem [p :cstr] :cstr
+(defn path/stem [p : cstr] : cstr
   ```c const char *base = strrchr(p, '/');
   base = base ? base + 1 : p;
   const char *dot = strrchr(base, '.');
@@ -136,7 +136,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn path/absolute? [p :cstr] :bool
+(defn path/absolute? [p : cstr] : bool
   ```c return p != NULL && p[0] == '/';
   ```)
 ;;; path/normalize -- collapse redundant '.' and '..' segments in a path.
@@ -155,7 +155,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn path/normalize [p :cstr] :cstr
+(defn path/normalize [p : cstr] : cstr
   ```c size_t plen = strlen(p);
   char *work = malloc(plen + 2);
   memcpy(work, p, plen + 1);

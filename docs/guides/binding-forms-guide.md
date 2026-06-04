@@ -63,7 +63,7 @@ or anywhere that is not a body sequence.
 All annotations that `let` accepts work on `define`:
 
 ```turmeric
-(defn counter [] :int
+(defn counter [] : int
   (define ^mut n 0)
   (set! n (+ n 1))
   n)
@@ -98,9 +98,9 @@ before any init is elaborated, so each init can reference any name in the
 group:
 
 ```turmeric
-(defn run [] :int
-  (letrec [even? (fn [n :int] :bool (if (= n 0) true  (odd?  (- n 1))))
-           odd?  (fn [n :int] :bool (if (= n 0) false (even? (- n 1))))]
+(defn run [] : int
+  (letrec [even? (fn [n : int] : bool (if (= n 0) true  (odd?  (- n 1))))
+           odd?  (fn [n : int] : bool (if (= n 0) false (even? (- n 1))))]
     (println (if (even? 10) "even" "odd"))
     0))
 ```
@@ -120,8 +120,8 @@ defn run [] :int
 A single self-recursive function is the common case:
 
 ```turmeric
-(defn main [] :int
-  (letrec [fact (fn [n :int] :int
+(defn main [] : int
+  (letrec [fact (fn [n : int] : int
                   (if (= n 0) 1 (* n (fact (- n 1)))))]
     (println (fact 5))   ;; 120
     0))
@@ -133,8 +133,8 @@ For mutual recursion, annotate the return type so the elaborator can
 build placeholder types before the bodies are checked:
 
 ```turmeric
-(letrec [a (fn [n :int] :int (b (- n 1)))
-         b (fn [n :int] :int (if (= n 0) 0 (a n)))]
+(letrec [a (fn [n : int] : int (b (- n 1)))
+         b (fn [n : int] : int (if (= n 0) 0 (a n)))]
   (a 3))
 ```
 
@@ -165,7 +165,7 @@ Write `(let loop [bindings...] body...)` to both introduce a local function
 
 ```turmeric
 ;; Sum 1..n
-(defn sum [n :int] :int
+(defn sum [n : int] : int
   (let loop [i n acc 0]
     (if (= i 0)
       acc
@@ -185,7 +185,7 @@ defn sum [n :int] :int
 The named let desugars to:
 
 ```turmeric
-(letrec [loop (fn [i :int acc :int] :int
+(letrec [loop (fn [i : int acc : int] : int
                 (if (= i 0) acc (loop (- i 1) (+ acc i))))]
   (loop n 0))
 ```
@@ -195,7 +195,7 @@ The named let desugars to:
 Annotate binding names the same way as `let`:
 
 ```turmeric
-(let loop [xs :int n :int 0]
+(let loop [xs : int n :int 0]
   (if (= xs 0)
     n
     (loop (cons-tail xs) (+ n 1))))

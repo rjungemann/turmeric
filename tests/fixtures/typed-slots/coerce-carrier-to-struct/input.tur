@@ -5,10 +5,10 @@
 ;; the concrete Result__int__int struct so that ok-val (which takes the struct
 ;; by value) receives the right type.
 
-(defn double-if-ok [r :int] :int
+(defn double-if-ok [r : int] : int
   (result-map r (fn [x] (* x 2))))
 
-(defn main [] :int
+(defn main [] : int
   (let [r (double-if-ok (ok 21))
         v (ok-val (:: r (Result int int)))]
     (println v)

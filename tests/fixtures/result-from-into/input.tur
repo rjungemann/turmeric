@@ -2,18 +2,18 @@
 ;; v1 coverage: two-parameter typeclass declarations and basic From/Into usage.
 
 (defclass From [a b]
-  (from [x] :int))
+  (from [x] : int))
 
 (defclass Into [a b]
-  (into [x] :int))
+  (into [x] : int))
 
 (definstance From [int int]
-  (from [x] :int (+ x 1)))
+  (from [x] : int (+ x 1)))
 
 (definstance Into [int int]
-  (into [x] :int (.from x)))
+  (into [x] : int (.from x)))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (println (.from 41))
     (println (.into 9))

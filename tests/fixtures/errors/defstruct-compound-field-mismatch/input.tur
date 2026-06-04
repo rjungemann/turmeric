@@ -12,10 +12,10 @@
 ;; comparison (n_constraints / constraint_classes / constraint_var_idx)
 ;; to enforce the constraint check.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -25,6 +25,6 @@
 (defstruct B :move
   [p (exists [a] [(Show a)] a)])
 
-(defn main [] :int
+(defn main [] : int
   (let [b (make-struct B 42)]
     0))

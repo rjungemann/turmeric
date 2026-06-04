@@ -21,7 +21,7 @@
 ;;;   (clone 42)  ; => 42
 ;;;
 ;;; Since: Phase B1
-(defclass Clone [a] (clone [x] :int))
+(defclass Clone [a] (clone [x] : int))
 ;;; Clone [int] -- Clone instance for int (trivial copy).
 ;;;
 ;;; Since: Phase B1
@@ -31,7 +31,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(definstance Clone [ref] (clone [x] :int ```c /* x is void *; allocate a new int64_t cell and copy the stored value. */
+(definstance Clone [ref] (clone [x] : int ```c /* x is void *; allocate a new int64_t cell and copy the stored value. */
     int64_t *src = (int64_t *)x;
     int64_t *dst = (int64_t *)malloc(sizeof(int64_t));
     if (!dst) abort();

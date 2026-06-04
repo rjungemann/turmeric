@@ -231,7 +231,7 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
     symtab_init(&st, &arena);
 
     diag_reset();
-    SourceFile sfile;
+    SourceFile sfile = {0};  /* clear xform_map/orig_src so diag rendering is safe */
     sfile.path        = "<type>";
     sfile.src         = combined.data;
     sfile.len         = combined.len - 1;

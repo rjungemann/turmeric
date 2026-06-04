@@ -5,25 +5,25 @@
 ;; resolve through the preprocessor.  Neoteric calls keep working
 ;; inline.
 
-defn add [x :int y :int] :int
+defn add [x : int y : int] : int
   +(x y)
 
-defn classify [x :int] :int
+defn classify [x : int] : int
   if >(x 0)
     1
     if <(x 0)
       -(0 1)
       0
 
-defn pair-sum [] :int
+defn pair-sum [] : int
   let [a 10
        b 20]
     +(a b)
 
-defn dollar [] :int
+defn dollar [] : int
   $ + 100 200
 
-defn main [] :int
+defn main [] : int
   println(add(40 2))
   println(classify(7))
   println(classify(-3))

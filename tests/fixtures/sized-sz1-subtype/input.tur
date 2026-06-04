@@ -12,27 +12,27 @@
   (SVNil : (SizedVec Size int))
   (SVCons int (SizedVec Size int) : (SizedVec Size int)))
 
-(defn size-eval [s :Size] :int
+(defn size-eval [s : Size] : int
   (match s
     (Static n)   n
     (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
     (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
 
-(defn size-compat? [s1 :Size s2 :Size] :bool (= (size-eval s1) (size-eval s2)))
-(defn size-assert-eq! [s1 :Size s2 :Size] :nil
+(defn size-compat? [s1 : Size s2 : Size] : bool (= (size-eval s1) (size-eval s2)))
+(defn size-assert-eq! [s1 : Size s2 : Size] : nil
   (require-msg! (= (size-eval s1) (size-eval s2)) "sized type mismatch: sizes are not equal"))
-(defn size-assert-le! [s1 :Size s2 :Size] :nil
+(defn size-assert-le! [s1 : Size s2 : Size] : nil
   (require-msg! (<= (size-eval s1) (size-eval s2)) "sized type mismatch: size exceeds upper bound"))
 
-(defn sized-vec-len [v :SizedVec] :int
+(defn sized-vec-len [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons _ xs) (+ 1 (sized-vec-len xs))))
 
-(defn sized-vec-size [v :SizedVec] :Size (Static (sized-vec-len v)))
-(defn sized-vec-of-3 [a :int b :int c :int] :SizedVec (SVCons a (SVCons b (SVCons c (SVNil)))))
+(defn sized-vec-size [v : SizedVec] : Size (Static (sized-vec-len v)))
+(defn sized-vec-of-3 [a : int b : int c : int] : SizedVec (SVCons a (SVCons b (SVCons c (SVNil)))))
 
-(defn main [] :int
+(defn main [] : int
   ; size-compat?: equal sizes are compatible
   (println (size-compat? (Static 4) (Add (Static 2) (Static 2))))
   ; size-compat?: different sizes are not compatible

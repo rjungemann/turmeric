@@ -3,16 +3,16 @@
 ;; On "ab": parses 'a' then 'b' → 1 result, value = 98 ('b').
 ;; On "ac": parses 'a' then fails on 'c' → 0 results.
 
-(defn mzero [] :int ```c return 0; ```)
+(defn mzero [] : int ```c return 0; ```)
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x; cell->next = 0;
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn mbind [ma fn] :int
+(defn mbind [ma fn] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
@@ -37,7 +37,7 @@
   return (int64_t)(intptr_t)result;
   ```)
 
-(defn bt-length [xs] :int
+(defn bt-length [xs] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
@@ -45,39 +45,39 @@
   return n;
   ```)
 
-(defn pair-new [a b] :int
+(defn pair-new [a b] : int
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
   p->first = a; p->second = b;
   return (int64_t)(intptr_t)p;
   ```)
 
-(defn pair-first [p] :int
+(defn pair-first [p] : int
   ```c return ((struct { int64_t first; int64_t second; } *)(intptr_t)p)->first; ```)
 
-(defn pair-second [p] :int
+(defn pair-second [p] : int
   ```c return ((struct { int64_t first; int64_t second; } *)(intptr_t)p)->second; ```)
 
-(defn input-new [s :cstr pos] :int
+(defn input-new [s : cstr pos] : int
   ```c
   struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
   inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
   return (int64_t)(intptr_t)inp;
   ```)
 
-(defn input-at-end [inp] :bool
+(defn input-at-end [inp] : bool
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   return ((const char*)(intptr_t)i->str)[i->pos] == '\0';
   ```)
 
-(defn input-current-char [inp] :int
+(defn input-current-char [inp] : int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   return (int64_t)(unsigned char)((const char*)(intptr_t)i->str)[i->pos];
   ```)
 
-(defn input-advance [inp] :int
+(defn input-advance [inp] : int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
@@ -85,37 +85,37 @@
   return (int64_t)(intptr_t)n;
   ```)
 
-(defn apply-parser [p inp] :int
+(defn apply-parser [p inp] : int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)p;
   return TUR_APPLY1(fat, inp);
   ```)
 
-(defn pchar-impl [_c inp] :int
+(defn pchar-impl [_c inp] : int
   (if (input-at-end inp)
     (mzero)
     (if (= (input-current-char inp) _c)
       (mreturn (pair-new _c (input-advance inp)))
       (mzero))))
 
-(defn pchar [c] :ptr<void>
+(defn pchar [c] : ptr<void>
   (let [_c c]
     (fn [inp] (pchar-impl _c inp))))
 
-(defn then-parser-impl [lp lq inp] :int
+(defn then-parser-impl [lp lq inp] : int
   (let [lq2 lq]
     (mbind (apply-parser lp inp)
            (fn [pair] (apply-parser lq2 (pair-second pair))))))
 
-(defn then-parser [p q] :ptr<void>
+(defn then-parser [p q] : ptr<void>
   (let [lp p lq q]
     (fn [inp] (then-parser-impl lp lq inp))))
 
-(defn run-parser [p s :cstr] :int
+(defn run-parser [p s : cstr] : int
   (let [inp (input-new s 0)]
     (apply-parser p inp)))
 
-(defn parse-value [results] :int
+(defn parse-value [results] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   typedef struct { int64_t first; int64_t second; } Pair;

@@ -463,11 +463,30 @@ typedef struct Type {
              * -1 when the return is not a lifetime-tied borrow.  Used by the
              * inter-procedural borrow-escape check at call sites. */
             int8_t result_borrow_arg;
+            /* CRU Phase 3 / Option B (first-class closure type): true when this
+             * TY_FN denotes a *closure value* -- a fat box { thunk, env... } --
+             * rather than a bare function reference (captureless fn / C function
+             * pointer address).  A boxed TY_FN is always called through the fat
+             * protocol (thunk = slot 0, env = the box) for all arities; a bare
+             * TY_FN coerces to a boxed one of the same signature via the
+             * EX_FN_TO_FAT auto-shim, never the reverse.  See
+             * docs/upcoming/closure-first-class-type-plan.md.  B-0 only plumbs
+             * the bit; nothing sets it true yet. */
+            bool boxed;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
             TypeKind inner;   /* The type T that ref<T> owns */
         } ref;
+        /* ptr-generic-parameterised-type: typed raw pointer ptr<T>.
+         * Carried on kind == TY_PTR_VOID; `inner` is the full pointee type T
+         * (arena-allocated), or NULL for the legacy untyped ptr<void> spelling.
+         * Folding the typed form onto TY_PTR_VOID (rather than a new TypeKind)
+         * keeps every existing raw-pointer code path working unchanged while
+         * letting codegen lower ptr<T> to `T *` in C. */
+        struct {
+            struct Type *inner; /* pointee type T, or NULL for ptr<void> */
+        } ptr;
         /* Phase 9: rc<T> and weak<T> store the inner type T */
         struct {
             TypeKind inner;   /* The type T that rc<T> or weak<T> points to */
@@ -764,6 +783,17 @@ static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
 #define TYPE_CSTR     (type_simple(TY_CSTR, CK_COPY))
 #define TYPE_PTR_VOID (type_simple(TY_PTR_VOID, CK_COPY))
 #define TYPE_NEVER    (type_simple(TY_NEVER, CK_MOVE))
+
+/* ptr-generic-parameterised-type: typed raw pointer ptr<T>.
+ * Lives on TY_PTR_VOID with a non-NULL pointee; inner == NULL is ptr<void>. */
+static inline Type type_ptr(struct Type *inner) {
+    Type t = {0};
+    t.kind = TY_PTR_VOID;
+    t.copy_kind = CK_COPY;       /* raw pointer: bitwise copyable, like ptr<void> */
+    t.hkt_kind = KIND_STAR;
+    t.as.ptr.inner = inner;
+    return t;
+}
 /* SYM0: interned runtime symbol type (-Xsymbols) */
 #define TYPE_SYM      (type_simple(TY_SYM, CK_COPY))
 

@@ -1,12 +1,12 @@
 ;; Verify that upgrading a weak ref after the rc is dropped returns none.
 
-(defn weak-some? [o :ptr<void>] :bool
+(defn weak-some? [o : ptr<void>] : bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r (rc/of 99)]
     (let [w (weak r)]
       (rc/drop r)

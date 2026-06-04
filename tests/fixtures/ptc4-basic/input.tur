@@ -6,7 +6,7 @@
 ;; used to satisfy the (Measurable A) constraint.
 
 (defclass Measurable [a]
-  (measure [x] :int))
+  (measure [x] : int))
 
 (definstance Measurable [int]
   (measure [x] x))
@@ -16,12 +16,12 @@
 
 ;; Constrained instance: Measurable[Box] given Measurable[A]
 (definstance Measurable [Box] [(Measurable A)]
-  (measure [b] :int
+  (measure [b] : int
     ```c
     return *(int64_t*)(intptr_t)b;
     ```))
 
-(defn box-new [x :int] :(Box int)
+(defn box-new [x : int] :(Box int)
   ```c
   int64_t *p = (int64_t*)malloc(sizeof(int64_t));
   *p = x;

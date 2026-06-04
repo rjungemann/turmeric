@@ -4,6 +4,6 @@
 (defdata Both [a]
   (MkBoth a a))
 
-(defn main [] :int
+(defn main [] : int
   (let [_ (MkBoth 1 "hello")]
     0))

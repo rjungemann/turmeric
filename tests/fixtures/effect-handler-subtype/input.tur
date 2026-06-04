@@ -1,8 +1,8 @@
 ;; ET3-F3: Handler subtyping -- run a function that performs Write and collect result.
 (defeffect Write [s :cstr] :nil)
-(defn compute [] :int
+(defn compute [] : int
   (do (perform (Write "result")) 42))
-(defn main [] :int
+(defn main [] : int
   (let [r (handle (compute)
     (Write [s] k) (do (println s) (resume k nil)))]
     (println r)

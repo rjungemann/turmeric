@@ -2,7 +2,7 @@
 ;; perform it, and handle it.
 (defeffect Increment [n :int] :int)
 
-(defn add-with-effect [x] :int
+(defn add-with-effect [x] : int
   (+ x (perform (Increment 10))))
 
 (println (handle (add-with-effect 5)

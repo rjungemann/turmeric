@@ -2,12 +2,12 @@
 ;; KB-008: neoteric sweet-exp form `->(int int)` in a spaced annotation.
 ;; The neoteric reader expands `->(int int)` to `(-> int int)` before elaboration,
 ;; so this exercises the same KB-008 fix via the sweet-exp parser path.
-(defn apply1 [f : ->(int int) x : int] :int
+(defn apply1 [f : ->(int int) x : int] : int
   (f x))
 
-(defn inc [x :int] :int
+(defn inc [x : int] : int
   (+ x 1))
 
-(defn main [] :int
+(defn main [] : int
   (println (apply1 inc 41))
   0)

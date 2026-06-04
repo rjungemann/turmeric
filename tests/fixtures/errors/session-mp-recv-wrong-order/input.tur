@@ -2,9 +2,9 @@
 (defprotocol Ping [A B]
   (-> A B int))
 
-(defn role-b [^linear ch :(Role Ping B)] :nil
+(defn role-b [^linear ch :(Role Ping B)] : nil
   ;; B tries to send before receiving -- wrong protocol step
   (let [ch (send-to ch A 42)]
     (close ch)))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

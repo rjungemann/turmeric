@@ -2,11 +2,11 @@
 ;; the instance -- the expected-type channel is empty, so the compiler asks
 ;; for a type ascription.
 (defclass Default [a]
-  (default-of [] :a))
+  (default-of [] : a))
 
 (definstance Default [int]
   (default-of [] 42))
 
-(defn main [] :int
+(defn main [] : int
   (let [x (default-of)]
     x))

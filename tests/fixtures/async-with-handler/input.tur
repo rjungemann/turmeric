@@ -6,7 +6,7 @@
 
 (defeffect AddTen [x :int] :int)
 
-(defn main [] :int
+(defn main [] : int
   ;; (async (with-handler body cases...)) — handler runs inside the async scope.
   ;; with-handler is an alias for handle; (async expr) wraps expr in a thunk.
   (let [fut (async (with-handler (perform (AddTen 5))

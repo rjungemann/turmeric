@@ -22,7 +22,7 @@
 
 (defn vec-new []
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
@@ -42,9 +42,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-len [v :int]
+(defn vec-len [v : int]
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   ```)
@@ -62,7 +62,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-get [A] [v :int i :int]
+(defn vec-get [A]
+  [v :int i :int]
   #{}
   :A
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -82,7 +83,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-push! [A] [v :int val :A]
+(defn vec-push! [A]
+  [v :int val :A]
   #{}
   :nil
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -109,7 +111,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-pop! [A] [v :int]
+(defn vec-pop! [A]
+  [v :int]
   #{}
   :A
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -128,7 +131,8 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-set! [A] [v :int i :int val :A]
+(defn vec-set! [A]
+  [v :int i :int val :A]
   #{}
   :void
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -146,9 +150,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-free [v :int]
+(defn vec-free [v : int]
   #{}
-  :void
+  : void
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->data) free(vec->data);
   free(vec);
@@ -169,8 +173,7 @@
 ;;; no-op; the call exists only to make the type-checker enforce that adjacent
 ;;; vec-of elements have the same type. No allocation (fixed arity).
 
-(defn tur-vec-homog__ [A] [a :A b :A] :nil
-  ```c (void)a; (void)b; ```)
+(defn tur-vec-homog__ [A] [a :A b :A] :nil ```c (void)a; (void)b; ```)
 ;;; vec-homog-chain__ -- internal: pairwise-chain tur-vec-homog__ over xs.
 ;;;
 ;;; Emits (tur-vec-homog__ x0 x1), (tur-vec-homog__ x1 x2), ... so all
@@ -217,10 +220,9 @@
 (defmacro vec-of [& xs]
   (if (empty? xs)
     (list vec-new)
-    (list let `[__v (vec-new)]
-      (list do
-        (list vec-homog-chain__ ~@xs)
-        (list vec-push-each__ __v ~@xs)))))
+    (list let
+      `[__v (vec-new)]
+      (list do (list vec-homog-chain__ ~@xs) (list vec-push-each__ __v ~@xs)))))
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:
@@ -236,14 +238,16 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-eq? [v1 :int v2 :int cmp-fn]
+(defn vec-eq? [v1 : int v2 : int ^fat cmp-fn]
   #{}
-  :bool
+  : bool
   ```c struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
+  /* CRU B-3: cmp-fn is a fat closure box; fat-dispatch via slot 0 (a capturing
+     element comparator works; captureless lambdas are boxed at the call site). */
   for (size_t i = 0; i < a->len; i++) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->data[i], b->data[i]))
+      if (!((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])((void*)(intptr_t)cmp_fn, a->data[i], b->data[i]))
           return false;
   }
   return true;

@@ -1,12 +1,12 @@
 ;; SYM1 (runtime-symbols-plan): :foo is a first-class interned symbol.
 ;; Two keywords with the same name are the same pointer (eq is ==), and the
 ;; precomputed hash field is shared; distinct names are distinct pointers.
-(defn ptr-eq [a :Sym b :Sym] :int
+(defn ptr-eq [a : Sym b : Sym] : int
   ```c
   return (int64_t)((const void *)a == (const void *)b);
   ```)
 
-(defn hash-eq [a :Sym b :Sym] :int
+(defn hash-eq [a : Sym b : Sym] : int
   ```c
   return (int64_t)(((const struct __tur_sym *)a)->hash
                 == ((const struct __tur_sym *)b)->hash);

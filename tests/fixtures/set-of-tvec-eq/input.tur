@@ -7,7 +7,7 @@
 ;; element comparator -- and routes Set's recursive dispatch
 ;; through it so `Set[Vec[int]]` etc. compare structurally.
 
-(defn main [] :int
+(defn main [] : int
   (let [v1 []:int
         v2 []:int
         v3 []:int]

@@ -6,7 +6,7 @@
 (defn box-float [] : any 3.5)
 (defn box-cstr [] : any "ok")
 
-(defn main [] :int
+(defn main [] : int
   (println (cast (box-int) int))
   (println (cast (box-bool) bool))
   (println (cast (box-float) float))

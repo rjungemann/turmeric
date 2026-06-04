@@ -4,15 +4,15 @@
 ;; matching Functor[bool] -- both are exact matches, not erased-type fallbacks).
 
 (defclass MyShow [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance MyShow [int]
-  (show [x] :cstr "int"))
+  (show [x] : cstr "int"))
 
 (definstance MyShow [bool]
-  (show [x] :cstr "bool"))
+  (show [x] : cstr "bool"))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (println (.show 42))    ;; exact match: TY_INT -> MyShow[int]
     (println (.show true))  ;; exact match: TY_BOOL -> MyShow[bool]

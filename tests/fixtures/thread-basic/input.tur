@@ -6,7 +6,7 @@
 
 ;; thread-arg-new : int → ptr<void>
 ;; Allocate an int64_t argument cell for passing to a thread.
-(defn thread-arg-new [val :int] :ptr<void>
+(defn thread-arg-new [val : int] : ptr<void>
   ```c
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   if (!p) { fprintf(stderr, "thread-arg-new: oom\n"); abort(); }
@@ -15,14 +15,14 @@
   ```)
 
 ;; thread-arg-free : ptr<void> → nil
-(defn thread-arg-free [p :ptr<void>] :nil
+(defn thread-arg-free [p : ptr<void>] : nil
   ```c
   free(p);
   ```)
 
 ;; The worker thread function: prints the value in the arg cell.
 ;; Must match void *(*)(void *) — defined as a named C static function.
-(defn thread-worker-fn [arg :ptr<void>] :ptr<void>
+(defn thread-worker-fn [arg : ptr<void>] : ptr<void>
   ```c
   int64_t val = *(int64_t *)arg;
   printf("%lld\n", (long long)val);
@@ -32,7 +32,7 @@
 ;; thread-spawn : ptr<void> → ptr<void>
 ;; Spawn a thread running thread-worker-fn with the given arg.
 ;; Returns the pthread_t (stored in a heap-allocated slot) as ptr<void>.
-(defn thread-spawn [arg :ptr<void>] :ptr<void>
+(defn thread-spawn [arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
@@ -45,13 +45,13 @@
 
 ;; thread-join : ptr<void> → nil
 ;; Wait for a thread to finish and free the pthread_t handle.
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [arg1 (thread-arg-new 10)]
     (let [t1 (thread-spawn arg1)]
       (thread-join t1)

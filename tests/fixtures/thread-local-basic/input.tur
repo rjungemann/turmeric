@@ -6,20 +6,20 @@
 
 ;; tls-set!/tls-get operate on a named __thread int64_t.
 ;; We use a single named global TLS var for the test.
-(defn tls-set [val :int] :nil
+(defn tls-set [val : int] : nil
   ```c
   static __thread int64_t tls_val = 0;
   tls_val = (int64_t)val;
   ```)
 
-(defn tls-get [] :int
+(defn tls-get [] : int
   ```c
   static __thread int64_t tls_val = 0;
   return tls_val;
   ```)
 
 ;; Thread argument: (id: int, result: int)
-(defn targ-new [id :int] :ptr<void>
+(defn targ-new [id : int] : ptr<void>
   ```c
   typedef struct { int64_t id; int64_t result; } TArg;
   TArg *a = (TArg *)malloc(sizeof(TArg));
@@ -28,20 +28,20 @@
   return (void *)a;
   ```)
 
-(defn targ-result [a :ptr<void>] :int
+(defn targ-result [a : ptr<void>] : int
   ```c
   typedef struct { int64_t id; int64_t result; } TArg;
   return (int64_t)((TArg *)a)->result;
   ```)
 
-(defn targ-free [a :ptr<void>] :nil
+(defn targ-free [a : ptr<void>] : nil
   ```c
   free(a);
   ```)
 
 ;; Worker: sets TLS to its id, does some work, then reads it back.
 ;; If TLS were shared, threads would clobber each other.
-(defn thread-worker [arg :ptr<void>] :ptr<void>
+(defn thread-worker [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct { int64_t id; int64_t result; } TArg;
   static __thread int64_t tls_val = 0;
@@ -55,7 +55,7 @@
   return NULL;
   ```)
 
-(defn thread-spawn [arg :ptr<void>] :ptr<void>
+(defn thread-spawn [arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
@@ -63,13 +63,13 @@
   return (void *)t;
   ```)
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [a1 (targ-new 7)]
     (let [a2 (targ-new 13)]
       (let [t1 (thread-spawn a1)]

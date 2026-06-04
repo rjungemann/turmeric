@@ -2,12 +2,12 @@
 ;; (async fn) launches fn in a background thread and returns a future (ptr<void>)
 ;; (await fut) blocks until the future is ready and returns the int64 result
 
-(defn compute [] :int
+(defn compute [] : int
   ```c
   return (int64_t)42;
   ```)
 
-(defn main [] :nil
+(defn main [] : nil
   (let [fut (async compute)]
     (let [result (await fut)]
       (println result))))

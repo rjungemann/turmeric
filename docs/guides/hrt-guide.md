@@ -16,7 +16,7 @@ A **rank-2 type** introduces a `forall` *inside* a function argument. The classi
 
 ```turmeric
 ; apply-poly works for any type -- the callee instantiates `a`
-(defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+(defn apply-poly [f (forall [a] (-> a a)) x : int] : int
   (f x))
 ```
 
@@ -44,7 +44,7 @@ tur compile -Xhrt myfile.tur -o myfile
 Annotate a parameter with a `forall` type by placing the type form immediately after the parameter name in the `[]` vector:
 
 ```turmeric
-(defn my-fn [f (forall [a] (-> a a)) x :int] :int
+(defn my-fn [f (forall [a] (-> a a)) x : int] : int
   (f x))
 ```
 
@@ -58,7 +58,7 @@ The `forall` type must appear as a parenthesized form `(forall [...] ...)` direc
 ### Multiple type variables
 
 ```turmeric
-(defn swap-apply [f (forall [a b] (-> a b a)) x :int y :int] :int
+(defn swap-apply [f (forall [a b] (-> a b a)) x : int y : int] : int
   (f x y))
 ```
 
@@ -75,7 +75,7 @@ Use `exists` to hide a type implementation:
 (defn make-counter [] (exists [s] s)
   (pack int 0))
 
-(defn use-counter [c (exists [s] s)] :int
+(defn use-counter [c (exists [s] s)] : int
   (open c as [s v] v))
 ```
 
@@ -96,10 +96,10 @@ See `docs/higher-ranked-types-plan.md` for the full existential type spec.
 Apply a single function uniformly over data, without fixing its type:
 
 ```turmeric
-(defn apply-to-both [f (forall [a] (-> a a)) x :int y :int] :int
+(defn apply-to-both [f (forall [a] (-> a a)) x : int y : int] : int
   (+ (f x) (f y)))
 
-(defn inc [x :int] :int (+ x 1))
+(defn inc [x : int] : int (+ x 1))
 
 ; At the call site, `inc` is wrapped automatically
 (apply-to-both inc 3 7)  ; => 12
@@ -121,7 +121,7 @@ apply-to-both(inc 3 7)  ; => 12
 Apply a polymorphic function n times -- the essence of Church numerals:
 
 ```turmeric
-(defn church-apply [f (forall [a] (-> a a)) n :int x :int] :int
+(defn church-apply [f (forall [a] (-> a a)) n : int x : int] : int
   (if (<= n 0)
     x
     (church-apply f (- n 1) (f x))))
@@ -147,7 +147,7 @@ This works because HRT5 correctly propagates the poly fn type through recursive 
 Thread a value through a sequence of polymorphic transforms:
 
 ```turmeric
-(defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x :int] :int
+(defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x : int] : int
   (g (f x)))
 
 (pipe2 inc double-it 3)  ; => (3+1)*2 = 8
@@ -165,10 +165,10 @@ pipe2(inc double-it 3)  ; => (3+1)*2 = 8
 You can bind a poly fn to a local name and use it multiple times:
 
 ```turmeric
-(defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+(defn apply-poly [f (forall [a] (-> a a)) x : int] : int
   (f x))
 
-(defn use-poly-id [] :int
+(defn use-poly-id [] : int
   (let [f id]  ; f is a poly fn alias for id
     (+ (apply-poly f 10) (apply-poly f 20))))
 ```
@@ -189,10 +189,10 @@ The `source_binding` mechanism tracks `f` back to `id` so the correct wrapper is
 Pass a received poly fn parameter to another function expecting a poly fn:
 
 ```turmeric
-(defn apply-once [f (forall [a] (-> a a)) x :int] :int
+(defn apply-once [f (forall [a] (-> a a)) x : int] : int
   (f x))
 
-(defn apply-twice [f (forall [a] (-> a a)) x :int] :int
+(defn apply-twice [f (forall [a] (-> a a)) x : int] : int
   (apply-once f (apply-once f x)))  ; f forwarded directly
 ```
 
@@ -212,7 +212,7 @@ Define typeclass methods that accept polymorphic function arguments:
 
 ```turmeric
 (defclass Transform []
-  (transform [[f (forall [a] (-> a a))] x] :int))
+  (transform [[f (forall [a] (-> a a))] x] : int))
 
 (definstance Transform []
   (transform [f x] (f x)))
@@ -237,7 +237,7 @@ definstance Transform []
 A function whose parameter is itself rank-2 -- it accepts a "polymorphic function handler":
 
 ```turmeric
-(defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] :int
+(defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] : int
   (h id))
 ```
 
@@ -278,7 +278,7 @@ You must annotate rank-2 parameters explicitly in `defn`. The compiler does not 
 (defn apply [f x])  ; NOT rank-2
 
 ; With annotation, it's a proper rank-2 function
-(defn apply [f (forall [a] (-> a a)) x :int] :int  ; rank-2
+(defn apply [f (forall [a] (-> a a)) x : int] : int  ; rank-2
   (f x))
 ```
 

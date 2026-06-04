@@ -1,6 +1,6 @@
 ;; FH6: the default affine continuation may be resumed at most once.
 (defeffect Choose [] :int)
-(defn main [] :int
+(defn main [] : int
   (with-handler
     (handler (Choose [] k) (do (resume k 1) (resume k 2)))
     (perform (Choose))))

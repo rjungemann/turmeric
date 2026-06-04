@@ -1,6 +1,6 @@
 ;; LT1: ^linear annotation on a function parameter.
 ;; use-once must consume x exactly once; returning it counts as one use.
-(defn use-once [^linear x] :int
+(defn use-once [^linear x] : int
   x)
 
 (println (use-once 99))

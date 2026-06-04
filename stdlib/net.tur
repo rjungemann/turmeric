@@ -19,7 +19,7 @@
 ;;; if a linear value is silently dropped.
 ;;;
 ;;; Since: LT4
-(defstruct Socket :linear [fd :int])
+(defstruct Socket :linear [fd : int])
 ;;; socket-fd -- return the raw file descriptor from a Socket.
 ;;;
 ;;; Parameters:
@@ -33,7 +33,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn socket-fd [s : Socket] :int
+(defn socket-fd [s : Socket] : int
   ```c return s.fd;
   ```)
 ;;; socket-valid? -- return true if the Socket wraps a non-negative fd.
@@ -49,7 +49,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn socket-valid? [s : Socket] :bool
+(defn socket-valid? [s : Socket] : bool
   ```c return s.fd >= 0;
   ```)
 ;;; socket-close -- close a Socket and release the underlying fd.
@@ -65,7 +65,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn socket-close [s : Socket] :int
+(defn socket-close [s : Socket] : int
   ```c if (s.fd < 0) return -1;
   return close(s.fd);
   ```)

@@ -4,7 +4,7 @@
 ; manual re/compile call.
 (load "stdlib/re.tur")
 
-(defn main [] :int
+(defn main [] : int
   (let [digits   #rx"^[0-9]+$"
         words    #rx"^[A-Za-z]+$"]
     (if (re/match? digits "12345")  (println "digits-match")    (println "digits-miss"))

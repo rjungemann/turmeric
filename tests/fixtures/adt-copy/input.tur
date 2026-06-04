@@ -12,7 +12,7 @@
     (Green) "green"
     (Blue)  "blue"))
 
-(defn main [] :int
+(defn main [] : int
   ; c is CK_COPY so assigning it to d does not consume c.
   (let [c (Red)
         d c]

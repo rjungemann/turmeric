@@ -40,17 +40,17 @@ the boxed value and a vtable pointer for each constraint.
 
 ```turmeric
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [e (pack 42 (exists [a] [(Show a)] a))]
     0))
 ```
@@ -129,10 +129,10 @@ list of mixed concrete payloads can still be printed:
 
 ```turmeric
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -140,10 +140,10 @@ list of mixed concrete payloads can still be printed:
     ```))
 
 (definstance Show [bool]
-  (show [x] :cstr
+  (show [x] : cstr
     (if x "true" "false")))
 
-(defn main [] :int
+(defn main [] : int
   (let [e1 (pack 42   (exists [a] [(Show a)] a))
         e2 (pack true (exists [a] [(Show a)] a))]
     (println (open e1 [a v] (.show v)))
@@ -189,7 +189,7 @@ the `Show`-constrained case. They are load-on-demand:
 ```turmeric
 (load "stdlib/existential.tur")
 
-(defn main [] :int
+(defn main [] : int
   (let [e (showable 42)]
     (println (show-it e)))
   0)

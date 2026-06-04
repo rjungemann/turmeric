@@ -1,2 +1,2 @@
 (import geom/vector :as gv)
-(defn main [] :int 0)
+(defn main [] : int 0)

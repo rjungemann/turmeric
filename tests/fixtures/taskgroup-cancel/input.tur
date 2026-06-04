@@ -8,7 +8,7 @@
 ;; Expected output: cancelled
 
 ;; TaskGroupBlock inline definition
-(defn tg-new [] :ptr<void>
+(defn tg-new [] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -29,7 +29,7 @@
   return (void *)g;
   ```)
 
-(defn tg-cancel [group :ptr<void>] :nil
+(defn tg-cancel [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -47,7 +47,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-wait [group :ptr<void>] :nil
+(defn tg-wait [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -64,7 +64,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn tg-free [group :ptr<void>] :nil
+(defn tg-free [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -80,7 +80,7 @@
   free(g);
   ```)
 
-(defn tg-spawn [group :ptr<void>] :nil
+(defn tg-spawn [group : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -96,7 +96,7 @@
   pthread_mutex_unlock(&g->lock);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [tg (tg-new)]
     (tg-spawn tg)  ;; task 1
     (tg-spawn tg)  ;; task 2

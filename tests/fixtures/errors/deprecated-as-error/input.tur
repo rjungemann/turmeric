@@ -2,9 +2,9 @@
 ; use site of a ^deprecated binding is promoted from a warning to a
 ; hard error.  This lets a build gate against new uses of deprecated
 ; APIs (the legacy stdlib modules being the canonical case).
-(defn ^deprecated "use new-add instead" old-add [a :int b :int] :int
+(defn ^deprecated "use new-add instead" old-add [a : int b : int] : int
   (+ a b))
 
-(defn main [] :int
+(defn main [] : int
   (println (old-add 1 2))
   0)

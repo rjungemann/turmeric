@@ -36,7 +36,7 @@
 
 (defn Real-Logger []
   #{Unsafe}
-  :int
+  : int
   ```c /* Define the Logger struct */
   typedef struct Logger Logger;
   struct Logger {
@@ -106,7 +106,7 @@
 
 (defn Real-Logger-free [log]
   #{Unsafe}
-  :nil
+  : nil
   ```c free(log);
   ```)
 ;; ============================================================================
@@ -129,7 +129,7 @@
 
 (defn Simple-Logger []
   #{Unsafe}
-  :int
+  : int
   ```c typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
@@ -180,7 +180,7 @@
 
 (defn Simple-Logger-free [log]
   #{Unsafe}
-  :nil
+  : nil
   ```c free(log);
   ```)
 ;; ============================================================================
@@ -202,7 +202,7 @@
 
 (defn Null-Logger []
   #{Unsafe}
-  :int
+  : int
   ```c typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
@@ -232,7 +232,7 @@
 
 (defn Null-Logger-free [log]
   #{Unsafe}
-  :nil
+  : nil
   ```c free(log);
   ```)
 ;; ============================================================================
@@ -253,7 +253,7 @@
 
 (defn log-debug-direct [msg]
   #{Unsafe}
-  :nil
+  : nil
   ```c fprintf(stdout, "[DEBUG] %s\n", msg);
   fflush(stdout);
   ```)
@@ -271,7 +271,7 @@
 
 (defn log-info-direct [msg]
   #{Unsafe}
-  :nil
+  : nil
   ```c fprintf(stdout, "[INFO] %s\n", msg);
   fflush(stdout);
   ```)
@@ -289,7 +289,7 @@
 
 (defn log-warn-direct [msg]
   #{Unsafe}
-  :nil
+  : nil
   ```c fprintf(stderr, "[WARN] %s\n", msg);
   fflush(stderr);
   ```)
@@ -307,7 +307,7 @@
 
 (defn log-error-direct [msg]
   #{Unsafe}
-  :nil
+  : nil
   ```c fprintf(stderr, "[ERROR] %s\n", msg);
   fflush(stderr);
   ```)

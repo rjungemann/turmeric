@@ -103,6 +103,13 @@ typedef struct EmitCtx {
     char    **thunk_typedef_names;
     uint32_t  n_thunk_typedef_names;
     uint32_t  cap_thunk_typedef_names;
+    /* closure-typed-invocation-abi-plan: per-signature typed fat-shim tracking.
+     * EX_FN_TO_FAT boxes a non-capturing fn as { shim, orig }; for a non-int64
+     * closure signature the shim must speak the closure's declared C types so
+     * the typed-thunk invocation cast at the call site matches the shim's ABI. */
+    char    **fatshim_names;
+    uint32_t  n_fatshim_names;
+    uint32_t  cap_fatshim_names;
     /* Phase 3: For closure thunk emission, track the current closure */
     struct Closure *closure;
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
@@ -266,6 +273,12 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out);
 bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params);
 char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
                                  Type result_type, Type *param_types, uint8_t n_params);
+/* closure-typed-invocation-abi-plan: ensure a typed fat-shim exists for the
+ * given closure signature, returning its C function name.  Returns NULL when
+ * the signature is the all-int64_t carrier case (caller uses the preamble
+ * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
+char *ensure_typed_fatshim(EmitCtx *ctx,
+                           Type result_type, Type *param_types, uint8_t n_params);
 
 /* ------------ emit_effects.c: effects/CPS expression emission ------------ */
 /* Region C -- algebraic effects (EX_DEFECT, EX_PERFORM, EX_HANDLE, EX_RESUME,

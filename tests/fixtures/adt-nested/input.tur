@@ -17,7 +17,7 @@
   (Empty)
   (Wrap :Opt))
 
-(defn main [] :int
+(defn main [] : int
   ; Wrap a Just inside an Outer, then sub-match.
   (let [v (Wrap (Just 42))]
     (match v

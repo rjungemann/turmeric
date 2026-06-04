@@ -1,9 +1,9 @@
 ;; CPS-CL9: Cloneable continuation capturing an rc value.
 ;; Each clone increments the refcount via Clone [ptr<void>].
 
-(defn k-identity [k] :int k)
+(defn k-identity [k] : int k)
 
-(defn main [] :int
+(defn main [] : int
   (let [k (cloneable-reset
             (cloneable-shift k-identity 0))]
     (println (tur_cloneable_cont_resume k 55)))

@@ -1,13 +1,13 @@
 ; gc-deterministic: predictable collection -- multiple zombies collected at once.
 ; Both a and b become zombies; a single gc! collects both.
 ; Subsequent upgrade calls return none for both (not alive).
-(defn lgc-some? [o :ptr<void>] :bool
+(defn lgc-some? [o : ptr<void>] : bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (gc-enable!)
   (let [a (rc/of 1)
         b (rc/of 2)]

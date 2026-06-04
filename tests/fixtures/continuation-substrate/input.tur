@@ -5,35 +5,35 @@
 (extern-c printf [^cstr fmt ^int v] :int)
 
 ;; shift in tail position: (shift f v) = f(v)
-(defn t-shift [] :int
+(defn t-shift [] : int
   (reset (shift (fn [v] (+ v 1)) 42)))
 
 ;; shift0 in tail position
-(defn t-shift0 [] :int
+(defn t-shift0 [] : int
   (reset (shift0 (fn [v] (+ v 100)) 7)))
 
 ;; nested resets: inner reset self-delimits; outer adds 1 to its value
-(defn t-nested-reset [] :int
+(defn t-nested-reset [] : int
   (reset (+ 1 (reset (+ 10 (shift (fn [v] (* v 2)) 5))))))
 
 ;; first shift reached aborts the reset (the second shift is dead)
-(defn t-multiple [] :int
+(defn t-multiple [] : int
   (reset (let [x (shift (fn [v] (* v 2)) 3)]
            (shift (fn [v] (+ x v)) 4))))
 
 ;; receiver ignores its argument
-(defn t-ignores-k [] :int
+(defn t-ignores-k [] : int
   (reset (shift (fn [v] 42) 10)))
 
 ;; reset with no shift -- value flows out unchanged
-(defn t-no-shift [] :int
+(defn t-no-shift [] : int
   (reset 123))
 
 ;; shift body closes over let-bound locals captured ahead of the shift node
-(defn t-deep [] :int
+(defn t-deep [] : int
   (reset (let [a 1 b 2 c 3] (shift (fn [v] (+ a (+ b (+ c v)))) 10))))
 
-(defn main [] :int
+(defn main [] : int
   (printf "t-shift=%lld\n" (t-shift))
   (printf "t-shift0=%lld\n" (t-shift0))
   (printf "t-nested-reset=%lld\n" (t-nested-reset))

@@ -16,7 +16,7 @@
 ;; float round-trip; here we assert a :float32 key alongside the others.
 
 ;; dup-str -- a freshly-allocated, DISTINCT pointer with the same text.
-(defn dup-str [s :cstr] :cstr
+(defn dup-str [s : cstr] : cstr
   ```c const char *src = (const char *)(intptr_t)s;
   size_t n = 0; while (src[n]) n++;
   char *d = (char *)malloc(n + 1);
@@ -24,7 +24,7 @@
   return (const char *)d;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; --- :cstr keys: content-keyed via distinct pointers ---
   (let [m  (map-assoc (map-assoc (:: (map-new) (Map cstr int)) "alpha" 1) "beta" 2)
         m2 (map-assoc m (dup-str "beta") 99)]

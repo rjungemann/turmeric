@@ -4,10 +4,10 @@
 
 (defeffect GetValue [] :int)
 
-(defn main [] :int
+(defn main [] : int
   (let [result (handle (perform (GetValue))
                    (GetValue [] k)
-                     (let [fut (async (fn [] :int 42))]
+                     (let [fut (async (fn [] : int 42))]
                        (let [val (await fut)]
                          (resume k val))))]
     (println result)

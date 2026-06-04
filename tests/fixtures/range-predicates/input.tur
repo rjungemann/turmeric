@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   ; singleton
   (println (singleton-range? (singleton-range 3)))   ; true
   (println (singleton-range? (closed-range 1 3)))    ; false

@@ -1,6 +1,6 @@
 (defmacro choose [pred then-form else-form]
   (if (not (nil? pred)) then-form else-form))
 
-(defn main [] :int
+(defn main [] : int
   (choose nil (println 10) (println 20))
   0)

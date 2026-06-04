@@ -6,17 +6,17 @@
 (load "../turmeric-spices/spices/scscm/src/scscm/expander.tur")
 (load "../turmeric-spices/spices/scscm/src/scscm/compile.tur")
 
-(defn print-cstr [s :cstr] #{Unsafe} :void
+(defn print-cstr [s : cstr] #{Unsafe} : void
   ```c
   printf("%s\n", s ? s : "(null)");
   ```)
 
-(defn print-pass [label :cstr] #{Unsafe} :void
+(defn print-pass [label : cstr] #{Unsafe} : void
   ```c
   printf("PASS %s\n", (const char*)(intptr_t)label);
   ```)
 
-(defn print-fail [label :cstr got :cstr expected :cstr] #{Unsafe} :void
+(defn print-fail [label : cstr got : cstr expected : cstr] #{Unsafe} : void
   ```c
   printf("FAIL %s\ngot:      %s\nexpected: %s\n",
     (const char*)(intptr_t)label,
@@ -24,7 +24,7 @@
     (const char*)(intptr_t)expected);
   ```)
 
-(defn cstr-eq? [a :cstr b :cstr] #{Unsafe} :bool
+(defn cstr-eq? [a : cstr b : cstr] #{Unsafe} : bool
   ```c
   const char *ca = (const char*)(intptr_t)a;
   const char *cb = (const char*)(intptr_t)b;
@@ -32,7 +32,7 @@
   return strcmp(ca, cb) == 0;
   ```)
 
-(defn check [label :cstr source :cstr expected :cstr] #{Unsafe} :void
+(defn check [label : cstr source : cstr expected : cstr] #{Unsafe} : void
   (let [res (compile-text source)]
     (if (lex-err? res)
       (print-fail label "(compile error)" expected)

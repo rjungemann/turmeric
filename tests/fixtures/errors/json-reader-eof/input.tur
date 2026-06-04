@@ -1,4 +1,4 @@
 ;; JR3: unexpected EOF inside #json(...) -> TUR-E0271.
-(defn main [] :int
+(defn main [] : int
   (do
     #json([1, 2

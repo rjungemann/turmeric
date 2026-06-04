@@ -1,0 +1,30 @@
+;; G1 (language-readiness-for-typed-signal-plan): :float-returning fat
+;; closures composed through annotated ^fat parameters round-trip the
+;; xmm0/double result correctly end-to-end.
+;;
+;; Annotated form (per bare-fat-param-non-int-result-miscompiles.md fix
+;; direction 1) -- bare ^fat for :float result is a hard error; the
+;; annotated form `^fat g :(fn [:float] #{} :float)` threads the result
+;; type through.
+
+(defn make-scaler [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+
+(defn compose
+  [^fat f :(fn [:float] #{} :float)
+   ^fat g :(fn [:float] #{} :float)] : ptr<void>
+  (let [fv f gv g]
+    (fn [x : float] : float (gv (fv x)))))
+
+(defn run-with
+  [^fat h :(fn [:float] #{} :float) x : float] : float
+  (h x))
+
+(defn main [] : int
+  (let [f2  (make-scaler 2.0)
+        f3  (make-scaler 3.0)
+        f6  (compose f2 f3)]
+    (println (run-with f2 1.5))            ;; 3
+    (println (run-with f3 1.5))            ;; 4.5
+    (println (run-with f6 1.0)))           ;; 6
+  0)

@@ -1,49 +1,37 @@
 ---
 title: Arrows and Signal Processing
 category: Language Features
-description: Arrow typeclass, composition operators, and building DSP signal graphs with stdlib/arrow.tur and stdlib/signal/
+description: Bare-function arrow combinators and building DSP signal graphs with stdlib/arrow.tur and stdlib/signal/
 ---
 
 # Arrows and Signal Processing
 
-Turmeric's `stdlib/arrow.tur` implements the Arrow typeclass hierarchy from
-functional programming. Arrows generalize functions: they describe composable
-computations that take an input and produce an output, but the "computation"
-can carry extra structure -- state, effects, or signal transformation over time.
+Turmeric's `stdlib/arrow.tur` provides a small set of **bare-function arrow
+combinators** over the `(->)` function arrow. They describe composable
+computations that take an input and produce an output -- `arr`, `>>>`,
+`arrow-first`, `arrow-second`, `par-comp`, `arrow-split`, `arrow-const`, and
+`arrow-dup`.
 
-The most immediate use case in Turmeric is **signal processing**: the `stdlib/signal/`
-libraries build on the function Arrow to create composable DSP graphs from pure
-building blocks.
+The most immediate use case in Turmeric is **signal processing**: the
+`stdlib/signal/` libraries build on these combinators to create composable
+DSP graphs from pure building blocks.
 
-## The Arrow Typeclass
+## Why bare functions, not typeclass dispatch
 
-An Arrow wraps a two-parameter type constructor `arr` with four operations:
+Earlier drafts declared a full Haskell-style Arrow typeclass hierarchy
+(`Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`, `ArrowApply`),
+but those declarations were never backed by working `definstance` forms --
+closure-returning instance methods tripped a codegen bug and several stub
+bodies required language features (`Either`/`Left`/`Right`, full Tuple
+feedback) that do not exist yet. The scaleback in
+[`docs/upcoming/stdlib-arrow-scaleback-plan.md`](../upcoming/stdlib-arrow-scaleback-plan.md)
+removed the dead typeclass scaffolding and kept only the bare functions, which
+are exercised by `tests/fixtures/stdlib-arrow` and
+`tests/fixtures/arrow-capturing-closure`. If and when the typeclass codegen
+gap closes, the hierarchy can be reintroduced through its own plan; until
+then, write `(>>> f g)` rather than reaching for a typeclass method.
 
-| Operation | Type | Meaning |
-|-----------|------|---------|
-| `arr f` | `(a -> b) -> arr a b` | Lift a pure function to an arrow |
-| `>>> f g` | `arr a b -> arr b c -> arr a c` | Compose: first f, then g |
-| `first f` | `arr a b -> arr (Pair a c) (Pair b c)` | Apply f to the first component of a product |
-| `second f` | `arr a b -> arr (Pair a c) (Pair c b)` | Apply f to the second component |
-
-```turmeric
-(defclass Arrow [^arr]
-  (arr    [f]   :int)
-  (>>>    [f g] :int)
-  (first  [f]   :int)
-  (second [f]   :int))
-```
-
-```sweet-exp
-defclass Arrow [^arr]
-  arr    [f]   :int
-  >>>    [f g] :int
-  first  [f]   :int
-  second [f]   :int
-```
-
-The simplest Arrow instance is plain functions (`->`). For functions, `arr` is
-the identity, and `>>>` is left-to-right composition.
+For functions, `arr` is the identity, and `>>>` is left-to-right composition.
 
 ## Function Arrow Basics
 
@@ -111,23 +99,14 @@ let [add1       arr(fn([x] +(x 1)))
 ```
 
 `arrow-first` and `arrow-second` are the plain-function helpers exported from
-`stdlib/arrow.tur`. (`first`/`second` from the typeclass dispatch are also
-available for future use when the full typeclass machinery is active.)
+`stdlib/arrow.tur`. Reverse composition (`<<<`) is intentionally not exported
+-- both `<<<` and `>>>` mangle to the same C identifier (`___`), so they
+cannot coexist as free `defn`s. Write `(>>> f g)` with the arguments in the
+order you want them applied.
 
 ## Additional Combinators
 
 `stdlib/arrow.tur` exports several convenience combinators:
-
-### `<<<` (reverse composition)
-
-```turmeric
-;; (<<< g f) applies f first, then g -- right-to-left reading
-((<<< double add1) 3)   ; => 8   (same as (>>> add1 double) 3)
-```
-
-```sweet-exp
-<<<(double add1)(3)     ; => 8
-```
 
 ### `par-comp` (parallel composition)
 
@@ -163,13 +142,13 @@ let [split arrow-split(0 0 0 fn([x] {x + 1}) fn([x] {x * 2}))]
 ### `arrow-const` and `arrow-dup`
 
 ```turmeric
-((arrow-const 42) 999)   ; => 42  (ignores input)
-(first (arrow-dup 7))    ; => 7   (Pair(7, 7))
+((arrow-const 42) 999)        ; => 42  (ignores input)
+(tuple2-1st (arrow-dup 7))    ; => 7   (Tuple2(7, 7))
 ```
 
 ```sweet-exp
-arrow-const(42)(999)     ; => 42
-first arrow-dup(7)       ; => 7
+arrow-const(42)(999)          ; => 42
+tuple2-1st arrow-dup(7)       ; => 7
 ```
 
 ---
@@ -185,8 +164,9 @@ SF a b    =  Signal a -> Signal b
 
 A **Signal** is just a function from time to a value. A **Signal Function** (SF)
 transforms one signal into another. Because SF is itself a function `(Signal a ->
-Signal b)`, the plain function Arrow instance applies without any extra machinery:
-`arr`, `>>>`, `first`, and `second` all work on SFs out of the box.
+Signal b)`, the bare-function arrow combinators apply without any extra
+machinery: `arr`, `>>>`, `arrow-first`, and `arrow-second` all work on SFs
+out of the box.
 
 ### Core signal constructors
 
@@ -445,20 +425,15 @@ let [dummy  constant(())
 
 ## Extended Arrow Typeclasses
 
-`stdlib/arrow.tur` declares the full Arrow hierarchy for future use:
-
-| Typeclass | Adds | Use case |
-|-----------|------|----------|
-| `ArrowZero` | `zeroArrow` | empty/failing arrows |
-| `ArrowPlus` | `<+>` | combining alternative arrows |
-| `ArrowChoice` | `left`, `right`, `+++`, `|||` | routing over sum types (`Either`) |
-| `ArrowLoop` | `loop` | feedback -- output fed back as input |
-| `ArrowApply` | `app` | first-class arrow application |
-
-`ArrowChoice` and `ArrowLoop` are fully declared but their bodies require
-`Either`/`Left`/`Right` sum types and `Tuple` unpacking, which are still
-in development. The stubs are present so code that imports them will compile;
-behaviour will be filled in as those features land.
+Earlier drafts declared `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`,
+and `ArrowApply` in `stdlib/arrow.tur`. Those declarations were removed by
+the scaleback in
+[`docs/upcoming/stdlib-arrow-scaleback-plan.md`](../upcoming/stdlib-arrow-scaleback-plan.md)
+because no instances ever backed them (the closure-returning instance methods
+tripped a codegen bug, and several stub bodies needed `Either`/`Left`/`Right`
+sum types that do not exist yet). When that codegen gap closes and the sum
+types land, reintroducing the hierarchy is a follow-up plan, not something
+the current stdlib pretends to support.
 
 ---
 
@@ -473,8 +448,8 @@ tur run examples/signal-processing/02_signals.tur   # Signals and SFs
 tur run examples/signal-processing/03_dsp.tur       # DSP primitives
 ```
 
-**`01_basics.tur`** -- covers `arr`, `>>>`, arrow laws, and `first`/`second`
-using plain integer functions.
+**`01_basics.tur`** -- covers `arr`, `>>>`, arrow laws, and
+`arrow-first`/`arrow-second` using plain integer functions.
 
 **`02_signals.tur`** -- introduces the `Signal` and `SF` types, `constant`,
 `time-signal`, `pair-signals`, and stateful SFs via `state-sf`.
@@ -487,7 +462,7 @@ complete multi-stage processing chain.
 ## Quick Reference
 
 ```
-stdlib/arrow.tur          -- arr, >>>, <<<, arrow-first, arrow-second,
+stdlib/arrow.tur          -- arr, >>>, arrow-first, arrow-second,
                              par-comp, arrow-split, arrow-const, arrow-dup
 stdlib/signal/core.tur    -- constant, time-signal, sample, map-signal,
                              pair-signals, left-signal, right-signal

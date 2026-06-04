@@ -14,10 +14,10 @@
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
-(defn print-tag [s :cstr] :nil
+(defn print-tag [s : cstr] : nil
   ```c printf("%s\n", s); ```)
 
-(defn client-worker [arg :ptr<void>] :ptr<void>
+(defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   struct timespec ts = { 0, 30000000L };
@@ -84,17 +84,17 @@
   return NULL;
   ```)
 
-(defn run-server [h :ptr<void>] :ptr<void>
+(defn run-server [h : ptr<void>] : ptr<void>
   ```c httpd_run(h); return NULL; ```)
 
-(defn spawn-server [h :ptr<void>] :ptr<void>
+(defn spawn-server [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
   return (void *)t;
   ```)
 
-(defn spawn-client [port :int] :ptr<void>
+(defn spawn-client [port : int] : ptr<void>
   ```c
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
@@ -103,12 +103,12 @@
   return (void *)t;
   ```)
 
-(defn join-thread [t :ptr<void>] :nil
+(defn join-thread [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [donech   (chan-new 1)
-        base     (fn [c :ptr<void>] :nil
+        base     (fn [c : ptr<void>] : nil
                    (print-tag "base")
                    (httpd-resp-status! c 200)
                    (httpd-resp-body! c "ok")
@@ -116,7 +116,7 @@
         ;; Verifier must be a *fat* closure (captures at least one variable)
         ;; because mw-basic-auth dispatches through the fat-closure ABI.
         _tag     "secret"
-        verify   (fn [u :cstr p :cstr] :int
+        verify   (fn [u : cstr p : cstr] : int
                    (let [_t _tag]   ;; force fat-closure shape
                      (if (= 1 (cstr-eq-const-time u "admin"))
                        (cstr-eq-const-time p "s3cret")

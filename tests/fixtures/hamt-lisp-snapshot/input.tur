@@ -4,7 +4,7 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn alloc-key [x :int] :ptr
+(defn alloc-key [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
@@ -12,7 +12,7 @@
   ```)
 
 ;; Test: snapshot - m1 unchanged after m2 modification
-(defn test-snapshot [] :int
+(defn test-snapshot [] : int
   (let [k1 (alloc-key 1)]
     (let [k2 (alloc-key 2)]
       (let [v1 (alloc-key 100)]

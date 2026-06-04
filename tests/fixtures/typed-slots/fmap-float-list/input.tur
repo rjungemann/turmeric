@@ -6,7 +6,7 @@
 ;;  2. Float bit-pattern list fmap via TS2 bit-reinterpret closure => [3.0, 5.0]
 
 ;; Helper: print all int64_t heads of a raw cons list.
-(defn print-int-cons-list [lst :int] :void
+(defn print-int-cons-list [lst : int] : void
   ```c
   struct _c { int64_t head; int64_t tail; };
   for (struct _c *c = (struct _c *)(intptr_t)lst; c; c = (struct _c *)(intptr_t)c->tail)
@@ -14,7 +14,7 @@
   ```)
 
 ;; Helper: print all double heads of a raw cons list.
-(defn print-float-cons-list [lst :int] :void
+(defn print-float-cons-list [lst : int] : void
   ```c
   struct _c { double head; int64_t tail; };
   for (struct _c *c = (struct _c *)(intptr_t)lst; c; c = (struct _c *)(intptr_t)c->tail)
@@ -22,7 +22,7 @@
   ```)
 
 ;; Helper: build a 2-element float cons list and return raw :int pointer.
-(defn make-raw-float-list [a :float b :float] #{Unsafe} :int
+(defn make-raw-float-list [a : float b : float] #{Unsafe} : int
   ```c
   struct _c { double head; int64_t tail; };
   struct _c *t = malloc(sizeof(*t));
@@ -32,17 +32,17 @@
   return (int64_t)(intptr_t)h;
   ```)
 
-(defn main [] #{Unsafe} :int
+(defn main [] #{Unsafe} : int
   ;; Test 1: integer list [3, 5] fmap (*factor) with capturing closure => [6, 10]
   (let [factor 2]
     (let [xs (tcons 3 (tcons 5 0))]
-      (print-int-cons-list (__cons-fmap xs (fn [x :int] :int (* x factor))))))
+      (print-int-cons-list (__cons-fmap xs (fn [x : int] : int (* x factor))))))
   ;; Test 2: float bit-pattern list [1.5, 2.5] fmap (*scale) via TS2 reinterpret => [3.0, 5.0]
   ;; Uses nested let so the compiler correctly captures 'scale' as a fat-closure env var.
   ;; The closure receives int64 bit-patterns, reinterprets to float, multiplies, reinterprets back.
   (let [scale 2.0]
     (let [xs (make-raw-float-list 1.5 2.5)]
-      (let [float-fn (fn [x-bits :int] :int
+      (let [float-fn (fn [x-bits : int] : int
                        (let [xf (:: x-bits :float)]
                          (let [result (* xf scale)]
                            (:: result :int))))]

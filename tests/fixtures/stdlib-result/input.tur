@@ -2,6 +2,6 @@
 ;; Note: result functions use inline C and return pointers which the type system
 ;; doesn't fully support yet. This test just verifies the module compiles.
 
-(defn main [] :int
+(defn main [] : int
   (println "Result stdlib loaded successfully")
   0)

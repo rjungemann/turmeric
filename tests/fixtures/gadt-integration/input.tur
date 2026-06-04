@@ -5,18 +5,18 @@
   (Lit int : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
 
-(defn color-to-int [c] :int
+(defn color-to-int [c] : int
   (match c
     (Red)   1
     (Green) 2
     (Blue)  3))
 
-(defn eval-expr [e] :int
+(defn eval-expr [e] : int
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))))
 
-(defn main [] :int
+(defn main [] : int
   (println (color-to-int (Red)))
   (println (eval-expr (Add (Lit 10) (Lit 20))))
   (println (color-to-int (Green)))

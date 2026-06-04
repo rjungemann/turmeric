@@ -1,6 +1,6 @@
 ;; SS1 E0212: choose-left not valid on Session[Recv int Close].
 ;; 'r' has protocol Recv int Close; choose-left is only valid on Choose sessions.
 ;; This endpoint must perform a recv, not an internal branch selection.
-(defn use-wrong [^linear r :(Session (Recv int Close))] :nil
+(defn use-wrong [^linear r :(Session (Recv int Close))] : nil
   (let [r (choose-left r)]
     (close r)))

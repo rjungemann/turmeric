@@ -1,4 +1,4 @@
 ; Loaded by input.tur. The `#sum[...]` macro comes from input.tur's
 ; registry. Without T2 wiring this would fail to parse.
-(defn helper-sum [] :int
+(defn helper-sum [] : int
   #sum[1 2 3 4 5])

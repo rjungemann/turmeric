@@ -3,11 +3,11 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn always-writes [x :int] #{e} :int
+(defn always-writes [x : int] #{e} : int
   (do (perform (Write "hello"))
       x))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (always-writes 0)
     (Write [msg] k) (resume k 0)))

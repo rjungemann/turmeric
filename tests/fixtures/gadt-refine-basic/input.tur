@@ -2,12 +2,12 @@
   (IntWit : (Witness int))
   (BoolWit : (Witness bool)))
 
-(defn show-witness [w] :int
+(defn show-witness [w] : int
   (match w
     (IntWit)  (do (println "int") 0)
     (BoolWit) (do (println "bool") 0)))
 
-(defn main [] :int
+(defn main [] : int
   (show-witness (IntWit))
   (show-witness (BoolWit))
   0)

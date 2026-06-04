@@ -3,7 +3,7 @@
 
 (defeffect Choose [] :int)
 
-(defn main [] :int
+(defn main [] : int
   (let [sum
     (handle (+ (perform (Choose)) (perform (Choose)))
       (Choose [] ^unsafe-multishot k)

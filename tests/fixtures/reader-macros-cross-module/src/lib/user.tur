@@ -5,5 +5,5 @@
 ;; threaded through elab_module.c (T1) is what makes this work.
 (defmodule lib/user
   (export answer)
-  (defn answer [] :int
+  (defn answer [] : int
     #sum[1 2 3 4 5]))

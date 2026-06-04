@@ -8,12 +8,12 @@
 (load "stdlib/sized.tur")
 (load "stdlib/vec-existential.tur")
 
-(defn leak [v :ptr<void>] :SizedVec
+(defn leak [v : ptr<void>] : SizedVec
   (let [vec (:: v (exists [n] (SizedVec n int)))]
     (open-vec vec n s
       s)))
 
-(defn main [] :int
+(defn main [] : int
   (let [v (vec-of-sized (SVCons 1 (SVCons 2 (SVCons 3 (SVNil)))))]
     (println (sized-vec-len (leak v))))
   0)

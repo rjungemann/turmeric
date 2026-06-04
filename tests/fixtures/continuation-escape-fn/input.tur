@@ -2,15 +2,15 @@
 ;; No -Xcallcc flag, no enclosing reset.
 
 ;; escape body ignores k: returns 42 normally.
-(defn test-escape-no-exit [] :int
+(defn test-escape-no-exit [] : int
   (escape (fn [k] 42)))
 
 ;; escape body invokes (k 9): the pending (+ 3 ...) is abandoned, escape
 ;; returns 9, and the outer (+ 100 ...) makes 109.
-(defn test-escape-exit [] :int
+(defn test-escape-exit [] : int
   (+ 100 (escape (fn [k] (+ 3 (k 9))))))
 
-(defn main [] :int
+(defn main [] : int
   (println (test-escape-no-exit))
   (println (test-escape-exit))
   0)

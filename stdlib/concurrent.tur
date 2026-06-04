@@ -19,7 +19,7 @@
 ;;; lock).  Every MutexGuard must be explicitly consumed via mutex-guard-unlock.
 ;;;
 ;;; Since: LT4
-(defstruct MutexGuard :linear [mutex :ptr<void>])
+(defstruct MutexGuard :linear [mutex : ptr<void>])
 ;;; mutex-guard-lock -- lock a mutex and return a MutexGuard RAII token.
 ;;;
 ;;; Parameters:
@@ -33,7 +33,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn mutex-guard-lock [mutex] :MutexGuard
+(defn mutex-guard-lock [mutex] : MutexGuard
   ```c pthread_mutex_lock((pthread_mutex_t*)mutex);
   MutexGuard g;
   g.mutex = mutex;
@@ -52,7 +52,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn mutex-guard-unlock [guard : MutexGuard] :int
+(defn mutex-guard-unlock [guard : MutexGuard] : int
   ```c if (!guard.mutex) return -1;
   return pthread_mutex_unlock((pthread_mutex_t*)guard.mutex);
   ```)
@@ -69,6 +69,6 @@
 ;;;
 ;;; Since: LT4
 
-(defn mutex-guard-valid? [guard : MutexGuard] :bool
+(defn mutex-guard-valid? [guard : MutexGuard] : bool
   ```c return guard.mutex != NULL;
   ```)

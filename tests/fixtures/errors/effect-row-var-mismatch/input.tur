@@ -3,13 +3,13 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+(defn run-twice [f :(fn [] #{e} :int)] #{e} : int
   (+ (f) (f)))
 
-(defn pure-caller [] #{} :int
+(defn pure-caller [] #{} : int
   (run-twice (fn [] (do (perform (Write "hi")) 1))))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (println (pure-caller))
     (Write [msg] k) (do (println msg) (resume k 0)))

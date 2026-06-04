@@ -77,7 +77,7 @@ each other. Nest `let` forms when you need sequential bindings.
 annotated with `:type`:
 
 ```turmeric
-(defn square [x :int] :int (* x x))
+(defn square [x : int] : int (* x x))
 
 (square 9)    ; => 81
 ```
@@ -101,7 +101,7 @@ evaluating.
 `if` always produces a value -- both branches are required:
 
 ```turmeric
-(defn abs [n :int] :int
+(defn abs [n : int] : int
   (if (< n 0) (- 0 n) n))
 
 (abs -5)    ; => 5
@@ -122,7 +122,7 @@ abs(5)     ; => 5
 `cond` chains tests in order. `:else` is the fallback:
 
 ```turmeric
-(defn sign [n :int] :int
+(defn sign [n : int] : int
   (cond (> n 0) 1
         (< n 0) -1
         :else   0))
@@ -169,7 +169,7 @@ Turmeric has no loop keyword. Repeat work through recursion or the `for`
 macro (see Collections below):
 
 ```turmeric
-(defn factorial [n :int] :int
+(defn factorial [n : int] : int
   (if (<= n 1) 1 (* n (factorial (- n 1)))))
 
 (factorial 10)    ; => 3628800
@@ -218,7 +218,7 @@ Returning `Option` instead of crashing is idiomatic for operations that
 might not produce a value:
 
 ```turmeric
-(defn safe-div [a :int b :int]
+(defn safe-div [a : int b : int]
   (if (= b 0) (option-none) (option-some (/ a b))))
 
 (option-unwrap    (safe-div 10 2))     ; => 5
@@ -361,7 +361,7 @@ let [squares vec-new()]
 `fn` creates a function value that captures its lexical scope:
 
 ```turmeric
-(let [add5 (fn [x :int] :int (+ x 5))]
+(let [add5 (fn [x : int] : int (+ x 5))]
   (add5 10))    ; => 15
 ```
 ```sweet-exp
@@ -373,7 +373,7 @@ Closures can be returned from functions, giving each call site its own
 captured environment:
 
 ```turmeric
-(defn make-adder [n :int] (fn [x :int] :int (+ x n)))
+(defn make-adder [n : int] (fn [x : int] : int (+ x n)))
 
 (let [add3 (make-adder 3)
       add7 (make-adder 7)]
@@ -395,9 +395,9 @@ let [add3 make-adder(3)
 Functions are first-class values. Pass them to other functions:
 
 ```turmeric
-(defn apply-twice [f x :int] :int (f (f x)))
+(defn apply-twice [f x : int] : int (f (f x)))
 
-(apply-twice (fn [x :int] :int (* x 2)) 3)    ; => 12
+(apply-twice (fn [x : int] : int (* x 2)) 3)    ; => 12
 ```
 ```sweet-exp
 defn apply-twice [f x :int] :int
@@ -417,7 +417,7 @@ happens to be another function.
 name; field accessors are generated as `StructName-fieldname`:
 
 ```turmeric
-(defstruct Point [x :int y :int])
+(defstruct Point [x : int y : int])
 
 (let [p (Point 3 4)]
   (println (Point-x p))    ; 3
@@ -437,9 +437,9 @@ the type.
 A complete example combining struct and function:
 
 ```turmeric
-(defstruct Rect [width :int height :int])
+(defstruct Rect [width : int height : int])
 
-(defn area [r] :int
+(defn area [r] : int
   (* (Rect-width r) (Rect-height r)))
 
 (area (Rect 6 7))    ; => 42
@@ -475,7 +475,7 @@ defeffect Log [msg :cstr] :void
 `perform` raises the effect and suspends until a handler responds:
 
 ```turmeric
-(defn do-work [] :void
+(defn do-work [] : void
   (perform (Log "starting"))
   (perform (Log "done")))
 ```
@@ -553,7 +553,7 @@ evaluates to whatever the handler passes to `resume`:
 ```turmeric
 (defeffect Ask [] :int)
 
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 
 (handle (use-ask)
@@ -583,7 +583,7 @@ Write Turmeric code to a `.tur` file and load it into any REPL session with
 
 ```turmeric
 ; hello.tur
-(defn greet [name :cstr] :void
+(defn greet [name : cstr] : void
   (println (str-concat "Hello, " (str-concat name "!"))))
 ```
 ```sweet-exp

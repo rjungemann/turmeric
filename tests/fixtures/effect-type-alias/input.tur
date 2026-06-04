@@ -4,11 +4,11 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(deftype Logger (fn [:cstr] #{Log} :nil))
+(deftype Logger (fn [:cstr] #{Log} : nil))
 
-(defstruct App :copy [run :fn #{Log}])
+(defstruct App :copy [run : fn #{Log}])
 
-(defn main [] :int
+(defn main [] : int
   (let [app (make-struct App (fn [msg] (perform (Log msg))))]
     (handle
       (do (.run app "type alias test") 0)

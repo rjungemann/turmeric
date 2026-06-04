@@ -2,7 +2,7 @@
 ;; stdlib/result.tur, which take a result-shaped :ptr<void>. Applying ? to
 ;; a non-result expression (here, a plain int) must produce a type-mismatch
 ;; diagnostic at the helper call site rather than silently miscompiling.
-(defn main [] :int
+(defn main [] : int
   (do
     (? 42)
     0))

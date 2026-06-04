@@ -1,11 +1,11 @@
 ;; KB-008: spaced `f : (-> int int)` annotation must elaborate correctly.
 
-(defn apply1 [f : (-> int int) x : int] :int
+(defn apply1 [f : (-> int int) x : int] : int
   (f x))
 
-(defn inc [x :int] :int
+(defn inc [x : int] : int
   (+ x 1))
 
-(defn main [] :int
+(defn main [] : int
   (println (apply1 inc 41))
   0)

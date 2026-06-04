@@ -335,6 +335,24 @@ static Form *build_mapkey_cmp_form(Elab *e, const Type *key_type, Span span) {
  * as the receiver, which (thanks to F3-7's sticky ascription) dispatches
  * to the right inner instance.  Recursion terminates at primitive
  * element types where F3-7's single-level path takes over. */
+/* CRU B-3: box a synthesized comparator expr into a fat closure.  The
+ * constrained-Eq synthesis dispatcher builds its helper call as an EX_CALL node
+ * directly, bypassing elab_call's ^fat auto-shim -- so a captureless comparator
+ * lambda would reach the (now ^fat) *-eq? value-comparator parameter as a bare
+ * function pointer and be misread as a fat box (segfault, per
+ * docs/reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md).
+ * Wrapping it in EX_FN_TO_FAT here boxes a captureless lambda via the
+ * per-signature __tur_fatshim_*, and is a pass-through for an already-fat
+ * (capturing) closure -- matching the fat dispatch the helper bodies now use.
+ * Only *value/element* comparators are boxed; the MapKey `keyeq` carrier stays
+ * thin (it is a constant carrier-ABI fn pointer, not a user closure). */
+static Expr *box_synth_comparator(Elab *e, Expr *inner) {
+    if (!inner) return NULL;
+    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, inner->span);
+    shim->as.fn_to_fat_.inner = inner;
+    return shim;
+}
+
 static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
                                      Expr *obj, Expr *other_arg, Span span) {
     if (!outer_inst || outer_inst->n_type_args == 0) return NULL;
@@ -410,7 +428,8 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
             Binding *mek_b = scope_lookup(&e->global, intern_cstr(e->st, "map-eq-k?"));
             if (!mek_b) return NULL;
             Expr **ca = (Expr **)arena_alloc(e->arena, 4 * sizeof(Expr *));
-            ca[0] = obj; ca[1] = other_arg; ca[2] = kcmp; ca[3] = vcmp;
+            ca[0] = obj; ca[1] = other_arg; ca[2] = kcmp;
+            ca[3] = box_synth_comparator(e, vcmp);   /* value comparator: ^fat */
             Expr *out = expr_new(e->arena, EX_CALL, TYPE_BOOL, span);
             out->as.call_.fn_binding = mek_b;
             out->as.call_.fn_expr    = NULL;
@@ -493,7 +512,10 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
     call_args[0] = obj;
     call_args[1] = other_arg;
     for (uint8_t i = 0; i < n_comparators; i++) {
-        call_args[2 + i] = lambdas[i];
+        /* CRU B-3: the *-eq? carrier helpers now fat-dispatch their value/element
+         * comparator(s); box each synthesized comparator so the captureless
+         * lambda arrives as a fat closure rather than a bare pointer. */
+        call_args[2 + i] = box_synth_comparator(e, lambdas[i]);
     }
 
     Expr *out = expr_new(e->arena, EX_CALL, TYPE_BOOL, span);
@@ -727,6 +749,17 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     }
     if (method_form->as.list.len > ret_idx) {
         Form *ret_form = method_form->as.list.items[ret_idx];
+        /* Spaced `: T` over a single symbol/keyword: normalise to F_KEYWORD
+         * so the class-type-param match below runs. */
+        if (ret_form->tag == F_TYPE_ANN && ret_form->as.list.len == 1 &&
+            (ret_form->as.list.items[0]->tag == F_KEYWORD ||
+             ret_form->as.list.items[0]->tag == F_SYM)) {
+            Form *inner = ret_form->as.list.items[0];
+            Form *kf = (Form *)arena_alloc(e->arena, sizeof(Form));
+            *kf = *inner;
+            kf->tag = F_KEYWORD;
+            ret_form = kf;
+        }
         if (ret_form->tag == F_MAP) {
             /* another effect row or #{} after the params — skip silently */
             /* (ignore the rest; return type stays TYPE_NIL) */
@@ -1840,9 +1873,17 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         /* Check for return type annotation after params */
         if (impl_form->as.list.len >= 3) {
             Form *ret_or_body = impl_form->as.list.items[2];
+            /* Accept both fused `:T` (F_KEYWORD) and spaced `: T` (F_TYPE_ANN). */
+            const Symbol *kw = NULL;
             if (ret_or_body->tag == F_KEYWORD) {
-                /* This is a return type annotation */
-                const Symbol *kw = ret_or_body->as.sym;
+                kw = ret_or_body->as.sym;
+            } else if (ret_or_body->tag == F_TYPE_ANN &&
+                       ret_or_body->as.list.len == 1 &&
+                       (ret_or_body->as.list.items[0]->tag == F_SYM ||
+                        ret_or_body->as.list.items[0]->tag == F_KEYWORD)) {
+                kw = ret_or_body->as.list.items[0]->as.sym;
+            }
+            if (kw) {
                 if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                     return_type = TYPE_INT;
                 } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
@@ -2102,7 +2143,22 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             param_kinds[j] = method_param_types[j].kind;
         }
         Type fn_type = type_fn(param_kinds, n_method_params, return_type.kind);
-        
+        /* Closure-returning instance methods: a method whose declared return
+         * type is a function type (e.g. (arr-of [f] : (fn [:int] :int))) must
+         * carry the full TY_FN through result_full_type, exactly like the
+         * regular defn path (elab_fns.c "Issue 1b").  Without it, codegen falls
+         * back to emit_type_from_kind(TY_FN) -- a zeroed fn shell whose result
+         * kind is TY_UNKNOWN -- and the dict-field / impl-signature return type
+         * lowers to an unknown-void carrier, silently dropping the returned fat
+         * closure handle.  Attaching the full type makes type_c_name lower the
+         * fn carrier to int64_t (the fat-closure handle the rest of the
+         * language and TUR_APPLY* expect). */
+        if (return_type.kind == TY_FN) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = return_type;
+            fn_type.as.fn.result_full_type = rft;
+        }
+
         /* Create FnDef for the method implementation */
         FnDef *method_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
         memset(method_fd, 0, sizeof(FnDef));
@@ -3079,9 +3135,11 @@ found_method:;
             Binding *inner_b = poly_arg_fn_binding(args[i]);
             if (!inner_b) {
                 /* Phase CCL: no named-function binding found.  If the argument
-                 * is a fat closure (TY_PTR_VOID — capturing or non-capturing
-                 * lambda), wrap it for tur_poly_fn_t packing in the emitter. */
-                if (args[i]->type.kind == TY_PTR_VOID) {
+                 * is a fat closure (TY_PTR_VOID, or CRU B-1's boxed TY_FN
+                 * closure value — capturing or non-capturing lambda), wrap it
+                 * for tur_poly_fn_t packing in the emitter. */
+                if (args[i]->type.kind == TY_PTR_VOID ||
+                    (args[i]->type.kind == TY_FN && args[i]->type.as.fn.boxed)) {
                     Expr *orig2 = args[i];
                     Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig2->span);
                     cwrap->as.poly_wrap_.inner = orig2;

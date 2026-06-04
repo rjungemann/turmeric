@@ -34,7 +34,7 @@
 ;;; Since: LZ4
 
 
-(defn range-bound-new [inclusive :int value :int] :int
+(defn range-bound-new [inclusive : int value : int] : int
   ```c struct { bool is_inclusive; int64_t value; } *b = malloc(sizeof(*b));
   b->is_inclusive = (bool)inclusive;
   b->value = value;
@@ -47,7 +47,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-bound-inclusive? [b :int] :bool
+(defn range-bound-inclusive? [b : int] : bool
   ```c return ((struct { bool is_inclusive; int64_t value; } *)(intptr_t)b)->is_inclusive;
   ```)
 ;;; range-bound-value -- return the endpoint value of a bound.
@@ -57,7 +57,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-bound-value [b :int] :int
+(defn range-bound-value [b : int] : int
   ```c return ((struct { bool is_inclusive; int64_t value; } *)(intptr_t)b)->value;
   ```)
 ;;; range-bound-flip -- return a new bound with the same value but flipped inclusivity.
@@ -67,7 +67,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-bound-flip [b :int] :int
+(defn range-bound-flip [b : int] : int
   (range-bound-new (if (range-bound-inclusive? b) 0 1) (range-bound-value b)))
 ;; -------------------------------------------------------------------
 ;; Range allocation and accessors (inline-C)
@@ -84,7 +84,7 @@
 ;;; Since: LZ4
 
 
-(defn range-new [lower :int upper :int] :int
+(defn range-new [lower : int upper : int] : int
   ```c struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
   r->lower = lower;
   r->upper = upper;
@@ -97,7 +97,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-lower [r :int] :int
+(defn range-lower [r : int] : int
   ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
   ```)
 ;;; range-upper -- return the upper bound pointer (0 = unbounded).
@@ -107,24 +107,24 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-upper [r :int] :int
+(defn range-upper [r : int] : int
   ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
   ```)
 ;; Typed abort helpers -- each returns :int so they can be used in if-branches.
 
-(defn range-abort-not-connected [] :int
+(defn range-abort-not-connected [] : int
   ```c fprintf(stderr, "range-intersection: ranges are not connected\n");
   abort();
   return 0;
   ```)
 
-(defn range-abort-connected [] :int
+(defn range-abort-connected [] : int
   ```c fprintf(stderr, "range-gap: ranges are connected (no gap exists)\n");
   abort();
   return 0;
   ```)
 
-(defn range-abort-unbounded-lower [] :int
+(defn range-abort-unbounded-lower [] : int
   ```c fprintf(stderr, "seq/from-range: lower bound must be present\n");
   abort();
   return 0;
@@ -147,7 +147,7 @@
 ;;; Since: LZ4
 
 
-(defn closed-range [lo :int hi :int] :int
+(defn closed-range [lo : int hi : int] : int
   (range-new (range-bound-new 1 lo) (range-bound-new 1 hi)))
 ;;; open-range -- (lo, hi) both endpoints exclusive.
 ;;;
@@ -163,7 +163,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn open-range [lo :int hi :int] :int
+(defn open-range [lo : int hi : int] : int
   (range-new (range-bound-new 0 lo) (range-bound-new 0 hi)))
 ;;; closed-open-range -- [lo, hi) inclusive lower, exclusive upper.
 ;;;
@@ -179,7 +179,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn closed-open-range [lo :int hi :int] :int
+(defn closed-open-range [lo : int hi : int] : int
   (range-new (range-bound-new 1 lo) (range-bound-new 0 hi)))
 ;;; open-closed-range -- (lo, hi] exclusive lower, inclusive upper.
 ;;;
@@ -195,7 +195,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn open-closed-range [lo :int hi :int] :int
+(defn open-closed-range [lo : int hi : int] : int
   (range-new (range-bound-new 0 lo) (range-bound-new 1 hi)))
 ;;; at-least-range -- [lo, +inf) inclusive lower, unbounded above.
 ;;;
@@ -210,7 +210,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn at-least-range [lo :int] :int (range-new (range-bound-new 1 lo) 0))
+(defn at-least-range [lo : int] : int (range-new (range-bound-new 1 lo) 0))
 ;;; greater-than-range -- (lo, +inf) exclusive lower, unbounded above.
 ;;;
 ;;; Parameters:
@@ -224,7 +224,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn greater-than-range [lo :int] :int (range-new (range-bound-new 0 lo) 0))
+(defn greater-than-range [lo : int] : int (range-new (range-bound-new 0 lo) 0))
 ;;; at-most-range -- (-inf, hi] unbounded below, inclusive upper.
 ;;;
 ;;; Parameters:
@@ -238,7 +238,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn at-most-range [hi :int] :int (range-new 0 (range-bound-new 1 hi)))
+(defn at-most-range [hi : int] : int (range-new 0 (range-bound-new 1 hi)))
 ;;; less-than-range -- (-inf, hi) unbounded below, exclusive upper.
 ;;;
 ;;; Parameters:
@@ -252,7 +252,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn less-than-range [hi :int] :int (range-new 0 (range-bound-new 0 hi)))
+(defn less-than-range [hi : int] : int (range-new 0 (range-bound-new 0 hi)))
 ;;; singleton-range -- [v, v] a range containing exactly one value.
 ;;;
 ;;; Parameters:
@@ -266,7 +266,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn singleton-range [v :int] :int
+(defn singleton-range [v : int] : int
   (range-new (range-bound-new 1 v) (range-bound-new 1 v)))
 ;;; unbounded-range -- (-inf, +inf) no bounds at all.
 ;;;
@@ -278,7 +278,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn unbounded-range [] :int (range-new 0 0))
+(defn unbounded-range [] : int (range-new 0 0))
 ;; -------------------------------------------------------------------
 ;; Internal comparison helpers
 ;; -------------------------------------------------------------------
@@ -286,7 +286,7 @@
 ;; b == 0 means unbounded (always satisfied).
 
 
-(defn range-val-in-lower? [b :int v :int] :bool
+(defn range-val-in-lower? [b : int v : int] : bool
   (if (= b 0)
     true
     (if (range-bound-inclusive? b)
@@ -295,7 +295,7 @@
 ;; range-val-in-upper? -- true if v satisfies the upper bound b.
 ;; b == 0 means unbounded (always satisfied).
 
-(defn range-val-in-upper? [b :int v :int] :bool
+(defn range-val-in-upper? [b : int v : int] : bool
   (if (= b 0)
     true
     (if (range-bound-inclusive? b)
@@ -305,7 +305,7 @@
 ;; Used for range-overlaps?: if u strictly before l, ranges don't share any value.
 ;; u == 0 (unbounded above) or l == 0 (unbounded below): never strictly before.
 
-(defn range-bound-strictly-before? [u :int l :int] :bool
+(defn range-bound-strictly-before? [u : int l : int] : bool
   (if (or (= u 0) (= l 0))
     false
     (let [uv (range-bound-value u) lv (range-bound-value l)]
@@ -319,7 +319,7 @@
 ;; Differs from strictly-before: touching [1,3) and [3,5] has no gap but strictly-before.
 ;; u == 0 or l == 0: no gap.
 
-(defn range-bound-has-gap? [u :int l :int] :bool
+(defn range-bound-has-gap? [u : int l : int] : bool
   (if (or (= u 0) (= l 0))
     false
     (let [uv (range-bound-value u) lv (range-bound-value l)]
@@ -348,7 +348,7 @@
 ;;; Since: LZ4
 
 
-(defn range-contains? [r :int v :int] :bool
+(defn range-contains? [r : int v : int] : bool
   (and (range-val-in-lower? (range-lower r) v)
     (range-val-in-upper? (range-upper r) v)))
 ;;; range-encloses? -- true if every value in other is also in r.
@@ -366,7 +366,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-encloses? [r :int other :int] :bool
+(defn range-encloses? [r : int other : int] : bool
   (let [rl (range-lower r)
         ru (range-upper r)
         ol (range-lower other)
@@ -414,7 +414,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-connected? [r1 :int r2 :int] :bool
+(defn range-connected? [r1 : int r2 : int] : bool
   (and (not (range-bound-has-gap? (range-upper r1) (range-lower r2)))
     (not (range-bound-has-gap? (range-upper r2) (range-lower r1)))))
 ;;; range-overlaps? -- true if r1 and r2 share at least one common value.
@@ -435,7 +435,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-overlaps? [r1 :int r2 :int] :bool
+(defn range-overlaps? [r1 : int r2 : int] : bool
   (and (not (range-bound-strictly-before? (range-upper r1) (range-lower r2)))
     (not (range-bound-strictly-before? (range-upper r2) (range-lower r1)))))
 ;;; bounded-range? -- true if both endpoints are present.
@@ -445,7 +445,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-range? [r :int] :bool
+(defn bounded-range? [r : int] : bool
   (and (not (= (range-lower r) 0)) (not (= (range-upper r) 0))))
 ;;; bounded-above? -- true if r has an upper bound.
 ;;;
@@ -454,7 +454,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-above? [r :int] :bool (not (= (range-upper r) 0)))
+(defn bounded-above? [r : int] : bool (not (= (range-upper r) 0)))
 ;;; bounded-below? -- true if r has a lower bound.
 ;;;
 ;;; Parameters:
@@ -462,7 +462,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn bounded-below? [r :int] :bool (not (= (range-lower r) 0)))
+(defn bounded-below? [r : int] : bool (not (= (range-lower r) 0)))
 ;;; unbounded-above? -- true if r has no upper bound.
 ;;;
 ;;; Parameters:
@@ -470,7 +470,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn unbounded-above? [r :int] :bool (= (range-upper r) 0))
+(defn unbounded-above? [r : int] : bool (= (range-upper r) 0))
 ;;; unbounded-below? -- true if r has no lower bound.
 ;;;
 ;;; Parameters:
@@ -478,7 +478,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn unbounded-below? [r :int] :bool (= (range-lower r) 0))
+(defn unbounded-below? [r : int] : bool (= (range-lower r) 0))
 ;;; singleton-range? -- true if r contains exactly one value.
 ;;;
 ;;; A range is a singleton when both bounds are present, equal, and inclusive.
@@ -488,7 +488,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn singleton-range? [r :int] :bool
+(defn singleton-range? [r : int] : bool
   (let [lo (range-lower r) hi (range-upper r)]
     (if (or (= lo 0) (= hi 0))
       false
@@ -505,7 +505,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn empty-range? [r :int] :bool
+(defn empty-range? [r : int] : bool
   (let [lo (range-lower r) hi (range-upper r)]
     (if (or (= lo 0) (= hi 0))
       false
@@ -523,7 +523,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn nonempty-range? [r :int] :bool (not (empty-range? r)))
+(defn nonempty-range? [r : int] : bool (not (empty-range? r)))
 ;; -------------------------------------------------------------------
 ;; Internal bound selection helpers for set operations
 ;; -------------------------------------------------------------------
@@ -531,7 +531,7 @@
 ;; Unbounded (0) is less restrictive than any bound.
 
 
-(defn range-lower-min [b1 :int b2 :int] :int
+(defn range-lower-min [b1 : int b2 : int] : int
   (if (= b1 0)
     0
     (if (= b2 0)
@@ -543,7 +543,7 @@
 ;; range-upper-max -- return the less-restrictive of two upper bounds (for span).
 ;; Unbounded (0) is less restrictive than any bound.
 
-(defn range-upper-max [b1 :int b2 :int] :int
+(defn range-upper-max [b1 : int b2 : int] : int
   (if (= b1 0)
     0
     (if (= b2 0)
@@ -555,7 +555,7 @@
 ;; range-lower-max -- return the more-restrictive of two lower bounds (for intersection).
 ;; Unbounded (0) defers to the other bound.
 
-(defn range-lower-max [b1 :int b2 :int] :int
+(defn range-lower-max [b1 : int b2 : int] : int
   (if (= b1 0)
     b2
     (if (= b2 0)
@@ -567,7 +567,7 @@
 ;; range-upper-min -- return the more-restrictive of two upper bounds (for intersection).
 ;; Unbounded (0) defers to the other bound.
 
-(defn range-upper-min [b1 :int b2 :int] :int
+(defn range-upper-min [b1 : int b2 : int] : int
   (if (= b1 0)
     b2
     (if (= b2 0)
@@ -595,7 +595,7 @@
 ;;; Since: LZ4
 
 
-(defn range-span [r1 :int r2 :int] :int
+(defn range-span [r1 : int r2 : int] : int
   (range-new (range-lower-min (range-lower r1) (range-lower r2))
     (range-upper-max (range-upper r1) (range-upper r2))))
 ;;; range-intersection -- largest range enclosed by both r1 and r2.
@@ -615,7 +615,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-intersection [r1 :int r2 :int] :int
+(defn range-intersection [r1 : int r2 : int] : int
   (if (not (range-connected? r1 r2))
     (range-abort-not-connected)
     (range-new (range-lower-max (range-lower r1) (range-lower r2))
@@ -640,7 +640,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn range-gap [r1 :int r2 :int] :int
+(defn range-gap [r1 : int r2 : int] : int
   (if (range-connected? r1 r2)
     (range-abort-connected)
     (let [u1       (range-upper r1)
@@ -672,7 +672,7 @@
 ;;; Since: LZ4
 
 
-(defn seq/from-range [r :int] :int
+(defn seq/from-range [r : int] : int
   (let [lo (range-lower r)]
     (if (= lo 0)
       (range-abort-unbounded-lower)
@@ -710,7 +710,7 @@
 ;;;
 ;;; Since: LZ4
 
-(defn seq/from-range-step [step :int r :int] :int
+(defn seq/from-range-step [step : int r : int] : int
   (let [lo (range-lower r)]
     (if (= lo 0)
       (range-abort-unbounded-lower)

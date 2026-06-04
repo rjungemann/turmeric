@@ -1,9 +1,9 @@
 ;; TA2: fused parameter annotations in fn should elaborate.
 
-(defn main [] :int
-  (let [square-int (fn [x :int] :int
+(defn main [] : int
+  (let [square-int (fn [x : int] : int
                      (* x x))]
-    (let [square-float (fn [x :float] :float
+    (let [square-float (fn [x : float] : float
                          (* x x))]
       (println (square-int 3))
       (println (square-float 4.0))

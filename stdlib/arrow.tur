@@ -1,110 +1,24 @@
-;;; tur/arrow -- Haskell-style Arrow typeclass hierarchy for signal processing.
+;;; tur/arrow -- bare-function arrow combinators over the (->) function arrow.
 ;;;
-;;; Provides Category, Arrow, ArrowChoice, and ArrowLoop typeclasses.
+;;; Provides arr, >>>, arrow-first, arrow-second, par-comp, arrow-split,
+;;; arrow-const, and arrow-dup as plain functions. The Haskell-style Arrow
+;;; typeclass hierarchy was scaled back in docs/upcoming/stdlib-arrow-scaleback-plan.md
+;;; -- see that plan for the rationale and the conditions under which it would
+;;; be reintroduced.
 ;;;
 ;;; Since: Phase CA0
-;; Signal Processing Arrows Library
-;; Haskell-style Arrow typeclass hierarchy for Turmeric
-;;
-;; This module implements the Arrow typeclass hierarchy for building
-;; composable signal processing pipelines.
-;;
-;; Note: Full Arrow typeclass dispatch requires Turmeric features still in
-;; development (Either/Left/Right sum types, vector literals in expression
-;; position). The defclass declarations are provided for documentation and
-;; future compatibility. Plain function implementations are provided for
-;; immediate use.
 ;; =============================================================================
-;; Arrow Typeclass Declarations
+;; Closure dispatch convention
 ;; =============================================================================
-;;; Arrow -- base typeclass for arrow-like structures.
-;;;
-;;; An Arrow arr is a type constructor that takes two type parameters (input and
-;;; output) and supports lifting, sequential composition, and product-component
-;;; application.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor (kind * -> * -> *)
-;;;
-;;; Example:
-;;;   (arr (fn [x] (* x 2)))  ; => a function arrow that doubles its input
-(defclass Arrow [^arr]
-  (arr [f] :int)
-  (>>> [f g] :int)
-  (first [f] :int)
-  (second [f] :int))
-;;; ArrowZero -- arrows with an empty/zero element.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-;;;
-;;; Returns:
-;;;   zeroArrow produces an arrow that yields no output.
-
-(defclass ArrowZero [^arr] (zeroArrow [] :int))
-;;; ArrowPlus -- arrows that can be combined with choice.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-;;;
-;;; Returns:
-;;;   <+> combines two arrows in parallel.
-
-(defclass ArrowPlus [^arr] (<+> [f g] :int))
-;;; ArrowChoice -- arrows with choice over sum types (Either).
-;;;
-;;; Note: requires Either/Left/Right sum types (future Turmeric feature).
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-
-(defclass ArrowChoice [^arr]
-  (left [f] :int)
-  (right [f] :int)
-  (+++ [f g] :int)
-  (||| [f g] :int))
-;;; ArrowLoop -- arrows with feedback loops for recursive signal processing.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-
-(defclass ArrowLoop [^arr] (loop [f] :int))
-;;; ArrowApply -- arrows that support first-class application.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-
-(defclass ArrowApply [^arr] (app [f] :int))
-;; =============================================================================
-;; C Helpers for calling function-valued parameters
-;; =============================================================================
-;;; __arrow_call1 -- call a function stored as int64 with one argument.
-
-
-(defn __arrow_call1 [f x] :int
-  ```c return ((int64_t(*)(int64_t))(intptr_t)f)(x);
-  ```)
-;;; __arrow_call2 -- call a function stored as int64 with two arguments.
-
-(defn __arrow_call2 [f x y] :int
-  ```c return ((int64_t(*)(int64_t, int64_t))(intptr_t)f)(x, y);
-  ```)
-;; =============================================================================
-;; Instances for Function Arrow (->) -- omitted
-;; =============================================================================
-;; The typeclass instances (Arrow [->], ArrowChoice [->], ArrowZero [->],
-;; ArrowPlus [->], ArrowLoop [->], ArrowApply [->]) are intentionally omitted.
-;; They tripped codegen bugs around closure-returning instance methods (dict
-;; field types resolved to void * rather than int64_t) and several stub bodies
-;; relied on language features (Either/Left/Right, full Tuple feedback) that
-;; aren't available yet. The free function implementations below cover the
-;; (->) case; reintroduce instances once those gaps are closed. See
-;; docs/stdlib-arrow-typeclass-plan.md.
-;; =============================================================================
-;; Plain Function Implementations
-;; =============================================================================
-;; These provide direct, non-dispatched versions of the Arrow combinators
-;; for use when Arrow typeclass dispatch is not needed.
+;; Arrow combinators normalize their function arguments to fat closures via
+;; ^fat parameters: a captureless function (a bare C pointer) is auto-shimmed
+;; into a fat box at the call site, and a capturing closure is already a fat
+;; box.  Every helper then dispatches uniformly through the fat protocol
+;; (TUR_APPLY1, which reads the thunk from slot 0 and passes the box as the
+;; environment), or by calling the closure directly in Turmeric (a :ptr<void>
+;; direct call already fat-dispatches).  This replaces the former
+;; __arrow_call1/__arrow_call2 thin int64 casts, which segfaulted on capturing
+;; closures.  See docs/upcoming/closure-representation-unification-plan.md.
 ;;; arr -- lift a function to an arrow (identity for function arrows).
 ;;;
 ;;; Parameters:
@@ -115,9 +29,7 @@
 ;;;
 ;;; Example:
 ;;;   (arr (fn [x] (+ x 1)))  ; => identity for functions
-
-
-(defn arr [f] f)
+(defn arr [^fat f] f)
 ;;; >>> -- compose two function arrows sequentially.
 ;;;
 ;;; Parameters:
@@ -130,48 +42,47 @@
 ;;; Example:
 ;;;   ((>>> (fn [x] (+ x 1)) (fn [x] (* x 2))) 3)  ; => 8
 
-(defn >>> [f g]
-  (let [fv f gv g] (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
+(defn >>> [^fat f ^fat g] (let [fv f gv g] (fn [x] (gv (fv x)))))
 ;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,
 ;;; return a new heap Tuple2 *.  Used by arrow-first.
 
-(defn __arrow_pair_first [fv p] :int
+(defn __arrow_pair_first [fv p] : int
   ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
   Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
-  r->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(src->e1);
+  r->e1 = TUR_APPLY1(fv, src->e1);
   r->e2 = src->e2;
   return (int64_t)(intptr_t)r;
   ```)
 ;;; __arrow_pair_second -- inline-C: apply fv to e2 of a heap Tuple2 *p,
 ;;; return a new heap Tuple2 *.  Used by arrow-second.
 
-(defn __arrow_pair_second [fv p] :int
+(defn __arrow_pair_second [fv p] : int
   ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
   Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
   r->e1 = src->e1;
-  r->e2 = ((int64_t(*)(int64_t))(intptr_t)fv)(src->e2);
+  r->e2 = TUR_APPLY1(fv, src->e2);
   return (int64_t)(intptr_t)r;
   ```)
 ;;; __arrow_pair_par -- inline-C: apply fv to e1 and gv to e2 of *p.
 
-(defn __arrow_pair_par [fv gv p] :int
+(defn __arrow_pair_par [fv gv p] : int
   ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
   Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
-  r->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(src->e1);
-  r->e2 = ((int64_t(*)(int64_t))(intptr_t)gv)(src->e2);
+  r->e1 = TUR_APPLY1(fv, src->e1);
+  r->e2 = TUR_APPLY1(gv, src->e2);
   return (int64_t)(intptr_t)r;
   ```)
 ;;; __arrow_pair_split -- inline-C: produce a heap Tuple2 from (fv x, gv x).
 
-(defn __arrow_pair_split [fv gv x] :int
+(defn __arrow_pair_split [fv gv x] : int
   ```c Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
-  r->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(x);
-  r->e2 = ((int64_t(*)(int64_t))(intptr_t)gv)(x);
+  r->e1 = TUR_APPLY1(fv, x);
+  r->e2 = TUR_APPLY1(gv, x);
   return (int64_t)(intptr_t)r;
   ```)
 ;;; __arrow_pair_dup -- inline-C: produce a heap Tuple2 with both fields = x.
 
-(defn __arrow_pair_dup [x] :int
+(defn __arrow_pair_dup [x] : int
   ```c Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
   r->e1 = x;
   r->e2 = x;
@@ -188,7 +99,7 @@
 ;;; Example:
 ;;;   ((arrow-first (fn [x] (+ x 1))) <heap Tuple2 (5, 10)>)  ; => Tuple2(6, 10)
 
-(defn arrow-first [f] (let [fv f] (fn [p] (__arrow_pair_first fv p))))
+(defn arrow-first [^fat f] (let [fv f] (fn [p] (__arrow_pair_first fv p))))
 ;;; arrow-second -- apply a function to the second component of a Tuple2.
 ;;;
 ;;; Parameters:
@@ -200,7 +111,7 @@
 ;;; Example:
 ;;;   ((arrow-second (fn [x] (+ x 1))) <heap Tuple2 (5, 10)>)  ; => Tuple2(5, 11)
 
-(defn arrow-second [f] (let [fv f] (fn [p] (__arrow_pair_second fv p))))
+(defn arrow-second [^fat f] (let [fv f] (fn [p] (__arrow_pair_second fv p))))
 ;;; par-comp -- parallel composition of two functions on Tuple2 types.
 ;;;
 ;;; Parameters:
@@ -214,7 +125,7 @@
 ;;; Example:
 ;;;   ((par-comp inc double) (tuple2 1 2))  ; => Tuple2(2, 4)
 
-(defn par-comp [a b c d f g]
+(defn par-comp [a b c d ^fat f ^fat g]
   (let [fv f gv g] (fn [p] (__arrow_pair_par fv gv p))))
 ;;; arrow-split -- duplicate input and apply two functions, returning a Tuple2.
 ;;;
@@ -228,7 +139,7 @@
 ;;; Example:
 ;;;   ((arrow-split inc double) 3)  ; => Tuple2(4, 6)
 
-(defn arrow-split [a b c f g]
+(defn arrow-split [a b c ^fat f ^fat g]
   (let [fv f gv g] (fn [x] (__arrow_pair_split fv gv x))))
 ;; <<< (reverse composition) is omitted. Both <<< and >>> mangle to the
 ;; same C identifier (___), so they can't coexist as free defns. Write
@@ -261,4 +172,4 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn arrow-dup [x] :int (__arrow_pair_dup x))
+(defn arrow-dup [x] : int (__arrow_pair_dup x))

@@ -1,9 +1,9 @@
 ;; call-cc-completion (CC4.4): a ^linear continuation that is never invoked is a
 ;; dropped linear value -- TUR-E0100.  This proves ^linear reaches the binder
 ;; even though the parameter is also defaulted to the escape continuation flavor.
-(defn t [] :int
+(defn t [] : int
   (call/cc (fn [^linear k] 99)))
 
-(defn main [] :int
+(defn main [] : int
   (println (t))
   0)

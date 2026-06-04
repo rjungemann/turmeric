@@ -1,5 +1,5 @@
 (extern-c exit [code] :void)
 
-(defn main [] :int
+(defn main [] : int
   (exit 42)
   0)

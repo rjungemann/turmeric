@@ -5,7 +5,7 @@
 ;; `(Eq A)` constraint on `Eq[Vec[A]]` so `(.eq? v v)` resolves
 ;; without an explicit `(load "stdlib/typeclass.tur")`.
 
-(defn main [] :int
+(defn main [] : int
   (let [a []:int
         b []:int]
     (vec-push! a 42)

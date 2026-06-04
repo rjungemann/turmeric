@@ -30,9 +30,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn grid-new [width :int height :int]
+(defn grid-new [width : int height : int]
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
   g->width  = (int)width;
   g->height = (int)height;
@@ -56,9 +56,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn grid-get [g :int x :int y :int]
+(defn grid-get [g : int x : int y : int]
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   ```)
@@ -75,9 +75,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn grid-set! [g :int x :int y :int v :int]
+(defn grid-set! [g : int x : int y : int v : int]
   #{}
-  :void
+  : void
   ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   grid->data[(size_t)(y * grid->width + x)] = v;
   ```)
@@ -94,9 +94,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn grid-width [g :int]
+(defn grid-width [g : int]
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->width;
   ```)
@@ -113,9 +113,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn grid-height [g :int]
+(defn grid-height [g : int]
   #{}
-  :int
+  : int
   ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->height;
   ```)
@@ -129,9 +129,9 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn grid-free [g :int]
+(defn grid-free [g : int]
   #{}
-  :void
+  : void
   ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   if (grid->data) free(grid->data);
   free(grid);

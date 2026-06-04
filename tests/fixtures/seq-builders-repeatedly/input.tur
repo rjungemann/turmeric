@@ -3,7 +3,7 @@
 
 (load "stdlib/seq/builders.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [^mut n 0
         g (seq-iter (seq/repeatedly (fn [] (let [r n] (set! n (+ n 1)) r))))
         ^mut count 0]

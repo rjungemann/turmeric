@@ -14,7 +14,7 @@
 ;; Expected output: 99
 (extern-c tvar/new [^int] :ptr)
 
-(defn run [] :int
+(defn run [] : int
   (let [^linear token 99]
     (let [_tv (tvar/new 0)]
       token)))

@@ -4,7 +4,7 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Read [] :int)
 
-(defn echo-doubled [] :nil
+(defn echo-doubled [] : nil
   (let [x (perform (Read))]
     (perform (Write "result:"))
     (println (* x 2))))

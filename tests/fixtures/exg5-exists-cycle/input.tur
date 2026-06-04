@@ -24,16 +24,16 @@
 ;; strong_count stays > 0.  Extending the suspect tracking to handle
 ;; live cycles is tracked separately; this fixture documents the
 ;; topology and ensures gc! runs through the RCK_STRUCT path cleanly.
-(defstruct S :move [next :rc<S>])
+(defstruct S :move [next : rc<S>])
 
 ;; Initial sentinel for S.next at construction time -- the back-edge is
 ;; installed by the set! below.
-(defn null-rc-s [] :ptr<void>
+(defn null-rc-s [] : ptr<void>
   ```c
   return NULL;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (gc-enable!)
   (let [s1 (rc/of (make-struct S (null-rc-s)))
         s2 (rc/of (make-struct S (rc/clone s1)))]

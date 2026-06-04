@@ -6,7 +6,7 @@
 ;; Expected: one rc_strong_decrement for the explicit (rc/drop x) call,
 ;; no additional auto-drop defer injected for x.
 
-(defn main [] :int
+(defn main [] : int
   (let [x (rc/of 200)]
     (println (rc/strong-count x))
     (rc/drop x))

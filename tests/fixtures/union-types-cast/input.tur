@@ -1,9 +1,9 @@
 ; IT4: (cast x T) -- unsafe downcast from any-typed value to T.
 
-(defn print-as-int [x : any] :int
+(defn print-as-int [x : any] : int
   (println (cast x int))
   0)
 
-(defn main [] :int
+(defn main [] : int
   (print-as-int 99)
   0)

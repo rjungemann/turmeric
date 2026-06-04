@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (unsafe
     (let [p (raw-malloc 8)]
       (ptr-write p 123)

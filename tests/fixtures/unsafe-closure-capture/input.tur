@@ -9,7 +9,7 @@
 ;; Here `interp` is built inside the unsafe block and captures TWO outer
 ;; bindings (scale, bias), exercising multi-capture env threading.
 
-(defn main [] :int
+(defn main [] : int
   (let [scale  3
         bias   7
         lifted (free-lift 10)

@@ -19,7 +19,7 @@
 
 ;; ---- Channel global singleton (getter/setter via function-static) ----
 ;; Call with store=1 to write ch; call with store=0 to read current value.
-(defn chan-slot [ch :ptr<void> store :int] :ptr<void>
+(defn chan-slot [ch : ptr<void> store : int] : ptr<void>
   ```c
   static void *g = NULL;
   if ((int64_t)store) g = ch;
@@ -27,7 +27,7 @@
   ```)
 
 ;; ---- AsyncChan construction/destruction ----
-(defn achan-new [cap :int] :ptr<void>
+(defn achan-new [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -50,7 +50,7 @@
   return (void *)ch;
   ```)
 
-(defn achan-free [ch :ptr<void>] :nil
+(defn achan-free [ch : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -65,18 +65,18 @@
   ```)
 
 ;; ---- Fiber helpers (wrap built-in tur_fiber_block_* runtime) ----
-(defn fiber-new-fn [fn :ptr<void>] :ptr<void>
+(defn fiber-new-fn [fn : ptr<void>] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
   ```)
 
-(defn fiber-free [f :ptr<void>] :nil
+(defn fiber-free [f : ptr<void>] : nil
   ```c
   tur_fiber_block_free((FiberBlock *)f);
   ```)
 
 ;; ---- Simple FIFO fiber scheduler (circular buffer, cap 16) ----
-(defn sched-new [] :ptr<void>
+(defn sched-new [] : ptr<void>
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   SchedQ *q = (SchedQ *)calloc(1, sizeof(SchedQ));
@@ -84,7 +84,7 @@
   return (void *)q;
   ```)
 
-(defn sched-push [q :ptr<void> f :ptr<void>] :nil
+(defn sched-push [q : ptr<void> f : ptr<void>] : nil
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   SchedQ *sq = (SchedQ *)q;
@@ -94,13 +94,13 @@
   sq->count++;
   ```)
 
-(defn sched-free [q :ptr<void>] :nil
+(defn sched-free [q : ptr<void>] : nil
   ```c
   free(q);
   ```)
 
 ;; Run scheduler until all fibers are done.
-(defn sched-run [q :ptr<void>] :nil
+(defn sched-run [q : ptr<void>] : nil
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   SchedQ *sq = (SchedQ *)q;
@@ -121,7 +121,7 @@
 
 ;; ---- Producer fiber: sends 1, 2, 3 to global channel ----
 ;; Yields if the channel is full (non-blocking try-send with backpressure).
-(defn producer [] :nil
+(defn producer [] : nil
   ```c
   void *ch = chan_slot(NULL, 0);
   typedef struct {
@@ -148,7 +148,7 @@
 
 ;; ---- Consumer fiber: receives 3 items from global channel ----
 ;; Yields if the channel is empty (non-blocking try-recv with backpressure).
-(defn consumer [] :nil
+(defn consumer [] : nil
   ```c
   void *ch = chan_slot(NULL, 0);
   typedef struct {
@@ -174,7 +174,7 @@
   ```)
 
 ;; ---- Main: create channel, schedule fibers, run to completion ----
-(defn main [] :int
+(defn main [] : int
   (let [ch (achan-new 2)]           ;; buffered channel, cap=2
     (chan-slot ch 1)                  ;; store channel in global singleton
     (let [q (sched-new)]

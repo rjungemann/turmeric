@@ -9,7 +9,7 @@
 ;;; Ref -- heap-allocated single-value container with independent ownership.
 ;;;
 ;;; Since: Phase B1
-(defstruct Ref [value :int])
+(defstruct Ref [value : int])
 ;; Create a new Ref from a value (takes ownership of the pointer)
 ;; The caller is responsible for ensuring the value is heap-allocated
 ;; if it needs to outlive the Ref.
@@ -26,7 +26,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn ref-new [value] :int
+(defn ref-new [value] : int
   ```c struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
   ref->value = value;
   return (int64_t)(intptr_t)ref;
@@ -45,7 +45,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn ref-get [r] :int
+(defn ref-get [r] : int
   ```c struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
   if (!ref) {
     fprintf(stderr, "ref-get: null ref\n");
@@ -73,7 +73,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(definstance Clone [Ref] (clone [x] :int ```c struct { int64_t value; } *dst = malloc(sizeof(Ref));
+(definstance Clone [Ref] (clone [x] : int ```c struct { int64_t value; } *dst = malloc(sizeof(Ref));
     dst->value = x.value;
     return (int64_t)(intptr_t)dst;
     ```))

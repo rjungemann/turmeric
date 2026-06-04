@@ -6,7 +6,7 @@
 ;;   (3) Recursive sum over the rest list produces the correct value.
 
 ;; Extract the head of a cons cell (or 0 if nil).
-(defn cons-head [lst :int] #{Unsafe} :int
+(defn cons-head [lst : int] #{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
@@ -14,7 +14,7 @@
   ```)
 
 ;; Extract the tail of a cons cell (or 0 if nil).
-(defn cons-tail [lst :int] #{Unsafe} :int
+(defn cons-tail [lst : int] #{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
@@ -22,20 +22,20 @@
   ```)
 
 ;; Tail-recursive accumulator: walk lst and accumulate into acc.
-(defn list-sum-acc [lst :int acc :int] #{Unsafe} :int
+(defn list-sum-acc [lst : int acc : int] #{Unsafe} : int
   (if (= lst 0)
     acc
     (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))
 
 ;; Variadic entry point: collects rest as a cons list and sums it.
-(defn variadic-sum [& rest :int] #{Unsafe} :int
+(defn variadic-sum [& rest : int] #{Unsafe} : int
   (list-sum-acc rest 0))
 
 ;; Variadic with a fixed base: base + recursive sum of rest.
-(defn variadic-sum-from [base :int & rest :int] #{Unsafe} :int
+(defn variadic-sum-from [base : int & rest : int] #{Unsafe} : int
   (+ base (list-sum-acc rest 0)))
 
-(defn main [] :int
+(defn main [] : int
   (unsafe
     (let [;; no rest args -> sum = 0
           s0 (variadic-sum)

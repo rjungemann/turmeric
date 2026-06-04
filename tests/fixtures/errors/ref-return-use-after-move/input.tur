@@ -3,5 +3,5 @@
     (return r)
     @r))
 
-(defn main [] :int
+(defn main [] : int
   0)

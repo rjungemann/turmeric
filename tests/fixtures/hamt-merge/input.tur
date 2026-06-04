@@ -3,12 +3,12 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a :ptr b :ptr] :bool
+(defn ptr= [a : ptr b : ptr] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-int [x :int] :ptr
+(defn alloc-int [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
@@ -16,7 +16,7 @@
   ```)
 
 ;; Test: merge disjoint maps
-(defn test-merge-disjoint [] :int
+(defn test-merge-disjoint [] : int
   (let [k1 (alloc-int 1)]
     (let [k2 (alloc-int 2)]
       (let [v1 (alloc-int 10)]
@@ -43,7 +43,7 @@
                               (if (and (= c 2) (ptr= r1 v1) (ptr= r2 v2)) 1 0))))))))))))))))
 
 ;; Test: merge with overlapping keys (b wins)
-(defn test-merge-overlapping [] :int
+(defn test-merge-overlapping [] : int
   (let [k1 (alloc-int 1)]
     (let [v1 (alloc-int 10)]
       (let [v2 (alloc-int 20)]

@@ -1,18 +1,18 @@
 ; Phase HRT5: CPS-style composition with rank-2 poly fn parameters.
 ; pipe2 applies f then g in sequence; pipe-n applies f n times then g once.
 ; This pattern mirrors the continuation monad: each poly fn is a step in a chain.
-(defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x :int] :int
+(defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x : int] : int
   (g (f x)))
 
-(defn pipe-n [f (forall [a] (-> a a)) g (forall [a] (-> a a)) n :int x :int] :int
+(defn pipe-n [f (forall [a] (-> a a)) g (forall [a] (-> a a)) n : int x : int] : int
   (if (<= n 0)
     (g x)
     (pipe-n f g (- n 1) (f x))))
 
-(defn inc [x :int] :int (+ x 1))
-(defn double-it [x :int] :int (* x 2))
+(defn inc [x : int] : int (+ x 1))
+(defn double-it [x : int] : int (* x 2))
 
-(defn main [] :int
+(defn main [] : int
   ; inc then double: (0+1)*2 = 2
   (println (pipe2 inc double-it 0))
   ; double then inc: 0*2+1 = 1

@@ -1,0 +1,12 @@
+;; bare-fat-result-type-inference-plan.md (A6 soundness gate): here (g x) is an
+;; ARGUMENT to int->float, NOT the function's tail, so the tail-retype pass must
+;; NOT touch it -- it stays int64 and round-trips.  If the pass wrongly fired,
+;; the float read would be garbage.  The tail is the int->float call (whose
+;; fn_binding is not ^fat), so recursion stops before reaching (g x).
+(defn int->float [n : int] : float
+  ```c return (double)n; ```)
+(defn use-int-cb [^fat g x : int] : float (int->float (g x)))
+(defn make-inc [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn main [] : int
+  (println (use-int-cb (make-inc 1) 4))   ;; (4+1)=5 -> 5.0
+  0)

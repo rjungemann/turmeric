@@ -8,10 +8,10 @@
 ;; handle is freed via an inline C helper rather than rc/drop.
 
 (defclass TestClone [a]
-  (clone [x] :int))
+  (clone [x] : int))
 
 (definstance TestClone [rc]
-  (clone [x] :int
+  (clone [x] : int
     ```c
     /* x is RcControlBlock *; increment refcount, return same pointer. */
     rc_strong_increment(x);
@@ -24,7 +24,7 @@
   rc_strong_decrement((RcControlBlock *)(intptr_t)p);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r (rc/of 42)]
     (println (rc/strong-count r))   ;; 1 — sole owner
     (let [r2 (.clone r)]

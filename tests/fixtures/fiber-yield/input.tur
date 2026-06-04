@@ -8,34 +8,34 @@
 ;;   30
 ;;   done
 
-(defn fiber-body [] :nil
+(defn fiber-body [] : nil
   ```c
   tur_fiber_block_yield(10);
   tur_fiber_block_yield(20);
   tur_fiber_block_yield(30);
   ```)
 
-(defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
-(defn fiber-resume-fn [f :ptr<void> arg :int] :int
+(defn fiber-resume-fn [f : ptr<void> arg : int] : int
   ```c
   return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 
-(defn fiber-done? [f :ptr<void>] :bool
+(defn fiber-done? [f : ptr<void>] : bool
   ```c
   return ((FiberBlock *)f)->done != 0;
   ```)
 
-(defn fiber-free-fn [f :ptr<void>] :nil
+(defn fiber-free-fn [f : ptr<void>] : nil
   ```c
   tur_fiber_block_free((FiberBlock *)f);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [f (fiber-new-fn fiber-body 0)]
     (println (fiber-resume-fn f 0))   ;; 10
     (println (fiber-resume-fn f 0))   ;; 20

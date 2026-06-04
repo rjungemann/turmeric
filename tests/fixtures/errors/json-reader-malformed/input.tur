@@ -1,5 +1,5 @@
 ;; JR3: malformed JSON inside #json(...) -> TUR-E0270.
-(defn main [] :int
+(defn main [] : int
   (do
     #json({"a": })
     0))

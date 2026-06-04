@@ -6,18 +6,18 @@
 ; scope.  Instead, we expose a `counter-print` helper that consumes v
 ; inside the open and yields :nil; the increment helper repacks before
 ; the open expression's tail, so v never appears in the tail position.
-(defn make-counter [n :int] :ptr<void>
+(defn make-counter [n : int] : ptr<void>
   (pack n (exists [a] a)))
 
-(defn counter-print [c :ptr<void>] :nil
+(defn counter-print [c : ptr<void>] : nil
   (open c [a v]
     (println v)))
 
-(defn counter-incr [c :ptr<void>] :ptr<void>
+(defn counter-incr [c : ptr<void>] : ptr<void>
   (open c [a v]
     (pack (+ v 1) (exists [a] a))))
 
-(defn main [] :int
+(defn main [] : int
   (let [c0 (make-counter 0)
         c1 (counter-incr c0)
         c2 (counter-incr c1)

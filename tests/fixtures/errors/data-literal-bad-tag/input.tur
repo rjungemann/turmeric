@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (do
     #bag{1 2}
     0))

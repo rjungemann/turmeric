@@ -17,7 +17,7 @@
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
 
-(defn main [] :int
+(defn main [] : int
   ; (1) Vacuous binder: n is bound but never referenced in the body.
   (let [e1 (pack 7 (exists [n] int))]
     (open e1 [n v]

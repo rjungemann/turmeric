@@ -486,6 +486,27 @@ Expr *elab_let(Elab *e, const Form *call) {
         const Symbol *name = cur->as.sym;
         Span name_span = cur->span;
         i++;
+        /* Optional type annotation between name and init:
+         *   fused:  (let [x :int 5] ...)
+         *   spaced: (let [x : int 5] ...)
+         * Spaced (F_TYPE_ANN) is unambiguous and always consumed.  Fused
+         * (F_KEYWORD) overlaps with keyword *values* (e.g. a macro template
+         * `(let [__k ~k] ...)` where `k` is bound to `:foo`), so only consume
+         * a bare keyword when it resolves to a known TypeKind.  Anything else
+         * is treated as the initializer. */
+        const Form *type_ann_form = NULL;
+        if (i < bindings_form->as.list.len) {
+            Form *maybe_ann = bindings_form->as.list.items[i];
+            if (maybe_ann->tag == F_TYPE_ANN) {
+                type_ann_form = maybe_ann;
+                i++;
+            } else if (maybe_ann->tag == F_KEYWORD &&
+                       maybe_ann->as.sym != NULL &&
+                       typekind_from_symbol(maybe_ann->as.sym->name) != TY_UNKNOWN) {
+                type_ann_form = maybe_ann;
+                i++;
+            }
+        }
         if (i >= bindings_form->as.list.len) {
             diag_emit(DIAG_ERROR, cur->span,
                       "let binding for '%s' is missing its initializer",
@@ -522,6 +543,40 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         if (!init) { rc = -1; break; }
+
+        /* Verify the optional type annotation against the elaborated init type.
+         * For now we compare TypeKind for the common primitive cases (int,
+         * float, bool, cstr, nil/void, ptr) -- enough to reject obvious
+         * mistakes like `(let [x : int "hello"] ...)`.  Complex types
+         * (structs, ADTs, arrows) parse but skip the equality check;
+         * downstream typing rules still apply to the init expression. */
+        if (type_ann_form) {
+            Type *ann_ty = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
+            if (ann_ty) {
+                /* bare-fat-param-non-int-result (Phase A4): a declared-typed
+                 * binding whose init's tail is a bare-^fat int64 call carries no
+                 * recorded result type; infer it from the annotation and re-stamp
+                 * the call before the kind-match check below.  See
+                 * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+                if (kind_is_non_int_register_class(ann_ty->kind) &&
+                    retype_bare_fat_tail_calls(init, ann_ty->kind) &&
+                    init->type.kind == TY_INT) {
+                    init->type = type_from_kind(ann_ty->kind);
+                }
+                TypeKind ak = ann_ty->kind, ik = init->type.kind;
+                bool primitive = (ak == TY_INT || ak == TY_FLOAT ||
+                                  ak == TY_BOOL || ak == TY_CSTR ||
+                                  ak == TY_NIL || ak == TY_PTR_VOID);
+                if (primitive && ak != ik) {
+                    diag_emit(DIAG_ERROR, type_ann_form->span,
+                        "let binding '%s': type annotation does not match "
+                        "initializer (annotated %s, got %s)",
+                        name->name,
+                        typekind_to_string(ak), typekind_to_string(ik));
+                    rc = -1; break;
+                }
+            }
+        }
 
         /* Phase 11: Move tracking - if init is a CK_MOVE binding reference, poison it */
         if (init->kind == EX_VAR && type_is_move(init->as.var.binding->type)) {
@@ -643,6 +698,15 @@ Expr *elab_let(Elab *e, const Form *call) {
          * (let [g id] ...) where id is a global TY_FN → g.source_binding = id. */
         if (init && init->kind == EX_VAR) {
             Binding *init_b = init->as.var.binding;
+            /* closure-representation-unification (Phase 0): propagate the ^fat
+             * marker through a let alias so (let [gv g] ... (gv x)) on a
+             * fn-typed ^fat parameter still fat-dispatches instead of taking the
+             * thin ER2 path (which casts the fat box to a bare fn pointer and
+             * crashes).  A bare ^fat alias is :ptr<void> and fat-dispatches
+             * regardless, but carrying is_fat keeps the two forms consistent. */
+            if (init_b->is_fat) {
+                b->is_fat = true;
+            }
             if (init_b->is_poly_fn) {
                 b->is_poly_fn = true;
                 b->poly_type  = init_b->poly_type;
@@ -1105,6 +1169,19 @@ Expr *elab_letstar(Elab *e, const Form *call) {
             return NULL;
         }
         i++; /* the name symbol or destructuring pattern */
+        /* Optional type annotation between name and init (mirrors elab_let).
+         * F_TYPE_ANN is unambiguous; F_KEYWORD only consumed if it names a
+         * known type (otherwise it's a keyword value, e.g. macro-expanded). */
+        if (i < blen) {
+            Form *maybe_ann = bindings->as.list.items[i];
+            if (maybe_ann->tag == F_TYPE_ANN) {
+                i++;
+            } else if (maybe_ann->tag == F_KEYWORD &&
+                       maybe_ann->as.sym != NULL &&
+                       typekind_from_symbol(maybe_ann->as.sym->name) != TY_UNKNOWN) {
+                i++;
+            }
+        }
         if (i >= blen) {
             diag_emit(DIAG_ERROR, bindings->as.list.items[i - 1]->span,
                       "let* binding is missing its initializer");
@@ -1271,7 +1348,13 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                     TypeKind ret_kind = TY_INT;
                     if (init_f->as.list.len >= 4) {
                         Form *ret_f = init_f->as.list.items[2];
-                        if (ret_f->tag == F_KEYWORD) {
+                        /* Accept spaced `: T` (F_TYPE_ANN{F_SYM/F_KEYWORD}) too. */
+                        if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                            (ret_f->as.list.items[0]->tag == F_SYM ||
+                             ret_f->as.list.items[0]->tag == F_KEYWORD)) {
+                            ret_f = ret_f->as.list.items[0];
+                        }
+                        if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
                             const char *rn = ret_f->as.sym->name;
                             uint32_t   rl = ret_f->as.sym->len;
                             if      (rl == 3 && memcmp(rn, "int",  3) == 0) ret_kind = TY_INT;
@@ -1427,9 +1510,12 @@ Expr *elab_named_let(Elab *e, const Form *call) {
         }
         fn_param_items[n_params++] = cur;  /* the param name */
         bi++;
-        /* Optional :type annotation */
-        if (bi < blen && bvec->as.list.items[bi]->tag == F_KEYWORD) {
-            fn_param_items[n_params++] = bvec->as.list.items[bi++]; /* :type */
+        /* Optional :type annotation -- accept both fused `:type` (F_KEYWORD)
+         * and spaced `: type` (F_TYPE_ANN); fn elaboration handles both. */
+        if (bi < blen &&
+            (bvec->as.list.items[bi]->tag == F_KEYWORD ||
+             bvec->as.list.items[bi]->tag == F_TYPE_ANN)) {
+            fn_param_items[n_params++] = bvec->as.list.items[bi++];
         }
         /* Mandatory initializer */
         if (bi >= blen) {

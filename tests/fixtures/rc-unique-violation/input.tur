@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [rc (rc/of 77)]
     (let [w (weak rc)]
       (ref/from-rc rc)

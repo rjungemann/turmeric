@@ -2,7 +2,7 @@
 ;; A closure that captures three let-bound values and returns their sum.
 ;; The borrow checker must accept all three captures without false positives.
 
-(defn main [] :int
+(defn main [] : int
   (let [a 10]
     (let [b 20]
       (let [c 30]

@@ -3,7 +3,7 @@
 ;; resizes; all entries must remain retrievable aferr? the
 ;; rehashing.
 
-(defn main [] :int
+(defn main [] : int
   (let [mm (mutmap-new)
         ^mut i 0]
     (while (< i 100)

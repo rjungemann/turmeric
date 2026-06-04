@@ -6,17 +6,17 @@
 ;; serial-shift was previously a compiled-path stub returning 0.
 
 ;; round-trip the captured continuation through bytes, then resume it.
-(defn rt5 [k] :int
+(defn rt5 [k] : int
   (tur_serial_cont_resume
     (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
-(defn rt7 [k] :int
+(defn rt7 [k] : int
   (tur_serial_cont_resume
     (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 7))
 
 ;; resume directly, without marshaling.
-(defn direct4 [k] :int (tur_serial_cont_resume k 4))
+(defn direct4 [k] : int (tur_serial_cont_resume k 4))
 
-(defn main [] :int
+(defn main [] : int
   (println (serial-reset (+ 10 (serial-shift rt5 0))))           ; (10+5)        = 15
   (println (serial-reset (* 2 (+ 1 (serial-shift direct4 0)))))  ; 2*(1+4)       = 10
   (println (serial-reset (serial-shift rt7 0)))                  ; empty ctx @7  = 7

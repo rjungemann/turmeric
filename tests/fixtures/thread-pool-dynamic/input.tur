@@ -15,13 +15,13 @@
 ;; Worker threads scale up dynamically when all workers are busy.
 
 ;; Identity task: returns arg unchanged.
-(defn dyn-identity-fn [arg :ptr<void>] :ptr<void>
+(defn dyn-identity-fn [arg : ptr<void>] : ptr<void>
   ```c
   return arg;
   ```)
 
 ;; Worker thread function for the dynamic pool.
-(defn dyn-worker-fn [arg :ptr<void>] :ptr<void>
+(defn dyn-worker-fn [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -64,7 +64,7 @@
   return NULL;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;

@@ -1,6 +1,6 @@
 ;; LT3 E0100: lref/new returns lref<T> which is CK_LINEAR.
 ;; The binding p is never consumed, so E0100 fires at scope exit.
-(defn use-lref [] :int
+(defn use-lref [] : int
   (let [p (lref/new 42)]
     0))
 (println (use-lref))

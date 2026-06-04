@@ -8,7 +8,7 @@
 ;; Expected output:
 ;;   run returned
 
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi -pthread */
   return 0;
   ```)
@@ -19,22 +19,22 @@
 (extern-c tur_reactor_stop [r :ptr] :void)
 (extern-c tur_reactor_free [r :ptr] :void)
 
-(defn make-pipe [] :ptr<void>
+(defn make-pipe [] : ptr<void>
   ```c
   int *fds = (int *)malloc(2 * sizeof(int));
   if (pipe(fds) < 0) { free(fds); return NULL; }
   return (void *)fds;
   ```)
 
-(defn pipe-read-fd [p :ptr<void>] :int
+(defn pipe-read-fd [p : ptr<void>] : int
   ```c return (int64_t)((int *)p)[0]; ```)
 
-(defn pipe-close [p :ptr<void>] :nil
+(defn pipe-close [p : ptr<void>] : nil
   ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
 
 ;; Worker: sleep 20ms, then call tur_reactor_stop(r).
 ;; arg is the reactor pointer cast to void*.
-(defn stopper-worker [arg :ptr<void>] :ptr<void>
+(defn stopper-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>
   struct timespec ts = { 0, 20000000L }; /* 20 ms */
@@ -43,21 +43,21 @@
   return NULL;
   ```)
 
-(defn spawn-stopper [r :ptr<void>] :ptr<void>
+(defn spawn-stopper [r : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))stopper_worker, (void *)r);
   return (void *)t;
   ```)
 
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r       (tur_reactor_new)
         p       (make-pipe)
         _src    (tur_reactor_add_fd r (pipe-read-fd p) 1   ;; READ = 1
-                   (fn [id events ud] :nil
+                   (fn [id events ud] : nil
                      (println "fd fired (unexpected)"))
                    0)
         stopper (spawn-stopper r)]

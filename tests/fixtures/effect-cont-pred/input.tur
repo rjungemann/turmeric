@@ -3,7 +3,7 @@
 ;; returns true since the static one-shot check prevents double-resume.
 (defeffect Ask [] :int)
 
-(defn ask-with-check [] :int
+(defn ask-with-check [] : int
   (perform (Ask)))
 
 ;; The handler checks (cont? k) before resuming.

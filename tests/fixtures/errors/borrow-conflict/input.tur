@@ -1,7 +1,7 @@
 ; Phase 12: Borrow aliasing conflict
 ; &mut T conflicts with existing &T
 
-(defn main [] :int
+(defn main [] : int
   (let [x 42]
     (let [r1 (& x)]
       (let [r2 &mut x]    ; ERROR: cannot borrow as mutable while already borrowed

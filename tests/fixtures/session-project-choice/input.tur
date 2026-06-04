@@ -7,26 +7,26 @@
     [left  (-> A B int)]
     [right]))
 
-(defn spawn [f :ptr<void>] :ptr<void>
+(defn spawn [f : ptr<void>] : ptr<void>
   ```c
   pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(tid, NULL, tur_session_thread_wrapper, f);
   return (void *)tid;
   ```)
 
-(defn join [t :ptr<void>] :int
+(defn join [t : ptr<void>] : int
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   return 0;
   ```)
 
-(defn role-a [^linear ch :(project Choose2 A)] :nil
+(defn role-a [^linear ch :(project Choose2 A)] : nil
   (let [ch (choose-left ch)]
     (let [ch (send ch 99)]
       (close ch))))
 
-(defn role-b [^linear ch :(project Choose2 B)] :nil
+(defn role-b [^linear ch :(project Choose2 B)] : nil
   (match (offer ch)
     (Left ch)
       (let [[v ch] (recv ch)]
@@ -35,7 +35,7 @@
     (Right ch)
       (close ch)))
 
-(defn main [] :int
+(defn main [] : int
   (let [[ca cb] (make-session (Choose (Send int Close) Close))]
     (let [t (spawn (fn [] (role-b cb)))]
       (role-a ca)

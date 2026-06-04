@@ -4,7 +4,7 @@
 ;;;   ARG1=hello ARG2=world tur run examples/cli_args_demo.tur
 ;;;   ; => hello world
 
-(defn main [] :void
+(defn main [] : void
   (print "Environment variables: ")
   (print (getenv "ARG1"))
   (print " ")

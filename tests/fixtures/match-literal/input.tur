@@ -1,18 +1,18 @@
 ;;; Phase S4-lit: literal pattern matching -- integer, bool, and string literals.
 
-(defn int-name [n :int] :cstr
+(defn int-name [n : int] : cstr
   (match n
     0 "zero"
     1 "one"
     2 "two"
     _ "other"))
 
-(defn bool-desc [b :bool] :cstr
+(defn bool-desc [b : bool] : cstr
   (match b
     true  "yes"
     false "no"))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (println (int-name 0))
     (println (int-name 1))

@@ -2,7 +2,7 @@
 ; Assigning a ref to another binding poisons the source.
 ; Any subsequent use of the source is a compile error.
 
-(defn main [] :int
+(defn main [] : int
   (let [a (ref 10)]
     (let [b a]
       (println @b)

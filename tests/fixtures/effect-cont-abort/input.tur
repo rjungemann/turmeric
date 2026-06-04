@@ -3,7 +3,7 @@
 
 (defeffect Fail [msg :cstr] :int)
 
-(defn main [] :int
+(defn main [] : int
   (let [result
     (handle (+ (perform (Fail "oops")) 1)
       (Fail [msg] k) -1)]

@@ -1,4 +1,4 @@
 ;; RD2: #json-str<>(x) with an empty type hint is a reader error.
-(defn f [b :cstr] :int
+(defn f [b : cstr] : int
   #json-str<>(b))
-(defn main [] :int 0)
+(defn main [] : int 0)

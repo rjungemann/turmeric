@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [x 10]
     (defer (println "outer-1"))
     (defer (println "outer-2"))

@@ -9,20 +9,20 @@
 (defeffect Abort [msg :cstr] :int)
 
 ;;; run-write -- annotated function that performs Write.
-(defn run-write [] #{Write} :nil
+(defn run-write [] #{Write} : nil
   (perform (Write "hello from write")))
 
 ;;; run-fail-handled -- performs Fail but handles it locally.
-(defn run-fail-handled [] #{} :nil
+(defn run-fail-handled [] #{} : nil
   (handle
     (perform (Fail "oops"))
     (Fail [msg] k) (println msg)))
 
 ;;; run-log -- annotated function that performs Log.
-(defn run-log [] #{Log} :nil
+(defn run-log [] #{Log} : nil
   (perform (Log "info" "log message")))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (handle
       (handle

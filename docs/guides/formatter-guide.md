@@ -111,8 +111,8 @@ reformat embedded C.
 Before formatting:
 
 ```turmeric
-(defn add [x :int y :int] :int (+ x y))
-(defn factorial [n :int] :int (if (<= n 1) 1 (* n (factorial (- n 1)))))
+(defn add [x : int y : int] : int (+ x y))
+(defn factorial [n : int] : int (if (<= n 1) 1 (* n (factorial (- n 1)))))
 ```
 
 ```sweet-exp
@@ -127,10 +127,10 @@ defn factorial [n :int] :int
 After `tur format`:
 
 ```turmeric
-(defn add [x :int y :int] :int
+(defn add [x : int y : int] : int
   (+ x y))
 
-(defn factorial [n :int] :int
+(defn factorial [n : int] : int
   (if (<= n 1)
     1
     (* n (factorial (- n 1)))))

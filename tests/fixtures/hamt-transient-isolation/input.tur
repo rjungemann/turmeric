@@ -1,6 +1,6 @@
 ; P4: Transient isolation — original map unchanged after transient mutations
 
-(defn alloc-str [s :cstr] :ptr<void>
+(defn alloc-str [s : cstr] : ptr<void>
   ```c
   #include <string.h>
   char *p = (char *)malloc(strlen(s) + 1);
@@ -8,13 +8,13 @@
   return (void *)p;
   ```)
 
-(defn build-base [] :ptr<void>
+(defn build-base [] : ptr<void>
   (let [k1 (alloc-str "key1")]
     (let [v1 (alloc-str "val1")]
       (let [m0 (hamt/new)]
         (hamt/set m0 (hamt/hash-str "key1") k1 v1)))))
 
-(defn main [] :int
+(defn main [] : int
   (let [k1 (alloc-str "key1")]
     (let [m1 (build-base)]
       (let [t (hamt/transient m1)]

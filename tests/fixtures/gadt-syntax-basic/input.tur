@@ -2,6 +2,6 @@
   (Lit : (Expr int))
   (Add : (Expr int)))
 
-(defn main [] :int
+(defn main [] : int
   (println "ok")
   0)

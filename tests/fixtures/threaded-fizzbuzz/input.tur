@@ -13,7 +13,7 @@
 ;; Main joins all threads then prints results 0..14 in order.
 
 ;; Allocate a flat int64_t[15] results array, zero-initialised.
-(defn fb-results-new [] :ptr<void>
+(defn fb-results-new [] : ptr<void>
   ```c
   int64_t *r = (int64_t *)malloc(15 * sizeof(int64_t));
   if (!r) { fprintf(stderr, "fb-results-new: oom\n"); abort(); }
@@ -21,13 +21,13 @@
   return (void *)r;
   ```)
 
-(defn fb-results-free [r :ptr<void>] :nil
+(defn fb-results-free [r : ptr<void>] : nil
   ```c
   free(r);
   ```)
 
 ;; Range arg: { results_ptr, start_idx (0-based), count }
-(defn fb-range-new [results :ptr<void> start :int count :int] :ptr<void>
+(defn fb-range-new [results : ptr<void> start : int count : int] : ptr<void>
   ```c
   typedef struct { int64_t *results; int64_t start; int64_t count; } FBRange;
   FBRange *rng = (FBRange *)malloc(sizeof(FBRange));
@@ -38,13 +38,13 @@
   return (void *)rng;
   ```)
 
-(defn fb-range-free [rng :ptr<void>] :nil
+(defn fb-range-free [rng : ptr<void>] : nil
   ```c
   free(rng);
   ```)
 
 ;; Worker: fills the assigned slice of the results array.
-(defn fb-worker [arg :ptr<void>] :ptr<void>
+(defn fb-worker [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct { int64_t *results; int64_t start; int64_t count; } FBRange;
   FBRange *rng = (FBRange *)arg;
@@ -60,7 +60,7 @@
   ```)
 
 ;; Spawn a thread running fn-ptr with the given arg; return pthread_t handle.
-(defn fb-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn fb-thread-spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "fb-thread-spawn: oom\n"); abort(); }
@@ -69,14 +69,14 @@
   ```)
 
 ;; Join a thread and free its handle.
-(defn fb-thread-join [t :ptr<void>] :nil
+(defn fb-thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
 ;; Print the result at index i.
-(defn fb-print [results :ptr<void> i :int] :nil
+(defn fb-print [results : ptr<void> i : int] : nil
   ```c
   int64_t v = ((int64_t *)results)[i];
   if      (v == -3) printf("fizzbuzz\n");
@@ -85,7 +85,7 @@
   else              printf("%lld\n", (long long)v);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [results (fb-results-new)]
     (let [rng-a (fb-range-new results 0  5)]
       (let [rng-b (fb-range-new results 5  5)]

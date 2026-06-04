@@ -272,15 +272,15 @@ An effect row appears between the parameter list and the return type:
 
 ```turmeric
 ;; Annotated: may perform the Write effect
-(defn log-msg [msg :cstr] #{Write} :nil
+(defn log-msg [msg : cstr] #{Write} : nil
   (perform (Write msg)))
 
 ;; Pure: performs no effects
-(defn add [a :int b :int] #{} :int
+(defn add [a : int b : int] #{} : int
   (+ a b))
 
 ;; Row-polymorphic: propagates the row of the function argument
-(defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+(defn run-twice [f :(fn [] #{e} :int)] #{e} : int
   (+ (f) (f)))
 ```
 ```sweet-exp
@@ -394,11 +394,11 @@ deprecated no-op.)
 ```turmeric
 ;; k aborts the pending (+ 100 ...) and returns 41 at the call/cc site; the
 ;; outer (+ 1 ...) makes 42 -- with no enclosing reset.
-(defn answer [] :int
+(defn answer [] : int
   (+ 1 (call/cc (fn [k] (+ 100 (k 41))))))   ; => 42
 
 ;; f that ignores k just returns its body value.
-(defn plain [] :int
+(defn plain [] : int
   (+ 1 (call/cc (fn [k] 10))))                ; => 11
 ```
 
@@ -420,7 +420,7 @@ reach -- use `shift`/`shift0` or `call/cc*` when you want delimited capture.
 (the `shift0`-style behavior). It is the idiomatic early-exit:
 
 ```turmeric
-(defn first-positive [] :int
+(defn first-positive [] : int
   (escape (fn [k]
     (when (> -3 0) (k -3))
     (when (>  7 0) (k 7))     ; first positive: aborts here with 7
@@ -439,7 +439,7 @@ a non-default flavor.
 is `TUR-E0100` / `TUR-E0101`). Opt into exactly-once accounting with `^linear`:
 
 ```turmeric
-(defn use-once [] :int
+(defn use-once [] : int
   (call/cc (fn [^linear k] (k 42))))   ; k must be invoked exactly once
 ```
 

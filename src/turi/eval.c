@@ -3826,6 +3826,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
     diag_reset();
 
     SourceFile *sfile = (SourceFile *)arena_alloc(eval_arena, sizeof(SourceFile));
+    /* arena_alloc does not zero; clear so xform_map/orig_src start NULL.
+     * Otherwise diagnostic snippet rendering dereferences uninitialized
+     * memory (the sweet-exp xform map) and crashes. */
+    memset(sfile, 0, sizeof(*sfile));
     sfile->path        = "<eval>";
     sfile->src         = src_copy;
     sfile->len         = src_len;

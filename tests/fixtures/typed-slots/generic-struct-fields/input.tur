@@ -5,7 +5,7 @@
   (fst : A)
   (snd : B))
 
-(defn main [] :int
+(defn main [] : int
   (let [b (make-struct Box 3)
         ^mut p (make-struct Duo 1 2)]
     (println (+ (.value b) 4))

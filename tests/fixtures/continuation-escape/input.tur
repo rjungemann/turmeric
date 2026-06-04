@@ -3,15 +3,15 @@
 ;; unwinds to the escape site with v, abandoning the pending computation.
 
 ;; (k 5) aborts the pending (+ 1 ...); escape returns 5, the let binds v=5.
-(defn test-escape-abort [] :int
+(defn test-escape-abort [] : int
   (let [v (escape (fn [k] (+ 1 (k 5))))]
     (+ v 10)))
 
 ;; f ignores k: the body value (100) flows out normally.
-(defn test-escape-normal [] :int
+(defn test-escape-normal [] : int
   (escape (fn [k] 100)))
 
-(defn main [] :int
+(defn main [] : int
   (println (test-escape-abort))
   (println (test-escape-normal))
   0)

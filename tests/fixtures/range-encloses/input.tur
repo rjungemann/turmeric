@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   (println (range-encloses? (closed-range 0 10) (closed-range 2 8)))   ; true
   (println (range-encloses? (closed-range 2 8)  (closed-range 0 10)))  ; false
   (println (range-encloses? (at-least-range 0)  (closed-range 5 100))) ; true

@@ -1,12 +1,12 @@
 ; IT4: union match dispatch -- runtime tag-checking for (A | B) values.
 ; A function that accepts (int | bool) and branches on the actual type.
 
-(defn describe [x : (int | bool)] :cstr
+(defn describe [x : (int | bool)] : cstr
   (match x
     (n : int)  "got-int"
     (b : bool) "got-bool"))
 
-(defn main [] :int
+(defn main [] : int
   (println (describe 42))
   (println (describe true))
   (println (describe 0))

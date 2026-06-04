@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [a (rc/of 7)]
     (let [b (rc/of (rc/clone a))]
       (println (rc/strong-count a))

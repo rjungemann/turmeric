@@ -6,10 +6,10 @@
 
 (defeffect GetK [] :int)
 
-(defn main [] :int
+(defn main [] : int
   (handle (perform (GetK))
     (GetK [] k)
       ;; ERROR: continuation k captured by async fn — would escape its handler scope.
-      (await (async (fn [] :int
+      (await (async (fn [] : int
                       (resume k 42)))))
   0)

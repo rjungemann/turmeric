@@ -3,5 +3,5 @@
 ;; beta/__h returns 200.
 (defmodule beta
   (export beta-val)
-  (defn __h [] :int 200)
-  (defn beta-val [] :int (__h)))
+  (defn __h [] : int 200)
+  (defn beta-val [] : int (__h)))

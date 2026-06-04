@@ -2,4 +2,4 @@
   (Lit)
   (Add : (Expr int)))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

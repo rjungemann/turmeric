@@ -6,20 +6,20 @@
 ;; NoClone has no Clone instance, so capturing it must produce TUR-E0014.
 
 (defclass Clone [a]
-  (clone [x] :int))
+  (clone [x] : int))
 
 (definstance Clone [int]
   (clone [x] x))
 
 ;; NoClone: a struct with no Clone instance — captures here are illegal.
-(defstruct NoClone :copy [x :int])
+(defstruct NoClone :copy [x : int])
 
-(defn k-discard [k] :int 0)
+(defn k-discard [k] : int 0)
 
-(defn test [] :int
+(defn test [] : int
   (let [nc (make-struct NoClone 42)]
     (cloneable-reset
       (cloneable-shift k-discard nc))))
 
-(defn main [] :int
+(defn main [] : int
   (test))

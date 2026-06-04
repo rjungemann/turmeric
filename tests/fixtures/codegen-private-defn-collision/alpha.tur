@@ -2,5 +2,5 @@
 ;; exported function alpha-val that calls its own __h.  alpha/__h returns 100.
 (defmodule alpha
   (export alpha-val)
-  (defn __h [] :int 100)
-  (defn alpha-val [] :int (__h)))
+  (defn __h [] : int 100)
+  (defn alpha-val [] : int (__h)))

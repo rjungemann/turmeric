@@ -125,7 +125,7 @@ A field list mixes `:cstr` keys with schema pointers, which a homogeneous
 `Vec` cannot hold, so object schemas are built incrementally:
 
 ```turmeric
-(defn user-schema [] :int
+(defn user-schema [] : int
   (schema/field
     (schema/field (schema/object-new) "name" (schema/str))
     "age" (schema/int)))
@@ -173,12 +173,12 @@ Decoding does **not** fail fast. Every violation is collected, each tagged with
 a dot-separated path (`address.zip`) or an array index (`children[0].value`):
 
 ```turmeric
-(defn address-schema [] :int
+(defn address-schema [] : int
   (schema/field
     (schema/field (schema/object-new) "city" (schema/str))
     "zip" (schema/str)))
 
-(defn user-schema [] :int
+(defn user-schema [] : int
   (schema/field
     (schema/field (schema/object-new) "name" (schema/str))
     "address" (address-schema)))
@@ -215,7 +215,7 @@ the schema itself in as `self`. The body is forced lazily on first decode and
 memoized:
 
 ```turmeric
-(defn tree-schema [] :int
+(defn tree-schema [] : int
   (schema/rec
     (fn [self]
       (schema/field
@@ -255,9 +255,9 @@ binding), not from any argument.
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defstruct User :copy [name :cstr age :int])
+(defstruct User :copy [name : cstr age : int])
 
-(defn user-schema [] :int
+(defn user-schema [] : int
   (schema/field
     (schema/field (schema/object-new) "name" (schema/str))
     "age" (schema/int)))
@@ -336,7 +336,7 @@ once.
 | `schema/alt a b` | `<\|>` | two-arm first-match union |
 
 ```turmeric
-(defn double-it [x :int] :int (* x 2))
+(defn double-it [x : int] : int (* x 2))
 
 ;; pure(double-it) <*> field-of("n", int)  -- on {"n":21} => 42
 (schema-decode! (schema/ap (schema/always double-it)
@@ -394,7 +394,7 @@ the identity (the value *is* the schema pointer). Build a struct field by field:
 
 ```turmeric
 ;; ->User is a curried constructor: name -> (age -> boxed User)
-(defn user-schema [] :int
+(defn user-schema [] : int
   (let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
         age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))]
     (.raw (ap (fmap name-s ->User) age-s))))   ; Validation: both fields decoded, errors accumulated

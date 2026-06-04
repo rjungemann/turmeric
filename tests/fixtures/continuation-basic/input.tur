@@ -1,16 +1,16 @@
 ;; Phase 18: Delimited continuations - basic test
 
-(defn test-reset [] :int
+(defn test-reset [] : int
   (reset 42))
 
 ;; Test that shift calls its function argument with the body value
 ;; (fn [v] (+ v 1)) takes a value and adds 1 to it
 ;; (shift (fn [v] (+ v 1)) 42) should call the function with 42, returning 43
-(defn test-shift [] :int
+(defn test-shift [] : int
   (reset
     (shift (fn [v] (+ v 1)) 42)))
 
 ;; Test nested shift - the inner shift should capture and call its function
-(defn test-shift-nested [] :int
+(defn test-shift-nested [] : int
   (reset
     (shift (fn [v] (+ v 10)) 5)))

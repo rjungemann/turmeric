@@ -5,4 +5,4 @@
 (defkind Bifunctor2 (* -> * -> *))
 (defkind Identity0 *)
 
-(defn main [] :int 0)
+(defn main [] : int 0)

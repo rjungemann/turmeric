@@ -36,8 +36,8 @@ Arithmetic on `int` and `float` compiles to the corresponding C types.
 There is no boxing overhead for scalars declared with concrete types:
 
 ```turmeric
-(defn square [x] :int (* x x))
-(defn hyp [a b] :float
+(defn square [x] : int (* x x))
+(defn hyp [a b] : float
   (sqrt (+ (* a a) (* b b))))
 ```
 
@@ -59,14 +59,14 @@ Iterative is faster for large N because it avoids stack growth:
 ; iterative -- O(n) time, O(1) space.  The named-let `loop` call is a
 ; self-tail-call, so it is lowered to an iterative backedge (see
 ; "Self-tail-call optimization" below): the stack does not grow with n.
-(defn fib-iter [n] :int
+(defn fib-iter [n] : int
   (let loop [i n a 0 b 1]
     (if (= i 0)
       a
       (loop (- i 1) b (+ a b)))))
 
 ; recursive -- O(2^n) time, avoid for n > ~30
-(defn fib-rec [n] :int
+(defn fib-rec [n] : int
   (if (< n 2)
     n
     (+ (fib-rec (- n 1)) (fib-rec (- n 2)))))

@@ -6,33 +6,33 @@
 ;; original err payload (99) rather than the ok path.
 ;;
 
-(defn u-ok [x :int] :ptr<void>
+(defn u-ok [x : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
   ```)
 
-(defn u-err [e :int] :ptr<void>
+(defn u-err [e : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
   ```)
 
-(defn u-err-val [r :ptr<void>] :int
+(defn u-err-val [r : ptr<void>] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r2 = (void*)r;
   return r2->err_val;
   ```)
 
-(defn produce [b :bool] :ptr<void>
+(defn produce [b : bool] : ptr<void>
   (if b (u-ok 7) (u-err 99)))
 
-(defn run [b :bool] :ptr<void>
+(defn run [b : bool] : ptr<void>
   ;; When b is false, (? (produce b)) returns the err Result early.
   (let [x (? (produce b))]
     (u-ok (* x 2))))
 
-(defn main [] :int
+(defn main [] : int
   (let [r (run false)]
     (println (u-err-val r))
     0))

@@ -4,7 +4,7 @@
   (Nada)
   (Just :int))
 
-(defn main [] :int
+(defn main [] : int
   (let [v (Just 7)]
     (match v
       (Nada)   (println "none")

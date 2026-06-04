@@ -7,11 +7,11 @@
 ;; value.  Previously a shift behind an `if` fell back to the legacy lowering.
 
 ;; sum-two: resume the captured continuation twice (clone for the first use).
-(defn sum-two [k] :int
+(defn sum-two [k] : int
   (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
      (tur_cloneable_cont_resume k 2)))
 
-(defn main [] :int
+(defn main [] : int
   ;; cond true, shift in THEN, context (+ 10 []): (10+1) + (10+2)    = 23
   (println (cloneable-reset
              (if (< 0 1) (+ 10 (cloneable-shift sum-two 0)) 99)))

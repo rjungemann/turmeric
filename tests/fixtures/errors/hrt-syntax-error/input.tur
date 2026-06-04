@@ -2,5 +2,5 @@
 ; (forall [a] a) is a type-level form and cannot appear where a value is expected.
 (def x (forall [a] a))
 
-(defn main [] :int
+(defn main [] : int
   0)

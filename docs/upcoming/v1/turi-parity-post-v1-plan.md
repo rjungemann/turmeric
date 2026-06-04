@@ -120,6 +120,31 @@ EX_LETREC                EX_SHIFT
    `EX_PANIC_PAYLOAD_DOWNS`.
 6. **Effect / channel select:** `EX_WITH_HANDLER`, `EX_SELECT`.
 
+### Builtin natives registered only on the compiler side
+
+The `EX_*` audit above counts expression kinds, but the parity gap also
+shows up at the **builtin-native** layer: functions that exist as
+compiler builtins with no corresponding registration in the turi
+interpreter. These fail at runtime under `tur repl` and the WASM REPL
+even when the source parses cleanly.
+
+Known instances:
+
+- **`rc/of`, `rc/clone`, `rc/drop`, `rc/strong-count`** -- registered
+  only as compiler builtins (`src/compiler/builtins.c:140-146`). A grep
+  of `src/turi/` returns zero references, so any program that touches
+  `rc/*` runs fine under `tur build` / `tur run` but errors out under
+  the interpreter and the WASM REPL. Doc snippets in
+  `docs/guides/eval-api.md` that demonstrate `rc/of` are therefore
+  misleading for sandbox/WASM readers.
+
+TI8's `tools/check_turi_parity.py` should be extended to diff the
+compiler's builtin-native registry against the interpreter's native
+table (not just `EX_*` enums) so this class of gap is caught by the
+same CI ratchet. Until then, treat any new `register_builtin` in
+`src/compiler/builtins.c` without a matching `turi_register_native` as
+a TI-gap to file.
+
 ### Test-harness gap
 
 - `tests/run-turi.sh` ships an inline `TURI_FIXTURES_DEFAULT` string

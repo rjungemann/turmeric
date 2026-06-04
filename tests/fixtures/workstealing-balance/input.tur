@@ -17,7 +17,7 @@
 
 ;; Global BalState accessor: pass a real ptr to set, call g_state(NULL)
 ;; from C blocks to get.
-(defn g-state [set-to :ptr<void>] :ptr<void>
+(defn g-state [set-to : ptr<void>] : ptr<void>
   ```c
   static void *s = NULL;
   if (set_to) s = set_to;
@@ -25,7 +25,7 @@
   ```)
 
 ;; Allocate a work-stealing deque with the given power-of-2 capacity.
-(defn bwsd-new [cap :int] :ptr<void>
+(defn bwsd-new [cap : int] : ptr<void>
   ```c
   typedef struct {
       void  **buffer;
@@ -46,7 +46,7 @@
   ```)
 
 ;; Push an item (owner / bottom side).
-(defn bwsd-push [d :ptr<void> item :ptr<void>] :nil
+(defn bwsd-push [d : ptr<void> item : ptr<void>] : nil
   ```c
   typedef struct {
       void  **buffer;
@@ -64,7 +64,7 @@
   ```)
 
 ;; Pop from the bottom (owner side); returns 0 / NULL if empty.
-(defn bwsd-pop [d :ptr<void>] :ptr<void>
+(defn bwsd-pop [d : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       void  **buffer;
@@ -84,7 +84,7 @@
   ```)
 
 ;; Steal from the top (thief / CAS side); returns 0 / NULL on failure.
-(defn bwsd-steal [d :ptr<void>] :ptr<void>
+(defn bwsd-steal [d : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       void  **buffer;
@@ -106,7 +106,7 @@
   ```)
 
 ;; Free a deque.
-(defn bwsd-free [d :ptr<void>] :nil
+(defn bwsd-free [d : ptr<void>] : nil
   ```c
   typedef struct {
       void  **buffer;
@@ -124,7 +124,7 @@
 ;; arg = thread index (0 or 1) packed as (void *)(intptr_t)idx.
 ;; BalState is accessed via g_state(NULL) — a direct C call to the
 ;; Turmeric-generated g_state function (forward-declared in same TU).
-(defn bal-worker [arg :ptr<void>] :ptr<void>
+(defn bal-worker [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       void  **deques;   /* void *[2] */
@@ -165,7 +165,7 @@
 
 ;; Spawn 2 worker threads with function pointer fn.
 ;; Returns a malloc'd pthread_t[2] — caller must join and free.
-(defn launch-workers [fn :ptr<void>] :ptr<void>
+(defn launch-workers [fn : ptr<void>] : ptr<void>
   ```c
   pthread_t *threads = (pthread_t *)malloc(2 * sizeof(pthread_t));
   if (!threads) { fprintf(stderr, "launch-workers: oom\n"); abort(); }
@@ -178,7 +178,7 @@
   ```)
 
 ;; Join 2 worker threads and free the handle array.
-(defn join-workers [handles :ptr<void>] :nil
+(defn join-workers [handles : ptr<void>] : nil
   ```c
   pthread_t *threads = (pthread_t *)handles;
   for (int i = 0; i < 2; i++) pthread_join(threads[i], NULL);
@@ -186,7 +186,7 @@
   ```)
 
 ;; Allocate and initialise a BalState; sets the global via g-state.
-(defn make-state [deque0 :ptr<void> deque1 :ptr<void> n :int] :ptr<void>
+(defn make-state [deque0 : ptr<void> deque1 : ptr<void> n : int] : ptr<void>
   ```c
   typedef struct {
       void  **deques;
@@ -212,7 +212,7 @@
   ```)
 
 ;; Wait until all items are processed, then return the final count.
-(defn wait-done [state :ptr<void>] :int
+(defn wait-done [state : ptr<void>] : int
   ```c
   typedef struct {
       void  **deques;
@@ -231,13 +231,13 @@
   ```)
 
 ;; Print final count to stdout.
-(defn print-count [count :int] :nil
+(defn print-count [count : int] : nil
   ```c
   printf("items-processed: %lld\n", (long long)count);
   ```)
 
 ;; Free a BalState (call after all workers have joined).
-(defn free-state [state :ptr<void>] :nil
+(defn free-state [state : ptr<void>] : nil
   ```c
   typedef struct {
       void  **deques;
@@ -253,7 +253,7 @@
   free(s);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [d0 (bwsd-new 16)]
     (let [d1 (bwsd-new 16)]
       ;; Push 8 sentinel items into deque[0]

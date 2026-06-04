@@ -13,7 +13,7 @@
 ;; No threads required: channels are pre-filled, every select uses the
 ;; non-blocking path.
 
-(defn chan-new [cap :int] :ptr<void>
+(defn chan-new [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -32,7 +32,7 @@
   return (void *)ch;
   ```)
 
-(defn chan-fill [ch :ptr<void> n :int] :nil
+(defn chan-fill [ch : ptr<void> n : int] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -48,7 +48,7 @@
   }
   ```)
 
-(defn chan-free [ch :ptr<void>] :nil
+(defn chan-free [ch : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -64,7 +64,7 @@
   ```)
 
 ;; Bitwise OR via inline C.
-(defn bit-or [a :int b :int] :int
+(defn bit-or [a : int b : int] : int
   ```c
   return (int64_t)((int64_t)a | (int64_t)b);
   ```)
@@ -72,8 +72,8 @@
 ;; Tail-recursive loop over 4 channels.
 ;; Returns bitmask of which channels fired at least once.
 ;; The (+ vN N) form ensures each recv binding is referenced in its body.
-(defn mark-loop [ch-a :ptr<void> ch-b :ptr<void> ch-c :ptr<void> ch-d :ptr<void>
-                 iter :int seen :int] :int
+(defn mark-loop [ch-a : ptr<void> ch-b : ptr<void> ch-c : ptr<void> ch-d : ptr<void>
+                 iter : int seen : int] : int
   (if (= iter 0)
     seen
     (let [bit (select ((ch-a :recv va) (+ va 1))
@@ -82,7 +82,7 @@
                       ((ch-d :recv vd) (+ vd 8)))]
       (mark-loop ch-a ch-b ch-c ch-d (- iter 1) (bit-or seen bit)))))
 
-(defn main [] :int
+(defn main [] : int
   (let [ch-a (chan-new 1000)
         ch-b (chan-new 1000)
         ch-c (chan-new 1000)

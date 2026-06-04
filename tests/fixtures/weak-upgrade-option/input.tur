@@ -2,13 +2,13 @@
 ;;   - some (non-NULL) when the rc is still alive
 ;;   - none (NULL) after the rc has been dropped
 
-(defn ptr-opt-some? [o :ptr<void>] :bool
+(defn ptr-opt-some? [o : ptr<void>] : bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Case 1: rc still alive -- upgrade should succeed (some)
   (let [rc1 (rc/of 42)]
     (let [w1 (weak rc1)

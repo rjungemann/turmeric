@@ -14,29 +14,29 @@
 ;;   client got: hello echo
 ;;   all done
 
-(defn mk-scheduler [] :ptr<void>
+(defn mk-scheduler [] : ptr<void>
   ```c
   TurScheduler *s = tur_scheduler_new();
   tur_scheduler = s;
   return (void *)s;
   ```)
 
-(defn mk-fiber [fn :ptr<void>] :ptr<void>
+(defn mk-fiber [fn : ptr<void>] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
   ```)
 
-(defn sched-spawn [s :ptr<void> f :ptr<void>] :nil
+(defn sched-spawn [s : ptr<void> f : ptr<void>] : nil
   ```c
   tur_scheduler_spawn((TurScheduler *)s, (FiberBlock *)f);
   ```)
 
-(defn sched-run [s :ptr<void>] :nil
+(defn sched-run [s : ptr<void>] : nil
   ```c
   tur_scheduler_run((TurScheduler *)s);
   ```)
 
-(defn timer-sleep-ms [ms :int] :nil
+(defn timer-sleep-ms [ms : int] : nil
   ```c
   if (ms <= 0) return;
   FiberBlock *me = tur_current_fiber;
@@ -53,7 +53,7 @@
 ;; in a global so the client can connect.
 ;; For simplicity, use a fixed port with SO_REUSEADDR.
 
-(defn fiber-server [] :nil
+(defn fiber-server [] : nil
   ```c
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) { perror("socket"); abort(); }
@@ -125,7 +125,7 @@
   close(fd);
   ```)
 
-(defn fiber-client [] :nil
+(defn fiber-client [] : nil
   ```c
   /* Brief sleep to let server start listening */
   FiberBlock *me = tur_current_fiber;
@@ -187,7 +187,7 @@
   close(fd);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (println "start")
   (let [s (mk-scheduler)]
     (sched-spawn s (mk-fiber fiber-server))

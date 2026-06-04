@@ -25,7 +25,7 @@
 ;;;   (hash true) ; => 1
 ;;;
 ;;; Since: Phase TM0
-(defclass Hash [a] (hash [x] :int))
+(defclass Hash [a] (hash [x] : int))
 ;;; Hash [int] -- Hash instance for int (identity hash).
 
 (definstance Hash [int] (hash [x] x))
@@ -34,11 +34,11 @@
 (definstance Hash [bool] (hash [x] (if x 1 0)))
 ;;; Hash [cstr] -- Hash instance for cstr (content hash via tur_hamt_hash_str).
 
-(definstance Hash [cstr] (hash [x] :int ```c return (int64_t)tur_hamt_hash_str(x);
+(definstance Hash [cstr] (hash [x] : int ```c return (int64_t)tur_hamt_hash_str(x);
     ```))
 ;;; Hash [float32] -- Hash instance for float32 (bit-cast and hash).
 
-(definstance Hash [float32] (hash [x] :int ```c union { float f; int32_t i; } u;
+(definstance Hash [float32] (hash [x] : int ```c union { float f; int32_t i; } u;
     u.f = (float)x;
     return (int64_t)u.i;
     ```))
@@ -48,7 +48,7 @@
 ;;; hash, which numerically truncates 1.5 -> 1 and collapses distinct keys.
 ;;; Bit-casting the double to its int64 pattern hashes by value instead.
 
-(definstance Hash [float] (hash [x] :int ```c union { double f; int64_t i; } u;
+(definstance Hash [float] (hash [x] : int ```c union { double f; int64_t i; } u;
     u.f = (double)x;
     return u.i;
     ```))

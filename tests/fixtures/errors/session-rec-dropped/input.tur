@@ -6,7 +6,7 @@
 ;; closing the channel, violating the linear discipline.
 ;;
 ;; Expected: TUR-E0211 -- session channel dropped before protocol completion.
-(defn bad-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+(defn bad-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] : nil
   (match (offer ch)
     (Left ch)
       (let [[n ch] (recv ch)]

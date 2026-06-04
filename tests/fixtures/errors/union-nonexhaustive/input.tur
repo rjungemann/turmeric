@@ -1,4 +1,4 @@
 ; IT1: Non-exhaustive match on union type -- missing arm for bool.
-(defn describe [x : (int | bool)] :cstr
+(defn describe [x : (int | bool)] : cstr
   (match x
     (n : int) "an int"))

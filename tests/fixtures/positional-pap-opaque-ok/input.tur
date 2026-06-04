@@ -1,0 +1,8 @@
+;; positional-pap-opaque-ok -- partially applying with a correct :A handle and
+;; saturating with another :A still type-checks and runs (Phase 3 positive).
+(defopaque A :int)
+(defn add [x : A y : A] : int ```c return (int64_t)(x + y); ```)
+(defn mk-a [n : int] : A ```c return n; ```)
+(defn main [] : int
+  (let [f (add (mk-a 0))]
+    (f (mk-a 0))))

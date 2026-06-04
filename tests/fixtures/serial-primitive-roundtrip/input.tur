@@ -8,7 +8,7 @@
 (extern-c printf_s [^cstr fmt ^cstr s] :int)
 
 ;; Helper: check int round-trip
-(defn check-int [expected :int] :int
+(defn check-int [expected : int] : int
   (let [b (.serialize expected)]
     (let [got (__inst_Serializable_deserialize_int b)]
       (if (= got expected)
@@ -20,7 +20,7 @@
           0)))))
 
 ;; Helper: check bool round-trip
-(defn check-bool [expected :bool] :int
+(defn check-bool [expected : bool] : int
   (let [b (.serialize expected)]
     (let [got (__inst_Serializable_deserialize_bool b)]
       (if (= got (if expected 1 0))
@@ -31,7 +31,7 @@
           (printf "bool FAIL\n")
           0)))))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (check-int 0)
     (check-int 42)

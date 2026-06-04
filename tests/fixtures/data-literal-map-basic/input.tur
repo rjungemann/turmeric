@@ -1,11 +1,11 @@
 ;; DL3: #map{:a 1 :b 2} round-trips through map-count / map-get.
-(defn count- [] :int
+(defn count- [] : int
   (map-count #map{:a 1 :b 2}))
-(defn get-a [] :int
+(defn get-a [] : int
   (let [m #map{:a 1 :b 2}
         k (hamt/hash-str "a")]
     (map-get m k)))
-(defn get-b [] :int
+(defn get-b [] : int
   (let [m #map{:a 1 :b 2}
         k (hamt/hash-str "b")]
     (map-get m k)))

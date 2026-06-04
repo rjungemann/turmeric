@@ -36,7 +36,7 @@
 ;;; Since: Phase 21
 
 
-(defn bytes-alloc [n :int] :ptr<void>
+(defn bytes-alloc [n : int] : ptr<void>
   ```c int64_t *buf = malloc(sizeof(int64_t) + (size_t)n);
   if (!buf) { fprintf(stderr, "bytes-alloc: out of memory\n"); exit(1); }
   buf[0] = (int64_t)n;
@@ -54,7 +54,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-len [b :ptr<void>] :int
+(defn bytes-len [b : ptr<void>] : int
   ```c if (!b) return 0;
   return (int64_t)(((int64_t*)b)[0]);
   ```)
@@ -69,7 +69,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-data [b :ptr<void>] :ptr<void>
+(defn bytes-data [b : ptr<void>] : ptr<void>
   ```c if (!b) return NULL;
   return (void*)((int64_t*)b + 1);
   ```)
@@ -81,7 +81,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-free [b :ptr<void>] :void
+(defn bytes-free [b : ptr<void>] : void
   ```c free(b);
   ```)
 ;; Concatenate two bytes values into a new one.
@@ -99,7 +99,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn bytes-concat [a :ptr<void> b :ptr<void>] :ptr<void>
+(defn bytes-concat [a : ptr<void> b : ptr<void>] : ptr<void>
   ```c int64_t la = a ? ((int64_t*)a)[0] : 0;
   int64_t lb = b ? ((int64_t*)b)[0] : 0;
   int64_t total = la + lb;
@@ -130,8 +130,8 @@
 
 
 (defclass Serializable [a]
-  (serialize [x] :ptr<void>)
-  (deserialize [b :ptr<void>] :int))
+  (serialize [x] : ptr<void>)
+  (deserialize [b : ptr<void>] : int))
 ;; ---------------------------------------------------------------------------
 ;; Primitive instances
 ;; Each instance packs its value as little-endian bytes, prefixed by length.
@@ -330,9 +330,7 @@
 
 
 (definstance Serializable [Pair] [(Serializable A) (Serializable B)]
-  (serialize [x]
-    ```c
-    struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
+  (serialize [x] ```c struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Pair: oom\n"); exit(1); }
     buf[0] = 16;
@@ -340,9 +338,7 @@
     buf[2] = p ? p->snd : 0;
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 16) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 16) {
       fprintf(stderr, "deserialize Pair: short buffer\n"); exit(1);
     }
     int64_t *d = (int64_t*)b + 1;
@@ -358,9 +354,7 @@
 ;;; Since: cps-transform-plan (value-typed cont env codec)
 
 (definstance Serializable [Option] [(Serializable A)]
-  (serialize [x]
-    ```c
-    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
+  (serialize [x] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Option: oom\n"); exit(1); }
     buf[0] = 16;
@@ -368,9 +362,7 @@
     buf[2] = (o && o->is_some) ? o->value : 0;
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 16) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 16) {
       fprintf(stderr, "deserialize Option: short buffer\n"); exit(1);
     }
     int64_t *d = (int64_t*)b + 1;
@@ -412,7 +404,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn cont-to-file [b :ptr<void> path :cstr] :int
+(defn cont-to-file [b : ptr<void> path : cstr] : int
   ```c if (!b) return 0;
   FILE *f = fopen((const char*)path, "wb");
   if (!f) return 0;
@@ -438,7 +430,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn cont-from-file [path :cstr] :ptr<void>
+(defn cont-from-file [path : cstr] : ptr<void>
   ```c FILE *f = fopen((const char*)path, "rb");
   if (!f) return NULL;
   int64_t len = 0;

@@ -9,6 +9,6 @@
   (-> A B int)
   (-> B A int))
 
-(defn main [] :int
+(defn main [] : int
   (println "ok")
   0)

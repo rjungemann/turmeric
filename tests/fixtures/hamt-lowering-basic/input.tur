@@ -1,7 +1,7 @@
 ; Phase P3: Test that persistent map operations are lowered to HAMT calls
 ; Create a persistent map and perform operations
 
-(defn main [] :int
+(defn main [] : int
   (let [^persistent m (map-new)]
     ; m is empty
     (println (count m))

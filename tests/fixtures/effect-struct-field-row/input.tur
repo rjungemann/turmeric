@@ -4,9 +4,9 @@
 
 (defeffect Emit [s :cstr] :nil)
 
-(defstruct Emitter :copy [run :fn #{Emit}])
+(defstruct Emitter :copy [run : fn #{Emit}])
 
-(defn main [] :int
+(defn main [] : int
   (let [em (make-struct Emitter (fn [s] (perform (Emit s))))]
     (handle
       (do (.run em "struct field row") 0)

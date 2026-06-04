@@ -2,7 +2,7 @@
 ;; Demonstrates that k can be stored and resumed after the handle form exits.
 (defeffect Ask [] :int)
 
-(defn compute [] :int
+(defn compute [] : int
   (let [x (perform (Ask))]
     (* x 2)))
 

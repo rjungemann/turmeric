@@ -1,6 +1,6 @@
-(defn main [] :int
+(defn main [] : int
   (let [x 10]
-    (letrec [f (fn [] :int x)]
+    (letrec [f (fn [] : int x)]
       (println (f))
       (let [x 99]
         (println (f)))

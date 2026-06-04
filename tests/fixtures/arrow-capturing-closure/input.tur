@@ -1,0 +1,56 @@
+;; Regression fixture for closure-representation-unification (Phase 1).
+;; Composes *capturing* closures through every migrated arrow combinator
+;; (arr, >>>, arrow-first, arrow-second, par-comp, arrow-split).  Before the
+;; migration these routed through the __arrow_call1 / __arrow_pair_* thin int64
+;; casts and segfaulted on a fat-closure box; they now normalize their function
+;; arguments to fat closures (^fat) and dispatch through the fat protocol.
+;; Captureless arrows (bare C function pointers) auto-shim into fat boxes, so
+;; both representations flow through the same path -- see stdlib-arrow for the
+;; captureless coverage.
+
+(load "stdlib/arrow.tur")
+
+;; Apply a fat closure (heap box: { int64_t __fn; ...env... }) to one argument.
+(defn call1 [f x] : int
+  ```c return TUR_APPLY1(f, x); ```)
+
+;; Heap pair of two int64 fields, matching the Tuple2 layout arrow.tur expects.
+(defn pair-new [a b] : int
+  ```c struct { int64_t e1, e2; } *p = malloc(sizeof(*p));
+  p->e1 = a; p->e2 = b; return (int64_t)(intptr_t)p; ```)
+(defn pair-e1 [p] : int ```c return ((int64_t *)(intptr_t)p)[0]; ```)
+(defn pair-e2 [p] : int ```c return ((int64_t *)(intptr_t)p)[1]; ```)
+
+;; Capturing closure constructors: each closes over a free variable.
+(defn make-add [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn make-mul [k : int] : ptr<void> (fn [x : int] : int (* x k)))
+
+(defn main [] : int
+  (let [add10 (make-add 10)
+        mul3  (make-mul 3)]
+    ;; arr normalizes a capturing closure to a fat box; applied directly.
+    (println (call1 (arr add10) 5))                 ;; 15
+
+    ;; >>>: (add10 >>> mul3)(4) = mul3(add10(4)) = (4+10)*3 = 42
+    (println (call1 (>>> add10 mul3) 4))            ;; 42
+
+    ;; arrow-first: add10 on first of Tuple2(5, 9) -> Tuple2(15, 9)
+    (let [r (call1 (arrow-first add10) (pair-new 5 9))]
+      (println (pair-e1 r))                          ;; 15
+      (println (pair-e2 r)))                          ;; 9
+
+    ;; arrow-second: mul3 on second of Tuple2(5, 9) -> Tuple2(5, 27)
+    (let [r (call1 (arrow-second mul3) (pair-new 5 9))]
+      (println (pair-e1 r))                          ;; 5
+      (println (pair-e2 r)))                          ;; 27
+
+    ;; par-comp: add10 on first, mul3 on second of Tuple2(5, 9) -> Tuple2(15, 27)
+    (let [r (call1 (par-comp 0 0 0 0 add10 mul3) (pair-new 5 9))]
+      (println (pair-e1 r))                          ;; 15
+      (println (pair-e2 r)))                          ;; 27
+
+    ;; arrow-split: duplicate 5 and apply both -> Tuple2(15, 15)
+    (let [r (call1 (arrow-split 0 0 0 add10 mul3) 5)]
+      (println (pair-e1 r))                          ;; 15
+      (println (pair-e2 r))))                         ;; 15
+  0)

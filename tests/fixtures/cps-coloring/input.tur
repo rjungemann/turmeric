@@ -13,17 +13,17 @@
 ;; the colored partition holds regardless of dynamic reachability, and the
 ;; program runs trivially (exit 0) under the fixture harness.
 
-(defn pure-arith [x :int y :int] :int
+(defn pure-arith [x : int y : int] : int
   (+ (* x x) (* y y)))
 
-(defn also-pure [n :int] :int
+(defn also-pure [n : int] : int
   (pure-arith n (+ n 1)))
 
-(defn uses-shift [x :int] :int
+(defn uses-shift [x : int] : int
   (reset
     (shift (fn [v] (+ v 1)) x)))
 
-(defn calls-shifter [x :int] :int
+(defn calls-shifter [x : int] : int
   (+ 1 (uses-shift x)))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

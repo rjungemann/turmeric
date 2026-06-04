@@ -5,13 +5,13 @@
 ;; Expected output:
 ;;   shutdown: 10  (sum of 0+1+2+3+4 = 10)
 
-(defn tp-identity [arg :ptr<void>] :ptr<void>
+(defn tp-identity [arg : ptr<void>] : ptr<void>
   ```c
   return arg;
   ```)
 
 ;; Worker thread for the custom thread pool.
-(defn tp-sd-worker-fn [arg :ptr<void>] :ptr<void>
+(defn tp-sd-worker-fn [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       void *queue;
@@ -62,7 +62,7 @@
   return NULL;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ```c
   typedef struct {
       void *queue;

@@ -358,7 +358,7 @@ guard shapes are recognized:
 
 ```turmeric
 ;; (is? x T) -- the dedicated type-test predicate
-(defn bump [x : any] :int
+(defn bump [x : any] : int
   (if (is? x int)
     (+ x 1)     ;; x is narrowed to int here -- no cast needed
     0))
@@ -372,7 +372,7 @@ guard shapes are recognized:
 Chaining handles multi-type dispatch:
 
 ```turmeric
-(defn describe [v : any] :cstr
+(defn describe [v : any] : cstr
   (if (is? v int)   "int"
     (if (is? v bool) "bool"
       (if (is? v Point) "point" "other"))))
