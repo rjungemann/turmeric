@@ -1,0 +1,1 @@
+function 'async-socket-close' arg 1: expected Fd, got int

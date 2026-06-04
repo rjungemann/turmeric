@@ -1,0 +1,13 @@
+;; fd-wrong-handle -- a byte count (a plain :int) cannot stand in for an Fd.
+;; Acceptance test for the I/O-sweep Fd newtype from the
+;; stdlib-opaque-handle-types plan: async-socket-recv returns the number of
+;; bytes read (an :int), while async-socket-close expects an Fd. Feeding the
+;; byte count back in as if it were the descriptor -- a classic fd/length
+;; mix-up that type-checked when both were bare :int -- is now a compile error.
+(load "stdlib/async_socket.tur")
+
+(defn main [] #{Unsafe} : int
+  (let [fd (async-socket-connect "127.0.0.1" 80)]
+    (let [n (async-socket-recv fd 256)]
+      (async-socket-close n)))
+  0)

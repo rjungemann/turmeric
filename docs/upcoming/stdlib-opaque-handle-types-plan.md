@@ -302,11 +302,37 @@ co-evolve (`condvar-wait` needs both newtypes simultaneously).
 >   parameters are *unannotated* (effectively polymorphic), plus a `Clone`
 >   instance returns the raw `:int`; newtyping it cleanly needs more than a
 >   signature pass, so it is left for a follow-up.
-> - The broad **I/O fd sweep** (`tur/io`, `tur/fs`, `tur/net`,
->   `tur/async_socket` / `_file` / `_pipe`, `tur/process`, `tur/serial`):
->   these pass raw `:int` file descriptors through inline-C and a `Fd`
->   newtype would ripple across many modules and the C surface -- a larger
->   effort than the rest of Tier 3 and best taken as its own phase.
+> - The broad **I/O fd sweep** -- see the dedicated status update below.
+
+> **Status update (2026-06-04, I/O fd sweep):** the file-descriptor slice
+> of the sweep has landed. A new shared module `stdlib/fd.tur` defines
+> `(defopaque Fd :int)` plus `fd->int` / `int->fd` / `fd-valid?` helpers
+> (the `-1` OS error value still rides in the `Fd`; test it with
+> `fd-valid?` or recover the raw int with `fd->int`).
+>
+> - **async_socket**: `async-socket-listen` / `-accept` / `-connect` return
+>   `Fd`; `-accept` / `-send` / `-recv` / `-close` take `[fd :Fd ...]`
+>   (send/recv keep their `:int` byte-count returns).
+> - **async_file**: `async-file-open` returns `Fd`; `-read` / `-write` /
+>   `-close` take `[fd :Fd ...]`.
+> - **net**: `socket-fd [s :Socket]` now returns `Fd` so it composes with
+>   the async-socket ops (e.g. `(async-socket-send (socket-fd s) ...)`).
+>   The existing linear `Socket` struct is unchanged.
+>
+> All three `(load "stdlib/fd.tur")`; the inline-C bodies are unchanged
+> (they already `(int)`-cast the descriptor, and `Fd` lowers to `:int`).
+> Acceptance fixture `errors/fd-wrong-handle` proves that feeding an
+> `async-socket-recv` byte count back into `async-socket-close` -- the
+> classic fd/length mix-up -- is now a compile-time `TUR-E0001`. No fixture
+> or other stdlib module loads these I/O modules, so nothing else needed
+> updating.
+>
+> **Still deferred:** `async_pipe` (its stdin/stdout helpers take no fd
+> arguments), `tur/process` (PIDs -- a `Pid` newtype is a separate concept
+> worth its own slice), `tur/fs` (the `:int` stat / tmpfile / glob handles
+> are heterogeneous opaque-struct handles, each its own newtype), and
+> `tur/io` (already partly handle-typed via `FileHandle`; the `FILE*`-based
+> path and the dir-listing handles remain).
 >
 > Implementing the taskgroup slice (Tier 2) had already surfaced the
 > pre-existing `task-group-with*` macro bug
