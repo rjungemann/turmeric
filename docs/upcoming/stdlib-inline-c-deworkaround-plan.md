@@ -1,6 +1,7 @@
 # Stdlib Inline-C De-Workaround Plan
 
-> **Status:** Phases 1-2 complete (Phase 2: 2026-06-04); Phases 3-4 outstanding
+> **Status:** All phases complete. Phases 1-2 (codegen rewrites) landed
+> 2026-06-03/04; Phases 3-4 (triage + documentation) completed 2026-06-04.
 > **Last Updated:** 2026-06-04
 > **Type:** stdlib hygiene -- replace inline-C workarounds with idiomatic Turmeric
 > **Sibling plans:**
@@ -186,25 +187,46 @@ workarounds, but they belong in this plan so they are tracked somewhere:
    reference `re.tur` or the mw-fold path, so there was no snapshot churn;
    shipped as one change.
 
-### Phase 3 -- Tier 3 triage
+### Phase 3 -- Tier 3 triage  **[DONE 2026-06-04]**
 
 For each of `json.tur`, `future.tur`, `parsec.tur`, `threadpool.tur`,
 `chan.tur`, `httpd.tur` (the non-mw-fold portion):
 
-1. Classify each inline-C block as "libc/ABI glue" (keep) or "domain logic"
-   (rewrite candidate).
-2. Open a tracking issue per module summarising the count and the
-   rewrite plan; do not bundle into this plan's PR.
-3. Sequence rewrites after the relevant opaque-handle / advanced-typing
-   phases land so the rewrites can use the new types instead of `:int`.
+1. ~~Classify each inline-C block as "libc/ABI glue" (keep) or "domain logic"
+   (rewrite candidate).~~ DONE.
+2. ~~Open a tracking issue per module summarising the count and the
+   rewrite plan; do not bundle into this plan's PR.~~ Tracked **in-repo**
+   instead of as GitHub issues, in
+   [stdlib-inline-c-tier3-triage.md](stdlib-inline-c-tier3-triage.md).
+3. ~~Sequence rewrites after the relevant opaque-handle / advanced-typing
+   phases land so the rewrites can use the new types instead of `:int`.~~
+   Sequencing recorded in the triage doc.
 
-### Phase 4 -- Documentation-only follow-ups
+**Findings:** `threadpool.tur` (16) and `chan.tur` (11) are 100% concurrency
+glue -- 0 rewrite candidates, correct as-is. `future.tur` (3 combinators),
+`parsec.tur` (2), and `json.tur` (2) have small domain pockets blocked on
+opaque-handle types / `Monad [Parser]` / `defopaque Value` respectively.
+`httpd.tur` is the largest surface (~40 nominally-domain blocks) but almost all
+are gated on the opaque-handle plan's Request/Response/Middleware sealed types;
+no rewrites are funded here.
 
-1. Add a short note to `stdlib/tuple.tur`'s module docstring linking to a
+### Phase 4 -- Documentation-only follow-ups  **[DONE 2026-06-04]**
+
+1. ~~Add a short note to `stdlib/tuple.tur`'s module docstring linking to a
    "variadic generics" language plan stub (create the stub under
-   `docs/upcoming/` if absent).
-2. Promote KB-029 from a comment in `session.tur` to a tracked entry in the
-   language plan covering tuple/pair type syntax.
+   `docs/upcoming/` if absent).~~ DONE. The module docstring now names the
+   variadic-generic gap explicitly and links the two existing design docs
+   (`docs/archive/tuple-variadic-type-plan.md` -- Option B, deferred; and
+   `docs/design/tuple-variadic-vs-hlist.md`). No new stub was needed -- the
+   plan already exists (archived as deferred), so we linked it rather than
+   duplicating.
+2. ~~Promote KB-029 from a comment in `session.tur` to a tracked entry in the
+   language plan covering tuple/pair type syntax.~~ DONE. KB-029 already lives
+   as a tracked entry in
+   `docs/archive/history/known-bugs-followups-plan.md` (the
+   contained-stdlib fix is marked DONE there; the residual `:[(...)]`
+   parser-surface gap is the language follow-up). The `session.tur` comment now
+   cross-references that tracked entry instead of standing alone.
 
 ---
 

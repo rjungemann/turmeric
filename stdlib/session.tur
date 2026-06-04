@@ -65,11 +65,15 @@
 ;;;     (println r))   ; => 42
 ;;;
 ;;; Since: SS4
-;; KB-029: the return value of (recv ch) is the internal session recv-pair
+;; KB-029 (tracked: docs/archive/history/known-bugs-followups-plan.md): the
+;; return value of (recv ch) is the internal session recv-pair
 ;; [echoed-int, updated-Session], which has no surface type syntax (the prior
 ;; :[(int (Session ...))] tuple annotation is not a supported type form).  The
 ;; return type is left to inference -- it is exactly the recv-pair the body
 ;; yields and that callers destructure with (let [[r ch] (echo-client-call ...)]).
+;; The contained-stdlib fix is DONE (annotation dropped, file checks clean under
+;; -Xsessions); the residual :[(...)] parser-surface gap remains a tracked
+;; language follow-up there, not a workaround to paper over here.
 
 (defn echo-client-call [^linear ch : (Session (Rec self
                                                 (Choose (Send int
