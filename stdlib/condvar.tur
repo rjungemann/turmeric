@@ -9,21 +9,30 @@
 ;; from stdlib/mutex.tur.
 ;;
 ;; API:
-;;   condvar-new        []                              -- ptr<void>
-;;   condvar-wait       [c :ptr<void> m :ptr<void>]    -- nil
-;;   condvar-signal     [c :ptr<void>]                 -- nil
-;;   condvar-broadcast  [c :ptr<void>]                 -- nil
-;;   condvar-free       [c :ptr<void>]                 -- nil
+;;   condvar-new        []                              -- CondVar
+;;   condvar-wait       [c :CondVar m :Mutex]          -- nil
+;;   condvar-signal     [c :CondVar]                   -- nil
+;;   condvar-broadcast  [c :CondVar]                   -- nil
+;;   condvar-free       [c :CondVar]                   -- nil
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 2) ----
+;; CondVar wraps the underlying :ptr<void> with a nominally distinct type. This
+;; closes the long-standing condvar-wait hazard: with both args bare :ptr<void>,
+;; (condvar-wait m c) -- mutex and condvar swapped -- type-checked and deadlocked
+;; at runtime. condvar-wait now takes a CondVar and a Mutex (imported from
+;; tur/mutex below), so the swap is a compile-time error. Both lower to
+;; :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
+(load "stdlib/mutex.tur")
+(defopaque CondVar :ptr<void>)
 ;;; condvar-new -- allocate and initialise a new POSIX condition variable.
 ;;;
 ;;; Returns:
-;;;   An opaque ptr<void> handle to a heap-allocated pthread_cond_t.
+;;;   A CondVar handle to a heap-allocated pthread_cond_t.
 ;;;
 ;;; Example:
-;;;   (let [c (condvar-new)] ...)  ; => ptr<void>
+;;;   (let [c (condvar-new)] ...)  ; => CondVar
 ;;;
 ;;; Since: Phase T19-C
-(defn condvar-new [] : ptr<void>
+(defn condvar-new [] : CondVar
   ```c pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
   if (!c) { fprintf(stderr, "condvar-new: out of memory\n"); abort(); }
   pthread_cond_init(c, NULL);
@@ -40,7 +49,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-wait [c : ptr<void> m : ptr<void>] : nil
+(defn condvar-wait [c : CondVar m : Mutex] : nil
   ```c pthread_cond_wait((pthread_cond_t *)c, (pthread_mutex_t *)m);
   ```)
 ;;; condvar-signal -- wake one thread waiting on the condition variable.
@@ -53,7 +62,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-signal [c : ptr<void>] : nil
+(defn condvar-signal [c : CondVar] : nil
   ```c pthread_cond_signal((pthread_cond_t *)c);
   ```)
 ;;; condvar-broadcast -- wake all threads waiting on the condition variable.
@@ -66,7 +75,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-broadcast [c : ptr<void>] : nil
+(defn condvar-broadcast [c : CondVar] : nil
   ```c pthread_cond_broadcast((pthread_cond_t *)c);
   ```)
 ;;; condvar-free -- destroy the condition variable and release its memory.
@@ -79,7 +88,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-free [c : ptr<void>] : nil
+(defn condvar-free [c : CondVar] : nil
   ```c pthread_cond_destroy((pthread_cond_t *)c);
   free(c);
   ```)
