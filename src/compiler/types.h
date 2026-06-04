@@ -1005,6 +1005,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_fat[i] = false;
     t.as.fn.result_fat = false;  /* A#1: must initialise or UBSan fires on bool read */
+    t.as.fn.boxed = false;  /* CRU B-1: must initialise or UBSan fires on bool read */
     t.as.fn.is_variadic = false;  /* AR6: default non-variadic */
     t.as.fn.result_borrow_arg = -1; /* LS4: no lifetime-tied borrow return by default */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
