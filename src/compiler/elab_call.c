@@ -451,6 +451,17 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
      * inner fn instead of calling f directly. */
     if (head_kind == TY_PTR_VOID) {
         tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
+    } else if (head_kind == TY_FN && source_expr && source_expr->kind == EX_CALL) {
+        /* curried-fn-typed-param: the head is the *result of a call* whose
+         * static type is itself a function type -- e.g. ((adder 1) 2) where
+         * (adder 1) : (fn [int] int).  When the callee genuinely produces a
+         * fat closure (its returns_closure_fn_binding is set, as for a defn
+         * whose body is a capturing lambda), the runtime value is a heap
+         * closure box, not a thin function pointer.  Dispatch the chained
+         * application through that closure thunk; otherwise (a call that
+         * returns a bare fn reference, e.g. ((pick) 5) -> inc) the head
+         * resolves to NULL here and stays a thin pointer call. */
+        tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
     }
     if (source_expr && source_expr->kind == EX_VAR && source_expr->as.var.binding) {
         Binding *source_b = source_expr->as.var.binding;
