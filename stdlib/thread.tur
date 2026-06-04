@@ -6,19 +6,27 @@
 ;; stdlib/thread.tur -- POSIX thread spawn/join/detach (Phase T19-C)
 ;;
 ;; Wraps pthread_create / pthread_join / pthread_detach.
-;; A thread handle is a :ptr<void> pointing to a heap-allocated TurThreadHandle.
-;; The handle is consumed (freed) by thread-join or thread-detach.
+;; A thread handle is a ThreadHandle (a :ptr<void> pointing to a heap-allocated
+;; TurThreadHandle). The handle is consumed (freed) by thread-join or
+;; thread-detach.
+;;
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 3) ----
+;; ThreadHandle wraps the underlying :ptr<void> with a nominally distinct type
+;; so the checker rejects passing an unrelated handle to thread-join /
+;; thread-detach / cancel-thread. It lowers to :ptr<void> in the C ABI, so the
+;; inline-C bodies are unchanged.
+(defopaque ThreadHandle :ptr<void>)
 ;;
 ;; TC0-TC2: Cooperative cancellation API:
-;;   cancel-thread    [t :ptr<void>]   -- request cancellation of t
+;;   cancel-thread    [t :ThreadHandle] -- request cancellation of t
 ;;   cancelled?       []               -- true if the calling thread has been cancelled
 ;;   yield-point      []               -- macro: panic if cancelled (cooperative cancel point)
 ;;   with-cancel-guard [cleanup body]  -- run body; on cancel, run cleanup and return nil
 ;;
 ;; API:
-;;   thread-spawn-fn  [fn-ptr :ptr<void> arg :ptr<void>]  -- ptr<void>
-;;   thread-join      [t :ptr<void>]                       -- nil
-;;   thread-detach    [t :ptr<void>]                       -- nil
+;;   thread-spawn-fn  [fn-ptr :ptr<void> arg :ptr<void>]  -- ThreadHandle
+;;   thread-join      [t :ThreadHandle]                    -- nil
+;;   thread-detach    [t :ThreadHandle]                    -- nil
 ;;   thread-id        []                                   -- int
 ;;
 ;; Note: (thread-spawn (fn [] ...)) is the elaborator-level Send-safety gate
@@ -31,15 +39,15 @@
 ;;;   arg    -- opaque argument forwarded to fn-ptr
 ;;;
 ;;; Returns:
-;;;   A ptr<void> thread handle that must be passed to thread-join or thread-detach.
+;;;   A ThreadHandle that must be passed to thread-join or thread-detach.
 ;;;
 ;;; Example:
-;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ptr<void>
+;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ThreadHandle
 ;;;
 ;;; Since: Phase T19-C
 (defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>]
   #{Unsafe}
-  : ptr<void>
+  : ThreadHandle
   ```c TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
   if (!state) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
   pthread_mutex_init(&state->cancel_mutex, NULL);
@@ -71,7 +79,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn thread-join [t : ptr<void>]
+(defn thread-join [t : ThreadHandle]
   #{Unsafe}
   : nil
   ```c TurThreadHandle *h = (TurThreadHandle *)t;
@@ -91,7 +99,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn thread-detach [t : ptr<void>]
+(defn thread-detach [t : ThreadHandle]
   #{Unsafe}
   : nil
   ```c TurThreadHandle *h = (TurThreadHandle *)t;
@@ -133,7 +141,7 @@
 ;;; Since: Phase TC0
 
 
-(defn cancel-thread [t : ptr<void>]
+(defn cancel-thread [t : ThreadHandle]
   #{Unsafe}
   : void
   ```c TurThreadHandle *h = (TurThreadHandle *)t;

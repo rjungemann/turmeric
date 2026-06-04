@@ -271,6 +271,48 @@ co-evolve (`condvar-wait` needs both newtypes simultaneously).
 - Re-audit `tur/thread`, `tur/fiber`, `tur/stm`, `tur/ref`.
 - I/O module sweep (file descriptors, sockets).
 
+> **Status update (2026-06-04, Tier 3):** the headline `tur/atomic` slice
+> plus most of the re-audit sweep have landed.
+>
+> - **atomic** (own commit): `AtomicCell` over `:ptr<void>`; every
+>   `atomic-*` op is handle-typed (fixture `errors/atomic-wrong-handle`).
+> - **stm**: `TVar` over `:ptr` -- distinguishes the transactional-variable
+>   handle from the boxed `:ptr` values it holds. `tvar/new -> TVar`;
+>   `tvar/read` / `-write` / `-swap` / `-cas` take `[tv :TVar ...]`. No
+>   dedicated error fixture: the STM-block guard (`TUR-E0009`) fires before
+>   argument type-checking, so a standalone wrong-handle case can't reach
+>   the `TUR-E0001`; the typing is covered by compile + suite.
+> - **thread**: `ThreadHandle` over `:ptr<void>`; `thread-spawn-fn ->
+>   ThreadHandle`, `thread-join` / `-detach` / `cancel-thread` take it
+>   (fixture `errors/thread-wrong-handle`). `tur/dynvar`'s `spawn-conveying`
+>   now returns `ThreadHandle` too (it `(load "stdlib/thread.tur")`), so its
+>   documented `(thread-join (spawn-conveying ...))` contract still
+>   type-checks.
+> - **fiber**: `FiberHandle` over `:ptr<void>`; `fiber-new -> FiberHandle`,
+>   and `fiber-resume` / `-done?` / `-arg` / `-free` / `-local-get` /
+>   `-local-set!` / `scheduler-unpark!` take it (fixture
+>   `errors/fiber-wrong-handle`). The consumer `tur/scheduler_mt`
+>   (`scheduler-mt-spawn` / `-unpark`) now takes `FiberHandle` and
+>   `(load "stdlib/fiber.tur")`; the `scheduler-multithread` fixture (which
+>   loads both) flows a `FiberHandle` from `fiber-new` into
+>   `scheduler-mt-spawn` unchanged.
+>
+> **Deferred (documented, not done):**
+> - `tur/ref` -- its handle is an `:int` and its `ref-get`/`ref-free`
+>   parameters are *unannotated* (effectively polymorphic), plus a `Clone`
+>   instance returns the raw `:int`; newtyping it cleanly needs more than a
+>   signature pass, so it is left for a follow-up.
+> - The broad **I/O fd sweep** (`tur/io`, `tur/fs`, `tur/net`,
+>   `tur/async_socket` / `_file` / `_pipe`, `tur/process`, `tur/serial`):
+>   these pass raw `:int` file descriptors through inline-C and a `Fd`
+>   newtype would ripple across many modules and the C surface -- a larger
+>   effort than the rest of Tier 3 and best taken as its own phase.
+>
+> Implementing the taskgroup slice (Tier 2) had already surfaced the
+> pre-existing `task-group-with*` macro bug
+> (`docs/reported/taskgroup-wrapper-macros-emit-nil-head.md`); no new
+> defects were found in Tier 3.
+
 ### Out of scope
 
 - Pure-data modules where `:int` is a real integer (`math`, `nat`, `bits`,

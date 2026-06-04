@@ -2473,25 +2473,25 @@ static int64_t __inst_MapKey_mk_owned__float32(float);
 static int64_t __inst_MapKey_mk_box_float(double);
 static int64_t __inst_MapKey_mk_cmp_float(double);
 static int64_t __inst_MapKey_mk_owned__float(double);
-static bool __fn_599(int64_t, int64_t);
+static bool __fn_600(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_623(int64_t, int64_t);
+static bool __fn_624(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_650(int64_t, int64_t);
+static bool __fn_651(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_672(int64_t, int64_t);
-static bool __fn_676(int64_t, int64_t);
+static bool __fn_673(int64_t, int64_t);
+static bool __fn_677(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_692(int64_t, int64_t);
-static bool __fn_696(int64_t, int64_t);
+static bool __fn_693(int64_t, int64_t);
+static bool __fn_697(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_777(int64_t, int64_t);
-static bool __fn_781(int64_t, int64_t);
+static bool __fn_778(int64_t, int64_t);
+static bool __fn_782(int64_t, int64_t);
 static bool __inst_Eq_eq__Tuple2(int64_t, int64_t);
-static bool __fn_799(int64_t, int64_t);
+static bool __fn_800(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_878(int64_t, int64_t);
+static bool __fn_879(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
@@ -2612,31 +2612,31 @@ static bool mutmap_has_(int64_t, int64_t, int64_t);
 static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, void *);
 static void mutmap_free(int64_t);
-static void * fiber_new(void *, int64_t);
-static int64_t fiber_resume(void *, int64_t);
+static int64_t fiber_new(void *, int64_t);
+static int64_t fiber_resume(int64_t, int64_t);
 static void fiber_yield(int64_t);
-static int64_t fiber_done_(void *);
-static int64_t fiber_arg(void *);
-static void fiber_free(void *);
-static int64_t fiber_local_get(void *, int64_t);
-static void fiber_local_set_(void *, int64_t, int64_t);
+static int64_t fiber_done_(int64_t);
+static int64_t fiber_arg(int64_t);
+static void fiber_free(int64_t);
+static int64_t fiber_local_get(int64_t, int64_t);
+static void fiber_local_set_(int64_t, int64_t, int64_t);
 static int64_t fiber_local_current_get(int64_t);
 static void fiber_local_current_set_(int64_t, int64_t);
 static void scheduler_yield_();
 static void scheduler_park_();
-static void scheduler_unpark_(void *);
+static void scheduler_unpark_(int64_t);
 static void async_sleep(int64_t);
 static int64_t fiber_thread_id();
 static void * scheduler_mt_new(int64_t);
 static void scheduler_mt_free(void *);
-static void scheduler_mt_spawn(void *, void *);
+static void scheduler_mt_spawn(void *, int64_t);
 static void scheduler_mt_run(void *);
 static int64_t scheduler_mt_thread_id();
 static void scheduler_mt_set_current(void *);
 static void * scheduler_mt_current();
 static void scheduler_mt_yield();
 static void scheduler_mt_park();
-static void scheduler_mt_unpark(void *);
+static void scheduler_mt_unpark(int64_t);
 static void fiber_a();
 static void fiber_b();
 static void thread_sleep(int64_t);
@@ -3017,14 +3017,14 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
     .mk_owned_ = __inst_MapKey_mk_owned__float,
 };
 
-static bool __fn_599(int64_t a, int64_t b) {
+static bool __fn_600(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
         int64_t *__t2 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t2[1] = (int64_t)(intptr_t)__fn_599;
+        __t2[1] = (int64_t)(intptr_t)__fn_600;
         void *__t3 = __t2;
         return map_eq_dynamic(x, y, (void *)(intptr_t)(__t3));
 }
@@ -3037,14 +3037,14 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_623(int64_t a, int64_t b) {
+static bool __fn_624(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
         int64_t *__t4 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t4[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t4[1] = (int64_t)(intptr_t)__fn_623;
+        __t4[1] = (int64_t)(intptr_t)__fn_624;
         void *__t5 = __t4;
         return vec_eq_(x, y, (void *)(intptr_t)(__t5));
 }
@@ -3057,14 +3057,14 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_650(int64_t a, int64_t b) {
+static bool __fn_651(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
         int64_t *__t6 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t6[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t6[1] = (int64_t)(intptr_t)__fn_650;
+        __t6[1] = (int64_t)(intptr_t)__fn_651;
         void *__t7 = __t6;
         return option_eq_(x, y, (void *)(intptr_t)(__t7));
 }
@@ -3077,22 +3077,22 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_672(int64_t a, int64_t b) {
+static bool __fn_673(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_676(int64_t a, int64_t b) {
+static bool __fn_677(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
         int64_t *__t8 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t8[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t8[1] = (int64_t)(intptr_t)__fn_672;
+        __t8[1] = (int64_t)(intptr_t)__fn_673;
         void *__t9 = __t8;
         int64_t *__t10 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t10[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t10[1] = (int64_t)(intptr_t)__fn_676;
+        __t10[1] = (int64_t)(intptr_t)__fn_677;
         void *__t11 = __t10;
         return result_eq_(x, y, (void *)(intptr_t)(__t9), (void *)(intptr_t)(__t11));
 }
@@ -3105,22 +3105,22 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_692(int64_t a, int64_t b) {
+static bool __fn_693(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_696(int64_t a, int64_t b) {
+static bool __fn_697(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
         int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t12[1] = (int64_t)(intptr_t)__fn_692;
+        __t12[1] = (int64_t)(intptr_t)__fn_693;
         void *__t13 = __t12;
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_696;
+        __t14[1] = (int64_t)(intptr_t)__fn_697;
         void *__t15 = __t14;
         return pair_eq_carrier_(x, y, (void *)(intptr_t)(__t13), (void *)(intptr_t)(__t15));
 }
@@ -3133,16 +3133,16 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_777(int64_t a, int64_t b) {
+static bool __fn_778(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_781(int64_t a, int64_t b) {
+static bool __fn_782(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Tuple2(int64_t x, int64_t y) {
-        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_777), (int64_t)(intptr_t)(__fn_781));
+        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_778), (int64_t)(intptr_t)(__fn_782));
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -3153,14 +3153,14 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_ = __inst_Eq_eq__Tuple2,
 };
 
-static bool __fn_799(int64_t a, int64_t b) {
+static bool __fn_800(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
         int64_t *__t16 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t16[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t16[1] = (int64_t)(intptr_t)__fn_799;
+        __t16[1] = (int64_t)(intptr_t)__fn_800;
         void *__t17 = __t16;
         return list_eq_(x, y, (int64_t)(intptr_t)(__t17));
 }
@@ -3185,14 +3185,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_878(int64_t a, int64_t b) {
+static bool __fn_879(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
         int64_t *__t18 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t18[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t18[1] = (int64_t)(intptr_t)__fn_878;
+        __t18[1] = (int64_t)(intptr_t)__fn_879;
         void *__t19 = __t18;
         return mutmap_eq_(x, y, (void *)(intptr_t)(__t19));
 }
@@ -4297,12 +4297,12 @@ static void mutmap_free(int64_t m) {
   
 }
 
-static void * fiber_new(void * fn, int64_t stack_size) {
+static int64_t fiber_new(void * fn, int64_t stack_size) {
         return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   
 }
 
-static int64_t fiber_resume(void * f, int64_t arg) {
+static int64_t fiber_resume(int64_t f, int64_t arg) {
         return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   
 }
@@ -4312,29 +4312,29 @@ static void fiber_yield(int64_t value) {
   
 }
 
-static int64_t fiber_done_(void * f) {
+static int64_t fiber_done_(int64_t f) {
         FiberBlock *fb = (FiberBlock *)f;
   return fb ? (int64_t)fb->done : 1;
   
 }
 
-static int64_t fiber_arg(void * f) {
+static int64_t fiber_arg(int64_t f) {
         FiberBlock *fb = (FiberBlock *)f;
   return fb ? fb->arg : 0;
   
 }
 
-static void fiber_free(void * f) {
+static void fiber_free(int64_t f) {
         tur_fiber_block_free((FiberBlock *)f);
   
 }
 
-static int64_t fiber_local_get(void * f, int64_t key) {
+static int64_t fiber_local_get(int64_t f, int64_t key) {
         return tur_fiber_local_get((FiberBlock *)f, (int64_t)key);
   
 }
 
-static void fiber_local_set_(void * f, int64_t key, int64_t value) {
+static void fiber_local_set_(int64_t f, int64_t key, int64_t value) {
         tur_fiber_local_set((FiberBlock *)f, (int64_t)key, (int64_t)value);
   
 }
@@ -4359,7 +4359,7 @@ static void scheduler_park_() {
   
 }
 
-static void scheduler_unpark_(void * f) {
+static void scheduler_unpark_(int64_t f) {
         tur_scheduler_unpark((FiberBlock *)f);
   
 }
@@ -4402,7 +4402,7 @@ static void scheduler_mt_free(void * sched) {
   
 }
 
-static void scheduler_mt_spawn(void * sched, void * fiber) {
+static void scheduler_mt_spawn(void * sched, int64_t fiber) {
         tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
   
 }
@@ -4437,7 +4437,7 @@ static void scheduler_mt_park() {
   
 }
 
-static void scheduler_mt_unpark(void * fiber) {
+static void scheduler_mt_unpark(int64_t fiber) {
         tur_scheduler_mt_unpark((FiberBlock *)fiber);
   
 }
@@ -4462,20 +4462,20 @@ int main(int argc, char **argv) {
         }
         int64_t __t25;
         {
-            void * sched_906 = scheduler_mt_new(INT64_C(2));
-            (void)sched_906;
+            void * sched_908 = scheduler_mt_new(INT64_C(2));
+            (void)sched_908;
             {
-                void * fa_907 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
-                (void)fa_907;
+                int64_t fa_909 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
+                (void)fa_909;
                 {
-                    void * fb_908 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
-                    (void)fb_908;
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_906), (void *)(intptr_t)(fa_907));
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_906), (void *)(intptr_t)(fb_908));
+                    int64_t fb_910 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
+                    (void)fb_910;
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_908), fa_909);
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_908), fb_910);
                     thread_sleep(INT64_C(100));
-                    scheduler_mt_free((void *)(intptr_t)(sched_906));
-                    fiber_free((void *)(intptr_t)(fa_907));
-                    fiber_free((void *)(intptr_t)(fb_908));
+                    scheduler_mt_free((void *)(intptr_t)(sched_908));
+                    fiber_free(fa_909);
+                    fiber_free(fb_910);
                 }
             }
             int64_t __t26;
