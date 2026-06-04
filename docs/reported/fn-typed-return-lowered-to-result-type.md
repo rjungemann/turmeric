@@ -6,6 +6,13 @@ description: A `defn` whose declared return type is a function type `(fn [...] T
 
 # Function-Typed Return Annotation Mis-Lowered to its Result Type -- Reported Bug
 
+> **Status:** RESOLVED (2026-06-04). A `defn` that returns a *thin*
+>   (non-capturing) function value now emits its C signature, forward
+>   declaration, and body return as the matching fn-ptr typedef
+>   (`tur_fnptr_<ret>_<args>_t`) instead of the function's result type.
+>   Regression fixture: `tests/fixtures/fn-typed-return-thin-closure/`.
+>   See the "Resolution" section at the end.
+>
 > **Found:** 2026-06-03, during the G2 spike of
 >   [language-readiness-for-typed-signal-plan](../upcoming/language-readiness-for-typed-signal-plan.md).
 > **Severity:** Medium -- caught by `cc` today (incompatible-result-type
@@ -119,6 +126,43 @@ strictly the signature-emission side.
    `: (fn [:float] :int)` returns (dropping the `:ptr<void>` workaround)
    and still pass.
 3. Full `bash tests/run.sh` stays green.
+
+## Resolution (2026-06-04)
+
+The producer-side signature emission now distinguishes a *thin* (bare,
+non-capturing) function-value return from the function's result type.
+
+- New helper `emit_fn_return_typedef(fd, rft)` in `src/compiler/emit_core.c`
+  returns the matching fn-ptr typedef name (e.g. `tur_fnptr_double_double_t`,
+  registered via the existing `register_fn_ptr_typedef` machinery) when the
+  declared return is a concrete, non-boxed `TY_FN` **and** the body
+  statically yields a thin function pointer; otherwise it returns NULL and
+  the existing lowering is used.
+- "Body statically yields a thin fn pointer" (`body_yields_thin_fn`) means a
+  non-capturing fn literal (lifted to a top-level function, so the body is an
+  `EX_VAR` referencing a global non-boxed `TY_FN` binding), modulo
+  transparent `do`/`let`/`if`/ascribe wrappers. A capturing `EX_CLOSURE`
+  (fat box) and any call/local result -- which may be a fat box typed as a
+  plain fn -- stay on the existing `int64_t`/`void*` carrier, so the box is
+  never mistyped as a bare function pointer.
+- Typeclass-method impls (`__inst_*`) are excluded: they are reached through
+  a dictionary whose field type lowers the fn-typed return via
+  `type_c_name` (the `int64_t` carrier, in `emit_stmt.c`), and the impl
+  signature must match that field. The pre-existing instance-method
+  "by-luck int64_t" lowering is therefore unchanged here (its non-int
+  result-kind variant remains a separate, related issue).
+- Both the definition signature (`emit_fns.c`) and the forward declaration
+  (`emit_module.c`) use the helper so they agree; `^fat` returns (wrapped
+  into a `void*` heap fat box) are skipped.
+
+Validation: the minimal repro compiles and runs; the new regression fixture
+`tests/fixtures/fn-typed-return-thin-closure/` (a `(fn [:int] :int)` and a
+`(fn [:float] :int)` producer, applied at the consumer) passes; full
+`bash tests/run.sh` is green (1355 passed, 0 failed).
+
+The `signal-constant-poly` fixture referenced below does not exist in this
+tree yet (its plan is still under `docs/upcoming/`); upgrading it to drop the
+`:ptr<void>` workaround is left to that plan's landing.
 
 ## Cross-references
 

@@ -1,0 +1,24 @@
+;; fn-typed-return-thin-closure -- a `defn` whose declared return type is a
+;; function value (fn [:int] :int) / (fn [:float] :int).
+;;
+;; Regression for fn-typed-return-lowered-to-result-type: the producer's C
+;; signature lowered the declared TY_FN return to the function's *result* type
+;; (`int64_t` / `double`) instead of a function-pointer carrier, so the body
+;; returned a `T (*)(...)` bare function pointer into a scalar return slot and
+;; the emitted C refused to compile.  Now the producer return type is the
+;; matching fn-ptr typedef, agreeing with the thin-fn-pointer let binding the
+;; consumer emits.
+
+(defn make-add1 [] : (fn [:int] :int)
+  (fn [x :int] :int (+ x 1)))
+
+;; result type differs from the arg type -- exercises the typedef arg/result split.
+(defn make-trunc [] : (fn [:float] :int)
+  (fn [x :float] :int 7))
+
+(defn main [] :int
+  (let [g (make-add1)
+        h (make-trunc)]
+    (println (g 41))      ;; 42
+    (println (h 3.5)))    ;; 7
+  0)
