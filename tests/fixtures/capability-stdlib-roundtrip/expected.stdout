@@ -1,0 +1,9 @@
+exists=1
+contents=hello
+after-clear-exists=0
+log-count=1
+has-msg=1
+rng1=27
+rng-after-reset=27
+time=1000
+time-after-reset=0

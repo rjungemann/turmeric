@@ -1,0 +1,68 @@
+;; Happy-path fixture for log-capability-vtable-uncompilable (capability.tur
+;; half). Loads stdlib/test/capability.tur and exercises all four mock
+;; capabilities through their hoisted, file-scope vtables + shared singleton
+;; state: the in-memory FileSystem (write/exists/get-contents/clear), the
+;; capturing Logger (count/has?), the deterministic RNG (seeded LCG), and the
+;; manually-controlled mock clock. All output is deterministic.
+;;
+;; Expected output:
+;;   exists=1
+;;   contents=hello
+;;   after-clear-exists=0
+;;   log-count=1
+;;   has-msg=1
+;;   rng1=27
+;;   rng-after-reset=27
+;;   time=1000
+;;   time-after-reset=0
+(load "stdlib/test/capability.tur")
+
+(defn fs-write [fs : int path : cstr data : cstr len : int] : int
+  ```c typedef struct { int (*r)(const char*,unsigned char*,int,int*);
+                        int (*w)(const char*,const unsigned char*,int);
+                        int (*d)(const char*); int (*l)(const char*,char**,int,int*); } FS;
+  return ((FS*)(intptr_t)fs)->w(path, (const unsigned char*)data, (int)len);
+  ```)
+
+(defn log-info [lg : int msg : cstr] : nil
+  ```c typedef struct { void (*d)(const char*); void (*i)(const char*);
+                        void (*w)(const char*); void (*e)(const char*); } LG;
+  ((LG*)(intptr_t)lg)->i(msg); ```)
+
+(defn rng-int [r : int lo : int hi : int] : int
+  ```c typedef struct { int (*ni)(int,int); int (*nf)(void); } R;
+  return ((R*)(intptr_t)r)->ni((int)lo, (int)hi);
+  ```)
+
+(defn print-int [label : cstr n : int] : nil
+  ```c printf("%s%d\n", label, (int)n); ```)
+
+(defn print-contents [p : ptr<void>] : nil
+  ```c printf("contents=%s\n", (const char*)p); free(p); ```)
+
+(defn main [] #{Unsafe} : int
+  (let [fs (Test-FileSystem)]
+    (fs-write fs "a.txt" "hello" 5)
+    (print-int "exists=" (testfs-exists? "a.txt"))
+    (print-contents (testfs-get-contents "a.txt"))
+    (testfs-clear)
+    (print-int "after-clear-exists=" (testfs-exists? "a.txt"))
+    (Test-FileSystem-free fs))
+  (let [lg (Test-Logger)]
+    (log-info lg "captured message")
+    (print-int "log-count=" (testlog-count))
+    (print-int "has-msg=" (testlog-has? "INFO" "captured message"))
+    (testlog-clear)
+    (Test-Logger-free lg))
+  (let [r (Test-Random)]
+    (print-int "rng1=" (rng-int r 0 99))
+    (testrng-reset)
+    (print-int "rng-after-reset=" (rng-int r 0 99))
+    (Test-Random-free r))
+  (let [t (Test-Time)]
+    (testtime-set t 1000)
+    (print-int "time=" (testtime-get t))
+    (testtime-reset)
+    (print-int "time-after-reset=" (testtime-get t))
+    (Test-Time-free t))
+  0)

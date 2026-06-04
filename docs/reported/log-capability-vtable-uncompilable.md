@@ -1,5 +1,31 @@
 # `stdlib/log.tur` and `stdlib/test/capability.tur` capability vtables are uncompilable (same nested-`static`-function pattern as io)
 
+> **Resolved (this session).** Both modules now compile + run through the C
+> backend, reusing the file-scope c-block hook landed with the io fix.
+> - **Defect A** (`log.tur`): the shared `Logger` struct and every logger's
+>   methods (timestamped, simple, null) were hoisted into a top-level
+>   ` ```c ... ``` ` block; `Real-/Simple-/Null-Logger` now just allocate the
+>   vtable and wire file-scope function pointers.
+> - **Defect A** (`capability.tur`): all four mock capabilities
+>   (`Test-FileSystem`/`Logger`/`Random`/`Time`) plus their singleton state were
+>   hoisted to a single file-scope c-block, so the standalone accessor defns
+>   (`testfs-clear`, `testlog-count`, ...) and the vtable methods share one copy
+>   of the structs/globals (previously the globals were trapped inside the
+>   constructor bodies, leaving the accessors referencing undefined symbols).
+> - **Defect B** (`log.tur`): dropped the `extern-c stderr/stdout/time/ctime`
+>   (and `fprintf`) decls; `<stdio.h>` comes from the preamble and the
+>   timestamped logger `#include <time.h>` in its c-block.
+> - Drive-by fixes while rewriting: annotated the untyped `:cstr` params on the
+>   `log-*-direct` writers (silenced real `%s`/`int64_t` format mismatches),
+>   cast handles cleanly in the `*-free` bodies, and replaced the
+>   `Test-Random` LCG's signed-overflow UB (`int * 1103515245`) with unsigned
+>   arithmetic (UBSan-clean).
+>
+> Validated by two new happy-path fixtures,
+> `tests/fixtures/log-stdlib-roundtrip` and
+> `tests/fixtures/capability-stdlib-roundtrip` (both also verified
+> leak-clean + UBSan-clean under an `-fsanitize=address,undefined` build).
+
 **Summary.** `stdlib/log.tur` (`Real-Logger`, `Simple-Logger`, `Null-Logger`)
 and `stdlib/test/capability.tur` (`Test-FileSystem`) build their capability
 structs the same way the now-fixed `Real-FileSystem` did: an inline-C body that
