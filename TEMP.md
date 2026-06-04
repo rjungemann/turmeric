@@ -79,13 +79,13 @@ do not collapse phases, do not reword entries into prose, and update the
    - Kind: plan
    - Goal: Generalize poly-to-fat shim for non-int64 typeclass method signatures
    - Deps: 7
-   - Status: In Progress
+   - Status: Complete
 
 10. `reported/nested-closure-transitive-capture.md`
     - Kind: report
     - Goal: Closures nested two levels deep that reference a grandparent-scoped variable never thread it through the middle closure's env -- generated C references an undeclared local
     - Deps: independent
-    - Status: In Progress
+    - Status: Complete
 
 11. `reported/intra-instance-method-dispatch-unsupported.md`
     - Kind: report
