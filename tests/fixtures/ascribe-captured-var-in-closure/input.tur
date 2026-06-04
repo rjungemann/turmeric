@@ -1,0 +1,35 @@
+;; Regression: a variable captured by an enclosing closure must resolve to its
+;; captured-env access even when its only use inside the closure body is under
+;; a (:: expr T) ascription.  Previously collect_free_vars did not descend into
+;; EX_ASCRIBE, so `ch` was missed as a capture and codegen emitted the bare
+;; `ch_NNNN` local inside the lifted closure -- a hard C 'undeclared' error.
+;; See docs/reported/ascribe-captured-var-in-closure.md.
+
+(defopaque Chan :ptr<void>)
+
+;; Allocate a tiny heap cell whose first int64 slot holds the receiver fn ptr
+;; (filled in by `spawn`), and stash a marker we can read back through `ch`.
+(defn chan-new [marker : int] : Chan
+  ```c
+  int64_t *p = (int64_t *)malloc(16);
+  p[1] = marker;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+;; Read the marker stashed in slot 1 of the raw cell.
+(defn use-raw [p : ptr<void>] : int
+  ```c return ((int64_t *)(intptr_t)p)[1]; ```)
+
+;; Invoke the closure stored at slot 0 of its own env (fat-closure ABI).
+(defn spawn [f : ptr<void>] : nil
+  ```c ((void(*)(void*,int64_t))((int64_t*)f)[0])((void*)f, 0); ```)
+
+(defn main [] : int
+  (let [ch (chan-new 99)]
+    (spawn
+      (fn [user : int] : nil
+        ;; ch is captured here ONLY through the ascription; it must compile to
+        ;; the env access, not a bare local.
+        (println (use-raw (:: ch :ptr<void>)))
+        0))
+    0))

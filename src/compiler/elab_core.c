@@ -345,6 +345,11 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
                         ls[lsp++] = cur->as.set_lit_.items[i-1];
                     break;
+                /* (:: expr T) is type-erased; descend into the inner expr so any
+                 * `let` bindings under an ascription are still collected. */
+                case EX_ASCRIBE:
+                    if (cur->as.ascribe_.inner) ls[lsp++] = cur->as.ascribe_.inner;
+                    break;
                 /* GF1: Generator body -- traverse to find local defs */
                 case EX_GEN:
                     if (cur->as.gen_.def && cur->as.gen_.def->body)
@@ -697,6 +702,14 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             case EX_GEN_DONE:
                 if (cur->as.gen_done_.gen_expr) stack[sp++] = cur->as.gen_done_.gen_expr;
+                break;
+            /* (:: expr T) is type-erased at codegen; descend into the inner
+             * expr so a variable that only appears under an ascription is still
+             * seen as a free variable and captured by the enclosing closure.
+             * Without this, `(use-raw (:: ch :ptr<void>))` inside a `(fn ...)`
+             * misses `ch` and emits the bare local instead of the env access. */
+            case EX_ASCRIBE:
+                if (cur->as.ascribe_.inner) stack[sp++] = cur->as.ascribe_.inner;
                 break;
             default:
                 break;
