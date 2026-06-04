@@ -1,0 +1,43 @@
+;; instance-intra-method-forward-ref -- a method body dispatches to a sibling
+;; defined LATER in the same instance, and two methods are mutually recursive.
+;;
+;; Regression for the "forward references" limitation noted in
+;; docs/reported/intra-instance-method-dispatch-unsupported.md.  definstance
+;; elaboration is split into two passes: pass 1 wires up every method's FnDef
+;; shell and method_impls slot, pass 2 elaborates the bodies.  A call to a
+;; sibling defined later (or a mutually recursive pair) now resolves because
+;; the dispatcher sees a non-NULL slot for it.
+
+;; Forward reference: `twice` calls `base`, which is defined after it.
+(defclass HasN [a]
+  (twice [self n :int] :int)
+  (base  [self n :int] :int))
+
+(defstruct ArrW [a]
+  (raw :int))
+
+(definstance HasN [ArrW]
+  (twice [self n :int] (.base self (* n 2)))    ;; forward dispatch on self
+  (base  [self n :int] (+ n 1)))
+
+;; Mutual recursion: is-even <-> is-odd.
+(defclass Parity [a]
+  (is-even [self n :int] :int)
+  (is-odd  [self n :int] :int))
+
+(defstruct P [a]
+  (raw :int))
+
+(definstance Parity [P]
+  (is-even [self n :int]
+    (if (= n 0) 1 (.is-odd self (- n 1))))
+  (is-odd [self n :int]
+    (if (= n 0) 0 (.is-even self (- n 1)))))
+
+(defn main [] :int
+  (let [w (:: (make-struct ArrW 0) (ArrW int))
+        p (:: (make-struct P 0) (P int))]
+    (println (.twice w 41))        ;; (41 * 2) + 1 = 83
+    (println (.is-even p 10))      ;; 1 (even)
+    (println (.is-even p 7)))      ;; 0 (odd)
+  0)

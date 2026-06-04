@@ -97,18 +97,46 @@ Validation: `tests/fixtures/instance-intra-method-dispatch` exercises both the
 simple `(.base self ...)` case (prints `83`) and the closure-returning
 "via sibling" case (prints `105`).
 
-### Known limitation: forward references
+### Forward references and mutual recursion (now fixed, 2026-06-04)
 
-A method that dispatches to a sibling defined *later* in the same
-`definstance` (or two mutually recursive methods) still fails, because the
-later method's `method_impls` slot is still `NULL` when the earlier body is
-elaborated. Order the methods so callees precede callers, or factor the shared
-logic into a top-level `defn`. A full fix would pre-create every method's
-`FnDef`/binding before elaborating any body (a two-pass split of the loop).
+The original fix filled each `method_impls[i]` slot *as that method's body was
+elaborated*, so a method dispatching to a sibling defined **later** in the same
+`definstance` (or two mutually recursive methods) still failed -- the callee's
+slot was still `NULL` when the caller's body was elaborated.
 
-## Workaround for the forward-reference case
+This is now resolved by splitting `elab_definstance`'s body loop into two
+passes (the "two-pass split" the original report proposed):
 
-Factor the shared logic into a top-level `defn` and call it from both methods,
-or compose the methods' results at the call site. The
-`tests/fixtures/instance-closure-return-compose-methods` fixture takes the
-call-site-composition route.
+1. **Pass 1** parses every method's signature (name / params / return type) and
+   creates its `FnDef` + binding shell, populating `method_impls[i]` -- but
+   leaves the body as a nil placeholder. After pass 1 *every* sibling slot is
+   non-`NULL`, with the param bindings and fn-type the dispatcher needs.
+2. **Pass 2** elaborates each method body against the now-complete instance, so
+   a call to a sibling defined later -- or a mutually recursive pair -- resolves
+   because the dispatcher finds a populated slot.
+
+The method's file-scope registration (`elab_register_file_def` + global
+`scope_add`) is deliberately deferred to pass 2, *after* the body is
+elaborated, preserving the original `[body lambdas...][method def]` emit order.
+Registering the method def in pass 1 would emit the method ahead of its
+closure's lifted thunk; the closure's file-scope env struct (written while
+emitting the method body) would then land textually inside the method, out of
+scope for the later thunk -- an "undefined `struct __env_N`" miscompile.
+
+Validation: `tests/fixtures/instance-intra-method-forward-ref` exercises a
+forward `(.base self ...)` dispatch (prints `83`) and a mutually recursive
+`is-even`/`is-odd` pair (prints `1` then `0`).
+
+#### Latent bug surfaced and fixed alongside
+
+The two-pass split shifts the global synthetic-id counter (`Elab.next_id`),
+which perturbs arena allocation offsets. That exposed a pre-existing latent
+defect: the union-match arm path in `elab_structs.c` (the `(match x (n : int)
+...)` form on a `(int | bool)` scrutinee) allocated its `MatchArm` array
+without initialising `arm.guard`. The arena is never zeroed, so `guard` held
+arena garbage; readers such as `scan_adt_apps_in_expr` (the ADT
+monomorphisation walk, run only for union/ADT programs) did
+`if (arm.guard) recurse(arm.guard)` and dereferenced the garbage -- a
+SEGV that previously "worked by luck" whenever that slot happened to be zero.
+Fixed by initialising `arm.guard = NULL` in that path, matching the sibling
+session-offer / literal / ADT match paths.

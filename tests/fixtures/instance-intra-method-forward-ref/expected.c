@@ -2396,6 +2396,14 @@ typedef struct MutableMap {
     void * storage;
 } MutableMap;
 
+typedef struct ArrW {
+    int64_t raw;
+} ArrW;
+
+typedef struct P {
+    int64_t raw;
+} P;
+
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
@@ -2493,6 +2501,10 @@ static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
 static bool __fn_853(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
+static int64_t __inst_HasN_twice_ArrW(int64_t, int64_t);
+static int64_t __inst_HasN_base_ArrW(int64_t, int64_t);
+static int64_t __inst_Parity_is_even_P(int64_t, int64_t);
+static int64_t __inst_Parity_is_odd_P(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2612,8 +2624,6 @@ static bool mutmap_has_(int64_t, int64_t, int64_t);
 static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, void *);
 static void mutmap_free(int64_t);
-static int64_t add(int64_t, int64_t);
-static int64_t mul(int64_t, int64_t);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3177,6 +3187,54 @@ typedef struct dict_Eq_MutableMap {
 
 static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
+};
+
+static int64_t __inst_HasN_twice_ArrW(int64_t self, int64_t n) {
+        return __inst_HasN_base_ArrW(self, (n) * (INT64_C(2)));
+}
+
+static int64_t __inst_HasN_base_ArrW(int64_t self, int64_t n) {
+        return (n) + (INT64_C(1));
+}
+
+typedef struct dict_HasN_ArrW {
+    int64_t (*twice)(int64_t, int64_t);
+    int64_t (*base)(int64_t, int64_t);
+} dict_HasN_ArrW;
+
+static dict_HasN_ArrW dict_HasN_ArrW_singleton = {
+    .twice = __inst_HasN_twice_ArrW,
+    .base = __inst_HasN_base_ArrW,
+};
+
+static int64_t __inst_Parity_is_even_P(int64_t self, int64_t n) {
+        int64_t __t20;
+        if ((n) == (INT64_C(0))) {
+            __t20 = INT64_C(1);
+        } else {
+            __t20 = __inst_Parity_is_odd_P(self, (n) - (INT64_C(1)));
+        }
+        return __t20;
+}
+
+static int64_t __inst_Parity_is_odd_P(int64_t self, int64_t n) {
+        int64_t __t21;
+        if ((n) == (INT64_C(0))) {
+            __t21 = INT64_C(0);
+        } else {
+            __t21 = __inst_Parity_is_even_P(self, (n) - (INT64_C(1)));
+        }
+        return __t21;
+}
+
+typedef struct dict_Parity_P {
+    int64_t (*is_even)(int64_t, int64_t);
+    int64_t (*is_odd)(int64_t, int64_t);
+} dict_Parity_P;
+
+static dict_Parity_P dict_Parity_P_singleton = {
+    .is_even = __inst_Parity_is_even_P,
+    .is_odd = __inst_Parity_is_odd_P,
 };
 
 static void * array_get(void * arr, int64_t idx) {
@@ -3751,35 +3809,35 @@ static int64_t list_length(int64_t l) {
 }
 
 static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        bool __t20;
+        bool __t22;
         if (tnil_(l1)) {
-            __t20 = tnil_(l2);
+            __t22 = tnil_(l2);
         } else {
-            bool __t21;
+            bool __t23;
             if (tnil_(l2)) {
-                __t21 = false;
+                __t23 = false;
             } else {
-                bool __t22;
+                bool __t24;
                 if ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), list_head(l1), list_head(l2))) {
-                    __t22 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
+                    __t24 = list_eq_(list_tail(l1), list_tail(l2), (int64_t)(intptr_t)(cmp_fn));
                 } else {
-                    __t22 = false;
+                    __t24 = false;
                 }
-                __t21 = __t22;
+                __t23 = __t24;
             }
-            __t20 = __t21;
+            __t22 = __t23;
         }
-        return __t20;
+        return __t22;
 }
 
 static int64_t __cons_fmap(int64_t cell, void * f) {
-        int64_t __t23;
+        int64_t __t25;
         if (tnil_(cell)) {
-            __t23 = INT64_C(0);
+            __t25 = INT64_C(0);
         } else {
-            __t23 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
+            __t25 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_head(cell)), __cons_fmap(list_tail(cell), (void *)(intptr_t)(f)));
         }
-        return __t23;
+        return __t25;
 }
 
 static int64_t list_head(int64_t l) {
@@ -3795,13 +3853,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t24;
+        int64_t __t26;
         if (tnil_(l1)) {
-            __t24 = l2;
+            __t26 = l2;
         } else {
-            __t24 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t26 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t24;
+        return __t26;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4271,14 +4329,6 @@ static void mutmap_free(int64_t m) {
   
 }
 
-static int64_t add(int64_t x, int64_t y) {
-        return (x) + (y);
-}
-
-static int64_t mul(int64_t x, int64_t y) {
-        return (x) * (y);
-}
-
 int main(int argc, char **argv) {
         /* *args*: build cons list from argv[1..argc-1] */
         g_tur_args = 0;
@@ -4289,16 +4339,18 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        int64_t __t25;
         {
-            int64_t result_859 = mul(INT64_C(2), add(INT64_C(5), INT64_C(10)));
-            (void)result_859;
-            printf("%lld\n", (long long)(result_859));
-            int64_t __t26;
-            __t26 = INT64_C(0);
-            __t25 = __t26;
+            int64_t w_867 = (int64_t)(INT64_C(0));
+            (void)w_867;
+            int64_t p_868 = (int64_t)(INT64_C(0));
+            (void)p_868;
+            printf("%lld\n", (long long)(__inst_HasN_twice_ArrW(w_867, INT64_C(41))));
+            printf("%lld\n", (long long)(__inst_Parity_is_even_P(p_868, INT64_C(10))));
+            printf("%lld\n", (long long)(__inst_Parity_is_even_P(p_868, INT64_C(7))));
         }
-        return (int)__t25;
+        int64_t __t27;
+        __t27 = INT64_C(0);
+        return (int)__t27;
 }
 
 

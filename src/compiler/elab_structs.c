@@ -2126,6 +2126,10 @@ Expr *elab_match(Elab *e, const Form *call) {
             Form *body_form = call->as.list.items[3 + ai * 2];
             MatchPattern *pat = &arms[ai].pattern;
             memset(pat, 0, sizeof(MatchPattern));
+            /* Union match arms carry no guard; initialise the field so readers
+             * (e.g. scan_adt_apps_in_expr) do not dereference arena garbage.
+             * The arm array is arena-allocated and never zeroed. */
+            arms[ai].guard = NULL;
 
             /* Wildcard: bare _ or bare variable symbol */
             if (pat_form->tag == F_SYM) {
