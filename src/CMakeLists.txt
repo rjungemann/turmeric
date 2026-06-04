@@ -88,6 +88,7 @@ set(TUR_CORE_SOURCES
     compiler/emit_module.c
     compiler/expr.c
     compiler/fmt.c
+    compiler/mangle.c
     compiler/forms.c
     compiler/pkg.c
     compiler/justrun.c

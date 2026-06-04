@@ -1,0 +1,30 @@
+;; A3 (stdlib-type-erasure-cleanup-plan): operator-name C identifier mangling.
+;;
+;; `>>>` and `<<<` used to both mangle to the C identifier `___`, producing a
+;; redefinition error when both were defined in one module. The reversible
+;; mnemonic mangler now spells them `_gt_gt_gt` and `_lt_lt_lt`, so symmetric
+;; operator pairs coexist. This fixture defines both (and a few other sigil
+;; operators) and exercises every one to prove the names stay distinct.
+
+(defn >>> [a : int b : int] : int
+  (+ a b))
+
+(defn <<< [a : int b : int] : int
+  (* a b))
+
+(defn === [a : int b : int] : int
+  (- a b))
+
+(defn !!! [a : int b : int] : int
+  (+ (* a 10) b))
+
+(defn main [] : int
+  (let [s (>>> 2 3)      ;; 5
+        p (<<< 2 3)      ;; 6
+        d (=== 10 4)     ;; 6
+        b (!!! 4 2)]     ;; 42
+    (println s)
+    (println p)
+    (println d)
+    (println b)
+    0))
