@@ -185,7 +185,7 @@ The `?` operator unwraps an ok `Result` in place, or returns the err `Result`
 early from the enclosing function. It is the ergonomic counterpart to manual
 `(if (err? r) (return r) (ok-val r))` threading.
 
-```turmeric
+```turmeric no-check
 (? expr)            ;; s-expression
 ```
 ```sweet-exp

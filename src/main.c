@@ -3813,6 +3813,49 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
  *
  * Exit codes: 0 = ASTs equal, 1 = mismatch, 2 = read/parse error. */
 
+/* parse-check canonicalization: a simple type annotation reads as an
+ * `F_TYPE_ANN` wrapping the type when written spaced (`: int`) but as a plain
+ * `F_KEYWORD` when written unspaced (`:int`). Both elaborate identically, so
+ * for AST-equality purposes fold `F_TYPE_ANN(sym)` down to `F_KEYWORD(sym)`.
+ * Compound annotations (`: (fn [:int] :int)`, `: list<int>`) keep their
+ * `F_TYPE_ANN` wrapper -- both toggle siblings produce it, so they still match.
+ * Applied to both sides before form_print, so a guide's traditional `[] : int`
+ * and its sweet-exp `[] :int` compare equal. */
+static void parse_check_canon(SymbolTable *st, Form *f) {
+    if (!f) return;
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_SET:
+        case F_QUOTE: case F_QUASIQUOTE: case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING: case F_TYPE_ANN: case F_CONTRACT_TYPE:
+        case F_READER_COND: case F_RANGE_VAR:
+        case F_MAP_LITERAL: case F_SET_LITERAL:
+            for (uint32_t i = 0; i < f->as.list.len; i++)
+                parse_check_canon(st, f->as.list.items[i]);
+            break;
+        default:
+            break;
+    }
+    /* Fold `: T` (F_TYPE_ANN wrapping a single atom) to the `:T` keyword form.
+     * The inner is F_SYM for ordinary type names, but a literal for the built-in
+     * type names nil/true/false, which the reader produces as F_NIL/F_BOOL. */
+    if (f->tag == F_TYPE_ANN && f->as.list.len == 1) {
+        const Form  *inner = f->as.list.items[0];
+        const Symbol *kw   = NULL;
+        switch (inner->tag) {
+            case F_SYM:  kw = inner->as.sym; break;
+            case F_NIL:  kw = symtab_intern(st, strslice("nil", 3)); break;
+            case F_BOOL: kw = inner->as.b ? symtab_intern(st, strslice("true", 4))
+                                          : symtab_intern(st, strslice("false", 5));
+                         break;
+            default:     break;
+        }
+        if (kw) {
+            f->tag    = F_KEYWORD;
+            f->as.sym = kw;
+        }
+    }
+}
+
 /* Read `path`, select the reader (forced unless a `#lang` directive is
  * present), parse all top-level forms, and serialize each with form_print into
  * `out` (one per line). Returns 0 on success, non-zero on read/parse error. */
@@ -3866,6 +3909,7 @@ static int parse_check_read(const char *path, ReaderType forced, Buf *out) {
         rc = 2;
     } else {
         for (uint32_t i = 0; i < nforms; i++) {
+            parse_check_canon(&st, forms[i]);
             form_print(out, forms[i]);
             buf_putc(out, '\n');
         }
