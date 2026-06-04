@@ -1890,12 +1890,37 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     return_type = TYPE_BOOL;
                 } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
                     return_type = TYPE_CSTR;
+                } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
+                    /* A :float instance return must carry the real register class
+                     * (xmm0/double) all the way through the emitted impl signature
+                     * and the monomorphic dispatch -- otherwise the result is
+                     * numerically truncated at the int64-carrier return boundary
+                     * (e.g. 6.5 -> 6).  See the typeclass-method return-type
+                     * erasure follow-up. */
+                    return_type = TYPE_FLOAT;
+                } else if (kw->len == 7 && memcmp(kw->name, "float32", 7) == 0) {
+                    return_type = TYPE_FLOAT32;
+                } else if (kw->len == 7 && memcmp(kw->name, "float64", 7) == 0) {
+                    return_type = TYPE_FLOAT64;
                 } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
                            (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                     return_type = TYPE_NIL;
                 } else if ((kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) ||
                            (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
                     return_type = TYPE_PTR_VOID;
+                } else {
+                    /* Fall back to a full type expression so compound instance
+                     * return annotations (e.g. `: (Vec int)`, a struct/ADT name)
+                     * resolve instead of being silently dropped to the class
+                     * carrier.  The keyword shortcuts above stay for the common
+                     * primitives; type_expr_from_form covers the rest.  If it
+                     * cannot resolve, leave return_type at the class default
+                     * (back-compat with annotations the resolver does not know). */
+                    Form *tf = (ret_or_body->tag == F_TYPE_ANN &&
+                                ret_or_body->as.list.len >= 1)
+                        ? ret_or_body->as.list.items[0] : ret_or_body;
+                    Type *ft = type_expr_from_form(e, tf, NULL, NULL, NULL, 0);
+                    if (ft) return_type = *ft;
                 }
                 impl_body_start = 3;
             }

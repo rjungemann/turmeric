@@ -1,0 +1,29 @@
+;; typeclass-method return-type erasure fix: the Functor class stub declares
+;; `fmap : int` (an int64 carrier), so an instance that genuinely returns a
+;; :float used to be numerically truncated at the int64-carrier return
+;; boundary (6.5 -> 6).  The instance return-type parser now recognises
+;; :float (and :float32/:float64, plus compound type forms), so an instance
+;; that annotates its method `: float` carries the real xmm0/double register
+;; class through the emitted impl signature and the monomorphic dispatch, and
+;; the non-integer result round-trips faithfully.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defstruct BoxW [A]
+  (raw :int))
+
+;; fmap returns a computed :float (ignores the poly fn argument) -- this
+;; isolates the method *return-type* path.  Without the explicit `: float`
+;; the result would default to the class's :int carrier and truncate.
+(definstance Functor [BoxW]
+  (fmap [container fn] : float (+ 3.0 3.5)))
+
+(defn dummy [x : int] : int x)
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    ;; 3.0 + 3.5 = 6.5 -- prints 6.5, not 6, proving the return is not
+    ;; truncated to the int64 carrier.
+    (println (.fmap b dummy)))
+  0)
