@@ -1,5 +1,22 @@
 # `io/file-open` (and friends) untyped params default to `:int`, rejecting `:cstr` paths
 
+> **Resolved (this session).** `file-open`, `read-file`, `write-file`,
+> `file-exists?`, and `file-read` now carry their real parameter/return types
+> (`:cstr` paths, `ptr<void>` buffers, `int` lengths). Fixing this surfaced a
+> second, deeper defect: an inline-C defn whose declared return is a by-value
+> struct (the linear `FileHandle`) was demoted to `int64_t` in codegen, so
+> `file-open`'s `return fh;` could not compile -- that path
+> (`emit_fns.c` / `emit_module.c`) now emits the struct's C type. The documented
+> `(file-open "/path" "rb")` call type-checks, and the pattern builds and runs in
+> isolation (regression test: `tests/fixtures/inline-c-struct-return-cstr-params`).
+> A fixture that loads the *entire* `stdlib/io.tur` and builds remains blocked by
+> three unrelated, pre-existing defects in `Real-FileSystem` / `list-dir`,
+> tracked in
+> [io-real-filesystem-and-list-dir-uncompilable.md](io-real-filesystem-and-list-dir-uncompilable.md).
+> `write-file`'s `data` was settled as `ptr<void>` (binary write with an explicit
+> `len`, mirroring `read-file`'s `ptr<void>` return); all real callers were
+> illustrative pseudo-examples.
+
 **Summary.** Several `stdlib/io.tur` functions declare their parameters with no
 type annotation -- `(defn file-open [path mode] : FileHandle ...)`,
 `(defn read-file [path] ...)`, `(defn write-file [path data len] ...)`,

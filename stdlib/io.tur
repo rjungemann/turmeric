@@ -224,7 +224,7 @@
 ;; Sets out_len to the number of bytes read
 
 
-(defn read-file [path]
+(defn read-file [path : cstr] : ptr<void>
   ```c FILE* f = fopen(path, "rb");
   if (!f) return NULL;
   fseek(f, 0, SEEK_END);
@@ -254,7 +254,7 @@
 ;; Write data to a file
 ;; Returns 0 on success, non-zero on error
 
-(defn write-file [path data len]
+(defn write-file [path : cstr data : ptr<void> len : int] : int
   ```c FILE* f = fopen(path, "wb");
   if (!f) return -1;
   size_t n = fwrite(data, 1, len, f);
@@ -275,7 +275,7 @@
 ;;; Since: Phase 16
 ;; Check if file exists
 
-(defn file-exists? [path]
+(defn file-exists? [path : cstr] : int
   ```c FILE* f = fopen(path, "rb");
   if (f) { fclose(f); return 1; }
   return 0;
@@ -368,7 +368,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn file-open [path mode] : FileHandle
+(defn file-open [path : cstr mode : cstr] : FileHandle
   ```c FileHandle fh;
   fh.ptr = (void*)fopen(path, mode);
   return fh;
@@ -404,7 +404,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn file-read [fh : FileHandle buf len] : int
+(defn file-read [fh : FileHandle buf : ptr<void> len : int] : int
   ```c if (!fh.ptr) return -1;
   return (int)fread(buf, 1, len, (FILE*)fh.ptr);
   ```)

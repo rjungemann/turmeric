@@ -1,0 +1,53 @@
+;; Regression for io-file-open-untyped-params-default-to-int:
+;; mirrors stdlib/io.tur's FileHandle / file-open path without depending on the
+;; (separately broken) Real-FileSystem / list-dir parts of that module.
+;;
+;; Exercises two fixes at once:
+;;   1. An inline-C defn declares its params with :cstr annotations -- an
+;;      unannotated param used to default to :int and reject a :cstr argument
+;;      (TUR-E0001). h-open/h-write/read-all all take :cstr paths.
+;;   2. An inline-C defn whose declared return is a by-value struct (the linear
+;;      Handle, like FileHandle) must emit a struct-returning C function -- it
+;;      used to be demoted to int64_t, so `return h;` failed to compile.
+;;
+;; Expected output: io roundtrip ok
+(defstruct Handle :linear [ptr : ptr<void>])
+
+(defn h-open [path : cstr mode : cstr] : Handle
+  ```c Handle h; h.ptr = (void*)fopen(path, mode); return h; ```)
+
+(defn h-close [h : Handle] : int
+  ```c if (!h.ptr) return -1;
+  return fclose((FILE*)h.ptr); ```)
+
+(defn h-write [path : cstr data : ptr<void> len : int] : int
+  ```c FILE* f = fopen(path, "wb"); if (!f) return -1;
+  size_t n = fwrite(data, 1, len, f); fclose(f);
+  return (n == (size_t)len) ? 0 : -1; ```)
+
+(defn read-all [path : cstr] : ptr<void>
+  ```c FILE* f = fopen(path, "rb"); if (!f) return NULL;
+  fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+  unsigned char* b = (unsigned char*)malloc((size_t)sz + 1);
+  size_t n = fread(b, 1, (size_t)sz, f); fclose(f);
+  b[n] = '\0'; return (void*)b; ```)
+
+(defn cstr->ptr [s : cstr] : ptr<void>
+  ```c return (void*)s; ```)
+
+(defn free-buf [p : ptr<void>] : void
+  ```c free(p); ```)
+
+(defn emit [p : ptr<void>] : void
+  ```c fputs((const char*)p, stdout); ```)
+
+(defn main [] : int
+  (let [path "/tmp/tur-io-rt-fixture.txt"
+        msg  "io roundtrip ok\n"
+        wr   (h-write path (cstr->ptr msg) 16)
+        fh   (h-open path "rb")
+        rc   (h-close fh)
+        buf  (read-all path)]
+    (emit buf)
+    (free-buf buf)
+    0))

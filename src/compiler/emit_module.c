@@ -1171,9 +1171,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 /* ptr-generic-parameterised-type: a typed ptr<T> return lowers
                  * to `T *` even for inline-C bodies; mirror emit_fns.c. */
                 bool typed_ptr = rft && rft->kind == TY_PTR_VOID && rft->as.ptr.inner;
+                /* inline-c-struct-return: mirror emit_fns.c -- a by-value struct
+                 * return lowers to the struct's C name even for inline-C bodies. */
+                bool typed_struct = rft && rft->kind == TY_STRUCT;
                 if (fn_ret_td && !body_is_inline_c) {
                     buf_puts(out, fn_ret_td);
-                } else if (rft && (!body_is_inline_c || typed_ptr)) {
+                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {
                     buf_puts(out, "int64_t");
