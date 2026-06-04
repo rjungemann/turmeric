@@ -11,8 +11,11 @@ expected.
 program" hole on the partial-application path that mirrors (and is broader than)
 the positional nominal-identity hole tracked in
 [positional-nominal-type-identity-not-checked.md](positional-nominal-type-identity-not-checked.md).
-The nominal-identity slice of this hole is now closed (see below); the
-*kind*-level slice remains open.
+
+**Status: FIXED.** Both the nominal-identity slice and the kind-level slice are
+now closed. The capture loop in `elab_partial_apply` validates each provided
+argument against the slot it fills whenever that slot is a struct/opaque/ADT
+nominal type, emitting `TUR-E0001` on a mismatch.
 
 ---
 
@@ -82,12 +85,15 @@ is closed: a `type_eq`-based demotion now runs in the capture loop at
 `tests/fixtures/positional-pap-opaque-ok`. This landed alongside the positional
 nominal-identity fix.
 
-## What is still open
+## What is now fixed (kind-level slice)
 
 The **kind-level** slice (e.g. plain `int` -- `TY_INT` -- captured at a
-`TY_STRUCT`/opaque slot) is *not* caught, because the nominal demotion only
-fires when the provided arg and the expected param share a `TypeKind`. A bare
-`int` at an opaque slot has differing kinds, so it slips through.
+`TY_STRUCT`/opaque slot) is now caught. The capture-loop check at
+`elab_call.c:~1437` no longer requires the provided arg and the expected param
+to share a `TypeKind`: when the slot is a struct/opaque/ADT nominal it demands
+an exact `type_eq` against the recorded full type (falling back to a kind-level
+compare when no full type is recorded), so a bare `int` at an opaque slot now
+emits `TUR-E0001`. Covered by `tests/fixtures/errors/positional-pap-int-mismatch`.
 
 ## Proposed fix directions
 

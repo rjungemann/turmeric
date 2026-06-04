@@ -1434,29 +1434,52 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
         const Symbol *cap_sym = symtab_intern(e->st, strslice(cap_name, (uint32_t)strlen(cap_name)));
         /* arg type from fn_type: skip index 0 if closure (env), so index = i+1 if closure, else i */
         TypeKind cap_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (i + 1) : i];
-        /* Phase 3: nominal identity for captured (partial-application) args.
-         * Mirror the saturated positional check: a same-kind struct/opaque/ADT
-         * argument captured here must be the *same* nominal type, not merely the
-         * same TypeKind.  Without this, `(two (mk-b))` -- binding a :B into a :A
-         * slot -- would slip through because the saturated path only re-checks
-         * the *remaining* params.  See
-         * docs/upcoming/positional-nominal-type-identity-fix-plan.md (Phase 3). */
+        /* Type-check captured (partial-application) args against the slot they
+         * fill.  Mirror the saturated positional check, which for a
+         * struct/opaque/ADT parameter is strict: the captured argument must be
+         * the *same* nominal type -- not merely the same TypeKind, and not a
+         * value of a differing kind (e.g. a bare int) at all.  Two failure
+         * modes are folded together here:
+         *   - kind-level: a plain int (TY_INT) captured at a TY_STRUCT opaque
+         *     slot -- differing kinds.  Without this, `(two 5)` -- binding an
+         *     int into a :A slot -- slips through because the capture loop never
+         *     compared the provided arg's type to the parameter at all.
+         *   - nominal-identity: a :B captured at a :A slot -- same kind,
+         *     different nominal.  The saturated path only re-checks the
+         *     *remaining* params, so the captured slot must be validated here.
+         * See docs/reported/partial-application-skips-captured-arg-type-check.md
+         * and docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
         {
             Type *cap_full_chk = PAP_SLOT_FULL(i);
-            if (cap_full_chk &&
-                    (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT) &&
-                    elab_args[i]->type.kind == cap_full_chk->kind &&
-                    !type_eq(elab_args[i]->type, *cap_full_chk)) {
-                Buf eb; buf_init(&eb);
-                type_print(&eb, *cap_full_chk); buf_putc(&eb, '\0');
-                Buf ab; buf_init(&ab);
-                type_print(&ab, elab_args[i]->type); buf_putc(&ab, '\0');
-                diag_emit_with_code(DIAG_ERROR, elab_args[i]->span,
-                                    TUR_E0001_TYPE_MISMATCH,
-                                    "function '%s' arg %u: expected %s, got %s",
-                                    fn_binding->name->name, i + 1, eb.data, ab.data);
-                buf_free(&eb); buf_free(&ab);
-                return NULL;
+            bool slot_is_nominal =
+                (cap_full_chk &&
+                 (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) ||
+                cap_kind == TY_STRUCT || cap_kind == TY_ADT;
+            if (slot_is_nominal) {
+                /* Prefer the recorded full type for an exact nominal compare;
+                 * fall back to a kind-level compare when it is unavailable. */
+                bool mismatch;
+                Type expected_ty;
+                if (cap_full_chk &&
+                        (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) {
+                    mismatch = !type_eq(elab_args[i]->type, *cap_full_chk);
+                    expected_ty = *cap_full_chk;
+                } else {
+                    mismatch = (elab_args[i]->type.kind != cap_kind);
+                    expected_ty = type_from_kind(cap_kind);
+                }
+                if (mismatch) {
+                    Buf eb; buf_init(&eb);
+                    type_print(&eb, expected_ty); buf_putc(&eb, '\0');
+                    Buf ab; buf_init(&ab);
+                    type_print(&ab, elab_args[i]->type); buf_putc(&ab, '\0');
+                    diag_emit_with_code(DIAG_ERROR, elab_args[i]->span,
+                                        TUR_E0001_TYPE_MISMATCH,
+                                        "function '%s' arg %u: expected %s, got %s",
+                                        fn_binding->name->name, i + 1, eb.data, ab.data);
+                    buf_free(&eb); buf_free(&ab);
+                    return NULL;
+                }
             }
         }
         Type cap_type = type_from_kind(cap_kind);
