@@ -1,0 +1,32 @@
+;; instance-closure-return-bool -- a typeclass method whose declared return
+;; type is a closure with a :bool result kind, with no captures.
+;;
+;; Regression for instance-method-closure-return-lowered-to-result-type: the
+;; method `pred-of` returns a value of function type `(fn [:int] :bool)`.
+;; Before the fix the dict-field and impl-signature return type lowered via
+;; `type_c_name` to `bool`, while the impl body returned a bare
+;; `bool (*)(int64_t)` function pointer -- a hard `cc` error.  Now the thin
+;; closure return is carried as the matching fn-ptr typedef on both sites.
+;;
+;; The returned closure captures nothing, so it is a bare function pointer;
+;; apply it through a thin (captureless) cast.
+
+(defclass HasPred [a]
+  (pred-of [self] : (fn [:int] :bool)))
+
+(defstruct PredW [a]
+  (raw :int))
+
+(definstance HasPred [PredW]
+  (pred-of [self]
+    (fn [x :int] :bool (> x 0))))
+
+;; Apply a captureless closure (a bare bool(*)(int64_t) function pointer).
+(defn call-thin [f :int x :int] :bool
+  ```c return ((bool(*)(int64_t))(intptr_t)f)(x); ```)
+
+(defn main [] :int
+  (let [g (.pred-of (:: (make-struct PredW 0) (PredW int)))]
+    (println (call-thin g 7))     ;; true
+    (println (call-thin g -3)))   ;; false
+  0)

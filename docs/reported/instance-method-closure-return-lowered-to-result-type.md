@@ -6,6 +6,17 @@ description: A `definstance` method whose declared return type is a thin functio
 
 # Closure-Returning Typeclass Method Mis-Lowered to its Result Type -- Reported Bug
 
+> **Status:** RESOLVED (2026-06-04). A `definstance` method whose declared
+>   return type is a concrete (non-boxed) function value now carries it as the
+>   matching fn-ptr typedef (thin, non-capturing body) or the `int64_t` closure
+>   carrier (fat box) on **both** the dictionary field type and the impl
+>   signature/forward-decl -- never the function's *result* type. The `:float`
+>   repro compiles and runs; the `:int` thin case no longer emits
+>   `-Wint-conversion`. Regression fixtures:
+>   `tests/fixtures/instance-closure-return-float/` (`(fn [:float] :float)`)
+>   and `tests/fixtures/instance-closure-return-bool/` (`(fn [:int] :bool)`).
+>   See the "Resolution" section at the end.
+>
 > **Found:** 2026-06-04, while fixing
 >   [fn-typed-return-lowered-to-result-type](fn-typed-return-lowered-to-result-type.md)
 >   (the plain-`defn` producer-side mirror of this bug).
@@ -170,6 +181,54 @@ the `instance-closure-return-*` snapshots regenerated.
    at the consumer.
 3. The existing `instance-closure-return-*` fixtures still pass (snapshots
    regenerated), and the `:int` cases no longer emit `-Wint-conversion`.
+4. Full `bash tests/run.sh` stays green.
+
+## Resolution (2026-06-04)
+
+Implemented **direction 1** (thin fn-ptr typedef), extended to keep fat boxes
+on the `int64_t` carrier explicitly so non-`int` *result kinds* are correct on
+both the thin and the fat path.
+
+- The `__inst_*` exclusion was removed from `emit_fn_return_typedef`
+  (`src/compiler/emit_core.c`): a thin (non-capturing) method body yields a
+  bare C function pointer, so a typeclass-method impl uses the same
+  `tur_fnptr_<ret>_<args>_t` typedef as a plain `defn` producer.
+- A new arbiter `emit_inst_fn_return_carrier(fd, rft)` (also in `emit_core.c`)
+  is the single source of truth for an `__inst_*` method's fn-typed return:
+  it returns the fn-ptr typedef for a thin body (via `emit_fn_return_typedef`),
+  otherwise the `int64_t` closure carrier (a `void*` fat box returned through
+  an `int64_t` slot). It returns NULL for non-method / non-fn returns so the
+  ordinary lowering is untouched.
+- All three emission sites consult it so they agree:
+  - dict field type -- `src/compiler/emit_stmt.c` (the dict-struct emission);
+  - impl definition signature -- `src/compiler/emit_fns.c`;
+  - impl forward declaration -- `src/compiler/emit_module.c`.
+
+  This replaces the previous `type_c_name(rft)` lowering, which collapsed the
+  fn type to its *result* type's C name (`double`/`bool`/...), mismatching the
+  function-pointer / box the body produces.
+
+Why this also covers the latent fat path: `type_c_name(TY_FN)` returned the
+*result* type's C name, which equals the `int64_t` carrier only when the
+result kind is itself `int`. A capturing method returning e.g.
+`(fn [:float] :float)` would have mis-lowered to `double` too; routing every
+non-thin fn-typed `__inst_*` return through the explicit `int64_t` carrier
+fixes that as well (the by-luck `-Wint-conversion` on the fat path remains, as
+the box is intentionally a `void*` returned through `int64_t`, exactly as the
+plain-`defn` fix leaves it).
+
+Validation:
+
+1. The `:float` repro compiles cleanly (no warning) and `(.arr-of w)` applied
+   to `1.5` yields `3.0`.
+2. New regression fixtures
+   [instance-closure-return-float](../../tests/fixtures/instance-closure-return-float/)
+   (`(fn [:float] :float)`) and
+   [instance-closure-return-bool](../../tests/fixtures/instance-closure-return-bool/)
+   (`(fn [:int] :bool)`) build, run, and pass.
+3. The existing `instance-closure-return-*` fixtures still pass; the thin
+   `:int` `instance-closure-return-simple` snapshot was regenerated and now
+   emits `tur_fnptr_int64_t_int64_t_t` (no more `-Wint-conversion`).
 4. Full `bash tests/run.sh` stays green.
 
 ## Cross-references

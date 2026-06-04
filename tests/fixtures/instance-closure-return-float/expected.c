@@ -2401,7 +2401,7 @@ typedef struct ArrW {
 } ArrW;
 
 
-typedef int64_t (*tur_fnptr_int64_t_int64_t_t)(int64_t);
+typedef double (*tur_fnptr_double_double_t)(double);
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
@@ -2499,8 +2499,8 @@ static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
 static bool __fn_853(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
-static int64_t __fn_858(int64_t);
-static tur_fnptr_int64_t_int64_t_t __inst_HasArr_arr_of_ArrW(int64_t);
+static double __fn_858(double);
+static tur_fnptr_double_double_t __inst_HasArr_arr_of_ArrW(int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2620,7 +2620,7 @@ static bool mutmap_has_(int64_t, int64_t, int64_t);
 static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, void *);
 static void mutmap_free(int64_t);
-static int64_t call_thin(int64_t, int64_t);
+static double call_thin(int64_t, double);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3186,16 +3186,16 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
 };
 
-static int64_t __fn_858(int64_t x) {
-        return (x) + (INT64_C(1));
+static double __fn_858(double x) {
+        return (x) * (2.0);
 }
 
-static tur_fnptr_int64_t_int64_t_t __inst_HasArr_arr_of_ArrW(int64_t self) {
+static tur_fnptr_double_double_t __inst_HasArr_arr_of_ArrW(int64_t self) {
         return __fn_858;
 }
 
 typedef struct dict_HasArr_ArrW {
-    tur_fnptr_int64_t_int64_t_t (*arr_of)(int64_t);
+    tur_fnptr_double_double_t (*arr_of)(int64_t);
 } dict_HasArr_ArrW;
 
 static dict_HasArr_ArrW dict_HasArr_ArrW_singleton = {
@@ -4294,8 +4294,8 @@ static void mutmap_free(int64_t m) {
   
 }
 
-static int64_t call_thin(int64_t f, int64_t x) {
-        return ((int64_t(*)(int64_t))(intptr_t)f)(x); 
+static double call_thin(int64_t f, double x) {
+        return ((double(*)(double))(intptr_t)f)(x); 
 }
 
 int main(int argc, char **argv) {
@@ -4308,13 +4308,7 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        {
-            int64_t w_862 = (int64_t)(INT64_C(0));
-            (void)w_862;
-            int64_t g = (int64_t)(intptr_t)(__inst_HasArr_arr_of_ArrW(w_862));
-            (void)g;
-            printf("%lld\n", (long long)(call_thin((int64_t)(intptr_t)(g), INT64_C(41))));
-        }
+        printf("%g\n", (double)(call_thin((int64_t)(intptr_t)(__inst_HasArr_arr_of_ArrW((int64_t)(INT64_C(0)))), 1.5)));
         int64_t __t25;
         __t25 = INT64_C(0);
         return (int)__t25;
