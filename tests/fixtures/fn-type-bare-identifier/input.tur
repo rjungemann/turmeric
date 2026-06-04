@@ -1,0 +1,80 @@
+;; fn-type-bare-identifier -- bare-identifier types inside (fn ...) type
+;; expressions.
+;;
+;; Inside a (fn [...] ...) *type* expression, position alone tells the
+;; elaborator which forms are param types and which is the result type, so the
+;; leading ':' on each inner type is redundant. This fixture pins that the
+;; bare-identifier spelling -- (fn [int] int) -- elaborates identically to the
+;; legacy keyword spelling (fn [:int] :int), in every position:
+;;
+;;   - unary, binary, nullary param vectors
+;;   - an optional empty effect set #{}
+;;   - a mix of legacy ':int' and bare 'int' in one signature (lenient path)
+;;   - a declared user type (via defalias) used bare
+;;   - a parenthesised inner type (a struct name)
+;;   - a nested (fn ...) result type (curried) -- signature only; see note
+;;
+;; Note: the curried parameter's signature type-checks, but *applying* the
+;; result of a higher-order-returning parameter -- ((f 1) 2) -- is a
+;; pre-existing limitation that fails identically for the bare, legacy, and
+;; '->' spellings. Tracked in
+;; docs/reported/curried-fn-typed-param-second-application-not-callable.md.
+;; This fixture therefore only declares the curried signature.
+
+(defalias Sample :int)
+
+(defstruct Box [a : int b : int])
+
+;; unary, bare
+(defn apply1 [f : (fn [int] int) x : int] : int
+  (f x))
+
+;; binary, bare
+(defn apply2 [f : (fn [int int] int)] : int
+  (f 3 4))
+
+;; nullary, bare
+(defn applyn [f : (fn [] int)] : int
+  (f))
+
+;; bare with an explicit empty effect set
+(defn applyeff [f : (fn [int] #{} int) x : int] : int
+  (f x))
+
+;; mixed legacy ':int' + bare 'int' in one signature (lenient transition path)
+(defn applymix [f : (fn [:int] int) x : int] : int
+  (f x))
+
+;; declared user type used bare inside (fn ...)
+(defn applysample [f : (fn [Sample] Sample) x : Sample] : Sample
+  (f x))
+
+;; parenthesised inner type (struct name) used inside (fn ...)
+(defn applybox [f : (fn [Box] int) p : Box] : int
+  (f p))
+
+;; nested (fn ...) result type -- bare, curried. Signature-only (see note).
+(defn declares-curried [f : (fn [int] (fn [int] int))] : int
+  0)
+
+(defn inc [x : int] : int
+  (+ x 1))
+
+(defn add [a : int b : int] : int
+  (+ a b))
+
+(defn zero [] : int
+  42)
+
+(defn box-fst [p : Box] : int
+  (.a p))
+
+(defn main [] : int
+  (println (apply1 inc 21))
+  (println (apply2 add))
+  (println (applyn zero))
+  (println (applyeff inc 99))
+  (println (applymix inc 7))
+  (println (applysample inc 1000))
+  (println (applybox box-fst (make-struct Box 11 22)))
+  0)
