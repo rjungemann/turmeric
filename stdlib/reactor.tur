@@ -21,16 +21,24 @@
 ;;
 ;; Reactor handle: :ptr<void> (create with reactor-new; free with reactor-free)
 ;;
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 2) ----
+;; EventSourceId wraps the source id (an :int) returned by the reactor-add-*
+;; family with a nominally distinct type, so the checker rejects passing an
+;; arbitrary integer to reactor-modify-fd / reactor-remove -- only an id minted
+;; by a reactor-add-* call is accepted. It lowers to :int in the C ABI. The
+;; add-* functions still encode their error case as id -1; unwrap with
+;; (:: id :int) to compare against it.
+;;
 ;; API:
 ;;   reactor-new           []                                   -- ptr<void>
 ;;   reactor-free          [r]                                  -- nil
-;;   reactor-add-fd        [r fd events cb user-data]           -- int  (source id)
+;;   reactor-add-fd        [r fd events cb user-data]           -- EventSourceId
 ;;   reactor-modify-fd     [r id new-events]                    -- int
 ;;   reactor-remove        [r id]                               -- int
-;;   reactor-add-timer     [r delay-ms cb user-data]            -- int  (source id)
-;;   reactor-add-interval  [r first-ms interval-ms cb ud]       -- int  (source id)
-;;   reactor-add-signal    [r signum cb user-data]              -- int  (source id)
-;;   reactor-add-chan      [r ch cb user-data]                  -- int  (source id)
+;;   reactor-add-timer     [r delay-ms cb user-data]            -- EventSourceId
+;;   reactor-add-interval  [r first-ms interval-ms cb ud]       -- EventSourceId
+;;   reactor-add-signal    [r signum cb user-data]              -- EventSourceId
+;;   reactor-add-chan      [r ch cb user-data]                  -- EventSourceId
 ;;   reactor-poll          [r timeout-ms]                       -- int
 ;;   reactor-run           [r]                                  -- nil
 ;;   reactor-stop          [r]                                  -- nil
@@ -41,6 +49,8 @@
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)
+;; ---- Source-id handle newtype ----
+(defopaque EventSourceId :int)
 ;; ---- C surface declarations ----
 
 
@@ -149,7 +159,7 @@
 ;;;   user-data -- opaque value forwarded to cb as its third argument
 ;;;
 ;;; Returns:
-;;;   int -- source id (>= 0), or -1 on error
+;;;   EventSourceId -- source id (>= 0), or -1 on error (unwrap with (:: id :int))
 ;;;
 ;;; Example:
 ;;;   (reactor-add-fd r listen-fd READ
@@ -171,8 +181,8 @@
                       user-data
                       : ptr<void>]
   #{}
-  : int
-  (tur_reactor_add_fd r fd events cb user-data))
+  : EventSourceId
+  (:: (tur_reactor_add_fd r fd events cb user-data) :EventSourceId))
 ;;; reactor-modify-fd -- change the watched event mask for a source.
 ;;;
 ;;; Parameters:
@@ -188,10 +198,10 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn reactor-modify-fd [r : ptr<void> id : int new-events : int]
+(defn reactor-modify-fd [r : ptr<void> id : EventSourceId new-events : int]
   #{}
   : int
-  (tur_reactor_modify_fd r id new-events))
+  (tur_reactor_modify_fd r (:: id :int) new-events))
 ;;; reactor-remove -- unregister a source by id.
 ;;;
 ;;; After this call the fd is no longer watched and the callback will
@@ -209,7 +219,7 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn reactor-remove [r : ptr<void> id : int] #{} : int (tur_reactor_remove r id))
+(defn reactor-remove [r : ptr<void> id : EventSourceId] #{} : int (tur_reactor_remove r (:: id :int)))
 ;;; reactor-add-timer -- register a one-shot timer that fires once.
 ;;;
 ;;; The callback fires after delay-ms milliseconds on the thread that calls
@@ -225,7 +235,7 @@
 ;;;   user-data -- opaque value forwarded to cb as its second argument
 ;;;
 ;;; Returns:
-;;;   int -- source id (>= 0), or -1 on error
+;;;   EventSourceId -- source id (>= 0), or -1 on error (unwrap with (:: id :int))
 ;;;
 ;;; Example:
 ;;;   (reactor-add-timer r 500
@@ -243,8 +253,8 @@
                          user-data
                          : ptr<void>]
   #{}
-  : int
-  (tur_reactor_add_timer r delay-ms cb user-data))
+  : EventSourceId
+  (:: (tur_reactor_add_timer r delay-ms cb user-data) :EventSourceId))
 ;;; reactor-add-interval -- register a repeating interval timer.
 ;;;
 ;;; The callback fires first after first-ms milliseconds, then every
@@ -261,7 +271,7 @@
 ;;;   user-data   -- opaque value forwarded to cb
 ;;;
 ;;; Returns:
-;;;   int -- source id (>= 0), or -1 on error
+;;;   EventSourceId -- source id (>= 0), or -1 on error (unwrap with (:: id :int))
 ;;;
 ;;; Example:
 ;;;   (reactor-add-interval r 0 1000
@@ -281,8 +291,8 @@
                             user-data
                             : ptr<void>]
   #{}
-  : int
-  (tur_reactor_add_interval r first-ms interval-ms cb user-data))
+  : EventSourceId
+  (:: (tur_reactor_add_interval r first-ms interval-ms cb user-data) :EventSourceId))
 ;; ---- Running ----
 ;;; reactor-add-signal -- watch an OS signal via the reactor.
 ;;;
@@ -300,7 +310,7 @@
 ;;;   user-data -- opaque value forwarded to cb
 ;;;
 ;;; Returns:
-;;;   int -- source id (>= 0), or -1 on error
+;;;   EventSourceId -- source id (>= 0), or -1 on error (unwrap with (:: id :int))
 ;;;
 ;;; Example:
 ;;;   (reactor-add-signal r 2
@@ -312,8 +322,8 @@
 
 (defn reactor-add-signal [r : ptr<void> signum : int cb : int user-data : ptr<void>]
   #{}
-  : int
-  (tur_reactor_add_signal r signum cb user-data))
+  : EventSourceId
+  (:: (tur_reactor_add_signal r signum cb user-data) :EventSourceId))
 ;;; reactor-add-chan -- watch a channel for one incoming value (one-shot).
 ;;;
 ;;; Fires at most once: when a value is available the callback receives
@@ -331,7 +341,7 @@
 ;;;   user-data -- opaque value forwarded to cb
 ;;;
 ;;; Returns:
-;;;   int -- source id (>= 0), or -1 on error
+;;;   EventSourceId -- source id (>= 0), or -1 on error (unwrap with (:: id :int))
 ;;;
 ;;; Example:
 ;;;   (reactor-add-chan r stop-chan
@@ -342,8 +352,8 @@
 
 (defn reactor-add-chan [r : ptr<void> ch : ptr<void> cb : int user-data : ptr<void>]
   #{}
-  : int
-  (tur_reactor_add_chan r ch cb user-data))
+  : EventSourceId
+  (:: (tur_reactor_add_chan r ch cb user-data) :EventSourceId))
 ;; ---- Running ----
 ;;; reactor-poll -- poll for events once, dispatching ready callbacks.
 ;;;
