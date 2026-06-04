@@ -2,7 +2,7 @@
 ;;
 ;; This benchmark exercises the HKT typeclass dispatch mechanism.
 ;;
-;; Uses a simple option type and Functor instance.
+;; Uses a simple option type and BenchFunctor instance.
 
 ;; Option type helpers
 (defn option-some [x :int] :int
@@ -13,14 +13,14 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn option-free [o :int] :void
+(defn opt-free [o :int] :void
   ```c
   free((void *)(intptr_t)o);
   ```)
 
-;; Functor typeclass
-(defclass Functor [^container]
-  (fmap [container fn] :int))
+;; BenchFunctor typeclass
+(defclass BenchFunctor [^container]
+  (bfmap [container fn] :int))
 
 ;; fmap for option
 (defn __fmap_option [container fn] :int
@@ -34,8 +34,8 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
-  (fmap [container fn] (__fmap_option container fn)))
+(definstance BenchFunctor [option]
+  (bfmap [container fn] (__fmap_option container fn)))
 
 ;; Increment function
 (defn inc [x :int] :int (+ x 1))
@@ -44,9 +44,9 @@
 (defn bench-main [] :int
   (let [v (option-some 42)]
     ;; Apply fmap using typeclass dispatch
-    (let [result (.fmap v inc)]
-      (option-free result))
-    (option-free v)
+    (let [result (.bfmap v inc)]
+      (opt-free result))
+    (opt-free v)
     0))
 
 ;; Standard main for standalone execution

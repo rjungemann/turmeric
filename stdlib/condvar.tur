@@ -22,6 +22,7 @@
 ;; tur/mutex below), so the swap is a compile-time error. Both lower to
 ;; :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
 (load "stdlib/mutex.tur")
+
 (defopaque CondVar :ptr<void>)
 ;;; condvar-new -- allocate and initialise a new POSIX condition variable.
 ;;;
@@ -32,6 +33,7 @@
 ;;;   (let [c (condvar-new)] ...)  ; => CondVar
 ;;;
 ;;; Since: Phase T19-C
+
 (defn condvar-new [] : CondVar
   ```c pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
   if (!c) { fprintf(stderr, "condvar-new: out of memory\n"); abort(); }

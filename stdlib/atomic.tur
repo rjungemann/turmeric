@@ -29,6 +29,7 @@
 ;;;   (def a (atomic-new 0))  ; => AtomicCell holding 0
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-new [init : int] : AtomicCell
   ```c int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
   if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }

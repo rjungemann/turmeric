@@ -43,7 +43,8 @@
 ;; A freshly allocated cell is handed out as a Promise (the producer fulfills
 ;; it); derive the consumer's Future view with future-of-cell / promise-pair.
 (defopaque Promise :ptr<void>)
-(defopaque Future  :ptr<void>)
+
+(defopaque Future :ptr<void>)
 ;; ---- Shared FutureCell type and helpers ----
 ;; Allocate a new FutureCell (shared by Promise and Future)
 ;;; future-cell-new -- allocate and initialise a shared FutureCell (mutex, condvar, unset).
@@ -52,6 +53,7 @@
 ;;;   A Promise (write-end view of the new FutureCell); free with future-cell-free.
 ;;;
 ;;; Since: Phase T20-C
+
 (defn future-cell-new [] : Promise
   ```c typedef struct {
       pthread_mutex_t lock;
@@ -122,7 +124,8 @@
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-of-cell [cell : Promise] : Future (:: (:: cell :ptr<void>) :Future))
+(defn future-of-cell [cell : Promise] : Future
+  (:: (:: cell :ptr<void>) :Future))
 ;; Return a (Promise Future) pair from a cell.
 ;; Both elements are the same pointer but conceptually distinct types.
 ;;; promise-pair -- expand to a (Promise Future) pair list from a single shared cell.

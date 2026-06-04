@@ -72,10 +72,10 @@
 ;;;       (thread-join t)))
 ;;;
 ;;; Since: DV3
-
 ;; spawn-conveying hands back a thread handle that the caller passes to
 ;; thread-join / thread-detach; load tur/thread so its ThreadHandle newtype is
 ;; in scope (load is idempotent).
+
 (load "stdlib/thread.tur")
 
 (defn spawn-conveying [f : ptr<void>]

@@ -36,6 +36,7 @@
 ;;;   (let [f (fiber-new my-fn 0)] ...)  ; => FiberHandle
 ;;;
 ;;; Since: Phase T21-C
+
 (defn fiber-new [fn : ptr<void> stack-size : int] : FiberHandle
   ```c return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)

@@ -35,6 +35,7 @@
 ;;;   (scheduler-mt-new 4)  ; => sched-ptr
 ;;;
 ;;; Since: Phase T23
+
 (defn scheduler-mt-new [n_threads : int] : ptr<void>
   ```c TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
   if (!s) { fprintf(stderr, "scheduler-mt-new: oom\n"); abort(); }

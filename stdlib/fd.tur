@@ -25,6 +25,7 @@
 ;;;   (if (< (fd->int fd) 0) (handle-error))
 ;;;
 ;;; Since: I/O sweep
+
 (defn fd->int [fd : Fd] : int (:: fd :int))
 ;;; int->fd -- wrap a raw :int file descriptor as an Fd.
 ;;;
@@ -38,6 +39,7 @@
 ;;;   (def stdin-fd (int->fd 0))
 ;;;
 ;;; Since: I/O sweep
+
 (defn int->fd [n : int] : Fd (:: n :Fd))
 ;;; fd-valid? -- return true if the Fd is a real descriptor (>= 0).
 ;;;
@@ -52,4 +54,5 @@
 ;;;     (when (fd-valid? fd) (serve fd)))
 ;;;
 ;;; Since: I/O sweep
+
 (defn fd-valid? [fd : Fd] : bool (>= (:: fd :int) 0))
