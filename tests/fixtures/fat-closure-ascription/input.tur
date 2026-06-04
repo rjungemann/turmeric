@@ -1,0 +1,50 @@
+;; Regression: ascribing an already-fat closure value (carried as :int) to a
+;; (fn ...) type and passing it to a ^fat parameter must dispatch the existing
+;; fat { thunk, env } record directly -- NOT wrap it in a __tur_fatshim adapter
+;; (which would call the record pointer as code and BUS/SEGV-fault).
+;;
+;; See docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md.
+;;
+;; Each list cell holds a fat closure of shape (fn [int] :ptr<void>) that
+;; captures a runtime value; fold applies them right-to-left over a base int.
+
+(defn add-d [n : int d : int] : ptr<void>
+  ```c return (void*)(intptr_t)(n + d); ```)
+
+;; make-adder -- returns a genuine fat closure (captures the runtime _d) of the
+;; (fn [int] :ptr<void>) shape the fold dispatches over.
+(defn make-adder [d : int] : ptr<void>
+  (let [_d d]
+    (fn [n : int] : ptr<void>
+      (add-d n _d))))
+
+;; apply-mw -- dispatch an already-fat closure carried as :int. The ^fat
+;; parameter takes the value untouched (no re-shim) and the inline-C reads the
+;; standard { thunk, env } layout.
+(defn apply-mw [^fat mw : (fn [int] :ptr<void>) cur : int] : int
+  ```c
+  typedef int64_t (*thunk_t)(void*, int64_t);
+  int64_t *fat = (int64_t *)(intptr_t)mw;
+  thunk_t t = (thunk_t)(intptr_t)fat[0];
+  return (int)(intptr_t)t((void*)fat, (int64_t)cur);
+  ```)
+
+;; build-chain -- prepend n fat-closure adders (each adding its index) onto acc.
+(defn build-chain [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (build-chain (- n 1) (tcons (:: (make-adder n) int) acc))))
+
+;; fold -- the actual exercise of the fixed path: list-head is :int, ascribed to
+;; the closure's fn type and handed to apply-mw's ^fat parameter.
+(defn fold [base : int mws : int] : int
+  (if (tnil? mws)
+    base
+    (apply-mw (:: (list-head mws) (fn [int] :ptr<void>))
+              (fold base (list-tail mws)))))
+
+(defn main [] : int
+  ;; chain adds 1+2+3+4+5 = 15 across five fat closures, on top of base 100.
+  (let [chain (build-chain 5 (tnil))]
+    (println (fold 100 chain))
+    0))
