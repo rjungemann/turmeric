@@ -1,0 +1,13 @@
+;; bare-fat-result-type-inference-plan.md (Phase A): the SAME bare `^fat g`
+;; spelling is reused at two register classes.  `apply-int` keeps int64 (the
+;; declared return is :int, so the retype predicate skips it); `apply-float`
+;; infers :float from its declared return and re-stamps the tail call.  One
+;; signature-less combinator shape, two carriers, no annotation.
+(defn apply-int   [^fat g x : int]   : int   (g x))
+(defn apply-float [^fat g x : float] : float (g x))
+(defn make-inc   [n : int]   : ptr<void> (fn [x : int]   : int   (+ x n)))
+(defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
+(defn main [] : int
+  (println (apply-int   (make-inc   1)   4))    ;; 5
+  (println (apply-float (make-scale 2.0) 3.5))  ;; 7
+  0)

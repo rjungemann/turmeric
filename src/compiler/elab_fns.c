@@ -346,41 +346,69 @@ static uint8_t collect_implicit_fn_type_params(const Form *params_f, const Form 
     return n;
 }
 
-/* bare-fat-param-non-int-result diagnostic
- * (docs/reported/bare-fat-param-non-int-result-miscompiles.md):
+/* bare-fat-param-non-int-result inference
+ * (docs/upcoming/bare-fat-result-type-inference-plan.md, Phase A):
  * A bare `^fat g` parameter (TY_PTR_VOID + is_fat, no fn-type annotation) has
  * no recorded result type, so a direct call (g x) is elaborated with an
  * int64_t result (elab_call.c, the bare-^fat dispatch path).  When such a call
  * sits in a function's result position and the declared return type is a
  * float-register-class type, emitting `return <int64 expr>;` into a
- * double-returning C function reads the wrong register (rax vs xmm0) and yields
- * garbage -- a silent miscompile.  (cstr/ptr returns share the integer register
- * and round-trip, so only the float-class case is wrong.)  Detect the tail call
- * so the caller can require the annotated `^fat g :(fn [...] :T)` form, which
- * threads the correct result type.  Returns the offending bare-^fat binding, or
- * NULL. */
-static const Binding *bare_fat_int_tail_call(const Expr *tail) {
-    if (!tail) return NULL;
+ * double-returning C function would read the wrong register (rax vs xmm0).
+ * (cstr/ptr returns share the integer register and round-trip, so only the
+ * float-class case is wrong.)
+ *
+ * Codegen already lowers the bare-^fat dispatch using the call expression's
+ * `e->type` (emit_expr.c, ~1799), so it is correct for any result type -- the
+ * only thing wrong is that elaboration stamped the call TYPE_INT.  This pass
+ * re-stamps the call's result type from the declared (return / binding) type
+ * once it is known.  Soundness rests on the tail-only walk below: only result
+ * positions are visited, so a non-tail bare-^fat call (e.g. an argument to
+ * another call) is never retyped. */
+
+/* Integer-register carriers (int/cstr/ptr/rc/...) round-trip through the
+ * int64 slot; only xmm/by-value-distinct returns need retyping. */
+bool kind_is_non_int_register_class(TypeKind k) {
+    return k == TY_FLOAT /* || k == TY_FLOAT32 || ... (extend as carriers arise) */;
+}
+
+/* Re-stamp bare-^fat int64 calls in `tail`'s result position(s) to `target`
+ * (a concrete non-int register-class kind).  Returns true if any call was
+ * retyped.  Tail-precise: only result positions are visited, so a non-tail
+ * bare-^fat call is never touched. */
+bool retype_bare_fat_tail_calls(Expr *tail, TypeKind target) {
+    if (!tail) return false;
     switch (tail->kind) {
-        case EX_DO:
-            return tail->as.do_.n == 0 ? NULL
-                : bare_fat_int_tail_call(tail->as.do_.items[tail->as.do_.n - 1]);
+        case EX_DO: {
+            if (tail->as.do_.n == 0) return false;
+            Expr *last = tail->as.do_.items[tail->as.do_.n - 1];
+            bool changed = retype_bare_fat_tail_calls(last, target);
+            if (changed) tail->type = last->type;   /* keep wrapper consistent */
+            return changed;
+        }
         case EX_LET:
-        case EX_LETREC:
-            return bare_fat_int_tail_call(tail->as.let_.body);
+        case EX_LETREC: {
+            bool changed = retype_bare_fat_tail_calls(tail->as.let_.body, target);
+            if (changed) tail->type = tail->as.let_.body->type;
+            return changed;
+        }
         case EX_IF: {
-            const Binding *b = bare_fat_int_tail_call(tail->as.if_.then_);
-            return b ? b : bare_fat_int_tail_call(tail->as.if_.else_or_null);
+            bool c1 = retype_bare_fat_tail_calls(tail->as.if_.then_, target);
+            bool c2 = retype_bare_fat_tail_calls(tail->as.if_.else_or_null, target);
+            /* The if's type follows its (now-consistent) then-branch. */
+            if ((c1 || c2) && tail->as.if_.then_) tail->type = tail->as.if_.then_->type;
+            return c1 || c2;
         }
         case EX_CALL: {
-            const Binding *b = tail->as.call_.fn_binding;
+            Binding *b = tail->as.call_.fn_binding;
             if (b && b->is_fat && b->type.kind == TY_PTR_VOID &&
-                tail->type.kind == TY_INT)
-                return b;
-            return NULL;
+                tail->type.kind == TY_INT) {
+                tail->type = type_from_kind(target);
+                return true;
+            }
+            return false;
         }
         default:
-            return NULL;
+            return false;
     }
 }
 
@@ -1868,23 +1896,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
         body = elab_coerce_to_any(e, body);
     }
 
-    /* bare-fat-param-non-int-result: a bare `^fat g` call returned where a
-     * float-register-class type is declared is a silent miscompile (the call's
-     * int64 result is read from the wrong register).  Diagnose and direct the
-     * user to the annotated form, which threads the correct result type. */
-    if (return_kind == TY_FLOAT) {
-        const Binding *bf = bare_fat_int_tail_call(body);
-        if (bf) {
-            diag_emit(DIAG_ERROR, body->span,
-                      "calling bare '^fat %s' in the result position of a "
-                      ":float function loses the closure's result type (the "
-                      "call yields int64); annotate the parameter with its "
-                      "function type -- ^fat %s :(fn [...] :float) -- so the "
-                      "correct result type is threaded",
-                      bf->name->name, bf->name->name);
-            e->scope = inner.parent;
-            scope_free(&inner);
-            return NULL;
+    /* bare-fat-param-non-int-result: a bare `^fat g` call in result position
+     * has no recorded result type (typed int64).  When the function declares a
+     * non-int register-class return, infer the closure's result type from the
+     * declared return and re-stamp the tail call(s) so codegen reads the right
+     * register.  Tail-precise; sound under an honest signature (see
+     * docs/upcoming/bare-fat-result-type-inference-plan.md). */
+    if (kind_is_non_int_register_class(return_kind)) {
+        if (retype_bare_fat_tail_calls(body, return_kind) &&
+            body->type.kind == TY_INT) {
+            body->type = type_from_kind(return_kind);
         }
     }
 
@@ -2870,7 +2891,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
             return_fn_type = rft;
         }
     }
-    
+
+    /* bare-fat-param-non-int-result (Phase A): same retype as elab_defn, run on
+     * each lambda's own body so a `fn` whose declared result is non-int-class
+     * and whose tail is a bare-^fat call gets the correct call result type.
+     * Per-lambda scope -> no cross-lambda leakage. */
+    if (kind_is_non_int_register_class(return_kind)) {
+        if (retype_bare_fat_tail_calls(body, return_kind) &&
+            body->type.kind == TY_INT) {
+            body->type = type_from_kind(return_kind);
+        }
+    }
+
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {

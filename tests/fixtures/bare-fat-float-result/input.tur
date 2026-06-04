@@ -1,0 +1,11 @@
+;; bare-fat-result-type-inference-plan.md (Phase A): a bare `^fat g` parameter
+;; (no fn-type annotation) records no result type, so a direct call (g x) is
+;; elaborated int64.  When the enclosing function declares a non-int
+;; register-class return (:float here), the tail-retype pass infers the
+;; closure's result type from the declared return and re-stamps the call so
+;; codegen reads xmm0 instead of rax.  No annotation required; prints 7.
+(defn run-with [^fat g x : float] : float (g x))
+(defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
+(defn main [] : int
+  (println (run-with (make-scale 2.0) 3.5))
+  0)

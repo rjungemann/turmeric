@@ -860,6 +860,10 @@ Expr *elab_escape(Elab *e, const Form *call);
 /* elab_fns.c */
 Expr *elab_defn(Elab *e, const Form *call);
 Expr *elab_fn(Elab *e, const Form *call);
+/* bare-fat-param-non-int-result inference (Phase A); see
+ * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+bool kind_is_non_int_register_class(TypeKind k);
+bool retype_bare_fat_tail_calls(Expr *tail, TypeKind target);
 Expr *elab_extern_c(Elab *e, const Form *call);
 Expr *elab_def(Elab *e, const Form *call);
 
