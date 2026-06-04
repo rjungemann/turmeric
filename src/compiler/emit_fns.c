@@ -451,8 +451,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 strcmp(pc, "int64_t") != 0)
                 fd->params[i]->emit_byvalue_carrier_abi = true;
         } else {
-            /* Phase D: large structs use const T* ABI unless in inline-C or closure. */
-            Type param_ty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
+            /* Phase D: large structs use const T* ABI unless in inline-C or closure.
+             * bare-fat-sink-poly-box-slot0-int64-mismatch.md: a ^fat param is a
+             * fat-closure *carrier* handle, never a by-value fn; its arg_full_types
+             * slot may now hold a synthesized (fn ...) signature purely so a caller
+             * boxing a tur_poly_fn_t can pick the right slot-0 shim.  Emit the
+             * carrier type from param_types here so that signature does not leak
+             * into the param's own C type (type_c_name(fn) -> the result type). */
+            Type param_ty = (!fd->params[i]->is_fat &&
+                             e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
                 ? *e->type.as.fn.arg_full_types[i]
                 : fd->param_types[i];
             if (!fd->closure && !body_is_inline_c && type_struct_pass_by_ptr(param_ty)) {
@@ -668,7 +675,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             } else if (fd->param_types[i].kind == TY_FN) {
                 buf_puts(real_file, "int64_t");
             } else {
-                Type param_ty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
+                Type param_ty = (!fd->params[i]->is_fat &&
+                                 e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
                     ? *e->type.as.fn.arg_full_types[i]
                     : fd->param_types[i];
                 buf_puts(real_file, emit_type_c_name(ctx, param_ty));

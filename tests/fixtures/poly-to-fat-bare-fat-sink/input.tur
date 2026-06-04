@@ -1,0 +1,33 @@
+;; bare-fat-sink-poly-box-slot0-int64-mismatch.md (fix): a bare `^fat g`
+;; sink (no :(fn ...) annotation) whose :float result is recovered by the
+;; bare-fat result-type-inference pass.  When a typeclass method boxes its
+;; (poly) closure argument into this bare ^fat slot, the box's slot-0 shim
+;; must match the typed-thunk cast `double (*)(void *, double)` the sink
+;; invokes -- not the int64 __tur_poly_to_fat1 shim (which round-tripped
+;; only because xmm0 incidentally survived the integer-ABI thunk hops).
+;;
+;; The bare-fat inference now synthesizes the param's fn signature onto the
+;; sink's type, so the box site selects __tur_poly_to_fat1_double_double and
+;; the :float argument round-trips by construction: (* 3.5 2.0) = 7.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+;; BARE ^fat sink: g has no fn-type annotation; its :float result/arg are
+;; inferred from the `: float` return and the `(g x)` invoke.
+(defn call-bare [^fat g x : float] : float
+  (g x))
+
+(defstruct BoxW [A]
+  (raw :int))
+
+(definstance Functor [BoxW]
+  (fmap [container fn]
+    (call-bare fn 3.5)))
+
+(defn main [] : int
+  (let [k 0.0
+        b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    ;; capturing closure through the instance method into the bare ^fat sink
+    (println (.fmap b (fn [x : float] : float (+ (* x 2.0) k)))))
+  0)

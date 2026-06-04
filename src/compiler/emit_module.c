@@ -194,6 +194,72 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     return name;
 }
 
+static char *typed_poly_to_fat_name(Type result_type, Type arg_type) {
+    Buf name;
+    buf_init(&name);
+    buf_puts(&name, "__tur_poly_to_fat1_");
+    append_sanitized_c_token(&name, type_c_name(result_type));
+    buf_putc(&name, '_');
+    append_sanitized_c_token(&name, type_c_name(arg_type));
+    buf_putc(&name, '\0');
+    char *result = strdup(name.data);
+    buf_free(&name);
+    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return result;
+}
+
+char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type, Type arg_type) {
+    /* tur_poly_fn_t is inherently unary, so a single (R, A0) shim family
+     * suffices.  The sink invokes the boxed handle through the typed-thunk cast
+     * only when use_typed_thunk_abi holds for (R, A0); otherwise it falls back
+     * to the int64_t carrier (TUR_APPLY1) that the preamble __tur_poly_to_fat1
+     * already satisfies. */
+    if (!use_typed_thunk_abi(result_type, &arg_type, 1)) return NULL;
+    /* All-int64_t carrier signatures are likewise served by the preamble shim
+     * (its int64_t (*)(void *, int64_t) ABI equals the typed-thunk cast), so
+     * emit nothing new and keep int64/pointer poly boxes churn-free. */
+    if (strcmp(type_c_name(result_type), "int64_t") == 0 &&
+        strcmp(type_c_name(arg_type), "int64_t") == 0) {
+        return NULL;
+    }
+
+    char *name = typed_poly_to_fat_name(result_type, arg_type);
+    for (uint32_t i = 0; i < ctx->n_poly_fatshim_names; i++) {
+        if (strcmp(ctx->poly_fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_poly_fatshim_names >= ctx->cap_poly_fatshim_names) {
+        uint32_t new_cap = ctx->cap_poly_fatshim_names ? ctx->cap_poly_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->poly_fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->poly_fatshim_names = nn;
+        ctx->cap_poly_fatshim_names = new_cap;
+    }
+    ctx->poly_fatshim_names[ctx->n_poly_fatshim_names++] = strdup(name);
+    if (!ctx->poly_fatshim_names[ctx->n_poly_fatshim_names - 1]) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    /* static R name(void *__e, A0 a0) {
+     *     int64_t *__b = (int64_t *)__e;
+     *     return ((R (*)(void *, A0))(intptr_t)__b[1])((void *)(intptr_t)__b[2], a0);
+     * }
+     * Slot 1 holds the method's real (typed) fn pointer; slot 2 its env.  The
+     * carrier erases the signature to int64_t (*)(void *, int64_t); this shim
+     * re-types it back to the true R (*)(void *, A0) so the sink's typed-thunk
+     * cast at slot 0 matches the actual ABI. */
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    const char *rc = type_c_name(result_type);
+    const char *ac = type_c_name(arg_type);
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    buf_printf(target, "static %s %s(void *__e, %s a0) {\n", rc, name, ac);
+    buf_puts(target, "    int64_t *__b = (int64_t *)__e;\n    ");
+    if (has_ret) buf_puts(target, "return ");
+    buf_printf(target, "((%s (*)(void *, %s))(intptr_t)__b[1])((void *)(intptr_t)__b[2], a0);\n}\n",
+               rc, ac);
+    return name;
+}
+
 static bool emit_abi_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -1197,7 +1263,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 buf_puts(out, "int64_t");
             } else {
                 bool _fwd_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
-                Type _fwd_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                /* bare-fat-sink-poly-box-slot0-int64-mismatch.md: a ^fat param's
+                 * arg_full_types may hold a synthesized fn signature for the box
+                 * site; emit the carrier from param_types so it does not leak into
+                 * the forward declaration's param type. */
+                Type _fwd_pty = (!fd->params[j]->is_fat &&
+                                 e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                     ? *e->type.as.fn.arg_full_types[j]
                     : fd->param_types[j];
                 if (!fd->closure && !_fwd_inline_c && type_struct_pass_by_ptr(_fwd_pty)) {
@@ -1228,7 +1299,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 } else if (fd->param_types[j].kind == TY_FN) {
                     buf_puts(out, "int64_t");
                 } else {
-                    Type _pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                    Type _pty = (!fd->params[j]->is_fat &&
+                                 e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                         ? *e->type.as.fn.arg_full_types[j]
                         : fd->param_types[j];
                     buf_puts(out, type_c_name(_pty));
@@ -1293,6 +1365,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.fatshim_names = NULL;
     ctx.n_fatshim_names = 0;
     ctx.cap_fatshim_names = 0;
+    ctx.poly_fatshim_names = NULL;
+    ctx.n_poly_fatshim_names = 0;
+    ctx.cap_poly_fatshim_names = 0;
     /* Phase 4 v1: frame tracking */
     ctx.frame_var = NULL;
     ctx.in_scope_with_defers = false;
@@ -4746,6 +4821,8 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
+    free(ctx.poly_fatshim_names);
     free(ctx.env_struct_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
@@ -5185,6 +5262,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.fatshim_names = NULL;
     ctx.n_fatshim_names = 0;
     ctx.cap_fatshim_names = 0;
+    ctx.poly_fatshim_names = NULL;
+    ctx.n_poly_fatshim_names = 0;
+    ctx.cap_poly_fatshim_names = 0;
     /* Phase 3/4: Track return emission */
     ctx.return_emitted = false;
     /* Phase 19: Pending effect handler function buffer */
@@ -5536,6 +5616,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
+    free(ctx.poly_fatshim_names);
     free(ctx.env_struct_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);

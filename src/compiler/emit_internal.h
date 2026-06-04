@@ -110,6 +110,14 @@ typedef struct EmitCtx {
     char    **fatshim_names;
     uint32_t  n_fatshim_names;
     uint32_t  cap_fatshim_names;
+    /* poly-to-fat-typed-shim-plan: per-signature typed poly-to-fat shim tracking.
+     * EX_POLY_TO_FAT boxes a typeclass-method closure (tur_poly_fn_t) as
+     * { shim, fn, env }; for a non-int64 method signature the slot-0 shim must
+     * speak the method's declared C types so the typed-thunk invocation cast at
+     * the sink's call site matches the shim's ABI (mirrors fatshim_names). */
+    char    **poly_fatshim_names;
+    uint32_t  n_poly_fatshim_names;
+    uint32_t  cap_poly_fatshim_names;
     /* Phase 3: For closure thunk emission, track the current closure */
     struct Closure *closure;
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
@@ -287,6 +295,11 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
+/* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the
+ * given (result, arg) method signature, returning its C function name.  Returns
+ * NULL for the all-int64_t carrier case (caller uses the preamble
+ * __tur_poly_to_fat1 shim instead), keeping int64 poly boxes churn-free. */
+char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type, Type arg_type);
 
 /* ------------ emit_effects.c: effects/CPS expression emission ------------ */
 /* Region C -- algebraic effects (EX_DEFECT, EX_PERFORM, EX_HANDLE, EX_RESUME,

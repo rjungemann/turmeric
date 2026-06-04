@@ -1,0 +1,40 @@
+;; poly-to-fat-typed-shim-plan (Phase 2): a typeclass instance method hands its
+;; closure argument (a tur_poly_fn_t {env,fn}) to a ^fat sink whose declared
+;; signature is :float -> :float.  The sink invokes the boxed handle through the
+;; typed-thunk cast `double (*)(void *, double)`, so the fat box's slot-0 shim
+;; must speak that same ABI -- the int64 carrier shim (__tur_poly_to_fat1) would
+;; read the :float argument from the wrong register class (rdi vs xmm0).
+;;
+;; The capturing closure stores its real `double (*)(void *, double)` thunk into
+;; the carrier (address-preserving cast), so the per-signature typed shim
+;; __tur_poly_to_fat1_double_double recovers the correct ABI and the non-integer
+;; argument 3.5 round-trips: (* 3.5 2.0) = 7.0.  With the int64 carrier shim the
+;; 3.5 would be corrupted and the result would not be 7.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+;; A ^fat sink with a concrete :float -> :float signature.  `f` is invoked
+;; through the typed-thunk cast, which is what forces the typed slot-0 shim.
+(defn call-ff [^fat f :(fn [:float] #{} :float) x : float] : float
+  (f x))
+
+(defstruct BoxW [A]
+  (raw :int))
+
+;; Functor instance whose fmap forwards its (poly) closure argument to the
+;; :float sink.  Inside the body, `fn` is a tur_poly_fn_t carrier that gets
+;; boxed via EX_POLY_TO_FAT before reaching call-ff's ^fat parameter.
+(definstance Functor [BoxW]
+  (fmap [container fn]
+    (call-ff fn 3.5)))
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    ;; A *capturing* closure (captures k) lowers through the tur_poly_fn_t
+    ;; closure pass-through, which stores the closure's real
+    ;; `double (*)(void *, double)` thunk into the carrier -- so the typed
+    ;; slot-0 shim recovers the correct ABI: (* 3.5 2.0) + 0.0 = 7.
+    (let [k 0.0]
+      (println (.fmap b (fn [x : float] : float (+ (* x 2.0) k))))))
+  0)

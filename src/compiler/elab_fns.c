@@ -412,6 +412,43 @@ bool retype_bare_fat_tail_calls(Expr *tail, TypeKind target) {
     }
 }
 
+/* bare-fat-sink-poly-box-slot0-int64-mismatch.md: recover the argument kinds
+ * of a bare `^fat` param `g`'s tail-position invoke `(g x0 x1 ...)`, mirroring
+ * the tail walk above.  Returns the arg count (>= 0) and fills `out`, or -1
+ * when no tail-position call to `g` is found.  Used to synthesize `g`'s fn
+ * signature on the enclosing function's type so a caller that boxes a
+ * tur_poly_fn_t into this ^fat slot (EX_POLY_TO_FAT) can pick a slot-0 shim
+ * whose ABI matches the typed-thunk cast the retyped invoke applies. */
+static int bare_fat_tail_call_arg_kinds(const Expr *tail, const Binding *g,
+                                        TypeKind *out) {
+    if (!tail) return -1;
+    switch (tail->kind) {
+        case EX_DO:
+            return tail->as.do_.n
+                ? bare_fat_tail_call_arg_kinds(tail->as.do_.items[tail->as.do_.n - 1], g, out)
+                : -1;
+        case EX_LET:
+        case EX_LETREC:
+            return bare_fat_tail_call_arg_kinds(tail->as.let_.body, g, out);
+        case EX_IF: {
+            int a = bare_fat_tail_call_arg_kinds(tail->as.if_.then_, g, out);
+            if (a >= 0) return a;
+            return bare_fat_tail_call_arg_kinds(tail->as.if_.else_or_null, g, out);
+        }
+        case EX_CALL:
+            if (tail->as.call_.fn_binding == g) {
+                uint32_t n = tail->as.call_.n_args;
+                if (n > MAX_FN_ARITY) n = MAX_FN_ARITY;
+                for (uint32_t i = 0; i < n; i++)
+                    out[i] = tail->as.call_.args[i]->type.kind;
+                return (int)n;
+            }
+            return -1;
+        default:
+            return -1;
+    }
+}
+
 /* TY4: reject a function whose result is a borrow of one of its own locals
  * (params or let-locals).  Such a borrow dangles once the frame is gone --
  * today it only surfaces as a C -Wdangling-pointer warning.  Walk the body's
@@ -2293,6 +2330,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
         Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
         for (uint8_t i = 0; i < n_params; i++)
             aFT[i] = param_poly_types[i] ? param_poly_types[i] : &params[i]->type;
+        /* bare-fat-sink-poly-box-slot0-int64-mismatch.md: a bare `^fat` param
+         * carries no fn signature (its full type is TY_PTR_VOID), so a caller
+         * boxing a tur_poly_fn_t into this slot could not see that the sink
+         * invokes it through a non-int64 typed-thunk cast -- slot 0 kept the
+         * int64 __tur_poly_to_fat1 shim while the (retyped) invoke cast to
+         * e.g. double, a register-class mismatch masked only by xmm0 luck.
+         * When the bare-fat result-type inference above retyped this param's
+         * tail call to a non-int register class, synthesize `(fn [args] : R)`
+         * here so the box site (elab_call.c, sink_fn_type) selects the typed
+         * slot-0 shim that matches the invoke. */
+        if (kind_is_non_int_register_class(return_kind)) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                if (!(params[i]->is_fat && params[i]->type.kind == TY_PTR_VOID))
+                    continue;
+                TypeKind akinds[MAX_FN_ARITY];
+                int n = bare_fat_tail_call_arg_kinds(body, params[i], akinds);
+                if (n < 0) continue;
+                Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *ft = type_fn(akinds, (uint8_t)n, return_kind);
+                aFT[i] = ft;
+            }
+        }
         fn_type.as.fn.arg_full_types = aFT;
     }
 
@@ -3022,6 +3081,27 @@ Expr *elab_fn(Elab *e, const Form *call) {
             Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
             for (uint8_t i = 0; i < n_params; i++) aFT[i] = param_full_types[i];
             fn_type.as.fn.arg_full_types = aFT;
+        }
+    }
+    /* bare-fat-sink-poly-box-slot0-int64-mismatch.md: same bare-^fat signature
+     * synthesis as elab_defn, for a lambda sink.  A retyped bare `^fat` param
+     * gets a `(fn [args] : R)` recorded on arg_full_types so a caller boxing a
+     * tur_poly_fn_t selects the typed slot-0 shim. */
+    if (kind_is_non_int_register_class(return_kind)) {
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (!(params[i]->is_fat && params[i]->type.kind == TY_PTR_VOID))
+                continue;
+            TypeKind akinds[MAX_FN_ARITY];
+            int n = bare_fat_tail_call_arg_kinds(body, params[i], akinds);
+            if (n < 0) continue;
+            if (!fn_type.as.fn.arg_full_types) {
+                Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
+                for (uint8_t k = 0; k < n_params; k++) aFT[k] = NULL;
+                fn_type.as.fn.arg_full_types = aFT;
+            }
+            Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *ft = type_fn(akinds, (uint8_t)n, return_kind);
+            fn_type.as.fn.arg_full_types[i] = ft;
         }
     }
     if (return_full_type) {

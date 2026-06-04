@@ -3520,8 +3520,31 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *box = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t *%s = (int64_t *)malloc(3 * sizeof(int64_t));\n", box);
+            /* poly-to-fat-typed-shim-plan: when the sink's ^fat param has a
+             * concrete (non-int64) fn signature, slot 0 must carry a typed shim
+             * whose ABI matches the typed-thunk cast the sink applies on
+             * invocation -- otherwise a :float/:cstr method would be read through
+             * the int64 carrier ABI from the wrong register class.  For an
+             * int64/pointer signature (or no threaded signature) the preamble
+             * __tur_poly_to_fat1 shim already matches; keep it (churn-free). */
+            char *poly_shim = NULL;
+            const Type *sft = e->as.poly_to_fat_.sink_fn_type;
+            if (sft && sft->kind == TY_FN && sft->as.fn.arity == 1) {
+                Type pr = sft->as.fn.result_full_type
+                              ? *sft->as.fn.result_full_type
+                              : emit_type_from_kind(sft->as.fn.result_kind);
+                Type pa = (sft->as.fn.arg_full_types && sft->as.fn.arg_full_types[0])
+                              ? *sft->as.fn.arg_full_types[0]
+                              : emit_type_from_kind(sft->as.fn.arg_kinds[0]);
+                poly_shim = ensure_typed_poly_to_fat(ctx, pr, pa);
+            }
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;\n", box);
+            if (poly_shim) {
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", box, poly_shim);
+            } else {
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;\n", box);
+            }
+            free(poly_shim);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s[1] = (int64_t)(intptr_t)%s.fn;\n", box, pf);
             indent_buf(body, ctx->indent);

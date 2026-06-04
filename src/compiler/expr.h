@@ -753,7 +753,12 @@ struct Expr {
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes
          * { __tur_poly_to_fat1, fn, env } and yields the box pointer. */
-        struct { struct Expr *inner; } poly_to_fat_;
+        /* poly-to-fat-typed-shim-plan: sink_fn_type is the ^fat consumer's
+         * declared fn signature for this argument slot (a TY_FN), threaded from
+         * elaboration so the emitter can pick a typed slot-0 shim whose ABI
+         * matches the typed-thunk cast the sink will apply.  NULL for the int64
+         * carrier case (keeps __tur_poly_to_fat1). */
+        struct { struct Expr *inner; const struct Type *sink_fn_type; } poly_to_fat_;
         /* Phase HRT2: Existential types.
          * Phase EX1c: optional resolved constraint witnesses (one per constraint
          * in the target existential type).  NULL when the target has no
