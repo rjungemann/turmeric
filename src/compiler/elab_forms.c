@@ -690,8 +690,27 @@ Expr *elab_let(Elab *e, const Form *call) {
          * closure literal or a closure-returning call remains callable with the
          * underlying thunk signature. */
         if (init) {
-            Binding *closure_b = expr_closure_fn_binding(init);
-            if (closure_b) b->closure_fn_binding = closure_b;
+            /* curried-fn-typed-param: distinguish "init *is* a closure value"
+             * from "init names a *function* that returns a closure".  When the
+             * init is an EX_VAR naming a plain function (TY_FN, no
+             * closure_fn_binding of its own) that merely *returns* a closure,
+             * the alias is still that function -- propagate
+             * returns_closure_fn_binding, NOT closure_fn_binding.  Marking the
+             * alias as a closure value would make elab_call_fn swap in the
+             * inner thunk's type and subtract a hidden env param from its
+             * arity, so (f 1) on a curried (fn [int] (fn [int] int)) would
+             * wrongly resolve to the inner result kind instead of (fn [int]
+             * int). */
+            if (init->kind == EX_VAR && init->as.var.binding &&
+                init->as.var.binding->type.kind == TY_FN &&
+                !init->as.var.binding->closure_fn_binding &&
+                init->as.var.binding->returns_closure_fn_binding) {
+                b->returns_closure_fn_binding =
+                    init->as.var.binding->returns_closure_fn_binding;
+            } else {
+                Binding *closure_b = expr_closure_fn_binding(init);
+                if (closure_b) b->closure_fn_binding = closure_b;
+            }
         }
         /* Phase HRT4: propagate poly fn metadata through let-bindings.
          * (let [g f] ...) where f is is_poly_fn → g inherits is_poly_fn.

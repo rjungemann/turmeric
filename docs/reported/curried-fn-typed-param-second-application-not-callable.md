@@ -6,7 +6,8 @@ description: A parameter whose declared type is a function that *returns a funct
 
 # Applying the Result of a Higher-Order-Returning Parameter Is "Not Callable" -- Reported Bug
 
-> **Status:** OPEN (found 2026-06-04).
+> **Status:** FIXED 2026-06-04 (type-checking + closure-value codegen). One
+>   narrow runtime limitation remains documented below.
 > **Found:** while implementing the curried fixture case of
 >   [fn-type-bare-identifier-plan](../upcoming/fn-type-bare-identifier-plan.md).
 > **Severity:** Medium -- a hard, non-silent error (`TUR-E0002`), so it
@@ -15,6 +16,68 @@ description: A parameter whose declared type is a function that *returns a funct
 >   only the second application is rejected), forcing the `:ptr<void>` +
 >   annotated-`^fat` recovery workaround that the typed-signal plans
 >   already lean on.
+
+## Resolution (2026-06-04)
+
+Four changes, spanning the type-expression elaborator, the closure-value
+producer, the call-head consumer, and the let-binding propagator:
+
+1. **Type-expression elaborator** (`src/compiler/elab_types.c`). The
+   `(fn ...)` type-expression handler now stores `result_full_type` (and
+   `arg_full_types`) when the result/arg is itself a compound type --
+   crucially including `TY_FN`. The `->` handler's `aggregate_result`
+   predicate likewise now includes `TY_FN`. This is what makes `(f 1)`
+   recover the inner `(fn [int] int)` instead of erasing it to `?`, fixing
+   the reported `TUR-E0002` for all three spellings.
+
+2. **Closure-value producer** (`src/compiler/elab_fns.c`). The first-class
+   `EX_CLOSURE` value type (`clo_ty`) is rebuilt without the env param; it
+   now copies `result_full_type` so a *closure that returns a function*
+   keeps the inner `(fn ...)` type on its value. Without this, a let-bound
+   local closure applied as `((f 1) 2)` recovered a bare result kind.
+
+3. **Let-binding propagator** (`src/compiler/elab_forms.c`). The root-cause
+   miscompile: a `let` binding aliasing a *function that returns a closure*
+   (an `EX_VAR` naming a plain `TY_FN` defn/lambda with
+   `returns_closure_fn_binding` set but no `closure_fn_binding` of its own)
+   was wrongly marked as a *closure value* (`closure_fn_binding`). That made
+   `elab_call_fn` swap in the inner thunk's type and subtract a hidden env
+   param from the arity, so `(f 1)` resolved to the inner *result* kind
+   (`int`) and `(g ...)` was "not a function". It now propagates
+   `returns_closure_fn_binding` instead, leaving the alias callable at its
+   true arity.
+
+4. **Call-head consumer** (`src/compiler/elab_call.c`). When the head of a
+   chained application is the *result of a call* whose static type is a
+   function (`((adder 1) 2)`), the synthesized `__call_head_*` binding now
+   adopts the callee's `returns_closure_fn_binding` so the second
+   application dispatches through the closure thunk rather than treating the
+   fat-closure box address as a thin function pointer (which jumped to
+   garbage and segfaulted). A call that returns a *bare fn reference* (e.g.
+   `((pick) 5)` where `pick` returns `inc`) resolves to `NULL` here and
+   correctly stays a thin function-pointer call.
+
+Regression coverage:
+`tests/fixtures/curried-fn-typed-param-application/` (runnable: top-level
+closure-returning defn, let-bound intermediate, local capturing lambda,
+arrow-spelled curried parameter, and the thin captureless returner), plus
+`tests/fixtures/fn-type-bare-identifier/` upgraded from signature-only to a
+real `((f 1) 2)` application.
+
+### Remaining limitation (not fixed)
+
+Passing a function that returns a **fat (capturing) closure** *through a
+fn-typed parameter* and then applying the result -- e.g.
+`(apply-curried adder 1 2)` where the parameter is
+`(fn [int] (fn [int] int))` and `adder` captures -- still segfaults at
+runtime. This is irreducible at the `((f a) b)` site: a fn-typed parameter
+carries a *thin* function pointer, and the compiler cannot tell whether the
+opaque `f` returns a thin pointer (works, e.g. a `(fn [a] inc)`) or a fat
+closure box (needs thunk dispatch). It is the same pre-existing thin-param /
+fat-closure gap that already makes single-application
+`(apply1 (capturing-closure) x)` segfault. Resolving it requires a uniform
+closure ABI through fn-typed parameters (box every function-typed value, or
+runtime-tag thin vs fat) and is tracked as future work, not by this report.
 
 ---
 

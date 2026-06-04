@@ -920,11 +920,24 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* Parse param types from the vector */
             uint8_t n_fn_args = (uint8_t)params_vec->as.list.len;
             TypeKind fn_arg_kinds[MAX_FN_ARITY];
+            Type *fn_arg_full[MAX_FN_ARITY];
+            bool any_compound_arg = false;
             memset(fn_arg_kinds, 0, sizeof(fn_arg_kinds));
+            memset(fn_arg_full, 0, sizeof(fn_arg_full));
             for (uint8_t pi2 = 0; pi2 < n_fn_args && pi2 < MAX_FN_ARITY; pi2++) {
                 Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
                                                rec_name, type_params, type_param_kinds, n_type_params);
                 fn_arg_kinds[pi2] = at ? at->kind : TY_INT;
+                fn_arg_full[pi2] = at;
+                /* curried-fn-typed-param: a compound arg (notably a nested
+                 * (fn ...) type) cannot be reconstructed from its bare
+                 * TypeKind; preserve the full type so an applied result that
+                 * is itself a function stays callable. */
+                if (at && (at->kind == TY_FN || at->kind == TY_APP ||
+                           at->kind == TY_ADT ||
+                           (at->kind == TY_STRUCT && at->as.struct_.def != NULL))) {
+                    any_compound_arg = true;
+                }
             }
             /* Optional #{...} effect-row annotation */
             EffectRow *fn_effect_row = NULL;
@@ -959,10 +972,21 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
              * drops the def/args and lowers it to the int64_t carrier.  Preserve
              * the full type so a call through this fat-closure param (and its
              * typed-thunk dispatch) emit the real C return type, not int64_t. */
+            /* curried-fn-typed-param: a result that is itself a (fn ...) type
+             * must keep its full Type so a chained application -- ((f 1) 2)
+             * through a parameter typed (fn [int] (fn [int] int)) -- can
+             * recover the inner function type at the call site instead of
+             * erasing it to a bare result kind. */
             if (ret_t &&
-                (ret_t->kind == TY_APP || ret_t->kind == TY_ADT ||
+                (ret_t->kind == TY_FN || ret_t->kind == TY_APP ||
+                 ret_t->kind == TY_ADT ||
                  (ret_t->kind == TY_STRUCT && ret_t->as.struct_.def != NULL))) {
                 fn_t->as.fn.result_full_type = ret_t;
+            }
+            if (any_compound_arg) {
+                Type **aFT = (Type **)arena_alloc(e->arena, n_fn_args * sizeof(Type *));
+                for (uint8_t i = 0; i < n_fn_args; i++) aFT[i] = fn_arg_full[i];
+                fn_t->as.fn.arg_full_types = aFT;
             }
             return fn_t;
         }
@@ -1090,7 +1114,11 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 poly_result = true;
             } else {
                 result_kind = result_type->kind;
+                /* curried-fn-typed-param: a (fn ...) result must keep its full
+                 * Type so a chained application ((f 1) 2) recovers the inner
+                 * function type rather than erasing it to a bare result kind. */
                 aggregate_result =
+                    result_type->kind == TY_FN ||
                     result_type->kind == TY_APP ||
                     result_type->kind == TY_ADT ||
                     (result_type->kind == TY_STRUCT && result_type->as.struct_.def != NULL);

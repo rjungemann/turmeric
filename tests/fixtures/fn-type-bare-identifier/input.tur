@@ -12,14 +12,13 @@
 ;;   - a mix of legacy ':int' and bare 'int' in one signature (lenient path)
 ;;   - a declared user type (via defalias) used bare
 ;;   - a parenthesised inner type (a struct name)
-;;   - a nested (fn ...) result type (curried) -- signature only; see note
+;;   - a nested (fn ...) result type (curried), applied as ((f 1) 2)
 ;;
-;; Note: the curried parameter's signature type-checks, but *applying* the
-;; result of a higher-order-returning parameter -- ((f 1) 2) -- is a
-;; pre-existing limitation that fails identically for the bare, legacy, and
-;; '->' spellings. Tracked in
+;; Note: applying the result of a higher-order-returning parameter --
+;; ((f 1) 2) -- now type-checks and runs (a fn-typed parameter carries a
+;; thin function pointer, so the passed function must itself return a thin
+;; captureless function; mk-inc does). Fixed in
 ;; docs/reported/curried-fn-typed-param-second-application-not-callable.md.
-;; This fixture therefore only declares the curried signature.
 
 (defalias Sample :int)
 
@@ -53,12 +52,21 @@
 (defn applybox [f : (fn [Box] int) p : Box] : int
   (f p))
 
-;; nested (fn ...) result type -- bare, curried. Signature-only (see note).
-(defn declares-curried [f : (fn [int] (fn [int] int))] : int
-  0)
+;; nested (fn ...) result type -- bare, curried.  The second application
+;; ((f 1) 2) now type-checks and runs (see
+;; docs/reported/curried-fn-typed-param-second-application-not-callable.md).
+;; A fn-typed parameter carries a *thin* function pointer, so the function
+;; passed must itself return a thin (captureless) function -- mk-inc does.
+(defn apply-curried [f : (fn [int] (fn [int] int))] : int
+  ((f 1) 2))
 
 (defn inc [x : int] : int
   (+ x 1))
+
+;; curried, returns a thin (captureless) function -- usable through a
+;; fn-typed parameter
+(defn mk-inc [a : int] : (fn [int] int)
+  inc)
 
 (defn add [a : int b : int] : int
   (+ a b))
@@ -77,4 +85,5 @@
   (println (applymix inc 7))
   (println (applysample inc 1000))
   (println (applybox box-fst (make-struct Box 11 22)))
+  (println (apply-curried mk-inc))   ; ((mk-inc 1) 2) => (inc 2) => 3
   0)

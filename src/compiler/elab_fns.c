@@ -3148,6 +3148,17 @@ Expr *elab_fn(Elab *e, const Form *call) {
         for (uint8_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
         Type clo_ty = type_fn(clo_arg_kinds, n_params, return_kind);
         clo_ty.as.fn.boxed = true;
+        /* curried-fn-typed-param: preserve the closure's full result type so a
+         * closure that *returns a function* keeps the inner (fn ...) type on
+         * its first-class value.  Without this, a let-bound closure value
+         * applied as ((f 1) 2) recovers a bare result kind for (f 1) and the
+         * chained application is rejected as not callable. */
+        if (return_full_type) {
+            clo_ty.as.fn.result_full_type = return_full_type;
+        }
+        if (return_fn_type) {
+            clo_ty.as.fn.result_full_type = return_fn_type;
+        }
         Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, clo_ty, call->span);
         closure_expr->as.closure_.closure = closure;
 
