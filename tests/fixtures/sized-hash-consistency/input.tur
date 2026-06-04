@@ -7,7 +7,7 @@
 ;       hash(uint8(0xFF)) != hash(int(-1))
 
 ; splitmix64 finalizer: bijective, used as the canonical integer hash.
-(defn hash-int [n :int] :int
+(defn hash-int [n : int] : int
   ```c
   uint64_t h = (uint64_t)n;
   h ^= h >> 30;
@@ -18,8 +18,8 @@
   return (int64_t)h;
   ```)
 
-(defn hash-int8  [n :int8]  :int (hash-int (as int n)))
-(defn hash-uint8 [n :uint8] :int (hash-int (as int n)))
+(defn hash-int8  [n : int8]  : int (hash-int (as int n)))
+(defn hash-uint8 [n : uint8] : int (hash-int (as int n)))
 
 ; int8(42) sign-extends to int(42): same hash
 (println (= (hash-int8 42i8) (hash-int 42)))

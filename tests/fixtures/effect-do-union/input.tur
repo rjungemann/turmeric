@@ -6,13 +6,13 @@
 (defeffect Read [] :int)
 (defeffect Log [msg :cstr] :nil)
 
-(defn run-all [] #{Write Read Log} :nil
+(defn run-all [] #{Write Read Log} : nil
   (do
     (perform (Write "step1"))
     (let [n (perform (Read))]
       (perform (Log (if (> n 0) "step3" "step3-zero"))))))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (handle
       (handle

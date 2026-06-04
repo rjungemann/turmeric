@@ -32,7 +32,7 @@
 ;;;   (let [spec (args/spec-new)] ...)
 ;;;
 ;;; Since: Phase A1
-(defn args/spec-new [] :int
+(defn args/spec-new [] : int
   ```c int64_t *s = calloc(4, sizeof(int64_t));
   return (int64_t)(intptr_t)s;
   ```)
@@ -50,7 +50,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-prog [spec :int name :cstr] :int
+(defn args/spec-prog [spec : int name : cstr] : int
   ```c int64_t *s = (int64_t*)(intptr_t)spec;
   s[3] = (int64_t)(intptr_t)name;
   return spec;
@@ -69,7 +69,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-flag [spec :int name :cstr] :int
+(defn args/spec-flag [spec : int name : cstr] : int
   ```c int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(2 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
@@ -94,7 +94,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-option [spec :int name :cstr type :cstr dflt :int] :int
+(defn args/spec-option [spec : int name : cstr type : cstr dflt : int] : int
   ```c int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(4 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
@@ -121,7 +121,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-subcommand [spec :int name :cstr sub-spec :int] :int
+(defn args/spec-subcommand [spec : int name : cstr sub-spec : int] : int
   ```c int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(3 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
@@ -151,7 +151,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/parse [spec :int argv :int] :int
+(defn args/parse [spec : int argv : int] : int
   ```c /* --- linearise the *args* cons list into a char* array --- */
   int argc_l = 0;
   int64_t tmp = argv;
@@ -370,7 +370,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/has? [result :int key :cstr] :bool
+(defn args/has? [result : int key : cstr] : bool
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
@@ -394,7 +394,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/get-str [result :int key :cstr] :cstr
+(defn args/get-str [result : int key : cstr] : cstr
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
@@ -418,7 +418,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/get-int [result :int key :cstr] :int
+(defn args/get-int [result : int key : cstr] : int
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
@@ -442,7 +442,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/get-bool [result :int key :cstr] :bool
+(defn args/get-bool [result : int key : cstr] : bool
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
@@ -468,7 +468,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/subcommand [result :int] :cstr
+(defn args/subcommand [result : int] : cstr
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[2];
   ```)
@@ -485,7 +485,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/sub-result [result :int] :int
+(defn args/sub-result [result : int] : int
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   return res[3];
   ```)
@@ -504,7 +504,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/positional [result :int] :int
+(defn args/positional [result : int] : int
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   return res[1];
   ```)
@@ -521,7 +521,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/error? [result :int] :bool
+(defn args/error? [result : int] : bool
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   return res[4] != 0;
   ```)
@@ -538,7 +538,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/error-msg [result :int] :cstr
+(defn args/error-msg [result : int] : cstr
   ```c int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[5];
   ```)
@@ -552,7 +552,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/print-help [spec :int] :void
+(defn args/print-help [spec : int] : void
   ```c int64_t *sp = (int64_t*)(intptr_t)spec;
   const char *prog = sp[3] ? (const char*)(intptr_t)sp[3] : "program";
   printf("Usage: %s [options]", prog);
@@ -599,7 +599,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-free [spec :int] :void
+(defn args/spec-free [spec : int] : void
   ```c int64_t *sp = (int64_t*)(intptr_t)spec;
   int64_t *fl = (int64_t*)(intptr_t)sp[0];
   while (fl) { int64_t *nx = (int64_t*)(intptr_t)fl[1]; free(fl); fl = nx; }
@@ -619,7 +619,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/result-free [result :int] :void
+(defn args/result-free [result : int] : void
   ```c int64_t cur = result;
   while (cur) {
     int64_t *res = (int64_t*)(intptr_t)cur;

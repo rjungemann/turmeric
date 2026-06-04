@@ -3,10 +3,10 @@
 ;; Composition law:  fmap (f . g) x = fmap f (fmap g x)
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; Option helpers
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -14,21 +14,21 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_some? [o] :bool
+(defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -43,11 +43,11 @@
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Helper functions
-(defn id [x] :int x)
-(defn times2 [x] :int (* x 2))
-(defn inc [x] :int (+ x 1))
+(defn id [x] : int x)
+(defn times2 [x] : int (* x 2))
+(defn inc [x] : int (+ x 1))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; Identity law: fmap id (some 42) = some 42
     (let [opt (__opt_some 42)]

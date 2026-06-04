@@ -3,7 +3,7 @@
 
 (load "stdlib/seq/consume.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [six 6
         big? (fn [x] (> x six))]
     (println (seq-opt-unwrap (seq/find-index big? (seq/range 0 10))))

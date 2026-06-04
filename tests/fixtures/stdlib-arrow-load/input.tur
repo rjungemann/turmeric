@@ -3,6 +3,6 @@
 
 (load "stdlib/arrow.tur")
 
-(defn main [] :int
+(defn main [] : int
   (println "arrow loaded")
   0)

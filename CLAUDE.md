@@ -234,7 +234,7 @@ The separator can also be any non-comment, non-blank, non-definition form
 ;;;   (cons 1 (cons 2 (nil-value)))  ; => (1 2)
 ;;;
 ;;; Since: Phase B1
-(defn cons [value next] :int
+(defn cons [value next] : int
   ...)
 ```
 
@@ -334,10 +334,10 @@ as an indented block.
 ```turmeric
 #lang sweet-exp
 
-defn square [x :float] :float
+defn square [x : float] : float
   *(x x)
 
-defn classify [x : float] :cstr
+defn classify [x : float] : cstr
   if >(x 0.0)
     "positive"
     if <(x 0.0)
@@ -445,12 +445,12 @@ import opengl/window :refer [make-window destroy-window window-should-close?
                               poll-events swap-buffers set-clear-color clear]
 import opengl/shaders :refer [compile-shader shader-program use-program]
 
-defn make-program [vert-src :cstr frag-src :cstr] :int
+defn make-program [vert-src : cstr frag-src : cstr] : int
   shader-program
     compile-shader(":vertex"   vert-src)
     compile-shader(":fragment" frag-src)
 
-defn main [] :int
+defn main [] : int
   let [w make-window(800 600 "Demo")]
     set-clear-color(0.1 0.1 0.1 1.0)
     while not(window-should-close?(w))
@@ -485,7 +485,7 @@ the column of the first argument (one past the opening `(`).
 forms use a fixed 2-space indent for their bodies, regardless of column position.
 
 ```turmeric
-(defn greet [name :cstr] :void
+(defn greet [name : cstr] : void
   (println name))
 
 (fn [x]
@@ -567,7 +567,7 @@ interpret it as the end of any surrounding code fence, breaking rendered
 documentation. Example:
 
 ```turmeric
-(defn file-size [f] :int
+(defn file-size [f] : int
   ```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);
@@ -618,14 +618,14 @@ struct and pass a single options value:
 
 ```turmeric
 (defstruct CsvOpts
-  [delim       :int   ;; field separator (e.g. 44 = ',')
-   quote       :int   ;; quote char (e.g. 34 = '"')
-   has-header  :int   ;; 1 = first row is header
-   infer-rows  :int   ;; rows to sample for type inference
-   null-str    :cstr  ;; string that represents NULL (e.g. "")
+  [delim       : int   ;; field separator (e.g. 44 = ',')
+   quote       : int   ;; quote char (e.g. 34 = '"')
+   has-header  : int   ;; 1 = first row is header
+   infer-rows  : int   ;; rows to sample for type inference
+   null-str    : cstr  ;; string that represents NULL (e.g. "")
   ])
 
-(defn read-csv [src :cstr opts :CsvOpts] :int
+(defn read-csv [src : cstr opts : CsvOpts] : int
   ...)
 ```
 
@@ -650,7 +650,7 @@ When a function takes an *unknown number of values of the same type*
 parameter:
 
 ```turmeric
-(defn println-all [first :cstr & rest :cstr] :void
+(defn println-all [first : cstr & rest : cstr] : void
   (println first)
   ;; rest is a cons-list of :cstr; walk it with head/tail helpers
   ...)
@@ -667,7 +667,7 @@ their full type and each rest argument is checked by identity at the call site:
 (defopaque Route :int)
 (defopaque Middleware :int)
 
-(defn launch [& routes :Route] :int ...)
+(defn launch [& routes : Route] : int ...)
 
 (launch (route!) (route!))     ;; OK -- all Route
 (launch (route!) (make-mw))    ;; ERROR: rest arg 1 (expected Route, got Middleware)
@@ -707,7 +707,7 @@ The rest parameter is a `int64_t` holding a pointer to a linked list of
 Inline-C helpers that walk it look like:
 
 ```turmeric
-(defn cons-list-sum [lst :int] #{Unsafe} :int
+(defn cons-list-sum [lst : int] #{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
@@ -720,7 +720,7 @@ Inline-C helpers that walk it look like:
 Or use a pure tail-recursive helper:
 
 ```turmeric
-(defn list-sum-acc [lst :int acc :int] #{Unsafe} :int
+(defn list-sum-acc [lst : int acc : int] #{Unsafe} : int
   (if (= lst 0)
     acc
     (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))

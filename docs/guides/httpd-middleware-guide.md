@@ -19,9 +19,9 @@ writing your own.
 Every middleware in this guide has the shape
 
 ```turmeric
-(defn mw-foo [next :int] :ptr<void>
+(defn mw-foo [next : int] : ptr<void>
   (let [_n next ...]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       ;; pre-processing here ...
       (httpd-call _n c)
       ;; post-processing here ...
@@ -178,12 +178,12 @@ handlers can read it back. See the [request attributes](#request-attributes-mw2)
 section for the full surface.
 
 ```turmeric
-(let [verify   (fn [u :cstr p :cstr] :int
+(let [verify   (fn [u : cstr p : cstr] : int
                  (let [_t "_force-fat-closure"]
                    (if (= 1 (cstr-eq-const-time u "admin"))
                      (cstr-eq-const-time p "s3cret")
                      0)))
-      base     (fn [c :ptr<void>] :nil
+      base     (fn [c : ptr<void>] : nil
                  (let [u (httpd-req-attr c "user")]
                    (httpd-resp-status! c 200)
                    (httpd-resp-body!   c u)))
@@ -217,7 +217,7 @@ your program.
 ```turmeric
 (load "stdlib/httpd-compress.tur")
 
-(let [base     (fn [c :ptr<void>] :nil
+(let [base     (fn [c : ptr<void>] : nil
                  (httpd-resp-status! c 200)
                  (httpd-resp-body!   c large-html))
       composed (compose-middleware base mw-log mw-compress)]
@@ -306,11 +306,11 @@ Capture at least one variable in the outer `let` so the closure is
 fat-shaped (which the `httpd-call` dispatcher requires):
 
 ```turmeric
-(defn mw-add-header [name :cstr value :cstr next :int] :ptr<void>
+(defn mw-add-header [name : cstr value : cstr next : int] : ptr<void>
   (let [_n next
         _k name
         _v value]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (httpd-call _n c)
       (httpd-resp-header! c _k _v))))
 ```
@@ -328,9 +328,9 @@ defn mw-add-header [name :cstr value :cstr next :int] :ptr<void>
 Short-circuit by *not* calling `(httpd-call _n c)`:
 
 ```turmeric
-(defn mw-require-https [next :int] :ptr<void>
+(defn mw-require-https [next : int] : ptr<void>
   (let [_n next]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-req-header? c "X-Forwarded-Proto"))
         (httpd-call _n c)
         (do
@@ -352,9 +352,9 @@ defn mw-require-https [next :int] :ptr<void>
 Use request attrs to thread context downstream:
 
 ```turmeric
-(defn mw-request-id [next :int] :ptr<void>
+(defn mw-request-id [next : int] : ptr<void>
   (let [_n next]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (let [id (httpd-req-header c "X-Request-Id")]
         (httpd-set-attr! c "request_id" id)
         (httpd-call _n c)

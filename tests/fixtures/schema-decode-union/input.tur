@@ -4,21 +4,21 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defn int-or-str [] :int
+(defn int-or-str [] : int
   (schema/union (vec-of (schema/int) (schema/str))))
 
 ;; int matches the first arm
-(defn test-int [] :int
+(defn test-int [] : int
   (let [r (schema-decode (int-or-str) (json/decode "42"))]
     (if (schema-decode-ok? r) (schema-decode-value r) -1)))
 
 ;; string matches the second arm
-(defn test-str [] :int
+(defn test-str [] : int
   (let [r (schema-decode (int-or-str) (json/decode "\"hi\""))]
     (if (schema-decode-ok? r) 1 0)))
 
 ;; bool matches neither -> err
-(defn test-none [] :cstr
+(defn test-none [] : cstr
   (let [r (schema-decode (int-or-str) (json/decode "true"))]
     (schema-error-message (schema-decode-errors r))))
 

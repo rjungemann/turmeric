@@ -5,16 +5,16 @@
 ;; After each resume the env is freed.  Run with ASAN_OPTIONS=detect_leaks=1
 ;; to confirm leak-clean behaviour (validates CF7.2's __clenv_N_drop change).
 
-(defn k-identity [k] :int k)
+(defn k-identity [k] : int k)
 
 ;; result is a local int in scope at the shift site.
 ;; The CPS pass includes it in live_captures; __clenv_N contains it.
-(defn run-resumable [result :int] :int
+(defn run-resumable [result : int] : int
   (cloneable-reset
     (let [n result]
       (cloneable-shift k-identity 0))))
 
-(defn main [] :nil
+(defn main [] : nil
   (let [k (run-resumable 42)]
     (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10))
     (println (tur_cloneable_cont_resume k 20)))

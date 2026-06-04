@@ -35,7 +35,7 @@
 ;;;
 ;;; Since: Phase H8 (M6)
 
-(defn httpd-mw-compress-step [conn :ptr<void> min-bytes :int] :nil
+(defn httpd-mw-compress-step [conn : ptr<void> min-bytes : int] : nil
   ```c
   if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
@@ -101,10 +101,10 @@
 ;;;
 ;;; Since: Phase H8 (M6)
 
-(defn mw-compress-with [min-bytes :int ^fat next :int] :ptr<void>
+(defn mw-compress-with [min-bytes : int ^fat next : int] : ptr<void>
   (let [_min min-bytes
         _n   next]
-    (fn [c :ptr<void>] :nil
+    (fn [c : ptr<void>] : nil
       (httpd-call _n c)
       (httpd-mw-compress-step c _min))))
 
@@ -117,5 +117,5 @@
 ;;;
 ;;; Since: Phase H8 (M6)
 
-(defn mw-compress [^fat next :int] :ptr<void>
+(defn mw-compress [^fat next : int] : ptr<void>
   (mw-compress-with 256 next))

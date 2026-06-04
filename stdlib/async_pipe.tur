@@ -28,9 +28,9 @@
 ;;;   (async-read-stdin 1024)  ; => bytes-read count (0 on EOF)
 ;;;
 ;;; Since: Phase T24
-(defn async-read-stdin [buf-size :int]
+(defn async-read-stdin [buf-size : int]
   #{Unsafe}
-  :int
+  : int
   ```c /* Set stdin non-blocking */
   int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
   fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
@@ -71,7 +71,7 @@
 
 (defn async-stdin-buf []
   #{Unsafe}
-  :ptr<void>
+  : ptr<void>
   ```c if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51C5D10);
   ```)
@@ -88,7 +88,7 @@
 
 (defn async-stdin-len []
   #{Unsafe}
-  :int
+  : int
   ```c if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51C5D11);
   ```)
@@ -109,9 +109,9 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-write-stdout [data :cstr len :int]
+(defn async-write-stdout [data : cstr len : int]
   #{Unsafe}
-  :int
+  : int
   ```c /* Set stdout non-blocking */
   int flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
   fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK);

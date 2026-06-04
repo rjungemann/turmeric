@@ -2,7 +2,7 @@
 ;; body with (with-handler hv body).  The body performs Write twice; the
 ;; handler prints each and resumes.
 (defeffect Write [s :cstr] :nil)
-(defn main [] :int
+(defn main [] : int
   (with-handler
     (handler (Write [s] k) (do (println s) (resume k nil)))
     (do (perform (Write "hello"))

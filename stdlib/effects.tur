@@ -148,7 +148,7 @@
 
 (defn read-int-console []
   #{Unsafe}
-  :int
+  : int
   ```c int _v = 0;
   scanf("%d", &_v);
   return (int64_t)_v;

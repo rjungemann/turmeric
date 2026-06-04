@@ -256,11 +256,11 @@
 ;;;
 ;;; Since: TCE4
 
-(defn cstr-hash [s :cstr] :int
+(defn cstr-hash [s : cstr] : int
   ```c return (int64_t)tur_hamt_hash_str((const char *)(intptr_t)s); ```)
 ;;; tur-cstr-key-eq? -- internal: content equality of two string keys.
 
-(defn tur-cstr-key-eq? [a :cstr b :cstr] :bool
+(defn tur-cstr-key-eq? [a : cstr b : cstr] : bool
   ```c const char *p = (const char *)(intptr_t)a;
   const char *q = (const char *)(intptr_t)b;
   while (*p && (*p == *q)) { p++; q++; }
@@ -304,13 +304,13 @@
 ;;; integer equality on the two carrier words is the key equality.
 
 
-(defn tur-int-carrier-eq? [a :int b :int] :bool (= a b))
+(defn tur-int-carrier-eq? [a : int b : int] : bool (= a b))
 ;;; tur-f32-carrier-eq? -- carrier comparator for :float32 keys.
 ;;;
 ;;; Reinterprets each int64 carrier word's low 32 bits back to a float and
 ;;; compares by value (NaN never matches, as with =).
 
-(defn tur-f32-carrier-eq? [a :int b :int] :bool
+(defn tur-f32-carrier-eq? [a : int b : int] : bool
   ```c union { float f; int64_t i; } ua, ub;
   ua.i = a; ub.i = b;
   return ua.f == ub.f;
@@ -319,7 +319,7 @@
 ;;;
 ;;; Reinterprets each int64 carrier word back to a double and compares by value.
 
-(defn tur-f64-carrier-eq? [a :int b :int] :bool
+(defn tur-f64-carrier-eq? [a : int b : int] : bool
   ```c union { double f; int64_t i; } ua, ub;
   ua.i = a; ub.i = b;
   return ua.f == ub.f;
@@ -331,37 +331,37 @@
 ;;;
 ;;; Since: WKC (float32-map-key-carrier-plan)
 
-(defclass MapKey [a] (mk-box [x] :int) (mk-cmp [x] :int) (mk-owned? [x] :int))
+(defclass MapKey [a] (mk-box [x] : int) (mk-cmp [x] : int) (mk-owned? [x] : int))
 ;;; MapKey [int] -- one-word identity carrier; integer-equality comparator.
 
 (definstance MapKey [int] (mk-box [x] x)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [bool] -- one-word 0/1 carrier; integer-equality comparator.
 
 (definstance MapKey [bool] (mk-box [x] (if x 1 0))
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [cstr] -- pointer carrier; content-equality comparator.
 
 (definstance MapKey [cstr] (mk-box [x]
-                             :int
+                             : int
                              ```c return (int64_t)(intptr_t)x; ```)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_cstr_key_eq_; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_cstr_key_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [float32] -- bit-reinterpret carrier; float-value comparator.
 
 (definstance MapKey [float32] (mk-box [x]
-                                :int
+                                : int
                                 ```c union { float f; int64_t i; } u; u.i = 0; u.f = x; return u.i; ```)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_f32_carrier_eq_; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_f32_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; MapKey [float] -- bit-reinterpret carrier (float64); double-value comparator.
 
 (definstance MapKey [float] (mk-box [x]
-                              :int
+                              : int
                               ```c union { double f; int64_t i; } u; u.f = x; return u.i; ```)
-  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_f64_carrier_eq_; ```)
+  (mk-cmp [x] : int ```c return (int64_t)(intptr_t)tur_f64_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; ============================================================================
 ;;; The typed Map[K V] accessor surface (TMS3).
@@ -569,9 +569,9 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-eq-raw? [m1 :int m2 :int ^fat val-cmp]
+(defn map-eq-raw? [m1 : int m2 : int ^fat val-cmp]
   #{}
-  :bool
+  : bool
   ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
@@ -612,9 +612,9 @@
 ;;; MapKey[K] comparator here is what makes structural equality content-correct
 ;;; for :cstr keys (distinct pointers with equal text match).
 
-(defn map-eq-raw-k? [m1 :int m2 :int keyeq ^fat val-cmp]
+(defn map-eq-raw-k? [m1 : int m2 : int keyeq ^fat val-cmp]
   #{}
-  :bool
+  : bool
   ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
@@ -663,7 +663,7 @@
 ;;; is used -- which is correct for :int keys.
 
 
-(defn map-eq-dynamic [m1 :int m2 :int ^fat val-cmp] :bool
+(defn map-eq-dynamic [m1 : int m2 : int ^fat val-cmp] : bool
   ;; CRU B-3: val-cmp is a fat closure box; threaded as int64 to the runtime,
   ;; which fat-dispatches it (tur_hamt_eq_dynamic reads slot 0).
   ```c return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); ```)

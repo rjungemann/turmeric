@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   ; step 2 over [0,8]: 0 2 4 6 8
   (seq-for-each println (seq/from-range-step 2 (closed-range 0 8)))
   (println -1)

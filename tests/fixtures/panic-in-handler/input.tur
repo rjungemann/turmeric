@@ -2,13 +2,13 @@
 ;;; chain (it is only intercepted by a catch-unwind).
 (defeffect Boom [] :nil)
 
-(defn run [] :int
+(defn run [] : int
   (handle
     (do (perform (Boom)) 1)
     (Boom [] k) (panic "panic in handler")))
 
-(defn main [] :int
-  (let [r (catch-unwind (fn [] :int (run)))]
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (run)))]
     (if (err? r) (println "handler panic caught") (println "no panic")))
   (println "survived")
   0)

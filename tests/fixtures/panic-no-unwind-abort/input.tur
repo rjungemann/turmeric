@@ -5,5 +5,5 @@
     (panic "no-unwind triggered")
     x))
 
-(defn main [] :int
+(defn main [] : int
   (abort-op 0))

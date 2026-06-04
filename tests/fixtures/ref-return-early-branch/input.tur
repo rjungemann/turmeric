@@ -1,10 +1,10 @@
-(defn keep-or-return [flag :bool] :int
+(defn keep-or-return [flag : bool] : int
   (let [r (ref 7)]
     (if flag
       (return @r))
     @r))
 
-(defn main [] :int
+(defn main [] : int
   (println (keep-or-return false))
   (println (keep-or-return true))
   0)

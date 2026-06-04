@@ -3,7 +3,7 @@
 ;; of alternatives, only the first N results are returned.
 ;; This tests the depth-cap functionality.
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
@@ -11,7 +11,7 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn mplus [xs ys] :int
+(defn mplus [xs ys] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
@@ -28,7 +28,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn run-backtrack-depth [xs n] :int
+(defn run-backtrack-depth [xs n] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *head = NULL, *tail = NULL, *c = (Cell*)(intptr_t)xs;

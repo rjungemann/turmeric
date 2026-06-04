@@ -235,7 +235,7 @@ rather than embedding a string literal in the HTML.
 Create `program.tur` in your project directory:
 
 ```scheme
-(defn greet [name] :str
+(defn greet [name] : str
   (str-append "Hello, " name "!"))
 
 (println (greet "Web"))

@@ -17,7 +17,7 @@
 ;;;   (bit-shr -1 1)  ; => 9223372036854775807  (fills with 0, not sign bit)
 ;;;
 ;;; Since: Phase B1
-(defn bit-shr [x :int n :int] :int
+(defn bit-shr [x : int n : int] : int
   ```c return (int64_t)((uint64_t)x >> (unsigned)n);
   ```)
 ;;; println-float -- print a float with the specified number of decimal places.
@@ -34,7 +34,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn println-float [x :float decimals :int] :nil
+(defn println-float [x : float decimals : int] : nil
   ```c int d = (int)decimals;
   if (d < 0) d = 0;
   if (d > 17) d = 17;

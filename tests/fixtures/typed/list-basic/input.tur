@@ -1,30 +1,30 @@
 ;;
 ;; Phase TC1: tlist basic operations test
 
-(defn test-nil [] :bool
+(defn test-nil [] : bool
   (tnil? (tnil)))
 
-(defn test-cons-not-nil [] :bool
+(defn test-cons-not-nil [] : bool
   (tnil? (tcons 1 (tnil))))
 
-(defn test-head [] :int
+(defn test-head [] : int
   (let [l (:: (make-struct Cons 42 (tnil)) (Cons int))]
     (thead l)))
 
-(defn test-tail-nil [] :bool
+(defn test-tail-nil [] : bool
   (let [l (:: (make-struct Cons 1 (tnil)) (Cons int))]
     (tnil? (ttail l))))
 
-(defn test-length [] :int
+(defn test-length [] : int
   (list-length (tcons 1 (tcons 2 (tcons 3 (tnil))))))
 
-(defn test-list-eq [] :bool
+(defn test-list-eq [] : bool
   (list-eq?
     (tcons 1 (tcons 2 (tnil)))
     (tcons 1 (tcons 2 (tnil)))
     (fn [a b] (= a b))))
 
-(defn test-list-neq [] :bool
+(defn test-list-neq [] : bool
   (list-eq?
     (tcons 1 (tnil))
     (tcons 2 (tnil))

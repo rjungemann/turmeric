@@ -1,11 +1,11 @@
 ;; CY4: partial application of a rank-2 polymorphic function preserves the
 ;; forall annotation on its remaining parameter.
-(defn apply-poly [x :int f (forall [a] (-> a a))] :int
+(defn apply-poly [x : int f (forall [a] (-> a a))] : int
   (f x))
 
-(defn id [y :int] :int y)
+(defn id [y : int] : int y)
 
-(defn main [] :int
+(defn main [] : int
   (let [g (apply-poly 42)]
     (println (g id)))
   0)

@@ -5,7 +5,7 @@
 (defn box-cstr [] : any
   "hello world")
 
-(defn main [] :int
+(defn main [] : int
   (let [a (box-cstr)]
     (println (type-of a))
     (println (cast a cstr)))

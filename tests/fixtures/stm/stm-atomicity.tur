@@ -1,7 +1,7 @@
 ;; stm-atomicity.tur - Verify atomicity of transactions
 
 ;; Test that writes are not visible until commit
-(defn test-atomicity [] :ptr
+(defn test-atomicity [] : ptr
   (let [tv (tvar/new 0)]
     (let [result
           (atomically

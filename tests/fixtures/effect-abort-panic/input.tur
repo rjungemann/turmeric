@@ -6,12 +6,12 @@
   (handle body
     (Abort [msg] k) (panic msg)))
 
-(defn safe-divide [n :int d :int] :int
+(defn safe-divide [n : int d : int] : int
   (if (= d 0)
     (perform (Abort "division by zero"))
     (/ n d)))
 
-(defn main [] :int
+(defn main [] : int
   (let [r (with-abort-panic (safe-divide 10 0))]
     (println r))
   0)

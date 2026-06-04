@@ -1,5 +1,5 @@
 ;; LT1 happy path: linear value consumed in both branches -- OK.
-(defn main [] :int
+(defn main [] : int
   (let [^linear x 42]
     (if true
       (println x)

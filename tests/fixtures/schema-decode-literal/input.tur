@@ -4,25 +4,25 @@
 (load "stdlib/schema.tur")
 
 ;; exact string match
-(defn test-str-ok [] :int
+(defn test-str-ok [] : int
   (let [r (schema-decode (schema/literal-str "active")
                          (json/decode "\"active\""))]
     (if (schema-decode-ok? r) 1 0)))
 
 ;; wrong string -> err
-(defn test-str-bad [] :cstr
+(defn test-str-bad [] : cstr
   (let [r (schema-decode (schema/literal-str "active")
                          (json/decode "\"inactive\""))]
     (schema-error-message (schema-decode-errors r))))
 
 ;; exact int match
-(defn test-int-ok [] :int
+(defn test-int-ok [] : int
   (let [r (schema-decode (schema/literal-int 42)
                          (json/decode "42"))]
     (if (schema-decode-ok? r) (schema-decode-value r) -1)))
 
 ;; wrong int -> err
-(defn test-int-bad [] :cstr
+(defn test-int-bad [] : cstr
   (let [r (schema-decode (schema/literal-int 42)
                          (json/decode "7"))]
     (schema-error-message (schema-decode-errors r))))

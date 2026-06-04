@@ -13,7 +13,7 @@
 ;;   callback fired
 ;;   run returned
 
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)
@@ -24,23 +24,23 @@
 (extern-c tur_reactor_stop [r :ptr] :void)
 (extern-c tur_reactor_free [r :ptr] :void)
 
-(defn make-pipe [] :ptr<void>
+(defn make-pipe [] : ptr<void>
   ```c
   int *fds = (int *)malloc(2 * sizeof(int));
   if (pipe(fds) < 0) { free(fds); return NULL; }
   return (void *)fds;
   ```)
 
-(defn pipe-read-fd  [p :ptr<void>] :int
+(defn pipe-read-fd  [p : ptr<void>] : int
   ```c return (int64_t)((int *)p)[0]; ```)
 
-(defn pipe-write-byte [p :ptr<void>] :nil
+(defn pipe-write-byte [p : ptr<void>] : nil
   ```c char b = 1; write(((int *)p)[1], &b, 1); ```)
 
-(defn pipe-close [p :ptr<void>] :nil
+(defn pipe-close [p : ptr<void>] : nil
   ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r       (tur_reactor_new)
         p-ready (make-pipe)    ;; has data -- fires immediately
         p-idle  (make-pipe)]   ;; no data -- never fires
@@ -51,7 +51,7 @@
     (tur_reactor_add_fd r (pipe-read-fd p-idle) 1 0 0)
     ;; Primary source: callback fires once and stops the reactor.
     (tur_reactor_add_fd r (pipe-read-fd p-ready) 1
-      (fn [id events ud] :nil
+      (fn [id events ud] : nil
         (println "callback fired")
         (tur_reactor_stop r))
       0)

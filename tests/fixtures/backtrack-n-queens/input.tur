@@ -2,10 +2,10 @@
 ;; Each solution is a list of column placements (one per row).
 ;; Expected: 10 solutions for N=5.
 
-(defn mzero [] :int
+(defn mzero [] : int
   ```c return 0; ```)
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
@@ -13,7 +13,7 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn mplus [xs ys] :int
+(defn mplus [xs ys] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
@@ -30,7 +30,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn mbind [ma f] :int
+(defn mbind [ma f] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
@@ -59,13 +59,13 @@
   return (int64_t)(intptr_t)result;
   ```)
 
-(defn guard [pred :bool] :int
+(defn guard [pred : bool] : int
   (if pred (mreturn 0) (mzero)))
 
 ;; List utilities using inline C for compactness
 
 ;; Create an int list from 1..n
-(defn range1 [n] :int
+(defn range1 [n] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *head = NULL, *tail = NULL;
@@ -80,7 +80,7 @@
 
 ;; Prepend value to list (encoded as a pair: hi=len, rest=packed int list)
 ;; We encode solutions as a single int64 using base-N+1 encoding.
-(defn encode-col [packed col row n] :int
+(defn encode-col [packed col row n] : int
   ```c
   int64_t scale = 1;
   for (int64_t i = 0; i < row; i++) scale *= (n + 1);
@@ -88,7 +88,7 @@
   ```)
 
 ;; Check safety: given packed placement, is col at row safe?
-(defn safe [packed col row n] :bool
+(defn safe [packed col row n] : bool
   ```c
   for (int64_t r = 0; r < row; r++) {
       int64_t scale = 1;
@@ -103,7 +103,7 @@
 
 ;; place-row: for a given row, return all placements (as packed ints)
 ;; We iterate over columns 1..n and filter by safety.
-(defn place-row [row n packed] :int
+(defn place-row [row n packed] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *head = NULL, *tail = NULL;
@@ -136,7 +136,7 @@
 ;; Solve N-Queens iteratively using the list monad.
 ;; Start with a list containing 0 (empty board), then for each row
 ;; flatmap over place-row.
-(defn nqueens [n] :int
+(defn nqueens [n] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
 
@@ -178,7 +178,7 @@
   ```)
 
 ;; Count solutions
-(defn count-solutions [xs] :int
+(defn count-solutions [xs] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)xs;

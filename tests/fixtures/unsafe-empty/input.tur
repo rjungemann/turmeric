@@ -1,5 +1,5 @@
 ;; Phase U2: Test for empty unsafe block warning
 
-(defn main [] :int
+(defn main [] : int
   (unsafe)
   (println 0))

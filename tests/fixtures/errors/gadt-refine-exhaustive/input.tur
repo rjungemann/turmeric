@@ -3,8 +3,8 @@
   (BoolLit bool : (Expr bool))
   (Add (Expr int) (Expr int) : (Expr int)))
 
-(defn eval-int [e] :int
+(defn eval-int [e] : int
   (match e
     (Lit n)   n))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

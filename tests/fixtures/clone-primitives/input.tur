@@ -1,7 +1,7 @@
 ;; Phase B1: Clone typeclass for primitive types
 ;; Clone [int] is provided by stdlib/typeclass-clone.tur (auto-loaded).
 
-(defn main [] :int
+(defn main [] : int
   (do
     (let [a 42]
       (let [b (.clone a)]

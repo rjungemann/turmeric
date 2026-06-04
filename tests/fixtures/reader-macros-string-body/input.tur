@@ -8,7 +8,7 @@
 ; #echo"text" -> (println "text")
 (reader-macros/define 'echo  :string '(println $body))
 
-(defn main [] :int
+(defn main [] : int
   #shout"hello world"
   #echo"escapes work: line1\nline2"
   0)

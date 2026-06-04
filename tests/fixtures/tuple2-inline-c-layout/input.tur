@@ -3,24 +3,24 @@
 ;; same translation unit.  This locks in the assumption used by
 ;; stdlib/future.tur's future-join (after the TurTuple2 migration).
 
-(defn box-it [a :int b :int] :ptr<void>
+(defn box-it [a : int b : int] : ptr<void>
   ```c
   Tuple2 *tup = (Tuple2 *)malloc(sizeof(Tuple2));
   tup->e1 = a; tup->e2 = b;
   return (void *)tup;
   ```)
 
-(defn read-e1 [tup :ptr<void>] :int
+(defn read-e1 [tup : ptr<void>] : int
   ```c
   return ((Tuple2 *)tup)->e1;
   ```)
 
-(defn read-e2 [tup :ptr<void>] :int
+(defn read-e2 [tup : ptr<void>] : int
   ```c
   return ((Tuple2 *)tup)->e2;
   ```)
 
-(defn free-it [tup :ptr<void>] :nil
+(defn free-it [tup : ptr<void>] : nil
   ```c
   free(tup);
   ```)

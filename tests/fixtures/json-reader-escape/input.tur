@@ -1,5 +1,5 @@
 ;; JSON string escapes -- embedded quotes and a tab decode correctly.
-(defn quoted [] :cstr (json/get-string #json("he said \"hi\"")))
-(defn tabbed [] :cstr (json/get-string #json("a\tb")))
+(defn quoted [] : cstr (json/get-string #json("he said \"hi\"")))
+(defn tabbed [] : cstr (json/get-string #json("a\tb")))
 (println (quoted))
 (println (tabbed))

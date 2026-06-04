@@ -13,54 +13,54 @@
 
 (load "stdlib/reactor.tur")
 
-(defn say [msg :cstr] :nil
+(defn say [msg : cstr] : nil
   ```c printf("%s\n", (const char *)msg); ```)
 
-(defn print-events [n :int] :nil
+(defn print-events [n : int] : nil
   ```c printf("reader woke events=%lld\n", (long long)n); ```)
 
-(defn print-got [n :int] :nil
+(defn print-got [n : int] : nil
   ```c printf("reader got %lld\n", (long long)n); ```)
 
-(defn print-completed [n :int] :nil
+(defn print-completed [n : int] : nil
   ```c printf("completed=%lld\n", (long long)n); ```)
 
-(defn null-ptr [] :ptr<void>
+(defn null-ptr [] : ptr<void>
   ```c return NULL; ```)
 
-(defn make-pipe [] :ptr<void>
+(defn make-pipe [] : ptr<void>
   ```c
   int *fds = (int *)malloc(2 * sizeof(int));
   if (pipe(fds) < 0) { free(fds); return NULL; }
   return (void *)fds;
   ```)
 
-(defn pipe-read-fd [p :ptr<void>] :int
+(defn pipe-read-fd [p : ptr<void>] : int
   ```c return (int64_t)((int *)p)[0]; ```)
 
-(defn pipe-write-42 [p :ptr<void>] :nil
+(defn pipe-write-42 [p : ptr<void>] : nil
   ```c char b = 42; write(((int *)p)[1], &b, 1); ```)
 
-(defn pipe-read-byte [p :ptr<void>] :int
+(defn pipe-read-byte [p : ptr<void>] : int
   ```c unsigned char b = 0; ssize_t n = read(((int *)p)[0], &b, 1); return n == 1 ? (int64_t)b : -1; ```)
 
-(defn pipe-close [p :ptr<void>] :nil
+(defn pipe-close [p : ptr<void>] : nil
   ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [p (make-pipe)
         r (reactor-new)
         g (local-fiber-group-new r)]
     ;; Reader: park on the read end, then read the byte.
     (local-spawn g
-      (fn [user] :nil
+      (fn [user] : nil
         (let [ev (local-park-fd g (pipe-read-fd p) 1 -1)]
           (print-events ev)
           (print-got (pipe-read-byte p))))
       (null-ptr))
     ;; Writer: make the pipe readable, then finish.
     (local-spawn g
-      (fn [user] :nil
+      (fn [user] : nil
         (pipe-write-42 p)
         (say "writer done"))
       (null-ptr))

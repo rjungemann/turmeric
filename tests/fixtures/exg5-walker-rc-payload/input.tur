@@ -6,15 +6,15 @@
 ; walker must scan through the existential's `value` slot without
 ; tripping or corrupting the inner rc.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [rc]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     return (const char *)"<rc>";
     ```))
 
-(defn inner-color [e :ptr<void>] :int
+(defn inner-color [e : ptr<void>] : int
   ```c
   /* Walk e (the existential's control block) to its inner rc, then
    * read the inner rc's GC color.  After gc!, the walker should have
@@ -25,7 +25,7 @@
   return (int64_t)inner->color;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (gc-enable!)
   (let [r (rc/of 7)
         e (pack r (exists [a] [(Show a)] a))]

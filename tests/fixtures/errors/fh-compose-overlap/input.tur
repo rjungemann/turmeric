@@ -1,6 +1,6 @@
 ;; FH5/FH0.2: composing two handlers for the SAME effect is rejected (TUR-E0251).
 (defeffect Write [s :cstr] :nil)
-(defn main [] :int
+(defn main [] : int
   (with-handler
     (compose-handlers
       (handler (Write [s] k) (do (println s) (resume k nil)))

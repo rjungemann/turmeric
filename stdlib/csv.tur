@@ -30,7 +30,7 @@
 ;;;   (csv/parse-row-with-delim "bad" 0)  ; => 0
 ;;;
 ;;; Since: Phase D2
-(defn csv/parse-row-with-delim [line :cstr delim :int] :int
+(defn csv/parse-row-with-delim [line : cstr delim : int] : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
@@ -99,7 +99,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/parse-row [line :cstr] :int
+(defn csv/parse-row [line : cstr] : int
   ```c return csv_parse_row_with_delim(line, 44);
   ```)
 ;;; csv/row-free -- free a row vec and all its field strings.
@@ -112,7 +112,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/row-free [v :int] :void
+(defn csv/row-free [v : int] : void
   ```c if (!v) return;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   for (size_t i = 0; i < vec->len; i++) free((void*)(intptr_t)vec->data[i]);
@@ -137,7 +137,7 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/parse-with-delim [s :cstr delim :int] :int
+(defn csv/parse-with-delim [s : cstr delim : int] : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
@@ -207,7 +207,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/parse [s :cstr] :int
+(defn csv/parse [s : cstr] : int
   ```c return csv_parse_with_delim(s, 44);
   ```)
 ;;; csv/free -- free a cons list of rows returned by csv/parse.
@@ -220,7 +220,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/free [lst :int] :void
+(defn csv/free [lst : int] : void
   ```c int64_t cur = lst;
   while (cur) {
     int64_t *cell = (int64_t*)(intptr_t)cur;
@@ -257,7 +257,7 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/emit-row-with-delim [v :int delim :int] :cstr
+(defn csv/emit-row-with-delim [v : int delim : int] : cstr
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
@@ -311,7 +311,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/emit-row [v :int] :cstr
+(defn csv/emit-row [v : int] : cstr
   ```c return csv_emit_row_with_delim(v, 44);
   ```)
 ;;; csv/emit-with-delim -- serialize a cons list of row vecs to a full delimiter-separated string.
@@ -332,7 +332,7 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/emit-with-delim [rows :int delim :int] :cstr
+(defn csv/emit-with-delim [rows : int delim : int] : cstr
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
@@ -387,7 +387,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/emit [rows :int] :cstr
+(defn csv/emit [rows : int] : cstr
   ```c return csv_emit_with_delim(rows, 44);
   ```)
 ;;; csv/read-file-with-delim -- read a delimiter-separated file and parse it into a cons list of row vecs.
@@ -407,7 +407,7 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/read-file-with-delim [path :cstr delim :int] :int
+(defn csv/read-file-with-delim [path : cstr delim : int] : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
@@ -470,7 +470,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/read-file [path :cstr] :int
+(defn csv/read-file [path : cstr] : int
   ```c return csv_read_file_with_delim(path, 44);
   ```)
 ;;; csv/write-file-with-delim -- serialize a cons list of row vecs to a delimiter-separated file.
@@ -490,7 +490,7 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/write-file-with-delim [path :cstr rows :int delim :int] :int
+(defn csv/write-file-with-delim [path : cstr rows : int delim : int] : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return -1;
   char sep = (char)delim;
@@ -536,6 +536,6 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/write-file [path :cstr rows :int] :int
+(defn csv/write-file [path : cstr rows : int] : int
   ```c return csv_write_file_with_delim(path, rows, 44);
   ```)

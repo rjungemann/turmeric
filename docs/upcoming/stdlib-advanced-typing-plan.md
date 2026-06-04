@@ -98,9 +98,9 @@ Promote the opaque declarations from the opaque-handle plan to `:linear`
 Constructor / consumer signatures:
 
 ```turmeric
-(defn promise-new []           :Promise)
-(defn promise-fulfill [p :Promise v :int] :nil)   ;; consumes p
-(defn task-group-wait [g :TaskGroup] :int)        ;; consumes g
+(defn promise-new []           : Promise)
+(defn promise-fulfill [p : Promise v : int] : nil)   ;; consumes p
+(defn task-group-wait [g : TaskGroup] : int)        ;; consumes g
 ```
 
 The opaque-handle plan's "C-side declarations are unaffected" guarantee
@@ -142,10 +142,10 @@ A thin generic wrapper over the (already-opaque) `Chan` newtype:
 ```turmeric
 (defopaque SChan p :ptr<void> :linear)   ;; p :: protocol phantom
 
-(defn schan-new   [:p]                       :SChan<p>)
-(defn schan-send  [c :SChan<Send T rest> v :T] :SChan<rest>)
-(defn schan-recv  [c :SChan<Recv T rest>]      :Pair<T SChan<rest>>)
-(defn schan-close [c :SChan<Close>]            :nil)
+(defn schan-new   [:p]                       : SChan<p>)
+(defn schan-send  [c : SChan<Send T rest> v : T] : SChan<rest>)
+(defn schan-recv  [c : SChan<Recv T rest>]      : Pair<T SChan<rest>>)
+(defn schan-close [c : SChan<Close>]            : nil)
 ```
 
 The implementation delegates to `chan-send`/`chan-recv`; the protocol is a
@@ -225,12 +225,12 @@ a classic stringly-typed sum that the GADT machinery can replace.
 
 ```turmeric
 (defopaque NonEmpty A :int)                    ;; phantom-tagged Cons
-(defn ne-head  [xs :NonEmpty<A>] :A)           ;; total
-(defn ne-of    [x  :A xs :List<A>] :NonEmpty<A>)
-(defn ne-from? [xs :List<A>]  :Option<NonEmpty<A>>)
+(defn ne-head  [xs : NonEmpty<A>] : A)           ;; total
+(defn ne-of    [x  : A xs : List<A>] : NonEmpty<A>)
+(defn ne-from? [xs : List<A>]  : Option<NonEmpty<A>>)
 
 (defopaque BoundedIdx n :int)                  ;; refinement on int
-(defn vec-get-checked [v :SizedVec<n A> i :BoundedIdx<n>] :A)
+(defn vec-get-checked [v : SizedVec<n A> i : BoundedIdx<n>] : A)
 ```
 
 And a GADT for range bounds:

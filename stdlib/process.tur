@@ -16,7 +16,7 @@
 ;;;   (process/pid)  ; => 12345
 ;;;
 ;;; Since: Phase B2
-(defn process/pid [] :int
+(defn process/pid [] : int
   ```c #include <unistd.h>
   return (int64_t)getpid();
   ```)
@@ -30,7 +30,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/ppid [] :int
+(defn process/ppid [] : int
   ```c #include <unistd.h>
   return (int64_t)getppid();
   ```)
@@ -44,7 +44,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/exit [code :int] :void
+(defn process/exit [code : int] : void
   ```c exit((int)code);
   ```)
 ;;; process/exec -- replace the current process image with a new program.
@@ -64,7 +64,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/exec [path :cstr argv :int] :int
+(defn process/exec [path : cstr argv : int] : int
   ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -96,7 +96,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/spawn [path :cstr argv :int] :int
+(defn process/spawn [path : cstr argv : int] : int
   ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -128,7 +128,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/wait [pid :int] :int
+(defn process/wait [pid : int] : int
   ```c #include <sys/wait.h>
   int status = 0;
   if (waitpid((pid_t)pid, &status, 0) < 0) return -1;
@@ -151,7 +151,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/run [path :cstr argv :int] :int
+(defn process/run [path : cstr argv : int] : int
   ```c #include <unistd.h>
   #include <sys/wait.h>
   int argc = 0;
@@ -200,7 +200,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/capture [path :cstr argv :int] :int
+(defn process/capture [path : cstr argv : int] : int
   ```c int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -259,7 +259,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/cwd [] :cstr
+(defn process/cwd [] : cstr
   ```c #include <unistd.h>
   char *buf = malloc(4096);
   if (!getcwd(buf, 4096)) { free(buf); return NULL; }
@@ -278,7 +278,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/chdir [path :cstr] :int
+(defn process/chdir [path : cstr] : int
   ```c #include <unistd.h>
   return (int64_t)chdir(path);
   ```)

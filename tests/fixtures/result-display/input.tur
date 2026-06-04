@@ -3,37 +3,37 @@
 ;; Simplified to use direct functions instead of typeclass methods due to
 ;; typeclass instance elaboration issues with inline-c return types.
 
-(defn u-ok [x :int] :ptr<void>
+(defn u-ok [x : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
   ```)
 
-(defn u-err [e :int] :ptr<void>
+(defn u-err [e : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
   ```)
 
-(defn result-display [r :ptr<void>] :cstr
+(defn result-display [r : ptr<void>] : cstr
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (res != NULL && res->is_ok) ? "ok" : "err";
   ```)
 
-(defn result-debug [r :ptr<void>] :cstr
+(defn result-debug [r : ptr<void>] : cstr
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (res != NULL && res->is_ok) ? "Result::Ok" : "Result::Err";
   ```)
 
-(defn result-error-message [r :ptr<void>] :cstr
+(defn result-error-message [r : ptr<void>] : cstr
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (res != NULL && !res->is_ok) ? "result is err" : "result is ok";
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r-ok (u-ok 7)]
     (let [r-err (u-err 9)]
       (do

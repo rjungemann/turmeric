@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [x 1]
     (println "before")
     (defer (println "first-registered"))

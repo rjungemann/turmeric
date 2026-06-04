@@ -7,10 +7,10 @@
 ;; Type note: .clone returns int64_t (the new cell pointer cast), so the
 ;; cloned handle is read and freed via inline C helpers.
 
-(defstruct Ref [value :int])
+(defstruct Ref [value : int])
 
 (defclass TestClone [a]
-  (clone [x] :int))
+  (clone [x] : int))
 
 (definstance TestClone [int]
   (clone [x] x))
@@ -18,7 +18,7 @@
 ;; TestClone [Ref]: deep-copy — allocate a new cell with a copy of the value.
 ;; x has type Ref (struct value); x.value is the stored int64_t.
 (definstance TestClone [Ref]
-  (clone [x] :int
+  (clone [x] : int
     ```c
     struct { int64_t value; } *dst = malloc(sizeof(Ref));
     dst->value = x.value;
@@ -26,7 +26,7 @@
     ```))
 
 ;; Read the value from a heap Ref pointer (result of .clone).
-(defn ref-read [p] :int
+(defn ref-read [p] : int
   ```c
   struct { int64_t value; } *r = (void *)(intptr_t)p;
   return r ? r->value : -1;
@@ -38,7 +38,7 @@
   free((void *)(intptr_t)p);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Create Ref(42), clone it; both copies read 42.  Freeing the original
   ;; does not disturb the clone (deep-copy semantics).
   (let [r (make-struct Ref 42)]

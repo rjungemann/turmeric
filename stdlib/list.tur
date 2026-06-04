@@ -27,9 +27,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn tcons [h :int t :int]
+(defn tcons [h : int t : int]
   #{}
-  :int
+  : int
   ```c struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
   cell->head = h;
   cell->tail = t;
@@ -62,7 +62,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn tnil [] :int 0)
+(defn tnil [] : int 0)
 ;;; tnil? -- check whether a typed list is empty.
 ;;;
 ;;; Parameters:
@@ -77,7 +77,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn tnil? [l :int] :bool (= l 0))
+(defn tnil? [l : int] : bool (= l 0))
 ;;; thead -- return the head element of a non-empty typed list.
 ;;;
 ;;; Parameters:
@@ -121,9 +121,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn list-length [l :int]
+(defn list-length [l : int]
   #{}
-  :int
+  : int
   ```c struct __tur_cell_t { int64_t head; int64_t tail; };
   struct __tur_cell_t *cell = (void*)(intptr_t)l;
   int64_t count = 0;
@@ -148,7 +148,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn list-eq? [l1 :int l2 :int ^fat cmp-fn : (fn [int int] :bool)] :bool
+(defn list-eq? [l1 : int l2 : int ^fat cmp-fn : (fn [int int] :bool)] : bool
   (if (tnil? l1)
     (tnil? l2)
     (if (tnil? l2)
@@ -177,7 +177,7 @@
 ;;;
 ;;; Since: Phase TS5
 
-(defn __cons-fmap [cell :int ^fat f] :int
+(defn __cons-fmap [cell : int ^fat f] : int
   (if (tnil? cell)
     0
     (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f))))
@@ -237,13 +237,13 @@
     (list tcons (first args) (list list* ~@(rest args)))))
 ;;; list-head -- head element of a non-empty carrier-level list.
 
-(defn list-head [l :int] :int
+(defn list-head [l : int] : int
   ```c struct __tur_cell_t { int64_t head; int64_t tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->head;
   ```)
 ;;; list-tail -- tail pointer of a non-empty carrier-level list.
 
-(defn list-tail [l :int] :int
+(defn list-tail [l : int] : int
   ```c struct __tur_cell_t { int64_t head; int64_t tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->tail;
   ```)
@@ -269,5 +269,5 @@
 ;;;
 ;;; Since: List literal macro
 
-(defn list-concat [l1 :int l2 :int] :int
+(defn list-concat [l1 : int l2 : int] : int
   (if (tnil? l1) l2 (tcons (list-head l1) (list-concat (list-tail l1) l2))))

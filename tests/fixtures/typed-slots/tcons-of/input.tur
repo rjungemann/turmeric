@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [c (tcons-of 1.5 0)]
     (println (.head c))
     (println (.tail c)))

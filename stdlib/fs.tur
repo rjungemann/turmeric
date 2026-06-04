@@ -22,7 +22,7 @@
 ;;;   (let [s (fs/stat "/etc/hosts")] (fs/stat-size s))
 ;;;
 ;;; Since: Phase B2
-(defn fs/stat [path :cstr] :int
+(defn fs/stat [path : cstr] : int
   ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return 0;
@@ -42,7 +42,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-free [s :int] :void
+(defn fs/stat-free [s : int] : void
   ```c if (s) free((void*)(intptr_t)s);
   ```)
 ;;; fs/stat-size -- extract file size from a stat result.
@@ -58,7 +58,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-size [s :int] :int
+(defn fs/stat-size [s : int] : int
   ```c return ((int64_t*)(intptr_t)s)[0];
   ```)
 ;;; fs/stat-mtime -- extract modification time from a stat result.
@@ -74,7 +74,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-mtime [s :int] :int
+(defn fs/stat-mtime [s : int] : int
   ```c return ((int64_t*)(intptr_t)s)[1];
   ```)
 ;;; fs/stat-mode -- extract file mode bits from a stat result.
@@ -90,7 +90,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat-mode [s :int] :int
+(defn fs/stat-mode [s : int] : int
   ```c return ((int64_t*)(intptr_t)s)[2];
   ```)
 ;;; fs/exists? -- test whether a path exists.
@@ -106,7 +106,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/exists? [path :cstr] :bool
+(defn fs/exists? [path : cstr] : bool
   ```c #include <sys/stat.h>
   struct stat st;
   return stat(path, &st) == 0;
@@ -124,7 +124,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/file? [path :cstr] :bool
+(defn fs/file? [path : cstr] : bool
   ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return false;
@@ -143,7 +143,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/dir? [path :cstr] :bool
+(defn fs/dir? [path : cstr] : bool
   ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return false;
@@ -162,7 +162,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/mkdir [path :cstr] :int
+(defn fs/mkdir [path : cstr] : int
   ```c #include <sys/stat.h>
   return (int64_t)mkdir(path, 0755);
   ```)
@@ -180,7 +180,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/mkdirp [path :cstr] :int
+(defn fs/mkdirp [path : cstr] : int
   ```c #include <sys/stat.h>
   #include <errno.h>
   char *p = strdup(path);
@@ -209,7 +209,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/rmdir [path :cstr] :int
+(defn fs/rmdir [path : cstr] : int
   ```c return (int64_t)rmdir(path);
   ```)
 ;;; fs/rm -- remove a regular file.
@@ -225,7 +225,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/rm [path :cstr] :int
+(defn fs/rm [path : cstr] : int
   ```c return (int64_t)unlink(path);
   ```)
 ;;; fs/rename -- rename or move a file.
@@ -242,7 +242,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/rename [src :cstr dst :cstr] :int
+(defn fs/rename [src : cstr dst : cstr] : int
   ```c return (int64_t)rename(src, dst);
   ```)
 ;;; fs/copy -- copy a file from src to dst using a read/write loop.
@@ -259,7 +259,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/copy [src :cstr dst :cstr] :int
+(defn fs/copy [src : cstr dst : cstr] : int
   ```c FILE *in = fopen(src, "rb");
   if (!in) return -1;
   FILE *out = fopen(dst, "wb");
@@ -290,7 +290,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/glob [dir :cstr pattern :cstr] :int
+(defn fs/glob [dir : cstr pattern : cstr] : int
   ```c #include <dirent.h>
   #include <fnmatch.h>
   DIR *d = opendir(dir);
@@ -325,7 +325,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/glob-free [lst :int] :void
+(defn fs/glob-free [lst : int] : void
   ```c int64_t cur = lst;
   while (cur) {
     int64_t *cell = (int64_t*)(intptr_t)cur;
@@ -347,7 +347,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile [] :int
+(defn fs/tmpfile [] : int
   ```c char *tmpl = strdup("/tmp/tur_XXXXXX");
   int fd = mkstemp(tmpl);
   if (fd < 0) { free(tmpl); return 0; }
@@ -369,7 +369,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-path [t :int] :cstr
+(defn fs/tmpfile-path [t : int] : cstr
   ```c return (const char*)(intptr_t)((int64_t*)(intptr_t)t)[0];
   ```)
 ;;; fs/tmpfile-fd -- extract the file descriptor from an fs/tmpfile pair.
@@ -385,7 +385,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-fd [t :int] :int
+(defn fs/tmpfile-fd [t : int] : int
   ```c return ((int64_t*)(intptr_t)t)[1];
   ```)
 ;;; fs/tmpfile-free -- close the fd and free the tmpfile pair.
@@ -398,7 +398,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-free [t :int] :void
+(defn fs/tmpfile-free [t : int] : void
   ```c #include <unistd.h>
   if (!t) return;
   int64_t *pair = (int64_t*)(intptr_t)t;
@@ -420,7 +420,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/read-text [path :cstr] :cstr
+(defn fs/read-text [path : cstr] : cstr
   ```c FILE *f = fopen(path, "rb");
   if (!f) return NULL;
   fseek(f, 0, SEEK_END);
@@ -446,7 +446,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/write-text [path :cstr content :cstr] :int
+(defn fs/write-text [path : cstr content : cstr] : int
   ```c FILE *f = fopen(path, "wb");
   if (!f) return -1;
   size_t len = strlen(content);

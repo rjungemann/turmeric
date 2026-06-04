@@ -5,7 +5,7 @@
 ;; Because neither endpoint has any messages to exchange, no thread is needed.
 ;;
 ;; Expected output: closed
-(defn main [] :int
+(defn main [] : int
   (let [[a b] (make-session Close)]
     (close a)
     (close b)

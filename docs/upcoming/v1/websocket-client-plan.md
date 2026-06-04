@@ -71,7 +71,7 @@ and optionally threads through `tur-tls` for `wss://` URIs.
 ;;;     ...)
 ;;;
 ;;; Since: Phase WC1
-(defn ws-connect [uri :cstr] :int ...)
+(defn ws-connect [uri : cstr] : int ...)
 
 ;;; ws-send -- send a UTF-8 text frame.
 ;;;
@@ -86,7 +86,7 @@ and optionally threads through `tur-tls` for `wss://` URIs.
 ;;;   (ws-send c "ping")
 ;;;
 ;;; Since: Phase WC1
-(defn ws-send [conn :int msg :cstr] :int ...)
+(defn ws-send [conn : int msg : cstr] : int ...)
 
 ;;; ws-send-bytes -- send a binary frame.
 ;;;
@@ -99,7 +99,7 @@ and optionally threads through `tur-tls` for `wss://` URIs.
 ;;;   Number of bytes written, or negative on error.
 ;;;
 ;;; Since: Phase WC1
-(defn ws-send-bytes [conn :int ptr :ptr<void> len :int] :int ...)
+(defn ws-send-bytes [conn : int ptr : ptr<void> len : int] : int ...)
 
 ;;; ws-recv -- receive the next WebSocket frame.
 ;;;
@@ -113,7 +113,7 @@ and optionally threads through `tur-tls` for `wss://` URIs.
 ;;;   A WsFrame value.
 ;;;
 ;;; Since: Phase WC1
-(defn ws-recv [conn :int] :WsFrame ...)
+(defn ws-recv [conn : int] : WsFrame ...)
 
 ;;; ws-close -- initiate the WebSocket closing handshake.
 ;;;
@@ -121,7 +121,7 @@ and optionally threads through `tur-tls` for `wss://` URIs.
 ;;;   conn -- WsConn handle
 ;;;
 ;;; Since: Phase WC1
-(defn ws-close [conn :int] :void ...)
+(defn ws-close [conn : int] : void ...)
 
 ;;; ws-free -- unconditionally release all resources for conn.
 ;;;
@@ -129,7 +129,7 @@ and optionally threads through `tur-tls` for `wss://` URIs.
 ;;;   conn -- WsConn handle
 ;;;
 ;;; Since: Phase WC1
-(defn ws-free [conn :int] :void ...)
+(defn ws-free [conn : int] : void ...)
 
 ;;; ws-set-timeout -- set receive timeout in milliseconds.
 ;;;
@@ -141,16 +141,16 @@ and optionally threads through `tur-tls` for `wss://` URIs.
 ;;;   ms   -- timeout in milliseconds
 ;;;
 ;;; Since: Phase WC1
-(defn ws-set-timeout [conn :int ms :int] :void ...)
+(defn ws-set-timeout [conn : int ms : int] : void ...)
 ```
 
 ### `WsFrame` struct
 
 ```turmeric
 (defstruct WsFrame
-  [kind    :int   ;; :text | :binary | :ping | :pong | :close | :timeout | :error
-   data    :ptr<void>
-   len     :int
+  [kind    : int   ;; :text | :binary | :ping | :pong | :close | :timeout | :error
+   data    : ptr<void>
+   len     : int
   ])
 ```
 

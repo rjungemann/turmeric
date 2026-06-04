@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (let [b (box 42)]
     (let [v (unbox b)]
       (println v)

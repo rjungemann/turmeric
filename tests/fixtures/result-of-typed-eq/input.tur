@@ -6,7 +6,7 @@
 ;; primitive arg's lambda dispatches through the auok?-loaded
 ;; primitive Eq instance from F3-7).
 
-(defn main [] :int
+(defn main [] : int
   (let [v1 []:int
         v2 []:int]
     (vec-push! v1 1)

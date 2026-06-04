@@ -2,6 +2,6 @@
   (let [pair (list a b)]
     (second pair)))
 
-(defn main [] :int
+(defn main [] : int
   (emit-second (println 1) (println 2))
   0)

@@ -5,7 +5,7 @@
 (defdata Box [a]
   (Wrap a))
 
-(defn main [] :int
+(defn main [] : int
   (let [b (Wrap 1.5)]
     (match b
       (Wrap v) 0)))

@@ -1,14 +1,14 @@
 ;; Phase S4: try/catch in compiled mode.
 ;; Demonstrates tur_catch_unwind thunk wrapping for panic interception.
 
-(defn safe-div [a b] :int
+(defn safe-div [a b] : int
   (try (do
          (if (= b 0)
            (throw 42)
            (/ a b)))
     (catch [e] -1)))
 
-(defn with-capture [x] :int
+(defn with-capture [x] : int
   (let [base x]
     (try (do
            (if (= base 0)
@@ -16,7 +16,7 @@
              (+ base 10)))
       (catch [e] (+ base -1)))))
 
-(defn no-panic [] :int
+(defn no-panic [] : int
   (try (+ 3 4)
     (catch [e] -1)))
 

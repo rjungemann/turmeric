@@ -1,12 +1,12 @@
 ; TY3: an (is? x T) guard in an if condition narrows x to T in the then-branch,
 ; so x is usable at the narrowed type with no explicit cast.
 
-(defn bump [x : any] :int
+(defn bump [x : any] : int
   (if (is? x int)
     (+ x 1)     ; x is narrowed to int here -- no cast needed
     0))
 
-(defn main [] :int
+(defn main [] : int
   (println (bump 41))
   (println (bump "hi"))
   0)

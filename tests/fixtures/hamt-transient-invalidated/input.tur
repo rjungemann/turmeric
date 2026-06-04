@@ -1,6 +1,6 @@
 ; P4: Using a transient after persistent! should abort with an error
 
-(defn alloc-str [s :cstr] :ptr<void>
+(defn alloc-str [s : cstr] : ptr<void>
   ```c
   #include <string.h>
   char *p = (char *)malloc(strlen(s) + 1);
@@ -8,7 +8,7 @@
   return (void *)p;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [m0 (hamt/new)]
     (let [t (hamt/transient m0)]
       (let [k1 (alloc-str "key1")]

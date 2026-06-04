@@ -30,7 +30,7 @@
 ;;;   A bytes :ptr<void> on success, or nil when codegen is not yet implemented.
 ;;;
 ;;; Since: Phase 21
-(defn save-cont! [k :ptr<void>] :ptr<void>
+(defn save-cont! [k : ptr<void>] : ptr<void>
   ```c /* Phase 21: placeholder -- serial-shift codegen not yet implemented.
    * A real implementation would call serial_cont_to_bytes() here. */
   (void)k;
@@ -52,7 +52,7 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn resume-cont! [b :ptr<void> v :int] :int
+(defn resume-cont! [b : ptr<void> v : int] : int
   ```c /* Phase 21: placeholder -- serial-shift codegen not yet implemented. */
   (void)b;
   (void)v;
@@ -88,7 +88,7 @@
 ;;; Since: Phase 21
 
 
-(defn workflow-suspend [k :ptr<void>] :ptr<void> (save-cont! k))
+(defn workflow-suspend [k : ptr<void>] : ptr<void> (save-cont! k))
 ;; workflow-resume -- resume a previously suspended workflow step.
 ;; b    : bytes value from workflow-suspend
 ;; v    : value to pass to the resumed continuation
@@ -103,4 +103,4 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn workflow-resume [b :ptr<void> v :int] :int (resume-cont! b v))
+(defn workflow-resume [b : ptr<void> v : int] : int (resume-cont! b v))

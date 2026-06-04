@@ -15,29 +15,29 @@
 
 ;; ---- FiberBlock wrappers ----
 
-(defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
-(defn fiber-resume-fn [f :ptr<void>] :int
+(defn fiber-resume-fn [f : ptr<void>] : int
   ```c
   return tur_fiber_block_resume((FiberBlock *)f, 0);
   ```)
 
-(defn fiber-done? [f :ptr<void>] :bool
+(defn fiber-done? [f : ptr<void>] : bool
   ```c
   return ((FiberBlock *)f)->done != 0;
   ```)
 
-(defn fiber-free-fn [f :ptr<void>] :nil
+(defn fiber-free-fn [f : ptr<void>] : nil
   ```c
   tur_fiber_block_free((FiberBlock *)f);
   ```)
 
 ;; ---- Simple FIFO queue (circular buffer of void* pointers, cap 16) ----
 
-(defn sched-new [] :ptr<void>
+(defn sched-new [] : ptr<void>
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   SchedQ *q = (SchedQ *)calloc(1, sizeof(SchedQ));
@@ -45,7 +45,7 @@
   return (void *)q;
   ```)
 
-(defn sched-push [q :ptr<void> f :ptr<void>] :nil
+(defn sched-push [q : ptr<void> f : ptr<void>] : nil
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   SchedQ *sq = (SchedQ *)q;
@@ -55,7 +55,7 @@
   sq->count++;
   ```)
 
-(defn sched-pop [q :ptr<void>] :ptr<void>
+(defn sched-pop [q : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   SchedQ *sq = (SchedQ *)q;
@@ -66,20 +66,20 @@
   return f;
   ```)
 
-(defn sched-empty? [q :ptr<void>] :bool
+(defn sched-empty? [q : ptr<void>] : bool
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   return ((SchedQ *)q)->count == 0;
   ```)
 
-(defn sched-free [q :ptr<void>] :nil
+(defn sched-free [q : ptr<void>] : nil
   ```c
   free(q);
   ```)
 
 ;; ---- Run scheduler to completion ----
 
-(defn sched-run [q :ptr<void>] :nil
+(defn sched-run [q : ptr<void>] : nil
   ```c
   typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
   SchedQ *sq = (SchedQ *)q;
@@ -97,25 +97,25 @@
 
 ;; ---- Fiber bodies (yield label then return) ----
 
-(defn fiber-a [] :nil
+(defn fiber-a [] : nil
   ```c
   puts("A1"); tur_fiber_block_yield(0);
   puts("A2"); tur_fiber_block_yield(0);
   ```)
 
-(defn fiber-b [] :nil
+(defn fiber-b [] : nil
   ```c
   puts("B1"); tur_fiber_block_yield(0);
   puts("B2"); tur_fiber_block_yield(0);
   ```)
 
-(defn fiber-c [] :nil
+(defn fiber-c [] : nil
   ```c
   puts("C1"); tur_fiber_block_yield(0);
   puts("C2"); tur_fiber_block_yield(0);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [q (sched-new)]
     (sched-push q (fiber-new-fn fiber-a 0))
     (sched-push q (fiber-new-fn fiber-b 0))

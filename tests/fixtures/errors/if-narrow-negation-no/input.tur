@@ -2,11 +2,11 @@
 ; positive case in the else-branch, which this phase does not narrow -- so using
 ; x as an int there is still a type error (an explicit cast is still required).
 
-(defn f [x : any] :int
+(defn f [x : any] : int
   (if (not (is? x int))
     0
     (+ x 1)))    ; x is still `any` here -- no narrowing; expect TUR-E0006
 
-(defn main [] :int
+(defn main [] : int
   (println (f 5))
   0)

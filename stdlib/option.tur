@@ -24,9 +24,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some [x :int]
+(defn some [x : int]
   #{}
-  :int
+  : int
   ```c return tur_some(x);
   ```)
 ;;; none -- return the none Option[A] (NULL).
@@ -41,7 +41,7 @@
 
 (defn none []
   #{}
-  :int
+  : int
   ```c return TUR_NONE;
   ```)
 ;;; some? -- check whether an Option[A] contains a value.
@@ -58,9 +58,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some? [o :int]
+(defn some? [o : int]
   #{}
-  :bool
+  : bool
   ```c return tur_is_some(o);
   ```)
 ;;; unwrap -- extract the value from a typed Option[A].
@@ -93,9 +93,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn unwrap-or [o :int dflt :int]
+(defn unwrap-or [o : int dflt : int]
   #{}
-  :int
+  : int
   ```c return tur_is_some(o) ? tur_opt_value(o) : dflt;
   ```)
 ;;; option-free -- free a heap-allocated Option[A].
@@ -108,9 +108,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-free [o :int]
+(defn option-free [o : int]
   #{}
-  :void
+  : void
   ```c if (o) free((void*)(intptr_t)o);
   ```)
 ;;; option-map -- apply a function to the contained value if some.
@@ -127,9 +127,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-map [o :int ^fat f]
+(defn option-map [o : int ^fat f]
   #{}
-  :int
+  : int
   ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
@@ -152,9 +152,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-eq? [o1 :int o2 :int ^fat cmp-fn]
+(defn option-eq? [o1 : int o2 : int ^fat cmp-fn]
   #{}
-  :bool
+  : bool
   ```c struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
   struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
   bool a_some = a && a->is_some;

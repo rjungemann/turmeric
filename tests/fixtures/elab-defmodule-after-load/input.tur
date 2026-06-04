@@ -4,7 +4,7 @@
 (load "tests/fixtures/elab-defmodule-after-load/helper.tur")
 (load "tests/fixtures/elab-defmodule-after-load/wrapped.tur")
 
-(defn main [] :int
+(defn main [] : int
   (helper-tag)
   (wrapped-tag)
   0)

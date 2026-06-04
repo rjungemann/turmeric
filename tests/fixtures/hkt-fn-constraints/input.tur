@@ -5,23 +5,23 @@
 
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true; r->value = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -37,12 +37,12 @@
 
 ;; Both ^f and ^g kind-variable annotations are erased at runtime.
 ;; The function receives only the concrete container and fn parameters.
-(defn fmap-twice [^f ^g container fn] :int
+(defn fmap-twice [^f ^g container fn] : int
   (.fmap (.fmap container fn) fn))
 
-(defn inc [x] :int (+ x 1))
+(defn inc [x] : int (+ x 1))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; fmap-twice (some 10) inc => some 12
     (let [opt (__opt_some 10)]

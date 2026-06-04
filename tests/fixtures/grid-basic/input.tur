@@ -3,7 +3,7 @@
 ;; C struct layout shared by all inline C blocks:
 ;;   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
 
-(defn lgrid-new [width height] :int
+(defn lgrid-new [width height] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *g = malloc(sizeof(GCtx));
@@ -15,7 +15,7 @@
   return (int64_t)(intptr_t)g;
   ```)
 
-(defn lgrid-get [g x y] :int
+(defn lgrid-get [g x y] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -23,7 +23,7 @@
   return p->data[y * p->width + x];
   ```)
 
-(defn grid-set [g x y val] :int
+(defn grid-set [g x y val] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -32,19 +32,19 @@
   return 0;
   ```)
 
-(defn lgrid-width [g] :int
+(defn lgrid-width [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   return ((GCtx *)(intptr_t)g)->width;
   ```)
 
-(defn lgrid-height [g] :int
+(defn lgrid-height [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   return ((GCtx *)(intptr_t)g)->height;
   ```)
 
-(defn grid-clone [g] :int
+(defn grid-clone [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
@@ -59,7 +59,7 @@
   return (int64_t)(intptr_t)dst;
   ```)
 
-(defn grid-print [g] :int
+(defn grid-print [g] : int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
@@ -72,7 +72,7 @@
   return 0;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [g (lgrid-new 4 3)]
     (do
       ;; Verify dimensions

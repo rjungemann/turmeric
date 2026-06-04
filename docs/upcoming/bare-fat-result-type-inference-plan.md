@@ -253,9 +253,9 @@ Add a fixture that breaks if the walk ever leaves tail position:
 ;; (g x) is an ARGUMENT to int->float, not the function's tail, so it must
 ;; stay int64 and round-trip.  If the retype pass wrongly fired here, the
 ;; float read would be garbage.
-(defn use-int-cb [^fat g x :int] :float (int->float (g x)))
-(defn make-inc [n :int] :ptr<void> (fn [x :int] :int (+ x n)))
-(defn main [] :int
+(defn use-int-cb [^fat g x : int] : float (int->float (g x)))
+(defn make-inc [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
+(defn main [] : int
   (println (use-int-cb (make-inc 1) 4))   ;; (4+1)=5 -> 5.0
   0)
 ```

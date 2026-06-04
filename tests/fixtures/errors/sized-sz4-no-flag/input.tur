@@ -7,5 +7,5 @@
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defn main [] :int
+(defn main [] : int
   0)

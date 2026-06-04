@@ -82,7 +82,7 @@
 ;; Create a new empty HAMT
 
 
-(defn hamt/new [] #{} :ptr<void> (tur_hamt_new))
+(defn hamt/new [] #{} : ptr<void> (tur_hamt_new))
 ;;; hamt/free -- decrement the reference count of a HAMT; free if it reaches zero.
 ;;;
 ;;; Parameters:
@@ -94,7 +94,7 @@
 ;;; Since: Phase P1
 ;; Free a HAMT (decrement ref count, free if zero)
 
-(defn hamt/free [m :ptr<void>] #{} :void (tur_hamt_free m))
+(defn hamt/free [m : ptr<void>] #{} : void (tur_hamt_free m))
 ;;; hamt/retain -- increment the reference count of a HAMT and return it.
 ;;;
 ;;; Parameters:
@@ -109,7 +109,7 @@
 ;;; Since: Phase P1
 ;; Increment ref count
 
-(defn hamt/retain [m :ptr<void>] #{} :ptr<void> (tur_hamt_retain m))
+(defn hamt/retain [m : ptr<void>] #{} : ptr<void> (tur_hamt_retain m))
 ;; ============================================================================
 ;; Core API - Operations
 ;; ============================================================================
@@ -132,9 +132,9 @@
 ;; hash: 64-bit hash of the key (passed as int = int64_t)
 
 
-(defn hamt/set [m :ptr<void> hash :int key :ptr<void> val :ptr<void>]
+(defn hamt/set [m : ptr<void> hash : int key : ptr<void> val : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_set m hash key val))
 ;;; hamt/del -- delete a key from the HAMT; returns a new HAMT.
 ;;;
@@ -152,9 +152,9 @@
 ;;; Since: Phase P1
 ;; Delete a key. Returns a new HAMT.
 
-(defn hamt/del [m :ptr<void> hash :int key :ptr<void>]
+(defn hamt/del [m : ptr<void> hash : int key : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_del m hash key))
 ;;; hamt/get -- look up a key and return its value, or NULL if absent.
 ;;;
@@ -172,9 +172,9 @@
 ;;; Since: Phase P1
 ;; Get the value for a key. Returns NULL if not found.
 
-(defn hamt/get [m :ptr<void> hash :int key :ptr<void>]
+(defn hamt/get [m : ptr<void> hash : int key : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_get m hash key))
 ;;; hamt/has? -- check whether a key exists in the HAMT.
 ;;;
@@ -192,9 +192,9 @@
 ;;; Since: Phase P1
 ;; Check if a key exists in the HAMT.
 
-(defn hamt/has? [m :ptr<void> hash :int key :ptr<void>]
+(defn hamt/has? [m : ptr<void> hash : int key : ptr<void>]
   #{}
-  :bool
+  : bool
   (tur_hamt_has m hash key))
 ;;; hamt/count -- return the number of key/value pairs in the HAMT.
 ;;;
@@ -210,7 +210,7 @@
 ;;; Since: Phase P1
 ;; Get the number of key/value pairs in the HAMT.
 
-(defn hamt/count [m :ptr<void>] #{} :int (tur_hamt_count m))
+(defn hamt/count [m : ptr<void>] #{} : int (tur_hamt_count m))
 ;;; hamt/merge -- merge two HAMTs; values from b win on key collision.
 ;;;
 ;;; Parameters:
@@ -227,9 +227,9 @@
 ;; Merge two HAMTs. If a key exists in both, the value from b is kept.
 ;; Returns a new HAMT.
 
-(defn hamt/merge [a :ptr<void> b :ptr<void>]
+(defn hamt/merge [a : ptr<void> b : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_merge a b))
 ;; ============================================================================
 ;; Hash utilities
@@ -249,7 +249,7 @@
 ;; Compute xxHash64 of a string (NUL-terminated).
 
 
-(defn hamt/hash-str [str :cstr] #{} :int (tur_hamt_hash_str str))
+(defn hamt/hash-str [str : cstr] #{} : int (tur_hamt_hash_str str))
 ;;; hamt/hash-ptr -- hash a pointer value directly (identity hash).
 ;;;
 ;;; Parameters:
@@ -264,7 +264,7 @@
 ;;; Since: Phase P1
 ;; Hash a pointer value directly.
 
-(defn hamt/hash-ptr [ptr :ptr<void>] #{} :int (tur_hamt_hash_ptr ptr))
+(defn hamt/hash-ptr [ptr : ptr<void>] #{} : int (tur_hamt_hash_ptr ptr))
 ;; ============================================================================
 ;; Iteration API
 ;; ============================================================================
@@ -281,9 +281,9 @@
 ;; Initialize an iterator (iter must be pre-allocated, at least 64 bytes).
 
 
-(defn hamt/iter-init [iter :ptr<void> m :ptr<void>]
+(defn hamt/iter-init [iter : ptr<void> m : ptr<void>]
   #{}
-  :void
+  : void
   (tur_hamt_iter_init iter m))
 ;;; hamt/iter-free -- release any resources held by an iterator.
 ;;;
@@ -296,7 +296,7 @@
 ;;; Since: Phase P1
 ;; Free iterator resources.
 
-(defn hamt/iter-free [iter :ptr<void>] #{} :void (tur_hamt_iter_free iter))
+(defn hamt/iter-free [iter : ptr<void>] #{} : void (tur_hamt_iter_free iter))
 ;;; hamt/iter-next -- advance an iterator and write the next entry into out-pointers.
 ;;;
 ;;; Parameters:
@@ -316,15 +316,15 @@
 ;; hash-out, key-out, val-out must be pre-allocated pointers.
 
 (defn hamt/iter-next [iter
-                      :ptr<void>
+                      : ptr<void>
                       hash-out
-                      :ptr<void>
+                      : ptr<void>
                       key-out
-                      :ptr<void>
+                      : ptr<void>
                       val-out
-                      :ptr<void>]
+                      : ptr<void>]
   #{}
-  :bool
+  : bool
   (tur_hamt_iter_next iter hash-out key-out val-out))
 ;; ============================================================================
 ;; Higher-order operations
@@ -354,9 +354,9 @@
 ;;; Since: Phase P1
 ;; Map: return a new HAMT with each value replaced by fn(val, ctx).
 
-(defn hamt/map [m :ptr<void> fn :ptr<void> ctx :ptr<void>]
+(defn hamt/map [m : ptr<void> fn : ptr<void> ctx : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_map m fn ctx))
 ;;; hamt/filter -- return a new HAMT keeping only entries where fn(key, val, ctx) is true.
 ;;;
@@ -374,9 +374,9 @@
 ;;; Since: Phase P1
 ;; Filter: return a new HAMT with only entries where fn(key, val, ctx) is true.
 
-(defn hamt/filter [m :ptr<void> fn :ptr<void> ctx :ptr<void>]
+(defn hamt/filter [m : ptr<void> fn : ptr<void> ctx : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_filter m fn ctx))
 ;;; hamt/reduce -- fold all entries into an accumulator using fn(acc, key, val, ctx).
 ;;;
@@ -395,9 +395,9 @@
 ;;; Since: Phase P1
 ;; Reduce: fold all entries; returns final accumulator (as ptr).
 
-(defn hamt/reduce [m :ptr<void> fn :ptr<void> init :ptr<void> ctx :ptr<void>]
+(defn hamt/reduce [m : ptr<void> fn : ptr<void> init : ptr<void> ctx : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_reduce m fn init ctx))
 ;;; hamt/merge-with -- merge two HAMTs, resolving key conflicts with fn(val_a, val_b, ctx).
 ;;;
@@ -416,9 +416,9 @@
 ;;; Since: Phase P1
 ;; Merge-with: merge a and b; resolve conflicts with fn(val_a, val_b, ctx).
 
-(defn hamt/merge-with [a :ptr<void> b :ptr<void> fn :ptr<void> ctx :ptr<void>]
+(defn hamt/merge-with [a : ptr<void> b : ptr<void> fn : ptr<void> ctx : ptr<void>]
   #{}
-  :ptr<void>
+  : ptr<void>
   (tur_hamt_merge_with a b fn ctx))
 
 (extern-c tur_hamt_show [m :ptr] :cstr)
@@ -436,7 +436,7 @@
 ;;; Since: Phase P1
 ;; Show: return a string "{k->v, ../..}" -- caller must free.
 
-(defn hamt/show [m :ptr<void>] #{} :cstr (tur_hamt_show m))
+(defn hamt/show [m : ptr<void>] #{} : cstr (tur_hamt_show m))
 
 (extern-c tur_hamt_dump_dot [m :ptr out :ptr] :void)
 
@@ -452,7 +452,7 @@
 ;;; Since: Phase P1
 ;; Dump the HAMT in DOT format to stderr (for debugging).
 
-(defn hamt/dump [m :ptr<void>] #{} :void (tur_hamt_dump_dot_stderr m))
+(defn hamt/dump [m : ptr<void>] #{} : void (tur_hamt_dump_dot_stderr m))
 ;; ============================================================================
 ;; Transient mode -- mutable batch-construction
 ;; ============================================================================
@@ -479,7 +479,7 @@
 ;;; Since: Phase P1
 ;; Fork a transient from an immutable map.
 
-(defn hamt/transient [m :ptr<void>] #{} :ptr<void> (tur_hamt_transient m))
+(defn hamt/transient [m : ptr<void>] #{} : ptr<void> (tur_hamt_transient m))
 ;;; hamt/transient-set! -- mutate a transient by inserting or updating a key in place.
 ;;;
 ;;; Parameters:
@@ -494,9 +494,9 @@
 ;;; Since: Phase P1
 ;; Mutate a transient: insert/update key (hash, key, val).
 
-(defn hamt/transient-set! [t :ptr<void> hash :int key :ptr<void> val :ptr<void>]
+(defn hamt/transient-set! [t : ptr<void> hash : int key : ptr<void> val : ptr<void>]
   #{}
-  :void
+  : void
   (tur_hamt_transient_set t hash key val))
 ;;; hamt/transient-del! -- mutate a transient by deleting a key in place.
 ;;;
@@ -511,9 +511,9 @@
 ;;; Since: Phase P1
 ;; Mutate a transient: delete key (hash, key).
 
-(defn hamt/transient-del! [t :ptr<void> hash :int key :ptr<void>]
+(defn hamt/transient-del! [t : ptr<void> hash : int key : ptr<void>]
   #{}
-  :void
+  : void
   (tur_hamt_transient_del t hash key))
 ;;; hamt/persistent! -- seal a transient into an immutable HAMT.
 ;;;
@@ -529,7 +529,7 @@
 ;;; Since: Phase P1
 ;; Seal transient into an immutable map. The transient must not be used after this.
 
-(defn hamt/persistent! [t :ptr<void>] #{} :ptr<void> (tur_hamt_persistent t))
+(defn hamt/persistent! [t : ptr<void>] #{} : ptr<void> (tur_hamt_persistent t))
 ;; ============================================================================
 ;; Autolink hint -- consumed by `tur build`/`tur run` (src/main.c).
 ;; The __tur_autolink__ comment causes src/runtime/hamt.c to be compiled
@@ -541,7 +541,7 @@
 
 (defn hamt/autolink-hint []
   #{Unsafe}
-  :int
+  : int
   ```c /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
   return 0;
   ```)

@@ -5,11 +5,11 @@
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defn size-eval [s :Size] :int
+(defn size-eval [s : Size] : int
   (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
             (Mul a b) (* (size-eval a) (size-eval b))))
 
-(defn sized-matrix-new-zeroed [rows cols] #{Unsafe} :int
+(defn sized-matrix-new-zeroed [rows cols] #{Unsafe} : int
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
   m->rows = rows;
@@ -19,30 +19,30 @@
   return (int64_t)(intptr_t)m;
   ```)
 
-(defn sized-matrix-free [m] #{Unsafe} :nil
+(defn sized-matrix-free [m] #{Unsafe} : nil
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (mat->data) free(mat->data);
   free(mat);
   ```)
 
-(defn sized-matrix-rows [m] #{Unsafe} :int
+(defn sized-matrix-rows [m] #{Unsafe} : int
   ```c
   return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->rows;
   ```)
 
-(defn sized-matrix-cols [m] #{Unsafe} :int
+(defn sized-matrix-cols [m] #{Unsafe} : int
   ```c
   return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->cols;
   ```)
 
-(defn sized-matrix-size [m] #{Unsafe} :Size
+(defn sized-matrix-size [m] #{Unsafe} : Size
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   return ctor_Static(mat->rows * mat->cols);
   ```)
 
-(defn sized-matrix-get [m r c] #{Unsafe} :int
+(defn sized-matrix-get [m r c] #{Unsafe} : int
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols)
@@ -50,7 +50,7 @@
   fprintf(stderr, "sized-matrix-get: out of bounds\n"); exit(1); return 0;
   ```)
 
-(defn sized-matrix-set! [m r c v] #{Unsafe} :int
+(defn sized-matrix-set! [m r c v] #{Unsafe} : int
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols) {
@@ -59,7 +59,7 @@
   fprintf(stderr, "sized-matrix-set!: out of bounds\n"); exit(1); return m;
   ```)
 
-(defn sized-matrix-row-sum [m r] #{Unsafe} :int
+(defn sized-matrix-row-sum [m r] #{Unsafe} : int
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   int64_t s = 0;
@@ -67,7 +67,7 @@
   return s;
   ```)
 
-(defn sized-matrix-col-sum [m c] #{Unsafe} :int
+(defn sized-matrix-col-sum [m c] #{Unsafe} : int
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   int64_t s = 0;
@@ -75,7 +75,7 @@
   return s;
   ```)
 
-(defn sized-matrix-total-sum [m] #{Unsafe} :int
+(defn sized-matrix-total-sum [m] #{Unsafe} : int
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   int64_t s = 0; int64_t n = mat->rows * mat->cols;
@@ -83,13 +83,13 @@
   return s;
   ```)
 
-(defn sized-matrix-assert-shape! [m er :Size ec :Size] #{Unsafe} :nil
+(defn sized-matrix-assert-shape! [m er : Size ec : Size] #{Unsafe} : nil
   (let [ar (sized-matrix-rows m)]
     (let [ac (sized-matrix-cols m)]
       (require-msg! (= ar (size-eval er)) "row mismatch")
       (require-msg! (= ac (size-eval ec)) "col mismatch"))))
 
-(defn main [] :int
+(defn main [] : int
   (let [m (unsafe (sized-matrix-new-zeroed 3 4))]
     ; Shape
     (println (unsafe (sized-matrix-rows m)))

@@ -3,7 +3,7 @@
 ;; so the concrete instance is selected from the ascribed expected type
 ;; rather than from any argument.
 (defclass Default [a]
-  (default-of [] :a))
+  (default-of [] : a))
 
 (definstance Default [int]
   (default-of [] 42))
@@ -11,7 +11,7 @@
 (definstance Default [bool]
   (default-of [] 1))
 
-(defn main [] :int
+(defn main [] : int
   (let [i (:: (default-of) int)
         b (:: (default-of) bool)]
     (println i)

@@ -3,4 +3,4 @@
 ; fail with a "cannot shadow built-in" diagnostic at registration time.
 (reader-macros/define 's :raw-paren '$body)
 
-(defn main [] :int 0)
+(defn main [] : int 0)

@@ -3,9 +3,9 @@
 ;; so it must be used exactly once.  (k 42) consumes it -> returns 42.
 (extern-c printf [^cstr fmt ^int v] :int)
 
-(defn t [] :int
+(defn t [] : int
   (call/cc (fn [^linear k] (k 42))))
 
-(defn main [] :int
+(defn main [] : int
   (printf "r=%lld\n" (t))
   0)

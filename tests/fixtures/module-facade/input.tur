@@ -3,7 +3,7 @@
 ;; module can change without breaking them.
 (defmodule app
   (import math-facade :refer [twice thrice])
-  (defn main [] :int
+  (defn main [] : int
     (println (twice 5))
     (println (thrice 4))
     0))

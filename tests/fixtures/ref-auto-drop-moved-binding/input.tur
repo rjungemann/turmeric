@@ -8,7 +8,7 @@
 ;; Expected: r is moved into rc/from-ref, so no (drop! r) defer is emitted.
 ;; The rc binding owns the data from this point on.
 
-(defn main [] :int
+(defn main [] : int
   (let [r (ref 100)]
     (let [rc (rc/from-ref r)]
       (println (rc/strong-count rc))))

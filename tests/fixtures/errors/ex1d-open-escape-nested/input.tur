@@ -1,12 +1,12 @@
 ; Phase EX1d: nested `open` where the inner open's tail returns the
 ; outer's bound value.  The outer's escape check must look through the
 ; inner open and reject the leak of the outer skolem.
-(defn leak [e1 :ptr<void> e2 :ptr<void>] :int
+(defn leak [e1 : ptr<void> e2 : ptr<void>] : int
   (open e1 [a v1]
     (open e2 [b v2]
       v1)))
 
-(defn main [] :int
+(defn main [] : int
   (let [x (pack 1 (exists [a] a))
         y (pack 2 (exists [b] b))]
     (println (leak x y)))

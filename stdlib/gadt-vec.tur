@@ -20,7 +20,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn gvec-nil [] :GVec (GVNil))
+(defn gvec-nil [] : GVec (GVNil))
 ;;; gvec-cons -- prepend an integer element to a GVec.
 ;;;
 ;;; Parameters:
@@ -35,7 +35,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn gvec-cons [x :int v :GVec] :GVec (GVCons x v))
+(defn gvec-cons [x : int v : GVec] : GVec (GVCons x v))
 ;;; gvec-len -- compute the length of a GVec.
 ;;;
 ;;; Parameters:
@@ -49,7 +49,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn gvec-len [v :GVec] :int
+(defn gvec-len [v : GVec] : int
   (match v (GVNil) 0 (GVCons _ t) (+ 1 (gvec-len t))))
 ;;; gvec-sum -- sum all elements of a GVec.
 ;;;
@@ -64,7 +64,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn gvec-sum [v :GVec] :int
+(defn gvec-sum [v : GVec] : int
   (match v (GVNil) 0 (GVCons x t) (+ x (gvec-sum t))))
 ;;; gvec-head-or -- return the first element or a default if empty.
 ;;;
@@ -81,7 +81,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn gvec-head-or [dflt :int v :GVec] :int
+(defn gvec-head-or [dflt : int v : GVec] : int
   (match v (GVNil) dflt (GVCons x _) x))
 ;;; gvec-tail -- return all elements after the first.
 ;;;
@@ -97,11 +97,11 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn gvec-tail [v :GVec] :GVec (match v (GVNil) (GVNil) (GVCons _ t) t))
+(defn gvec-tail [v : GVec] : GVec (match v (GVNil) (GVNil) (GVCons _ t) t))
 ;;; __gvec-call-fn1 -- apply a ptr<void> closure to one int argument.
 ;; Internal helper for gvmap; dispatches through the fat-closure ABI.
 
-(defn __gvec-call-fn1 [^fat f x :int] :int (f x))
+(defn __gvec-call-fn1 [^fat f x : int] : int (f x))
 ;;; gvmap -- apply an int->int function to every element of a GVec.
 ;;;
 ;;; Parameters:
@@ -117,7 +117,7 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn gvmap [f :ptr<void> v] :GVec
+(defn gvmap [f : ptr<void> v] : GVec
   (match v
     (GVNil)
     (GVNil)
@@ -147,7 +147,7 @@
 ;; wraps any callee into a tur_poly_fn_t, so `(f x y)` dispatches correctly via
 ;; fn.fn(fn.env, x, y) for both bare functions and capturing closures.
 
-(defn gvzip-with [f : (fn [int int] :int) v1 v2] :GVec
+(defn gvzip-with [f : (fn [int int] :int) v1 v2] : GVec
   (match v1
     (GVNil)
     (GVNil)

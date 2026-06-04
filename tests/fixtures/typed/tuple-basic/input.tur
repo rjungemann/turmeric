@@ -1,8 +1,8 @@
 ;;
 ;; Phase TP1: Tuple2 construction and positional accessors.
 
-(defn t2-fst [] :int (tuple2-1st (tuple2 10 20)))
-(defn t2-snd [] :int (tuple2-2nd (tuple2 10 20)))
+(defn t2-fst [] : int (tuple2-1st (tuple2 10 20)))
+(defn t2-snd [] : int (tuple2-2nd (tuple2 10 20)))
 
 (println (t2-fst))
 (println (t2-snd))

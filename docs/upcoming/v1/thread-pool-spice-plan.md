@@ -95,7 +95,7 @@ the only structural change from `__httpd_pool`.
 
 ```turmeric
 ;;; pool-worker-loop -- (internal) thread entry; dequeues and dispatches items.
-(defn pool-worker-loop [arg :ptr<void>] :ptr<void>
+(defn pool-worker-loop [arg : ptr<void>] : ptr<void>
   ...)
 ```
 
@@ -121,7 +121,7 @@ The callback owns the item's lifetime (allocate before submit, free inside callb
 ;;;   (def pool (pool-new 8 my-callback))
 ;;;
 ;;; Since: TP1
-(defn pool-new [size :int callback :ptr<void>] :ptr<void> ...)
+(defn pool-new [size : int callback : ptr<void>] : ptr<void> ...)
 
 ;;; pool-submit -- enqueue a work item; blocks when ring buffer is full.
 ;;;
@@ -135,7 +135,7 @@ The callback owns the item's lifetime (allocate before submit, free inside callb
 ;;;   (pool-submit pool (make-work-item data))
 ;;;
 ;;; Since: TP1
-(defn pool-submit [pool :ptr<void> item :ptr<void>] :void ...)
+(defn pool-submit [pool : ptr<void> item : ptr<void>] : void ...)
 
 ;;; pool-stop -- signal shutdown, drain, join workers, free.
 ;;;
@@ -148,7 +148,7 @@ The callback owns the item's lifetime (allocate before submit, free inside callb
 ;;;   (pool-stop pool)
 ;;;
 ;;; Since: TP1
-(defn pool-stop [pool :ptr<void>] :void ...)
+(defn pool-stop [pool : ptr<void>] : void ...)
 ```
 
 ### Ring-buffer capacity

@@ -22,7 +22,7 @@
 ;; requires.tsan
 
 ;; Ray-sphere hit test for one row.
-(defn rt-row-fn [arg :ptr<void>] :ptr<void>
+(defn rt-row-fn [arg : ptr<void>] : ptr<void>
   ```c
   int row = (int)(uintptr_t)arg;
   double ys[4] = {-0.75, -0.25, 0.25, 0.75};
@@ -38,7 +38,7 @@
   ```)
 
 ;; Worker thread for the ray-tracing thread pool.
-(defn rt-worker-fn [arg :ptr<void>] :ptr<void>
+(defn rt-worker-fn [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_empty;
@@ -80,7 +80,7 @@
   return NULL;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_empty;

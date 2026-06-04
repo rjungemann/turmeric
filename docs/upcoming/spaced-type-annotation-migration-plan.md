@@ -190,9 +190,50 @@ The variadic-rest sub-task revealed a real elaboration gap: `elab_defn`/`elab_fn
 
 **Exit criteria for Phase 1**: Every type-annotation position the codemod will touch has at least one passing spaced-form fixture, and `bash tests/run.sh` is green with leak detection on.
 
-### Phase 2 — Codemod tooling
+### Phase 2 — Codemod tooling *(DONE)*
 
-Build a single rewriter that operates on parsed forms rather than text:
+Landed `tools/spaced-types-rewrite.py`, a structural rewriter operating on a
+trivia-preserving token tree (not regex):
+
+- Tokenizer recognises strings, `;`-comments, ` ```c ... ``` ` inline-C
+  fences, `#{...}` effect sets, `#map{...}`/`#set{...}`/`#vec{...}`
+  data-literal dispatches, quote/quasiquote/unquote prefixes, and the
+  `#lang sweet-exp` directive — each as opaque tokens that the walker
+  steps over rather than into.
+- Form tree is just paren/bracket/brace pairing with trivia kept as
+  in-line children, so serialisation round-trips byte-for-byte when no
+  rewrite fires.
+- Type-bearing position walker covers `defn`/`fn`/`defmacro` param vec
+  and return slot (including `& rest :T`), `defstruct` field vec,
+  `let`/`let*`/`loop`/named-let binding vec (including the type slot
+  enabled in Phase 1a-bis), and `defclass`/`defprotocol`/`definstance`
+  method signatures.
+- Sweet-exp handled by an implicit-form walker that scans the top-level
+  token sequence for unparenthesised `defn`/`fn`/`let`/etc. and applies
+  the same per-form rewriters (gated on a `#lang sweet-exp` directive).
+- Skip rules: `#{...}`, `#map{...}`/`#set{...}`/`#vec{...}`, string
+  literals, comments, ` ```c ... ``` ` blocks, and (by default) any form
+  inside `quote`/`quasiquote`. `--rewrite-quoted` opts back in.
+- `build.tur` files are skipped by name (CC-11). `--no-skip-build-tur`
+  opts back in.
+- CLI: `--write` (default), `--dry-run` (unified diff), `--check`
+  (exit 1 if any file would change).
+
+Test corpus under `tests/codemod/spaced-types/` has 14 hand-written
+before/after pairs covering CC-1 through CC-13. Run with
+`bash tests/codemod/run-spaced-types.sh`.
+
+Smoke-tested end-to-end: `python3 tools/spaced-types-rewrite.py --check
+stdlib/` reports 98 files / 2352 fused annotation sites needing rewrite
+across stdlib; `--write` on `stdlib/option.tur` produced byte-identical
+`emit-c` output to the fused-form original (codegen-invariance held). The
+named-let-loop and t-expression-sweet-exp fixtures also round-tripped
+through the rewriter with byte-identical codegen.
+
+Carry-over for Phase 6: the `--check` mode is the CI hook called out in
+that phase.
+
+#### Original design notes
 
 - New tool: `tools/spaced-types-rewrite.py` (or `tur fmt --spaced-types` if we prefer to land it inside the compiler — open question; Python keeps the migration off the critical path).
 - Input: a `.tur` or `.tur.sweet` file.
@@ -211,9 +252,44 @@ Build a single rewriter that operates on parsed forms rather than text:
 
 Add a unit-test corpus under `tests/codemod/spaced-types/` with hand-written before/after pairs covering every CC-N case.
 
-### Phase 3 — Mechanical rewrite (this repo)
+### Phase 3 — Mechanical rewrite (this repo) *(DONE)*
 
-Order matters: rewrite the leaves first so the trunk's tests still pass.
+Landed across four commits (see `git log`):
+
+1. `Phase 3 step 1: rewrite tests/fixtures` — 1338 files, 6196 rewrites.
+   Also extended the elaborator to close the spaced-form gaps the rewrite
+   surfaced (variadic `& rest : T`, defn/fn/defclass/definstance return
+   slots, top-level forward-decl peek, letrec init-fn return peek).
+   Pinned to fused form (kept as the fused-syntax regression coverage):
+   `named-let-loop`, `variadic-types-int`, `variadic-types-opaque`,
+   `defn-spaced-typeann` (intentional mix), `hamt-lisp-*` (4),
+   `instance-closure-return-*` (5), `linear-lref-param-kw`,
+   `set-duplicate-elements`, `session-*` (3),
+   `typeclass-effect-row-caller`, `errors/typeclass-effect-row-*` (2),
+   `scheduler-multithread`.
+2. `Phase 3 step 2: rewrite stdlib` — 96 files, 2070 rewrites.
+   Excluded `stdlib/docstrings.tur` (auto-generated; step 4) and
+   `stdlib/httpd.tur` (hits a pre-existing if-branch widening gap that
+   only surfaces under `load`). Also added bare `ptr` → TY_PTR_VOID in
+   `typekind_from_symbol` so `: ptr` (F_SYM) resolves the same as
+   fused `:ptr`. Regenerated 105 fixture `expected.c` snapshots to match
+   the new stdlib codegen.
+3. `Phase 3 step 3: rewrite examples/` — 9 files, 456 rewrites
+   (datalog, guestbook, minikanren, snake).
+4. Step 4 (`stdlib/docstrings.tur` regen): `python3 tools/gendocs.py
+   stdlib --emit-tur stdlib/docstrings.tur` produced byte-identical
+   output (the generator still emits fused form for the doctable's
+   internal `(defn doc-lookup [name :cstr] :cstr ...)` signature; that
+   keyword-typed inline-C stays valid and is intentionally left alone).
+   No commit needed.
+
+Final suite: **1337 pass / 8 fail**. All 8 failures
+(`future-capturing-closure`, `hkt-for-comprehension`,
+`hkt-for-comprehension-vec`, `instance-closure-return-*` × 5) reproduce
+on `origin/main` with identical diagnostics, i.e. they are unrelated
+pre-existing failures.
+
+#### Original mechanical-rewrite checklist (kept for reference)
 
 1. `tests/fixtures/**/*.tur` — run the codemod, then `bash tests/run.sh`. Any FAIL is a codemod bug; fix the tool, not the fixture. Snapshot `expected.c` files are untouched.
 2. `stdlib/**/*.tur` (excluding the autogenerated `docstrings.tur`).
@@ -223,9 +299,27 @@ Order matters: rewrite the leaves first so the trunk's tests still pass.
 
 Commit each step separately so a regression bisects cleanly.
 
-### Phase 4 — Mechanical rewrite (`../turmeric-spices`)
+### Phase 4 — Mechanical rewrite (`../turmeric-spices`) *(DONE)*
 
-Same process, in the sibling repo:
+Landed on the `spaced-types` branch in `../turmeric-spices` as commit
+`645710a` ("Migrate to spaced type annotations"). Same codemod invocation
+as Phase 3, scoped to `spices/`:
+
+- 341 tracked `.tur` files modified, 4101 lines (+4101 / -4101 --
+  whitespace-only changes).
+- `build.tur` manifests skipped automatically by the codemod (CC-11).
+- Codegen-invariance spot-checked on three representative files
+  (`ansi/src/ansi/style.tur`, `math/src/math/vec3.tur`,
+  `regex/src/regex/regex.tur`): `tur emit-c` output byte-identical for
+  fused and spaced.
+- Pre-existing per-spice build failures (`math` malloc shadowing,
+  `regex`/`c-dsl`/`stats` per-file C compile issues) reproduce on the
+  sibling repo's `main` unchanged.
+
+The branch is local; opening a PR upstream is left for whoever drives
+the migration on that repo's side.
+
+#### Original phase notes
 
 1. Run codemod on `spices/**/*.tur` and `spices/**/*.tur.sweet`.
 2. Run that repo's test suite.
@@ -233,9 +327,28 @@ Same process, in the sibling repo:
 
 This phase can run concurrently with Phase 3 after Phase 1+2 land.
 
-### Phase 5 — Documentation
+### Phase 5 — Documentation *(DONE)*
 
-Update to prefer spaced syntax everywhere:
+Built `tools/spaced-types-rewrite-md.py`, a small wrapper that walks
+`turmeric` / `tur` / `scheme` / `clojure` / `lisp` code fences inside
+markdown files and pipes the contents through `rewrite_source` from the
+main codemod. Prose and non-Turmeric code blocks are left alone.
+
+Landed as a single commit covering 72 files / 555 line changes across
+`CLAUDE.md`, `README.md`, `docs/guides/**`, and `docs/upcoming/**`.
+Preserved fused examples on purpose:
+
+- The "current (fused)" motivation block in this plan (line 8), which
+  exists to contrast against the target spaced form.
+- The "old fused-keyword style is still accepted" demonstration in
+  `docs/guides/type-annotations-guide.md`.
+
+`docs/guides/type-annotations-guide.md` already existed and already
+called out that the legacy fused form remains a valid reader input but
+should not be used in new code, so the plan's "new short guide" step
+was a no-op.
+
+#### Original phase notes
 
 - `CLAUDE.md` — the function-arity, sweet-exp, indentation, and docstring sections. All `:int` examples become `: int`.
 - `README.md` — any code snippets.

@@ -11,14 +11,14 @@
 
   (defeffect ^private InternalLog [msg :cstr] :nil)
 
-  (defn run-internal [] :int
+  (defn run-internal [] : int
     (do (perform (InternalLog "computing")) 42))
 
-  (defn wrapper [] :int
+  (defn wrapper [] : int
     (handle
       (run-internal)
       (InternalLog [msg] k) (resume k nil))))
 
-(defn main [] #{} :int
+(defn main [] #{} : int
   (println (wrapper))
   0)

@@ -4,22 +4,22 @@
 ;; libc llabs/labs are declared with platform-variant long/long-long types
 ;; that conflict with Turmeric's int64_t-based :int under LP64 Linux.
 
-(defn c-abs [n :int] :int
+(defn c-abs [n : int] : int
   ```c
   return n < 0 ? -n : n;
   ```)
 
-(defn safe-abs [x :int] :int
+(defn safe-abs [x : int] : int
   (ensure-msg! (>= (c-abs x) 0) "c-abs must return non-negative value")
   (c-abs x))
 
-(defn safe-add [a :int b :int] :int
+(defn safe-add [a : int b : int] : int
   (require-msg! (>= a 0) "a must be non-negative")
   (require-msg! (>= b 0) "b must be non-negative")
   (ensure! (>= (+ a b) 0))
   (+ a b))
 
-(defn main [] :int
+(defn main [] : int
   (println (safe-abs -5))
   (println (safe-abs 3))
   (println (safe-add 4 6))

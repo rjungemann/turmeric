@@ -1,7 +1,7 @@
-(defn add [x y] :int (+ x y))
-(defn mul [x y] :int (* x y))
+(defn add [x y] : int (+ x y))
+(defn mul [x y] : int (* x y))
 
-(defn main [] :int
+(defn main [] : int
   (let [result (->> 10 (add 5) (mul 2))]
     (println result)
     0))

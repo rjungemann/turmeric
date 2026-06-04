@@ -13,10 +13,10 @@
 ;;; Since: Phase 15
 ;; Ord typeclass - ordering
 (defclass Ord [a]
-  (lt? [x y] :bool)
-  (lte? [x y] :bool)
-  (gt? [x y] :bool)
-  (gte? [x y] :bool))
+  (lt? [x y] : bool)
+  (lte? [x y] : bool)
+  (gt? [x y] : bool)
+  (gte? [x y] : bool))
 ;; Instances for primitive types
 ;;; Ord [int] -- Ord instance for int.
 
@@ -84,11 +84,11 @@
 ;;; Since: Phase 15
 ;; Show typeclass - string representation
 
-(defclass Show [a] (show [x] :cstr))
+(defclass Show [a] (show [x] : cstr))
 ;; Instances for primitive types
 ;;; Show [int] -- Show instance for int.
 
-(definstance Show [int] (show [x] :cstr ```c char *buf = (char *)malloc(24);
+(definstance Show [int] (show [x] : cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
@@ -97,52 +97,52 @@
 (definstance Show [cstr] (show [x] x))
 ;;; Show [bool] -- Show instance for bool.
 
-(definstance Show [bool] (show [x] :cstr (if x "true" "false")))
+(definstance Show [bool] (show [x] : cstr (if x "true" "false")))
 ;;; Show [int8] -- Show instance for int8.
 
-(definstance Show [int8] (show [x] :cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [int8] (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int16] -- Show instance for int16.
 
-(definstance Show [int16] (show [x] :cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [int16] (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int32] -- Show instance for int32.
 
-(definstance Show [int32] (show [x] :cstr ```c char *buf = (char *)malloc(16);
+(definstance Show [int32] (show [x] : cstr ```c char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%d", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint8] -- Show instance for uint8.
 
-(definstance Show [uint8] (show [x] :cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [uint8] (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint16] -- Show instance for uint16.
 
-(definstance Show [uint16] (show [x] :cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [uint16] (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint32] -- Show instance for uint32.
 
-(definstance Show [uint32] (show [x] :cstr ```c char *buf = (char *)malloc(16);
+(definstance Show [uint32] (show [x] : cstr ```c char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%u", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint64] -- Show instance for uint64.
 
-(definstance Show [uint64] (show [x] :cstr ```c char *buf = (char *)malloc(24);
+(definstance Show [uint64] (show [x] : cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%llu", (unsigned long long)x);
     return (const char *)buf;
     ```))
 ;;; Show [float32] -- Show instance for float32.
 
-(definstance Show [float32] (show [x] :cstr ```c char *buf = (char *)malloc(32);
+(definstance Show [float32] (show [x] : cstr ```c char *buf = (char *)malloc(32);
     snprintf(buf, 32, "%g", (double)x);
     return (const char *)buf;
     ```))
@@ -159,11 +159,11 @@
 ;; Num typeclass - numeric operations
 
 (defclass Num [a]
-  (add [x y] :int)
-  (sub [x y] :int)
-  (mul [x y] :int)
-  (div [x y] :int)
-  (neg [x] :int))
+  (add [x y] : int)
+  (sub [x y] : int)
+  (mul [x y] : int)
+  (div [x y] : int)
+  (neg [x] : int))
 ;; Instance for int
 ;;; Num [int] -- Num instance for int.
 
@@ -243,7 +243,7 @@
 ;;; Since: Phase B1
 ;; Phase B1: Clone typeclass - deep copy of a value
 
-(defclass Clone [a] (clone [x] :int))
+(defclass Clone [a] (clone [x] : int))
 ;; Clone instances for primitive types
 ;;; Clone [int] -- Clone instance for int (trivial copy).
 
@@ -301,7 +301,7 @@
 ;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 
 
-(defclass Functor [^f] (fmap [container [fn :fn]] :int))
+(defclass Functor [^f] (fmap [container [fn :fn]] : int))
 ;;; Applicative -- container with a pure constructor and ap combinator.
 ;;;
 ;;; Parameters:
@@ -315,7 +315,7 @@
 ;;   pure :: a -> f a
 ;;   ap   :: f (a -> b) -> f a -> f b
 
-(defclass Applicative [^f] (pure [x] :int) (ap [ff fa] :int))
+(defclass Applicative [^f] (pure [x] : int) (ap [ff fa] : int))
 ;;; Monad -- typeclass for sequencing computations with bind.
 ;;;
 ;;; Parameters:
@@ -329,7 +329,7 @@
 ;;   bind :: m a -> (a -> m b) -> m b
 ;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 
-(defclass Monad [^m] (bind [ma [fn :fn]] :int))
+(defclass Monad [^m] (bind [ma [fn :fn]] : int))
 ;;; Foldable -- reduce a container to a summary value.
 ;;;
 ;;; Parameters:
@@ -343,7 +343,7 @@
 ;;   foldl :: b -> (b -> a -> b) -> t a -> b
 ;;   foldr :: (a -> b -> b) -> b -> t a -> b
 
-(defclass Foldable [^t] (foldl [ta init fn] :int) (foldr [ta init fn] :int))
+(defclass Foldable [^t] (foldl [ta init fn] : int) (foldr [ta init fn] : int))
 ;;; Traversable -- map with effects, collecting results.
 ;;;
 ;;; Parameters:
@@ -357,7 +357,7 @@
 ;;   traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
 ;;   In v1: simplified to traverse [ta fn] :int
 
-(defclass Traversable [^t] (traverse [ta fn] :int))
+(defclass Traversable [^t] (traverse [ta fn] : int))
 ;;; SINCE: Phase HKT H7
 ;; Alternative — typeclass for types with an "empty" value and a way to combine alternatives.
 ;; Similar to MonadPlus/ApplicativePlus in Haskell.
@@ -375,7 +375,7 @@
 ;;; Since: Phase HKT H7
 
 
-(defclass Alternative [^f] (empty [a] :int) (alt-or [a b] :int))
+(defclass Alternative [^f] (empty [a] : int) (alt-or [a b] : int))
 ;;; SINCE: Phase HKT H5
 ;; Bifunctor — map over both sides of a binary type constructor.
 ;;   The canonical signature is:
@@ -392,7 +392,7 @@
 ;;; Since: Phase HKT H5
 
 
-(defclass Bifunctor [^^f] (bimap [container fn-left fn-right] :int))
+(defclass Bifunctor [^^f] (bimap [container fn-left fn-right] : int))
 ;;; Display -- typeclass for human-readable string formatting.
 ;;;
 ;;; Parameters:
@@ -406,7 +406,7 @@
 ;; Display - human-readable string representation (like Rust's Display)
 
 
-(defclass Display [a] (display [x] :cstr))
+(defclass Display [a] (display [x] : cstr))
 ;;; Debug -- typeclass for debug string formatting.
 ;;;
 ;;; Parameters:
@@ -418,7 +418,7 @@
 ;;; Since: Phase R0
 ;; Debug - debug string representation (like Rust's Debug)
 
-(defclass Debug [a] (debug [x] :cstr))
+(defclass Debug [a] (debug [x] : cstr))
 ;;; Error -- typeclass for types that represent errors.
 ;;;
 ;;; Parameters:
@@ -431,17 +431,17 @@
 ;; Phase R0: Error typeclass (extends Show)
 ;; Error - for types that represent errors
 
-(defclass Error [a] (error-message [x] :cstr) (error-cause [x] :ptr<void>))
+(defclass Error [a] (error-message [x] : cstr) (error-cause [x] : ptr<void>))
 ;; Instances for primitive types (Display/Debug)
 ;;; Display [int] -- Display instance for int.
 
-(definstance Display [int] (display [x] :cstr ```c char *buf = (char *)malloc(24);
+(definstance Display [int] (display [x] : cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 ;;; Debug [int] -- Debug instance for int.
 
-(definstance Debug [int] (debug [x] :cstr ```c char *buf = (char *)malloc(32);
+(definstance Debug [int] (debug [x] : cstr ```c char *buf = (char *)malloc(32);
     snprintf(buf, 32, "int(%lld)", (long long)x);
     return (const char *)buf;
     ```))
@@ -450,7 +450,7 @@
 ;; In v1, result is represented as ptr<void>
 
 
-(definstance Display [ptr<void>] (display [x] :cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Display [ptr<void>] (display [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "err";
     char *buf = (char *)malloc(48);
     if (res->is_ok) {
@@ -462,7 +462,7 @@
     ```))
 ;;; Debug [ptr<void>] -- Debug instance for result<T,E> represented as ptr<void>.
 
-(definstance Debug [ptr<void>] (debug [x] :cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Debug [ptr<void>] (debug [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "Result::err";
     char *buf = (char *)malloc(64);
     if (res->is_ok) {
@@ -474,7 +474,7 @@
     ```))
 ;;; Show [ptr<void>] -- Show instance for result<T,E> represented as ptr<void>.
 
-(definstance Show [ptr<void>] (show [x] :cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Show [ptr<void>] (show [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "err";
     char *buf = (char *)malloc(48);
     if (res->is_ok) {
@@ -486,7 +486,7 @@
     ```))
 ;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
 
-(definstance Error [ptr<void>] (error-message [x] :cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Error [ptr<void>] (error-message [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL || res->is_ok) {
         return "not an error";
     } else {
@@ -495,7 +495,7 @@
         return "error";
     }
     ```)
-  (error-cause [x] :ptr<void> ```c /* In v1, result doesn't carry cause information */
+  (error-cause [x] : ptr<void> ```c /* In v1, result doesn't carry cause information */
     return NULL;
     ```))
 ;;; From -- typeclass for value conversion from type A to type B.
@@ -512,7 +512,7 @@
 ;; From[A B] - conversion from A to B
 ;; Note: return type is :int (int64_t holds pointers in v1)
 
-(defclass From [a b] (from [x] :int))
+(defclass From [a b] (from [x] : int))
 ;;; Into -- typeclass for value conversion from type A to type B (derived from From).
 ;;;
 ;;; Parameters:
@@ -525,7 +525,7 @@
 ;;; Since: Phase R0
 ;; Into[A B] - conversion from A to B (blanket derived from From[A B])
 
-(defclass Into [a b] (into [x] :int))
+(defclass Into [a b] (into [x] : int))
 ;;; Hash -- the Hash class and its primitive instances now live in the
 ;;; auto-loaded stub stdlib/typeclass-hash.tur (Phase GHE0).  They were
 ;;; removed from this module so that loading typeclass.tur on demand does

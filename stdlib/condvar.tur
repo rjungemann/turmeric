@@ -23,7 +23,7 @@
 ;;;   (let [c (condvar-new)] ...)  ; => ptr<void>
 ;;;
 ;;; Since: Phase T19-C
-(defn condvar-new [] :ptr<void>
+(defn condvar-new [] : ptr<void>
   ```c pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
   if (!c) { fprintf(stderr, "condvar-new: out of memory\n"); abort(); }
   pthread_cond_init(c, NULL);
@@ -40,7 +40,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-wait [c :ptr<void> m :ptr<void>] :nil
+(defn condvar-wait [c : ptr<void> m : ptr<void>] : nil
   ```c pthread_cond_wait((pthread_cond_t *)c, (pthread_mutex_t *)m);
   ```)
 ;;; condvar-signal -- wake one thread waiting on the condition variable.
@@ -53,7 +53,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-signal [c :ptr<void>] :nil
+(defn condvar-signal [c : ptr<void>] : nil
   ```c pthread_cond_signal((pthread_cond_t *)c);
   ```)
 ;;; condvar-broadcast -- wake all threads waiting on the condition variable.
@@ -66,7 +66,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-broadcast [c :ptr<void>] :nil
+(defn condvar-broadcast [c : ptr<void>] : nil
   ```c pthread_cond_broadcast((pthread_cond_t *)c);
   ```)
 ;;; condvar-free -- destroy the condition variable and release its memory.
@@ -79,7 +79,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-free [c :ptr<void>] :nil
+(defn condvar-free [c : ptr<void>] : nil
   ```c pthread_cond_destroy((pthread_cond_t *)c);
   free(c);
   ```)

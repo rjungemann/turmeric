@@ -29,6 +29,10 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "cstr") == 0) return TY_CSTR;
     if (strcmp(name, "nil") == 0) return TY_NIL;
     if (strcmp(name, "ptr-void") == 0 || strcmp(name, "ptr<void>") == 0) return TY_PTR_VOID;
+    /* Bare `ptr` -- same as ptr<void>.  Surfaces via spaced annotation `: ptr`
+     * (F_TYPE_ANN inner is the bare symbol `ptr`); fused `:ptr` is handled
+     * directly by the F_KEYWORD ladder in elab_fns.c. */
+    if (strcmp(name, "ptr") == 0) return TY_PTR_VOID;
     if (strcmp(name, "ref") == 0) return TY_REF;
     if (strcmp(name, "lref") == 0) return TY_LREF;
     if (strcmp(name, "rc") == 0) return TY_RC;

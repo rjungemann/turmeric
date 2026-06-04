@@ -1,7 +1,7 @@
 ;; variadic-rest-int-opaque -- an opaque value is rejected where an :int rest is
 ;; declared.  The old TY_INT -> STRUCT/ADT/APP coercion has been removed.
 (defopaque Route :int)
-(defn mk-route [] :Route 0)
-(defn sink [& xs :int] :int 0)
-(defn main [] :int
+(defn mk-route [] : Route 0)
+(defn sink [& xs : int] : int 0)
+(defn main [] : int
   (sink 1 (mk-route) 3))

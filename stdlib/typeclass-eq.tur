@@ -13,7 +13,7 @@
 ;;; Eq -- typeclass for equality comparison.
 ;;;
 ;;; Since: Phase 15
-(defclass Eq [a] (eq? [x y] :bool))
+(defclass Eq [a] (eq? [x y] : bool))
 ;; F3-7 (cross-plan-followups): primitive Eq instances must be in
 ;; scope for the auto-loaded typed-collection definstances above to
 ;; have their `(Eq A)` constraints satisfiable when A bottoms out at
@@ -32,7 +32,7 @@
 ;;; Eq [cstr] -- equality on cstr (null-terminated string).  Uses
 ;;; the runtime's string comparator rather than pointer equality.
 
-(definstance Eq [cstr] (eq? [x y] :bool ```c if (x == NULL && y == NULL) return true;
+(definstance Eq [cstr] (eq? [x y] : bool ```c if (x == NULL && y == NULL) return true;
     if (x == NULL || y == NULL) return false;
     return strcmp((const char *)x, (const char *)y) == 0;
     ```))

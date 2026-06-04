@@ -4,7 +4,7 @@
 ;; enclosing stack frame, so any reference to an outer borrow is invalid.
 (defeffect Ask [] :int)
 
-(defn test [] :int
+(defn test [] : int
   (let [x 42]
     (let [r (& x)]
       (handle (perform (Ask))

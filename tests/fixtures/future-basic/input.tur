@@ -9,7 +9,7 @@
 
 ;; ---- FutureCell helpers (matching stdlib/future.tur layout) ----
 
-(defn fc-new [] :ptr<void>
+(defn fc-new [] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -30,7 +30,7 @@
   return (void *)cell;
   ```)
 
-(defn fc-fulfill [fc :ptr<void> v :int] :nil
+(defn fc-fulfill [fc : ptr<void> v : int] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)fc;
@@ -43,7 +43,7 @@
   pthread_mutex_unlock(&cell->lock);
   ```)
 
-(defn fc-fail [fc :ptr<void> e :int] :nil
+(defn fc-fail [fc : ptr<void> e : int] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)fc;
@@ -56,7 +56,7 @@
   pthread_mutex_unlock(&cell->lock);
   ```)
 
-(defn fc-get [fc :ptr<void>] :ptr<void>
+(defn fc-get [fc : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)fc;
@@ -74,7 +74,7 @@
   return (void *)r;
   ```)
 
-(defn fc-done? [fc :ptr<void>] :bool
+(defn fc-done? [fc : ptr<void>] : bool
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)fc;
@@ -84,7 +84,7 @@
   return done;
   ```)
 
-(defn fc-free [fc :ptr<void>] :nil
+(defn fc-free [fc : ptr<void>] : nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *cell = (FutureCell *)fc;
@@ -94,33 +94,33 @@
   ```)
 
 ;; Result helpers
-(defn result-ok? [r :ptr<void>] :bool
+(defn result-ok? [r : ptr<void>] : bool
   ```c
   typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
   Result *res = (Result *)r;
   return res != NULL && res->is_ok;
   ```)
 
-(defn result-val [r :ptr<void>] :int
+(defn result-val [r : ptr<void>] : int
   ```c
   typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
   return (int)((Result *)r)->ok_val;
   ```)
 
-(defn result-err [r :ptr<void>] :int
+(defn result-err [r : ptr<void>] : int
   ```c
   typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
   return (int)((Result *)r)->err_val;
   ```)
 
-(defn result-free [r :ptr<void>] :nil
+(defn result-free [r : ptr<void>] : nil
   ```c
   free(r);
   ```)
 
 ;; ---- Worker thread ----
 
-(defn future-worker [arg :ptr<void>] :ptr<void>
+(defn future-worker [arg : ptr<void>] : ptr<void>
   ```c
   void **args = (void **)arg;
   void *cell_ptr = args[0];
@@ -143,7 +143,7 @@
 ;; make-worker-arg : ptr<void> × int → ptr<void>
 ;; Packs (cell, value) into a heap-allocated void*[2] for passing to a thread.
 ;; The worker thread is responsible for freeing this allocation.
-(defn make-worker-arg [cell :ptr<void> val :int] :ptr<void>
+(defn make-worker-arg [cell : ptr<void> val : int] : ptr<void>
   ```c
   void **a = (void **)malloc(2 * sizeof(void *));
   if (!a) { fprintf(stderr, "make-worker-arg: oom\n"); abort(); }
@@ -152,7 +152,7 @@
   return (void *)a;
   ```)
 
-(defn thread-spawn-raw [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn thread-spawn-raw [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn-raw: oom\n"); abort(); }
@@ -160,18 +160,18 @@
   return (void *)t;
   ```)
 
-(defn thread-join-raw [t :ptr<void>] :nil
+(defn thread-join-raw [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
-(defn print-labelled [label :cstr val :int] :nil
+(defn print-labelled [label : cstr val : int] : nil
   ```c
   printf("%s %lld\n", label, (long long)val);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [fc (fc-new)]
     (let [arg (make-worker-arg fc 42)]
       (let [t (thread-spawn-raw future-worker arg)]

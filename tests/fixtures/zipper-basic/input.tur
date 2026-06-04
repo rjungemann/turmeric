@@ -3,7 +3,7 @@
 
 (extern-c free [p :ptr<void>] :void)
 
-(defn make-arr3 [] :ptr<void>
+(defn make-arr3 [] : ptr<void>
   ```c
   int64_t *arr = malloc(3 * sizeof(int64_t));
   arr[0] = 1;
@@ -15,7 +15,7 @@
 ;; zipper-new copies its left/right inputs (see stdlib/tzipper.tur);
 ;; the caller still owns and must free the originals.
 
-(defn test-focus [] :int
+(defn test-focus [] : int
   (let [left (make-arr3)]
     (let [right (make-arr3)]
       (let [z (zipper-new left 2 10 right 2)]
@@ -25,7 +25,7 @@
           (free right)
           f)))))
 
-(defn test-move-right-focus [] :int
+(defn test-move-right-focus [] : int
   (let [left (make-arr3)]
     (let [right (make-arr3)]
       (let [z (zipper-new left 0 10 right 3)]

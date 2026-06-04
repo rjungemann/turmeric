@@ -1,7 +1,7 @@
 ;; SS1 E0212: offer not valid on Session[Send int Close].
 ;; 's' has protocol Send int Close; offer is only valid on Branch sessions.
 ;; This endpoint must perform a send, not a branch selection.
-(defn use-wrong [^linear s :(Session (Send int Close))] :nil
+(defn use-wrong [^linear s :(Session (Send int Close))] : nil
   (match (offer s)
     (Left s) (close s)
     (Right s) (close s)))

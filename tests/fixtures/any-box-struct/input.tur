@@ -1,12 +1,12 @@
 ; TY2.2: heap-box a by-value struct into `any` (it cannot ride the int64_t
 ; carrier), then recover it with a checked cast and read its fields.
 
-(defstruct Point [x :int y :int])
+(defstruct Point [x : int y : int])
 
-(defn box-point [p :Point] : any
+(defn box-point [p : Point] : any
   p)
 
-(defn main [] :int
+(defn main [] : int
   (let [p (make-struct Point 3 4)]
     (let [a (box-point p)]
       (println (type-of a))

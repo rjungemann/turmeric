@@ -5,20 +5,20 @@
 (defeffect Ask [] :int)
 
 ;; Single effect annotation
-(defn log-hello [] #{Log} :nil
+(defn log-hello [] #{Log} : nil
   (perform (Log "hello")))
 
 ;; Multiple effects annotation
-(defn ask-and-log [] #{Ask Log} :int
+(defn ask-and-log [] #{Ask Log} : int
   (do
     (let [n (perform (Ask))]
       (do (perform (Log "asked")) n))))
 
 ;; Pure function (no annotation needed, but empty row is valid)
-(defn add [x :int y :int] :int
+(defn add [x : int y : int] : int
   (+ x y))
 
-(defn main [] :int
+(defn main [] : int
   ;; Run log-hello under a Log handler
   (handle
     (do (log-hello) 0)

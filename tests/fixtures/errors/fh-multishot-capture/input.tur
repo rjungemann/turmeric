@@ -1,6 +1,6 @@
 ;; FH6: a ^multishot handler value cannot capture a unique (move-only) value.
 (defeffect Choose [] :int)
-(defn main [] :int
+(defn main [] : int
   (let [^unique token 42]
     (with-handler
       (handler (Choose [] ^multishot k) (resume k token))

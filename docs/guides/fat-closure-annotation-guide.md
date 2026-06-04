@@ -49,7 +49,7 @@ Any combinator that dispatches its callback through `apply-fat` is
 therefore a **fat-expecting sink**:
 
 ```turmeric
-(defn bind-parser [p f] :ptr<void>
+(defn bind-parser [p f] : ptr<void>
   ;; ... eventually calls (apply-fat f x) ...
   ...)
 ```
@@ -82,7 +82,7 @@ one-cell fat closure (`{ __tur_fatshim<arity>, orig_fn }`) before the
 call.
 
 ```turmeric
-(defn bind-parser [p ^fat f] :ptr<void>
+(defn bind-parser [p ^fat f] : ptr<void>
   ;; (apply-fat f x) is now safe for any caller
   ...)
 ```
@@ -127,8 +127,8 @@ There are two ways to spell a `^fat` *parameter*, and they differ in what
 they know about the closure's **result type**:
 
 ```turmeric
-(defn run-with [^fat g x :int] :int (g x))                     ;; bare
-(defn run-with [^fat g :(fn [:float] #{} :float) x :float] :float (g x))  ;; annotated
+(defn run-with [^fat g x : int] : int (g x))                     ;; bare
+(defn run-with [^fat g :(fn [:float] #{} :float) x : float] : float (g x))  ;; annotated
 ```
 
 A **bare** `^fat g` records no signature, so the compiler has no result
@@ -148,7 +148,7 @@ result type, and the compiler dispatches through a typed thunk that uses
 the right register:
 
 ```turmeric
-(defn run-with [^fat g :(fn [:float] #{} :float) x :float] :float
+(defn run-with [^fat g :(fn [:float] #{} :float) x : float] : float
   (g x))                       ;; returns a real double
 ```
 

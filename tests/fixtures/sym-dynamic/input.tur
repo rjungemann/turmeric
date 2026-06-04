@@ -4,7 +4,7 @@
 ;; literal, and repeated interns of a name return one stable pointer.
 (load "stdlib/sym-dynamic.tur")
 
-(defn main [] :int
+(defn main [] : int
   (println (if (eq? :hello (str->sym "hello")) 1 0))     ; 1 (literal == dynamic)
   (println (if (eq? (str->sym "x") (str->sym "x")) 1 0)) ; 1 (stable)
   (println (if (eq? (str->sym "a") (str->sym "b")) 1 0)) ; 0 (distinct)

@@ -1,10 +1,10 @@
 ;; TY4: a borrow of an equal-or-outer-scope binding is fine -- `r` does not
 ;; outlive `x`, so this is accepted and runs.
-(defn deref-outer [] :int
+(defn deref-outer [] : int
   (let [x 42]
     (let [r (& x)]
       (deref r))))
 
-(defn main [] :int
+(defn main [] : int
   (println (deref-outer))
   0)

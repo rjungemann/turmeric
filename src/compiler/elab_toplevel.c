@@ -829,7 +829,16 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                             }
                             if (f->as.list.len > ret_idx) {
                                 Form *ret_f = f->as.list.items[ret_idx];
-                                if (ret_f->tag == F_KEYWORD) {
+                                /* Accept spaced `: T` (F_TYPE_ANN of a single
+                                 * symbol/keyword) by treating the inner as a
+                                 * keyword.  Compound `: (-> a b)` still routes
+                                 * through the F_TYPE_ANN branch below. */
+                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                                    (ret_f->as.list.items[0]->tag == F_SYM ||
+                                     ret_f->as.list.items[0]->tag == F_KEYWORD)) {
+                                    ret_f = ret_f->as.list.items[0];
+                                }
+                                if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
                                     const Symbol *kw = ret_f->as.sym;
                                     if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                                         return_kind = TY_INT;

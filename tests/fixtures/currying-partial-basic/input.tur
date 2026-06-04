@@ -1,4 +1,4 @@
-(defn add [a b] :int (+ a b))
-(defn main [] :int
+(defn add [a b] : int (+ a b))
+(defn main [] : int
   (let [add1 (add 1)]
     (println (add1 41))))

@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (unsafe
     (let [x 42]
       (println x)

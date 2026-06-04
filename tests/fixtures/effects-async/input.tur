@@ -4,9 +4,9 @@
 
 (defeffect AddTen [x :int] :int)
 
-(defn main [] :int
+(defn main [] : int
   ;; Test: perform an effect inside async block, handler resumes fiber
-  (let [fut (async (fn [] :int
+  (let [fut (async (fn [] : int
                      (handle (perform (AddTen 5))
                        (AddTen [x] k) (resume k (+ x 10)))))]
     (let [result (await fut)]

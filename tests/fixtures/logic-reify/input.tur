@@ -2,11 +2,11 @@
 ;; Two fresh vars x(id=0),y(id=1): conjoin (x=10),(y=20); walk both to confirm.
 ;; Uses defn helpers to avoid let-inside-lambda capture issues.
 
-(defn mzero [] :int ```c return 0; ```)
-(defn mreturn [x] :int
+(defn mzero [] : int ```c return 0; ```)
+(defn mreturn [x] : int
   ```c struct { int64_t value; int64_t next; } *c = malloc(sizeof(*c));
   c->value = x; c->next = 0; return (int64_t)(intptr_t)c; ```)
-(defn mbind [ma fn] :int
+(defn mbind [ma fn] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma; if (!cell) return 0;
@@ -21,23 +21,23 @@
   while (rev) { Cell *tmp = (Cell*)(intptr_t)rev->next; rev->next = (int64_t)(intptr_t)result; result = rev; rev = tmp; }
   return (int64_t)(intptr_t)result;
   ```)
-(defn bt-length [xs] :int
+(defn bt-length [xs] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
   while (c) { n++; c = (Cell*)(intptr_t)c->next; } return n; ```)
 
-(defn term-int [n] :int
+(defn term-int [n] : int
   ```c struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
   t->tag = 0; t->data1 = n; t->data2 = 0; return (int64_t)(intptr_t)t; ```)
-(defn term-var [id] :int
+(defn term-var [id] : int
   ```c struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
   t->tag = 1; t->data1 = id; t->data2 = 0; return (int64_t)(intptr_t)t; ```)
-(defn term-int-val [t] :int
+(defn term-int-val [t] : int
   ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
 
-(defn lvar-next [] :int ```c static int64_t n = 0; return n++; ```)
+(defn lvar-next [] : int ```c static int64_t n = 0; return n++; ```)
 
-(defn logic-walk [t subs] :int
+(defn logic-walk [t subs] : int
   ```c
   typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
   typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
@@ -49,7 +49,7 @@
   }
   ```)
 
-(defn logic-unify [t1 t2 subs] :int
+(defn logic-unify [t1 t2 subs] : int
   ```c
   typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
   typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
@@ -64,44 +64,44 @@
   return -1;
   ```)
 
-(defn apply-fat [f arg] :int
+(defn apply-fat [f arg] : int
   ```c int64_t *fat = (int64_t*)(intptr_t)f;
   return TUR_APPLY1(fat, arg); ```)
 
-(defn apply-goal [g state] :int
+(defn apply-goal [g state] : int
   ```c int64_t *fat = (int64_t*)(intptr_t)g;
   return TUR_APPLY1(fat, state); ```)
 
-(defn unify-goal-impl [lt1 lt2 state] :int
+(defn unify-goal-impl [lt1 lt2 state] : int
   (let [ns (logic-unify lt1 lt2 state)]
     (if (= ns -1) (mzero) (mreturn ns))))
 
-(defn lequal [t1 t2] :ptr<void>
+(defn lequal [t1 t2] : ptr<void>
   (let [lt1 t1 lt2 t2]
     (fn [state] (unify-goal-impl lt1 lt2 state))))
 
-(defn conjoined-inner [lg22 s] :int
+(defn conjoined-inner [lg22 s] : int
   (let [lg2 lg22] (apply-goal lg2 s)))
 
-(defn conjoined-impl [lg1 lg2 state] :int
+(defn conjoined-impl [lg1 lg2 state] : int
   (let [lg22 lg2]
     (mbind (apply-goal lg1 state)
            (fn [s] (conjoined-inner lg22 s)))))
 
-(defn conjoined [g1 g2] :ptr<void>
+(defn conjoined [g1 g2] : ptr<void>
   (let [lg1 g1 lg2 g2]
     (fn [state] (conjoined-impl lg1 lg2 state))))
 
-(defn fresh-impl [lf state] :int
+(defn fresh-impl [lf state] : int
   (let [nv (term-var (lvar-next))
         lf2 lf]
     (apply-goal (apply-fat lf2 nv) state)))
 
-(defn fresh [f] :ptr<void>
+(defn fresh [f] : ptr<void>
   (let [lf f]
     (fn [state] (fresh-impl lf state))))
 
-(defn take-n [n lst] :int
+(defn take-n [n lst] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *result = NULL, *tail = NULL; Cell *c = (Cell*)(intptr_t)lst; int64_t count = 0;
   while (c && count < n) { Cell *nc = malloc(sizeof(Cell)); nc->value = c->value; nc->next = 0;
@@ -109,24 +109,24 @@
       c = (Cell*)(intptr_t)c->next; count++; }
   return (int64_t)(intptr_t)result; ```)
 
-(defn run-logic [n g] :int
+(defn run-logic [n g] : int
   (let [init 0] (take-n n (apply-goal g init))))
 
-(defn first-state [results] :int
+(defn first-state [results] : int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)results; return c ? c->value : 0; ```)
 
 ;; inner-goal: conjoin (lx=10) and (y=20)
-(defn inner-goal [lx y] :ptr<void>
+(defn inner-goal [lx y] : ptr<void>
   (conjoined (lequal lx (term-int 10)) (lequal y (term-int 20))))
 
 ;; make-inner-fn: given lx (term), returns fat closure (y -> goal)
-(defn make-inner-fn [lx] :ptr<void>
+(defn make-inner-fn [lx] : ptr<void>
   (let [lx2 lx]
     (fn [y] (inner-goal lx2 y))))
 
 ;; outer-body: given x (term), produce the inner fresh goal
-(defn outer-body [x] :ptr<void>
+(defn outer-body [x] : ptr<void>
   (fresh (make-inner-fn x)))
 
 ;; make-outer-fn: returns fat closure (x -> goal) for outer fresh

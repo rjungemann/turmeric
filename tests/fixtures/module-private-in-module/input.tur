@@ -1,7 +1,7 @@
 (defmodule mymod
   (export run)
-  (defn helper [x] :int (* x 2))
-  (defn run [] :int
+  (defn helper [x] : int (* x 2))
+  (defn run [] : int
     (println (helper 21))
     0)
-  (defn main [] :int (run)))
+  (defn main [] : int (run)))

@@ -1,6 +1,6 @@
-(defn make-add [a :float]
-  (fn [b :float] :float (+ a b)))
+(defn make-add [a : float]
+  (fn [b : float] : float (+ a b)))
 
-(defn main [] :int
+(defn main [] : int
   (println ((make-add 1.5) 2.25))
   0)

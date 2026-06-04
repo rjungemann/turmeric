@@ -6,4 +6,4 @@
 ;; corresponding simple-keyword path that already printed e.g. ":rc<int>".
 (defstruct Bad :copy [r (lref int)])
 
-(defn main [] :int 0)
+(defn main [] : int 0)

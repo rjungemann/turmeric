@@ -3,7 +3,7 @@
 ;; orphan-instance errors against the auto-loaded stdlib typeclasses.
 
 (defclass MyEqPrim [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (definstance MyEqPrim [int]
   (eq? [x y] (= x y)))
@@ -12,10 +12,10 @@
   (eq? [x y] (= x y)))
 
 (defclass MyOrdPrim [a]
-  (lt? [x y] :bool)
-  (lte? [x y] :bool)
-  (gt? [x y] :bool)
-  (gte? [x y] :bool))
+  (lt? [x y] : bool)
+  (lte? [x y] : bool)
+  (gt? [x y] : bool)
+  (gte? [x y] : bool))
 
 (definstance MyOrdPrim [int]
   (lt? [x y] (< x y))
@@ -24,16 +24,16 @@
   (gte? [x y] (>= x y)))
 
 (defclass MyShowPrim [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance MyShowPrim [int]
-  (show [x] :cstr "<int>"))
+  (show [x] : cstr "<int>"))
 
 (definstance MyShowPrim [bool]
-  (show [x] :cstr "<bool>"))
+  (show [x] : cstr "<bool>"))
 
 (definstance MyShowPrim [cstr]
   (show [x] x))
 
-(defn main [] :int
+(defn main [] : int
   0)

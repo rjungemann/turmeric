@@ -2,8 +2,8 @@
 ;; arms against the same input and accumulates every error with its path.
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
-(defn pick-a [x :int] :int x)
-(defn main [] :int
+(defn pick-a [x : int] : int x)
+(defn main [] : int
   (let [s (schema/ap (schema/fmap (schema/field-of "a" (schema/int)) pick-a)
                      (schema/field-of "b" (schema/int)))
         r (schema-decode s (json/decode "{\"a\": \"x\", \"b\": \"y\"}"))]

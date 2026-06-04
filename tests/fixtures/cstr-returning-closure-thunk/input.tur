@@ -8,13 +8,13 @@
 ;; the fn-literal return-type parser, so the thunk is emitted as
 ;; `const char * (*)(void *, ...)` and round-trips through TUR_APPLY1_T cleanly.
 
-(defn call-s [f :ptr<void> s :cstr] :cstr
+(defn call-s [f : ptr<void> s : cstr] : cstr
   ```c return TUR_APPLY1_T(char *, char *, f, s); ```)
 
-(defn make-pick [n :int] :ptr<void>
-  (fn [s :cstr] :cstr (if (> n 0) s "other")))   ;; captures n -> fat closure
+(defn make-pick [n : int] : ptr<void>
+  (fn [s : cstr] : cstr (if (> n 0) s "other")))   ;; captures n -> fat closure
 
-(defn main [] :int
+(defn main [] : int
   (println (call-s (make-pick 1) "hello"))        ;; n>0 -> "hello"
   (println (call-s (make-pick 0) "hello"))        ;; n==0 -> "other"
   0)

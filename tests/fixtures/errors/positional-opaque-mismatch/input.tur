@@ -3,6 +3,6 @@
 ;; identities, even though both lower to the same underlying kind.
 (defopaque A :int)
 (defopaque B :ptr<void>)
-(defn take-a [x :A] :int ```c return (int64_t)x; ```)
-(defn mk-b   []     :B   ```c return 0; ```)
-(defn main   []     :int (take-a (mk-b)))
+(defn take-a [x : A] : int ```c return (int64_t)x; ```)
+(defn mk-b   []     : B   ```c return 0; ```)
+(defn main   []     : int (take-a (mk-b)))

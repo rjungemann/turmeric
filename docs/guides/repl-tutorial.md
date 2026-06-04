@@ -147,7 +147,7 @@ expressions.
 Type this:
 
 ```turmeric
-(defn square [x :int] :int (* x x))
+(defn square [x : int] : int (* x x))
 ```
 ```sweet-exp
 defn square [x :int] :int
@@ -190,7 +190,7 @@ of the REPL session.
 Type this:
 
 ```turmeric
-(defn abs [n :int] :int
+(defn abs [n : int] : int
   (if (< n 0) (- 0 n) n))
 ```
 ```sweet-exp
@@ -218,7 +218,7 @@ Expected output:
 Now try a multi-branch form:
 
 ```turmeric
-(defn sign [n :int] :int
+(defn sign [n : int] : int
   (cond
     (> n 0) 1
     (< n 0) -1
@@ -265,7 +265,7 @@ fallback.
 Type this:
 
 ```turmeric
-(defn factorial [n :int] :int
+(defn factorial [n : int] : int
   (if (<= n 1) 1 (* n (factorial (- n 1)))))
 ```
 ```sweet-exp
@@ -443,7 +443,7 @@ Expected output:
 Now define a division function that never crashes:
 
 ```turmeric
-(defn safe-div [a :int b :int]
+(defn safe-div [a : int b : int]
   (if (= b 0) (option-none) (option-some (/ a b))))
 ```
 ```sweet-exp
@@ -717,7 +717,7 @@ its signature. The index variable is available inside the body.
 Type this:
 
 ```turmeric
-(let [add5 (fn [x :int] :int (+ x 5))]
+(let [add5 (fn [x : int] : int (+ x 5))]
   (add5 10))
 ```
 ```sweet-exp
@@ -734,7 +734,7 @@ Expected output:
 Then define a function that returns a closure:
 
 ```turmeric
-(defn make-adder [n :int] (fn [x :int] :int (+ x n)))
+(defn make-adder [n : int] (fn [x : int] : int (+ x n)))
 ```
 ```sweet-exp
 defn make-adder [n :int]
@@ -773,7 +773,7 @@ and returned from other functions.
 Type this:
 
 ```turmeric
-(defn apply-twice [f x :int] :int (f (f x)))
+(defn apply-twice [f x : int] : int (f (f x)))
 ```
 ```sweet-exp
 defn apply-twice [f x :int] :int
@@ -781,7 +781,7 @@ defn apply-twice [f x :int] :int
 ```
 
 ```turmeric
-(apply-twice (fn [x :int] :int (* x 2)) 3)
+(apply-twice (fn [x : int] : int (* x 2)) 3)
 ```
 ```sweet-exp
 apply-twice(fn([x :int] :int {x * 2}) 3)
@@ -811,7 +811,7 @@ doubles its argument, so `3` becomes `6` then `12`.
 Type this:
 
 ```turmeric
-(defstruct Point [x :int y :int])
+(defstruct Point [x : int y : int])
 ```
 ```sweet-exp
 defstruct Point [x :int y :int]
@@ -870,7 +870,7 @@ defeffect Log [msg :cstr] :void
 Then define a function that performs it:
 
 ```turmeric
-(defn do-work [] :void
+(defn do-work [] : void
   (perform (Log "starting"))
   (perform (Log "done")))
 ```
@@ -999,7 +999,7 @@ defeffect Ask [] :int
 ```
 
 ```turmeric
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 ```
 ```sweet-exp
@@ -1044,7 +1044,7 @@ First, save the following to a file called `hello.tur` in your working
 directory:
 
 ```turmeric
-(defn greet [name :cstr] :void
+(defn greet [name : cstr] : void
   (println (str-concat "Hello, " (str-concat name "!"))))
 ```
 ```sweet-exp

@@ -8,17 +8,17 @@
 ;   - no auto-drop / defer chain on the let binding
 ;   - the open's body ends with `free((void *)(e))`
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [e (pack 7 (exists :linear [a] [(Show a)] a))]
     (open e [_ v]
       (println (.show v))))

@@ -3,7 +3,7 @@
 ;; auto-loaded stdlib Eq typeclass.
 
 (defclass MyEqDerived [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (definstance MyEqDerived [int]
   (eq? [x y] (= x y)))
@@ -14,5 +14,5 @@
 ;; Derived instance for option<T> if Eq T
 ;; For v1, we just verify the syntax is accepted
 ;; Actual derived instance mechanism deferred
-(defn main [] :int
+(defn main [] : int
   0)

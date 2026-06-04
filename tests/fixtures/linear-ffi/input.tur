@@ -11,12 +11,12 @@
 ;; and let the call site enforce exactly-once semantics.
 ;;
 ;; Expected output: 77
-(defn ffi-echo [tok] :int
+(defn ffi-echo [tok] : int
   ```c
   return (int64_t)tok;
   ```)
 
-(defn run [] :int
+(defn run [] : int
   (let [^linear token 77]
     (ffi-echo token)))
 

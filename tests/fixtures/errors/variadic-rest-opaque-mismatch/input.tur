@@ -2,8 +2,8 @@
 ;; declared is a compile error (the two opaque types are now distinguished).
 (defopaque Route :int)
 (defopaque Middleware :int)
-(defn route! [] :Route 0)
-(defn make-mw [] :Middleware 0)
-(defn server [port :int & items :Route] :int 0)
-(defn main [] :int
+(defn route! [] : Route 0)
+(defn make-mw [] : Middleware 0)
+(defn server [port : int & items : Route] : int 0)
+(defn main [] : int
   (server 3000 (route!) (make-mw) 42))

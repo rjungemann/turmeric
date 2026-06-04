@@ -21,17 +21,17 @@
   (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
 
 ; SZ8.2: a length-polymorphic function over (SizedVec n) -- no index annotation.
-(defn svlen [v :SizedVec] :int
+(defn svlen [v : SizedVec] : int
   (match v
     (SVNil)       0
     (SVCons _ xs) (+ 1 (svlen xs))))
 
 ; SZ8 fallback: prepends onto an arbitrary-length v; the result size is
 ; (Add (Static 1) n) with n unknown, so it is un-inferable here.
-(defn prepend [v :SizedVec] :SizedVec
+(defn prepend [v : SizedVec] : SizedVec
   (SVCons 99 v))
 
-(defn main [] :int
+(defn main [] : int
   (println (svlen (SVNil)))                                 ; 0
   (println (svlen (SVCons 10 (SVCons 20 (SVNil)))))         ; 2
   (println (svlen (prepend (SVCons 1 (SVNil)))))            ; 2

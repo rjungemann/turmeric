@@ -1,7 +1,7 @@
 ;; Reinterpret with size mismatch must be rejected at compile time.
 ;; int is 8 bytes, bool is 1 byte — sizes don't match.
 
-(defn main [] :int
+(defn main [] : int
   (unsafe
     (let [x 42]
       (let [b (reinterpret x :bool)]

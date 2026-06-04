@@ -2,7 +2,7 @@
 
 (load "stdlib/range.tur")
 
-(defn main [] :void
+(defn main [] : void
   ; n = v  (singleton)
   (println (range-contains? #r{n = 5} 5))      ; true
   (println (range-contains? #r{n = 5} 4))      ; false

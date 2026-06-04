@@ -8,14 +8,14 @@
 ;;
 ;; Expected output: 99
 
-(defn spawn [f :ptr<void>] :ptr<void>
+(defn spawn [f : ptr<void>] : ptr<void>
   ```c
   pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(tid, NULL, tur_session_thread_wrapper, f);
   return (void *)tid;
   ```)
 
-(defn join [t :ptr<void>] :int
+(defn join [t : ptr<void>] : int
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
@@ -24,23 +24,23 @@
 
 ;; do-send-recv: take ownership of the channel, send val, recv response, close.
 ;; Returns the response integer.
-(defn do-send-recv [^linear ch :(Session (Send int (Recv int Close))) val :int] :int
+(defn do-send-recv [^linear ch :(Session (Send int (Recv int Close))) val : int] : int
   (let [ch (send ch val)]
     (let [[resp ch] (recv ch)]
       (close ch)
       resp)))
 
 ;; request: delegate the entire send+recv to do-send-recv.
-(defn request [^linear ch :(Session (Send int (Recv int Close))) val :int] :int
+(defn request [^linear ch :(Session (Send int (Recv int Close))) val : int] : int
   (do-send-recv ch val))
 
 ;; echo-server: receive an int and send it back unchanged.
-(defn echo-server [^linear ch :(Session (Recv int (Send int Close)))] :nil
+(defn echo-server [^linear ch :(Session (Recv int (Send int Close)))] : nil
   (let [[n ch] (recv ch)]
     (let [ch (send ch n)]
       (close ch))))
 
-(defn main [] :int
+(defn main [] : int
   (let [[s r] (make-session (Send int (Recv int Close)))]
     (let [t (spawn (fn [] (echo-server r)))]
       (let [result (request s 99)]

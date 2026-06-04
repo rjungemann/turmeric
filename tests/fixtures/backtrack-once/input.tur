@@ -1,9 +1,9 @@
 ;; Phase B3: Backtracking monad — once keeps only the first result.
 
-(defn mzero [] :int
+(defn mzero [] : int
   ```c return 0; ```)
 
-(defn mreturn [x] :int
+(defn mreturn [x] : int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
@@ -11,7 +11,7 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn mplus [xs ys] :int
+(defn mplus [xs ys] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
@@ -28,7 +28,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn once [xs] :int
+(defn once [xs] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)xs;

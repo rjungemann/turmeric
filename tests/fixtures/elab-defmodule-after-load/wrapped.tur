@@ -8,5 +8,5 @@
 (defmodule wrapped
   (export wrapped-tag)
 
-  (defn wrapped-tag [] :nil
+  (defn wrapped-tag [] : nil
     ```c printf("wrapped\n"); ```))

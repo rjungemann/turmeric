@@ -1,6 +1,6 @@
-(defn main [] :int
+(defn main [] : int
   (let [r (ref 5)]
     (let [tmp r]
-      (let [f (fn [] :int @r)]
+      (let [f (fn [] : int @r)]
         (f))))
   0)

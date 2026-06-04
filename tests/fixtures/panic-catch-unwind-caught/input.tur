@@ -1,6 +1,6 @@
 ;;; Phase R2: catch-unwind returns err(panic) for a panicking thunk, and the
 ;;; panic message round-trips through the boxed payload.
-(defn panic-msg [r :int] :cstr
+(defn panic-msg [r : int] : cstr
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   if (!res || res->is_ok) return "(ok)";
@@ -8,10 +8,10 @@
   return p ? (const char*)tur_panic_payload_value(p) : "(null)";
   ```)
 
-(defn boom [] :int (panic "boom happened"))
+(defn boom [] : int (panic "boom happened"))
 
-(defn main [] :int
-  (let [r (catch-unwind (fn [] :int (boom)))]
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (boom)))]
     (if (err? r)
       (println (panic-msg r))
       (println "no panic")))

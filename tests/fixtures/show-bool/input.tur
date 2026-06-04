@@ -1,12 +1,12 @@
 ;; SI1: Show [bool] returns "true" or "false".
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [bool]
-  (show [x] :cstr
+  (show [x] : cstr
     (if x "true" "false")))
 
-(defn main [] :int
+(defn main [] : int
   (println (.show true))
   (println (.show false))
   0)

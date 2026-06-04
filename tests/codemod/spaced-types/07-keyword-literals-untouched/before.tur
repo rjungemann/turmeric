@@ -1,0 +1,11 @@
+;; Keyword literals (NOT type annotations) must remain fused.
+;; This covers CC-5 (positional matcher) and CC-11 (build.tur fields).
+
+(import foo :refer [a b])
+
+(defn main [] :int
+  (let [m #map{:name "x" :age 7}
+        v [:vertex :fragment]]
+    (cond
+      ((= 1 1) :first)
+      (:else   :default))))

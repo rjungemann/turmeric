@@ -16,7 +16,7 @@
 ;;;
 ;;; Example:
 ;;;   (assert 42 (my-fn))  ; => true when my-fn returns 42
-(defn assert [expected actual] :bool
+(defn assert [expected actual] : bool
   (if (= expected actual)
     true
     (do
@@ -39,7 +39,7 @@
 ;;; Example:
 ;;;   (assert-true (= 1 1))  ; => true
 
-(defn assert-true [x] :bool
+(defn assert-true [x] : bool
   (if (= x 1) true (do (println "Assertion failed: expected true") false)))
 ;; Assert a condition is false (0=false convention)
 ;;; assert-false -- assert that x is falsy (0); print a failure message and return false if not.
@@ -53,7 +53,7 @@
 ;;; Example:
 ;;;   (assert-false (= 1 2))  ; => true
 
-(defn assert-false [x] :bool
+(defn assert-false [x] : bool
   (if (= x 1) (do (println "Assertion failed: expected false") false) true))
 ;; Assert a value is nil.
 ;; Current function-signature limits treat args as int in this path,
@@ -69,7 +69,7 @@
 ;;; Example:
 ;;;   (assert-nil (no-op))  ; => true when no-op returns 0
 
-(defn assert-nil [x] :bool
+(defn assert-nil [x] : bool
   (if (= x 0) true (do (println "Assertion failed: expected nil") false)))
 ;; Assert that invoking the callback throws an error.
 ;; `thunk` must be a no-arg callback bridged through ptr<void>.
@@ -84,7 +84,7 @@
 ;;; Example:
 ;;;   (assert-error (fn [] (error "boom")))  ; => true
 
-(defn assert-error [^fat thunk] :bool
+(defn assert-error [^fat thunk] : bool
   (if (= (try (do (thunk) 0) (catch [e] 1)) 1)
     true
     (do (println "Assertion failed: expected error") false)))
@@ -103,7 +103,7 @@
 ;;; Example:
 ;;;   (run-test "my test" (fn [] (assert 1 1)))  ; => 1
 
-(defn run-test [name :cstr ^fat test-fn] :int
+(defn run-test [name : cstr ^fat test-fn] : int
   (if (= (test-fn) 1) (do (println ".") 1) (do (println "F") (println name) 0)))
 ;; Register a named test callback for later execution via run-tests!.
 ;; Returns nonzero on success.
@@ -116,7 +116,7 @@
 ;;; Returns:
 ;;;   Non-zero on successful registration.
 
-(defn register-test [name :cstr test-fn :ptr<void>] :int
+(defn register-test [name : cstr test-fn : ptr<void>] : int
   ```c extern int64_t tur_test_register(const char *name, void *test_fn);
   return (int)tur_test_register((const char *)name, (void *)test_fn);
   ```)
@@ -126,7 +126,7 @@
 ;;; Returns:
 ;;;   0 if all tests passed, non-zero if any failed.
 
-(defn run-tests! [] :int
+(defn run-tests! [] : int
   ```c extern int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
   ```)

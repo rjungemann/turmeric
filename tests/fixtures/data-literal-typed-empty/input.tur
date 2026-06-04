@@ -3,7 +3,7 @@
 ;; collection's element type, so an empty `[]:int` / `#set{}:int`
 ;; recovers its element type without a verbose `(:: (vec-new) (Vec int))`
 ;; ascription.  Desugars to `(:: <literal> (Vec T))` / `(:: <literal> (Set T))`.
-(defn main [] :int
+(defn main [] : int
   ;; []:int -- empty typed vec; .eq? dispatch recovers Eq[Vec[int]]
   (let [a []:int
         b []:int

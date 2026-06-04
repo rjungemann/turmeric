@@ -41,10 +41,10 @@
     contract-enabled?
     set-contract-handler!
     with-contract-handler)
-  (defn contract-enabled? [] :bool true)
-  (defn tur-contract-check [condition :bool msg :cstr] :void ```c if (!condition) { tur_panic((const char*)msg); }
+  (defn contract-enabled? [] : bool true)
+  (defn tur-contract-check [condition : bool msg : cstr] : void ```c if (!condition) { tur_panic((const char*)msg); }
   ```)
-  (defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void ```c typedef bool (*pred_fn)(int64_t);
+  (defn tur-contract-check-inv [obj : int pred : int msg : cstr] : void ```c typedef bool (*pred_fn)(int64_t);
   pred_fn f = (pred_fn)(intptr_t)pred;
   if (!f(obj)) { tur_panic((const char*)msg); }
   ```)
@@ -61,10 +61,10 @@
     (tur-contract-check-inv obj predicate "Invariant failed"))
   (defmacro invariant-msg! [obj predicate msg]
     (tur-contract-check-inv obj predicate msg))
-  (defn set-contract-handler! [handler :int] :void ```c extern void tur_set_contract_handler(void (*h)(const char*));
+  (defn set-contract-handler! [handler : int] : void ```c extern void tur_set_contract_handler(void (*h)(const char*));
   tur_set_contract_handler((void (*)(const char*))(intptr_t)handler);
   ```)
-  (defn with-contract-handler [h :int body :int] :int ```c extern void tur_set_contract_handler(void (*h)(const char*));
+  (defn with-contract-handler [h : int body : int] : int ```c extern void tur_set_contract_handler(void (*h)(const char*));
   extern void* tur_get_contract_handler(void);
   void* prev = tur_get_contract_handler();
   tur_set_contract_handler((void (*)(const char*))(intptr_t)h);

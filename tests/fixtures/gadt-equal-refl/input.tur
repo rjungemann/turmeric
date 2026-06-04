@@ -1,6 +1,6 @@
 (defgadt Equal [a b]
   (Refl : (Equal a a)))
 
-(defn main [] :int
+(defn main [] : int
   (match (Refl)
     (Refl) (do (println 1) 0)))

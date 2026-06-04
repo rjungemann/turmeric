@@ -1,0 +1,5 @@
+;; Compound type forms in param-type position.  The reader already
+;; emits F_TYPE_ANN for both spaced and fused-with-paren forms; the
+;; rewriter only needs to space leading-colon keyword tokens.
+
+(defn apply1 [f :(-> int int)] :int (f 0))

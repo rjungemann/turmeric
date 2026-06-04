@@ -1,13 +1,13 @@
 ; IT4: three-way union match dispatch.
 ; Verifies correct tag assignment for (int | bool | cstr) unions.
 
-(defn classify [x : (int | bool | cstr)] :int
+(defn classify [x : (int | bool | cstr)] : int
   (match x
     (n : int)  1
     (b : bool) 2
     (s : cstr) 3))
 
-(defn main [] :int
+(defn main [] : int
   (println (classify 99))
   (println (classify false))
   (println (classify "hi"))

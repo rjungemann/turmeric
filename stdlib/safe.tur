@@ -9,7 +9,7 @@
 ;; remain globally visible without explicit import.
 (defmodule tur/safe
   (export array-get array-set array-slice with-c-string from-c-string box unbox)
-  (defn array-get [arr :ptr<void> idx :int] :ptr ```c struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  (defn array-get [arr : ptr<void> idx : int] : ptr ```c struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
     opt->is_some = true;
@@ -20,28 +20,28 @@
   }
   return opt;
   ```)
-  (defn array-set [arr :ptr<void> idx :int value :int] :int ```c int64_t *array = (int64_t *)arr;
+  (defn array-set [arr : ptr<void> idx : int value : int] : int ```c int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
     array[idx] = value;
     return 1;
   }
   return 0;
   ```)
-  (defn array-slice [arr :ptr<void> start :int len :int] :ptr ```c /* For v1, we return a new struct containing ptr and len */
+  (defn array-slice [arr : ptr<void> start : int len : int] : ptr ```c /* For v1, we return a new struct containing ptr and len */
   struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
   slice->ptr = (char *)arr + start * sizeof(int64_t);
   slice->len = len;
   return slice;
   ```)
-  (defn with-c-string [s :cstr f :ptr] :ptr ```c /* For v1, we just call f with s directly since cstr is already a C string */
+  (defn with-c-string [s : cstr f : ptr] : ptr ```c /* For v1, we just call f with s directly since cstr is already a C string */
   int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
   return (void *)(intptr_t)fn(s);
   ```)
-  (defn from-c-string [s :cstr] :cstr s)
-  (defn box [v :int] :ptr ```c int64_t *boxed = malloc(sizeof(int64_t));
+  (defn from-c-string [s : cstr] : cstr s)
+  (defn box [v : int] : ptr ```c int64_t *boxed = malloc(sizeof(int64_t));
   *boxed = v;
   return boxed;
   ```)
-  (defn unbox [p :ptr] :int ```c int64_t *boxed = (int64_t *)p;
+  (defn unbox [p : ptr] : int ```c int64_t *boxed = (int64_t *)p;
   return *boxed;
   ```))

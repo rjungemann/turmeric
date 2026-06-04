@@ -4,7 +4,7 @@
 (defeffect Read [] :int)
 
 
-(defn effect-parser-smoke [] :int
+(defn effect-parser-smoke [] : int
   (do
     (handle 41
       (Read [] k) 0)

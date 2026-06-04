@@ -2,10 +2,10 @@
 ; by a closure; the ref's auto-defer fires when the ref's let-scope exits
 ; (after the closure has completed), proving the defer ordering is correct.
 
-(defn main [] :int
+(defn main [] : int
   (let [r (ref 42)]
     (defer (println "ref-scope-exiting"))
     (let [v @r]
-      (let [f (fn [] :int v)]
+      (let [f (fn [] : int v)]
         (println (f)))))
   0)

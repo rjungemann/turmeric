@@ -8,11 +8,11 @@
     __TUR_TY_T__ v = x;
     return (__TUR_TY_T__)(v * v);
     ```)
-  (defn square-float [x :float] :float
+  (defn square-float [x : float] : float
     (square x))
-  (defn square-int [x :int] :int
+  (defn square-int [x : int] : int
     (square x))
-  (defn main [] :int
+  (defn main [] : int
     (let [f (square-float 4.0)
           i (square-int 5)]
       (println f)

@@ -10,7 +10,7 @@
 
 ;; dup-str -- allocate a fresh copy of s, so the result is a DISTINCT pointer
 ;; from any literal with the same text.
-(defn dup-str [s :cstr] :cstr
+(defn dup-str [s : cstr] : cstr
   ```c const char *src = (const char *)(intptr_t)s;
   size_t n = 0; while (src[n]) n++;
   char *d = (char *)malloc(n + 1);
@@ -18,7 +18,7 @@
   return (const char *)d;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [m  #map{"name" 1 "age" 2}
         ;; update "name" through a distinct-pointer copy -> replace, not insert
         m2 (map-assoc m (dup-str "name") 99)

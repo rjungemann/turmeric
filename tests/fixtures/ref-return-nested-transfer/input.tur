@@ -5,7 +5,7 @@
         (return tmp))
       (ref 0))))
 
-(defn main [] :int
+(defn main [] : int
   (make-ref)
   (println 0)
   0)

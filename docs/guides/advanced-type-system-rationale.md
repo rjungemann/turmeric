@@ -131,11 +131,11 @@ first-class.
 
 ```turmeric
 ;; Typed: this function may perform Io and nothing else.
-(defn read-file [path :cstr] :cstr @ {Io}
+(defn read-file [path : cstr] : cstr @ {Io}
   ...)
 
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
-(defn ask-and-add [x :int] :int @ {Ask | e}
+(defn ask-and-add [x : int] : int @ {Ask | e}
   (+ x (perform (Ask))))
 ```
 ```sweet-exp
@@ -174,14 +174,14 @@ separate features but modes of the existing continuation representation.
 
 ```turmeric
 ;; Union: a value that may be int, cstr, or bool.
-(defn print-any [x :(int | cstr | bool)] :unit
+(defn print-any [x :(int | cstr | bool)] : unit
   (match x
     (i :int)  (println i)
     (s :cstr) (println s)
     (b :bool) (println (if b "true" "false"))))
 
 ;; Intersection: a value that is both Serializable and Printable.
-(defn log-and-save [^Serializable ^Printable x :a] :unit ...)
+(defn log-and-save [^Serializable ^Printable x : a] : unit ...)
 ```
 ```sweet-exp
 ;; Union: a value that may be int, cstr, or bool.
@@ -335,10 +335,10 @@ caller is allowed to do with it.
 
 ```turmeric
 ;; A boxed value paired with evidence that its type implements Show.
-(defn box-it [x :a] :(exists [a] [(Show a)] a)
+(defn box-it [x : a] :(exists [a] [(Show a)] a)
   (pack x (exists [a] [(Show a)] a)))
 
-(defn print-it [e :(exists [a] [(Show a)] a)] :unit
+(defn print-it [e :(exists [a] [(Show a)] a)] : unit
   (open e [x] (println (show x))))
 ```
 ```sweet-exp

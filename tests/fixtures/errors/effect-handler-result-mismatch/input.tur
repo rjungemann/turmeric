@@ -1,6 +1,6 @@
 ;; ET3-F5: Handler clause result type mismatch triggers TUR-E0252.
 (defeffect Write [s :cstr] :nil)
-(defn main [] :int
+(defn main [] : int
   (handle
     (do (perform (Write "x")) 0)
     (Write [s] k) "wrong type"))

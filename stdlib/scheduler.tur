@@ -24,7 +24,7 @@
 ;;;   (scheduler-new)  ; => sched-ptr
 ;;;
 ;;; Since: Phase T21
-(defn scheduler-new [] :ptr<void>
+(defn scheduler-new [] : ptr<void>
   ```c TurScheduler *s = tur_scheduler_new();
   if (tur_scheduler) { fprintf(stderr, "scheduler-new: only one scheduler supported\n"); abort(); }
   tur_scheduler = s;
@@ -41,7 +41,7 @@
 ;;;
 ;;; Since: Phase T21
 
-(defn scheduler-current [] :ptr<void>
+(defn scheduler-current [] : ptr<void>
   ```c return (void *)tur_scheduler_current();
   ```)
 ;; Spawn a fiber on the scheduler's run queue.
@@ -56,7 +56,7 @@
 ;;;
 ;;; Since: Phase T21
 
-(defn scheduler-spawn [sched :ptr<void> f :ptr<void>] :nil
+(defn scheduler-spawn [sched : ptr<void> f : ptr<void>] : nil
   ```c tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
   ```)
 ;; Run the scheduler event loop until queue is empty.
@@ -70,7 +70,7 @@
 ;;;
 ;;; Since: Phase T21
 
-(defn scheduler-run [sched :ptr<void>] :nil
+(defn scheduler-run [sched : ptr<void>] : nil
   ```c tur_scheduler_run((TurScheduler *)sched);
   ```)
 ;; Run the scheduler until all fibers in the queue complete.
@@ -84,7 +84,7 @@
 ;;;
 ;;; Since: Phase T21
 
-(defn scheduler-run-to-completion [sched :ptr<void>] :nil
+(defn scheduler-run-to-completion [sched : ptr<void>] : nil
   ```c tur_scheduler_run_to_completion((TurScheduler *)sched);
   ```)
 ;; Schedule a callback to be invoked after a delay (milliseconds).
@@ -102,6 +102,6 @@
 ;;;
 ;;; Since: Phase T21
 
-(defn scheduler-timeout [ms :int cb :ptr<void> arg :ptr<void>] :nil
+(defn scheduler-timeout [ms : int cb : ptr<void> arg : ptr<void>] : nil
   ```c tur_scheduler_timeout((int64_t)ms, (void (*)(void *))cb, arg);
   ```)

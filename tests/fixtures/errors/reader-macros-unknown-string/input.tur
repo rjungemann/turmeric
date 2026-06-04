@@ -1,5 +1,5 @@
 ; #name"..." with no matching registration: the reader emits a targeted
 ; diagnostic rather than silently falling through to "unexpected character".
-(defn main [] :int
+(defn main [] : int
   (println #json"some body")
   0)

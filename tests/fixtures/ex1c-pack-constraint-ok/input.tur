@@ -1,17 +1,17 @@
 ; Phase EX1c: pack with a constraint vector resolves a typeclass witness at
 ; the pack site.  int has a (local) Show instance, so this must type-check.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [e (pack 42 (exists [a] [(Show a)] a))]
     (println "ok"))
   0)

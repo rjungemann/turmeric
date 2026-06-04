@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (unsafe
     (let [arr (raw-malloc 16)]
       (array-set-unchecked arr 0 42)

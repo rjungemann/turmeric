@@ -3,7 +3,7 @@
 ;; Demonstrates that (definstance Clone [Pr] ...) can deep-copy a Pr
 ;; struct value into a heap-allocated copy and return a pointer as int64_t.
 
-(defstruct Pr [first :int second :int])
+(defstruct Pr [first : int second : int])
 
 ;; Clone typeclass and Clone [int] are provided by stdlib (auto-loaded).
 
@@ -11,7 +11,7 @@
 ;; return the result as an int64_t pointer.  x has type Pr (struct value)
 ;; inside the generated C function, so field access uses x.first / x.second.
 (definstance Clone [Pr]
-  (clone [x] :int
+  (clone [x] : int
     ```c
     struct { int64_t first; int64_t second; } *dst = malloc(sizeof(Pr));
     dst->first = x.first;
@@ -20,19 +20,19 @@
     ```))
 
 ;; Accessors for a heap-allocated Pr pointer (returned by Clone.clone).
-(defn heap-pair-first [p] :int
+(defn heap-pair-first [p] : int
   ```c
   struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
   return pair->first;
   ```)
 
-(defn heap-pair-second [p] :int
+(defn heap-pair-second [p] : int
   ```c
   struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
   return pair->second;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ;; Clone a Pr(10, 20) and verify the copy has the same fields (sum = 30).
   (let [p (make-struct Pr 10 20)]
     (let [p2 (.clone p)]

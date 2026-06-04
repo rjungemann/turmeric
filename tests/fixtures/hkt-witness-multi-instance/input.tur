@@ -4,10 +4,10 @@
 ;; producing correct output for both types through erased-type receivers.
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
 ;; Option helpers
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -15,21 +15,21 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_some? [o] :bool
+(defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int64_t)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -41,7 +41,7 @@
   ```)
 
 ;; Vec helpers (minimal single-element vec)
-(defn __vec_of [x] :int
+(defn __vec_of [x] : int
   ```c
   struct { int64_t len; int64_t item; } *r = malloc(sizeof(*r));
   r->len = 1;
@@ -49,14 +49,14 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __vec_get0 [v] :int
+(defn __vec_get0 [v] : int
   ```c
   struct { int64_t len; int64_t item; } *p =
       (struct { int64_t len; int64_t item; } *)(intptr_t)v;
   return p->item;
   ```)
 
-(defn __fmap_vec [container fn] :int
+(defn __fmap_vec [container fn] : int
   ```c
   struct { int64_t len; int64_t item; } *c =
       (struct { int64_t len; int64_t item; } *)(intptr_t)container;
@@ -72,14 +72,14 @@
 (definstance TestFunctor [vec]
   (fmap [c f] (__fmap_vec c f)))
 
-(defn add5 [x] :int (+ x 5))
-(defn twice [x] :int (* x 2))
+(defn add5 [x] : int (+ x 5))
+(defn twice [x] : int (* x 2))
 
 ;; Both return :int (erased type).
-(defn mk-opt [] :int (__opt_some 10))
-(defn mk-vec [] :int (__vec_of 7))
+(defn mk-opt [] : int (__opt_some 10))
+(defn mk-vec [] : int (__vec_of 7))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; @option witness -> TestFunctor[option]: fmap add5 (some 10) => some 15
     (let [o (mk-opt)]

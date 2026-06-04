@@ -3,20 +3,20 @@
 ;; Foo has no Clone instance, so capturing it is an error.
 
 (defclass Clone [a]
-  (clone [x] :int))
+  (clone [x] : int))
 
 (definstance Clone [int]
   (clone [x] x))
 
 ;; Foo: a struct with no Clone instance
-(defstruct Foo :copy [x :int])
+(defstruct Foo :copy [x : int])
 
-(defn k-discard [k] :int 0)
+(defn k-discard [k] : int 0)
 
-(defn test [] :int
+(defn test [] : int
   (let [foo (make-struct Foo 42)]
     (cloneable-reset
       (cloneable-shift k-discard foo))))
 
-(defn main [] :int
+(defn main [] : int
   (test))

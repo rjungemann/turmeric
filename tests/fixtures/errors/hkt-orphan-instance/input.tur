@@ -6,4 +6,4 @@
   (import tc/functor)
   (definstance TestFunctor [option]
     (fmap [container fn] 0))
-  (defn main [] :int 0))
+  (defn main [] : int 0))

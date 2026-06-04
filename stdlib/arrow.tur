@@ -49,7 +49,7 @@
 ;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,
 ;;; return a new heap Tuple2 *.  Used by arrow-first.
 
-(defn __arrow_pair_first [fv p] :int
+(defn __arrow_pair_first [fv p] : int
   ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
   Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
   r->e1 = TUR_APPLY1(fv, src->e1);
@@ -59,7 +59,7 @@
 ;;; __arrow_pair_second -- inline-C: apply fv to e2 of a heap Tuple2 *p,
 ;;; return a new heap Tuple2 *.  Used by arrow-second.
 
-(defn __arrow_pair_second [fv p] :int
+(defn __arrow_pair_second [fv p] : int
   ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
   Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
   r->e1 = src->e1;
@@ -68,7 +68,7 @@
   ```)
 ;;; __arrow_pair_par -- inline-C: apply fv to e1 and gv to e2 of *p.
 
-(defn __arrow_pair_par [fv gv p] :int
+(defn __arrow_pair_par [fv gv p] : int
   ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
   Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
   r->e1 = TUR_APPLY1(fv, src->e1);
@@ -77,7 +77,7 @@
   ```)
 ;;; __arrow_pair_split -- inline-C: produce a heap Tuple2 from (fv x, gv x).
 
-(defn __arrow_pair_split [fv gv x] :int
+(defn __arrow_pair_split [fv gv x] : int
   ```c Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
   r->e1 = TUR_APPLY1(fv, x);
   r->e2 = TUR_APPLY1(gv, x);
@@ -85,7 +85,7 @@
   ```)
 ;;; __arrow_pair_dup -- inline-C: produce a heap Tuple2 with both fields = x.
 
-(defn __arrow_pair_dup [x] :int
+(defn __arrow_pair_dup [x] : int
   ```c Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
   r->e1 = x;
   r->e2 = x;
@@ -175,4 +175,4 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn arrow-dup [x] :int (__arrow_pair_dup x))
+(defn arrow-dup [x] : int (__arrow_pair_dup x))

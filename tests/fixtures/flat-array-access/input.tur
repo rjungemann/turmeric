@@ -2,25 +2,25 @@
 ;; index(x, y) = y * width + x
 ;; Used as the foundation for GridCtx in CA2.
 
-(defn flat-new [n] :int
+(defn flat-new [n] : int
   ```c
   return (int64_t)(intptr_t)calloc((size_t)n, sizeof(int64_t));
   ```)
 
-(defn flat-get [arr x y width] :int
+(defn flat-get [arr x y width] : int
   ```c
   int64_t *a = (int64_t *)(intptr_t)arr;
   return a[y * width + x];
   ```)
 
-(defn flat-set [arr x y width val] :int
+(defn flat-set [arr x y width val] : int
   ```c
   int64_t *a = (int64_t *)(intptr_t)arr;
   a[y * width + x] = val;
   return 0;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [w 4
         h 3
         arr (flat-new (* w h))]

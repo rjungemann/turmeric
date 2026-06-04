@@ -1,5 +1,5 @@
 ;; UT1: a ^unique value may be silently dropped (weakening is allowed).
 ;; Unlike linear types, there is no error when a unique value goes out of scope unused.
-(defn main [] :int
+(defn main [] : int
   (let [^unique x 42]
     0))

@@ -10,7 +10,7 @@
 ;; lambda that gets auto-boxed at the call site -- it exercises the helper's fat
 ;; dispatch of an already-fat box.
 
-(defn main [] :int
+(defn main [] : int
   (let [k   1000
         cmp (fn [a b] (= (+ a k) (+ b k)))]   ;; capturing comparator (== semantics)
     ;; option-eq? (raw :int handles)

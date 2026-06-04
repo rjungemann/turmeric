@@ -6,23 +6,23 @@
 
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container fn] : int))
 
-(defn __opt_some [x] :int
+(defn __opt_some [x] : int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true; r->value = x;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __opt_unwrap [o] :int
+(defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
   return (int)(p->value);
   ```)
 
-(defn __fmap_option [container fn] :int
+(defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -37,13 +37,13 @@
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; No explicit ^f: kind is inferred from the .fmap usage.
-(defn map-and-add [container fn addend] :int
+(defn map-and-add [container fn addend] : int
   (let [mapped (.fmap container fn)]
     (+ (__opt_unwrap mapped) addend)))
 
-(defn negate [x] :int (- 0 x))
+(defn negate [x] : int (- 0 x))
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; map-and-add (some 10) negate 3 => (-10 + 3) = -7
     (let [opt (__opt_some 10)]

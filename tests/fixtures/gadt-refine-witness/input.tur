@@ -7,12 +7,12 @@
   (WInt  : (Witness int))
   (WBool : (Witness bool)))
 
-(defn wit-double [w :Witness v :a] :int
+(defn wit-double [w : Witness v : a] : int
   (match w
     (WInt)  (* v 2)
     (WBool) 0))
 
-(defn main [] :int
+(defn main [] : int
   (println (wit-double (WInt) 21))
   (println (wit-double (WBool) 1))
   0)

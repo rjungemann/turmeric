@@ -4,5 +4,5 @@
 (defmodule math-facade
   (import math-internal :refer [mul2 mul3])
   (export twice thrice)
-  (defn twice [x] :int (mul2 x))
-  (defn thrice [x] :int (mul3 x)))
+  (defn twice [x] : int (mul2 x))
+  (defn thrice [x] : int (mul3 x)))

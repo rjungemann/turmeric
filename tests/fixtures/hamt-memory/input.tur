@@ -3,14 +3,14 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn alloc-int [x :int] :ptr
+(defn alloc-int [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
   return (void *)p;
   ```)
 
-(defn test-memory [] :int
+(defn test-memory [] : int
   (let [k1 (alloc-int 1)]
     (let [k2 (alloc-int 2)]
       (let [v1 (alloc-int 10)]

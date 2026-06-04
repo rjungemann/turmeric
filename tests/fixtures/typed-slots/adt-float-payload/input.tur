@@ -9,9 +9,9 @@
   (NothingF))
 
 ;; Pass the ADT through a generic int boundary; the heap pointer is intact.
-(defn passthrough [x :int] :int x)
+(defn passthrough [x : int] : int x)
 
-(defn main [] :int
+(defn main [] : int
   ;; Direct match: JustF payload should be 1.5.
   (match (JustF 1.5)
     (JustF x)  (println x)

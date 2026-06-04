@@ -10,7 +10,7 @@
 ;; This probe is self-contained (no stdlib container dependency) so it pins the
 ;; technique in isolation. See docs/typed-collection-elements-plan.md (TCE0).
 
-(defn box-new [] :int
+(defn box-new [] : int
   ```c
   int64_t *buf = (int64_t *)malloc(sizeof(int64_t) * 8);
   return (int64_t)(intptr_t)buf;
@@ -28,7 +28,7 @@
   return buf[i];
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [b (box-new)]
     ;; :float element -- bits survive the carrier crossing
     (box-set! b 0 1.5)

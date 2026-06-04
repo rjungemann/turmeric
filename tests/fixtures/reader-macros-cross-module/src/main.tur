@@ -8,6 +8,6 @@
 (defmodule main
   (import lib/syntax)          ; registers #sum / #pi
   (import lib/user :refer [answer])  ; uses #sum -- compiles thanks to T1
-  (defn main [] :int
+  (defn main [] : int
     (println (answer))         ; 15
     0))

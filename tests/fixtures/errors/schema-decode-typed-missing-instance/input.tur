@@ -5,10 +5,10 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defstruct User :copy [name :cstr age :int])
-(defstruct Widget :copy [id :int])
+(defstruct User :copy [name : cstr age : int])
+(defstruct Widget :copy [id : int])
 
-(defn user-schema [] :int
+(defn user-schema [] : int
   (schema/field (schema/object-new) "name" (schema/str)))
 
 (definstance HasSchema [User]
@@ -16,7 +16,7 @@
     (let [v (schema-decode! (user-schema) node)]
       (make-struct User (json/get-string (json/get! v "name")) 0))))
 
-(defn main [] :int
+(defn main [] : int
   ;; No (HasSchema Widget) instance exists.
   (let [w (:: (decode! (json/decode "{}")) Widget)]
     (println (.id w)))

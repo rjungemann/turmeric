@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   (do
     #map{x 1}
     0))

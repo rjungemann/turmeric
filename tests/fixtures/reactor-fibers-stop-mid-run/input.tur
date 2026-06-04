@@ -12,30 +12,30 @@
 
 (load "stdlib/reactor.tur")
 
-(defn say [msg :cstr] :nil
+(defn say [msg : cstr] : nil
   ```c printf("%s\n", (const char *)msg); ```)
 
-(defn print-ran [n :int] :nil
+(defn print-ran [n : int] : nil
   ```c printf("ran=%lld\n", (long long)n); ```)
 
-(defn null-ptr [] :ptr<void>
+(defn null-ptr [] : ptr<void>
   ```c return NULL; ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r (reactor-new)
         g (local-fiber-group-new r)]
     ;; First fiber: stop the pump mid-tick.
     (local-spawn g
-      (fn [user] :nil
+      (fn [user] : nil
         (say "first stopped")
         (reactor-stop r))
       (null-ptr))
     ;; These two are queued behind it and must NOT run.
     (local-spawn g
-      (fn [user] :nil (say "second -- should not run"))
+      (fn [user] : nil (say "second -- should not run"))
       (null-ptr))
     (local-spawn g
-      (fn [user] :nil (say "third -- should not run"))
+      (fn [user] : nil (say "third -- should not run"))
       (null-ptr))
     (print-ran (reactor-run-fibers g))
     (local-fiber-group-free g)

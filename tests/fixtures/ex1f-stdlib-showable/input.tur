@@ -3,10 +3,10 @@
 ; locally (the stdlib typeclass is load-on-demand), loads the helpers,
 ; and verifies the roundtrip prints the inner int.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
@@ -15,7 +15,7 @@
 
 (load "stdlib/existential.tur")
 
-(defn main [] :int
+(defn main [] : int
   (let [e (showable 42)]
     (println (show-it e)))
   0)

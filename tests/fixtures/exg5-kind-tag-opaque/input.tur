@@ -4,29 +4,29 @@
 ; inline-C lets us check the layout-tag bytes written by the kinded
 ; allocator without any user-visible API for them.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn kind-tag [e :ptr<void>] :int
+(defn kind-tag [e : ptr<void>] : int
   ```c
   RcControlBlock *cb = (RcControlBlock *)e;
   return (int64_t)cb->reserved[0];
   ```)
 
-(defn payload-tag [e :ptr<void>] :int
+(defn payload-tag [e : ptr<void>] : int
   ```c
   RcControlBlock *cb = (RcControlBlock *)e;
   return (int64_t)cb->reserved[1];
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [e1 (pack 42 (exists [a] [(Show a)] a))
         e2 (rc/clone e1)]
     (println (kind-tag e1))

@@ -3,10 +3,10 @@
 ;; (all kind * types) compile and run correctly alongside the kind infrastructure.
 
 (defclass MyEq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (defclass MyNum [a]
-  (add [x y] :int))
+  (add [x y] : int))
 
 (definstance MyEq [int]
   (eq? [x y] (= x y)))
@@ -14,7 +14,7 @@
 (definstance MyNum [int]
   (add [x y] (+ x y)))
 
-(defn main [] :int
+(defn main [] : int
   (do
     (println (.eq? 1 1))
     (println (.eq? 1 2))

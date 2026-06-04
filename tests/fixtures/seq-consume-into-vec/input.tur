@@ -3,7 +3,7 @@
 
 (load "stdlib/seq/consume.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [v (seq/into-vec (seq/range 0 5))]
     (println (seq-vec-len v))
     (let [^mut i 0]

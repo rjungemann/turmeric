@@ -1360,6 +1360,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
         Form *ret_f = call->as.list.items[body_start];
+        /* Spaced `: T` where T is a single symbol or keyword: treat as if
+         * fused so the full F_KEYWORD lookup ladder (alias / ADT / struct /
+         * sized prim / type-param / opaque-fallback) runs.  Compound
+         * `: (-> a b)` etc. still falls through to the F_TYPE_ANN branch. */
+        if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+            (ret_f->as.list.items[0]->tag == F_KEYWORD ||
+             ret_f->as.list.items[0]->tag == F_SYM)) {
+            Form *inner = ret_f->as.list.items[0];
+            ret_f = inner;
+            if (ret_f->tag == F_SYM) {
+                Form *kf = (Form *)arena_alloc(e->arena, sizeof(Form));
+                *kf = *ret_f;
+                kf->tag = F_KEYWORD;
+                ret_f = kf;
+            }
+        }
         if (ret_f->tag == F_KEYWORD) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;
@@ -2659,6 +2675,22 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
         Form *ret_f = call->as.list.items[body_start];
+        /* Spaced `: T` where T is a single symbol or keyword: treat as if
+         * fused so the full F_KEYWORD lookup ladder (alias / ADT / struct /
+         * sized prim / type-param / opaque-fallback) runs.  Compound
+         * `: (-> a b)` etc. still falls through to the F_TYPE_ANN branch. */
+        if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+            (ret_f->as.list.items[0]->tag == F_KEYWORD ||
+             ret_f->as.list.items[0]->tag == F_SYM)) {
+            Form *inner = ret_f->as.list.items[0];
+            ret_f = inner;
+            if (ret_f->tag == F_SYM) {
+                Form *kf = (Form *)arena_alloc(e->arena, sizeof(Form));
+                *kf = *ret_f;
+                kf->tag = F_KEYWORD;
+                ret_f = kf;
+            }
+        }
         if (ret_f->tag == F_KEYWORD) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;

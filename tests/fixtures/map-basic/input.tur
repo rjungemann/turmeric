@@ -1,13 +1,13 @@
 ;;
 ;; Phase TM0: tmap basic operations test
 
-(defn test-empty [] :int
+(defn test-empty [] : int
   (let [m (:: (map-new) (Map int int))]
     (let [c (map-count m)]
       (map-free m)
       c)))
 
-(defn test-assoc-get [] :int
+(defn test-assoc-get [] : int
   (let [m (:: (map-new) (Map int int))]
     (let [m2 (map-assoc m 42 100)]
       (let [v (map-get m2 42)]
@@ -15,7 +15,7 @@
         (map-free m2)
         v))))
 
-(defn test-has [] :int
+(defn test-has [] : int
   (let [m (:: (map-new) (Map int int))]
     (let [m2 (map-assoc m 7 999)]
       (let [found (map-has? m2 7)]
@@ -23,7 +23,7 @@
         (map-free m2)
         (if found 1 0)))))
 
-(defn test-count [] :int
+(defn test-count [] : int
   (let [m (:: (map-new) (Map int int))]
     (let [m2 (map-assoc m 1 10)]
       (let [m3 (map-assoc m2 2 20)]
@@ -33,7 +33,7 @@
           (map-free m3)
           c)))))
 
-(defn test-dissoc [] :int
+(defn test-dissoc [] : int
   (let [m (:: (map-new) (Map int int))]
     (let [m2 (map-assoc m 5 50)]
       (let [m3 (map-dissoc m2 5)]
@@ -43,7 +43,7 @@
           (map-free m3)
           c)))))
 
-(defn test-merge [] :int
+(defn test-merge [] : int
   (let [a (:: (map-new) (Map int int))]
     (let [b (:: (map-new) (Map int int))]
       (let [a2 (map-assoc a 1 10)]

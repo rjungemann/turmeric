@@ -3,12 +3,12 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a :ptr b :ptr] :bool
+(defn ptr= [a : ptr b : ptr] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-int [x :int] :ptr
+(defn alloc-int [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
@@ -16,7 +16,7 @@
   ```)
 
 ;; Test: delete present key
-(defn test-del-present [] :int
+(defn test-del-present [] : int
   (let [k1 (alloc-int 42)]
     (let [v1 (alloc-int 100)]
       (let [m1 (hamt/new)]
@@ -33,7 +33,7 @@
                   (if (and (not has) (= c 0)) 1 0))))))))))
 
 ;; Test: delete absent key - count unchanged
-(defn test-del-absent [] :int
+(defn test-del-absent [] : int
   (let [k1 (alloc-int 42)]
     (let [k2 (alloc-int 43)]
       (let [v1 (alloc-int 100)]
@@ -53,7 +53,7 @@
                       (if (and (= c2 1) (= c3 1)) 1 0))))))))))))
 
 ;; Test: delete then re-insert
-(defn test-del-reinsert [] :int
+(defn test-del-reinsert [] : int
   (let [k1 (alloc-int 42)]
     (let [v1 (alloc-int 100)]
       (let [v2 (alloc-int 200)]

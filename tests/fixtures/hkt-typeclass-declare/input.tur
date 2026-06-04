@@ -4,9 +4,9 @@
 ;; succeeds without error.
 
 (defclass MyFunctor [^f]
-  (fmap [x] :int))
+  (fmap [x] : int))
 
 (defclass MyBifunctor [^f ^g]
-  (bimap [x y] :int))
+  (bimap [x y] : int))
 
-(defn main [] :int 0)
+(defn main [] : int 0)

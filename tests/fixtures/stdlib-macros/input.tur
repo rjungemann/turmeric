@@ -1,6 +1,6 @@
 ;; Test fixture for stdlib macros (when, unless, cond)
 
-(defn main [] :int
+(defn main [] : int
   ;; Test when macro
   (when true (println "when-true"))  ;; Should print "when-true"
   (when false (println "when-false"))  ;; Should not print

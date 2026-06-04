@@ -30,9 +30,9 @@
 ;;;   (async-socket-listen 8080 128)  ; => 4
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-listen [port :int backlog :int]
+(defn async-socket-listen [port : int backlog : int]
   #{Unsafe}
-  :int
+  : int
   ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int opt = 1;
@@ -71,9 +71,9 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-accept [listen-fd :int]
+(defn async-socket-accept [listen-fd : int]
   #{Unsafe}
-  :int
+  : int
   ```c while (1) {
     int cfd = accept((int)listen_fd, NULL, NULL);
     if (cfd >= 0) {
@@ -112,9 +112,9 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-connect [host :cstr port :int]
+(defn async-socket-connect [host : cstr port : int]
   #{Unsafe}
-  :int
+  : int
   ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int flags = fcntl(fd, F_GETFL, 0);
@@ -160,9 +160,9 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-send [fd :int data :cstr len :int]
+(defn async-socket-send [fd : int data : cstr len : int]
   #{Unsafe}
-  :int
+  : int
   ```c int64_t total = 0;
   while (total < len) {
     ssize_t n = send((int)fd, data + total, (size_t)(len - total), 0);
@@ -202,9 +202,9 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-recv [fd :int buf-size :int]
+(defn async-socket-recv [fd : int buf-size : int]
   #{Unsafe}
-  :int
+  : int
   ```c char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
   while (1) {
@@ -242,7 +242,7 @@
 
 (defn async-socket-recv-buf []
   #{Unsafe}
-  :ptr<void>
+  : ptr<void>
   ```c if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51C50C0);
   ```)
@@ -259,7 +259,7 @@
 
 (defn async-socket-recv-len []
   #{Unsafe}
-  :int
+  : int
   ```c if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51C50C1);
   ```)
@@ -274,9 +274,9 @@
 ;;;
 ;;; Since: Phase T24
 
-(defn async-socket-close [fd :int]
+(defn async-socket-close [fd : int]
   #{Unsafe}
-  :nil
+  : nil
   ```c tur_io_unregister((int)fd);
   close((int)fd);
   ```)

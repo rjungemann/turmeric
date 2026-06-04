@@ -2,7 +2,7 @@
 ;; [V]-generic map ops. hamt-of infers V; map-get returns :V, read with `::`.
 ;; Heterogeneous values are rejected (see errors/tce3-map-heterogeneous-val).
 
-(defn main [] :int
+(defn main [] : int
   (let [m (hamt-of 1 "alpha" 2 "beta" 3 "gamma")
         f (hamt-of 100 0.25 200 0.5)]
     (println (:: (map-get m 1) :cstr))

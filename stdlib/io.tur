@@ -285,7 +285,7 @@
 ;;; Since: LT4
 
 
-(defstruct FileHandle :linear [ptr :ptr<void>])
+(defstruct FileHandle :linear [ptr : ptr<void>])
 ;;; file-open -- open a file and return a move-only FileHandle.
 ;;;
 ;;; Parameters:
@@ -301,7 +301,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn file-open [path mode] :FileHandle
+(defn file-open [path mode] : FileHandle
   ```c FileHandle fh;
   fh.ptr = (void*)fopen(path, mode);
   return fh;
@@ -319,7 +319,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn file-handle-ok? [fh : FileHandle] :bool
+(defn file-handle-ok? [fh : FileHandle] : bool
   ```c return fh.ptr != NULL;
   ```)
 ;;; file-read -- read up to len bytes from fh into buf.
@@ -337,7 +337,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn file-read [fh : FileHandle buf len] :int
+(defn file-read [fh : FileHandle buf len] : int
   ```c if (!fh.ptr) return -1;
   return (int)fread(buf, 1, len, (FILE*)fh.ptr);
   ```)
@@ -354,7 +354,7 @@
 ;;;
 ;;; Since: LT4
 
-(defn file-close [fh : FileHandle] :int
+(defn file-close [fh : FileHandle] : int
   ```c if (!fh.ptr) return -1;
   return fclose((FILE*)fh.ptr);
   ```)

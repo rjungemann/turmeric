@@ -1,6 +1,6 @@
 ;; cli-args-basic -- verify *args* contains passed CLI arguments.
 ;; Prints the first argument from *args* using the cons cell layout.
-(defn print-first-arg [lst :int] :void
+(defn print-first-arg [lst : int] : void
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *c = (struct __tur_cons *)(intptr_t)lst;

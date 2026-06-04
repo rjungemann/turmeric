@@ -5,7 +5,7 @@
   (Nope)
   (Yep a))
 
-(defn main [] :int
+(defn main [] : int
   (let [v (Yep 42)]
     (match v
       (Nope)   (println "none")

@@ -19,7 +19,7 @@
 ;;; returns a fresh void* generator.  Always create with seq-new.
 
 
-(defstruct Seq [mk :int])
+(defstruct Seq [mk : int])
 ;; -------------------------------------------------------------------
 ;; Internal allocation and invocation
 ;; -------------------------------------------------------------------
@@ -37,7 +37,7 @@
 ;;; Since: LZ0
 
 
-(defn seq-new [mk :int] :int
+(defn seq-new [mk : int] : int
   ```c int64_t *s = (int64_t *)malloc(sizeof(int64_t));
   s[0] = mk;
   return (int64_t)(intptr_t)s;
@@ -55,7 +55,7 @@
 ;;;
 ;;; Since: LZ0
 
-(defn seq-iter [s :int] :ptr<void>
+(defn seq-iter [s : int] : ptr<void>
   ```c int64_t mk = ((int64_t *)(intptr_t)s)[0];
   int64_t *fat = (int64_t *)(intptr_t)mk;
   int64_t fn_ptr = fat[0];
@@ -78,7 +78,7 @@
 ;;; Since: LZ0
 
 
-(defn seq-gen-done [g :ptr<void>] :bool
+(defn seq-gen-done [g : ptr<void>] : bool
   ```c typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
   return ((__seq_gen_hdr_t *)g)->__state == -1;
   ```)
@@ -97,7 +97,7 @@
 ;;;
 ;;; Since: LZ0
 
-(defn seq-gen-next [g :ptr<void>] :ptr<void>
+(defn seq-gen-next [g : ptr<void>] : ptr<void>
   ```c typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
   return ((__seq_gen_hdr_t *)g)->__next_fn(g);
   ```)
@@ -114,7 +114,7 @@
 ;;;
 ;;; Since: LZ0
 
-(defn seq-val-some? [v :ptr<void>] :bool
+(defn seq-val-some? [v : ptr<void>] : bool
   ```c return v != NULL;
   ```)
 ;;; seq-val-unwrap -- extract the int64_t value from a yield pointer.
@@ -130,7 +130,7 @@
 ;;;
 ;;; Since: LZ0
 
-(defn seq-val-unwrap [v :ptr<void>] :int
+(defn seq-val-unwrap [v : ptr<void>] : int
   ```c return *(int64_t *)v;
   ```)
 ;; -------------------------------------------------------------------
@@ -150,7 +150,7 @@
 ;;; Since: LZ0
 
 
-(defn seq-of [v :int] :int (seq-new (fn [] (gen [] (yield v)))))
+(defn seq-of [v : int] : int (seq-new (fn [] (gen [] (yield v)))))
 ;;; empty-seq -- construct a Seq that yields no values.
 ;;;
 ;;; Returns:
@@ -161,7 +161,7 @@
 ;;;
 ;;; Since: LZ0
 
-(defn empty-seq [] :int
+(defn empty-seq [] : int
   (let [_d 0]
     (seq-new (fn [] (let [_ignore _d] (gen [] (while false (yield 0))))))))
 ;; --- Vec helpers (no #{Unsafe} so usable inside gen bodies) ---
@@ -169,12 +169,12 @@
 ;;; seq-vec-get -- return element at index i in a vec without #{Unsafe}.
 
 
-(defn seq-vec-len [v :int] :int
+(defn seq-vec-len [v : int] : int
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
   return (int64_t)vec->len;
   ```)
 
-(defn seq-vec-get [v :int i :int] :int
+(defn seq-vec-get [v : int i : int] : int
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
   return vec->data[i];
   ```)
@@ -184,16 +184,16 @@
 ;;; seq-list-tail -- return the next pointer of the first Cons cell.
 
 
-(defn seq-list-nil? [lst :int] :bool
+(defn seq-list-nil? [lst : int] : bool
   ```c return lst == 0;
   ```)
 
-(defn seq-list-head [lst :int] :int
+(defn seq-list-head [lst : int] : int
   ```c struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)lst;
   return cell->value;
   ```)
 
-(defn seq-list-tail [lst :int] :int
+(defn seq-list-tail [lst : int] : int
   ```c struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)lst;
   return cell->next;
   ```)
@@ -213,7 +213,7 @@
 ;;;
 ;;; Since: LZ0
 
-(defn seq-from-vec [v :int] :int
+(defn seq-from-vec [v : int] : int
   (seq-new (fn []
              (let [^mut i 0]
                (gen []
@@ -234,7 +234,7 @@
 ;;;
 ;;; Since: LZ0
 
-(defn seq-from-list [l :int] :int
+(defn seq-from-list [l : int] : int
   (seq-new (fn []
              (let [^mut node l]
                (gen []

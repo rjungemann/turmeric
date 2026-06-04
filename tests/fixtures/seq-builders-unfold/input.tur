@@ -4,7 +4,7 @@
 (load "stdlib/seq/builders.tur")
 
 ;;; make-some-pair -- allocate Some(pair(val, next-seed)) for seq/unfold
-(defn make-some-pair [val :int nxt :int] :int
+(defn make-some-pair [val : int nxt : int] : int
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
   p->first = val; p->second = nxt;
@@ -15,7 +15,7 @@
   ```)
 
 ;;; make-none -- allocate None for seq/unfold
-(defn make-none [] :int
+(defn make-none [] : int
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = false;
@@ -23,7 +23,7 @@
   return (int64_t)(intptr_t)opt;
   ```)
 
-(defn main [] :void
+(defn main [] : void
   (let [limit 5
         f (fn [n] (if (< n limit) (make-some-pair n (+ n 1)) (make-none)))]
     (seq-for-each println (seq/unfold 0 f))))

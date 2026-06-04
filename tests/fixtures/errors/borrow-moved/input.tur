@@ -1,7 +1,7 @@
 ; Phase 12: Borrow of moved value
 ; Cannot borrow a value that has been moved
 
-(defn main [] :int
+(defn main [] : int
   (let [r (ref 42)]
     (let [s r]  ; s takes ownership of r
       (let [b (& r)]  ; ERROR: cannot borrow r because it was moved

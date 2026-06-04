@@ -2,7 +2,7 @@
 
 (load "stdlib/seq/transform.tur")
 
-(defn main [] :void
+(defn main [] : void
   (let [ten 10
         f (fn [i x] (+ (* i ten) x))]
     (seq-for-each println (seq/map-indexed f (seq/range 5 8)))))

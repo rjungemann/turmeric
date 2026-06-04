@@ -11,7 +11,7 @@
 ;; Layout: { pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
 ;;           int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap; }
 
-(defn chan-new [cap :int] :ptr<void>
+(defn chan-new [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -34,7 +34,7 @@
   return (void *)ch;
   ```)
 
-(defn chan-send [ch :ptr<void> val :int] :nil
+(defn chan-send [ch : ptr<void> val : int] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -51,7 +51,7 @@
   pthread_mutex_unlock(&c->lock);
   ```)
 
-(defn chan-recv [ch :ptr<void>] :int
+(defn chan-recv [ch : ptr<void>] : int
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -69,7 +69,7 @@
   return val;
   ```)
 
-(defn chan-free [ch :ptr<void>] :nil
+(defn chan-free [ch : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -86,7 +86,7 @@
 ;; -----------------------------------------------------------------------
 ;; Thread arg: { chan ptr, result slot }
 
-(defn targ-new [ch :ptr<void>] :ptr<void>
+(defn targ-new [ch : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *ch; int64_t result; } TArg;
   TArg *a = (TArg *)malloc(sizeof(TArg));
@@ -95,13 +95,13 @@
   return (void *)a;
   ```)
 
-(defn targ-result [a :ptr<void>] :int
+(defn targ-result [a : ptr<void>] : int
   ```c
   typedef struct { void *ch; int64_t result; } TArg;
   return ((TArg *)a)->result;
   ```)
 
-(defn targ-free [a :ptr<void>] :nil
+(defn targ-free [a : ptr<void>] : nil
   ```c
   free(a);
   ```)
@@ -109,7 +109,7 @@
 ;; -----------------------------------------------------------------------
 ;; Producer: sends 10, 20, 30, 40, 50 then sentinel -1.
 
-(defn producer [arg :ptr<void>] :ptr<void>
+(defn producer [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -134,7 +134,7 @@
 
 ;; Consumer: receives until -1 sentinel, accumulates sum into result slot.
 
-(defn consumer [arg :ptr<void>] :ptr<void>
+(defn consumer [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -163,7 +163,7 @@
 ;; -----------------------------------------------------------------------
 ;; Thread spawn/join helpers.
 
-(defn pc-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn pc-thread-spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "pc-thread-spawn: oom\n"); abort(); }
@@ -171,7 +171,7 @@
   return (void *)t;
   ```)
 
-(defn pc-thread-join [t :ptr<void>] :nil
+(defn pc-thread-join [t : ptr<void>] : nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
@@ -179,7 +179,7 @@
 
 ;; -----------------------------------------------------------------------
 
-(defn main [] :int
+(defn main [] : int
   (let [ch (chan-new 4)]
     (let [prod-arg (targ-new ch)]
       (let [cons-arg (targ-new ch)]

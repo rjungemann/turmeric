@@ -28,7 +28,7 @@ Example:
 
 ````markdown
 ```turmeric
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 ```
 ```sweet-exp

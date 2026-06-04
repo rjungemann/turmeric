@@ -3,17 +3,17 @@
 ; the clone open successfully; each auto-drop fires once at scope exit,
 ; balancing the pack's strong count back to zero exactly once.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [e1 (pack 7 (exists [a] [(Show a)] a))
         e2 (rc/clone e1)]
     (open e1 [_ v]

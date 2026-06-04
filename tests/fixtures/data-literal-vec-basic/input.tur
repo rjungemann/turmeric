@@ -1,7 +1,7 @@
 ;; DL3: [1 2 3] in expression position round-trips through vec-len / vec-get.
-(defn len- [] :int (vec-len [1 2 3]))
-(defn at0 [] :int (vec-get [1 2 3] 0))
-(defn at2 [] :int (vec-get [1 2 3] 2))
+(defn len- [] : int (vec-len [1 2 3]))
+(defn at0 [] : int (vec-get [1 2 3] 0))
+(defn at2 [] : int (vec-get [1 2 3] 2))
 (println (len-))
 (println (at0))
 (println (at2))

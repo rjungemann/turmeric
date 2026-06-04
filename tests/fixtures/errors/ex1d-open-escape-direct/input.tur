@@ -1,9 +1,9 @@
 ; Phase EX1d: returning the existentially-bound value directly from an
 ; `open` lets the abstract type leak its scope and must be rejected.
-(defn leak [e :ptr<void>] :int
+(defn leak [e : ptr<void>] : int
   (open e [a v] v))
 
-(defn main [] :int
+(defn main [] : int
   (let [e (pack 7 (exists [a] a))]
     (println (leak e)))
   0)

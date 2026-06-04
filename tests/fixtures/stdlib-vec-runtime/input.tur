@@ -1,4 +1,4 @@
-(defn lv-new [] :ptr<void>
+(defn lv-new [] : ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
@@ -7,13 +7,13 @@
   return v;
   ```)
 
-(defn lv-len [v :ptr<void>] :int
+(defn lv-len [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->len;
   ```)
 
-(defn lv-get [v :ptr<void> i] :int
+(defn lv-get [v : ptr<void> i] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
@@ -21,7 +21,7 @@
   return 0;
   ```)
 
-(defn lv-push! [v :ptr<void> val]
+(defn lv-push! [v : ptr<void> val]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len >= vec->cap) {
@@ -35,7 +35,7 @@
   vec->data[vec->len++] = val;
   ```)
 
-(defn lv-pop! [v :ptr<void>] :int
+(defn lv-pop! [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len == 0) {
@@ -45,14 +45,14 @@
   return (int)vec->data[--vec->len];
   ```)
 
-(defn lv-free [v :ptr<void>]
+(defn lv-free [v : ptr<void>]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   free(vec->data);
   free(vec);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [v (lv-new)]
     (println (lv-len v))
     (lv-push! v 10)

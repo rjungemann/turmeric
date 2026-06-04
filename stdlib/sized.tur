@@ -31,7 +31,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn static-int [n :int] :StaticInt (SInt n))
+(defn static-int [n : int] : StaticInt (SInt n))
 ;;; static-int-val -- extract the integer value from a StaticInt.
 ;;;
 ;;; Parameters:
@@ -45,7 +45,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn static-int-val [si :StaticInt] :int (match si (SInt n) n))
+(defn static-int-val [si : StaticInt] : int (match si (SInt n) n))
 ;;; static-int-add -- add two StaticInt values.
 ;;;
 ;;; Parameters:
@@ -60,7 +60,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn static-int-add [a :StaticInt b :StaticInt] :StaticInt
+(defn static-int-add [a : StaticInt b : StaticInt] : StaticInt
   (SInt (+ (static-int-val a) (static-int-val b))))
 ;;; static-int-mul -- multiply two StaticInt values.
 ;;;
@@ -76,7 +76,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn static-int-mul [a :StaticInt b :StaticInt] :StaticInt
+(defn static-int-mul [a : StaticInt b : StaticInt] : StaticInt
   (SInt (* (static-int-val a) (static-int-val b))))
 ;; ===== Size =====
 ;;; Size -- arithmetic expressions over compile-time sizes.
@@ -109,7 +109,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn size-static [n :int] :Size (Static n))
+(defn size-static [n : int] : Size (Static n))
 ;;; size-add -- create a Size representing the sum of two sizes.
 ;;;
 ;;; Parameters:
@@ -124,7 +124,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn size-add [s1 :Size s2 :Size] :Size (Add s1 s2))
+(defn size-add [s1 : Size s2 : Size] : Size (Add s1 s2))
 ;;; size-mul -- create a Size representing the product of two sizes.
 ;;;
 ;;; Parameters:
@@ -139,7 +139,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn size-mul [s1 :Size s2 :Size] :Size (Mul s1 s2))
+(defn size-mul [s1 : Size s2 : Size] : Size (Mul s1 s2))
 ;;; size-eval -- evaluate a Size expression to a runtime integer.
 ;;;
 ;;; Parameters:
@@ -153,7 +153,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn size-eval [s :Size] :int
+(defn size-eval [s : Size] : int
   (match s
     (Static n)
     n
@@ -189,7 +189,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn sized-vec-nil [] :SizedVec (SVNil))
+(defn sized-vec-nil [] : SizedVec (SVNil))
 ;;; sized-vec-cons -- prepend an integer element to a SizedVec.
 ;;;
 ;;; Parameters:
@@ -204,7 +204,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn sized-vec-cons [x :int xs :SizedVec] :SizedVec (SVCons x xs))
+(defn sized-vec-cons [x : int xs : SizedVec] : SizedVec (SVCons x xs))
 ;;; sized-vec-len -- compute the runtime length of a SizedVec.
 ;;;
 ;;; Parameters:
@@ -218,7 +218,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn sized-vec-len [v :SizedVec] :int
+(defn sized-vec-len [v : SizedVec] : int
   (match v (SVNil) 0 (SVCons _ xs) (+ 1 (sized-vec-len xs))))
 ;;; sized-vec-head-or -- return the first element, or dflt if empty.
 ;;;
@@ -235,7 +235,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn sized-vec-head-or [dflt :int v :SizedVec] :int
+(defn sized-vec-head-or [dflt : int v : SizedVec] : int
   (match v (SVNil) dflt (SVCons x _) x))
 ;;; sized-vec-tail -- return all elements after the first.
 ;;;
@@ -250,7 +250,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn sized-vec-tail [v :SizedVec] :SizedVec
+(defn sized-vec-tail [v : SizedVec] : SizedVec
   (match v (SVNil) (SVNil) (SVCons _ xs) xs))
 ;;; sized-vec-sum -- sum all integer elements of a SizedVec.
 ;;;
@@ -265,7 +265,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn sized-vec-sum [v :SizedVec] :int
+(defn sized-vec-sum [v : SizedVec] : int
   (match v (SVNil) 0 (SVCons x xs) (+ x (sized-vec-sum xs))))
 ;;; sized-vec-size -- compute a Size expression for the runtime length.
 ;;;
@@ -280,7 +280,7 @@
 ;;;
 ;;; Since: Phase SZ0
 
-(defn sized-vec-size [v :SizedVec] :Size (Static (sized-vec-len v)))
+(defn sized-vec-size [v : SizedVec] : Size (Static (sized-vec-len v)))
 ;; ===== Phase SZ1: Size Type Checking =====
 ;; ----- Size predicates -----
 ;;; size-eq? -- check whether two Size expressions evaluate to equal integers.
@@ -298,7 +298,7 @@
 ;;; Since: Phase SZ1
 
 
-(defn size-eq? [s1 :Size s2 :Size] :bool (= (size-eval s1) (size-eval s2)))
+(defn size-eq? [s1 : Size s2 : Size] : bool (= (size-eval s1) (size-eval s2)))
 ;;; size-le? -- check whether s1 evaluates to <= s2.
 ;;;
 ;;; Parameters:
@@ -313,7 +313,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn size-le? [s1 :Size s2 :Size] :bool (<= (size-eval s1) (size-eval s2)))
+(defn size-le? [s1 : Size s2 : Size] : bool (<= (size-eval s1) (size-eval s2)))
 ;;; size-lt? -- check whether s1 evaluates to < s2.
 ;;;
 ;;; Parameters:
@@ -328,7 +328,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn size-lt? [s1 :Size s2 :Size] :bool (< (size-eval s1) (size-eval s2)))
+(defn size-lt? [s1 : Size s2 : Size] : bool (< (size-eval s1) (size-eval s2)))
 ;;; size-ge? -- check whether s1 evaluates to >= s2.
 ;;;
 ;;; Parameters:
@@ -343,7 +343,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn size-ge? [s1 :Size s2 :Size] :bool (>= (size-eval s1) (size-eval s2)))
+(defn size-ge? [s1 : Size s2 : Size] : bool (>= (size-eval s1) (size-eval s2)))
 ;;; size-gt? -- check whether s1 evaluates to > s2.
 ;;;
 ;;; Parameters:
@@ -358,7 +358,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn size-gt? [s1 :Size s2 :Size] :bool (> (size-eval s1) (size-eval s2)))
+(defn size-gt? [s1 : Size s2 : Size] : bool (> (size-eval s1) (size-eval s2)))
 ;; ----- Size normalization and simplification -----
 ;;; size-normalize -- reduce a Size expression to its canonical (Static n) form.
 ;;;
@@ -374,7 +374,7 @@
 ;;; Since: Phase SZ1
 
 
-(defn size-normalize [s :Size] :Size (Static (size-eval s)))
+(defn size-normalize [s : Size] : Size (Static (size-eval s)))
 ;;; size-simplify -- apply algebraic reduction rules to a Size expression.
 ;;;
 ;;; Applies identity and zero laws without evaluating the full expression:
@@ -398,7 +398,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn size-simplify [s :Size] :Size
+(defn size-simplify [s : Size] : Size
   (match s
     (Static n)
     (Static n)
@@ -436,7 +436,7 @@
 ;;; Since: Phase SZ1
 
 
-(defn size-assert-eq! [s1 :Size s2 :Size] :nil
+(defn size-assert-eq! [s1 : Size s2 : Size] : nil
   (require-msg! (= (size-eval s1) (size-eval s2))
     "sized type mismatch: sizes are not equal"))
 ;;; size-assert-le! -- panic at runtime if s1 evaluates to greater than s2.
@@ -456,7 +456,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn size-assert-le! [s1 :Size s2 :Size] :nil
+(defn size-assert-le! [s1 : Size s2 : Size] : nil
   (require-msg! (<= (size-eval s1) (size-eval s2))
     "sized type mismatch: size exceeds upper bound"))
 ;; ----- Subtyping compatibility -----
@@ -479,7 +479,7 @@
 ;;; Since: Phase SZ1
 
 
-(defn size-compat? [s1 :Size s2 :Size] :bool (= (size-eval s1) (size-eval s2)))
+(defn size-compat? [s1 : Size s2 : Size] : bool (= (size-eval s1) (size-eval s2)))
 ;; ----- Size inference: fixed-arity SizedVec constructors -----
 ;;; sized-vec-of-1 -- construct a 1-element SizedVec, size inferred as 1.
 ;;;
@@ -495,7 +495,7 @@
 ;;; Since: Phase SZ1
 
 
-(defn sized-vec-of-1 [a :int] :SizedVec (SVCons a (SVNil)))
+(defn sized-vec-of-1 [a : int] : SizedVec (SVCons a (SVNil)))
 ;;; sized-vec-of-2 -- construct a 2-element SizedVec, size inferred as 2.
 ;;;
 ;;; Parameters:
@@ -510,7 +510,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn sized-vec-of-2 [a :int b :int] :SizedVec (SVCons a (SVCons b (SVNil))))
+(defn sized-vec-of-2 [a : int b : int] : SizedVec (SVCons a (SVCons b (SVNil))))
 ;;; sized-vec-of-3 -- construct a 3-element SizedVec, size inferred as 3.
 ;;;
 ;;; Parameters:
@@ -526,7 +526,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn sized-vec-of-3 [a :int b :int c :int] :SizedVec
+(defn sized-vec-of-3 [a : int b : int c : int] : SizedVec
   (SVCons a (SVCons b (SVCons c (SVNil)))))
 ;;; sized-vec-of-4 -- construct a 4-element SizedVec, size inferred as 4.
 ;;;
@@ -544,7 +544,7 @@
 ;;;
 ;;; Since: Phase SZ1
 
-(defn sized-vec-of-4 [a :int b :int c :int d :int] :SizedVec
+(defn sized-vec-of-4 [a : int b : int c : int d : int] : SizedVec
   (SVCons a (SVCons b (SVCons c (SVCons d (SVNil))))))
 ;; ----- Size inference: list conversion -----
 ;;; sized-vec-from-list -- convert a cons list to a SizedVec, inferring the size at runtime.
@@ -568,7 +568,7 @@
 
 (defn sized-vec-from-list [lst]
   #{Unsafe}
-  :SizedVec
+  : SizedVec
   ```c struct __sz_cons { int64_t value; int64_t next; };
   /* Count elements */
   int64_t count = 0;

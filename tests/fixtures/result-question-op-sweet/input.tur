@@ -3,30 +3,30 @@
 ;; Phase R1: the ? operator composes with sweet-exp neoteric call syntax.
 ;; Pins both the neoteric spelling ?(expr) and the traditional (? expr).
 
-(defn u-ok [x :int] :ptr<void>
+(defn u-ok [x : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
   ```)
 
-(defn u-ok-val [r :ptr<void>] :int
+(defn u-ok-val [r : ptr<void>] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r2 = (void*)r;
   return r2->ok_val;
   ```)
 
-(defn produce [] :ptr<void>
+(defn produce [] : ptr<void>
   (u-ok 21))
 
-(defn run-neoteric [] :ptr<void>
+(defn run-neoteric [] : ptr<void>
   (let [x ?(produce())]
     (u-ok (* x 2))))
 
-(defn run-trad [] :ptr<void>
+(defn run-trad [] : ptr<void>
   (let [y (? (produce))]
     (u-ok (+ y 1))))
 
-(defn main [] :int
+(defn main [] : int
   (println (u-ok-val (run-neoteric)))
   (println (u-ok-val (run-trad)))
   0)

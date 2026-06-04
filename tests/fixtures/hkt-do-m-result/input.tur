@@ -2,49 +2,49 @@
 ;; Tests that do-m works with result<T, E> and short-circuits on err
 
 (defclass Monad [^m]
-  (bind [ma fn] :int))
+  (bind [ma fn] : int))
 
-(defn __res_ok [x] :int
+(defn __res_ok [x] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __res_err [e] :int
+(defn __res_err [e] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->ok_val = 0; r->err_val = e;
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn __res_ok? [r] :bool
+(defn __res_ok? [r] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
   return p != NULL && p->is_ok;
   ```)
 
-(defn __res_unwrap [r] :int
+(defn __res_unwrap [r] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
   return p->ok_val;
   ```)
 
-(defn __res_err_val [r] :int
+(defn __res_err_val [r] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
   return p->err_val;
   ```)
 
-(defn __res_free [r] :nil
+(defn __res_free [r] : nil
   ```c
   free((void *)(intptr_t)r);
   ```)
 
-(defn __bind_result [ma fn] :int
+(defn __bind_result [ma fn] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
@@ -57,13 +57,13 @@
   (bind [ma fn] (__bind_result ma fn)))
 
 ;; Helper: add two results, propagating err
-(defn add-results [a b] :int
+(defn add-results [a b] : int
   (do-m
    x a
    y b
    (__res_ok (+ x y))))
 
-(defn main [] :int
+(defn main [] : int
   (let [r1 (add-results (__res_ok 10) (__res_ok 20))]
     (let [r2 (add-results (__res_err 999) (__res_ok 20))]
       (let [r3 (add-results (__res_ok 10) (__res_err 42))]

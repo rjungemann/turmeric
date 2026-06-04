@@ -3,10 +3,10 @@
 ;; ^affine: may be dropped; cannot be duplicated
 ;; ^relevant: must be used; may be duplicated
 
-(defn consume-affine [^affine x] :int x)
-(defn use-relevant  [^relevant x] :int x)
+(defn consume-affine [^affine x] : int x)
+(defn use-relevant  [^relevant x] : int x)
 
-(defn main [] :int
+(defn main [] : int
   ;; ^linear: ref<T> inferred as linear under -Xsubstructural
   (let [r (ref 10)]
     ;; ^affine: may use exactly once

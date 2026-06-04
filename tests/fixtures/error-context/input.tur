@@ -3,13 +3,13 @@
 ;; ─── inline result helpers ──────────────────────────────────────────────────
 ;; NOTE: renamed user `ok`/`err`/`err-context`/`err-val-cstr`/`ok?` -> u-*
 ;; to avoid collisions with the auto-loaded stdlib result helpers.
-(defn u-ok [x :int] :ptr<void>
+(defn u-ok [x : int] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return (void*)r;
   ```)
 
-(defn u-err-cstr [x :cstr] :ptr<void>
+(defn u-err-cstr [x : cstr] : ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->ok_val = 0;
@@ -17,20 +17,20 @@
   return (void*)r;
   ```)
 
-(defn u-ok? [r :ptr<void>] :bool
+(defn u-ok? [r : ptr<void>] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return res->is_ok;
   ```)
 
-(defn u-err-val-cstr [r :ptr<void>] :cstr
+(defn u-err-val-cstr [r : ptr<void>] : cstr
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (const char*)(intptr_t)res->err_val;
   ```)
 
 ;; u-err-context — wrap an err value's message in additional context
-(defn u-err-context [r :ptr<void> ctx :cstr] :ptr<void>
+(defn u-err-context [r : ptr<void> ctx : cstr] : ptr<void>
   ```c
   extern size_t strlen(const char*);
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -53,7 +53,7 @@
 
 ;; ─── inline error type helpers ───────────────────────────────────────────────
 ;; IoError convenience constructor
-(defn io-error [msg :cstr] :ptr<void>
+(defn io-error [msg : cstr] : ptr<void>
   ```c
   typedef struct { const char *message; int errno_; } IoError;
   IoError *e = (IoError*)malloc(sizeof(IoError));
@@ -62,7 +62,7 @@
   return (void*)e;
   ```)
 
-(defn show-io-error [err :ptr<void>] :cstr
+(defn show-io-error [err : ptr<void>] : cstr
   ```c
   typedef struct { const char *message; int errno_; } IoError;
   IoError *e = (IoError*)err;
@@ -78,7 +78,7 @@
   ```)
 
 ;; ParseError convenience constructor
-(defn parse-error-simple [msg :cstr line :int] :ptr<void>
+(defn parse-error-simple [msg : cstr line : int] : ptr<void>
   ```c
   typedef struct { const char *message; int line; int col; const char *file; } ParseError;
   ParseError *e = (ParseError*)malloc(sizeof(ParseError));
@@ -89,7 +89,7 @@
   return (void*)e;
   ```)
 
-(defn show-parse-error [err :ptr<void>] :cstr
+(defn show-parse-error [err : ptr<void>] : cstr
   ```c
   typedef struct { const char *message; int line; int col; const char *file; } ParseError;
   ParseError *e = (ParseError*)err;
@@ -101,7 +101,7 @@
   return buf;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (do
     ;; u-err-context adds context to an err result
     (let [r1 (u-err-cstr "file not found")]

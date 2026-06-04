@@ -1,9 +1,9 @@
 ;; #json([...]) builds a tagged JSON array node; elements may be heterogeneous.
-(defn len- [] :int
+(defn len- [] : int
   (json/array-len #json([10, "x", 2.5, true])))
-(defn first-int [] :int
+(defn first-int [] : int
   (json/get-int (json/array-get #json([10, "x", 2.5, true]) 0)))
-(defn second-str [] :cstr
+(defn second-str [] : cstr
   (json/get-string (json/array-get #json([10, "x", 2.5, true]) 1)))
 (println (len-))
 (println (first-int))

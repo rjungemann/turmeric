@@ -1338,7 +1338,13 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                     TypeKind ret_kind = TY_INT;
                     if (init_f->as.list.len >= 4) {
                         Form *ret_f = init_f->as.list.items[2];
-                        if (ret_f->tag == F_KEYWORD) {
+                        /* Accept spaced `: T` (F_TYPE_ANN{F_SYM/F_KEYWORD}) too. */
+                        if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                            (ret_f->as.list.items[0]->tag == F_SYM ||
+                             ret_f->as.list.items[0]->tag == F_KEYWORD)) {
+                            ret_f = ret_f->as.list.items[0];
+                        }
+                        if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
                             const char *rn = ret_f->as.sym->name;
                             uint32_t   rl = ret_f->as.sym->len;
                             if      (rl == 3 && memcmp(rn, "int",  3) == 0) ret_kind = TY_INT;

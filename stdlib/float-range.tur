@@ -27,7 +27,7 @@
 ;;;   int64_t pointer to a heap FloatRangeBound.
 ;;;
 ;;; Since: RR4
-(defn float-range-bound-new [inclusive :int value :float] :int
+(defn float-range-bound-new [inclusive : int value : float] : int
   ```c struct { bool is_inclusive; double value; } *b = malloc(sizeof(*b));
   b->is_inclusive = (bool)inclusive;
   b->value = value;
@@ -40,7 +40,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-range-bound-inclusive? [b :int] :bool
+(defn float-range-bound-inclusive? [b : int] : bool
   ```c return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->is_inclusive;
   ```)
 ;;; float-range-bound-value -- return the endpoint value of a bound.
@@ -50,7 +50,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-range-bound-value [b :int] :float
+(defn float-range-bound-value [b : int] : float
   ```c return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->value;
   ```)
 ;; -------------------------------------------------------------------
@@ -68,7 +68,7 @@
 ;;; Since: RR4
 
 
-(defn float-range-new [lower :int upper :int] :int
+(defn float-range-new [lower : int upper : int] : int
   ```c struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
   r->lower = lower;
   r->upper = upper;
@@ -81,7 +81,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-range-lower [r :int] :int
+(defn float-range-lower [r : int] : int
   ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
   ```)
 ;;; float-range-upper -- return the upper bound pointer (0 = unbounded).
@@ -91,7 +91,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-range-upper [r :int] :int
+(defn float-range-upper [r : int] : int
   ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
   ```)
 ;; -------------------------------------------------------------------
@@ -100,14 +100,14 @@
 ;;; float-range-val-in-lower? -- check value against a lower bound.
 
 
-(defn float-range-val-in-lower? [lower :int v :float] :bool
+(defn float-range-val-in-lower? [lower : int v : float] : bool
   (if (= lower 0)
     true
     (let [bv (float-range-bound-value lower)]
       (if (float-range-bound-inclusive? lower) (>= v bv) (> v bv)))))
 ;;; float-range-val-in-upper? -- check value against an upper bound.
 
-(defn float-range-val-in-upper? [upper :int v :float] :bool
+(defn float-range-val-in-upper? [upper : int v : float] : bool
   (if (= upper 0)
     true
     (let [bv (float-range-bound-value upper)]
@@ -130,7 +130,7 @@
 ;;; Since: RR4
 
 
-(defn float-closed-range [lo :float hi :float] :int
+(defn float-closed-range [lo : float hi : float] : int
   (float-range-new (float-range-bound-new 1 lo) (float-range-bound-new 1 hi)))
 ;;; float-open-range -- (lo, hi) both endpoints exclusive.
 ;;;
@@ -146,7 +146,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-open-range [lo :float hi :float] :int
+(defn float-open-range [lo : float hi : float] : int
   (float-range-new (float-range-bound-new 0 lo) (float-range-bound-new 0 hi)))
 ;;; float-closed-open-range -- [lo, hi) inclusive lower, exclusive upper.
 ;;;
@@ -162,7 +162,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-closed-open-range [lo :float hi :float] :int
+(defn float-closed-open-range [lo : float hi : float] : int
   (float-range-new (float-range-bound-new 1 lo) (float-range-bound-new 0 hi)))
 ;;; float-open-closed-range -- (lo, hi] exclusive lower, inclusive upper.
 ;;;
@@ -178,7 +178,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-open-closed-range [lo :float hi :float] :int
+(defn float-open-closed-range [lo : float hi : float] : int
   (float-range-new (float-range-bound-new 0 lo) (float-range-bound-new 1 hi)))
 ;;; float-at-least-range -- [lo, +inf) inclusive lower, unbounded above.
 ;;;
@@ -193,7 +193,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-at-least-range [lo :float] :int
+(defn float-at-least-range [lo : float] : int
   (float-range-new (float-range-bound-new 1 lo) 0))
 ;;; float-greater-than-range -- (lo, +inf) exclusive lower, unbounded above.
 ;;;
@@ -208,7 +208,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-greater-than-range [lo :float] :int
+(defn float-greater-than-range [lo : float] : int
   (float-range-new (float-range-bound-new 0 lo) 0))
 ;;; float-at-most-range -- (-inf, hi] unbounded below, inclusive upper.
 ;;;
@@ -223,7 +223,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-at-most-range [hi :float] :int
+(defn float-at-most-range [hi : float] : int
   (float-range-new 0 (float-range-bound-new 1 hi)))
 ;;; float-less-than-range -- (-inf, hi) unbounded below, exclusive upper.
 ;;;
@@ -238,7 +238,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-less-than-range [hi :float] :int
+(defn float-less-than-range [hi : float] : int
   (float-range-new 0 (float-range-bound-new 0 hi)))
 ;;; float-singleton-range -- [v, v] a range containing exactly one value.
 ;;;
@@ -253,7 +253,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-singleton-range [v :float] :int
+(defn float-singleton-range [v : float] : int
   (float-range-new (float-range-bound-new 1 v) (float-range-bound-new 1 v)))
 ;;; float-unbounded-range -- (-inf, +inf) no bounds at all.
 ;;;
@@ -265,7 +265,7 @@
 ;;;
 ;;; Since: RR4
 
-(defn float-unbounded-range [] :int (float-range-new 0 0))
+(defn float-unbounded-range [] : int (float-range-new 0 0))
 ;; -------------------------------------------------------------------
 ;; Predicates
 ;; -------------------------------------------------------------------
@@ -285,6 +285,6 @@
 ;;; Since: RR4
 
 
-(defn float-range-contains? [r :int v :float] :bool
+(defn float-range-contains? [r : int v : float] : bool
   (and (float-range-val-in-lower? (float-range-lower r) v)
     (float-range-val-in-upper? (float-range-upper r) v)))

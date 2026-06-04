@@ -111,7 +111,7 @@ value. Only a `[...]` that reaches expression position lowers to `(vec-of
 surrounding form decides whether it is read as a binding spec or a value.
 
 ```turmeric
-(defn add [x :int y :int] :int (+ x y))   ; [x :int y :int] is a param list
+(defn add [x : int y : int] : int (+ x y))   ; [x :int y :int] is a param list
 (let [a 1 b 2] (+ a b))                   ; [a 1 b 2] is a binding vector
 (def v [1 2 3])                           ; [1 2 3] is a vec literal
 ```

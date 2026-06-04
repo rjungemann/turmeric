@@ -4,9 +4,9 @@
 (defmodule mymod
   (export run)
   (defeffect ^private Ask [] :int)
-  (defn run [] :int 0))
+  (defn run [] : int 0))
 
-(defn main [] :int
+(defn main [] : int
   (handle
     (do
       (let [x (perform (Ask))] x))

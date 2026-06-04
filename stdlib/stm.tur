@@ -21,7 +21,7 @@
 
 (defn ptr/null []
   #{Unsafe}
-  :ptr
+  : ptr
   ```c return NULL;
   ```)
 ;;; tvar/new -- create a new transactional variable with an initial value.
@@ -39,7 +39,7 @@
 
 (defn tvar/new [init]
   #{Unsafe}
-  :ptr
+  : ptr
   ```c TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
   return (void*)tv;
   ```)
@@ -56,9 +56,9 @@
 ;;;
 ;;; Since: Phase 20
 
-(defn tvar/read [tv :ptr]
+(defn tvar/read [tv : ptr]
   #{Unsafe}
-  :ptr
+  : ptr
   ```c return (void*)tur_tvar_read(tur_stm_current_tx(), (TVar*)tv);
   ```)
 ;;; tvar/write -- write a new value to a TVar within the active transaction.
@@ -72,9 +72,9 @@
 ;;;
 ;;; Since: Phase 20
 
-(defn tvar/write [tv :ptr val :ptr]
+(defn tvar/write [tv : ptr val : ptr]
   #{Unsafe}
-  :nil
+  : nil
   ```c tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
   return 0;
   ```)
@@ -92,9 +92,9 @@
 ;;;
 ;;; Since: Phase 20
 
-(defn tvar/swap [tv :ptr new :ptr]
+(defn tvar/swap [tv : ptr new : ptr]
   #{Unsafe}
-  :ptr
+  : ptr
   ```c return (void*)tur_tvar_swap(tur_stm_current_tx(), (TVar*)tv, (void*)new);
   ```)
 ;;; tvar/cas -- compare-and-swap a TVar within the active transaction.
@@ -112,8 +112,8 @@
 ;;;
 ;;; Since: Phase 21
 
-(defn tvar/cas [tv :ptr old :ptr new :ptr]
+(defn tvar/cas [tv : ptr old : ptr new : ptr]
   #{Unsafe}
-  :bool
+  : bool
   ```c return tur_tvar_cas(tur_stm_current_tx(), (TVar*)tv, (void*)old, (void*)new);
   ```)

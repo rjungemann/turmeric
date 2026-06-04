@@ -1,6 +1,6 @@
 ; P4: Transient basic test — fork, mutate, seal; verify result
 
-(defn alloc-str [s :cstr] :ptr<void>
+(defn alloc-str [s : cstr] : ptr<void>
   ```c
   #include <string.h>
   char *p = (char *)malloc(strlen(s) + 1);
@@ -8,7 +8,7 @@
   return (void *)p;
   ```)
 
-(defn main [] :int
+(defn main [] : int
   ; Start from empty map, build a transient
   (let [m0 (hamt/new)]
     (let [t (hamt/transient m0)]

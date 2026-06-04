@@ -1,19 +1,19 @@
 ;; Test deftest macro - registers tests via register-test
 
-(defn assert-true [x] :bool
+(defn assert-true [x] : bool
   (if (= x 1)
     true
     (do
       (println "Assertion failed: expected true")
       false)))
 
-(defn register-test [name :cstr test-fn :ptr<void>] :int
+(defn register-test [name : cstr test-fn : ptr<void>] : int
   ```c
   extern int64_t tur_test_register(const char *name, void *test_fn);
   return (int)tur_test_register((const char *)name, (void *)test_fn);
   ```)
 
-(defn run-tests! [] :int
+(defn run-tests! [] : int
   ```c
   extern int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
@@ -22,7 +22,7 @@
 (defmacro deftest [test-name & body]
   (register-test test-name (fn [] ~@body 1)))
 
-(defn main [] :int
+(defn main [] : int
   (deftest "addition" (assert-true (if (= (+ 1 1) 2) 1 0)))
   (deftest "equality" (assert-true (if (= 42 42) 1 0)))
   (run-tests!))

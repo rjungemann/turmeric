@@ -1,11 +1,11 @@
 ;;; Phase R2: a nested catch-unwind catches an inner panic; the outer boundary
 ;;; sees a normal (ok) result -- nested boundaries are independent.
-(defn inner [] :int
-  (let [ri (catch-unwind (fn [] :int (panic "deep")))]
+(defn inner [] : int
+  (let [ri (catch-unwind (fn [] : int (panic "deep")))]
     (if (err? ri) (println "inner caught") (println "inner ok"))
     7))
 
-(defn main [] :int
-  (let [r (catch-unwind (fn [] :int (inner)))]
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (inner)))]
     (if (ok? r) (println "outer ok") (println "outer err")))
   0)

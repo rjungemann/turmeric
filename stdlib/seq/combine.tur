@@ -22,7 +22,7 @@
 ;;; Since: LZ3
 
 
-(defn seq-make-pair [a :int b :int] :int
+(defn seq-make-pair [a : int b : int] : int
   ```c Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
   p->e1 = a; p->e2 = b;
   return (int64_t)(intptr_t)p;
@@ -46,7 +46,7 @@
 ;;; Since: LZ3
 
 
-(defn seq/concat [s1 :int s2 :int] :int
+(defn seq/concat [s1 : int s2 : int] : int
   (seq-new (fn []
              (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
@@ -71,7 +71,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/chain [s :int] :int (seq/flatten s))
+(defn seq/chain [s : int] : int (seq/flatten s))
 ;;; seq/zip -- pair corresponding elements from two Seqs; stops at the shorter.
 ;;;
 ;;; Parameters:
@@ -88,7 +88,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/zip [s1 :int s2 :int] :int
+(defn seq/zip [s1 : int s2 : int] : int
   (seq-new (fn []
              (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
@@ -114,7 +114,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/zip-with [^fat f :int s1 :int s2 :int] :int
+(defn seq/zip-with [^fat f : int s1 : int s2 : int] : int
   (seq-new (fn []
              (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
@@ -140,7 +140,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/interleave [s1 :int s2 :int] :int
+(defn seq/interleave [s1 : int s2 : int] : int
   (seq-new (fn []
              (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []

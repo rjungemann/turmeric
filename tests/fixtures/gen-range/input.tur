@@ -1,16 +1,16 @@
 ; GF1 fixture: simple generator that yields integers in a range.
 
-(defn ptr-some? [p] :bool
+(defn ptr-some? [p] : bool
   ```c
   return p != 0;
   ```)
 
-(defn ptr-unwrap [p] :int
+(defn ptr-unwrap [p] : int
   ```c
   return *(int64_t *)(intptr_t)p;
   ```)
 
-(defn main [] :void
+(defn main [] : void
   (let [start 0
         end   5
         g (gen []

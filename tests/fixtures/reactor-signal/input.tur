@@ -9,7 +9,7 @@
 ;; Expected output:
 ;;   signal=10
 
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)
@@ -19,20 +19,20 @@
 (extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
 (extern-c tur_reactor_free [r :ptr] :void)
 
-(defn raise-signal [sig :int] :nil
+(defn raise-signal [sig : int] : nil
   ```c
   extern int raise(int);
   raise((int)sig);
   ```)
 
-(defn print-signal [n :int] :nil
+(defn print-signal [n : int] : nil
   ```c printf("signal=%lld\n", (long long)n); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [r (tur_reactor_new)]
     ;; Register SIGUSR1 (10).
     (tur_reactor_add_signal r 10
-      (fn [id signum ud] :nil
+      (fn [id signum ud] : nil
         (print-signal signum))
       0)
     ;; Raise the signal -- now safely caught by the reactor.

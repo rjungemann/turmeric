@@ -1,4 +1,4 @@
-(defn main [] :int
+(defn main [] : int
   ;; Test case 1: Multiple uses of cloned RC (elision barrier)
   ;; Even though both uses are "local", the clone is used more than once.
   ;; With multiple uses, we can't elide the increment/decrement.

@@ -6,18 +6,18 @@
 ;; the dispatch for (.measure (box-of-bool #true)) must be rejected.
 
 (defclass Measurable [a]
-  (measure [x] :int))
+  (measure [x] : int))
 
 (defstruct Box [A]
   (v :int))
 
 (definstance Measurable [Box] [(Measurable A)]
-  (measure [b] :int
+  (measure [b] : int
     ```c
     return *(int64_t*)(intptr_t)b;
     ```))
 
-(defn box-of-bool [x :bool] :(Box bool)
+(defn box-of-bool [x : bool] :(Box bool)
   ```c
   int64_t *p = (int64_t*)malloc(sizeof(int64_t));
   *p = (int64_t)x;

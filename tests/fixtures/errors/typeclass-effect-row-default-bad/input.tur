@@ -4,14 +4,14 @@
 (defeffect Write [msg :cstr] :nil)
 
 (defclass Greet [a]
-  (greeting [x] #{} :cstr
+  (greeting [x] #{} : cstr
     (do (perform (Write "hi"))
         "hello")))
 
 (definstance Greet [int]
-  (greeting [x] :cstr
+  (greeting [x] : cstr
     "hello int"))
 
-(defn main [] :int
+(defn main [] : int
   (println (.greeting 42))
   0)

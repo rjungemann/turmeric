@@ -4,7 +4,7 @@
 ;; Expected: TUR-E0012 kind mismatch error.
 
 (defclass MyContainer [^f]
-  (wrap [x :int] :int))
+  (wrap [x : int] : int))
 
 ;; Error: 'int' has kind '*' but MyContainer parameter '^f' expects kind '* -> *'.
 (definstance MyContainer [int]

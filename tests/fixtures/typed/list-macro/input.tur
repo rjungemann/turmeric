@@ -3,32 +3,32 @@
 ;; and produce values indistinguishable from hand-written tcons code.
 ;; Also covers list* round-trip tests.
 
-(defn test-empty [] :bool
+(defn test-empty [] : bool
   (tnil? (list)))
 
-(defn test-single [] :int
+(defn test-single [] : int
   (list-length (list 42)))
 
-(defn test-many-length [] :int
+(defn test-many-length [] : int
   (list-length (list 1 2 3 4 5)))
 
-(defn test-eq-handwritten [] :bool
+(defn test-eq-handwritten [] : bool
   (list-eq?
     (list 1 2 3)
     (tcons 1 (tcons 2 (tcons 3 (tnil))))
     (fn [a b] (= a b))))
 
 ;; list* tests
-(defn test-list-star-identity [] :bool
+(defn test-list-star-identity [] : bool
   (tnil? (list* (tnil))))
 
-(defn test-list-star-prepend [] :bool
+(defn test-list-star-prepend [] : bool
   (list-eq?
     (list* 1 2 (tnil))
     (list 1 2)
     (fn [a b] (= a b))))
 
-(defn test-list-star-with-tail [] :bool
+(defn test-list-star-with-tail [] : bool
   (list-eq?
     (list* 1 2 (list 3 4))
     (list 1 2 3 4)

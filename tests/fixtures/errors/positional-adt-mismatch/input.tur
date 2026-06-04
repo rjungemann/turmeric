@@ -2,5 +2,5 @@
 ;; parameter of a different ADT is declared is a compile error.
 (defdata Color (Red) (Green))
 (defdata Shape (Circle) (Square))
-(defn take-color [c :Color] :int 0)
-(defn main [] :int (take-color (Circle)))
+(defn take-color [c : Color] : int 0)
+(defn main [] : int (take-color (Circle)))

@@ -9,9 +9,9 @@
 ;; Both must elaborate to interned symbol values, NOT be misread as a
 ;; spaced type annotation.
 
-(defn show-kw [k :int] :int k)
+(defn show-kw [k : int] : int k)
 
-(defn main [] :int
+(defn main [] : int
   (let [a (quote :int)
         b ':float]
     (show-kw 0)

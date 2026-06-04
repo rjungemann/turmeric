@@ -1,6 +1,6 @@
 ; gc-no-false-positives: live objects (strong_count > 0) must survive gc/collect.
 ; After gc! the strong_count of x should still be 1 — it was not falsely collected.
-(defn main [] :int
+(defn main [] : int
   (gc-enable!)
   (let [x (rc/of 42)]
     (gc!)

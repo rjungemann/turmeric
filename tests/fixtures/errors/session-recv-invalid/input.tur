@@ -1,7 +1,7 @@
 ;; SS1 E0212: recv not valid on Session[Send int Close].
 ;; 's' has protocol Send int Close; calling recv on it violates the protocol --
 ;; this endpoint must send next, not receive.
-(defn use-wrong [^linear s :(Session (Send int Close))] :int
+(defn use-wrong [^linear s :(Session (Send int Close))] : int
   (let [[n s] (recv s)]
     (close s))
   0)

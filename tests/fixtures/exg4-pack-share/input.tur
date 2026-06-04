@@ -6,17 +6,17 @@
 ; Without EXG4's let-tail move-tracking and the EXG4-2 rc/clone
 ; relaxation, the inner let would auto-drop before the clone escaped.
 (defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (definstance Show [int]
-  (show [x] :cstr
+  (show [x] : cstr
     ```c
     char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 
-(defn main [] :int
+(defn main [] : int
   (let [e1 (pack 11 (exists [a] [(Show a)] a))
         outer (let [c (rc/clone e1)] c)]
     (open e1 [_ v]

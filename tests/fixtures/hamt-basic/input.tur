@@ -3,25 +3,25 @@
 
 (extern-c free [p :ptr] :void)
 
-(defn ptr= [a :ptr b :ptr] :bool
+(defn ptr= [a : ptr b : ptr] : bool
   ```c
   return a == b;
   ```)
 
-(defn alloc-int [x :int] :ptr
+(defn alloc-int [x : int] : ptr
   ```c
   int64_t *p = malloc(sizeof(int64_t));
   *p = (int64_t)x;
   return (void *)p;
   ```)
 
-(defn test-empty [] :int
+(defn test-empty [] : int
   (let [m (hamt/new)]
     (let [c (hamt/count m)]
       (hamt/free m)
       c)))
 
-(defn test-single [] :int
+(defn test-single [] : int
   (let [k (alloc-int 42)]
     (let [v (alloc-int 100)]
       (let [m1 (hamt/new)]
@@ -34,7 +34,7 @@
               (free v)
               (if (ptr= r v) 1 0))))))))
 
-(defn test-has [] :int
+(defn test-has [] : int
   (let [k (alloc-int 42)]
     (let [v (alloc-int 100)]
       (let [m1 (hamt/new)]
@@ -47,7 +47,7 @@
               (free v)
               (if found 1 0))))))))
 
-(defn test-count [] :int
+(defn test-count [] : int
   (let [k1 (alloc-int 1)]
     (let [k2 (alloc-int 2)]
       (let [v1 (alloc-int 10)]

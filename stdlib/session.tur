@@ -43,7 +43,7 @@
 (defn echo-server-loop [^linear
                         ch
                         : (Session (Rec self
-                                     (Branch (Recv int (Send int self)) Close)))] :nil
+                                     (Branch (Recv int (Send int self)) Close)))] : nil
   (match (offer ch)
     (Left ch)
     (let [[n ch] (recv ch)] (let [ch (send ch n)] (echo-server-loop ch)))
@@ -76,7 +76,7 @@
                         : (Session (Rec self
                                      (Choose (Send int (Recv int self)) Close)))
                         val
-                        :int]
+                        : int]
   (let [ch (choose-left ch)] (let [ch (send ch val)] (recv ch))))
 ;; ---------------------------------------------------------------------------
 ;; rpc -- generic single-shot request/response
@@ -101,7 +101,7 @@
 ;;; Since: SS4
 
 
-(defn rpc-call [^linear ch : (Session (Send int (Recv int Close))) req :int] :int
+(defn rpc-call [^linear ch : (Session (Send int (Recv int Close))) req : int] : int
   (let [ch (send ch req)] (let [[resp ch] (recv ch)] (close ch) resp)))
 ;; ---------------------------------------------------------------------------
 ;; pubsub -- publish-subscribe protocol template
@@ -133,7 +133,7 @@
                         : (Session (Recv int
                                      (Rec self (Branch (Recv int self) Close))))
                         handler
-                        : (-> int nil)] :nil
+                        : (-> int nil)] : nil
   (let [[msg ch] (recv ch)] (handler msg) (pubsub-recv-loop-inner ch handler)))
 ;;; pubsub-recv-loop-inner -- inner recursive loop after initial recv.
 
@@ -142,7 +142,7 @@
                               : (Session (Rec self
                                            (Branch (Recv int self) Close)))
                               handler
-                              : (-> int nil)] :nil
+                              : (-> int nil)] : nil
   (match (offer ch)
     (Left ch)
     (let [[msg ch] (recv ch)] (handler msg) (pubsub-recv-loop-inner ch handler))

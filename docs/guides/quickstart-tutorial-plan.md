@@ -443,7 +443,7 @@ Concept: writing code to a `.tur` file and loading it into the REPL session.
 Instruction: save the following to `hello.tur`:
 
 ```turmeric
-(defn greet [name :cstr] :void
+(defn greet [name : cstr] : void
   (println (str-concat "Hello, " (str-concat name "!"))))
 ```
 ```sweet-exp

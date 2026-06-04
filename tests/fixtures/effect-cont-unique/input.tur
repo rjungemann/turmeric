@@ -3,7 +3,7 @@
 
 (defeffect Ask [] :int)
 
-(defn main [] :int
+(defn main [] : int
   (let [result
     (handle (perform (Ask))
       (Ask [] k) (resume k 42))]

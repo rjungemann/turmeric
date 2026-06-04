@@ -3,7 +3,7 @@
 ;; Multiple readers can hold the lock concurrently; writers get exclusive access.
 ;; Represented as a :ptr<void> to a heap-allocated pthread_rwlock_t.
 
-(defn rwlock-new [] :ptr<void>
+(defn rwlock-new [] : ptr<void>
   ```c
   pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
   if (!rw) { fprintf(stderr, "rwlock-new: oom\n"); abort(); }
@@ -11,38 +11,38 @@
   return (void *)rw;
   ```)
 
-(defn rwlock-rdlock [rw :ptr<void>] :nil
+(defn rwlock-rdlock [rw : ptr<void>] : nil
   ```c
   pthread_rwlock_rdlock((pthread_rwlock_t *)rw);
   ```)
 
-(defn rwlock-wrlock [rw :ptr<void>] :nil
+(defn rwlock-wrlock [rw : ptr<void>] : nil
   ```c
   pthread_rwlock_wrlock((pthread_rwlock_t *)rw);
   ```)
 
-(defn rwlock-try-rdlock [rw :ptr<void>] :bool
+(defn rwlock-try-rdlock [rw : ptr<void>] : bool
   ```c
   return pthread_rwlock_tryrdlock((pthread_rwlock_t *)rw) == 0;
   ```)
 
-(defn rwlock-try-wrlock [rw :ptr<void>] :bool
+(defn rwlock-try-wrlock [rw : ptr<void>] : bool
   ```c
   return pthread_rwlock_trywrlock((pthread_rwlock_t *)rw) == 0;
   ```)
 
-(defn rwlock-unlock [rw :ptr<void>] :nil
+(defn rwlock-unlock [rw : ptr<void>] : nil
   ```c
   pthread_rwlock_unlock((pthread_rwlock_t *)rw);
   ```)
 
-(defn rwlock-free [rw :ptr<void>] :nil
+(defn rwlock-free [rw : ptr<void>] : nil
   ```c
   pthread_rwlock_destroy((pthread_rwlock_t *)rw);
   free(rw);
   ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [rw (rwlock-new)]
     ;; write lock / unlock
     (rwlock-wrlock rw)

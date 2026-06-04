@@ -6,28 +6,28 @@
 ;; so the concrete-cast dispatch delivers the correct bit pattern for both
 ;; native closure thunks and the generic carrier wrapper.
 
-(defn apply8 [f (forall [a] (-> a a)) x :uint8] :uint8
+(defn apply8 [f (forall [a] (-> a a)) x : uint8] : uint8
   (f x))
 
-(defn apply16 [f (forall [a] (-> a a)) x :uint16] :uint16
+(defn apply16 [f (forall [a] (-> a a)) x : uint16] : uint16
   (f x))
 
-(defn apply32 [f (forall [a] (-> a a)) x :uint32] :uint32
+(defn apply32 [f (forall [a] (-> a a)) x : uint32] : uint32
   (f x))
 
-(defn inc8 [x :uint8] :uint8
+(defn inc8 [x : uint8] : uint8
   (as uint8 (+ (as int x) 1)))
 
-(defn double32 [x :uint32] :uint32
+(defn double32 [x : uint32] : uint32
   (as uint32 (* (as int x) 2)))
 
-(defn main [] :int
+(defn main [] : int
   ;; Named function through a poly fn param (non-closure path).
   (println (as int (apply8 inc8 200u8)))
   (println (as int (apply32 double32 100u32)))
 
   ;; Closure through a poly fn param.
-  (println (as int (apply16 (fn [x :uint16] :uint16 (as uint16 (+ (as int x) 5))) 1000u16)))
+  (println (as int (apply16 (fn [x : uint16] : uint16 (as uint16 (+ (as int x) 5))) 1000u16)))
 
   ;; Chained: apply a poly fn to the result of another poly fn call.
   (let [r (apply32 double32 (apply32 double32 3u32))]

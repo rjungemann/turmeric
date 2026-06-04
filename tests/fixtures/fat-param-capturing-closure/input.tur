@@ -6,24 +6,24 @@
 ;; over state (the whole point of a closure) could not be passed to a directly
 ;; callable closure parameter.  Covers int and float (register-class-distinct).
 
-(defn apply-int [^fat g :(fn [:int] #{} :int) x :int] :int
+(defn apply-int [^fat g :(fn [:int] #{} :int) x : int] : int
   (g x))
 
-(defn apply-float [^fat g :(fn [:float] #{} :float) x :float] :float
+(defn apply-float [^fat g :(fn [:float] #{} :float) x : float] : float
   (g x))
 
-(defn make-adder [n :int] :ptr<void>
-  (fn [x :int] :int (+ x n)))
+(defn make-adder [n : int] : ptr<void>
+  (fn [x : int] : int (+ x n)))
 
-(defn make-scale [k :float] :ptr<void>
-  (fn [x :float] :float (* x k)))
+(defn make-scale [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
 
-(defn main [] :int
+(defn main [] : int
   (let [add (make-adder 10)
         scl (make-scale 2.0)]
     (println (apply-int add 5))                            ;; 15  (capturing, via var)
-    (println (apply-int (fn [x :int] :int (+ x 1)) 5))     ;; 6   (captureless lambda)
+    (println (apply-int (fn [x : int] : int (+ x 1)) 5))     ;; 6   (captureless lambda)
     (let [n 100]
-      (println (apply-int (fn [x :int] :int (+ x n)) 5)))  ;; 105 (capturing, inline)
+      (println (apply-int (fn [x : int] : int (+ x n)) 5)))  ;; 105 (capturing, inline)
     (println (apply-float scl 3.5)))                       ;; 7   (float capturing)
   0)

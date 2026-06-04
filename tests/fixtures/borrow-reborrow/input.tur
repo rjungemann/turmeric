@@ -1,6 +1,6 @@
 ; Phase 12: Reborrowing — (& r) where r is already &T gives another &T
 
-(defn main [] :int
+(defn main [] : int
   (let [x 7]
     (let [r1 (& x)]      ; &int
       (let [r2 (& r1)]   ; reborrow: also &int (not &&int)

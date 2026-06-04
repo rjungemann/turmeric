@@ -2,7 +2,7 @@
 
 (defdata Color :copy (Red) (Green) (Blue))
 
-(defn cons-list-len [lst :int] #{Unsafe} :int
+(defn cons-list-len [lst : int] #{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t n = 0;
@@ -11,10 +11,10 @@
   return (int)n;
   ```)
 
-(defn count-colors [& cs :Color] #{Unsafe} :int
+(defn count-colors [& cs : Color] #{Unsafe} : int
   (cons-list-len cs))
 
-(defn main [] :int
+(defn main [] : int
   (unsafe
     (let [n (count-colors (Red) (Green) (Blue))]
       (if (= n 3) 0 1))))

@@ -2,7 +2,7 @@
 
 (defeffect Ask [] :int)
 
-(defn bad [] :int
+(defn bad [] : int
   (handle (perform (Ask))
     (Ask [] k) (+ (resume k 1) (resume k 2))))
 

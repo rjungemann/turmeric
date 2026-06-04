@@ -11,7 +11,7 @@
 ;; takes the non-blocking path in tur_select_blocking and picks a winner
 ;; via the xorshift32 PRNG.
 
-(defn chan-new [cap :int] :ptr<void>
+(defn chan-new [cap : int] : ptr<void>
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -31,7 +31,7 @@
   ```)
 
 ;; Fill channel with n items, each with value 0.
-(defn chan-fill [ch :ptr<void> n :int] :nil
+(defn chan-fill [ch : ptr<void> n : int] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -47,7 +47,7 @@
   }
   ```)
 
-(defn chan-free [ch :ptr<void>] :nil
+(defn chan-free [ch : ptr<void>] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -67,14 +67,14 @@
 ;; but we only use the result as a flag (1=a, 0=b) -- the (+ v N) form
 ;; ensures the recv binding v is referenced, suppressing unused-variable
 ;; warnings in the generated C.
-(defn count-loop [ch-a :ptr<void> ch-b :ptr<void> iter :int acc :int] :int
+(defn count-loop [ch-a : ptr<void> ch-b : ptr<void> iter : int acc : int] : int
   (if (= iter 0)
     acc
     (let [hit (select ((ch-a :recv va) (+ va 1))
                       ((ch-b :recv vb) (* vb 0)))]
       (count-loop ch-a ch-b (- iter 1) (+ acc hit)))))
 
-(defn main [] :int
+(defn main [] : int
   (let [ch-a (chan-new 1000)
         ch-b (chan-new 1000)]
     (chan-fill ch-a 1000)

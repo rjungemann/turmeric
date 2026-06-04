@@ -4,8 +4,8 @@
 ;; (rax vs xmm0) and silently miscompiled.  This is now a hard error directing
 ;; the user to the annotated form `^fat g :(fn [...] :float)`, which threads the
 ;; correct result type.
-(defn run-with [^fat g x :float] :float (g x))
-(defn make-scale [k :float] :ptr<void> (fn [x :float] :float (* x k)))
-(defn main [] :int
+(defn run-with [^fat g x : float] : float (g x))
+(defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
+(defn main [] : int
   (println (run-with (make-scale 2.0) 3.5))
   0)

@@ -17,7 +17,7 @@
 ;;   modified
 ;;   post-modify polls=1
 
-(defn reactor-link [] :int
+(defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)
@@ -28,34 +28,34 @@
 (extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
 (extern-c tur_reactor_free [r :ptr] :void)
 
-(defn make-pipe [] :ptr<void>
+(defn make-pipe [] : ptr<void>
   ```c
   int *fds = (int *)malloc(2 * sizeof(int));
   if (pipe(fds) < 0) { free(fds); return NULL; }
   return (void *)fds;
   ```)
 
-(defn pipe-read-fd [p :ptr<void>] :int
+(defn pipe-read-fd [p : ptr<void>] : int
   ```c return (int64_t)((int *)p)[0]; ```)
 
-(defn pipe-write-byte [p :ptr<void>] :nil
+(defn pipe-write-byte [p : ptr<void>] : nil
   ```c char b = 1; write(((int *)p)[1], &b, 1); ```)
 
-(defn pipe-close [p :ptr<void>] :nil
+(defn pipe-close [p : ptr<void>] : nil
   ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
 
-(defn print-pre [n :int] :nil
+(defn print-pre [n : int] : nil
   ```c printf("pre-modify polls=%lld\n", (long long)n); ```)
 
-(defn print-post [n :int] :nil
+(defn print-post [n : int] : nil
   ```c printf("post-modify polls=%lld\n", (long long)n); ```)
 
-(defn main [] :int
+(defn main [] : int
   (let [p (make-pipe)
         r (tur_reactor_new)]
     ;; Register read end for WRITE -- read-end is never writable, so no fire.
     (let [src-id (tur_reactor_add_fd r (pipe-read-fd p) 2   ;; WRITE = 2
-                   (fn [id events ud] :nil
+                   (fn [id events ud] : nil
                      (println "modified"))
                    0)]
       ;; Poll with zero timeout: no events expected.

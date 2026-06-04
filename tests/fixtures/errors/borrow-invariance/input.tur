@@ -2,7 +2,7 @@
 ; Policy: invariant — &T is not assignable to &mut T (no covariance)
 ; Attempting &mut r where r: &int must be rejected.
 
-(defn main [] :int
+(defn main [] : int
   (let [x 42]
     (let [ri (& x)]       ; ri: &int (immutable borrow)
       (let [rm &mut ri]   ; ERROR: cannot promote &T to &mut T
