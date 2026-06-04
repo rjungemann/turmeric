@@ -2793,6 +2793,17 @@ Expr *elab_fn(Elab *e, const Form *call) {
                     if (ann->kind == TY_FN) {
                         return_fn_type = ann;
                     }
+                    /* fat-closure-dispatch-aggregate-return: a lambda whose
+                     * declared return is an aggregate/applied type (TY_APP like
+                     * (Pair A B), a concrete TY_STRUCT, or a TY_ADT) must carry
+                     * the full type on its fn_type.  Otherwise emit lowers the
+                     * lifted thunk's C return type to int64_t while the body
+                     * returns the struct by value -- a hard C compile error. */
+                    if (!return_full_type &&
+                        (ann->kind == TY_APP || ann->kind == TY_ADT ||
+                         (ann->kind == TY_STRUCT && ann->as.struct_.def != NULL))) {
+                        return_full_type = ann;
+                    }
                 }
             }
             body_start++;

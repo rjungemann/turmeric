@@ -108,6 +108,40 @@ both Debug and Release builds, leak-clean under ASan. The fixture
 directory `tests/fixtures/pair-signals-typed/` is currently a stub; once
 a fix lands, re-add the input.tur and `expected.stdout` of `2\n3\n`.
 
+## Resolution
+
+Fixed. The diagnosis in "Proposed fix directions" was slightly off: the
+typed-thunk family (`use_typed_thunk_abi` / `ensure_typed_thunk_typedef`)
+*already* accepts `TY_STRUCT` results -- it was simply never reached
+because the aggregate result type was dropped to the `int64_t` carrier
+before it got there. Three sites lost the type:
+
+1. `src/compiler/elab_types.c` -- the `(fn [param-types] #{row} :ret)`
+   fat-fn-type parser built the `TY_FN` with `result_kind` only and never
+   stored `result_full_type`, so a call through a `^fat` parameter typed
+   `:(fn [...] :(Pair float float))` saw the result as the bare carrier.
+   Now preserves the full type for `TY_APP` / `TY_ADT` / concrete
+   `TY_STRUCT` results (the `(-> ...)` arrow parser got the same fix).
+2. `src/compiler/elab_fns.c` (`elab_fn`) -- the lambda return-annotation
+   parser preserved `return_full_type` only for tyvar/`TY_FN` results, so
+   the lifted closure `(fn [t] : (Pair float float) ...)` was typed with a
+   def-less struct and emitted an `int64_t`-returning thunk over a
+   struct-returning body. Now preserves it for `TY_APP` / `TY_ADT` /
+   concrete `TY_STRUCT`.
+3. `src/compiler/emit_expr.c` -- a separate latent bug surfaced by the
+   repro: `let`-binding a call whose declared result is a concrete
+   carrier-ABI aggregate (`(Pair float float)`, `(Vec int)`) declared the
+   binding as `int64_t` even though `emit_fns.c` returns such functions'
+   results *by value*. Added `call_returns_byvalue_aggregate` so the
+   binding (and the by-value-bridging predicate) match what the callee
+   actually returns. Generic (tyvar-carried) and inline-C results still
+   use the `int64_t` carrier.
+
+Validation: `tests/fixtures/pair-signals-typed/` re-added (the repro
+above) with `expected.stdout` of `2\n3\n`; passes under `bash
+tests/run.sh` (1378 fixtures, 0 fail) and runs leak-clean under
+ASan/LSan in both Debug and Release.
+
 ## Cross-references
 
 - Surfaced by [[language-readiness-for-typed-signal-plan]] gap G4.
