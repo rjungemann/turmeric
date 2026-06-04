@@ -1278,6 +1278,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 Binding *sb = scope_lookup(e->scope, kw);
                                 if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
                                     type_args[i] = sb->type;
+                                } else if (sb && sb->type.kind == TY_ADT && sb->type.as.adt_.def) {
+                                    /* A defdata/defgadt type constructor used as an
+                                     * instance head, e.g. (definstance Functor [Either] ...).
+                                     * Preserve the ADT type so the orphan-instance check
+                                     * can credit the module that defines it, and carry the
+                                     * symbol for method-name mangling so codegen never
+                                     * dereferences the struct_ union on a TY_ADT. */
+                                    type_args[i] = sb->type;
+                                    type_arg_syms[i] = kw;
                                 } else {
                                     /* Phase HKT H3: Unknown name — treat as an opaque type constructor.
                                      * TY_STRUCT without a StructDef causes codegen to emit 'void *' for
@@ -1330,13 +1339,27 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                       "type application argument must be a type keyword or symbol");
                             return NULL;
                         }
-                        /* Build fn type: TY_STRUCT with no def, KIND_ARROW2 (binary constructor) */
+                        /* Build fn type for the constructor being applied.
+                         * If the constructor names a real defdata/defstruct in
+                         * scope (e.g. `Either` in `(Either E)`), preserve its
+                         * TY_ADT/TY_STRUCT identity -- including the def's
+                         * origin_file_id -- so the orphan-instance check can
+                         * credit the owning module.  Otherwise fall back to an
+                         * opaque KIND_ARROW2 TY_STRUCT (e.g. `result`/`vec`). */
                         Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                         memset(fn_type, 0, sizeof(Type));
-                        fn_type->kind = TY_STRUCT;
-                        fn_type->copy_kind = CK_MOVE;
-                        fn_type->hkt_kind = KIND_ARROW2;
-                        fn_type->as.struct_.def = NULL;
+                        Binding *ctor_b = scope_lookup(e->scope, ctor_sym);
+                        if (ctor_b && (ctor_b->type.kind == TY_ADT ||
+                                       (ctor_b->type.kind == TY_STRUCT &&
+                                        ctor_b->type.as.struct_.def))) {
+                            *fn_type = ctor_b->type;
+                            fn_type->hkt_kind = KIND_ARROW2;
+                        } else {
+                            fn_type->kind = TY_STRUCT;
+                            fn_type->copy_kind = CK_MOVE;
+                            fn_type->hkt_kind = KIND_ARROW2;
+                            fn_type->as.struct_.def = NULL;
+                        }
                         /* Build arg type on arena */
                         Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));
                         *arg_type_ptr = app_arg_type;
@@ -2295,6 +2318,28 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         for (uint8_t i = 0; i < n_type_args && !owns_a_type_arg; i++) {
             if (type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def) {
                 if (type_args[i].as.struct_.def->origin_file_id == call->span.file_id) {
+                    owns_a_type_arg = true;
+                }
+                continue;
+            }
+            /* An ADT (defdata/defgadt) type-arg, like Functor [Either], is owned
+             * by the module that declares it -- mirror the TY_STRUCT path. */
+            if (type_args[i].kind == TY_ADT && type_args[i].as.adt_.def) {
+                if (type_args[i].as.adt_.def->origin_file_id == call->span.file_id) {
+                    owns_a_type_arg = true;
+                }
+                continue;
+            }
+            /* A partially-applied head, like Functor [(Either E)], is a TY_APP
+             * whose fn carries the constructor's ADT/struct identity.  Credit
+             * the instance to the constructor's owning module. */
+            if (type_args[i].kind == TY_APP && type_args[i].as.app.fn) {
+                const Type *fn = type_args[i].as.app.fn;
+                if (fn->kind == TY_ADT && fn->as.adt_.def &&
+                    fn->as.adt_.def->origin_file_id == call->span.file_id) {
+                    owns_a_type_arg = true;
+                } else if (fn->kind == TY_STRUCT && fn->as.struct_.def &&
+                           fn->as.struct_.def->origin_file_id == call->span.file_id) {
                     owns_a_type_arg = true;
                 }
                 continue;

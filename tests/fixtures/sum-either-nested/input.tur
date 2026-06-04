@@ -1,0 +1,22 @@
+; Sum-types plan T8.3: an Either whose Right arm carries an Opt sum; decompose
+; through the nested sum with a two-level match (Either int (Opt cstr)-shaped).
+(defdata Opt :copy
+  (Nada)
+  (Just :int))
+
+(defdata Either :copy [L R]
+  (Left L)
+  (Right R))
+
+(defn classify [e : int] : int
+  (match e
+    (Left n)  n
+    (Right r) (match r
+                (Nada)   (- 0 1)
+                (Just k) k)))
+
+(defn main [] : int
+  (println (classify (Left 100)))
+  (println (classify (Right (Just 5))))
+  (println (classify (Right (Nada))))
+  0)

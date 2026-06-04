@@ -185,7 +185,10 @@ regenerate naturally once the typeclass declarations are removed.
 
 - Adding `definstance Arrow [(->)]`. That is gated on the typeclass
   codegen bug fix and is not part of this scale-back.
-- Implementing `Either` / `Left` / `Right`. Tracked separately.
+- Implementing `Either` / `Left` / `Right`. Tracked separately in
+  [[sum-types-either-plan]] (now landed: `stdlib/either.tur` provides
+  `Either`/`Left`/`Right`, a right-biased `Functor [(Either E)]` instance, and
+  `match` destructuring -- the prerequisite this scale-back was waiting on).
 - Adding `<<<` (reverse composition). The `___` mangling collision with
   `>>>` is real (`stdlib/arrow.tur:231-233`) and a separate problem.
 - Touching `arrow-first` / `arrow-second` / `par-comp` semantics. They

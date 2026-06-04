@@ -1,0 +1,14 @@
+; Sum-types plan T8.5: a deliberately non-exhaustive match silenced with the
+; #{NonExhaustive} opt-out marker.  Without the marker this is a hard error
+; (see errors/sum-either-nonexhaustive); with it the program compiles and runs.
+(defdata Either :copy [L R]
+  (Left L)
+  (Right R))
+
+(defn only-right [e : int] : int
+  (match #{NonExhaustive} e
+    (Right r) r))
+
+(defn main [] : int
+  (println (only-right (Right 88)))
+  0)

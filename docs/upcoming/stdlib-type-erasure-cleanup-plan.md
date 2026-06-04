@@ -72,6 +72,13 @@ tasks each sub-phase contains.
 
 #### A1. Sum types (`Either`, `Left`, `Right`) end-to-end
 
+> **Superseded by [[sum-types-either-plan]] -- see that plan for the detailed
+> task list and the ADR of decisions taken.** This subsection is retained for
+> context; the standalone plan is the source of truth. Note one deviation: A1
+> step 4 below specced a *warning* on non-exhaustive matches, but the shipped
+> behaviour keeps the pre-existing hard **error** and adds a `#{NonExhaustive}`
+> opt-out marker instead.
+
 Unblocks `ArrowChoice` (`left`, `right`, `+++`, `|||`) and tightens many
 error-handling sites currently using two-of-tuple workarounds.
 
