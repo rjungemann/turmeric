@@ -1247,7 +1247,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 buf_puts(out, "int64_t");
             } else {
                 bool _fwd_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
-                Type _fwd_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                /* bare-fat-sink-poly-box-slot0-int64-mismatch.md: a ^fat param's
+                 * arg_full_types may hold a synthesized fn signature for the box
+                 * site; emit the carrier from param_types so it does not leak into
+                 * the forward declaration's param type. */
+                Type _fwd_pty = (!fd->params[j]->is_fat &&
+                                 e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                     ? *e->type.as.fn.arg_full_types[j]
                     : fd->param_types[j];
                 if (!fd->closure && !_fwd_inline_c && type_struct_pass_by_ptr(_fwd_pty)) {
@@ -1278,7 +1283,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 } else if (fd->param_types[j].kind == TY_FN) {
                     buf_puts(out, "int64_t");
                 } else {
-                    Type _pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                    Type _pty = (!fd->params[j]->is_fat &&
+                                 e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                         ? *e->type.as.fn.arg_full_types[j]
                         : fd->param_types[j];
                     buf_puts(out, type_c_name(_pty));

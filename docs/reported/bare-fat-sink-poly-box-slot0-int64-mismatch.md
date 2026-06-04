@@ -1,5 +1,7 @@
 # Bare `^fat` sink + poly box: slot-0 int64 shim vs `double` invoke cast -- round-trips only by xmm0 luck
 
+> **Status:** Fixed (2026-06-04) -- fix direction 1, see Resolution below.
+
 **One-line summary:** When a typeclass-method closure (`tur_poly_fn_t`) is
 boxed via `EX_POLY_TO_FAT` and handed to a **bare** `^fat` sink (one with
 no `:(fn [...] :T)` annotation, whose `:float` result is recovered by the
@@ -150,3 +152,43 @@ annotated form); 3 is the cheap immediate defuse.
 - `tests/fixtures/poly-to-fat-float-roundtrip/` (annotated) and
   `tests/fixtures/poly-to-fat-float-named-fn/` stay green.
 - `bash tests/run.sh` clean; int64/pointer poly boxes churn-free.
+
+## Resolution (fix direction 1)
+
+Implemented by threading the bare sink's inferred fn signature to the box
+site, exactly as the annotated form already does.
+
+1. **Synthesize the bare-`^fat` param's fn signature** (`src/compiler/elab_fns.c`).
+   When the bare-fat result-type-inference pass retypes a `^fat` param's
+   tail call to a non-int register class, recover that invoke's argument
+   kinds (`bare_fat_tail_call_arg_kinds`, mirroring the tail walk) and record
+   `(fn [args] : R)` on the function type's `arg_full_types[param_idx]`. Done
+   in both the `elab_defn` and `elab_fn` (lambda) paths. The existing box
+   site (`elab_call.c`, `poly_to_fat_.sink_fn_type`) then reads that `TY_FN`
+   and selects `ensure_typed_poly_to_fat` -> the typed
+   `__tur_poly_to_fat1_double_double` slot-0 shim.
+
+2. **Keep the `^fat` param's *emitted* C type as the carrier**
+   (`src/compiler/emit_fns.c`, `src/compiler/emit_module.c`). `arg_full_types`
+   is overloaded: it is also the source for a parameter's own emitted C type.
+   A `^fat` param is a fat-closure *carrier* handle (`void *` / `int64_t`),
+   never a by-value fn, so the four param-type emit sites (definition, CPS
+   definition, forward decl, CPS forward decl) now ignore `arg_full_types`
+   for an `is_fat` param and emit the carrier from `param_types` -- otherwise
+   the synthesized `(fn ...)` would leak in as the param's type
+   (`type_c_name(fn)` lowers to the *result* type, e.g. `double g`). The
+   annotated form was already immune (it hits the `param_types[i].kind ==
+   TY_FN -> int64_t` branch earlier); this makes the bare form behave the
+   same.
+
+Result: for `call-bare [^fat g x : float] : float (g x)` the box now stores
+`__tur_poly_to_fat1_double_double` at slot 0 and the sink stays
+`call_bare(void *g, double x)` -- ABI-consistent by construction, no longer
+dependent on xmm0 survival.
+
+**Regression coverage:** `tests/fixtures/poly-to-fat-bare-fat-sink/`
+(capturing float closure through a typeclass method into a bare `^fat`
+sink; prints `7`, slot 0 = `__tur_poly_to_fat1_double_double`). The existing
+`tests/fixtures/bare-fat-float-result/` (bare `^fat` float sink without a
+poly box) stays green and churn-free. `bash tests/run.sh`: 1352 passed,
+0 failed.
