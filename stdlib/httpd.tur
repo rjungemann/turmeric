@@ -97,18 +97,12 @@
 ;;;
 ;;; Since: Phase H5
 
-(defn httpd-register-tls-impl [wrap-fd
-                               :int
-                               handshake
-                               :int
-                               read-fn
-                               :int
-                               write-fn
-                               :int
-                               shutdown
-                               :int
-                               free-fn
-                               :int] :nil
+(defn httpd-register-tls-impl [wrap-fd :int
+                               handshake :int
+                               read-fn :int
+                               write-fn :int
+                               shutdown :int
+                               free-fn :int] :nil
   ```c httpd_tls_ops.wrap_fd   = (int64_t)wrap_fd;
   httpd_tls_ops.handshake = (int64_t)handshake;
   httpd_tls_ops.read_fn   = (int64_t)read_fn;
@@ -159,8 +153,7 @@
 ;;; Since: Phase H1 (TLS path: Phase H5)
 
 (defn httpd-handle [fd :int handler :int tls :int] :nil
-  ```c
-  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
+  ```c typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
   /* 5 second receive timeout bounds idle keep-alive connections. */
   struct timeval tv;
@@ -929,16 +922,14 @@
 ;;; Since: Phase H1
 
 (defn httpd-req-method [conn :ptr<void>] :cstr
-  ```c
-  return ((HttpdConn *)conn)->method;
+  ```c return ((HttpdConn *)conn)->method;
   ```)
 ;;; httpd-req-path -- return the request-target path from the parsed request.
 ;;;
 ;;; Since: Phase H1
 
 (defn httpd-req-path [conn :ptr<void>] :cstr
-  ```c
-  return ((HttpdConn *)conn)->path;
+  ```c return ((HttpdConn *)conn)->path;
   ```)
 ;;; httpd-req-version -- return the HTTP version from the parsed request line.
 ;;;
@@ -948,8 +939,7 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-version [conn :ptr<void>] :cstr
-  ```c
-  return ((HttpdConn *)conn)->version;
+  ```c return ((HttpdConn *)conn)->version;
   ```)
 ;;; httpd-req-body -- return the request body (NUL-terminated copy).
 ;;;
@@ -963,8 +953,7 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-body [conn :ptr<void>] :cstr
-  ```c
-  HttpdConn *c = (HttpdConn *)conn;
+  ```c HttpdConn *c = (HttpdConn *)conn;
   return c->body ? c->body : "";
   ```)
 ;;; httpd-req-body-len -- return the request body length in bytes.
@@ -975,8 +964,7 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-body-len [conn :ptr<void>] :int
-  ```c
-  return (int64_t)((HttpdConn *)conn)->body_len;
+  ```c return (int64_t)((HttpdConn *)conn)->body_len;
   ```)
 ;;; httpd-resp-status-get -- return the currently-set response status code.
 ;;;
@@ -986,24 +974,21 @@
 ;;; Since: Phase H6
 
 (defn httpd-resp-status-get [conn :ptr<void>] :int
-  ```c
-  return (int64_t)((HttpdConn *)conn)->resp_status;
+  ```c return (int64_t)((HttpdConn *)conn)->resp_status;
   ```)
 ;;; httpd-resp-status! -- set the HTTP response status code.
 ;;;
 ;;; Since: Phase H1
 
 (defn httpd-resp-status! [conn :ptr<void> status :int] :nil
-  ```c
-  ((HttpdConn *)conn)->resp_status = (int)status;
+  ```c ((HttpdConn *)conn)->resp_status = (int)status;
   ```)
 ;;; httpd-resp-body! -- set the HTTP response body (copies the string).
 ;;;
 ;;; Since: Phase H1
 
 (defn httpd-resp-body! [conn :ptr<void> body :cstr] :nil
-  ```c
-  HttpdConn *c = (HttpdConn *)conn;
+  ```c HttpdConn *c = (HttpdConn *)conn;
   if (c->resp_body) { free(c->resp_body); c->resp_body = NULL; c->resp_body_len = 0; }
   if (!body) return;
   size_t len = strlen(body);
@@ -1031,8 +1016,7 @@
 ;;; Since: Phase H8 (M6)
 
 (defn httpd-resp-body-bytes! [conn :ptr<void> bytes :ptr<void> len :int] :nil
-  ```c
-  HttpdConn *c = (HttpdConn *)conn;
+  ```c HttpdConn *c = (HttpdConn *)conn;
   if (c->resp_body) { free(c->resp_body); c->resp_body = NULL; c->resp_body_len = 0; }
   if (!bytes || len <= 0) return;
   c->resp_body = (char *)malloc((size_t)len + 1);
@@ -1076,8 +1060,7 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-req-header [conn :ptr<void> name :cstr] :cstr
-  ```c
-  if (!conn || !name) return "";
+  ```c if (!conn || !name) return "";
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   while (h) {
       if (h->name && strcasecmp(h->name, name) == 0) {
@@ -1102,8 +1085,7 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-req-header? [conn :ptr<void> name :cstr] :int
-  ```c
-  if (!conn || !name) return 0;
+  ```c if (!conn || !name) return 0;
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   while (h) {
       if (h->name && strcasecmp(h->name, name) == 0) return 1;
@@ -1128,8 +1110,7 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-resp-header! [conn :ptr<void> name :cstr value :cstr] :nil
-  ```c
-  if (!conn || !name) return;
+  ```c if (!conn || !name) return;
   HttpdConn *c = (HttpdConn *)conn;
   /* Replace if name already present. */
   HttpdHeader *h = (HttpdHeader *)c->resp_headers;
@@ -1186,8 +1167,7 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-resp-header-add! [conn :ptr<void> name :cstr value :cstr] :nil
-  ```c
-  if (!conn || !name) return;
+  ```c if (!conn || !name) return;
   HttpdConn *c = (HttpdConn *)conn;
   HttpdHeader *nh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
   if (!nh) return;
@@ -1257,8 +1237,7 @@
 ;;; Since: Phase H8 (M2)
 
 (defn httpd-req-cookie [conn :ptr<void> name :cstr] :cstr
-  ```c
-  if (!conn || !name || !*name) return "";
+  ```c if (!conn || !name || !*name) return "";
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   const char *cookie_hdr = NULL;
   while (h) {
@@ -1354,22 +1333,14 @@
 ;;;
 ;;; Since: Phase H8 (M2)
 
-(defn cookie-full [name
-                   :cstr
-                   value
-                   :cstr
-                   path
-                   :cstr
-                   domain
-                   :cstr
-                   max-age
-                   :int
-                   secure
-                   :int
-                   http-only
-                   :int
-                   same-site
-                   :cstr] :CookieOpts
+(defn cookie-full [name :cstr
+                   value :cstr
+                   path :cstr
+                   domain :cstr
+                   max-age :int
+                   secure :int
+                   http-only :int
+                   same-site :cstr] :CookieOpts
   (make-struct CookieOpts
     name
     value
@@ -1456,8 +1427,7 @@
 ;;; Since: Phase H8 (M3)
 
 (defn httpd-req-form [conn :ptr<void> field :cstr] :cstr
-  ```c
-  if (!conn || !field || !*field) return "";
+  ```c if (!conn || !field || !*field) return "";
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->body || c->body_len <= 0) return "";
   size_t flen = strlen(field);
@@ -1527,8 +1497,7 @@
 ;;; Since: Phase H8 (M3)
 
 (defn httpd-req-json [conn :ptr<void>] :int
-  ```c
-  if (!conn) return 0;
+  ```c if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (c->req_json_cache) return c->req_json_cache;
   if (!c->body || c->body_len <= 0) return 0;
@@ -1571,8 +1540,7 @@
 ;;; if-form inside mw-json-body can stay in Turmeric.
 
 (defn httpd-mw-json-body-precheck [conn :ptr<void>] :int
-  ```c
-  if (!conn) return 0;
+  ```c if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->body || c->body_len <= 0) return 0;  /* empty body -> not malformed */
   if (c->req_json_cache) return 0;             /* already parsed once -> ok */
@@ -1656,18 +1624,12 @@
 ;;; mw-cors destructures opts into primitives so the inner closure env
 ;;; stays scalar-only.
 
-(defn httpd-mw-cors-emit-preflight [conn
-                                    :ptr<void>
-                                    allow-origin
-                                    :cstr
-                                    allow-methods
-                                    :cstr
-                                    allow-headers
-                                    :cstr
-                                    allow-credentials
-                                    :int
-                                    max-age
-                                    :int] :nil
+(defn httpd-mw-cors-emit-preflight [conn :ptr<void>
+                                    allow-origin :cstr
+                                    allow-methods :cstr
+                                    allow-headers :cstr
+                                    allow-credentials :int
+                                    max-age :int] :nil
   ```c if (!conn) return;
   httpd_resp_status_((void *)conn, 204);
   httpd_resp_body_((void *)conn, "");
@@ -1688,14 +1650,10 @@
   ```)
 ;;; httpd-mw-cors-decorate -- internal: decorate a normal-flow response.
 
-(defn httpd-mw-cors-decorate [conn
-                              :ptr<void>
-                              allow-origin
-                              :cstr
-                              expose-headers
-                              :cstr
-                              allow-credentials
-                              :int] :nil
+(defn httpd-mw-cors-decorate [conn :ptr<void>
+                              allow-origin :cstr
+                              expose-headers :cstr
+                              allow-credentials :int] :nil
   ```c if (!conn) return;
   const char *ao = allow_origin   ? allow_origin   : "*";
   const char *eh = expose_headers ? expose_headers : "";
@@ -1731,20 +1689,13 @@
 ;;;
 ;;; Since: Phase H8 (M4)
 
-(defn mw-cors-with [allow-origin
-                    :cstr
-                    allow-methods
-                    :cstr
-                    allow-headers
-                    :cstr
-                    expose-headers
-                    :cstr
-                    allow-credentials
-                    :int
-                    max-age
-                    :int
-                    ^fat next
-                    :int] :ptr<void>
+(defn mw-cors-with [allow-origin :cstr
+                    allow-methods :cstr
+                    allow-headers :cstr
+                    expose-headers :cstr
+                    allow-credentials :int
+                    max-age :int
+                    ^fat next :int] :ptr<void>
   (let [_ao allow-origin
         _am allow-methods
         _ah allow-headers
@@ -1947,8 +1898,7 @@
 ;;; / non-multipart content.
 
 (defn httpd-req-multipart-parse [conn :ptr<void>] :int
-  ```c
-  typedef struct __HttpdPart {
+  ```c typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2091,8 +2041,7 @@
 ;;; Since: Phase H8 (M7)
 
 (defn httpd-req-file [conn :ptr<void> field :cstr] :ptr<void>
-  ```c
-  typedef struct __HttpdPart {
+  ```c typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2602,7 +2551,9 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-new-async-with-limit [port :int ^fat handler :int max-in-flight :int] :ptr<void>
+(defn httpd-new-async-with-limit [port :int
+                                  ^fat handler :int
+                                  max-in-flight :int] :ptr<void>
   ```c #include <fcntl.h>
   typedef void (*tur_sig_fn)(int);
   extern tur_sig_fn signal(int, tur_sig_fn);
@@ -2792,8 +2743,7 @@
 ;;; Since: Phase H8 (A0)
 
 (defn httpd-await-readable [conn :ptr<void>] :nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
   (void)tur_local_park_fd(c->fiber_group, c->fd, 1, -1);
@@ -2801,8 +2751,7 @@
 ;;; httpd-await-writable -- suspend until conn fd is writable.
 
 (defn httpd-await-writable [conn :ptr<void>] :nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
   (void)tur_local_park_fd(c->fiber_group, c->fd, 2, -1);
@@ -2817,8 +2766,7 @@
 ;;; Since: Phase H8 (A0)
 
 (defn httpd-await-timer [conn :ptr<void> ms :int] :nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
   /* Park on the fd with NO event mask (0): the timer alone wakes us. */
@@ -3111,8 +3059,7 @@
 ;;; httpd-mw-log-emit -- emit one log line for a completed request. Internal.
 
 (defn httpd-mw-log-emit [c :ptr<void> elapsed-ms :int] :nil
-  ```c
-  HttpdConn *cn = (HttpdConn *)c;
+  ```c HttpdConn *cn = (HttpdConn *)c;
   int status = cn->resp_status ? cn->resp_status : 200;
   fprintf(stdout, "%s %s -> %d %d %lldms\n",
           cn->method, cn->path, status, cn->resp_body_len,
@@ -3370,8 +3317,7 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-set-attr! [conn :ptr<void> key :cstr val :cstr] :nil
-  ```c
-  if (!conn || !key) return;
+  ```c if (!conn || !key) return;
   HttpdConn *c = (HttpdConn *)conn;
   /* Overwrite if the key already exists. */
   HttpdAttr *ap = (HttpdAttr *)c->attr_list;
@@ -3410,8 +3356,7 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-req-attr [conn :ptr<void> key :cstr] :cstr
-  ```c
-  if (!conn || !key) return "";
+  ```c if (!conn || !key) return "";
   HttpdAttr *ap = (HttpdAttr *)((HttpdConn *)conn)->attr_list;
   while (ap) {
       if (ap->key && strcmp(ap->key, key) == 0) {

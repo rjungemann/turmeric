@@ -10,10 +10,9 @@
 ;;; httpd-resp-body-bytes! from stdlib/httpd.tur.
 ;;;
 ;;; Since: Phase H8 (M6)
-
 (load "stdlib/httpd.tur")
-(load "../turmeric-spices/spices/zlib/src/tur/zlib.tur")
 
+(load "../turmeric-spices/spices/zlib/src/tur/zlib.tur")
 ;; -----------------------------------------------------------------------------
 ;; Internal: single-shot post-processing step.
 ;;
@@ -23,7 +22,6 @@
 ;; mutate the conn in place.  Going through Turmeric-level glue would
 ;; require a NULL test on a :ptr<void>, which is awkward in surface syntax.
 ;; -----------------------------------------------------------------------------
-
 ;;; httpd-mw-compress-step -- internal: post-processing gzip pass.
 ;;;
 ;;; When the client accepts gzip AND the response is not already encoded
@@ -35,9 +33,9 @@
 ;;;
 ;;; Since: Phase H8 (M6)
 
+
 (defn httpd-mw-compress-step [conn : ptr<void> min-bytes : int] : nil
-  ```c
-  if (!conn) return;
+  ```c if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (c->resp_body_len < (int)min_bytes) return;
   /* Skip if handler already produced an encoded body. */
@@ -68,11 +66,9 @@
   httpd_resp_header_add_((void *)conn, "Vary", "Accept-Encoding");
   gzip_buf_free(buf);
   ```)
-
 ;; -----------------------------------------------------------------------------
 ;; The middleware factories
 ;; -----------------------------------------------------------------------------
-
 ;;; mw-compress-with -- gzip the response body when the client accepts gzip.
 ;;;
 ;;; Inspects Accept-Encoding for "gzip"; when present AND the response body
@@ -101,13 +97,10 @@
 ;;;
 ;;; Since: Phase H8 (M6)
 
-(defn mw-compress-with [min-bytes : int ^fat next : int] : ptr<void>
-  (let [_min min-bytes
-        _n   next]
-    (fn [c : ptr<void>] : nil
-      (httpd-call _n c)
-      (httpd-mw-compress-step c _min))))
 
+(defn mw-compress-with [min-bytes : int ^fat next : int] : ptr<void>
+  (let [_min min-bytes _n next]
+    (fn [c : ptr<void>] : nil (httpd-call _n c) (httpd-mw-compress-step c _min))))
 ;;; mw-compress -- mw-compress-with default 256-byte threshold.
 ;;;
 ;;; `(mw-compress next)` is equivalent to `(mw-compress-with 256 next)`.
@@ -117,5 +110,5 @@
 ;;;
 ;;; Since: Phase H8 (M6)
 
-(defn mw-compress [^fat next : int] : ptr<void>
-  (mw-compress-with 256 next))
+
+(defn mw-compress [^fat next : int] : ptr<void> (mw-compress-with 256 next))

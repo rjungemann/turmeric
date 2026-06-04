@@ -29,8 +29,6 @@
 ;;;
 ;;; Example:
 ;;;   (arr (fn [x] (+ x 1)))  ; => identity for functions
-
-
 (defn arr [^fat f] f)
 ;;; >>> -- compose two function arrows sequentially.
 ;;;
@@ -44,8 +42,7 @@
 ;;; Example:
 ;;;   ((>>> (fn [x] (+ x 1)) (fn [x] (* x 2))) 3)  ; => 8
 
-(defn >>> [^fat f ^fat g]
-  (let [fv f gv g] (fn [x] (gv (fv x)))))
+(defn >>> [^fat f ^fat g] (let [fv f gv g] (fn [x] (gv (fv x)))))
 ;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,
 ;;; return a new heap Tuple2 *.  Used by arrow-first.
 

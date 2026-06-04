@@ -52,7 +52,8 @@
 ;;;
 ;;; Since: Phase G4
 
-(defn nat-to-int [n : Nat] : int (match n (Zero) 0 (Succ p) (+ 1 (nat-to-int p))))
+(defn nat-to-int [n : Nat] : int
+  (match n (Zero) 0 (Succ p) (+ 1 (nat-to-int p))))
 ;;; nat-add -- add two type-level Nat values.
 ;;;
 ;;; Parameters:

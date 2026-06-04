@@ -479,7 +479,8 @@
 ;;; Since: Phase SZ1
 
 
-(defn size-compat? [s1 : Size s2 : Size] : bool (= (size-eval s1) (size-eval s2)))
+(defn size-compat? [s1 : Size s2 : Size] : bool
+  (= (size-eval s1) (size-eval s2)))
 ;; ----- Size inference: fixed-arity SizedVec constructors -----
 ;;; sized-vec-of-1 -- construct a 1-element SizedVec, size inferred as 1.
 ;;;
