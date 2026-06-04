@@ -9,21 +9,27 @@
 ;; implemented using the __atomic_* GCC/Clang builtins in C blocks.
 ;; All operations use sequentially-consistent ordering by default.
 ;;
-;; An "atomic" value is represented as a :ptr<void> pointing to a
-;; heap-allocated int64_t cell.
+;; An "atomic" value is represented as an AtomicCell handle (a :ptr<void>
+;; pointing to a heap-allocated int64_t cell).
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 3) ----
+;; AtomicCell wraps the underlying :ptr<void> with a nominally distinct type so
+;; the checker rejects passing an unrelated handle where an atomic cell is
+;; expected. It lowers to :ptr<void> in the C ABI, so the inline-C bodies are
+;; unchanged.
+(defopaque AtomicCell :ptr<void>)
 ;;; atomic-new -- allocate a heap-based atomic int64 cell initialised to init.
 ;;;
 ;;; Parameters:
 ;;;   init -- initial integer value stored in the cell
 ;;;
 ;;; Returns:
-;;;   A :ptr<void> handle to the new atomic cell.
+;;;   An AtomicCell handle to the new atomic cell.
 ;;;
 ;;; Example:
-;;;   (def a (atomic-new 0))  ; => atomic cell holding 0
+;;;   (def a (atomic-new 0))  ; => AtomicCell holding 0
 ;;;
 ;;; Since: Phase T19
-(defn atomic-new [init : int] : ptr<void>
+(defn atomic-new [init : int] : AtomicCell
   ```c int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
   if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }
   __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
@@ -42,7 +48,7 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-load [p : ptr<void>] : int
+(defn atomic-load [p : AtomicCell] : int
   ```c int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_load_n(cell, __ATOMIC_SEQ_CST);
   ```)
@@ -54,7 +60,7 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-store! [p : ptr<void> v : int] : nil
+(defn atomic-store! [p : AtomicCell v : int] : nil
   ```c int64_t *cell = (int64_t *)p;
   __atomic_store_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
   ```)
@@ -72,7 +78,7 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-add! [p : ptr<void> delta : int] : int
+(defn atomic-add! [p : AtomicCell delta : int] : int
   ```c int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_fetch_add(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
@@ -87,7 +93,7 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-sub! [p : ptr<void> delta : int] : int
+(defn atomic-sub! [p : AtomicCell delta : int] : int
   ```c int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_fetch_sub(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
@@ -105,7 +111,7 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-swap! [p : ptr<void> new-val : int] : int
+(defn atomic-swap! [p : AtomicCell new-val : int] : int
   ```c int64_t *cell = (int64_t *)p;
   int64_t tmp = (int64_t)new_val;
   return (int64_t)__atomic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
@@ -125,7 +131,7 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-cas! [p : ptr<void> expected : int desired : int] : bool
+(defn atomic-cas! [p : AtomicCell expected : int desired : int] : bool
   ```c int64_t *cell = (int64_t *)p;
   int64_t exp_v = (int64_t)expected;
   int64_t des_v = (int64_t)desired;
@@ -139,6 +145,6 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-free [p : ptr<void>] : nil
+(defn atomic-free [p : AtomicCell] : nil
   ```c free(p);
   ```)
