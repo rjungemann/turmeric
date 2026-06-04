@@ -1,0 +1,11 @@
+(load "stdlib/either.tur")
+
+(defn describe [e : (Either int cstr)] : int
+  (match e
+    (Left n)  (do (println "left:") (println n) n)
+    (Right s) (do (println "right:") (println s) 0)))
+
+(defn main [] : int
+  (describe (Left 42))
+  (describe (Right "hello"))
+  0)

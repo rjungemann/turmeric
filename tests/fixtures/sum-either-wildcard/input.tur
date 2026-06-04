@@ -1,0 +1,11 @@
+(load "stdlib/either.tur")
+
+(defn name-of [e : (Either int cstr)] : cstr
+  (match e
+    (Left _) "left"
+    _        "other"))
+
+(defn main [] : int
+  (println (name-of (Left 1)))
+  (println (name-of (Right "x")))
+  0)

@@ -271,3 +271,95 @@ Pick **one** in Task 1 review; do not migrate more in this plan.
   for T7.
 - **Historical context**: `docs/archive/stdlib-arrow-typeclass-plan.md`
   documents the original encounter with the missing-sum-types problem.
+
+## ADR -- Decisions made while executing this plan
+
+This plan was authored against the pre-`defdata` codebase. By the time it was
+executed, the language had already grown a general n-ary algebraic sum type
+(`defdata`/`defgadt`) with constructor `match`, payload binding, and HKT
+partial-application instances. Most of T1-T7 was therefore **already
+implemented in a more general form**; the work landed the `Either` *use case*
+on top of it.
+
+### T1 surface syntax -- `defdata` (Option B), already in the language
+
+`defdata` is the existing surface and is exactly the plan's recommended Option
+B. `Either` is declared as `(defdata Either [L R] (Left L) (Right R))` in
+`stdlib/either.tur`. Option A (overloading `defstruct`) was correctly rejected;
+no parser work was needed.
+
+### T2 layout -- tagged union, already emitted
+
+The compiler already emits a real tagged union, not parallel slots:
+`struct tur_adt_Either { int tag; union { struct { int64_t _0; } Left;
+struct { int64_t _0; } Right; } as; }`, `tag` 0 = Left, 1 = Right. Payloads
+erase to `int64_t` and `match` restores the arm type. This satisfies the FFI
+and discriminant-convention constraints. Documented in the module docstring and
+`docs/guides/sum-types-guide.md`.
+
+### T6 exhaustiveness -- kept as a hard ERROR (deliberate divergence)
+
+The plan asked for a *warning* plus a `#{NonExhaustive}` opt-out, on the premise
+that "the elaborator does not yet model exhaustiveness." That premise is now
+false: the elaborator already enforces exhaustiveness as a **hard error**
+(`elab_structs.c`, "non-exhaustive patterns -- constructor ... not covered"),
+and the entire test suite + stdlib rely on it. Downgrading to a warning would
+*weaken* an existing safety guarantee and churn many tests for no benefit.
+
+Decision: **keep the hard error.** The escape hatch is a `_` wildcard arm (the
+language's existing, well-understood mechanism), not a new marker. The
+`#{NonExhaustive}` opt-out and the `sum-either-nonexhaustive-opt-out` fixture
+are therefore **not** implemented; the T8 "exhaustive-warn" fixture became the
+negative fixture `errors/sum-either-nonexhaustive` asserting the hard error, and
+`sum-either-wildcard` demonstrates the catch-all. Pattern-overlap remains a
+warning, as it already was.
+
+### T7 typeclass instances -- worked, modulo one orphan-check fix
+
+`Functor [(Either E)]` dispatches correctly through the existing HKT
+partial-application path; the closure-returning-instance-method bug did **not**
+resurface. One real gap was fixed: the orphan-instance check did not credit a
+**parametric ADT** used as a partial-application instance head (`(Either E)`,
+parsed with `def == NULL`) to its defining file, so an instance for your own
+`defdata` was wrongly rejected when the typeclass was imported. Fixed by adding
+`origin_file_id` to `AdtDef` and resolving the head constructor symbol against
+the ADT/struct tables in the orphan check (`elab_typeclasses.c`). This also
+benefits any future parametric-ADT instance, not just `Either`.
+
+### T5.4 nested patterns -- reported, not implemented
+
+Nested constructor patterns (`(Right (Left a))`) are not supported by `match`
+(field bindings must be symbols). This is a discrete language enhancement beyond
+the Either use case; it is filed as `docs/reported/nested-match-patterns.md` and
+the `sum-either-nested` fixture uses the supported two-step manual match.
+
+### T9 migration -- Either-returning helper instead of mutating an autoloaded site
+
+`stdlib/either.tur` is intentionally **not auto-loaded** (to keep `Left`/`Right`
+out of every program and avoid collisions). Migrating an auto-loaded stdlib
+module to depend on it would force `either` into every build and risk circular
+load order. No suitable *non*-auto-loaded tuple "error-or-value" site existed.
+The design is instead validated end-to-end by `safe-div : (Either int int)`
+(the canonical "error or value" replacing a lossy sentinel/tuple), exercised by
+`tests/fixtures/sum-either-safe-div`.
+
+### T3.4 / T10 gendocs
+
+`docs/api/` is a generated, untracked artifact; `gendocs.py` already renders an
+`tur-either.html` module page from the module docstring and the helper
+docstrings without `defdata`-specific support. Teaching gendocs to parse
+`defdata` as a first-class entry is a broad, all-ADTs tooling change with no
+bearing on the Either deliverable; it was deferred. `stdlib/docstrings.tur` is
+regenerated to include the `either` module's runtime doc entries.
+
+### What shipped
+
+- `stdlib/either.tur`: `Either`, `Left`/`Right`, predicates, `either`,
+  `either-map`/`-left`, `either-swap`, `from-left`/`from-right`, `safe-div`,
+  and `Functor [(Either E)]`. Added to the stdlib-check allowlist.
+- Compiler: `AdtDef.origin_file_id`; orphan-check credits parametric ADTs.
+- Fixtures: `sum-either-{basic,match,nested,functor-instance,
+  inline-c-roundtrip,wildcard,safe-div}` and
+  `errors/sum-either-nonexhaustive`.
+- Docs: `docs/guides/sum-types-guide.md`; this ADR;
+  `docs/reported/nested-match-patterns.md`.

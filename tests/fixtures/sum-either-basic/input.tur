@@ -1,0 +1,11 @@
+(load "stdlib/either.tur")
+
+(defn tag-of [L R] [e : (Either L R)] : int
+  (match e
+    (Left _)  0
+    (Right _) 1))
+
+(defn main [] : int
+  (println (tag-of (Left 1)))
+  (println (tag-of (Right 2)))
+  0)

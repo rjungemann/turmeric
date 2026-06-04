@@ -47,6 +47,9 @@ STDLIB_FILES=(
 
     # Bucket B: non-auto-loaded stdlib files that pass tur check standalone.
     # Files needing feature flags are documented inline.
+    # A1 (sum-types-either-plan): Either is a non-auto-loaded binary sum type;
+    # load it with (load "stdlib/either.tur") or (import either).
+    stdlib/either.tur
     stdlib/effects.tur
     stdlib/future.tur
     stdlib/threadpool.tur
@@ -90,6 +93,7 @@ STDLIB_FLAGS=(
     "--no-auto-stdlib"
 
     # Bucket B flags
+    ""
     ""
     ""
     ""

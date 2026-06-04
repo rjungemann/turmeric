@@ -1103,6 +1103,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->is_copy = is_copy;
         def->needs_drop_glue = false;
         def->is_gadt = false;
+        def->origin_file_id = call->span.file_id;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
         /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines) */
@@ -1129,6 +1130,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
+        def->origin_file_id = call->span.file_id;
         /* Phase RF1: store type parameters */
         def->type_params = type_params;
         def->n_type_params = n_type_params;
@@ -1740,6 +1742,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->is_copy = false;
         def->needs_drop_glue = false;
         def->is_gadt = true;
+        def->origin_file_id = call->span.file_id;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
         /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines) */
@@ -1763,6 +1766,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_gadt = true;
+        def->origin_file_id = call->span.file_id;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
         /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines) */

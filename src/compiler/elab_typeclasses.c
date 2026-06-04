@@ -2242,6 +2242,28 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             if (home && cur_basename && strcmp(cur_basename, home) == 0) {
                 owns_a_type_arg = true;
             }
+            /* A partially-applied type constructor (e.g. `(Either E)`) is
+             * parsed with def == NULL, so the TY_STRUCT branch above can never
+             * credit a user-defined parametric ADT/struct to its defining file.
+             * Resolve the recorded head symbol against the ADT and struct
+             * tables so an instance for your own `(defdata Either [L R] ...)`
+             * (or parametric defstruct) is not wrongly flagged orphan when the
+             * typeclass itself is imported. */
+            if (!owns_a_type_arg && type_arg_syms && type_arg_syms[i]) {
+                const char *head = type_arg_syms[i]->name;
+                for (uint32_t ai = 0; ai < e->n_adt_defs && !owns_a_type_arg; ai++) {
+                    if (e->adt_defs[ai]->origin_file_id == call->span.file_id &&
+                        strcmp(e->adt_defs[ai]->name, head) == 0) {
+                        owns_a_type_arg = true;
+                    }
+                }
+                for (uint32_t si = 0; si < e->n_struct_defs && !owns_a_type_arg; si++) {
+                    if (e->struct_defs[si]->origin_file_id == call->span.file_id &&
+                        strcmp(e->struct_defs[si]->name, head) == 0) {
+                        owns_a_type_arg = true;
+                    }
+                }
+            }
         }
         if (!owns_a_type_arg) {
             diag_emit_with_code(DIAG_ERROR, call->span,

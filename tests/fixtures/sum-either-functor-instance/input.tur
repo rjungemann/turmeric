@@ -1,0 +1,8 @@
+(load "stdlib/either.tur")
+
+(defn main [] : int
+  (let [r (:: (.fmap (Right 5) (fn [x : int] : int (* x 8))) (Either int int))
+        l (:: (.fmap (Left 9)  (fn [x : int] : int (* x 8))) (Either int int))]
+    (println (from-right r 0))
+    (println (from-left l 0))
+    0))

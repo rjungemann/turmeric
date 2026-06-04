@@ -1,0 +1,10 @@
+(load "stdlib/either.tur")
+
+;; Non-exhaustive: the Right arm is missing.  Turmeric treats this as a
+;; hard error (TUR exhaustiveness check), not a warning.
+(defn describe [e : (Either int cstr)] : int
+  (match e
+    (Left n) n))
+
+(defn main [] : int
+  (describe (Left 1)))

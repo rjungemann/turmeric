@@ -1,0 +1,15 @@
+;; T9 (sum-types-either-plan): migrate an "error or value" site to Either.
+;; safe-div returns (Right quotient) or (Left error-code); the match arms
+;; recover both with full typing -- no tuple, no lossy sentinel.
+(load "stdlib/either.tur")
+
+(defn report [n : int d : int] : int
+  (match (safe-div n d)
+    (Left _)  (do (println "div-by-zero") -1)
+    (Right q) (do (println "ok") q)))
+
+(defn main [] : int
+  (println (report 20 4))
+  (println (report 7 0))
+  (println (from-right (safe-div 100 5) 0))
+  0)

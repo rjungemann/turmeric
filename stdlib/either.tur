@@ -1,0 +1,214 @@
+;;; tur/either -- typed binary sum Either[L R]: a Left l or a Right r.
+;;;
+;;; Either is the canonical heterogeneous binary sum. Unlike Option (one
+;;; payload slot) and Result (an ok/err pair that shares the discriminant
+;;; convention), Either is built on the first-class `defdata` sum machinery,
+;;; so each arm carries its own independently-typed payload and `match`
+;;; binds the payload at the correct arm type.
+;;;
+;;; By convention Left carries the "error" or first alternative and Right the
+;;; "success" or second alternative; the Functor instance therefore maps over
+;;; the Right arm and passes Left through unchanged.
+;;;
+;;; Runtime layout (FFI bridge for inline-C blocks):
+;;;   typedef struct {
+;;;       int tag;                       /* 0 = Left, 1 = Right */
+;;;       union {
+;;;           struct { int64_t _0; } Left;
+;;;           struct { int64_t _0; } Right;
+;;;       } as;
+;;;   } tur_adt_Either;
+;;; Values are int64 handles to a heap-allocated tur_adt_Either. The payload
+;;; in each arm is erased to int64_t at the C boundary, exactly as Option[A]
+;;; erases its single slot; `match` restores the declared arm type.
+;;;
+;;; Since: Phase A1 (sum-types-either-plan)
+;; Either -- binary sum type; see module docstring for the FFI layout.
+(defdata Either [L R] (Left L) (Right R))
+;;; left? -- is this Either a Left?
+;;;
+;;; Parameters:
+;;;   e -- the Either[L R] to inspect (consumed)
+;;;
+;;; Returns:
+;;;   true if e is a Left, false if it is a Right.
+;;;
+;;; Example:
+;;;   (left? (Left 1))   ; => true
+;;;   (left? (Right 2))  ; => false
+;;;
+;;; Since: Phase A1
+
+(defn left? [L R]
+  [e : (Either L R)]
+  : bool
+  (match e (Left _) true (Right _) false))
+;;; right? -- is this Either a Right?
+;;;
+;;; Parameters:
+;;;   e -- the Either[L R] to inspect (consumed)
+;;;
+;;; Returns:
+;;;   true if e is a Right, false if it is a Left.
+;;;
+;;; Example:
+;;;   (right? (Right 2))  ; => true
+;;;   (right? (Left 1))   ; => false
+;;;
+;;; Since: Phase A1
+
+(defn right? [L R]
+  [e : (Either L R)]
+  : bool
+  (match e (Left _) false (Right _) true))
+;;; either -- eliminate an Either by applying one of two functions.
+;;;
+;;; The fundamental Either destructor: run on-left for a Left payload or
+;;; on-right for a Right payload, collapsing the sum to a single result.
+;;;
+;;; Parameters:
+;;;   e        -- the Either[L R] to eliminate (consumed)
+;;;   on-left  -- function L -> X applied to a Left payload
+;;;   on-right -- function R -> X applied to a Right payload
+;;;
+;;; Returns:
+;;;   The result of whichever branch matched, as :int (the erased carrier).
+;;;
+;;; Example:
+;;;   (either (Right 5) (fn [e] 0) (fn [x] (+ x 1)))  ; => 6
+;;;
+;;; Since: Phase A1
+
+(defn either [L R]
+  [e : (Either L R) ^fat on-left ^fat on-right]
+  : int
+  (match e (Left l) (on-left l) (Right r) (on-right r)))
+;;; either-map -- map a function over the Right payload.
+;;;
+;;; Leaves a Left unchanged; applies f to a Right payload. This is the
+;;; Functor action specialised to a concrete f, exposed as a plain function.
+;;;
+;;; Parameters:
+;;;   e -- the Either[L R] (consumed)
+;;;   f -- function R -> R' applied to a Right payload
+;;;
+;;; Returns:
+;;;   A fresh Either with f applied if Right, or the unchanged Left.
+;;;
+;;; Example:
+;;;   (either-map (Right 3) (fn [x] (* x 2)))  ; => (Right 6)
+;;;   (either-map (Left 7)  (fn [x] (* x 2)))  ; => (Left 7)
+;;;
+;;; Since: Phase A1
+
+(defn either-map [L R]
+  [e : (Either L R) ^fat f]
+  : int
+  (match e (Left l) (Left l) (Right r) (Right (f r))))
+;;; either-map-left -- map a function over the Left payload.
+;;;
+;;; Leaves a Right unchanged; applies f to a Left payload.
+;;;
+;;; Parameters:
+;;;   e -- the Either[L R] (consumed)
+;;;   f -- function L -> L' applied to a Left payload
+;;;
+;;; Returns:
+;;;   A fresh Either with f applied if Left, or the unchanged Right.
+;;;
+;;; Example:
+;;;   (either-map-left (Left 3)  (fn [x] (* x 2)))  ; => (Left 6)
+;;;   (either-map-left (Right 7) (fn [x] (* x 2)))  ; => (Right 7)
+;;;
+;;; Since: Phase A1
+
+(defn either-map-left [L R]
+  [e : (Either L R) ^fat f]
+  : int
+  (match e (Left l) (Left (f l)) (Right r) (Right r)))
+;;; either-swap -- exchange the Left and Right arms.
+;;;
+;;; Parameters:
+;;;   e -- the Either[L R] (consumed)
+;;;
+;;; Returns:
+;;;   (Right l) for a (Left l), and (Left r) for a (Right r).
+;;;
+;;; Example:
+;;;   (either-swap (Left 1))   ; => (Right 1)
+;;;   (either-swap (Right 2))  ; => (Left 2)
+;;;
+;;; Since: Phase A1
+
+(defn either-swap [L R]
+  [e : (Either L R)]
+  : int
+  (match e (Left l) (Right l) (Right r) (Left r)))
+;;; from-left -- extract a Left payload, or a default for a Right.
+;;;
+;;; Parameters:
+;;;   e    -- the Either[L R] (consumed)
+;;;   dflt -- value returned when e is a Right
+;;;
+;;; Returns:
+;;;   The Left payload, or dflt.
+;;;
+;;; Example:
+;;;   (from-left (Left 7)  0)  ; => 7
+;;;   (from-left (Right 9) 0)  ; => 0
+;;;
+;;; Since: Phase A1
+
+(defn from-left [L R]
+  [e : (Either L R) dflt : L]
+  : L
+  (match e (Left l) l (Right _) dflt))
+;;; from-right -- extract a Right payload, or a default for a Left.
+;;;
+;;; Parameters:
+;;;   e    -- the Either[L R] (consumed)
+;;;   dflt -- value returned when e is a Left
+;;;
+;;; Returns:
+;;;   The Right payload, or dflt.
+;;;
+;;; Example:
+;;;   (from-right (Right 7) 0)  ; => 7
+;;;   (from-right (Left 9)  0)  ; => 0
+;;;
+;;; Since: Phase A1
+
+(defn from-right [L R]
+  [e : (Either L R) dflt : R]
+  : R
+  (match e (Left _) dflt (Right r) r))
+;;; safe-div -- integer division that reports failure as a Left.
+;;;
+;;; The canonical "error or value" use of Either: where a tuple or a sentinel
+;;; (e.g. returning 0 and a separate ok-flag, which loses the failure detail
+;;; an Option would also drop) once stood in, Either carries both arms with
+;;; full typing. A Right holds the quotient; a Left holds an error code.
+;;;
+;;; Parameters:
+;;;   n -- dividend
+;;;   d -- divisor
+;;;
+;;; Returns:
+;;;   (Right (/ n d)) when d is non-zero, else (Left 0) for divide-by-zero.
+;;;
+;;; Example:
+;;;   (safe-div 20 4)  ; => (Right 5)
+;;;   (safe-div 20 0)  ; => (Left 0)
+;;;
+;;; Since: Phase A1
+
+(defn safe-div [n : int d : int] : (Either int int)
+  (if (= d 0) (Left 0) (Right (/ n d))))
+;;; Functor [(Either E)] -- map over the Right arm, leaving Left untouched.
+
+(definstance Functor [(Either E)] (fmap [container f]
+                                    (match container
+                                      (Left l)
+                                      (Left l)
+                                      (Right r)
+                                      (Right (f r)))))

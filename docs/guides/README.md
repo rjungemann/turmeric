@@ -119,6 +119,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Error Handling
 
 - **[error-handling-guide.md](error-handling-guide.md)** -- `Result`, `Option`, `panic`, contract macros (`assert!`, `require!`, `ensure!`)
+- **[sum-types-guide.md](sum-types-guide.md)** -- `defdata` sum types, `Either L R` for "error or value", `match` and exhaustiveness, the tagged-union FFI layout
 - **[contract-types-guide.md](contract-types-guide.md)** -- Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts (planned v4)
 - **[../design/error-handling-rationale.md](../design/error-handling-rationale.md)** -- Design rationale: exceptions vs. panic
 

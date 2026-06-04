@@ -1,0 +1,22 @@
+(load "stdlib/either.tur")
+
+;; Inline-C bridge: read the tur_adt_Either tagged union directly.
+(defn either-tag [e : int] #{Unsafe} : int
+  ```c typedef struct { int tag; union { struct { int64_t _0; } Left; struct { int64_t _0; } Right; } as; } E;
+  E *p = (E*)(intptr_t)e;
+  return (int64_t)p->tag;
+  ```)
+
+(defn either-payload [e : int] #{Unsafe} : int
+  ```c typedef struct { int tag; union { struct { int64_t _0; } Left; struct { int64_t _0; } Right; } as; } E;
+  E *p = (E*)(intptr_t)e;
+  return p->tag == 0 ? p->as.Left._0 : p->as.Right._0;
+  ```)
+
+(defn main [] : int
+  (unsafe
+    (println (either-tag (Right 7)))
+    (println (either-payload (Right 7)))
+    (println (either-tag (Left 4)))
+    (println (either-payload (Left 4))))
+  0)

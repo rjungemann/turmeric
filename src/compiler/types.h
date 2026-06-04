@@ -247,6 +247,10 @@ typedef struct AdtDef {
     /* TP1/TP2: arena-alloc'd Kind array, one per type_params entry.
      * Initialised to KIND_STAR; TP4 refines based on usage in CtorField.full_type. */
     Kind       *type_param_kinds;
+    /* Source file that declared this ADT (mirrors Span.file_id; 0 = unknown).
+     * Used by the orphan-instance check to credit an instance head whose head
+     * constructor is a user-defined ADT to its defining file. */
+    uint16_t    origin_file_id;
 } AdtDef;
 
 /* Phase 11: Struct field descriptor.

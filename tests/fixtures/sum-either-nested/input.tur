@@ -1,0 +1,14 @@
+(load "stdlib/either.tur")
+
+(defn deep [e : (Either int (Either int int))] : int
+  (match e
+    (Left n)     (do (println "outer-left") n)
+    (Right inner) (match inner
+                    (Left a)  (do (println "inner-left") a)
+                    (Right b) (do (println "inner-right") b))))
+
+(defn main [] : int
+  (println (deep (Left 1)))
+  (println (deep (Right (Left 2))))
+  (println (deep (Right (Right 3))))
+  0)
