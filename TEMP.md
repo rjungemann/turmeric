@@ -137,7 +137,7 @@ do not collapse phases, do not reword entries into prose, and update the
     - Kind: plan
     - Goal: Spike-validate that the type system can support a typed signal library; gate remaining gaps
     - Deps: 4, 7, 8, 10, 17
-    - Status: Done (G1, G3, G5, G6, G7, G8 green; G2 red → 14; G4 red → 15)
+    - Status: Complete (G1, G3, G5, G6, G7, G8 green; G2 red → 14; G4 red → 15)
 
 ## Phase 4 -- Stdlib hardening
 
