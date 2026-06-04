@@ -327,12 +327,18 @@ co-evolve (`condvar-wait` needs both newtypes simultaneously).
 > or other stdlib module loads these I/O modules, so nothing else needed
 > updating.
 >
+> **process (Pid):** also landed in the same pass. `tur/process` now has
+> `(defopaque Pid :int)`; `process/pid` / `-ppid` / `-spawn` return `Pid`
+> and `process/wait` takes one, so an exit code or other bare integer can no
+> longer be passed where a pid is expected (`process/spawn` still encodes
+> its error as pid `-1`, recovered with `(:: pid :int)`). Acceptance fixture
+> `errors/process-wrong-handle`.
+>
 > **Still deferred:** `async_pipe` (its stdin/stdout helpers take no fd
-> arguments), `tur/process` (PIDs -- a `Pid` newtype is a separate concept
-> worth its own slice), `tur/fs` (the `:int` stat / tmpfile / glob handles
-> are heterogeneous opaque-struct handles, each its own newtype), and
-> `tur/io` (already partly handle-typed via `FileHandle`; the `FILE*`-based
-> path and the dir-listing handles remain).
+> arguments), `tur/fs` (the `:int` stat / tmpfile / glob handles are
+> heterogeneous opaque-struct handles, each its own newtype), and `tur/io`
+> (already partly handle-typed via `FileHandle`; the `FILE*`-based path and
+> the dir-listing handles remain).
 >
 > Implementing the taskgroup slice (Tier 2) had already surfaced the
 > pre-existing `task-group-with*` macro bug

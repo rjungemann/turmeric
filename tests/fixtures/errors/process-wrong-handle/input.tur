@@ -1,0 +1,12 @@
+;; process-wrong-handle -- an exit code (a plain :int) cannot stand in for a Pid.
+;; Acceptance test for the I/O-sweep Pid newtype from the
+;; stdlib-opaque-handle-types plan: process/spawn / process/pid return a Pid,
+;; and process/wait accepts only a Pid -- so passing a bare integer (here an
+;; exit code) to process/wait, which type-checked when pids were bare :int, is
+;; now a compile-time error.
+(load "stdlib/process.tur")
+
+(defn main [] : int
+  (let [code 0]
+    (process/wait code))
+  0)
