@@ -1,0 +1,10 @@
+;; timer-wrong-handle -- passing an arbitrary integer to timer-cancel is a
+;; compile error. Acceptance test for the Tier-2 TimerId newtype from the
+;; stdlib-opaque-handle-types plan: timer-set returns a TimerId (an opaque over
+;; :int), and timer-cancel accepts only that -- not any stray :int -- so a
+;; transposed or fabricated id is caught at compile time.
+(load "stdlib/timer.tur")
+
+(defn main [] : int
+  (timer-cancel 3)
+  0)

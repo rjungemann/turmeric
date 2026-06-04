@@ -9,9 +9,15 @@
 ;; emitted in the runtime preamble.
 ;;
 ;; API:
-;;   timer-set    [ms callback arg]  -> timer-id (int)
+;;   timer-set    [ms callback arg]  -> TimerId
 ;;   timer-cancel [id]               -> nil
 ;;   timer-sleep  [ms]               -> nil  (parks fiber, requires scheduler)
+;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, Tier 2) ----
+;; TimerId wraps the timer-wheel handle (an :int) with a nominally distinct type
+;; so the checker rejects passing an arbitrary integer to timer-cancel -- only a
+;; value produced by timer-set is accepted. It lowers to :int in the C ABI, so
+;; the inline-C bodies are unchanged.
+(defopaque TimerId :int)
 ;;; timer-set -- schedule a one-shot callback after a delay.
 ;;;
 ;;; Parameters:
@@ -20,16 +26,16 @@
 ;;;   arg      -- opaque :ptr<void> passed to callback when it fires.
 ;;;
 ;;; Returns:
-;;;   A timer ID (int) that can be passed to timer-cancel to abort the timer
+;;;   A TimerId that can be passed to timer-cancel to abort the timer
 ;;;   before it fires.
 ;;;
 ;;; Example:
-;;;   (timer-set 500 my-cb my-arg)  ; => 3  (fires in 500 ms)
+;;;   (timer-set 500 my-cb my-arg)  ; => TimerId  (fires in 500 ms)
 ;;;
 ;;; Since: Phase T24
 ;; Schedule a callback to fire after ms milliseconds.
-;; Returns a timer ID that can be passed to timer-cancel.
-(defn timer-set [ms : int callback : ptr<void> arg : ptr<void>] : int
+;; Returns a TimerId that can be passed to timer-cancel.
+(defn timer-set [ms : int callback : ptr<void> arg : ptr<void>] : TimerId
   ```c if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
   int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
   return tur_timer_wheel_insert(tur_global_timers, deadline,
@@ -47,7 +53,7 @@
 ;; Cancel a previously scheduled timer by ID.
 ;; If the timer has already fired, this is a no-op.
 
-(defn timer-cancel [id : int] : nil
+(defn timer-cancel [id : TimerId] : nil
   ```c if (tur_global_timers) tur_timer_wheel_cancel(tur_global_timers, id);
   ```)
 ;;; timer-sleep -- park the current fiber for a given number of milliseconds.
