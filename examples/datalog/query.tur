@@ -23,30 +23,30 @@
 ;; Datum
 ;; ============================================================
 
-(defn datum-new [entity :int attr :int value :int tx :int] :int
+(defn datum-new [entity : int attr : int value : int tx : int] : int
   ```c
   int64_t *d = malloc(4 * sizeof(int64_t));
   d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
   return (int64_t)(intptr_t)d;
   ```)
 
-(defn datum-entity [d :int] :int
+(defn datum-entity [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[0]; ```)
 
-(defn datum-attr [d :int] :int
+(defn datum-attr [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[1]; ```)
 
-(defn datum-value [d :int] :int
+(defn datum-value [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[2]; ```)
 
-(defn datum-tx [d :int] :int
+(defn datum-tx [d : int] : int
   ```c return ((int64_t*)(intptr_t)d)[3]; ```)
 
 ;; ============================================================
 ;; Database
 ;; ============================================================
 
-(defn db-new [] :int
+(defn db-new [] : int
   ```c
   int64_t *db = malloc(2 * sizeof(int64_t));
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -56,21 +56,21 @@
   return (int64_t)(intptr_t)db;
   ```)
 
-(defn db-count [db :int] :int
+(defn db-count [db : int] : int
   ```c
   int64_t *p = (int64_t*)(intptr_t)db;
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
   return (int64_t)v->len;
   ```)
 
-(defn db-ref [db :int i :int] :int
+(defn db-ref [db : int i : int] : int
   ```c
   int64_t *p = (int64_t*)(intptr_t)db;
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
   return v->data[i];
   ```)
 
-(defn db-assert! [db :int entity :int attr :int value :int] :int
+(defn db-assert! [db : int entity : int attr : int value : int] : int
   ```c
   int64_t *p = (int64_t*)(intptr_t)db;
   p[1] += 1;
@@ -92,26 +92,26 @@
 ;; Result vec
 ;; ============================================================
 
-(defn rvec-new [] :ptr<void>
+(defn rvec-new [] : ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   return v;
   ```)
 
-(defn rvec-len [v :ptr<void>] :int
+(defn rvec-len [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->len;
   ```)
 
-(defn rvec-get [v :ptr<void> i :int] :int
+(defn rvec-get [v : ptr<void> i : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->data[i];
   ```)
 
-(defn rvec-push! [v :ptr<void> val :int]
+(defn rvec-push! [v : ptr<void> val : int]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len >= vec->cap) {
@@ -127,31 +127,31 @@
 ;; String helpers
 ;; ============================================================
 
-(defn cstr->int [s :cstr] :int
+(defn cstr->int [s : cstr] : int
   ```c return (int64_t)(intptr_t)s; ```)
 
-(defn cstr-eq? [a :int b :int] :bool
+(defn cstr-eq? [a : int b : int] : bool
   ```c
   return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
   ```)
 
-(defn println-cstr [s :int] :nil
+(defn println-cstr [s : int] : nil
   ```c printf("%s\n", (const char*)(intptr_t)s); ```)
 
 ;; ============================================================
 ;; Value constructors and printer
 ;; ============================================================
 
-(defn long-val [n :int] :int
+(defn long-val [n : int] : int
   (LongVal n))
 
-(defn str-val [s :cstr] :int
+(defn str-val [s : cstr] : int
   (StrVal (cstr->int s)))
 
-(defn entity-val [e :int] :int
+(defn entity-val [e : int] : int
   (EntityVal e))
 
-(defn print-value [v :int] :nil
+(defn print-value [v : int] : nil
   (match v
     (LongVal n)   (println n)
     (StrVal s)    (println-cstr s)
@@ -161,7 +161,7 @@
 ;; Base query combinators
 ;; ============================================================
 
-(defn db-q [db :int pred] :ptr<void>
+(defn db-q [db : int pred] : ptr<void>
   (let [n (db-count db)]
     (let [result (rvec-new)]
       (let [^mut i 0]
@@ -173,13 +173,13 @@
             (set! i (+ i 1))))
         result))))
 
-(defn q-entity [e :int]
+(defn q-entity [e : int]
   (fn [d] (= (datum-entity d) e)))
 
-(defn q-attr [a :cstr]
+(defn q-attr [a : cstr]
   (fn [d] (cstr-eq? (datum-attr d) (cstr->int a))))
 
-(defn q-ea [e :int a :cstr]
+(defn q-ea [e : int a : cstr]
   (fn [d]
     (and (= (datum-entity d) e)
          (cstr-eq? (datum-attr d) (cstr->int a)))))
@@ -198,7 +198,7 @@
 ;; ============================================================
 
 ;; Compare two Value ADT instances for equality
-(defn value-eq? [a :int b :int] :bool
+(defn value-eq? [a : int b : int] : bool
   (match a
     (LongVal x)   (match b (LongVal y)   (= x y)        _ false)
     (StrVal x)    (match b (StrVal y)    (cstr-eq? x y) _ false)
@@ -209,22 +209,22 @@
 ;; ============================================================
 
 ;; q-av -- query datums by attribute name and value
-(defn q-av [a :cstr v :int]
+(defn q-av [a : cstr v : int]
   (fn [d]
     (and (cstr-eq? (datum-attr d) (cstr->int a))
          (value-eq? (datum-value d) v))))
 
 ;; db-as-of -- return an rvec of all datums at or before as-of-tx
-(defn db-as-of [db :int as-of-tx :int] :ptr<void>
+(defn db-as-of [db : int as-of-tx : int] : ptr<void>
   (db-q db (fn [d] (<= (datum-tx d) as-of-tx))))
 
 ;; pull -- get all datums for entity e
-(defn pull [db :int e :int] :ptr<void>
+(defn pull [db : int e : int] : ptr<void>
   (db-q db (fn [d] (= (datum-entity d) e))))
 
 ;; history -- return datums for entity/attr sorted ascending by tx
 ;; Uses insertion sort (suitable for tutorial-scale data)
-(defn history [db :int entity :int attr :cstr] :ptr<void>
+(defn history [db : int entity : int attr : cstr] : ptr<void>
   (let [raw (db-q db (fn [d]
                        (and (= (datum-entity d) entity)
                             (cstr-eq? (datum-attr d) (cstr->int attr)))))]
@@ -256,11 +256,11 @@
 ;; db-retract! -- record a retraction fact for entity/attr
 ;; Retraction is represented as a :db/retract fact whose value
 ;; is the attribute name being retracted (as a StrVal).
-(defn db-retract! [db :int entity :int attr :cstr] :int
+(defn db-retract! [db : int entity : int attr : cstr] : int
   (db-assert! db entity (cstr->int ":db/retract") (StrVal (cstr->int attr))))
 
 ;; retracted? -- true if entity/attr has a :db/retract at or before as-of-tx
-(defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
+(defn retracted? [db : int entity : int attr : cstr as-of-tx : int] : bool
   (let [n (db-count db)]
     (let [^mut i 0]
       (let [^mut found false]
@@ -280,7 +280,7 @@
 ;; Demo
 ;; ============================================================
 
-(defn demo [] :nil
+(defn demo [] : nil
   (let [db (db-new)]
 
     ;; --- Alice: entity 1 ---
@@ -347,6 +347,6 @@
 
       nil)))
 
-(defn main [] :int
+(defn main [] : int
   (demo)
   0)

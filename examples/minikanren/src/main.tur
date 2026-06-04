@@ -7,7 +7,7 @@
 
 (def PERSON_COUNT 6)
 
-(defn person-name [id :int] :cstr
+(defn person-name [id : int] : cstr
   (cond
     (= id 0) "abe"
     (= id 1) "homer"
@@ -17,7 +17,7 @@
     (= id 5) "mona"
     :else "unknown"))
 
-(defn parento [parent :int child :int] :int
+(defn parento [parent : int child : int] : int
   (cond
     (and (= parent 0) (= child 1)) 1  ;; abe -> homer
     (and (= parent 5) (= child 1)) 1  ;; mona -> homer
@@ -27,7 +27,7 @@
     (and (= parent 4) (= child 3)) 1  ;; marge -> lisa
     :else 0))
 
-(defn grandparento [grand :int child :int] :int
+(defn grandparento [grand : int child : int] : int
   (let [^mut mid 0
         ^mut found 0]
     (while (< mid PERSON_COUNT)
@@ -38,7 +38,7 @@
         (set! mid (+ mid 1))))
     found))
 
-(defn query-parents-of [child :int] :nil
+(defn query-parents-of [child : int] : nil
   (do
     (println "Parents of:")
     (println (person-name child))
@@ -50,7 +50,7 @@
           (set! p (+ p 1)))))
     nil))
 
-(defn query-children-of [parent :int] :nil
+(defn query-children-of [parent : int] : nil
   (do
     (println "Children of:")
     (println (person-name parent))
@@ -62,7 +62,7 @@
           (set! c (+ c 1)))))
     nil))
 
-(defn query-grandparents-of [child :int] :nil
+(defn query-grandparents-of [child : int] : nil
   (do
     (println "Grandparents of:")
     (println (person-name child))
@@ -74,7 +74,7 @@
           (set! g (+ g 1)))))
     nil))
 
-(defn print-all-parent-facts [] :nil
+(defn print-all-parent-facts [] : nil
   (do
     (println "All parent facts (both vars unknown):")
     (let [^mut p 0]
@@ -91,7 +91,7 @@
           (set! p (+ p 1)))))
     nil))
 
-(defn -main [] :int
+(defn -main [] : int
   (do
     (println "miniKanren-style relational example")
     (println "----------------------------------")
