@@ -276,6 +276,7 @@ typedef struct StructDef {
     StructField *fields;    /* field array (malloc'd) */
     bool is_copy;           /* :copy annotation */
     bool is_linear;         /* LT4: :linear annotation -- exactly-once (CK_LINEAR) */
+    bool is_affine;         /* :affine annotation -- at-most-once (SK_AFFINE / CK_UNIQUE) */
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
     /* SI4-C: opaque newtype -- always int64_t in C; name only used for REPL type tags. */
     bool is_opaque;
@@ -1153,11 +1154,16 @@ static inline Type type_cloneable_cont(TypeKind returns) {
 
 /* Phase 11: Struct type constructor */
 /* Create a TY_STRUCT type referencing the given StructDef.
- * copy_kind is CK_LINEAR for :linear structs, CK_COPY for :copy, CK_MOVE otherwise. */
+ * copy_kind is CK_LINEAR for :linear structs, CK_COPY for :copy, CK_MOVE otherwise.
+ * An :affine struct is CK_UNIQUE (at-most-one alias) and carries SK_AFFINE on the
+ * substructural axis so it may be silently dropped but never duplicated. */
 static inline Type type_struct(StructDef *def) {
     Type t = {0};
     t.kind = TY_STRUCT;
-    t.copy_kind = def->is_linear ? CK_LINEAR : (def->is_copy ? CK_COPY : CK_MOVE);
+    t.copy_kind = def->is_linear ? CK_LINEAR
+                : def->is_affine ? CK_UNIQUE
+                : (def->is_copy ? CK_COPY : CK_MOVE);
+    if (def->is_affine) t.substruct = SK_AFFINE;
     t.hkt_kind = KIND_STAR;
     t.as.struct_.def = def;
     return t;

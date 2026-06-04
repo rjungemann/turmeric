@@ -1,0 +1,15 @@
+;; stdlib-linearity-affinity-plan (L2): TmpFile is a :linear resource handle.
+;;
+;; A temp file owns an open fd and an on-disk entry, so it must be released
+;; exactly once with fs/tmpfile-free. Under -Xlinear the checker proves the
+;; handle is consumed on the single live path -- dropping it (TUR-E0100) or
+;; freeing it twice (TUR-E0101) is a compile error (see the errors/ fixtures).
+;;
+;; Expected output: tmpfile released
+(load "stdlib/fs.tur")
+
+(defn main [] : int
+  (let [t (fs/tmpfile)]
+    (fs/tmpfile-free t)
+    (println "tmpfile released")
+    0))

@@ -4462,20 +4462,20 @@ int main(int argc, char **argv) {
         }
         int64_t __t25;
         {
-            void * sched_908 = scheduler_mt_new(INT64_C(2));
-            (void)sched_908;
+            void * sched_907 = scheduler_mt_new(INT64_C(2));
+            (void)sched_907;
             {
-                int64_t fa_909 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
-                (void)fa_909;
+                int64_t fa_908 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
+                (void)fa_908;
                 {
-                    int64_t fb_910 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
-                    (void)fb_910;
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_908), fa_909);
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_908), fb_910);
+                    int64_t fb_909 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
+                    (void)fb_909;
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_907), fa_908);
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_907), fb_909);
                     thread_sleep(INT64_C(100));
-                    scheduler_mt_free((void *)(intptr_t)(sched_908));
-                    fiber_free(fa_909);
-                    fiber_free(fb_910);
+                    scheduler_mt_free((void *)(intptr_t)(sched_907));
+                    fiber_free(fa_908);
+                    fiber_free(fb_909);
                 }
             }
             int64_t __t26;

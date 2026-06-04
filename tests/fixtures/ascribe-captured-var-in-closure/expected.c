@@ -2493,7 +2493,7 @@ static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
 static bool __fn_855(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
-static int64_t __fn_863(void *, int64_t);
+static int64_t __fn_862(void *, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -3181,10 +3181,10 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
 };
 
-struct __env_865 { tur_thunk_int64_t_int64_t_t __fn; int64_t ch; };
-static int64_t __fn_863(void * __env_p_866, int64_t user) {
-        struct __env_865 *__env___env_865 = (struct __env_865 *)__env_p_866;
-        printf("%lld\n", (long long)(use_raw((void *)(intptr_t)(__env___env_865->ch))));
+struct __env_864 { tur_thunk_int64_t_int64_t_t __fn; int64_t ch; };
+static int64_t __fn_862(void * __env_p_865, int64_t user) {
+        struct __env_864 *__env___env_864 = (struct __env_864 *)__env_p_865;
+        printf("%lld\n", (long long)(use_raw((void *)(intptr_t)(__env___env_864->ch))));
         int64_t __t20;
         __t20 = INT64_C(0);
         return __t20;
@@ -4309,11 +4309,11 @@ int main(int argc, char **argv) {
         }
         int64_t __t26;
         {
-            int64_t ch_861 = chan_new(INT64_C(99));
-            (void)ch_861;
-            struct __env_865 *__t27 = (struct __env_865 *)malloc(sizeof(struct __env_865));
-            __t27->__fn = (tur_thunk_int64_t_int64_t_t)__fn_863;
-            __t27->ch = ch_861;
+            int64_t ch_860 = chan_new(INT64_C(99));
+            (void)ch_860;
+            struct __env_864 *__t27 = (struct __env_864 *)malloc(sizeof(struct __env_864));
+            __t27->__fn = (tur_thunk_int64_t_int64_t_t)__fn_862;
+            __t27->ch = ch_860;
             void *__t28 = __t27;
             spawn((void *)(intptr_t)(__t28));
             int64_t __t29;

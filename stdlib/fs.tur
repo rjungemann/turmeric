@@ -14,11 +14,21 @@
 ;; integer) is expected -- e.g. handing a TmpFile to fs/stat-size. Both lower to
 ;; :int in the C ABI, so the inline-C bodies are unchanged. fs/tmpfile-fd hands
 ;; back the open descriptor as the shared Fd handle (from tur/fd).
+;;
+;; ---- Linearity (stdlib-linearity-affinity-plan, L2) ----
+;; TmpFile is declared :linear: a temp file owns an open fd and an on-disk
+;; entry, so it must be released exactly once with fs/tmpfile-free. Under
+;; -Xlinear the checker rejects dropping a TmpFile (TUR-E0100) or freeing it
+;; twice (TUR-E0101). The discipline is purely a type-checker concern; the
+;; :int C ABI and inline-C bodies are unchanged. NOTE: the non-consuming
+;; accessors fs/tmpfile-path / fs/tmpfile-fd currently consume the handle
+;; under -Xlinear (no borrow form yet) -- see
+;; docs/reported/stdlib-linear-handle-borrows.md.
 (load "stdlib/fd.tur")
 
 (defopaque StatInfo :int)
 
-(defopaque TmpFile :int)
+(defopaque TmpFile :int :linear)
 ;;; fs/stat -- return file metadata for a path.
 ;;;
 ;;; Parameters:
@@ -350,12 +360,14 @@
 ;;; fs/tmpfile -- create a unique temporary file via mkstemp(3).
 ;;;
 ;;; Returns:
-;;;   An opaque pointer (as :int) to a pair { path-cstr, fd }.
+;;;   A linear TmpFile handle wrapping a pair { path-cstr, fd }.
 ;;;   The path is heap-allocated; the fd is the open descriptor.
-;;;   Free with fs/tmpfile-free.  Returns 0 on mkstemp failure.
+;;;   Release exactly once with fs/tmpfile-free.  Returns 0 on mkstemp failure.
+;;;   Under -Xlinear the checker requires the handle be consumed exactly once
+;;;   (dropping it is TUR-E0100; freeing it twice is TUR-E0101).
 ;;;
 ;;; Example:
-;;;   (let [t (fs/tmpfile)] (fs/tmpfile-path t))
+;;;   (let [t (fs/tmpfile)] (fs/tmpfile-free t))
 ;;;
 ;;; Since: Phase B2
 

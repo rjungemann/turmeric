@@ -1251,6 +1251,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_copy = intern_cstr(st, "copy");
     e->kw_move = intern_cstr(st, "move");
     e->kw_linear = intern_cstr(st, "linear"); /* LT4 */
+    e->kw_affine = intern_cstr(st, "affine");
     /* Phase 11: struct registry */
     e->struct_defs = NULL;
     e->n_struct_defs = 0;
