@@ -1,0 +1,10 @@
+; Sum-types plan T8.6: the stdlib Functor [(Either E)] instance -- fmap runs
+; over the Right arm and is the identity on Left (right-biased).
+(load "stdlib/either.tur")
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn main [] : int
+  (println (from-right -1 (fmap (Right 41) inc)))
+  (println (from-left  -1 (fmap (Left 9) inc)))
+  0)

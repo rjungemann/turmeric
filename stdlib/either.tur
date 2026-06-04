@@ -1,0 +1,191 @@
+;;; tur/either -- binary sum type Either[L R]: Left l or Right r.
+;;;
+;;; A true tagged-union sum: a value is either `(Left l)` carrying an L, or
+;;; `(Right r)` carrying an R, with the two payloads living in distinct union
+;;; arms (no shadowing).  This is the canonical "one of two differently-typed
+;;; things" type -- isomorphic to Result[R L] but with neutral naming, and the
+;;; building block for ArrowChoice and session-typed protocol choices.
+;;;
+;;; By convention Right is the "success"/"main" arm and Left the
+;;; "error"/"other" arm, so the Functor instance maps over Right and leaves
+;;; Left untouched (right-biased), matching Haskell's `Either`.
+;;;
+;;; Runtime / FFI layout (single shared, type-erased struct):
+;;;   typedef struct tur_adt_Either {
+;;;     int tag;                 // 0 = Left, 1 = Right
+;;;     union {
+;;;       struct { int64_t _0; } Left;
+;;;       struct { int64_t _0; } Right;
+;;;     } as;
+;;;   } tur_adt_Either;
+;;; Construct with ctor_Left(v) / ctor_Right(v); both heap-allocate and return
+;;; an int64_t handle.  Payloads are erased to int64_t at the C boundary, the
+;;; same way Option[A] / Result[A B] erase theirs.
+;;;
+;;; Since: Phase sum-types-either
+;; Either[L R] -- binary sum; Left l | Right r.
+;; :copy -- an Either handle is an immutable tagged scalar pair with no owned
+;; resources, so it is freely copyable (like a primitive); this matches the
+;; ergonomics of Option/Result, whose APIs erase to the int carrier.
+(defdata Either :copy [L R]
+  (Left L)
+  (Right R))
+
+;;; left? -- is this Either a Left?
+;;;
+;;; Parameters:
+;;;   e -- an Either[L R] handle
+;;;
+;;; Returns:
+;;;   true when e is (Left _), false when (Right _).
+;;;
+;;; Example:
+;;;   (left? (Left 3))   ; => true
+;;;   (left? (Right 3))  ; => false
+;;;
+;;; Since: Phase sum-types-either
+(defn left? [e : int] : bool
+  (match e
+    (Left _)  true
+    (Right _) false))
+
+;;; right? -- is this Either a Right?
+;;;
+;;; Parameters:
+;;;   e -- an Either[L R] handle
+;;;
+;;; Returns:
+;;;   true when e is (Right _), false when (Left _).
+;;;
+;;; Example:
+;;;   (right? (Right 3))  ; => true
+;;;   (right? (Left 3))   ; => false
+;;;
+;;; Since: Phase sum-types-either
+(defn right? [e : int] : bool
+  (match e
+    (Left _)  false
+    (Right _) true))
+
+;;; from-left -- extract the Left payload, or a default when e is a Right.
+;;;
+;;; Parameters:
+;;;   dflt -- value returned when e is a Right
+;;;   e    -- an Either[L R] handle
+;;;
+;;; Returns:
+;;;   The L payload when e is (Left l), else dflt.
+;;;
+;;; Example:
+;;;   (from-left 0 (Left 7))   ; => 7
+;;;   (from-left 0 (Right 7))  ; => 0
+;;;
+;;; Since: Phase sum-types-either
+(defn from-left [dflt : int e : int] : int
+  (match e
+    (Left l)  l
+    (Right _) dflt))
+
+;;; from-right -- extract the Right payload, or a default when e is a Left.
+;;;
+;;; Parameters:
+;;;   dflt -- value returned when e is a Left
+;;;   e    -- an Either[L R] handle
+;;;
+;;; Returns:
+;;;   The R payload when e is (Right r), else dflt.
+;;;
+;;; Example:
+;;;   (from-right 0 (Right 7))  ; => 7
+;;;   (from-right 0 (Left 7))   ; => 0
+;;;
+;;; Since: Phase sum-types-either
+(defn from-right [dflt : int e : int] : int
+  (match e
+    (Left _)  dflt
+    (Right r) r))
+
+;;; either -- eliminate an Either by applying one of two functions.
+;;;
+;;; The fundamental Either destructor (its catamorphism): runs on-left over
+;;; the L payload of a Left, or on-right over the R payload of a Right.  Both
+;;; branches must produce the same result type.
+;;;
+;;; Parameters:
+;;;   on-left  -- function applied to the Left payload  (carried as a fat closure)
+;;;   on-right -- function applied to the Right payload (carried as a fat closure)
+;;;   e        -- an Either[L R] handle
+;;;
+;;; Returns:
+;;;   (on-left l) when e is (Left l), else (on-right r).
+;;;
+;;; Example:
+;;;   (either negate id (Left 5))   ; => -5
+;;;   (either negate id (Right 5))  ; => 5
+;;;
+;;; Since: Phase sum-types-either
+(defn either [^fat on-left : (fn [int] :int) ^fat on-right : (fn [int] :int) e : int] : int
+  (match e
+    (Left l)  (on-left l)
+    (Right r) (on-right r)))
+
+;;; either-map -- map a function over the Right arm (right-biased).
+;;;
+;;; Applies f to the payload of a Right, rebuilding a Right; passes a Left
+;;; through unchanged.  This is the Functor map for Either fixed in its Left
+;;; type parameter.
+;;;
+;;; Parameters:
+;;;   f -- function applied to the Right payload (carried as a fat closure)
+;;;   e -- an Either[L R] handle
+;;;
+;;; Returns:
+;;;   (Right (f r)) when e is (Right r), else e unchanged.
+;;;
+;;; Example:
+;;;   (either-map inc (Right 4))  ; => (Right 5)
+;;;   (either-map inc (Left 4))   ; => (Left 4)
+;;;
+;;; Since: Phase sum-types-either
+(defn either-map [^fat f : (fn [int] :int) e : int] : int
+  (match e
+    (Left l)  (Left l)
+    (Right r) (Right (f r))))
+
+;;; either-map-left -- map a function over the Left arm.
+;;;
+;;; Applies f to the payload of a Left, rebuilding a Left; passes a Right
+;;; through unchanged.  The mirror of either-map.
+;;;
+;;; Parameters:
+;;;   f -- function applied to the Left payload (carried as a fat closure)
+;;;   e -- an Either[L R] handle
+;;;
+;;; Returns:
+;;;   (Left (f l)) when e is (Left l), else e unchanged.
+;;;
+;;; Example:
+;;;   (either-map-left inc (Left 4))   ; => (Left 5)
+;;;   (either-map-left inc (Right 4))  ; => (Right 4)
+;;;
+;;; Since: Phase sum-types-either
+(defn either-map-left [^fat f : (fn [int] :int) e : int] : int
+  (match e
+    (Left l)  (Left (f l))
+    (Right r) (Right r)))
+
+;; Functor instance for (Either E) -- right-biased: fmap runs f on the Right
+;; payload and is the identity on Left.  Either owns this instance (it is its
+;; home module), so it is not an orphan even though Functor is declared in
+;; typeclass-functor.tur.  The partially-applied head `(Either E)` fixes the
+;; Left type parameter, leaving the kind-(* -> *) functor over the Right arm.
+;;; Functor [(Either E)] -- right-biased Functor for Either: map over Right.
+;;;
+;;; Since: Phase sum-types-either
+(definstance Functor [(Either E)]
+  (fmap [container fn]
+    ```c
+    tur_adt_Either *p = (tur_adt_Either *)(intptr_t)container;
+    if (p->tag != 1) return container;
+    return ctor_Right(fn.fn(fn.env, p->as.Right._0));
+    ```))

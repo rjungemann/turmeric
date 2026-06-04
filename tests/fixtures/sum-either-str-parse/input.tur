@@ -1,0 +1,15 @@
+; Sum-types plan T9: exercise the Either-based migration in stdlib/str.tur.
+; str->int-checked returns (Right n) on a clean parse and (Left code) on
+; failure, where the old str->int/cstr->parse-int collapsed every failure to 0.
+(load "stdlib/str.tur")
+
+(defn main [] : int
+  ; clean parse -> Right 42
+  (println (from-right -1 (str->int-checked "42")))
+  ; a real zero is a Right 0, not a failure sentinel
+  (println (right? (str->int-checked "0")))
+  ; trailing garbage -> Left 1
+  (println (from-left -9 (str->int-checked "12x")))
+  ; empty -> Left 0
+  (println (from-left -9 (str->int-checked "")))
+  0)

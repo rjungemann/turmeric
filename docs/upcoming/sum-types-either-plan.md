@@ -271,3 +271,96 @@ Pick **one** in Task 1 review; do not migrate more in this plan.
   for T7.
 - **Historical context**: `docs/archive/stdlib-arrow-typeclass-plan.md`
   documents the original encounter with the missing-sum-types problem.
+
+## ADR -- decisions taken during execution
+
+This section records the choices made while landing the plan (Task 1 asked
+for an ADR-style note; it is captured here).
+
+### Context: the core feature already existed
+
+When execution began, Turmeric *already had* first-class sum types: `defdata`
+(binary and n-ary), parametric constructors (`[L R]`), monomorphised
+`ctor_<Name>` lowering, `match` with payload-binding patterns, nested
+matching, and exhaustiveness analysis. `(defdata Either [L R] (Left L)
+(Right R))` compiled and ran out of the box. The plan was written as though
+none of this existed -- it predates the `defdata`/`match` implementation. So
+this plan was executed as a *productionisation* of the existing feature
+(stdlib module, instance support, fixtures, docs, FFI documentation) rather
+than a from-scratch language build.
+
+### T1 -- surface syntax: `defdata` (Option B), as already implemented
+
+`defdata` is the shipped surface and matches the plan's recommendation
+(Option B). No `defstruct` overloading was introduced. Decision: **keep
+`defdata`**.
+
+### T6 -- exhaustiveness: hard **error** + `#{NonExhaustive}` opt-out
+
+The plan specced exhaustiveness as a *warning*. The compiler already enforced
+it as a hard **error** (TUR-E0301 / `match: non-exhaustive patterns`), and an
+existing fixture (`tests/fixtures/errors/adt-nonexhaustive`) locks that in.
+Downgrading to a warning would weaken a real safety guarantee and break that
+fixture. Decision (confirmed with the requester): **keep the hard error** and
+add a form-level `#{NonExhaustive}` marker as the explicit opt-out. Placed
+immediately after `match` (before the scrutinee), it suppresses the
+non-exhaustiveness diagnostic for that one form. Overlap warnings were not in
+scope (no overlap analysis exists today).
+
+### T2 -- layout: type-erased tagged union (as already emitted)
+
+`defdata` lowers to `struct tur_adt_<Name> { int tag; union { ...arms } as; }`
+with payloads erased to `int64_t`, exactly the "parallel/erased slots"
+recommendation. `Either int cstr` -> the struct documented in
+`stdlib/either.tur` and the FFI section of the guide.
+
+### T7 -- typeclass instances over an ADT: two real compiler gaps fixed
+
+Writing `Functor [(Either E)]` surfaced two genuine defects (reported-and-fixed
+in this session, per the bug-reporting rule):
+
+1. `AdtDef` had no `origin_file_id` (unlike `StructDef`), so the
+   orphan-instance check could not credit an instance to the module that
+   *defines* the ADT -- every ADT instance was wrongly flagged
+   `TUR-E0013 orphan`. Fix: add `origin_file_id` to `AdtDef`, populate it in
+   `elab_defdata`/`elab_defgadt`, and credit `TY_ADT` (and the `TY_APP` head's
+   `fn`) in the orphan check.
+2. The `definstance` head parser discarded an ADT type-constructor and
+   substituted an opaque `TY_STRUCT`/NULL placeholder, losing the ADT identity
+   for both the orphan check and dispatch. Fix: preserve the real `TY_ADT`
+   (and, for a partially-applied `(Either E)` head, set the `TY_APP.fn` from
+   the constructor's actual binding).
+
+With those fixed, the right-biased `Functor [(Either E)]` instance compiles and
+dispatches. No `void *` vs `int64_t` dict-field bug surfaced, so T7 was **not**
+gated on the closure-returning-instance-method plan.
+
+### T8 -- fixtures: stdout/diag snapshots, not `expected.c`
+
+The plan asked for `expected.c` per fixture. The directly-analogous existing
+ADT fixtures (`adt-basic`, `adt-param`, `adt-nested`, ...) deliberately use
+`expected.stdout`, and only ~10% of fixtures carry `expected.c`. Embedding the
+full auto-loaded stdlib in seven brittle C snapshots (which the project's
+snapshot rule would force us to regenerate on every codegen change) is poor
+value. Decision: **follow the local ADT-fixture convention** -- `expected.stdout`
+for the positive fixtures, `expected.diag` for the negative one. The
+non-exhaustive "warning" fixture became an *error* fixture
+(`errors/sum-either-nonexhaustive`) to match the T6 decision, paired with
+`sum-either-nonexhaustive-opt-out` proving the `#{NonExhaustive}` escape hatch.
+
+### T9 -- migration: a lossy sentinel, since no two-of-tuple site existed
+
+The plan's candidate "two-of-tuple error-or-value" sites did not actually
+exist in stdlib. The real instance of the underlying problem is
+`str->int` / `cstr->parse-int`, which fold *every* failure into the sentinel
+`0`. Migration: add `str->int-checked` to `stdlib/str.tur`, returning
+`(Right n)` on a clean parse or `(Left code)` describing the failure.
+`str.tur` is not auto-loaded and has no `expected.c` consumers, so the blast
+radius is nil. Exercised by `tests/fixtures/sum-either-str-parse`.
+
+### T10 -- docs
+
+`docs/guides/sum-types-guide.md` written. `gendocs.py` taught to recognise
+`defdata`/`defgadt` (sum-type entries on the module page);
+`stdlib/docstrings.tur` regenerated. `docs/api/*.html` is gitignored, so only
+the `.tur` lookup table is a tracked artifact.

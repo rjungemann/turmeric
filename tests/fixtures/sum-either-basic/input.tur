@@ -1,0 +1,17 @@
+; Sum-types plan T8.1: declare Either, construct Left and Right, print the
+; discriminant of each.
+(defdata Either :copy [L R]
+  (Left L)
+  (Right R))
+
+(defn tag-of [e : int] : int
+  (match e
+    (Left _)  0
+    (Right _) 1))
+
+(defn main [] : int
+  (let [a (Left 1)
+        b (Right "x")]
+    (println (tag-of a))
+    (println (tag-of b)))
+  0)

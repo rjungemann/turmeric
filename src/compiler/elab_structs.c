@@ -1194,6 +1194,12 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         scope_add(&e->global, adt_binding);
     }
 
+    /* Record the owning compilation unit so the orphan-instance check can
+     * credit instances over this ADT to its defining module (mirrors
+     * StructDef.origin_file_id).  Set on both the fresh and reused-stub
+     * paths to the real definition's file. */
+    def->origin_file_id = name_form->span.file_id;
+
     /* Parse each constructor */
     for (uint32_t ci = 0; ci < n_ctors; ci++) {
         Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
@@ -1827,6 +1833,10 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         scope_add(&e->global, adt_binding);
     }
 
+    /* Record the owning compilation unit for the orphan-instance check
+     * (mirrors StructDef.origin_file_id). */
+    def->origin_file_id = name_form->span.file_id;
+
     /* Parse each constructor */
     for (uint32_t ci = 0; ci < n_ctors; ci++) {
         Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
@@ -2107,6 +2117,44 @@ Expr *elab_match(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span,
                   "match requires a scrutinee: (match scrutinee pattern body ...)");
         return NULL;
+    }
+    /* Sum-types plan T6: optional `#{NonExhaustive}` opt-out marker.
+     * Placed immediately after `match`, before the scrutinee:
+     *   (match #{NonExhaustive} scrutinee (Left l) ... )
+     * When present, the non-exhaustiveness diagnostic on a known sum/ADT
+     * scrutinee is suppressed -- the programmer asserts they have proven
+     * exhaustiveness (or coverage of overlap) by other means.  The marker
+     * is spliced out so the rest of the function sees an ordinary match.
+     * The reader lowers `#{...}` to an F_MAP whose items are the contained
+     * symbols (same shape as a defn effect row). */
+    bool nonexhaustive_optout = false;
+    if (call->as.list.items[1]->tag == F_MAP) {
+        const Form *marker = call->as.list.items[1];
+        const Symbol *sym_nonexh = intern_cstr(e->st, "NonExhaustive");
+        for (uint32_t mi = 0; mi < marker->as.list.len; mi++) {
+            if (marker->as.list.items[mi]->tag == F_SYM &&
+                marker->as.list.items[mi]->as.sym == sym_nonexh) {
+                nonexhaustive_optout = true;
+            } else {
+                diag_emit(DIAG_ERROR, marker->span,
+                          "match: unknown marker in '#{...}'; only "
+                          "'#{NonExhaustive}' is recognised here");
+                return NULL;
+            }
+        }
+        if (call->as.list.len < 3) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "match requires a scrutinee after the '#{NonExhaustive}' "
+                      "marker: (match #{NonExhaustive} scrutinee pattern body ...)");
+            return NULL;
+        }
+        /* Splice the marker out: rebuild the call form without items[1]. */
+        uint32_t new_len = call->as.list.len - 1;
+        Form **new_items = (Form **)arena_alloc(e->arena, new_len * sizeof(Form *));
+        new_items[0] = call->as.list.items[0];               /* 'match' */
+        for (uint32_t k = 2; k < call->as.list.len; k++)
+            new_items[k - 1] = call->as.list.items[k];
+        call = form_list(e->arena, call->span, new_items, new_len);
     }
     /* Phase G4: Pre-scan arms to count and find per-arm start indices.
      * Arms can be (pat body) or (pat when guard body). */
@@ -3068,6 +3116,8 @@ Expr *elab_match(Elab *e, const Form *call) {
                               "match: constructor '%s' of '%s' is unreachable for "
                               "this GADT instantiation",
                               c->name, adt->name);
+                } else if (nonexhaustive_optout) {
+                    /* T6: programmer opted out with #{NonExhaustive}. */
                 } else {
                     diag_emit(DIAG_ERROR, call->span,
                               "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
@@ -3077,7 +3127,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             }
         } else {
             for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
-                if (!covered[ci]) {
+                if (!covered[ci] && !nonexhaustive_optout) {
                     diag_emit(DIAG_ERROR, call->span,
                               "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
                               adt->ctors[ci]->name, adt->name);
