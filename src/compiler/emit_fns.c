@@ -383,6 +383,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_puts(file, emit_type_c_name(ctx, ctx->current_abi_specialization->result_type));
         } else if (carrier_override.kind == TY_STRUCT) {
             buf_puts(file, emit_type_c_name(ctx, carrier_override));
+        } else if (!is_main && e->type.as.fn.result_full_type &&
+                   emit_inst_fn_return_carrier(fd, e->type.as.fn.result_full_type)) {
+            /* instance-method-closure-return: a typeclass-method impl whose
+             * declared return is a function value uses the thin fn-ptr typedef
+             * (non-capturing) or the int64_t closure carrier (fat box) -- never
+             * the function's result type.  Must agree with the dict field type
+             * in emit_stmt.c and the forward decl in emit_module.c. */
+            buf_puts(file, emit_inst_fn_return_carrier(fd, e->type.as.fn.result_full_type));
         } else if (e->type.as.fn.result_full_type) {
             bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
             Type rft = *e->type.as.fn.result_full_type;

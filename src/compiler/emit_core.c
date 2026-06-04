@@ -176,14 +176,15 @@ const char *emit_fn_return_typedef(const FnDef *fd, const Type *rft) {
     if (!fd || !rft || rft->kind != TY_FN) return NULL;
     /* A boxed first-class closure is the void* carrier, not a thin fn ptr. */
     if (rft->as.fn.boxed) return NULL;
-    /* A typeclass-method impl is reached through its dictionary, whose field
-     * type lowers the fn-typed return via type_c_name (the int64_t fn carrier)
-     * -- see the dict-struct emission in emit_stmt.c.  The impl signature must
-     * match that field type, so it must NOT use the thin fn-ptr typedef.  The
-     * generated impl name is `__inst_<class>_<method>_<typeargs>`. */
-    if (fd->binding && fd->binding->name && fd->binding->name->name &&
-        strncmp(fd->binding->name->name, "__inst_", 7) == 0)
-        return NULL;
+    /* A typeclass-method impl is reached through its dictionary.  The dict
+     * field type and the impl signature must agree and both must match what
+     * the body produces.  A thin (non-capturing) body yields a bare fn
+     * pointer, so it uses the same fn-ptr typedef as a plain defn here; the
+     * dict field is updated in lockstep (see emit_inst_fn_return_carrier and
+     * the dict-struct emission in emit_stmt.c).  A capturing __inst_ method
+     * is a fat box and is steered onto the int64_t carrier by
+     * emit_inst_fn_return_carrier instead (body_yields_thin_fn is false for
+     * it, so this helper returns NULL below). */
     /* Only a body that statically yields a thin (non-capturing) function
      * pointer may be typed as one.  Capturing closures and other fn-typed
      * values stay on the existing int64_t/void* carrier so the box is not
@@ -192,6 +193,31 @@ const char *emit_fn_return_typedef(const FnDef *fd, const Type *rft) {
     /* register_fn_ptr_typedef returns NULL unless every arg/result kind is a
      * concrete primitive -- exactly the thin-fn-pointer case. */
     return register_fn_ptr_typedef(rft);
+}
+
+/* instance-method-closure-return: the carrier for a typeclass-method impl
+ * (`__inst_*`) whose declared return type is a concrete (non-boxed) function
+ * value.  The dictionary field type and the impl signature both consult this,
+ * so they agree with each other AND with the body the impl emits:
+ *
+ *   - thin (non-capturing) body  -> the matching fn-ptr typedef (a bare C
+ *     function pointer is returned, so the slot must be that pointer type);
+ *   - everything else (capturing fat box, etc.) -> the int64_t closure
+ *     carrier (a void* heap box returned through an int64_t slot).
+ *
+ * type_c_name(TY_FN) would instead pick the function's *result* type's C name
+ * ("double" for a (fn [...] :float) return) -- correct for inline-C raw
+ * function references, but wrong for a turmeric-level closure value: the impl
+ * body returns a function pointer / box, not a value of the result type, so
+ * for non-int result kinds the emitted C is a hard `cc` error.  Returns NULL
+ * for non-`__inst_` functions and non-fn returns (use the normal lowering). */
+const char *emit_inst_fn_return_carrier(const FnDef *fd, const Type *rft) {
+    if (!fd || !rft || rft->kind != TY_FN || rft->as.fn.boxed) return NULL;
+    if (!(fd->binding && fd->binding->name && fd->binding->name->name &&
+          strncmp(fd->binding->name->name, "__inst_", 7) == 0))
+        return NULL;
+    const char *td = emit_fn_return_typedef(fd, rft);
+    return td ? td : "int64_t";
 }
 
 /* KB-021: the single arbiter of which types may use the int64_t carrier ABI

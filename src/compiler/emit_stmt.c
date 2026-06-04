@@ -479,6 +479,18 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     ret_type = method_impl->body->type;
                 }
                 const char *ret_c_name = type_c_name(ret_type);
+                /* instance-method-closure-return: a method whose declared
+                 * return is a concrete function value carries it as a thin
+                 * fn-ptr typedef (non-capturing body) or the int64_t closure
+                 * carrier (fat box) -- never type_c_name's *result* type,
+                 * which mis-lowers non-int result kinds (e.g. :float -> double)
+                 * and breaks the impl-body return.  Must agree with the impl
+                 * signature in emit_fns.c / emit_module.c. */
+                if (ret_type.kind == TY_FN) {
+                    const char *carrier =
+                        emit_inst_fn_return_carrier(method_impl, &ret_type);
+                    if (carrier) ret_c_name = carrier;
+                }
                 buf_printf(ctx->file, "%s", ret_c_name);
                 buf_puts(ctx->file, " (*");
                 buf_printf(ctx->file, "%s", sanitized_method_name);

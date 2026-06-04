@@ -232,6 +232,10 @@ const char *emit_type_c_name(EmitCtx *ctx, Type t);
  * or NULL when the return is not such a fn / is a dict-dispatched method impl
  * (see emit_core.c). */
 const char *emit_fn_return_typedef(const FnDef *fd, const Type *rft);
+/* instance-method-closure-return: carrier for an `__inst_*` method's fn-typed
+ * return -- the fn-ptr typedef for a thin body, else the int64_t closure
+ * carrier; NULL for non-method / non-fn returns (see emit_core.c). */
+const char *emit_inst_fn_return_carrier(const FnDef *fd, const Type *rft);
 /* KB-021: arbiter of which struct-valued types may use the int64_t carrier ABI
  * (see emit_core.c). */
 bool type_uses_carrier_abi(Type t);

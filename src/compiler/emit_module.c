@@ -1154,6 +1154,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             Type carrier_override = emit_carrier_return_override(fd);
             if (carrier_override.kind == TY_STRUCT) {
                 buf_puts(out, type_c_name(carrier_override));
+            } else if (e->type.as.fn.result_full_type &&
+                       emit_inst_fn_return_carrier(fd, e->type.as.fn.result_full_type)) {
+                /* instance-method-closure-return: mirror emit_fns.c so the
+                 * forward declaration agrees with the definition and the dict
+                 * field -- thin fn-ptr typedef or int64_t closure carrier. */
+                buf_puts(out, emit_inst_fn_return_carrier(fd, e->type.as.fn.result_full_type));
             } else if (e->type.as.fn.result_full_type) {
                 bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
                 const struct Type *rft = e->type.as.fn.result_full_type;
