@@ -6,6 +6,19 @@
 
 let turiModule = null;
 
+// Forward a #lang directive to the WASM runtime. Silently no-ops on older
+// WASM builds that don't export turi_wasm_set_lang.
+function wasmSetLang(lang) {
+    try {
+        if (typeof turiModule._turi_wasm_set_lang !== 'function') return;
+        const len = turiModule.lengthBytesUTF8(lang) + 1;
+        const ptr = turiModule._malloc(len);
+        turiModule.stringToUTF8(lang, ptr, len);
+        turiModule._turi_wasm_set_lang(ptr);
+        turiModule._free(ptr);
+    } catch (_) {}
+}
+
 function postPrint(text) {
     self.postMessage({ type: 'print', text });
 }
@@ -28,6 +41,7 @@ function handleMessage(msg) {
 
     if (msg.type === 'eval') {
         try {
+            if (msg.lang) wasmSetLang(msg.lang);
             const inputLen = turiModule.lengthBytesUTF8(msg.input) + 1;
             const inputPtr = turiModule._malloc(inputLen);
             turiModule.stringToUTF8(msg.input, inputPtr, inputLen);

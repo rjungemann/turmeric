@@ -8,12 +8,15 @@ default: build
 build: debug
 
 debug:
+    @[ -f build/CMakeCache.txt ] || just configure
     cmake --build build -j --config Debug
 
 release:
+    @[ -f build/CMakeCache.txt ] || just configure
     cmake --build build -j --config Release
 
 tsan:
+    @[ -f build/CMakeCache.txt ] || just configure
     cmake --build build -j --config TSan
 
 # ---------------------------------------------------------------------------
@@ -61,8 +64,7 @@ smoke:
 # ---------------------------------------------------------------------------
 
 clean:
-    cmake --build build --target clean
-    rm -rf build tests/out
+    rm -rf build build-release build-tsan build-wasm tests/out
     find tests/fixtures -name 'actual.*' -delete
     find tests/cli -name 'actual.*' -delete
 
@@ -187,6 +189,8 @@ check-docs: check-guides check-spices
 # Configure with WASM support
 configure-wasm:
     cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+alias build-wasm := wasm
 
 # Build WASM module (requires Emscripten).
 # Runs `just docs` first so stdlib/docstrings.tur is up-to-date.
