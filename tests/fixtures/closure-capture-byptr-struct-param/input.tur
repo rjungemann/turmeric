@@ -1,0 +1,34 @@
+;; B5 codegen: an inner (fn ...) that captures a struct *parameter* of the
+;; enclosing function.  Struct params cross the pass-by-pointer ABI, so the
+;; captured C value is `const T *`, while the closure env field is declared
+;; by value (`T`).  The capture-store must deref so the closure owns a copy
+;; rather than the caller's pointer (which would dangle once the frame
+;; returns).  See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (B5).
+
+(defstruct Cfg
+  [name :cstr
+   tag  :cstr
+   n    :int])
+
+;; invoke a captured 0-arg fat (fn [] :int) closure
+(defn call0 [handler :ptr<void>] :int
+  ```c if (!handler) return 0;
+  int64_t *fat = (int64_t *)(intptr_t)handler;
+  typedef int64_t (*fn1_t)(void *);
+  return ((fn1_t)(intptr_t)fat[0])((void *)fat);
+  ```)
+
+;; `cfg` is a by-pointer struct param captured into the returned closure.
+(defn make-reader [cfg :Cfg] :ptr<void>
+  (fn [] :int
+    (do
+      (println (.name cfg))
+      (println (.tag cfg))
+      (.n cfg))))
+
+(defn main [] :int
+  (let [cfg (make-struct Cfg "alpha" "beta" 7)
+        rdr (make-reader cfg)]
+    (do
+      (println (call0 rdr))
+      0)))

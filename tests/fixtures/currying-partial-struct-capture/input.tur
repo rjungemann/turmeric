@@ -1,0 +1,32 @@
+;; A5: partial application that captures a struct value.
+;; The auto-generated __pap env field must carry the full nominal
+;; struct type, not a kind-erased int64_t.  Covers: small copy struct,
+;; struct + primitive mixed capture, and a struct holding a cstr field.
+
+(defstruct Pt :copy
+  [x :int
+   y :int])
+
+(defstruct Cfg
+  [label :cstr
+   base  :int])
+
+;; capture a copy struct, supply remaining primitive later
+(defn pt-sum [p :Pt d :int] :int
+  (+ (+ (.x p) (.y p)) d))
+
+;; capture struct + primitive, supply remaining primitive later
+(defn blend [c :Cfg k :int n :int] :int
+  (do
+    (println (.label c))
+    (+ (.base c) (+ k n))))
+
+(defn main [] :int
+  (let [p     (make-struct Pt 3 4)
+        psum   (pt-sum p)
+        c     (make-struct Cfg "cfg" 10)
+        blp   (blend c 1)]
+    (do
+      (println (psum 5))
+      (println (blp 100))
+      0)))

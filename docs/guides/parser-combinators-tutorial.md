@@ -248,6 +248,12 @@ of type `int -> int` (we use `0` for false, `1` for true).
 ```
 
 ```sweet-exp
+defn apply-fat [f arg] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)f;
+  return TUR_APPLY1(fat, arg);
+  ```
+
 defn satisfy-impl [_pred inp] :int
   if input-at-end(inp)
     mzero()
@@ -521,6 +527,9 @@ defn many1 [p] :ptr<void>
   let [_p p]
     fn [inp]
       many1-impl(_p inp)
+
+defn optional-impl [_p inp] :int
+  mplus(apply-parser(_p inp) mreturn(pair-new(0 inp)))
 
 defn optional [p] :ptr<void>
   let [_p p]

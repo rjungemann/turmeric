@@ -177,25 +177,39 @@ Likely shares machinery with the existing fat-closure work (commit
 6. Stress-test with the existing effects suite under ASan to catch
    use-after-free regressions.
 
-#### A5. Struct-in-`__pap` env codegen
+#### A5. Struct-in-`__pap` env codegen -- LANDED 2026-06-04
 
-Store struct values in `__pap` env fields without truncating to `int64_t`
-(the `CorsOpts` case). Likely a sibling of A2 -- see open question 2.
-
-1. Reproduce the `mw-cors` failure in a minimal fixture: a curried function
-   whose first argument is a struct.
-2. Inspect the `__pap` env struct emission: confirm the field is being
-   declared as `int64_t` when the captured value is a struct.
-3. Extend the `__pap` env layout to carry the real struct type (by value or
-   by boxed pointer -- decide based on size threshold).
-4. Update the `__pap` apply trampoline to read the struct field with the
-   correct type rather than reinterpreting an `int64_t`.
-5. Decide (with A2 findings in hand) whether this is a separate codepath or
-   the same fix; collapse if possible.
-6. Add fixtures for: small struct capture, large struct capture, struct +
-   primitive mixed capture.
-7. Regenerate snapshots and verify the httpd suite passes once `mw-cors`
-   currying is re-enabled (the B5 smoke test).
+> **Landed.** Two distinct codegen defects had to be fixed; they are
+> **separate codepaths** from A2 (resolving open question #2 -- see below).
+>
+> 1. **`__pap` env field type erasure** (`src/compiler/elab_call.c`,
+>    `elab_partial_apply`). A captured partial-application argument's binding
+>    type was built from `type_from_kind(cap_kind)`, erasing a nominal
+>    struct/ADT to a kind-only `TY_STRUCT`/`TY_ADT`. The emitter's
+>    `type_c_name` then rendered the env field as `int64_t`, so the let-binding
+>    init truncated the struct value and the inner call passed an `int64_t`
+>    where the callee expected the nominal struct (a hard C compile error).
+>    Fix: when `PAP_SLOT_FULL(i)` yields a `TY_STRUCT`/`TY_ADT` full type, the
+>    capture binding now carries that full type, so the env field, the
+>    let-binding, and the inner call all agree.
+> 2. **Inner-`fn` capture of a by-pointer struct *parameter***
+>    (`src/compiler/emit_expr.c`, `EX_CLOSURE` env-fill). A struct parameter
+>    of the enclosing function crosses the pass-by-pointer ABI (`const T *`),
+>    but the closure env field is declared by value (`T`). The capture-store
+>    emitted `env->field = cn` -- assigning a pointer to a value field. Fix:
+>    when the captured binding is one of the enclosing function's
+>    `pbp_param_ptrs`, the store now derefs (`env->field = *cn`) so the closure
+>    owns a copy (the caller's pointer would dangle after the frame returns).
+>    This is the codegen behind the original `mw-cors` "destructure opts into
+>    primitives so the inner closure env stays scalar-only" workaround.
+>
+> Coverage: `tests/fixtures/currying-partial-struct-capture` (small copy
+> struct + struct/primitive mixed capture + struct-with-cstr, via `__pap`) and
+> `tests/fixtures/closure-capture-byptr-struct-param` (inner-`fn` capture of a
+> by-pointer struct param). The **stdlib `mw-cors` API rewrite** (B5) is left
+> as its own follow-through: it additionally depends on compose-middleware's
+> value-vs-name callability limitation (httpd.tur:3143), which is orthogonal
+> to these codegen fixes.
 
 ### Phase B -- per-module follow-throughs (one PR each, gated on Phase A)
 
@@ -213,7 +227,11 @@ Each of these is a small, self-contained PR once its prerequisite lands.
 - **B4. `equal.tur`**: enable `equal-cong` once HKT is stable. Tiny diff;
   mostly removing the gating comment and adding fixtures.
 - **B5. `httpd.tur`**: re-enable `(mw-cors opts)` curried partial
-  application, remove the workaround comment at line 1688. Gated on A5.
+  application, remove the workaround comment at line 1688. Gated on A5
+  (**LANDED** -- both codegen blockers fixed). Remaining work is the stdlib
+  API rewrite itself, which additionally needs compose-middleware to accept a
+  partially-applied closure *value* as a middleware (it currently requires a
+  name-callable form -- httpd.tur:3143). Track that under its own task.
 - **B6. `map.tur`**: expose the key-checking wrappers as real functions (not
   macros) once the type checker can carry the constraint through a normal
   `defn`. Gated on a typeclass-constraint-on-defn task (separate plan).
@@ -256,8 +274,13 @@ for other reasons.
    with a broader symbol-mangling overhaul?~~ **Resolved (2026-06-04):** landed
    standalone. Scoped to operator/sigil names via one shared helper; structural
    separators (`-`/`/`) kept their legacy `_` spelling to bound the churn.
-2. Does fixing A2 (closure-returning instance methods) also fix A5
-   (struct-in-`__pap` env), or are they distinct codepaths in codegen?
+2. ~~Does fixing A2 (closure-returning instance methods) also fix A5
+   (struct-in-`__pap` env), or are they distinct codepaths in codegen?~~
+   **Resolved (2026-06-04): distinct codepaths.** A2 touched dict-field /
+   instance-method return-type propagation; A5 was two unrelated defects --
+   `__pap` capture-binding type erasure (`elab_call.c`) and inner-`fn`
+   by-pointer-struct-param capture stores (`emit_expr.c`). Neither was fixed
+   by A2; both were fixed independently under A5.
 3. For B6 (`map.tur`), is the right answer "real `defn` with constraint"
    or "leave as macro and document the limitation"?
 

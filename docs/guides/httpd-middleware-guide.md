@@ -227,7 +227,7 @@ your program.
 ```sweet-exp
 load "stdlib/httpd-compress.tur"
 
-let [base     fn(c :ptr<void> :nil
+let [base     fn([c :ptr<void>] :nil
                  httpd-resp-status!(c 200)
                  httpd-resp-body!(c large-html))
      composed compose-middleware(base mw-log mw-compress)]
