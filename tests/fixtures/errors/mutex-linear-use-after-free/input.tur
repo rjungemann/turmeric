@@ -1,0 +1,11 @@
+;; stdlib-linearity-affinity-plan (L1): borrowing a :linear Mutex after it has
+;; been freed. mutex-free consumes the handle; a subsequent mutex-lock borrows
+;; an already-consumed value, which is a use-after-consume.
+;; Expected: TUR-E0101 (linear value used after being consumed).
+(load "stdlib/mutex.tur")
+
+(defn main [] : int
+  (let [m (mutex-new)]
+    (mutex-free m)
+    (mutex-lock m))
+  0)

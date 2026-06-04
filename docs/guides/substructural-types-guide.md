@@ -126,6 +126,39 @@ let [^relevant msg "important event"]
 
 ---
 
+## Borrowing a linear handle: `^borrow` parameters
+
+A `^linear` (or `^affine`) handle must be consumed exactly once, but resources
+typically expose **non-consuming accessors** -- reads that observe the handle
+and hand it back for further use (`fs/tmpfile-path`, `mutex-lock`,
+`mutex-unlock`, ...). Marking such a parameter `^borrow` lets the function read
+its argument **without consuming it**: the single-consumption obligation stays
+with the caller for a later consuming op.
+
+```turmeric
+;; mutex-lock / mutex-unlock borrow; mutex-free consumes.
+(defn mutex-lock [^borrow m : Mutex] : nil ...)
+(defn mutex-free [m : Mutex]         : nil ...)   ;; consumes
+
+(let [m (mutex-new)]
+  (mutex-lock m)      ;; borrow -- m not consumed
+  (mutex-unlock m)    ;; borrow again -- still fine
+  (mutex-free m))     ;; the single legal consumption
+```
+
+Rules:
+
+- A `^borrow` parameter keeps its **nominal** type (`Mutex`, `TmpFile`, ...);
+  it is not a `&T` borrow *type*, so opaque identity is checked as usual.
+- Borrowing an **already-consumed** handle is `TUR-E0101`
+  (`mutex-free` then `mutex-lock`).
+- A handle that is only ever borrowed, never consumed, is still `TUR-E0100`
+  (dropped without being consumed).
+- `^borrow` is a no-op for non-linear arguments, so the same accessor works
+  whether or not the handle's type is under a linear discipline.
+
+---
+
 ## Stdlib macros
 
 ### `(must-use expr)`

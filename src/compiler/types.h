@@ -437,6 +437,12 @@ typedef struct Type {
             bool arg_unique_mut[MAX_FN_ARITY]; /* UT2: true if the i-th param is ^unique ^mut */
             bool arg_affine[MAX_FN_ARITY];     /* ST0: true if the i-th param is ^affine */
             bool arg_relevant[MAX_FN_ARITY];   /* ST0: true if the i-th param is ^relevant */
+            /* LB1: true if the i-th param is ^borrow -- it reads its linear/affine
+             * argument without consuming it.  A linear binding passed to a ^borrow
+             * param is borrowed (the single-consumption obligation is preserved for
+             * a later consuming op).  Borrowing an already-consumed value is still a
+             * TUR-E0101.  See docs/reported/stdlib-linear-handle-borrows.md. */
+            bool arg_borrow[MAX_FN_ARITY];
             /* A#1: true if the i-th param is ^fat -- it consumes its argument via
              * the fat-closure calling convention (thunk = slot 0, env = the heap
              * struct).  A bare non-capturing fn passed here is auto-shimmed into a
@@ -1004,6 +1010,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique_mut[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_affine[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_borrow[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_fat[i] = false;
     t.as.fn.result_fat = false;  /* A#1: must initialise or UBSan fires on bool read */
     t.as.fn.is_variadic = false;  /* AR6: default non-variadic */

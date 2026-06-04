@@ -1,0 +1,23 @@
+;; stdlib-linearity-affinity-plan (L1): Mutex is a :linear resource handle.
+;;
+;; A Mutex owns a heap-allocated pthread_mutex_t that must be destroyed exactly
+;; once with mutex-free. The multi-use accessors mutex-lock / mutex-unlock /
+;; mutex-try-lock declare their handle ^borrow, so locking and unlocking
+;; repeatedly reads the handle without consuming it; only mutex-free consumes.
+;; Under -Xlinear this whole sequence type-checks while dropping the Mutex
+;; (TUR-E0100) or freeing it twice / locking after free (TUR-E0101) is rejected.
+;;
+;; Expected output: mutex ok
+(load "stdlib/mutex.tur")
+
+(defn main [] : int
+  (let [m (mutex-new)]
+    (mutex-lock m)
+    (mutex-unlock m)
+    ;; borrow again -- still legal after an earlier borrow
+    (mutex-lock m)
+    (mutex-unlock m)
+    ;; the single consumption
+    (mutex-free m)
+    (println "mutex ok")
+    0))

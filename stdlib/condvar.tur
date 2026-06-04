@@ -51,7 +51,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn condvar-wait [c : CondVar m : Mutex] : nil
+(defn condvar-wait [c : CondVar ^borrow m : Mutex] : nil
   ```c pthread_cond_wait((pthread_cond_t *)c, (pthread_mutex_t *)m);
   ```)
 ;;; condvar-signal -- wake one thread waiting on the condition variable.

@@ -6,15 +6,65 @@ description: Promoting a stdlib resource handle to `:linear` (or `:affine`) per 
 
 # Linear Resource Handles Have No Borrow Form for Non-Consuming Accessors -- Reported Bug
 
-> **Status:** OPEN (found 2026-06-04).
+> **Status:** RESOLVED (found 2026-06-04, fixed 2026-06-04). The borrow form
+>   landed as a `^borrow` parameter attribute (see "Resolution" below).
 > **Found:** while executing
 >   [stdlib-linearity-affinity-plan](../upcoming/stdlib-linearity-affinity-plan.md)
 >   -- the foundational slice (defopaque `:linear`/`:affine` support +
 >   inline-C linear-param consumption + `TmpFile` as the representative handle).
 > **Severity:** Medium -- ergonomics / expressiveness gap, not a miscompile.
->   It blocks the bulk of the linearity-plan inventory from being promoted,
->   and it half-promotes the handles that *are* promoted (their read
->   accessors cannot be called under `-Xlinear`).
+>   It blocked the bulk of the linearity-plan inventory from being promoted,
+>   and it half-promoted the handles that *were* promoted (their read
+>   accessors could not be called under `-Xlinear`).
+
+---
+
+## Resolution
+
+A **`^borrow` parameter attribute** was added (LB1). A parameter declared
+`^borrow` reads its linear/affine argument *without consuming it*: the
+single-consumption obligation is preserved for a later consuming op. This is
+the call-site half of proposed direction (2) -- auto-borrow when an argument is
+passed to a borrowing parameter -- but spelled as a parameter attribute
+(`[^borrow t : TmpFile]`) rather than a `&T` parameter *type*. The attribute
+keeps the parameter's full **nominal** handle type (`TmpFile`, `Mutex`, ...),
+so opaque identity is checked exactly as for a by-value parameter; the Phase-12
+`&T` borrow type only carries a coarse `ref_borrow.target` TypeKind and would
+have lost that identity at the borrow boundary.
+
+Semantics:
+
+- A fresh linear/affine binding passed to a `^borrow` param is **read, not
+  consumed** -- it can be borrowed any number of times and still owes exactly
+  one consuming use.
+- Borrowing an **already-consumed** handle is still a `TUR-E0101`
+  (use-after-consume) -- e.g. `mutex-free; mutex-lock`.
+- A handle that is **only ever borrowed**, never consumed, is still a
+  `TUR-E0100` (dropped without being consumed).
+
+Implementation (file:line at time of fix):
+
+- `Binding.is_borrow` (`src/compiler/expr.h`) + `fn.arg_borrow[]`
+  (`src/compiler/types.h`, initialised in `type_fn`).
+- `^borrow` interned (`src/compiler/elab_core.c`), parsed on both the `defn`
+  and `fn` parameter paths and stored into the fn type
+  (`src/compiler/elab_fns.c`).
+- Call-site roll-back: when an `EX_VAR` argument is passed to a `^borrow`
+  parameter, the consumption recorded by the var-use elaboration is undone
+  (`src/compiler/elab_call.c`, in the saturated-call argument loop).
+
+Promoted accessors:
+
+- `fs/tmpfile-path`, `fs/tmpfile-fd` -> `^borrow` (TmpFile stays `:linear`).
+- `Mutex` promoted to `:linear`; `mutex-lock`, `mutex-unlock`,
+  `mutex-try-lock` -> `^borrow`; `mutex-free` consumes. `condvar-wait`'s
+  `Mutex` parameter is also `^borrow` (it does not own the mutex).
+
+Fixtures: `tests/fixtures/tmpfile-linear-borrow` (read path/fd between create
+and free), `tests/fixtures/mutex-linear` (lock/unlock/lock/unlock/free),
+`tests/fixtures/errors/mutex-linear-use-after-free` (TUR-E0101),
+`tests/fixtures/errors/mutex-linear-dropped` (TUR-E0100). The original
+`tmpfile-linear*` fixtures are unchanged and still pass.
 
 ---
 
