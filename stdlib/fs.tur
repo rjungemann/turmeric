@@ -15,8 +15,10 @@
 ;; :int in the C ABI, so the inline-C bodies are unchanged. fs/tmpfile-fd hands
 ;; back the open descriptor as the shared Fd handle (from tur/fd).
 (load "stdlib/fd.tur")
+
 (defopaque StatInfo :int)
-(defopaque TmpFile  :int)
+
+(defopaque TmpFile :int)
 ;;; fs/stat -- return file metadata for a path.
 ;;;
 ;;; Parameters:
@@ -31,6 +33,7 @@
 ;;;   (let [s (fs/stat "/etc/hosts")] (fs/stat-size s))
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/stat [path : cstr] : StatInfo
   ```c #include <sys/stat.h>
   struct stat st;

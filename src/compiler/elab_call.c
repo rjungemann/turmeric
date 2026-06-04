@@ -2624,6 +2624,41 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         wrap_generic_result = (result_type.kind != TY_INT);
     }
 
+    /* Report guard (poly-defn-shares-inner-closure-body-across-monomorphizations):
+     * a generic defn that *returns* an (fn ...) whose declared result type is one
+     * of the defn's type parameters emits a single shared inner closure body,
+     * carried with the integer thunk ABI (the result tyvar lowers to int64_t).
+     * The outer defn is monomorphized per concrete type, but the inner body is
+     * not; a float specialization dispatches the shared body through a
+     * `double (*)(...)` pointer (xmm0) while the body returns through rax -- a
+     * silent register-class miscompile.  cstr/ptr/int specializations share the
+     * integer register and round-trip, so only a floating-point binding of the
+     * inner result tyvar is rejected here.  See the report for fix directions. */
+    if (n_type_bindings > 0 && fn_binding && fn_binding->returns_closure_fn_binding) {
+        Binding *inner = fn_binding->returns_closure_fn_binding;
+        const Type *inner_res = (inner->type.kind == TY_FN)
+            ? inner->type.as.fn.result_full_type : NULL;
+        if (inner_res && inner_res->kind == TY_TYVAR && inner_res->as.tyvar_.name) {
+            uint8_t bidx = 0;
+            if (call_find_type_binding(type_bindings, n_type_bindings,
+                                       inner_res->as.tyvar_.name, &bidx)) {
+                TypeKind bk = type_bindings[bidx].type.kind;
+                if (bk == TY_FLOAT || bk == TY_FLOAT32 || bk == TY_FLOAT64) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0705_POLY_CLOSURE_RESULT_TYVAR,
+                        "polymorphic closure-returning function '%s' specialized at a "
+                        "floating-point type (TUR-E0705): the returned (fn ...) result "
+                        "type is the type parameter '%s', but its body is emitted once "
+                        "with the integer-register closure ABI; a float specialization "
+                        "is a silent register-class miscompile (xmm0 vs rax). Work "
+                        "around by writing a monomorphic defn per concrete result type.",
+                        fn_binding->name ? fn_binding->name->name : "?",
+                        inner_res->as.tyvar_.name);
+                }
+            }
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
     out->as.call_.fn_binding = fn_binding;
     out->as.call_.args = args;

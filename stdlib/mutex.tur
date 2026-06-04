@@ -29,6 +29,7 @@
 ;;;   (let [m (mutex-new)] ...)  ; => Mutex
 ;;;
 ;;; Since: Phase T19-C
+
 (defn mutex-new [] : Mutex
   ```c pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   if (!m) { fprintf(stderr, "mutex-new: out of memory\n"); abort(); }

@@ -45,6 +45,7 @@
 ;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ThreadHandle
 ;;;
 ;;; Since: Phase T19-C
+
 (defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>]
   #{Unsafe}
   : ThreadHandle

@@ -17,6 +17,7 @@
 ;; inline-C bodies are unchanged. (This is distinct from the Ref struct above
 ;; and its Clone instance, which deep-copy a by-value Ref; the Clone typeclass
 ;; fixes clone's return type at :int, so that path keeps the raw int.)
+
 (defopaque RefHandle :int)
 ;; Create a new Ref from a value (takes ownership of the pointer)
 ;; The caller is responsible for ensuring the value is heap-allocated

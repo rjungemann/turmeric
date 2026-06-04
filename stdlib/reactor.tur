@@ -50,6 +50,7 @@
   return 0;
   ```)
 ;; ---- Source-id handle newtype ----
+
 (defopaque EventSourceId :int)
 ;; ---- C surface declarations ----
 
@@ -214,7 +215,10 @@
 ;;;
 ;;; Since: Phase R2
 
-(defn reactor-remove [r : ptr<void> id : EventSourceId] #{} : int (tur_reactor_remove r (:: id :int)))
+(defn reactor-remove [r : ptr<void> id : EventSourceId]
+  #{}
+  : int
+  (tur_reactor_remove r (:: id :int)))
 ;;; reactor-add-timer -- register a one-shot timer that fires once.
 ;;;
 ;;; The callback fires after delay-ms milliseconds on the thread that calls
@@ -278,7 +282,8 @@
                             user-data : ptr<void>]
   #{}
   : EventSourceId
-  (:: (tur_reactor_add_interval r first-ms interval-ms cb user-data) :EventSourceId))
+  (:: (tur_reactor_add_interval r first-ms interval-ms cb user-data)
+    :EventSourceId))
 ;; ---- Running ----
 ;;; reactor-add-signal -- watch an OS signal via the reactor.
 ;;;

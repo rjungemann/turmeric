@@ -51,10 +51,13 @@
 ;; dynamic-pool ops (the two pools have different block layouts), and a submitted
 ;; FutureHandle cannot be confused with the pool that produced it. All lower to
 ;; :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
-(defopaque WorkQueueHandle    :ptr<void>)
-(defopaque ThreadPoolHandle   :ptr<void>)
+(defopaque WorkQueueHandle :ptr<void>)
+
+(defopaque ThreadPoolHandle :ptr<void>)
+
 (defopaque DynThreadPoolHandle :ptr<void>)
-(defopaque FutureHandle       :ptr<void>)
+
+(defopaque FutureHandle :ptr<void>)
 ;;; work-queue-new -- create a new unbounded work queue that grows dynamically.
 ;;;
 ;;; Returns:
@@ -64,6 +67,7 @@
 ;;;   (let [q (work-queue-new)] ...)  ; => WorkQueueHandle
 ;;;
 ;;; Since: Phase T20-B
+
 (defn work-queue-new [] : WorkQueueHandle
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -422,7 +426,9 @@
 ;; task_fn is a C function: void *(*)(void *)
 ;; The return value from task_fn is stored as the Future result.
 
-(defn thread-pool-submit [tp : ThreadPoolHandle task_fn : ptr<void> task_arg : ptr<void>] : FutureHandle
+(defn thread-pool-submit [tp : ThreadPoolHandle
+                          task_fn : ptr<void>
+                          task_arg : ptr<void>] : FutureHandle
   ```c typedef struct {
       void *queue;
       pthread_t *threads;

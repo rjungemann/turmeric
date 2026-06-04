@@ -144,6 +144,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0703_YIELD_IN_RECURSIVE_GEN:           return "TUR-E0703";
         /* CF3: gated first-class handler composition */
         case TUR_E0704_HANDLER_COMPOSE_UNIMPL:           return "TUR-E0704";
+        case TUR_E0705_POLY_CLOSURE_RESULT_TYVAR:        return "TUR-E0705";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -241,6 +242,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0703") == 0) return TUR_E0703_YIELD_IN_RECURSIVE_GEN;
     /* CF3: gated first-class handler composition */
     if (strcmp(s, "TUR-E0704") == 0) return TUR_E0704_HANDLER_COMPOSE_UNIMPL;
+    if (strcmp(s, "TUR-E0705") == 0) return TUR_E0705_POLY_CLOSURE_RESULT_TYVAR;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
