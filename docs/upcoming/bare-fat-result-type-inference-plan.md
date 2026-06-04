@@ -6,8 +6,8 @@ description: Close the missing functionality behind bare-fat-param-non-int-resul
 
 # Bare `^fat` Result-Type Inference -- Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-03
+> **Status:** Phase A implemented (Phase B pending, separate PR)
+> **Last Updated:** 2026-06-04
 > **Type:** compiler -- closure ABI / type inference
 > **Resolves the missing functionality flagged in:**
 > - [bare-fat-param-non-int-result-miscompiles.md](../reported/bare-fat-param-non-int-result-miscompiles.md)
@@ -283,22 +283,35 @@ Use it in A2/A3/A4 instead of the bare `== TY_FLOAT`.
 
 ### Phase A validation
 
-- [ ] Reported repro compiles **with no annotation** and prints `7`:
+- [x] Reported repro compiles **with no annotation** and prints `7`:
       `(defn run-with [^fat g x :float] :float (g x))` + `(make-scale 2.0)`.
-- [ ] `tests/fixtures/errors/bare-fat-float-result` is **moved out of
+      (`tests/fixtures/bare-fat-float-result`)
+- [x] `tests/fixtures/errors/bare-fat-float-result` is **moved out of
       `errors/`** to a positive fixture (`bare-fat-float-result` ->
-      stdout `7`) since it now compiles -- or, under A5-conservative, kept
-      with the reworded message. State which in the commit.
-- [ ] Register-class-distinct fixture: one bare-`^fat` combinator applied
-      to an `:int` closure (stays int) and a `:float` closure (infers
-      float) in the same file.
-- [ ] A6 non-tail fixture round-trips (`5.0`).
-- [ ] A4 `let`-binding fixture (if shipped).
-- [ ] `arrow-capturing-closure`, `fat-param-capturing-closure`,
+      stdout `7`) since it now compiles. **A5-preferred** was taken: the
+      hard-error diagnostic is deleted outright (the tail walk covers every
+      tail position; a residual non-tail bare-`^fat` int64 value stays
+      int64, consistent with every other int-carrier use).
+- [x] Register-class-distinct fixture: one bare-`^fat` combinator shape
+      applied to an `:int` closure (stays int) and a `:float` closure
+      (infers float) in the same file
+      (`tests/fixtures/bare-fat-int-and-float-combinator`).
+- [x] A6 non-tail fixture round-trips (`5`)
+      (`tests/fixtures/bare-fat-nontail-int-roundtrip`).
+- [x] A4 `let`-binding fixture shipped
+      (`tests/fixtures/bare-fat-let-float-binding`); the retype runs before
+      the annotation-vs-init kind check so `[y : float (g x)]` is accepted.
+- [x] `arrow-capturing-closure`, `fat-param-capturing-closure`,
       `fat-param-direct-call`, `fat-param-nullary-closure` still green
       (int-carrier + annotated paths unchanged).
-- [ ] `bash tests/run.sh`: 0 FAIL, leak detection on. Regenerate any
-      `expected.c` snapshots whose emitted thunk gained a float signature.
+- [x] `bash tests/run.sh`: **1347 passed, 0 failed**, leak detection on.
+      New fixtures carry regenerated `expected.c` snapshots.
+
+> **A3 note:** the `elab_fn` (lambda) retype call is in place for symmetry,
+> but a `^fat` parameter on a *lambda* (`(fn [^fat g ...] ...)`) is not yet
+> accepted by the elaborator (`'g' is not a function`), so the lambda path is
+> currently dormant -- it will activate for free once bare-`^fat` lambda
+> params are supported. No fixture is added for the unsupported syntax.
 
 ---
 

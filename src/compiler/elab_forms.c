@@ -553,6 +553,16 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (type_ann_form) {
             Type *ann_ty = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
             if (ann_ty) {
+                /* bare-fat-param-non-int-result (Phase A4): a declared-typed
+                 * binding whose init's tail is a bare-^fat int64 call carries no
+                 * recorded result type; infer it from the annotation and re-stamp
+                 * the call before the kind-match check below.  See
+                 * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+                if (kind_is_non_int_register_class(ann_ty->kind) &&
+                    retype_bare_fat_tail_calls(init, ann_ty->kind) &&
+                    init->type.kind == TY_INT) {
+                    init->type = type_from_kind(ann_ty->kind);
+                }
                 TypeKind ak = ann_ty->kind, ik = init->type.kind;
                 bool primitive = (ak == TY_INT || ak == TY_FLOAT ||
                                   ak == TY_BOOL || ak == TY_CSTR ||
