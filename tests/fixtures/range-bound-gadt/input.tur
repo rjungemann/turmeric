@@ -1,0 +1,23 @@
+; R3: Bound A GADT for range endpoints + the legacy-pointer compatibility shim.
+
+(load "stdlib/range-bound.tur")
+
+(defn main [] : int
+  ; Build a [1,5) range from GADT endpoints; legacy range predicates still apply.
+  (let [r (bound-range (bound-inclusive 1) (bound-exclusive 5))]
+    (println (range-contains? r 1))                       ; true
+    (println (range-contains? r 5))                       ; false
+    (println (range-contains? r 4))                       ; true
+    ; Round-trip: project endpoints back into the GADT.
+    (println (bound-inclusive? (range-lower-bound r)))    ; true
+    (println (bound-inclusive? (range-upper-bound r)))    ; false
+    (println (bound-value (range-lower-bound r)))         ; 1
+    (println (bound-value (range-upper-bound r))))        ; 5
+  ; Unbounded endpoints round-trip through the shim too.
+  (let [r2 (bound-range (bound-unbounded) (bound-inclusive 10))]
+    (println (bound-unbounded? (range-lower-bound r2)))   ; true
+    (println (range-contains? r2 10))                     ; true
+    (println (range-contains? r2 -999)))                  ; true
+  ; The shim is exhaustive: every legacy bound lifts back to the GADT.
+  (println (bound-inclusive? (range-bound->bound (range-lower (closed-range 2 8))))) ; true
+  0)

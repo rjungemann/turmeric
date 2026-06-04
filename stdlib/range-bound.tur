@@ -1,0 +1,236 @@
+;;; tur/range-bound -- Bound A GADT: typed range endpoints (R3).
+;;;
+;;; range.tur encodes a range endpoint's kind as a sentinel int -- the
+;;; `inclusive : int` argument to range-bound-new (1 = inclusive, 0 =
+;;; exclusive) plus the null pointer (0) standing for "unbounded". That is a
+;;; classic stringly-typed sum. This module replaces it with a real algebraic
+;;; type, the `Bound A` GADT:
+;;;
+;;;   Inclusive v  -- the endpoint v is part of the interval
+;;;   Exclusive v  -- the endpoint v is the open boundary
+;;;   Unbounded    -- no endpoint on this side
+;;;
+;;; A pair of bidirectional compatibility shims (bound->range-bound and
+;;; range-bound->bound) bridges the GADT to range.tur's existing pointer
+;;; representation, so every legacy range constructor and predicate keeps
+;;; working unchanged while new code can construct and destructure endpoints
+;;; with exhaustive pattern matching.
+;;;
+;;; Opt-in: this layer requires -Xgadt. range.tur itself stays GADT-free so
+;;; that its existing callers (the `for` macros, the range-* fixtures) need no
+;;; flag. The full migration of range.tur's *internal* representation onto the
+;;; GADT is held back by two issues tracked in
+;;; docs/reported/defgadt-copy-and-shared-bounds.md: defgadt has no :copy form
+;;; (GADT values are move-tracked, but range bounds are shared/read many
+;;; times), and adopting the GADT in range.tur would force -Xgadt on every
+;;; range consumer.
+;;;
+;;; Since: stdlib-refinement-collections-plan (R3)
+(load "stdlib/range.tur")
+;;; Bound -- a range endpoint: inclusive, exclusive, or unbounded.
+;;;
+;;; Since: R3
+(defgadt Bound
+  [A]
+  (Inclusive int : (Bound int))
+  (Exclusive int : (Bound int))
+  (Unbounded : (Bound int)))
+;;; bound-inclusive -- construct an inclusive endpoint at v.
+;;;
+;;; Parameters:
+;;;   v -- the endpoint value (part of the interval)
+;;;
+;;; Returns:
+;;;   A (Bound int) tagged Inclusive.
+;;;
+;;; Example:
+;;;   (range-contains? (bound-range (bound-inclusive 1) (bound-unbounded)) 1)  ; => true
+;;;
+;;; Since: R3
+
+(defn bound-inclusive [v : int] : Bound (Inclusive v))
+;;; bound-exclusive -- construct an exclusive endpoint at v.
+;;;
+;;; Parameters:
+;;;   v -- the open boundary value (not part of the interval)
+;;;
+;;; Returns:
+;;;   A (Bound int) tagged Exclusive.
+;;;
+;;; Example:
+;;;   (range-contains? (bound-range (bound-inclusive 1) (bound-exclusive 5)) 5)  ; => false
+;;;
+;;; Since: R3
+
+(defn bound-exclusive [v : int] : Bound (Exclusive v))
+;;; bound-unbounded -- construct an unbounded (open-ended) endpoint.
+;;;
+;;; Returns:
+;;;   A (Bound int) tagged Unbounded.
+;;;
+;;; Example:
+;;;   (range-contains? (bound-range (bound-unbounded) (bound-unbounded)) 999)  ; => true
+;;;
+;;; Since: R3
+
+(defn bound-unbounded [] : Bound (Unbounded))
+;;; bound->range-bound -- compatibility shim: GADT endpoint -> legacy pointer.
+;;;
+;;; Lowers a Bound to range.tur's internal representation: a RangeBound
+;;; pointer for Inclusive / Exclusive, or 0 (the unbounded sentinel) for
+;;; Unbounded. Consumes its argument (GADT values are move-tracked).
+;;;
+;;; Parameters:
+;;;   b -- the (Bound int) to lower
+;;;
+;;; Returns:
+;;;   An :int RangeBound pointer (0 = unbounded), accepted by range-new and
+;;;   every range.tur predicate.
+;;;
+;;; Example:
+;;;   (range-bound-inclusive? (bound->range-bound (bound-inclusive 3)))  ; => true
+;;;
+;;; Since: R3
+
+(defn bound->range-bound [b : Bound] : int
+  (match b
+    (Inclusive v)
+    (range-bound-new 1 v)
+    (Exclusive v)
+    (range-bound-new 0 v)
+    (Unbounded)
+    0))
+;;; range-bound->bound -- compatibility shim: legacy pointer -> GADT endpoint.
+;;;
+;;; Lifts range.tur's pointer representation back into the Bound GADT: 0 maps
+;;; to Unbounded, an inclusive RangeBound to Inclusive, an exclusive one to
+;;; Exclusive.
+;;;
+;;; Parameters:
+;;;   b -- an :int RangeBound pointer (0 = unbounded)
+;;;
+;;; Returns:
+;;;   The corresponding (Bound int).
+;;;
+;;; Example:
+;;;   (bound-value (range-bound->bound (range-lower (closed-range 2 8))))  ; => 2
+;;;
+;;; Since: R3
+
+(defn range-bound->bound [b : int] : Bound
+  (if (= b 0)
+    (Unbounded)
+    (if (range-bound-inclusive? b)
+      (Inclusive (range-bound-value b))
+      (Exclusive (range-bound-value b)))))
+;;; bound-value -- extract the endpoint value from a bounded endpoint.
+;;;
+;;; Parameters:
+;;;   b -- a (Bound int); Unbounded yields 0
+;;;
+;;; Returns:
+;;;   The endpoint value for Inclusive / Exclusive, or 0 for Unbounded.
+;;;
+;;; Example:
+;;;   (bound-value (bound-exclusive 7))  ; => 7
+;;;
+;;; Since: R3
+
+(defn bound-value [b : Bound] : int
+  (match b
+    (Inclusive v)
+    v
+    (Exclusive v)
+    v
+    (Unbounded)
+    0))
+;;; bound-inclusive? -- true when an endpoint is inclusive.
+;;;
+;;; Parameters:
+;;;   b -- a (Bound int)
+;;;
+;;; Returns:
+;;;   true for Inclusive, false for Exclusive or Unbounded.
+;;;
+;;; Example:
+;;;   (bound-inclusive? (bound-inclusive 1))  ; => true
+;;;
+;;; Since: R3
+
+(defn bound-inclusive? [b : Bound] : bool
+  (match b
+    (Inclusive _)
+    true
+    (Exclusive _)
+    false
+    (Unbounded)
+    false))
+;;; bound-unbounded? -- true when an endpoint is unbounded.
+;;;
+;;; Parameters:
+;;;   b -- a (Bound int)
+;;;
+;;; Returns:
+;;;   true for Unbounded, false otherwise.
+;;;
+;;; Example:
+;;;   (bound-unbounded? (bound-unbounded))  ; => true
+;;;
+;;; Since: R3
+
+(defn bound-unbounded? [b : Bound] : bool
+  (match b
+    (Inclusive _)
+    false
+    (Exclusive _)
+    false
+    (Unbounded)
+    true))
+;;; bound-range -- build a Range from two GADT endpoints.
+;;;
+;;; The GADT-typed analogue of range.tur's positional constructors
+;;; (closed-range, open-range, ...): pick any Inclusive / Exclusive /
+;;; Unbounded combination for each side.
+;;;
+;;; Parameters:
+;;;   lo -- the lower (Bound int)
+;;;   hi -- the upper (Bound int)
+;;;
+;;; Returns:
+;;;   An :int Range pointer, usable with every range.tur predicate.
+;;;
+;;; Example:
+;;;   (range-contains? (bound-range (bound-inclusive 1) (bound-exclusive 5)) 4)  ; => true
+;;;
+;;; Since: R3
+
+(defn bound-range [lo : Bound hi : Bound] : int
+  (range-new (bound->range-bound lo) (bound->range-bound hi)))
+;;; range-lower-bound -- the lower endpoint of a Range as a Bound GADT.
+;;;
+;;; Parameters:
+;;;   r -- an :int Range pointer
+;;;
+;;; Returns:
+;;;   The lower endpoint lifted into the (Bound int) GADT.
+;;;
+;;; Example:
+;;;   (bound-inclusive? (range-lower-bound (closed-range 1 5)))  ; => true
+;;;
+;;; Since: R3
+
+(defn range-lower-bound [r : int] : Bound (range-bound->bound (range-lower r)))
+;;; range-upper-bound -- the upper endpoint of a Range as a Bound GADT.
+;;;
+;;; Parameters:
+;;;   r -- an :int Range pointer
+;;;
+;;; Returns:
+;;;   The upper endpoint lifted into the (Bound int) GADT.
+;;;
+;;; Example:
+;;;   (bound-unbounded? (range-upper-bound (at-least-range 3)))  ; => true
+;;;
+;;; Since: R3
+
+(defn range-upper-bound [r : int] : Bound (range-bound->bound (range-upper r)))
