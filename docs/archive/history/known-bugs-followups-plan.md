@@ -452,8 +452,27 @@ docstring is unchanged.
 
 `stdlib/session.tur` now checks clean under `-Xsessions` and was added to
 `tests/run-stdlib-checks.sh` (30 passed).  No compiler change was required; the
-`:[(...)]` parser gap noted in the original plan remains an unimplemented
+`:[(...)]` parser gap noted in the original plan remained an unimplemented
 feature but is no longer on any stdlib file's path.
+
+### Follow-up: residual parser-surface gap CLOSED (2026-06-04)
+
+The general tuple-type surface gap is now closed. Option (a) shipped, refined:
+in type-annotation position a bracket list `[T1 T2 ... Tn]` (2 <= N <= 8) is
+sugar for the stdlib `TupleN` struct application `(TupleN T1 ... Tn)`,
+mirroring the value-level tuple destructure `(let [[a b] e] ...)`. It nests
+recursively and reports a clear diagnostic for out-of-range arities. Lowering
+lives in `src/compiler/elab_types.c` (the `F_VEC` branch of
+`type_expr_from_form`); covered by `tests/fixtures/tuple-type-bracket-sugar`
+and `tests/fixtures/errors/tuple-type-bad-arity`.
+
+This does **not** change `session.tur`: `(recv ch)` still yields the internal
+`TY_SESSION_RECV_PAIR`, a type distinct from `Tuple2`, so `[int (Session ...)]`
+would denote the wrong type. Session recv-pairs still have no surface spelling
+and that signature stays inferred. Two pre-existing defects surfaced while
+landing the sugar and are filed separately (not regressions):
+`docs/reported/tuplen-struct-param-passed-by-pointer-codegen-mismatch.md` and
+`docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md`.
 
 ---
 

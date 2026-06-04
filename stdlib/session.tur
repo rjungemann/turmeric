@@ -72,8 +72,12 @@
 ;; return type is left to inference -- it is exactly the recv-pair the body
 ;; yields and that callers destructure with (let [[r ch] (echo-client-call ...)]).
 ;; The contained-stdlib fix is DONE (annotation dropped, file checks clean under
-;; -Xsessions); the residual :[(...)] parser-surface gap remains a tracked
-;; language follow-up there, not a workaround to paper over here.
+;; -Xsessions). The general tuple-type surface gap is now closed: `[T1 T2 ...]`
+;; in type position is sugar for the stdlib TupleN struct (see stdlib/tuple.tur
+;; and src/compiler/elab_types.c). It does NOT apply here, though -- (recv ch)
+;; yields the internal session recv-pair (TY_SESSION_RECV_PAIR), a distinct
+;; type from Tuple2, so `[int (Session ...)]` would mean the wrong thing. The
+;; recv-pair still has no surface spelling; this return stays inferred.
 
 (defn echo-client-call [^linear ch : (Session (Rec self
                                                 (Choose (Send int

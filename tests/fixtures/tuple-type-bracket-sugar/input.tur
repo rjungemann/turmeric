@@ -1,0 +1,30 @@
+;; KB-029 residual gap: `[T1 T2 ... Tn]` in type-annotation position is
+;; surface sugar for the stdlib TupleN struct, mirroring the value-level
+;; tuple destructure `(let [[a b] e] ...)`. Exercises the bracket form in
+;; parameter and return position, a nested `[int [cstr int]]` type that
+;; must lower recursively, and a 3-arity bracket return type. Helper names
+;; are prefixed `tts-` to avoid auto-loaded stdlib collisions.
+
+(defn tts-mk-pair [a : int b : cstr] : [int cstr]
+  (tuple2 a b))
+
+(defn tts-first [p : [int cstr]] : int
+  (tuple2-1st p))
+
+(defn tts-second [p : [int cstr]] : cstr
+  (tuple2-2nd p))
+
+;; nested tuple type `[int [cstr int]]` must lower recursively to
+;; (Tuple2 int (Tuple2 cstr int)).
+(defn tts-nested-head [t : [int [cstr int]]] : int
+  (tuple2-1st t))
+
+;; 3-arity bracket return type lowers to (Tuple3 int int int).
+(defn tts-mk-triple [] : [int int int]
+  (tuple3 10 20 30))
+
+(let [p (tts-mk-pair 7 "hello")]
+  (println (tts-first p))
+  (println (tts-second p))
+  (println (tts-nested-head (tuple2 1 (tuple2 "x" 2))))
+  (println (tuple3-2nd (tts-mk-triple))))

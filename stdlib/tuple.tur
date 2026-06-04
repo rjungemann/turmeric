@@ -8,6 +8,13 @@
 ;;; Tuple2 is intentionally distinct from Pair[A B]; see the
 ;;; "two-tuple-types problem" decision in docs/tuple-type-plan.md.
 ;;;
+;;; Surface sugar: in type-annotation position, a bracket list `[T1 T2 ... Tn]`
+;;; is shorthand for `(TupleN T1 T2 ... Tn)` (2 <= N <= 8), mirroring the
+;;; value-level tuple destructure `(let [[a b] e] ...)`. For example
+;;; `: [int cstr]` means `: (Tuple2 int cstr)` and nests recursively
+;;; (`[int [cstr int]]` -> `(Tuple2 int (Tuple2 cstr int))`). The lowering
+;;; lives in src/compiler/elab_types.c.
+;;;
 ;;; Language gap: tuple3..tuple8 and their per-N accessors are mechanical,
 ;;; copy-paste expansions of the Tuple2 pattern -- there is no variadic-generic
 ;;; way to write "a tuple of N typed elements" in one definition. The eventual
