@@ -2112,6 +2112,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
     bool body_is_inline_c = (body && body->kind == EX_INLINE_C);
     if (g_linear_enabled && body && !body_is_inline_c) {
         for (uint8_t _li = 0; _li < n_params; _li++) {
+            /* LB1: a ^borrow parameter is non-consuming -- the caller retains
+             * ownership and the borrow auto-releases at scope exit -- so it
+             * carries no consumption obligation. Without this exemption a
+             * Turmeric-bodied accessor that merely forwards its borrowed handle
+             * to another ^borrow parameter (e.g. a thin delegating wrapper)
+             * would spuriously report TUR-E0100, even though inline-C-bodied
+             * borrow accessors are already exempt via body_is_inline_c. */
+            if (params[_li]->is_borrow) continue;
             if (params[_li]->is_linear && !params[_li]->is_linear_consumed && !params[_li]->is_moved) {
                 /* SS0b: Session channels get a distinct error code.
                  * SS1: include the current protocol state in the message. */
@@ -2952,6 +2960,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * k] ...)) that is never invoked is a dropped linear value (TUR-E0100). */
     if (g_linear_enabled && body) {
         for (uint8_t _li = 0; _li < n_params; _li++) {
+            /* LB1: ^borrow params are non-consuming; they carry no consumption
+             * obligation (see the defn-scope LT1 check above). */
+            if (params[_li]->is_borrow) continue;
             if (params[_li]->is_linear && !params[_li]->is_linear_consumed
                     && !params[_li]->is_moved) {
                 diag_emit_with_code(DIAG_ERROR, params[_li]->span,

@@ -1,0 +1,20 @@
+;; stdlib-linearity-affinity-plan (L2): TaskGroup is a :linear resource handle.
+;;
+;; A TaskGroup owns a heap-allocated TaskGroupBlock that must be destroyed
+;; exactly once with task-group-free. All group accessors (cancel / wait /
+;; cancelled?) declare their group ^borrow, so a group may be cancelled, waited
+;; on, and queried any number of times without consuming it; only
+;; task-group-free consumes. Under -Xlinear this whole sequence type-checks.
+;;
+;; Expected output: taskgroup ok
+(load "stdlib/taskgroup.tur")
+
+(defn main [] : int
+  (let [g (task-group-new)]
+    (task-group-cancel g)
+    (task-group-wait g)
+    (let [c (task-group-cancelled? g)]
+      ;; the single consumption
+      (task-group-free g)
+      (println "taskgroup ok")
+      0)))

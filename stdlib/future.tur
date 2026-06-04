@@ -42,7 +42,22 @@
 ;; underlying :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
 ;; A freshly allocated cell is handed out as a Promise (the producer fulfills
 ;; it); derive the consumer's Future view with future-of-cell / promise-pair.
-(defopaque Promise :ptr<void>)
+;;
+;; ---- Linearity (stdlib-linearity-affinity-plan, L1) ----
+;; Promise is :linear: it is the producer end of a one-shot cell and must be
+;; settled exactly once. promise-fulfill / promise-fail consume the Promise by
+;; value, so under -Xlinear settling the same Promise twice is a TUR-E0101
+;; (use-after-consume) and dropping a Promise without ever settling or freeing
+;; it is a TUR-E0100. promise-free / future-cell-free likewise consume; the
+;; identity views promise-of-cell (Promise -> Promise) and future-of-cell
+;; (Promise -> Future) consume the Promise and hand back the next single owner.
+;;
+;; Future is intentionally NOT promoted in this pass: a Promise and the Future
+;; over the same shared FutureCell are aliases of one pointer, so holding both
+;; (as promise-pair does) is exactly the multi-owner pattern linearity forbids.
+;; Promoting Future to :affine requires first untangling that shared-cell
+;; aliasing -- see docs/reported/stdlib-future-linearity-aliasing.md.
+(defopaque Promise :ptr<void> :linear)
 
 (defopaque Future :ptr<void>)
 ;; ---- Shared FutureCell type and helpers ----

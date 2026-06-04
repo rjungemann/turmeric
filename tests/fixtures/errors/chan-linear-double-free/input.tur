@@ -1,0 +1,10 @@
+;; stdlib-linearity-affinity-plan (L1): freeing a :linear Chan twice. chan-free
+;; consumes the handle, so a second chan-free is a use-after-consume.
+;; Expected: TUR-E0101 (linear value used after being consumed).
+(load "stdlib/chan.tur")
+
+(defn main [] : int
+  (let [ch (chan-new 4)]
+    (chan-free ch)
+    (chan-free ch))
+  0)

@@ -10,6 +10,26 @@ description: Promote stdlib resource-handle newtypes (Mutex, Chan, Promise, Futu
 > **Prerequisite:** the corresponding handle is already a `defopaque` newtype
 > (see [[stdlib-opaque-handle-types-plan]]); this plan layers on top.
 
+> **Status (2026-06-04, update 2):** L1/L2 inventory largely promoted. On top
+> of the foundational slice below, `Chan` + `AsyncChan` (`:linear`; send/recv/
+> try/count accessors `^borrow`, `*-free` consumes), `TaskGroup` (`:linear`; all
+> group accessors `^borrow`, `task-group-free` consumes -- `TaskHandle` stays a
+> plain opaque since a group hands out many un-freed handles), and `Promise`
+> (`:linear`; `promise-fulfill`/`-fail`/`-free` consume by value, so
+> double-fulfill is now a compile-time `TUR-E0101`) are all promoted, each with
+> positive + negative (`-dropped` / `-double-free` / `-double-fulfill`)
+> fixtures. While promoting `TaskGroup` a real `^borrow` false-positive was
+> found and fixed: a `^borrow` parameter forwarded to another `^borrow`
+> parameter (or simply unused) in a non-inline-C body spuriously reported
+> `TUR-E0100`; see [[../reported/borrow-param-forwarding-drop]] (RESOLVED).
+> `Future` is intentionally **not** promoted: a `Promise` and its `Future` are
+> aliases of one shared `FutureCell`, which single-ownership forbids -- see
+> [[../reported/stdlib-future-linearity-aliasing]] for the design tension and
+> fix directions. Still unpromoted (prerequisite not met -- not yet a
+> `defopaque`): `Reactor` and `Bytes` (bare `ptr<void>`), and `ChildHandle`
+> (`tur/process` uses `Pid`, a freely-copied value rather than a freed
+> resource). Promote those only after they gain opaque-handle status.
+>
 > **Status (2026-06-04):** foundational slice + borrow form landed. The compiler
 > now supports `defopaque Name :base :linear` / `:affine` (previously the
 > attribute was silently dropped), inline-C accessor bodies no longer mis-report

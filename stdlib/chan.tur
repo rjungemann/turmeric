@@ -32,9 +32,19 @@
 ;; are nominally distinct so the type checker rejects passing a synchronous
 ;; Chan where an AsyncChan is expected (and vice versa). Both lower to the
 ;; underlying :ptr<void> in the C ABI, so the inline-C bodies are unchanged.
-(defopaque Chan :ptr<void>)
+;;
+;; ---- Linearity (stdlib-linearity-affinity-plan, L1) ----
+;; Chan and AsyncChan are :linear: each owns a heap-allocated ChanBlock (and its
+;; pthread mutex/condvars and ring buffer) that must be destroyed exactly once
+;; with chan-free / async-chan-free. Under -Xlinear the checker rejects dropping
+;; a channel (TUR-E0100) or freeing it twice / using it after free (TUR-E0101).
+;; The multi-use accessors -- chan-send / chan-recv and the async send/recv/try/
+;; count variants -- declare their handle parameter ^borrow, so sending and
+;; receiving repeatedly reads the handle without consuming it; only the *-free
+;; operation consumes. See docs/reported/stdlib-linear-handle-borrows.md.
+(defopaque Chan :ptr<void> :linear)
 
-(defopaque AsyncChan :ptr<void>)
+(defopaque AsyncChan :ptr<void> :linear)
 ;; ---- Chan (synchronous blocking) ----
 ;;; chan-new -- allocate a new synchronous blocking channel with the given capacity.
 ;;;
@@ -84,7 +94,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn chan-send [ch : Chan val : int] : nil
+(defn chan-send [^borrow ch : Chan val : int] : nil
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
@@ -123,7 +133,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn chan-recv [ch : Chan] : int
+(defn chan-recv [^borrow ch : Chan] : int
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
@@ -224,7 +234,7 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-send [ch : AsyncChan val : int] : nil
+(defn async-chan-send [^borrow ch : AsyncChan val : int] : nil
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
@@ -263,7 +273,7 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-recv [ch : AsyncChan] : int
+(defn async-chan-recv [^borrow ch : AsyncChan] : int
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
@@ -304,7 +314,7 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-try-send [ch : AsyncChan val : int] : bool
+(defn async-chan-try-send [^borrow ch : AsyncChan val : int] : bool
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
@@ -339,7 +349,7 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-try-recv [ch : AsyncChan] : int
+(defn async-chan-try-recv [^borrow ch : AsyncChan] : int
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
@@ -372,7 +382,7 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-count [ch : AsyncChan] : int
+(defn async-chan-count [^borrow ch : AsyncChan] : int
   ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;

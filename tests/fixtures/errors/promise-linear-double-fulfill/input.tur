@@ -1,0 +1,12 @@
+;; stdlib-linearity-affinity-plan (L1): settling a :linear Promise twice.
+;; promise-fulfill consumes the Promise by value, so a second promise-fulfill on
+;; the same Promise is a use-after-consume -- catching the double-fulfill bug
+;; class at compile time.
+;; Expected: TUR-E0101 (linear value used after being consumed).
+(load "stdlib/future.tur")
+
+(defn main [] : int
+  (let [p (promise-new)]
+    (promise-fulfill p 1)
+    (promise-fulfill p 2))
+  0)
