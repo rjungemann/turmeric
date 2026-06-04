@@ -46,7 +46,7 @@
   }
   /* Negotiate: substring "gzip" in Accept-Encoding (case-insensitive).
    * Full RFC 7231 q-value parsing is M6-OQ5 and deferred. */
-  if (!httpd_req_header_((void *)conn, "Accept-Encoding")) return;
+  if (!httpd_req_header_qu((void *)conn, "Accept-Encoding")) return;
   const char *ae = httpd_req_header((void *)conn, "Accept-Encoding");
   if (!ae || !*ae) return;
   int found = 0;
@@ -61,9 +61,9 @@
   void *data = gzip_buf_data(buf);
   int64_t dlen = gzip_buf_len(buf);
   /* Replace the response body with the compressed bytes (binary-safe). */
-  httpd_resp_body_bytes_((void *)conn, data, dlen);
-  httpd_resp_header_((void *)conn, "Content-Encoding", "gzip");
-  httpd_resp_header_add_((void *)conn, "Vary", "Accept-Encoding");
+  httpd_resp_body_bytes_ex((void *)conn, data, dlen);
+  httpd_resp_header_ex((void *)conn, "Content-Encoding", "gzip");
+  httpd_resp_header_add_ex((void *)conn, "Vary", "Accept-Encoding");
   gzip_buf_free(buf);
   ```)
 ;; -----------------------------------------------------------------------------

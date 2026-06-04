@@ -1,5 +1,6 @@
 /* emit_core.c -- shared codegen helpers: naming, atoms, builtins, captures. */
 #include "emit_internal.h"
+#include "mangle.h"
 
 /* ------------ helpers ------------ */
 
@@ -606,7 +607,7 @@ char *raw_name_for_binding(const Binding *b) {
         mod_prefix_len  = j;
     }
 
-    size_t total = mod_prefix_len + b->name->len + 1;
+    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len);
     char *p = (char *)malloc(total);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
@@ -614,15 +615,7 @@ char *raw_name_for_binding(const Binding *b) {
         memcpy(p, mod_prefix, mod_prefix_len);
         k = mod_prefix_len;
     }
-    for (uint32_t i = 0; i < b->name->len; i++) {
-        char c = b->name->name[i];
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '_') {
-            p[k++] = c;
-        } else {
-            p[k++] = '_';
-        }
-    }
+    tur_mangle_append(p, &k, b->name->name, b->name->len);
     p[k] = '\0';
     return p;
 }
@@ -871,19 +864,11 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     /* `<name>_<id>` with non-id-safe chars mangled to underscores. We append
      * the unique id so different bindings with the same source name don't
      * collide in C. */
-    size_t cap = b->name->len + 16;
+    size_t cap = tur_mangle_bound(b->name->len) + 16;
     char *p = (char *)malloc(cap);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
-    for (uint32_t i = 0; i < b->name->len; i++) {
-        char c = b->name->name[i];
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '_') {
-            p[k++] = c;
-        } else {
-            p[k++] = '_';
-        }
-    }
+    tur_mangle_append(p, &k, b->name->name, b->name->len);
     snprintf(p + k, cap - k, "_%u", b->id);
     return p;
 }

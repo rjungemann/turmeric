@@ -1382,7 +1382,7 @@
   if (opts.secure)         n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Secure");
   if (opts.http_only)      n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; HttpOnly");
   if (*csame)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; SameSite=%s", csame);
-  httpd_resp_header_add_((void *)conn, "Set-Cookie", buf);
+  httpd_resp_header_add_ex((void *)conn, "Set-Cookie", buf);
   ```)
 ;; =============================================================================
 ;; M3: Body parsers -- URL-encoded forms + JSON
@@ -1615,7 +1615,7 @@
   ```c if (!conn) return 0;
   const char *m = httpd_req_method((void *)conn);
   if (!m || strcmp(m, "OPTIONS") != 0) return 0;
-  return httpd_req_header_((void *)conn, "Access-Control-Request-Method");
+  return httpd_req_header_qu((void *)conn, "Access-Control-Request-Method");
   ```)
 ;;; httpd-mw-cors-emit-preflight -- internal: write the preflight response.
 ;;;
@@ -1631,21 +1631,21 @@
                                     allow-credentials :int
                                     max-age :int] :nil
   ```c if (!conn) return;
-  httpd_resp_status_((void *)conn, 204);
-  httpd_resp_body_((void *)conn, "");
+  httpd_resp_status_ex((void *)conn, 204);
+  httpd_resp_body_ex((void *)conn, "");
   const char *ao = allow_origin  ? allow_origin  : "*";
   const char *am = allow_methods ? allow_methods : "";
   const char *ah = allow_headers ? allow_headers : "";
-  httpd_resp_header_((void *)conn, "Access-Control-Allow-Origin",  ao);
-  if (*am) httpd_resp_header_((void *)conn, "Access-Control-Allow-Methods", am);
-  if (*ah) httpd_resp_header_((void *)conn, "Access-Control-Allow-Headers", ah);
+  httpd_resp_header_ex((void *)conn, "Access-Control-Allow-Origin",  ao);
+  if (*am) httpd_resp_header_ex((void *)conn, "Access-Control-Allow-Methods", am);
+  if (*ah) httpd_resp_header_ex((void *)conn, "Access-Control-Allow-Headers", ah);
   if (allow_credentials) {
-      httpd_resp_header_((void *)conn, "Access-Control-Allow-Credentials", "true");
+      httpd_resp_header_ex((void *)conn, "Access-Control-Allow-Credentials", "true");
   }
   if (max_age >= 0) {
       char buf[32];
       snprintf(buf, sizeof(buf), "%lld", (long long)max_age);
-      httpd_resp_header_((void *)conn, "Access-Control-Max-Age", buf);
+      httpd_resp_header_ex((void *)conn, "Access-Control-Max-Age", buf);
   }
   ```)
 ;;; httpd-mw-cors-decorate -- internal: decorate a normal-flow response.
@@ -1657,10 +1657,10 @@
   ```c if (!conn) return;
   const char *ao = allow_origin   ? allow_origin   : "*";
   const char *eh = expose_headers ? expose_headers : "";
-  httpd_resp_header_((void *)conn, "Access-Control-Allow-Origin", ao);
-  if (*eh) httpd_resp_header_((void *)conn, "Access-Control-Expose-Headers", eh);
+  httpd_resp_header_ex((void *)conn, "Access-Control-Allow-Origin", ao);
+  if (*eh) httpd_resp_header_ex((void *)conn, "Access-Control-Expose-Headers", eh);
   if (allow_credentials) {
-      httpd_resp_header_((void *)conn, "Access-Control-Allow-Credentials", "true");
+      httpd_resp_header_ex((void *)conn, "Access-Control-Allow-Credentials", "true");
   }
   ```)
 ;;; mw-cors-with -- CORS middleware factory (positional args).
@@ -1821,7 +1821,7 @@
   int64_t ok = ((fn2_t)(intptr_t)fat[0])((void *)fat, user, pass);
   /* MW2: on success, publish the verified username via httpd-set-attr!
    * so downstream handlers can read it back through (httpd-req-attr c "user"). */
-  if (ok) httpd_set_attr_((void *)conn, "user", user);
+  if (ok) httpd_set_attr_ex((void *)conn, "user", user);
   free(raw);
   return (int)(ok ? 1 : 0);
   ```)
@@ -1829,12 +1829,12 @@
 
 (defn httpd-mw-basic-auth-challenge [conn :ptr<void> realm :cstr] :nil
   ```c if (!conn) return;
-  httpd_resp_status_((void *)conn, 401);
-  httpd_resp_body_((void *)conn, "Unauthorized");
+  httpd_resp_status_ex((void *)conn, 401);
+  httpd_resp_body_ex((void *)conn, "Unauthorized");
   char buf[256];
   const char *r = (realm && *realm) ? realm : "restricted";
   snprintf(buf, sizeof(buf), "Basic realm=\"%s\"", r);
-  httpd_resp_header_((void *)conn, "WWW-Authenticate", buf);
+  httpd_resp_header_ex((void *)conn, "WWW-Authenticate", buf);
   ```)
 ;;; mw-basic-auth -- HTTP Basic Auth middleware factory.
 ;;;
@@ -3240,7 +3240,7 @@
 
 (defn httpd-mw-content-length [conn :ptr<void>] :int
   ```c if (!conn) return -1;
-  if (!httpd_req_header_((void *)conn, "Content-Length")) return -1;
+  if (!httpd_req_header_qu((void *)conn, "Content-Length")) return -1;
   const char *v = httpd_req_header((void *)conn, "Content-Length");
   if (!v || !*v) return -1;
   /* Skip leading whitespace; require at least one digit. */
@@ -3410,7 +3410,7 @@
       inet_ntop(AF_INET6, &sa->sin6_addr, ipbuf, sizeof(ipbuf));
   }
   if (!ipbuf[0]) return "";
-  httpd_set_attr_((void *)conn, "__remote_ip", ipbuf);
+  httpd_set_attr_ex((void *)conn, "__remote_ip", ipbuf);
   return httpd_req_attr((void *)conn, "__remote_ip");
   ```)
 ;; =============================================================================
@@ -3536,11 +3536,11 @@
 
 (defn httpd-mw-ratelimit-emit-429 [conn :ptr<void> retry-s :int] :nil
   ```c if (!conn) return;
-  httpd_resp_status_((void *)conn, 429);
-  httpd_resp_body_((void *)conn, "Too Many Requests");
+  httpd_resp_status_ex((void *)conn, 429);
+  httpd_resp_body_ex((void *)conn, "Too Many Requests");
   char buf[32];
   snprintf(buf, sizeof(buf), "%lld", (long long)retry_s);
-  httpd_resp_header_((void *)conn, "Retry-After", buf);
+  httpd_resp_header_ex((void *)conn, "Retry-After", buf);
   ```)
 ;;; mw-rate-limit -- sliding-window IP-based rate limiter middleware.
 ;;;
@@ -3652,9 +3652,9 @@
   /* Conditional request: If-None-Match. */
   const char *inm = httpd_req_header((void *)conn, "If-None-Match");
   if (inm && *inm && strcmp(inm, etag) == 0) {
-      httpd_resp_status_((void *)conn, 304);
-      httpd_resp_body_((void *)conn, "");
-      httpd_resp_header_((void *)conn, "ETag", etag);
+      httpd_resp_status_ex((void *)conn, 304);
+      httpd_resp_body_ex((void *)conn, "");
+      httpd_resp_header_ex((void *)conn, "ETag", etag);
       return 1;
   }
   /* Read the file into a heap buffer. */
@@ -3672,15 +3672,15 @@
   close(ffd);
   if (got != sz) { free(buf); return 0; }
   buf[got] = '\0';
-  /* Hand the buffer to httpd_resp_body_ which strdups its arg; free ours. */
-  httpd_resp_status_((void *)conn, 200);
-  /* httpd_resp_body_ uses strlen so binary files with embedded NULs are
+  /* Hand the buffer to httpd_resp_body_ex which strdups its arg; free ours. */
+  httpd_resp_status_ex((void *)conn, 200);
+  /* httpd_resp_body_ex uses strlen so binary files with embedded NULs are
    * truncated. The mw-static API ships as a "small static files" surface;
    * binary safety is a future enhancement. */
-  httpd_resp_body_((void *)conn, buf);
+  httpd_resp_body_ex((void *)conn, buf);
   free(buf);
-  httpd_resp_header_((void *)conn, "Content-Type", httpd_mw_static_mime(c->path));
-  httpd_resp_header_((void *)conn, "ETag", etag);
+  httpd_resp_header_ex((void *)conn, "Content-Type", httpd_mw_static_mime(c->path));
+  httpd_resp_header_ex((void *)conn, "ETag", etag);
   return 1;
   ```)
 ;;; mw-static -- serve files from a root directory when next returns 404.

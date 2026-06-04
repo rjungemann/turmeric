@@ -1,5 +1,6 @@
 /* elab_core.c -- Elab state, scope, free-var analysis, binding/move/linear-state helpers. */
 #include "elab_internal.h"
+#include "mangle.h"
 #include <string.h>  /* memset for elab_init_state */
 
 /* ---- shared file-scope state (declared in elab_internal.h) ---- */
@@ -1697,17 +1698,12 @@ char *elab_mangle_binding_name(const Binding *b) {
         mod_prefix_len  = j;
     }
 
-    size_t total = mod_prefix_len + b->name->len + 1;
+    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len);
     char *p = (char *)malloc(total);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
     if (mod_prefix_len > 0) { memcpy(p, mod_prefix, mod_prefix_len); k = mod_prefix_len; }
-    for (uint32_t i = 0; i < b->name->len; i++) {
-        char c = b->name->name[i];
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '_') { p[k++] = c; }
-        else { p[k++] = '_'; }
-    }
+    tur_mangle_append(p, &k, b->name->name, b->name->len);
     p[k] = '\0';
     return p;
 }

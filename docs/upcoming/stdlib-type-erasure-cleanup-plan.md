@@ -119,25 +119,44 @@ currying case in httpd.
 6. Regenerate affected `expected.c` snapshots and confirm `bash tests/run.sh`
    is clean.
 
-#### A3. Operator-name C identifier mangling
+#### A3. Operator-name C identifier mangling -- LANDED 2026-06-04
+
+> **Landed.** Binding-name mangling now routes through a single shared helper
+> (`src/compiler/mangle.{h,c}`, `tur_mangle_append`) used by both
+> `elab_mangle_binding_name` and the emitter's `raw_name_for_binding` /
+> `c_name_for_binding`, so a function's declaration, definition, and call sites
+> always agree. Each operator/sigil character gets a distinct two-letter
+> mnemonic (`>` -> `_gt`, `<` -> `_lt`, `?` -> `_qu`, `!` -> `_ex`, ...) plus a
+> `_xHH` hex escape hatch, so `>>>` (`_gt_gt_gt`) and `<<<` (`_lt_lt_lt`) -- and
+> any symmetric operator pair -- coexist. The structural separators `-` and `/`
+> deliberately keep the legacy single-`_` spelling so the hundreds of existing
+> kebab/namespaced names are not churned. Coverage:
+> `tests/fixtures/operator-mangle-pair`.
 
 `>>>` and `<<<` both mangle to `___`. Needed for `Category` (both
 compositions) and for any future typeclass that wants symmetric operator
 pairs.
 
-1. Inventory current operator-to-identifier mapping in the mangler; list all
-   operators that collide today.
-2. Design a stable, reversible mangling scheme (e.g. `>>>` -> `__gt_gt_gt`,
-   `<<<` -> `__lt_lt_lt`) -- pick a prefix that cannot collide with
-   user-defined identifiers.
-3. Implement the new mangler and gate it behind a single helper function so
-   every emission site stays consistent.
-4. Update the demangler / error-reporting path to invert the scheme so user
-   diagnostics still show `>>>` rather than `__gt_gt_gt`.
-5. Add a fixture defining both `>>>` and `<<<` in the same module and
-   asserting both are callable.
-6. Regenerate all snapshots that contain operator-name symbols; review the
-   diff for unintended renames.
+1. ~~Inventory current operator-to-identifier mapping in the mangler.~~ Done:
+   every non-`[A-Za-z0-9_]` char collapsed to a single `_`, so all sigil names
+   (`?`, `!`, `=`, `<`, `>`, ...) were mutually colliding, not just `>>>`/`<<<`.
+2. ~~Design a stable, reversible mangling scheme.~~ Done -- two-letter mnemonics
+   + `_xHH` escape (see helper). `-`/`/` keep the legacy `_` (low-churn choice).
+3. ~~Implement the new mangler behind a single helper.~~ Done -- `tur_mangle_append`.
+4. **Demangler intentionally omitted.** Because `-`, `/`, and a literal `_` all
+   fold to `_`, the encoding is not self-delimiting and no *sound* inverse
+   exists without also re-encoding those separators (which would churn every
+   identifier). It is also unnecessary: diagnostics report the original *source*
+   symbol name, never the mangled C identifier, so users already see `>>>`.
+   Rationale is documented in `mangle.h`. (Resolves open question #1: A3 landed
+   standalone, scoped to operator/sigil names, no broader symbol overhaul.)
+5. ~~Add a fixture defining both `>>>` and `<<<`.~~ Done --
+   `tests/fixtures/operator-mangle-pair` defines `>>>`, `<<<`, `===`, `!!!`.
+6. ~~Regenerate affected snapshots.~~ Done -- 115/116 codegen snapshots changed
+   (every fixture inlines the stdlib preamble, which carries predicate/bang
+   names); all sigil-named inline-C references in `stdlib/httpd.tur`,
+   `stdlib/httpd-compress.tur`, `stdlib/map.tur`, and `stdlib/sym.tur` that
+   hardcoded the old `_`-mangled spelling were updated to match.
 
 #### A4. Effect-handler closure capture
 
@@ -233,8 +252,10 @@ for other reasons.
 
 ## Open questions
 
-1. Is operator-name mangling (A3) worth doing standalone, or should it land
-   with a broader symbol-mangling overhaul?
+1. ~~Is operator-name mangling (A3) worth doing standalone, or should it land
+   with a broader symbol-mangling overhaul?~~ **Resolved (2026-06-04):** landed
+   standalone. Scoped to operator/sigil names via one shared helper; structural
+   separators (`-`/`/`) kept their legacy `_` spelling to bound the churn.
 2. Does fixing A2 (closure-returning instance methods) also fix A5
    (struct-in-`__pap` env), or are they distinct codepaths in codegen?
 3. For B6 (`map.tur`), is the right answer "real `defn` with constraint"
