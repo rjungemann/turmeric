@@ -1,0 +1,263 @@
+;;; tur/refined -- refinement newtypes for total collection accessors.
+;;;
+;;; Replaces partial functions over lists and vectors with total versions
+;;; guarded by refinement newtypes:
+;;;
+;;;   NonEmpty   -- a list proven to hold at least one element; ne-head /
+;;;                 ne-tail are total (no empty-list panic).
+;;;   BoundedIdx -- an index proven to fall within a collection's length;
+;;;                 vec-get-checked / slice-get-checked are total (no
+;;;                 out-of-bounds panic).
+;;;
+;;; The proof obligation is discharged by smart constructors (ne-from?,
+;;; bidx-of?) that return Option: the caller pattern-matches on the Option
+;;; once and then holds a value whose accessors can never fail. The existing
+;;; partial accessors (list-head, vec-get, slice-get) stay callable -- this
+;;; module is purely additive.
+;;;
+;;; Both newtypes lower to :int in the C ABI (defopaque over :int), so they
+;;; compose with the int-carrier Option and list/vec/slice helpers at zero
+;;; runtime cost. Element-type (A) and length (n) parameterization in the
+;;; type spelling awaits parameterized defopaque support; see
+;;; docs/reported/parameterized-defopaque.md.
+;;;
+;;; Since: stdlib-refinement-collections-plan (R1, R2)
+;; Refinement newtypes: NonEmpty (R1) and BoundedIdx (R2).
+;; ===================================================================
+;; R1: NonEmpty -- a non-empty cons list.
+;; ===================================================================
+;;; NonEmpty -- a cons list proven to contain at least one element.
+;;;
+;;; Lowers to :int (the head cons-cell pointer, never 0). Construct it with
+;;; ne-of / ne-singleton (always non-empty by construction) or recover it
+;;; from an arbitrary list with the ne-from? smart constructor.
+;;;
+;;; Since: R1
+(defopaque NonEmpty :int)
+;;; ne-of -- build a NonEmpty by prepending a head to an existing list.
+;;;
+;;; Parameters:
+;;;   x  -- the head element (carrier :int)
+;;;   xs -- the rest of the list (a cons list; may be empty / tnil)
+;;;
+;;; Returns:
+;;;   A NonEmpty whose head is x and whose tail is xs.
+;;;
+;;; Example:
+;;;   (ne-head (ne-of 7 (tnil)))  ; => 7
+;;;
+;;; Since: R1
+
+(defn ne-of [x : int xs : int] : NonEmpty (:: (tcons x xs) :NonEmpty))
+;;; ne-singleton -- build a one-element NonEmpty.
+;;;
+;;; Parameters:
+;;;   x -- the sole element (carrier :int)
+;;;
+;;; Returns:
+;;;   A NonEmpty containing exactly x.
+;;;
+;;; Example:
+;;;   (ne-head (ne-singleton 42))  ; => 42
+;;;
+;;; Since: R1
+
+(defn ne-singleton [x : int] : NonEmpty (ne-of x (tnil)))
+;;; ne-head -- the first element of a NonEmpty (total).
+;;;
+;;; Unlike list-head, this never panics: a NonEmpty is non-empty by
+;;; construction, so the head always exists.
+;;;
+;;; Parameters:
+;;;   ne -- the NonEmpty to inspect
+;;;
+;;; Returns:
+;;;   The first element (carrier :int).
+;;;
+;;; Example:
+;;;   (ne-head (ne-of 1 (tcons 2 (tnil))))  ; => 1
+;;;
+;;; Since: R1
+
+(defn ne-head [ne : NonEmpty] : int (list-head (:: ne :int)))
+;;; ne-tail -- the elements after the head, as an ordinary (possibly empty) list.
+;;;
+;;; Parameters:
+;;;   ne -- the NonEmpty to inspect
+;;;
+;;; Returns:
+;;;   The tail as a cons list (tnil when ne has a single element).
+;;;
+;;; Example:
+;;;   (list-head (ne-tail (ne-of 1 (tcons 2 (tnil)))))  ; => 2
+;;;
+;;; Since: R1
+
+(defn ne-tail [ne : NonEmpty] : int (list-tail (:: ne :int)))
+;;; ne->list -- view a NonEmpty as an ordinary cons list.
+;;;
+;;; Parameters:
+;;;   ne -- the NonEmpty to convert
+;;;
+;;; Returns:
+;;;   The underlying cons list (never empty).
+;;;
+;;; Example:
+;;;   (list-head (ne->list (ne-singleton 5)))  ; => 5
+;;;
+;;; Since: R1
+
+(defn ne->list [ne : NonEmpty] : int (:: ne :int))
+;;; ne-len -- the number of elements in a NonEmpty (always >= 1).
+;;;
+;;; Parameters:
+;;;   ne -- the NonEmpty to measure
+;;;
+;;; Returns:
+;;;   The element count as an :int.
+;;;
+;;; Example:
+;;;   (ne-len (ne-of 1 (tcons 2 (tnil))))  ; => 2
+;;;
+;;; Since: R1
+
+(defn ne-len [ne : NonEmpty] : int (__ne-len-acc (ne->list ne) 0))
+;;; __ne-len-acc -- tail-recursive length accumulator over a cons list.
+
+(defn __ne-len-acc [xs : int acc : int] : int
+  (if (tnil? xs) acc (__ne-len-acc (list-tail xs) (+ acc 1))))
+;;; ne-from? -- smart constructor: recover a NonEmpty from an arbitrary list.
+;;;
+;;; This is the proof obligation: match the resulting Option once, and the
+;;; some-branch holds a NonEmpty whose ne-head / ne-tail are total.
+;;;
+;;; Parameters:
+;;;   xs -- an arbitrary cons list (may be empty)
+;;;
+;;; Returns:
+;;;   (some ne) when xs is non-empty, (none) when xs is empty. The payload
+;;;   is the NonEmpty carrier; recover it with ne-unwrap.
+;;;
+;;; Example:
+;;;   (some? (ne-from? (tcons 1 (tnil))))  ; => true
+;;;   (some? (ne-from? (tnil)))            ; => false
+;;;
+;;; Since: R1
+
+(defn ne-from? [xs : int] : int
+  (if (tnil? xs) (none) (some (:: xs :NonEmpty))))
+;;; ne-unwrap -- recover the NonEmpty payload from a non-none Option.
+;;;
+;;; Pair with ne-from? after a some? check; on a none Option this yields a
+;;; NonEmpty over 0, so guard with some? first.
+;;;
+;;; Parameters:
+;;;   o -- an Option carrier as returned by ne-from?
+;;;
+;;; Returns:
+;;;   The wrapped NonEmpty.
+;;;
+;;; Example:
+;;;   (let [o (ne-from? (tcons 9 (tnil)))]
+;;;     (if (some? o) (ne-head (ne-unwrap o)) -1))  ; => 9
+;;;
+;;; Since: R1
+
+(defn ne-unwrap [o : int] : NonEmpty (:: (unwrap-or o 0) :NonEmpty))
+;; ===================================================================
+;; R2: BoundedIdx -- an index proven to be in range for some length.
+;; ===================================================================
+;;; BoundedIdx -- an index proven to satisfy 0 <= i < n for some length n.
+;;;
+;;; Lowers to :int. Construct it only through bidx-of?, which checks the
+;;; index against a length; the resulting BoundedIdx can then drive a total
+;;; accessor (vec-get-checked / slice-get-checked) without a second bounds
+;;; check. (The length n is tracked at the value level by the smart
+;;; constructor rather than in the type, pending parameterized defopaque.)
+;;;
+;;; Since: R2
+(defopaque BoundedIdx :int)
+;;; bidx->int -- recover the raw :int index from a BoundedIdx.
+;;;
+;;; Parameters:
+;;;   b -- the BoundedIdx to unwrap
+;;;
+;;; Returns:
+;;;   The underlying index as a plain :int.
+;;;
+;;; Example:
+;;;   (bidx->int (bidx-unwrap (bidx-of? 5 3)))  ; => 3
+;;;
+;;; Since: R2
+
+(defn bidx->int [b : BoundedIdx] : int (:: b :int))
+;;; bidx-of? -- smart constructor: prove an index lies within [0, n).
+;;;
+;;; Parameters:
+;;;   n -- the exclusive upper bound (e.g. a collection's length)
+;;;   i -- the candidate index
+;;;
+;;; Returns:
+;;;   (some b) when 0 <= i < n, (none) otherwise. Recover the BoundedIdx
+;;;   payload with bidx-unwrap.
+;;;
+;;; Example:
+;;;   (some? (bidx-of? 5 3))  ; => true
+;;;   (some? (bidx-of? 5 9))  ; => false
+;;;
+;;; Since: R2
+
+(defn bidx-of? [n : int i : int] : int
+  (if (and (>= i 0) (< i n)) (some (:: i :BoundedIdx)) (none)))
+;;; bidx-unwrap -- recover the BoundedIdx payload from a non-none Option.
+;;;
+;;; Pair with bidx-of? after a some? check.
+;;;
+;;; Parameters:
+;;;   o -- an Option carrier as returned by bidx-of?
+;;;
+;;; Returns:
+;;;   The wrapped BoundedIdx.
+;;;
+;;; Example:
+;;;   (let [o (bidx-of? 4 2)]
+;;;     (if (some? o) (bidx->int (bidx-unwrap o)) -1))  ; => 2
+;;;
+;;; Since: R2
+
+(defn bidx-unwrap [o : int] : BoundedIdx (:: (unwrap-or o 0) :BoundedIdx))
+;;; vec-get-checked -- index a Vec with a proven-in-range BoundedIdx (total).
+;;;
+;;; Because the BoundedIdx was validated against the vector's length by
+;;; bidx-of?, this access never reaches vec-get's out-of-bounds path.
+;;;
+;;; Parameters:
+;;;   v -- the Vec[A] pointer to read
+;;;   b -- a BoundedIdx proven against (vec-len v)
+;;;
+;;; Returns:
+;;;   The element at the index (carrier :int).
+;;;
+;;; Example:
+;;;   (let [o (bidx-of? (vec-len v) 1)]
+;;;     (if (some? o) (vec-get-checked v (bidx-unwrap o)) -1))
+;;;
+;;; Since: R2
+
+(defn vec-get-checked [v : int b : BoundedIdx] : int (vec-get v (bidx->int b)))
+;;; slice-get-checked -- index a Slice with a proven-in-range BoundedIdx (total).
+;;;
+;;; Parameters:
+;;;   s -- the Slice pointer to read
+;;;   b -- a BoundedIdx proven against (slice-len s)
+;;;
+;;; Returns:
+;;;   The element at the index (carrier :int).
+;;;
+;;; Example:
+;;;   (let [o (bidx-of? (slice-len s) 0)]
+;;;     (if (some? o) (slice-get-checked s (bidx-unwrap o)) -1))
+;;;
+;;; Since: R2
+
+(defn slice-get-checked [s : int b : BoundedIdx] : int (slice-get s (bidx->int b)))
