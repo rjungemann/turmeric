@@ -25,6 +25,10 @@
 ;; under -Xlinear (no borrow form yet) -- see
 ;; docs/reported/stdlib-linear-handle-borrows.md.
 (load "stdlib/fd.tur")
+(load "stdlib/effects.tur")
+;; stdlib-effect-rows: fs/* operations that touch the file system carry the
+;; #{FS} capability tag.  Pure accessors over an already-fetched StatInfo or
+;; TmpFile handle (fs/stat-size, fs/tmpfile-path, ...) stay untagged.
 
 (defopaque StatInfo :int)
 
@@ -44,7 +48,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/stat [path : cstr] : StatInfo
+(defn fs/stat [path : cstr] #{FS} : StatInfo
   ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return 0;
@@ -128,7 +132,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/exists? [path : cstr] : bool
+(defn fs/exists? [path : cstr] #{FS} : bool
   ```c #include <sys/stat.h>
   struct stat st;
   return stat(path, &st) == 0;
@@ -146,7 +150,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/file? [path : cstr] : bool
+(defn fs/file? [path : cstr] #{FS} : bool
   ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return false;
@@ -165,7 +169,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/dir? [path : cstr] : bool
+(defn fs/dir? [path : cstr] #{FS} : bool
   ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return false;
@@ -184,7 +188,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/mkdir [path : cstr] : int
+(defn fs/mkdir [path : cstr] #{FS} : int
   ```c #include <sys/stat.h>
   return (int64_t)mkdir(path, 0755);
   ```)
@@ -202,7 +206,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/mkdirp [path : cstr] : int
+(defn fs/mkdirp [path : cstr] #{FS} : int
   ```c #include <sys/stat.h>
   #include <errno.h>
   char *p = strdup(path);
@@ -231,7 +235,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/rmdir [path : cstr] : int
+(defn fs/rmdir [path : cstr] #{FS} : int
   ```c return (int64_t)rmdir(path);
   ```)
 ;;; fs/rm -- remove a regular file.
@@ -247,7 +251,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/rm [path : cstr] : int
+(defn fs/rm [path : cstr] #{FS} : int
   ```c return (int64_t)unlink(path);
   ```)
 ;;; fs/rename -- rename or move a file.
@@ -264,7 +268,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/rename [src : cstr dst : cstr] : int
+(defn fs/rename [src : cstr dst : cstr] #{FS} : int
   ```c return (int64_t)rename(src, dst);
   ```)
 ;;; fs/copy -- copy a file from src to dst using a read/write loop.
@@ -281,7 +285,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/copy [src : cstr dst : cstr] : int
+(defn fs/copy [src : cstr dst : cstr] #{FS} : int
   ```c FILE *in = fopen(src, "rb");
   if (!in) return -1;
   FILE *out = fopen(dst, "wb");
@@ -312,7 +316,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/glob [dir : cstr pattern : cstr] : int
+(defn fs/glob [dir : cstr pattern : cstr] #{FS} : int
   ```c #include <dirent.h>
   #include <fnmatch.h>
   DIR *d = opendir(dir);
@@ -371,7 +375,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile [] : TmpFile
+(defn fs/tmpfile [] #{FS} : TmpFile
   ```c char *tmpl = strdup("/tmp/tur_XXXXXX");
   int fd = mkstemp(tmpl);
   if (fd < 0) { free(tmpl); return 0; }
@@ -422,7 +426,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/tmpfile-free [t : TmpFile] : void
+(defn fs/tmpfile-free [t : TmpFile] #{FS} : void
   ```c #include <unistd.h>
   if (!t) return;
   int64_t *pair = (int64_t*)(intptr_t)t;
@@ -444,7 +448,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/read-text [path : cstr] : cstr
+(defn fs/read-text [path : cstr] #{FS} : cstr
   ```c FILE *f = fopen(path, "rb");
   if (!f) return NULL;
   fseek(f, 0, SEEK_END);
@@ -470,7 +474,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn fs/write-text [path : cstr content : cstr] : int
+(defn fs/write-text [path : cstr content : cstr] #{FS} : int
   ```c FILE *f = fopen(path, "wb");
   if (!f) return -1;
   size_t len = strlen(content);

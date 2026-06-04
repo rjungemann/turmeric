@@ -401,6 +401,7 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
     effect->is_private = is_private;
     effect->is_exported = !is_private;
     effect->parent = NULL;  /* ET4: no parent by default */
+    effect->is_capability = false;  /* stdlib-effect-rows: set later for ^capability effects */
 
     /* Create the constructor (1:1 for now) */
     EffectConstructor *ctor = arena_alloc(a, sizeof(EffectConstructor));

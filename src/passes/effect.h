@@ -39,6 +39,13 @@ struct Effect {
     const Symbol *defining_module_name; /* module that declared this effect, or NULL for top-level */
     /* ET4: effect hierarchy -- NULL if no parent */
     struct Effect *parent;
+    /* Capability effect (stdlib-effect-rows): a coarse capability tag (e.g.
+     * #{FS}, #{Net}) that marks a function's authority rather than an effect it
+     * `perform`s.  Capability effects are justified by their declared annotation
+     * alone -- they are never inferred from the body, never warned as
+     * over-annotated (TUR-W0031), and their *declared* presence on a callee
+     * propagates into the caller's inferred row (like the built-in Unsafe). */
+    bool is_capability;
 };
 
 /* Effect row represents a set of effects that a function may perform.

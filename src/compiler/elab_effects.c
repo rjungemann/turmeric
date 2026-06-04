@@ -591,12 +591,24 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
     
-    /* ET4: Parse optional ^extends ParentName after the return type */
+    /* ET4: Parse optional ^extends ParentName after the return type.
+     * stdlib-effect-rows: also parse the standalone ^capability flag, which may
+     * appear anywhere among the trailing attributes (it takes no argument). */
     const Symbol *parent_name = NULL;
+    bool is_capability = false;
     uint32_t extends_start = name_idx + 3; /* items after (defeffect [^private] Name [params] :ret) */
-    for (uint32_t xi = extends_start; xi + 1 < (uint32_t)call->as.list.len; xi++) {
+    for (uint32_t xi = extends_start; xi < (uint32_t)call->as.list.len; xi++) {
         Form *f = call->as.list.items[xi];
+        if (f->tag == F_SYM && f->as.sym == e->sym_caret_capability) {
+            is_capability = true;
+            continue;
+        }
         if (f->tag == F_SYM && f->as.sym == e->sym_caret_extends) {
+            if (xi + 1 >= (uint32_t)call->as.list.len) {
+                diag_emit(DIAG_ERROR, f->span,
+                          "defeffect: expected effect name after ^extends");
+                return NULL;
+            }
             Form *pname_f = call->as.list.items[xi + 1];
             if (pname_f->tag != F_SYM) {
                 diag_emit(DIAG_ERROR, pname_f->span,
@@ -604,7 +616,7 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                 return NULL;
             }
             parent_name = pname_f->as.sym;
-            break;
+            xi++; /* consume the parent name */
         }
     }
 
@@ -613,6 +625,7 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                                           param_names, param_types, n_params, result_type,
                                           e->current_module_name, is_private);
     if (!effect) return NULL;
+    effect->is_capability = is_capability;
 
     /* ET4: Resolve parent effect if ^extends was specified */
     if (parent_name) {
@@ -636,6 +649,7 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     def->is_private = is_private;
     def->defining_module_name = e->current_module_name;
     def->parent_name = parent_name;  /* ET4: ^extends parent effect name */
+    def->is_capability = is_capability;  /* stdlib-effect-rows */
 
     Expr *out = expr_new(e->arena, EX_DEFECT, TYPE_NIL, call->span);
     out->as.effect_def_.def = def;
