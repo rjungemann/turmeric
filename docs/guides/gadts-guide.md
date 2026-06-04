@@ -12,8 +12,10 @@ learns those specializations when pattern-matching, so programs that previously
 needed runtime tags or unsafe casts become statically verified.
 
 This guide walks from plain sum types up to GADTs and equality witnesses. All
-examples are valid Turmeric source. Activate GADT support by passing `-Xgadt`
-to the compiler.
+examples are valid Turmeric source. GADT support is **enabled by default** --
+no flag is required. (The historical `-Xgadt` flag is still accepted as a
+deprecated no-op for source compatibility; see
+[compiler-flags-guide.md](compiler-flags-guide.md#-xgadt----generalized-algebraic-data-types).)
 
 ---
 
@@ -111,14 +113,12 @@ A GADT is declared with `defgadt`. The key difference from `defdata` is that
 each constructor carries an explicit `: return-type` annotation:
 
 ```turmeric
-; Requires: -Xgadt
 (defgadt Expr [a]
   (Lit int         : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
 ```
 
 ```sweet-exp
-; Requires: -Xgadt
 defgadt Expr [a]
   (Lit int         : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int))
@@ -138,7 +138,6 @@ value types (use this when the constructors carry only copyable payloads, e.g.
 shared range bounds):
 
 ```turmeric
-; Requires: -Xgadt
 (defgadt Bound [A]
   :copy
   (Inclusive int : (Bound int))
@@ -146,11 +145,12 @@ shared range bounds):
   (Unbounded     : (Bound int)))
 ```
 
-Without `-Xgadt` the compiler rejects `defgadt` entirely:
+This is exactly the `Bound` GADT that backs `stdlib/range.tur`'s internal
+endpoint representation -- `Inclusive` / `Exclusive` / `Unbounded` range
+bounds (see `range-gadt-typeclass-migration-plan`).
 
-```text
-error: unknown form 'defgadt' (pass -Xgadt to enable)
-```
+GADT support is on by default, so no flag is needed. (Passing the legacy
+`-Xgadt` flag still works but prints a deprecation notice.)
 
 Evaluation is written the same as for a plain ADT:
 
@@ -431,23 +431,26 @@ is tried.
 
 | Mistake | Error message (excerpt) | Fix |
 |---|---|---|
-| Using `defgadt` without `-Xgadt` | `unknown form 'defgadt' (pass -Xgadt to enable)` | Add `-Xgadt` to the build command |
 | Omitting the `: return-type` on a refining constructor | `constructor refines type variable -- explicit return type required` | Add `: (MyGadt ...)` after the field list |
 | Missing a constructor in a match | `non-exhaustive match: missing constructor 'Foo'` | Add the missing arm or a wildcard `_` |
 | Type mismatch from a skolem | `cannot unify 'int' with 'bool' (skolem from 'BoolTag')` | Check that the correct GADT arm is used for the operation |
 | Skolem type escaping its scope | `skolem type variable 'a' escapes its match scope` | Use a universally polymorphic return type instead of the refined one |
 | Unannotated GADT in a container | `ambiguous GADT type parameter -- annotation required` | Add an explicit type annotation, e.g. `: (vec (MyGadt int))` |
 
-### Enabling the flag
+### No flag required
 
-Every file that uses `defgadt` or matches on a GADT must be compiled with
-`-Xgadt`:
+GADT support is on by default. Files that use `defgadt` or match on a GADT
+compile with no special flag:
 
 ```sh
-just build          # plain ADTs only (no flag needed)
-./build/tur run -Xgadt my-file.tur
-./build/tur build -Xgadt my-file.tur
+just build          # builds everything, GADTs included
+./build/tur run my-file.tur
+./build/tur build my-file.tur
 ```
+
+The legacy `-Xgadt` flag is still accepted but is a deprecated no-op (it prints
+`warning: -Xgadt is deprecated and has no effect; GADTs are enabled by
+default`).
 
 ---
 
@@ -625,7 +628,7 @@ defn print-as-int [x : any] :int
 ; Declare a plain ADT
 (defdata Color :copy (Red) (Green) (Blue))
 
-; Declare a GADT  (requires -Xgadt)
+; Declare a GADT  (GADTs are on by default)
 (defgadt Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))
@@ -661,7 +664,7 @@ defn print-as-int [x : any] :int
 ; Declare a plain ADT
 defdata Color :copy (Red) (Green) (Blue)
 
-; Declare a GADT  (requires -Xgadt)
+; Declare a GADT  (GADTs are on by default)
 defgadt Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))

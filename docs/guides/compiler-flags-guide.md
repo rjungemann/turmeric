@@ -21,7 +21,7 @@ between flags.
 | `-Xlinear` | ✅ Complete | `^linear` annotation; `CK_LINEAR` capability kind; linearity tracking in elaborator | -- |
 | `-Xsubstructural` | ✅ Complete | `^linear`, `^affine`, `^relevant` capability kinds; full substructural framework | `-Xlinear` |
 | `-Xunique-types` | ✅ Partial (UT0–UT1) | Uniqueness types; `CK_UNIQUE`; `ref<T>` as an explicit unique type | -- |
-| `-Xgadt` | ✅ Substantial (G0–G4) | `defgadt`; GADT constructor return-type annotations; skolem refinement in `match` arms; `Equal`/`coerce`/`sym`/`trans` in stdlib | -- |
+| `-Xgadt` | 🚫 Deprecated no-op | `defgadt`; GADT constructor return-type annotations; skolem refinement in `match` arms; `Equal`/`coerce`/`sym`/`trans` in stdlib -- all now **enabled by default**. The flag prints a deprecation warning and has no effect. | -- |
 | `-Xunion-types` | ✅ Substantial (IT0–IT4) | Union types `(A \| B)`; `any` top type; `(cast x T)`; `(type-of x)`; union pattern matching; typeclass dispatch on unions | -- |
 | `-Xintersection-types` | ✅ Substantial (IT0–IT4) | Intersection types `(A & B)`; typeclass intersection constraints | -- |
 | `-Xeffect-types` | ✅ Complete (ET0–ET4, LC0–LC3, MS0–MS4) | Row-polymorphic effect types; `forall [e]` quantification; `TY_HANDLER`; effect hierarchy (`Write ≤ IO`); linear continuations; multi-shot continuations | `--strict-effects` |
@@ -131,7 +131,16 @@ are deferred.
 
 ### `-Xgadt` -- Generalized Algebraic Data Types
 
-Enables `defgadt` and GADT pattern matching. In a GADT, each constructor may
+> **Deprecated no-op.** GADTs are **enabled by default** as of
+> `range-gadt-typeclass-migration-plan` (A1) -- `defgadt` and GADT pattern
+> matching work with no flag. `-Xgadt` is still accepted for source
+> compatibility but prints `warning: -Xgadt is deprecated and has no effect;
+> GADTs are enabled by default` and otherwise does nothing. This mirrors the
+> `-Xcallcc` graduation. `-Xsized-types` historically implied `-Xgadt`; that
+> implication is now redundant (GADTs are always on) but harmless.
+
+`defgadt` declares a GADT and GADT pattern matching refines types per arm. In a
+GADT, each constructor may
 specialize the type parameters of the data type it returns. The type-checker
 *learns* those specializations when matching and refines the types of bound
 variables in each arm (via skolem equalities).
@@ -512,17 +521,17 @@ specialization is best-effort and otherwise silent on fallback.
 # Session types (implies substructural + linear)
 turc -Xsessions myfile.tur
 
-# Full gradual typing: unions + GADTs + intersection
-turc -Xunion-types -Xintersection-types -Xgadt myfile.tur
+# Full gradual typing: unions + intersection (GADTs are always on)
+turc -Xunion-types -Xintersection-types myfile.tur
 
 # Row-polymorphic effects (HRT is always on)
 turc -Xeffect-types myfile.tur
 
-# GADTs (HKT, always on, enables equal-cong and full stdlib)
-turc -Xgadt myfile.tur
+# GADTs need no flag -- they are enabled by default
+turc myfile.tur
 
 # Everything on (development / experimentation)
-turc -Xsubstructural -Xgadt -Xunion-types -Xintersection-types -Xeffect-types myfile.tur
+turc -Xsubstructural -Xunion-types -Xintersection-types -Xeffect-types myfile.tur
 ```
 
 ---
@@ -534,7 +543,7 @@ turc -Xsubstructural -Xgadt -Xunion-types -Xintersection-types -Xeffect-types my
 | `-Xlinear` | LT0–LT4 | ✅ Complete |
 | `-Xsubstructural` | ST0–ST3 | ✅ Complete |
 | `-Xunique-types` | UT0–UT1 | ✅ Partial (UT2–UT3 deferred) |
-| `-Xgadt` | G0–G4 | ✅ Substantial (`equal-cong` uses HKT, always on) |
+| `-Xgadt` | G0–G4 | 🚫 Deprecated no-op (GADTs enabled by default) |
 | `-Xunion-types` | IT0–IT4 | ✅ Substantial (some IT4 items deferred) |
 | `-Xintersection-types` | IT0–IT4 | ✅ Substantial |
 | `-Xeffect-types` | ET0–ET4, LC0–LC3, MS0–MS4 | ✅ Complete |

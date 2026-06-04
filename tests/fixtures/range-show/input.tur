@@ -1,0 +1,22 @@
+; range-gadt-typeclass-migration-plan B2: range->str / bound->str rendering and
+; the structural Eq [Bound] instance. No -Xgadt flag (GADTs default-on, A1).
+(load "stdlib/range-bound.tur")
+
+(defn main [] : int
+  ; range->str renders interval notation with inclusive/exclusive brackets.
+  (println (range->str (closed-range 1 5)))         ; [1, 5]
+  (println (range->str (closed-open-range 1 5)))    ; [1, 5)
+  (println (range->str (open-range 2 8)))           ; (2, 8)
+  (println (range->str (at-most-range 5)))          ; (-inf, 5]
+  (println (range->str (at-least-range 3)))         ; [3, +inf)
+  (println (range->str (unbounded-range)))          ; (-inf, +inf)
+  ; bound->str renders a lone endpoint.
+  (println (bound->str (bound-inclusive 3)))        ; [3
+  (println (bound->str (bound-exclusive 3)))        ; (3
+  (println (bound->str (bound-unbounded)))          ; unbounded
+  ; Eq [Bound] is structural: same constructor + value.
+  (println (if (.eq? (Inclusive 4) (Inclusive 4)) "eq-incl-incl" "ne"))
+  (println (if (.eq? (Inclusive 4) (Exclusive 4)) "BAD" "ne-incl-excl"))
+  (println (if (.eq? (Unbounded) (Unbounded)) "eq-unb-unb" "ne"))
+  (println (if (.eq? (range-lower (closed-range 2 8)) (Inclusive 2)) "lower-eq" "ne"))
+  0)

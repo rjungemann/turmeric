@@ -838,8 +838,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         bool is_defgadt   = (head->as.sym == e.sym_defgadt);
         bool is_defopaque = (head->as.sym == e.sym_defopaque);
         if (!is_defstruct && !is_defdata && !is_defgadt && !is_defopaque) continue;
-        /* GADTs are only registered if -Xgadt is enabled */
-        if (is_defgadt && !g_gadt_enabled) continue;
+        /* range-gadt-typeclass-migration-plan A1: GADTs are registered
+         * unconditionally now that g_gadt_enabled defaults true. */
         Form *name_f = f->as.list.items[1];
         if (!name_f || name_f->tag != F_SYM) continue;
         const Symbol *type_name = name_f->as.sym;

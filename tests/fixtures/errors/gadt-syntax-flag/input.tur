@@ -1,4 +1,0 @@
-(defgadt Expr [a]
-  (Lit : (Expr int)))
-
-(defn main [] : int 0)
