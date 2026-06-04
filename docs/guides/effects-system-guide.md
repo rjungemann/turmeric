@@ -337,10 +337,69 @@ defmodule MyLib
 
 Other modules import it with `:refer [(effect Write)]`.
 
+### Capability effect tags (`^capability`)
+
+The algebraic effects above (`Write`, `Read`, `Log`, ...) are *performed* and
+*handled*. Some side effects, though, are not expressed with `perform` at all --
+they happen inside inline-C or `extern-c` calls (touching the file system,
+opening a socket, reading the clock). To bring those under effect-row
+discipline, declare a **capability effect** with `^capability`:
+
+```turmeric
+(defeffect IO [] :nil ^capability)
+(defeffect FS [] :nil ^extends IO ^capability)
+```
+
+A capability effect is a coarse *authority* tag rather than something you
+`perform`. It behaves differently from an ordinary effect in two ways:
+
+- **Justified by annotation alone.** A function tagged `#{FS}` is never flagged
+  as over-annotated (`TUR-W0031`), even though its body never performs `FS` --
+  the annotation *is* the justification.
+- **Propagated from the declared row.** Capability effects are never inferred
+  from a body, so they propagate from a callee's *declared* row into the
+  caller's inferred row. A `#{}` (pure) caller of an `#{FS}`-tagged function
+  therefore fails effect-row checking with `TUR-E0009`, exactly like the
+  built-in `#{Unsafe}`.
+
+The standard library ships five capability tags in
+[`stdlib/effects.tur`](../../stdlib/effects.tur), used to annotate the
+I/O-touching modules:
+
+| Tag       | Used by                                     |
+|-----------|---------------------------------------------|
+| `#{IO}`   | umbrella, parent of the others              |
+| `#{FS}`   | `fs.tur`, `csv.tur` file helpers, `tmpfile` |
+| `#{Net}`  | `net.tur`, `async_socket.tur`, `httpd.tur`  |
+| `#{Proc}` | `process.tur`, `env.tur`                     |
+| `#{Rand}` | `random.tur`                                |
+
+Discipline stays **opt-in**: a function with no effect-row annotation is never
+checked, so existing code that ignores effect rows keeps compiling. Only when a
+caller annotates its own row (e.g. declares `#{}` or `#{Net}`) does the compiler
+enforce that it has the capabilities of everything it calls.
+
+```turmeric
+(import tur/fs :refer [fs/read-text])
+
+;; OK: declares the FS capability it relies on.
+(defn load-config [path : cstr] #{FS} : cstr
+  (fs/read-text path))
+
+;; ERROR (TUR-E0009): claims purity but reaches the file system.
+(defn load-config-bad [path : cstr] #{} : cstr
+  (fs/read-text path))
+
+;; OK: un-annotated, so the row is not checked at all.
+(defn load-config-unchecked [path : cstr] : cstr
+  (fs/read-text path))
+```
+
 ### Benefits
 
 - **Polymorphism** -- row variables let higher-order functions propagate caller effects.
 - **Compile-time checking** -- the compiler verifies that annotated functions do not perform unlisted effects (`TUR-E0009`).
+- **Capability discipline** -- `^capability` tags put inline-C side effects (FS, Net, Proc, Rand) under the same row checking, opt-in per caller.
 - **Auditing** -- `--dump-effects` shows the full effect signature of every function.
 
 ## Integration with Ownership and Defer

@@ -274,7 +274,7 @@ def parse_tur_file(path):
     # ------------------------------------------------------------------
     doc_buf = []  # accumulated ';;;' lines
     def_re = re.compile(
-        r'^\s*\(\s*(defn|defmacro|defstruct|definstance|defopaque)\s+'
+        r'^\s*\(\s*(defn|defmacro|defstruct|definstance|defopaque|defeffect)\s+'
     )
 
     pending_module_doc = None   # most recently flushed ;;; block before first def
@@ -375,8 +375,10 @@ def _parse_def_line(kind, text):
     Returns (name, params, return_type, extra) where extra is a dict of kind-specific
     data (e.g. {'struct_ann': 'linear'} for defstruct with :linear annotation).
     """
-    # Match kind name
-    pattern = r'\(\s*' + kind + r'\s+([\w/\-!?<>*+]+)'
+    # Match kind name. defeffect may carry a leading ^private/^public visibility
+    # annotation before the effect name: (defeffect ^private Ask [] :int).
+    caret_prefix = r'(?:\^\w+\s+)?' if kind == 'defeffect' else ''
+    pattern = r'\(\s*' + kind + r'\s+' + caret_prefix + r'([\w/\-!?<>*+]+)'
     m = re.search(pattern, text)
     if not m:
         return None, [], None, {}

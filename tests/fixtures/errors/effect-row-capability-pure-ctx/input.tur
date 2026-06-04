@@ -1,0 +1,19 @@
+;; stdlib-effect-rows: a #{} (pure) function that calls an FS-capability-tagged
+;; function must fail effect-row checking.  The #{FS} capability is never
+;; `perform`ed -- it is justified by its declaration and propagates from the
+;; callee's declared row into the caller's inferred row, so the pure caller's
+;; inferred {FS} is not a subset of its declared {} and TUR-E0009 fires.
+
+(defeffect IO [] :nil ^capability)
+(defeffect FS [] :nil ^extends IO ^capability)
+
+;; A capability-tagged file reader (stands in for fs/read-text).
+(defn file-read [path : cstr] #{FS} : cstr
+  ```c return (int64_t)(intptr_t)path;
+  ```)
+
+;; This function claims to be pure (#{}) but calls an FS-tagged function.
+(defn read-config [path : cstr] #{} : cstr
+  (file-read path))
+
+(defn main [] : int 0)

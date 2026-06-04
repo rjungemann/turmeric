@@ -19,6 +19,10 @@
 (extern-c malloc [^ptr size] :ptr)
 
 (extern-c free [^ptr p] :void)
+(load "stdlib/effects.tur")
+;; stdlib-effect-rows: the log-*-direct writers emit to stdout/stderr, so they
+;; add the #{IO} capability tag alongside their existing #{Unsafe}.  The Logger
+;; constructors/frees only allocate and stay #{Unsafe}.
 ;;; Real-Logger -- create a timestamped Logger capability writing to stdout/stderr.
 ;;;
 ;;; Returns:
@@ -252,7 +256,7 @@
 
 
 (defn log-debug-direct [msg]
-  #{Unsafe}
+  #{Unsafe IO}
   : nil
   ```c fprintf(stdout, "[DEBUG] %s\n", msg);
   fflush(stdout);
@@ -270,7 +274,7 @@
 ;; Log an info message
 
 (defn log-info-direct [msg]
-  #{Unsafe}
+  #{Unsafe IO}
   : nil
   ```c fprintf(stdout, "[INFO] %s\n", msg);
   fflush(stdout);
@@ -288,7 +292,7 @@
 ;; Log a warning message
 
 (defn log-warn-direct [msg]
-  #{Unsafe}
+  #{Unsafe IO}
   : nil
   ```c fprintf(stderr, "[WARN] %s\n", msg);
   fflush(stderr);
@@ -306,7 +310,7 @@
 ;; Log an error message
 
 (defn log-error-direct [msg]
-  #{Unsafe}
+  #{Unsafe IO}
   : nil
   ```c fprintf(stderr, "[ERROR] %s\n", msg);
   fflush(stderr);

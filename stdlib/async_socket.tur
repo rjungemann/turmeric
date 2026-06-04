@@ -18,6 +18,10 @@
 ;; Fds returned by listen/accept/connect are Fd handles (a :int newtype); a
 ;; returned -1 still signals failure -- test with fd-valid? or fd->int.
 (load "stdlib/fd.tur")
+(load "stdlib/effects.tur")
+;; stdlib-effect-rows: the async-socket network operations add the #{Net}
+;; capability tag alongside their existing #{Unsafe}.  The recv-buf / recv-len
+;; accessors read the last-receive scratch buffer only and stay #{Unsafe}.
 ;; Create a listening TCP socket on the given port.
 ;; Returns the listen fd, or -1 on error.
 ;;; async-socket-listen -- create a non-blocking TCP listening socket on the given port.
@@ -35,7 +39,7 @@
 ;;; Since: Phase T24
 
 (defn async-socket-listen [port : int backlog : int]
-  #{Unsafe}
+  #{Unsafe Net}
   : Fd
   ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -76,7 +80,7 @@
 ;;; Since: Phase T24
 
 (defn async-socket-accept [listen-fd : Fd]
-  #{Unsafe}
+  #{Unsafe Net}
   : Fd
   ```c while (1) {
     int cfd = accept((int)listen_fd, NULL, NULL);
@@ -117,7 +121,7 @@
 ;;; Since: Phase T24
 
 (defn async-socket-connect [host : cstr port : int]
-  #{Unsafe}
+  #{Unsafe Net}
   : Fd
   ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -165,7 +169,7 @@
 ;;; Since: Phase T24
 
 (defn async-socket-send [fd : Fd data : cstr len : int]
-  #{Unsafe}
+  #{Unsafe Net}
   : int
   ```c int64_t total = 0;
   while (total < len) {
@@ -207,7 +211,7 @@
 ;;; Since: Phase T24
 
 (defn async-socket-recv [fd : Fd buf-size : int]
-  #{Unsafe}
+  #{Unsafe Net}
   : int
   ```c char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
@@ -279,7 +283,7 @@
 ;;; Since: Phase T24
 
 (defn async-socket-close [fd : Fd]
-  #{Unsafe}
+  #{Unsafe Net}
   : nil
   ```c tur_io_unregister((int)fd);
   close((int)fd);

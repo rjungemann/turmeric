@@ -1123,6 +1123,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_borrow    = intern_cstr(st, "^borrow");
     e->sym_caret_fat       = intern_cstr(st, "^fat");  /* A#1: fat-closure param */
     e->sym_caret_extends   = intern_cstr(st, "^extends");  /* ET4: effect hierarchy */
+    e->sym_caret_capability = intern_cstr(st, "^capability");  /* stdlib-effect-rows */
     e->sym_caret_multishot        = intern_cstr(st, "^multishot");        /* MS1 */
     e->sym_caret_deprecated       = intern_cstr(st, "^deprecated");       /* F4 */
     e->sym_map_new = intern_cstr(st, "map-new");

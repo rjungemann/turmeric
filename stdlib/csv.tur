@@ -8,6 +8,10 @@
 ;; Handles quoted fields (double-quote), embedded commas, embedded quotes
 ;; (doubled as ""), and embedded newlines within quoted fields.
 ;; Depends on: str.tur (cstr ops), vec.tur layout, fs.tur for file helpers.
+(load "stdlib/effects.tur")
+;; stdlib-effect-rows: csv/read-file* and csv/write-file* touch the file system
+;; and carry the #{FS} capability tag.  The in-memory parse/emit/free helpers
+;; operate on strings and vecs only and stay untagged.
 ;;; csv/parse-row-with-delim -- parse one delimiter-separated line into a vec of field cstrs.
 ;;;
 ;;; Handles RFC 4180-style quoting: fields may be optionally enclosed in
@@ -407,7 +411,7 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/read-file-with-delim [path : cstr delim : int] : int
+(defn csv/read-file-with-delim [path : cstr delim : int] #{FS} : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
@@ -470,7 +474,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/read-file [path : cstr] : int
+(defn csv/read-file [path : cstr] #{FS} : int
   ```c return csv_read_file_with_delim(path, 44);
   ```)
 ;;; csv/write-file-with-delim -- serialize a cons list of row vecs to a delimiter-separated file.
@@ -490,7 +494,7 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/write-file-with-delim [path : cstr rows : int delim : int] : int
+(defn csv/write-file-with-delim [path : cstr rows : int delim : int] #{FS} : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return -1;
   char sep = (char)delim;
@@ -536,6 +540,6 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/write-file [path : cstr rows : int] : int
+(defn csv/write-file [path : cstr rows : int] #{FS} : int
   ```c return csv_write_file_with_delim(path, rows, 44);
   ```)

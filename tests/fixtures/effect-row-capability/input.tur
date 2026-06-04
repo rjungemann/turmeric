@@ -1,0 +1,27 @@
+;; stdlib-effect-rows: capability effect tags (#{FS}, #{Net}, ...) are declared
+;; with ^capability.  They are justified by their annotation alone -- never
+;; flagged as over-annotated (TUR-W0031) even though the body never performs
+;; them -- and they propagate from a callee's declared row into a caller's
+;; inferred row.  A correctly-tagged caller (#{FS}) type-checks and runs; an
+;; un-annotated caller is unconstrained.
+
+(defeffect IO [] :nil ^capability)
+(defeffect FS [] :nil ^extends IO ^capability)
+
+;; Capability-tagged leaf (inline-C body never performs FS; no W0031).
+(defn slurp [path : cstr] #{FS} : int
+  ```c return (int64_t)__builtin_strlen(path);
+  ```)
+
+;; A caller that correctly declares #{FS} -- propagation keeps it in-row.
+(defn count-bytes [path : cstr] #{FS} : int
+  (slurp path))
+
+;; An un-annotated caller is never checked, so it compiles freely.
+(defn count-unchecked [path : cstr] : int
+  (slurp path))
+
+(defn main [] : int
+  (println (count-bytes "hello"))
+  (println (count-unchecked "worldly"))
+  0)

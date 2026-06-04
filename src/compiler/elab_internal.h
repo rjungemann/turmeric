@@ -205,6 +205,7 @@ typedef struct Elab {
     const Symbol *sym_caret_borrow;     /* ^borrow -- borrow (read without consuming) annotation */
     const Symbol *sym_caret_fat;        /* ^fat -- fat-closure-consuming parameter (A#1) */
     const Symbol *sym_caret_extends;    /* ^extends -- effect hierarchy parent annotation (ET4) */
+    const Symbol *sym_caret_capability; /* ^capability -- coarse capability effect tag (stdlib-effect-rows) */
     /* MS1: multi-shot continuation annotation */
     const Symbol *sym_caret_multishot;        /* ^multishot -- MS1: safe multi-shot via snapshot semantics */
     /* F4 (cross-plan-followups): ^deprecated definition annotation */
