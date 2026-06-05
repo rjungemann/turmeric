@@ -6,12 +6,21 @@ description: When a plain (non-`__inst_`) defn declares its return type as a con
 
 # Boxed fn-typed closure return miscompiles (capturing body)
 
-> **Status:** OPEN. Found while implementing Stage A of
-> `docs/upcoming/poly-closure-result-specialization-plan.md` (Direction B of the
-> arrow-compose float report). This is a genuine pre-existing defect,
-> independent of that work: it reproduces with a fully monomorphic `defn` and no
-> generics. It is recorded here per the CLAUDE.md "Reporting Bugs" rule rather
-> than silently worked around.
+> **Status:** RESOLVED (2026-06-05) via Direction B, as Stage 0 of
+> `docs/upcoming/poly-closure-result-specialization-plan.md`. Found while
+> implementing Stage A of that plan (Direction B of the arrow-compose float
+> report). This was a genuine pre-existing defect, independent of that work: it
+> reproduced with a fully monomorphic `defn` and no generics. Recorded here per
+> the CLAUDE.md "Reporting Bugs" rule.
+>
+> **Fix:** `src/compiler/elab_fns.c` -- when a plain (non-`__inst_`) defn's body
+> yields a capturing closure (`returns_boxed_closure`) and its declared return is
+> a non-boxed, non-`^fat` `TY_FN`, the declared result type is now marked `boxed`
+> during elaboration. `type_c_name(TY_FN boxed)` lowers to `void *`, so the
+> signature, forward declaration, and the consumer let-binding all carry the
+> void* fat-closure carrier in lockstep; the producer's `return <box>` then
+> matches. Fixture: `tests/fixtures/boxed-fn-typed-closure-return/` (float prints
+> `1.55`, int prints `8`, both build clean with no `-Wint-conversion`).
 >
 > **Severity:** latent miscompile / hard error. For a `:float`- or
 > `:cstr`-result closure the emitted C is a hard `cc` error (program does not
