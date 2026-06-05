@@ -7,6 +7,18 @@ description: Non-trivial Turmeric programs fail to compile via `tur build`. The 
 
 # stdlib poly-codegen emits undeclared identifiers
 
+> **Status:** RESOLVED. The broken `__poly_NNN` wrappers that emitted the
+> source parameter names (`m1` / `x` / `y` / `keyeq` / `val_cmp`) as
+> undeclared C identifiers no longer occur: the closure-representation
+> unification + typed closure invocation ABI (#276) and the injective
+> Turmeric->C name mangling (#275) together materialize the fat-closure box
+> and use the wrapper's own declared parameters. The `Eq [Map]` instance now
+> codegens as `__inst_Eq_eq_qu_Map(int64_t x, int64_t y)` calling
+> `map_hyeq_hydynamic(x, y, <fat box>)` -- `x`/`y` are real parameters, not
+> dangling identifiers. Regression coverage added in
+> `tests/fixtures/poly-fat-float-closure-eqmap/`. See the **Resolution**
+> section at the bottom.
+
 ## Summary
 
 `tur build` on freestanding programs produces C source that references
@@ -163,6 +175,47 @@ poly-instance codegen, not in fat dispatch.
 - `./build/tur build /tmp/probe4.tur -o /tmp/probe4` succeeds.
 - `bash tests/run.sh` still green.
 - New fixture covering the freestanding case is added and passes.
+
+## Resolution
+
+Already fixed by the time this report was executed. The original `probe4`
+reproducer and a stronger combo (4-binding `let` + `^fat` typed-fn
+parameter + inline-C helper + a `.eq?` over a `Map int int`, which
+materializes the `Eq [Map]` instance and the `map-eq-dynamic` delegation)
+both build and run cleanly:
+
+```sh
+$ ./build/tur build /tmp/probe4.tur -o /tmp/probe4 && /tmp/probe4
+14.200
+```
+
+Root cause, in retrospect, was the pre-#275/#276 codegen of polymorphic
+typeclass-method wrappers: the `Eq [Map]` instance body
+`(eq? [x y] (map-eq-dynamic x y (fn [a b] (= a b))))` was emitted with the
+*source* identifiers (`m1`/`x`/`y`/`keyeq`/`val_cmp`) instead of the
+wrapper's materialized parameters and a real fat-closure box for the inner
+`(fn [a b] ...)`. The current emission is correct:
+
+```c
+static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
+    int64_t *__t2 = (int64_t *)malloc(2 * sizeof(int64_t));
+    __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+    __t2[1] = (int64_t)(intptr_t)__fn_575;        /* materialized closure */
+    void *__t3 = __t2;
+    return map_hyeq_hydynamic(x, y, (void *)(intptr_t)(__t3));
+}
+```
+
+`x`/`y` are the function's own declared parameters; the inner comparator is
+a real fat box; `map_hyeq_hydynamic` is the injective mangling of
+`map-eq-dynamic`. No undeclared identifiers remain.
+
+**Regression test:** `tests/fixtures/poly-fat-float-closure-eqmap/` mirrors
+the report's reproducer (4 `let` bindings, a `^fat` typed-fn parameter, an
+inline-C helper, and an `Eq [Map]` `.eq?` call). It carries no `expected.c`
+snapshot on purpose, so `tests/run.sh` does a full build+run -- the broken
+codegen failed to *compile*, so a regression would surface as a FAIL, not a
+silent snapshot drift. Expected stdout is `14.200` / `1`.
 
 ## Related
 
