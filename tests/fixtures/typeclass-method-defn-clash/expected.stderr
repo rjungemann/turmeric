@@ -1,0 +1,1 @@
+warning [TUR-W0039]: free defn 'render' shares its name with the method 'render' of typeclass 'Showy'

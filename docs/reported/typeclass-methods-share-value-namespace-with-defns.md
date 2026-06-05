@@ -1,5 +1,21 @@
 # Typeclass methods share the value namespace with `defn`s (and lose silently)
 
+> **Status (2026-06-05): partially resolved -- fix (2) landed.** The *silence*
+> is gone: a free top-level `defn` that collides with a **user-defined**
+> typeclass method now raises `TUR-W0039` (warning, not error, so the
+> intentional stdlib-method-override pattern stays expressible). Stdlib classes
+> are exempt (`TypeClass.from_stdlib`). The deeper namespace separation
+> (fix (1)) that would let the bare + typeclass Arrow layers reunite in one
+> module is **still open** -- Repro B continues to fail to type-check (it now
+> warns first). See the "Fix directions" / "Validation" notes below for the
+> remaining work.
+>
+> Implemented in: `src/compiler/typeclass.{h,c}` (`from_stdlib` flag),
+> `src/compiler/elab_typeclasses.c` (set the flag at `defclass`),
+> `src/compiler/diag.{h,c}` (`TUR_W0039_METHOD_DEFN_CLASH`),
+> `src/compiler/elab_toplevel.c` (post-pass-2 clash scan). Fixture:
+> `tests/fixtures/typeclass-method-defn-clash/`.
+
 **Summary.** A typeclass method name and a top-level `defn` of the same name
 occupy the *same* value namespace. When both exist, the free `defn`
 unconditionally wins at every bare call site, the method becomes unreachable by

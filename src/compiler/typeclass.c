@@ -28,6 +28,7 @@ TypeClass *typeclass_env_register_typeclass(TypeClassEnv *env, const Symbol *nam
     tc->n_type_params = 0;
     tc->methods = NULL;
     tc->n_methods = 0;
+    tc->from_stdlib = false;
     tc->next = env->typeclasses;
     env->typeclasses = tc;
     

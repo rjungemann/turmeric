@@ -1189,6 +1189,38 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
 
+    /* method-vs-defn clash warning (TUR-W0039).
+     *
+     * A typeclass method and a free top-level `defn` share the same value
+     * namespace: a free defn unconditionally wins at every bare call site
+     * (see the `!fn_binding` gate in elab_call.c) and the method becomes
+     * unreachable by its bare name, with no diagnostic.  This made it
+     * impossible to keep a class method and a same-named free helper in one
+     * module (the Arrow typeclass layer was forced into a separate file).
+     *
+     * We now surface the clash.  Because *overriding a stdlib class method*
+     * with a same-named user defn is a documented, intentional pattern, the
+     * warning fires only when the colliding class is user-defined
+     * (`!tc->from_stdlib`) and the binding is genuine user code
+     * (`!is_from_stdlib`).  It is a warning, not an error, so the override
+     * use case stays expressible.  The dotted `(.method ...)` form still
+     * reaches the shadowed method.  See
+     * docs/reported/typeclass-methods-share-value-namespace-with-defns.md. */
+    for (TypeClass *tc = e.typeclass_env.typeclasses; tc != NULL; tc = tc->next) {
+        if (tc->from_stdlib) continue;
+        for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+            const Symbol *mn = tc->methods[mi].name;
+            if (!mn) continue;
+            Binding *b = scope_lookup(&e.global, mn);
+            if (!b || b->is_from_stdlib) continue;
+            diag_emit_with_code(DIAG_WARNING, b->span, TUR_W0039_METHOD_DEFN_CLASH,
+                "free defn '%s' shares its name with the method '%s' of typeclass "
+                "'%s'; the defn shadows the method at every bare call site -- "
+                "rename one, or use the dotted form (.%s ...) to dispatch the method",
+                mn->name, mn->name, tc->name->name, mn->name);
+        }
+    }
+
     scope_free(&e.global);
     free(e.struct_defs);
     free(e.adt_defs);
