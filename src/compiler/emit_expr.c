@@ -2060,7 +2060,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&out, "))(intptr_t)%s)(", fn_ptr);
                     for (uint32_t i = 0; i < n; i++) {
                         if (i > 0) buf_puts(&out, ", ");
-                        buf_puts(&out, arg_strs[i]);
+                        /* closure-carrier-return-and-arg-int-pointer-warnings:
+                         * when the two-level-SF fix retypes an already-fat arg to
+                         * the :ptr<void> carrier, the formal param lowers to a
+                         * pointer C type ("void *") but the actual arg's C value
+                         * is the int64_t closure carrier -- drive's `input` is a
+                         * fat fn-typed parameter whose C variable is declared
+                         * int64_t (TY_FN params emit as int64_t).  Bridge with the
+                         * standard (<ptr>)(intptr_t) coercion -- the same cast the
+                         * fat thunk path uses for the box -- otherwise clang trips
+                         * -Wint-conversion ("pointer from integer").  Restricted to
+                         * a bare variable reference whose binding lowers to the
+                         * int64_t carrier: a call/expression that already yields a
+                         * pointer (e.g. make_hyadder() returning void*) needs no
+                         * cast, so this avoids gratuitous casts on those args. */
+                        const Expr *arg = e->as.call_.args[i];
+                        const char *pty = type_c_name(arg->type);
+                        size_t plen = strlen(pty);
+                        bool ptr_formal = plen > 0 && pty[plen - 1] == '*';
+                        bool var_is_int64_carrier =
+                            arg->kind == EX_VAR && arg->as.var.binding &&
+                            (arg->as.var.binding->type.kind == TY_FN ||
+                             arg->as.var.binding->type.kind == TY_INT);
+                        if (ptr_formal && var_is_int64_carrier) {
+                            buf_printf(&out, "(%s)(intptr_t)(%s)", pty, arg_strs[i]);
+                        } else {
+                            buf_puts(&out, arg_strs[i]);
+                        }
                     }
                     buf_puts(&out, ")");
                     buf_putc(&out, '\0');
