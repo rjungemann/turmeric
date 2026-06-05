@@ -2650,6 +2650,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+    b->closure_return_dispatches = expr_closure_return_dispatches(body);
     /* let-bound-sf-loses-outer-arg-type: record whether the return *value* is
      * itself a fat closure box (capturing lambda body) vs a thin fn pointer. */
     b->returns_boxed_closure = (body && body->type.kind == TY_FN &&
@@ -3369,6 +3370,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     Binding *b = binding_new(e, fn_name_sym, fn_type, false, true, call->span);
     scope_add(&e->global, b);
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+    b->closure_return_dispatches = expr_closure_return_dispatches(body);
     /* let-bound-sf-loses-outer-arg-type: see the defn path -- record whether the
      * lambda's return *value* is a fat closure box vs a thin fn pointer. */
     b->returns_boxed_closure = (body && body->type.kind == TY_FN &&

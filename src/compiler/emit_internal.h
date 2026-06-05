@@ -83,6 +83,23 @@ typedef struct EmitAbiSpecialization {
     /* J3: when true the clone is emitted with external (not static) linkage
      * and its forward decl omits 'static'.  False in whole-program mode. */
     bool external_linkage;
+    /* poly-closure-result-specialization: for an inner-closure-body spec
+     * (the lifted (fn ...) a generic closure-returning defn returns), this is
+     * the suffixed env-struct symbol the clone -- and the enclosing outer
+     * spec's EX_CLOSURE construction -- must agree on, so a float (register-
+     * class-changing) specialization gets its own `struct __env_N__spec__...`
+     * instead of reusing the base int64-carrier layout.  NULL for ordinary
+     * specs. */
+    const Symbol *env_name_override;
+    /* On an OUTER (closure-returning) spec: index into abi_specializations of
+     * the linked inner-closure-body spec, or -1 when none.  Lets the outer
+     * spec body's EX_CLOSURE emit reference the inner clone's name + env. */
+    int32_t inner_closure_spec_idx;
+    /* poly-closure-result-specialization: set once this spec's body has been
+     * emitted, so the spec emit loop can hoist an inner-closure clone ahead of
+     * its outer (so the suffixed env struct lands at file scope) without
+     * double-emitting it. */
+    bool emitted;
 } EmitAbiSpecialization;
 
 typedef struct EmitCtx {

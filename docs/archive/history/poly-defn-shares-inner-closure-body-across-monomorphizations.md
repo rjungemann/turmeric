@@ -6,26 +6,39 @@ description: A polymorphic defn that returns an inner `(fn ...)` whose result ty
 
 # Polymorphic defn shares one inner closure body across monomorphizations
 
-> **Status:** RESOLVED (2026-06-04) via fix direction 3 (diagnose). The silent
->   miscompile is gone: a call that specializes a closure-returning generic
->   `defn` at a **floating-point** result type -- where the shared inner thunk's
->   integer-register return (`rax`) is read back through a `double (*)(...)`
->   dispatch pointer (`xmm0`) -- is now a hard error (`TUR-E0705`) at the call
->   site, directing the user to write a monomorphic `defn` per concrete result
->   type. `cstr`/`ptr`/`int` specializations share the integer register and
->   round-trip correctly, so they are intentionally not diagnosed (same
->   register-class scoping as the sibling `bare-fat` and `cstr-returning-closure`
->   fixes). The check lives in `elab_call.c` (right before the `EX_CALL` node is
->   built), keying off `fn_binding->returns_closure_fn_binding` whose `TY_FN`
->   result is a bare `TY_TYVAR` bound by the call to a floating type. Regression
->   fixture: `tests/fixtures/errors/poly-closure-result-tyvar-float`. Fix
->   directions 1 (per-A clone of the inner body) and 2 (type the env field by A)
->   remain the end-state for making the float case *work* without a rewrite;
->   until then the monomorphic-per-type form is the supported float path.
->   `bash tests/run.sh`: 0 FAIL.
+> **Status:** RESOLVED for the **dispatch-free** inner-body shape (2026-06-05)
+>   via fix directions 1 + 2 (per-monomorphization inner-closure specialization);
+>   the **dispatching** shape remains a hard error (see below). For a
+>   dispatch-free inner body (one that returns a captured value, e.g.
+>   `(fn [t] : A val)`), the emit phase now clones the lifted inner closure body
+>   per concrete result type, so a closure-returning generic `defn` specialized at
+>   a **floating-point** type is register-class-correct end to end (xmm0 dispatch
+>   + double-typed env field) instead of being rejected. The machinery lives in
+>   `src/compiler/emit_module.c` (`emit_inner_closure_needs_float_spec` interns an
+>   inner-body spec alongside the outer spec;
+>   `EmitAbiSpecialization.env_name_override` / `inner_closure_spec_idx` link them
+>   and give the float layout its own env struct), with the per-spec type
+>   resolution threaded through `emit_resolve_type` in `emit_fns.c` (inner clone
+>   signature/env) and `emit_expr.c` (outer `EX_CLOSURE` thunk + fat-dispatch
+>   typedef). `cstr`/`ptr`/`int` specializations still round-trip through the
+>   shared integer carrier with byte-identical codegen (the clone fires only for
+>   float-class tyvars). The former error fixture is now the passing
+>   codegen+stdout fixture `tests/fixtures/poly-closure-result-tyvar-float`
+>   (prints `440\n440\n1`). Implemented per
+>   `docs/upcoming/poly-closure-result-specialization-plan.md` (Stages B+C+D).
+>
+>   **Still a hard error (TUR-E0705), now narrowed:** a closure-returning generic
+>   whose inner body **fat-dispatches a captured closure** (e.g.
+>   `(fn [x] (gv (fv x)))`, the `>>>`/`cmp` shape) cannot be float-specialized --
+>   its intermediate result types are erased to the int64 carrier in the
+>   elaborated body. The guard now fires for **only** that case (keyed off
+>   `Binding.closure_return_dispatches`), not the dispatch-free case above. Root
+>   cause + fix directions: `docs/reported/poly-closure-inner-dispatch-result-erased.md`.
+>   `bash tests/run.sh`: 0 FAIL (1524 passed).
 > **Found:** surfaced by spike G2 of `language-readiness-for-typed-signal-plan`.
-> **Severity:** silent miscompile (no diagnostic, wrong runtime result), now a
->   hard error for the float case.
+> **Severity:** silent miscompile (no diagnostic, wrong runtime result); now
+>   fixed for the dispatch-free float case and a hard error for the dispatching
+>   float case.
 
 ## Summary
 

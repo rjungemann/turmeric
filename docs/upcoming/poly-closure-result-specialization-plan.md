@@ -159,8 +159,32 @@ and that tyvar binds to a float kind (2938).
    `tests/fixtures/generic-compose-int/` (generic compose at `:int`, does not
    hit E0705) compiles and runs; full suite green (1518 passed, 0 failed).
 
-2. **Stage B+C (per-spec inner-body clone) -- the risk center.** In the
-   spec-emit loop (emit_module.c:2019-2028), when the outer defn has
+2. **Stage B+C (per-spec inner-body clone) -- PARTIALLY DONE (2026-06-05).**
+   Landed for the **dispatch-free** inner-body shape (e.g. `constant`'s
+   `(fn [t] : A val)` returning a captured value): a float result/param/captured
+   tyvar now gets a register-class-correct inner clone. Implemented via
+   `emit_inner_closure_needs_float_spec` + inner-spec interning in
+   `emit_module.c` (`EmitAbiSpecialization.env_name_override` /
+   `inner_closure_spec_idx`, hoisted ahead of the outer spec so the suffixed env
+   struct lands at file scope), with per-spec resolution threaded through
+   `emit_resolve_type` in `emit_fns.c` (inner clone signature + env struct) and
+   `emit_expr.c` (outer `EX_CLOSURE` thunk/env + fat-dispatch typedef). Verified
+   register-class-correct with fractional probes; full suite green (1524 passed,
+   0 failed), zero codegen churn on the non-spec path.
+
+   **NOT done -- the dispatching inner-body shape (the actual `>>>`/`cmp`
+   combinator).** When the inner body fat-dispatches a captured closure
+   (`(fn [x] (gv (fv x)))`), the intermediate result types are already lowered
+   to the int64 carrier in the elaborated AST, so `emit_resolve_type` has no
+   `TY_TYVAR` to substitute and the clone miscompiles. This was discovered while
+   landing B+C and is deferred with a written analysis +/- fix directions in
+   `docs/reported/poly-closure-inner-dispatch-result-erased.md`. The emit
+   trigger is gated on `!Binding.closure_return_dispatches` so a dispatching
+   inner is never given a broken clone, and Stage D's E0705 guard is **retained
+   for exactly that case** (see below). The original B+C sketch (for the
+   dispatch shape) follows for reference:
+
+   In the spec-emit loop (emit_module.c:2019-2028), when the outer defn has
    `returns_closure_fn_binding` whose inner body mentions a spec tyvar,
    compute a spec suffix (reuse `emit_abi_clone_name`) and:
    - emit a suffixed clone of the lifted inner `EX_FN_DEF` under the same
@@ -181,18 +205,28 @@ and that tyvar binds to a float kind (2938).
      `TY_TYVAR/TY_APP/TY_UNION/TY_INTERSECTION`; if an inner result is a nested
      `(fn ...)` rather than a bare tyvar, add a `TY_FN` case there.
 
-3. **Stage D (remove guard).** Delete the E0705 block (elab_call.c:2929-2952)
-   once B+C make both the dispatch *and* the captured-value env field
-   (direction 2) float-correct. Convert
-   `tests/fixtures/errors/poly-closure-result-tyvar-float/` from an error
-   fixture to a passing codegen+stdout fixture (expected `440\n440\n1\n`).
-   Update the resolved report to "RESOLVED via direction 1/2".
+3. **Stage D (narrow the guard) -- DONE (2026-06-05).** The E0705 block now
+   fires **only** when the closure-returning generic's inner body dispatches a
+   captured closure (`Binding.closure_return_dispatches`, computed by
+   `expr_closure_return_dispatches` in `elab_core.c`) -- the case B+C cannot yet
+   make float-correct. For the dispatch-free shape B+C now handles, the guard is
+   gone and the former error fixture became the passing codegen+stdout fixture
+   `tests/fixtures/poly-closure-result-tyvar-float/` (prints `440\n440\n1`). The
+   resolved report (`docs/archive/history/poly-defn-shares-inner-closure-body-...`)
+   is updated to "RESOLVED via direction 1/2 (dispatch-free shape)".
 
-4. **Stage E (generalize `>>>`).** Retype `stdlib/arrow.tur:45` to the
-   polymorphic typed spelling, regenerate the arrow/closure snapshots, rewrite
-   `tests/fixtures/sf-compose-typed/` to call stdlib `>>>` on `:float` SFs,
-   and flip the G7 amber note in
-   `docs/archive/history/language-readiness-for-typed-signal-plan.md` to green.
+4. **Stage E (generalize `>>>`) -- BLOCKED, NOT done.** `>>>`'s inner body
+   (`(fn [x] (gv (fv x)))`) is the dispatching shape, so retyping `>>>` to the
+   polymorphic typed spelling triggers the inner-dispatch erasure miscompile
+   documented in `docs/reported/poly-closure-inner-dispatch-result-erased.md`.
+   The retype + `sf-compose-typed` rewrite were spiked and **reverted** to avoid
+   shipping a register-class miscompile; `>>>` keeps its type-erased spelling and
+   `compose-float` remains the float path. Stage E is unblocked only once the
+   inner-dispatch result types are recoverable per spec (report's fix directions
+   1-3, which also need the fn-typed-`^fat`-param nested-tyvar preservation noted
+   in that report). The G7 amber note in
+   `docs/archive/history/language-readiness-for-typed-signal-plan.md` stays
+   amber.
 
 ## Risk + validation
 - Fixtures to diff/regenerate (shared-inner-body / `>>>` / sibling

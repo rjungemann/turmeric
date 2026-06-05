@@ -1656,6 +1656,76 @@ Binding *expr_closure_fn_binding(const Expr *expr) {
     }
 }
 
+/* poly-closure-result-specialization: does `e` (or a subexpression) fat-dispatch
+ * a captured closure -- i.e. CALL a value whose binding is a ptr<void>/fn-typed
+ * carrier (a captured closure box), as opposed to a directly-named global fn?
+ * Such a call's result type is erased to the int64 carrier in the elaborated
+ * body, so an inner-closure clone cannot recover its float register class. */
+static bool expr_fat_dispatches_closure(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CALL: {
+            Binding *fb = e->as.call_.fn_binding;
+            if (fb && (fb->type.kind == TY_PTR_VOID || fb->type.kind == TY_FN) &&
+                !fb->is_global)
+                return true;
+            if (e->as.call_.fn_expr && expr_fat_dispatches_closure(e->as.call_.fn_expr))
+                return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_fat_dispatches_closure(e->as.call_.args[i])) return true;
+            return false;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_fat_dispatches_closure(e->as.let_.bindings[i].init)) return true;
+            return expr_fat_dispatches_closure(e->as.let_.body);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_fat_dispatches_closure(e->as.do_.items[i])) return true;
+            return false;
+        case EX_IF:
+            return expr_fat_dispatches_closure(e->as.if_.cond) ||
+                   expr_fat_dispatches_closure(e->as.if_.then_) ||
+                   expr_fat_dispatches_closure(e->as.if_.else_or_null);
+        case EX_ASCRIBE:
+            return expr_fat_dispatches_closure(e->as.ascribe_.inner);
+        default:
+            return false;
+    }
+}
+
+/* Return true when the closure that `expr` evaluates to has a body that
+ * fat-dispatches a captured closure (see expr_fat_dispatches_closure). Mirrors
+ * the structural walk of expr_closure_fn_binding to locate the inner closure. */
+bool expr_closure_return_dispatches(const Expr *expr) {
+    if (!expr) return false;
+    switch (expr->kind) {
+        case EX_ASCRIBE:
+            return expr_closure_return_dispatches(expr->as.ascribe_.inner);
+        case EX_CLOSURE:
+            if (expr->as.closure_.closure && expr->as.closure_.closure->fn)
+                return expr_fat_dispatches_closure(expr->as.closure_.closure->fn->body);
+            return false;
+        case EX_LET:
+        case EX_LETREC:
+            return expr_closure_return_dispatches(expr->as.let_.body);
+        case EX_DO:
+            for (int i = (int)expr->as.do_.n - 1; i >= 0; i--) {
+                const Expr *item = expr->as.do_.items[i];
+                if (item->kind == EX_DEFER) continue;
+                return expr_closure_return_dispatches(item);
+            }
+            return false;
+        case EX_IF:
+            return expr_closure_return_dispatches(expr->as.if_.then_) ||
+                   (expr->as.if_.else_or_null &&
+                    expr_closure_return_dispatches(expr->as.if_.else_or_null));
+        default:
+            return false;
+    }
+}
+
 /* Phase M2: File reading helper — returns 0 on success, -1 on failure. */
 int elab_read_file(const char *path, char **out, size_t *out_len) {
     FILE *f = fopen(path, "rb");

@@ -441,6 +441,7 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
 
     EmitAbiSpecialization *spec = &ctx->abi_specializations[ctx->n_abi_specializations++];
     memset(spec, 0, sizeof(*spec));
+    spec->inner_closure_spec_idx = -1;
     spec->call_expr = call_expr;
     spec->fn_expr = fn_expr;  /* NULL for borrow specs */
     spec->fn = fd;            /* NULL for borrow specs */
@@ -622,6 +623,59 @@ static bool body_has_dispatch_on_app_tyvar(
     return false;
 }
 
+/* poly-closure-result-specialization: a float-class type lives in a different
+ * register class (xmm0) than the int64 carrier (rax), so a closure body shared
+ * across monomorphizations miscompiles when its result/param/captured tyvar
+ * resolves to a float.  These helpers decide whether a generic
+ * closure-returning defn needs a register-class-correct inner-body clone. */
+static bool abi_kind_is_float(TypeKind k) {
+    return k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64;
+}
+
+/* True when type `t` is (at the top level) a tyvar that binds to a float-class
+ * type under `bindings`. */
+static bool abi_type_binds_to_float(const Type *t, const AbiTypeBinding *bindings,
+                                    uint8_t n_bindings) {
+    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name) return false;
+    for (uint8_t i = 0; i < n_bindings; i++) {
+        if (bindings[i].name && strcmp(bindings[i].name, t->as.tyvar_.name) == 0)
+            return abi_kind_is_float(bindings[i].type.kind);
+    }
+    return false;
+}
+
+/* True when the inner closure a generic defn returns has a result or argument
+ * tyvar that resolves to a float under `bindings` -- i.e. its int64-carrier
+ * thunk ABI would be a register-class miscompile and it needs a per-spec
+ * clone. */
+/* Mint a fresh Symbol in `arena` for a generated C identifier.  env-struct
+ * dedup compares by pointer identity, so a fresh Symbol is guaranteed distinct
+ * from the base closure's env_name -- exactly what an inner-body spec needs so
+ * its float layout does not collide with the base int64-carrier struct. */
+static const Symbol *emit_arena_symbol(Arena *arena, const char *s) {
+    size_t n = strlen(s);
+    char *buf = (char *)arena_alloc(arena, n + 1);
+    memcpy(buf, s, n + 1);
+    Symbol *sym = (Symbol *)arena_alloc(arena, sizeof(Symbol));
+    sym->name = buf;
+    sym->len = (uint32_t)n;
+    sym->hash = 0;
+    return sym;
+}
+
+static bool emit_inner_closure_needs_float_spec(Binding *inner,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!inner || inner->type.kind != TY_FN) return false;
+    if (abi_type_binds_to_float(inner->type.as.fn.result_full_type, bindings, n_bindings))
+        return true;
+    for (uint8_t i = 0; i < inner->type.as.fn.arity; i++) {
+        const Type *at = inner->type.as.fn.arg_full_types
+            ? inner->type.as.fn.arg_full_types[i] : NULL;
+        if (abi_type_binds_to_float(at, bindings, n_bindings)) return true;
+    }
+    return false;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -759,6 +813,21 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     if (!abi_changes && !borrow_path && fd && fd->body) {
         instance_changes = body_has_dispatch_on_app_tyvar(fd->body, bindings, n_bindings);
     }
+    /* poly-closure-result-specialization (Stage B+C): when the callee returns a
+     * lifted inner closure whose result/arg tyvar resolves to a float, the inner
+     * body's int64-carrier thunk ABI is a register-class miscompile.  Force an
+     * outer spec (so its EX_CLOSURE construction stores the float-correct thunk
+     * + env) and intern a matching inner-body clone below.  Only the float case
+     * needs this: every int64-register kind round-trips through the carrier. */
+    Binding *inner_closure = (!borrow_path && fd)
+        ? fn_binding->returns_closure_fn_binding : NULL;
+    /* Only specialize a DISPATCH-FREE inner body: one that fat-dispatches a
+     * captured closure has intermediate result types erased to the int64
+     * carrier (unrecoverable here).  elab raises TUR-E0705 for that float case,
+     * so skipping it never causes a silent miscompile. */
+    bool inner_float = inner_closure && !fn_binding->closure_return_dispatches &&
+        emit_inner_closure_needs_float_spec(inner_closure, bindings, n_bindings);
+    if (inner_float) abi_changes = true;
     if (!abi_changes && !instance_changes) {
         if (!borrow_path &&
             !emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {
@@ -771,7 +840,65 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
         arg_types, n_spec_args, result_type, call);
+    /* Interning the inner-closure spec below may realloc abi_specializations,
+     * invalidating `spec`; refer to the outer spec by index afterward. */
+    uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
     emit_abi_record_specialized_call(ctx, call, spec->clone_name);
+
+    /* poly-closure-result-specialization (Stage B+C): intern a register-class-
+     * correct clone of the lifted inner closure body and link it to this outer
+     * spec.  The inner clone is emitted under its own bindings so its result /
+     * params / env fields / dispatch typedefs all resolve through
+     * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
+     * construction then stores the clone's thunk + uses its suffixed env. */
+    if (inner_float && inner_closure) {
+        const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
+        if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
+            FnDef *inner_fd = inner_expr->as.fn_def_.fn;
+            Type inner_args[MAX_FN_ARITY];
+            uint8_t inner_n = inner_fd->n_params;
+            /* The inner closure binding's TY_FN includes the hidden env as arg 0,
+             * so its arg_full_types are 1:1 with inner_fd->params.  Resolve each
+             * to a *concrete* type via the spec bindings: the clone name and
+             * forward decl use type_c_name(arg_types[i]) while the definition
+             * uses emit_type_c_name (which resolves tyvars), so arg_types[i] MUST
+             * be tyvar-free or the three disagree (decl/def signature mismatch). */
+            for (uint8_t i = 0; i < inner_n; i++) {
+                if (i == 0) {
+                    /* param 0 is the env pointer -- concrete ptr<void> already */
+                    inner_args[i] = inner_fd->param_types[0];
+                    continue;
+                }
+                const Type *aft = (inner_closure->type.as.fn.arg_full_types &&
+                                   i < inner_closure->type.as.fn.arity)
+                    ? inner_closure->type.as.fn.arg_full_types[i] : NULL;
+                inner_args[i] = emit_abi_instantiate_type(
+                    aft ? aft : &inner_fd->param_types[i],
+                    bindings, n_bindings, ctx->type_arena);
+            }
+            Type inner_res = inner_closure->type.as.fn.result_full_type
+                ? emit_abi_instantiate_type(inner_closure->type.as.fn.result_full_type,
+                                            bindings, n_bindings, ctx->type_arena)
+                : emit_type_from_kind(inner_closure->type.as.fn.result_kind);
+            EmitAbiSpecialization *inner_spec = emit_abi_intern_spec(
+                ctx, inner_closure, inner_expr, inner_fd, bindings, n_bindings,
+                inner_args, inner_n, inner_res, NULL);
+            /* Build the suffixed env-struct symbol both sites agree on. */
+            if (!inner_spec->env_name_override && inner_fd->closure &&
+                inner_fd->closure->env_name) {
+                Buf en; buf_init(&en);
+                buf_puts(&en, inner_fd->closure->env_name->name);
+                buf_puts(&en, "__spec__");
+                append_sanitized_c_token(&en, type_c_name(inner_res));
+                buf_putc(&en, '\0');
+                inner_spec->env_name_override =
+                    emit_arena_symbol(ctx->type_arena, en.data);
+                buf_free(&en);
+            }
+            uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
+            ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
+        }
+    }
 
     /* GHE2: a freshly-created spec whose body references generic fn-values must
      * clone those values per the same bindings.  Recurse into the spec body with
@@ -779,7 +906,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * intern the child fn-value specializations (and nested ones).  Borrow specs
      * (fd==NULL) are emitted by the owning module and scanned there. */
     if (fd && fd->body && ctx->n_abi_specializations != before_specs) {
-        uint32_t spec_idx = (uint32_t)(spec - ctx->abi_specializations);
+        uint32_t spec_idx = outer_spec_idx;
         /* current_abi_specialization may point into abi_specializations, which
          * the recursion can realloc; save/restore by index, not pointer. */
         const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
@@ -2045,10 +2172,31 @@ int emit_program(Buf *out, const Expr *program) {
         }
     }
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
-        ctx.current_abi_specialization = &ctx.abi_specializations[i];
-        ctx.fn_name_override = ctx.abi_specializations[i].clone_name;
+        EmitAbiSpecialization *sp = &ctx.abi_specializations[i];
+        /* poly-closure-result-specialization: hoist a linked inner-closure clone
+         * ahead of its outer so the suffixed env struct is defined at file scope
+         * before the outer body's EX_CLOSURE references it. */
+        if (sp->inner_closure_spec_idx >= 0) {
+            EmitAbiSpecialization *isp =
+                &ctx.abi_specializations[sp->inner_closure_spec_idx];
+            if (!isp->emitted) {
+                ctx.current_abi_specialization = isp;
+                ctx.fn_name_override = isp->clone_name;
+                ctx.fn_name_override_external = false;
+                emit_fn_def(&ctx, &file, isp->fn_expr);
+                isp->emitted = true;
+                ctx.fn_name_override = NULL;
+                ctx.fn_name_override_external = false;
+                ctx.current_abi_specialization = NULL;
+                ctx.current_scan_fn = NULL;
+            }
+        }
+        if (sp->emitted) continue;
+        ctx.current_abi_specialization = sp;
+        ctx.fn_name_override = sp->clone_name;
         ctx.fn_name_override_external = false;  /* single-file clones stay static */
-        emit_fn_def(&ctx, &file, ctx.abi_specializations[i].fn_expr);
+        emit_fn_def(&ctx, &file, sp->fn_expr);
+        sp->emitted = true;
         ctx.fn_name_override = NULL;
         ctx.fn_name_override_external = false;
         ctx.current_abi_specialization = NULL;
