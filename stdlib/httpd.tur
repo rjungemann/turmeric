@@ -3221,11 +3221,11 @@
 ;;; middlewares over a base handler. Each cell holds a fat closure value of
 ;;; shape (fn [next :int] :ptr<void> ...). Applied right-to-left so the list
 ;;; head becomes the outermost wrapper. Null cells are skipped. Unbounded --
-;;; the walk recurses over the typed Cons abstraction (tnil?/list-head/
-;;; list-tail), so there is no fixed element cap.
+;;; the walk recurses over the cons-list abstraction (list-head/list-tail),
+;;; so there is no fixed element cap.
 
 (defn httpd-mw-fold [base :int mws :int] :int
-  (if (tnil? mws)
+  (if (= mws 0)
     base
     (let [inner (httpd-mw-fold base (list-tail mws))
           mw    (list-head mws)]
