@@ -1,0 +1,17 @@
+;; two-level-sf-closure-return-miscompiles-out-binding: a Signal-Function
+;; shape -- (make-sf) -> (fn [^fat sig] (fn [t] (sig t))) -- that is
+;; let-bound, fed a signal, and sampled.  The let binding `out` holds the
+;; closure RETURNED by (sf input); native codegen must carry it as the fat
+;; closure box (not a thin C function pointer) and must not re-box the
+;; already-fat `input` argument.  Sampling (out 3.5) drives scale2(3.5) = 7.
+(defn make-sf []
+  (fn [^fat sig : (fn [float] float)]
+    (fn [t : float] : float (sig t))))
+(defn scale2 [x : float] : float (* x 2.0))
+(defn drive [^fat input : (fn [float] float)] : float
+  (let [sf  (make-sf)
+        out (sf input)]
+    (out 3.5)))
+(defn main [] : int
+  (println (drive scale2))
+  0)

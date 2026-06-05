@@ -2021,6 +2021,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *fn_ptr = name_for_binding(ctx, fn_binding);
                 uint32_t n = e->as.call_.n_args;
                 const char *ret_c = type_c_name(e->type);
+                /* two-level-sf-closure-return-miscompiles-out-binding: when this
+                 * thin local fn returns a *function value* (e.g. (sf input) where
+                 * sf : (fn [sig] (fn [t] float))), the result is a concrete thin
+                 * function pointer, not a value of the inner result kind.
+                 * type_c_name(TY_FN) collapses a non-boxed primitive-result fn to
+                 * its result type's C name ("double"), so the cast would claim the
+                 * call returns `double` while it actually returns
+                 * `double (*)(double)` -- a hard `cc` "incompatible types" error at
+                 * the let binding that captures it.  Type the cast's return as the
+                 * matching fn-ptr typedef instead (a boxed closure result already
+                 * lowers to "void *" above and is left untouched). */
+                if (e->type.kind == TY_FN && !e->type.as.fn.boxed) {
+                    const char *ret_td = register_fn_ptr_typedef(&e->type);
+                    if (ret_td) ret_c = ret_td;
+                }
                 if (n == 0) {
                     Buf out; buf_init(&out);
                     buf_printf(&out, "((%s (*)(void))(intptr_t)%s)()",

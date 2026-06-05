@@ -7,6 +7,31 @@ description: A Signal-Function shape `(make-sf)` -> `(fn [^fat sig] (fn [t] (sig
 
 # Two-level SF closure return miscompiles the let-bound `out` result
 
+> **Resolution:** Fixed. Two coordinated changes:
+> 1. `src/compiler/elab_call.c` (`^fat` argument handling): an already-fat
+>    value -- a `^fat` parameter (or let-alias of one), marked `is_fat`, whose
+>    declared type is a concrete `(fn ...)` -- is now retyped to the
+>    `:ptr<void>` carrier before the bare-fn auto-shim. Previously it took the
+>    `ak == TY_FN && !boxed` shim branch and got wrapped in a *second*
+>    `__tur_fatshim` adapter (double-boxing), so the capturing variant
+>    dispatched through the inner box's first word as code and segfaulted. It
+>    now flows through the already-fat pass-through, exactly like a bare `^fat`
+>    parameter (which carries `TY_PTR_VOID` and already worked).
+> 2. `src/compiler/emit_expr.c` (thin local-fn call codegen): when such a call
+>    returns a *function value* (`(sf input)` whose static result is the inner
+>    `(fn [float] float)`), the cast's return type now uses the matching fn-ptr
+>    typedef (`tur_fnptr_double_double_t`) instead of `type_c_name(TY_FN)`,
+>    which collapsed a non-boxed primitive-result fn to `double` and produced
+>    the `cc` "incompatible types ... using type 'double'" error at the `out`
+>    binding (no-capture variant). Boxed-closure results already lower to
+>    `void *` and are untouched.
+>
+> Validated by `tests/fixtures/sf-let-bind-with-inner-call/` (build+run, prints
+> `7`) alongside the existing check-time guard
+> `tests/check-sf-let-bind-inner-call.sh`. The
+> `voice`/`voice-sf`/`poly-synth` SF-composition bodies in
+> `../turmeric-spices/spices/signal/src/signal/synth.tur` can now be restored.
+
 ## Summary
 
 After the type-checker fix for
