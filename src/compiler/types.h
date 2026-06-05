@@ -1023,6 +1023,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_borrow[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_fat[i] = false;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_poly_fn[i] = false;  /* CCL: must initialise or UBSan fires on bool read (macOS miscompile) */
     t.as.fn.result_fat = false;  /* A#1: must initialise or UBSan fires on bool read */
     t.as.fn.boxed = false;  /* CRU B-1: must initialise or UBSan fires on bool read */
     t.as.fn.is_variadic = false;  /* AR6: default non-variadic */
