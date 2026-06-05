@@ -152,11 +152,14 @@ the right register:
   (g x))                       ;; returns a real double
 ```
 
-The compiler enforces this: calling a bare `^fat g` in the result position
-of a `:float` function is a hard error directing you to the annotated
-form, rather than silently miscompiling. (Making the *bare* form infer the
-result type from context is tracked in
-`docs/upcoming/bare-fat-result-type-inference-plan.md`.)
+As of the tail-position retype pass (shipped #208), a bare `^fat g` in the
+result *tail* of a `:float` function infers the result type from the
+declared return -- no annotation required. The one case still left to the
+annotated form is a bare-`^fat` non-int result consumed in a **non-tail**
+position; that is tracked in
+`docs/upcoming/v1/bare-fat-result-monomorphization-plan.md` (deferred until
+a real consumer exists). The annotated form remains the *checked* path in
+all positions.
 
 ## 5. When you do *not* need `^fat`
 

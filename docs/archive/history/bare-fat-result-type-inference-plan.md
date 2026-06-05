@@ -6,10 +6,13 @@ description: Close the missing functionality behind bare-fat-param-non-int-resul
 
 # Bare `^fat` Result-Type Inference -- Plan
 
-> **Status:** Phase A implemented and merged (#208) -- reported gap closed.
-> Phase B **deferred until a real non-tail consumer exists** (see "Phase B
-> feasibility & decision" below); the plan is functionally delivered.
-> **Last Updated:** 2026-06-04
+> **Status:** ARCHIVED -- Phase A implemented and merged (#208); reported gap
+> closed and the plan is functionally delivered. Phase B was **deferred** (see
+> "Phase B feasibility & decision" below) and has been **broken out into its own
+> plan**:
+> [docs/upcoming/v1/bare-fat-result-monomorphization-plan.md](../../upcoming/v1/bare-fat-result-monomorphization-plan.md).
+> This document is retained for the Phase A record and the deferral rationale.
+> **Last Updated:** 2026-06-05
 > **Type:** compiler -- closure ABI / type inference
 > **Resolves the missing functionality flagged in:**
 > - [bare-fat-param-non-int-result-miscompiles.md](../reported/bare-fat-param-non-int-result-miscompiles.md)
@@ -411,69 +414,19 @@ When that lands, implement the monomorphization mechanism sketched above
 (`(let [y (g x)] (use-float y))`), regenerate snapshots, and keep the suite
 green.
 
-The remainder of this section is the original B1-B4 sketch, retained for
-reference; B1 is superseded by the monomorphization framing above.
+## Phase B -- broken out into its own plan
 
----
+The Phase B design (first-class closure result type, and the
+monomorphization framing that supersedes the original B1-B4 value-typed
+sketch) now lives in its own document:
 
-## Phase B (original sketch) -- first-class closure result type (end-state, subsumes A)
+- **[docs/upcoming/v1/bare-fat-result-monomorphization-plan.md](../../upcoming/v1/bare-fat-result-monomorphization-plan.md)**
 
-`closure-first-class-type-plan.md` (CRU Phase 3 / Option B) already made a
-capturing closure a first-class boxed `TY_FN` value that knows its
-signature. Phase B extends that so a bare-`^fat` *parameter* retains the
-incoming closure's **result kind**, and the call reads it off the value's
-type -- no context inference needed.
-
-### B1. Preserve `result_kind` onto the bare-`^fat` parameter binding
-
-Today a bare `^fat g` parameter binding is `TY_PTR_VOID` with no result
-info (`closure-representation-unification` Phase 0 made bare `^fat`
-default to `:ptr<void>`). Where the parameter binding is built, if the
-*argument* flowing in is a boxed `TY_FN` (CRU B-1) carrying
-`result_full_type`/`result_kind`, thread that onto the binding's type
-(e.g. store a `result_kind` on the binding, or promote the binding to the
-annotated `TY_FN`-with-`is_fat` representation that already threads the
-result type at `elab_call.c`). Reuse the annotated-`^fat` machinery rather
-than inventing a parallel path.
-
-- Pointer: the annotated path at `elab_call.c:~1787+` (`fn_type.kind ==
-  TY_FN`, `is_fat`) already threads `e->type` from the declared signature.
-  Goal: make the bare path reach the *same* code once the result type is
-  known, instead of the `TYPE_INT` default at `elab_call.c:~1704`.
-
-### B2. Type the direct call from the binding's own result type
-
-In the `elab_call.c` `TY_PTR_VOID` fat-dispatch branch (~`1704`), prefer,
-in order: (1) the binding's recorded result type (B1); (2) the Phase A
-context retype; (3) the `TYPE_INT` default. Once B1 covers a closure, the
-call is correctly typed at the *call site* regardless of position -- so a
-bare-`^fat` value works in **non-tail** positions too (the one thing
-Phase A cannot do).
-
-### B3. Retire Phase A where B2 covers it
-
-Remove the tail-retype pass for any call whose binding carries a result
-type (B2 handles it). Keep the pass only for the residual "opaque int64
-carrier with no result type" case (e.g. a closure handed in from inline-C
-as a raw `int64`), or drop it entirely if no such case remains. Delete the
-diagnostic if B2 leaves no float-class ambiguity.
-
-### B4. Generalize beyond `:float`
-
-With the result kind on the value's type, every register-class-distinct
-return works uniformly through the existing typed-thunk machinery
-(`ensure_typed_thunk_typedef`). Add a fixture per distinct carrier as they
-arise.
-
-### Phase B validation
-
-- [ ] Every Phase A fixture passes with the tail-retype pass removed (B2
-      covers them from the call site).
-- [ ] A bare-`^fat` combinator reused across `:int` and `:float` closures
-      with **no annotation and no tail-position requirement** -- including
-      a `:float` result consumed in a **non-tail** position (`(let [y (g
-      x)] (use-float y))`), which Phase A leaves int64.
-- [ ] `bash tests/run.sh`: 0 FAIL.
+That plan carries the remaining-gap statement, the per-call-site
+monomorphization mechanism (B1'/B2/B3/B4), the open issues (recursion,
+exports, cross-module dedup, snapshot churn), the non-tail gate fixture,
+and the validation checklist. It stays deferred until a real non-tail
+consumer appears (the re-open trigger above).
 
 ---
 

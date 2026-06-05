@@ -17,7 +17,9 @@ against have since landed on `main`:
   `docs/archive/history/closure-returning-instance-method-codegen-plan.md`.
 - **Bare `^fat` result-type inference** (G1, G7 surface): #208 (Phase A)
   + #212 (Phase B feasibility); plan archived as
-  `docs/archive/bare-fat-result-type-inference-plan.md`. Companion fix
+  `docs/archive/history/bare-fat-result-type-inference-plan.md` (Phase B
+  broken out to
+  `docs/upcoming/v1/bare-fat-result-monomorphization-plan.md`). Companion fix
   `docs/archive/history/bare-fat-param-non-int-result-miscompiles.md`
   and `docs/archive/history/cstr-returning-closure-thunk-int64-return.md`.
 - **Typed closure invocation ABI / first-class closure type** (G1, G6,
