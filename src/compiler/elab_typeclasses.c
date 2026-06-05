@@ -2422,7 +2422,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             method_fd->binding->type.kind == TY_FN) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = method_body->type;
-            rft->as.fn.boxed = true;
+            /* Preserve the body's actual boxing: a *capturing* arrow body (e.g.
+             * comp's `(fn [x] (g (f x)))`) is a boxed fat closure, so a caller
+             * applying the result -- `(h 3)` -- uses the thunk convention; a
+             * *non-capturing* body (e.g. Category ident's `(fn [x] x)`) is
+             * lifted to a bare function pointer and must stay unboxed so `(i 41)`
+             * emits a direct call (and arrow_fat_shim boxes it when fed to a fat
+             * parameter).  Forcing boxed=true here mis-types the non-capturing
+             * case and crashes the thunk dispatch on a code address. */
             method_fd->binding->type.as.fn.result_full_type = rft;
         }
 
@@ -2615,6 +2622,32 @@ static bool rt_unify_return(const Type *ret, const Type *expected,
     return false;
 }
 
+/* Shared callable-result helper (return-type-dispatch-nullary-arrow plan, T2).
+ * A method whose binding return type is a *boxed* TY_FN carries a callable fat
+ * closure value (the capturing arrow body recovered in pass 2 -- report
+ * function-arrow-not-instantiable, fix #1).  Return its full signature so a
+ * caller applying the result -- `(h 3)` -- sees the real arity and dispatches
+ * through the fat (thunk) protocol instead of an arity-0 shell.  Otherwise fall
+ * back to the supplied carrier type: the unboxed fn-handle ABI in
+ * elab_method_call, or the unified/ascribed `bound` in return dispatch.
+ *
+ * Note the boxed gate: a regular closure-returning method may declare an
+ * *unboxed* TY_FN return whose body nonetheless captures (so the runtime value
+ * is a fat box, applied through TUR_APPLY1).  Typing that as a bare function
+ * pointer would miscompile a direct call, so unboxed declared returns keep the
+ * opaque carrier here.  Arrow methods, whose result_full_type is refined from
+ * the *body* in pass 2 (accurate boxing), are handled directly in
+ * elab_try_return_dispatch where the unboxed bare-fn case is wanted. */
+static Type method_callable_result_type(const Binding *binding, Type fallback) {
+    if (binding && binding->type.kind == TY_FN) {
+        const Type *rft = binding->type.as.fn.result_full_type;
+        if (rft && rft->kind == TY_FN && rft->as.fn.boxed) {
+            return *rft;
+        }
+    }
+    return fallback;
+}
+
 Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                                bool *handled) {
     if (handled) *handled = false;
@@ -2670,31 +2703,55 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
         return NULL;
     }
 
-    if (!e->expected_type) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "cannot infer type for return-directed method '%s'; add a "
-                  "type ascription, e.g. (:: (%s ...) T)",
-                  name->name, name->name);
-        return NULL;
-    }
-
-    /* Bind the dispatch tyvar from the expected type (bare or structured). */
     Type bound;
-    if (!rt_unify_return(&meth->return_type, e->expected_type, disp_tv, &bound)) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "ascribed type does not match the result shape of '%s'",
-                  name->name);
-        return NULL;
-    }
-    /* Use the typed lookup so struct instances are discriminated by identity
-     * (HasSchema[User] vs HasSchema[Post]); it matches primitives by kind and
-     * structs by StructDef pointer. */
-    TypeClassInstance *inst =
-        typeclass_env_lookup_instance(env, tc, &bound, 1);
-    if (!inst) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "no instance '%s %s'", tc->name->name, type_name(bound));
-        return NULL;
+    TypeClassInstance *inst = NULL;
+    if (!e->expected_type) {
+        /* Mechanism B (return-type-dispatch-nullary-arrow plan, T3): with no
+         * expected type a nullary arrow method (e.g. Category `ident`) has
+         * nothing to dispatch on.  Fall back to the instance set: if `tc`+`meth`
+         * has exactly one implementing instance and its head is the function
+         * arrow, select it unambiguously.  Gating to a *unique arrow* instance
+         * keeps existing multi-instance return-only classes (default-of,
+         * schema-of, decode!, ...) on the ascription-required path below. */
+        TypeClassInstance *uniq = NULL;
+        int n_impl = 0;
+        for (TypeClassInstance *it = env->instances; it; it = it->next) {
+            if (it->typeclass != tc) continue;
+            if (midx >= it->n_method_impls || !it->method_impls[midx]) continue;
+            n_impl++;
+            uniq = it;
+        }
+        if (n_impl == 1 && uniq->n_type_args > 0 &&
+            uniq->type_args[0].kind == TY_FN) {
+            inst  = uniq;
+            bound = uniq->type_args[0];
+        } else {
+            /* T4: genuinely ambiguous (no instance, or >1, or non-arrow head) --
+             * keep requiring an ascription; never silently pick an instance. */
+            diag_emit(DIAG_ERROR, call->span,
+                      "cannot infer type for return-directed method '%s'; add a "
+                      "type ascription, e.g. (:: (%s ...) T)",
+                      name->name, name->name);
+            return NULL;
+        }
+    } else {
+        /* Bind the dispatch tyvar from the expected type (bare or structured). */
+        if (!rt_unify_return(&meth->return_type, e->expected_type, disp_tv,
+                             &bound)) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "ascribed type does not match the result shape of '%s'",
+                      name->name);
+            return NULL;
+        }
+        /* Use the typed lookup so struct instances are discriminated by identity
+         * (HasSchema[User] vs HasSchema[Post]); it matches primitives by kind
+         * and structs by StructDef pointer. */
+        inst = typeclass_env_lookup_instance(env, tc, &bound, 1);
+        if (!inst) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "no instance '%s %s'", tc->name->name, type_name(bound));
+            return NULL;
+        }
     }
     FnDef *impl = inst->method_impls[midx];
     if (!impl || !impl->binding) {
@@ -2717,7 +2774,23 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     }
     e->expected_type = saved_expected;
 
-    Expr *out = expr_new(e->arena, EX_CALL, bound, call->span);
+    /* Thread the callable result type (plan T2/T3).  For an arrow method the
+     * impl binding's result_full_type was refined from the *body* in pass 2,
+     * so its boxing is accurate: a non-capturing body (Category ident's
+     * `(fn [x] x)`) is an unboxed bare function pointer applied directly
+     * (`(i 41)`), while a capturing body (comp's `(fn [x] (g (f x)))`) is a
+     * boxed fat closure applied through the thunk protocol.  Use it whichever
+     * way it is boxed so the result carries the real arity; non-arrow
+     * return-dispatch methods (default-of, schema-of, ...) have no fn-typed
+     * result_full_type and fall back to the unified/ascribed `bound`. */
+    Type result_type = bound;
+    if (impl->binding && impl->binding->type.kind == TY_FN) {
+        const Type *rft = impl->binding->type.as.fn.result_full_type;
+        if (rft && rft->kind == TY_FN) {
+            result_type = *rft;
+        }
+    }
+    Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
     out->as.call_.fn_binding = impl->binding;
     out->as.call_.fn_expr    = NULL;
     out->as.call_.args       = args;
@@ -3522,12 +3595,9 @@ resolved_user_fallback:;
          * sees the real arity instead of an arity-0 shell.  Closure-returning
          * methods that carry the int64 fat handle (an unboxed fn-typed return
          * annotation) keep the carrier ABI via type_from_kind below. */
-        const Type *rft = best_method->binding->type.as.fn.result_full_type;
-        if (rft && rft->kind == TY_FN && rft->as.fn.boxed) {
-            result_type = *rft;
-        } else {
-            result_type = type_from_kind(best_method->binding->type.as.fn.result_kind);
-        }
+        result_type = method_callable_result_type(
+            best_method->binding,
+            type_from_kind(best_method->binding->type.as.fn.result_kind));
     } else {
         result_type = best_method->body->type;
         if (result_type.kind == TY_UNKNOWN || result_type.kind == TY_NIL) {
