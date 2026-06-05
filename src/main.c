@@ -7141,10 +7141,10 @@ static bool parse_no_contracts(int argc, char **argv) {
  * of the form "TUR-E" followed by one or more decimal digits. */
 static bool looks_like_diag_code_(const char *s) {
     if (!s) return false;
-    /* Accept TUR-E#### and TUR-W#### */
+    /* Accept TUR-E####, TUR-W#### and TUR-D#### (deprecation band) */
     if (strncmp(s, "TUR-", 4) != 0) return false;
     const char *p = s + 4;
-    if (*p != 'E' && *p != 'W') return false;
+    if (*p != 'E' && *p != 'W' && *p != 'D') return false;
     p++;
     if (*p == '\0') return false;   /* need at least one digit */
     while (*p) {

@@ -202,6 +202,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0605_DYNVAR_SET_IN_ATOMIC:      return "TUR-E0605";
         /* DV0: Dynamic var naming warning */
         case TUR_W0600_DYNVAR_NO_EARMUFFS:        return "TUR-W0600";
+        /* Deprecation band */
+        case TUR_D0001_FN_TYPE_COLON:             return "TUR-D0001";
         default:                          return "";
     }
 }
@@ -297,6 +299,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0605") == 0) return TUR_E0605_DYNVAR_SET_IN_ATOMIC;
     /* DV0: Dynamic var naming warning */
     if (strcmp(s, "TUR-W0600") == 0) return TUR_W0600_DYNVAR_NO_EARMUFFS;
+    /* Deprecation band */
+    if (strcmp(s, "TUR-D0001") == 0) return TUR_D0001_FN_TYPE_COLON;
     return DIAG_CODE_NONE;
 }
 
@@ -1445,6 +1449,27 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Suppress with -Wno-dynvar-earmuffs if your project intentionally omits\n"
       "this convention.\n",
+    },
+    /* fn-type-bare-identifier-plan Phase 3: redundant colon inside (fn ...) */
+    { TUR_D0001_FN_TYPE_COLON,
+      "TUR-D0001: leading colon inside a (fn ...) type is deprecated\n"
+      "\n"
+      "Inside a (fn [params...] result) *type* expression, position alone\n"
+      "tells the elaborator which forms are parameter types and which is the\n"
+      "result type.  The leading ':' on each inner type is therefore\n"
+      "redundant and is being phased out.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (defn compose [^fat f : (fn [:float] #{} :float)] : ptr<void> ...)\n"
+      "                            ^^^^^^         ^^^^^^  redundant colons\n"
+      "\n"
+      "Fix: drop the colons on the inner types:\n"
+      "  (defn compose [^fat f : (fn [float] #{} float)] : ptr<void> ...)\n"
+      "\n"
+      "The structural colon between the binder (^fat f) and its type stays;\n"
+      "only the *inner* types inside (fn ...) lose theirs.  Run\n"
+      "tools/rewrite_fn_type_colons.py to migrate a tree automatically.\n"
+      "Promoted to an error under --Werror=deprecated.\n",
     },
 };
 

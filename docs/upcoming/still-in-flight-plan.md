@@ -120,25 +120,43 @@ is complete; this is the inner-type-expression version.
       let bindings, defalias, method sigs, `(:: _ T)`/`(the T _)`
       ascriptions, nested `(fn ...)`; handles `:kw`, bare `: (T)`,
       and effect sets; never touches lambda values). Corpus regression
-      harness at `tests/codemod/run-fn-type-colons.sh`. **Swept so far:**
-      `stdlib/` (`either`, `gadt-vec`, `list`) and `docs/guides/`.
+      harness at `tests/codemod/run-fn-type-colons.sh`. **Swept:**
+      all of `stdlib/` (`either`, `gadt-vec`, `list`, and `arrow`) and
+      `docs/guides/`; `python3 tools/rewrite_fn_type_colons.py --check
+      stdlib/ docs/guides/` is now clean.
       **Remaining:** `tests/fixtures/` sources are intentionally left
       on the legacy colon spelling until Phase 4 (they back the
-      lenient-path coverage), and `../turmeric-spices/` is deferred
-      until that checkout is present. Full suite stays green
-      (`1479 passed, 0 failed`); the rewrite is annotation-spelling
-      only, so codegen snapshots are byte-identical. **Known gap:**
-      the codemod only finds fn types inside paren-delimited
-      declarations, so sweet-exp top-level forms (`.tur.sweet` files,
-      ```sweet-exp doc blocks) are skipped -- port the
-      `spaced-types-rewrite.py` implicit-sequence walk before sweeping
-      those.
-- [ ] Phase 3 -- emit `TUR-D000x` deprecation warning when an
-      `F_KEYWORD` is consumed inside a `(fn ...)` type position.
-- [ ] Phase 4 -- remove the `F_KEYWORD` branch from the
-      `(fn ...)` type-expression handler; convert the lenient-path
-      fixture into an `errors/` fixture asserting the hard
-      diagnostic.
+      lenient-path coverage), `../turmeric-spices/` is deferred until
+      that checkout is present, and the lone legacy form left under
+      `docs/upcoming/` is the intentional before/after illustration in
+      `v1/fn-type-colons-sweet-exp-plan.md` (do not rewrite it). The
+      rewrite is annotation-spelling only, so codegen snapshots are
+      byte-identical. **Known gap:** the codemod only finds fn types
+      inside paren-delimited declarations, so sweet-exp top-level forms
+      (`.tur.sweet` files, ```sweet-exp doc blocks) are skipped -- port
+      the `spaced-types-rewrite.py` implicit-sequence walk before
+      sweeping those.
+- [x] Phase 3 -- `TUR-D0001` deprecation warning fires when a leading
+      colon (the fused `F_KEYWORD` `:int` form **or** the spaced-but-
+      redundant `F_TYPE_ANN` `: int` form) is consumed in a `(fn ...)`
+      type param/result slot (`warn_fn_type_colon` in
+      `src/compiler/elab_types.c`). Default DIAG_WARNING; promoted to a
+      hard error under `--Werror=deprecated` (reuses `g_werror_deprecated`,
+      mirroring `^deprecated` use sites). Does **not** fire on bare
+      identifiers, on the `(-> ...)` arrow type, or on value-position
+      `(fn [x] ...)` lambdas. `tur explain TUR-D0001` carries the
+      migration hint. Coverage: happy fixture
+      `tests/fixtures/fn-type-colon-deprecation/` (warns + still runs)
+      and negative fixture `tests/fixtures/errors/fn-type-colon-werror/`
+      (`--Werror=deprecated` -> hard error).
+- [ ] Phase 4 -- remove the `F_KEYWORD`/`F_TYPE_ANN` colon branch from
+      the `(fn ...)` type-expression handler (delete
+      `warn_fn_type_colon` and reject instead); sweep the remaining
+      legacy spellings in `tests/fixtures/` inputs, macro expansions
+      (`contract.tur`/`macros.tur`), and `../turmeric-spices/`; convert
+      the lenient-path fixture `tests/fixtures/fn-type-bare-identifier/`
+      into an `errors/` fixture asserting the hard diagnostic. Gated on
+      at least one minor release with the warning live.
 
 ## HTTPD compression + `tur/zlib` spice
 

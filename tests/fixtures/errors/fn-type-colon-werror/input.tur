@@ -1,0 +1,12 @@
+;; fn-type-colon-werror -- under --Werror=deprecated, a redundant leading
+;; colon on a type inside a (fn ...) type expression is a hard error
+;; (TUR-D0001).  See fn-type-bare-identifier-plan Phase 3.
+(defn apply-legacy [f : (fn [:int] :int) x : int] : int
+  (f x))
+
+(defn inc [x : int] : int
+  (+ x 1))
+
+(defn main [] : int
+  (println (apply-legacy inc 20))
+  0)
