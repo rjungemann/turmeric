@@ -1,0 +1,37 @@
+;; arrow-instance-basic -- the function arrow (->) as a typeclass instance head.
+;;
+;; Exercises Arrow [(->)] dispatch: `arr` lifts a function to an arrow (identity
+;; for function arrows), `comp` (sequential composition, >>>) composes two
+;; arrows, and the composed arrow is applied directly.  The results match the
+;; bare-function arrow layer (tests/fixtures/stdlib-arrow) -- the typeclass
+;; surface dispatches to the (->) instance and computes the same values.
+
+(defclass Arrow [a]
+  (arr  [f]   : a)
+  (comp [f g] : a))
+
+(definstance Arrow [(->)]
+  (arr  [f]   f)
+  (comp [f g] (fn [x] (g (f x)))))
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; arr is identity for function arrows; compose add1 then mul2 through arr.
+  (let [h (comp (arr add1) (arr mul2))]
+    (println (h 3)))            ;; mul2(add1(3)) = 8
+
+  ;; comp dispatches on bare function arguments too.
+  (let [h2 (comp add1 mul2)]
+    (println (h2 10)))          ;; mul2(add1(10)) = 22
+
+  ;; three-stage composition: add1 >>> mul2 >>> add1.
+  (let [h3 (comp (comp add1 mul2) add1)]
+    (println (h3 3)))           ;; add1(mul2(add1(3))) = 9
+
+  ;; a capturing closure participates as an arrow argument.
+  (let [k  100
+        h4 (comp add1 (fn [x] (+ x k)))]
+    (println (h4 5)))           ;; (5+1)+100 = 106
+  0)
