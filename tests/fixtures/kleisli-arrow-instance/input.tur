@@ -1,0 +1,38 @@
+;; kleisli-arrow-instance -- the Kleisli arrow over Option as a second Category
+;; instance plus an HONEST ArrowZero (the (->) arrow has no zero; Kleisli's is
+;; \_ -> none).  With two Category instances in scope the nullary (ident) /
+;; (zero-arrow) are ambiguous, so each is ascribed to :Kleisli to pick the head.
+;;
+;; Each ascription-disambiguated arrow is applied exactly once and the resulting
+;; Option is reused -- see docs/reported/opaque-ascription-cast-marks-value-move-once.md.
+(load "stdlib/kleisli.tur")
+
+(defn safe-recip [x : int] : int (if (= x 0) (none) (some (/ 100 x))))
+(defn add1m     [x : int] : int (some (+ x 1)))
+
+(defn main [] : int
+  ;; identity Kleisli: \a -> some a
+  (let [i (:: (ident) :Kleisli)
+        r (k-apply i 41)]
+    (println (some? r))                ;; true
+    (println (unwrap-or r 0)))         ;; 41
+
+  ;; Kleisli composition over some: (100/5)=20 then +1 = 21
+  (let [f  (kleisli safe-recip)
+        g  (kleisli add1m)
+        fg (:: (comp f g) :Kleisli)
+        r  (k-apply fg 5)]
+    (println (unwrap-or r -7)))        ;; 21
+
+  ;; none short-circuits through composition: safe-recip 0 -> none, g skipped
+  (let [f2  (kleisli safe-recip)
+        g2  (kleisli add1m)
+        fg2 (:: (comp f2 g2) :Kleisli)
+        r2  (k-apply fg2 0)]
+    (println (some? r2)))              ;; false
+
+  ;; honest zero arrow: ignore input, fail with none
+  (let [z  (:: (zero-arrow) :Kleisli)
+        rz (k-apply z 99)]
+    (println (some? rz)))              ;; false
+  0)

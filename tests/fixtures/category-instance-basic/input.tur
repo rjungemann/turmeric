@@ -1,0 +1,19 @@
+;; category-instance-basic -- Category [(->)] dispatch: the identity arrow and
+;; forward composition over the function arrow.  With only the (->) Category
+;; instance in scope, the nullary (ident) resolves via the unique-instance
+;; fallback (no ascription needed).
+(load "stdlib/arrow.tur")
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn main [] : int
+  ;; identity arrow
+  (let [i (ident)]
+    (println (i 41)))                  ;; 41
+  ;; ident is the left identity of comp: (ident `comp` add1) == add1
+  (let [h (comp (ident) add1)]
+    (println (h 41)))                  ;; 42
+  ;; ident is the right identity of comp: (add1 `comp` ident) == add1
+  (let [h (comp add1 (ident))]
+    (println (h 41)))                  ;; 42
+  0)

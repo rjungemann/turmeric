@@ -263,6 +263,13 @@ any `b` to any `c` requires `c` to be inhabited / chosen). Decide:
 Recommendation: **A**. Declare the classes, do not instantiate them at
 `(->)`. A future `Kleisli` instance is the natural home for these.
 
+> **Follow-up landed (2026-06-05):** Option A still holds for `(->)`, and the
+> "future `Kleisli` instance" is now real --
+> [`docs/upcoming/category-arrowzero-implementation-plan.md`](category-arrowzero-implementation-plan.md)
+> ships `stdlib/kleisli.tur` with `ArrowZero [Kleisli]`
+> (`zero-arrow = \_ -> none`), the honest home this task anticipated. `(->)`
+> `ArrowZero`/`ArrowPlus` remain uninstantiated, as recommended.
+
 ### T6. `ArrowChoice [(->)]` instance
 
 1. Implement `left f = \case Left b -> Left (f b); Right d -> Right d`.
@@ -295,6 +302,14 @@ follow-up for the lazy case.
 If `Category` has landed by this point, write `Category [(->)]` and have
 `Arrow` inherit composition from it (matching the Haskell hierarchy).
 Otherwise skip and inline composition into `Arrow` as in T4.
+
+> **Superseded / follow-up landed (2026-06-05):** `Category` did not exist when
+> this plan shipped (composition was inlined into `Arrow`).
+> [`docs/upcoming/category-arrowzero-implementation-plan.md`](category-arrowzero-implementation-plan.md)
+> now adds `Category [arr]` with `ident` + `comp` and a `Category [(->)]`
+> instance. It deliberately chose **not** to have `Arrow` inherit composition
+> from `Category` (D1b): `Category` owns a separate `comp`, `Arrow` keeps its
+> own `>>>`, avoiding an operator-mangling collision and hierarchy churn.
 
 ### T10. Fixtures
 

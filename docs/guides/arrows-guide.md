@@ -170,11 +170,12 @@ Haskell-style hierarchy and instantiates it at the function arrow:
 
 | Class | Methods | `(->)` instance? |
 |-------|---------|------------------|
+| `Category` | `ident`, `comp` | yes |
 | `Arrow` | `arr`, `>>>`, `<<<`, `first`, `second` | yes |
 | `ArrowChoice` | `left`, `right`, `+++`, `\|\|\|` | yes (over `Either`) |
 | `ArrowLoop` | `arrow-loop` | yes (non-recursive subset) |
 | `ArrowApply` | `app` | yes |
-| `ArrowZero` | `zero-arrow` | no -- `(->)` has no zero |
+| `ArrowZero` | `zero-arrow` | no -- `(->)` has no zero (see Kleisli below) |
 | `ArrowPlus` | `plus-arrow` | no -- declared for other arrows |
 
 Every call resolves through the instance dictionary rather than a free
@@ -197,6 +198,70 @@ function:
 `arr` is eta-expanded in the instance (`(fn [x] (f x))`, not the bare `f`) so
 the dispatched result carries a concrete arrow type and is directly callable;
 see `docs/reported/instance-method-returning-untyped-param-loses-result-type.md`.
+
+### `Category` -- identity and composition
+
+`Category` is the base of the hierarchy: an identity arrow `ident` and forward
+composition `comp` (`comp f g` runs `f`, then `g`). `comp` is a distinct method
+name from `Arrow`'s `>>>`, so the two coexist without an operator collision.
+
+`ident` is **nullary** -- there is no argument to dispatch on, so it resolves by
+return-type / unique-instance dispatch (the mechanism from
+[`return-type-dispatch-nullary-arrow-methods-plan`](../upcoming/return-type-dispatch-nullary-arrow-methods-plan.md)).
+With only the `(->)` instance in scope, a bare `(ident)` resolves uniquely:
+
+```turmeric
+(load "stdlib/arrow.tur")
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn main [] : int
+  (let [i (ident)] (println (i 41)))        ; identity arrow      => 41
+  (let [h (comp (ident) add1)] (println (h 41)))  ; left identity  => 42
+  (let [h (comp add1 (ident))] (println (h 41)))  ; right identity => 42
+  0)
+```
+
+Once a **second** `Category` instance is in scope (e.g. `Kleisli` below), a bare
+`(ident)` is ambiguous -- ascribe it to pick the head: `(:: (ident) :Kleisli)`.
+
+### `ArrowZero` honestly: the `Kleisli` arrow (`stdlib/kleisli.tur`)
+
+The `(->)` arrow has no `ArrowZero` instance because a total function `a -> b`
+with no input cannot conjure an inhabitant of `b`. The honest home for
+`zero-arrow` is an arrow whose codomain *has* a zero. `stdlib/kleisli.tur`
+provides one: `Kleisli A B = A -> Option B`, where `none` is the zero.
+
+```turmeric
+(load "stdlib/kleisli.tur")
+
+(defn safe-recip [x : int] : int (if (= x 0) (none) (some (/ 100 x))))
+(defn add1m      [x : int] : int (some (+ x 1)))
+
+(defn main [] : int
+  ;; Category [Kleisli]: ident = \a -> some a; comp threads Option-bind
+  (let [fg (:: (comp (kleisli safe-recip) (kleisli add1m)) :Kleisli)
+        r  (k-apply fg 5)]
+    (println (unwrap-or r -1)))          ; (100/5)+1 => 21
+
+  ;; none short-circuits composition
+  (let [fg (:: (comp (kleisli safe-recip) (kleisli add1m)) :Kleisli)
+        r  (k-apply fg 0)]
+    (println (some? r)))                 ; safe-recip 0 -> none => false
+
+  ;; ArrowZero [Kleisli]: the honest zero arrow, \_ -> none
+  (let [z (:: (zero-arrow) :Kleisli)]
+    (println (some? (k-apply z 99))))    ; => false
+  0)
+```
+
+`Kleisli` is the worked second `Category` instance the hierarchy needs; it is
+also the reason `ArrowZero` stays declared-but-uninstantiated at `(->)`.
+
+> Note: ascription-disambiguated arrows (`(:: (ident) :Kleisli)`, etc.) are
+> currently move-once due to
+> [`opaque-ascription-cast-marks-value-move-once`](../reported/opaque-ascription-cast-marks-value-move-once.md);
+> apply each once and reuse the resulting `Option` until that is fixed.
 
 ### `ArrowChoice` over `Either`
 
@@ -510,15 +575,19 @@ let [dummy  constant(())
 
 ## Extended Arrow Typeclasses
 
-Earlier drafts declared `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`,
-and `ArrowApply` in `stdlib/arrow.tur`. Those declarations were removed by
-the scaleback in
-[`docs/upcoming/stdlib-arrow-scaleback-plan.md`](../upcoming/stdlib-arrow-scaleback-plan.md)
-because no instances ever backed them (the closure-returning instance methods
-tripped a codegen bug, and several stub bodies needed `Either`/`Left`/`Right`
-sum types that do not exist yet). When that codegen gap closes and the sum
-types land, reintroducing the hierarchy is a follow-up plan, not something
-the current stdlib pretends to support.
+An earlier scaleback
+([`docs/upcoming/stdlib-arrow-scaleback-plan.md`](../upcoming/stdlib-arrow-scaleback-plan.md))
+removed `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`, and `ArrowApply`
+because no instances backed them (closure-returning instance methods tripped a
+codegen bug, and several stubs needed `Either`/`Left`/`Right` sum types). Both
+gaps have since closed, so the hierarchy was **reintroduced**
+([`docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`](../upcoming/stdlib-arrow-typeclass-reintroduction-plan.md))
+and is now live in `stdlib/arrow.tur` -- see the **Typeclass dispatch** section
+above for the full table and per-class examples. `Category` and the honest
+`Kleisli` `ArrowZero` were added on top
+([`docs/upcoming/category-arrowzero-implementation-plan.md`](../upcoming/category-arrowzero-implementation-plan.md)).
+`ArrowZero`/`ArrowPlus` remain uninstantiated at `(->)` by design (no zero for a
+total function); `Kleisli` is where `zero-arrow` honestly lives.
 
 ---
 
