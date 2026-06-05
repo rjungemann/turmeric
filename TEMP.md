@@ -23,17 +23,6 @@ do not collapse phases, do not reword entries into prose, and update the
 
 ---
 
-## Phase 5 -- Stdlib API cleanup
-
-32. `upcoming/stdlib-type-erasure-cleanup-plan.md`
-    - Kind: plan
-    - Goal: Replace int64-erased typeclass stubs with real instances
-    - Deps: 7, 19 (plus operator-name mangling fix tracked inside the
-      plan; see 30)
-    - Status: Complete -- Phase B6 deferred
-
-    - B6 deferred
-
 ## Phase 6 -- Typeclass reintroduction
 
 33. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
@@ -42,6 +31,9 @@ do not collapse phases, do not reword entries into prose, and update the
       `(->)`
     - Deps: 7, 19, 32
     - Status: Draft -- blocked on prerequisites (T1-T12 tasks defined)
+
+    - docs/upcoming/fn-type-first-class-application-plan.md
+      - F6 deferred
 
 ## Phase 7 -- Signal rebuild
 
@@ -100,7 +92,17 @@ later.
   inline-C stops hardcoding mangled names at all -- rather than making
   the whole scheme self-delimiting just to enable demangling.
 
-docs/reported/generic-struct-opaque-element-miscompile.md
-- Variant 2 (phantom element type recoverable only from an opaque argument, e.g. generic recv returning (Pair T (SChan R))) is the harder case the report flags as needing phantom-element recovery in emit_abi_instantiate_type (fix direction #3). It's not exercised by any shipping code — the real stdlib/schan.tur recv was already respecified to avoid the shape — so I updated the report to mark variant 1 resolved and variant 2 as a tracked limitation rather than risk a speculative inference change.
+`docs/reported/generic-struct-opaque-element-miscompile.md`:
+Variant 2 (phantom element type recoverable only from an opaque argument,
+e.g. generic recv returning (Pair T (SChan R))) is the harder case the report
+flags as needing phantom-element recovery in emit_abi_instantiate_type (fix
+direction #3). It's not exercised by any shipping code — the real
+stdlib/schan.tur recv was already respecified to avoid the shape — so I updated
+the report to mark variant 1 resolved and variant 2 as a tracked limitation
+rather than risk a speculative inference change.
 
 Do an inline-c reduction pass for the new typeclass work and related
+
+Category is not in stalib, so per T9 I'll inline composition into Arrow (no
+Category instance). Let me check whether the bare-layer fixtures carry
+expected. c snapshots (T11 requires them stable) and how they load arrow.tur.

@@ -6,11 +6,19 @@ description: Result is declared (defstruct Result [A B]) with the ok type FIRST 
 
 # Result's `[A=ok B=err]` parameter order blocks Functor/Monad/MonadError
 
-> **Status:** OPEN. The stdlib HKT consolidation otherwise landed in full --
-> T1 (Option got Functor/Applicative/Monad/Alternative; Result got Bifunctor),
-> T2 (Parser), and T3 (Backtrack + logic Goal) all carry the four instances.
-> This records the one instance family that remains inexpressible:
-> `MonadError [Result]` (and the ok-biased `Functor`/`Monad [Result]`).
+> **Status:** OPEN -- **scheduled for resolution via Fix #1** (see Proposed
+> fix directions below). The stdlib HKT consolidation otherwise landed in full
+> -- T1 (Option got Functor/Applicative/Monad/Alternative; Result got
+> Bifunctor), T2 (Parser), and T3 (Backtrack + logic Goal) all carry the four
+> instances. This records the one instance family that remains inexpressible
+> today: `MonadError [Result]` (and the ok-biased `Functor`/`Monad [Result]`).
+>
+> The path forward is tracked as **T4** in
+> `docs/upcoming/stdlib-hkt-consolidation-plan.md`: extend instance-head
+> syntax so a *trailing* type parameter can be fixed (working candidate:
+> `(Result _ B)`), then add the ok-biased `Result` instances on top. Fix #2
+> (flip `Result`'s parameter order) and Fix #3 (workers only) were considered
+> and rejected -- see the plan's "Out of scope" section for the reasoning.
 
 ## Summary
 
@@ -79,12 +87,21 @@ projection is unrepresentable.
 
 1. **Add instance-head support for fixing a trailing parameter** (e.g.
    `(Result _ B)` or a kind-level flip), so the ok-biased instances become
-   expressible without touching `Result`. Most general.
-2. **Flip `Result` to `[B=err A=ok]`** to mirror `Either`. Breaking
+   expressible without touching `Result`. Most general. **CHOSEN** -- scheduled
+   as T4 in `docs/upcoming/stdlib-hkt-consolidation-plan.md`. Generalizes
+   beyond `Result`: any future kind-`(* -> * -> *)` type whose "interesting"
+   arm is not leftmost benefits automatically. Implementation point of entry
+   is the `F_LIST` branch of `parse_instance_head`
+   (`src/compiler/elab_typeclasses.c` ~line 1304), which already recognizes
+   the leftmost-fix case `(constructor arg)`.
+2. **Flip `Result` to `[B=err A=ok]`** to mirror `Either`. Rejected -- breaking
    layout/source change to a core auto-preloaded type; churns every
-   `ok-val`/`err-val`/`Result` site -- almost certainly not worth it.
+   `ok-val`/`err-val`/`Result` site, and only solves the `Result` instance of
+   a general problem.
 3. **Ship `Bifunctor [Result]` only** (done in T1) plus `result-map` /
-   `result-bimap` workers, and document the omission (this report).
+   `result-bimap` workers, and document the omission (this report). Rejected
+   as a final state -- this is effectively the current behavior, and leaves
+   `MonadError [Result]` permanently inexpressible.
 
 ## Validation of a fix
 

@@ -1,7 +1,7 @@
 ---
 title: Stdlib HKT Typeclass Consolidation
 category: Planning
-description: Delete hand-rolled monad interfaces in parsec/logic/backtrack by adding real `Monad` and `Alternative` instances. Add missing `Bifunctor` / `MonadError` instances on `Result` and `Option` so downstream consumers (httpd, csv, json) stop open-coding `result-map` / `result-and-then` chains. Pure consolidation; no new typeclass hierarchies.
+description: Delete hand-rolled monad interfaces in parsec/logic/backtrack by adding real `Monad` and `Alternative` instances. Add missing `Bifunctor` / `MonadError` instances on `Result` and `Option` so downstream consumers (httpd, csv, json) stop open-coding `result-map` / `result-and-then` chains. T4 extends instance-head syntax to fix a trailing type parameter (`(Result _ B)`) so the ok-biased `Functor`/`Monad`/`MonadError [Result]` instances become expressible without breaking `Result`'s `[A=ok B=err]` layout.
 ---
 
 # Stdlib HKT Typeclass Consolidation -- Plan
@@ -10,11 +10,15 @@ description: Delete hand-rolled monad interfaces in parsec/logic/backtrack by ad
 > **Prerequisites:** HKT phases S1-S8 are complete (see
 > `project_hkt_phase.md`).
 >
-> **Status:** T1, T2, T3 landed.
+> **Status:** T1, T2, T3 landed; **T4 is the next deliverable** and unblocks
+> the one piece of T1 that could not ship.
 > - **T1** -- `Option` got Functor/Applicative/Monad/Alternative; `Result` got
->   `Bifunctor`. `MonadError [Result]` remains blocked by Result's `[A=ok B=err]`
->   parameter order (see
->   `docs/reported/result-param-order-blocks-functor-monad.md`).
+>   `Bifunctor`. `MonadError [Result]` (and the ok-biased
+>   `Functor`/`Monad [Result]`) remain blocked by Result's `[A=ok B=err]`
+>   parameter order combined with leftmost-only partial application in instance
+>   heads. See `docs/reported/result-param-order-blocks-functor-monad.md`.
+>   **Resolution path:** T4 below (Fix #1 from the report -- generalize the
+>   instance-head mechanism, do not flip `Result`'s layout).
 > - **T2** -- `Parser` is now a kind-`(* -> *)` opaque carrying
 >   Functor/Applicative/Monad/Alternative; validated by
 >   `tests/fixtures/hkt-stdlib-parser-instances/`.
@@ -22,6 +26,10 @@ description: Delete hand-rolled monad interfaces in parsec/logic/backtrack by ad
 >   the same four instances; validated by
 >   `tests/fixtures/hkt-stdlib-backtrack-instances/` and
 >   `tests/fixtures/hkt-stdlib-logic-instances/`.
+> - **T4** (NEXT) -- extend instance-head partial application so a *trailing*
+>   parameter can be fixed (`(Result _ B)` / kind-level flip), then add the
+>   ok-biased `Functor`/`Applicative`/`Monad`/`MonadError [Result]` instances on
+>   top of the new mechanism. Closes the report.
 >
 > The enabling pattern for all three: each instance method delegates to the
 > module's existing int-carrier worker. The worker declares its continuation
@@ -88,12 +96,95 @@ open-coding in `httpd` / `csv` / `json` becomes `fmap` / `bimap` /
    disjunction (`disjoined`); `empty` is `fail`. Validated by
    `tests/fixtures/hkt-stdlib-backtrack-instances/` and
    `tests/fixtures/hkt-stdlib-logic-instances/`.
+4. **T4** (NEXT) -- **trailing-parameter instance heads, then ok-biased
+   `Result` instances.** Implements Fix #1 from
+   `docs/reported/result-param-order-blocks-functor-monad.md`. Chosen over
+   flipping `Result`'s layout (Fix #2 -- breaking churn to a preloaded core
+   type) or shipping workers only (Fix #3 -- effectively the current state;
+   leaves the hole open). Generalizes the mechanism so any future
+   kind-`(* -> * -> *)` type whose "interesting" arm is not leftmost benefits
+   automatically.
+
+   **T4a -- instance-head mechanism.** Extend the type-application parser in
+   `parse_instance_head` (`src/compiler/elab_typeclasses.c` near line 1304,
+   where `(constructor arg)` is currently recognized as `TY_APP` with the
+   *trailing* parameter free) to also accept a *hole* form that fixes a
+   trailing parameter and leaves an earlier one free. Two surface candidates
+   to evaluate during T4a-0:
+   - `(Result _ B)` -- explicit wildcard at the free position. Reads
+     directly; mirrors existing `(Result int)` partial-application syntax.
+   - A kind-level `Flip` combinator -- `[(Flip Result B)]` reduces to
+     "Result with arms swapped"; reuses the existing leftmost-fix path with
+     no new parser surface, but introduces a new kind-level form.
+
+   Recommended default: `(Result _ B)`. It's local to the instance-head
+   parser, requires no kind-system surface, and the wildcard reads as
+   "this slot stays free." Document the decision in T4a-0 before coding.
+
+   Steps:
+   - T4a-0 Pick `_`-hole vs `Flip`. Write the decision into this plan.
+     Add a one-page sketch under `docs/design/` if `Flip` wins (more
+     machinery to justify).
+   - T4a-1 Parser: extend the `F_LIST` branch in `parse_instance_head` to
+     accept `(<ctor> <args...>)` with exactly one `_` hole among the
+     args; build the same `TY_APP` representation the leftmost-fix path
+     produces, but with the free slot recorded at the hole's position.
+     Reject multiple holes (would require multi-parameter abstraction;
+     out of scope for T4).
+   - T4a-2 Kind check: confirm the hole position is the one varying for
+     the class's expected kind (e.g. `Functor` expects kind `* -> *`, so
+     exactly one hole, in any position).
+   - T4a-3 Method dispatch / orphan-instance bookkeeping: the resolver
+     currently keys instances by the constructor symbol + fixed-arg
+     pattern; extend the key so `(Result _ B)` and `(Result A _)` are
+     distinct instances of the same class on the same constructor.
+   - T4a-4 Error messages: a class that expects kind `* -> *` applied to
+     a fully saturated `(Result A B)` should suggest the hole syntax.
+
+   **T4b -- the actual instances.** Add to `stdlib/result.tur`:
+   ```turmeric
+   (definstance Functor    [(Result _ B)] (fmap ...))      ;; varies ok, holds err
+   (definstance Applicative[(Result _ B)] (pure ...) (ap ...))
+   (definstance Monad      [(Result _ B)] (bind ...))
+   (definstance MonadError [(Result _ B)] (throw-error ...) (catch-error ...))
+   ```
+   These delegate to existing int-carrier workers exactly as T1's `Option`
+   instances do; no new fat-closure plumbing required.
+
+   **T4c -- validation.**
+   - Extend `tests/fixtures/hkt-stdlib-option-result-instances/` (or a new
+     `hkt-stdlib-result-ok-biased-instances/` fixture) to exercise
+     `fmap` / `bind` / `do-m` / `throw-error` / `catch-error` against
+     `Result`, including the report's two-line proof case:
+     ```turmeric
+     (opt-val (fmap (:: (ok 21) (Result int int)) (fn [x] (* x 2))))
+     (res-err (fmap (:: (err 5) (Result int int)) (fn [x] (* x 2))))
+     ```
+   - Add a fixture that exercises the hole syntax on a non-`Result`
+     constructor (e.g. a tiny `defstruct Pair [A B]`) so the mechanism is
+     validated independently of `Result`.
+   - Add a negative fixture: `(definstance Functor [(Result _ _)] ...)`
+     must error (multiple holes) with the message produced in T4a-1.
+
+   **T4d -- close the report.** Move
+   `docs/reported/result-param-order-blocks-functor-monad.md` to
+   `docs/reported/resolved/` (or whatever the project convention is at
+   the time) and add a one-paragraph postscript pointing at the T4
+   commit and fixture.
 
 ## Out of scope
 
 - **Refactoring the underlying parser / logic engine internals.**
 - **Adding new typeclass hierarchies** (Comonad-Free, Profunctor,
   etc.); this is purely consolidation of what stdlib already inlines.
+- **Flipping `Result`'s parameter order** to `[B=err A=ok]` to mirror
+  `Either` (the report's Fix #2). Rejected: `Result` is auto-preloaded
+  and used pervasively; the churn to `ok-val` / `err-val` / every
+  consumer would dwarf the elaborator change in T4 and provides no
+  generalization beyond `Result`.
+- **Multi-hole instance heads** (e.g. `(Triple _ B _)` for some
+  `(* -> * -> * -> *)` constructor). T4 admits exactly one hole; richer
+  abstraction would need a small kind-level lambda and is its own plan.
 
 ## Risks
 
@@ -109,9 +200,10 @@ open-coding in `httpd` / `csv` / `json` becomes `fmap` / `bimap` /
 ## Acceptance
 
 - [x] `Bifunctor` instance exists for `Result`; `Functor`/`Applicative`/`Monad`/
-  `Alternative` for `Option`. `MonadError [Result]` deferred -- inexpressible
-  given Result's `[A=ok B=err]` order (tracked in
-  `docs/reported/result-param-order-blocks-functor-monad.md`).
+  `Alternative` for `Option`. (Ok-biased `Functor`/`Monad`/`MonadError [Result]`
+  intentionally deferred to T4, which adds the trailing-parameter instance-head
+  mechanism that makes them expressible without flipping `Result`'s layout --
+  tracked in `docs/reported/result-param-order-blocks-functor-monad.md`.)
 - [x] `Functor`/`Applicative`/`Monad`/`Alternative` instances exist for
   `Parser`, `Backtrack`, and logic `Goal`.
 - [x] The bespoke monad combinators are retained as the internal int-carrier
@@ -123,6 +215,16 @@ open-coding in `httpd` / `csv` / `json` becomes `fmap` / `bimap` /
 - [x] `bash tests/run.sh` passes with zero `FAIL` lines.
 - [x] `tur run docs` regenerated (`stdlib/docstrings.tur`,
   `web/public/doc-names.json`).
+- [ ] **T4** -- Instance-head syntax admits a single hole at any position
+  (`(Result _ B)`), validated by a fixture on a non-`Result` constructor and
+  a negative fixture rejecting multi-hole heads.
+- [ ] **T4** -- `Functor`/`Applicative`/`Monad`/`MonadError [Result]` ok-biased
+  instances exist in `stdlib/result.tur` and are exercised by a fixture
+  including the report's two-line proof case.
+- [ ] **T4** -- The report
+  `docs/reported/result-param-order-blocks-functor-monad.md` is marked
+  resolved (or moved per the prevailing convention) with a pointer to the
+  T4 commit and fixture.
 
 ## Cross-references
 
