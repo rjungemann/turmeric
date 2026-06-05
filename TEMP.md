@@ -6,7 +6,7 @@
 - [+] docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md -- mostly delivered (2026-06-05), but follow-ups
 (arrow-class.tur merge-back, snapshot refresh) still open
 - [+] docs/upcoming/stdlib-arrow-scaleback-plan.md -- superseded but the bare-combinator surface it locks in is what
-- [ ] docs/upcoming/category-arrowzero-implementation-plan.md
+- [-] docs/upcoming/category-arrowzero-implementation-plan.md -- resolved-by-audit (2026-06-05, T0 outcome (c)): tur-signal Tier 1 calls neither ident nor zeroArrow, so no Category/ArrowZero [(->)] surface ships. Sequel-ready if a real consumer appears. See docs/reported/category-arrowzero-resolved-by-audit.md
 
 ### Hard prerequisites from still-in-flight-plan.md (these are tur-signal's own gating list)
 
@@ -68,7 +68,7 @@ in stdlib/arrow.tur)
 ## One ambiguous case worth calling out
 
 - [+] function-arrow-as-typeclass-head report -- but it's narrower than the typeclass reintroduction itself. If
-- [ ] Category.ident / ArrowZero.zeroArrow aren't on tur-signal's actual call surface, you could defer it. Worth checking the signal plan's combinator list before committing time.
+- [-] Category.ident / ArrowZero.zeroArrow aren't on tur-signal's actual call surface, you could defer it. Worth checking the signal plan's combinator list before committing time. -- CHECKED (2026-06-05): confirmed not on the Tier 1 surface; deferred as a sequel. See docs/reported/category-arrowzero-resolved-by-audit.md
 
 
 Phase 0c note: the SF-composition path (voice / voice-sf / poly-synth) uses

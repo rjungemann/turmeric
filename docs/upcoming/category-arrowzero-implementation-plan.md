@@ -245,3 +245,71 @@ resolve via dispatch.
   `tests/fixtures/arrow-instance-basic` snapshot-stable.
 - `bash tests/run.sh 2>&1 | grep "^FAIL"` empty.
 - `docs/guides/arrows-guide.md` and `stdlib/docstrings.tur` regenerated.
+
+## Audit (T0) -- 2026-06-05: resolved-by-audit, outcome (c)
+
+T0 is the load-bearing gate: no instance shape is locked in until the audit
+decides whether tur-signal actually exercises `ident` and/or `zeroArrow`. The
+audit was run on 2026-06-05. **Outcome: (c) -- tur-signal calls neither.** This
+plan therefore collapses to a no-op for stdlib; `Category`/`ArrowZero [(->)]`
+do **not** ship. No `definstance`/`defclass` was added to `stdlib/arrow.tur`.
+
+### Sources consulted
+
+- **`docs/upcoming/tur-signal-rebuild-plan.md`** -- the authoritative v1 scope
+  for tur-signal. Its Tier 1 surface table (lines 327-356, "the rebuild ships
+  when this works") is the contract for what the spice's combinator surface
+  must support.
+- **`stdlib/arrow.tur`** -- current instance/method surface.
+- **`stdlib/`** (grep) -- for the `Default` typeclass D3a depends on.
+
+> Caveat: the sibling `../turmeric-spices/tur-signal/` checkout is **absent**
+> in this container (it is `requires.spices`-gated), so the source-level grep
+> called for in T0 could not be run directly. The cross-check was made against
+> the rebuild plan's Tier 1 table, which is the design of record for what
+> tur-signal v1 ships and is sufficient to settle the gate. If the source ever
+> diverges from that table to introduce a polymorphic `ident`/`zeroArrow` call,
+> reopen this plan.
+
+### Findings
+
+1. **Composition is `compose-float`, not the typeclass.** tur-signal's only
+   composition combinator, `effects-chain` (Tier 1, `compose` module), is
+   specified as "composition of `Vec<SF Sample Sample>`" implemented via
+   `stdlib/arrow.tur`'s **`compose-float`** -- the bare `:float -> :float`
+   combinator (rebuild plan lines 141, 172-173, 356). It does not call the
+   `Category`/`Arrow` typeclass method `>>>`/`comp`, so no `ident` neutral
+   element is threaded through dispatch.
+
+2. **The "identity" arrows it needs are concrete, not polymorphic.** Tier 1
+   identity-shaped symbols (`time-signal`, `invert`, etc.) are concrete
+   `:float -> :float` functions -- a literal `(fn [x : float] : float x)` --
+   not the polymorphic `Category.ident :: arr a a`. An empty-`Vec`
+   `effects-chain` seed, if needed, is likewise a concrete float identity, not
+   `(ident)`.
+
+3. **No `zeroArrow` consumer.** Nothing in the Tier 1 table (oscillators,
+   filters, shapers, envelope, compose) produces or requires a zero/empty
+   arrow. `ArrowZero` has no call site.
+
+4. **D3a was unbuildable anyway.** D3a's `(definstance (ArrowZero [(->)])
+   (where [Default b]) ...)` depends on a `Default` typeclass / `default-of`
+   method. Grepping `stdlib/` finds **no `Default` class and no `default-of`**.
+   So even had the audit gone the other way, T4 would have hit the
+   "Default-constrained instance unsupported" risk immediately and fallen back
+   to a sequel plan.
+
+### Decision
+
+Per T0(c): close this plan as **resolved-by-audit**. Do not ship typeclass
+surface area tur-signal does not exercise. The bare-combinator surface
+(`compose-float`, the `arr`/`>>>` Arrow instance, the concrete identity
+functions) is all v1 needs. `Category` and a `(->)` `ArrowZero` remain
+**available as a sequel** if and when a real consumer (a Kleisli/SF arrow, or a
+tur-signal Tier 2 combinator) calls `ident`/`zeroArrow` through dispatch -- the
+PR #261 mechanism that unblocks them is in place and proven by
+`tests/fixtures/arrow-instance-nullary`, so the sequel is cheap to pick up.
+
+A one-line record of this decision is filed at
+`docs/reported/category-arrowzero-resolved-by-audit.md`, and the TEMP.md
+entries are reverted to closed.
