@@ -264,6 +264,10 @@ void indent_buf(Buf *b, int n);
 bool expr_is_divergent(const Expr *e);
 bool expr_contains_return_or_throw(const Expr *e);
 bool expr_tail_diverges(const Expr *e);
+/* Fat-closure-env scoped-free escape analysis: true if `b` (holding a fat
+ * closure value) is used as a value rather than only as a direct-call callee
+ * within `e`.  See emit_core.c. */
+bool closure_binding_escapes(const Expr *e, const Binding *b);
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);

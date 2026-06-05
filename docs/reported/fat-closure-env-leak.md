@@ -1,5 +1,8 @@
 # Fat-closure env is never freed (leaks once per construction)
 
+**Status:** RESOLVED (scoped-free escape analysis). See the Resolution section
+below.
+
 **One-line summary:** Every `(fn ...)` that captures a free variable
 heap-allocates a fat-closure env struct that is never `free`d, so closures
 constructed in a loop or a repeatedly-invoked effect handler leak unboundedly.
@@ -117,3 +120,53 @@ Found while executing Phase A4 (effect-handler closure capture) of
 (threading captured outer vars through the handler env) is sound and ASan-clean
 for value/struct/nested captures; this leak is the orthogonal, pre-existing
 fat-closure-env lifetime gap that the same ASan sweep surfaced.
+
+## Resolution
+
+Implemented direction (1): **escape analysis + scoped free**, in the codegen
+emitter.
+
+- `closure_binding_escapes` (`src/compiler/emit_core.c`) is a sound, conservative
+  walk of a let body: it returns true the moment the bound closure value is used
+  as anything other than the callee of a direct call `(b ...)` -- passed as an
+  argument, stored, returned, borrowed, or captured by a nested closure (detected
+  via that closure's precomputed capture set). Any unmodeled Expr kind, and any
+  `perform` (a continuation-capture point that a multi-shot handler could replay
+  over the free), conservatively reports an escape. The analysis only ever
+  greenlights a free, so a false negative preserves the status-quo leak; it never
+  frees a still-live env.
+- `emit_let_value` (`src/compiler/emit_expr.c`) consults it via
+  `let_binding_env_freeable`: a let binding whose initializer is an `EX_CLOSURE`,
+  whose result is a scalar (so the return value can never alias the env), and
+  which provably does not escape the body or any sibling initializer, gets a
+  `free((void *)(intptr_t)<name>)` emitted at scope exit, after the body (its last
+  use). Only the clean, non-`return`/`throw` paths emit the free (an early return
+  would skip it -- a leak, not a UAF).
+
+This frees the env at the end of its defining scope for the common non-escaping
+case (loop bodies, repeatedly-invoked handler bodies) while leaving genuinely
+escaping closures (returned, stored, passed to a retaining call) untouched.
+
+### Validation
+
+- The minimal repro above reports `0 byte(s) leaked` under
+  `ASAN_OPTIONS=detect_leaks=1` and still prints `202`.
+- `tests/fixtures/closure-env-no-leak/` builds a capturing closure both in a
+  1000-iteration loop and in a twice-invoked effect handler; the dedicated ctest
+  target `tur_closure_env_leak` (`tests/run-closure-env-leak.sh`) compiles the
+  emitted C with `-fsanitize=address,undefined` + `detect_leaks=1` and asserts a
+  leak-clean, correct run. The fixture carries `requires.dedicated-runner` so the
+  non-sanitized `tests/run.sh` PASS-skips it.
+- Escaping closures are confirmed *not* freed early (returned closure, closure
+  passed as an argument): both emit zero scoped frees.
+- Full suite green (`summary: 1458 passed, 0 failed`); the two snapshots that
+  legitimately gained a scoped free (`define-in-fn`, `letrec-shadows-outer`) were
+  regenerated and ASan-verified.
+
+### Known conservative limits (safe, leave as status quo)
+
+- Only scalar-returning, let-bound closures are freed. Closures returning
+  structs/strings/pointers, or bound by other forms (e.g. internal `define`),
+  still leak; broadening to non-reference results is sound future work.
+- A let body containing a `perform` (or any unmodeled control form) disables the
+  free for that scope to stay safe under multi-shot resume.

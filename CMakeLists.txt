@@ -92,6 +92,17 @@ add_test(
   COMMAND bash tests/run-leak-gate.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Fat-closure-env scoped-free gate. Compiles tests/fixtures/closure-env-no-leak
+# (a capturing closure built in a loop and in a repeatedly-invoked effect
+# handler) with ASan/UBSan + LeakSanitizer ON and asserts the emitted program is
+# leak-clean: the scoped-free pass must release each non-escaping closure env at
+# scope exit. The normal suite compiles spawned programs without ASan, so this
+# leak would otherwise slip past. See docs/reported/fat-closure-env-leak.md.
+add_test(
+  NAME tur_closure_env_leak
+  COMMAND bash tests/run-closure-env-leak.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # WKC2: boxed-key ownership gate. Compiles the HAMT runtime + a C unit test
 # with ASan/UBSan (+LSan on Linux) and asserts that a wide-keyed map
 # build+drop is leak-clean and double-free/use-after-free clean: a boxed key

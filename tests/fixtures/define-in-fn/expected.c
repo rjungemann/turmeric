@@ -4419,6 +4419,7 @@ static int64_t make_adder(int64_t base) {
             int64_t f_885 = (int64_t)(intptr_t)(__t28);
             (void)f_885;
             __t26 = __fn_880((void *)(intptr_t)(f_885), INT64_C(5));
+            free((void *)(intptr_t)f_885);
         }
         return __t26;
 }
