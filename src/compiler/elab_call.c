@@ -15,6 +15,34 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr);
  * churn in the body of this file. */
 typedef AbiTypeBinding CallTypeBinding;
 
+/* Discoverability aid (one-off-script-print-and-annotation-ergonomics, Finding
+ * 2): the named scalar print/convert helpers are *not* auto-loaded. A user
+ * probing "how do I print/convert a float" reaches for these by analogy and
+ * hits a bare "unknown function or operator", with no pointer to where they
+ * live or how to pull them in. Map the well-known helpers to their stdlib file
+ * so the diagnostic can suggest the exact `(load ...)` line.
+ *
+ * NB: these files (stdlib/math.tur, stdlib/bits.tur) are bare definition files,
+ * not `defmodule`s with `(export ...)`, so `(import math :refer [float->int])`
+ * does *not* work -- the only mechanism is `(load "stdlib/<file>")`. The hint
+ * deliberately suggests `load`, not a broken import. Curated on purpose: every
+ * entry names a genuine helper (verified by the load-hint fixtures), so the
+ * hint never points at a nonexistent symbol or file. Helpers a user might
+ * *expect* but that do not exist (println-int, float->cstr) are deliberately
+ * absent -- those stay a plain "unknown". */
+static const char *stdlib_load_hint_file(const Symbol *name) {
+    static const struct { const char *name; const char *file; } table[] = {
+        { "float->int",   "stdlib/math.tur" },
+        { "int->float",   "stdlib/math.tur" },
+        { "printf-float6", "stdlib/math.tur" },
+        { "println-float", "stdlib/bits.tur" },
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        if (strcmp(name->name, table[i].name) == 0) return table[i].file;
+    }
+    return NULL;
+}
+
 /* TY2.2: Coerce a value expression to the `any` top type by wrapping it in an
  * EX_UNION_INJECT carrying the value's TypeKind as the runtime tag.  Used at
  * every widening site (call args, return position, branch unification) so a
@@ -1454,8 +1482,24 @@ Expr *elab_call(Elab *e, Form *call) {
              * runtime-dispatch fallback below is reserved for interpret mode
              * (eval / --interpret / repl / worker), where TuriEnv natives are
              * resolved at runtime. */
-            diag_emit(DIAG_ERROR, head->span,
-                      "unknown function or operator '%s'", name->name);
+            const char *hint_file = stdlib_load_hint_file(name);
+            if (hint_file) {
+                char err_msg[128];
+                char hint_text[160];
+                char hint_repl[160];
+                snprintf(err_msg, sizeof(err_msg),
+                         "unknown function or operator '%s'", name->name);
+                snprintf(hint_text, sizeof(hint_text),
+                         "'%s' lives in %s and is not auto-loaded",
+                         name->name, hint_file);
+                snprintf(hint_repl, sizeof(hint_repl),
+                         "(load \"%s\")", hint_file);
+                DiagSuggestion sug = { hint_text, hint_repl, NULL };
+                diag_emit_with_suggestion(DIAG_ERROR, head->span, err_msg, &sug);
+            } else {
+                diag_emit(DIAG_ERROR, head->span,
+                          "unknown function or operator '%s'", name->name);
+            }
         } else {
             /* eval mode: create a runtime-dispatch call so native builtins
              * registered in TuriEnv (e.g. async scheduler functions) are

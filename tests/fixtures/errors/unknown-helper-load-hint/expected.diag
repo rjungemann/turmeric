@@ -1,0 +1,3 @@
+unknown function or operator 'float->int'
+'float->int' lives in stdlib/math.tur and is not auto-loaded
+(load "stdlib/math.tur")

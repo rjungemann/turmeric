@@ -27,9 +27,28 @@ freestanding probe.
   `src/compiler/elab_fns.c` (the "misplaced effect annotation" check after
   return-type parsing) and the regression fixture
   `tests/fixtures/errors/effect-annotation-after-return-type/`.
-- **Findings 2 & 3 -- open.** Auto-loading / off-tree resolution of the named
-  print/convert helpers (`float->int`, `println-float`, ...) are discoverability
-  and module-resolution enhancements, not defects, and remain to be scheduled.
+- **Finding 2 -- PARTIALLY ADDRESSED + premise corrected.** The unknown-call
+  diagnostic now suggests the exact `(load ...)` line for the well-known scalar
+  print/convert helpers (`float->int`, `int->float`, `printf-float6`,
+  `println-float`): e.g. for `float->int` it adds *"'float->int' lives in
+  stdlib/math.tur and is not auto-loaded; try: (load "stdlib/math.tur")"*. See
+  `stdlib_load_hint_file` in `src/compiler/elab_call.c` and the fixtures
+  `tests/fixtures/errors/unknown-helper-load-hint/` (the hint) +
+  `tests/fixtures/stdlib-float-convert-load/` (the suggested `load` works).
+
+  **Correction to this report's premise:** Finding 2 originally framed these as
+  needing an `(import ...)` line. That is wrong -- `stdlib/math.tur` and
+  `stdlib/bits.tur` are bare definition files, *not* `defmodule`s with
+  `(export ...)`, so `(import math :refer [float->int])` fails with "symbol
+  'float->int' is not exported from module 'math'". The only working mechanism
+  for these helpers in a freestanding script is `(load "stdlib/<file>")`, which
+  is what the hint now suggests. (Whether math/bits *should* be promoted to
+  exporting `defmodule`s is a separate design question, not pursued here.)
+
+- **Finding 3 -- open.** Off-tree resolution (a `/tmp/foo.tur` that
+  `(load ...)`s or imports stdlib without being run from the repo root, or
+  resolving against an installed stdlib via `TUR_STDLIB_DIR`) is a
+  module-resolution enhancement, not a defect, and remains to be scheduled.
 
 ## Finding 1 -- misleading diagnostic for a misplaced effect annotation
 
