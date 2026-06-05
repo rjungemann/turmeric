@@ -83,6 +83,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ### Core Language
 
 - **[structs-guide.md](structs-guide.md)** -- Struct types: `defstruct`, field access, ownership kinds, typeclasses, RC, linear fields
+- **[opaques-guide.md](opaques-guide.md)** -- Opaque newtypes: `defopaque`, nominal handles, `(::)` cast, `:linear` / `:affine` resource discipline
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
 - **[cli-args-guide.md](cli-args-guide.md)** -- CLI argument passing via `*args*` and structured parsing with `stdlib/args.tur`
