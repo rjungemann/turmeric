@@ -6,6 +6,39 @@ description: Reintroduce the `Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `
 
 # `stdlib/arrow` Typeclass Reintroduction -- Plan
 
+## T1 prerequisite-readiness status (2026-06-05) -- BLOCKED, plan does not start
+
+Ran the Task 1 readiness check against `tur 0.18.0` at repo HEAD `24ad0e7`.
+
+The three *listed* hard gates all PASS:
+
+- **Sum types / `Either`** -- `stdlib/either.tur` (`d993ba3`) declares
+  `(defdata Either :copy [L R] (Left L) (Right R))` with `match`
+  destructuring; `Functor [(Either E)]` instance present and proven by
+  `tests/fixtures/sum-either-functor-instance` (`d993ba3`). `emit-c` clean.
+- **Closure-returning instance-method codegen** -- proven by
+  `tests/fixtures/instance-closure-return-capture-int` and siblings
+  (`6464084`); `expected.c` dict fields are `int64_t`, no `void *` regression.
+- **Operator-name mangling** -- `>>>` and `<<<` coexist in
+  `tests/fixtures/operator-mangle-pair` (`a25fe53`) and the existing
+  `stdlib-arrow`/`arrow-capturing-closure` fixtures; `emit-c` clean.
+
+A **fourth, unlisted gate FAILS**, blocking the plan's central deliverable:
+the function arrow `(->)` cannot be used as a typeclass instance head.
+`(definstance Arrow [(->)] ...)` is rejected (`unsupported type argument in
+definstance`); the opaque-name workarounds `[->]`/`[Fn]` compile but type the
+method parameters as an opaque struct, so a method body that composes/applies
+them fails with `'g' is not a function or continuation`. There is no language
+path that makes `Arrow [(->)]` methods carry callable arrow parameters.
+
+Per this plan's own T1 rule ("If any gate fails, **stop** -- this plan does not
+start") and its "If a prerequisite cannot be restored, revert this plan and
+stay scaled back" clause, **the plan is halted**. `stdlib/arrow.tur` is left
+untouched (bare-function layer only). The gap is filed at
+[docs/reported/function-arrow-not-instantiable-as-typeclass-head.md](../reported/function-arrow-not-instantiable-as-typeclass-head.md);
+that report is the missing fourth hard gate and a prerequisite this plan now
+depends on. Resume only once a function-arrow instance head lands.
+
 ## Why
 
 [[stdlib-arrow-scaleback-plan]] removed the disabled `defclass` declarations
