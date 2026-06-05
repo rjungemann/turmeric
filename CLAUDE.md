@@ -21,6 +21,16 @@ the test to dodge the breakage. If you fix the bug in the same session,
 the report can become the commit/PR description instead; otherwise it
 stays in `docs/reported/` so it is never forgotten.
 
+## Testing Float Behavior -- STRICT RULE
+
+When investigating anything involving floats (type coercion, arithmetic,
+truncation, printing, codegen), **always pick a literal with a non-zero
+fractional part** as your first probe -- e.g. `7.1`, `3.25`, not `7.0` and
+never the integer `7`. An integer literal cannot show truncation, rounding,
+or int/float divergence, so starting with `7` produces a misleading "looks
+fine" result and forces a second round with `7.1` to actually see the bug.
+Skip the double-take: lead with `7.1`.
+
 ## Locating Referenced Files -- STRICT RULE
 
 When asked to act on a doc, plan, or file by path, **look before concluding it

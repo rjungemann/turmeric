@@ -19,8 +19,8 @@ in stdlib/arrow.tur)
 
 ### Closure / fn-first-class work feeding G1+G7
 
-- [-] bare-fat-result-type-inference-plan.md -- unblocks :float-returning fat closures (G1)
-- [-] fn-type-first-class-application-plan.md -- one predictable rule for callable :fn, needed for typed >>>
+- [+] bare-fat-result-type-inference-plan.md -- unblocks :float-returning fat closures (G1)
+- [+] fn-type-first-class-application-plan.md -- one predictable rule for callable :fn, needed for typed >>>
 - [ ] fn-first-class-stdlib-deworkaround-plan.md -- validates the above end-to-end
 - [ ] return-type-dispatch-nullary-arrow-methods-plan.md -- required for Category.ident / ArrowZero.zeroArrow to resolve
 
