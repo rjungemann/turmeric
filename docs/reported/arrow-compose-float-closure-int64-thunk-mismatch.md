@@ -6,11 +6,19 @@ description: The untyped `>>>` combinator in stdlib/arrow.tur emits an int64-onl
 
 # `>>>` dispatches float closures through int64 thunk pointers
 
-> **Status:** OPEN. Surfaced while evaluating "generalize `>>>` now" (the G7
-> amber edge of `language-readiness-for-typed-signal-plan`). The current
-> `tests/fixtures/sf-compose-typed/` deliberately avoids stdlib `>>>` and uses a
-> local monomorphic `compose-f` for exactly this reason; this report pins down
-> *why* `>>>` cannot be swapped in.
+> **Status:** MITIGATED (fix direction A landed); `>>>` itself still affected
+> (direction B tracked separately). Surfaced while evaluating "generalize `>>>`
+> now" (the G7 amber edge of `language-readiness-for-typed-signal-plan`). The
+> `tests/fixtures/sf-compose-typed/` fixture deliberately avoids stdlib `>>>`
+> and uses a local monomorphic `compose-f` for exactly this reason; this report
+> pins down *why* `>>>` cannot be swapped in.
+>
+> **Direction A shipped:** `stdlib/arrow.tur` now exports `compose-float`, a
+> register-class-correct `:float -> :float` sequential-composition combinator
+> (fixture `tests/fixtures/arrow-compose-float/`). Use it for float pipelines.
+> Generalizing `>>>` *itself* (direction B) needs the compiler change tracked
+> in `docs/upcoming/poly-closure-result-specialization-plan.md`; until that
+> lands, `>>>` must not be applied to `:float`-returning closures.
 > **Severity:** latent silent miscompile (UB function-pointer call). Produces
 > correct output today for pure-`:float` chains by register-class luck; not
 > guaranteed under optimization, a different ABI, or mixed int/float chains.

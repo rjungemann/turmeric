@@ -26,6 +26,14 @@ Verified feasibility verdict: **MEDIUM-LARGE**. Elaboration + E0705 changes are
 small and local; the emit-side inner-body cloning is genuinely new machinery
 and the risk center.
 
+> **Interim shipped (2026-06-05):** `stdlib/arrow.tur` now exports
+> `compose-float`, a register-class-correct `:float -> :float` composition
+> combinator (fixture `tests/fixtures/arrow-compose-float/`), so float
+> pipelines (signal SFs) are unblocked today without the compiler change. This
+> plan generalizes the `>>>` *operator itself*; Stage E would let
+> `compose-float` callers move back to `>>>` and the combinator could then be
+> retired or kept as an alias.
+
 ## Confirmed root-cause map (file:line)
 
 ### Elaboration -- why the polymorphic typed spelling fails to type-check

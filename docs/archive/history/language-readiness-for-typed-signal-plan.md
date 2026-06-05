@@ -19,7 +19,7 @@ typed signal rebuild. Summary:
 | G4 typed `Pair` through closures | green | build `Pair` inside the closure body; read via `pair-fst`/`pair-snd` |
 | G5 typed state cells | green | `:ptr<:float>` state, inline-C body uses `double *` directly |
 | G6 `Vec[Closure]` reads | green | `(vec-get v i)` + `:ptr<void>` ascription into a `^fat` sink |
-| G7 typed `>>>` | green (amber edge) | use a **local** typed-compose over `(fn [:float] :float)`; the stdlib `>>>` stays int-default until [stdlib-arrow-scaleback-plan](../../upcoming/stdlib-arrow-scaleback-plan.md) generalises it |
+| G7 typed `>>>` | green (amber edge) | use `stdlib/arrow.tur`'s `compose-float` (register-class-correct `:float -> :float` compose) or a local typed-compose; the operator `>>>` itself stays int-class until [poly-closure-result-specialization-plan](../../upcoming/poly-closure-result-specialization-plan.md) generalises it |
 | G8 integration smoke | green | the typed two-osc + filter chain compiles, runs leak-clean |
 
 **G2 decision:** amber, not red. The original silent miscompile is
@@ -35,11 +35,17 @@ polymorphic `constant` over a float-class `A`. Making the float case
 *work* polymorphically (fix directions 1/2 in the report) is end-state
 work, not a blocker for the rebuild.
 
-**G7 decision:** commit to a local typed-compose in the signal rebuild.
-Generalising `stdlib/arrow.tur`'s `>>>` to a typed `^fat` result is
-owned by [stdlib-arrow-scaleback-plan](../../upcoming/stdlib-arrow-scaleback-plan.md)
-(which keeps `>>>` as a bare-function combinator); the rebuild does not
-wait on it.
+**G7 decision:** the signal rebuild composes `:float` SFs with
+`stdlib/arrow.tur`'s `compose-float` (a register-class-correct
+`:float -> :float` sequential-composition combinator, fixture
+`tests/fixtures/arrow-compose-float/`) or a local typed-compose. The
+operator `>>>` itself stays int-register-class: generalising it to all
+register classes needs the per-monomorphization inner-closure
+specialization tracked in
+[poly-closure-result-specialization-plan](../../upcoming/poly-closure-result-specialization-plan.md);
+[stdlib-arrow-scaleback-plan](../../upcoming/stdlib-arrow-scaleback-plan.md)
+keeps `>>>` a bare-function combinator in the meantime. The rebuild does
+not wait on either.
 
 **Handoff:** [tur-signal-rebuild-plan](../../upcoming/tur-signal-rebuild-plan.md)
 (hard prerequisites G1/G7 green, G3 amber-ok, G4 green, G2/G5/G6
