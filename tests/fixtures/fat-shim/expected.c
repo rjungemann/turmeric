@@ -2511,19 +2511,23 @@ static bool __fn_664(int64_t, int64_t);
 static bool __fn_668(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Result(int64_t, int64_t);
 static int64_t __inst_Bifunctor_bimap_Result(int64_t, int64_t, int64_t);
-static bool __fn_691(int64_t, int64_t);
-static bool __fn_695(int64_t, int64_t);
+static int64_t __inst_Functor_fmap_Result__struct_(int64_t, tur_poly_fn_t);
+static int64_t __inst_Monad_bind_Result__struct_(int64_t, tur_poly_fn_t);
+static int64_t __inst_MonadError_throw_error_Result__struct_(int64_t);
+static int64_t __inst_MonadError_catch_error_Result__struct_(int64_t, tur_poly_fn_t);
+static bool __fn_702(int64_t, int64_t);
+static bool __fn_706(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
-static bool __fn_776(int64_t, int64_t);
-static bool __fn_780(int64_t, int64_t);
+static bool __fn_787(int64_t, int64_t);
+static bool __fn_791(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
-static bool __fn_798(int64_t, int64_t);
+static bool __fn_809(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_877(int64_t, int64_t);
+static bool __fn_888(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
-static int64_t __fn_885(int64_t);
-static int64_t __fn_890(int64_t, int64_t);
+static int64_t __fn_896(int64_t);
+static int64_t __fn_901(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -3198,22 +3202,74 @@ static dict_Bifunctor_Result dict_Bifunctor_Result_singleton = {
     .bimap = __inst_Bifunctor_bimap_Result,
 };
 
-static bool __fn_691(int64_t a, int64_t b) {
+static int64_t __inst_Functor_fmap_Result__struct_(int64_t container, tur_poly_fn_t fn) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
+    if (!r) return 0;
+    if (r->is_ok) return tur_ok(fn.fn(fn.env, r->ok_val));
+    return tur_err(r->err_val);
+    
+}
+
+typedef struct dict_Functor_Result__struct_ {
+    int64_t (*fmap)(int64_t, tur_poly_fn_t);
+} dict_Functor_Result__struct_;
+
+static dict_Functor_Result__struct_ dict_Functor_Result__struct__singleton = {
+    .fmap = __inst_Functor_fmap_Result__struct_,
+};
+
+static int64_t __inst_Monad_bind_Result__struct_(int64_t ma, tur_poly_fn_t fn) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+    if (!r || !r->is_ok) return ma;
+    return fn.fn(fn.env, r->ok_val);
+    
+}
+
+typedef struct dict_Monad_Result__struct_ {
+    int64_t (*bind)(int64_t, tur_poly_fn_t);
+} dict_Monad_Result__struct_;
+
+static dict_Monad_Result__struct_ dict_Monad_Result__struct__singleton = {
+    .bind = __inst_Monad_bind_Result__struct_,
+};
+
+static int64_t __inst_MonadError_throw_error_Result__struct_(int64_t err) {
+        return tur_err(err); 
+}
+
+static int64_t __inst_MonadError_catch_error_Result__struct_(int64_t ma, tur_poly_fn_t handler) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+    if (!r || r->is_ok) return ma;
+    return handler.fn(handler.env, r->err_val);
+    
+}
+
+typedef struct dict_MonadError_Result__struct_ {
+    int64_t (*throw_error)(int64_t);
+    int64_t (*catch_error)(int64_t, tur_poly_fn_t);
+} dict_MonadError_Result__struct_;
+
+static dict_MonadError_Result__struct_ dict_MonadError_Result__struct__singleton = {
+    .throw_error = __inst_MonadError_throw_error_Result__struct_,
+    .catch_error = __inst_MonadError_catch_error_Result__struct_,
+};
+
+static bool __fn_702(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_695(int64_t a, int64_t b) {
+static bool __fn_706(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Pair(int64_t x, int64_t y) {
         int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t12[1] = (int64_t)(intptr_t)__fn_691;
+        __t12[1] = (int64_t)(intptr_t)__fn_702;
         void *__t13 = __t12;
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_695;
+        __t14[1] = (int64_t)(intptr_t)__fn_706;
         void *__t15 = __t14;
         return pair_eq_carrier_qu(x, y, (void *)(intptr_t)(__t13), (void *)(intptr_t)(__t15));
 }
@@ -3226,16 +3282,16 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Pair,
 };
 
-static bool __fn_776(int64_t a, int64_t b) {
+static bool __fn_787(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_780(int64_t a, int64_t b) {
+static bool __fn_791(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Tuple2(int64_t x, int64_t y) {
-        return tuple2_eq_carrier_qu(x, y, (int64_t)(intptr_t)(__fn_776), (int64_t)(intptr_t)(__fn_780));
+        return tuple2_eq_carrier_qu(x, y, (int64_t)(intptr_t)(__fn_787), (int64_t)(intptr_t)(__fn_791));
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -3246,14 +3302,14 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
-static bool __fn_798(int64_t a, int64_t b) {
+static bool __fn_809(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         int64_t *__t16 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t16[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t16[1] = (int64_t)(intptr_t)__fn_798;
+        __t16[1] = (int64_t)(intptr_t)__fn_809;
         void *__t17 = __t16;
         return list_eq_qu(x, y, (int64_t)(intptr_t)(__t17));
 }
@@ -3278,14 +3334,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_877(int64_t a, int64_t b) {
+static bool __fn_888(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t18 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t18[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t18[1] = (int64_t)(intptr_t)__fn_877;
+        __t18[1] = (int64_t)(intptr_t)__fn_888;
         void *__t19 = __t18;
         return mutmap_eq_qu(x, y, (void *)(intptr_t)(__t19));
 }
@@ -3298,11 +3354,11 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_qu = __inst_Eq_eq_qu_MutableMap,
 };
 
-static int64_t __fn_885(int64_t v) {
+static int64_t __fn_896(int64_t v) {
         return (v) * (INT64_C(10));
 }
 
-static int64_t __fn_890(int64_t a, int64_t b) {
+static int64_t __fn_901(int64_t a, int64_t b) {
         return (a) + (b);
 }
 
@@ -4425,7 +4481,7 @@ static int64_t apply2(int64_t cb, int64_t x, int64_t y) {
 
 static int64_t __effect_handler_26(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_26(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_887 = __k;
+    int64_t k_898 = __k;
     return 0;
 }
 
@@ -4433,7 +4489,7 @@ static void __handle_body_25(void);
 static void __handle_body_25(void) {
     int64_t *__t27 = (int64_t *)malloc(2 * sizeof(int64_t));
     __t27[0] = (int64_t)(intptr_t)__tur_fatshim1;
-    __t27[1] = (int64_t)(intptr_t)__fn_885;
+    __t27[1] = (int64_t)(intptr_t)__fn_896;
     void *__t28 = __t27;
     printf("%lld\n", (long long)(apply1((int64_t)(intptr_t)(__t28), INT64_C(5))));
     tur_current_fiber->result = 0;
@@ -4470,7 +4526,7 @@ static int64_t __dispatch_25(void *__ctx_void, int64_t __k_int, int64_t __resume
 
 static int64_t __effect_handler_31(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_31(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_892 = __k;
+    int64_t k_903 = __k;
     return 0;
 }
 
@@ -4478,7 +4534,7 @@ static void __handle_body_30(void);
 static void __handle_body_30(void) {
     int64_t *__t32 = (int64_t *)malloc(2 * sizeof(int64_t));
     __t32[0] = (int64_t)(intptr_t)__tur_fatshim2;
-    __t32[1] = (int64_t)(intptr_t)__fn_890;
+    __t32[1] = (int64_t)(intptr_t)__fn_901;
     void *__t33 = __t32;
     printf("%lld\n", (long long)(apply2((int64_t)(intptr_t)(__t33), INT64_C(20), INT64_C(22))));
     tur_current_fiber->result = 0;

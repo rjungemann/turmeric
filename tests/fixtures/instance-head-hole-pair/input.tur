@@ -1,0 +1,33 @@
+;; stdlib-hkt-consolidation T4: the trailing-parameter instance-head hole
+;; `(Ctor _ B)` works on any kind-(* -> * -> *) user type, not just Result.
+;; Here a binary `Box` struct gets a right-biased `BoxFunctor` that fixes the
+;; second arm B and maps over the first.  Validates the mechanism independently
+;; of stdlib Result.  See
+;; docs/reported/result-param-order-blocks-functor-monad.md.
+
+(defstruct Box [A B] (a :int) (b :int))
+(defclass BoxFunctor [^f] (boxmap [c [fn :fn]] : int))
+
+;; (Box _ B): fix the second arm, vary the first.
+(definstance BoxFunctor [(Box _ B)]
+  (boxmap [c fn]
+    ```c struct { int64_t a; int64_t b; } *p = (void*)(intptr_t)c;
+         struct { int64_t a; int64_t b; } *out = malloc(16);
+         out->a = fn.fn(fn.env, p->a);
+         out->b = p->b;
+         return (int64_t)(intptr_t)out; ```))
+
+(defn mk-box [a : int b : int] : int
+  ```c struct { int64_t a; int64_t b; } *p = malloc(16);
+       p->a = a; p->b = b; return (int64_t)(intptr_t)p; ```)
+(defn box-a [c : int] : int
+  ```c struct { int64_t a; int64_t b; } *p = (void*)(intptr_t)c; return p->a; ```)
+(defn box-b [c : int] : int
+  ```c struct { int64_t a; int64_t b; } *p = (void*)(intptr_t)c; return p->b; ```)
+(defn inc1 [x : int] : int (+ x 1))
+
+(defn main [] : int
+  (let [r (boxmap (:: (mk-box 41 7) (Box int int)) inc1)]
+    (println (box-a r))    ; 42  (first arm mapped)
+    (println (box-b r)))   ; 7   (second arm held)
+  0)
