@@ -1730,8 +1730,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) {
                         buf_printf(&out, ", %s", arg_strs[i]);
                     }
+                } else if (n > 1) {
+                    /* Generic carrier dispatch, N-ary: the carrier's `fn` field is
+                     * typed unary (int64_t(*)(void*,int64_t)), but it points at an
+                     * N-ary int64 wrapper/thunk.  Calling it with >1 argument
+                     * through the unary prototype is undefined and drops args, so
+                     * recast `fn` to the matching int64 N-ary signature first. */
+                    buf_printf(&out, "((int64_t(*)(void*");
+                    for (uint32_t i = 0; i < n; i++) buf_puts(&out, ", int64_t");
+                    buf_printf(&out, "))%s.fn)(%s.env", fn_name, fn_name);
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", (int64_t)(%s)", arg_strs[i]);
+                    }
                 } else {
-                    /* Generic carrier dispatch: all args cast to int64_t */
+                    /* Generic carrier dispatch, unary: call through the field as-is. */
                     buf_printf(&out, "%s.fn(%s.env", fn_name, fn_name);
                     for (uint32_t i = 0; i < n; i++) {
                         buf_printf(&out, ", (int64_t)(%s)", arg_strs[i]);

@@ -1015,6 +1015,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             /* For F_TYPE_ANN, unwrap to the inner type form first */
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
+            /* Phase CCL (fn-first-class-application): a spaced `: fn` annotation
+             * (the bare `fn` keyword/symbol) is the first-class poly-closure
+             * carrier -- mirror the fused `:fn` keyword handling above. */
+            if ((type_form->tag == F_SYM || type_form->tag == F_KEYWORD) &&
+                type_form->as.sym->len == 2 &&
+                memcmp(type_form->as.sym->name, "fn", 2) == 0) {
+                param_kinds[n_params - 1] = TY_PTR_VOID;
+                params[n_params - 1]->type = TYPE_PTR_VOID;
+                params[n_params - 1]->is_poly_fn = true;
+                params[n_params - 1]->poly_type = NULL;
+                continue;
+            }
             /* Parse as a type expression — supports (forall [a] (-> a a)), (-> a b), etc. */
             Type *ann = fn_type_from_form(e, type_form,
                                           fn_type_params, fn_type_param_kinds, n_fn_type_params);
@@ -1141,6 +1153,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 params[n_params - 1]->type.hkt_kind = fn_type_param_kinds[type_param_idx];
                 param_poly_types[n_params - 1] = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *param_poly_types[n_params - 1] = params[n_params - 1]->type;
+                continue;
+            }
+            /* Phase CCL (fn-first-class-application): a bare `:fn` parameter is a
+             * first-class poly-closure carrier (tur_poly_fn_t {env, fn}), the same
+             * representation typeclass-method `:fn` params use.  Marking it
+             * is_poly_fn (with a NULL poly_type to distinguish it from a rank-2
+             * forall) makes it directly callable -- `(g x)` routes through
+             * elab_poly_call -- and coercible into a `^fat` sink (EX_POLY_TO_FAT)
+             * or constructed from a lambda/closure (EX_POLY_WRAP) at call sites. */
+            if (kw->len == 2 && memcmp(kw->name, "fn", 2) == 0) {
+                param_kinds[n_params - 1] = TY_PTR_VOID;
+                params[n_params - 1]->type = TYPE_PTR_VOID;
+                params[n_params - 1]->is_poly_fn = true;
+                params[n_params - 1]->poly_type = NULL;
                 continue;
             }
             /* CC4 (cps-transform-plan): a flavored continuation parameter --
@@ -2442,6 +2468,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* Phase CCL (fn-first-class-application): propagate the mono `:fn`
+     * poly-closure marker into fn_type so call sites box function/lambda/closure
+     * arguments into the tur_poly_fn_t carrier.  A rank-2 forall param (is_poly_fn
+     * with a non-NULL poly_type) is handled by the arg_full_types path instead. */
+    for (uint8_t i = 0; i < n_params; i++) {
+        if (params[i]->is_poly_fn && params[i]->poly_type == NULL) {
+            fn_type.as.fn.arg_poly_fn[i] = true;
+        }
+    }
     /* A#1 (return position): propagate the ^fat result marker into fn_type so
      * the emitter shims a returned non-capturing fn into a fat closure. */
     fn_type.as.fn.result_fat = result_fat;
@@ -3122,6 +3157,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
             for (uint8_t i = 0; i < n_params; i++) {
                 fn_type.as.fn.arg_fat[i] = params[i]->is_fat;
             }
+        }
+    }
+    /* Phase CCL (fn-first-class-application): propagate mono `:fn` poly-closure
+     * markers into the lambda's fn_type, mirroring the defn path. */
+    for (uint8_t i = 0; i < n_params; i++) {
+        if (params[i]->is_poly_fn && params[i]->poly_type == NULL) {
+            fn_type.as.fn.arg_poly_fn[i] = true;
         }
     }
     /* LB1: propagate ^borrow param flags into the lambda's fn_type. */

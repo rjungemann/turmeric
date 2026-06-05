@@ -1,0 +1,36 @@
+;; fn-first-class-application -- a `:fn` value is a first-class callable.
+;;
+;; Exercises the five probes from the fn-first-class-application plan, all with
+;; the int64 carrier:
+;;   P1 direct application of a `:fn` parameter
+;;   P2 a `:fn` value forwarded into a ^fat sink
+;;   P3 a `:fn` value forwarded to another `:fn` parameter
+;;   P4 a (non-capturing) lambda literal coerced into a `:fn` slot
+;;   P5 a capturing closure coerced into a `:fn` slot
+
+;; P1: call the `:fn` parameter directly.
+(defn applyf [g : fn x : int] : int (g x))
+
+(defn dbl [n : int] : int (* n 2))
+
+;; P2: a `:fn` source coerces into a ^fat sink.
+(defn fat-sink [^fat g x : int] : int (g x))
+(defn via-fat [g : fn x : int] : int (fat-sink g x))
+
+;; P3: forward a `:fn` value to another `:fn` parameter.
+(defn forward [g : fn x : int] : int (applyf g x))
+
+;; Multi-argument `:fn` application round-trips through the N-ary carrier.
+(defn apply2 [g : fn a : int b : int] : int (g a b))
+(defn add [x : int y : int] : int (+ x y))
+
+(defn main [] : int
+  (println (applyf dbl 21))                              ;; P1 -> 42
+  (println (via-fat dbl 21))                             ;; P2 -> 42
+  (println (forward dbl 21))                             ;; P3 -> 42
+  (println (applyf (fn [n : int] : int (* n 3)) 14))     ;; P4 -> 42
+  (let [bias 40]
+    (println (applyf (fn [n : int] : int (+ n bias)) 2))) ;; P5 -> 42
+  (println (apply2 add 40 2))                            ;; N-ary named -> 42
+  (println (apply2 (fn [x : int y : int] : int (+ x y)) 40 2)) ;; N-ary lambda -> 42
+  0)
