@@ -1,5 +1,20 @@
 # `^fat` parameters are emitted as `void *`, warning `-Wint-conversion` in inline-C bodies
 
+> **RESOLVED (2026-06-05).** A `^fat` parameter on an **inline-C-bodied** `defn`
+> is now emitted as `int64_t` -- the canonical carrier ABI -- instead of `void *`,
+> across all four C signature sites (definition, forward prototype, and both
+> `__cps` wrapper sites), and the call site coerces such arguments with
+> `(int64_t)(intptr_t)` rather than the old `(void *)(intptr_t)` up-cast. The
+> minimal repro and the `pair-fn-arg` helper in `arrow-instance-apply` now compile
+> warning-free. The fix is **scoped to inline-C bodies on purpose**: emitting
+> `int64_t` for *every* `^fat` param cascades into the typeclass-dictionary
+> codegen (instance methods would get `int64_t` params while the dict's
+> function-pointer slots stay `void *(*)(void *)`, producing
+> `-Wincompatible-pointer-types`), which is a far broader change than this
+> ergonomics gap warrants. Compiler-generated bodies keep the `void *` fat
+> carrier, so the fat-call dispatch and typeclass machinery are untouched. See
+> **Resolution** at the end.
+
 **One-line summary:** A `defn` parameter declared `^fat` is emitted into the C
 function signature as `void *`, but every other Turmeric value crosses the C
 boundary as `int64_t` -- so an inline-C body that handles the `^fat` parameter
@@ -112,3 +127,50 @@ by-value fn"; a carrier handle's canonical C type is `int64_t`, not `void *`.
 - Worth adding a tiny regression fixture: a `^fat`-param `defn` with an
   inline-C body that stores `f` into an `int64_t` slot, snapshotting the
   warning-free `expected.c`.
+
+## Resolution
+
+Implemented fix direction #1, **scoped to inline-C bodies** (`body_is_inline_c`).
+The broad "every `^fat` param" form was tried first and rejected: it flips the
+arrow typeclass instance methods' params to `int64_t` while the generated
+`dict_Arrow_T` slot types stay `void *(*)(void *)`, raising
+`-Wincompatible-pointer-types` plus a `return f;` int->ptr warning in each
+instance method. Narrowing to inline-C bodies fixes exactly the reported cases
+(hand-written C that treats the carrier as a handle) and leaves the fat-call
+dispatch and typeclass-dictionary machinery -- which both rely on the `void *`
+carrier -- completely untouched.
+
+Changes:
+
+1. **Signature emission (4 sites).** A `^fat` param on a `defn` whose body is
+   `EX_INLINE_C` is emitted as `int64_t`:
+   - direct definition signature (`src/compiler/emit_fns.c`, param loop),
+   - `__cps` wrapper signature (`emit_fns.c`),
+   - forward prototype (`src/compiler/emit_module.c`),
+   - `__cps` wrapper forward prototype (`emit_module.c`).
+
+   All four gate on `is_fat && body-is-inline-C`, so prototype and definition
+   always agree. (Inline-C bodies are never CPS, so the two `__cps` gates are
+   inert in practice; they are kept for parity.)
+2. **Call-site coercion.** When the callee binding `body_is_inline_c` and the
+   target param is `^fat` (`arg_fat[param_idx]`), the argument is coerced with
+   `(int64_t)(intptr_t)` instead of the `(void *)(intptr_t)` up-cast
+   (`src/compiler/emit_expr.c`). Non-inline-C `^fat` callees are unchanged.
+
+Why this is safe for existing inline-C bodies: the canonical fat-apply idiom
+`TUR_APPLY1(f, x)` expands to `(... (void *)(intptr_t)(f) ...)`, i.e. it already
+coerces the carrier through `intptr_t`, so it is agnostic to whether `f` is
+spelled `void *` or `int64_t`. Only bodies that assign the carrier *directly*
+into an `int64_t` (e.g. `pair-fn-arg`'s `p->e1 = f;`) were warning, and those
+are exactly the ones this fix makes clean.
+
+**Validation.**
+- The minimal repro and `tests/fixtures/arrow-instance-apply` (`42 / 42 / 1007`)
+  compile with no `-Wint-conversion` / `-Wincompatible-pointer-types` warning;
+  the prototype, definition, and every call site emit `int64_t` consistently.
+- Codegen snapshots regenerated: 127 `expected.c` files updated (the stdlib
+  prelude carries the affected inline-C `^fat` helpers -- `option-map`,
+  `map-eq-*`, `vec-eq?`, `set-eq-cmp?`, `result-eq?`, `pair-eq-carrier?`, etc.).
+  Every changed line is purely a `void *`<->`int64_t` flip; no other churn.
+- Full suite green: `summary: 1487 passed, 0 failed`, zero `FAIL`, zero codegen
+  mismatch.

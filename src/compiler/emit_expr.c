@@ -2205,6 +2205,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         needs_fn_cast = false;
                     }
                 }
+                /* fat-param-emitted-as-void-ptr-warns-in-inline-c.md: an
+                 * inline-C-bodied callee declares its ^fat param as an int64_t
+                 * carrier (so the C body can treat it as a handle without a
+                 * void*->int64_t warning), so the argument must be coerced to
+                 * int64_t rather than the old void* up-cast.  Only inline-C
+                 * bodies opt into the int64_t spelling; ordinary bodies keep the
+                 * void* fat carrier and the typeclass-dictionary slot types. */
+                if (needs_fn_cast && fn_binding->type.kind == TY_FN &&
+                    fn_binding->body_is_inline_c) {
+                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
+                    if (fn_binding->type.as.fn.arg_fat[param_idx])
+                        cast_to_void_ptr = false;
+                }
                 if (needs_fn_cast) {
                     Buf cast; buf_init(&cast);
                     if (cast_to_void_ptr) {
