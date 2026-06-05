@@ -50,4 +50,12 @@ size_t tur_mangle_bound(size_t src_len);
  * ensure dst has at least *pk + tur_mangle_bound(len) bytes of capacity. */
 void tur_mangle_append(char *dst, size_t *pk, const char *name, size_t len);
 
+/* Mangle a NUL-terminated `name` into the fixed buffer `out` (capacity `cap`,
+ * including the NUL), writing a NUL terminator and truncating safely if the
+ * mangled form would not fit. This is the convenience wrapper the typeclass
+ * dict/instance emitters use so a method's instance-function name, its dict
+ * struct field, and every dispatch site agree on one spelling -- letting sigil
+ * method pairs like `>>>` / `<<<` coexist instead of colliding on `___`. */
+void tur_mangle_ident(const char *name, char *out, size_t cap);
+
 #endif /* TUR_COMPILER_MANGLE_H */

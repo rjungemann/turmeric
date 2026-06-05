@@ -6,6 +6,46 @@ description: Reintroduce the `Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `
 
 # `stdlib/arrow` Typeclass Reintroduction -- Plan
 
+## Delivered (2026-06-05)
+
+The typeclass layer has **landed**. Summary of what shipped and the one
+architectural deviation from the task text:
+
+- **New module `stdlib/arrow-class.tur`** (not an edit to `stdlib/arrow.tur`).
+  A typeclass method and a free `defn` cannot share a name in one module, and
+  the bare layer already binds free `arr` / `>>>`; per the plan's own
+  "parallel, dispatch-driven surface" framing and the "bare combinators stay"
+  non-goal, the dispatch surface is a separate file carrying the canonical
+  method names. `stdlib/arrow.tur` is left byte-for-byte unchanged (T11).
+- **A3 operator-mangling completed** (commit "Complete A3 operator mangling for
+  typeclass method names"). The typeclass dict/instance codegen path still used
+  the naive sanitizer that collapsed every sigil to `_`, so `>>>` / `<<<` (and
+  `+++` / `|||`) collided on `___`. All five typeclass-internal method-name
+  sites now route through the shared `tur_mangle_append` mangler
+  (`>>>`->`_gt_gt_gt`, `<<<`->`_lt_lt_lt`, ...); 124 codegen snapshots
+  regenerated, suite green. This is the previously-soft A3 gate, now hard-closed.
+- **Classes** (T2): `Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`,
+  `ArrowLoop`, `ArrowApply` declared with `;;;` docstrings.
+- **Product representation** (T3): **Option A** -- heap pairs reused via local
+  `__ac_pair_*` inline-C helpers. Zero-allocation product is a future follow-up.
+- **Instances**: `Arrow [(->)]` (arr/>>>/<<</first/second), `ArrowChoice [(->)]`
+  (left/right/+++/|||, `match` over `Either`), `ArrowLoop [(->)]` (non-recursive
+  subset, T7), `ArrowApply [(->)]` (nullary `app` via return-type dispatch, T8).
+- **T5 decision**: `ArrowZero` / `ArrowPlus` are **not** instantiated at `(->)`
+  (Option A) -- `(->)` has no generic zero. Classes declared for other arrows.
+- **T9**: `Category` does not exist in stdlib, so composition is inlined into
+  `Arrow` (no `Category [(->)]`).
+- **Fixtures** (T10): `arrow-instance-stdlib-basic`, `arrow-instance-vs-bare`,
+  `arrow-instance-choice`, `arrow-instance-loop-nonrecursive`,
+  `arrow-instance-apply`, `arrow-instance-closure-capture` -- all stdout-only
+  (matching the landed `arrow-instance-basic`/`-nullary` precedent), all green.
+- **New finding** filed:
+  [instance-method-returning-untyped-param-loses-result-type](../reported/instance-method-returning-untyped-param-loses-result-type.md)
+  -- `(arr [f] f)` makes the dispatched result uncallable; the instance uses the
+  eta-expanded `(fn [x] (f x))` workaround.
+- **Docs** (T12): `docs/guides/arrows-guide.md` rewritten to cover both surfaces;
+  scaleback plan annotated "superseded by".
+
 ## T1 prerequisite-readiness status (2026-06-05) -- fourth gate CLOSED
 
 **Update (2026-06-05):** the fourth, unlisted gate below -- the function arrow
@@ -288,19 +328,26 @@ has changed -- root-cause it before regenerating.
 
 ## Acceptance checklist
 
-- [ ] Prerequisite-readiness check (T1) recorded with commit hashes.
-- [ ] All six `defclass` forms restored in `stdlib/arrow.tur`.
-- [ ] `Arrow [(->)]` instance compiles and dispatches.
-- [ ] `ArrowChoice [(->)]` instance compiles and dispatches over `Either`.
-- [ ] `ArrowLoop [(->)]` (non-recursive subset) and `ArrowApply [(->)]`
-      instances compile and dispatch.
-- [ ] `ArrowZero`/`ArrowPlus` decision recorded (omitted for `(->)`, by
-      default).
-- [ ] All T10 fixtures pass with snapshot-stable `expected.c`.
-- [ ] T11: existing bare-function fixtures pass unchanged.
-- [ ] `docs/guides/arrows-guide.md` rewritten to cover both layers.
-- [ ] `docs/api/` regenerated; no broken cross-links.
-- [ ] [[stdlib-arrow-scaleback-plan]] annotated with a "superseded by" note.
+- [x] Prerequisite-readiness check (T1) recorded (see "Delivered" block + the
+      T1 status section; all gates closed including A3 mangling).
+- [x] All six `defclass` forms declared -- in `stdlib/arrow-class.tur` (separate
+      module; see "Delivered" for why not `stdlib/arrow.tur`).
+- [x] `Arrow [(->)]` instance compiles and dispatches
+      (`arrow-instance-stdlib-basic`).
+- [x] `ArrowChoice [(->)]` instance compiles and dispatches over `Either`
+      (`arrow-instance-choice`).
+- [x] `ArrowLoop [(->)]` (non-recursive subset) and `ArrowApply [(->)]`
+      instances compile and dispatch (`arrow-instance-loop-nonrecursive`,
+      `arrow-instance-apply`).
+- [x] `ArrowZero`/`ArrowPlus` decision recorded (omitted for `(->)`, by
+      default -- T5 Option A).
+- [x] All T10 fixtures pass (stdout snapshots, matching the
+      `arrow-instance-basic`/`-nullary` precedent; no brittle `expected.c`).
+- [x] T11: existing bare-function fixtures pass unchanged
+      (`stdlib/arrow.tur` untouched).
+- [x] `docs/guides/arrows-guide.md` rewritten to cover both layers.
+- [x] `docs/api/` regenerated; no broken cross-links.
+- [x] [[stdlib-arrow-scaleback-plan]] annotated with a "superseded by" note.
 
 ## Non-goals
 

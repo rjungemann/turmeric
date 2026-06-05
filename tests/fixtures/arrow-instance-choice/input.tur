@@ -1,0 +1,33 @@
+;; arrow-instance-choice -- ArrowChoice [(->)] dispatch over Either.
+;;
+;; left/right route an arrow over one arm of an Either and pass the other arm
+;; through unchanged; +++ fans two arrows over the two arms; ||| collapses both
+;; arms to a common result.  All four methods dispatch through the (->) instance
+;; and destructure Either with `match` inside the instance bodies.
+
+(load "stdlib/arrow-class.tur")
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; left add1: Left 10 -> Left 11 ; Right 7 passes through.
+  (let [l (left add1)]
+    (println (from-left  -1 (l (Left 10))))   ;; 11
+    (println (from-right -1 (l (Right 7)))))   ;; 7
+
+  ;; right mul2: Right 7 -> Right 14 ; Left 10 passes through.
+  (let [r (right mul2)]
+    (println (from-right -1 (r (Right 7))))    ;; 14
+    (println (from-left  -1 (r (Left 10)))))   ;; 10
+
+  ;; +++ : add1 on Left, mul2 on Right.
+  (let [p (+++ add1 mul2)]
+    (println (from-left  -1 (p (Left 10))))    ;; 11
+    (println (from-right -1 (p (Right 7)))))   ;; 14
+
+  ;; ||| : collapse both arms to a bare int.
+  (let [c (||| add1 mul2)]
+    (println (c (Left 10)))                    ;; add1(10) = 11
+    (println (c (Right 7))))                   ;; mul2(7)  = 14
+  0)

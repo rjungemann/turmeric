@@ -1,6 +1,7 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
 #include "forms.h"
+#include "mangle.h"
 
 /* ---- file-local helper forward declarations ---- */
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
@@ -1882,21 +1883,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         };
         char method_name[MAX_INSTANCE_METHOD_NAME_LEN];
         
-        /* Sanitize method name for C identifier (replace invalid chars with _) */
+        /* Mangle method name into a C identifier via the shared mangler so
+         * sigil method pairs (`>>>`/`<<<`) get distinct instance-function
+         * names instead of colliding on `___`. */
         char sanitized_method_name[MAX_SANITIZED_METHOD_NAME_LEN];
         const char *method_name_str = tc->methods[i].name->name;
-        uint32_t method_name_len = tc->methods[i].name->len;
-        if (method_name_len >= sizeof(sanitized_method_name)) {
-            method_name_len = sizeof(sanitized_method_name) - 1;
-        }
-        memcpy(sanitized_method_name, method_name_str, method_name_len);
-        sanitized_method_name[method_name_len] = '\0';
-        for (char *p = sanitized_method_name; *p; p++) {
-            if (!isalnum((unsigned char)*p) && *p != '_') {
-                *p = '_';
-            }
-        }
-        
+        tur_mangle_ident(method_name_str, sanitized_method_name,
+                         sizeof(sanitized_method_name));
+
         /* Build type arg suffix */
         char type_suffix[MAX_INSTANCE_TYPE_SUFFIX_LEN] = "";
         size_t type_suffix_len = 0;
@@ -2898,12 +2892,8 @@ Expr *elab_method_call(Elab *e, const Form *call) {
 
             /* Build the EX_DICT node for the pinned instance. */
             Expr *dict_w = make_dict_expr(e, witness_inst, call->span);
-            strncpy(dict_w->as.dict_.method_name, method_name,
-                    sizeof(dict_w->as.dict_.method_name) - 1);
-            dict_w->as.dict_.method_name[sizeof(dict_w->as.dict_.method_name) - 1] = '\0';
-            for (char *p = dict_w->as.dict_.method_name; *p; p++) {
-                if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
-            }
+            tur_mangle_ident(method_name, dict_w->as.dict_.method_name,
+                             sizeof(dict_w->as.dict_.method_name));
 
             /* Build EX_CALL: args array is [obj_w, args_w...]. */
             Expr **call_args_w = (Expr **)arena_alloc(e->arena,
@@ -3627,13 +3617,10 @@ resolved_user_fallback:;
     Expr *dict_expr = NULL;
     if (best_inst) {
         dict_expr = make_dict_expr(e, best_inst, call->span);
-        /* Copy the method name into the EX_DICT node and sanitize for C. */
-        strncpy(dict_expr->as.dict_.method_name, method_name,
-                sizeof(dict_expr->as.dict_.method_name) - 1);
-        dict_expr->as.dict_.method_name[sizeof(dict_expr->as.dict_.method_name) - 1] = '\0';
-        for (char *p = dict_expr->as.dict_.method_name; *p; p++) {
-            if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
-        }
+        /* Mangle the method name into the EX_DICT node (must match the dict
+         * field + instance-function spelling produced by the shared mangler). */
+        tur_mangle_ident(method_name, dict_expr->as.dict_.method_name,
+                         sizeof(dict_expr->as.dict_.method_name));
     }
 
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);

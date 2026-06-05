@@ -16,22 +16,28 @@ The most immediate use case in Turmeric is **signal processing**: the
 `stdlib/signal/` libraries build on these combinators to create composable
 DSP graphs from pure building blocks.
 
-## Why bare functions, not typeclass dispatch
+## Two surfaces: bare functions and typeclass dispatch
 
-Earlier drafts declared a full Haskell-style Arrow typeclass hierarchy
-(`Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`, `ArrowApply`),
-but those declarations were never backed by working `definstance` forms --
-closure-returning instance methods tripped a codegen bug and several stub
-bodies required language features (`Either`/`Left`/`Right`, full Tuple
-feedback) that do not exist yet. The scaleback in
-[`docs/upcoming/stdlib-arrow-scaleback-plan.md`](../upcoming/stdlib-arrow-scaleback-plan.md)
-removed the dead typeclass scaffolding and kept only the bare functions, which
-are exercised by `tests/fixtures/stdlib-arrow` and
-`tests/fixtures/arrow-capturing-closure`. If and when the typeclass codegen
-gap closes, the hierarchy can be reintroduced through its own plan; until
-then, write `(>>> f g)` rather than reaching for a typeclass method.
+Turmeric ships the arrow API as **two parallel surfaces**:
 
-For functions, `arr` is the identity, and `>>>` is left-to-right composition.
+| Surface | Module | When to reach for it |
+|---------|--------|----------------------|
+| Bare functions | `stdlib/arrow.tur` | The simple, default path. You are working concretely with the function arrow `(->)` and do not need to be polymorphic over the arrow constructor. |
+| Typeclass dispatch | `stdlib/arrow-class.tur` | You want code parametric over *any* `Arrow` instance, resolved through the instance dictionary -- the Haskell-style `Arrow` / `ArrowChoice` / `ArrowLoop` / `ArrowApply` hierarchy. |
+
+The bare layer exposes plain functions: `arr`, `>>>`, `arrow-first`,
+`arrow-second`, `par-comp`, `arrow-split`, `arrow-const`, `arrow-dup`. The
+typeclass layer declares the classes and instantiates them at `(->)` with the
+canonical method names (`arr`, `>>>`, `<<<`, `first`, `second`, `left`,
+`right`, `+++`, `|||`, `app`).
+
+The two surfaces are **not loaded together** -- a typeclass method and a free
+`defn` cannot share a name in one module, and both layers bind `arr` / `>>>`.
+Load whichever surface a given file needs.
+
+For the function arrow, `arr` lifts a function (the identity up to eta), and
+`>>>` is left-to-right composition; both surfaces compute identical values --
+see `tests/fixtures/arrow-instance-vs-bare`.
 
 ## Function Arrow Basics
 
@@ -99,10 +105,11 @@ let [add1       arr(fn([x] +(x 1)))
 ```
 
 `arrow-first` and `arrow-second` are the plain-function helpers exported from
-`stdlib/arrow.tur`. Reverse composition (`<<<`) is intentionally not exported
--- both `<<<` and `>>>` mangle to the same C identifier (`___`), so they
-cannot coexist as free `defn`s. Write `(>>> f g)` with the arguments in the
-order you want them applied.
+`stdlib/arrow.tur`. The bare layer exports only forward composition (`>>>`);
+write `(>>> f g)` with the arguments in the order you want them applied. If you
+need reverse composition (`<<<`), reach for the typeclass layer below -- the A3
+operator-mangling fix gives `>>>` and `<<<` distinct C identifiers
+(`_gt_gt_gt` / `_lt_lt_lt`), so they coexist there as method names.
 
 ## Additional Combinators
 
@@ -150,6 +157,80 @@ let [split arrow-split(0 0 0 fn([x] {x + 1}) fn([x] {x * 2}))]
 arrow-const(42)(999)          ; => 42
 tuple2-1st arrow-dup(7)       ; => 7
 ```
+
+## Typeclass dispatch (`stdlib/arrow-class.tur`)
+
+When you want to write code that is parametric over the arrow constructor --
+not hard-wired to `(->)` -- use the typeclass layer. It declares the
+Haskell-style hierarchy and instantiates it at the function arrow:
+
+| Class | Methods | `(->)` instance? |
+|-------|---------|------------------|
+| `Arrow` | `arr`, `>>>`, `<<<`, `first`, `second` | yes |
+| `ArrowChoice` | `left`, `right`, `+++`, `\|\|\|` | yes (over `Either`) |
+| `ArrowLoop` | `arrow-loop` | yes (non-recursive subset) |
+| `ArrowApply` | `app` | yes |
+| `ArrowZero` | `zero-arrow` | no -- `(->)` has no zero |
+| `ArrowPlus` | `plus-arrow` | no -- declared for other arrows |
+
+Every call resolves through the instance dictionary rather than a free
+function:
+
+```turmeric
+(load "stdlib/arrow-class.tur")
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  (let [h (>>> add1 mul2)]      ; >>> dispatches to Arrow [(->)]
+    (println (h 3)))            ; => 8
+  (let [g (<<< add1 mul2)]      ; reverse composition, only on this surface
+    (println (g 3)))            ; => 7  (add1(mul2(3)))
+  0)
+```
+
+`arr` is eta-expanded in the instance (`(fn [x] (f x))`, not the bare `f`) so
+the dispatched result carries a concrete arrow type and is directly callable;
+see `docs/reported/instance-method-returning-untyped-param-loses-result-type.md`.
+
+### `ArrowChoice` over `Either`
+
+`ArrowChoice` routes an arrow over one arm of a binary sum. It builds on the
+`Either` sum type (`stdlib/either.tur`, from
+[`docs/upcoming/sum-types-either-plan.md`](../upcoming/sum-types-either-plan.md));
+`left` acts on `Left` and passes `Right` through, `+++` fans two arrows over the
+two arms, and `|||` collapses both arms to a common result:
+
+```turmeric
+(load "stdlib/arrow-class.tur")
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  (let [c (||| add1 mul2)]
+    (println (c (Left 10)))     ; add1(10) => 11
+    (println (c (Right 7))))    ; mul2(7)  => 14
+  0)
+```
+
+### `ArrowLoop` -- non-recursive only
+
+`arrow-loop` feeds part of an arrow's output back as input. Turmeric is strict
+and has no lazy thunks, so the `(->)` instance implements only the case where
+the looped arrow **does not read** the fed-back component (it runs the arrow on
+`(b, sentinel)` and projects the first output). True lazy feedback is future
+work.
+
+### Both surfaces agree
+
+The dispatch surface computes the same values as the bare functions for `(->)`
+-- `tests/fixtures/arrow-instance-vs-bare` runs the same pipeline both ways and
+asserts identical output. The dispatch fixtures
+(`arrow-instance-stdlib-basic`, `-choice`, `-loop-nonrecursive`, `-apply`,
+`-closure-capture`) lock the typeclass path, including capturing closures
+flowing through the instance dictionary.
 
 ---
 

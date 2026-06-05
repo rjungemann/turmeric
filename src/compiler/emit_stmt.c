@@ -1,5 +1,6 @@
 /* emit_stmt.c -- statement-position C emission (emit_stmt and friends). */
 #include "emit_internal.h"
+#include "mangle.h"
 
 void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* while (1) { cond; if (!cond) break; body; } — we re-emit the condition
@@ -443,16 +444,13 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const TypeClassMethod *method = &tc->methods[i];
                 FnDef *method_impl = inst->method_impls[i];
                 
-                /* Sanitize method name for C field name (replace invalid chars with _) */
+                /* Mangle method name into a C field name. Routed through the
+                 * shared mangler so sigil pairs (`>>>`/`<<<`) get distinct
+                 * fields instead of colliding on `___`. */
                 char sanitized_method_name[64];
-                strncpy(sanitized_method_name, method->name->name, sizeof(sanitized_method_name) - 1);
-                sanitized_method_name[sizeof(sanitized_method_name) - 1] = '\0';
-                for (char *p = sanitized_method_name; *p; p++) {
-                    if (!isalnum((unsigned char)*p) && *p != '_') {
-                        *p = '_';
-                    }
-                }
-                
+                tur_mangle_ident(method->name->name, sanitized_method_name,
+                                 sizeof(sanitized_method_name));
+
                 /* Build function pointer type */
                 buf_puts(ctx->file, "    ");
                 
@@ -524,15 +522,11 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             for (uint8_t i = 0; i < tc->n_methods; i++) {
                 const TypeClassMethod *method = &tc->methods[i];
                 
-                /* Sanitize method name for C field name */
-                strncpy(sanitized_method_name, method->name->name, sizeof(sanitized_method_name) - 1);
-                sanitized_method_name[sizeof(sanitized_method_name) - 1] = '\0';
-                for (char *p = sanitized_method_name; *p; p++) {
-                    if (!isalnum((unsigned char)*p) && *p != '_') {
-                        *p = '_';
-                    }
-                }
-                
+                /* Mangle method name into the C field name (must match the
+                 * struct field spelling emitted above). */
+                tur_mangle_ident(method->name->name, sanitized_method_name,
+                                 sizeof(sanitized_method_name));
+
                 buf_puts(ctx->file, "    ");
                 buf_printf(ctx->file, ".%s = ", sanitized_method_name);
                 /* Phase HKT H3: Use the binding name directly — it already encodes
