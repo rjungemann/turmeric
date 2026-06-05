@@ -4,6 +4,11 @@ category: Planning
 description: A thin generic wrapper `SChan<p>` over the (opaque, linear) `Chan` newtype that carries a protocol phantom advanced by each `schan-send` / `schan-recv` / `schan-close` operation. Makes worker-pool and RPC-pipe protocols compile-time checks.
 ---
 
+> **Superseded by [session-types-guide](../../guides/session-types-guide.md).**
+> This plan has shipped; the user-facing reference for `stdlib/schan.tur` and
+> the broader session-types story is the guide. This document is retained
+> here for historical context.
+
 # Stdlib Session-Typed Channel Wrappers -- Plan
 
 > **Status:** COMPLETE (landed in "Add stdlib/schan.tur: session-typed

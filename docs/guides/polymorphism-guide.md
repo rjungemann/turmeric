@@ -139,7 +139,20 @@ definstance Eq [Pair] [(Eq A) (Eq B)]
 **Reach for it when** the same operation has many implementations and which
 one to use is determined by the argument's type. The stdlib uses this for
 `Eq`, `Ord`, `Show`, `Num`, `Hash`, `Clone`, `Functor`, `Applicative`,
-`Monad`, and `Alternative` -- see `stdlib/typeclass*.tur`.
+`Monad`, `Alternative`, and the `Category` / `Arrow` / `Kleisli` arrow
+hierarchy (`stdlib/arrow.tur`, `stdlib/kleisli.tur`; see
+[arrows-guide.md](arrows-guide.md)) -- see `stdlib/typeclass*.tur`.
+
+`definstance` is **idempotent**: re-running a `definstance C [T]` (e.g. via
+REPL `(reload)` or re-importing a module) replaces the singleton entry rather
+than appending a duplicate. The most recent elaboration wins.
+
+> **TUR-W0039** -- when a typeclass method shares a name with an ordinary
+> `defn` in the same scope, the compiler warns at the shadowing site. Both
+> bindings coexist (method dispatch goes through the dictionary; the free
+> `defn` is still callable), but rename one when the clash is unintentional.
+> See [typeclass-internals-guide.md](typeclass-internals-guide.md) and
+> [arrows-guide.md](arrows-guide.md).
 
 ---
 

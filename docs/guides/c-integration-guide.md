@@ -372,9 +372,16 @@ Then add `generated/mylib.c` (and `src/runtime.c`) to your C build. Declare
 the Turmeric-emitted top-level `defn` functions with `extern` in a hand-written
 header, and call them from your C code.
 
-Name mangling is minimal: a top-level `(defn my-function ...)` becomes
-`my_function` in C (hyphens → underscores). Closures and anonymous functions
-get mangled names like `tur__closure_N`.
+Name mangling is **reversible and injective** (#275): a top-level
+`(defn my-function ...)` becomes `my_function` in C, but sigils encode through
+escape digraphs -- `-` → `_hy`, `/` → `_sl`, `_` → `_un`, with `?`, `!`, `=`
+and friends covered analogously -- so any Turmeric global name round-trips
+cleanly to C and back. Closures and anonymous functions get mangled names
+like `tur__closure_N`. See [name-mangling-guide.md](name-mangling-guide.md)
+for the full table and the demangler. **Inside an inline-C body, prefer the
+`__TUR_CNAME_<source-name>__` splice** (Section 2.2) over hand-spelling the
+mangled name; the splice tracks the live mangler so a future scheme change
+does not silently break your code.
 
 ### 3.2 Subprocess / build-step integration
 
@@ -568,7 +575,8 @@ exception payload yet.
 | `ref<T>` | No | Borrow-checker-managed; do not store across call |
 | `rc<T>` | No | Contains control block; use `ptr` wrappers instead |
 | `weak<T>` | No | Same issue as `rc<T>` |
-| closures | No | Env struct pointer; layout is unstable |
+| closures (annotated `^fat`) | Yes (as `int64_t`) | Unified-representation handle; see §8.1 |
+| closures (unannotated) | No | Compiler chooses bare vs. fat; carrier is not stable across positions |
 | structs (copy) | Yes (by value) | Passed as C value types |
 | structs (move) | With care | Passing implies ownership transfer |
 
@@ -590,6 +598,37 @@ block as a black box and trusts the annotated return type. This means:
   either add an `extern-c memcpy` declaration or put `#include <string.h>` at
   the top of the inline block. The latter is valid C99 (an `#include` can
   appear anywhere a declaration can appear).
+
+### 8.1 Callbacks: `^fat` parameters are `int64_t` in inline-C
+
+Under the unified closure representation, a function-typed parameter marked
+`^fat` is emitted in the generated C signature as **`int64_t`** -- the
+closure handle. Inside an inline-C body you can therefore name it directly
+and dispatch it with the standard `TUR_APPLY*` macros:
+
+```turmeric
+(defn run-twice [^fat f x : int] : int
+  ```c
+  /* f is int64_t; TUR_APPLY1 reads the thunk from slot 0 of the
+     fat-closure box and invokes it with x. */
+  int64_t a = TUR_APPLY1(f, (int64_t)x);
+  int64_t b = TUR_APPLY1(f, a);
+  return (int)b;
+  ```)
+```
+
+If your C side is a plain `extern-c` callback (a hand-written `int64_t (*)(int64_t)`
+function pointer), declare it normally and pass it in -- the `^fat` parameter
+auto-shims a bare fn-pointer into a one-cell fat box on the way in. Do not
+spell the handle as `void *` in inline-C; the codegen agrees on `int64_t`,
+and the unsafe-block capture scan (#264) inspects ascriptions, so a wrong
+carrier type can hide a real capture from the checker. See
+[fat-closure-annotation-guide.md](fat-closure-annotation-guide.md) for the
+deeper rationale and `^fat` on return types.
+
+First-class `:fn` values shipped (#272); the prior hedges in this guide
+about "closures cannot cross the boundary" are obsolete -- the rule is that
+they cross as `int64_t` and must be annotated at the boundary.
 
 ---
 

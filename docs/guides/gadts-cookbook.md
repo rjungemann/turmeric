@@ -7,7 +7,10 @@ description: GADTs cookbook: practical patterns and recipes
 # GADTs Cookbook
 
 Practical patterns for using Generalized Algebraic Data Types (GADTs) in
-Turmeric. All examples require `-Xgadt` unless noted.
+Turmeric. GADTs are enabled by default -- the historical `-Xgadt` flag is
+still accepted as a deprecated no-op. The combined examples below pair GADTs
+with `-Xunion-types`, which is still flag-gated; that is the only `-X` flag
+required for any pattern in this cookbook.
 
 ---
 

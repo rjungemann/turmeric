@@ -275,6 +275,11 @@ The self-heal case matters most when your startup build failed (e.g.
 a compile error in your spice): instead of restarting the REPL after
 fixing the source, just type `(reload)`.
 
+`definstance` is **idempotent** across `(reload)`: re-running a `definstance C [T]`
+replaces the existing singleton entry instead of appending a duplicate, so a
+typeclass-heavy session can `(reload)` freely without `instance already defined`
+errors or ambiguous resolution from stale entries.
+
 ### --watch -- auto-reload on edit
 
 `tur repl --watch` checks source freshness between every prompt and

@@ -95,6 +95,30 @@ call.
 Reach for `^fat` on a parameter whenever your function body invokes the
 parameter via `apply-fat`, `TUR_APPLY1`, or any other fat-ABI form.
 
+### `^fat` parameters inside inline-C
+
+Since #286, a `^fat` function-typed parameter is materialised in the
+generated C signature as plain **`int64_t`** -- the unified closure handle
+(a pointer to the fat box, or, for the bare-shimmed case, a one-cell box
+whose slot 0 is the original fn-pointer). That means you can name it
+directly inside an inline-C body and feed it back to the `TUR_APPLY*`
+macros:
+
+```turmeric
+(defn run-once [^fat f x : int] : int
+  ```c
+  /* f is int64_t at the C level; pass it through TUR_APPLY1
+     to invoke the closure under the unified ABI. */
+  return (int64_t)TUR_APPLY1(f, x);
+  ```)
+```
+
+The same rule applies in either direction: a Turmeric global declared
+`^fat` is callable from inline-C as `int64_t`, and an inline-C function
+that wants to *receive* a closure handle from Turmeric should take it as
+`int64_t`. Do not spell it as `void *` -- inline-C ascription is scanned
+for captures (#264) and the carrier type is what the codegen agrees on.
+
 ## 4. `^fat` on a return type
 
 The parameter form only fires at **call-argument** sites. A different
@@ -131,17 +155,28 @@ they know about the closure's **result type**:
 (defn run-with [^fat g :(fn [float] #{} float) x : float] : float (g x))  ;; annotated
 ```
 
-A **bare** `^fat g` records no signature, so the compiler has no result
-type to thread: a direct call `(g x)` is typed as the `int64` carrier.
-That is correct for the int-carrier generic combinators (`>>>`,
-`option-map`, and friends), where every value is an `int64` at runtime.
+Under the unified closure representation (#276 and the typed-invocation
+refinements that followed: #283/#285/#287/#292/#293/`9588cda7`), every
+closure value -- bare or fat, captureless or capturing -- is carried as a
+single `int64_t` handle. The remaining distinction is **what the call site
+knows about the result type** at the point where it dispatches the handle.
+
+A **bare** `^fat g` records no result signature, so a direct call `(g x)`
+falls back to the int-carrier dispatch path: the result is read out of the
+integer return register as an `int64_t`. That is correct for the int-carrier
+generic combinators (`>>>`, `option-map`, and friends), where every value
+is already an `int64` at runtime.
 
 But a closure that returns a **non-int register class** -- `:float` is the
-one that bites -- cannot go through the bare form. A `double` is returned
-in a floating-point register (xmm0), while the bare-`^fat` call reads the
-integer register (rax). The bits do not line up, and you get garbage. (A
-`:cstr` or `:ptr<void>` result happens to share the integer register, so
-it round-trips -- but do not rely on that; annotate non-int results.)
+one that bites -- cannot go through the bare form unless the tail-position
+inference (below) can recover the type. A `double` is returned in a
+floating-point register (xmm0), while the bare-`^fat` int-carrier dispatch
+reads the integer register (rax). The bits do not line up, and you get
+garbage. (A `:cstr` or `:ptr<void>` result happens to share the integer
+register, so it round-trips -- but do not rely on that; annotate non-int
+results. For the integer/pointer carrier specifically, the SF-application
+call sites now bridge `int <-> ptr<void>` (`9588cda7`), so mixing the two
+no longer requires a manual `(::)` cast at the boundary.)
 
 For any non-int result, use the **annotated** form -- it carries the
 result type, and the compiler dispatches through a typed thunk that uses

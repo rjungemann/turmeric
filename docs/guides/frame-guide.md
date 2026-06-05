@@ -12,6 +12,12 @@ dataframes modeled on R's `data.frame`, pandas `DataFrame`, and Racket's
 (C Data Interface compatible), which enables zero-copy hand-off to Python,
 R, DuckDB, and Polars without serialization.
 
+> The "arrow" in `arrow-export` / `arrow-import` / `arrow-export-column`
+> refers to **Apache Arrow** (the columnar format), not the `Arrow`
+> typeclass. For Turmeric's arrow typeclass hierarchy (`Category`, `Arrow`,
+> `ArrowZero`, `Kleisli`, signal graphs), see
+> [arrows-guide.md](arrows-guide.md).
+
 ## Installing
 
 ```sh

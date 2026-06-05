@@ -86,9 +86,10 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[opaques-guide.md](opaques-guide.md)** -- Opaque newtypes: `defopaque`, nominal handles, `(::)` cast, `:linear` / `:affine` resource discipline
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
+- **[name-mangling-guide.md](name-mangling-guide.md)** -- Reversible/injective Turmeric->C name mangling (`_hy`/`_sl`/`_un` escapes) for inline-C interop and debugging
 - **[cli-args-guide.md](cli-args-guide.md)** -- CLI argument passing via `*args*` and structured parsing with `stdlib/args.tur`
 - **[binding-forms-guide.md](binding-forms-guide.md)** -- `define`, `letrec`, and named let: local binding forms beyond `let`
-- **[fat-closure-annotation-guide.md](fat-closure-annotation-guide.md)** -- When and why to mark function-typed parameters and return positions `^fat`
+- **[fat-closure-annotation-guide.md](fat-closure-annotation-guide.md)** -- When and why to mark function-typed parameters and return positions `^fat`; `^fat` params are visible as `int64_t` inside inline-C bodies
 
 ### Type System
 
@@ -104,7 +105,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 ### Functional Abstractions
 
-- **[arrows-guide.md](arrows-guide.md)** -- Arrows: `arr`/`>>>`/`first`/`second`, composition combinators, and DSP signal graphs with `stdlib/signal/`
+- **[arrows-guide.md](arrows-guide.md)** -- Arrows: `arr`/`>>>`/`first`/`second`, composition combinators, the `Category` superclass and honest `Kleisli` `ArrowZero`, and DSP signal graphs with `stdlib/signal/`
 - **[generators-guide.md](generators-guide.md)** -- Zero-overhead generators (`gen`/`yield`), lazy `Seq` combinators, and `Range` types
 
 ### Design Rationale

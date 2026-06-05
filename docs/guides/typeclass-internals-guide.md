@@ -52,8 +52,8 @@ accordingly:
 
 - A **boxed** `TY_FN` (a stored first-class closure) -> `void *`.
 - A **bare** `TY_FN` reference -> its result type's C name; but a closure whose
-  result is *itself a function* (a curried return, `(fn [:int] (fn [:int]
-  :int))`) or whose result is unknown -> **`int64_t`** (the handle). Recursing
+  result is *itself a function* (a curried return, `(fn [int] (fn [int]
+  int))`) or whose result is unknown -> **`int64_t`** (the handle). Recursing
   into the result kind there would bottom out at a zeroed `TY_FN` shell and emit
   an unknown-void carrier, silently dropping the handle.
 
@@ -101,6 +101,35 @@ The returned handle obeys the usual captureless-vs-fat distinction:
 
 The `tests/fixtures/instance-closure-return-*` fixtures cover both, plus int and
 struct captures, curried returns, and two methods composed at the call site.
+
+## `definstance` is idempotent (reload-safe)
+
+A `definstance C [T]` form is **idempotent**: re-running it -- whether at the
+REPL, via `(reload)`, or by re-loading a module -- replaces the singleton entry
+in the instance table rather than appending a duplicate. The most recent
+elaboration wins. This means a typeclass-heavy session can call `(reload)`
+freely without `instance already defined` errors and without ambiguous
+resolution caused by stale duplicates.
+
+## TUR-W0039: method name shadowing a free `defn`
+
+A typeclass method name shares a global namespace with ordinary `defn`
+bindings. When a `defn` and a `defclass` method use the same name in the same
+scope, the compiler emits **TUR-W0039** at the shadowing site. Both bindings
+coexist (the method resolves through the dictionary; the free `defn` is still
+callable by its qualified name), but the warning flags the ambiguity for the
+reader. Rename one of them when the shadowing is unintentional. See
+[arrows-guide.md](arrows-guide.md) for the worked example that originally
+surfaced the diagnostic.
+
+## See also -- the arrow / `Category` hierarchy
+
+The arrow surface in `stdlib/arrow.tur` and `stdlib/kleisli.tur` is a
+production-grade example of the dictionary-lowering rules above: `Category`
+(the superclass providing `ident`/`comp`), `Arrow`, `ArrowChoice`,
+`ArrowZero`, and a second `Category` instance (`Kleisli`) all share method
+names and exercise both the closure-handle convention and the method-vs-defn
+namespace rules. See [arrows-guide.md](arrows-guide.md).
 
 ## Related
 

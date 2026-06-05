@@ -10,8 +10,10 @@ description: A parametric struct such as `Pair<A B>` instantiated with an *opaqu
 > compile; never reaches codegen-correct output). Blocks any use of stdlib
 > `Pair` / parametric structs whose element is an opaque newtype.
 > **Found:** 2026-06-04, executing
-> [stdlib-session-typed-channels-plan](../upcoming/stdlib-session-typed-channels-plan.md)
-> phase S1 (recv was specified to return `Pair<T SChan<R>>`).
+> [stdlib-session-typed-channels-plan](stdlib-session-typed-channels-plan.md)
+> phase S1 (recv was specified to return `Pair<T SChan<R>>`). The plan has
+> since shipped; the canonical user-facing reference is now
+> [session-types-guide](../../guides/session-types-guide.md).
 > **Status:** Variant 1 (concrete, no generics) **FIXED** 2026-06-05 and
 > Variant 2 (phantom element through a generic-from-generic relay) **FIXED**
 > 2026-06-05 -- see [Resolution](#resolution).

@@ -715,17 +715,23 @@ optimised to a bare C function pointer (`int64_t (*)(int64_t)`), which is
 `int64_t (*)(void*, int64_t)` in slot 0). Feed a bare pointer to `apply-fat`
 and it reads the first instruction byte as a thunk address and segfaults.
 
-The compiler tracks this representation in the type system and boxes a
-captureless lambda into a one-cell fat closure wherever a *fat-expecting
-sink* is annotated `^fat` -- either a parameter (`[p ^fat f]`, as on
-`bind-parser`) or a constructor's return type (`^fat :ptr<void>`, as on
-`pfail`/`item`). Earlier versions of this tutorial (and `stdlib/parsec`)
-forced the fat ABI by hand with a dead `(let [sentinel 0] ...)` capture;
-that workaround is obsolete now that the sinks carry `^fat`. Inner lambdas
-may also reference an enclosing `fn`'s parameter directly -- the old "bind
-parameters to locals first" rule no longer applies. See
-[c-integration-guide.md](c-integration-guide.md#closures-and-fat-pointers)
-for the underlying calling convention.
+Under the unified closure representation (#276 and the typed-invocation
+work that followed), every closure value -- bare or fat -- is carried as a
+single `int64_t` handle; the remaining question is what the call site knows
+about the closure's signature. The compiler tracks the bare-vs-fat
+*production* in the type system and boxes a captureless lambda into a
+one-cell fat closure wherever a *fat-expecting sink* is annotated `^fat` --
+either a parameter (`[p ^fat f]`, as on `bind-parser`) or a constructor's
+return type (`^fat :ptr<void>`, as on `pfail`/`item`). Earlier versions of
+this tutorial (and `stdlib/parsec`) forced the fat ABI by hand with a dead
+`(let [sentinel 0] ...)` capture; that workaround is obsolete now that the
+sinks carry `^fat`. Inner lambdas may also reference an enclosing `fn`'s
+parameter directly -- the old "bind parameters to locals first" rule no
+longer applies. See
+[fat-closure-annotation-guide.md](fat-closure-annotation-guide.md) for the
+full annotation reference and
+[c-integration-guide.md §8.1](c-integration-guide.md#81-callbacks-fat-parameters-are-int64_t-in-inline-c)
+for the inline-C carrier rule (`^fat` params are `int64_t` at the C level).
 
 **Pointer-to-int casting.** Both the tutorial and the production library
 pass parser pointers around as `:int` (raw `int64_t`) and reinterpret them

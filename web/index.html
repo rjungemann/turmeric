@@ -42,13 +42,12 @@
       <span class="eyebrow-dot"></span>
       Now in public beta -- v%TURMERIC_VERSION%
     </div>
-    <h1>A <em>fast</em> and <em>safe</em> <br>systems language</h1>
-    <p class="hero-subtitle">Lightning-fast, expressive, and a joy to write.</p>
+    <h1>A <em>safe</em>, <em>expressive</em><br>systems language</h1>
+    <p class="hero-subtitle">Readable and expressive, without sacrificing safety.</p>
     <div class="hero-desc">
-      <em>Lisp-level expressiveness</em>, including a <em>Pythonic</em> dialect<br>
-      <em>Systems-level control</em> and performance<br>
-      <em>Zero-cost abstractions</em> with advanced type safety<br>
-      <em>Batteries included</em> with near-zero dependencies<br>
+      <em>Advanced type safety</em> with zero runtime cost<br>
+      <em>Close-to-Rust performance</em>, with inline C for the last mile<br>
+      <em>Lisp-level expressiveness</em>, with a <em>non-Lispy dialect</em> available<br>
     </div>
     <div class="hero-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span class="arrow">→</span></a>
@@ -176,9 +175,9 @@ println
 <div class="split-section reveal">
   <div>
     <p class="section-label">Typeclasses</p>
-    <h2 class="section-title">Polymorphic convenience</h2>
-    <p class="section-desc mb-24">Define behavior once, use it everywhere. Turmeric's typeclass system handles dispatch at compile time -- no virtual tables, no runtime cost.</p>
-    <p class="section-desc">Write instances for any type with complete type inference. Typeclass constraints keep your functions general without losing precision.</p>
+    <h2 class="section-title">Zero-overhead polymorphism</h2>
+    <p class="section-desc mb-24">Attach new behavior to any type without touching it. Turmeric resolves typeclass dispatch at compile time -- no virtual tables, no runtime cost.</p>
+    <p class="section-desc">From typeclasses and HKTs to runtime contract types, Turmeric offers <a href="/docs/html/guides/polymorphism-guide.html" style="color:var(--gold);">multiple forms of polymorphism</a>. Choose what fits the problem -- not what the type system forces on you.</p>
   </div>
   <div class="code-card code-card--sm">
     <div class="code-card-bar">
@@ -242,10 +241,10 @@ defn color-name [c] :cstr
 <!-- ── EFFECTS SPLIT ──────────────────── -->
 <div class="split-section reverse reveal">
   <div>
-    <p class="section-label">Algebraic Effects</p>
-    <h2 class="section-title">Tame your side-effects and take the pain out of tests</h2>
-    <p class="section-desc mb-24">Declare what your functions can do, not how they do it. Handlers let you swap implementations -- test, log, mock -- without touching your core logic.</p>
-    <p class="section-desc">Compose effects freely. The type system ensures you never forget to handle one.</p>
+    <p class="section-label">Effect Handlers</p>
+    <h2 class="section-title">Write once,<br>handle anywhere</h2>
+    <p class="section-desc mb-24">The same business logic powers your production app and your test suite. Swap the handler -- not the function. No mocking frameworks, no dependency injection.</p>
+    <p class="section-desc">Turmeric's algebraic effect system makes this possible: declare what a function can do, not how it does it. The type system ensures every effect is handled.</p>
   </div>
   <div class="code-card code-card--sm">
     <div class="code-card-bar">
@@ -303,10 +302,10 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
 <!-- ── SPICE PACKAGE MANAGER ─────────── -->
 <div class="split-section reveal">
   <div>
-    <p class="section-label">Spice Package Manager</p>
-    <h2 class="section-title">Packages, meet<br><em>simplicity.</em></h2>
-    <p class="section-desc mb-24">One <code>build.tur</code> file declares your package and all its dependencies -- called <em>spices</em>. Git URLs are all you need. No separate package manager binary, no CMake required.</p>
-    <p class="section-desc">Need a C library? Add it to <code>:cmake-deps</code> and Turmeric handles the rest -- fetching, building, and linking automatically.</p>
+    <p class="section-label">Package Manager</p>
+    <h2 class="section-title">One file. No ceremony.</h2>
+    <p class="section-desc mb-24">One <code>build.tur</code> declares your package and its dependencies. Reference any spice by Git URL -- no registry account, no separate tooling. Third-party spices import just like your own modules.</p>
+    <p class="section-desc">Most spices are pure Turmeric or inline C -- nothing to install. When you need a native C library, add it to <code>:cmake-deps</code> and Turmeric handles fetching, building, and linking automatically. Many popular libraries already have Turmeric spices -- like <a href="https://spices.turmeric-lang.com/raylib/" style="color:var(--gold);">tur/raylib</a> -- so you may not need it at all.</p>
   </div>
   <div class="code-card code-card--sm">
     <div class="code-card-bar">
@@ -339,36 +338,6 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
 
 <hr class="divider">
 
-<!-- ── BENCHMARKS ─────────────────────── -->
-<div class="bench-section reveal">
-  <p class="section-label">Performance</p>
-  <h2 class="section-title">Speed that <em>doesn't compromise.</em></h2>
-  <p class="section-desc" style="margin-top: 16px;">Turmeric compiles to optimized native code. Functional programming without the performance tax.</p>
-
-  <div class="bench-grid">
-    <div class="bench-card">
-      <div class="bench-metric">1.2<span class="bench-unit">ms</span></div>
-      <div class="bench-label">Median cold compile time<br>for a 1000-line module</div>
-      <div class="bench-bar-wrap"><div class="bench-bar" style="width:92%"></div></div>
-      <div class="bench-compare">vs 18ms in Haskell (GHC)</div>
-    </div>
-    <div class="bench-card">
-      <div class="bench-metric">0<span class="bench-unit">ns</span></div>
-      <div class="bench-label">Typeclass dispatch overhead<br>at runtime</div>
-      <div class="bench-bar-wrap"><div class="bench-bar" style="width:100%"></div></div>
-      <div class="bench-compare">fully resolved at compile time</div>
-    </div>
-    <div class="bench-card">
-      <div class="bench-metric">2.1<span class="bench-unit">×</span></div>
-      <div class="bench-label">Faster than equivalent<br>Clojure on numeric workloads</div>
-      <div class="bench-bar-wrap"><div class="bench-bar" style="width:76%"></div></div>
-      <div class="bench-compare">native LLVM IR, no JVM overhead</div>
-    </div>
-  </div>
-</div>
-
-<hr class="divider">
-
 <!-- ── GETTING STARTED ───────────────── -->
 <div class="started-section reveal">
   <p class="section-label">Get Started</p>
@@ -377,9 +346,9 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
   <div class="started-grid">
     <div class="step-card">
       <div class="step-num">01 -- Install</div>
-      <div class="step-title">One command install</div>
+      <div class="step-title">One-command install</div>
       <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
-      <p class="step-desc">Installs <code>tur</code> via the Homebrew formula. Requires <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a>. Or build from source -- see the <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">GitHub repo</a>.</p>
+      <p class="step-desc">Installs <code>tur</code> via <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a> on macOS. On Linux, grab a prebuilt binary from the <a href="https://github.com/rjungemann/turmeric/releases" style="color:var(--gold);">releases page</a> or <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">build from source</a>.</p>
     </div>
 
     <div class="step-card">
@@ -408,7 +377,7 @@ tur run</div>
       <div class="step-code">tur add spice/http
 tur add spice/json
 tur add spice/postgres</div>
-      <p class="step-desc">The Spice registry hosts packages for HTTP, JSON, databases, parsing, and more -- all with effect-typed APIs.</p>
+      <p class="step-desc">The Spice registry hosts packages for GUI, audio, HTTP, JSON, databases, parsing, and more.</p>
     </div>
   </div>
 </div>

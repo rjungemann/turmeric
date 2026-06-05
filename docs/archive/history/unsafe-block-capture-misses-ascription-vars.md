@@ -19,8 +19,10 @@ description: An `(unsafe ...)` block is lowered to a fiber/handler body whose fr
 > **Severity:** silent-miscompile -> hard cc error ("undeclared identifier").
 > Easy to trip and the message points at generated C, not the source.
 > **Found:** 2026-06-04, executing
-> [stdlib-session-typed-channels-plan](../upcoming/stdlib-session-typed-channels-plan.md)
+> [stdlib-session-typed-channels-plan](stdlib-session-typed-channels-plan.md)
 > (the typed wrappers call inline-C raw ops from inside `(unsafe ...)`).
+> The plan has since shipped; the canonical user-facing reference is now
+> [session-types-guide](../../guides/session-types-guide.md).
 
 ## Summary
 

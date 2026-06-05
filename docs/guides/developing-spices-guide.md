@@ -928,10 +928,45 @@ for the full design sketch.
 
 ---
 
+## Diagnostics to Watch For
+
+### TUR-D0001 -- no leading colons inside `(fn ...)` types
+
+Leading colons inside a `(fn ...)` type expression are deprecated and the
+compiler emits **TUR-D0001** wherever they appear. Write the new form when
+declaring function-typed parameters, return types, or higher-kinded
+abstractions in your spice:
+
+```turmeric
+;; Wrong (TUR-D0001):
+(defn map-fn [^fat g :(fn [:int] :int) n :int] :int (g n))
+
+;; Right:
+(defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))
+```
+
+The structural `name : type` colon (the one separating a parameter name from
+its type) is unaffected -- the rule only forbids colons **inside** a `(fn ...)`
+type. If you are migrating an older spice forward, run the codemod from
+`#270` (`bf3445e5`) over your tree, or fix the hits by hand.
+
+### Name mangling and inline-C
+
+If your spice exposes any inline-C bodies that reference sibling Turmeric
+`defn`s by name, use the `__TUR_CNAME_<source-name>__` splice rather than
+hand-spelling the mangled C identifier; the mangling scheme is reversible
+and injective (#275) but is still an internal detail. See
+[name-mangling-guide.md](name-mangling-guide.md) for the encoding and
+[c-integration-guide.md §2.2](c-integration-guide.md#22-inline-c-blocks----arbitrary-c-inside-a-turmeric-expression)
+for the splice form.
+
+---
+
 ## See Also
 
 - [Consuming spices](consuming-spices-guide.md) -- adding and using spices in a project
 - [Package management guide](package-management-guide.md) -- full `build.tur` manifest reference and `tur` CLI
 - [C integration guide](c-integration-guide.md) -- `extern-c`, `include-c`, inline-C blocks
+- [Name mangling guide](name-mangling-guide.md) -- reversible Turmeric->C name mangling for inline-C interop
 - [Using a Turmeric library from CMake](using-turmeric-from-cmake.md) -- step-by-step guide for `tur emit-cmake`
 - [Test runner contract](test-runner-contract.md) -- full testing API

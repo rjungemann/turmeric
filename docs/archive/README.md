@@ -285,6 +285,8 @@ Post-v0.18.0 sweep:
 
 Post-v0.18.0 followup sweep:
 
+- **[category-arrowzero-implementation-plan.md](history/category-arrowzero-implementation-plan.md)** -- `Category` typeclass + honest Kleisli `ArrowZero`; shipped in #290 under maintainer override (audit recommendation was resolved-by-audit); see [arrows-guide.md](../guides/arrows-guide.md)
+- **[vec-typed-fat-closure-readback-fixture-regressed-codegen.md](history/vec-typed-fat-closure-readback-fixture-regressed-codegen.md)** -- `vec-typed-fat-closure-readback` fixture + `^fat`-arg call-slot + ascribed-aggregate-return regressions; RESOLVED (fixed in `9588cda7`, #288)
 - **[fn-type-first-class-application-plan.md](history/fn-type-first-class-application-plan.md)** -- First-class `:fn` closure values; F1--F6 landed; suite green
 - **[fn-first-class-stdlib-deworkaround-plan.md](history/fn-first-class-stdlib-deworkaround-plan.md)** -- Retire `^fat`-sink shims in parser/backtrack/logic combinators on top of first-class `:fn`; complete
 - **[stdlib-session-typed-channels-plan.md](history/stdlib-session-typed-channels-plan.md)** -- `stdlib/schan.tur` session-typed channel wrappers (S1--S3); complete; see [session-types-guide.md](../guides/session-types-guide.md)
