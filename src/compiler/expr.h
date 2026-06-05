@@ -66,6 +66,13 @@ struct Binding {
      * dispatch-free inner body (e.g. `(fn [t] : A val)` returning a captured
      * value) is safe and IS specialized. */
     bool closure_return_dispatches;
+    /* poly-closure-inner-dispatch-result-erased (Direction 3): true when the
+     * returned inner closure's body dispatches through a binding that Direction 3
+     * cannot handle (TY_PTR_VOID bare-fat, or TY_FN without a named-tyvar
+     * result_full_type).  Used to gate TUR-E0705 and the inner-spec trigger:
+     * if this is false (all dispatches are typed-fn with recoverable result),
+     * Direction 3 in emit_expr.c can derive the correct dispatch C type. */
+    bool closure_return_dispatches_untyped;
     /* let-bound-sf-loses-outer-arg-type: true when this function's *return value*
      * is itself a fat closure box (its body evaluates to a capturing closure),
      * as opposed to a thin function pointer that merely returns a closure when

@@ -1,0 +1,24 @@
+;; poly-closure-inner-dispatch-result-erased (fix): a generic cmp/>>> defn that
+;; composes two ^fat closures (fn [A] B) and (fn [B] C) into (fn [A] C) now
+;; specializes its inner body correctly for float, using Direction 3 in
+;; emit_expr.c to derive the real C dispatch types from the captured bindings'
+;; resolved result_full_type.
+;;
+;; This is the "dispatching" shape that previously triggered TUR-E0705 and was
+;; deferred in docs/reported/poly-closure-inner-dispatch-result-erased.md.
+
+(defn cmp [A B C]
+  [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+  (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
+
+(defn call-float [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+
+(defn fadd  [x : float] : float (+ x 0.25))
+(defn fhalf [x : float] : float (* x 0.5))
+
+(defn main [] : int
+  ;; (7.1 + 0.25) * 0.5 = 3.675
+  (println (call-float (cmp fadd fhalf) 7.1))
+  ;; (3.25 + 0.25) * 0.5 = 1.75
+  (println (call-float (cmp fadd fhalf) 3.25))
+  0)

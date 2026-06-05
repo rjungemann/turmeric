@@ -1695,6 +1695,83 @@ static bool expr_fat_dispatches_closure(const Expr *e) {
     }
 }
 
+/* poly-closure-inner-dispatch-result-erased (Direction 3): return true when a
+ * fat-dispatch in `e` goes through a binding that Direction 3 cannot handle --
+ * i.e. a TY_PTR_VOID bare-fat capture, or a TY_FN without a named-tyvar
+ * result_full_type.  A TY_FN with result_full_type = TY_TYVAR(name) IS handled
+ * by Direction 3 (emit derives the real C type from the binding's resolved type)
+ * and should NOT trigger the guard or block the inner-spec clone. */
+static bool binding_dispatch_is_untyped(const Binding *fb) {
+    if (!fb || fb->is_global) return false;
+    if (fb->type.kind == TY_PTR_VOID) return true;
+    if (fb->type.kind != TY_FN) return false;
+    const Type *rfull = fb->type.as.fn.result_full_type;
+    return !(rfull && rfull->kind == TY_TYVAR && rfull->as.tyvar_.name);
+}
+
+static bool expr_fat_dispatches_untyped(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CALL: {
+            Binding *fb = e->as.call_.fn_binding;
+            if (binding_dispatch_is_untyped(fb)) return true;
+            if (e->as.call_.fn_expr && expr_fat_dispatches_untyped(e->as.call_.fn_expr))
+                return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_fat_dispatches_untyped(e->as.call_.args[i])) return true;
+            return false;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_fat_dispatches_untyped(e->as.let_.bindings[i].init)) return true;
+            return expr_fat_dispatches_untyped(e->as.let_.body);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_fat_dispatches_untyped(e->as.do_.items[i])) return true;
+            return false;
+        case EX_IF:
+            return expr_fat_dispatches_untyped(e->as.if_.cond) ||
+                   expr_fat_dispatches_untyped(e->as.if_.then_) ||
+                   expr_fat_dispatches_untyped(e->as.if_.else_or_null);
+        case EX_ASCRIBE:
+            return expr_fat_dispatches_untyped(e->as.ascribe_.inner);
+        default:
+            return false;
+    }
+}
+
+/* Return true when the closure that `expr` evaluates to has a body that
+ * fat-dispatches only through untyped bindings (Direction 3 cannot recover
+ * the result type). */
+bool expr_closure_return_dispatches_untyped(const Expr *expr) {
+    if (!expr) return false;
+    switch (expr->kind) {
+        case EX_ASCRIBE:
+            return expr_closure_return_dispatches_untyped(expr->as.ascribe_.inner);
+        case EX_CLOSURE:
+            if (expr->as.closure_.closure && expr->as.closure_.closure->fn)
+                return expr_fat_dispatches_untyped(expr->as.closure_.closure->fn->body);
+            return false;
+        case EX_LET:
+        case EX_LETREC:
+            return expr_closure_return_dispatches_untyped(expr->as.let_.body);
+        case EX_DO:
+            for (int i = (int)expr->as.do_.n - 1; i >= 0; i--) {
+                const Expr *item = expr->as.do_.items[i];
+                if (item->kind == EX_DEFER) continue;
+                return expr_closure_return_dispatches_untyped(item);
+            }
+            return false;
+        case EX_IF:
+            return expr_closure_return_dispatches_untyped(expr->as.if_.then_) ||
+                   (expr->as.if_.else_or_null &&
+                    expr_closure_return_dispatches_untyped(expr->as.if_.else_or_null));
+        default:
+            return false;
+    }
+}
+
 /* Return true when the closure that `expr` evaluates to has a body that
  * fat-dispatches a captured closure (see expr_fat_dispatches_closure). Mirrors
  * the structural walk of expr_closure_fn_binding to locate the inner closure. */
