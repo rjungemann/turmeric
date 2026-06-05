@@ -593,19 +593,29 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
     }
 
-    /* If fiber is done, free it.  If not (k was stored), it lives on. */
+    /* If fiber is done, free it.  If not (k was stored), it lives on.
+     * Cache `done` into a local FIRST: freeing the fiber and then reading
+     * `fiber->done` again to decide whether to free the env is a
+     * use-after-free (it only "worked" because the freed slot was not yet
+     * reused). Reading the flag once up front, and freeing the env before
+     * the fiber, keeps the teardown sound. */
+    char done_var[80];
+    snprintf(done_var, sizeof(done_var), "__fiber_done_%d", handle_id);
     indent_buf(body, ctx->indent);
-    buf_printf(body, "if (%s->done) { free(%s->stack); free(%s); }\n",
-               fiber_var, fiber_var, fiber_var);
+    buf_printf(body, "bool %s = %s->done;\n", done_var, fiber_var);
 
     /* Free env if we allocated it and fiber is done (for immediate-resume case).
      * If fiber is NOT done (k stored), leak env for v1 -- it must stay alive
-     * as long as the fiber might be resumed. */
+     * as long as the fiber might be resumed. Done before the fiber free so the
+     * cached flag (not the freed fiber) gates it. */
     if (has_captures) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s->done) { free(%s); }\n",
-                   fiber_var, env_var_name);
+        buf_printf(body, "if (%s) { free(%s); }\n", done_var, env_var_name);
     }
+
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s) { free(%s->stack); free(%s); }\n",
+               done_var, fiber_var, fiber_var);
 
     /* Cleanup */
     for (uint8_t i = 0; i < h->n_cases; i++) free(hfn_names[i]);

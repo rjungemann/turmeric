@@ -4540,7 +4540,8 @@ int main(int argc, char **argv) {
         __eff_frame_25.cases[0].env = NULL;
         __fiber_25->effect_handler_chain = &__eff_frame_25;
         __dispatch_25(&__cap_25, (int64_t)(intptr_t)__fiber_25, 0);
-        if (__fiber_25->done) { free(__fiber_25->stack); free(__fiber_25); }
+        bool __fiber_done_25 = __fiber_25->done;
+        if (__fiber_done_25) { free(__fiber_25->stack); free(__fiber_25); }
         TurEffectCaptureCtx __cap_30;
         __cap_30.has_pending_effect = false;
         __cap_30.eff_name = NULL;
@@ -4558,7 +4559,8 @@ int main(int argc, char **argv) {
         __eff_frame_30.cases[0].env = NULL;
         __fiber_30->effect_handler_chain = &__eff_frame_30;
         __dispatch_30(&__cap_30, (int64_t)(intptr_t)__fiber_30, 0);
-        if (__fiber_30->done) { free(__fiber_30->stack); free(__fiber_30); }
+        bool __fiber_done_30 = __fiber_30->done;
+        if (__fiber_done_30) { free(__fiber_30->stack); free(__fiber_30); }
         int64_t __t35;
         __t35 = INT64_C(0);
         return (int)__t35;

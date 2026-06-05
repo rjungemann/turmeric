@@ -165,7 +165,46 @@ pairs.
    `stdlib/httpd-compress.tur`, `stdlib/map.tur`, and `stdlib/sym.tur` that
    hardcoded the old `_`-mangled spelling were updated to match.
 
-#### A4. Effect-handler closure capture
+#### A4. Effect-handler closure capture -- LANDED 2026-06-05
+
+> **Landed.** The core capture machinery already existed: handler bodies and
+> handle bodies are run through `collect_handle_captures`
+> (`src/compiler/emit_core.c`), packed into a per-handle `__HEnv_<id>` env
+> struct, and threaded through the dispatch trampoline via
+> `TurEffectCaptureCtx::body_env` (`src/compiler/emit_effects.c`). Value,
+> struct, loop-local, and `EX_CLOSURE`/`EX_DEFER` captures all worked. This
+> phase closed the two remaining gaps the ASan sweep exposed:
+>
+> 1. **Nested-handle case-body captures were dropped.** The `EX_HANDLE` arm of
+>    `collect_handle_captures` walked only the inner handle's *body*, not its
+>    *case* bodies. But a nested handle's env-fill (`__henv_inner->f = f`) is
+>    emitted in the *enclosing* function and references those names directly, so
+>    a variable captured only by an inner case body (e.g. `b`, three frames out)
+>    became an undeclared-identifier **hard C compile error**. Fix: the
+>    `EX_HANDLE` arm now merges the inner handle's transitive case-body captures
+>    (minus that inner case's own effect-params/`k`) into the current env --
+>    mirroring the existing `EX_CLOSURE` handling. Shared via a new `cap_append`
+>    helper.
+> 2. **Use-after-free in the handle teardown.** The teardown freed the fiber,
+>    then read `fiber->done` again to decide whether to free the capture env --
+>    a heap-use-after-free that only "worked" because the freed slot was not yet
+>    reused. Fix: cache `done` into a local up front and free the env before the
+>    fiber (`src/compiler/emit_effects.c`).
+>
+> Interaction with `resume`/one-shot continuations is sound: the env lives on
+> the heap (not the fiber stack) and is only freed once the fiber reports
+> `done`; if `k` is stored (fiber not done) the env is intentionally retained.
+> Coverage: `tests/fixtures/effect-handler-capture-loop`,
+> `.../effect-handler-capture-struct`, `.../effect-handler-capture-nested`. All
+> are ASan-clean (`-fsanitize=address,undefined`, `detect_leaks=1`).
+>
+> **Orthogonal finding (not fixed here):** any `(fn ...)` that captures a free
+> variable heap-allocates a fat-closure env that is never freed, so a closure
+> built inside a loop or a repeatedly-invoked handler leaks one env per
+> construction. This is a general fat-closure lifetime gap, not effect-specific;
+> reported in `docs/reported/fat-closure-env-leak.md`. The B2 follow-through
+> (rewrite the effects test suite to exercise capturing handlers) should account
+> for it.
 
 A closure analysis pass over the bodies of `fn`s passed to effect handlers.
 Likely shares machinery with the existing fat-closure work (commit
