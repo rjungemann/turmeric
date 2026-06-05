@@ -530,25 +530,24 @@
 ;;;   lf   -- the continuation fat closure (value -> Parser).
 ;;;   pair -- a Pair(value, remaining-Input) from the first parser.
 
-(defn bind-parser-inner [lf pair] : int
-  (let [lf2 lf]
-    (apply-parser (apply-fat lf2 (pair-first pair)) (pair-second pair))))
+(defn bind-parser-inner [f : fn pair] : int
+  (apply-parser (f (pair-first pair)) (pair-second pair)))
 ;;; bind-parser-impl -- internal implementation for bind-parser.
 ;;; Parameters:
 ;;;   lp  -- the first parser.
 ;;;   lf  -- the continuation fat closure.
 ;;;   inp -- the current Input.
 
-(defn bind-parser-impl [lp lf inp] : int
-  (let [lf2 lf]
-    (mbind (apply-parser lp inp)
-      (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
+(defn bind-parser-impl [lp f : fn inp] : int
+  (mbind (apply-parser lp inp)
+    (fn [pair] (bind-parser-inner f pair))))
 ;;; bind-parser -- sequence two parsers, threading the first result into the second.
 ;;;
 ;;; Parameters:
 ;;;   p -- the first parser.
-;;;   f -- a fat closure of type int64_t -> Parser; receives the parsed value
-;;;        and returns the next parser to run.
+;;;   f -- a `:fn` continuation of type value -> Parser; receives the parsed
+;;;        value and returns the next parser to run. A `(fn ...)` literal
+;;;        coerces into this slot.
 ;;;
 ;;; Returns:
 ;;;   A parser that runs p, then for each result calls (f value) and runs
@@ -557,8 +556,8 @@
 ;;; Example:
 ;;;   (bind-parser (item) (fn [c] (pure c)))  ; identity parser
 
-(defn bind-parser [p f] : ptr<void>
-  (let [lp p lf f] (fn [inp] (let [_ lp] (bind-parser-impl lp lf inp)))))
+(defn bind-parser [p f : fn] : ptr<void>
+  (let [lp p] (fn [inp] (let [_ lp] (bind-parser-impl lp f inp)))))
 ;; then-parser p q: apply p, discard result, apply q
 ;;; then-parser-impl -- internal implementation for then-parser.
 ;;; Parameters:
@@ -817,21 +816,20 @@
 ;; Parser is a kind-(* -> *) handle (carrier: the fat-closure pointer), so the
 ;; standard Functor / Applicative / Monad / Alternative instances are all
 ;; directly expressible and own their type (no orphans). Each method delegates
-;; to an int-carrier worker above. The continuation parameter of `fmap` / `bind`
-;; arrives as a typeclass-method poly closure; handing it to a worker whose
-;; parameter is declared `^fat` lets the compiler box it into the fat-closure
-;; protocol automatically (EX_POLY_TO_FAT), so the instance bodies stay pure
-;; Turmeric -- no hand-written `__tur_poly_to_fat` box.
-;;; fmap-parser-raw -- worker: map a fat-closure fn over the value arm of a parser.
-(defn fmap-parser-raw [p ^fat f] : ptr<void>
-  (let [lp p lf (:: f :int)]
+;; to a worker above. The continuation parameter of `fmap` / `bind` arrives as a
+;; typeclass-method poly closure; now that a `:fn` value is a first-class
+;; callable, the worker declares its callback `:fn` and applies it directly
+;; (captured into the deferred parser closure), so the instance bodies just hand
+;; the continuation straight through -- no `^fat`-sink shim, no `apply-fat`.
+;;; fmap-parser-raw -- worker: map a `:fn` callback over the value arm of a parser.
+(defn fmap-parser-raw [p f : fn] : ptr<void>
+  (let [lp p]
     (fn [inp]
       (let [_ lp]
         (mbind (apply-parser lp inp)
           (fn [pair]
-            (let [_ lf]
-              (mreturn (pair-new (apply-fat lf (pair-first pair))
-                                 (pair-second pair))))))))))
+            (mreturn (pair-new (f (pair-first pair))
+                               (pair-second pair)))))))))
 ;;; ap-parser-raw -- int worker: sequential application of a parser of functions.
 (defn ap-parser-raw [pf pa] : ptr<void>
   (let [lpf pf lpa pa]
@@ -873,13 +871,9 @@
 ;;;   (do-m a (item) b (item) (pure (+ a b)))
 ;;;
 ;;; Since: stdlib-hkt-consolidation T2
-;;; bind-parser-fat -- ^fat-sink wrapper so the Monad instance can hand its poly
-;;; continuation to bind-parser without a hand-written poly-to-fat box.
-(defn bind-parser-fat [p ^fat f] : ptr<void>
-  (bind-parser p (:: f :int)))
 (definstance Monad [Parser]
-  (bind [ma fn]
-    (:: (bind-parser-fat (:: ma :int) fn) :Parser)))
+  (bind [ma k]
+    (:: (bind-parser (:: ma :int) k) :Parser)))
 ;;; Alternative [Parser] -- empty is the always-failing parser; alt-or runs both
 ;;; parsers and unions their results (full backtracking choice).
 ;;;

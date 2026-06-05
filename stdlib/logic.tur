@@ -572,26 +572,26 @@
 ;; Goal is a kind-(* -> *) handle (carrier: the goal fat-closure pointer). The
 ;; instances are built on the inlined solution-stream monad above. The
 ;; continuation parameter of `fmap` / `bind` arrives as a typeclass-method poly
-;; closure; handing it to a worker whose parameter is declared `^fat` lets the
-;; compiler box it into the fat-closure protocol automatically (EX_POLY_TO_FAT),
-;; so the instance bodies stay pure Turmeric -- no hand-written
-;; `__tur_poly_to_fat` box.
+;; closure; now that a `:fn` value is a first-class callable, the worker declares
+;; its callback `:fn` and applies it with a plain `(k s)` -- the carrier is
+;; captured into the deferred goal closure and dispatched there (no `^fat`-sink
+;; box, no `apply-fat`).
 ;;; bind-goal-raw -- worker: conjunction that threads the substitution into the
-;;; (fat-closure) continuation, which returns the next goal.
-(defn bind-goal-raw [g ^fat k] : ptr<void>
-  (let [lg g lk (:: k :int)]
+;;; `:fn` continuation, which returns the next goal.
+(defn bind-goal-raw [g k : fn] : ptr<void>
+  (let [lg g]
     (fn [state]
       (let [_ lg]
         (mbind (apply-goal lg state)
-          (fn [s] (let [_ lk] (apply-goal (apply-fat lk s) s))))))))
-;;; fmap-goal-raw -- worker: map a fat-closure fn over each solution
+          (fn [s] (apply-goal (k s) s)))))))
+;;; fmap-goal-raw -- worker: map a `:fn` callback over each solution
 ;;; substitution.
-(defn fmap-goal-raw [g ^fat f] : ptr<void>
-  (let [lg g lf (:: f :int)]
+(defn fmap-goal-raw [g f : fn] : ptr<void>
+  (let [lg g]
     (fn [state]
       (let [_ lg]
         (mbind (apply-goal lg state)
-          (fn [s] (let [_ lf] (mreturn (apply-fat lf s)))))))))
+          (fn [s] (mreturn (f s))))))))
 ;;; Functor [Goal] -- map a function over each solution substitution.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3

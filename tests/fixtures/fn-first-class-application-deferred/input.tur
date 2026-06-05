@@ -1,0 +1,33 @@
+;; fn-first-class-application-deferred -- a `:fn` value survives *capture* into
+;; a returned closure and is callable from the closure body later (the F6-0
+;; prerequisite of the fn-first-class-stdlib-deworkaround plan).
+;;
+;; The combinator stacks (parsec/backtrack/logic) capture their continuation
+;; into a deferred goal/parser closure and invoke it later, so the 16-byte
+;; `tur_poly_fn_t` carrier must be stored intact in the closure env and the
+;; deferred `(k x)` must still emit `k.fn(k.env, x)` through the env access.
+
+;; Capture a `:fn` param into a returned closure; apply it later.
+(defn make-applier [k : fn] : ptr<void>
+  (let [lk k]
+    (fn [x : int] : int (lk x))))
+
+(defn dbl [n : int] : int (* n 2))
+
+;; Deferred application threading a second captured value alongside the `:fn`.
+(defn make-adder [k : fn bias : int] : ptr<void>
+  (let [lk k lb bias]
+    (fn [x : int] : int (+ (lk x) lb))))
+
+(defn main [] : int
+  ;; named fn captured then deferred
+  (let [app (make-applier dbl)]
+    (println (app 21)))                                  ;; -> 42
+  ;; capturing lambda coerced to `:fn`, captured, then deferred
+  (let [bias 40
+        app2 (make-applier (fn [n : int] : int (+ n bias)))]
+    (println (app2 2)))                                  ;; -> 42
+  ;; `:fn` captured alongside a plain int into the same env
+  (let [app3 (make-adder dbl 2)]
+    (println (app3 20)))                                 ;; -> 42
+  0)

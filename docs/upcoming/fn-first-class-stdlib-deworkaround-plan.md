@@ -6,7 +6,7 @@ description: Now that a `:fn` value is a first-class callable (the fn-first-clas
 
 # De-workaround the stdlib HKT combinators onto first-class `:fn` -- Plan
 
-> **Status:** Draft
+> **Status:** COMPLETE
 > **Type:** stdlib cleanup -- closure ABI consumer
 > **Builds on (COMPLETE):**
 > - [fn-type-first-class-application-plan.md](fn-type-first-class-application-plan.md)
@@ -105,6 +105,34 @@ This is exactly why F6 was split out: the de-workaround is only safe once
 captured-and-deferred `:fn` application is proven, and that is a distinct
 capability from the immediate-application path the parent plan shipped.
 
+### Resolution -- the capability was missing; it is now fixed
+
+F6-0 found that deferred `:fn` capture **did not work**: a captured `:fn`
+carrier produced a miscompile (`error: 'lk' undeclared`), and the capability
+turned out to be the real content of this plan, exactly as anticipated. Three
+coupled gaps in the closure-capture path were fixed:
+
+1. **Capture-set collection (`elab_core.c`, `collect_free_vars`).** A `:fn`
+   carrier referenced only through a compiler-inserted conversion shim
+   (`EX_POLY_WRAP` for a `:fn`->`:fn` pass-through argument, `EX_POLY_TO_FAT` /
+   `EX_FN_TO_FAT` / `EX_REINTERPRET` / `EX_CAST`) was invisible to the free-var
+   walk, so the enclosing closure was emitted captureless and the inner body
+   referenced an undeclared local. The walk now descends through these shim
+   nodes (in both the local-defs pre-pass and the main traversal). A `:fn`
+   carrier *applied directly* `(k x)` inside a closure is likewise now counted
+   as a capture (the `is_poly_call` callee), mirroring the existing
+   `closure_fn_binding` / `:ptr<void>` / `^fat` cases.
+2. **Env-qualified callee naming (`emit_core.c`, `emit_call_name`).** The
+   poly-fn dispatch path emits `<name>.fn(<name>.env, ...)`, but
+   `emit_call_name` returned the bare local name, so a *captured* carrier
+   emitted `lk.fn(lk.env, ...)` instead of `__env->lk.fn(...)`. The captured
+   binding -> env access rewrite (previously only in `name_for_binding`) is now
+   factored into a shared `capture_env_access` helper and applied here too.
+
+With these in place the 16-byte `tur_poly_fn_t` carrier survives capture intact
+and the deferred `(k s)` dispatches through the env. Guarded permanently by
+`tests/fixtures/fn-first-class-application-deferred/`.
+
 ## Design
 
 For each combinator stack, in isolation:
@@ -127,26 +155,36 @@ and substructural discipline of each combinator must be preserved.
 
 ## Phasing (each phase ends suite-green)
 
-0. **F6-0 -- prove deferred `:fn` capture.** A throwaway fixture that captures a
-   `:fn` parameter into a returned closure and applies it later. If it works,
-   proceed; if not, implement the capture support and add a permanent fixture
-   under `tests/fixtures/fn-first-class-application/` (or a sibling) before
-   touching stdlib. *Exit:* deferred `(k s)` round-trips.
-1. **F6-1 -- Backtrack.** Retype `mbind`'s / `fmap-backtrack-raw`'s /
-   `ap-backtrack-raw`'s continuation to `:fn`, drop `mbind-fat` and
-   `bt-apply-fat` where unused. *Exit:* `hkt-stdlib-backtrack-instances`
-   passes with identical output.
-2. **F6-2 -- Parser.** Retype `bind-parser` / `bind-parser-inner`'s continuation
-   to `:fn`, drop `bind-parser-fat`; keep `apply-parser` (parser dispatch, not a
-   continuation). Retire `apply-fat` only if the continuation path was its sole
-   caller. *Exit:* `hkt-stdlib-parser-instances` passes.
-3. **F6-3 -- Goal.** Retype `bind-goal-raw` / `fmap-goal-raw`'s continuation to
-   `:fn`, applied inside the deferred goal closure; drop the `^fat` param and the
-   `(:: k :int)` ascription. *Exit:* `hkt-stdlib-logic-instances` passes.
-4. **F6-4 -- sweep.** Grep for any remaining `^fat`-sink continuation shim or
-   `apply-fat`-style continuation dispatch across stdlib; remove or justify each.
-   Regenerate any affected `expected.c` snapshots per the CLAUDE.md recipe.
-   *Exit:* `bash tests/run.sh` green; no orphaned shims.
+0. **F6-0 -- prove deferred `:fn` capture. (DONE)** Found broken; the
+   closure-capture path was fixed (see *Resolution* above). Guarded by
+   `tests/fixtures/fn-first-class-application-deferred/`. *Exit met:* deferred
+   `(k s)` round-trips.
+1. **F6-1 -- Backtrack. (DONE)** Retyped `fmap-backtrack-raw`'s continuation to
+   `:fn` (direct `(f x)`); the Monad `bind` now wraps the poly continuation in a
+   plain result-mapping lambda `(mbind ma (fn [x] (k x)))`, dropping `mbind-fat`.
+   `bt-apply-fat` stays -- `ap-backtrack-raw` still uses it to dispatch *function
+   elements* pulled from a result list (genuine int-carried fat boxes, not poly
+   `:fn` continuations). *Exit met:* `hkt-stdlib-backtrack-instances` passes with
+   identical output (`4 2 3 3 4 2 2 4 11 12 1 2 3`).
+2. **F6-2 -- Parser. (DONE)** Retyped the whole continuation chain
+   (`bind-parser` / `bind-parser-impl` / `bind-parser-inner` / `fmap-parser-raw`)
+   to `:fn`, applied directly; dropped `bind-parser-fat`. `apply-parser` (parser
+   dispatch) and `apply-fat` stay -- `ap-parser-raw` uses `apply-fat` on a parsed
+   *function element*. *Exit met:* `hkt-stdlib-parser-instances` passes
+   (`131 66 66 66 0`).
+3. **F6-3 -- Goal. (DONE)** Retyped `bind-goal-raw` / `fmap-goal-raw`'s
+   continuation to `:fn`, applied inside the deferred goal closure; dropped the
+   `^fat` param and the `(:: k :int)` ascription. `apply-fat` stays -- `fresh-impl`
+   applies a user-supplied lambda continuation (`fresh`'s `f`), which is outside
+   the HKT-instance de-workaround scope. *Exit met:* `hkt-stdlib-logic-instances`
+   passes (`2 1 1 1 2`).
+4. **F6-4 -- sweep. (DONE)** No `^fat`-sink continuation shims remain; the
+   surviving `apply-fat` / `bt-apply-fat` callers are all *function-element*
+   dispatch (`ap`) or the out-of-scope `fresh` user-lambda continuation. The
+   remaining `^fat` spellings in `parsec.tur` are *return-type* boxes on
+   `pfail-raw` / `item-raw` (bare-fn -> fat, not continuation sinks).
+   `stdlib/docstrings.tur` regenerated. *Exit met:* `bash tests/run.sh` green
+   (1465 passed, 0 failed); `run-turi.sh` green (124 passed).
 
 ## Risks
 
