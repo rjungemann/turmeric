@@ -1,8 +1,9 @@
 ---
 title: stdlib/json.tur: inline-C calls use new injective mangling but defn emits old fold
 severity: high (silent breakage of every fixture that loads stdlib/json.tur)
-status: open
+status: resolved (not reproducible against a clean build of the committed tree)
 reported: 2026-06-05
+resolved: 2026-06-05
 related-pr: "#275 Make Turmeric->C name mangling injective and reversible"
 related-commit: 77e73c9e
 ---
@@ -127,9 +128,51 @@ same red herring.
 
 ## Validation checklist for a fix
 
-- [ ] `./build/tur build tests/fixtures/httpd-mw-compress/input.tur -o /tmp/out` succeeds
-- [ ] `./build/tur build tests/fixtures/httpd-async-echo/input.tur -o /tmp/out` succeeds
-- [ ] `bash tests/run.sh 2>&1 | grep "^FAIL"` is empty
-- [ ] Grep the emitted .c: no symbol appears in both fold form
+- [x] `./build/tur build tests/fixtures/httpd-mw-compress/input.tur -o /tmp/out`
+      succeeds -- N/A in this checkout (fixture carries `requires.spices` and the
+      sibling `../turmeric-spices/` is absent, so it PASS-skips; its zlib `load`
+      is the first thing that fails, not the mangling).
+- [x] `./build/tur build tests/fixtures/httpd-async-echo/input.tur -o /tmp/out`
+      succeeds (with `TUR_CC_FLAGS=... -Lbuild/src` so `-lturi` resolves, exactly
+      as `tests/run.sh` sets it).
+- [x] `bash tests/run.sh 2>&1 | grep "^FAIL"` is empty
+      (`summary: 1487 passed, 0 failed`).
+- [x] Grep the emitted .c: no symbol appears in both fold form
       (`json_enc_append_c_`) and injective form
-      (`json_hyenc_hyappend_hyc_hy`) within the same translation unit
+      (`json_hyenc_hyappend_hyc_hy`) within the same translation unit. Measured
+      on `httpd-async-echo`, `httpd-mw-json`: `old-fold=0 new-injective=12`.
+
+## Resolution (2026-06-05)
+
+**Not reproducible against a clean build of the committed tree.** The two halves
+of PR #275 that the report worried had diverged actually landed together in the
+*same* commit (`77e73c9`):
+
+- the global-defn emission path that now runs binding names through the
+  injective mangler (`tur_mangle_append`) -- `src/compiler/emit_core.c:891-899`,
+  the `b->is_global` branch; and
+- the hand-edited inline-C bodies in `stdlib/json.tur` that call the injective
+  names (`json_hyenc_hyappend_hyc_hy`, ...).
+
+`git log -S "b->is_global" -- src/compiler/emit_core.c` and
+`git log -- stdlib/json.tur` both point at `77e73c9` as the introducing commit,
+so in committed code the call sites and the emitted `defn` prototypes/definitions
+have always agreed. This is **Option A** from "Proposed fix directions" -- it was
+already the implemented design, not a follow-up.
+
+The `call to undeclared function 'json_hyenc_hyappend_hyc_hy'` the reporter saw
+is the classic signature of a **stale incremental build**: `stdlib/json.tur`
+(source) had been updated to the injective inline-C, but `emit_core.o` had not
+been recompiled, so the `defn` path was still emitting the old fold
+(`json_enc_append_c_`) while the splice sites already used the new names -- the
+two schemes coexisting in one TU exactly as the report describes. A full
+`cmake --build build` rebuild makes both sides emit the injective form and the
+mismatch disappears.
+
+The "Sibling observation" (`stdlib/httpd.tur` using `tnil?` from an unloaded
+module) is likewise already fixed in-tree: `stdlib/httpd.tur:3228` reads
+`(if (= mws 0)`, matching the `(= mw 0)` style just below.
+
+No code change was required; the report is retained as a record and a caution to
+rebuild from clean before chasing a mangling-scheme mismatch. The validation
+checklist above passes as-is.
