@@ -57,6 +57,15 @@ struct Binding {
     /* Returned-closure metadata: if evaluating this binding yields a closure value,
      * this points at the closure's thunk binding. */
     struct Binding *returns_closure_fn_binding;
+    /* poly-closure-result-specialization: true when the returned inner closure's
+     * body fat-dispatches a captured (ptr<void>/fn-typed) closure -- i.e. its
+     * intermediate result types are erased to the int64 carrier and cannot be
+     * resolved to a float per-monomorphization clone.  Such a body is NOT
+     * register-class-safe to specialize (the emit trigger skips it; elab keeps
+     * the TUR-E0705 hard error for a float binding rather than miscompile). A
+     * dispatch-free inner body (e.g. `(fn [t] : A val)` returning a captured
+     * value) is safe and IS specialized. */
+    bool closure_return_dispatches;
     /* let-bound-sf-loses-outer-arg-type: true when this function's *return value*
      * is itself a fat closure box (its body evaluates to a capturing closure),
      * as opposed to a thin function pointer that merely returns a closure when

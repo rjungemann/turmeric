@@ -1995,16 +1995,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* CY2: Fat-closure dynamic dispatch with n_args > 0.
                      * The fat closure has layout: struct { int64_t __fn; ... }
                      * Extract __fn as a function pointer and call it with fat_ptr + args. */
-                    const char *ret_c = type_c_name(e->type);
+                    /* poly-closure-result-specialization: inside an inner-body
+                     * spec, the dispatched closure's result/arg tyvars resolve
+                     * to concrete floats; use emit_resolve_type so the typedef
+                     * cast is xmm0-correct.  Identity outside a spec. */
+                    Type _disp_result = emit_resolve_type(ctx, e->type);
+                    const char *ret_c = type_c_name(_disp_result);
                     Type arg_types[MAX_FN_ARITY];
                     char **arg_strs = (char **)malloc(n * sizeof(char *));
                     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                     for (uint32_t i = 0; i < n; i++) {
-                        arg_types[i] = e->as.call_.args[i]->type;
+                        arg_types[i] = emit_resolve_type(ctx, e->as.call_.args[i]->type);
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
-                        e->type, n > 0 ? arg_types : NULL, (uint8_t)n);
+                        _disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
                     if (thunk_typedef) {
                         /* TS1: typed fat-closure layout stores __fn as a typed function pointer. */
@@ -2013,7 +2018,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         /* Legacy fallback: polymorphic fat closures still store __fn as int64_t. */
                         buf_printf(&out, "((%s (*)(void*", ret_c);
                         for (uint32_t i = 0; i < n; i++) {
-                            buf_printf(&out, ", %s", type_c_name(e->as.call_.args[i]->type));
+                            buf_printf(&out, ", %s", type_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -2652,7 +2657,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit closure: the closure value IS the env struct (passed by value to thunk) */
             struct Closure *closure = e->as.closure_.closure;
             const Symbol *env_name = closure->env_name;
-            
+            /* poly-closure-result-specialization: when emitting the body of an
+             * outer (closure-returning) spec, the EX_CLOSURE it constructs must
+             * store the register-class-correct inner-body clone's thunk and use
+             * its suffixed env struct.  Resolve the thunk's result/param tyvars
+             * to the spec's concrete (float) types via emit_resolve_type so the
+             * typed thunk slot is xmm0-correct.  No-op outside a matching spec. */
+            const char *thunk_sym_override = NULL;
+            const EmitAbiSpecialization *_cur_spec = ctx->current_abi_specialization;
+            if (_cur_spec && _cur_spec->inner_closure_spec_idx >= 0) {
+                const EmitAbiSpecialization *_isp =
+                    &ctx->abi_specializations[_cur_spec->inner_closure_spec_idx];
+                if (_isp->binding == closure->fn->binding) {
+                    if (_isp->env_name_override) env_name = _isp->env_name_override;
+                    thunk_sym_override = _isp->clone_name;
+                }
+            }
+
             /* Emit env struct type definition at file scope if not already emitted */
             /* Check if we've already emitted this env struct */
             bool already_emitted = false;
@@ -2665,9 +2686,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
             if (!already_emitted) {
-                Type thunk_result = emit_fn_result_type_from_type(closure->fn->binding->type);
-                Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+                Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
                 uint8_t thunk_arity = closure->fn->n_params > 0 ? (uint8_t)(closure->fn->n_params - 1) : 0;
+                Type _rtp[MAX_FN_ARITY];
+                Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+                if (thunk_params && thunk_sym_override) {
+                    for (uint8_t _t = 0; _t < thunk_arity; _t++)
+                        _rtp[_t] = emit_resolve_type(ctx, closure->fn->param_types[_t + 1]);
+                    thunk_params = _rtp;
+                }
                 char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file, thunk_result, thunk_params, thunk_arity);
                 /* Track this env struct */
                 if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
@@ -2699,7 +2726,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * read-back agree. */
                     const char *field_ctype = captured->type.kind == TY_FN
                         ? "int64_t"
-                        : type_c_name(captured->type);
+                        : emit_type_c_name(ctx, captured->type);
                     buf_printf(ctx->file, "%s %s; ", field_ctype, field);
                     free(field);
                 }
@@ -2715,11 +2742,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * using the generic fat-closure protocol recover the thunk as:
              *   thunk = (int64_t(*)(void*,int64_t))(intptr_t)fat->__fn
              * and invoke it as thunk(fat_ptr, arg). */
-            Type thunk_result = emit_fn_result_type_from_type(closure->fn->binding->type);
-            Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+            Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
             uint8_t thunk_arity = closure->fn->n_params > 0 ? (uint8_t)(closure->fn->n_params - 1) : 0;
+            Type _rtp2[MAX_FN_ARITY];
+            Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+            if (thunk_params && thunk_sym_override) {
+                for (uint8_t _t = 0; _t < thunk_arity; _t++)
+                    _rtp2[_t] = emit_resolve_type(ctx, closure->fn->param_types[_t + 1]);
+                thunk_params = _rtp2;
+            }
             char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file, thunk_result, thunk_params, thunk_arity);
-            char *thunk_sym = raw_name_for_binding(closure->fn->binding);
+            char *thunk_sym = thunk_sym_override
+                ? strdup(thunk_sym_override)
+                : raw_name_for_binding(closure->fn->binding);
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "struct %s *%s = (struct %s *)malloc(sizeof(struct %s));\n",

@@ -1,0 +1,20 @@
+;; poly-closure-result-specialization (Stage D): a generic defn that returns an
+;; (fn ...) whose result type is the type parameter A now specializes its inner
+;; closure body per monomorphization, so a FLOAT instantiation is register-class
+;; correct (xmm0) instead of dispatching the shared int64 thunk -- the case the
+;; former TUR-E0705 guard rejected.  The :int instantiation continues to share
+;; the integer carrier.  See docs/upcoming/poly-closure-result-specialization-plan.md.
+
+(defn constant [A] [val :A] : ptr<void>
+  (fn [t : float] : A val))
+
+(defn call-float [^fat f :(fn [:float] #{} :float) t : float] : float (f t))
+(defn call-int   [^fat f :(fn [:float] #{} :int)   t : float] : int   (f t))
+
+(defn main [] : int
+  (let [k440  (constant 440.0)
+        kflag (constant 1)]
+    (println (call-float k440  0.0))
+    (println (call-float k440  99.0))   ;; the float closure is reusable
+    (println (call-int   kflag 0.0)))
+  0)

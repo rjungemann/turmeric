@@ -296,9 +296,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->file = &fn_tmp;
     file = &fn_tmp;
 
+    /* poly-closure-result-specialization: an inner-closure-body spec emits its
+     * env struct + cast under a suffixed env name so the float layout does not
+     * collide with the base int64-carrier struct.  NULL/identical for ordinary
+     * specs and non-spec closures. */
+    const Symbol *env_name_eff = fd->closure ? fd->closure->env_name : NULL;
+    if (use_abi_spec && ctx->current_abi_specialization->env_name_override)
+        env_name_eff = ctx->current_abi_specialization->env_name_override;
+
     /* Phase 3: Emit env struct for closure thunks */
     if (fd->closure) {
-        const Symbol *env_name = fd->closure->env_name;
+        const Symbol *env_name = env_name_eff;
         /* Check if we've already emitted this env struct */
         bool already_emitted = false;
         if (ctx->env_struct_names) {
@@ -313,7 +321,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             Type thunk_result = (e->type.kind == TY_FN && e->type.as.fn.result_full_type)
                 ? *e->type.as.fn.result_full_type
                 : emit_type_from_kind(e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL);
+            /* poly-closure-result-specialization: resolve the inner result tyvar
+             * to its concrete (float) type so the typed thunk slot is xmm0-correct. */
+            thunk_result = emit_resolve_type(ctx, thunk_result);
             Type *thunk_params = fd->n_params > 1 ? &fd->param_types[1] : NULL;
+            Type resolved_thunk_params[MAX_FN_ARITY];
+            if (thunk_params && use_abi_spec) {
+                uint8_t tp_n = (uint8_t)(fd->n_params - 1);
+                for (uint8_t _t = 0; _t < tp_n; _t++)
+                    resolved_thunk_params[_t] = emit_resolve_type(ctx, fd->param_types[_t + 1]);
+                thunk_params = resolved_thunk_params;
+            }
             uint8_t thunk_arity = fd->n_params > 0 ? (uint8_t)(fd->n_params - 1) : 0;
             char *thunk_typedef = ensure_typed_thunk_typedef(ctx, file, thunk_result, thunk_params, thunk_arity);
             if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
@@ -347,7 +365,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                                           ? "tur_poly_fn_t"
                                           : (captured->type.kind == TY_FN
                                                ? "int64_t"
-                                               : type_c_name(captured->type));
+                                               : emit_type_c_name(ctx, captured->type));
                 char *field = raw_name_for_binding(captured);
                 buf_printf(file, "%s %s; ", cap_ctype, field);
                 free(field);
@@ -584,12 +602,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             indent_buf(file, ctx->indent);
             char *env_param_name = raw_name_for_binding(env_param);
             /* Create a local variable name for the casted env */
-            char env_var_name_buf[64];
-            snprintf(env_var_name_buf, sizeof(env_var_name_buf), "__env_%s", fd->closure->env_name->name);
+            char env_var_name_buf[80];
+            snprintf(env_var_name_buf, sizeof(env_var_name_buf), "__env_%s", env_name_eff->name);
             buf_printf(file, "struct %s *%s = (struct %s *)%s;\n",
-                       fd->closure->env_name->name,
+                       env_name_eff->name,
                        env_var_name_buf,
-                       fd->closure->env_name->name,
+                       env_name_eff->name,
                        env_param_name);
             free(env_param_name);
             /* Store the env variable name for use in name_for_binding */

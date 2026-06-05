@@ -3062,17 +3062,25 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
-    /* Report guard (poly-defn-shares-inner-closure-body-across-monomorphizations):
-     * a generic defn that *returns* an (fn ...) whose declared result type is one
-     * of the defn's type parameters emits a single shared inner closure body,
-     * carried with the integer thunk ABI (the result tyvar lowers to int64_t).
-     * The outer defn is monomorphized per concrete type, but the inner body is
-     * not; a float specialization dispatches the shared body through a
-     * `double (*)(...)` pointer (xmm0) while the body returns through rax -- a
-     * silent register-class miscompile.  cstr/ptr/int specializations share the
-     * integer register and round-trip, so only a floating-point binding of the
-     * inner result tyvar is rejected here.  See the report for fix directions. */
-    if (n_type_bindings > 0 && fn_binding && fn_binding->returns_closure_fn_binding) {
+    /* poly-closure-result-specialization (Stage B-D): a generic closure-returning
+     * defn specialized at a FLOAT result type previously always raised TUR-E0705
+     * (the lifted inner body was emitted once on the integer thunk ABI -- a
+     * xmm0-vs-rax register-class miscompile).  The emit phase now clones the
+     * inner body per monomorphization (emit_module.c
+     * emit_inner_closure_needs_float_spec + EmitAbiSpecialization.env_name_-
+     * override / inner_closure_spec_idx), so a DISPATCH-FREE inner body (e.g.
+     * `(fn [t] : A val)` returning a captured value) is register-class-correct.
+     *
+     * The guard is RETAINED only for the case emit cannot yet fix: an inner body
+     * that fat-dispatches a captured closure (e.g. `(fn [x] (g (f x)))`).  There
+     * the intermediate result types are erased to the int64 carrier in the
+     * elaborated body, so the clone cannot recover their float register class --
+     * a hard error is correct, not a silent miscompile.  Generalizing this
+     * (per-spec re-elaboration of the inner body) is the remaining Stage E work;
+     * see docs/reported/poly-closure-inner-dispatch-result-erased.md. */
+    if (n_type_bindings > 0 && fn_binding &&
+        fn_binding->returns_closure_fn_binding &&
+        fn_binding->closure_return_dispatches) {
         Binding *inner = fn_binding->returns_closure_fn_binding;
         const Type *inner_res = (inner->type.kind == TY_FN)
             ? inner->type.as.fn.result_full_type : NULL;
@@ -3086,10 +3094,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         TUR_E0705_POLY_CLOSURE_RESULT_TYVAR,
                         "polymorphic closure-returning function '%s' specialized at a "
                         "floating-point type (TUR-E0705): the returned (fn ...) result "
-                        "type is the type parameter '%s', but its body is emitted once "
-                        "with the integer-register closure ABI; a float specialization "
-                        "is a silent register-class miscompile (xmm0 vs rax). Work "
-                        "around by writing a monomorphic defn per concrete result type.",
+                        "type is the type parameter '%s', and its body dispatches a "
+                        "captured closure whose intermediate result types are erased to "
+                        "the integer-register closure ABI; a float specialization would "
+                        "be a register-class miscompile (xmm0 vs rax). Work around by "
+                        "writing a monomorphic defn per concrete result type.",
                         fn_binding->name ? fn_binding->name->name : "?",
                         inner_res->as.tyvar_.name);
                 }
