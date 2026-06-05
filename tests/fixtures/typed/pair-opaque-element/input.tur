@@ -1,0 +1,29 @@
+;;
+;; Regression: a parametric struct (Pair[A B]) whose element type is an
+;; *opaque* newtype must monomorphize to a by-value specialization
+;; (Pair__int__Tag), not fall back to the broken generic carrier template
+;; `(int64_t){.fst = a, .snd = b}` -- see
+;; docs/reported/generic-struct-opaque-element-miscompile.md.
+
+(defopaque Tag :int)
+
+(defn make-tag [n : int] : Tag
+  (:: n :Tag))
+
+(defn tag->int [t : Tag] : int
+  (:: t :int))
+
+;; Pair<int Tag>: opaque element in the second slot.
+(defn fst-of [] : int
+  (pair-fst (pair 5 (make-tag 7))))
+
+(defn snd-of [] : int
+  (tag->int (pair-snd (pair 5 (make-tag 7)))))
+
+;; Pair<Tag int>: opaque element in the first slot.
+(defn fst-of2 [] : int
+  (tag->int (pair-fst (pair (make-tag 9) 3))))
+
+(println (fst-of))
+(println (snd-of))
+(println (fst-of2))
