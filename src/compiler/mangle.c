@@ -70,3 +70,20 @@ void tur_mangle_append(char *dst, size_t *pk, const char *name, size_t len) {
     }
     *pk = k;
 }
+
+void tur_mangle_ident(const char *name, char *out, size_t cap) {
+    if (cap == 0) return;
+    size_t k = 0;
+    /* Mangle one source byte at a time so we can stop cleanly before the fixed
+     * buffer overflows. tur_mangle_append treats each byte independently, so
+     * per-byte and bulk mangling yield identical output. */
+    for (const char *p = name; *p; p++) {
+        char tmp[4];          /* worst case per byte is the "_xHH" escape == 4 */
+        size_t tk = 0;
+        tur_mangle_append(tmp, &tk, p, 1);
+        if (k + tk >= cap) break;   /* leave room for the NUL terminator */
+        memcpy(out + k, tmp, tk);
+        k += tk;
+    }
+    out[k] = '\0';
+}
