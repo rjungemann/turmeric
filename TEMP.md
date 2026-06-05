@@ -23,6 +23,9 @@ do not collapse phases, do not reword entries into prose, and update the
 
 ---
 
+Reported complete - io-file-open-untyped-params-default-to-int.md
+In progress - unsafe-block-capture-misses-ascription-vars.md
+
 ## Phase 6 -- Typeclass reintroduction
 
 33. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
