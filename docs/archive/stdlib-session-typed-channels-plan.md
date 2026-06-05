@@ -6,6 +6,30 @@ description: A thin generic wrapper `SChan<p>` over the (opaque, linear) `Chan` 
 
 # Stdlib Session-Typed Channel Wrappers -- Plan
 
+> **Status:** COMPLETE (landed in "Add stdlib/schan.tur: session-typed
+> channel wrappers", #247). All three phases shipped:
+> - **S1** -- `stdlib/schan.tur` with `schan-new` / `schan-send` /
+>   `schan-recv` / `schan-close` (plus the `schan-cell-*` out-parameter
+>   helpers). Round-trip fixture `tests/fixtures/schan-roundtrip` exercises
+>   the `SSend int (SRecv int SClose)` protocol; the negative fixture
+>   `tests/fixtures/errors/schan-skip-step` confirms a skipped step is a
+>   compile-time `TUR-E0001` phantom mismatch.
+> - **S2** -- `tests/fixtures/schan-worker-pool` drives a real
+>   three-worker request/response loop over wrapped channels, leak-clean
+>   under ASan.
+> - **S3** -- documented in `docs/guides/session-types-guide.md`
+>   (Session-Typed Channel Wrappers section); `stdlib/docstrings.tur`
+>   regenerated to carry the schan entries.
+>
+> One deviation from the original design is recorded inline: `schan-recv`
+> returns the typed continuation directly and delivers the received value
+> through a caller-provided cell, rather than the planned
+> `Pair<T SChan<R>>`. That ideal is blocked by a monomorphizer limitation
+> around parametric aggregates whose element type is a phantom carried
+> inside an opaque -- see `docs/reported/generic-struct-opaque-element-miscompile.md`.
+> The continuation stays fully typed, so the protocol-ordering guarantee
+> is intact on every step.
+>
 > **Type:** stdlib API hardening -- session-typed channels
 > **Prerequisites:** `Chan` / `AsyncChan` are opaque newtypes
 > ([[stdlib-opaque-handle-types-plan]] Tier 1) **and** linear

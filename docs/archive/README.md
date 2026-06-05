@@ -123,7 +123,7 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [module-system-guide.md](../guides/module-system-guide.md) | `module-system-plan.md` (history) |
 | [package-management-guide.md](../guides/package-management-guide.md) | `package-management-plan.md`, `tur-cli-plan.md` |
 | [serializable-continuations-guide.md](../guides/serializable-continuations-guide.md) | `serializable-continuations-plan.md` (history) |
-| [session-types-guide.md](../guides/session-types-guide.md) | `session-types-plan.md` (history; SS0--SS8 complete) |
+| [session-types-guide.md](../guides/session-types-guide.md) | `session-types-plan.md` (history; SS0--SS8 complete); `stdlib-session-typed-channels-plan.md` (complete; S1--S3) |
 | [sized-types-guide.md](../guides/sized-types-guide.md) | `sized-types-plan.md` (history; SZ3 complete) |
 | [stm-guide.md](../guides/stm-guide.md) | `stm-plan-2.md` (history) |
 | [substructural-types-guide.md](../guides/substructural-types-guide.md) | `substructural-types-plan.md` (complete); `linear-types-plan.md` (history) |
