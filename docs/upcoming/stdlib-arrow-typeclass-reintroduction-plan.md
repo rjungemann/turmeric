@@ -14,9 +14,13 @@ are now first-class instance heads whose method parameters are callable arrows,
 proven by `tests/fixtures/arrow-instance-basic` (an `arr`/`comp` network through
 dispatch). See
 [docs/reported/function-arrow-not-instantiable-as-typeclass-head.md](../reported/function-arrow-not-instantiable-as-typeclass-head.md)
-(Resolution). The original BLOCKED assessment is preserved below for history;
-the plan may now start, with return-type *dispatch* for nullary arrow methods
-(fix direction #3) as the remaining caveat.
+(Resolution). Return-type *dispatch* for nullary arrow methods (fix direction
+#3 -- e.g. Category `ident`/ArrowZero `zeroArrow`) has since been closed too,
+via the unique-arrow-instance fallback proven by
+`tests/fixtures/arrow-instance-nullary` (the
+[return-type-dispatch-nullary-arrow plan](return-type-dispatch-nullary-arrow-methods-plan.md)).
+The original BLOCKED assessment is preserved below for history; the plan may now
+start, with no outstanding instance-head/dispatch gate.
 
 ### Original assessment -- BLOCKED, plan does not start
 

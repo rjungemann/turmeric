@@ -9,9 +9,17 @@
 > emit C, and run (repro #2 prints `8`). Covered by
 > `tests/fixtures/arrow-instance-basic`. See **Resolution** at the end.
 >
-> Out of scope (unchanged, see fix direction #3): return-type *dispatch* for a
-> nullary arrow method (`arr :: (b->c) -> a b c` selected purely from the result
-> type) and direct application of a bare `(arr f)` result -- the latter is the
+> **Fix direction #3 also RESOLVED (2026-06-05).** Return-type *dispatch* for a
+> nullary arrow method (a method with no argument to dispatch on whose result is
+> the arrow itself, e.g. Category `ident :: arr a a`) now resolves even with no
+> expected type, via a unique-arrow-instance fallback (the
+> return-type-dispatch-nullary-arrow plan, Mechanism B). Covered by
+> `tests/fixtures/arrow-instance-nullary`. The one remaining caveat is genuine
+> *ambiguity*: a nullary arrow method in a class with more than one instance
+> (or whose unique instance is not the arrow) still requires a type ascription
+> -- silently picking an instance there would be unsound. See **Resolution**.
+>
+> Out of scope (unchanged): direct application of a bare `(arr f)` result -- the
 > same limitation the bare-function layer documents (it calls arrow results via
 > `TUR_APPLY1`). Arrow results still compose fine as fat arguments.
 
@@ -182,8 +190,26 @@ Implemented in `src/compiler/elab_typeclasses.c`:
 4. **Argument-based dispatch.** A structurally return-dispatch method defers to
    argument dispatch when its class has an arrow instance and the call supplies
    arguments: the function argument's type selects the `(->)` instance, so no
-   return-type ascription is needed. Nullary arrow methods still use
-   return/expected-type dispatch (fix direction #3, still open).
+   return-type ascription is needed.
+6. **Nullary arrow methods (fix direction #3).** A method with no argument to
+   dispatch on, whose result is the arrow itself (e.g. Category `ident`),
+   resolves through return-type dispatch. With an expected/ascribed `TY_FN` it
+   binds the dispatch tyvar from that type; with **no** expected type,
+   `elab_try_return_dispatch` falls back to the instance set and, when exactly
+   one instance of the class implements the method and its head is the function
+   arrow, selects it unambiguously (`return-type-dispatch-nullary-arrow` plan,
+   Mechanism B). The method impl's `result_full_type`, refined from the body in
+   pass 2, threads the callable signature -- boxed for a capturing body, an
+   unboxed bare function pointer for a non-capturing one like `(fn [x] x)` -- so
+   the result is applicable (`(let [i (ident)] (i 41))` prints `41`). A class
+   with more than one instance keeps requiring an ascription (the choice is
+   genuinely ambiguous). Covered by `tests/fixtures/arrow-instance-nullary`.
+
+   Fixing this also corrected a latent miscompile: pass 2 previously force-set
+   the refined arrow result to `boxed`, which mis-typed a non-capturing body as
+   a fat closure and crashed a direct application (`(i 41)`) by dispatching a
+   thunk on a code address. The boxing now mirrors the body, so non-capturing
+   arrow results are bare function pointers and capturing ones stay boxed.
 5. **Call-site fat shim.** Arrow-instance dispatch auto-shims a bare
    (non-capturing) function argument into a fat-closure box, mirroring the
    `^fat` coercion in `elab_call.c`.

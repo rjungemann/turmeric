@@ -1,0 +1,36 @@
+;; arrow-instance-nullary -- return-type dispatch for a nullary arrow method.
+;;
+;; A nullary typeclass method (no argument to dispatch on, result is the arrow
+;; itself) cannot be resolved from its arguments.  Category's `ident :: arr a a`
+;; is the canonical case.  With a single function-arrow instance in scope, the
+;; unique-instance fallback (return-type-dispatch-nullary-arrow plan, Mechanism
+;; B) resolves `(ident)` to that instance even when no expected type is present
+;; -- closing fix direction #3 of
+;; docs/reported/function-arrow-not-instantiable-as-typeclass-head.md.
+
+(defclass Category [a]
+  (ident [] : a)            ;; nullary -- dispatch variable only in the result
+  (comp [f g] : a))
+
+(definstance Category [(->)]
+  (ident [] (fn [x] x))
+  (comp [f g] (fn [x] (g (f x)))))
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn main [] : int
+  ;; Standalone nullary use with no expected type -- the unique-arrow fallback
+  ;; picks the (->) instance; `ident` is the identity arrow.
+  (let [i (ident)]
+    (println (i 41)))            ;; 41
+
+  ;; Composition: `(ident)` as an argument to comp (a fat-closure sink) still
+  ;; resolves via the same fallback; ident >>> add1 == add1.
+  (let [h (comp (ident) add1)]
+    (println (h 41)))            ;; 42
+
+  ;; Regression for the already-working ascription path: an explicit (fn ...)
+  ;; expected type drives return-dispatch directly.
+  (let [j (:: (ident) (fn [:int] : int))]
+    (println (j 7)))             ;; 7
+  0)
