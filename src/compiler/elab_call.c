@@ -2640,6 +2640,17 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     if (inner_fn_b->is_poly_fn) {
                         /* Already a tur_poly_fn_t -- pass through. */
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
+                    } else if (inner_fn_b->closure_fn_binding && !inner_fn_b->is_global) {
+                        /* CRU: a *capturing closure VALUE* bound to a local (e.g.
+                         * a `:ptr<void>` from `(make-add 10)`).  make_poly_wrapper
+                         * would emit a file-scope wrapper that statically references
+                         * the local env var (`__poly_N` reading `add10_904`), which
+                         * is out of scope at file scope and fails to compile.  Pack
+                         * the runtime closure into the carrier inline instead -- the
+                         * is_closure path reads the thunk from the box's slot 0 at
+                         * runtime, so a capturing closure round-trips correctly. */
+                        wrap->as.poly_wrap_.wrapper_binding = NULL;
+                        wrap->as.poly_wrap_.is_closure = true;
                     } else {
                         uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                             ? inner_fn_b->type.as.fn.arity : 1;

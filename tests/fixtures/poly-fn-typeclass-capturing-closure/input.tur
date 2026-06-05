@@ -1,0 +1,32 @@
+;; Regression: a capturing closure VALUE (a :ptr<void> bound to a local, e.g.
+;; the result of (make-adder 10)) passed to a `:fn` typeclass-method parameter.
+;;
+;; The compiler used to route this through make_poly_wrapper, which emits a
+;; file-scope wrapper that statically references the closure's *local* env
+;; variable -- producing uncompilable C ("'adder10_NNN' undeclared in
+;; __poly_NNN").  It now packs the runtime closure into the tur_poly_fn_t
+;; carrier inline, reading the thunk from the box's slot 0 at runtime, so a
+;; capturing closure round-trips like a captureless lambda.
+
+(defclass Box [^w]
+  (boxmap [wa f :fn] : int))
+
+(defn __id_new [x] : int
+  ```c int64_t *p = malloc(sizeof(int64_t)); *p = x; return (int64_t)(intptr_t)p; ```)
+(defn __id_get [wa] : int
+  ```c return *(int64_t*)(intptr_t)wa; ```)
+
+(definstance Box [idbox]
+  (boxmap [wa f] (__id_new (f wa))))
+
+;; Capturing closure over k -> returned as a :ptr<void> closure value.
+(defn make-adder [k : int] : ptr<void> (fn [wa : int] : int (+ (__id_get wa) k)))
+
+(defn main [] : int
+  (let [w       (__id_new 42)
+        adder10 (make-adder 10)]
+    ;; capturing closure value through the :fn method param
+    (println (__id_get (.boxmap w adder10)))                                  ;; 52
+    ;; captureless lambda still works
+    (println (__id_get (.boxmap w (fn [wa : int] : int (* (__id_get wa) 2)))))) ;; 84
+  0)

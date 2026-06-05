@@ -3603,6 +3603,16 @@ resolved_user_fallback:;
             wrap->as.poly_wrap_.inner = orig;
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else if (inner_b->closure_fn_binding && !inner_b->is_global) {
+                /* CRU: a *capturing closure VALUE* bound to a local reaching a
+                 * `:fn` typeclass-method param.  make_poly_wrapper would emit a
+                 * file-scope wrapper statically referencing the local env var
+                 * (out of scope at file scope -> uncompilable C).  Pack the
+                 * runtime closure inline instead; the is_closure emit path reads
+                 * the thunk from the box's slot 0 at runtime, so a capturing
+                 * closure round-trips correctly. */
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+                wrap->as.poly_wrap_.is_closure = true;
             } else {
                 uint8_t inner_arity = (inner_b->type.kind == TY_FN)
                     ? (uint8_t)inner_b->type.as.fn.arity : 1;

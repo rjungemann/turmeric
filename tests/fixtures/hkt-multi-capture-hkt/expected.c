@@ -4558,7 +4558,7 @@ int main(int argc, char **argv) {
                     __t25->a = a_898;
                     __t25->b = b_899;
                     void *__t26 = __t25;
-                    void *__t27 = __t26;
+                    void *__t27 = (void *)(intptr_t)(__t26);
                     int64_t result_906 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(4)), (tur_poly_fn_t){ __t27, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t27)) });
                     (void)result_906;
                     puts((_un_unopt_unsome_qu(result_906)) ? "true" : "false");
@@ -4582,7 +4582,7 @@ int main(int argc, char **argv) {
                         __t28->q = q_908;
                         __t28->r = r_909;
                         void *__t29 = __t28;
-                        void *__t30 = __t29;
+                        void *__t30 = (void *)(intptr_t)(__t29);
                         int64_t result_916 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(10)), (tur_poly_fn_t){ __t30, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t30)) });
                         (void)result_916;
                         puts((_un_unopt_unsome_qu(result_916)) ? "true" : "false");
@@ -4602,7 +4602,7 @@ int main(int argc, char **argv) {
                 __t31->a = a_917;
                 __t31->b = b_918;
                 void *__t32 = __t31;
-                void *__t33 = __t32;
+                void *__t33 = (void *)(intptr_t)(__t32);
                 puts((_un_unopt_unsome_qu(__inst_TestFunctor_fmap_option(__opt_none(), (tur_poly_fn_t){ __t33, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t33)) }))) ? "true" : "false");
             }
         }
@@ -4617,12 +4617,12 @@ int main(int argc, char **argv) {
                     __t34->__fn = (tur_thunk_int64_t_int64_t_t)__fn_928;
                     __t34->scale = scale_925;
                     void *__t35 = __t34;
-                    void *__t36 = __t35;
+                    void *__t36 = (void *)(intptr_t)(__t35);
                     struct __env_936 *__t37 = (struct __env_936 *)malloc(sizeof(struct __env_936));
                     __t37->__fn = (tur_thunk_int64_t_int64_t_t)__fn_934;
                     __t37->offset = offset_926;
                     void *__t38 = __t37;
-                    void *__t39 = __t38;
+                    void *__t39 = (void *)(intptr_t)(__t38);
                     int64_t r2_939 = __inst_TestFunctor_fmap_option(__inst_TestFunctor_fmap_option(__opt_some(INT64_C(3)), (tur_poly_fn_t){ __t36, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t36)) }), (tur_poly_fn_t){ __t39, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t39)) });
                     (void)r2_939;
                     puts((_un_unopt_unsome_qu(r2_939)) ? "true" : "false");

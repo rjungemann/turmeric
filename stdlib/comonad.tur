@@ -27,7 +27,7 @@
 ;;; Since: Phase CA0
 (defclass Comonad [^w]
   (extract [wa] : int)
-  (extend [wa fn] : int)
+  (extend [wa f :fn] : int)
   (duplicate [wa] : int))
 ;; -- Identity comonad ────────────────────────────────────────────────────────
 ;; Identity w a = Identity a
@@ -55,14 +55,15 @@
   return *p;
   ```)
 ;;; __identity_extend -- apply fn to the Identity cell and wrap the result.
-
-(defn __identity_extend [wa fn] : int
-  ```c /* extend f w = Identity (f w) */
-  int64_t result = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(wa, 0);
-  int64_t *p = malloc(sizeof(int64_t));
-  *p = result;
-  return (int64_t)(intptr_t)p;
-  ```)
+;;;
+;;; CRU Phase 1: extend takes its function as a `:fn` poly-closure carrier and
+;;; applies it directly in Turmeric -- both a captureless lambda and a capturing
+;;; closure round-trip through the carrier, so `extend` no longer crashes on a
+;;; capturing closure the way the old bare-thin-cast `int64_t(*)(int64_t,int64_t)`
+;;; invocation did.
+(defn __identity_extend [wa f :fn] : int
+  ;; extend f w = Identity (f w)
+  (__identity_new (f wa)))
 ;;; __identity_duplicate -- wrap an Identity cell inside another Identity cell.
 
 (defn __identity_duplicate [wa] : int
@@ -74,7 +75,7 @@
 ;;; Comonad [identity] -- Comonad instance for the Identity comonad.
 
 (definstance Comonad [identity] (extract [wa] (__identity_extract wa))
-  (extend [wa fn] (__identity_extend wa fn))
+  (extend [wa f] (__identity_extend wa f))
   (duplicate [wa] (__identity_duplicate wa)))
 ;; -- Pair (Product) comonad ──────────────────────────────────────────────────
 ;; Pair e a = (e, a)   -- carries a fixed environment e alongside a value a.
@@ -109,16 +110,12 @@
   return p->e2;
   ```)
 ;;; __pair_extend -- extend over a Pair cell: (e, a) -> (e, f (e, a)).
-
-(defn __pair_extend [wa fn] : int
-  ```c /* extend f (e, a) = (e, f (e, a)) */
-  Tuple2 *src = (Tuple2 *)(intptr_t)wa;
-  int64_t new_val = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(wa, 0);
-  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
-  p->e1 = src->e1;
-  p->e2 = new_val;
-  return (int64_t)(intptr_t)p;
-  ```)
+;;;
+;;; CRU Phase 1: extend takes its function as a `:fn` poly-closure carrier (see
+;;; __identity_extend) so a capturing closure works.
+(defn __pair_extend [wa f :fn] : int
+  ;; extend f (e, a) = (e, f (e, a))
+  (__pair_new (__pair_env wa) (f wa)))
 ;;; __pair_duplicate -- duplicate a Pair cell: (e, a) -> (e, (e, a)).
 
 (defn __pair_duplicate [wa] : int
@@ -132,5 +129,5 @@
 ;;; Comonad [pair] -- Comonad instance for the Pair (product) comonad.
 
 (definstance Comonad [pair] (extract [wa] (__pair_extract wa))
-  (extend [wa fn] (__pair_extend wa fn))
+  (extend [wa f] (__pair_extend wa f))
   (duplicate [wa] (__pair_duplicate wa)))
