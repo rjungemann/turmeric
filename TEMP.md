@@ -6,6 +6,7 @@
 - [+] docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md -- mostly delivered (2026-06-05), but follow-ups
 (arrow-class.tur merge-back, snapshot refresh) still open
 - [+] docs/upcoming/stdlib-arrow-scaleback-plan.md -- superseded but the bare-combinator surface it locks in is what
+- [ ] docs/upcoming/category-arrowzero-implementation-plan.md
 
 ### Hard prerequisites from still-in-flight-plan.md (these are tur-signal's own gating list)
 
@@ -48,25 +49,25 @@ in stdlib/arrow.tur)
 ### Hygiene / tooling
 
 - [+] reversible-name-mangling-plan.md
-- [ ] Spaced-type annotation Phase 6/7 (CI enforcement)
-- [ ] defmodule per-file scoping (still-in-flight)
-- [ ] "drop leading colons inside (fn ...) types" (still-in-flight)
+- [ ] docs/upcoming/still-in-flight-plan.md - Spaced-type annotation Phase 6/7 (CI enforcement)
+- [ ] docs/upcoming/still-in-flight-plan.md - defmodule per-file scoping (still-in-flight)
+- [-] docs/upcoming/still-in-flight-plan.md - "drop leading colons inside (fn ...) types" (still-in-flight)
 - [+] Stdlib opaque handle types tail (io/file-open annotation)
 - [+] HTTPD compression + tur/zlib spice
 
 ### Unrelated reports
 
-- [ ] generic-struct-opaque-element-miscompile.md
-- [ ] instance-method-returning-untyped-param-loses-result-type.md
-- [ ] io-file-open-untyped-params-default-to-int.md
-- [ ] load-not-idempotent-typeclass.md
-- [ ] parameterized-defopaque.md
-- [ ] taskgroup-wrapper-macros-emit-nil-head.md
-- [ ] unsafe-block-capture-misses-ascription-vars.md
+- [+] generic-struct-opaque-element-miscompile.md
+- [+] instance-method-returning-untyped-param-loses-result-type.md
+- [+] io-file-open-untyped-params-default-to-int.md
+- [+] load-not-idempotent-typeclass.md
+- [+] parameterized-defopaque.md
+- [+] taskgroup-wrapper-macros-emit-nil-head.md
+- [+] unsafe-block-capture-misses-ascription-vars.md
 
 ## One ambiguous case worth calling out
 
-- [ ] function-arrow-as-typeclass-head report -- but it's narrower than the typeclass reintroduction itself. If
+- [+] function-arrow-as-typeclass-head report -- but it's narrower than the typeclass reintroduction itself. If
 - [ ] Category.ident / ArrowZero.zeroArrow aren't on tur-signal's actual call surface, you could defer it. Worth checking the signal plan's combinator list before committing time.
 
 
