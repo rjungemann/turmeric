@@ -416,7 +416,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 buf_puts(file, "int64_t");
             }
         } else {
-            buf_puts(file, emit_type_c_name(ctx, emit_type_from_kind(result)));
+            /* SF-application carrier bridge (struct/app closure return):
+             * a lifted closure body whose declared return is a typed application
+             * (e.g. (Pair float float)) often has result_full_type=NULL on the
+             * outer TY_FN type, so the bare result_kind (TY_APP / TY_STRUCT)
+             * here would lower to the int64_t carrier and mismatch the body's
+             * actual struct return.  When the body's type has the concrete
+             * codegen layout (Pair__float__float), prefer it so the C return
+             * type matches the value the body produces. */
+            const char *_body_c = (fd->body && (fd->body->type.kind == TY_APP
+                                                || fd->body->type.kind == TY_STRUCT))
+                ? emit_type_c_name(ctx, fd->body->type) : NULL;
+            if (_body_c && strcmp(_body_c, "int64_t") != 0) {
+                buf_puts(file, _body_c);
+            } else {
+                buf_puts(file, emit_type_c_name(ctx, emit_type_from_kind(result)));
+            }
         }
     } else {
         buf_puts(file, "void");

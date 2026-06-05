@@ -650,7 +650,23 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     } else {
         char *t = emit_value(ctx, body, e->as.if_.then_);
         indent_buf(body, ctx->indent);
-        buf_printf(body, "%s = %s;\n", tmp, t);
+        /* SF-application carrier bridge (if-branch assign):
+         * an `^fat`-bound variable is held in C as int64_t even though its
+         * elab type (TY_FN boxed or TY_PTR_VOID) lowers `e->type` to a
+         * pointer type at the temp's declaration.  Bridge a bare ^fat var
+         * source with (void *)(intptr_t) so clang accepts the assign. */
+        const Expr *th = e->as.if_.then_;
+        while (th && th->kind == EX_ASCRIBE) th = th->as.ascribe_.inner;
+        bool then_is_fat_var = th && th->kind == EX_VAR && th->as.var.binding
+                               && th->as.var.binding->is_fat;
+        const char *temp_c = type_c_name(e->type);
+        size_t tlen = strlen(temp_c);
+        bool temp_is_ptr = tlen > 0 && temp_c[tlen - 1] == '*';
+        if (then_is_fat_var && temp_is_ptr) {
+            buf_printf(body, "%s = (void *)(intptr_t)(%s);\n", tmp, t);
+        } else {
+            buf_printf(body, "%s = %s;\n", tmp, t);
+        }
         free(t);
     }
     ctx->indent -= 4;
@@ -667,7 +683,19 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             char *el = emit_value(ctx, body, e->as.if_.else_or_null);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s = %s;\n", tmp, el);
+            /* See the then-branch comment above. */
+            const Expr *eb = e->as.if_.else_or_null;
+            while (eb && eb->kind == EX_ASCRIBE) eb = eb->as.ascribe_.inner;
+            bool else_is_fat_var = eb && eb->kind == EX_VAR && eb->as.var.binding
+                                    && eb->as.var.binding->is_fat;
+            const char *temp_c2 = type_c_name(e->type);
+            size_t tlen2 = strlen(temp_c2);
+            bool temp_is_ptr2 = tlen2 > 0 && temp_c2[tlen2 - 1] == '*';
+            if (else_is_fat_var && temp_is_ptr2) {
+                buf_printf(body, "%s = (void *)(intptr_t)(%s);\n", tmp, el);
+            } else {
+                buf_printf(body, "%s = %s;\n", tmp, el);
+            }
             free(el);
         }
     } else {
@@ -1879,12 +1907,44 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         formal = thunk_binding->type.as.fn.arg_kinds[i + 1];
                     }
                     TypeKind actual = e->as.call_.args[i]->type.kind;
+                    /* SF-application carrier bridge: the thunk's formal slot may be
+                     * declared TY_INT *or* TY_FN; both lower to the int64_t carrier
+                     * in the lifted body's C signature.  If the actual is a TY_PTR_VOID
+                     * (or another TY_FN value held as void *), bridge it through
+                     * intptr_t -- otherwise clang trips -Wint-conversion at the call. */
                     bool formal_is_int64_carrier =
                         (formal == TY_INT || formal == TY_FN);
+                    bool formal_is_ptr =
+                        (formal == TY_PTR_VOID || formal == TY_RC ||
+                         formal == TY_REF || formal == TY_WEAK);
+                    /* The actual C value is int64_t when:
+                     *   - the arg expression is a bare ^fat-bound variable
+                     *     (^fat lowers to int64_t even when its elab type is TY_FN), or
+                     *   - the arg expression is a let-bound variable whose binding type
+                     *     resolved to TY_FN (Turmeric's fn-carrier ABI is int64_t). */
+                    const Expr *arg_e = e->as.call_.args[i];
+                    bool arg_is_int64_carrier = false;
+                    if (arg_e && arg_e->kind == EX_VAR && arg_e->as.var.binding) {
+                        Binding *ab = arg_e->as.var.binding;
+                        if (ab->is_fat) arg_is_int64_carrier = true;
+                        if (ab->type.kind == TY_FN) arg_is_int64_carrier = true;
+                    }
                     if (formal_is_int64_carrier &&
                         (actual == TY_PTR_VOID || actual == TY_FN)) {
                         Buf cast; buf_init(&cast);
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&cast, '\0');
+                        free(raw);
+                        raw = strdup(cast.data);
+                        buf_free(&cast);
+                    } else if (formal_is_ptr && arg_is_int64_carrier) {
+                        /* Reverse direction: formal slot is a pointer (void *),
+                         * but the arg's C value is the int64_t carrier (because
+                         * the binding holds a function-typed value via the
+                         * fn-carrier ABI, or because it was annotated ^fat).
+                         * Bridge through intptr_t so the pointer slot accepts it. */
+                        Buf cast; buf_init(&cast);
+                        buf_printf(&cast, "(void *)(intptr_t)(%s)", raw);
                         buf_putc(&cast, '\0');
                         free(raw);
                         raw = strdup(cast.data);
@@ -1958,7 +2018,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
                     for (uint32_t i = 0; i < n; i++) {
-                        buf_printf(&out, ", %s", arg_strs[i]);
+                        /* SF-application carrier bridge (fat-dispatch arg slot):
+                         * a ^fat-typed binding is lowered to int64_t in C even
+                         * though its elaborator type is TY_FN ("void *" per
+                         * type_c_name).  The typed-thunk-typedef cast expects
+                         * "void *" at each arg slot, so a bare ^fat variable
+                         * reference must be bridged with (void *)(intptr_t)
+                         * to dodge clang's -Wint-conversion. */
+                        const Expr *arg = e->as.call_.args[i];
+                        bool needs_ptr_cast = false;
+                        if (arg && arg->kind == EX_VAR && arg->as.var.binding &&
+                            arg->as.var.binding->is_fat &&
+                            (arg->type.kind == TY_FN || arg->type.kind == TY_PTR_VOID)) {
+                            needs_ptr_cast = true;
+                        }
+                        if (needs_ptr_cast) {
+                            buf_printf(&out, ", (void *)(intptr_t)(%s)", arg_strs[i]);
+                        } else {
+                            buf_printf(&out, ", %s", arg_strs[i]);
+                        }
                     }
                     buf_puts(&out, ")");
                     buf_putc(&out, '\0');
@@ -2040,7 +2118,29 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
                     for (uint32_t i = 0; i < n; i++) {
-                        buf_printf(&out, ", %s", arg_strs[i]);
+                        /* SF-application carrier bridge (decl-arg-typed fat-dispatch):
+                         * the thunk-typedef cast follows the callee's DECLARED arg
+                         * types (arg_types[i] above), so each slot's C type is
+                         * `type_c_name(arg_types[i])`.  A bare ^fat-bound variable
+                         * is held as int64_t in C even when its elab type is TY_FN
+                         * (lowers to "void *") or TY_PTR_VOID -- bridge it through
+                         * (void *)(intptr_t) so clang accepts the pointer slot. */
+                        const Expr *arg = e->as.call_.args[i];
+                        bool slot_is_ptr =
+                            (arg_types[i].kind == TY_PTR_VOID ||
+                             arg_types[i].kind == TY_RC ||
+                             arg_types[i].kind == TY_REF ||
+                             arg_types[i].kind == TY_WEAK ||
+                             (arg_types[i].kind == TY_FN &&
+                              arg_types[i].as.fn.boxed));
+                        bool var_is_int64_carrier =
+                            arg && arg->kind == EX_VAR && arg->as.var.binding &&
+                            arg->as.var.binding->is_fat;
+                        if (slot_is_ptr && var_is_int64_carrier) {
+                            buf_printf(&out, ", (void *)(intptr_t)(%s)", arg_strs[i]);
+                        } else {
+                            buf_printf(&out, ", %s", arg_strs[i]);
+                        }
                     }
                     buf_puts(&out, ")");
                     buf_putc(&out, '\0');
@@ -2274,6 +2374,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         /* ER2: TY_FN parameter — stored as int64_t in C.  A function
                          * reference (TY_FN) or closure pointer (TY_PTR_VOID) passed to it
                          * must be cast to int64_t via intptr_t. */
+                        needs_fn_cast = true;
+                        cast_to_void_ptr = false;
+                    } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS)
+                               && fn_binding->body_is_inline_c) {
+                        /* Inline-C polymorphic param (e.g. vec-push! [A] [val :A] with
+                         * an inline-C body that treats val as int64_t): the C signature
+                         * keeps val typed int64_t regardless of A.  A TY_FN/TY_PTR_VOID
+                         * actual must be bridged through (int64_t)(intptr_t) -- otherwise
+                         * clang trips -Wint-conversion ("integer from pointer"). */
                         needs_fn_cast = true;
                         cast_to_void_ptr = false;
                     } else {

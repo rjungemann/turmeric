@@ -1344,7 +1344,18 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     buf_puts(out, "int64_t");
                 }
             } else {
-                buf_puts(out, type_c_name(emit_type_from_kind(result)));
+                /* SF-application carrier bridge (forward decl mirror): when the
+                 * outer fn type lost its result_full_type but the body's type
+                 * has the concrete struct/app layout, use the body's type so
+                 * the forward decl agrees with the body emission. */
+                const char *_body_c = (fd->body && (fd->body->type.kind == TY_APP
+                                                    || fd->body->type.kind == TY_STRUCT))
+                    ? type_c_name(fd->body->type) : NULL;
+                if (_body_c && strcmp(_body_c, "int64_t") != 0) {
+                    buf_puts(out, _body_c);
+                } else {
+                    buf_puts(out, type_c_name(emit_type_from_kind(result)));
+                }
             }
         } else {
             buf_puts(out, "void");
