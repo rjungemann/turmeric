@@ -1,0 +1,28 @@
+;; Stage A of docs/upcoming/poly-closure-result-specialization-plan.md
+;; (Direction B of arrow-compose-float-closure-int64-thunk-mismatch.md).
+;;
+;; A *generic*, typed, closure-returning compose combinator must now
+;; type-check and run at :int. Before Stage A, the inner body `(gv (fv x))`
+;; raised TUR-E0001 ("expected <struct>, got tyvar") because a tyvar-typed
+;; argument (x : A) was rejected, and the call site could not bind A/B/C from
+;; the function-typed arguments. Stage A widens elaboration acceptance for
+;; both: a tyvar argument satisfies any parameter, and a (fn [A] B) parameter
+;; binds its named tyvars structurally from a function-typed argument.
+;;
+;; The :int instantiation is register-class-correct as-is (int64 carrier ==
+;; int), so it does not hit the TUR-E0705 float guard; it exercises only the
+;; Stage A acceptance widening.
+
+(defn cmp [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+  (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
+
+(defn call-int [^fat f :(fn [int] #{} int) x : int] : int (f x))
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; (3 + 1) * 2 = 8 ; ((5 + 1) * 2) then +1-compose check below
+  (println (call-int (cmp add1 mul2) 3))
+  (println (call-int (cmp mul2 add1) 5))   ;; (5 * 2) + 1 = 11
+  0)
