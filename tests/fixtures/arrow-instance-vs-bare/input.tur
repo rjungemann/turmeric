@@ -1,0 +1,37 @@
+;; arrow-instance-vs-bare -- the typeclass dispatch surface computes the same
+;; values as a plain-function arrow pipeline.
+;;
+;; The same pipeline (add1 >>> mul2 >>> add1, and first/second over a pair) is
+;; written twice: once through the Arrow [(->)] dictionary (stdlib/arrow-class)
+;; and once with local bare functions (b-comp / b-first, distinct names so both
+;; live in one module).  Each pair of lines prints the dispatch result then the
+;; bare result; they must be identical.
+
+(load "stdlib/arrow-class.tur")
+
+;; --- local bare reference implementation (no typeclass dispatch) ---
+(defn b-comp [^fat f ^fat g] (let [fv f gv g] (fn [x] (gv (fv x)))))
+(defn b-first [^fat f] (let [fv f]
+  (fn [p] (__ac_pair_first fv p))))     ;; reuse the heap-pair helper
+
+(defn pair-new [a b] : int
+  ```c struct { int64_t e1; int64_t e2; } *p = malloc(sizeof(*p));
+  p->e1 = a; p->e2 = b; return (int64_t)(intptr_t)p; ```)
+(defn pair-e1 [p] : int ```c return ((int64_t *)(intptr_t)p)[0]; ```)
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; add1 >>> mul2 >>> add1, applied to 3.
+  (let [hd (>>> (>>> add1 mul2) add1)
+        hb (b-comp (b-comp add1 mul2) add1)]
+    (println (hd 3))                 ;; dispatch: 9
+    (println (hb 3)))                ;; bare:     9
+
+  ;; first add1 over (5, 10) -- compare slot 0.
+  (let [rd ((first add1) (pair-new 5 10))
+        rb ((b-first add1) (pair-new 5 10))]
+    (println (pair-e1 rd))           ;; dispatch: 6
+    (println (pair-e1 rb)))          ;; bare:     6
+  0)

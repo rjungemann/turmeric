@@ -1,0 +1,48 @@
+;; arrow-instance-stdlib-basic -- Arrow [(->)] dispatch through stdlib/arrow-class.tur.
+;;
+;; Builds a small arrow network using the typeclass methods arr, >>>, <<<,
+;; first, and second resolved through the (->) instance dictionary (NOT the
+;; bare-function layer in stdlib/arrow.tur).  The results match the bare layer:
+;; the typeclass surface dispatches to the function-arrow instance and computes
+;; the same values.
+
+(load "stdlib/arrow-class.tur")
+
+;; A heap pair of two int64 slots, matching the layout the Arrow instance's
+;; first/second methods thread through.
+(defn pair-new [a b] : int
+  ```c struct { int64_t e1; int64_t e2; } *p = malloc(sizeof(*p));
+  p->e1 = a; p->e2 = b; return (int64_t)(intptr_t)p; ```)
+(defn pair-e1 [p] : int ```c return ((int64_t *)(intptr_t)p)[0]; ```)
+(defn pair-e2 [p] : int ```c return ((int64_t *)(intptr_t)p)[1]; ```)
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; arr lifts a function to an arrow (identity for (->)).
+  (let [a (arr add1)]
+    (println (a 5)))                 ;; 6
+
+  ;; >>>: left-to-right -- add1 then mul2 -- mul2(add1(3)) = 8.
+  (let [h (>>> add1 mul2)]
+    (println (h 3)))                 ;; 8
+
+  ;; <<<: right-to-left -- add1 after mul2 -- add1(mul2(3)) = 7.
+  (let [h (<<< add1 mul2)]
+    (println (h 3)))                 ;; 7
+
+  ;; first: act on slot 0 of a pair, pass slot 1 through.
+  (let [r ((first add1) (pair-new 5 10))]
+    (println (pair-e1 r))            ;; 6
+    (println (pair-e2 r)))           ;; 10
+
+  ;; second: act on slot 1, pass slot 0 through.
+  (let [r ((second mul2) (pair-new 5 10))]
+    (println (pair-e1 r))            ;; 5
+    (println (pair-e2 r)))           ;; 20
+
+  ;; Three-stage composition via dispatch: add1 >>> mul2 >>> add1.
+  (let [h (>>> (>>> add1 mul2) add1)]
+    (println (h 3)))                 ;; add1(mul2(add1(3))) = 9
+  0)

@@ -1,0 +1,26 @@
+;; arrow-instance-loop-nonrecursive -- ArrowLoop [(->)], non-recursive subset.
+;;
+;; arrow-loop takes an arrow a (b, d) (c, d) and feeds the d output back as the
+;; d input, yielding a b c.  Turmeric is strict with no lazy thunks, so the (->)
+;; instance implements only the case where the looped arrow does NOT read the
+;; fed-back component: it runs the arrow on (b, sentinel) and projects the first
+;; output slot.  Here the looped arrow ignores its second (fed-back) slot.
+
+(load "stdlib/arrow-class.tur")
+
+;; A pair-consuming arrow: read slot 0 (the real input b), ignore slot 1 (the
+;; fed-back d), and emit a pair (b+100, b) -- slot 1 is what would feed back.
+(defn step [p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *s = (P *)(intptr_t)p;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = s->e1 + 100;   /* c = b + 100, independent of the fed-back slot */
+  r->e2 = s->e1;         /* d output (unused by this non-recursive loop)  */
+  return (int64_t)(intptr_t)r; ```)
+
+(defn main [] : int
+  ;; (arrow-loop step) is an arrow b -> c; for input 5, c = 5 + 100 = 105.
+  (let [lp (arrow-loop step)]
+    (println (lp 5))                 ;; 105
+    (println (lp 40)))               ;; 140
+  0)

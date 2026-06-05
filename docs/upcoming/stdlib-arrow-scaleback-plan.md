@@ -6,6 +6,17 @@ description: Scale stdlib/arrow.tur back to a minimal pragmatic core. Remove the
 
 # `stdlib/arrow` Scale-back -- Plan
 
+> **Superseded by the typeclass reintroduction (2026-06-05).** The future-work
+> block at the end of this plan ("reintroducing the typeclass layer later") has
+> landed: the Arrow hierarchy is back as a **parallel, dispatch-driven surface**
+> in `stdlib/arrow-class.tur` (a separate module, since a typeclass method and
+> the bare free `arr` / `>>>` cannot share a name in one file). The
+> bare-function core in `stdlib/arrow.tur` is unchanged and stays the simple
+> default. See
+> [stdlib-arrow-typeclass-reintroduction-plan](stdlib-arrow-typeclass-reintroduction-plan.md)
+> for the delivered classes, instances, fixtures, and the A3 operator-mangling
+> completion that lets `>>>` / `<<<` coexist.
+
 > **Codegen prerequisite has landed (2026-06-03).** The closure-returning
 > instance-method codegen bug referenced below (dict field types resolving to a
 > non-`int64_t` carrier) is **fixed** -- see

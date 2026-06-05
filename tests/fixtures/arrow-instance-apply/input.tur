@@ -1,0 +1,31 @@
+;; arrow-instance-apply -- ArrowApply [(->)] dispatch.
+;;
+;; app is the arrow a (a b c, b) c: its input pair carries an arrow in slot 0
+;; and that arrow's argument in slot 1, and it applies the one to the other.
+;; app is nullary (it IS the arrow), so it resolves through return-type dispatch
+;; / the unique-arrow-instance fallback, like Category's ident.
+
+(load "stdlib/arrow-class.tur")
+
+;; Build a heap pair whose slot 0 is a fat closure and slot 1 is its argument.
+;; The ^fat parameter normalizes a bare function (captureless C pointer) into a
+;; fat box at the call site, so app's TUR_APPLY1 dispatch on slot 0 is uniform
+;; whether the stored arrow is a plain function or a capturing closure.
+(defn pair-fn-arg [^fat f arg] : int
+  ```c struct { int64_t e1; int64_t e2; } *p = malloc(sizeof(*p));
+  p->e1 = f; p->e2 = arg; return (int64_t)(intptr_t)p; ```)
+
+(defn add1 [x : int] : int (+ x 1))
+(defn mul2 [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; app applied to (add1, 41) = add1(41) = 42.
+  (let [ap (app)]
+    (println (ap (pair-fn-arg add1 41)))    ;; 42
+    (println (ap (pair-fn-arg mul2 21))))    ;; 42
+
+  ;; A capturing closure flows through app just as well.
+  (let [k  1000
+        ap (app)]
+    (println (ap (pair-fn-arg (fn [x : int] : int (+ x k)) 7))))  ;; 1007
+  0)
