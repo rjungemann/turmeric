@@ -1,0 +1,20 @@
+; A user-defined typeclass method and a free top-level defn that share a
+; name occupy the same value namespace: the free defn wins at every bare
+; call site and the method becomes unreachable by its bare name.  This used
+; to happen silently; the compiler now emits TUR-W0039 to surface the clash.
+; The program still compiles -- the warning keeps the (documented) override
+; use case expressible -- and the free defn's value is what runs.
+;
+; See docs/reported/typeclass-methods-share-value-namespace-with-defns.md
+(defclass Showy [a]
+  (render [x] : cstr))
+
+(definstance Showy [int]
+  (render [x] "from-method"))
+
+(defn render [x : int] : cstr
+  "from-free-defn")
+
+(defn main [] : int
+  (println (render 5))
+  0)
