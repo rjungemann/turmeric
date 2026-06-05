@@ -148,48 +148,6 @@ unstarted.
       length-prefixed `httpd-resp-body!` (M6-OQ2); default
       `min-bytes` threshold (M6-OQ3).
 
-## Language readiness for typed signal
-
-> Full plan: [../archive/language-readiness-for-typed-signal-plan.md](../archive/language-readiness-for-typed-signal-plan.md)
-
-Seven of eight gaps are green; G2 is the lone red blocker and several
-prerequisite plans this spike originally guarded have now landed.
-
-- [ ] G2 -- polymorphic `(defn f [A] ... (fn ... : A val))` emits a
-      single shared inner C body; float specialisation reads result
-      from xmm0. Underlying bug `poly-defn-shares-inner-closure-body-across-monomorphizations`
-      is resolved (diagnose direction); decide whether typed-signal
-      can move to amber on the diagnostic alone or needs the
-      miscompile fixed.
-- [ ] G7 amber edge -- `stdlib/arrow.tur`'s `>>>` is still int-typed;
-      generalise it (or commit to local typed-compose in the signal
-      rebuild) before [tur-signal-rebuild-plan](tur-signal-rebuild-plan.md)
-      starts.
-- [ ] Write the top-of-doc verdict summary once G2 is at least amber;
-      then hand off to `tur-signal-rebuild-plan` and
-      `stdlib-arrow-scaleback-plan`.
-
-## Signal Phase 0 spike
-
-> Full plan: [../archive/signal-phase-0-spike.md](../archive/signal-phase-0-spike.md)
-
-Recommendation is Option B (centralised bit-cast helper) until the
-compiler grows `:float`-returning closures through fat dispatch.
-
-- [ ] Update `signal-primitives-expansion-plan` Phase 0 exit criteria:
-      grep gate becomes
-      `grep -nE 'int64_t sig_val|memcpy\(.*&.*sig' src/signal/`
-      empty (centralised macro permitted).
-- [ ] Add `__sig_call_f` macro + `defn __sig_call [sv :int t :int] :float`
-      inline-C helper at the top of `dsp.tur`.
-- [ ] Refactor existing SFs to use it; verify tests pass.
-- [ ] Proceed with Phase 1 + 1.5 primitives using `__sig_call`
-      everywhere instead of inline `memcpy`.
-- [ ] File Option A (compiler-side `:float`-returning closures) as
-      `closure-float-return-abi-plan.md` (subsumed by
-      [closure-typed-invocation-abi-plan](#typed-closure-invocation-abi)?
-      decide before filing).
-
 ## `tur-signal` spice broken build
 
 > Full plan: [../archive/signal-spice-broken-build.md](../archive/signal-spice-broken-build.md)
