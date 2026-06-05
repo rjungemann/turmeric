@@ -1,0 +1,42 @@
+;; stdlib-hkt-consolidation T3: HKT typeclass instances for stdlib Backtrack.
+;;
+;; Backtrack is exposed as a kind-(* -> *) opaque so it carries Functor /
+;; Applicative / Monad / Alternative. Non-deterministic search is now written
+;; with the generic do-m / bind / alt-or surface from stdlib/macros.tur in
+;; addition to the bespoke backtrack-do macro.
+
+(load "stdlib/backtrack.tur")
+
+(defn bt-pure [x : int] : (Backtrack int) (:: (mreturn x) :Backtrack))
+
+;; The non-deterministic choice {1, 2}.
+(defn choices [] : (Backtrack int)
+  (:: (mplus (mreturn 1) (mreturn 2)) :Backtrack))
+
+;; Monad [Backtrack] via do-m: all pairwise sums of {1,2} x {1,2} = [2 3 3 4].
+(defn sums [] : int
+  (do-m
+    x (choices)
+    y (choices)
+    (bt-pure (+ x y))))
+
+;; Monad [Backtrack] via bind directly: double every choice = [2 4].
+(defn doubled [] : int
+  (bind (choices) (fn [x] (mreturn (* x 2)))))
+
+;; Functor [Backtrack]: (+10) over every choice = [11 12].
+(defn plus10 [] : int
+  (:: (fmap (choices) (fn [x : int] (+ x 10))) :int))
+
+;; Alternative [Backtrack]: union of {1,2} and {3} = [1 2 3].
+(defn unioned [] : int
+  (:: (alt-or (choices) (:: (mreturn 3) (Backtrack int))) :int))
+
+(defn main [] : int
+  (println (bt-length (sums)))    ; 4
+  (bt-print (sums))               ; 2 3 3 4
+  (println (bt-length (doubled))) ; 2
+  (bt-print (doubled))            ; 2 4
+  (bt-print (plus10))             ; 11 12
+  (bt-print (unioned))            ; 1 2 3
+  0)

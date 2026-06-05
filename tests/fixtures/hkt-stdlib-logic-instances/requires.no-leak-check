@@ -1,0 +1,1 @@
+Monadic combinators allocate fat-closure boxes and result cells that are never freed (process-lifetime), matching the other parsec-/backtrack-/logic- fixtures.
