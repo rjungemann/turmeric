@@ -1544,7 +1544,17 @@ Expr *elab_call(Elab *e, Form *call) {
             return NULL;
         }
     }
-    Expr *out = expr_new(e->arena, EX_BUILTIN, spec->result_type, call->span);
+    /* The static builtin spec table initializes result_type with a designated
+     * initializer (`{.kind=TY_FLOAT}` etc.) that leaves `.copy_kind` zeroed --
+     * which is CK_UNIQUE/CK_MOVE, not the kind's true copy semantics. Left
+     * uncorrected, a `let`-bound arithmetic result (e.g. `(- 0.0 a)`) inherits
+     * copy_kind=CK_MOVE, so reading it twice through any builtin trips a bogus
+     * TUR-E0005 use-after-move on a Copy primitive. Stamp the canonical
+     * copy_kind for the result's kind (a no-op for genuinely move-only results
+     * like rc<T>/weak<T>, whose default is already CK_MOVE). */
+    Type result_type = spec->result_type;
+    result_type.copy_kind = typekind_default_copy_kind(result_type.kind);
+    Expr *out = expr_new(e->arena, EX_BUILTIN, result_type, call->span);
     out->as.builtin.spec = spec;
     out->as.builtin.args = args;
     out->as.builtin.n = n_args;

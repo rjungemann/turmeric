@@ -7,6 +7,26 @@ description: A `let`-bound `:float` used twice in a single `if` (once in the pre
 
 # `use-after-move` fires asymmetrically on local vs captured `:float` let bindings
 
+> **Status: FIXED.** Root cause was *not* a local-vs-captured asymmetry (that
+> framing is a red herring) and *not* float-specific. The static builtin spec
+> table in `src/compiler/builtins.c` initializes each entry's `result_type`
+> with a designated initializer (`{.kind=TY_FLOAT}`), which leaves
+> `.copy_kind` zeroed -- and `CK_UNIQUE`/`CK_MOVE` is enum value `0`. So *every*
+> builtin arithmetic result (`int` and `float` alike) was typed move-only. A
+> `let` binding initialized by such a result (`(- 0.0 a)`, `(- 0 a)`) inherited
+> `copy_kind = CK_MOVE`, so reading it a second time through any builtin
+> (`(< x nv)` then `nv`) tripped a bogus `TUR-E0005`. Binding directly to a bare
+> variable (`nv a`) copied the param's correct `copy_kind`, which is why that
+> case "worked" -- the apparent asymmetry.
+>
+> **Fix:** stamp the canonical `copy_kind` for the result's kind when building
+> the builtin result expr (`elab_call.c`, after `builtin_lookup`):
+> `result_type.copy_kind = typekind_default_copy_kind(result_type.kind)`. A
+> no-op for genuinely move-only results (`rc<T>`/`weak<T>`, whose default is
+> already `CK_MOVE`). Regression fixture:
+> `tests/fixtures/use-after-move-float-let-vs-captured/` (covers the local-let,
+> captured-let, and int shapes).
+
 ## Summary
 
 A symmetric hard-clip SF written naturally as
