@@ -627,6 +627,68 @@ static bool elab_name_is_typeclass_method(Elab *e, const Symbol *name) {
     return false;
 }
 
+/* Method/defn namespace separation (fix (1) of
+ * docs/reported/typeclass-methods-share-value-namespace-with-defns.md).
+ *
+ * True when `name` is a method of a *user-defined* (non-stdlib) typeclass AND
+ * some instance of that class matches the receiver type `recv`.  When this
+ * holds, a bare `(m x ...)` whose head also binds a free `defn` of the same
+ * name prefers typeclass dispatch over the free defn -- letting a class method
+ * and a same-named free helper coexist in one module (the Arrow case: a bare
+ * `arr` combinator alongside the `Arrow` method `arr`).
+ *
+ * Stdlib class methods are intentionally excluded (`from_stdlib`): the
+ * documented pattern of a user `defn` overriding a stdlib method (e.g. a local
+ * `show`) must keep "defn wins".  The match test mirrors the exact-match arm of
+ * elab_method_call's instance search, so we only redirect when dispatch would
+ * genuinely resolve; an unknown/unmatched receiver keeps the free defn. */
+static bool elab_user_method_instance_matches(Elab *e, const Symbol *name,
+                                              const Type *recv) {
+    if (!name || !recv) return false;
+    TypeKind rk = recv->kind;
+    if (rk == TY_UNKNOWN) return false;          /* undecidable -> keep the defn */
+    bool recv_primitive = (rk == TY_INT  || rk == TY_BOOL  || rk == TY_CSTR ||
+                           rk == TY_NIL  || rk == TY_FLOAT || rk == TY_PTR_VOID ||
+                           rk == TY_SYM);
+    for (TypeClassInstance *inst = e->typeclass_env.instances; inst; inst = inst->next) {
+        TypeClass *tc = inst->typeclass;
+        if (!tc || tc->from_stdlib) continue;
+        bool name_match = false;
+        for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+            const Symbol *mn = tc->methods[mi].name;
+            if (mn && mn->len == name->len &&
+                memcmp(mn->name, name->name, name->len) == 0) { name_match = true; break; }
+        }
+        if (!name_match) continue;
+        if (inst->n_type_args == 0) return true;  /* no dispatch arg -> name suffices */
+        TypeKind itk = inst->type_args[0].kind;
+        if (recv_primitive) {
+            if (itk == rk) return true;
+            continue;
+        }
+        /* Receiver is non-primitive (KIND_ARROW receiver). */
+        bool inst_primitive = (itk == TY_INT  || itk == TY_BOOL  || itk == TY_CSTR ||
+                               itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID ||
+                               itk == TY_SYM);
+        if (inst_primitive) continue;
+        if (itk == TY_FN || rk == TY_FN) {
+            if (itk == TY_FN && rk == TY_FN) return true;
+            continue;
+        }
+        if (rk == TY_APP && itk == TY_STRUCT) {
+            const Type *head = recv;
+            while (head && head->kind == TY_APP) head = head->as.app.fn;
+            if (head && head->kind == TY_STRUCT &&
+                inst->type_args[0].as.struct_.def &&
+                inst->type_args[0].as.struct_.def != head->as.struct_.def)
+                continue;
+            return true;
+        }
+        return true;   /* both non-primitive, no discriminator -> accept */
+    }
+    return false;
+}
+
 /* Phase R6b: true if [p, p+n) contains the substring `needle`. */
 static bool lint_line_has_marker(const char *p, size_t n, const char *needle) {
     size_t m = strlen(needle);
@@ -1102,13 +1164,31 @@ Expr *elab_call(Elab *e, Form *call) {
      * through to the eval-mode native fallback (which types them :int).
      *
      * Gated on `!fn_binding` so a user defn or local binding of the same name
-     * always wins, and on class membership so a program that never declared
+     * normally wins, and on class membership so a program that never declared
      * the class is never intercepted -- a genuinely-unbound symbol still flows
      * to its original unbound-symbol / eval-native handling.  Return-only
      * dispatch methods were already handled above; argument-dispatched methods
      * always carry their dispatch type variable in the first parameter for the
-     * stdlib classes (Eq/Hash/Show/Num/Functor/...). */
-    if (!fn_binding && call->as.list.len >= 2 &&
+     * stdlib classes (Eq/Hash/Show/Num/Functor/...).
+     *
+     * Namespace separation (fix (1) of
+     * docs/reported/typeclass-methods-share-value-namespace-with-defns.md):
+     * when a free `defn` *and* a user-defined typeclass method share the name,
+     * the `!fn_binding` gate alone would make the defn shadow the method at
+     * every bare call site.  Instead, when an instance of the user class
+     * matches the receiver's static type we prefer dispatch (`prefer_method_
+     * dispatch`), so a class method and a same-named free helper can coexist in
+     * one module.  If no instance matches, the free defn still wins.  Stdlib
+     * methods are excluded by elab_user_method_instance_matches, preserving the
+     * documented "user defn overrides a stdlib method" pattern. */
+    bool prefer_method_dispatch = false;
+    if (fn_binding && call->as.list.len >= 2 &&
+        elab_name_is_typeclass_method(e, name)) {
+        Expr *recv0 = elab_form(e, call->as.list.items[1]);
+        if (recv0 && elab_user_method_instance_matches(e, name, &recv0->type))
+            prefer_method_dispatch = true;
+    }
+    if ((!fn_binding || prefer_method_dispatch) && call->as.list.len >= 2 &&
         elab_name_is_typeclass_method(e, name)) {
         char dotbuf[160];
         int dotlen = snprintf(dotbuf, sizeof(dotbuf), ".%s", name->name);

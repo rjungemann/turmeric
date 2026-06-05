@@ -8,6 +8,17 @@ description: Reintroduce the `Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `
 
 ## Delivered (2026-06-05)
 
+> **Follow-up note (2026-06-05):** the "a typeclass method and a free `defn`
+> cannot share a name in one module" constraint that forced the split below has
+> since been **lifted** -- see
+> [typeclass-methods-share-value-namespace-with-defns](../reported/typeclass-methods-share-value-namespace-with-defns.md)
+> (fix (1), RESOLVED). A bare `arr` / `>>>` now dispatches to the matching
+> instance when the receiver type selects one, and falls back to the bare
+> combinator otherwise. `stdlib/arrow-class.tur` *may* now merge back into
+> `stdlib/arrow.tur` as a single surface; that consolidation (a
+> snapshot-touching refactor) is deferred to a dedicated follow-up rather than
+> bundled with the namespace fix.
+
 The typeclass layer has **landed**. Summary of what shipped and the one
 architectural deviation from the task text:
 
