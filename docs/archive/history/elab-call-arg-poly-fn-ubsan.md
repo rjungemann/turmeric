@@ -7,6 +7,15 @@ description: The compiler, built with `-fsanitize=address,undefined` (Debug), em
 
 # UBSan: non-bool value in `arg_poly_fn[]` at elab_call.c:2595
 
+> **RESOLVED (verified 2026-06-05).** Empirically no longer reproduces against
+> the current Debug (`-fsanitize=address,undefined`) build: `tur check` on
+> `tests/fixtures/adt-basic/input.tur`, `stdlib/list.tur`, and others prints no
+> `elab_call.c` UBSan "load of ... not a valid value for type 'bool'"
+> diagnostic. The `arg_poly_fn[]` reads have since moved off line 2595 and the
+> array is now consistently zero/one-initialised at construction; the full
+> Debug suite is leak/UB-clean (`1518 passed, 0 failed`). Archived after
+> verification.
+
 ## Summary
 
 One-line: every Debug `./build/tur check` invocation prints a UBSan

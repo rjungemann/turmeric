@@ -1,0 +1,27 @@
+;; recursion-ptr-void-return-in-defmodule -- a self-recursive defn declared
+;; `: ptr<void>` inside a (defmodule ...) must type its recursive call at the
+;; declared return type (TY_PTR_VOID), not the TY_INT placeholder.
+;;
+;; Before the fix, the defmodule pass-1 forward declaration (elab_module.c)
+;; only recognised a return type written as a bare F_KEYWORD; a *spaced*
+;; `: ptr<void>` annotation parses as an F_TYPE_ANN wrapping the keyword and
+;; fell through to the TY_INT placeholder.  The recursive call site was then
+;; typed `int`, so the if-branch unifier rejected the body with
+;; "then=ptr<void> else=int".  The top-level pre-pass already unwrapped the
+;; single-element F_TYPE_ANN; the defmodule path now mirrors that.
+;;
+;; Regression for
+;; docs/reported/recursion-return-type-widens-to-int-inside-defmodule.md
+(defmodule probe/loop
+  (export run)
+  (defn run [i : int n : int] : ptr<void>
+    (if (>= i n)
+      (:: i :ptr<void>)
+      (run (+ i 1) n))))
+
+(defn main [] : int
+  ;; run counts up to n and returns the final i boxed as :ptr<void>;
+  ;; recover it to :int with the documented `::` ascription idiom.
+  (let [p (run 0 5)]
+    (println (:: p :int)))
+  0)

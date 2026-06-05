@@ -7,6 +7,14 @@ description: After commit 804f24ec ("Resolve result-param-order report", #268), 
 
 # Generic relay shims emit bare parameter names as undeclared C calls (post-#268)
 
+> **RESOLVED (verified 2026-06-05).** This critical suite-wide regression
+> (957 failures) no longer reproduces: the current tree builds clean and the
+> full suite reports `1518 passed, 0 failed`. The cited trivial repro
+> `tests/fixtures/adt-basic/` builds with no bare-parameter undeclared-C-call
+> shims and runs correctly. The `__poly_*` relay-shim codegen was repaired in
+> the follow-up to the #268 result-param-order work that originally introduced
+> the regression. Archived after empirical verification.
+
 ## Summary
 
 The test suite is failing at HEAD (`874824ca`, `main`):

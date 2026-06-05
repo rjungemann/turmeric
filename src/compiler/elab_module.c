@@ -749,7 +749,22 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                             }
                             if (ret_idx < (uint32_t)f->as.list.len) {
                                 Form *ret_f = f->as.list.items[ret_idx];
-                                if (ret_f->tag == F_KEYWORD) {
+                                /* Accept spaced `: T` (an F_TYPE_ANN wrapping a
+                                 * single symbol/keyword) by unwrapping to the
+                                 * inner form -- mirrors the top-level pre-pass in
+                                 * elab_toplevel.c.  Without this, a recursive defn
+                                 * inside a (defmodule ...) whose return type is
+                                 * written `: ptr<void>` (or any spaced scalar)
+                                 * falls through to the TY_INT placeholder, so the
+                                 * recursive call site is typed `int` and the
+                                 * if-branch unifier rejects the body.  See
+                                 * docs/reported/recursion-return-type-widens-to-int-inside-defmodule.md */
+                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                                    (ret_f->as.list.items[0]->tag == F_SYM ||
+                                     ret_f->as.list.items[0]->tag == F_KEYWORD)) {
+                                    ret_f = ret_f->as.list.items[0];
+                                }
+                                if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
                                     const char *kn = ret_f->as.sym->name;
                                     if (strcmp(kn, "int") == 0) fwd_result_kind = TY_INT;
                                     else if (strcmp(kn, "bool") == 0) fwd_result_kind = TY_BOOL;
