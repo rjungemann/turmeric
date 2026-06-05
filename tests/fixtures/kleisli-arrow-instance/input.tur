@@ -3,36 +3,30 @@
 ;; \_ -> none).  With two Category instances in scope the nullary (ident) /
 ;; (zero-arrow) are ambiguous, so each is ascribed to :Kleisli to pick the head.
 ;;
-;; Each ascription-disambiguated arrow is applied exactly once and the resulting
-;; Option is reused -- see docs/reported/opaque-ascription-cast-marks-value-move-once.md.
+;; The ascription-disambiguated arrows are reused across multiple applications --
+;; a regression guard for the now-fixed
+;; docs/reported/opaque-ascription-cast-marks-value-move-once.md (an unrestricted
+;; opaque ascribed via (:: ... :Kleisli) must stay freely copyable).
 (load "stdlib/kleisli.tur")
 
 (defn safe-recip [x : int] : int (if (= x 0) (none) (some (/ 100 x))))
 (defn add1m     [x : int] : int (some (+ x 1)))
 
 (defn main [] : int
-  ;; identity Kleisli: \a -> some a
-  (let [i (:: (ident) :Kleisli)
-        r (k-apply i 41)]
-    (println (some? r))                ;; true
-    (println (unwrap-or r 0)))         ;; 41
+  ;; identity Kleisli: \a -> some a -- the ascribed arrow `i` is applied twice
+  (let [i (:: (ident) :Kleisli)]
+    (println (some? (k-apply i 41)))         ;; true
+    (println (unwrap-or (k-apply i 41) 0)))  ;; 41
 
-  ;; Kleisli composition over some: (100/5)=20 then +1 = 21
+  ;; Kleisli composition over some: (100/5)=20 then +1 = 21.  `fg` is reused:
+  ;; applied to 5 (some path) and 0 (none short-circuit).
   (let [f  (kleisli safe-recip)
         g  (kleisli add1m)
-        fg (:: (comp f g) :Kleisli)
-        r  (k-apply fg 5)]
-    (println (unwrap-or r -7)))        ;; 21
-
-  ;; none short-circuits through composition: safe-recip 0 -> none, g skipped
-  (let [f2  (kleisli safe-recip)
-        g2  (kleisli add1m)
-        fg2 (:: (comp f2 g2) :Kleisli)
-        r2  (k-apply fg2 0)]
-    (println (some? r2)))              ;; false
+        fg (:: (comp f g) :Kleisli)]
+    (println (unwrap-or (k-apply fg 5) -7))  ;; 21
+    (println (some? (k-apply fg 0))))        ;; false (none short-circuits)
 
   ;; honest zero arrow: ignore input, fail with none
-  (let [z  (:: (zero-arrow) :Kleisli)
-        rz (k-apply z 99)]
-    (println (some? rz)))              ;; false
+  (let [z (:: (zero-arrow) :Kleisli)]
+    (println (some? (k-apply z 99))))        ;; false
   0)

@@ -1,5 +1,18 @@
 # Opaque ascription cast `(:: expr :T)` marks its result move-once
 
+> **FIXED (2026-06-05).** Root cause confirmed and patched in
+> `src/compiler/elab_types.c`: the `F_KEYWORD` branch of `type_expr_from_form`
+> resolved a known `:Opaque` name to a `TY_STRUCT` with `copy_kind` **hardcoded
+> to `CK_MOVE`**, instead of carrying the registered def's discipline like the
+> `F_SYM` path (which goes through `type_struct(def)`). The fix copies
+> `copy_kind`/`substruct` from the resolved def, so `(:: v :Name)` over an
+> unrestricted opaque is now `CK_COPY` (freely reusable), while `:linear`/
+> `:affine` opaques become `CK_LINEAR`/`CK_UNIQUE` and are still enforced under
+> `-Xlinear`/`-Xsubstructural` -- the keyword path now matches the `F_SYM` path
+> exactly. Regression fixtures: `tests/fixtures/opaque-ascription-copy-reuse`
+> (unrestricted reuse passes) and `tests/fixtures/kleisli-arrow-instance`
+> (reuses ascription-disambiguated arrows). The original report follows.
+
 **One-line summary:** Constructing an *unrestricted* opaque value via the
 ascription cast `(:: expr :SomeOpaque)` produces a binding the linearity
 checker treats as affine/move-once -- reusing it raises `TUR-E0005`
@@ -81,15 +94,18 @@ Likely locations to inspect (by symbol, not yet line-pinned):
   expect success; wrap a `:linear` opaque via `(:: v :L)`, use it twice, expect
   `TUR-E0005`.
 
-## Current workaround
+## Resolution
 
-`stdlib/kleisli.tur`'s fixtures apply each ascription-disambiguated arrow
-(`(:: (ident) :Kleisli)`, `(:: (zero-arrow) :Kleisli)`,
-`(:: (comp f g) :Kleisli)`) exactly once and reuse the resulting *Option* value
-(which is unaffected) rather than reusing the arrow binding. This keeps the
-fixtures green without papering over the defect.
+Fixed as described in the banner above. The `tests/fixtures/kleisli-arrow-instance`
+fixture now *reuses* each ascription-disambiguated arrow across multiple
+applications (no workaround needed), and `tests/fixtures/opaque-ascription-copy-reuse`
+is a focused regression: an unrestricted `(defopaque Crate [A] :int)` ascribed
+via `(:: ... :Crate)` is used twice and must type-check. Linear enforcement was
+verified unchanged: a `:linear` opaque reused under `-Xsubstructural` still
+raises `TUR-E0101`, via both the ascription and the plain (`F_SYM`) paths.
 
-## Discovered
+## Discovered / fixed
 
 While implementing `docs/upcoming/category-arrowzero-implementation-plan.md`
-(the Kleisli `Category`/`ArrowZero` example instance), 2026-06-05.
+(the Kleisli `Category`/`ArrowZero` example instance), 2026-06-05. Fixed the
+same day.

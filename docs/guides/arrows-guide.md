@@ -258,10 +258,8 @@ provides one: `Kleisli A B = A -> Option B`, where `none` is the zero.
 `Kleisli` is the worked second `Category` instance the hierarchy needs; it is
 also the reason `ArrowZero` stays declared-but-uninstantiated at `(->)`.
 
-> Note: ascription-disambiguated arrows (`(:: (ident) :Kleisli)`, etc.) are
-> currently move-once due to
-> [`opaque-ascription-cast-marks-value-move-once`](../reported/opaque-ascription-cast-marks-value-move-once.md);
-> apply each once and reuse the resulting `Option` until that is fixed.
+Ascription-disambiguated arrows (`(:: (ident) :Kleisli)`, etc.) are ordinary
+unrestricted values and may be reused freely.
 
 ### `ArrowChoice` over `Either`
 

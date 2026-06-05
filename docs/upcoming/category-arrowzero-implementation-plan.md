@@ -357,11 +357,14 @@ the plan's `zeroArrow`) is reused as-is.
 ### Defect found and reported
 
 Implementing the ascription-disambiguated fixtures surfaced a real linearity
-defect: the opaque ascription cast `(:: expr :Kleisli)` marks its result
-move-once even though `Kleisli` is an unrestricted opaque. Filed at
-`docs/reported/opaque-ascription-cast-marks-value-move-once.md`; the fixtures
-work around it by applying each ascribed arrow once and reusing the `Option`
-result.
+defect: the opaque ascription cast `(:: expr :Kleisli)` marked its result
+move-once even though `Kleisli` is an unrestricted opaque. **Root-caused and
+fixed** in `src/compiler/elab_types.c` (the `F_KEYWORD` type path hardcoded
+`copy_kind = CK_MOVE` for known opaques instead of carrying the def's
+discipline like the `F_SYM` path). Report:
+`docs/reported/opaque-ascription-cast-marks-value-move-once.md`. The
+`kleisli-arrow-instance` fixture now reuses the ascribed arrows directly, and
+`tests/fixtures/opaque-ascription-copy-reuse` is a focused regression.
 
 ### Not done (deliberately)
 
