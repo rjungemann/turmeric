@@ -1,5 +1,17 @@
 # Instance method that returns an untyped parameter verbatim loses its result type
 
+> **RESOLVED.** Fixed in `elab_method_call` (arrow-identity passthrough): when a
+> method's declared return is the arrow class variable (a boxed arity-0 TY_FN
+> shell) and its elaborated body is a bare `EX_VAR` reference to one of the
+> method's parameters, the dispatch site now recovers that argument's concrete
+> arrow signature (forcing the boxed/thunk convention, since a fat parameter is
+> returned as a fat box) instead of leaving an uncallable `?` shell. This
+> recovers the argument's *real* arity, so it is strictly better than the old
+> eta-expansion workaround (which fixed only the unary case).
+> `stdlib/arrow-class.tur` now defines `arr` as the bare `(arr [f] f)`.
+> Regression coverage lives in `tests/fixtures/arrow-instance-arr-identity/`.
+> The original report follows.
+
 **Summary.** A `definstance` method whose body is just one of its (untyped)
 parameters resolves to an unknown (`?`) result type at the dispatch site, so
 calling the dispatched result fails with `TUR-E0002: function '...' returns ?,
