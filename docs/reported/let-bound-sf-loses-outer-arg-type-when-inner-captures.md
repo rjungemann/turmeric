@@ -7,6 +7,21 @@ description: When a `defn` returns a two-level closure `(fn [^fat sig : (fn [flo
 
 # Let-bound SF loses outer-arg type when inner closure captures it
 
+> **Resolution (type-check half):** Fixed in `src/compiler/elab_forms.c`.
+> A `let` binding whose init is a *call* to a function that returns a thin
+> (non-boxed) closure-returning fn now routes through
+> `returns_closure_fn_binding` instead of `closure_fn_binding`, so the binding
+> keeps its declared outer signature while a chained call still sees its result
+> as a closure.  The discriminator is the new `Binding.returns_boxed_closure`
+> flag (set at defn/lambda elaboration from `body->type.as.fn.boxed`), which
+> tells a genuine fat-closure-returning call like `(adder 10)` apart from a
+> thin closure-returning fn like `(make-sf)`.  Guarded by
+> `tests/check-sf-let-bind-inner-call.sh` (ctest `tur_sf_let_bind_inner_call`).
+> The native-codegen half of this shape is still broken and is tracked
+> separately in
+> [sf-two-level-closure-return-miscompiles-out-binding](sf-two-level-closure-return-miscompiles-out-binding.md);
+> that is why the guard stops at `tur check` rather than build+run.
+
 ## Summary
 
 A `defn` whose return value is a Signal-Function (a two-level closure

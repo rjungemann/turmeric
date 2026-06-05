@@ -709,7 +709,32 @@ Expr *elab_let(Elab *e, const Form *call) {
                     init->as.var.binding->returns_closure_fn_binding;
             } else {
                 Binding *closure_b = expr_closure_fn_binding(init);
-                if (closure_b) b->closure_fn_binding = closure_b;
+                if (closure_b) {
+                    /* let-bound SF (let-bound-sf-loses-outer-arg-type): the same
+                     * "is a closure value" vs "returns a closure" distinction the
+                     * EX_VAR branch above makes also applies to a *call* init.
+                     * When init is a call to a function whose return *value* is a
+                     * thin (non-boxed) function pointer that itself returns a
+                     * closure -- e.g. (make-sf) returning the outer
+                     * (fn [sig] (fn [t] ...)) lambda -- closure_b describes what
+                     * that thin fn *returns* when called, not what the call result
+                     * *is*.  Recording it as closure_fn_binding would make
+                     * elab_call_fn swap in the inner env+arg thunk type for `b`,
+                     * dropping b's real first parameter (the outer `sig`) and
+                     * reading the inner arg in its place.  Route it to
+                     * returns_closure_fn_binding instead so a chained call
+                     * (sf input) still sees its result as a closure while `b`
+                     * keeps its declared outer signature.  A call whose callee
+                     * returns a genuine fat closure *box* (e.g. (adder 10), where
+                     * adder's body is a capturing lambda) still flows to
+                     * closure_fn_binding -- the call result IS the closure value. */
+                    if (init->kind == EX_CALL && init->as.call_.fn_binding &&
+                        !init->as.call_.fn_binding->returns_boxed_closure) {
+                        b->returns_closure_fn_binding = closure_b;
+                    } else {
+                        b->closure_fn_binding = closure_b;
+                    }
+                }
             }
         }
         /* Phase HRT4: propagate poly fn metadata through let-bindings.

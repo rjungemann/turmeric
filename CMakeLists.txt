@@ -61,6 +61,15 @@ add_test(
   COMMAND bash tests/check-httpd-conn-single-def.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# SF let-bind regression: a let-bound two-level closure (signal-function) whose
+# inner closure captures and calls the outer ^fat param must keep its declared
+# outer arg type (tur check guard; see
+# docs/reported/let-bound-sf-loses-outer-arg-type-when-inner-captures.md).
+add_test(
+  NAME tur_sf_let_bind_inner_call
+  COMMAND bash tests/check-sf-let-bind-inner-call.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests
