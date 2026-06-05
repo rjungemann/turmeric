@@ -208,12 +208,15 @@ and rank-2 `is_poly_fn`:
    + `:cstr`) passes; the bare-`:fn` float guard
    (`tests/fixtures/errors/fn-float-carrier-unsupported/`) still fires. See
    [../reported/fn-first-class-float-carrier-gap.md](../reported/fn-first-class-float-carrier-gap.md#resolution-f5----typed-carrier).
-6. **F6 -- de-workaround the consumer.** Drop the now-unnecessary `^fat`-sink
-   wrappers (`bind-parser-fat`, `mbind-fat`, `bind-goal-raw`'s `^fat` param,
-   etc.) where a direct `:fn` application is now legal, validating the cleanup
-   end-to-end against the existing `hkt-stdlib-*-instances` fixtures.
-   **Split out into its own plan** (it hinges on a distinct capability --
-   captured-and-deferred `:fn` application -- not exercised by F1-F4):
+6. **F6 -- de-workaround the consumer. (COMPLETE)** Dropped the now-unnecessary
+   `^fat`-sink wrappers (`bind-parser-fat`, `mbind-fat`, `bind-goal-raw`'s `^fat`
+   param) where a direct `:fn` application is now legal, validated end-to-end
+   against the existing `hkt-stdlib-*-instances` fixtures. As predicted, this
+   hinged on a distinct capability -- captured-and-deferred `:fn` application,
+   not exercised by F1-F4 -- which was found broken and fixed (the
+   closure-capture path missed a `:fn` carrier referenced only through a
+   conversion shim, and the poly-dispatch callee name skipped the env rewrite).
+   **Split out into its own plan:**
    [fn-first-class-stdlib-deworkaround-plan.md](fn-first-class-stdlib-deworkaround-plan.md).
 
 ## Risks

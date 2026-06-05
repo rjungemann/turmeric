@@ -351,6 +351,23 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 case EX_ASCRIBE:
                     if (cur->as.ascribe_.inner) ls[lsp++] = cur->as.ascribe_.inner;
                     break;
+                /* Conversion shims: descend so a `let` nested under one is still
+                 * registered as locally defined (mirrors the main traversal). */
+                case EX_REINTERPRET:
+                    if (cur->as.reinterpret_.expr) ls[lsp++] = cur->as.reinterpret_.expr;
+                    break;
+                case EX_CAST:
+                    if (cur->as.cast_.expr) ls[lsp++] = cur->as.cast_.expr;
+                    break;
+                case EX_FN_TO_FAT:
+                    if (cur->as.fn_to_fat_.inner) ls[lsp++] = cur->as.fn_to_fat_.inner;
+                    break;
+                case EX_POLY_TO_FAT:
+                    if (cur->as.poly_to_fat_.inner) ls[lsp++] = cur->as.poly_to_fat_.inner;
+                    break;
+                case EX_POLY_WRAP:
+                    if (cur->as.poly_wrap_.inner) ls[lsp++] = cur->as.poly_wrap_.inner;
+                    break;
                 /* GF1: Generator body -- traverse to find local defs */
                 case EX_GEN:
                     if (cur->as.gen_.def && cur->as.gen_.def->body)
@@ -522,15 +539,19 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 if (cur->as.call_.fn_binding &&
                     (cur->as.call_.fn_binding->closure_fn_binding ||
                      cur->as.call_.fn_binding->type.kind == TY_PTR_VOID ||
-                     cur->as.call_.fn_binding->is_fat)) {
-                    /* Restrict to bindings that hold a closure VALUE.  Three
+                     cur->as.call_.fn_binding->is_fat ||
+                     cur->as.call_.is_poly_call)) {
+                    /* Restrict to bindings that hold a closure VALUE.  Four
                      * forms qualify: a let-bound closure (closure_fn_binding),
-                     * a :ptr<void> binding being invoked as a fat closure, and a
-                     * ^fat binding -- all are callable values that the inner
-                     * closure must capture by env, not bare function references.
-                     * A let-bound non-capturing fn is lifted as a global and is
-                     * excluded by the is_global check below (which also avoids
-                     * regressing letrec/named-let self-recursion). */
+                     * a :ptr<void> binding being invoked as a fat closure, a
+                     * ^fat binding, and a `:fn` poly carrier applied directly
+                     * (is_poly_call -- the dispatch path emits `f.fn(f.env,...)`,
+                     * so the carrier value must be reached through the env).
+                     * All are callable values that the inner closure must
+                     * capture by env, not bare function references.  A let-bound
+                     * non-capturing fn is lifted as a global and is excluded by
+                     * the is_global check below (which also avoids regressing
+                     * letrec/named-let self-recursion). */
                     Binding *fb = cur->as.call_.fn_binding;
                     bool fb_is_param = false;
                     for (uint8_t i = 0; i < n_params; i++) {
@@ -752,6 +773,26 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * misses `ch` and emits the bare local instead of the env access. */
             case EX_ASCRIBE:
                 if (cur->as.ascribe_.inner) stack[sp++] = cur->as.ascribe_.inner;
+                break;
+            /* Compiler-only conversion shims wrap an inner expr that may be the
+             * sole reference to a free variable -- e.g. a `:fn` value passed
+             * through to another `:fn` param is wrapped in EX_POLY_WRAP, and a
+             * captured `:fn` boxed into a ^fat sink is wrapped in EX_POLY_TO_FAT.
+             * Descend so that variable is still captured. */
+            case EX_REINTERPRET:
+                if (cur->as.reinterpret_.expr) stack[sp++] = cur->as.reinterpret_.expr;
+                break;
+            case EX_CAST:
+                if (cur->as.cast_.expr) stack[sp++] = cur->as.cast_.expr;
+                break;
+            case EX_FN_TO_FAT:
+                if (cur->as.fn_to_fat_.inner) stack[sp++] = cur->as.fn_to_fat_.inner;
+                break;
+            case EX_POLY_TO_FAT:
+                if (cur->as.poly_to_fat_.inner) stack[sp++] = cur->as.poly_to_fat_.inner;
+                break;
+            case EX_POLY_WRAP:
+                if (cur->as.poly_wrap_.inner) stack[sp++] = cur->as.poly_wrap_.inner;
                 break;
             default:
                 break;

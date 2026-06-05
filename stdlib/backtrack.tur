@@ -391,22 +391,21 @@
 ;; the standard Functor / Applicative / Monad / Alternative instances are all
 ;; directly expressible and own their type. Each method delegates to an
 ;; int-carrier operation above. The continuation parameter of `fmap` / `bind`
-;; arrives as a typeclass-method poly closure; handing it to a worker whose
-;; parameter is declared `^fat` lets the compiler box it into the fat-closure
-;; protocol automatically (EX_POLY_TO_FAT), so the instance bodies stay pure
-;; Turmeric -- no hand-written `__tur_poly_to_fat` box.
+;; arrives as a typeclass-method poly closure; now that a `:fn` value is a
+;; first-class callable, the worker declares its callback `:fn` and applies it
+;; with a plain `(f x)` -- it is captured into the deferred result-mapping
+;; lambda and dispatched there (no `^fat`-sink box, no `apply-fat`).
 ;;; bt-apply-fat -- invoke a fat-closure box with a single argument.
+;; Still used by `ap` to dispatch *function elements* pulled from a result list
+;; (genuine int-carried fat boxes, not poly `:fn` continuations).
 (defn bt-apply-fat [f x] : int
   ```c int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, x);
   ```)
-;;; fmap-backtrack-raw -- worker: map a fat-closure fn over every result.
-(defn fmap-backtrack-raw [xs ^fat f] : int
-  (let [lf (:: f :int)]
-    (mbind xs (fn [x] (let [_ lf] (mreturn (bt-apply-fat lf x)))))))
-;;; mbind-fat -- ^fat-sink wrapper around mbind for the Monad instance.
-(defn mbind-fat [ma ^fat f] : int (mbind ma (:: f :int)))
+;;; fmap-backtrack-raw -- worker: map a `:fn` callback over every result.
+(defn fmap-backtrack-raw [xs f : fn] : int
+  (mbind xs (fn [x] (mreturn (f x)))))
 ;;; ap-backtrack-raw -- int worker: cartesian application of fns to arguments.
 (defn ap-backtrack-raw [fs xs] : int
   (let [lxs xs]
@@ -443,8 +442,8 @@
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Monad [Backtrack]
-  (bind [ma fn]
-    (mbind-fat (:: ma :int) fn)))
+  (bind [ma k]
+    (mbind (:: ma :int) (fn [x] (k x)))))
 ;;; Alternative [Backtrack] -- empty is the failing search; alt-or unions the
 ;;; results of both searches (the backtracking choice).
 ;;;

@@ -966,6 +966,8 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     return result;
 }
 
+static char *capture_env_access(EmitCtx *ctx, const Binding *b);
+
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     const Expr *cur = NULL;
     /* GHE: typeclass-method dispatch inside a monomorphized constrained generic
@@ -1014,69 +1016,65 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
             }
         }
     }
+    /* A captured carrier (e.g. a `:fn` poly closure threaded into a returned
+     * closure) is reached through its env, not by its bare local name -- the
+     * poly-fn dispatch path emits `<name>.fn(<name>.env, ...)`, so `<name>`
+     * here must be the env-qualified access. */
+    if (b) {
+        char *captured = capture_env_access(ctx, b);
+        if (captured) return captured;
+    }
     return raw_name_for_binding(b);
 }
 
 /* Return a sanitized C identifier for a Binding. If the binding is a
  * function parameter in the current context, use the raw name (without ID).
  * Otherwise, append the ID suffix. Caller frees. */
-char *name_for_binding(EmitCtx *ctx, const Binding *b) {
-    /* GF1: If inside a generator _next function, redirect struct fields to __g->field */
+/* If `b` is a captured binding in the current closure/defer/handle/generator
+ * scope, return a malloc'd env-qualified access string ("<env>->field" or
+ * "<env>.field"); otherwise NULL.  Shared by name_for_binding (value access)
+ * and emit_call_name (callee access) so that a captured carrier called via the
+ * poly-fn dispatch path is reached through its env, not by its bare name. */
+static char *capture_env_access(EmitCtx *ctx, const Binding *b) {
+    const char *env = NULL;
+    const char *sep = "->";
+    /* GF1: inside a generator _next function, struct fields live on __g->field. */
     if (ctx->gen_var_name && ctx->gen_struct_bindings) {
         for (uint32_t i = 0; i < ctx->n_gen_struct_bindings; i++) {
-            if (ctx->gen_struct_bindings[i] == b) {
-                char *field_name = raw_name_for_binding(b);
-                size_t sz = strlen(ctx->gen_var_name) + strlen(field_name) + 4;
-                char *result = (char *)malloc(sz);
-                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
-                snprintf(result, sz, "%s->%s", ctx->gen_var_name, field_name);
-                free(field_name);
-                return result;
-            }
+            if (ctx->gen_struct_bindings[i] == b) { env = ctx->gen_var_name; break; }
         }
     }
-    /* Phase 3: If this is a captured binding in a closure thunk, emit as env->field */
-    if (ctx->closure && ctx->env_var_name) {
+    /* Phase 3: captured binding in a closure thunk -> env_var_name->field. */
+    if (!env && ctx->closure && ctx->env_var_name) {
         for (uint8_t i = 0; i < ctx->closure->n_captures; i++) {
-            if (ctx->closure->captures[i] == b) {
-                /* This is a captured binding - emit as env_var_name->field_name */
-                char *field_name = raw_name_for_binding(b);
-                char *result = (char *)malloc(strlen(ctx->env_var_name) + strlen(field_name) + 4);
-                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
-                snprintf(result, strlen(ctx->env_var_name) + strlen(field_name) + 4, "%s->%s", ctx->env_var_name, field_name);
-                free(field_name);
-                return result;
-            }
+            if (ctx->closure->captures[i] == b) { env = ctx->env_var_name; break; }
         }
     }
-    /* Phase 4 v1: If this is a captured binding in a defer thunk, emit as env->field */
-    if (ctx->env_var_name && ctx->defer_captures) {
+    /* Phase 4 v1: captured binding in a defer thunk -> env_var_name->field. */
+    if (!env && ctx->env_var_name && ctx->defer_captures) {
         for (uint8_t i = 0; i < ctx->n_defer_captures; i++) {
-            if (ctx->defer_captures[i] == b) {
-                /* This is a captured binding - emit as env_var_name->field_name */
-                char *field_name = raw_name_for_binding(b);
-                char *result = (char *)malloc(strlen(ctx->env_var_name) + strlen(field_name) + 4);
-                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
-                snprintf(result, strlen(ctx->env_var_name) + strlen(field_name) + 4, "%s->%s", ctx->env_var_name, field_name);
-                free(field_name);
-                return result;
-            }
+            if (ctx->defer_captures[i] == b) { env = ctx->env_var_name; break; }
         }
     }
-    /* Phase 19D: If this is a captured binding in a handle body fiber function, emit as __env->field */
-    if (ctx->handle_captures && ctx->handle_env_name) {
+    /* Phase 19D: captured binding in a handle body fiber function -> __env->field. */
+    if (!env && ctx->handle_captures && ctx->handle_env_name) {
         for (uint32_t i = 0; i < ctx->n_handle_captures; i++) {
-            if (ctx->handle_captures[i] == b) {
-                char *field_name = raw_name_for_binding(b);
-                char *result = (char *)malloc(strlen(ctx->handle_env_name) + strlen(field_name) + 4);
-                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
-                snprintf(result, strlen(ctx->handle_env_name) + strlen(field_name) + 4,
-                         "%s->%s", ctx->handle_env_name, field_name);
-                free(field_name);
-                return result;
-            }
+            if (ctx->handle_captures[i] == b) { env = ctx->handle_env_name; break; }
         }
     }
+    if (!env) return NULL;
+    char *field_name = raw_name_for_binding(b);
+    size_t sz = strlen(env) + strlen(sep) + strlen(field_name) + 1;
+    char *result = (char *)malloc(sz);
+    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(result, sz, "%s%s%s", env, sep, field_name);
+    free(field_name);
+    return result;
+}
+
+char *name_for_binding(EmitCtx *ctx, const Binding *b) {
+    char *captured = capture_env_access(ctx, b);
+    if (captured) return captured;
     /* Check if this binding is a function parameter in the current context */
     if (ctx->fn_params) {
         for (uint8_t i = 0; i < ctx->n_fn_params; i++) {
