@@ -5,7 +5,7 @@
 ;; app is nullary (it IS the arrow), so it resolves through return-type dispatch
 ;; / the unique-arrow-instance fallback, like Category's ident.
 
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 ;; Build a heap pair whose slot 0 is a fat closure and slot 1 is its argument.
 ;; The ^fat parameter normalizes a bare function (captureless C pointer) into a

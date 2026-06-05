@@ -6,7 +6,7 @@
 ;; fed-back component: it runs the arrow on (b, sentinel) and projects the first
 ;; output slot.  Here the looped arrow ignores its second (fed-back) slot.
 
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 ;; A pair-consuming arrow: read slot 0 (the real input b), ignore slot 1 (the
 ;; fed-back d), and emit a pair (b+100, b) -- slot 1 is what would feed back.

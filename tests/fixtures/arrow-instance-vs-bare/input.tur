@@ -2,12 +2,12 @@
 ;; values as a plain-function arrow pipeline.
 ;;
 ;; The same pipeline (add1 >>> mul2 >>> add1, and first/second over a pair) is
-;; written twice: once through the Arrow [(->)] dictionary (stdlib/arrow-class)
+;; written twice: once through the Arrow [(->)] dictionary (stdlib/arrow)
 ;; and once with local bare functions (b-comp / b-first, distinct names so both
 ;; live in one module).  Each pair of lines prints the dispatch result then the
 ;; bare result; they must be identical.
 
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 ;; --- local bare reference implementation (no typeclass dispatch) ---
 (defn b-comp [^fat f ^fat g] (let [fv f gv g] (fn [x] (gv (fv x)))))

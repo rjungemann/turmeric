@@ -14,10 +14,21 @@ description: Reintroduce the `Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `
 > [typeclass-methods-share-value-namespace-with-defns](../reported/typeclass-methods-share-value-namespace-with-defns.md)
 > (fix (1), RESOLVED). A bare `arr` / `>>>` now dispatches to the matching
 > instance when the receiver type selects one, and falls back to the bare
-> combinator otherwise. `stdlib/arrow-class.tur` *may* now merge back into
-> `stdlib/arrow.tur` as a single surface; that consolidation (a
-> snapshot-touching refactor) is deferred to a dedicated follow-up rather than
-> bundled with the namespace fix.
+> combinator otherwise.
+>
+> **Consolidation landed (2026-06-05).** `stdlib/arrow-class.tur` has now been
+> merged back into `stdlib/arrow.tur` as a single surface and deleted. The
+> bare combinators and the typeclass hierarchy (six `defclass` forms + the four
+> `(->)` instances + the `__ac_pair_*`/`__ac_loop_step`/`__ac_app` helpers +
+> `(load "stdlib/either.tur")`) now live in one module; the shared `arr`/`>>>`
+> names coexist via the namespace fix. All seven dispatch fixtures, the guide
+> (`docs/guides/arrows-guide.md`), and the regenerated `stdlib/docstrings.tur` +
+> `docs/api/` were rewired from `stdlib/arrow-class.tur` to `stdlib/arrow.tur`;
+> no `expected.c` snapshot fixture depended on the bare module, so the refresh
+> was stdout-only and the full suite stayed green (1482 passed, 0 failed). The
+> stale "two surfaces are not loaded together" / "`<<<` collides on `___`" notes
+> were corrected. The only remaining follow-up is T12.5 (archive the scaleback
+> plan after one release cycle).
 
 The typeclass layer has **landed**. Summary of what shipped and the one
 architectural deviation from the task text:
@@ -341,8 +352,9 @@ has changed -- root-cause it before regenerating.
 
 - [x] Prerequisite-readiness check (T1) recorded (see "Delivered" block + the
       T1 status section; all gates closed including A3 mangling).
-- [x] All six `defclass` forms declared -- in `stdlib/arrow-class.tur` (separate
-      module; see "Delivered" for why not `stdlib/arrow.tur`).
+- [x] All six `defclass` forms declared -- now in `stdlib/arrow.tur` (originally
+      a separate `stdlib/arrow-class.tur`; merged back in the 2026-06-05
+      consolidation, see "Delivered").
 - [x] `Arrow [(->)]` instance compiles and dispatches
       (`arrow-instance-stdlib-basic`).
 - [x] `ArrowChoice [(->)]` instance compiles and dispatches over `Either`

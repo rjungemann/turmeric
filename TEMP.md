@@ -3,8 +3,9 @@
 ### The two anchors
 
 - [ ] docs/upcoming/tur-signal-rebuild-plan.md -- the goal itself
-- [ ] docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md -- mostly delivered (2026-06-05), but follow-ups
-(arrow-class.tur merge-back, snapshot refresh) still open
+- [+] docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md -- delivered; arrow-class.tur merge-back done
+(2026-06-05): arrow-class.tur folded into stdlib/arrow.tur as one surface, loaders/guide/docstrings updated, suite
+green (1482). Only remaining: move scaleback plan to archive after one release cycle (T12.5).
 - [ ] docs/upcoming/stdlib-arrow-scaleback-plan.md -- superseded but the bare-combinator surface it locks in is what
 signal's >>> will sit on
 

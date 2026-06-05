@@ -7,7 +7,7 @@
 ;; instance dict and still see the captured environment -- the dict fields are
 ;; int64_t closure carriers, not void*, so the fat box survives composition.
 
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 (defn pair-new [a b] : int
   ```c struct { int64_t e1; int64_t e2; } *p = malloc(sizeof(*p));
