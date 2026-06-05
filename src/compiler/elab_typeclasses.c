@@ -1232,6 +1232,91 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
+/* Build the codegen type-arg suffix for a typeclass instance, e.g. "_int",
+ * "_option", or "_result_int".  This suffix is the discriminator baked into
+ * every instance C symbol -- the method functions (__inst_<Class>_<method>SUFFIX)
+ * and the dictionary struct/singleton (dict_<Class>SUFFIX).  It mirrors
+ * emit_dict_name (emit_core.c) and is the single source of truth shared by both
+ * the method-name builder below and the duplicate-instance guard, so the dedup
+ * key can never drift from the names actually emitted.
+ *
+ * Two instances of the same typeclass collide in generated C iff their suffixes
+ * are byte-equal.  Returns false on buffer overflow (caller emits the error). */
+static bool build_inst_type_suffix(const Type *type_args,
+                                   const Symbol **type_arg_syms,
+                                   uint8_t n_type_args,
+                                   char *out, size_t outlen) {
+    size_t len = 0;
+    if (outlen == 0) return false;
+    out[0] = '\0';
+    for (uint8_t j = 0; j < n_type_args; j++) {
+        const char *type_component = NULL;
+        char ctor_name_buf[32];  /* for TY_STRUCT/TY_APP constructor names */
+        switch (type_args[j].kind) {
+            case TY_INT:     type_component = "int";     break;
+            case TY_BOOL:    type_component = "bool";    break;
+            case TY_CSTR:    type_component = "cstr";    break;
+            case TY_NIL:     type_component = "nil";     break;
+            case TY_PTR_VOID: type_component = "ptr_void"; break;
+            case TY_INT8:    type_component = "int8";    break;
+            case TY_INT16:   type_component = "int16";   break;
+            case TY_INT32:   type_component = "int32";   break;
+            case TY_UINT8:   type_component = "uint8";   break;
+            case TY_UINT16:  type_component = "uint16";  break;
+            case TY_UINT32:  type_component = "uint32";  break;
+            case TY_UINT64:  type_component = "uint64";  break;
+            case TY_FLOAT:   type_component = "float";   break;
+            case TY_FLOAT32: type_component = "float32"; break;
+            case TY_FLOAT64: type_component = "float64"; break;
+            case TY_SYM:     type_component = "Sym";     break;
+            case TY_FN:      type_component = "arrow";   break;
+            case TY_STRUCT:
+                /* Phase HKT H3: use the original symbol name when available,
+                 * falling back to "T" for unnamed struct type args. */
+                if (type_arg_syms && type_arg_syms[j]) {
+                    uint32_t sym_len = type_arg_syms[j]->len;
+                    if (sym_len >= sizeof(ctor_name_buf))
+                        sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
+                    memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
+                    ctor_name_buf[sym_len] = '\0';
+                    for (char *p = ctor_name_buf; *p; p++) {
+                        if (!isalnum((unsigned char)*p)) *p = '_';
+                    }
+                    type_component = ctor_name_buf;
+                } else if (type_args[j].as.struct_.def) {
+                    type_component = type_args[j].as.struct_.def->name;
+                } else {
+                    type_component = "T";
+                }
+                break;
+            case TY_APP: {
+                /* Phase HKT §3: partial type application -- encode as "ctor_arg" */
+                const char *ctor_part = "T";
+                const char *arg_part  = "T";
+                if (type_arg_syms && type_arg_syms[j]) {
+                    ctor_part = type_arg_syms[j]->name;
+                }
+                if (type_args[j].as.app.arg) {
+                    const char *n = type_name(*type_args[j].as.app.arg);
+                    if (n) arg_part = n;
+                }
+                snprintf(ctor_name_buf, sizeof(ctor_name_buf), "%s_%s", ctor_part, arg_part);
+                for (char *p = ctor_name_buf; *p; p++) {
+                    if (!isalnum((unsigned char)*p)) *p = '_';
+                }
+                type_component = ctor_name_buf;
+                break;
+            }
+            default: type_component = "T"; break;
+        }
+        int written = snprintf(out + len, outlen - len, "%s%s",
+                               j == 0 ? "_" : "", type_component);
+        if (written < 0 || (size_t)written >= outlen - len) return false;
+        len += (size_t)written;
+    }
+    return true;
+}
+
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
  *
  * Defines an instance of a typeclass for concrete types.
@@ -1810,12 +1895,44 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         }
     }
 
+    /* Compute the instance's codegen type-arg suffix once -- it depends only on
+     * the type args, not on any individual method, and is reused both for the
+     * duplicate-instance guard just below and for every method name built later. */
+    char inst_type_suffix[64];
+    if (!build_inst_type_suffix(type_args, type_arg_syms, n_type_args,
+                                inst_type_suffix, sizeof(inst_type_suffix))) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "typeclass instance name is too long for '%s'", tc_name->name);
+        return NULL;
+    }
+
+    /* Idempotent re-instance guard.  An instance whose (typeclass, type-arg
+     * suffix) matches one already registered would re-emit the same dictionary
+     * struct/singleton and __inst_* method functions, producing a hard C
+     * "redefinition" ODR error.  This fires whenever the same instance is seen
+     * twice -- e.g. a module that explicitly (load "stdlib/typeclass.tur")s
+     * while an auto-loaded partial typeclass stub (typeclass-clone.tur, ...)
+     * already supplied the same primitive instance.  The first definition wins;
+     * the redundant one is a silent no-op, matching the include-guard mental
+     * model for repeated loads.  See docs/reported/load-not-idempotent-typeclass.md. */
+    for (TypeClassInstance *prev = e->typeclass_env.instances; prev; prev = prev->next) {
+        if (prev->typeclass != tc || prev->n_type_args != n_type_args) continue;
+        char prev_suffix[64];
+        if (!build_inst_type_suffix(prev->type_args, prev->type_arg_syms,
+                                    prev->n_type_args, prev_suffix, sizeof(prev_suffix)))
+            continue;
+        if (strcmp(prev_suffix, inst_type_suffix) == 0) {
+            /* Already have this exact instance; emit nothing further. */
+            return e_nil(e, call->span);
+        }
+    }
+
     /* Parse method implementations */
     /* Each method impl is a function definition without the 'defn' keyword */
     /* Syntax: (method-name [param1 param2 ...] body...)
      * The number of methods must match the typeclass definition.
      */
-    
+
     if (call->as.list.len - impls_start < tc->n_methods) {
         diag_emit(DIAG_ERROR, call->span,
                   "definstance: expected %d method implementations for '%s', got %d",
@@ -1930,83 +2047,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         tur_mangle_ident(method_name_str, sanitized_method_name,
                          sizeof(sanitized_method_name));
 
-        /* Build type arg suffix */
-        char type_suffix[MAX_INSTANCE_TYPE_SUFFIX_LEN] = "";
-        size_t type_suffix_len = 0;
-        for (uint8_t j = 0; j < n_type_args; j++) {
-            const char *type_component = NULL;
-            char ctor_name_buf[32];  /* for TY_STRUCT/constructor names */
-            switch (type_args[j].kind) {
-                case TY_INT:     type_component = "int";     break;
-                case TY_BOOL:    type_component = "bool";    break;
-                case TY_CSTR:    type_component = "cstr";    break;
-                case TY_NIL:     type_component = "nil";     break;
-                case TY_PTR_VOID: type_component = "ptr_void"; break;
-                case TY_INT8:    type_component = "int8";    break;
-                case TY_INT16:   type_component = "int16";   break;
-                case TY_INT32:   type_component = "int32";   break;
-                case TY_UINT8:   type_component = "uint8";   break;
-                case TY_UINT16:  type_component = "uint16";  break;
-                case TY_UINT32:  type_component = "uint32";  break;
-                case TY_UINT64:  type_component = "uint64";  break;
-                case TY_FLOAT:   type_component = "float";   break;
-                case TY_FLOAT32: type_component = "float32"; break;
-                case TY_FLOAT64: type_component = "float64"; break;
-                case TY_SYM:     type_component = "Sym";     break;
-                case TY_FN:      type_component = "arrow";   break;
-                case TY_STRUCT:
-                    /* Phase HKT H3: use the original symbol name when available,
-                     * falling back to "T" for unnamed struct type args. */
-                    if (type_arg_syms && type_arg_syms[j]) {
-                        /* Sanitise the symbol name to a valid C identifier component */
-                        uint32_t sym_len = type_arg_syms[j]->len;
-                        if (sym_len >= sizeof(ctor_name_buf))
-                            sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
-                        memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
-                        ctor_name_buf[sym_len] = '\0';
-                        for (char *p = ctor_name_buf; *p; p++) {
-                            if (!isalnum((unsigned char)*p)) *p = '_';
-                        }
-                        type_component = ctor_name_buf;
-                    } else if (type_args[j].as.struct_.def) {
-                        type_component = type_args[j].as.struct_.def->name;
-                    } else {
-                        type_component = "T";
-                    }
-                    break;
-                case TY_APP: {
-                    /* Phase HKT §3: partial type application — encode as "ctor_arg" */
-                    const char *ctor_part = "T";
-                    const char *arg_part  = "T";
-                    if (type_arg_syms && type_arg_syms[j]) {
-                        ctor_part = type_arg_syms[j]->name;
-                    }
-                    if (type_args[j].as.app.arg) {
-                        const char *n = type_name(*type_args[j].as.app.arg);
-                        if (n) arg_part = n;
-                    }
-                    snprintf(ctor_name_buf, sizeof(ctor_name_buf), "%s_%s", ctor_part, arg_part);
-                    for (char *p = ctor_name_buf; *p; p++) {
-                        if (!isalnum((unsigned char)*p)) *p = '_';
-                    }
-                    type_component = ctor_name_buf;
-                    break;
-                }
-                default: type_component = "T"; break;
-            }
-            int written = snprintf(type_suffix + type_suffix_len,
-                                   sizeof(type_suffix) - type_suffix_len,
-                                   "%s%s", j == 0 ? "_" : "", type_component);
-            if (written < 0 || (size_t)written >= sizeof(type_suffix) - type_suffix_len) {
-                diag_emit(DIAG_ERROR, impl_form->span,
-                          "typeclass instance method name is too long");
-                return NULL;
-            }
-            type_suffix_len += (size_t)written;
-        }
+        /* Type arg suffix was computed once up front (inst_type_suffix) -- it is
+         * identical for every method of this instance and shared with the
+         * duplicate-instance guard, so the emitted names stay in lock-step. */
         int method_name_written =
             snprintf(method_name, sizeof(method_name), "__inst_%.*s_%s%s",
-                     (int)tc_name->len, tc_name->name, sanitized_method_name, type_suffix);
+                     (int)tc_name->len, tc_name->name, sanitized_method_name,
+                     inst_type_suffix);
         if (method_name_written < 0 || (size_t)method_name_written >= sizeof(method_name)) {
             diag_emit(DIAG_ERROR, impl_form->span,
                       "typeclass instance method name is too long");
