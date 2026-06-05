@@ -61,16 +61,12 @@
 ;;;   (cata my-alg leaf-fix)
 ;;;
 ;;; Since: Phase RF2
-;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
+;;; Updated: fn-first-class-application -- a `:fn` value is now directly
+;;; callable, so the algebra is applied with plain `(alg ...)` instead of the
+;;; hand-rolled fat-pointer extraction in inline-C.
 
-(defn cata [alg : fn fix : int]
-  #{Unsafe}
-  : int
-  ```c int64_t layer = unroll(fix);
-  int64_t *_fat = (int64_t*)(intptr_t)alg;
-  tur_poly_fn_t _alg = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  return _alg.fn(_alg.env, layer);
-  ```)
+(defn cata [alg : fn fix : int] : int
+  (alg (unroll fix)))
 ;;; ana -- anamorphism: unfold a seed value into a Fix value using a co-algebra.
 ;;;
 ;;; Parameters:
@@ -84,13 +80,9 @@
 ;;;   (ana my-coalg seed-value)
 ;;;
 ;;; Since: Phase RF2
-;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
+;;; Updated: fn-first-class-application -- a `:fn` value is now directly
+;;; callable, so the co-algebra is applied with plain `(coalg ...)` instead of
+;;; the hand-rolled fat-pointer extraction in inline-C.
 
-(defn ana [coalg : fn seed : int]
-  #{Unsafe}
-  : int
-  ```c int64_t *_fat = (int64_t*)(intptr_t)coalg;
-  tur_poly_fn_t _coalg = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
-  int64_t layer = _coalg.fn(_coalg.env, seed);
-  return roll(layer);
-  ```)
+(defn ana [coalg : fn seed : int] : int
+  (roll (coalg seed)))

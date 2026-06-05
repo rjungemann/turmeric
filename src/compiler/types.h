@@ -454,6 +454,13 @@ typedef struct Type {
              * a typed error.  Distinguishes fat consumers (reactor cb, free-bind
              * kont) from raw-C-callback params (hamt fn) that share the same kind. */
             bool arg_fat[MAX_FN_ARITY];
+            /* Phase CCL (fn-first-class-application): true if the i-th param is a
+             * first-class `:fn` poly-closure carrier (tur_poly_fn_t {env, fn}),
+             * i.e. a hand-written `:fn` parameter outside a typeclass method.
+             * Distinct from a rank-2 forall (whose full type is carried in
+             * arg_full_types[i]); a function/lambda/closure argument is boxed
+             * into the carrier via EX_POLY_WRAP at the call site. */
+            bool arg_poly_fn[MAX_FN_ARITY];
             /* A#1 (return position): true when the result type carries the
              * ^fat marker.  A bare non-capturing fn returned from this
              * function is auto-shimmed into a fat closure (EX_FN_TO_FAT) at

@@ -1,0 +1,5 @@
+;; fn-ptr-void-not-callable -- the first-class `:fn` work makes a `:fn` value
+;; callable, but a raw :ptr<void> is still NOT callable, by design.  Calling one
+;; directly is a hard error (the representation carve-out must survive).
+(defn applyf [g : ptr<void> x : int] : int (g x))
+(defn main [] : int 0)

@@ -2500,6 +2500,77 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             args[i] = wrap;
         }
 
+        /* Phase CCL (fn-first-class-application): a hand-written `:fn` parameter
+         * (mono poly-closure carrier, arg_poly_fn) receives a tur_poly_fn_t.  Box
+         * the function/lambda/closure argument into the carrier via EX_POLY_WRAP,
+         * mirroring the typeclass-method dispatch path:
+         *   - a named function / non-capturing lambda -> a generated poly wrapper;
+         *   - a capturing closure (TY_PTR_VOID / boxed TY_FN) -> packed inline;
+         *   - another `:fn` value (already a carrier) -> passed through.
+         * A raw :ptr<void> that is not a closure is left alone here; the regular
+         * kind check rejects it (a raw pointer is not callable, by design). */
+        if (!is_rank2_param && fn_type.kind == TY_FN) {
+            uint32_t fn_arg_idx_pf = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_arg_idx_pf < fn_type.as.fn.arity &&
+                fn_type.as.fn.arg_poly_fn[fn_arg_idx_pf]) {
+                Binding *inner_fn_b = poly_arg_fn_binding(args[i]);
+                /* Phase CCL: the `:fn` carrier is the int64 register class.  A
+                 * function whose signature has a float-class argument or result
+                 * cannot round-trip through it without a register-class miscompile
+                 * (xmm vs gp); reject the coercion rather than miscompile.  See
+                 * docs/reported/fn-first-class-float-carrier-gap.md. */
+                if (inner_fn_b && inner_fn_b->type.kind == TY_FN) {
+                    const Type *ft = &inner_fn_b->type;
+                    bool has_float = (kind_is_non_int_register_class(ft->as.fn.result_kind) ||
+                                      ft->as.fn.result_kind == TY_FLOAT32 ||
+                                      ft->as.fn.result_kind == TY_FLOAT64);
+                    for (uint8_t k = 0; !has_float && k < ft->as.fn.arity; k++) {
+                        TypeKind ak = ft->as.fn.arg_kinds[k];
+                        if (kind_is_non_int_register_class(ak) ||
+                            ak == TY_FLOAT32 || ak == TY_FLOAT64) has_float = true;
+                    }
+                    if (has_float) {
+                        diag_emit(DIAG_ERROR, args[i]->span,
+                                  "cannot pass a function with a floating-point "
+                                  "argument or result as a `:fn` value: the "
+                                  "first-class `:fn` carrier is the int64 register "
+                                  "class, so a float would be a silent register-class "
+                                  "miscompile; use a typed function parameter "
+                                  "(e.g. `g : (fn [float] : float)`) instead");
+                        return NULL;
+                    }
+                }
+                if (inner_fn_b) {
+                    Expr *orig = args[i];
+                    Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
+                    wrap->as.poly_wrap_.inner = orig;
+                    wrap->as.poly_wrap_.is_closure = false;
+                    if (inner_fn_b->is_poly_fn) {
+                        /* Already a tur_poly_fn_t -- pass through. */
+                        wrap->as.poly_wrap_.wrapper_binding = NULL;
+                    } else {
+                        uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                            ? inner_fn_b->type.as.fn.arity : 1;
+                        if (inner_fn_b->closure_fn_binding) inner_arity--;
+                        Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity,
+                                                               args[i]->span);
+                        if (!wrapper_b) return NULL;
+                        wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+                    }
+                    args[i] = wrap;
+                } else if (args[i]->type.kind == TY_PTR_VOID ||
+                           (args[i]->type.kind == TY_FN && args[i]->type.as.fn.boxed)) {
+                    /* A capturing closure value -- pack it into the carrier. */
+                    Expr *orig = args[i];
+                    Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
+                    wrap->as.poly_wrap_.inner = orig;
+                    wrap->as.poly_wrap_.wrapper_binding = NULL;
+                    wrap->as.poly_wrap_.is_closure = true;
+                    args[i] = wrap;
+                }
+            }
+        }
+
         /* A#1: ^fat parameter -- auto-shim a bare (non-capturing) fn into a fat
          * closure so a fat-call consumer (reactor cb, free-bind kont, ...) reads a
          * valid { thunk, env } layout instead of a bare function pointer.  A
@@ -2955,6 +3026,30 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!args[i]) return NULL;
+    }
+
+    /* Phase CCL (fn-first-class-application): a bare `:fn` value (mono
+     * poly-closure carrier, poly_type == NULL) round-trips through the int64
+     * carrier.  Integer-register kinds (int/cstr/ptr/bool) survive, but a
+     * float-class argument lives in a different register class (xmm0), so passing
+     * it through the int64 carrier is a silent register-class miscompile.  Reject
+     * it with a hard error rather than miscompile -- a typed `:fn` signature
+     * (the F5 phase of the plan) is the proper fix.  See
+     * docs/reported/fn-first-class-float-carrier-gap.md. */
+    if (fn_binding->poly_type == NULL) {
+        for (uint32_t i = 0; i < n_args; i++) {
+            if (kind_is_non_int_register_class(args[i]->type.kind) ||
+                args[i]->type.kind == TY_FLOAT32 || args[i]->type.kind == TY_FLOAT64) {
+                diag_emit(DIAG_ERROR, args[i]->span,
+                          "applying a `:fn` value to a floating-point argument is "
+                          "not supported: the first-class `:fn` carrier is the "
+                          "int64 register class, so a float argument would be a "
+                          "silent register-class miscompile; pass the value through "
+                          "an int-carried wrapper, or use a typed function "
+                          "parameter (e.g. `g : (fn [float] : float)`) instead");
+                return NULL;
+            }
+        }
     }
 
     /* Phase HRT3: Detect nested poly-fn args in the body type.
