@@ -6,6 +6,49 @@ description: Spike report on the Phase 0 :float sample migration from signal-pri
 
 # Signal Phase 0 Spike -- Findings
 
+## Resolution (2026-06-05) -- SUPERSEDED; no Option-B work landed
+
+The recommendation below (Option B: a centralised `__sig_call` bit-cast
+macro in `dsp.tur`) has been **overtaken by events** and is intentionally
+**not** executed:
+
+- **The signal spice was removed wholesale.** There is no
+  `../turmeric-spices/spices/signal/src/signal/dsp.tur` to add a
+  `__sig_call_f` / `__sig_call` macro to, and no existing SFs to refactor.
+  The spice is being rebuilt from scratch by
+  [tur-signal-rebuild-plan](../../upcoming/tur-signal-rebuild-plan.md), which
+  **explicitly rejects** the int64-bit-cast sample ABI that Option B was
+  designed to centralise. Adding the macro now would re-entrench exactly
+  the pattern the rebuild exists to delete.
+- **The Phase 0 exit-criteria edit is moot.** Its target,
+  `signal-primitives-expansion-plan.md`, is archived under
+  `docs/archive/history/` and superseded by the rebuild plan. There is no
+  live `src/signal/` to grep-gate.
+- **Option A is subsumed -- do not file `closure-float-return-abi-plan.md`.**
+  The compiler-side capability Option A asked for (`:float`-returning
+  fat closures, so samples flow as native `double` through closure and
+  arrow boundaries with no `memcpy`) has since landed via the typed
+  closure-invocation work, not as a separate plan:
+  - [closure-typed-invocation-abi-plan](../closure-typed-invocation-abi-plan.md)
+    threads declared arg/return types to the C invocation site.
+  - The typed `:fn` carrier (phase F5) now round-trips `float`/`cstr`/`ptr`
+    through `tur_poly_fn_t` -- see the RESOLVED report
+    `docs/reported/fn-first-class-float-carrier-gap.md`.
+  - The companion bare-`^fat` result-type and struct-return fixes
+    (`docs/archive/bare-fat-result-type-inference-plan.md`,
+    `docs/reported/fat-closure-dispatch-does-not-handle-struct-return.md`)
+    close the remaining float/aggregate boundary gaps.
+  These are reflected in G1/G4/G7 going green in
+  [language-readiness-for-typed-signal-plan](language-readiness-for-typed-signal-plan.md).
+  Filing a separate `closure-float-return-abi-plan.md` would duplicate
+  work already done.
+
+Net: the typed-`:float` closure ABI that Option A wanted exists today, so
+the rebuild gets the clean path *for free* and never needs Option B's
+interim macro. The findings below are retained for historical context.
+
+---
+
 Spike on Phase 0 ("finish the `:float` sample migration") from
 [signal-primitives-expansion-plan.md](signal-primitives-expansion-plan.md).
 **Result: blocked.** Phase 0 as written requires changes the compiler does

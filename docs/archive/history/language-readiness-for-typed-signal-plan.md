@@ -6,6 +6,47 @@ description: A spike-style investigation plan that enumerates the concrete langu
 
 # Language Readiness for a Typed Signal Library -- Plan
 
+## Verdict (as of 2026-06-05) -- GO, with two documented workarounds
+
+Every gap G1-G8 now has a verdict block. The language is ready for the
+typed signal rebuild. Summary:
+
+| Gap | Verdict | What the rebuild does |
+|-----|---------|-----------------------|
+| G1 `:float`-fat-closures | green | use directly |
+| G2 polymorphic `constant` | **amber** | spell `constant` monomorphically per result type (`constant-float` / `constant-int`); do not return a tyvar-typed closure from a generic `defn` |
+| G3 `vec-of` over SFs | green (mild amber) | `vec-of` SFs directly; read back with a `:ptr<void>` ascription |
+| G4 typed `Pair` through closures | green | build `Pair` inside the closure body; read via `pair-fst`/`pair-snd` |
+| G5 typed state cells | green | `:ptr<:float>` state, inline-C body uses `double *` directly |
+| G6 `Vec[Closure]` reads | green | `(vec-get v i)` + `:ptr<void>` ascription into a `^fat` sink |
+| G7 typed `>>>` | green (amber edge) | use a **local** typed-compose over `(fn [:float] :float)`; the stdlib `>>>` stays int-default until [stdlib-arrow-scaleback-plan](../../upcoming/stdlib-arrow-scaleback-plan.md) generalises it |
+| G8 integration smoke | green | the typed two-osc + filter chain compiles, runs leak-clean |
+
+**G2 decision:** amber, not red. The original silent miscompile is
+resolved -- a generic `defn` that returns a closure whose result type is
+a bare type parameter bound to a **float** is now a hard error
+(`TUR-E0705`, see the resolved report in
+`docs/archive/history/poly-defn-shares-inner-closure-body-across-monomorphizations.md`)
+rather than garbage at runtime. The integer-register specializations
+(`int`/`cstr`/`ptr`) round-trip correctly and are not diagnosed. The
+rebuild therefore proceeds on the diagnostic alone: it writes one
+monomorphic constructor per concrete sample type instead of a single
+polymorphic `constant` over a float-class `A`. Making the float case
+*work* polymorphically (fix directions 1/2 in the report) is end-state
+work, not a blocker for the rebuild.
+
+**G7 decision:** commit to a local typed-compose in the signal rebuild.
+Generalising `stdlib/arrow.tur`'s `>>>` to a typed `^fat` result is
+owned by [stdlib-arrow-scaleback-plan](../../upcoming/stdlib-arrow-scaleback-plan.md)
+(which keeps `>>>` as a bare-function combinator); the rebuild does not
+wait on it.
+
+**Handoff:** [tur-signal-rebuild-plan](../../upcoming/tur-signal-rebuild-plan.md)
+(hard prerequisites G1/G7 green, G3 amber-ok, G4 green, G2/G5/G6
+amber-ok -- all satisfied) and
+[stdlib-arrow-scaleback-plan](../../upcoming/stdlib-arrow-scaleback-plan.md)
+both pick up from here. This plan is complete.
+
 ## Status (as of 2026-06-04)
 
 Several prerequisite compiler/stdlib plans this spike originally guarded
@@ -40,7 +81,7 @@ Spike status:
 | Gap | Verdict | Fixture | Notes |
 |-----|---------|---------|-------|
 | G1 | green | `tests/fixtures/float-fat-closure/`, `.../fat-closure-float-compose/` | Both PASS, stable `expected.c` snapshots. |
-| G2 | **red** | repro in `docs/reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md` (fixture stub kept) | Polymorphic `(defn f [A] ... (fn ... : A val))` emits one shared inner C body. Float specialisation reads result from xmm0 (parameter register) -- silent miscompile. |
+| G2 | **amber** | `tests/fixtures/errors/poly-closure-result-tyvar-float/` (the silent-miscompile repro is now a hard-error fixture); resolved report in `docs/archive/history/poly-defn-shares-inner-closure-body-across-monomorphizations.md` | Polymorphic `(defn f [A] ... (fn ... : A val))` at a float-class `A` is now a hard error (`TUR-E0705`), not a silent miscompile. Workaround: write one monomorphic constructor per result type. |
 | G3 | green | `tests/fixtures/sf-vec-of/` | Three `(fn [:int] :int)` closures with different captured envs go into one `vec-of` without manual `:int` boxing; `tur-vec-homog__` accepts them. |
 | G4 | green | `tests/fixtures/pair-signals-typed/` | Fixed: the fat-closure result type `(Pair float float)` is now preserved through the fn-type annotation and the lambda return, so the lifted thunk's C return type matches its struct-returning body and the dispatch site invokes it with the right signature. |
 | G5 | green | `tests/fixtures/typed-state-cell/` | Inline-C body uses `double *` directly, no `(intptr_t)` cast on the state pointer. ABI signature is `void *` (acceptable). |
@@ -48,7 +89,8 @@ Spike status:
 | G7 | green | `tests/fixtures/sf-compose-typed/` | Local typed-compose over two `(fn [:float] :float)` closures composes cleanly; result is itself composable. **Amber edge**: `stdlib/arrow.tur`'s `>>>` itself is still int-typed; use a local typed-compose until the stdlib is generalised. |
 | G8 | green | `tests/fixtures/typed-signal-smoke/` | Two-oscillator + filter chain with all `:float` fat closures evaluates cleanly at four sample positions; output matches hand-computed reference. |
 
-G2 remains the one open red (polymorphic inner-closure return). G4 is
+G2 is now amber (resolved to a hard error in the float case -- see the
+verdict block at the top of this doc). G4 is
 now fixed: a closure declared `: (Pair float float)` builds the struct
 inside its body and survives the fat-dispatch boundary, with callers
 reading it back via `pair-fst` / `pair-snd`. The remaining greens give
@@ -56,13 +98,14 @@ seven fewer unknowns than at plan time: composition, vec-of, vec-get on
 closures, typed state cells, struct-returning combinators, and the
 integration smoke all work today.
 
-Next step for [[tur-signal-rebuild-plan]]: confirm with the maintainers
-whether the rebuild needs G2 (polymorphic `constant`) and G4 (typed
-pair returns from closures) on the critical path. If yes, both reports
-under `docs/reported/` need fixes first. If no -- e.g. the rebuild can
-spell `constant-float` / `constant-int` separately and route pair returns
-through a boxed `:ptr<Pair>` -- the rebuild can proceed with the current
-language.
+Resolved next step for [[tur-signal-rebuild-plan]]: G4 (typed pair
+returns from closures) is green, so it is on the happy path. G2
+(polymorphic `constant`) is amber -- the rebuild does **not** put it on
+the critical path; it spells `constant-float` / `constant-int`
+separately rather than returning a tyvar-typed closure from a generic
+`defn`. With that, the rebuild proceeds on the current language; no
+`docs/reported/` fix is required first. See the verdict block at the top
+of this doc.
 
 ## Why this plan exists
 
@@ -205,21 +248,27 @@ a signal" call needs a per-type wrapper, which defeats the typing point.
 which case the workaround is "spell out the type". File a feature request,
 mark amber.
 
-**Status**: **red**.
-**Fixture**: `tests/fixtures/signal-constant-poly/` is intentionally kept
-as a stub; the runnable repro lives in the filed report (below) so the
-suite stays green.
-**Filed report**:
-`docs/reported/poly-defn-shares-inner-closure-body-across-monomorphizations.md`.
+**Status**: **amber** (was red; resolved via the diagnose direction).
+**Fixture**: `tests/fixtures/errors/poly-closure-result-tyvar-float/`
+(the float case is now a hard-error fixture). The old
+`tests/fixtures/signal-constant-poly/` stub is retired.
+**Filed report** (resolved):
+`docs/archive/history/poly-defn-shares-inner-closure-body-across-monomorphizations.md`.
 **Notes**: A polymorphic `(defn constant [A] [val :A] : ptr<void> (fn [t :float] : A val))`
-emits *one* C body for the inner closure (returning `int64_t`). The outer
-`constant` is monomorphised correctly, but at the `:float` call site the
-dispatcher invokes that single body through a `double (*)(void*, double)`
-function pointer. The body writes `rax`; the caller reads `xmm0`, which
-still holds the parameter `t`. Result: float specialisations return their
-argument instead of the captured value -- a silent miscompile. Same
-family as `bare-fat-param-non-int-result-miscompiles` / `cstr-returning-
-closure-thunk-int64-return` (both archived) but for polymorphic-A returns.
+emitted *one* C body for the inner closure (returning `int64_t`). The
+outer `constant` was monomorphised correctly, but at the `:float` call
+site the dispatcher invoked that single body through a
+`double (*)(void*, double)` pointer: the body wrote `rax`, the caller
+read `xmm0` (still the parameter `t`), so float specialisations returned
+their argument -- a silent miscompile. **Resolved 2026-06-04 (fix
+direction 3, diagnose):** that exact call shape is now a hard error
+(`TUR-E0705`) at the call site, directing the user to a monomorphic
+`defn` per concrete float-class result type. `int`/`cstr`/`ptr`
+specializations share the integer register and round-trip correctly, so
+they are intentionally not diagnosed. The typed-signal rebuild proceeds
+on the diagnostic alone (monomorphic `constant-float`/`constant-int`);
+making the polymorphic float case actually work (fix directions 1/2) is
+end-state work, not a rebuild blocker.
 
 ---
 
