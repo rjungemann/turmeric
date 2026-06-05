@@ -12,6 +12,10 @@ description: A parametric struct such as `Pair<A B>` instantiated with an *opaqu
 > **Found:** 2026-06-04, executing
 > [stdlib-session-typed-channels-plan](../upcoming/stdlib-session-typed-channels-plan.md)
 > phase S1 (recv was specified to return `Pair<T SChan<R>>`).
+> **Status:** Variant 1 (concrete, no generics) **FIXED** 2026-06-05 -- see
+> [Resolution](#resolution). Variant 2 (phantom element through a generic
+> function) remains a tracked limitation; it needs phantom-element recovery in
+> `emit_abi_instantiate_type` and is not exercised by current stdlib code.
 
 ## Summary
 
@@ -126,3 +130,41 @@ specialize and in recovering the element type.
 `(pair 5 (:: (unsafe (nullp)) :Foo))` followed by `(pair-fst ...)` should build
 and print `5`. A generic `recv` returning `(Pair T (SChan R))` should build and
 round-trip a value plus a typed continuation.
+
+## Resolution
+
+**Variant 1 fixed** in `src/compiler/types.c`. The root cause was exactly as
+analyzed: `type_has_concrete_codegen_layout` (the element-recursion predicate
+that, via `type_c_name(TY_APP)`, gates `register_struct_app` and hence the
+ABI-specialization decision in `emit_abi_scan_call`) rejected an *opaque*
+struct element:
+
+```c
+case TY_STRUCT:
+    return t->as.struct_.def && !t->as.struct_.def->is_opaque &&  /* <- bug */
+           t->as.struct_.def->n_type_params == 0;
+```
+
+An opaque newtype lowers to the `int64_t` carrier -- a perfectly concrete,
+monomorphizable field layout -- so as an *element* of a parametric struct it
+should contribute a well-defined `int64_t` field. Dropping the `!is_opaque`
+guard makes `Pair<int Foo>` concrete, so `type_c_name` mangles it to
+`Pair__int__Foo` (distinct from the generic carrier `int64_t`), `abi_changes`
+becomes true, and the `pair`/`pair-fst` specializations are interned and called
+instead of the broken `(int64_t){.fst = ...}` template. An opaque struct never
+reaches this gate as a by-value *head* (`type_c_name` lowers it to `int64_t`
+directly, so it is never `register_struct_app`'d), so the fix is element-local.
+
+Regression coverage: `tests/fixtures/typed/pair-opaque-element/` exercises
+`Pair<int Tag>` and `Pair<Tag int>` (opaque element in each slot) through
+`pair-fst`/`pair-snd`. Full suite: `1450 passed, 0 failed`.
+
+**Variant 2 (phantom element via a generic function) not yet addressed.** When
+the element type variable is buried inside an opaque argument and recoverable
+from no concrete position (e.g. `recv [T R] [c : (SChan (SRecv T R))]` returning
+`(Pair T ...)`), `emit_abi_instantiate_type` cannot make the result type
+concrete, so the generic carrier template is still reached. This is proposed
+fix direction #3 and is left as a tracked limitation: the real `stdlib/schan.tur`
+`recv` was respecified to avoid the parametric-aggregate-with-phantom-element
+shape entirely (see "Impact / workaround" above), so no shipping code depends on
+it today.

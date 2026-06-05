@@ -379,8 +379,16 @@ static bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_GENERATOR:
             return true;
         case TY_STRUCT:
-            return t->as.struct_.def && !t->as.struct_.def->is_opaque &&
-                   t->as.struct_.def->n_type_params == 0;
+            /* An opaque newtype (e.g. (defopaque Foo ...)) lowers to the
+             * int64_t carrier -- a concrete, monomorphizable layout keyed by
+             * its nominal name in append_type_mangle.  As an *element* of a
+             * parametric struct (Pair<int Foo>) it therefore contributes a
+             * well-defined int64_t field, so the containing struct-app must be
+             * specialized rather than falling back to the broken generic
+             * carrier template.  (An opaque struct never reaches this gate as a
+             * by-value *head*: type_c_name lowers it to int64_t directly, so it
+             * is never register_struct_app'd.) */
+            return t->as.struct_.def && t->as.struct_.def->n_type_params == 0;
         case TY_APP: {
             StructDef *def = NULL;
             Type args[16];
