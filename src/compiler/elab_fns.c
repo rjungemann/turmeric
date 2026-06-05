@@ -371,6 +371,50 @@ bool kind_is_non_int_register_class(TypeKind k) {
     return k == TY_FLOAT /* || k == TY_FLOAT32 || ... (extend as carriers arise) */;
 }
 
+/* F5 (fn-first-class typed carrier): a `(fn [A...] : R)` parameter is routed
+ * through the tur_poly_fn_t {env, fn} carrier only when every argument and the
+ * result is a single-register scalar kind -- an integer/bool/float in a GP/xmm
+ * register, or a pointer (cstr / ptr<T> / ptr<void>).  These are exactly the
+ * kinds whose ABI is captured by their TypeKind, so the call site can cast
+ * fn.fn to the concrete R(*)(void*, A...) and the make_poly_wrapper thunk can
+ * carry each argument in its native kind.  A struct/ADT/union passed by value,
+ * a nested function result, a type variable, etc. would lose information through
+ * the kind-only carrier (e.g. type_from_kind drops a struct's def), so those
+ * keep the nominal bare-function-pointer TY_FN representation. */
+static bool fn_kind_is_carrier_scalar(TypeKind k) {
+    switch (k) {
+        case TY_NIL:  case TY_BOOL: case TY_INT:  case TY_FLOAT:
+        case TY_CSTR: case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* All arg kinds + the result kind of a concrete TY_FN are carrier scalars, and
+ * the signature carries no substructural / fat / borrow argument annotations
+ * (those discipline bits live only on the nominal TY_FN and are enforced at the
+ * higher-order call site, e.g. the LT2 linear-function-type check -- the carrier
+ * has no slot for them, so a function type that declares any must keep its
+ * nominal representation). */
+static bool fn_type_is_carrier_safe(const Type *ft) {
+    if (!ft || ft->kind != TY_FN) return false;
+    if (ft->as.fn.result_fat) return false;
+    if (!fn_kind_is_carrier_scalar(ft->as.fn.result_kind)) return false;
+    for (uint8_t i = 0; i < ft->as.fn.arity; i++) {
+        if (!fn_kind_is_carrier_scalar(ft->as.fn.arg_kinds[i])) return false;
+        if (ft->as.fn.arg_linear[i] || ft->as.fn.arg_unique[i] ||
+            ft->as.fn.arg_unique_mut[i] || ft->as.fn.arg_affine[i] ||
+            ft->as.fn.arg_relevant[i] || ft->as.fn.arg_borrow[i] ||
+            ft->as.fn.arg_fat[i])
+            return false;
+    }
+    return true;
+}
+
 /* Re-stamp bare-^fat int64 calls in `tail`'s result position(s) to `target`
  * (a concrete non-int register-class kind).  Returns true if any call was
  * retyped.  Tail-precise: only result positions are visited, so a non-tail
@@ -1059,6 +1103,44 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 params[n_params - 1]->type = *ann;
                 param_poly_types[n_params - 1] = ann;
             } else if (ann->kind == TY_FN) {
+                Binding *pb = params[n_params - 1];
+                /* F5 (fn-first-class-application, typed carrier): a plain
+                 * (non-fat, non-substructural) `(fn [A...] : R)` parameter is the
+                 * *typed* first-class `:fn` carrier -- the same tur_poly_fn_t
+                 * {env, fn} representation as a bare `:fn`, but with a known
+                 * concrete signature.  Routing it through the poly carrier rather
+                 * than the bare-function-pointer regular path lets it uniformly
+                 * hold a named fn, a lambda, OR a capturing closure (each boxed
+                 * into {env, fn}), and round-trip float/cstr/ptr argument and
+                 * result kinds via the concrete-signature cast at the call site
+                 * (see elab_poly_call + emit_expr.c is_poly_call).  Fat (^fat)
+                 * and substructural params keep their nominal TY_FN type -- they
+                 * have their own calling conventions/discipline checks.
+                 * See docs/reported/fn-first-class-float-carrier-gap.md. */
+                bool plain = !pb->is_fat && !pb->is_borrow && !pb->is_unique &&
+                             !pb->is_mut && !pb->is_linear && !pb->is_affine &&
+                             !pb->is_relevant;
+                /* A function type carrying an effect row (e.g. `(fn [:cstr]
+                 * #{Write} :nil)`) must keep its nominal TY_FN type so the
+                 * effect row propagates to callers when the param is invoked --
+                 * the tur_poly_fn_t carrier has no effect-row slot.  Likewise a
+                 * type variable in the signature (rank-2 / polymorphic element)
+                 * needs the arg_full_types path.  Stay on the regular path for
+                 * those; only fully-concrete, effect-free signatures become the
+                 * typed carrier. */
+                bool effectful = ann->as.fn.effect_row != NULL;
+                bool carrier_ok = plain && !effectful && !ann->as.fn.is_variadic &&
+                                  ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
+                                  !fn_type_has_named_tyvar(ann) &&
+                                  fn_type_is_carrier_safe(ann);
+                if (carrier_ok) {
+                    param_kinds[n_params - 1] = TY_PTR_VOID;
+                    pb->type = TYPE_PTR_VOID;
+                    pb->is_poly_fn = true;
+                    pb->poly_type = ann;        /* concrete signature (not a forall) */
+                    param_poly_types[n_params - 1] = ann;
+                    continue;
+                }
                 /* Plain function type annotation */
                 param_kinds[n_params - 1] = TY_FN;
                 params[n_params - 1]->type = *ann;
@@ -1789,6 +1871,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
             for (uint8_t _ei = 0; _ei < n_params; _ei++) _aFT[_ei] = param_poly_types[_ei];
             existing->type.as.fn.arg_full_types = _aFT;
         }
+        /* Propagate the `:fn` poly-closure marker early too, so a *recursive*
+         * call inside the body boxes its function/lambda/`:fn` argument into the
+         * tur_poly_fn_t carrier (and a pass-through `:fn` value is recognised as
+         * already-a-carrier) -- mirroring the same arg_poly_fn assignment applied
+         * to the final fn_type below.  Without this a self-call would fall back to
+         * the generic int64/void* arg cast and miscompile (aggregate-as-integer). */
+        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+            existing->type.as.fn.arg_poly_fn[_ei] =
+                params[_ei]->is_poly_fn &&
+                (params[_ei]->poly_type == NULL ||
+                 params[_ei]->poly_type->kind == TY_FN);
+        }
     }
 
     /* Push params into the inner scope (created earlier for kind-var bindings). */
@@ -2468,12 +2562,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
-    /* Phase CCL (fn-first-class-application): propagate the mono `:fn`
-     * poly-closure marker into fn_type so call sites box function/lambda/closure
-     * arguments into the tur_poly_fn_t carrier.  A rank-2 forall param (is_poly_fn
-     * with a non-NULL poly_type) is handled by the arg_full_types path instead. */
+    /* Phase CCL (fn-first-class-application): propagate the `:fn` poly-closure
+     * marker into fn_type so call sites box function/lambda/closure arguments
+     * into the tur_poly_fn_t carrier.  Both the bare `:fn` carrier (poly_type ==
+     * NULL, int64-default signature) and the F5 typed carrier (poly_type is a
+     * concrete TY_FN signature) take this path.  A rank-2 forall param (is_poly_fn
+     * with a TY_FORALL poly_type) is handled by the arg_full_types path instead. */
     for (uint8_t i = 0; i < n_params; i++) {
-        if (params[i]->is_poly_fn && params[i]->poly_type == NULL) {
+        if (params[i]->is_poly_fn &&
+            (params[i]->poly_type == NULL ||
+             params[i]->poly_type->kind == TY_FN)) {
             fn_type.as.fn.arg_poly_fn[i] = true;
         }
     }
@@ -3159,10 +3257,14 @@ Expr *elab_fn(Elab *e, const Form *call) {
             }
         }
     }
-    /* Phase CCL (fn-first-class-application): propagate mono `:fn` poly-closure
-     * markers into the lambda's fn_type, mirroring the defn path. */
+    /* Phase CCL (fn-first-class-application): propagate `:fn` poly-closure
+     * markers into the lambda's fn_type, mirroring the defn path (bare `:fn`
+     * carrier with poly_type == NULL, or the F5 typed carrier with a concrete
+     * TY_FN poly_type). */
     for (uint8_t i = 0; i < n_params; i++) {
-        if (params[i]->is_poly_fn && params[i]->poly_type == NULL) {
+        if (params[i]->is_poly_fn &&
+            (params[i]->poly_type == NULL ||
+             params[i]->poly_type->kind == TY_FN)) {
             fn_type.as.fn.arg_poly_fn[i] = true;
         }
     }

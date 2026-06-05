@@ -1739,9 +1739,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * This makes casting fn.fn from int64_t(*)(void*,int64_t) back to the
                  * concrete type correct for both closure thunks (native concrete sig)
                  * and generic poly wrappers (which truncate internally). */
+                /* F5 typed `:fn` carrier: when the carrier binding has a concrete
+                 * signature (poly_type is a TY_FN, not a forall or NULL), its
+                 * stored thunk is natively typed -- a generic poly wrapper that
+                 * retypes float args (make_poly_wrapper) or a closure's own
+                 * concrete thunk.  Cast fn.fn to the exact R(*)(void*, A...)
+                 * signature and pass native-typed args for *every* kind, so
+                 * float/cstr/ptr round-trip without int64 truncation or the
+                 * pointer<->int64 -Wint-conversion warnings the generic carrier
+                 * path emits.  See docs/reported/fn-first-class-float-carrier-gap.md. */
+                bool typed_carrier = fn_binding && fn_binding->poly_type &&
+                                     fn_binding->poly_type->kind == TY_FN;
                 bool phase_f_concrete = !e->as.call_.poly_arg_mask &&
-                                        type_kind_is_poly_concrete(e->type.kind);
-                for (uint32_t i = 0; i < n && phase_f_concrete; i++) {
+                                        (typed_carrier ||
+                                         type_kind_is_poly_concrete(e->type.kind));
+                for (uint32_t i = 0; i < n && phase_f_concrete && !typed_carrier; i++) {
                     if (!type_kind_is_poly_concrete(e->as.call_.args[i]->type.kind))
                         phase_f_concrete = false;
                 }

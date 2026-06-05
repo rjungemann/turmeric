@@ -1,0 +1,38 @@
+;; fn-first-class-application-typed -- a *typed* first-class `:fn` carrier
+;; round-trips non-int argument and result kinds.
+;;
+;; The bare `:fn` carrier is the int64 register class, so it rejects float-class
+;; arguments (see tests/fixtures/errors/fn-float-carrier-unsupported and
+;; docs/reported/fn-first-class-float-carrier-gap.md).  A `(fn [A...] : R)`
+;; parameter is the *typed* carrier: it stores the same tur_poly_fn_t {env, fn}
+;; value but with a known concrete signature, so the call site casts fn.fn to
+;; the concrete R(*)(void*, A...) and float/cstr arguments and results survive.
+;;
+;; It also uniformly holds a named fn, a (capturing) lambda, OR a closure --
+;; each boxed into the {env, fn} carrier -- so a capturing closure of float type
+;; works where the bare-function-pointer path used to segfault.
+
+;; --- float: named fn, lambda, capturing closure, multi-arg ---
+(defn apply-f [g : (fn [float] : float) x : float] : float (g x))
+(defn dbl-f [n : float] : float (* n 2.0))
+
+(defn apply2-f [g : (fn [float float] : float) a : float b : float] : float
+  (g a b))
+(defn add-f [x : float y : float] : float (+ x y))
+
+;; forward a typed carrier to another typed carrier (the `:fn` -> `:fn` pass-through)
+(defn forward-f [g : (fn [float] : float) x : float] : float (apply-f g x))
+
+;; --- cstr round-trip through the typed carrier ---
+(defn apply-s [g : (fn [cstr] : cstr) s : cstr] : cstr (g s))
+(defn id-s [s : cstr] : cstr s)
+
+(defn main [] : int
+  (println (apply-f dbl-f 3.5))                            ;; 7
+  (println (apply-f (fn [n : float] : float (* n 3.0)) 4.0)) ;; 12
+  (let [bias 10.0]
+    (println (apply-f (fn [n : float] : float (+ n bias)) 2.5))) ;; 12.5
+  (println (apply2-f add-f 1.5 2.0))                       ;; 3.5
+  (println (forward-f dbl-f 6.0))                          ;; 12
+  (println (apply-s id-s "typed-fn"))                      ;; typed-fn
+  0)

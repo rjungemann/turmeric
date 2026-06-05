@@ -3307,7 +3307,7 @@ resolved_user_fallback:;
         } else {
             uint8_t inner_arity = (inner_b->type.kind == TY_FN)
                 ? (uint8_t)inner_b->type.as.fn.arity : 1;
-            Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span);
+            Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
             if (!wrapper_b) return NULL;
             wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
         }
@@ -3345,7 +3345,7 @@ resolved_user_fallback:;
             } else {
                 uint8_t inner_arity = (inner_b->type.kind == TY_FN)
                     ? (uint8_t)inner_b->type.as.fn.arity : 1;
-                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span);
+                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span, false);
                 if (!wrapper_b) return NULL;
                 wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
             }

@@ -873,7 +873,7 @@ Expr *elab_def(Elab *e, const Form *call);
 
 /* elab_call.c */
 Expr *elab_call(Elab *e, Form *call);
-Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span);
+Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span, bool typed_concrete);
 Binding *poly_arg_fn_binding(Expr *arg);
 
 /* elab_module.c */

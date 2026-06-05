@@ -196,11 +196,18 @@ and rank-2 `is_poly_fn`:
    coercion `EX_FN_TO_POLY` / `EX_FAT_TO_POLY`: at a `:fn` parameter, box a
    `(fn ...)` literal's thunk+env, or an existing boxed-closure/`^fat` handle,
    into `{env, fn}`. *Exit:* P4 and P5 compile/run.
-5. **F5 -- typed signatures + non-int round-trip.** Allow `:fn` to carry an
-   explicit `(fn [A...] :R)` signature and thread arg/return types through the
-   poly carrier using the Typed Closure Invocation ABI thunks, so `:float` /
-   `:cstr` / `:ptr<T>` arguments and returns survive. *Exit:* round-trip
-   fixtures for `:float`/`:cstr` pass.
+5. **F5 -- typed signatures + non-int round-trip. (COMPLETE)** A plain
+   carrier-safe `(fn [A...] :R)` parameter now *is* the typed `:fn` carrier: it
+   threads its concrete signature through the `tur_poly_fn_t` carrier so
+   `:float` / `:cstr` / `:ptr<T>` arguments and returns survive (the carrier
+   stores a natively typed thunk; the call site casts `fn.fn` to the concrete
+   `R(*)(void*, A...)`). As a side effect, a *capturing closure* passed to a
+   typed `(fn ...)` parameter now works instead of segfaulting (the bare-pointer
+   representation had no env slot). *Exit:* `tests/fixtures/fn-first-class-application-typed/`
+   (named fn / lambda / capturing closure / multi-arg / pass-through, `:float`
+   + `:cstr`) passes; the bare-`:fn` float guard
+   (`tests/fixtures/errors/fn-float-carrier-unsupported/`) still fires. See
+   [../reported/fn-first-class-float-carrier-gap.md](../reported/fn-first-class-float-carrier-gap.md#resolution-f5----typed-carrier).
 6. **F6 -- de-workaround the consumer.** Drop the now-unnecessary `^fat`-sink
    wrappers (`bind-parser-fat`, `mbind-fat`, `bind-goal-raw`'s `^fat` param,
    etc.) where a direct `:fn` application is now legal, validating the cleanup
