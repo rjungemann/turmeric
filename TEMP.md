@@ -30,7 +30,9 @@ do not collapse phases, do not reword entries into prose, and update the
     - Goal: Replace int64-erased typeclass stubs with real instances
     - Deps: 7, 19 (plus operator-name mangling fix tracked inside the
       plan; see 30)
-    - Status: Complete -- Phase A complete; Phases B and C are WIP
+    - Status: Complete -- Phase B6 deferred
+
+    - B6 deferred
 
 ## Phase 6 -- Typeclass reintroduction
 
