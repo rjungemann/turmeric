@@ -1,0 +1,17 @@
+;; opaque-ascription-copy-reuse -- regression for
+;; docs/reported/opaque-ascription-cast-marks-value-move-once.md.
+;;
+;; A value produced by the keyword ascription cast (:: expr :T) over an
+;; UNRESTRICTED opaque (no :linear / :affine) must be freely reusable -- the
+;; cast must carry the opaque's Copy discipline, not hardcode move-once.
+(defopaque Crate [A] :int)
+
+(defn crate-wrap [n : int] : Crate (:: n :Crate))
+(defn crate-peek [c : Crate] : int (:: c :int))
+
+(defn main [] : int
+  ;; bind through the ascription cast, then use the SAME binding twice
+  (let [a (:: (crate-wrap 41) :Crate)]
+    (println (crate-peek a))      ;; 41
+    (println (crate-peek a)))     ;; 41  (would TUR-E0005 before the fix)
+  0)

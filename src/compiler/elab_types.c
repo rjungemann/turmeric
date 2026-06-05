@@ -1568,7 +1568,16 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                     memset(t, 0, sizeof(Type));
                     t->kind = TY_STRUCT;
-                    t->copy_kind = CK_MOVE;
+                    /* opaque-ascription-cast-marks-value-move-once: carry the
+                     * substructural class from the registered def (CK_COPY for a
+                     * plain opaque, CK_LINEAR/CK_UNIQUE for :linear/:affine)
+                     * instead of hardcoding CK_MOVE. Hardcoding made a redundant
+                     * `(:: v :Name)` keyword ascription over an *unrestricted*
+                     * opaque spuriously poison v as move-once -- diverging from
+                     * the F_SYM path, which resolves through type_struct(def) and
+                     * gets the copy_kind right. */
+                    t->copy_kind = cand->type.copy_kind;
+                    t->substruct = cand->type.substruct;
                     t->hkt_kind = KIND_STAR;
                     t->as.struct_.def = cand->type.as.struct_.def;
                     return t;

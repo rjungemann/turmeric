@@ -245,3 +245,136 @@ resolve via dispatch.
   `tests/fixtures/arrow-instance-basic` snapshot-stable.
 - `bash tests/run.sh 2>&1 | grep "^FAIL"` empty.
 - `docs/guides/arrows-guide.md` and `stdlib/docstrings.tur` regenerated.
+
+## Audit (T0) -- 2026-06-05: resolved-by-audit, outcome (c)
+
+T0 is the load-bearing gate: no instance shape is locked in until the audit
+decides whether tur-signal actually exercises `ident` and/or `zeroArrow`. The
+audit was run on 2026-06-05. **Outcome: (c) -- tur-signal calls neither.** This
+plan therefore collapses to a no-op for stdlib; `Category`/`ArrowZero [(->)]`
+do **not** ship. No `definstance`/`defclass` was added to `stdlib/arrow.tur`.
+
+### Sources consulted
+
+- **`docs/upcoming/tur-signal-rebuild-plan.md`** -- the authoritative v1 scope
+  for tur-signal. Its Tier 1 surface table (lines 327-356, "the rebuild ships
+  when this works") is the contract for what the spice's combinator surface
+  must support.
+- **`stdlib/arrow.tur`** -- current instance/method surface.
+- **`stdlib/`** (grep) -- for the `Default` typeclass D3a depends on.
+
+> Caveat: the sibling `../turmeric-spices/tur-signal/` checkout is **absent**
+> in this container (it is `requires.spices`-gated), so the source-level grep
+> called for in T0 could not be run directly. The cross-check was made against
+> the rebuild plan's Tier 1 table, which is the design of record for what
+> tur-signal v1 ships and is sufficient to settle the gate. If the source ever
+> diverges from that table to introduce a polymorphic `ident`/`zeroArrow` call,
+> reopen this plan.
+
+### Findings
+
+1. **Composition is `compose-float`, not the typeclass.** tur-signal's only
+   composition combinator, `effects-chain` (Tier 1, `compose` module), is
+   specified as "composition of `Vec<SF Sample Sample>`" implemented via
+   `stdlib/arrow.tur`'s **`compose-float`** -- the bare `:float -> :float`
+   combinator (rebuild plan lines 141, 172-173, 356). It does not call the
+   `Category`/`Arrow` typeclass method `>>>`/`comp`, so no `ident` neutral
+   element is threaded through dispatch.
+
+2. **The "identity" arrows it needs are concrete, not polymorphic.** Tier 1
+   identity-shaped symbols (`time-signal`, `invert`, etc.) are concrete
+   `:float -> :float` functions -- a literal `(fn [x : float] : float x)` --
+   not the polymorphic `Category.ident :: arr a a`. An empty-`Vec`
+   `effects-chain` seed, if needed, is likewise a concrete float identity, not
+   `(ident)`.
+
+3. **No `zeroArrow` consumer.** Nothing in the Tier 1 table (oscillators,
+   filters, shapers, envelope, compose) produces or requires a zero/empty
+   arrow. `ArrowZero` has no call site.
+
+4. **D3a was unbuildable anyway.** D3a's `(definstance (ArrowZero [(->)])
+   (where [Default b]) ...)` depends on a `Default` typeclass / `default-of`
+   method. Grepping `stdlib/` finds **no `Default` class and no `default-of`**.
+   So even had the audit gone the other way, T4 would have hit the
+   "Default-constrained instance unsupported" risk immediately and fallen back
+   to a sequel plan.
+
+### Decision (audit recommendation -- subsequently overridden)
+
+The audit's own recommendation, per T0(c), was to close as
+**resolved-by-audit**: don't ship typeclass surface tur-signal doesn't
+exercise. **The maintainer explicitly overrode this on 2026-06-05** and directed
+shipping the surface anyway, with a worked Kleisli instance as the example
+consumer. The implementation below records what actually landed; the audit
+stands as the rationale for *why the (->) `ArrowZero` is not honest* and why the
+example uses Kleisli instead.
+
+## Implementation (2026-06-05) -- shipped under maintainer override
+
+The plan was executed (not closed). What landed:
+
+### Category (T2/T3) -- `stdlib/arrow.tur`
+
+- `(defclass Category [arr] (ident [] : arr) (comp [f g] : arr))`. Chose **D1b**
+  over D1a: `Category` declares its own `comp` rather than moving `>>>` off
+  `Arrow`. This is the lowest-risk choice -- it avoids the operator-mangling
+  collision and the hierarchy churn D1a's `>>>`-move would impose on every
+  existing arrow fixture -- and it mirrors the exact shape proven by
+  `tests/fixtures/arrow-instance-nullary` (`ident` + `comp`).
+- `(definstance Category [(->)] (ident [] (fn [x] x)) (comp [f g] (fn [x] (g (f x)))))`.
+  The eta-expanded `(fn [x] x)` keeps the dispatched nullary call's result type
+  concrete (per `instance-method-returning-untyped-param-loses-result-type`).
+
+### ArrowZero, honestly (T4 via D3b, not D3a) -- `stdlib/kleisli.tur` (new)
+
+D3a (`ArrowZero [(->)]` constrained on `Default b`) was **abandoned**: grepping
+`stdlib/` confirms there is **no `Default` typeclass / `default-of`** to
+constrain on, so D3a was unbuildable. Rather than fall back to the rejected D3c
+panic stub, the implementation takes the **D3b** route the plan had parked as a
+separate effort, because it yields a genuinely honest zero:
+
+- `(defopaque Kleisli [A B] :int)` -- `Kleisli A B = A -> Option B`, carrier an
+  int-as-pointer fat closure (the `stdlib/backtrack.tur` handle convention).
+- `Category [Kleisli]`: `ident == \a -> some a`;
+  `comp f g == \a -> f a >>= g` (Option-monad bind; `none` short-circuits).
+- `ArrowZero [Kleisli]`: `zero-arrow == \_ -> none` -- the inhabitant `(->)`
+  cannot provide. This is why `ArrowZero` is instantiated at Kleisli and still
+  **not** at `(->)`, vindicating the original T5 decision.
+
+The existing `ArrowZero` class in `stdlib/arrow.tur` (method `zero-arrow`, not
+the plan's `zeroArrow`) is reused as-is.
+
+### Fixtures (T5)
+
+- `tests/fixtures/category-instance-basic` -- `(->)` identity + left/right
+  identity laws of `comp`. Single `Category` instance in scope, so bare
+  `(ident)` resolves via the unique-instance fallback (no ascription).
+- `tests/fixtures/kleisli-arrow-instance` -- two `Category` instances in scope:
+  exercises Kleisli identity, composition with `none` short-circuit, and the
+  honest `zero-arrow`. The nullary `(ident)`/`(zero-arrow)` are ascribed to
+  `:Kleisli` to resolve the (expected) two-instance ambiguity.
+
+### Defect found and reported
+
+Implementing the ascription-disambiguated fixtures surfaced a real linearity
+defect: the opaque ascription cast `(:: expr :Kleisli)` marked its result
+move-once even though `Kleisli` is an unrestricted opaque. **Root-caused and
+fixed** in `src/compiler/elab_types.c` (the `F_KEYWORD` type path hardcoded
+`copy_kind = CK_MOVE` for known opaques instead of carrying the def's
+discipline like the `F_SYM` path). Report:
+`docs/reported/opaque-ascription-cast-marks-value-move-once.md`. The
+`kleisli-arrow-instance` fixture now reuses the ascribed arrows directly, and
+`tests/fixtures/opaque-ascription-copy-reuse` is a focused regression.
+
+### Not done (deliberately)
+
+- **D1a** (`Category` owns `>>>`, `Arrow` extends it) -- skipped for D1b per
+  above.
+- **`ArrowZero [(->)]`** -- remains unshipped (no honest inhabitant; no `Default`
+  typeclass). The Kleisli instance is the honest home for `zero-arrow`.
+- Updating the reintroduction plan's T5/T9 status -- T5's "no `(->)` `ArrowZero`"
+  decision still holds; T9's "no `Category`" is now superseded (a `Category`
+  class exists). See that plan's follow-up note.
+
+The earlier `docs/reported/category-arrowzero-resolved-by-audit.md` tombstone is
+updated to point here.

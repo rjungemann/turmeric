@@ -1,0 +1,86 @@
+;;; tur/kleisli -- the Kleisli arrow over Option: `Kleisli A B = A -> Option B`.
+;;;
+;;; A worked second instance of the arrow hierarchy from stdlib/arrow.tur. Where
+;;; the `(->)` instances treat a plain function as the arrow, Kleisli wraps a
+;;; partial/effectful function `A -> Option B` so that:
+;;;
+;;;   - `Category`  gives identity (`ident == \a -> some a`) and Kleisli
+;;;     composition (`comp f g == \a -> f a >>= g`, threading `none` through).
+;;;   - `ArrowZero` gives an HONEST zero arrow (`zero-arrow == \_ -> none`) --
+;;;     the inhabitant the `(->)` arrow famously cannot provide. This is why the
+;;;     class is instantiated here and deliberately NOT at `(->)`.
+;;;
+;;; Adding this second `Category` instance makes a bare `(ident)`/`(zero-arrow)`
+;;; with no expected type ambiguous (the unique-instance dispatch fallback no
+;;; longer has a single candidate); ascribe to pick a head, e.g.
+;;; `(:: (ident) :Kleisli)`.
+;;;
+;;; The carrier is an int-level Option (stdlib/option.tur's `some`/`none`/
+;;; `some?`/`unwrap-or`), so the element type `B` is a phantom at the carrier
+;;; level -- enough for a worked example without an Option-of-T monomorphisation.
+;;;
+;;; Since: Phase CA2
+;; =============================================================================
+(load "stdlib/arrow.tur")
+
+;;; Kleisli -- a kind (* -> * -> *) arrow handle; carrier is a fat closure
+;;; `A -> Option B` stored as an int (the same int-as-pointer convention
+;;; stdlib/backtrack.tur uses for its handle).
+;;;
+;;; Since: Phase CA2
+(defopaque Kleisli [A B] :int)
+
+;;; k-apply-raw -- internal: invoke a fat closure carrier on x, returning the
+;;; int-level Option it produces.  Takes the raw :int carrier so instance
+;;; methods (whose params arrive type-erased) can call it after `(:: f :int)`.
+(defn k-apply-raw [k : int x : int] : int
+  ```c return TUR_APPLY1((int64_t)k, (int64_t)x); ```)
+
+;;; kleisli -- wrap a fat closure `A -> Option B` as a Kleisli arrow.
+;;;
+;;; Parameters:
+;;;   f -- the underlying partial function (returns an int-level Option)
+;;;
+;;; Returns:
+;;;   A Kleisli A B wrapping f.
+;;;
+;;; Example:
+;;;   (kleisli (fn [x] (if (= x 0) (none) (some (/ 100 x)))))
+;;;
+;;; Since: Phase CA2
+(defn kleisli [^fat f] : Kleisli (:: (:: f :int) :Kleisli))
+
+;;; k-apply -- run a Kleisli arrow on an input, returning its int-level Option.
+;;;
+;;; Parameters:
+;;;   k -- the Kleisli arrow
+;;;   x -- the input value
+;;;
+;;; Returns:
+;;;   The Option result (int carrier): `some y` or `none`.
+;;;
+;;; Example:
+;;;   (some? (k-apply (kleisli (fn [x] (some x))) 7))  ; => true
+;;;
+;;; Since: Phase CA2
+(defn k-apply [k : Kleisli x : int] : int
+  (k-apply-raw (:: k :int) x))
+
+;;; Category [Kleisli] -- identity is `\a -> some a`; composition runs f, and on
+;;; `some b` feeds b into g, short-circuiting `none` (Option-monad bind).  The
+;;; method params arrive type-erased, so each is cast back with `(:: f :int)`
+;;; before being applied -- the same idiom the Backtrack instances use.
+(definstance Category [Kleisli]
+  (ident []    (kleisli (fn [x] (some x))))
+  (comp  [f g] (let [fc (:: f :int)
+                     gc (:: g :int)]
+                 (kleisli (fn [x]
+                            (let [r (k-apply-raw fc x)]
+                              (if (some? r)
+                                (k-apply-raw gc (unwrap-or r 0))
+                                (none))))))))
+
+;;; ArrowZero [Kleisli] -- the honest zero arrow over Option: ignore the input
+;;; and fail with `none`. (->) has no such inhabitant; Kleisli does.
+(definstance ArrowZero [Kleisli]
+  (zero-arrow [] (kleisli (fn [_] (none)))))

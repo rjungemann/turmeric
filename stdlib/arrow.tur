@@ -279,6 +279,28 @@
   P *s = (P *)(intptr_t)p;
   return TUR_APPLY1(s->e1, s->e2); ```)
 
+;;; Category [arr] -- the base of the arrow hierarchy: an identity arrow and
+;;; sequential composition.
+;;;
+;;; Methods:
+;;;   ident -- the identity arrow (nullary; the result is the arrow itself).
+;;;            Resolved by return-type / unique-instance dispatch (there is no
+;;;            argument to dispatch on); see
+;;;            docs/upcoming/return-type-dispatch-nullary-arrow-methods-plan.md.
+;;;   comp  -- left-to-right composition: run f, then g (comp f g == g . f over
+;;;            (->)).  Distinct method name from Arrow's >>> so the two surfaces
+;;;            coexist without an operator-mangling collision.
+;;;
+;;; A second instance (e.g. Kleisli, stdlib/kleisli.tur) makes a bare `(ident)`
+;;; with no expected type ambiguous -- the Mechanism-B uniqueness gate then
+;;; fires the existing ambiguity error, resolvable by ascription
+;;; (`(:: (ident) :Kleisli)`).
+;;;
+;;; Since: Phase CA2
+(defclass Category [arr]
+  (ident []    : arr)
+  (comp  [f g] : arr))
+
 ;;; Arrow [a] -- lift functions into arrows and wire them together.
 ;;;
 ;;; Methods:
@@ -389,3 +411,12 @@
 ;;; ArrowApply [(->)] -- the apply arrow: run the arrow in slot 0 on slot 1.
 (definstance ArrowApply [(->)]
   (app [] (fn [p] (__ac_app p))))
+
+;;; Category [(->)] -- the function arrow: `ident` is the plain identity
+;;; function, `comp` is forward composition.  The eta-expanded `(fn [x] x)`
+;;; (rather than a bare `identity` reference) is required so the dispatched
+;;; nullary call keeps a concrete result type -- see
+;;; docs/reported/instance-method-returning-untyped-param-loses-result-type.md.
+(definstance Category [(->)]
+  (ident []    (fn [x] x))
+  (comp  [f g] (fn [x] (g (f x)))))
