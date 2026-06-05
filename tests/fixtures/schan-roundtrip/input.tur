@@ -1,0 +1,24 @@
+;; S1: schan-roundtrip -- session-typed channel, single round trip.
+;;
+;; Protocol (client side): SSend int (SRecv int SClose)
+;;   send 7, receive it back over the same FIFO channel, then close.
+;;
+;; Exercises stdlib/schan.tur end to end: the protocol phantom is threaded
+;; through each operation, so the send must precede the recv and the close must
+;; come last.  Reordering or skipping a step is a compile-time type error -- see
+;; the schan-skip-step fixture for the negative case.
+
+(defmodule app
+  (import schan :refer [SChan SSend SRecv SClose
+                        schan-new schan-send schan-recv schan-close
+                        schan-cell-new schan-cell-get schan-cell-free])
+  (defn main [] : int
+    (let [cell (schan-cell-new)
+          c0   (:: (schan-new 2) (SChan (SSend int (SRecv int SClose))))
+          c1   (schan-send c0 7)
+          c2   (schan-recv c1 cell)
+          v    (schan-cell-get cell)]
+      (println v)
+      (schan-close c2)
+      (schan-cell-free cell)
+      0)))

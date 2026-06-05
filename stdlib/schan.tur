@@ -1,0 +1,238 @@
+;;; tur/schan -- session-typed channel wrappers over a linear opaque handle.
+;;;
+;;; `SChan<p>` is a thin generic wrapper over a synchronous blocking channel
+;;; that carries a protocol phantom `p`.  Each operation advances the phantom:
+;;;
+;;;   schan-send  : SChan<SSend T R> -> T          -> SChan<R>
+;;;   schan-recv  : SChan<SRecv T R> -> cell        -> SChan<R>   (value -> cell)
+;;;   schan-close : SChan<SClose>                   -> nil
+;;;
+;;; The phantom is threaded through the result type, so a caller cannot skip a
+;;; step or reorder send/recv: doing so is a compile-time type error (TUR-E0001
+;;; phantom mismatch).  Combined with the :linear discipline (under -Xlinear),
+;;; every protocol step happens exactly once and in order.
+;;;
+;;; (The plan's ideal `schan-recv : SChan<SRecv T R> -> Pair<T SChan<R>>` is
+;;; blocked by a monomorphizer limitation around parametric aggregates whose
+;;; element type is a phantom carried inside an opaque -- see schan-recv's
+;;; docstring and docs/reported/generic-struct-opaque-element-miscompile.md.
+;;; recv therefore returns the typed continuation directly and delivers the
+;;; received value through a caller-provided cell, which keeps the continuation
+;;; protocol fully checked.)
+;;;
+;;; The wrapper operations carry their channel work directly as inline-C over the
+;;; opaque carrier (the phantom is erased at the C ABI), so the typed surface
+;;; adds no runtime overhead beyond the underlying channel.  The low-level
+;;; `tur/chan` keeps its untyped surface for callers that do not want the
+;;; protocol discipline.
+;;;
+;;; Since: S1
+;; stdlib/schan.tur -- session-typed channel wrappers.
+(defmodule schan
+  (export SChan SSend SRecv SClose
+    schan-new schan-send schan-recv schan-close
+    schan-cell-new schan-cell-get schan-cell-free)
+
+  ;; ---- Protocol phantom tags -----------------------------------------------
+  ;; Pure type-level markers; never constructed as values.  The carrier is :int
+  ;; only so the opaque has a base type -- the value is irrelevant.
+
+  ;;; SSend -- protocol step: send a value of type T, then continue as R.
+  (defopaque SSend [T R] :int)
+
+  ;;; SRecv -- protocol step: receive a value of type T, then continue as R.
+  (defopaque SRecv [T R] :int)
+
+  ;;; SClose -- protocol terminus: the channel is closed.
+  (defopaque SClose :int)
+
+  ;; ---- The session-typed channel wrapper -----------------------------------
+
+  ;;; SChan -- a linear channel handle carrying a protocol phantom P.
+  ;;;
+  ;;; Lowers to the underlying :ptr<void> channel in the C ABI; the phantom P is
+  ;;; erased at runtime.  :linear so the protocol cannot be replayed: each
+  ;;; operation consumes the handle and yields the continuation at the next step.
+  ;;;
+  ;;; Since: S1
+  (defopaque SChan [P] :ptr<void> :linear)
+
+  ;;; schan-new -- open a session-typed channel running protocol P.
+  ;;;
+  ;;; Parameters:
+  ;;;   cap -- ring-buffer capacity (>= 1)
+  ;;;
+  ;;; Returns:
+  ;;;   A fresh SChan<P>.  The protocol P is fixed by the call site's expected
+  ;;;   type (or an ascription).
+  ;;;
+  ;;; Example:
+  ;;;   (:: (schan-new 4) (SChan (SSend int SClose)))  ; => SChan<SSend int SClose>
+  ;;;
+  ;;; Since: S1
+  (defn schan-new [P] [cap : int] : (SChan P)
+    ```c typedef struct {
+        pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+        int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+    } SChanBlock;
+    SChanBlock *ch = (SChanBlock *)malloc(sizeof(SChanBlock));
+    if (!ch) { fprintf(stderr, "schan-new: out of memory\n"); abort(); }
+    ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+    if (!ch->buf) { free(ch); fprintf(stderr, "schan-new: buf oom\n"); abort(); }
+    pthread_mutex_init(&ch->lock, NULL);
+    pthread_cond_init(&ch->not_full, NULL);
+    pthread_cond_init(&ch->not_empty, NULL);
+    ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+    return (int64_t)(intptr_t)ch;
+    ```)
+
+  ;;; schan-send -- send a T over a channel whose protocol begins with SSend T R.
+  ;;;
+  ;;; Parameters:
+  ;;;   c -- channel at protocol SSend<T R> (consumed)
+  ;;;   v -- the value to send
+  ;;;
+  ;;; Returns:
+  ;;;   The same channel, advanced to protocol R.
+  ;;;
+  ;;; Example:
+  ;;;   (let [c2 (schan-send c 42)] ...)  ; c : SChan<SSend int R> => c2 : SChan<R>
+  ;;;
+  ;;; Since: S1
+  (defn schan-send [T R] [c : (SChan (SSend T R)) v : T] : (SChan R)
+    ```c typedef struct {
+        pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+        int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+    } SChanBlock;
+    SChanBlock *ch = (SChanBlock *)(intptr_t)c;
+    pthread_mutex_lock(&ch->lock);
+    while (ch->count == ch->cap)
+        pthread_cond_wait(&ch->not_full, &ch->lock);
+    ch->buf[ch->tail] = (int64_t)v;
+    ch->tail = (ch->tail + 1) % ch->cap;
+    ch->count++;
+    pthread_cond_signal(&ch->not_empty);
+    pthread_mutex_unlock(&ch->lock);
+    return (int64_t)(intptr_t)ch;
+    ```)
+
+  ;;; schan-recv -- receive a T from a channel whose protocol begins with SRecv T R.
+  ;;;
+  ;;; Parameters:
+  ;;;   c    -- channel at protocol SRecv<T R> (consumed)
+  ;;;   cell -- a cell (from schan-cell-new) that receives the value
+  ;;;
+  ;;; Returns:
+  ;;;   The channel advanced to protocol R.  The received value is written into
+  ;;;   `cell`; read it with schan-cell-get and ascribe to T.
+  ;;;
+  ;;;   NOTE: the plan's ideal signature is `Pair<T SChan<R>>` -- value and
+  ;;;   continuation returned together as a typed pair.  That is currently
+  ;;;   blocked by a monomorphizer limitation: a generic function cannot return a
+  ;;;   parametric aggregate (Pair, or any struct) whose element type is a phantom
+  ;;;   type parameter carried only inside an opaque argument -- the type
+  ;;;   variable is not recoverable from the opaque, so the aggregate result
+  ;;;   never specializes and the generic carrier fallback miscompiles (see
+  ;;;   docs/reported/generic-struct-opaque-element-miscompile.md).  Returning the
+  ;;;   continuation as a bare opaque (SChan R) keeps it *fully typed* -- the
+  ;;;   protocol-ordering guarantee is intact on every step -- and the value rides
+  ;;;   out through the cell.
+  ;;;
+  ;;; Example:
+  ;;;   (let [cell (schan-cell-new)
+  ;;;         c2   (schan-recv c cell)         ; c : SChan<SRecv int R> => c2 : SChan<R>
+  ;;;         v    (schan-cell-get cell)]      ; : int
+  ;;;     ...)
+  ;;;
+  ;;; Since: S1
+  (defn schan-recv [T R] [c : (SChan (SRecv T R)) cell : ptr<void>] : (SChan R)
+    ```c typedef struct {
+        pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+        int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+    } SChanBlock;
+    SChanBlock *ch = (SChanBlock *)(intptr_t)c;
+    pthread_mutex_lock(&ch->lock);
+    while (ch->count == 0)
+        pthread_cond_wait(&ch->not_empty, &ch->lock);
+    int64_t v = ch->buf[ch->head];
+    ch->head = (ch->head + 1) % ch->cap;
+    ch->count--;
+    pthread_cond_signal(&ch->not_full);
+    pthread_mutex_unlock(&ch->lock);
+    *(int64_t *)cell = v;
+    return (int64_t)(intptr_t)ch;
+    ```)
+
+  ;;; schan-close -- close a channel whose protocol has reached SClose.
+  ;;;
+  ;;; Parameters:
+  ;;;   c -- channel at protocol SClose (consumed)
+  ;;;
+  ;;; Returns:
+  ;;;   nil.  The underlying channel is freed.
+  ;;;
+  ;;; Example:
+  ;;;   (schan-close c)   ; c : SChan<SClose>
+  ;;;
+  ;;; Since: S1
+  (defn schan-close [c : (SChan SClose)] : nil
+    ```c typedef struct {
+        pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+        int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+    } SChanBlock;
+    SChanBlock *ch = (SChanBlock *)(intptr_t)c;
+    pthread_mutex_destroy(&ch->lock);
+    pthread_cond_destroy(&ch->not_full);
+    pthread_cond_destroy(&ch->not_empty);
+    free(ch->buf);
+    free(ch);
+    ```)
+
+  ;; ---- Value cell (out-parameter for schan-recv) ---------------------------
+
+  ;;; schan-cell-new -- allocate a one-slot cell for receiving a value.
+  ;;;
+  ;;; Returns:
+  ;;;   A fresh cell handle to pass to schan-recv; read it with schan-cell-get
+  ;;;   and release it with schan-cell-free.
+  ;;;
+  ;;; Example:
+  ;;;   (let [cell (schan-cell-new)] ...)
+  ;;;
+  ;;; Since: S1
+  (defn schan-cell-new [] : ptr<void>
+    ```c int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+    if (!c) { fprintf(stderr, "schan-cell-new: oom\n"); abort(); }
+    *c = 0; return (void *)c;
+    ```)
+
+  ;;; schan-cell-get -- read the value most recently stored into a cell by recv.
+  ;;;
+  ;;; Parameters:
+  ;;;   cell -- a cell handle from schan-cell-new
+  ;;;
+  ;;; Returns:
+  ;;;   The int64-carried value; ascribe it to the protocol payload type, e.g.
+  ;;;   (:: (schan-cell-get cell) :Bool).
+  ;;;
+  ;;; Example:
+  ;;;   (schan-cell-get cell)  ; => last received value
+  ;;;
+  ;;; Since: S1
+  (defn schan-cell-get [cell : ptr<void>] : int
+    ```c return *(int64_t *)cell; ```)
+
+  ;;; schan-cell-free -- release a cell allocated by schan-cell-new.
+  ;;;
+  ;;; Parameters:
+  ;;;   cell -- a cell handle from schan-cell-new
+  ;;;
+  ;;; Returns:
+  ;;;   nil.
+  ;;;
+  ;;; Example:
+  ;;;   (schan-cell-free cell)
+  ;;;
+  ;;; Since: S1
+  (defn schan-cell-free [cell : ptr<void>] : nil
+    ```c free(cell); ```))
