@@ -1,0 +1,25 @@
+;; arrow-instance-arr-identity -- `arr` lifts a plain function into the
+;; function arrow as the identity: its body returns the parameter verbatim
+;; (`(arr [f] f)`), not an eta-expanded `(fn [x] (f x))`.  The dispatched
+;; result must stay callable and preserve the argument's real arity, so a
+;; unary and a binary function both round-trip through `arr`.
+;;
+;; Regression for
+;; docs/reported/instance-method-returning-untyped-param-loses-result-type.md.
+
+(load "stdlib/arrow-class.tur")
+
+(defn add1 [x : int] : int (+ x 1))
+(defn addmul [x : int y : int] : int (+ x (* y 2)))
+
+(defn main [] : int
+  ;; unary: (arr add1) is add1, so (a 5) => 6
+  (let [a (arr add1)]
+    (println (a 5)))                 ;; 6
+  ;; binary: arity is preserved through the passthrough, (b 5 3) => 11
+  (let [b (arr addmul)]
+    (println (b 5 3)))               ;; 11
+  ;; arr then compose: (add1 >>> add1) applied to 10 => 12
+  (let [h (>>> (arr add1) add1)]
+    (println (h 10)))                ;; 12
+  0)

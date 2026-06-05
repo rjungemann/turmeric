@@ -3463,6 +3463,17 @@ resolved_user_fallback:;
         if (!args[i]) return NULL;
     }
 
+    /* Arrow-identity passthrough: capture the pre-shim argument types so a
+     * method whose body returns one of its (fat) parameters verbatim -- e.g.
+     * `(arr [f] f)` under `Arrow [(->)]` -- can recover the concrete arrow
+     * signature (and thus the real arity) of the argument it passes through.
+     * Later passes (poly-wrap, arrow_fat_shim) rewrite obj/args into opaque
+     * fat boxes, erasing the TY_FN type, so snapshot it now. */
+    Type obj_orig_type = obj->type;
+    Type *args_orig_types = n_args
+        ? (Type *)arena_alloc(e->arena, n_args * sizeof(Type)) : NULL;
+    for (uint32_t i = 0; i < n_args; i++) args_orig_types[i] = args[i]->type;
+
     /* F3-5 (cross-plan-followups): per-call-site synthesis for the
      * recursive case of typed-collection `.eq?` dispatch.  When the
      * outer instance is a constrained typed-collection (e.g. Eq[Vec])
@@ -3588,6 +3599,32 @@ resolved_user_fallback:;
         result_type = method_callable_result_type(
             best_method->binding,
             type_from_kind(best_method->binding->type.as.fn.result_kind));
+        /* Arrow-identity passthrough: the method's declared return is the arrow
+         * class variable (a boxed arity-0 TY_FN shell) and its body is a bare
+         * reference to one of the method's parameters -- so the dispatched
+         * result *is* exactly that argument (e.g. `(arr [f] f)` returns `f`).
+         * The arity-0 shell is uncallable (`(a 5)` => "returns ?"), so recover
+         * the argument's concrete arrow signature here, where the call-site arg
+         * type is known.  Force the boxed (thunk) convention: a fat parameter is
+         * returned as a fat box, so the caller must apply it through TUR_APPLY*
+         * rather than a direct fn-pointer call. */
+        if (result_type.kind == TY_FN && result_type.as.fn.arity == 0 &&
+            best_method->body && best_method->body->kind == EX_VAR) {
+            const Binding *vb = best_method->body->as.var.binding;
+            int passthru_idx = -1;
+            for (uint8_t pi = 0; pi < best_method->n_params; pi++) {
+                if (best_method->params[pi] == vb) { passthru_idx = pi; break; }
+            }
+            if (passthru_idx >= 0) {
+                Type at = (passthru_idx == 0)
+                    ? obj_orig_type
+                    : args_orig_types[passthru_idx - 1];
+                if (at.kind == TY_FN) {
+                    at.as.fn.boxed = true;
+                    result_type = at;
+                }
+            }
+        }
     } else {
         result_type = best_method->body->type;
         if (result_type.kind == TY_UNKNOWN || result_type.kind == TY_NIL) {
