@@ -242,6 +242,23 @@ Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     return t;
 }
 
+/* fn-type-bare-identifier-plan Phase 3: a type slot inside a (fn ...) type
+ * expression that carries a leading colon -- the fused `:int` keyword form or
+ * the spaced-but-still-redundant `: int` F_TYPE_ANN wrapper -- is deprecated.
+ * Position alone marks the slot as a type, so the colon is noise.  Emit a
+ * TUR-D0001 deprecation warning (promoted to an error under
+ * --Werror=deprecated, like ^deprecated use sites). */
+static void warn_fn_type_colon(Elab *e, const Form *slot) {
+    (void)e;
+    if (!slot) return;
+    if (slot->tag != F_KEYWORD && slot->tag != F_TYPE_ANN) return;
+    DiagLevel sev = g_werror_deprecated ? DIAG_ERROR : DIAG_WARNING;
+    diag_emit_with_code(sev, slot->span, TUR_D0001_FN_TYPE_COLON,
+                        "leading colon on a type inside a (fn ...) type is "
+                        "deprecated; drop it -- position already marks this as "
+                        "a type (e.g. (fn [int] int), not (fn [:int] :int))");
+}
+
 /* Helper: parse a type expression form into a Type for deftype body.
  * Supports:
  *   - Symbols: primitive types (int, bool, etc.) or type bindings
@@ -925,6 +942,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             memset(fn_arg_kinds, 0, sizeof(fn_arg_kinds));
             memset(fn_arg_full, 0, sizeof(fn_arg_full));
             for (uint8_t pi2 = 0; pi2 < n_fn_args && pi2 < MAX_FN_ARITY; pi2++) {
+                warn_fn_type_colon(e, params_vec->as.list.items[pi2]);
                 Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
                                                rec_name, type_params, type_param_kinds, n_type_params);
                 fn_arg_kinds[pi2] = at ? at->kind : TY_INT;
@@ -959,6 +977,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                           "'fn' type expression requires a return type: (fn [params...] :return)");
                 return NULL;
             }
+            warn_fn_type_colon(e, form->as.list.items[idx]);
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
             TypeKind ret_kind = ret_t ? ret_t->kind : TY_INT;

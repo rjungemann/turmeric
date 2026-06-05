@@ -139,6 +139,14 @@ typedef enum DiagCode {
      * a floating-point specialization dispatches through the wrong register and
      * silently miscompiles.  Rejected until per-A inner-body specialization lands. */
     TUR_E0705_POLY_CLOSURE_RESULT_TYVAR,
+    /* Deprecation band (TUR-D####): syntax accepted for backward
+     * compatibility but slated for removal.  Emitted as DIAG_WARNING;
+     * promoted to DIAG_ERROR under --Werror=deprecated. */
+    /* fn-type-bare-identifier-plan Phase 3: a leading colon on a type
+     * inside a (fn ...) type expression is redundant -- position alone
+     * marks the param/result slots as types.  Drop the colon:
+     * (fn [:int] :int) -> (fn [int] int). */
+    TUR_D0001_FN_TYPE_COLON,
 } DiagCode;
 
 typedef enum DiagLevel {
