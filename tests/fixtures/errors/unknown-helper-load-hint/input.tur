@@ -1,0 +1,6 @@
+;; Finding 2: a freestanding probe that reaches for the named float->int helper
+;; without loading stdlib/math.tur should get a hint naming the file + (load)
+;; line, not a bare "unknown function or operator".
+(defn main [] : int
+  (println (float->int 7.25))
+  0)

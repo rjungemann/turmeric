@@ -19,6 +19,45 @@ each of these cost an extra build.
 Severity: **low** (ergonomics), but they recur on essentially every
 freestanding probe.
 
+## Status
+
+- **Finding 1 -- FIXED.** A misplaced effect annotation (`: int #{Unsafe}`)
+  is now detected in `defn` header parsing and reported with an
+  ordering-specific diagnostic that names effects, not map literals. See
+  `src/compiler/elab_fns.c` (the "misplaced effect annotation" check after
+  return-type parsing) and the regression fixture
+  `tests/fixtures/errors/effect-annotation-after-return-type/`.
+- **Finding 2 -- PARTIALLY ADDRESSED + premise corrected.** The unknown-call
+  diagnostic now suggests the exact `(load ...)` line for the well-known scalar
+  print/convert helpers (`float->int`, `int->float`, `printf-float6`,
+  `println-float`): e.g. for `float->int` it adds *"'float->int' lives in
+  stdlib/math.tur and is not auto-loaded; try: (load "stdlib/math.tur")"*. See
+  `stdlib_load_hint_file` in `src/compiler/elab_call.c` and the fixtures
+  `tests/fixtures/errors/unknown-helper-load-hint/` (the hint) +
+  `tests/fixtures/stdlib-float-convert-load/` (the suggested `load` works).
+
+  **Correction to this report's premise:** Finding 2 originally framed these as
+  needing an `(import ...)` line. That is wrong -- `stdlib/math.tur` and
+  `stdlib/bits.tur` are bare definition files, *not* `defmodule`s with
+  `(export ...)`, so `(import math :refer [float->int])` fails with "symbol
+  'float->int' is not exported from module 'math'". The only working mechanism
+  for these helpers in a freestanding script is `(load "stdlib/<file>")`, which
+  is what the hint now suggests. (Whether math/bits *should* be promoted to
+  exporting `defmodule`s is a separate design question, not pursued here.)
+
+- **Finding 3 -- FIXED.** A freestanding `/tmp/foo.tur` that does
+  `(load "stdlib/math.tur")` now resolves the stdlib off-tree. `import` already
+  fell back to the resolved stdlib root (`TUR_STDLIB_DIR`, set to an absolute
+  path by `main.c`'s `resolve_stdlib_root` via an exe-relative walk); `(load
+  ...)` was purely cwd-relative and so failed when run from outside the repo.
+  The load expander now mirrors the import fallback: a `"stdlib/<rest>"` path
+  that is not found cwd-relative is retried under the resolved stdlib dir (the
+  leading `stdlib/` component is dropped to avoid `.../stdlib/stdlib/...`). See
+  the off-tree fallback in `src/compiler/elab_toplevel.c` (Phase M `(load ...)`
+  expansion) and the regression harness `tests/run-offtree-load.sh` (registered
+  as the `tur_offtree_load` ctest). With this, the `(load ...)` line that the
+  Finding 2 hint suggests works from any cwd, not just the repo root.
+
 ## Finding 1 -- misleading diagnostic for a misplaced effect annotation
 
 The canonical order is `#{Effect}` *before* the return type:

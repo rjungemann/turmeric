@@ -1,0 +1,10 @@
+;; Finding 2 (one-off-script-print-and-annotation-ergonomics): the named scalar
+;; convert helpers are reachable via (load "stdlib/math.tur").  This fixture
+;; pins that the load-based hint suggested by the unknown-call diagnostic
+;; actually works, and guards the hint table against the helper being renamed.
+;; float->int truncates toward zero (7.25 -> 7, 9.99 -> 9).
+(load "stdlib/math.tur")
+(defn main [] : int
+  (println (float->int 7.25))
+  (println (float->int 9.99))
+  0)
