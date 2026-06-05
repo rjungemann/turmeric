@@ -20,16 +20,12 @@
 
 
 (defn seq-call-fn0 [f : int] : int
-  ```c int64_t *fat = (int64_t *)(intptr_t)f;
-  int64_t fn_ptr = fat[0];
-  return ((int64_t (*)(void *))(intptr_t)fn_ptr)((void *)fat);
-  ```)
+  ;; Typed-ABI: fat-dispatch via the shared TUR_APPLY macro instead of a
+  ;; bespoke slot-0 cast (closure-typed-invocation-abi-plan, de-workaround).
+  ```c return TUR_APPLY0(f); ```)
 
 (defn seq-call-fn1 [f : int x : int] : int
-  ```c int64_t *fat = (int64_t *)(intptr_t)f;
-  int64_t fn_ptr = fat[0];
-  return ((int64_t (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
-  ```)
+  ```c return TUR_APPLY1(f, x); ```)
 ;; -------------------------------------------------------------------
 ;; Option helpers for seq/unfold (no #{Unsafe}, usable in gen bodies)
 ;; -------------------------------------------------------------------

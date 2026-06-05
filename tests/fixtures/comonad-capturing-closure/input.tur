@@ -1,0 +1,26 @@
+;; Regression for closure-representation-unification (Phase 1): stdlib/comonad.tur
+;; `extend` previously invoked its function argument through a bare
+;; int64_t(*)(int64_t,int64_t) thin cast, which segfaults on a capturing closure
+;; (a fat-closure box).  It now takes the function as a `:fn` poly-closure
+;; carrier and applies it directly in Turmeric, so both a captureless lambda and
+;; a capturing closure work for the Identity and Pair comonads.
+
+(load "stdlib/comonad.tur")
+
+;; Capturing closure over k.
+(defn make-add [k : int] : ptr<void> (fn [wa : int] : int (+ (__identity_get wa) k)))
+
+(defn main [] : int
+  (let [w     (__identity_new 42)
+        add10 (make-add 10)]
+    ;; Identity comonad, capturing closure: extend (+10) (Identity 42) -> 52
+    (println (__identity_get (__identity_extend w add10)))
+    ;; Identity comonad, captureless lambda: extend (*2) (Identity 42) -> 84
+    (println (__identity_get (__identity_extend w (fn [wa : int] : int (* (__identity_get wa) 2))))))
+  ;; Pair comonad, capturing closure over base.
+  (let [base 1000
+        pw   (__pair_new 7 100)
+        padd (fn [wa : int] : int (+ (+ (__pair_val wa) (__pair_env wa)) base))]
+    ;; extend padd (7, 100) = (7, 100 + 7 + 1000) = (7, 1107)
+    (println (__pair_val (__pair_extend pw padd))))
+  0)

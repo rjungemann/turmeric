@@ -4549,7 +4549,7 @@ int main(int argc, char **argv) {
                 __t25->__fn = (tur_thunk_int64_t_int64_t_t)__fn_909;
                 __t25->delta = delta_907;
                 void *__t26 = __t25;
-                void *__t27 = __t26;
+                void *__t27 = (void *)(intptr_t)(__t26);
                 int64_t result_914 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(23)), (tur_poly_fn_t){ __t27, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t27)) });
                 (void)result_914;
                 puts((_un_unopt_unsome_qu(result_914)) ? "true" : "false");
@@ -4563,7 +4563,7 @@ int main(int argc, char **argv) {
             __t28->__fn = (tur_thunk_int64_t_int64_t_t)__fn_917;
             __t28->delta = delta_915;
             void *__t29 = __t28;
-            void *__t30 = __t29;
+            void *__t30 = (void *)(intptr_t)(__t29);
             puts((_un_unopt_unsome_qu(__inst_TestFunctor_fmap_option(__opt_none(), (tur_poly_fn_t){ __t30, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t30)) }))) ? "true" : "false");
         }
         int64_t __t31;

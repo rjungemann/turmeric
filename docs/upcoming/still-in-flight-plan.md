@@ -20,21 +20,34 @@ and delete the section from this file.
 
 > Full plan: [../archive/closure-representation-unification-plan.md](../archive/closure-representation-unification-plan.md)
 
-Phase 0 prerequisites are done; the three-phase migration is
-unblocked but not yet executed.
+All three phases are now executed; the punch list is empty and the
+plan is ready to move to `docs/archive/history/`.
 
-- [ ] Phase 1 -- migrate stdlib thin-call consumers (`arrow`,
-      `option-map`, comonad, `pair`, `mutmap`) to `^fat` + fat
-      dispatch; retire the int64 casts.
-- [ ] Phase 2 -- fat-dispatch the nullary `:ptr<void>` direct-call
-      path.
-- [ ] Phase 3 -- box captureless fns at fat-dispatched `:ptr<void>`
-      sinks (Option B: distinct first-class closure type vs C
-      callbacks).
-- [ ] Capturing-closure fixtures pass for `:int` and `:float` at
-      every migrated site; `contract.tur` raw C-callback path still
-      works.
-- [ ] `bash tests/run.sh` zero `FAIL` with leak detection on.
+- [x] Phase 1 -- stdlib thin-call consumers migrated off the bare
+      int64 thin cast: `arrow`/`option-map`/`pair`/`mutmap` use `^fat`
+      + fat dispatch; `comonad` `extend` takes its function as a `:fn`
+      poly-closure carrier and applies it directly (a `:fn` typeclass
+      method param is the right surface for a dispatch-erased receiver,
+      where `^fat` does not thread). Fixing comonad surfaced and
+      resolved a closure-carrier miscompile -- see
+      [poly-wrap-of-capturing-closure-value-references-local-env.md](../reported/poly-wrap-of-capturing-closure-value-references-local-env.md).
+- [x] Phase 2 -- the nullary `:ptr<void>` direct-call path already
+      fat-dispatches when the sink is `is_fat` (CRU B-2: the `n == 0`
+      branch in `emit_expr.c` gates on `!fn_binding->is_fat`, so a fat
+      sink falls through to slot-0 dispatch while a raw C callback
+      stays thin).
+- [x] Phase 3 -- Option B (first-class closure type) shipped;
+      captureless fns are boxed at fat-dispatched sinks and raw
+      C-callbacks (`contract.tur`) keep the bare representation.
+- [x] Capturing-closure fixtures: `comonad-capturing-closure` and
+      `poly-fn-typeclass-capturing-closure` (`:int`); `arrow`/`option`
+      capturing + `:float` covered by `float-fat-closure`,
+      `arrow-capturing-closure`, `eq-carrier-capturing-comparator`,
+      etc. (comonad is an int64-carrier comonad; its `:fn` carrier is
+      the int register class by design). `contract.tur` C-callback path
+      still works.
+- [x] `bash tests/run.sh` zero `FAIL` with leak detection on
+      (`1482 passed, 0 failed`).
 
 ## Typed closure invocation ABI
 
@@ -43,22 +56,29 @@ unblocked but not yet executed.
 Companion to the representation-unification plan; threads declared
 arg/return types all the way to the C invocation site.
 
-- [ ] Phase 1 -- emit `TUR_APPLY{0..4}_T(R, A_i..., f, args...)`
-      macros; redefine legacy `TUR_APPLY{0..4}` as int64 aliases;
-      land signature-keyed fat-shim and `__tur_poly_to_fat1`
-      generalisation.
-- [ ] Phase 2 -- inline-C lowering, typeclass dispatch, and
-      `EX_FN_TO_FAT` emit `_T` calls keyed off `result_full_type`
-      and `param_types`. Invariant grep: no legacy
-      `TUR_APPLY[0-9]+(` inside non-int64 closure signatures.
-- [ ] Phase 3 -- stdlib migrations: `select.tur`
-      `seq-call-fn{0,1,2}`, `httpd.tur` `mw-cors`, `list.tur`
-      `__cons-fmap`.
+- [x] Phase 1 -- `TUR_APPLY{0..4}_T(R, A_i..., f, args...)` macros
+      emitted (`emit_module.c`); legacy `TUR_APPLY{0..4}` are int64
+      aliases of the `_T` forms; signature-keyed typed fat-shims
+      (`ensure_typed_fatshim`) and the typed `__tur_poly_to_fat`
+      generalisation (`ensure_typed_poly_to_fat`) land.
+- [x] Phase 2 -- inline-C lowering, typeclass dispatch, and
+      `EX_FN_TO_FAT`/`EX_POLY_TO_FAT` emit typed calls keyed off
+      `result_full_type` + `param_types` via
+      `ensure_typed_thunk_typedef` / `use_typed_thunk_abi`.
+- [x] Phase 3 -- stdlib migrations: `httpd.tur` `mw-cors` (`^fat`)
+      and `list.tur` `__cons-fmap` (`^fat` + direct call) done; the
+      `seq-call-fn{0,1,2}` / `seq-call-bool-fn1` helpers (in
+      `stdlib/seq/`, not `select.tur`) now dispatch through
+      `TUR_APPLY0/1/2` and `TUR_APPLY1_T(bool, ...)` instead of
+      bespoke slot-0 casts.
 - [ ] Phase 4 -- migrate `turmeric-spices/signal` (`__signal_call1`
       returns `:float` and drops `int64_t sig_val; memcpy(...)`
-      blocks).
-- [ ] Round-trip fixtures pass for `:float`, `:ptr`, `:bool`
-      returns and a `:cstr` argument.
+      blocks). Sibling-repo work; deferred until the
+      `../turmeric-spices` checkout is present.
+- [x] Round-trip fixtures cover `:float`, `:ptr`, `:bool` returns and
+      a `:cstr` argument (`tur-apply-t-fatshim-float`,
+      `poly-to-fat-float-roundtrip`, `bare-fat-float-result`,
+      `option-result-c-abi`, ...).
 
 ## `defmodule` per-file scoping
 

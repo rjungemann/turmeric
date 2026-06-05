@@ -3530,7 +3530,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             thunk_arity);
                     }
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "void *%s = %s;\n", tmp, fat);
+                    /* The closure value may be carried as int64_t (a let-bound
+                     * :ptr<void> closure value) or as a void *; cast through
+                     * intptr_t so both forms convert without an int-to-pointer
+                     * warning. */
+                    buf_printf(body, "void *%s = (void *)(intptr_t)(%s);\n", tmp, fat);
                     free(fat);
                     Buf out; buf_init(&out);
                     if (thunk_typedef) {

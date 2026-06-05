@@ -26,10 +26,9 @@
 
 
 (defn seq-call-bool-fn1 [f : int x : int] : bool
-  ```c int64_t *fat = (int64_t *)(intptr_t)f;
-  int64_t fn_ptr = fat[0];
-  return ((bool (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
-  ```)
+  ;; Typed-ABI: a :bool-returning fat closure dispatched through the typed
+  ;; TUR_APPLY1_T macro (closure-typed-invocation-abi-plan, de-workaround).
+  ```c return TUR_APPLY1_T(bool, int64_t, f, x); ```)
 ;;; seq-call-fn2 -- call a two-arg fat closure stored as int64_t.
 ;;;
 ;;; Parameters:
@@ -43,10 +42,7 @@
 ;;; Since: LZ2
 
 (defn seq-call-fn2 [f : int x : int y : int] : int
-  ```c int64_t *fat = (int64_t *)(intptr_t)f;
-  int64_t fn_ptr = fat[0];
-  return ((int64_t (*)(void *, int64_t, int64_t))(intptr_t)fn_ptr)((void *)fat, x, y);
-  ```)
+  ```c return TUR_APPLY2(f, x, y); ```)
 ;; -------------------------------------------------------------------
 ;; Inner-generator int helpers (for flat-map / flatten)
 ;; Storing a ptr<void> generator as int64_t lets us use ^mut with set!.
