@@ -5,7 +5,7 @@
 (defclass TestFunctor [^f]
   (fmap [container fn] : int))
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [ma fn] : int))
 
 ;; Option helpers
@@ -58,7 +58,7 @@
 (definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
-(definstance Monad [option]
+(definstance TestMonad [option]
   (bind [ma fn] (__bind_option ma fn)))
 
 (defn main [] : int

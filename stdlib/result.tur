@@ -214,3 +214,56 @@
 
 (definstance Eq [Result] [(Eq A) (Eq B)]
   (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
+;;; result-bimap -- map fn-left over the err arm and fn-right over the ok arm.
+;;;
+;;; Follows the Either convention: the err arm is the "left" side and the ok
+;;; arm is the "right" side. This is the worker behind the `Bifunctor [Result]`
+;;; instance (kept here next to the Result layout it depends on).
+;;;
+;;; Parameters:
+;;;   container -- Result[A B]
+;;;   fn-left   -- function applied to the err value (B -> D)
+;;;   fn-right  -- function applied to the ok value (A -> C)
+;;;
+;;; Returns:
+;;;   A freshly allocated Result[C D]; the input is not modified.
+;;;
+;;; Example:
+;;;   (result-bimap (ok 5) neg inc)   ; => ok(6)
+;;;   (result-bimap (err 5) neg inc)  ; => err(-5)
+;;;
+;;; Since: stdlib-hkt-consolidation T1
+(defn result-bimap [container : int fn-left fn-right]
+  #{}
+  : int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
+  if (!res) return 0;
+  if (res->is_ok)
+      return tur_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
+  return tur_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
+  ```)
+;; ---------------------------------------------------------------------------
+;; HKT typeclass instances (stdlib-hkt-consolidation T1)
+;;
+;; Result is a binary type constructor of kind (* -> * -> *), so it supports
+;; Bifunctor directly. Result owns this instance (home module of the type), so
+;; it is not an orphan; the Bifunctor class stub is preloaded before this file.
+;;
+;; NOTE: the conventional kind-(* -> *) instances (Functor / Monad / MonadError
+;; over the ok arm) are NOT expressible on Result. Result's parameters are
+;; [A=ok B=err] with ok FIRST, but a (* -> *) instance head fixes the leftmost
+;; parameter (as in `(Either E)`), which would fix ok and vary err -- the
+;; opposite of the right-biased convention. See
+;; docs/reported/stdlib-hkt-consolidation-t1-blocked.md.
+;; ---------------------------------------------------------------------------
+;;; Bifunctor [Result] -- map fn-left over err, fn-right over ok.
+;;;
+;;; Example:
+;;;   (bimap (ok 5) neg inc)   ; => ok(6)
+;;;   (bimap (err 5) neg inc)  ; => err(-5)
+;;;
+;;; Since: stdlib-hkt-consolidation T1
+(definstance Bifunctor [Result]
+  (bimap [container fn-left fn-right]
+    (result-bimap container fn-left fn-right)))

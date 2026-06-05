@@ -9,13 +9,13 @@
 
 ;;; ── Typeclass declarations ────────────────────────────────────────────────
 
-(defclass Applicative [^f]
+(defclass TestApplicative [^f]
   (pure [a] : int))
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [m f] : int))
 
-(defclass Alternative [^f]
+(defclass TestAlternative [^f]
   (empty [a] : int)
   (alt-or [a b] : int))
 
@@ -66,13 +66,13 @@
 
 ;;; ── Option typeclass instances ────────────────────────────────────────────
 
-(definstance Applicative [option]
+(definstance TestApplicative [option]
   (pure [a] (__opt_pure a)))
 
-(definstance Monad [option]
+(definstance TestMonad [option]
   (bind [m f] (__opt_bind m f)))
 
-(definstance Alternative [option]
+(definstance TestAlternative [option]
   (empty [_] (__opt_none))
   (alt-or [a b] (__opt_alt_or a b)))
 

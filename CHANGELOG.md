@@ -2,6 +2,30 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **stdlib HKT typeclass instances for `Option` and `Result` (consolidation
+  T1)** -- `Option` gains `Functor` / `Applicative` / `Monad` / `Alternative`
+  instances and `Result` gains a `Bifunctor` instance (err = left arm, ok =
+  right arm), so `fmap` / `bind` / `pure` / `ap` / `alt-or` / `bimap` and the
+  `do-m` / `for` macros work over stdlib optionals/results. Adds the
+  `tur/typeclass-monad` and `tur/typeclass-bifunctor` class stubs (auto-loaded
+  alongside the existing Applicative/Alternative stubs). See
+  `docs/upcoming/stdlib-hkt-consolidation-plan.md`. `Functor` / `Monad` /
+  `MonadError` for `Result` remain unavailable pending a fix to instance-head
+  parameter ordering (see
+  `docs/reported/result-param-order-blocks-functor-monad.md`).
+
+### Changed
+
+- **Local typeclass instances shadow stdlib instances on erased dispatch** --
+  when a `.method` dot-dispatch on an `int64_t`-erased receiver is otherwise
+  ambiguous and exactly one matching instance is user-defined (not from
+  `stdlib/`), that local instance is now selected instead of erroring with
+  `TUR-E0020`. Purely additive: only previously-erroring dispatch is affected.
+
 ## [0.18.0] -- 2026-06-02
 
 ### Added

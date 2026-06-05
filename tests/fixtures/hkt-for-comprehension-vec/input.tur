@@ -11,13 +11,13 @@
 
 ;; ---- Typeclass declarations -------------------------------------------------
 
-(defclass Applicative [^f]
+(defclass TestApplicative [^f]
   (pure [a] : int))
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [m f] : int))
 
-(defclass Alternative [^f]
+(defclass TestAlternative [^f]
   (empty [a] : int)
   (alt-or [a b] : int))
 
@@ -62,7 +62,7 @@
 
 ;; ---- Vec typeclass instances ------------------------------------------------
 
-;; Monad.bind: flatMap -- apply f to each element, concatenate results.
+;; TestMonad.bind: flatMap -- apply f to each element, concatenate results.
 ;; f is a non-capturing closure (raw function pointer) for single-binding for.
 (defn __vec_bind [ma f] : int
   ```c
@@ -90,7 +90,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-;; Applicative.pure: wrap a single value in a vec.
+;; TestApplicative.pure: wrap a single value in a vec.
 (defn __vec_pure [a] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -100,7 +100,7 @@
   return (int64_t)(intptr_t)v;
   ```)
 
-;; Alternative.empty: return an empty vec (zero element for alt-or).
+;; TestAlternative.empty: return an empty vec (zero element for alt-or).
 (defn __vec_empty [_] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -108,13 +108,13 @@
   return (int64_t)(intptr_t)v;
   ```)
 
-(definstance Applicative [vec]
+(definstance TestApplicative [vec]
   (pure [a] (__vec_pure a)))
 
-(definstance Monad [vec]
+(definstance TestMonad [vec]
   (bind [m f] (__vec_bind m f)))
 
-(definstance Alternative [vec]
+(definstance TestAlternative [vec]
   (empty [a] (__vec_empty a))
   (alt-or [a b] 0))
 

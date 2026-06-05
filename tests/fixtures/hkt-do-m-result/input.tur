@@ -1,7 +1,7 @@
 ;; Phase HKT-P8: do-m with result monad
 ;; Tests that do-m works with result<T, E> and short-circuits on err
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [ma fn] : int))
 
 (defn __res_ok [x] : int
@@ -53,7 +53,7 @@
   return TUR_APPLY1(fn, res->ok_val);
   ```)
 
-(definstance Monad [result]
+(definstance TestMonad [result]
   (bind [ma fn] (__bind_result ma fn)))
 
 ;; Helper: add two results, propagating err

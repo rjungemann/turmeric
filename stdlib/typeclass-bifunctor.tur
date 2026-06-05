@@ -1,0 +1,12 @@
+;;; tur/typeclass-bifunctor -- minimal Bifunctor typeclass stub.
+;;;
+;;; Auto-loaded (and loadable directly) so a module can declare
+;;; (definstance Bifunctor [...] ...) without importing the full typeclass.tur.
+;;; The full typeclass.tur (with every typeclass) remains available on demand
+;;; via (load "stdlib/typeclass.tur"); defclass redefinition is idempotent, so
+;;; the two coexist.
+;;;
+;;; Since: stdlib-hkt-consolidation T1
+;; Bifunctor -- map over both sides of a binary type constructor.
+;;   bimap :: (a -> c) -> (b -> d) -> f a b -> f c d
+(defclass Bifunctor [^^f] (bimap [container fn-left fn-right] : int))

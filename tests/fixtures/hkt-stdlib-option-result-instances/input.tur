@@ -1,0 +1,48 @@
+;; stdlib-hkt-consolidation T1: HKT typeclass instances for stdlib Option and
+;; Result. Option gets Functor / Applicative / Monad / Alternative; Result gets
+;; Bifunctor (err = left arm, ok = right arm). Option / Result and the class
+;; stubs are auto-preloaded, so no explicit (load ...) is needed.
+
+(defn dbl  [x : int] : int (* x 2))
+(defn inc1 [x : int] : int (+ x 1))
+(defn neg  [x : int] : int (* x -1))
+
+;; int-carrier extractors (Option = { bool is_some; int64_t value; })
+(defn opt-val [o : int] : int
+  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? p->value : -999; ```)
+(defn opt-some? [o : int] : int
+  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? 1 : 0; ```)
+
+;; int-carrier extractors (Result = { bool is_ok; int64_t ok_val; int64_t err_val; })
+(defn res-ok  [r : int] : int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
+       return p->ok_val; ```)
+(defn res-err [r : int] : int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
+       return p->err_val; ```)
+
+(defn main [] : int
+  ;; Functor [Option]: fmap over some, none unchanged
+  (println (opt-val (fmap (:: (some 21) (Option int)) dbl)))            ; 42
+  (println (opt-some? (fmap (:: (none) (Option int)) dbl)))             ; 0
+  ;; Monad [Option]: bind sequences; short-circuits on none
+  (println (opt-val (bind (:: (some 20) (Option int))
+                          (fn [x] (some (+ x 1))))))                    ; 21
+  (println (opt-some? (bind (:: (none) (Option int))
+                            (fn [x] (some (+ x 1))))))                  ; 0
+  ;; Applicative [Option]: pure + ap
+  (println (opt-val (:: (pure 99) (Option int))))                      ; 99
+  (let [bump 1
+        ff (:: (some (:: (fn [x : int] : int (+ x bump)) int)) (Option int))
+        fa (:: (some 41) (Option int))]
+    (println (opt-val (ap ff fa))))                                    ; 42
+  ;; Alternative [Option]: empty + alt-or (first some wins)
+  (println (opt-val (alt-or (:: (none) (Option int))
+                            (:: (some 7) (Option int)))))              ; 7
+  (println (opt-some? (empty 0)))                                      ; 0
+  ;; Bifunctor [Result]: fn-left over err, fn-right over ok
+  (println (res-ok  (bimap (:: (ok 5) (Result int int)) neg inc1)))    ; 6
+  (println (res-err (bimap (:: (err 5) (Result int int)) neg inc1)))   ; -5
+  0)
