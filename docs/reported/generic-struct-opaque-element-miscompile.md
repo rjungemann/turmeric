@@ -12,10 +12,9 @@ description: A parametric struct such as `Pair<A B>` instantiated with an *opaqu
 > **Found:** 2026-06-04, executing
 > [stdlib-session-typed-channels-plan](../upcoming/stdlib-session-typed-channels-plan.md)
 > phase S1 (recv was specified to return `Pair<T SChan<R>>`).
-> **Status:** Variant 1 (concrete, no generics) **FIXED** 2026-06-05 -- see
-> [Resolution](#resolution). Variant 2 (phantom element through a generic
-> function) remains a tracked limitation; it needs phantom-element recovery in
-> `emit_abi_instantiate_type` and is not exercised by current stdlib code.
+> **Status:** Variant 1 (concrete, no generics) **FIXED** 2026-06-05 and
+> Variant 2 (phantom element through a generic-from-generic relay) **FIXED**
+> 2026-06-05 -- see [Resolution](#resolution).
 
 ## Summary
 
@@ -159,12 +158,42 @@ Regression coverage: `tests/fixtures/typed/pair-opaque-element/` exercises
 `Pair<int Tag>` and `Pair<Tag int>` (opaque element in each slot) through
 `pair-fst`/`pair-snd`. Full suite: `1450 passed, 0 failed`.
 
-**Variant 2 (phantom element via a generic function) not yet addressed.** When
-the element type variable is buried inside an opaque argument and recoverable
-from no concrete position (e.g. `recv [T R] [c : (SChan (SRecv T R))]` returning
-`(Pair T ...)`), `emit_abi_instantiate_type` cannot make the result type
-concrete, so the generic carrier template is still reached. This is proposed
-fix direction #3 and is left as a tracked limitation: the real `stdlib/schan.tur`
-`recv` was respecified to avoid the parametric-aggregate-with-phantom-element
-shape entirely (see "Impact / workaround" above), so no shipping code depends on
-it today.
+**Variant 2 (phantom element via a generic function) FIXED 2026-06-05.** The
+diagnosis above was incomplete. The element type variable is *not* unrecoverable
+in general: when `recv [T R] [c : (SChan (SRecv T R))]` is called *directly* with
+a concrete argument type (`(SChan (SRecv int ...))`), elab already attaches a
+concrete `abi_bindings` substitution and `recv` monomorphizes correctly. The
+real gap was a **generic-from-generic relay**: a forwarder
+
+```turmeric
+(defn fwd [T R] [c : (SChan (SRecv T R))] : (Pair T ptr<void>)
+  (recv c))   ;; T,R here are *fwd's* tyvars, still abstract
+```
+
+When `fwd` is specialized at a concrete leaf, the inner `recv` call's
+`abi_bindings` (captured at elab time) map `recv`'s tyvars to *fwd's* tyvars,
+which are still abstract. The ABI scan never composed those through `fwd`'s
+concrete bindings, so the inner call (a) was carrier-noted -- forcing the broken
+generic `recv` carrier body `(int64_t){.fst = ...}` to be emitted -- and (b) was
+never re-specialized, so `fwd__spec` called the broken generic `recv` instead of
+a `recv__spec`. The C compiler then rejected the struct-vs-int64 mismatch (the
+exact hard error in this report).
+
+Fixed in `src/compiler/emit_module.c`:
+
+1. **Binding composition.** When `emit_abi_register_call` runs inside an active
+   specialization, it now instantiates each inner-call binding's type *and* the
+   call's result type (`call->type`, still expressed in the enclosing generic's
+   tyvars) through the active spec's concrete bindings. So the relayed `recv`
+   call specializes to `recv__spec__Pair__int__ptr_void` and `fwd__spec` calls
+   it directly.
+2. **Relay carrier-note suppression.** A new `emit_abi_call_is_generic_relay`
+   predicate suppresses the spurious carrier note for a relay call (abstract
+   bindings, inside a *generic* body, to a generic-unsafe callee), so the broken
+   generic carrier body is no longer emitted. It is scoped by `ctx->current_scan_fn`
+   so a top-level call with genuinely-unresolvable phantom tyvars
+   (`map_count(map_new())`, KB-022) keeps its carrier fallback.
+
+Regression coverage: `tests/fixtures/generic-relay-aggregate-result/`
+(a `[T R]` forwarder relaying to a `[T R]` `recv` that returns
+`(Pair T ptr<void>)`, prints `7`). Full suite: `1476 passed, 0 failed`.

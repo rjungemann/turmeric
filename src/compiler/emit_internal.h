@@ -164,6 +164,13 @@ typedef struct EmitCtx {
     uint32_t        n_carrier_call_bindings;
     uint32_t        cap_carrier_call_bindings;
     const EmitAbiSpecialization *current_abi_specialization;
+    /* Variant 2 (generic-struct-opaque-element): the EX_FN_DEF whose body the ABI
+     * scan is currently descending into (top-level scan only).  Used to tell a
+     * generic *relay* call (inside a generic body, resolvable by binding
+     * composition once the enclosing generic specializes) apart from a top-level
+     * call with unresolvable phantom tyvars (KB-022) that needs its carrier
+     * fallback emitted. */
+    const Expr  *current_scan_fn;
     const char  *fn_name_override;
     /* J3: when true, the clone body being emitted via fn_name_override gets
      * external (not static) linkage -- set alongside fn_name_override. */

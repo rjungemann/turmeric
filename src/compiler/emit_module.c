@@ -497,6 +497,43 @@ static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, con
 static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                                const Expr **items, uint32_t n_items);
 
+static bool emit_abi_fn_is_generic_unsafe(const Expr *e);
+
+/* Variant 2 (generic-struct-opaque-element): detect a generic-*relay* call that
+ * must NOT be carrier-noted.  Such a call sits inside a generic body (no active
+ * specialization) and still has an abstract binding -- it maps the callee's
+ * tyvars to the enclosing generic's tyvars rather than to concrete types.  When
+ * the callee is generic-unsafe (a by-value aggregate arg/result whose carrier
+ * body is invalid C, e.g. `recv : (Pair T ptr<void>)`), carrier-noting it would
+ * force that broken generic body to be emitted.  Instead the call is resolved by
+ * binding composition (in emit_abi_register_call) when the enclosing generic is
+ * specialized, so the inner callee specializes too.  Carrier-safe relays (whose
+ * generic carrier body *is* valid C, e.g. a fully-generic `equal-cong`) are left
+ * untouched so KB-022's carrier fallback still emits them. */
+static bool emit_abi_call_is_generic_relay(const EmitCtx *ctx, const Expr *call,
+                                           const Expr **items, uint32_t n_items) {
+    if (!ctx || ctx->current_abi_specialization) return false;
+    if (!call || call->kind != EX_CALL) return false;
+    /* The call must sit inside a *generic* function body: only then will the
+     * enclosing fn be specialized and the relay's abstract bindings composed to
+     * concrete ones.  A call in a monomorphic body (e.g. `map_count(map_new())`
+     * in `main`, KB-022) with abstract bindings is an unresolvable phantom that
+     * still needs its carrier fallback -- do not treat it as a relay. */
+    if (!emit_abi_fn_is_generic_unsafe(ctx->current_scan_fn)) return false;
+    const AbiTypeBinding *b = call->as.call_.abi_bindings;
+    uint8_t n = call->as.call_.n_abi_bindings;
+    if (!b || n == 0) return false;
+    bool abstract = false;
+    for (uint8_t i = 0; i < n; i++) {
+        if (emit_abi_type_has_named_tyvar(&b[i].type)) { abstract = true; break; }
+    }
+    if (!abstract) return false;
+    Binding *fb = call->as.call_.fn_binding;
+    if (!fb) return false;
+    const Expr *fe = emit_abi_find_fn_expr(items, n_items, fb);
+    return fe && emit_abi_fn_is_generic_unsafe(fe);
+}
+
 /* GDE1: scan an expression subtree for a typeclass-method dispatch call where
  * the receiver is a TY_TYVAR bound to a TY_APP type in `bindings`.  Returns
  * true when any such call is found.  This detects the case where the C ABI is
@@ -595,6 +632,33 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     uint8_t n_bindings = call->as.call_.n_abi_bindings;
     if (!bindings || n_bindings == 0) return;
 
+    /* Variant 2 of generic-struct-opaque-element: when this call is scanned
+     * inside an *active* specialization, its abi_bindings (captured at elab
+     * time) map this callee's tyvars to the *enclosing generic's* tyvars, which
+     * are still abstract.  Compose them through the active spec's concrete
+     * bindings so a generic-from-generic call (e.g. a forwarder `fwd` calling
+     * `recv`, both `[T R]`) specializes to the concrete clone instead of
+     * falling back to the broken carrier template. */
+    AbiTypeBinding composed[ABI_TYPE_BINDINGS_MAX];
+    if (ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->n_bindings > 0 &&
+        n_bindings <= ABI_TYPE_BINDINGS_MAX) {
+        bool changed = false;
+        for (uint8_t i = 0; i < n_bindings; i++) {
+            composed[i].name = bindings[i].name;
+            composed[i].type = emit_abi_instantiate_type(
+                &bindings[i].type,
+                ctx->current_abi_specialization->bindings,
+                ctx->current_abi_specialization->n_bindings,
+                ctx->type_arena);
+            if (strcmp(type_c_name(bindings[i].type),
+                       type_c_name(composed[i].type)) != 0) {
+                changed = true;
+            }
+        }
+        if (changed) bindings = composed;
+    }
+
     Binding *fn_binding = call->as.call_.fn_binding;
     if (call->as.call_.fn_expr || fn_binding->type.kind != TY_FN || !fn_binding->is_global ||
         fn_binding->closure_fn_binding) {
@@ -672,6 +736,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         ? *fn_binding->type.as.fn.result_full_type
         : emit_type_from_kind(fn_binding->type.as.fn.result_kind);
     Type result_type = result_type_override ? *result_type_override : call->type;
+    /* Variant 2: inside an active specialization, `call->type` is still expressed
+     * in the enclosing generic's tyvars (e.g. `(Pair T ptr<void>)`); instantiate
+     * it through that spec's concrete bindings so a relayed aggregate result
+     * specializes to `(Pair int ptr<void>)` rather than the int64_t carrier.  For
+     * a concrete top-level call this is a no-op (no tyvars to substitute). */
+    if (ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->n_bindings > 0) {
+        result_type = emit_abi_instantiate_type(
+            &result_type, ctx->current_abi_specialization->bindings,
+            ctx->current_abi_specialization->n_bindings, ctx->type_arena);
+    }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;
     }
@@ -685,7 +760,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         instance_changes = body_has_dispatch_on_app_tyvar(fd->body, bindings, n_bindings);
     }
     if (!abi_changes && !instance_changes) {
-        if (!borrow_path) emit_abi_note_carrier_call(ctx, fn_binding);
+        if (!borrow_path &&
+            !emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {
+            emit_abi_note_carrier_call(ctx, fn_binding);
+        }
         return;
     }
 
@@ -811,7 +889,12 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             }
             break;
         case EX_FN_DEF:
-            if (e->as.fn_def_.fn) emit_abi_scan_expr(ctx, e->as.fn_def_.fn->body, items, n_items);
+            if (e->as.fn_def_.fn) {
+                const Expr *saved_scan_fn = ctx->current_scan_fn;
+                ctx->current_scan_fn = e;
+                emit_abi_scan_expr(ctx, e->as.fn_def_.fn->body, items, n_items);
+                ctx->current_scan_fn = saved_scan_fn;
+            }
             break;
         case EX_DEF:
             emit_abi_scan_expr(ctx, e->as.def_.init, items, n_items);
@@ -848,7 +931,8 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
              * is a direct carrier call; remember its target so the generic
              * definition is still emitted. */
             if (!e->as.call_.fn_expr && e->as.call_.fn_binding &&
-                ctx->n_specialized_calls == before) {
+                ctx->n_specialized_calls == before &&
+                !emit_abi_call_is_generic_relay(ctx, e, items, n_items)) {
                 emit_abi_note_carrier_call(ctx, e->as.call_.fn_binding);
             }
             /* GHE2: when scanning inside an active specialization, a call that
@@ -1417,6 +1501,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_carrier_call_bindings = 0;
     ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
+    ctx.current_scan_fn = NULL;
     ctx.fn_name_override = NULL;
     ctx.fn_name_override_external = false;  /* J3: must match fn_name_override */
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
@@ -1939,6 +2024,7 @@ int emit_program(Buf *out, const Expr *program) {
         ctx.fn_name_override = NULL;
         ctx.fn_name_override_external = false;
         ctx.current_abi_specialization = NULL;
+        ctx.current_scan_fn = NULL;
     }
 
     /* Phase M5: emit module-level defer thunks + atexit constructor. */
@@ -5318,6 +5404,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.n_carrier_call_bindings = 0;
     ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
+    ctx.current_scan_fn = NULL;
     ctx.fn_name_override = NULL;
     ctx.fn_name_override_external = false;  /* J3 */
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
@@ -5562,6 +5649,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         ctx.fn_name_override = NULL;
         ctx.fn_name_override_external = false;
         ctx.current_abi_specialization = NULL;
+        ctx.current_scan_fn = NULL;
     }
 
     /* Phase M5: emit module-level defer thunks + atexit constructor. */
