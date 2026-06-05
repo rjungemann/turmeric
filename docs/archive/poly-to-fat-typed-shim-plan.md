@@ -259,5 +259,5 @@ through `type_c_name`, so primitives (`double`, `bool`, `const char *`,
   argument regardless of slot 0. Fixed by retyping the wrapper's
   float-class argument params to their real kind (scoped to the float
   register class to stay churn-free for int64-register kinds). See
-  [docs/reported/poly-wrapper-forces-int64-args-non-int-fat-sink.md](../reported/poly-wrapper-forces-int64-args-non-int-fat-sink.md)
+  [poly-wrapper-forces-int64-args-non-int-fat-sink.md](history/poly-wrapper-forces-int64-args-non-int-fat-sink.md)
   (Resolution) and `tests/fixtures/poly-to-fat-float-named-fn/`.

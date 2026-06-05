@@ -185,7 +185,7 @@ that touches the compiler.
   arms); no existing program changes meaning. The `-Xcallcc` graduation is the
   precedent that this is safe and low-churn.
 - **The malformed-`defgadt` NULL-deref crash becomes reachable without a flag.**
-  [docs/reported/defgadt-malformed-pattern-segfault.md](../reported/defgadt-malformed-pattern-segfault.md)
+  [defgadt-malformed-pattern-segfault.md](../archive/history/defgadt-malformed-pattern-segfault.md)
   documents a SEGV on a malformed constructor; today it requires `-Xgadt`.
   After A1 it is reachable by default, which **raises its severity**. Fix that
   report (option 1: don't leave a half-built `AdtDef` registered) as a hard
@@ -240,7 +240,7 @@ that touches the compiler.
 - Direct prerequisite: `defgadt :copy` --
   [docs/reported/defgadt-copy-and-shared-bounds.md](../reported/defgadt-copy-and-shared-bounds.md).
 - Hard co-requisite of A1:
-  [docs/reported/defgadt-malformed-pattern-segfault.md](../reported/defgadt-malformed-pattern-segfault.md).
+  [defgadt-malformed-pattern-segfault.md](../archive/history/defgadt-malformed-pattern-segfault.md).
 - Parent: phase R3 of
   [stdlib-refinement-collections-plan](./stdlib-refinement-collections-plan.md).
 - Flag-graduation precedent: `-Xcallcc` no-op handling in `src/main.c`.

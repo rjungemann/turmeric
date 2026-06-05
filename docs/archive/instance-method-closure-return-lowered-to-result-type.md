@@ -18,7 +18,7 @@ description: A `definstance` method whose declared return type is a thin functio
 >   See the "Resolution" section at the end.
 >
 > **Found:** 2026-06-04, while fixing
->   [fn-typed-return-lowered-to-result-type](fn-typed-return-lowered-to-result-type.md)
+>   [fn-typed-return-lowered-to-result-type](history/fn-typed-return-lowered-to-result-type.md)
 >   (the plain-`defn` producer-side mirror of this bug).
 > **Severity:** Medium-High. For a closure result type whose C lowering is not
 >   `int64_t` (e.g. `(fn [:float] :float)`), the emitted C is a **hard `cc`
@@ -122,7 +122,7 @@ The impl body, a thin non-capturing closure, emits a bare function pointer
 (or `int64_t`) slot is the mismatch.
 
 This is the exact dual of
-[fn-typed-return-lowered-to-result-type](fn-typed-return-lowered-to-result-type.md):
+[fn-typed-return-lowered-to-result-type](history/fn-typed-return-lowered-to-result-type.md):
 that report fixed the plain-`defn` producer; this one is the dictionary /
 method-impl path, which was intentionally left on the `int64_t`-by-luck
 carrier when scoping that fix.
@@ -234,7 +234,7 @@ Validation:
 ## Cross-references
 
 - Dual of (resolved):
-  [fn-typed-return-lowered-to-result-type](fn-typed-return-lowered-to-result-type.md)
+  [fn-typed-return-lowered-to-result-type](history/fn-typed-return-lowered-to-result-type.md)
   (plain-`defn` producer side).
 - Same register-class family as the `^fat` bare-param / non-int-result
   miscompile (consumer side, resolved).

@@ -22,7 +22,7 @@ Values of a `defgadt` type are affine: using one twice is a hard
 `TUR-E0005` use-after-move. `defdata` accepts a `:copy` keyword to opt a sum
 type out of move tracking, but `defgadt` has no equivalent (and rejects
 `:copy` -- see the separate crash report
-[defgadt-malformed-pattern-segfault.md](defgadt-malformed-pattern-segfault.md)).
+[defgadt-malformed-pattern-segfault.md](history/defgadt-malformed-pattern-segfault.md)).
 
 This is the concrete blocker behind R3's "internal bound representation moves
 to the GADT": range bounds are *shared* values (a single bound pointer is read

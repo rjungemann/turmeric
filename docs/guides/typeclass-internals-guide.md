@@ -104,10 +104,10 @@ struct captures, curried returns, and two methods composed at the call site.
 
 ## Related
 
-- [closure-returning-instance-method-codegen-plan](../upcoming/closure-returning-instance-method-codegen-plan.md)
+- [closure-returning-instance-method-codegen-plan](../archive/closure-returning-instance-method-codegen-plan.md)
   -- the plan this rule was extracted from.
-- `docs/reported/nested-closure-transitive-capture.md` -- an *orthogonal*
+- `docs/archive/history/nested-closure-transitive-capture.md` -- an *orthogonal*
   capture-set defect (a grandchild closure's free var not threaded through the
   middle closure), independent of the carrier type.
-- `docs/reported/intra-instance-method-dispatch-unsupported.md` -- calling a
+- `docs/archive/intra-instance-method-dispatch-unsupported.md` -- calling a
   sibling method via `(.other self ...)` inside an instance body.

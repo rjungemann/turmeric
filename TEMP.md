@@ -103,6 +103,7 @@ rather than risk a speculative inference change.
 
 Do an inline-c reduction pass for the new typeclass work and related
 
+`docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`:
 Category is not in stalib, so per T9 I'll inline composition into Arrow (no
 Category instance). Let me check whether the bare-layer fixtures carry
 expected. c snapshots (T11 requires them stable) and how they load arrow.tur.

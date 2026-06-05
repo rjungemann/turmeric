@@ -60,7 +60,7 @@ The internal-helper migration in `option.tur` / `list.tur` was intentionally
 so making those files call back into `refined.tur` would be a load cycle.
 
 A compiler crash found while probing `:copy` support is filed separately:
-[docs/reported/defgadt-malformed-pattern-segfault.md](../reported/defgadt-malformed-pattern-segfault.md).
+[defgadt-malformed-pattern-segfault.md](../archive/history/defgadt-malformed-pattern-segfault.md).
 
 ## Motivation
 

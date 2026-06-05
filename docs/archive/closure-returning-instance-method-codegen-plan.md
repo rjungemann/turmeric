@@ -255,10 +255,10 @@ call site). Each is end-to-end (`expected.stdout`) **and** a codegen snapshot
 
 The 5th fixture composes at the call site rather than via `(.other self ...)`
 because **intra-instance method dispatch is unsupported** -- filed as
-`docs/reported/intra-instance-method-dispatch-unsupported.md`. The "nested"
+`docs/archive/intra-instance-method-dispatch-unsupported.md`. The "nested"
 fixture's inner closure references only its immediate parent's parameter because
 **nested closures do not transitively capture grandparent variables** -- filed
-as `docs/reported/nested-closure-transitive-capture.md`. Both reproduce in plain
+as `docs/archive/history/nested-closure-transitive-capture.md`. Both reproduce in plain
 `defn` (no typeclasses) and are independent of the carrier-type fix.
 
 ### Pre-existing stale snapshot fixed

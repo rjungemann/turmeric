@@ -312,7 +312,7 @@ Use it in A2/A3/A4 instead of the bare `== TY_FLOAT`.
 > **A3 note (updated 2026-06-04):** the `elab_fn` (lambda) retype call is in
 > place for symmetry. `^fat` on a *lambda* binder (`(fn [^fat g ...] ...)`) is
 > now accepted -- the pass fires on `fn` binders too, per
-> [bare-fat-lambda-param-plan.md](bare-fat-lambda-param-plan.md). The lambda
+> [bare-fat-lambda-param-plan.md](../archive/history/bare-fat-lambda-param-plan.md). The lambda
 > path is no longer dormant; fixtures under
 > `tests/fixtures/{bare-fat-lambda-param,annotated-fat-lambda-param,
 > bare-fat-lambda-closure-returning}` exercise it.

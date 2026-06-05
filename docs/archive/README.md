@@ -242,6 +242,24 @@ Post-v0.18.0 sweep:
 - **[defstruct-inline-c-byvalue-callsite-plan.md](history/defstruct-inline-c-byvalue-callsite-plan.md)** -- Compiler: sync call-site to inline-C by-value struct params (DS0-DS2); complete
 - **[variadic-rest-closure-cast-plan.md](history/variadic-rest-closure-cast-plan.md)** -- Compiler: cast variadic-rest function-pointer args at call sites (V0-V2); complete
 - **[curried-call-cast-rough-edges-plan.md](history/curried-call-cast-rough-edges-plan.md)** -- Compiler: partial-application + closure-call `(intptr_t)` cast fixes surfaced by the httpd middleware work; complete
+- **[bare-fat-lambda-param-plan.md](history/bare-fat-lambda-param-plan.md)** -- Allow bare `^fat g` param on `(fn ...)` lambdas; implemented
+- **[noncapturing-closure-inline-c-dispatch-plan.md](history/noncapturing-closure-inline-c-dispatch-plan.md)** -- Auto-shim non-capturing closures at fat-dispatched inline-C sinks; implemented (2026-06-03)
+- **[httpd-conn-struct-consolidation-plan.md](history/httpd-conn-struct-consolidation-plan.md)** -- Consolidate `HttpdConn` struct definitions in `stdlib/httpd.tur`; implemented (2026-06-03)
+- **[io-real-filesystem-and-list-dir-uncompilable.md](history/io-real-filesystem-and-list-dir-uncompilable.md)** -- `stdlib/io.tur` nested-`static` + missing `<dirent.h>` defects; resolved
+- **[log-capability-vtable-uncompilable.md](history/log-capability-vtable-uncompilable.md)** -- `stdlib/log.tur` and `test/capability.tur` vtable defects (same root cause as io); resolved
+- **[sourcefile-uninit-xform-map-fix.md](history/sourcefile-uninit-xform-map-fix.md)** -- `SourceFile` uninitialised `xform_map` crash; done
+- **[stale-fn-gensym-snapshots-on-main.md](history/stale-fn-gensym-snapshots-on-main.md)** -- Off-by-one `__fn_*` gensym in two committed snapshots; regenerated
+- **[stdlib-future-linearity-aliasing.md](history/stdlib-future-linearity-aliasing.md)** -- Refcount the shared `FutureCell` so `Future` can be `:affine`; resolved
+- **[fn-typed-return-lowered-to-result-type.md](history/fn-typed-return-lowered-to-result-type.md)** -- `defn` returning `(fn [...] T)` mis-lowered to `T`; producer side resolved
+- **[nested-closure-transitive-capture.md](history/nested-closure-transitive-capture.md)** -- Two-level nested closures failing to thread grandparent captures; resolved
+- **[borrow-param-forwarding-drop.md](history/borrow-param-forwarding-drop.md)** -- LT1 linear-drop check spuriously firing on `^borrow` param forwarding; resolved
+- **[defgadt-malformed-pattern-segfault.md](history/defgadt-malformed-pattern-segfault.md)** -- NULL-deref SEGV on malformed `defgadt` constructor; regression fixture in place
+- **[bare-fat-sink-poly-box-slot0-int64-mismatch.md](history/bare-fat-sink-poly-box-slot0-int64-mismatch.md)** -- Poly box / bare `^fat` sink slot-0 int64 shim vs `double` invoke cast; fixed (2026-06-04)
+- **[poly-wrapper-forces-int64-args-non-int-fat-sink.md](history/poly-wrapper-forces-int64-args-non-int-fat-sink.md)** -- `make_poly_wrapper` forcing int64 arg params on float-class methods; fixed (2026-06-04)
+- **[poly-to-fat-drops-args-beyond-first-multiarg-method.md](history/poly-to-fat-drops-args-beyond-first-multiarg-method.md)** -- N-ary `__tur_poly_to_fat*` carriers / shims for multi-arg typeclass methods; fixed
+- **[polymorphic-return-type-instantiation-collapses-to-first-tyvar.md](history/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md)** -- Polymorphic accessor return type wrongly collapsed to first tyvar; fixed (2026-06-04)
+- **[tuplen-struct-param-passed-by-pointer-codegen-mismatch.md](history/tuplen-struct-param-passed-by-pointer-codegen-mismatch.md)** -- TupleN (N>=3) struct param mis-passed by pointer to by-value callee; fixed (2026-06-04)
+- **[typeclass-method-int-carrier-return-truncates-non-int.md](history/typeclass-method-int-carrier-return-truncates-non-int.md)** -- int64-carrier truncating non-int instance results (explicit annotations); fixed (2026-06-04)
 
 Earlier additions:
 

@@ -185,7 +185,7 @@ bare result kind.
 ## Cross-references
 
 - Consumer-side mirror of
-  [fn-typed-return-lowered-to-result-type](fn-typed-return-lowered-to-result-type.md)
+  [fn-typed-return-lowered-to-result-type](history/fn-typed-return-lowered-to-result-type.md)
   (producer-side return lowering, resolved). That fix threaded the inner type
   through the *producer* signature; this bug is the *application/consumer*
   side of the same "inner fn type erased" family.

@@ -12,7 +12,7 @@
 > A fixture that loads the *entire* `stdlib/io.tur` and builds remains blocked by
 > three unrelated, pre-existing defects in `Real-FileSystem` / `list-dir`,
 > tracked in
-> [io-real-filesystem-and-list-dir-uncompilable.md](io-real-filesystem-and-list-dir-uncompilable.md).
+> [io-real-filesystem-and-list-dir-uncompilable.md](../archive/history/io-real-filesystem-and-list-dir-uncompilable.md).
 > `write-file`'s `data` was settled as `ptr<void>` (binary write with an explicit
 > `len`, mirroring `read-file`'s `ptr<void>` return); all real callers were
 > illustrative pseudo-examples.
