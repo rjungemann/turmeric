@@ -44,7 +44,7 @@ in stdlib/arrow.tur)
 - [+] stdlib-refinement-collections-plan.md
 - [+] stdlib-session-typed-channels-plan.md
 - [+] stdlib-type-erasure-cleanup-plan.md (B6 already gated)
-- [ ] range-gadt-typeclass-migration-plan.md
+- [-] range-gadt-typeclass-migration-plan.md
 
 ### Hygiene / tooling
 
