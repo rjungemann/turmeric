@@ -126,8 +126,7 @@ is complete; this is the inner-type-expression version.
       stdlib/ docs/guides/` is now clean.
       **Remaining:** `tests/fixtures/` sources are intentionally left
       on the legacy colon spelling until Phase 4 (they back the
-      lenient-path coverage), `../turmeric-spices/` is deferred until
-      that checkout is present, and the lone legacy form left under
+      lenient-path coverage), and the lone legacy form left under
       `docs/upcoming/` is the intentional before/after illustration in
       `v1/fn-type-colons-sweet-exp-plan.md` (do not rewrite it). The
       rewrite is annotation-spelling only, so codegen snapshots are
