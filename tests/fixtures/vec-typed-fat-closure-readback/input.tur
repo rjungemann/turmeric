@@ -1,0 +1,55 @@
+;; vec-get-typed-fat-closure-readback: a fold over Vec<typed fat closure> --
+;; the natural shape for an effects-chain / SF pipeline (apply each signal
+;; function in a vec to a signal in sequence).  This exercises five gaps that
+;; together blocked the shape (all fixed):
+;;
+;;   1. Recursion arg_fat: `chain-loop` passes the threaded :ptr<void> fat box
+;;      back into its OWN ^fat sig param.  The forward-declared binding now
+;;      carries arg_fat early so the self-call accepts it.
+;;   2. if-branch unification: the base case `(if done sig (loop ...))` mixes a
+;;      ^fat fn value (sig) with a :ptr<void> recursive arm; both are fat boxes
+;;      so the if elaborates.
+;;   3. Closure thunk arg_fat shift: `(gain g)` captures `gv` AND the ^fat sig,
+;;      so its thunk type gains a hidden env param.  arg_fat is shifted with it,
+;;      so the captureless `base` lambda is shimmed into a fat box at the call.
+;;   4. Fat-dispatch ABI: `(sf sig)` in apply-sf casts slot 0 to sf's DECLARED
+;;      :ptr<void> param ABI, not sig's :float thunk signature.
+;;   5. ^fat in let: `^fat out :(fn ...)` re-types the :ptr<void> fold result
+;;      into a directly-callable fat closure.
+;;
+;; Vec elements (typed fat closures) are read back with the documented `::`
+;; ascription idiom (vec-get returns :A, recovered to :ptr<void> here).
+;; Expected: 2*3*1.0 = 6.
+
+(defn apply-sf
+  [^fat sf  :(fn [:ptr<void>] #{} :ptr<void>)
+   ^fat sig :(fn [:float]     #{} :float)] :ptr<void>
+  (sf sig))
+
+(defn chain-loop
+  [effects :int
+   ^fat sig :(fn [:float] #{} :float)
+   i :int n :int] :ptr<void>
+  (if (>= i n)
+    sig
+    (chain-loop effects (apply-sf (:: (vec-get effects i) :ptr<void>) sig) (+ i 1) n)))
+
+(defn effects-chain
+  [effects :int ^fat input :(fn [:float] #{} :float)] :ptr<void>
+  (chain-loop effects input 0 (vec-len effects)))
+
+;; A gain SF: takes a signal, returns a scaled signal.  The inner closure
+;; captures BOTH gv (a plain value) and sig (a ^fat param).
+(defn gain [g :float]
+  (let [gv g]
+    (fn [^fat sig : (fn [:float] #{} :float)] :ptr<void>
+      (fn [t :float] :float (* gv (sig t))))))
+
+(defn main [] : int
+  (let [v (vec-new)]
+    (vec-push! v (gain 2.0))
+    (vec-push! v (gain 3.0))
+    (let [base (fn [t : float] : float t)
+          ^fat out :(fn [:float] #{} :float) (effects-chain v base)]
+      (println (out 1.0))))
+  0)

@@ -191,9 +191,11 @@ Expr *elab_let(Elab *e, const Form *call) {
         bool is_unique_ann = false;
         bool is_affine_ann = false;   /* ST0 */
         bool is_relevant_ann = false; /* ST0 */
+        bool is_fat_ann = false;      /* vec-get-typed-fat-closure-readback */
         /* Phase P3 / LT0 / UT0 / UT2 / ST0: Consume binding annotations in any order.
-         * Accepted: ^mut, ^persistent, ^linear, ^unique, ^affine, ^relevant -- may
-         * appear in any combination before the binding name, e.g. [^affine v ...]. */
+         * Accepted: ^mut, ^persistent, ^linear, ^unique, ^affine, ^relevant, ^fat
+         * -- may appear in any combination before the binding name,
+         * e.g. [^affine v ...]. */
         {
             bool keep_going = true;
             while (keep_going && cur->tag == F_SYM) {
@@ -209,6 +211,8 @@ Expr *elab_let(Elab *e, const Form *call) {
                     is_affine_ann = true;
                 } else if (cur->as.sym == e->sym_caret_relevant) {
                     is_relevant_ann = true;
+                } else if (cur->as.sym == e->sym_caret_fat) {
+                    is_fat_ann = true;
                 } else if (cur->as.sym == e->sym_caret_multishot) {
                     /* MS2: ^multishot is only valid on handler continuation bindings */
                     diag_emit_with_code(DIAG_ERROR, cur->span,
@@ -636,6 +640,23 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (is_relevant_ann) {
             b->is_relevant = true;
             b->type.substruct = SK_RELEVANT;
+        }
+        /* vec-get-typed-fat-closure-readback: ^fat re-types a :ptr<void> fat-box
+         * init (the standard shape produced by a fat-closure-returning helper,
+         * e.g. an SF-fold's (chain-loop ...) result) into a directly-callable
+         * fat closure.  The fn-type annotation supplies the call signature;
+         * is_fat routes (out args) through the fat-dispatch path -- exactly the
+         * syntax the "declare it as a fat closure parameter (^fat out :(fn ...))"
+         * help text recommends.  Without the annotation, a bare ^fat keeps the
+         * init's :ptr<void> type but is still fat-callable. */
+        if (is_fat_ann) {
+            b->is_fat = true;
+            if (type_ann_form) {
+                Type *fat_ty = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
+                if (fat_ty && fat_ty->kind == TY_FN) {
+                    b->type = *fat_ty;
+                }
+            }
         }
         /* UT1: Propagate is_unique through ownership transfer (let [y x] where x is ^unique) */
         if (g_unique_enabled && !is_unique_ann &&
@@ -1673,6 +1694,20 @@ static Form *if_narrow_branch(Elab *e, Form *branch,
     return form_list(a, sp, let_items, 3);
 }
 
+/* vec-get-typed-fat-closure-readback: is this expression a fat-closure value --
+ * i.e. a directly-callable ^fat fn binding, or a boxed TY_FN closure value?
+ * Such a value is representationally a void* fat box, so it unifies with a
+ * :ptr<void> branch in an `if`.  A thin (unboxed) bare fn pointer is NOT a fat
+ * box, so it is excluded to preserve the raw-pointer-vs-closure split. */
+static bool expr_is_fat_closure_value(const Expr *x) {
+    if (!x) return false;
+    if (x->kind == EX_VAR && x->as.var.binding && x->as.var.binding->is_fat)
+        return true;
+    if (x->type.kind == TY_FN && x->type.as.fn.boxed)
+        return true;
+    return false;
+}
+
 Expr *elab_if(Elab *e, const Form *call) {
     if (call->as.list.len != 3 && call->as.list.len != 4) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1846,6 +1881,19 @@ Expr *elab_if(Elab *e, const Form *call) {
             then_ = elab_coerce_to_any(e, then_);
             else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;
+        } else if ((expr_is_fat_closure_value(then_) && else_->type.kind == TY_PTR_VOID) ||
+                   (expr_is_fat_closure_value(else_) && then_->type.kind == TY_PTR_VOID)) {
+            /* vec-get-typed-fat-closure-readback: a fat-closure value (a directly
+             * callable ^fat fn binding, representationally a void* box) and a
+             * :ptr<void> are the same representation.  This is the natural shape
+             * of an SF-fold base case: `(if done sig (loop ... (apply ...)))`
+             * where `sig` is a ^fat parameter (TY_FN) and the recursive arm
+             * returns the threaded :ptr<void> fat box.  Widen both arms to
+             * :ptr<void> so the if elaborates instead of reporting a spurious
+             * "then=(fn ...) else=ptr<void>" mismatch; the caller re-types the
+             * result with `^fat` (or `::`) to call it again.  Calling a raw
+             * :ptr<void> directly stays an error (CRU B-4). */
+            result_t = TYPE_PTR_VOID;
         } else if (!type_eq(then_->type, else_->type)) {
             free(then_states);
             free(move_bindings);
@@ -1853,9 +1901,22 @@ Expr *elab_if(Elab *e, const Form *call) {
             free(lin_then);
             free(lin_bindings);
             free(lin_before);
+            /* type_name() heap-allocates (strdup) for composite kinds (fn,
+             * handler, union, ...) and no one frees it -- a LeakSanitizer-visible
+             * leak on every if-branch mismatch involving a function type. Print
+             * into owned buffers we free here, matching the leak-clean pattern in
+             * elab_call.c's arg-mismatch diagnostic. */
+            Buf then_buf; buf_init(&then_buf);
+            type_print(&then_buf, then_->type);
+            buf_putc(&then_buf, '\0');
+            Buf else_buf; buf_init(&else_buf);
+            type_print(&else_buf, else_->type);
+            buf_putc(&else_buf, '\0');
             diag_emit(DIAG_ERROR, call->span,
                       "if branches have mismatched types: then=%s else=%s",
-                      type_name(then_->type), type_name(else_->type));
+                      then_buf.data, else_buf.data);
+            buf_free(&then_buf);
+            buf_free(&else_buf);
             return NULL;
         } else {
             result_t = then_->type;

@@ -1914,6 +1914,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 (params[_ei]->poly_type == NULL ||
                  params[_ei]->poly_type->kind == TY_FN);
         }
+        /* A#1 (recursion): propagate the ^fat param markers early too, so a
+         * *recursive* call inside the body that passes a :ptr<void> fat box
+         * into one of this function's own ^fat fn-typed parameters is accepted
+         * (elab_call.c gates the :ptr<void> -> ^fat coercion on arg_fat[i]).
+         * Without this the self-call sees the stale pass-1 arg_fat=false and
+         * rejects the argument with a spurious "(fn []), got ptr<void>" mismatch.
+         * Mirrors the final fn_type.arg_fat / result_fat assignment below. */
+        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+            existing->type.as.fn.arg_fat[_ei] = params[_ei]->is_fat;
+        }
+        existing->type.as.fn.result_fat = result_fat;
     }
 
     /* Push params into the inner scope (created earlier for kind-var bindings). */
@@ -3443,6 +3454,19 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (return_fn_type) {
             new_fn_type.as.fn.result_full_type = return_fn_type;
         }
+        /* two-level-sf-closure / vec-get-typed-fat-closure-readback: shift the
+         * ^fat param markers (and the ^fat result marker) into the env-prepended
+         * thunk type.  type_fn() zero-inits arg_fat, so without this the thunk
+         * type a *capturing* closure dispatches through loses its ^fat flags --
+         * and a call site that passes a captureless lambda into one of the
+         * closure's ^fat fn params reads arg_fat[env+i]=false, skips the
+         * EX_FN_TO_FAT shim, and feeds a bare fn pointer to a fat-dispatch
+         * consumer (slot-0 read of code bytes -> SEGV).  arg_full_types above is
+         * shifted for exactly the same reason; arg_fat must travel with it. */
+        for (uint8_t i = 0; i < n_params; i++) {
+            new_fn_type.as.fn.arg_fat[i + 1] = b->type.as.fn.arg_fat[i];
+        }
+        new_fn_type.as.fn.result_fat = b->type.as.fn.result_fat;
         b->type = new_fn_type;
         fd->binding->type = new_fn_type;
         fn_def_expr->type = new_fn_type;

@@ -1988,8 +1988,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char **arg_strs = (n > 0)
                         ? (char **)malloc(n * sizeof(char *)) : NULL;
                     if (n > 0 && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    /* two-level-sf-closure: the fat-dispatch thunk cast must follow
+                     * the CALLEE's declared parameter ABI, not the actual argument's
+                     * static type.  Calling `(sf sig)` where sf is
+                     * `^fat sf :(fn [:ptr<void>] :ptr<void>)` and sig is itself a
+                     * `^fat sig :(fn [:float] :float)` must cast slot 0 to
+                     * `R(*)(void*, void*)` (sf's :ptr<void> param), NOT
+                     * `R(*)(void*, double)` derived from sig's :float thunk signature
+                     * -- the latter passes the fat-box pointer in an FP register and
+                     * corrupts the call.  Prefer sf's declared arg_full_types /
+                     * arg_kinds; fall back to the argument's type only when the callee
+                     * carries no per-arg type info. */
+                    bool have_decl_args = (fn_binding->type.kind == TY_FN &&
+                                           fn_binding->type.as.fn.arity == n);
                     for (uint32_t i = 0; i < n; i++) {
-                        arg_types[i] = e->as.call_.args[i]->type;
+                        Type *decl = NULL;
+                        if (have_decl_args && fn_binding->type.as.fn.arg_full_types)
+                            decl = fn_binding->type.as.fn.arg_full_types[i];
+                        if (decl) {
+                            arg_types[i] = *decl;
+                        } else if (have_decl_args) {
+                            arg_types[i] = emit_type_from_kind(fn_binding->type.as.fn.arg_kinds[i]);
+                        } else {
+                            arg_types[i] = e->as.call_.args[i]->type;
+                        }
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
