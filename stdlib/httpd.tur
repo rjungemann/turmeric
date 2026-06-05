@@ -1678,15 +1678,12 @@
 ;;; wrapped handler that either short-circuits a preflight or decorates
 ;;; the normal response.
 ;;;
-;;; The 7-arg shape (incl. `next`) is the positional equivalent of the
-;;; planned `(mw-cors opts :CorsOpts next)` signature.  The curried
-;;; partial application `(mw-cors opts)` previously triggered a codegen
-;;; bug -- the auto-generated `__pap` wrapper stored a `CorsOpts` value
-;;; into an `int64_t` env field and the C compile failed.  That codegen
-;;; bug is now fixed (stdlib-type-erasure-cleanup-plan A5); the remaining
-;;; barrier to a struct-valued `(mw-cors opts)` factory is that
-;;; compose-middleware needs to accept a partially-applied closure value
-;;; as a middleware (see the note near `compose-middleware`).
+;;; For a struct-valued, curry-friendly equivalent, use `mw-cors-opts`:
+;;; `(mw-cors-opts opts)` partially applies a `CorsOpts` value and returns a
+;;; one-arg middleware usable directly in `compose-middleware`.  The curried
+;;; `__pap` env that captures the `CorsOpts` value once triggered a codegen
+;;; bug (a struct stored into an `int64_t` env field); that bug is now fixed
+;;; (stdlib-type-erasure-cleanup-plan A5/B5).
 ;;;
 ;;; See `CorsOpts` / `default-cors-opts` for field semantics.
 ;;;
@@ -1735,6 +1732,43 @@
     ""
     0
     -1
+    next))
+;;; mw-cors-opts -- CORS middleware factory configured by a CorsOpts struct.
+;;;
+;;; `(mw-cors-opts opts next)` returns a wrapped handler; the curried form
+;;; `(mw-cors-opts opts)` is a one-arg middleware value suitable for
+;;; `compose-middleware`:
+;;;
+;;;   (compose-middleware base (mw-cors-opts my-opts))
+;;;
+;;; This is the struct-valued counterpart to the positional `mw-cors-with`.
+;;; The curried partial application captures the `CorsOpts` value in the
+;;; auto-generated `__pap` env; that codegen path was once broken (a struct
+;;; stored into an `int64_t` env field) and is now fixed
+;;; (stdlib-type-erasure-cleanup-plan A5/B5).
+;;;
+;;; Parameters:
+;;;   opts -- a CorsOpts value (see `default-cors-opts`)
+;;;   next -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
+;;;   compose-middleware.
+;;;
+;;; Example:
+;;;   (let [opts     (default-cors-opts)
+;;;         composed (compose-middleware base (mw-cors-opts opts))]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M4)
+
+(defn mw-cors-opts [opts :CorsOpts ^fat next :int] :ptr<void>
+  (mw-cors-with (.allow-origin opts)
+    (.allow-methods opts)
+    (.allow-headers opts)
+    (.expose-headers opts)
+    (.allow-credentials opts)
+    (.max-age opts)
     next))
 ;; =============================================================================
 ;; M5: HTTP Basic Auth middleware

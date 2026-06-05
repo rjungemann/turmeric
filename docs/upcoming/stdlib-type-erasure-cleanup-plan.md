@@ -1,7 +1,7 @@
 # Stdlib Type-Erasure & Stub-Typeclass Cleanup Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-02
+> **Status:** Phase A landed; Phase B landed (B1 spun off, B6 still gated)
+> **Last Updated:** 2026-06-05
 > **Type:** stdlib hygiene -- replace `int64_t`-erased typeclass stubs with real instances
 > **Sibling plans:**
 > - [stdlib-inline-c-deworkaround-plan.md](stdlib-inline-c-deworkaround-plan.md) -- replace inline-C workarounds
@@ -261,26 +261,48 @@ Likely shares machinery with the existing fat-closure work (commit
 
 Each of these is a small, self-contained PR once its prerequisite lands.
 
-- **B1. `arrow.tur`**: reintroduce `Arrow [->]`, `ArrowChoice [->]`,
-  `ArrowZero [->]`, `ArrowPlus [->]`, `ArrowLoop [->]`, `ArrowApply [->]`.
-  Delete `__arrow_call1/2` and the `__arrow_pair_*` inline-C helpers; let the
-  fat-closure dispatch and `Tuple2` constructors do the work. Restore `<<<`
-  once mangling is fixed. Gated on A1, A2, A3.
-- **B2. `effects.tur`**: drop the "handlers cannot capture" caveat and
-  rewrite the test suite to exercise capturing handlers. Gated on A4.
-- **B3. `rc.tur`**: real `Functor [rc]` `fmap` against the restructured
-  `RcControlBlock`. Gated on the RC restructuring (its own plan).
-- **B4. `equal.tur`**: enable `equal-cong` once HKT is stable. Tiny diff;
-  mostly removing the gating comment and adding fixtures.
-- **B5. `httpd.tur`**: re-enable `(mw-cors opts)` curried partial
-  application, remove the workaround comment at line 1688. Gated on A5
-  (**LANDED** -- both codegen blockers fixed). Remaining work is the stdlib
-  API rewrite itself, which additionally needs compose-middleware to accept a
-  partially-applied closure *value* as a middleware (it currently requires a
-  name-callable form -- httpd.tur:3143). Track that under its own task.
-- **B6. `map.tur`**: expose the key-checking wrappers as real functions (not
-  macros) once the type checker can carry the constraint through a normal
-  `defn`. Gated on a typeclass-constraint-on-defn task (separate plan).
+- **B1. `arrow.tur` -- SPUN OFF.** The Arrow typeclass reintroduction is no
+  longer tracked here. `__arrow_call1/2` are already gone -- the combinators
+  now normalize their function arguments to fat closures via `^fat` params and
+  dispatch through `TUR_APPLY1` (see the closure-dispatch note at the top of
+  `stdlib/arrow.tur`). The disabled `defclass` scaffolding was removed in
+  [stdlib-arrow-scaleback-plan.md](stdlib-arrow-scaleback-plan.md), and
+  bringing the `Arrow`/`ArrowChoice`/... hierarchy *back* now lives in its own
+  dedicated plan,
+  [stdlib-arrow-typeclass-reintroduction-plan.md](stdlib-arrow-typeclass-reintroduction-plan.md)
+  (gated on A1/A2/A3, all landed). Treat that plan as the source of truth.
+- **B2. `effects.tur` -- LANDED.** The "handlers cannot capture" caveat is
+  gone; `stdlib/effects.tur:12` now documents that handler bodies CAN capture
+  (value, struct, loop-local, nested-handler), with the residual fat-closure
+  env-leak caveat called out. Capturing-handler coverage lives in
+  `tests/fixtures/effect-handler-capture-{loop,struct,nested}` (added under A4).
+- **B3. `rc.tur` -- LANDED.** `Functor [rc]` is a real `definstance` that
+  reaches the wrapped value through `tur_rc_ptr` and dispatches the mapping
+  function via the fat-closure protocol (`fn.fn(fn.env, value)`) --
+  `stdlib/rc.tur:58`. The earlier "can't reach the value through
+  `RcControlBlock`" inline-C stub is retained only as the `__functor_rc_fmap`
+  helper comment. `Foldable [rc]` and `Clone [rc]` round it out.
+- **B4. `equal.tur` -- LANDED.** `equal-cong` is implemented and ungated
+  (`stdlib/equal.tur:29`): `(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b)) (match eq (Refl) (Refl)))`.
+- **B5. `httpd.tur` -- LANDED.** Added `mw-cors-opts`, a struct-valued CORS
+  factory: `(mw-cors-opts opts next)` returns a wrapped handler and the curried
+  `(mw-cors-opts opts)` is a one-arg middleware usable directly in
+  `compose-middleware`. The curried `__pap` env captures the `CorsOpts` value
+  (the A5 fix). `compose-middleware` already accepts the partially-applied form
+  -- it expands `(compose-middleware base (mw-cors-opts opts))` to
+  `((mw-cors-opts opts) base)`, and calling a `__pap` expression in head
+  position works -- so the previously-feared "value-vs-name callability"
+  barrier did not materialize for this shape. The stale workaround comment on
+  `mw-cors-with` was updated to point at `mw-cors-opts`. Coverage:
+  `tests/fixtures/httpd-mw-cors-opts` (custom origin/methods threaded through
+  the curried wrapper, via `compose-middleware`).
+- **B6. `map.tur` -- STILL GATED.** The key-checking accessors remain macros
+  (`stdlib/map.tur:392` documents why: a generic value of any type V must ride
+  the map on the single int64 carrier word, which a typed `defn` would
+  ABI-specialize away). Exposing them as real functions still needs the type
+  checker to carry the key-type constraint through a normal `defn` (a separate
+  typeclass-constraint-on-defn task; resolves open question #3 only once that
+  lands).
 
 ### Phase C -- Tier-2 erasure migration (opportunistic)
 
