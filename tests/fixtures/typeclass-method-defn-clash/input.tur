@@ -1,9 +1,9 @@
-; A user-defined typeclass method and a free top-level defn that share a
-; name occupy the same value namespace: the free defn wins at every bare
-; call site and the method becomes unreachable by its bare name.  This used
-; to happen silently; the compiler now emits TUR-W0039 to surface the clash.
-; The program still compiles -- the warning keeps the (documented) override
-; use case expressible -- and the free defn's value is what runs.
+; A user-defined typeclass method and a free top-level defn share a name.
+; They now coexist (fix (1)): a bare (render 5) dispatches to the matching
+; instance because the receiver's type (int) selects Showy [int] -- so the
+; method's "from-method" runs, not the free defn.  The free defn still wins
+; for receiver types that have no instance.  The compiler emits TUR-W0039 to
+; surface the shared name; the dotted form (.render ...) always dispatches.
 ;
 ; See docs/reported/typeclass-methods-share-value-namespace-with-defns.md
 (defclass Showy [a]

@@ -1,0 +1,27 @@
+; Namespace separation (fix (1)): a free defn and a user-defined typeclass
+; method with the same name coexist in one module.  A bare call dispatches to
+; the matching instance when the receiver's type selects one, and falls back to
+; the free defn otherwise.  This is the case that used to force the Arrow
+; typeclass layer into a separate file.
+;
+; See docs/reported/typeclass-methods-share-value-namespace-with-defns.md
+
+; Free combinator named `arr` (the bare arrow-identity helper).
+(defn arr [f] f)
+
+; Typeclass method also named `arr`.  The (->) instance wraps the function so
+; that (arr add1) on a *function* receiver dispatches to the method, not the
+; bare helper.
+(defclass Arrow [a]
+  (arr [f] : a))
+
+(definstance Arrow [(->)]
+  (arr [f] (fn [x] (f x))))
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn main [] : int
+  ; Function receiver -> Arrow [(->)] instance selected -> method wraps add1.
+  (let [a (arr add1)]
+    (println (a 5)))          ; => 6
+  0)

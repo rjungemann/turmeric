@@ -1,20 +1,32 @@
 # Typeclass methods share the value namespace with `defn`s (and lose silently)
 
-> **Status (2026-06-05): partially resolved -- fix (2) landed.** The *silence*
-> is gone: a free top-level `defn` that collides with a **user-defined**
-> typeclass method now raises `TUR-W0039` (warning, not error, so the
-> intentional stdlib-method-override pattern stays expressible). Stdlib classes
-> are exempt (`TypeClass.from_stdlib`). The deeper namespace separation
-> (fix (1)) that would let the bare + typeclass Arrow layers reunite in one
-> module is **still open** -- Repro B continues to fail to type-check (it now
-> warns first). See the "Fix directions" / "Validation" notes below for the
-> remaining work.
+> **Status (2026-06-05): RESOLVED -- fix (1) landed on top of fix (2).** A free
+> `defn` and a *user-defined* typeclass method of the same name now **coexist**
+> in one module. A bare `(m x ...)` dispatches to the matching instance when the
+> receiver's static type selects one, and falls back to the free `defn`
+> otherwise. Both repros below now behave as the validation requires: Repro A
+> reaches the method (`from-method`), Repro B dispatches and prints `6`. The
+> intentional stdlib-method-override pattern is preserved -- the matcher excludes
+> stdlib classes (`from_stdlib`), so a user `defn` of a stdlib method name (e.g.
+> a local `show`) still wins. `TUR-W0039` still fires for the user-class clash,
+> now reworded to describe the dispatch-vs-fallback rule rather than silent
+> shadowing.
 >
-> Implemented in: `src/compiler/typeclass.{h,c}` (`from_stdlib` flag),
+> **Fix (1) implemented in:** `src/compiler/elab_call.c`
+> (`elab_user_method_instance_matches` + the `prefer_method_dispatch` gate in
+> the bare-call dispatch block). **Fix (2), still in place:**
+> `src/compiler/typeclass.{h,c}` (`from_stdlib` flag),
 > `src/compiler/elab_typeclasses.c` (set the flag at `defclass`),
 > `src/compiler/diag.{h,c}` (`TUR_W0039_METHOD_DEFN_CLASH`),
-> `src/compiler/elab_toplevel.c` (post-pass-2 clash scan). Fixture:
-> `tests/fixtures/typeclass-method-defn-clash/`.
+> `src/compiler/elab_toplevel.c` (post-pass-2 clash scan, reworded message).
+> **Fixtures:** `tests/fixtures/typeclass-method-defn-clash/` (Repro A: dispatch
+> wins) and `tests/fixtures/typeclass-method-defn-coexist/` (Repro B: a free
+> combinator and a function-receiver method share the name `arr`).
+>
+> With this, `stdlib/arrow-class.tur` *could* now merge back into
+> `stdlib/arrow.tur` (one surface); that consolidation is left to the Arrow
+> reintroduction plan's follow-up since it is a snapshot-touching refactor, not
+> part of this fix.
 
 **Summary.** A typeclass method name and a top-level `defn` of the same name
 occupy the *same* value namespace. When both exist, the free `defn`
@@ -101,6 +113,17 @@ kind of separation methods lack.
 
 ## Fix directions
 
+> **Landed approach (2026-06-05):** a hybrid of (1) and (3). A bare `(m args)`
+> where `m` names a *user-defined* typeclass method prefers argument-type
+> dispatch over a same-named free `defn` **when an instance matches the
+> receiver's static type**; otherwise the free `defn` wins. This gives the
+> coexistence (1) promised -- the bare and typeclass Arrow layers can live in one
+> module -- using the dispatch-on-match mechanism of (3), while the conservative
+> "only redirect on a real instance match, else keep the defn" rule and the
+> stdlib-class exclusion together preserve the intentional-override use case
+> (the regression guard below). The dotted `(.m ...)` form continues to force
+> dispatch unconditionally.
+
 1. **Separate method resolution namespace (preferred).** Treat a class method
    name as resolvable distinctly from value bindings, the way the dotted
    `(.method ...)` form already is. A bare `(m args)` where `m` is a method
@@ -122,16 +145,18 @@ kind of separation methods lack.
 
 ## Validation for a fix
 
-- Repro A: with fix (1) or (3), `(render 5)` reaches the method (or is a
-  diagnosable ambiguity); with fix (2), compilation fails with a clear
-  "name clashes with typeclass method" error rather than silently printing
-  `from-free-defn`.
+All three criteria are now met (see the status block):
+
+- Repro A: `(render 5)` reaches the method and prints `from-method` (the int
+  receiver selects `Showy [int]`). Locked by
+  `tests/fixtures/typeclass-method-defn-clash/`.
 - Repro B: `(arr add1)` dispatches to the `Arrow [(->)]` instance and prints
-  `6`.
-- Regression: the existing "a user `defn` of a stdlib method name (e.g. a local
-  `show`) intentionally overrides dispatch" behavior must remain expressible --
-  fix (1)/(3) should keep a way to bind a plain function that wins, so the
-  current intentional-override use case in `elab_call.c` is not lost.
+  `6`. Locked by `tests/fixtures/typeclass-method-defn-coexist/`.
+- Regression: a user `defn` of a **stdlib** method name (e.g. a local `show`)
+  still wins -- the matcher excludes `from_stdlib` classes. Confirmed manually
+  (`(defn show [x : int] : cstr "my-custom-show")` prints `my-custom-show`).
+  A user-class fallback case -- a free `defn` that handles a receiver type with
+  no instance -- also still resolves to the `defn`.
 
 ## Relationship to other work
 
