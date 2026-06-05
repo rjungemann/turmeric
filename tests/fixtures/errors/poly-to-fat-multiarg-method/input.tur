@@ -1,0 +1,27 @@
+;; poly-to-fat-drops-args-beyond-first-multiarg-method.md (defuse): a
+;; typeclass-method closure whose poly argument is BINARY (or higher arity)
+;; cannot be boxed into a `^fat` sink -- the tur_poly_fn_t carrier is unary
+;; and would forward only the first argument, silently dropping the rest.
+;; Reject it at the box site with a hard arity diagnostic instead of emitting
+;; a silent miscompile.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+;; binary ^fat sink
+(defn call2 [^fat f :(fn [:int :int] #{} :int) a : int b : int] : int
+  (f a b))
+
+(defstruct BoxW [A] (raw :int))
+
+;; instance method whose closure argument is binary -> boxed into call2's ^fat
+(definstance Functor [BoxW]
+  (fmap [container fn]
+    (call2 fn 3 4)))
+
+(defn add2 [x : int y : int] : int (+ x y))
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    (println (.fmap b add2)))
+  0)
