@@ -50,6 +50,58 @@ Audit run against `main` at 945cabc6 with a fresh `build/tur`. Verdict:
 The "Background" prose below is preserved verbatim for the historical
 record but should be read with this audit in mind.
 
+## Status update (2026-06-05, post-rebuild execution)
+
+The source-side rebuild has landed in `../turmeric-spices/spices/signal/`.
+Verified against the live tree:
+
+- **Module split done.** `src/signal/` now contains `core.tur` (88L),
+  `osc.tur` (102L), `filter.tur` (87L), `shaper.tur` (152L),
+  `envelope.tur` (95L), `compose.tur` (66L). `dsp.tur` and `synth.tur`
+  are gone. Every file is under the ~200-line smell threshold.
+- **Tier 1 surface complete.** Spot-checked defns per module match the
+  Tier 1 table: `core` has `constant`/`time-signal`/`sample`/
+  `map-signal`/`pair-signals`; `osc` has all four waveforms (including
+  the previously-missing `triangle`); `shaper` adds `multiply`, `offset`,
+  `invert`, `abs-sf`, `scale`, `saturate-tanh`, `clip`; `envelope` owns
+  `adsr-gen`; `compose` owns `effects-chain`.
+- **Banned patterns purged.** `shaper.tur` `mix`/`add`/`multiply` use
+  `pair-fst`/`pair-snd` from `stdlib/pair.tur` (lines 131-150). The old
+  `__dsp_pair_*_float` bit-cast helpers are gone. Ban-list grep
+  (`__arrow_call1|__signal_call1|memcpy\(&|::\s+:(int|float)`) is empty
+  across `src/signal/`.
+- **`build.tur` `:exports`** matches the Tier 1 surface exactly --
+  `left-signal`/`right-signal` and the entire Tier 2 surface are pruned.
+
+**Remaining work** (the only items still open for this plan):
+
+1. **Tests** -- only `tests/signal/test_core.tur` exists. Still owed:
+   `test_osc`, `test_filter`, `test_shaper`, `test_envelope`,
+   `test_compose` per Phases 2-5 validation.
+2. **Examples** -- only `01_constant_and_time.tur` exists. Still owed:
+   `02_oscillators`, `03_filters_and_shapers`, `04_envelopes`,
+   `05_simple_voice`.
+3. **`tur check` clean run** across all six modules (record verdict).
+4. **README pass** -- the spice's `README.md` should be re-read against
+   the actual Tier 1 surface that shipped.
+5. **Bug reports owed** (per CLAUDE.md "Reporting Bugs" rule, per the
+   "Bug reports owed" subsection below):
+   - `docs/reported/dsp-pair-bit-cast-helpers-obsolete.md`
+   - One-liner noting the `synth.tur` `Phase 0c` placeholders were
+     unblocked by PR #281; move
+     `docs/reported/let-bound-sf-loses-outer-arg-type-when-inner-captures.md`
+     to `docs/archive/`.
+   - Note `svf-low-pass` was removed with no consumers.
+6. **Phase 6 cross-references** -- update
+   `docs/guides/arrows-guide.md` to cite the new spice as a worked
+   example; optionally add `docs/guides/signal-spice-guide.md` if the
+   spice README outgrows one page.
+7. **Plan hygiene** -- once 1-6 land, tick the remaining acceptance
+   boxes and move this plan from `docs/upcoming/` to `docs/archive/`.
+
+The "Existing-module gap analysis" and per-symbol verdict tables below
+are preserved as the historical record that drove the work above.
+
 ## Existing-module gap analysis (2026-06-05)
 
 Per-symbol verdict against the Tier 1 surface table, based on a read of
@@ -478,20 +530,26 @@ this rebuild -- that lands when there is a real voice consumer.
 
 ## Acceptance for the rebuild
 
-- [ ] Every hard prerequisite in
+- [x] Every hard prerequisite in
       [[language-readiness-for-typed-signal-plan]] is green or amber
-      with a documented workaround in this plan.
+      with a documented workaround in this plan. *(Prereq audit
+      2026-06-05 above.)*
 - [ ] Every file under `src/signal/` checks clean under `tur check`.
+      *(Per-module run not yet recorded post-rebuild.)*
 - [ ] Every example under `examples/` runs and prints values matching
-      its in-file comments.
+      its in-file comments. *(Only `01_constant_and_time.tur` exists;
+      02-05 owed.)*
 - [ ] Every test under `tests/signal/` passes; zero `FAIL` lines.
-- [ ] `grep -rE "__arrow_call1|__signal_call1|memcpy\(&|::\s+:(int|float)" src/signal/`
-      is empty.
-- [ ] No file in `src/signal/` exceeds ~200 lines (the old monolith was
-      440 and that was a smell).
-- [ ] README documents the surface area and matches reality.
-- [ ] `build.tur` `:exports` matches every public symbol in `src/signal/`,
-      and no extras.
+      *(Only `test_core.tur` exists; test_osc/filter/shaper/envelope/
+      compose owed.)*
+- [x] `grep -rE "__arrow_call1|__signal_call1|memcpy\(&|::\s+:(int|float)" src/signal/`
+      is empty. *(Verified 2026-06-05.)*
+- [x] No file in `src/signal/` exceeds ~200 lines. *(Max is shaper.tur
+      at 152L.)*
+- [ ] README documents the surface area and matches reality. *(README
+      exists; needs a pass against the actually-shipped Tier 1 surface.)*
+- [x] `build.tur` `:exports` matches every public symbol in `src/signal/`,
+      and no extras. *(Verified 2026-06-05.)*
 
 ## Validation gates (per phase, runnable)
 
