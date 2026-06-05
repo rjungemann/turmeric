@@ -75,6 +75,17 @@ static bool call_type_has_named_tyvar(const Type *t) {
         case TY_APP:
             return call_type_has_named_tyvar(t->as.app.fn) ||
                    call_type_has_named_tyvar(t->as.app.arg);
+        case TY_FN:
+            /* poly-closure-inner-dispatch-result-erased (Part 1): a (fn [A] B)
+             * param type carries named tyvars in arg_full_types / result_full_type
+             * after the re-stamp in type_expr_from_form. */
+            if (call_type_has_named_tyvar(t->as.fn.result_full_type)) return true;
+            if (t->as.fn.arg_full_types) {
+                for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+                    if (call_type_has_named_tyvar(t->as.fn.arg_full_types[i])) return true;
+                }
+            }
+            return false;
         case TY_UNION:
             for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
                 if (call_type_has_named_tyvar(t->as.union_.members[i])) return true;
@@ -3078,9 +3089,14 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
      * a hard error is correct, not a silent miscompile.  Generalizing this
      * (per-spec re-elaboration of the inner body) is the remaining Stage E work;
      * see docs/reported/poly-closure-inner-dispatch-result-erased.md. */
+    /* poly-closure-inner-dispatch-result-erased: fire E0705 only when the
+     * dispatching inner body has untyped fat-calls that Direction 3 cannot
+     * handle.  When all dispatches are through typed (fn [..] R) bindings with
+     * named-tyvar result types, emit_expr.c Direction 3 derives the correct C
+     * dispatch type and the guard is no longer needed. */
     if (n_type_bindings > 0 && fn_binding &&
         fn_binding->returns_closure_fn_binding &&
-        fn_binding->closure_return_dispatches) {
+        fn_binding->closure_return_dispatches_untyped) {
         Binding *inner = fn_binding->returns_closure_fn_binding;
         const Type *inner_res = (inner->type.kind == TY_FN)
             ? inner->type.as.fn.result_full_type : NULL;

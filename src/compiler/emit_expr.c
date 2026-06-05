@@ -2078,7 +2078,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_free(&fnb);
                     free(raw_ptr);
                     uint32_t n = e->as.call_.n_args;
-                    const char *ret_c = type_c_name(e->type);
+                    /* poly-closure-inner-dispatch-result-erased (Direction 3):
+                     * e->type is the int64 carrier (erased) when the call is
+                     * inside a generic closure body.  If the callee binding is a
+                     * typed (fn [..] R) parameter whose result_full_type carries a
+                     * named TY_TYVAR, resolve it through the current spec to
+                     * recover the concrete C return type (e.g. double for float). */
+                    Type disp_result = emit_resolve_type(ctx, e->type);
+                    if (type_uses_carrier_abi(disp_result) &&
+                        fn_binding->type.kind == TY_FN &&
+                        fn_binding->type.as.fn.result_full_type) {
+                        Type rfull_resolved = emit_resolve_type(ctx,
+                            *fn_binding->type.as.fn.result_full_type);
+                        if (!type_uses_carrier_abi(rfull_resolved))
+                            disp_result = rfull_resolved;
+                    }
+                    const char *ret_c = type_c_name(disp_result);
                     Type arg_types[MAX_FN_ARITY];
                     char **arg_strs = (n > 0)
                         ? (char **)malloc(n * sizeof(char *)) : NULL;
@@ -2101,7 +2116,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (have_decl_args && fn_binding->type.as.fn.arg_full_types)
                             decl = fn_binding->type.as.fn.arg_full_types[i];
                         if (decl) {
-                            arg_types[i] = *decl;
+                            /* Direction 3: resolve TY_TYVAR arg types through spec. */
+                            arg_types[i] = emit_resolve_type(ctx, *decl);
                         } else if (have_decl_args) {
                             arg_types[i] = emit_type_from_kind(fn_binding->type.as.fn.arg_kinds[i]);
                         } else {
@@ -2110,7 +2126,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
-                        e->type, n > 0 ? arg_types : NULL, (uint8_t)n);
+                        disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
                     if (thunk_typedef) {
                         /* TS1: typed fat-closure layout -- slot 0 is a typed thunk ptr. */

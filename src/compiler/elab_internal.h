@@ -747,6 +747,7 @@ void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
 Binding *expr_closure_fn_binding(const Expr *expr);
 bool expr_closure_return_dispatches(const Expr *expr);
+bool expr_closure_return_dispatches_untyped(const Expr *expr);
 void elab_init_state(Elab *e, Arena *arena, SymbolTable *st);
 MacroDef *elab_lookup_macro(Elab *e, const Symbol *name);
 Binding *binding_new(Elab *e, const Symbol *name, Type type,

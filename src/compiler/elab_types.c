@@ -945,13 +945,28 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 warn_fn_type_colon(e, params_vec->as.list.items[pi2]);
                 Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
                                                rec_name, type_params, type_param_kinds, n_type_params);
-                fn_arg_kinds[pi2] = at ? at->kind : TY_INT;
+                /* poly-closure-inner-dispatch-result-erased (Part 1): re-stamp a
+                 * nameless TY_STRUCT(def=NULL) type-param placeholder as a named
+                 * TY_TYVAR so call_collect_type_bindings can bind A/B/C from a
+                 * captured (fn [A] B) parameter at call sites. */
+                if (at && at->kind == TY_STRUCT && at->as.struct_.def == NULL &&
+                    params_vec->as.list.items[pi2]->tag == F_SYM) {
+                    Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *tv = type_tyvar_named(params_vec->as.list.items[pi2]->as.sym->name);
+                    tv->hkt_kind = at->hkt_kind;
+                    at = tv;
+                }
                 fn_arg_full[pi2] = at;
+                /* Type variables map to the int64 carrier kind; use TY_INT so
+                 * the fn's result_kind/arg_kinds stay consistent with the ->
+                 * form's handling of type params. */
+                fn_arg_kinds[pi2] = (at && at->kind == TY_TYVAR) ? TY_INT
+                                  : (at ? at->kind : TY_INT);
                 /* curried-fn-typed-param: a compound arg (notably a nested
-                 * (fn ...) type) cannot be reconstructed from its bare
-                 * TypeKind; preserve the full type so an applied result that
-                 * is itself a function stays callable. */
-                if (at && (at->kind == TY_FN || at->kind == TY_APP ||
+                 * (fn ...) type) or a named tyvar cannot be reconstructed from
+                 * its bare TypeKind; preserve the full type. */
+                if (at && (at->kind == TY_TYVAR ||
+                           at->kind == TY_FN || at->kind == TY_APP ||
                            at->kind == TY_ADT ||
                            (at->kind == TY_STRUCT && at->as.struct_.def != NULL))) {
                     any_compound_arg = true;
@@ -980,7 +995,19 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             warn_fn_type_colon(e, form->as.list.items[idx]);
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
-            TypeKind ret_kind = ret_t ? ret_t->kind : TY_INT;
+            /* poly-closure-inner-dispatch-result-erased (Part 1): re-stamp a
+             * nameless TY_STRUCT(def=NULL) result placeholder as a named TY_TYVAR
+             * so Direction 3 in emit can resolve the real dispatch C type. */
+            if (ret_t && ret_t->kind == TY_STRUCT && ret_t->as.struct_.def == NULL &&
+                form->as.list.items[idx]->tag == F_SYM) {
+                Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *tv = type_tyvar_named(form->as.list.items[idx]->as.sym->name);
+                tv->hkt_kind = ret_t->hkt_kind;
+                ret_t = tv;
+            }
+            /* Type variables lower to the int64 carrier for the kind slot. */
+            TypeKind ret_kind = ret_t ? (ret_t->kind == TY_TYVAR ? TY_INT : ret_t->kind)
+                                      : TY_INT;
 
             Type *fn_t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *fn_t = type_fn(fn_arg_kinds, n_fn_args, ret_kind);
@@ -996,8 +1023,11 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
              * through a parameter typed (fn [int] (fn [int] int)) -- can
              * recover the inner function type at the call site instead of
              * erasing it to a bare result kind. */
+            /* Part 1: a named TY_TYVAR result must be preserved so Direction 3
+             * in emit can resolve the real dispatch type per monomorphization. */
             if (ret_t &&
-                (ret_t->kind == TY_FN || ret_t->kind == TY_APP ||
+                (ret_t->kind == TY_TYVAR ||
+                 ret_t->kind == TY_FN || ret_t->kind == TY_APP ||
                  ret_t->kind == TY_ADT ||
                  (ret_t->kind == TY_STRUCT && ret_t->as.struct_.def != NULL))) {
                 fn_t->as.fn.result_full_type = ret_t;

@@ -821,11 +821,14 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * needs this: every int64-register kind round-trips through the carrier. */
     Binding *inner_closure = (!borrow_path && fd)
         ? fn_binding->returns_closure_fn_binding : NULL;
-    /* Only specialize a DISPATCH-FREE inner body: one that fat-dispatches a
-     * captured closure has intermediate result types erased to the int64
-     * carrier (unrecoverable here).  elab raises TUR-E0705 for that float case,
-     * so skipping it never causes a silent miscompile. */
-    bool inner_float = inner_closure && !fn_binding->closure_return_dispatches &&
+    /* Specialize the inner closure body for float when:
+     *   - dispatch-free (original path), OR
+     *   - all dispatches are typed (fn [..] R) bindings whose result_full_type
+     *     carries a named TY_TYVAR -- Direction 3 in emit_expr.c derives the
+     *     correct C dispatch type from the binding's resolved type.
+     * Skip only when there are untyped dispatches (TY_PTR_VOID or TY_FN without
+     * named-tyvar result) that Direction 3 cannot handle. */
+    bool inner_float = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
         emit_inner_closure_needs_float_spec(inner_closure, bindings, n_bindings);
     if (inner_float) abi_changes = true;
     if (!abi_changes && !instance_changes) {
