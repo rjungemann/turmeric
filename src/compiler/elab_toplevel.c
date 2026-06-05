@@ -980,12 +980,19 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                                  * symbol/keyword) by treating the inner as a
                                  * keyword.  Compound `: (-> a b)` still routes
                                  * through the F_TYPE_ANN branch below. */
-                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
-                                    (ret_f->as.list.items[0]->tag == F_SYM ||
-                                     ret_f->as.list.items[0]->tag == F_KEYWORD)) {
-                                    ret_f = ret_f->as.list.items[0];
+                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1) {
+                                    Form *inner = ret_f->as.list.items[0];
+                                    if (inner->tag == F_SYM || inner->tag == F_KEYWORD) {
+                                        ret_f = inner;
+                                    } else if (inner->tag == F_NIL) {
+                                        /* `: nil` -- the bare `nil` literal in a type
+                                         * position is parsed as F_NIL by the reader;
+                                         * it means the nil/void return type. */
+                                        return_kind = TY_NIL;
+                                        ret_f = NULL;
+                                    }
                                 }
-                                if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
+                                if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
                                     const Symbol *kw = ret_f->as.sym;
                                     if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                                         return_kind = TY_INT;
@@ -1005,7 +1012,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                                     } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
                                         return_kind = TY_PTR_VOID;
                                     }
-                                } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
+                                } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
                                     /* Compound return type: peek at the head symbol to
                                      * recognize Session[P] returns for pass-1 forward decls. */
                                     Form *head_f = ret_f->as.list.items[0];

@@ -2,7 +2,7 @@
 (defmodule tur/docstrings
   (export doc-lookup doc-verified?)
 
-(defn doc-lookup [name :cstr] :cstr
+(defn doc-lookup [name : cstr] : cstr
   ```c
   static const struct { const char *key; const char *val; } entries[] = {
     {"args/spec-new", "args/spec-new -- create a new empty argument specification.\n\nReturns:\n  Opaque pointer (as :int) to an empty arg spec.\n    Free with args/spec-free when done.\n\nExample:\n  (let [spec (args/spec-new)] ...)\n\nSince: Phase A1"},
@@ -1567,7 +1567,7 @@
   return 0;
   ```)
 
-(defn doc-verified? [name :cstr] :bool
+(defn doc-verified? [name : cstr] : bool
   ```c
   static const char *verified[] = {
     NULL
