@@ -1,0 +1,15 @@
+;; A4: effect-handler closure capture -- handler body captures a by-value struct
+;; parameter `c` and reads its fields across the perform/resume boundary.
+;; Result: 10 * mult + off = 10*3 + 7 = 37.
+(defstruct Cfg [mult :int off :int])
+(defeffect Ask [] :int)
+
+(defn run [c : Cfg] : int
+  (handle
+    (perform (Ask))
+    (Ask [] k)
+    (resume k (+ (* 10 (.mult c)) (.off c)))))
+
+(defn main [] : int
+  (println (run (make-struct Cfg 3 7)))
+  0)

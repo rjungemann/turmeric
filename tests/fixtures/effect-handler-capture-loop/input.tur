@@ -1,0 +1,21 @@
+;; A4: effect-handler closure capture -- handler body captures a loop-local var.
+;; Each iteration installs a fresh handler that closes over the per-iteration
+;; snapshot `cur`; the handler resumes with (cur * 10).  Sum over i in 0..4 is
+;; 10*(0+1+2+3+4) = 100.
+(defeffect Ask [] :int)
+
+(defn run [] : int
+  (let [^mut i     0
+        ^mut total 0]
+    (while (< i 5)
+      (let [cur i]
+        (set! total
+          (+ total
+             (handle
+               (perform (Ask))
+               (Ask [] k)
+               (resume k (* cur 10))))))
+      (set! i (+ i 1)))
+    total))
+
+(println (run))

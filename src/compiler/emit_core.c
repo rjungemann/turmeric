@@ -1591,6 +1591,23 @@ void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *
     }
 }
 
+/* Append a binding to a caps array (realloc-growing) unless it is a global,
+ * a TY_FN value, already present, or in the `defs` (locally-defined) set.
+ * Shared by the nested-handle merge below. */
+static void cap_append(Binding *b, Binding ***caps, uint32_t *ncaps, uint32_t *ccaps,
+                       Binding **defs, uint32_t ndefs) {
+    if (!b || b->is_global || b->type.kind == TY_FN) return;
+    for (uint32_t i = 0; i < ndefs; i++)
+        if (defs[i] == b) return;
+    for (uint32_t i = 0; i < *ncaps; i++)
+        if ((*caps)[i] == b) return;
+    if (*ncaps >= *ccaps) {
+        *ccaps = (*ccaps == 0) ? 8 : *ccaps * 2;
+        *caps = (Binding **)realloc(*caps, *ccaps * sizeof(Binding *));
+    }
+    (*caps)[(*ncaps)++] = b;
+}
+
 /* Phase 19D: Collect free variable bindings in an expression (bindings not defined within it).
  * Returns a malloc'd array of outer bindings; caller frees. *n_out is set to count. */
 Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
@@ -1739,9 +1756,33 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
             }
             case EX_HANDLE: {
                 if (cur->as.handle_.handle) {
-                    /* Only walk the handle body (not case bodies), since case bodies
-                     * have their own local scope (effect params + k are local there). */
-                    PUSH_EXPR(cur->as.handle_.handle->body);
+                    HandleExpr *ih = cur->as.handle_.handle;
+                    /* Walk the inner handle body normally. */
+                    PUSH_EXPR(ih->body);
+                    /* A nested handle emits its own env-fill (`__henv_N->f = f`)
+                     * in the CURRENT function, referencing each of the inner
+                     * handle's captures by name. Those captures include free
+                     * variables of the inner CASE bodies, which are otherwise
+                     * skipped (case bodies have their own param/k scope). So we
+                     * must thread the inner handle's transitive case-body
+                     * captures through this env too -- mirroring EX_CLOSURE.
+                     * The inner case's own effect-params and k are local to it
+                     * and must not leak outward. */
+                    for (uint8_t ci = 0; ci < ih->n_cases; ci++) {
+                        HandleCase *icase = &ih->cases[ci];
+                        uint32_t n_icaps = 0;
+                        Binding **icaps = collect_handle_captures(icase->body, &n_icaps);
+                        for (uint32_t j = 0; j < n_icaps; j++) {
+                            Binding *ib = icaps[j];
+                            bool inner_local = (icase->k_binding && ib == icase->k_binding);
+                            for (uint8_t p = 0; p < icase->n_params && !inner_local; p++)
+                                if (icase->param_bindings && icase->param_bindings[p] == ib)
+                                    inner_local = true;
+                            if (!inner_local)
+                                cap_append(ib, &caps, &ncaps, &ccaps, defs, ndefs);
+                        }
+                        free(icaps);
+                    }
                 }
                 break;
             }

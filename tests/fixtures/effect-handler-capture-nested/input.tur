@@ -1,0 +1,22 @@
+;; A4: nested effect handlers, each case body capturing a DISTINCT outer var.
+;; The deepest handler (C) captures `x`, which is three handle-frames out from
+;; the case body; previously its env-fill referenced an undeclared local in the
+;; enclosing handle-body fn (a hard C compile error).  Now the inner handle's
+;; transitive case-body captures are threaded through each enclosing env.
+;; Result: x + y + z = 1 + 20 + 300 = 321.
+(defeffect A [] :int)
+(defeffect B [] :int)
+(defeffect C [] :int)
+
+(defn run [x : int y : int z : int] : int
+  (handle
+    (handle
+      (handle
+        (+ (perform (A)) (+ (perform (B)) (perform (C))))
+        (C [] k) (resume k x))
+      (B [] k) (resume k y))
+    (A [] k) (resume k z)))
+
+(defn main [] : int
+  (println (run 1 20 300))
+  0)
