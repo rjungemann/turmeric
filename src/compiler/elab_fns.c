@@ -1745,6 +1745,37 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* Ergonomics: a misplaced effect annotation -- `: int #{Unsafe}` instead
+     * of `#{Unsafe} : int` -- leaves the `#{...}` set as the first body form.
+     * It would otherwise elaborate as an F_MAP and emit the misleading "map
+     * literals are parsed but not yet supported" diagnostic, pointing the user
+     * at data-literals rather than at the real cause (annotation ordering).
+     * The leading effect-row parser above already consumed any correctly
+     * placed `#{...}`, so an `#{...}` whose items are all bare symbols sitting
+     * in body position is almost certainly a trailing effect annotation. Name
+     * the real problem. */
+    if (body_start < call->as.list.len) {
+        Form *stray = call->as.list.items[body_start];
+        if (stray->tag == F_MAP && stray->as.list.len >= 1) {
+            bool all_syms = true;
+            for (uint32_t j = 0; j < stray->as.list.len; j++) {
+                if (stray->as.list.items[j]->tag != F_SYM) { all_syms = false; break; }
+            }
+            if (all_syms) {
+                const Symbol *first = stray->as.list.items[0]->as.sym;
+                diag_emit(DIAG_ERROR, stray->span,
+                          "defn: effect annotation '#{%s%s}' must precede the "
+                          "return type -- write `#{...} : <type>`, not "
+                          "`: <type> #{...}`",
+                          first->name,
+                          stray->as.list.len > 1 ? " ..." : "");
+                e->scope = inner.parent;
+                scope_free(&inner);
+                return NULL;
+            }
+        }
+    }
+
     /* Phase RT: parse an optional `where` clause attaching typeclass
      * constraints to this defn:
      *

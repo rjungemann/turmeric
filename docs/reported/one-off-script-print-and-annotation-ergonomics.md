@@ -19,6 +19,18 @@ each of these cost an extra build.
 Severity: **low** (ergonomics), but they recur on essentially every
 freestanding probe.
 
+## Status
+
+- **Finding 1 -- FIXED.** A misplaced effect annotation (`: int #{Unsafe}`)
+  is now detected in `defn` header parsing and reported with an
+  ordering-specific diagnostic that names effects, not map literals. See
+  `src/compiler/elab_fns.c` (the "misplaced effect annotation" check after
+  return-type parsing) and the regression fixture
+  `tests/fixtures/errors/effect-annotation-after-return-type/`.
+- **Findings 2 & 3 -- open.** Auto-loading / off-tree resolution of the named
+  print/convert helpers (`float->int`, `println-float`, ...) are discoverability
+  and module-resolution enhancements, not defects, and remain to be scheduled.
+
 ## Finding 1 -- misleading diagnostic for a misplaced effect annotation
 
 The canonical order is `#{Effect}` *before* the return type:
