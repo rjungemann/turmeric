@@ -280,7 +280,7 @@ An effect row appears between the parameter list and the return type:
   (+ a b))
 
 ;; Row-polymorphic: propagates the row of the function argument
-(defn run-twice [f :(fn [] #{e} :int)] #{e} : int
+(defn run-twice [f :(fn [] #{e} int)] #{e} : int
   (+ (f) (f)))
 ```
 ```sweet-exp
@@ -293,7 +293,7 @@ defn add [a :int b :int] #{} :int
   {a + b}
 
 ;; Row-polymorphic: propagates the row of the function argument
-defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+defn run-twice [f :(fn [] #{e} int)] #{e} :int
   {f() + f()}
 ```
 

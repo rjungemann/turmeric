@@ -1,0 +1,12 @@
+;; Effect sets are preserved; nested (fn ...) and a bare-colon paren result
+;; type are both rewritten.
+(defn compose [^fat f :(fn [float] #{} float)
+               ^fat g :(fn [float] #{} float)] : ptr<void>
+  (fn [x : float] : float (f (g x))))
+
+(defn call-pair [^fat f :(fn [float] #{} (Pair float float))] : int
+  0)
+
+(defn adder [n : int] : (fn [int] (fn [int] int))
+  (fn [x : int] : (fn [int] int)
+    (fn [y : int] : int (+ (+ x y) n))))

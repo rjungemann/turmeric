@@ -1,0 +1,12 @@
+;; Lambda VALUES and ordinary param annotations must be left untouched: only
+;; (fn ...) forms in TYPE position are rewritten.
+(defn run [] : int
+  (let [f (fn [x : int] : int (* x 2))
+        g (fn [a : int b : int] : int (+ a b))]
+    (+ (f 3) (g 1 2))))
+
+(defn higher [xs : int] : int
+  (map xs (fn [y : int] : int (+ y 1))))
+
+(defn returns-lambda [] : ptr<void>
+  (fn [x : int] : int x))

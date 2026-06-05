@@ -1,0 +1,17 @@
+;; fn types in every declaration position: defstruct field, defalias, let
+;; binding annotation, defclass method signature, and a (:: _ TYPE) ascription.
+(defstruct Runner
+  [run : (fn [] #{e} nil)])
+
+(defalias IntFn (fn [int] int))
+
+(defclass HasArr [a]
+  (arr-of [self n : int] : (fn [int] int)))
+
+(defn use-it [] : int
+  (let [g : (fn [int] int) some-fn
+        v (g 5)]
+    v))
+
+(defn ascribed [x : int] : int
+  (:: x (fn [:int] :int)))
