@@ -481,6 +481,7 @@
     {"httpd-mw-cors-decorate", "httpd-mw-cors-decorate -- internal: decorate a normal-flow response."},
     {"mw-cors-with", "mw-cors-with -- CORS middleware factory (positional args).\n\nExample:\n  (compose-middleware base\n      (mw-cors-with \"https://app.example.com\"\n                    \"GET, POST, OPTIONS\"\n                    \"Content-Type, Authorization\"\n                    \"\" 1 60))\n\nSince: Phase H8 (M4)"},
     {"mw-cors", "mw-cors -- CORS middleware with permissive defaults.\n\nExample:\n  (compose-middleware base mw-cors)\n\nSince: Phase H8 (M4)"},
+    {"mw-cors-opts", "mw-cors-opts -- CORS middleware factory configured by a CorsOpts struct.\n\nParameters:\n  opts -- a CorsOpts value (see `default-cors-opts`)\n  next -- downstream handler closure (fat-closure :int)\n\nReturns:\n  A wrapped handler closure (:ptr<void>) suitable for httpd-new /\n    compose-middleware.\n\nExample:\n  (let [opts     (default-cors-opts)\n          composed (compose-middleware base (mw-cors-opts opts))]\n      (httpd-new 0 composed))\n\nSince: Phase H8 (M4)"},
     {"cstr-eq-const-time", "cstr-eq-const-time -- length-then-constant-time XOR cstring compare.\n\nSince: Phase H8 (M5)"},
     {"httpd-mw-basic-auth-check", "httpd-mw-basic-auth-check -- internal: decode + dispatch the verifier."},
     {"httpd-mw-basic-auth-challenge", "httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate."},

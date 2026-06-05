@@ -1,0 +1,7 @@
+preflight-status=204
+preflight-allow-origin=https://app.example.com
+preflight-allow-methods=GET, POST, OPTIONS
+base
+get-status=200
+get-allow-origin=https://app.example.com
+done

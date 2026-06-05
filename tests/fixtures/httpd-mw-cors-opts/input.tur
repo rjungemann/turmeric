@@ -1,0 +1,159 @@
+;; M4/B5: httpd-mw-cors-opts -- struct-valued CORS factory, curried into
+;; compose-middleware as `(mw-cors-opts opts)`.
+;;
+;; This exercises the struct-curried partial application that A5/B5 of
+;; stdlib-type-erasure-cleanup-plan unblocked: `(mw-cors-opts opts)` captures
+;; a CorsOpts value in the auto-generated __pap env and is passed as a one-arg
+;; middleware to compose-middleware.  The custom origin/methods prove the
+;; struct fields flow through the curried wrapper.
+;;
+;; Two requests on one keep-alive socket:
+;;
+;;   1. OPTIONS preflight -- 204 with Access-Control-Allow-* from the opts.
+;;   2. GET / with Origin -- base runs, then the response is decorated.
+;;
+;; Expected output:
+;;   preflight-status=204
+;;   preflight-allow-origin=https://app.example.com
+;;   preflight-allow-methods=GET, POST, OPTIONS
+;;   base
+;;   get-status=200
+;;   get-allow-origin=https://app.example.com
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s : cstr] : nil
+  ```c printf("%s\n", s); ```)
+
+(defn client-worker [arg : ptr<void>] : ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+
+  /* Request 1: preflight. */
+  {
+      const char *req =
+          "OPTIONS / HTTP/1.1\r\n"
+          "Host: localhost\r\n"
+          "Origin: https://app.example.com\r\n"
+          "Access-Control-Request-Method: POST\r\n"
+          "Access-Control-Request-Headers: Content-Type\r\n"
+          "\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+          if (strstr(drain, "\r\n\r\n") != NULL) break;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.1 ", 9) == 0)
+          printf("preflight-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      const char *keys[2] = { "Access-Control-Allow-Origin", "Access-Control-Allow-Methods" };
+      const char *names[2] = { "preflight-allow-origin", "preflight-allow-methods" };
+      for (int k = 0; k < 2; k++) {
+          char needle[64];
+          snprintf(needle, sizeof(needle), "\r\n%s: ", keys[k]);
+          const char *p = strstr(drain, needle);
+          if (p) {
+              p += strlen(needle);
+              const char *eol = strstr(p, "\r\n");
+              if (eol) printf("%s=%.*s\n", names[k], (int)(eol - p), p);
+          }
+      }
+  }
+
+  /* Request 2: GET / with Origin. */
+  {
+      const char *req =
+          "GET / HTTP/1.0\r\n"
+          "Origin: https://app.example.com\r\n"
+          "\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("get-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      const char *needle = "\r\nAccess-Control-Allow-Origin: ";
+      const char *p = strstr(drain, needle);
+      if (p) {
+          p += strlen(needle);
+          const char *eol = strstr(p, "\r\n");
+          if (eol) printf("get-allow-origin=%.*s\n", (int)(eol - p), p);
+      }
+  }
+
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (let [donech   (chan-new 1)
+        base     (fn [c : ptr<void>] : nil
+                   (print-tag "base")
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body! c "ok")
+                   (chan-send donech 1))
+        opts     (make-struct CorsOpts
+                   "https://app.example.com"
+                   "GET, POST, OPTIONS"
+                   "Content-Type"
+                   ""
+                   0
+                   60)
+        composed (compose-middleware base (mw-cors-opts opts))
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (chan-recv donech)   ;; only the GET path runs the base handler
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))
