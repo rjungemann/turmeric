@@ -250,12 +250,16 @@
 ;; Bifunctor directly. Result owns this instance (home module of the type), so
 ;; it is not an orphan; the Bifunctor class stub is preloaded before this file.
 ;;
-;; NOTE: the conventional kind-(* -> *) instances (Functor / Monad / MonadError
-;; over the ok arm) are NOT expressible on Result. Result's parameters are
-;; [A=ok B=err] with ok FIRST, but a (* -> *) instance head fixes the leftmost
-;; parameter (as in `(Either E)`), which would fix ok and vary err -- the
-;; opposite of the right-biased convention. See
-;; docs/reported/stdlib-hkt-consolidation-t1-blocked.md.
+;; T4 (stdlib-hkt-consolidation): the conventional kind-(* -> *) instances
+;; (Functor / Applicative / Monad / MonadError over the ok arm) ARE now
+;; expressible via the trailing-parameter instance head `(Result _ B)`, which
+;; fixes the err arm B and varies the ok arm. (Result's parameters are
+;; [A=ok B=err] with ok FIRST, so leftmost-only application `(Result A)` would
+;; fix ok and vary err -- the opposite of the right-biased convention. The `_`
+;; hole marks the free parameter, sidestepping that.) The element arm is erased
+;; to the int64 carrier, so these instances delegate to inline-C carrier-level
+;; bodies that operate on the ok arm and pass err through unchanged. See
+;; docs/reported/result-param-order-blocks-functor-monad.md.
 ;; ---------------------------------------------------------------------------
 ;;; Bifunctor [Result] -- map fn-left over err, fn-right over ok.
 ;;;
@@ -267,3 +271,57 @@
 (definstance Bifunctor [Result]
   (bimap [container fn-left fn-right]
     (result-bimap container fn-left fn-right)))
+;; ---------------------------------------------------------------------------
+;; Ok-biased kind-(* -> *) instances (stdlib-hkt-consolidation T4)
+;;
+;; The `(Result _ B)` head fixes the err arm B and varies the ok arm, so these
+;; are right-biased: every method maps/sequences the ok payload and threads an
+;; err through unchanged. Result owns these instances (home module), so they
+;; are not orphans; the class stubs are preloaded before this file.
+;; ---------------------------------------------------------------------------
+;;; Functor [(Result _ B)] -- map a function over the ok payload; err unchanged.
+;;;
+;;; Example:
+;;;   (fmap (:: (ok 21) (Result int int)) (fn [x] (* x 2)))  ; => ok(42)
+;;;   (fmap (:: (err 5) (Result int int)) (fn [x] (* x 2)))  ; => err(5)
+;;;
+;;; Since: stdlib-hkt-consolidation T4
+(definstance Functor [(Result _ B)]
+  (fmap [container fn]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
+    if (!r) return 0;
+    if (r->is_ok) return tur_ok(fn.fn(fn.env, r->ok_val));
+    return tur_err(r->err_val);
+    ```))
+;;; Monad [(Result _ B)] -- bind sequences through ok; short-circuits on err.
+;;;
+;;; Example:
+;;;   (bind (ok 20) (fn [x] (ok (+ x 1))))  ; => ok(21)
+;;;
+;;; Since: stdlib-hkt-consolidation T4
+(definstance Monad [(Result _ B)]
+  (bind [ma fn]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+    if (!r || !r->is_ok) return ma;
+    return fn.fn(fn.env, r->ok_val);
+    ```))
+;;; MonadError [(Result _ B)] -- throw-error builds an err; catch-error runs a
+;;; handler on the err payload (ok values pass through unchanged).
+;;;
+;;; Example:
+;;;   (throw-error 404)                              ; => err(404)
+;;;   (catch-error (err 5) (fn [e] (ok (* e -1))))   ; => ok(-5)
+;;;   (catch-error (ok 7) (fn [e] (ok 0)))           ; => ok(7)
+;;;
+;;; Since: stdlib-hkt-consolidation T4
+(definstance MonadError [(Result _ B)]
+  (throw-error [err]
+    ```c return tur_err(err); ```)
+  (catch-error [ma handler]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+    if (!r || r->is_ok) return ma;
+    return handler.fn(handler.env, r->err_val);
+    ```))

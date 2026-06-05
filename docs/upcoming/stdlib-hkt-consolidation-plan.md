@@ -10,8 +10,9 @@ description: Delete hand-rolled monad interfaces in parsec/logic/backtrack by ad
 > **Prerequisites:** HKT phases S1-S8 are complete (see
 > `project_hkt_phase.md`).
 >
-> **Status:** T1, T2, T3 landed; **T4 is the next deliverable** and unblocks
-> the one piece of T1 that could not ship.
+> **Status:** T1, T2, T3 landed; **T4 landed** (except the deferred
+> `Applicative [Result]` -- see below), unblocking the ok-biased `Result`
+> instances that T1 could not ship.
 > - **T1** -- `Option` got Functor/Applicative/Monad/Alternative; `Result` got
 >   `Bifunctor`. `MonadError [Result]` (and the ok-biased
 >   `Functor`/`Monad [Result]`) remain blocked by Result's `[A=ok B=err]`
@@ -26,10 +27,19 @@ description: Delete hand-rolled monad interfaces in parsec/logic/backtrack by ad
 >   the same four instances; validated by
 >   `tests/fixtures/hkt-stdlib-backtrack-instances/` and
 >   `tests/fixtures/hkt-stdlib-logic-instances/`.
-> - **T4** (NEXT) -- extend instance-head partial application so a *trailing*
->   parameter can be fixed (`(Result _ B)` / kind-level flip), then add the
->   ok-biased `Functor`/`Applicative`/`Monad`/`MonadError [Result]` instances on
->   top of the new mechanism. Closes the report.
+> - **T4** (DONE except `Applicative`) -- extended instance-head partial
+>   application so a *trailing* parameter can be fixed with a one-`_`-hole head
+>   (`(Result _ B)`; the `_`-hole surface was chosen over a kind-level `Flip`),
+>   and added the ok-biased `Functor`/`Monad`/`MonadError [(Result _ B)]`
+>   instances. Surfaced and fixed a latent dispatch-ABI bug (partial-app-head
+>   instances mis-marshalled a by-value struct receiver). `Applicative` is
+>   deferred: its no-receiver `pure` is argument-dispatched and collides with
+>   `Applicative [Option]` -- a cross-cutting return-vs-argument dispatch
+>   limitation, independent of instance-head expressiveness. Closes
+>   `docs/reported/result-param-order-blocks-functor-monad.md` (its named
+>   blockers `MonadError`/ok-biased `Functor`/`Monad` are all shipped).
+>   Fixtures: `hkt-stdlib-result-ok-biased`, `instance-head-hole-pair`,
+>   `errors/instance-head-two-holes`.
 >
 > The enabling pattern for all three: each instance method delegates to the
 > module's existing int-carrier worker. The worker declares its continuation
@@ -96,8 +106,8 @@ open-coding in `httpd` / `csv` / `json` becomes `fmap` / `bimap` /
    disjunction (`disjoined`); `empty` is `fail`. Validated by
    `tests/fixtures/hkt-stdlib-backtrack-instances/` and
    `tests/fixtures/hkt-stdlib-logic-instances/`.
-4. **T4** (NEXT) -- **trailing-parameter instance heads, then ok-biased
-   `Result` instances.** Implements Fix #1 from
+4. **T4** (DONE, except `Applicative`) -- **trailing-parameter instance heads,
+   then ok-biased `Result` instances.** Implements Fix #1 from
    `docs/reported/result-param-order-blocks-functor-monad.md`. Chosen over
    flipping `Result`'s layout (Fix #2 -- breaking churn to a preloaded core
    type) or shipping workers only (Fix #3 -- effectively the current state;
@@ -121,10 +131,17 @@ open-coding in `httpd` / `csv` / `json` becomes `fmap` / `bimap` /
    parser, requires no kind-system surface, and the wildcard reads as
    "this slot stays free." Document the decision in T4a-0 before coding.
 
+   **T4a-0 decision (DONE):** chose the **`_`-hole** surface (`(Result _ B)`)
+   over a kind-level `Flip`. Rationale confirmed during implementation: the
+   element arm of these instances is erased to the `int64_t` carrier (class
+   stubs declare results `: int`; method bodies are carrier-level inline-C), so
+   no kind-system / arm-swap machinery is needed -- fixing the *named* arm and
+   carrying the constructor identity is sufficient for dispatch and the
+   orphan-instance check. The change stayed local to the instance-head parser,
+   so `Flip` would have added machinery for no benefit. No `docs/design/`
+   sketch needed.
+
    Steps:
-   - T4a-0 Pick `_`-hole vs `Flip`. Write the decision into this plan.
-     Add a one-page sketch under `docs/design/` if `Flip` wins (more
-     machinery to justify).
    - T4a-1 Parser: extend the `F_LIST` branch in `parse_instance_head` to
      accept `(<ctor> <args...>)` with exactly one `_` hole among the
      args; build the same `TY_APP` representation the leftmost-fix path

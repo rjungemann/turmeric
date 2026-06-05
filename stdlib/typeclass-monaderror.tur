@@ -1,0 +1,16 @@
+;;; tur/typeclass-monaderror -- minimal MonadError typeclass stub.
+;;;
+;;; Auto-loaded (and loadable directly) so a module can declare
+;;; (definstance MonadError [...] ...) without importing the full typeclass.tur.
+;;; The full typeclass.tur remains available on demand via
+;;; (load "stdlib/typeclass.tur"); defclass redefinition is idempotent, so the
+;;; two coexist.
+;;;
+;;; Since: stdlib-hkt-consolidation T4
+;; MonadError -- a monad m carrying an error channel e.
+;;   throw-error :: e -> m a               (construct a failed computation)
+;;   catch-error :: m a -> (e -> m a) -> m a (recover from a failure)
+;; handler is declared :fn so capturing closures can be passed.
+(defclass MonadError [^m]
+  (throw-error [err] : int)
+  (catch-error [ma [handler :fn]] : int))

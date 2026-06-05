@@ -1362,13 +1362,48 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 type_arg_syms[i] = kw;
                             }
                         }
-                    } else if (arg->tag == F_LIST && arg->as.list.len == 2) {
+                    } else if (arg->tag == F_LIST &&
+                               (arg->as.list.len == 2 || arg->as.list.len == 3)) {
                         /* Phase HKT §3: (constructor arg) — partial type application.
                          * Parses `(result int)` in type position as TY_APP where
                          * fn = TY_STRUCT(constructor, KIND_ARROW2) and arg = concrete type.
-                         * This allows `(definstance Functor [(result int)] ...)`. */
+                         * This allows `(definstance Functor [(result int)] ...)`.
+                         *
+                         * T4 (trailing-parameter head): the 3-element hole form
+                         * `(Ctor _ B)` / `(Ctor A _)` marks the *free* parameter
+                         * with exactly one `_` and fixes the other.  This lets a
+                         * kind-(* -> *) class fix a *trailing* parameter -- e.g.
+                         * `(Result _ B)` holds the err arm B and varies the ok arm,
+                         * which leftmost-only application (`(Result A)`) cannot
+                         * express.  The varying element arm is erased to the int64
+                         * carrier, so downstream only needs the constructor identity
+                         * (dispatch + orphan check) and a valid (* -> *) head, which
+                         * is exactly what fixing the named arm produces.  See
+                         * docs/reported/result-param-order-blocks-functor-monad.md. */
                         Form *ctor_form = arg->as.list.items[0];
-                        Form *aarg_form = arg->as.list.items[1];
+                        Form *aarg_form;
+                        if (arg->as.list.len == 2) {
+                            aarg_form = arg->as.list.items[1];
+                        } else {
+                            const Symbol *us = intern_cstr(e->st, "_");
+                            Form *h1 = arg->as.list.items[1];
+                            Form *h2 = arg->as.list.items[2];
+                            bool h1_hole = (h1->tag == F_SYM || h1->tag == F_KEYWORD)
+                                           && h1->as.sym == us;
+                            bool h2_hole = (h2->tag == F_SYM || h2->tag == F_KEYWORD)
+                                           && h2->as.sym == us;
+                            if (h1_hole == h2_hole) {
+                                diag_emit(DIAG_ERROR, arg->span,
+                                          h1_hole
+                                            ? "instance head has two '_' holes; exactly "
+                                              "one parameter may be left free (e.g. (Result _ B))"
+                                            : "instance head must mark the free parameter "
+                                              "with exactly one '_' (e.g. (Result _ B))");
+                                return NULL;
+                            }
+                            /* The fixed (non-hole) arm is the type argument. */
+                            aarg_form = h1_hole ? h2 : h1;
+                        }
                         if (ctor_form->tag != F_SYM && ctor_form->tag != F_KEYWORD) {
                             diag_emit(DIAG_ERROR, ctor_form->span,
                                       "type application constructor must be a symbol");
@@ -2185,9 +2220,17 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * applied as TY_APP at call sites, which lowers to int64_t in C.
                          * Use int64_t so the method signature matches the dispatch ABI.
                          * CS1b: preserve the full struct type in elab_param_type so that
-                         * field-access forms inside the method body can resolve correctly. */
+                         * field-access forms inside the method body can resolve correctly.
+                         * T4: a partially-applied instance head (e.g. `(Result _ B)` /
+                         * `(Either E)`) records the receiver type as a TY_APP, which also
+                         * lowers to the int64_t carrier.  Force the carrier here too --
+                         * otherwise a concrete by-value struct receiver (e.g. an ascribed
+                         * `(Result int int)`) is marshalled by-address into the int64_t
+                         * impl signature and emits invalid C. */
                         if (elab_param_type.kind == TY_STRUCT && elab_param_type.as.struct_.def &&
                             elab_param_type.as.struct_.def->n_type_params > 0) {
+                            param_type = TYPE_INT;
+                        } else if (elab_param_type.kind == TY_APP) {
                             param_type = TYPE_INT;
                         } else {
                             param_type = elab_param_type;

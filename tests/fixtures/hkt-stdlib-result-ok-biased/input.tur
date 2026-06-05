@@ -1,0 +1,33 @@
+;; stdlib-hkt-consolidation T4: ok-biased kind-(* -> *) instances for Result,
+;; made expressible by the trailing-parameter instance head `(Result _ B)`
+;; (fixes the err arm B, varies the ok arm).  Closes
+;; docs/reported/result-param-order-blocks-functor-monad.md.
+;;
+;; Result and the Functor / Monad / MonadError class stubs are auto-preloaded,
+;; so no explicit (load ...) is needed.
+
+(defn dbl [x : int] : int (* x 2))
+
+;; int-carrier extractors (Result = { bool is_ok; int64_t ok_val; int64_t err_val; })
+(defn res-ok  [r : int] : int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
+       return p ? p->ok_val : -1; ```)
+(defn res-err [r : int] : int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
+       return p ? p->err_val : -1; ```)
+(defn res-ok? [r : int] : int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
+       return (p && p->is_ok) ? 1 : 0; ```)
+
+(defn main [] : int
+  ;; Functor [(Result _ B)]: fmap varies ok, holds err -- the report's proof case
+  (println (res-ok  (fmap (:: (ok 21) (Result int int)) dbl)))   ; 42
+  (println (res-err (fmap (:: (err 5) (Result int int)) dbl)))   ; 5
+  ;; Monad [(Result _ B)]: bind sequences through ok, short-circuits on err
+  (println (res-ok  (bind (:: (ok 20) (Result int int)) (fn [x] (ok (+ x 1)))))) ; 21
+  (println (res-ok? (bind (:: (err 9) (Result int int)) (fn [x] (ok (+ x 1)))))) ; 0
+  ;; MonadError [(Result _ B)]: throw-error builds an err; catch-error recovers
+  (println (res-err (:: (throw-error 404) (Result int int))))                            ; 404
+  (println (res-ok  (catch-error (:: (err 5) (Result int int)) (fn [e] (ok (* e -1)))))) ; -5
+  (println (res-ok  (catch-error (:: (ok 7) (Result int int)) (fn [e] (ok 0)))))         ; 7
+  0)

@@ -682,6 +682,9 @@ static int compile_to_c(const char *path, Buf *out_c,
         "typeclass-applicative.tur",
         "typeclass-alternative.tur",
         "typeclass-monad.tur",
+        /* stdlib-hkt-consolidation T4: MonadError stub for the ok-biased
+         * Result instances (throw-error / catch-error). */
+        "typeclass-monaderror.tur",
         "typeclass-bifunctor.tur",
         /* Phase TM0/TC1/TC2/F5: typed parameterized collection stdlib files
          * (now under unprefixed module names). */
@@ -6204,6 +6207,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
                 "typeclass-applicative.tur",
                 "typeclass-alternative.tur",
                 "typeclass-monad.tur",
+                "typeclass-monaderror.tur",
                 "typeclass-bifunctor.tur",
                 /* Bug-5 follow-up: result.tur preloaded so ok/ok?/ok-val are
                  * globally available in the worker eval path too. */
