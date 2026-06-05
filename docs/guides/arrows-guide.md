@@ -303,6 +303,20 @@ flowing through the instance dictionary.
 
 ## Signals and Signal Functions
 
+> **Where the Signal/SF library lives:** the worked example is the
+> `tur-signal` spice in `../turmeric-spices/spices/signal/` (see
+> `docs/upcoming/tur-signal-rebuild-plan.md` for the rebuild plan and
+> current acceptance state). The code samples below use the
+> `stdlib/signal/core.tur` paths from the original placement; treat
+> them as the conceptual surface -- the same names are exported by
+> `signal/core`, `signal/osc`, `signal/filter`, `signal/shaper`,
+> `signal/envelope`, and `signal/compose` in the spice. End-to-end
+> exercise of the SF-application surface is currently gated on the
+> reports under `docs/reported/` named `defmodule-loses-fat-fn-type-
+> annotation` and `vec-typed-fat-closure-readback-fixture-regressed-
+> codegen`; the bare combinators (`arr`, `>>>`, `arrow-first`,
+> `arrow-second`) work today.
+
 `stdlib/signal/core.tur` introduces the Signal abstraction:
 
 ```

@@ -50,7 +50,62 @@ Audit run against `main` at 945cabc6 with a fresh `build/tur`. Verdict:
 The "Background" prose below is preserved verbatim for the historical
 record but should be read with this audit in mind.
 
-## Status update (2026-06-05, post-rebuild execution)
+## Status update (2026-06-05, second-pass audit)
+
+A re-audit against the live tree against turmeric `main` at `21d11393`
+turns up two regressions the prior status block missed. The plan is NOT
+"only paperwork left"; the spice is currently un-runnable end-to-end.
+
+### Regressions found this pass
+
+1. **`make-struct Pair` / `(Pair float float)` type-spec fails inside
+   `(defmodule ...)`.** `core.tur:85` (the original `pair-signals`
+   body) emits `TUR-E0012` kind mismatch and `make-struct: 'Pair' is
+   not a defined struct type`. `shaper.tur:133` (the `mix` body)
+   emits `TUR-E0042` mixed-width arithmetic because the
+   `(Pair float float)` annotation on `prod-sig`'s return propagates
+   to `pair-fst`/`pair-snd` as the int default. Both fixed in-tree by
+   switching to the `pair` constructor function and `(as float ...)`
+   on the `pair-fst`/`pair-snd` reads.
+2. **`^fat name : (fn ...)` annotation lost across the defmodule
+   export boundary.** Filed as
+   [[defmodule-loses-fat-fn-type-annotation]]. The Phase 1 example
+   `01_constant_and_time.tur` does NOT run -- the call site
+   `(sample c 0.0)` errors with `expected (fn [] : ?), got ptr<void>`
+   because `sample`'s exported `^fat sig : (fn [float] float)`
+   collapses to `(fn [] : ?)` at the caller. The same gap blocks
+   `compose.tur`'s in-module `(__apply-sf ...)` call site (also
+   `expected (fn [] : ?)`) and is hard-required for the Phase 1-5
+   test matrix and example matrix.
+
+### Acceptance impact
+
+- The plan's prior status block claimed "Tier 1 surface complete /
+  banned patterns purged / Phase 1 example runs / test_core passes."
+  Banned-patterns claim still holds (no `__arrow_call1` / `memcpy(&` /
+  `__signal_call1` / `::\s+:(int|float)` -- the `(as float ...)` fix
+  is not a `::` cast). The Phase 1 example does NOT run today, and
+  `test_core` does NOT pass today.
+- The previous status block has been preserved below for the historical
+  record, with corrections inlined. Treat the per-symbol verdict tables
+  as the *intent* the rebuild aimed at; treat the regressions above as
+  the *current* delta.
+
+### Updated state of the post-rebuild work items
+
+| Item | State |
+|---|---|
+| Module split (core/osc/filter/shaper/envelope/compose, each <200 lines) | Done. |
+| Tier 1 surface present | Done at the defn level; not exercisable until [[defmodule-loses-fat-fn-type-annotation]] resolves. |
+| Banned patterns purged | Done (ban-list grep empty). |
+| `build.tur :exports` matches Tier 1 | Done. |
+| `tur check` clean across all six modules | **No.** `compose.tur` still fails on `__apply-sf` -- blocked by [[defmodule-loses-fat-fn-type-annotation]]. `core.tur` and `shaper.tur` are clean only after the `pair`/`(as float ...)` workarounds in this status block. |
+| Phase 1 example runs | **No.** Blocked by [[defmodule-loses-fat-fn-type-annotation]]. |
+| `test_core` passes | **No.** Same blocker. |
+| Tests 2-5 + examples 2-5 | Blocked by `[[vec-typed-fat-closure-readback-fixture-regressed-codegen]]` AND `[[defmodule-loses-fat-fn-type-annotation]]`. |
+| Bug reports owed | **Filed:** [[defmodule-loses-fat-fn-type-annotation]]. **Not yet filed:** the `svf-low-pass`-was-removed paper-trail and the `dsp.tur` Pair64 bit-cast obsolete note. |
+
+## Status update (2026-06-05, post-rebuild execution -- preserved for history)
 
 The source-side rebuild has landed in `../turmeric-spices/spices/signal/`.
 Verified against the live tree:
@@ -535,13 +590,20 @@ this rebuild -- that lands when there is a real voice consumer.
       with a documented workaround in this plan. *(Prereq audit
       2026-06-05 above.)*
 - [ ] Every file under `src/signal/` checks clean under `tur check`.
-      *(Per-module run not yet recorded post-rebuild.)*
+      *(Re-audit 2026-06-05: 5/6 clean after the `pair` / `(as float
+      ...)` workarounds; `compose.tur` blocked by
+      [[defmodule-loses-fat-fn-type-annotation]].)*
 - [ ] Every example under `examples/` runs and prints values matching
-      its in-file comments. *(Only `01_constant_and_time.tur` exists;
-      02-05 owed.)*
+      its in-file comments. *(Re-audit 2026-06-05: even the existing
+      `01_constant_and_time.tur` does not run -- blocked by
+      [[defmodule-loses-fat-fn-type-annotation]] at the
+      `(sample c 0.0)` call site. Examples 02-05 owed once that and
+      [[vec-typed-fat-closure-readback-fixture-regressed-codegen]]
+      both clear.)*
 - [ ] Every test under `tests/signal/` passes; zero `FAIL` lines.
-      *(Only `test_core.tur` exists; test_osc/filter/shaper/envelope/
-      compose owed.)*
+      *(Re-audit 2026-06-05: `test_core` no longer passes -- same
+      blocker as the example. Tests 2-5 owed once both blockers
+      clear.)*
 - [x] `grep -rE "__arrow_call1|__signal_call1|memcpy\(&|::\s+:(int|float)" src/signal/`
       is empty. *(Verified 2026-06-05.)*
 - [x] No file in `src/signal/` exceeds ~200 lines. *(Max is shaper.tur
