@@ -442,6 +442,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             /* ER4: function-typed parameters are passed as int64_t (opaque
              * function pointer) in Turmeric's calling convention. */
             buf_puts(file, "int64_t");
+        } else if (fd->params[i]->is_fat && body_is_inline_c) {
+            /* fat-param-emitted-as-void-ptr-warns-in-inline-c.md: a ^fat param
+             * is a fat-closure *carrier* handle.  In an inline-C body, emit it as
+             * int64_t -- the same carrier ABI every other Turmeric value uses --
+             * so the hand-written C can treat it as a handle without a
+             * void*->int64_t -Wint-conversion warning.  The C ABI is identical
+             * (8-byte register arg); the call site coerces with (int64_t)(intptr_t).
+             * Ordinary (compiler-generated) bodies keep the void* fat carrier so
+             * the fat-call dispatch and typeclass-dictionary slot types are
+             * unchanged. */
+            buf_puts(file, "int64_t");
         } else if (use_abi_spec) {
             const char *pc = emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]);
             buf_puts(file, pc);
@@ -673,6 +684,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             if (fd->params[i]->is_poly_fn) {
                 buf_puts(real_file, "tur_poly_fn_t");
             } else if (fd->param_types[i].kind == TY_FN) {
+                buf_puts(real_file, "int64_t");
+            } else if (fd->params[i]->is_fat && body_is_inline_c) {
+                /* fat-param-emitted-as-void-ptr-warns-in-inline-c.md: ^fat
+                 * carrier handle -> int64_t (matches the direct signature).
+                 * Inline-C bodies are never CPS, so this stays void* in
+                 * practice; gated for parity with the direct signature. */
                 buf_puts(real_file, "int64_t");
             } else {
                 Type param_ty = (!fd->params[i]->is_fat &&

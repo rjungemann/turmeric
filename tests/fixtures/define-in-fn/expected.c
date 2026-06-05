@@ -2570,9 +2570,9 @@ static bool tur_hycstr_hykey_hyeq_qu(const char *, const char *);
 static bool tur_hyint_hycarrier_hyeq_qu(int64_t, int64_t);
 static bool tur_hyf32_hycarrier_hyeq_qu(int64_t, int64_t);
 static bool tur_hyf64_hycarrier_hyeq_qu(int64_t, int64_t);
-static bool map_hyeq_hyraw_qu(int64_t, int64_t, void *);
-static bool map_hyeq_hyraw_hyk_qu(int64_t, int64_t, int64_t, void *);
-static bool map_hyeq_hydynamic(int64_t, int64_t, void *);
+static bool map_hyeq_hyraw_qu(int64_t, int64_t, int64_t);
+static bool map_hyeq_hyraw_hyk_qu(int64_t, int64_t, int64_t, int64_t);
+static bool map_hyeq_hydynamic(int64_t, int64_t, int64_t);
 static void tur_hymap_hyhomog_un_un(int64_t, int64_t);
 static int64_t vec_hynew();
 static int64_t vec_hylen(int64_t);
@@ -2582,7 +2582,7 @@ static int64_t vec_hypop_ex(int64_t);
 static void vec_hyset_ex(int64_t, int64_t, int64_t);
 static void vec_hyfree(int64_t);
 static void tur_hyvec_hyhomog_un_un(int64_t, int64_t);
-static bool vec_hyeq_qu(int64_t, int64_t, void *);
+static bool vec_hyeq_qu(int64_t, int64_t, int64_t);
 static int64_t slice_hynew(void *, int64_t);
 static int64_t slice_hylen(int64_t);
 static int64_t slice_hyget(int64_t, int64_t);
@@ -2593,19 +2593,19 @@ static int64_t none();
 static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
-static int64_t option_hymap(int64_t, void *);
-static bool option_hyeq_qu(int64_t, int64_t, void *);
+static int64_t option_hymap(int64_t, int64_t);
+static bool option_hyeq_qu(int64_t, int64_t, int64_t);
 static int64_t ok(int64_t);
 static int64_t err(int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
 static int64_t result_hymap(int64_t, int64_t);
-static bool result_hyeq_qu(int64_t, int64_t, void *, void *);
+static bool result_hyeq_qu(int64_t, int64_t, int64_t, int64_t);
 static bool _un_untur_hyq_hyis_hyerr_qu(void *);
 static int64_t _un_untur_hyq_hyok_hyval(void *);
 static int64_t result_hybimap(int64_t, int64_t, int64_t);
-static bool pair_hyeq_hycarrier_qu(int64_t, int64_t, void *, void *);
+static bool pair_hyeq_hycarrier_qu(int64_t, int64_t, int64_t, int64_t);
 static bool tuple2_hyeq_hycarrier_qu(int64_t, int64_t, int64_t, int64_t);
 static int64_t tcons(int64_t, int64_t);
 static int64_t tnil();
@@ -2636,7 +2636,7 @@ static int64_t set_hyunion(int64_t, int64_t);
 static int64_t set_hyintersect(int64_t, int64_t);
 static int64_t set_hydiff(int64_t, int64_t);
 static bool set_hyeq_qu(int64_t, int64_t);
-static bool set_hyeq_hycmp_qu(int64_t, int64_t, void *);
+static bool set_hyeq_hycmp_qu(int64_t, int64_t, int64_t);
 static void set_hyfree(int64_t);
 static int64_t set_hyadd1(int64_t, int64_t);
 static int64_t mutmap_hynew();
@@ -2645,7 +2645,7 @@ static void mutmap_hyset_ex(int64_t, int64_t, int64_t, int64_t);
 static int64_t mutmap_hyget(int64_t, int64_t, int64_t);
 static bool mutmap_hyhas_qu(int64_t, int64_t, int64_t);
 static bool mutmap_hydelete_ex(int64_t, int64_t, int64_t);
-static bool mutmap_hyeq_qu(int64_t, int64_t, void *);
+static bool mutmap_hyeq_qu(int64_t, int64_t, int64_t);
 static void mutmap_hyfree(int64_t);
 static int64_t make_hyadder(int64_t);
 
@@ -3034,7 +3034,7 @@ static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t2[1] = (int64_t)(intptr_t)__fn_573;
         void *__t3 = __t2;
-        return map_hyeq_hydynamic(x, y, (void *)(intptr_t)(__t3));
+        return map_hyeq_hydynamic(x, y, (int64_t)(intptr_t)(__t3));
 }
 
 typedef struct dict_Eq_Map {
@@ -3054,7 +3054,7 @@ static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
         __t4[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t4[1] = (int64_t)(intptr_t)__fn_597;
         void *__t5 = __t4;
-        return vec_hyeq_qu(x, y, (void *)(intptr_t)(__t5));
+        return vec_hyeq_qu(x, y, (int64_t)(intptr_t)(__t5));
 }
 
 typedef struct dict_Eq_Vec {
@@ -3074,7 +3074,7 @@ static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
         __t6[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t6[1] = (int64_t)(intptr_t)__fn_624;
         void *__t7 = __t6;
-        return option_hyeq_qu(x, y, (void *)(intptr_t)(__t7));
+        return option_hyeq_qu(x, y, (int64_t)(intptr_t)(__t7));
 }
 
 typedef struct dict_Eq_Option {
@@ -3177,7 +3177,7 @@ static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
         __t10[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t10[1] = (int64_t)(intptr_t)__fn_666;
         void *__t11 = __t10;
-        return result_hyeq_qu(x, y, (void *)(intptr_t)(__t9), (void *)(intptr_t)(__t11));
+        return result_hyeq_qu(x, y, (int64_t)(intptr_t)(__t9), (int64_t)(intptr_t)(__t11));
 }
 
 typedef struct dict_Eq_Result {
@@ -3269,7 +3269,7 @@ static bool __inst_Eq_eq_qu_Pair(int64_t x, int64_t y) {
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t14[1] = (int64_t)(intptr_t)__fn_704;
         void *__t15 = __t14;
-        return pair_hyeq_hycarrier_qu(x, y, (void *)(intptr_t)(__t13), (void *)(intptr_t)(__t15));
+        return pair_hyeq_hycarrier_qu(x, y, (int64_t)(intptr_t)(__t13), (int64_t)(intptr_t)(__t15));
 }
 
 typedef struct dict_Eq_Pair {
@@ -3341,7 +3341,7 @@ static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         __t18[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t18[1] = (int64_t)(intptr_t)__fn_886;
         void *__t19 = __t18;
-        return mutmap_hyeq_qu(x, y, (void *)(intptr_t)(__t19));
+        return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t19));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3595,7 +3595,7 @@ static bool tur_hyf64_hycarrier_hyeq_qu(int64_t a, int64_t b) {
   
 }
 
-static bool map_hyeq_hyraw_qu(int64_t m1, int64_t m2, void * val_cmp) {
+static bool map_hyeq_hyraw_qu(int64_t m1, int64_t m2, int64_t val_cmp) {
         struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
@@ -3617,7 +3617,7 @@ static bool map_hyeq_hyraw_qu(int64_t m1, int64_t m2, void * val_cmp) {
   
 }
 
-static bool map_hyeq_hyraw_hyk_qu(int64_t m1, int64_t m2, int64_t keyeq, void * val_cmp) {
+static bool map_hyeq_hyraw_hyk_qu(int64_t m1, int64_t m2, int64_t keyeq, int64_t val_cmp) {
         struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
@@ -3641,7 +3641,7 @@ static bool map_hyeq_hyraw_hyk_qu(int64_t m1, int64_t m2, int64_t keyeq, void * 
   
 }
 
-static bool map_hyeq_hydynamic(int64_t m1, int64_t m2, void * val_cmp) {
+static bool map_hyeq_hydynamic(int64_t m1, int64_t m2, int64_t val_cmp) {
         return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); 
 }
 
@@ -3713,7 +3713,7 @@ static void tur_hyvec_hyhomog_un_un(int64_t a, int64_t b) {
         (void)a; (void)b; 
 }
 
-static bool vec_hyeq_qu(int64_t v1, int64_t v2, void * cmp_fn) {
+static bool vec_hyeq_qu(int64_t v1, int64_t v2, int64_t cmp_fn) {
         struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
@@ -3792,7 +3792,7 @@ static void option_hyfree(int64_t o) {
   
 }
 
-static int64_t option_hymap(int64_t o, void * f) {
+static int64_t option_hymap(int64_t o, int64_t f) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
@@ -3802,7 +3802,7 @@ static int64_t option_hymap(int64_t o, void * f) {
   
 }
 
-static bool option_hyeq_qu(int64_t o1, int64_t o2, void * cmp_fn) {
+static bool option_hyeq_qu(int64_t o1, int64_t o2, int64_t cmp_fn) {
         struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
   struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
   bool a_some = a && a->is_some;
@@ -3858,7 +3858,7 @@ static int64_t result_hymap(int64_t r, int64_t f) {
   
 }
 
-static bool result_hyeq_qu(int64_t r1, int64_t r2, void * ok_cmp, void * err_cmp) {
+static bool result_hyeq_qu(int64_t r1, int64_t r2, int64_t ok_cmp, int64_t err_cmp) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
   if (!a && !b) return true;
@@ -3893,7 +3893,7 @@ static int64_t result_hybimap(int64_t container, int64_t fn_left, int64_t fn_rig
   
 }
 
-static bool pair_hyeq_hycarrier_qu(int64_t p1, int64_t p2, void * fst_cmp, void * snd_cmp) {
+static bool pair_hyeq_hycarrier_qu(int64_t p1, int64_t p2, int64_t fst_cmp, int64_t snd_cmp) {
         struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
   struct { int64_t fst; int64_t snd; } *b = (void*)(intptr_t)p2;
   if (!a && !b) return true;
@@ -4214,7 +4214,7 @@ static bool set_hyeq_qu(int64_t a, int64_t b) {
   
 }
 
-static bool set_hyeq_hycmp_qu(int64_t a, int64_t b, void * cmp_fn) {
+static bool set_hyeq_hycmp_qu(int64_t a, int64_t b, int64_t cmp_fn) {
         /* O(n*m) comparison: iterate a's elements, scan b for a structural
    * match per element.  Bigger constant than set-eq?'s hash lookup
    * but correct for arbitrarily-structured element types.  Used by
@@ -4421,7 +4421,7 @@ static bool mutmap_hydelete_ex(int64_t m, int64_t h, int64_t key) {
   
 }
 
-static bool mutmap_hyeq_qu(int64_t m1, int64_t m2, void * val_cmp) {
+static bool mutmap_hyeq_qu(int64_t m1, int64_t m2, int64_t val_cmp) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };

@@ -1357,6 +1357,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 buf_puts(out, "tur_poly_fn_t");
             } else if (fd->param_types[j].kind == TY_FN) {
                 buf_puts(out, "int64_t");
+            } else if (fd->params[j]->is_fat &&
+                       fd->body && fd->body->kind == EX_INLINE_C) {
+                /* fat-param-emitted-as-void-ptr-warns-in-inline-c.md: ^fat
+                 * carrier handle -> int64_t for an inline-C body (matches the
+                 * definition signature). */
+                buf_puts(out, "int64_t");
             } else {
                 bool _fwd_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
                 /* bare-fat-sink-poly-box-slot0-int64-mismatch.md: a ^fat param's
@@ -1393,6 +1399,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 if (fd->params[j]->is_poly_fn) {
                     buf_puts(out, "tur_poly_fn_t");
                 } else if (fd->param_types[j].kind == TY_FN) {
+                    buf_puts(out, "int64_t");
+                } else if (fd->params[j]->is_fat &&
+                           fd->body && fd->body->kind == EX_INLINE_C) {
+                    /* fat-param-emitted-as-void-ptr-warns-in-inline-c.md: ^fat
+                     * carrier handle -> int64_t for an inline-C body (matches the
+                     * wrapper signature; inline-C is never CPS in practice). */
                     buf_puts(out, "int64_t");
                 } else {
                     Type _pty = (!fd->params[j]->is_fat &&
