@@ -109,5 +109,5 @@ struct captures, curried returns, and two methods composed at the call site.
 - `docs/archive/history/nested-closure-transitive-capture.md` -- an *orthogonal*
   capture-set defect (a grandchild closure's free var not threaded through the
   middle closure), independent of the carrier type.
-- `docs/archive/intra-instance-method-dispatch-unsupported.md` -- calling a
+- `docs/archive/history/intra-instance-method-dispatch-unsupported.md` -- calling a
   sibling method via `(.other self ...)` inside an instance body.

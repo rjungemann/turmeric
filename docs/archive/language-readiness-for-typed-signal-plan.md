@@ -14,7 +14,7 @@ against have since landed on `main`:
 - **Closure-returning instance-method codegen** (the exact
   `stdlib/arrow.tur:91-101` "dict field resolved to `void *`" gap flagged
   under G1's failure modes): fixed in #205; plan archived as
-  `docs/archive/closure-returning-instance-method-codegen-plan.md`.
+  `docs/archive/history/closure-returning-instance-method-codegen-plan.md`.
 - **Bare `^fat` result-type inference** (G1, G7 surface): #208 (Phase A)
   + #212 (Phase B feasibility); plan archived as
   `docs/archive/bare-fat-result-type-inference-plan.md`. Companion fix
@@ -23,7 +23,7 @@ against have since landed on `main`:
 - **Typed closure invocation ABI / first-class closure type** (G1, G6,
   G7): #197 + #198; plans archived as
   `docs/archive/closure-typed-invocation-abi-plan.md`,
-  `docs/archive/closure-first-class-type-plan.md`,
+  `docs/archive/history/closure-first-class-type-plan.md`,
   `docs/archive/closure-representation-unification-plan.md`.
 - **`ptr<T>` generic pointer** (G5): #204; plan archived as
   `docs/upcoming/ptr-generic-parameterised-type-plan.md` (now superseded).

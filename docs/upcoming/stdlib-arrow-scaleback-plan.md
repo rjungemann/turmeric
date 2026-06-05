@@ -142,7 +142,7 @@ model becomes a forward-pointer to this plan and to
    methods directly.
 
 `docs/archive/stdlib-arrow-typeclass-plan.md` and
-`docs/archive/arrow-thin-call-segfaults-capturing-closures.md` stay where
+`docs/archive/history/arrow-thin-call-segfaults-capturing-closures.md` stay where
 they are -- they are correct historical records. Add a forward pointer
 from the latter to this plan.
 
@@ -166,7 +166,7 @@ regenerate naturally once the typeclass declarations are removed.
    understanding why.
 4. Edit `docs/guides/arrows-guide.md` per the rules above.
 5. Add a backward-pointer in
-   `docs/archive/arrow-thin-call-segfaults-capturing-closures.md`
+   `docs/archive/history/arrow-thin-call-segfaults-capturing-closures.md`
    referencing this plan.
 
 ## Validation

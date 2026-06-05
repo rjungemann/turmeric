@@ -395,4 +395,4 @@ plan and stay scaled back.
   consumes the bare-function arrow API; this plan does not change that.
 - **Historical context**: `docs/archive/stdlib-arrow-typeclass-plan.md`
   (original "make typeclass dispatch work" plan that ran aground on the
-  codegen bug) and `docs/archive/arrow-thin-call-segfaults-capturing-closures.md`.
+  codegen bug) and `docs/archive/history/arrow-thin-call-segfaults-capturing-closures.md`.

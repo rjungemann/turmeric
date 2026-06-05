@@ -260,6 +260,25 @@ Post-v0.18.0 sweep:
 - **[polymorphic-return-type-instantiation-collapses-to-first-tyvar.md](history/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md)** -- Polymorphic accessor return type wrongly collapsed to first tyvar; fixed (2026-06-04)
 - **[tuplen-struct-param-passed-by-pointer-codegen-mismatch.md](history/tuplen-struct-param-passed-by-pointer-codegen-mismatch.md)** -- TupleN (N>=3) struct param mis-passed by pointer to by-value callee; fixed (2026-06-04)
 - **[typeclass-method-int-carrier-return-truncates-non-int.md](history/typeclass-method-int-carrier-return-truncates-non-int.md)** -- int64-carrier truncating non-int instance results (explicit annotations); fixed (2026-06-04)
+- **[closure-first-class-type-plan.md](history/closure-first-class-type-plan.md)** -- First-class closure type (Closure Repr Unification Phase 3, Option B); B-0..B-4 shipped
+- **[closure-returning-instance-method-codegen-plan.md](history/closure-returning-instance-method-codegen-plan.md)** -- `definstance` dict-field codegen for closure-returning methods; T1-T6 complete
+- **[poly-to-fat-typed-shim-plan.md](history/poly-to-fat-typed-shim-plan.md)** -- Typed `__tur_poly_to_fat1` shim generalisation; capturing-closure path implemented
+- **[ptr-generic-parameterised-type-plan.md](history/ptr-generic-parameterised-type-plan.md)** -- Parameterised `:ptr<T>` first-class type; P1-P4 core implemented
+- **[sum-types-either-plan.md](history/sum-types-either-plan.md)** -- `Either L R` sum type end-to-end; landed in `d993ba3d`
+- **[stdlib-effect-rows-plan.md](history/stdlib-effect-rows-plan.md)** -- Capability effect-row tags on I/O-touching stdlib modules; completed in `cdcf646f`; see [effects-system-guide.md](../guides/effects-system-guide.md)
+- **[positional-nominal-type-identity-fix-plan.md](history/positional-nominal-type-identity-fix-plan.md)** -- Type-checker fix to enforce nominal identity on positional struct/opaque/ADT params; landed alongside the partial-application fix
+- **[positional-nominal-type-identity-not-checked.md](history/positional-nominal-type-identity-not-checked.md)** -- Bug report behind the above plan; resolved
+- **[partial-application-skips-captured-arg-type-check.md](history/partial-application-skips-captured-arg-type-check.md)** -- `elab_partial_apply` capture loop now checks provided arg types; both nominal and kind slices fixed
+- **[curried-fn-typed-param-second-application-not-callable.md](history/curried-fn-typed-param-second-application-not-callable.md)** -- Second application of higher-order-returning param now type-checks; fixed (2026-06-04)
+- **[arrow-thin-call-segfaults-capturing-closures.md](history/arrow-thin-call-segfaults-capturing-closures.md)** -- `__arrow_call*` thin-call helpers crashing on capturing closures; RESOLVED 2026-06-03 in closure-representation-unification
+- **[eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md](history/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md)** -- Constrained-Eq dispatcher passing bare comparator into `^fat` sink; RESOLVED 2026-06-03
+- **[fat-fn-param-capturing-closure-gap.md](history/fat-fn-param-capturing-closure-gap.md)** -- Capturing closure unable to reach an `fn`-typed `^fat` parameter; RESOLVED 2026-06-03
+- **[ptr-void-direct-call-representation-split.md](history/ptr-void-direct-call-representation-split.md)** -- Direct call of a `:ptr<void>` callback crashed half the time; RESOLVED 2026-06-03
+- **[intra-instance-method-dispatch-unsupported.md](history/intra-instance-method-dispatch-unsupported.md)** -- `(.other self ...)` intra-instance dispatch; FIXED 2026-06-04
+- **[poly-defn-shares-inner-closure-body-across-monomorphizations.md](history/poly-defn-shares-inner-closure-body-across-monomorphizations.md)** -- Polymorphic defn shared one inner closure body across specialisations; RESOLVED 2026-06-04 (diagnose direction)
+- **[instance-method-closure-return-lowered-to-result-type.md](history/instance-method-closure-return-lowered-to-result-type.md)** -- `definstance` closure-returning method mis-lowered to its result type; RESOLVED 2026-06-04
+- **[stdlib-linear-handle-borrows.md](history/stdlib-linear-handle-borrows.md)** -- `^borrow` parameter attribute for non-consuming accessors on linear handles; RESOLVED 2026-06-04
+- **[defgadt-copy-and-shared-bounds.md](history/defgadt-copy-and-shared-bounds.md)** -- `defgadt :copy` opt-out for shared GADT values; resolved 2026-06-04
 
 Earlier additions:
 
