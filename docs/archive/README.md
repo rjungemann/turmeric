@@ -279,6 +279,7 @@ Post-v0.18.0 sweep:
 - **[instance-method-closure-return-lowered-to-result-type.md](history/instance-method-closure-return-lowered-to-result-type.md)** -- `definstance` closure-returning method mis-lowered to its result type; RESOLVED 2026-06-04
 - **[stdlib-linear-handle-borrows.md](history/stdlib-linear-handle-borrows.md)** -- `^borrow` parameter attribute for non-consuming accessors on linear handles; RESOLVED 2026-06-04
 - **[defgadt-copy-and-shared-bounds.md](history/defgadt-copy-and-shared-bounds.md)** -- `defgadt :copy` opt-out for shared GADT values; resolved 2026-06-04
+- **[range-gadt-typeclass-migration-plan.md](history/range-gadt-typeclass-migration-plan.md)** -- Fold the `Bound` GADT into `range.tur`'s endpoint representation + graduate `-Xgadt` to default-on (A1/B1/B2); complete; `Show`/`Eq`/`Ord [Bound]` instances; see [gadts-guide.md](../guides/gadts-guide.md)
 
 Earlier additions:
 

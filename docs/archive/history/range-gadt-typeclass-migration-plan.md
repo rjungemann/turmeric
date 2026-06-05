@@ -6,6 +6,15 @@ description: Fold stdlib/range-bound.tur's `Bound A` GADT into range.tur's inter
 
 # Migrate `range.tur` onto the `Bound` GADT -- Plan
 
+> **Status:** COMPLETE. A1 (`-Xgadt` default-on + deprecated no-op), B1
+> (`range.tur` endpoints folded onto the `Bound` GADT), B2 (`Show`/`Eq`/`Ord`
+> instances), and the doc updates all shipped. A2 (stripping the now-redundant
+> `-Xgadt` from `flags` files) completed last: all 42 `-Xgadt`-only `flags`
+> files were removed (the token is a no-op, so an empty/absent file is
+> equivalent). The hard co-requisite malformed-`defgadt` crash report is closed
+> (regression fixture `errors/defgadt-malformed-ctor-no-crash`). Full suite
+> green.
+>
 > **Type:** stdlib internal-representation migration + experimental-flag graduation
 > **Prerequisite (met):** `defgadt :copy` -- shipped 2026-06-04, see
 > [docs/reported/defgadt-copy-and-shared-bounds.md](../reported/defgadt-copy-and-shared-bounds.md).
