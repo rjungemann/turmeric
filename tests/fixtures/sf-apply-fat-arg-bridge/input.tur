@@ -1,0 +1,25 @@
+;; sf-apply-fat-arg-bridge: applying a closure to a `:ptr<void>` signal box
+;; through a `^fat`-typed parameter.  `(sine 2.0)` returns a closure whose
+;; parameter `sig` is declared `(fn [float] float)` and marked `^fat`; in C
+;; that slot is the int64_t carrier.  Passing a `:ptr<void>` SF box (`base`)
+;; into it must emit the (int64_t)(intptr_t) carrier bridge -- without it the
+;; void* flows into the int64_t slot uncast (-Wint-conversion; a hard error
+;; under clang, and a latent "works only because the widths match" defect).
+;; See docs/reported/vec-typed-fat-closure-readback-fixture-regressed-codegen.md
+;; (the "any caller of an ^fat-taking SF" update).
+
+(defn sine [freq : float]
+  (fn [^fat sig : (fn [float] #{} float)] : ptr<void>
+    (fn [t : float] : float (* freq (sig t)))))
+
+(defn sample [^fat s : (fn [float] #{} float) t : float] : float
+  (s t))
+
+(defn constant [v : float] : ptr<void>
+  (fn [t : float] : float v))
+
+(defn main [] : int
+  (let [base (constant 4.0)
+        s1   ((sine 2.0) base)]      ;; ^fat-arg call slot: base (:ptr<void>) -> int64_t
+    (println (sample (:: s1 :ptr<void>) 0.25)))  ;; 2.0 * 4.0 = 8.0
+  0)

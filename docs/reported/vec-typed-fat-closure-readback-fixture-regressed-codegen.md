@@ -7,6 +7,29 @@ description: `tests/fixtures/vec-typed-fat-closure-readback/` -- the fixture PR 
 
 # `vec-typed-fat-closure-readback` fixture regressed at codegen
 
+> **Status (2026-06-05): RESOLVED.**
+> - The `tests/fixtures/vec-typed-fat-closure-readback/` fixture **passes** on
+>   current HEAD (the original four `-Wint-conversion` mismatches are gone).
+> - The broader **`^fat`-arg call-slot** gap (the first Update below: applying
+>   `(sine ...)` to a `:ptr<void>` signal box through a `^fat` param) is now
+>   **fixed**. The closure-dispatch path in `emit_expr.c` only bridged
+>   `:ptr<void>`/`:fn` actuals when the formal kind was `TY_INT`; a `^fat`
+>   closure param is declared `TY_FN` but emitted as the `int64_t` carrier
+>   (`emit_fns.c`: closure params of kind `TY_FN` -> `int64_t`), so the void*
+>   flowed into the int64_t slot uncast. The fix treats `TY_FN` formals as
+>   int64_t carriers in that bridge. Regression fixture:
+>   `tests/fixtures/sf-apply-fat-arg-bridge/`.
+> - The **third pattern** (a closure that *returns* a typed aggregate, applied
+>   through a `::`-ascribed `:ptr<void>` box, then field-accessed) is now
+>   **fixed too** -- see the "Remaining gap" section at the bottom for the
+>   root cause. Root cause was *not* in the carrier-bridge pass: the `::`
+>   ascription re-typed the fat box to `TY_FN`, so `elab_call_head_expr`
+>   skipped the closure-dispatch branches and called the box as a *thin*
+>   function pointer (a jump into the env struct -> segfault). The fix routes
+>   a `:ptr<void>` source ascribed to a `(fn ...)` head through the
+>   closure-thunk dispatch. Regression fixture:
+>   `tests/fixtures/fat-box-ascribed-aggregate-return/`.
+
 ## Update (2026-06-05): the same gap blocks any caller of an `^fat`-taking SF
 
 The same int↔ptr<void> carrier-bridge gap surfaces in the **simplest**
@@ -202,6 +225,69 @@ bridge already does for the closure result.
   `(effects-chain v (constant 1.0))`, re-bind the result with
   `^fat out : (fn [float] float)`, and `(out 0.0)` returns the product
   of the gains. No `-Wint-conversion` in the emitted C.
+
+## Remaining gap (FIXED): aggregate-returning closure read back through a `:ptr<void>` box
+
+A closure that **returns a typed aggregate** (e.g. `(Pair float float)`),
+stored as a `:ptr<void>` box, ascribed to a `(fn ...)` type, applied, and
+then field-accessed, was crashing. Minimal standalone repro (no spices repo
+needed; `Pair`/`pair`/`pair-fst` are auto-loaded from `stdlib/pair.tur`):
+
+```turmeric
+(defn pair-signals [a : float b : float] : ptr<void>
+  (fn [t : float] : (Pair float float) (pair a b)))
+
+(defn main [] : int
+  (let [ps (pair-signals 1.5 2.5)
+        p  ((:: ps (fn [float] #{} (Pair float float))) 0.0)]
+    (println (pair-fst p)))
+  0)
+```
+
+- **Was (before fix):** compiled, then **segfaulted** at runtime (exit 139).
+  This was already a *change* from the originally-reported symptom (a hard
+  `-Wint-conversion` / `incompatible type 'Pair__float__float'` compile
+  error); intervening commits (#289-#291) had moved it from a compile error
+  to a silent miscompile + crash.
+- **Now:** prints `1.5` (exit 0).
+
+**Root cause (corrected).** This was *not* a missing carrier bridge in the
+codegen pass, and the apply site does *not* go through the `TY_PTR_VOID`
+dynamic-dispatch branch. The crash was upstream, in `elab_call_head_expr`
+(`src/compiler/elab_call.c`). The call head `(:: ps (fn [float] (Pair float
+float)))` is an `EX_ASCRIBE` whose *type* is `TY_FN` (the ascription
+re-types the box). The head-elaboration helper picks the dispatch strategy
+from `head_kind`:
+
+- the `TY_PTR_VOID` branch (set `closure_fn_binding`, i.e. fat dispatch)
+  was skipped because `head_kind == TY_FN`;
+- the `TY_FN` branch only handled an `EX_CALL` head, but the unwrapped
+  source is an `EX_VAR` (`ps`).
+
+So `closure_fn_binding` stayed `NULL` and the head was emitted as a **thin
+function-pointer call** on a fat box:
+
+```c
+int64_t (*__call_head)(double) = ps;          /* ps points at the env struct */
+((Pair__float__float (*)(double))__call_head)(0.0);  /* jump into the struct -> SIGSEGV */
+```
+
+**Fix.** Add a third branch in `elab_call_head_expr`: when `head_kind ==
+TY_FN` but the unwrapped source's own type is `TY_PTR_VOID`, route through
+`expr_closure_fn_binding(source_expr)` (gated on that being non-NULL, so a
+raw `:ptr<void>` callback with no thunk metadata still stays a thin call).
+The box then dispatches through its known thunk with the box as the env
+arg, and the `Pair__float__float` by-value return flows through correctly:
+
+```c
+__t27 = __fn_892((void *)(intptr_t)(ps), 0.0);   /* box passed as env; struct returned by value */
+```
+
+The G4 fixture `tests/fixtures/pair-signals-typed/` passed all along
+because it does not go through the `:ptr<void>` box + `::`-ascribed
+re-application combination that triggers this. Regression fixture:
+`tests/fixtures/fat-box-ascribed-aggregate-return/` (covers let-bound and
+direct application, float and int element types, both field accessors).
 
 ## Related
 

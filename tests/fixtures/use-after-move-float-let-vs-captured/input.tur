@@ -1,0 +1,41 @@
+;; Regression: a `let`-bound Copy primitive whose initializer is a builtin
+;; arithmetic result (e.g. `(- 0.0 a)`) must be readable more than once.
+;; Previously the builtin spec table left result_type.copy_kind zeroed
+;; (CK_UNIQUE/CK_MOVE), so reading the binding twice through a builtin tripped
+;; a bogus TUR-E0005 use-after-move on a Copy float/int.
+;; See docs/reported/use-after-move-on-local-let-bound-float-vs-captured.md.
+
+;; (1) local let-bound float, used twice (predicate + then-branch).
+(defn clip-local [limit :float t :float] :float
+  (let [nv (- 0.0 limit)]
+    (if (< t nv) nv
+      (if (< limit t) limit t))))
+
+;; (2) captured (outer) let, then a local let -- the original report's shape.
+(defn clip-captured [limit :float] : ptr<void>
+  (let [lv limit]
+    (fn [t :float] :float
+      (let [nv (- 0.0 lv)]
+        (if (< t nv) nv
+          (if (< lv t) lv t))))))
+
+;; (3) same shape on int -- the bug was never float-specific.
+(defn clip-int [limit :int t :int] :int
+  (let [nv (- 0 limit)]
+    (if (< t nv) nv
+      (if (< limit t) limit t))))
+
+(defn main [] : int
+  ;; clamp 0.9 into [-0.5, 0.5] -> 0.5 ; -0.9 -> -0.5 ; 0.25 stays
+  (println (clip-local 0.5 0.9))
+  (println (clip-local 0.5 (- 0.0 0.9)))
+  (println (clip-local 0.5 0.25))
+  (let [f (clip-captured 0.5)]
+    (println (f 0.9))
+    (println (f (- 0.0 0.9)))
+    (println (f 0.25)))
+  ;; clamp 9 into [-5, 5] -> 5 ; -9 -> -5 ; 2 stays
+  (println (clip-int 5 9))
+  (println (clip-int 5 (- 0 9)))
+  (println (clip-int 5 2))
+  0)

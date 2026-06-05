@@ -490,6 +490,19 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
          * returns a bare fn reference, e.g. ((pick) 5) -> inc) the head
          * resolves to NULL here and stays a thin pointer call. */
         tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
+    } else if (head_kind == TY_FN && source_expr &&
+               source_expr->type.kind == TY_PTR_VOID) {
+        /* aggregate-return-fat-box-ascription: a :ptr<void> fat-closure box
+         * ascribed to a (fn ...) type, then applied --
+         * e.g. ((:: ps (fn [float] (Pair float float))) 0.0) where `ps` came
+         * from a closure-returning helper.  The `::` re-types the box to TY_FN,
+         * so neither the TY_PTR_VOID branch nor the EX_CALL branch above fires;
+         * but the runtime value is still a heap closure box and MUST dispatch
+         * through slot 0 (read __fn, pass the box as env).  Without this it is
+         * called as a thin function pointer -- a jump into the env struct, i.e.
+         * a segfault.  Gated on the underlying source actually carrying closure
+         * thunk metadata so a raw :ptr<void> callback stays a thin call. */
+        tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
     }
     if (source_expr && source_expr->kind == EX_VAR && source_expr->as.var.binding) {
         Binding *source_b = source_expr->as.var.binding;
@@ -1544,7 +1557,17 @@ Expr *elab_call(Elab *e, Form *call) {
             return NULL;
         }
     }
-    Expr *out = expr_new(e->arena, EX_BUILTIN, spec->result_type, call->span);
+    /* The static builtin spec table initializes result_type with a designated
+     * initializer (`{.kind=TY_FLOAT}` etc.) that leaves `.copy_kind` zeroed --
+     * which is CK_UNIQUE/CK_MOVE, not the kind's true copy semantics. Left
+     * uncorrected, a `let`-bound arithmetic result (e.g. `(- 0.0 a)`) inherits
+     * copy_kind=CK_MOVE, so reading it twice through any builtin trips a bogus
+     * TUR-E0005 use-after-move on a Copy primitive. Stamp the canonical
+     * copy_kind for the result's kind (a no-op for genuinely move-only results
+     * like rc<T>/weak<T>, whose default is already CK_MOVE). */
+    Type result_type = spec->result_type;
+    result_type.copy_kind = typekind_default_copy_kind(result_type.kind);
+    Expr *out = expr_new(e->arena, EX_BUILTIN, result_type, call->span);
     out->as.builtin.spec = spec;
     out->as.builtin.args = args;
     out->as.builtin.n = n_args;
