@@ -1,0 +1,12 @@
+;; mangle-kebab-snake-coexist -- the headline of the reversible-name-mangling
+;; plan: a kebab name `foo-bar` and a snake name `foo_bar` are DISTINCT top-level
+;; defns that must coexist. Under the old lossy fold both mangled to C `foo_bar`,
+;; a hard redefinition error. The injective scheme spells them `foo_hybar` and
+;; `foo_unbar`, so both compile and dispatch to the correct body.
+(defn foo-bar [] : int 1)
+(defn foo_bar [] : int 2)
+
+(defn main [] : int
+  (println (foo-bar))   ;; => 1
+  (println (foo_bar))   ;; => 2
+  0)

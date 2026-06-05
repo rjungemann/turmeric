@@ -124,8 +124,8 @@
           else {
               const char *dd = (const char *)gzip_buf_data(dec);
               int dl = (int)gzip_buf_len(dec);
-              const char *want = big_body();
-              int wlen = (int)big_body_len();
+              const char *want = big_hybody();
+              int wlen = (int)big_hybody_hylen();
               int ok = (dl == wlen) && (memcmp(dd, want, (size_t)dl) == 0);
               printf("gzip-decoded-ok=%d\n", ok ? 1 : 0);
               gzip_buf_free(dec);
@@ -167,12 +167,12 @@
   ```)
 
 (defn run-server [h : ptr<void>] : ptr<void>
-  ```c httpd_run(h); return NULL; ```)
+  ```c httpd_hyrun(h); return NULL; ```)
 
 (defn spawn-server [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
   return (void *)t;
   ```)
 
@@ -181,7 +181,7 @@
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
   return (void *)t;
   ```)
 

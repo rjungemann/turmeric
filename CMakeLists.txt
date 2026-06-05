@@ -291,6 +291,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_docscanner_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Injective name-mangler round-trip + injectivity unit test
+add_test(
+  NAME tur_mangle_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_mangle_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Phase S3: algebraic effects via eval core
 add_test(
   NAME tur_eval_effects

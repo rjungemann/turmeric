@@ -40,15 +40,15 @@
   ```c
   typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
   typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
-  int64_t wt1 = logic_walk(t1, subs);
-  int64_t wt2 = logic_walk(t2, subs);
+  int64_t wt1 = logic_hywalk(t1, subs);
+  int64_t wt2 = logic_hywalk(t2, subs);
   Term *ct1 = (Term*)(intptr_t)wt1; Term *ct2 = (Term*)(intptr_t)wt2;
   if (ct1->tag == 1 && ct2->tag == 1 && ct1->data1 == ct2->data1) return subs;
   if (ct1->tag == 0 && ct2->tag == 0 && ct1->data1 == ct2->data1) return subs;
   if (ct1->tag == 3 && ct2->tag == 3) return subs;
   if (ct1->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct1->data1; e->term_ptr = wt2; e->next = subs; return (int64_t)(intptr_t)e; }
   if (ct2->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct2->data1; e->term_ptr = wt1; e->next = subs; return (int64_t)(intptr_t)e; }
-  if (ct1->tag == 2 && ct2->tag == 2) { int64_t s2 = logic_unify(ct1->data1, ct2->data1, subs); if (s2 == -1) return -1; return logic_unify(ct1->data2, ct2->data2, s2); }
+  if (ct1->tag == 2 && ct2->tag == 2) { int64_t s2 = logic_hyunify(ct1->data1, ct2->data1, subs); if (s2 == -1) return -1; return logic_hyunify(ct1->data2, ct2->data2, s2); }
   return -1;
   ```)
 

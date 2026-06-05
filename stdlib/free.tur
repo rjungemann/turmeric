@@ -101,7 +101,7 @@
     int64_t *_fat = (int64_t*)(intptr_t)f;
     tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
     int64_t mapped = _f.fn(_f.env, fr->as.PureFree._0);
-    return free_pure(mapped);
+    return free_hypure(mapped);
   }
   return free; /* Suspend -- pass through */
   ```)

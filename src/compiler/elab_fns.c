@@ -3664,6 +3664,11 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     /* Create a binding for the extern-c function so it can be looked up and called */
     Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, call->span);
     b->is_extern_c = true;  /* ER6: mark as extern-c for effect inference */
+    /* The extern-c C name is produced by the LEGACY fold (raw_name_for_binding /
+     * elab_mangle_binding_name special-case is_extern_c), matching the prototype
+     * emitted via mangle_field_name. Not c_export_name and never the injective
+     * scheme: extern-c names are real C symbols (`tur_hamt_new`, `tvar/new` ->
+     * `tvar_new`) that must agree across prototype, call sites, and inline-C. */
     scope_add(&e->global, b);
 
     /* CT4: Parse optional :pre and :post clauses after the return type annotation.

@@ -104,7 +104,7 @@
 ;;; Since: Phase B2
 
 (defn csv/parse-row [line : cstr] : int
-  ```c return csv_parse_row_with_delim(line, 44);
+  ```c return csv_slparse_hyrow_hywith_hydelim(line, 44);
   ```)
 ;;; csv/row-free -- free a row vec and all its field strings.
 ;;;
@@ -212,7 +212,7 @@
 ;;; Since: Phase B2
 
 (defn csv/parse [s : cstr] : int
-  ```c return csv_parse_with_delim(s, 44);
+  ```c return csv_slparse_hywith_hydelim(s, 44);
   ```)
 ;;; csv/free -- free a cons list of rows returned by csv/parse.
 ;;;
@@ -316,7 +316,7 @@
 ;;; Since: Phase B2
 
 (defn csv/emit-row [v : int] : cstr
-  ```c return csv_emit_row_with_delim(v, 44);
+  ```c return csv_slemit_hyrow_hywith_hydelim(v, 44);
   ```)
 ;;; csv/emit-with-delim -- serialize a cons list of row vecs to a full delimiter-separated string.
 ;;;
@@ -392,7 +392,7 @@
 ;;; Since: Phase B2
 
 (defn csv/emit [rows : int] : cstr
-  ```c return csv_emit_with_delim(rows, 44);
+  ```c return csv_slemit_hywith_hydelim(rows, 44);
   ```)
 ;;; csv/read-file-with-delim -- read a delimiter-separated file and parse it into a cons list of row vecs.
 ;;;
@@ -475,7 +475,7 @@
 ;;; Since: Phase B2
 
 (defn csv/read-file [path : cstr] #{FS} : int
-  ```c return csv_read_file_with_delim(path, 44);
+  ```c return csv_slread_hyfile_hywith_hydelim(path, 44);
   ```)
 ;;; csv/write-file-with-delim -- serialize a cons list of row vecs to a delimiter-separated file.
 ;;;
@@ -541,5 +541,5 @@
 ;;; Since: Phase B2
 
 (defn csv/write-file [path : cstr rows : int] #{FS} : int
-  ```c return csv_write_file_with_delim(path, rows, 44);
+  ```c return csv_slwrite_hyfile_hywith_hydelim(path, rows, 44);
   ```)

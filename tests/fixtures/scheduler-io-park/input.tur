@@ -100,7 +100,7 @@
   ```c
   extern ssize_t read(int, void *, size_t);
   typedef struct { void *pipe; void *fiber_a; } IOState;
-  IOState *st = (IOState *)io_state_cell(NULL);
+  IOState *st = (IOState *)io_hystate_hycell(NULL);
 
   /* Park self — fiber-B will unpark us after writing to the pipe.
    * tur_scheduler_park() marks the fiber parked and yields. */
@@ -119,7 +119,7 @@
   ```c
   extern ssize_t write(int, const void *, size_t);
   typedef struct { void *pipe; void *fiber_a; } IOState;
-  IOState *st = (IOState *)io_state_cell(NULL);
+  IOState *st = (IOState *)io_hystate_hycell(NULL);
 
   /* Simulate I/O completion: write value to pipe */
   int *fds = (int *)st->pipe;

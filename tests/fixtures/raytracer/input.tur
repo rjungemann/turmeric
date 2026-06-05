@@ -102,7 +102,7 @@
   pthread_t workers[2];
   for (int i = 0; i < 2; i++) {
       pthread_create(&workers[i], NULL,
-                     (void *(*)(void *))rt_worker_fn, (void *)q);
+                     (void *(*)(void *))rt_hyworker_hyfn, (void *)q);
   }
 
   /* Submit 4 scanline tasks */
@@ -115,7 +115,7 @@
       futures[r]->is_set = false;
 
       RTTask *task = (RTTask *)malloc(sizeof(RTTask));
-      task->fn = (void *(*)(void *))rt_row_fn;
+      task->fn = (void *(*)(void *))rt_hyrow_hyfn;
       task->arg = (void *)(uintptr_t)(int64_t)r;
       task->future_cell = (void *)futures[r];
 

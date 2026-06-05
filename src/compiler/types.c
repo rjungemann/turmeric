@@ -954,6 +954,10 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
         const StructField *field = &def->fields[fi];
         char *mfn = NULL;
         const char *ctype = struct_field_c_type(def, field, args);
+        /* Legacy field-name fold -- MUST match mangle_field_name (emit_core.c),
+         * which every field-access site uses. Struct fields keep the legacy
+         * '-' -> '_' spelling (not the injective scheme): they are referenced by
+         * this name from inline-C and often coincide with parameter names. */
         mfn = tur_strdup(field->name);
         if (!mfn) { fprintf(stderr, "tur: oom\n"); abort(); }
         for (char *p = mfn; *p; p++) {

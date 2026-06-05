@@ -2366,6 +2366,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         FnDef *method_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
         memset(method_fd, 0, sizeof(FnDef));
         Binding *method_binding = binding_new(e, method_sym, fn_type, false, true, impl_form->span);
+        /* method_sym->name is ALREADY a mangled C identifier (built as
+         * "__inst_<class>_<method>_<typesuffix>" above, with the method part run
+         * through tur_mangle_ident). It must be emitted verbatim: re-mangling it
+         * would double-encode every '_' as "_un" and desync the definition from
+         * the use site (the dict initializer rebuilds the same name fresh). Pin
+         * it via c_export_name, the documented "emit this C name as-is" bypass. */
+        method_binding->c_export_name = method_sym->name;
         method_fd->binding = method_binding;
         method_fd->params = method_params;
         method_fd->n_params = n_method_params;

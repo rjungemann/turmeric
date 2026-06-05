@@ -61,7 +61,7 @@
 (defn once-call [o : ptr<void>] : nil
   ```c
   pthread_once((pthread_once_t *)o,
-      (void (*)(void))init_counter_global);
+      (void (*)(void))init_hycounter_hyglobal);
   ```)
 
 (defn main [] : int

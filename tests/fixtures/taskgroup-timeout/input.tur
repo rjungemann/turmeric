@@ -114,7 +114,7 @@
   if (!arg) { free(t); fprintf(stderr, "spawn-timeout: arg oom\n"); abort(); }
   arg->tg = tg;
   arg->ms = (int)ms;
-  pthread_create(t, NULL, tg_timeout_fn, arg);
+  pthread_create(t, NULL, tg_hytimeout_hyfn, arg);
   pthread_detach(*t);
   return (void *)t;
   ```)

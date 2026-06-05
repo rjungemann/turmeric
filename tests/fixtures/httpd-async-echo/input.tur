@@ -65,7 +65,7 @@
   drain[total] = '\0';
   /* Capture just the body (after blank line); main prints it in order. */
   const char *blank = strstr(drain, "\r\n\r\n");
-  if (blank) { async_echo_body(1, blank + 4); }
+  if (blank) { async_hyecho_hybody(1, blank + 4); }
   close(fd);
   return NULL;
   ```)
@@ -73,15 +73,15 @@
 ;; Printer the main thread calls after joining the client (happens-before via
 ;; pthread_join), so the body line is emitted in a fixed order on one thread.
 (defn print-client-body [] : nil
-  ```c printf("body=%s\n", async_echo_body(0, "")); ```)
+  ```c printf("body=%s\n", async_hyecho_hybody(0, "")); ```)
 
 (defn run-server-async [h : ptr<void>] : ptr<void>
-  ```c httpd_run_async(h); return NULL; ```)
+  ```c httpd_hyrun_hyasync(h); return NULL; ```)
 
 (defn spawn-server-async [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver_hyasync, (void *)h);
   return (void *)t;
   ```)
 
@@ -90,7 +90,7 @@
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
   return (void *)t;
   ```)
 

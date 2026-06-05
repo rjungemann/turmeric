@@ -1721,6 +1721,20 @@ Expr *e_nil(Elab *e, Span span) {
 char *elab_mangle_binding_name(const Binding *b) {
     if (b->c_export_name) return strdup(b->c_export_name);
 
+    /* extern-c: legacy fold (alnum/'_' passthrough, everything else -> '_'),
+     * matching mangle_field_name in emit_module.c. Real C symbols, not mangled. */
+    if (b->is_extern_c) {
+        char *p = (char *)malloc(b->name->len + 1);
+        if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t i = 0; i < b->name->len; i++) {
+            char c = b->name->name[i];
+            p[i] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '_') ? c : '_';
+        }
+        p[b->name->len] = '\0';
+        return p;
+    }
+
     char mod_prefix[512];
     size_t mod_prefix_len = 0;
     bool is_main_binding = (b->name->len == 4 &&
@@ -1730,12 +1744,13 @@ char *elab_mangle_binding_name(const Binding *b) {
         const char *mn = b->defining_module_name->name;
         size_t mn_len  = b->defining_module_name->len;
         size_t j = 0;
-        for (size_t i = 0; i < mn_len && j < sizeof(mod_prefix) - 3; i++) {
+        /* Mirror raw_name_for_binding in emit_core.c: each '/'-separated
+         * component is mangled through the shared injective scheme, with '/'
+         * becoming the "__" structural separator. Keep these two in lockstep. */
+        for (size_t i = 0; i < mn_len && j + 6 < sizeof(mod_prefix); i++) {
             char c = mn[i];
             if (c == '/') { mod_prefix[j++] = '_'; mod_prefix[j++] = '_'; }
-            else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') || c == '_') { mod_prefix[j++] = c; }
-            else { mod_prefix[j++] = '_'; }
+            else { tur_mangle_append(mod_prefix, &j, &mn[i], 1); }
         }
         mod_prefix[j++] = '_';
         mod_prefix[j++] = '_';
@@ -1748,7 +1763,18 @@ char *elab_mangle_binding_name(const Binding *b) {
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
     if (mod_prefix_len > 0) { memcpy(p, mod_prefix, mod_prefix_len); k = mod_prefix_len; }
-    tur_mangle_append(p, &k, b->name->name, b->name->len);
+    /* Mirror raw_name_for_binding: "__"-prefixed pure-C-id synthesized names
+     * verbatim (module prefix still applied); injective for other globals;
+     * legacy fold for function-locals referenced by inline-C. */
+    if (tur_name_is_c_identifier(b->name->name, b->name->len) &&
+        b->name->len >= 2 && b->name->name[0] == '_' && b->name->name[1] == '_') {
+        memcpy(p + k, b->name->name, b->name->len);
+        k += b->name->len;
+    } else if (b->is_global) {
+        tur_mangle_append(p, &k, b->name->name, b->name->len);
+    } else {
+        tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);
+    }
     p[k] = '\0';
     return p;
 }

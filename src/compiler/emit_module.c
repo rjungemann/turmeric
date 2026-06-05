@@ -1983,6 +1983,11 @@ int emit_program(Buf *out, const Expr *program) {
                 }
             }
             if (!suppress_ec) {
+            /* extern-c names map to a real C symbol via the LEGACY fold (e.g.
+             * `tur_hamt_new` stays itself; `tvar/new` -> `tvar_new`). This must
+             * stay legacy -- never the injective scheme -- so the prototype, the
+             * call sites (raw_name_for_binding special-cases is_extern_c), and
+             * any inline-C reference all agree on the real symbol name. */
             char *ec_mangled = mangle_field_name(ec->c_name->name);
             buf_printf(&extern_decls, "extern %s %s(",
                        type_c_name(ec->return_type),
@@ -5294,7 +5299,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             free((void*)fn_name);
         } else if (e->kind == EX_EXTERN_C) {
             ExternC *ec = e->as.extern_c_.ext;
-            char *ec_mangled = mangle_field_name(ec->c_name->name);
+            char *ec_mangled = mangle_field_name(ec->c_name->name); /* legacy fold */
             buf_printf(out, "extern %s %s(",
                        type_c_name(ec->return_type),
                        ec_mangled);
@@ -5613,7 +5618,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         } else if (e->kind == EX_EXTERN_C) {
             /* In implementation, just emit the extern declaration reference */
             ExternC *ec = e->as.extern_c_.ext;
-            char *ec_mangled = mangle_field_name(ec->c_name->name);
+            char *ec_mangled = mangle_field_name(ec->c_name->name); /* legacy fold */
             buf_printf(&file, "extern %s %s(",
                        type_c_name(ec->return_type),
                        ec_mangled);

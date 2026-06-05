@@ -784,7 +784,18 @@ char *mangle_dynvar_name(const char *name) {
 }
 
 /* Mangle a Turmeric struct field name to a valid C identifier.
- * Replaces hyphens and other non-id-safe chars with underscores. Caller frees. */
+ *
+ * Struct fields (and dynvars) deliberately keep the LEGACY '-'/'/' -> '_' fold
+ * rather than the injective scheme used for linker-visible global symbols.
+ * Two reasons (see docs/guides/name-mangling-guide.md):
+ *   1. A field is referenced inside inline-C bodies by this stable spelling
+ *      (`opt->is_some` for a field `is-some`), exactly like a function-local.
+ *   2. Field names routinely coincide with parameter names (e.g. a Zipper
+ *      field `left-len` and a `zipper-new` parameter `left-len`); since
+ *      parameters are also legacy-folded, an injective field name would desync
+ *      the two for the same inline-C token. Fields are struct-scoped and never
+ *      cause linker collisions, so injectivity buys nothing here.
+ * Caller frees. */
 char *mangle_field_name(const char *name) {
     size_t len = strlen(name);
     char *p = (char *)malloc(len + 1);
@@ -813,6 +824,19 @@ char *raw_name_for_binding(const Binding *b) {
     if (b->c_export_name) {
         return strdup(b->c_export_name);
     }
+    /* Compiler-synthesized names with the reserved "__" prefix that are ALREADY
+     * pure C identifiers (anonymous lambdas `__fn_N`, instance dicts `__inst_*`)
+     * are emitted verbatim at their use sites, so the definition must match:
+     * re-encoding their literal '_' as "_un" would desync def from use
+     * (`__fn_5` -> `_un_unfn_un5`). Names that merely START with "__" but still
+     * contain kebab/sigil bytes (e.g. `__tur-q-is-err?`) are NOT pure C
+     * identifiers; they fall through to the injective mangler, which is applied
+     * consistently at def and use. Users cannot define "__"-prefixed names. */
+    /* extern-c bindings name a real C symbol via the LEGACY fold (matches the
+     * prototype emitted with mangle_field_name); never injectively mangled. */
+    if (b->is_extern_c) {
+        return mangle_field_name(b->name->name);
+    }
     /* Build module prefix if this binding belongs to a named module.
      * Exception: `main` is always the C entry point, never prefixed. */
     char mod_prefix[512];
@@ -826,16 +850,18 @@ char *raw_name_for_binding(const Binding *b) {
         const char *mn = b->defining_module_name->name;
         size_t mn_len = b->defining_module_name->len;
         size_t j = 0;
-        for (size_t i = 0; i < mn_len && j < sizeof(mod_prefix) - 3; i++) {
+        /* Each '/'-separated component is mangled through the shared injective
+         * scheme; '/' itself becomes the "__" structural separator (which data
+         * can never produce, since a literal '_' encodes as "_un"). A trailing
+         * "__" terminates the prefix. Reserve 6 bytes of slack: up to a 4-byte
+         * "_xHH" escape plus the trailing "__". */
+        for (size_t i = 0; i < mn_len && j + 6 < sizeof(mod_prefix); i++) {
             char c = mn[i];
             if (c == '/') {
                 mod_prefix[j++] = '_';
                 mod_prefix[j++] = '_';
-            } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                       (c >= '0' && c <= '9') || c == '_') {
-                mod_prefix[j++] = c;
             } else {
-                mod_prefix[j++] = '_';
+                tur_mangle_append(mod_prefix, &j, &mn[i], 1);
             }
         }
         mod_prefix[j++] = '_';
@@ -852,7 +878,25 @@ char *raw_name_for_binding(const Binding *b) {
         memcpy(p, mod_prefix, mod_prefix_len);
         k = mod_prefix_len;
     }
-    tur_mangle_append(p, &k, b->name->name, b->name->len);
+    /* Name component:
+     *  - Compiler-synthesized "__"-prefixed names that are already pure C
+     *    identifiers (anonymous lambdas `__fn_N`, internal stdlib helpers like
+     *    `__fiber_set_cancelled`) are emitted VERBATIM -- their use sites
+     *    reference them by that exact spelling. The module prefix above still
+     *    applies, so two module-private `__h` helpers stay distinct
+     *    (`alpha____h` vs `beta____h`).
+     *  - Globals are linker-visible and injective (the foo-bar/foo_bar
+     *    de-collision). Locals/params are block-scoped, never collide, and are
+     *    referenced by inline-C via the legacy `-`->`_` spelling. */
+    if (tur_name_is_c_identifier(b->name->name, b->name->len) &&
+        b->name->len >= 2 && b->name->name[0] == '_' && b->name->name[1] == '_') {
+        memcpy(p + k, b->name->name, b->name->len);
+        k += b->name->len;
+    } else if (b->is_global) {
+        tur_mangle_append(p, &k, b->name->name, b->name->len);
+    } else {
+        tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);
+    }
     p[k] = '\0';
     return p;
 }

@@ -62,7 +62,7 @@
 (defn stub-wrap-fd [ctx : int fd : int] : int
   ```c
   /* __tur_include__: #include <stdlib.h> */
-  print_c_line("wrap_fd-called");
+  print_hyc_hyline("wrap_fd-called");
   (void)ctx;
   int *conn = (int *)malloc(sizeof(int));
   if (!conn) return 0;
@@ -72,7 +72,7 @@
 
 (defn stub-handshake [conn : int] : int
   ```c
-  print_c_line("handshake-called");
+  print_hyc_hyline("handshake-called");
   if (conn == 0) return -1;
   return 0;
   ```)
@@ -96,25 +96,25 @@
 (defn stub-shutdown [conn : int] : void
   ```c
   if (conn == 0) return;
-  print_c_line("shutdown-called");
+  print_hyc_hyline("shutdown-called");
   ```)
 
 (defn stub-free [conn : int] : void
   ```c
   /* __tur_include__: #include <stdlib.h> */
   if (conn == 0) return;
-  print_c_line("free-called");
+  print_hyc_hyline("free-called");
   free((void *)(intptr_t)conn);
   ```)
 
 ;; ---- function-pointer-as-int helper -------------------------------------
 
-(defn fn-ptr-wrap-fd   [] : int ```c return (int64_t)(intptr_t)&stub_wrap_fd;   ```)
-(defn fn-ptr-handshake [] : int ```c return (int64_t)(intptr_t)&stub_handshake; ```)
-(defn fn-ptr-read      [] : int ```c return (int64_t)(intptr_t)&stub_read;      ```)
-(defn fn-ptr-write     [] : int ```c return (int64_t)(intptr_t)&stub_write;     ```)
-(defn fn-ptr-shutdown  [] : int ```c return (int64_t)(intptr_t)&stub_shutdown;  ```)
-(defn fn-ptr-free      [] : int ```c return (int64_t)(intptr_t)&stub_free;      ```)
+(defn fn-ptr-wrap-fd   [] : int ```c return (int64_t)(intptr_t)&stub_hywrap_hyfd;   ```)
+(defn fn-ptr-handshake [] : int ```c return (int64_t)(intptr_t)&stub_hyhandshake; ```)
+(defn fn-ptr-read      [] : int ```c return (int64_t)(intptr_t)&stub_hyread;      ```)
+(defn fn-ptr-write     [] : int ```c return (int64_t)(intptr_t)&stub_hywrite;     ```)
+(defn fn-ptr-shutdown  [] : int ```c return (int64_t)(intptr_t)&stub_hyshutdown;  ```)
+(defn fn-ptr-free      [] : int ```c return (int64_t)(intptr_t)&stub_hyfree;      ```)
 
 ;; 1 if the pointer is NULL, 0 otherwise.
 (defn is-null? [p : ptr<void>] : int
@@ -168,12 +168,12 @@
   ```)
 
 (defn run-server [h : ptr<void>] : ptr<void>
-  ```c httpd_run(h); return NULL; ```)
+  ```c httpd_hyrun(h); return NULL; ```)
 
 (defn spawn-server [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
   return (void *)t;
   ```)
 
@@ -196,7 +196,7 @@
   ca->port = (int64_t)port;
   ca->result_slot = (int *)result_slot;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)ca);
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)ca);
   return (void *)t;
   ```)
 

@@ -46,7 +46,7 @@
 (defn spawn-stopper [r : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))stopper_worker, (void *)r);
+  pthread_create(t, NULL, (void *(*)(void *))stopper_hyworker, (void *)r);
   return (void *)t;
   ```)
 

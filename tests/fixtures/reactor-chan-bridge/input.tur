@@ -83,7 +83,7 @@
   free(a);
   struct timespec ts = { 0, 20000000L }; /* 20 ms */
   nanosleep(&ts, NULL);
-  chan_send_val(ch, v);
+  chan_hysend_hyval(ch, v);
   tur_reactor_wake(r);
   return NULL;
   ```)
@@ -95,7 +95,7 @@
   a[1] = (int64_t)(intptr_t)r;
   a[2] = (int64_t)val;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))sender_worker, (void *)a);
+  pthread_create(t, NULL, (void *(*)(void *))sender_hyworker, (void *)a);
   return (void *)t;
   ```)
 

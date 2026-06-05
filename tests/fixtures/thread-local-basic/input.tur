@@ -59,7 +59,7 @@
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
-  pthread_create(t, NULL, (void *(*)(void *))thread_worker, arg);
+  pthread_create(t, NULL, (void *(*)(void *))thread_hyworker, arg);
   return (void *)t;
   ```)
 

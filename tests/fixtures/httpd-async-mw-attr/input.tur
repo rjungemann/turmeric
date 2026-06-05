@@ -73,12 +73,12 @@
   ```)
 
 (defn run-server-async [h : ptr<void>] : ptr<void>
-  ```c httpd_run_async(h); return NULL; ```)
+  ```c httpd_hyrun_hyasync(h); return NULL; ```)
 
 (defn spawn-server-async [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver_hyasync, (void *)h);
   return (void *)t;
   ```)
 
@@ -87,7 +87,7 @@
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
   return (void *)t;
   ```)
 

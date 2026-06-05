@@ -89,7 +89,7 @@
   int n_workers = 1;
   int max_workers = 4;
   pthread_t workers[4];
-  pthread_create(&workers[0], NULL, (void *(*)(void *))dyn_worker_fn, (void *)q);
+  pthread_create(&workers[0], NULL, (void *(*)(void *))dyn_hyworker_hyfn, (void *)q);
 
   /* Submit 8 identity tasks */
   DynFutCell *futures[8];
@@ -101,7 +101,7 @@
       futures[i]->is_set = false; futures[i]->is_ok = false;
 
       DynTask *task = (DynTask *)malloc(sizeof(DynTask));
-      task->fn = (void *(*)(void *))dyn_identity_fn;
+      task->fn = (void *(*)(void *))dyn_hyidentity_hyfn;
       task->arg = (void *)(uintptr_t)(int64_t)i;
       task->future_cell = (void *)futures[i];
 
@@ -109,7 +109,7 @@
       /* Scale up if queue is getting busy and we have capacity */
       if (q->count > 0 && n_workers < max_workers) {
           pthread_create(&workers[n_workers++], NULL,
-                         (void *(*)(void *))dyn_worker_fn, (void *)q);
+                         (void *(*)(void *))dyn_hyworker_hyfn, (void *)q);
       }
       q->buf[q->tail] = (int64_t)(uintptr_t)task;
       q->tail = (q->tail + 1) % q->alloc;

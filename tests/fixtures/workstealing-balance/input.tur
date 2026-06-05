@@ -133,8 +133,8 @@
       pthread_mutex_t done_lock;
       pthread_cond_t  done_cond;
   } BalState;
-  /* g_state is the C name for Turmeric's g-state function */
-  BalState *state = (BalState *)g_state(NULL);
+  /* g_hystate is the C name for Turmeric's g-state function */
+  BalState *state = (BalState *)g_hystate(NULL);
   int my    = (int)(intptr_t)arg;
   int other = 1 - my;
   void **deques = (void **)state->deques;
@@ -144,8 +144,8 @@
       if (cnt >= state->target) break;
 
       /* Try own deque, then steal */
-      void *item = bwsd_pop(deques[my]);
-      if (!item) item = bwsd_steal(deques[other]);
+      void *item = bwsd_hypop(deques[my]);
+      if (!item) item = bwsd_hysteal(deques[other]);
 
       if (item) {
           int64_t new_cnt = __atomic_add_fetch(&state->counter, 1, __ATOMIC_SEQ_CST);
@@ -206,8 +206,8 @@
   s->target  = (int64_t)n;
   pthread_mutex_init(&s->done_lock, NULL);
   pthread_cond_init(&s->done_cond, NULL);
-  /* Register in global so bal_worker can find it */
-  g_state((void *)s);
+  /* Register in global so bal_hyworker can find it */
+  g_hystate((void *)s);
   return (void *)s;
   ```)
 
