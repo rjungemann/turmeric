@@ -146,6 +146,46 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                                               bindings, n_bindings) &&
                    call_collect_type_bindings(expected->as.app.arg, *actual.as.app.arg,
                                               bindings, n_bindings);
+        case TY_FN: {
+            /* poly-closure-result-specialization (Stage A1): bind the named
+             * tyvars in a function-typed parameter (e.g. `:(fn [A] B)`) from a
+             * function-typed argument by recursing structurally over the arg and
+             * result full types.  A captureless fn argument carries no
+             * arg_full_types/result_full_type (monomorphic), so fall back to the
+             * kind-derived shell type for each position.  A fat-boxed closure
+             * arrives opaquely as ptr<void>; accept the head and leave the fn's
+             * tyvars unbound here -- they bind from the other argument or the
+             * call result (same precedent as the TY_ADT-vs-TY_APP head match). */
+            if (actual.kind == TY_PTR_VOID) {
+                return true;
+            }
+            if (actual.kind != TY_FN) {
+                return type_eq(*expected, actual);
+            }
+            bool ok = true;
+            uint8_t exp_arity = expected->as.fn.arity;
+            uint8_t act_arity = actual.as.fn.arity;
+            uint8_t n = exp_arity < act_arity ? exp_arity : act_arity;
+            for (uint8_t i = 0; i < n; i++) {
+                const Type *ea = (expected->as.fn.arg_full_types &&
+                                  expected->as.fn.arg_full_types[i])
+                    ? expected->as.fn.arg_full_types[i] : NULL;
+                if (!ea) continue;  /* concrete arg position -- nothing to bind */
+                Type aa = (actual.as.fn.arg_full_types &&
+                           actual.as.fn.arg_full_types[i])
+                    ? *actual.as.fn.arg_full_types[i]
+                    : type_from_kind(actual.as.fn.arg_kinds[i]);
+                ok = ok && call_collect_type_bindings(ea, aa, bindings, n_bindings);
+            }
+            const Type *er = expected->as.fn.result_full_type;
+            if (er) {
+                Type ar = actual.as.fn.result_full_type
+                    ? *actual.as.fn.result_full_type
+                    : type_from_kind(actual.as.fn.result_kind);
+                ok = ok && call_collect_type_bindings(er, ar, bindings, n_bindings);
+            }
+            return ok;
+        }
         case TY_UNION:
         case TY_INTERSECTION:
             return type_eq(*expected, actual);
@@ -2263,6 +2303,17 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         /* Phase HRT/G2: A TY_TYVAR parameter (named type variable like :a) accepts any argument.
          * The concrete type is resolved per-arm inside a GADT match. */
         if (!arg_ok && expected_arg_kind == TY_TYVAR) {
+            arg_ok = true;
+        }
+        /* poly-closure-result-specialization (Stage A2): the symmetric rule for
+         * a tyvar-typed *argument*.  Inside a generic body, a parameter such as
+         * `x : A` carries TY_TYVAR; passing it to another generic-typed callee
+         * (e.g. `(fv x)` where `fv :(fn [A] B)`) lowers the callee's arg kind to
+         * a non-tyvar carrier (TY_STRUCT), so the tyvar-parameter hatch above
+         * does not fire.  Accept any tyvar argument: its concrete type is
+         * resolved per monomorphization at the call site that instantiates the
+         * enclosing generic defn. */
+        if (!arg_ok && args[i]->type.kind == TY_TYVAR) {
             arg_ok = true;
         }
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_FN) {

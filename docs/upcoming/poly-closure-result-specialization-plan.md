@@ -34,6 +34,45 @@ and the risk center.
 > `compose-float` callers move back to `>>>` and the combinator could then be
 > retired or kept as an alias.
 
+> **Stage A landed (2026-06-05):** the elaboration-acceptance widening (below)
+> is implemented in `src/compiler/elab_call.c` and verified:
+> - `call_collect_type_bindings` gained a `TY_FN` case that binds a function-
+>   typed parameter's named tyvars structurally from a function-typed argument
+>   (and accepts a `ptr<void>` fat box at the head, leaving its tyvars unbound).
+> - the saturated-call loop gained the symmetric tyvar-*argument* acceptance
+>   rule next to the existing tyvar-*parameter* one.
+>
+> A *generic* typed compose now type-checks and runs at `:int`
+> (fixture `tests/fixtures/generic-compose-int/`, prints `8` then `11`); full
+> suite green (1518 passed, 0 failed). `>>>` is **not** retyped -- Stage A alone
+> is shipped only as the elaboration prerequisite, exactly as the staging note
+> below requires.
+>
+> **Two prerequisites discovered while landing Stage A that reshape B->E and
+> were not in the original feasibility verdict:**
+>
+> 1. **Specialization only triggers on fn-typed arguments, not `ptr<void>`.**
+>    The realistic repro (and the existing `>>>` callers) pass argument closures
+>    typed `ptr<void>` (e.g. `make-scale : ptr<void>`). A `ptr<void>` argument
+>    binds *no* tyvars in `call_collect_type_bindings`, so `emit_abi_register_call`
+>    sees no ABI change and interns no specialization -- the inner body stays on
+>    the int64 thunk ABI and the whole pipeline runs as int64 carriers, with the
+>    only UB at the typed consumer boundary (`call-float` casting an int64-bodied
+>    closure to a `double` thunk). This means a side effect of this: the
+>    `TUR-E0705` guard (Stage D) never fires for the `ptr<void>` form either,
+>    because it also keys on `n_type_bindings > 0`. For Stage B+C to do anything,
+>    the SF/argument closures **must carry their `(fn [float] float)` type**, not
+>    `ptr<void>`.
+> 2. **Producing fn-typed closures from a `defn` is itself broken** -- see
+>    `docs/reported/boxed-fn-typed-closure-return-miscompiles.md`. A plain `defn`
+>    declared `: (fn [float] float)` whose body is a capturing closure emits its
+>    C return type as the *result* type (`double`) instead of the fat-closure
+>    carrier, so float/cstr closures are a hard `cc` error and int closures
+>    compile with a `-Wint-conversion` "works by luck". **This must be fixed
+>    before Stage E** can retype `sf-compose-typed` to pass `:float` SFs as
+>    fn-typed closures. Add it as **Stage 0** (carrier fallback for plain
+>    closure-returning defns; mirror `emit_inst_fn_return_carrier`).
+
 ## Confirmed root-cause map (file:line)
 
 ### Elaboration -- why the polymorphic typed spelling fails to type-check
@@ -98,10 +137,22 @@ and that tyvar binds to a float kind (2938).
 > retyped polymorphic `>>>` type-checks but still hits E0705 on float. Land 1->4
 > as one change (or behind a flag) -- do not ship A alone.
 
-1. **Stage A (elaboration acceptance).** Add the `TY_FN` case to
-   `call_collect_type_bindings` (elab_call.c:86) and the tyvar-argument
-   acceptance near elab_call.c:2219. New positive fixture: a *generic* compose
-   used at `:int` (does not hit E0705) compiles and runs. Full suite green.
+0. **Stage 0 (carrier fallback for plain closure-returning defns) -- NEW,
+   prerequisite for Stage E.** Fix
+   `docs/reported/boxed-fn-typed-closure-return-miscompiles.md`: a plain `defn`
+   whose declared return is a non-boxed `TY_FN` and whose body yields a
+   capturing closure must lower its C return type (signature `emit_fns.c:414`,
+   forward decl `emit_module.c:1332`, consumer let-binding) to the fat-closure
+   carrier, not `type_c_name(TY_FN)` (the result type). Mirror
+   `emit_inst_fn_return_carrier` (`emit_core.c:214`) but drop the `__inst_`
+   name gate. Without this, no `defn` can produce the fn-typed `:float` closures
+   that Stage B+C need to specialize on.
+
+1. **Stage A (elaboration acceptance) -- DONE (2026-06-05).** Added the `TY_FN`
+   case to `call_collect_type_bindings` (elab_call.c) and the tyvar-argument
+   acceptance in the saturated-call loop. Positive fixture
+   `tests/fixtures/generic-compose-int/` (generic compose at `:int`, does not
+   hit E0705) compiles and runs; full suite green (1518 passed, 0 failed).
 
 2. **Stage B+C (per-spec inner-body clone) -- the risk center.** In the
    spec-emit loop (emit_module.c:2019-2028), when the outer defn has

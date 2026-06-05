@@ -19,6 +19,18 @@ description: The untyped `>>>` combinator in stdlib/arrow.tur emits an int64-onl
 > Generalizing `>>>` *itself* (direction B) needs the compiler change tracked
 > in `docs/upcoming/poly-closure-result-specialization-plan.md`; until that
 > lands, `>>>` must not be applied to `:float`-returning closures.
+>
+> **Direction B, Stage A landed (2026-06-05):** the elaboration-acceptance
+> widening that lets a *generic typed* closure-returning combinator
+> (`(defn cmp [A B C] [^fat f :(fn [A] B) ^fat g :(fn [B] C)] : ptr<void> ...)`)
+> type-check is implemented (`src/compiler/elab_call.c`) and verified at `:int`
+> (fixture `tests/fixtures/generic-compose-int/`). The remaining emit-side
+> inner-body cloning (Stages B+C) plus two newly-discovered prerequisites --
+> specialization only triggers on fn-typed (not `ptr<void>`) arguments, and
+> producing fn-typed closures from a `defn` is itself broken
+> (`docs/reported/boxed-fn-typed-closure-return-miscompiles.md`) -- are tracked
+> in the plan. `>>>` is **not** yet retyped.
+>
 > **Severity:** latent silent miscompile (UB function-pointer call). Produces
 > correct output today for pure-`:float` chains by register-class luck; not
 > guaranteed under optimization, a different ABI, or mixed int/float chains.
