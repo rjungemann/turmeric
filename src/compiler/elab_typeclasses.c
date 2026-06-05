@@ -353,6 +353,35 @@ static Expr *box_synth_comparator(Elab *e, Expr *inner) {
     return shim;
 }
 
+/* Coerce an argument bound for a fat-closure (is_fat) method parameter into the
+ * fat-closure representation, mirroring the `^fat` auto-shim in elab_call.c.  A
+ * bare (non-capturing) TY_FN reference is boxed via EX_FN_TO_FAT; a capturing
+ * closure (boxed TY_FN), an already-fat :ptr<void> handle, or nil passes
+ * through unchanged.  Used by arrow-instance dispatch so `(comp add1 dbl)`
+ * feeds its function arguments to the arrow method's fat-closure parameters. */
+static Expr *arrow_fat_shim(Elab *e, Expr *a) {
+    if (!a) return a;
+    if (a->type.kind == TY_FN && !a->type.as.fn.boxed) {
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, a->span);
+        shim->as.fn_to_fat_.inner = a;
+        return shim;
+    }
+    return a;
+}
+
+/* True when `tc` has an instance whose head is the function arrow (TY_FN).
+ * Used to defer a structurally-return-dispatch method (e.g. `comp [f g] : a`,
+ * whose untyped params do not mention the class variable) to argument-based
+ * dispatch when the call supplies arrow arguments: the function argument's type
+ * selects the arrow instance, so no return-type ascription is needed. */
+static bool typeclass_has_arrow_instance(TypeClassEnv *env, const TypeClass *tc) {
+    for (TypeClassInstance *inst = env->instances; inst; inst = inst->next) {
+        if (inst->typeclass != tc) continue;
+        if (inst->n_type_args > 0 && inst->type_args[0].kind == TY_FN) return true;
+    }
+    return false;
+}
+
 static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
                                      Expr *obj, Expr *other_arg, Span span) {
     if (!outer_inst || outer_inst->n_type_args == 0) return NULL;
@@ -1251,6 +1280,33 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 }
                 for (uint8_t i = 0; i < n_type_args; i++) {
                     Form *arg = args_form->as.list.items[i];
+                    /* Function-arrow instance head: `(->)` (a one-element list
+                     * whose item is the `->` symbol) or a bare `->` symbol map
+                     * to a dedicated function-arrow constructor of kind
+                     * * -> * -> *, represented as a TY_FN marker (arity 0).
+                     * This is distinct from the opaque-struct fallback below:
+                     * a method parameter typed by the class variable then
+                     * resolves to a callable fat closure (see the param-type
+                     * substitution further down), so an `Arrow [(->)]` instance
+                     * whose body composes/applies its arguments type-checks. */
+                    bool is_arrow_head = false;
+                    if (arg->tag == F_SYM && arg->as.sym == e->sym_arrow) {
+                        is_arrow_head = true;
+                    } else if (arg->tag == F_LIST && arg->as.list.len == 1 &&
+                               arg->as.list.items[0]->tag == F_SYM &&
+                               arg->as.list.items[0]->as.sym == e->sym_arrow) {
+                        is_arrow_head = true;
+                    }
+                    if (is_arrow_head) {
+                        memset(&type_args[i], 0, sizeof(type_args[i]));
+                        type_args[i].kind = TY_FN;
+                        type_args[i].copy_kind = CK_COPY;
+                        type_args[i].hkt_kind = KIND_ARROW2;  /* * -> * -> * */
+                        /* Stable, C-safe mangling component (the raw `->`
+                         * symbol would sanitise to "__"). */
+                        type_arg_syms[i] = intern_cstr(e->st, "arrow");
+                        continue;
+                    }
                     /* Parse type keywords or symbols */
                     if (arg->tag == F_KEYWORD || arg->tag == F_SYM) {
                         const Symbol *kw = arg->as.sym;
@@ -1761,6 +1817,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Binding **method_params;    /* param bindings to push into the body scope */
         uint8_t   n_method_params;
         FnDef    *method_fd;        /* shell whose ->body pass 2 fills in */
+        bool      arrow_return;     /* class return type is the (->) class var:
+                                     * refine the method's result type from the
+                                     * elaborated body (a callable closure) in
+                                     * pass 2. */
     } InstMethodPass;
     InstMethodPass *passes = NULL;
     if (tc->n_methods > 0) {
@@ -1860,6 +1920,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 case TY_FLOAT32: type_component = "float32"; break;
                 case TY_FLOAT64: type_component = "float64"; break;
                 case TY_SYM:     type_component = "Sym";     break;
+                case TY_FN:      type_component = "arrow";   break;
                 case TY_STRUCT:
                     /* Phase HKT H3: use the original symbol name when available,
                      * falling back to "T" for unnamed struct type args. */
@@ -1942,6 +2003,16 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     break;
                 }
             }
+        }
+        /* Arrow head: a method whose declared return is the class variable
+         * (e.g. `comp : a` under `Arrow [(->)]`) returns a callable closure.
+         * The arrow marker carries no arity yet, so flag it as a boxed TY_FN
+         * placeholder here and refine its full signature from the elaborated
+         * body in pass 2 (the body's `(fn [x] ...)` carries the real arity). */
+        bool arrow_return = false;
+        if (return_type.kind == TY_FN && return_type.as.fn.arity == 0) {
+            arrow_return = true;
+            return_type.as.fn.boxed = true;
         }
         /* Check for return type annotation after params */
         if (impl_form->as.list.len >= 3) {
@@ -2074,7 +2145,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     }
 
                     Type param_type = TYPE_INT;
-                    
+                    /* Arrow head: a class-variable-typed parameter becomes a
+                     * callable fat closure (TY_PTR_VOID + is_fat), so a method
+                     * body that applies it -- `(g (f x))` -- routes through the
+                     * fat-dispatch path instead of erroring "not a function". */
+                    bool param_is_fat = false;
+
                     /* Phase 15: Try to use type from typeclass method definition */
                     if (tc->methods[i].param_types && n_method_params < tc->methods[i].n_params) {
                         param_type = tc->methods[i].param_types[n_method_params];
@@ -2086,10 +2162,25 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     /* CS1b: elab_param_type is the type used for scope bindings and body
                      * elaboration; param_type is the ABI type used for the emitted signature. */
                     Type elab_param_type = param_type;
+                    /* Arrow head: under `Arrow [(->)]`, a method parameter typed
+                     * by the class variable is the function arrow itself -- a
+                     * callable closure.  Carry it as a fat-closure sink
+                     * (:ptr<void> + is_fat), the same representation the
+                     * bare-function arrow layer uses for its `^fat` parameters,
+                     * so applying it (`(g (f x))`) dispatches through the fat
+                     * protocol.  This applies even to a return-dispatch method
+                     * (e.g. `comp [f g] : a`, whose untyped params default to the
+                     * carrier): the arrow instance head makes the params arrows. */
+                    if (param_type.kind == TY_INT && n_type_args > 0 &&
+                        type_args[0].kind == TY_FN) {
+                        elab_param_type = TYPE_PTR_VOID;
+                        param_type = TYPE_PTR_VOID;
+                        param_is_fat = true;
+                    }
                     /* Phase RT: for a return-only-dispatch method, parameters
                      * are genuine (concrete) inputs, not the dispatch receiver,
                      * so do not rewrite an int parameter to the instance type. */
-                    if (param_type.kind == TY_INT && n_type_args > 0 &&
+                    else if (param_type.kind == TY_INT && n_type_args > 0 &&
                         !method_is_return_dispatch(tc, &tc->methods[i])) {
                         elab_param_type = type_args[0];
                         /* PTC4: KIND_ARROW struct type-constructors (have type params) are
@@ -2126,6 +2217,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             *pt = param_type;
                             method_params[n_method_params]->poly_type = pt;
                         }
+                        if (param_is_fat) method_params[n_method_params]->is_fat = true;
                         method_param_types[n_method_params++] = c_param_type;
                     } else if (p->tag == F_VEC && p->as.list.len >= 1) {
                         /* Parameter with type annotation: [name : type] */
@@ -2207,6 +2299,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             param_kinds[j] = method_param_types[j].kind;
         }
         Type fn_type = type_fn(param_kinds, n_method_params, return_type.kind);
+        /* Arrow head: mirror each fat-closure parameter into the method's fn
+         * type so call sites auto-shim a bare function argument into a fat box
+         * (the same arg_fat plumbing the regular defn path uses for `^fat`). */
+        for (uint8_t j = 0; j < n_method_params; j++) {
+            if (method_params[j]->is_fat) fn_type.as.fn.arg_fat[j] = true;
+        }
         /* Closure-returning instance methods: a method whose declared return
          * type is a function type (e.g. (arr-of [f] : (fn [:int] :int))) must
          * carry the full TY_FN through result_full_type, exactly like the
@@ -2260,6 +2358,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         passes[i].method_params   = method_params;
         passes[i].n_method_params = n_method_params;
         passes[i].method_fd       = method_fd;
+        passes[i].arrow_return    = arrow_return;
     }
 
     /* Pass 2: every sibling's FnDef shell and `method_impls` slot is now
@@ -2291,6 +2390,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         if (n_body > 0) {
             if (n_body == 1) {
                 method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
+                if (!method_body) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
             } else {
                 Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
                 for (uint32_t k = 0; k < n_body; k++) {
@@ -2311,6 +2411,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
 
         FnDef *method_fd = mp->method_fd;
         method_fd->body = method_body;
+
+        /* Arrow head: the method's declared return was the class variable (the
+         * function arrow), flagged as a boxed-TY_FN placeholder in pass 1.  Now
+         * that the body is elaborated, refine the result's full signature from
+         * the body's actual closure type (arity, boxing) so a caller binding
+         * the result -- `(let [h (comp f g)] (h 3))` -- sees a callable closure
+         * with the right arity rather than an arity-0 shell. */
+        if (mp->arrow_return && method_body && method_body->type.kind == TY_FN &&
+            method_fd->binding->type.kind == TY_FN) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = method_body->type;
+            rft->as.fn.boxed = true;
+            method_fd->binding->type.as.fn.result_full_type = rft;
+        }
 
         /* Register the method now -- after its body's lifted lambdas were
          * registered above -- so emit order is `[body lambdas...][method def]`,
@@ -2543,6 +2657,18 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     }
     if (!meth) return NULL;  /* not a return-only-dispatch method */
     if (handled) *handled = true;
+
+    /* Arrow head: if this class has a function-arrow instance and the call has
+     * arguments, the arrow argument (a function) selects the instance via the
+     * normal argument-based dispatcher -- so decline return-dispatch here and
+     * let argument dispatch take over, rather than demanding a return-type
+     * ascription.  Nullary arrow methods (no argument to dispatch on, e.g. an
+     * ArrowZero `zero`) still fall through to expected-type return-dispatch. */
+    if (call->as.list.len > 1 &&
+        typeclass_has_arrow_instance(&e->typeclass_env, tc)) {
+        if (handled) *handled = false;
+        return NULL;
+    }
 
     if (!e->expected_type) {
         diag_emit(DIAG_ERROR, call->span,
@@ -3127,6 +3253,13 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                          itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID ||
                          itk == TY_SYM);
                     type_ok = !inst_is_primitive;
+                    /* Arrow head (itk == TY_FN): an `Arrow [(->)]` instance
+                     * matches only a function receiver, never a struct/vec.
+                     * Conversely, a function receiver must not bind a non-arrow
+                     * KIND_ARROW instance (e.g. an opaque container). */
+                    if (type_ok && (itk == TY_FN || obj->type.kind == TY_FN)) {
+                        type_ok = (itk == TY_FN && obj->type.kind == TY_FN);
+                    }
                     if (type_ok && obj->type.kind == TY_APP && itk == TY_STRUCT) {
                         const Type *head = &obj->type;
                         while (head && head->kind == TY_APP) head = head->as.app.fn;
@@ -3353,6 +3486,23 @@ resolved_user_fallback:;
         }
     }
 
+    /* Arrow head (and any fat-closure method parameter): auto-shim a bare
+     * (non-capturing) function argument into a fat-closure box, mirroring the
+     * `^fat` coercion the regular call path applies (elab_call.c).  A capturing
+     * closure (boxed TY_FN) or an already-fat :ptr<void> handle passes through.
+     * params[0] is the receiver (obj); params[i+1] matches args[i]. */
+    if (best_method->n_params > 0 && best_method->params[0] &&
+        best_method->params[0]->is_fat) {
+        obj = arrow_fat_shim(e, obj);
+    }
+    for (uint32_t i = 0; i < n_args; i++) {
+        uint8_t pidx = 1 + (uint8_t)i;
+        if (pidx < best_method->n_params && best_method->params[pidx] &&
+            best_method->params[pidx]->is_fat) {
+            args[i] = arrow_fat_shim(e, args[i]);
+        }
+    }
+
     /* Allocate arguments array with obj prepended */
     Expr **call_args = (Expr **)arena_alloc(e->arena, (n_args + 1) * sizeof(Expr *));
     call_args[0] = obj;
@@ -3366,7 +3516,18 @@ resolved_user_fallback:;
      * declared return type from the method's binding function type. */
     Type result_type;
     if (best_method->binding->type.kind == TY_FN) {
-        result_type = type_from_kind(best_method->binding->type.as.fn.result_kind);
+        /* Arrow head: when the method returns a *boxed* closure value (a
+         * callable `(fn [x] ...)` recovered from an arrow instance body), use
+         * its full signature so a caller applying the result -- `(h 3)` --
+         * sees the real arity instead of an arity-0 shell.  Closure-returning
+         * methods that carry the int64 fat handle (an unboxed fn-typed return
+         * annotation) keep the carrier ABI via type_from_kind below. */
+        const Type *rft = best_method->binding->type.as.fn.result_full_type;
+        if (rft && rft->kind == TY_FN && rft->as.fn.boxed) {
+            result_type = *rft;
+        } else {
+            result_type = type_from_kind(best_method->binding->type.as.fn.result_kind);
+        }
     } else {
         result_type = best_method->body->type;
         if (result_type.kind == TY_UNKNOWN || result_type.kind == TY_NIL) {

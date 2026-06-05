@@ -6,7 +6,19 @@ description: Reintroduce the `Arrow`, `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `
 
 # `stdlib/arrow` Typeclass Reintroduction -- Plan
 
-## T1 prerequisite-readiness status (2026-06-05) -- BLOCKED, plan does not start
+## T1 prerequisite-readiness status (2026-06-05) -- fourth gate CLOSED
+
+**Update (2026-06-05):** the fourth, unlisted gate below -- the function arrow
+`(->)` as a typeclass instance head -- has since been **closed**. `(->)`/`[->]`
+are now first-class instance heads whose method parameters are callable arrows,
+proven by `tests/fixtures/arrow-instance-basic` (an `arr`/`comp` network through
+dispatch). See
+[docs/reported/function-arrow-not-instantiable-as-typeclass-head.md](../reported/function-arrow-not-instantiable-as-typeclass-head.md)
+(Resolution). The original BLOCKED assessment is preserved below for history;
+the plan may now start, with return-type *dispatch* for nullary arrow methods
+(fix direction #3) as the remaining caveat.
+
+### Original assessment -- BLOCKED, plan does not start
 
 Ran the Task 1 readiness check against `tur 0.18.0` at repo HEAD `24ad0e7`.
 

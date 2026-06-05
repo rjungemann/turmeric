@@ -1,5 +1,20 @@
 # Function arrow `(->)` is not instantiable as a typeclass instance head
 
+> **RESOLVED (2026-06-05).** The function arrow is now a first-class typeclass
+> instance head. `definstance C [(->)]` (and the bare `[->]` spelling) are
+> accepted and map to a dedicated arrow constructor of kind `* -> * -> *`; a
+> method parameter typed by the class variable resolves to a callable fat
+> closure, so a method body that composes/applies its arguments type-checks and
+> a caller can apply the composed arrow directly. Both repros below now build,
+> emit C, and run (repro #2 prints `8`). Covered by
+> `tests/fixtures/arrow-instance-basic`. See **Resolution** at the end.
+>
+> Out of scope (unchanged, see fix direction #3): return-type *dispatch* for a
+> nullary arrow method (`arr :: (b->c) -> a b c` selected purely from the result
+> type) and direct application of a bare `(arr f)` result -- the latter is the
+> same limitation the bare-function layer documents (it calls arrow results via
+> `TUR_APPLY1`). Arrow results still compose fine as fat arguments.
+
 **One-line summary:** `definstance C [(->)]` is rejected outright, and the
 opaque-name workarounds (`[->]`, `[Fn]`) silently type the method parameters
 as an opaque struct rather than as callable functions -- so the entire
@@ -138,8 +153,45 @@ type of a callable closure.
 
 ## Disposition
 
-`stdlib-arrow-typeclass-reintroduction-plan.md` is **blocked** on this gap and
-must stay scaled back, per its own "If a prerequisite cannot be restored,
-revert this plan and stay scaled back" clause. `stdlib/arrow.tur` is left
-untouched (bare-function layer only). This report is the prerequisite that the
-plan's Task 1 should have listed as a fourth hard gate.
+`stdlib-arrow-typeclass-reintroduction-plan.md` listed this gap as its fourth
+hard gate. With the gate now closed (see Resolution), the plan's central
+deliverable -- `definstance Arrow [(->)]` with composing/applying methods -- is
+expressible. `stdlib/arrow.tur` is still left untouched (bare-function layer
+only); reintroducing the typeclass layer there is the plan's own follow-up.
+
+## Resolution
+
+Implemented in `src/compiler/elab_typeclasses.c`:
+
+1. **Arrow instance head.** The instance-head parser recognises `(->)` (a
+   one-element list of the `->` symbol) and the bare `->` symbol and maps them
+   to a dedicated function-arrow constructor -- a `TY_FN` marker of kind
+   `KIND_ARROW2` (`* -> * -> *`), distinct from the opaque-struct fallback.
+   Mangling encodes it as the suffix `arrow`.
+2. **Callable method parameters.** When the instance head is the arrow, a method
+   parameter typed by the class variable (the untyped/`TY_INT`-carrier default)
+   becomes a fat-closure sink (`:ptr<void>` + `is_fat`) -- the same
+   representation the bare-function arrow layer uses for `^fat` params -- so
+   `(g (f x))` routes through the fat-dispatch path instead of erroring "not a
+   function". This applies even to a structurally return-dispatch method
+   (`comp [f g] : a`, whose untyped params do not mention `a`).
+3. **Callable arrow result.** A method whose declared return is the class
+   variable has its result signature refined in pass 2 from the elaborated body
+   (a boxed `(fn [x] ...)` closure), so `(let [h (comp f g)] (h 3))` sees a
+   callable closure of the right arity rather than an arity-0 shell.
+4. **Argument-based dispatch.** A structurally return-dispatch method defers to
+   argument dispatch when its class has an arrow instance and the call supplies
+   arguments: the function argument's type selects the `(->)` instance, so no
+   return-type ascription is needed. Nullary arrow methods still use
+   return/expected-type dispatch (fix direction #3, still open).
+5. **Call-site fat shim.** Arrow-instance dispatch auto-shims a bare
+   (non-capturing) function argument into a fat-closure box, mirroring the
+   `^fat` coercion in `elab_call.c`.
+
+A latent NULL-deref was fixed along the way: a single-expression instance method
+body that fails to elaborate left `method_body == NULL` and SEGV'd in pass 2;
+the single-body path now bails out like the multi-body path.
+
+**Validation.** `tests/fixtures/arrow-instance-basic` builds an arrow network
+(`arr`/`comp`) through typeclass dispatch and matches the bare-function output;
+both repros above run; the full suite is green (`1459 passed, 0 failed`).
