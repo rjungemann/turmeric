@@ -3370,11 +3370,11 @@ static int64_t __fn_900(int64_t x) {
         __t20->__fn = (tur_thunk_int64_t_int64_t_t)__fn_895;
         __t20->x = x;
         void *__t21 = __t20;
-        return __t21;
+        return (int64_t)(intptr_t)__t21;
 }
 
 static int64_t __inst_HasAdder_adder_AddW(int64_t self) {
-        return __fn_900;
+        return (int64_t)(intptr_t)__fn_900;
 }
 
 typedef struct dict_HasAdder_AddW {

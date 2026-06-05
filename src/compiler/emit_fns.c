@@ -635,14 +635,49 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Function with return value */
         char *ret_val = emit_fat_return_value(ctx, file, e, fd->body);
         indent_buf(file, ctx->indent);
+        /* closure-carrier-return-and-arg-int-pointer-warnings: determine the
+         * function's actual C return type so a fn-typed body returned through
+         * the int64_t/void* closure carrier gets the matching bridge cast.
+         * This mirrors the signature-emission branches above; the body is
+         * guaranteed non-inline-c here (inline-c is handled earlier), so the
+         * inline-c-only sub-branches there do not apply. */
+        const char *ret_ctype = NULL;
+        if (e->type.kind == TY_FN && !is_main) {
+            Type carrier_override = emit_carrier_return_override(fd);
+            if (use_abi_spec) {
+                ret_ctype = emit_type_c_name(ctx,
+                    ctx->current_abi_specialization->result_type);
+            } else if (carrier_override.kind == TY_STRUCT) {
+                ret_ctype = emit_type_c_name(ctx, carrier_override);
+            } else if (e->type.as.fn.result_full_type &&
+                       emit_inst_fn_return_carrier(fd,
+                           e->type.as.fn.result_full_type)) {
+                ret_ctype = emit_inst_fn_return_carrier(fd,
+                    e->type.as.fn.result_full_type);
+            } else if (e->type.as.fn.result_full_type) {
+                Type rft = *e->type.as.fn.result_full_type;
+                const char *fn_ret_td = e->type.as.fn.result_fat
+                    ? NULL : emit_fn_return_typedef(fd, &rft);
+                ret_ctype = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
+            } else {
+                ret_ctype = emit_type_c_name(ctx,
+                    emit_type_from_kind(e->type.as.fn.result_kind));
+            }
+        }
+        bool ret_is_int64_carrier = ret_ctype &&
+            strcmp(ret_ctype, "int64_t") == 0;
         /* Special case: if this is main and it returns int64_t, cast to int */
         if (is_main && result_kind == TY_INT) {
             buf_printf(file, "return (int)%s;\n", ret_val);
-        } else if (result_kind == TY_INT && fd->body->type.kind == TY_FN) {
-            /* A bare non-capturing function reference (TY_FN) returned as the
-             * int64_t function-pointer carrier needs an explicit cast.  Without
-             * it, newer Apple clang rejects the implicit function-pointer-to-
-             * integer conversion with -Wincompatible-function-pointer-types. */
+        } else if (fd->body->type.kind == TY_FN &&
+                   (result_kind == TY_INT || ret_is_int64_carrier)) {
+            /* A function-typed body returned through the int64_t closure
+             * carrier: a bare non-capturing fn reference is a `void *(...)`
+             * function pointer, and a fat box is declared `void *`, but the C
+             * return type is the int64_t carrier.  Without the (int64_t)(intptr_t)
+             * bridge, clang trips -Wint-conversion / -Wincompatible-function-
+             * pointer-types on the implicit pointer-to-int conversion.  (A void*
+             * carrier return needs no cast: the body value is already a pointer.) */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);

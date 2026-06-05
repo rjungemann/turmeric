@@ -3397,7 +3397,7 @@ static int64_t __inst_HasArr_adder_Box(int64_t self) {
         __t20->__fn = (tur_thunk_int64_t_int64_t_t)__fn_903;
         __t20->self = self;
         void *__t21 = __t20;
-        return __t21;
+        return (int64_t)(intptr_t)__t21;
 }
 
 typedef struct dict_HasArr_Box {

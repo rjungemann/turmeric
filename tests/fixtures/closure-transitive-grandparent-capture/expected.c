@@ -3368,7 +3368,7 @@ static int64_t __fn_898(void * __env_p_901, int64_t x) {
         __t20->x = x;
         __t20->n = __env___env_900->n;
         void *__t21 = __t20;
-        return __t21;
+        return (int64_t)(intptr_t)__t21;
 }
 
 static void * array_hyget(void * arr, int64_t idx) {
@@ -4477,7 +4477,7 @@ static int64_t adder(int64_t n) {
         __t27->__fn = (int64_t)(intptr_t)__fn_898;
         __t27->n = n;
         void *__t28 = __t27;
-        return __t28;
+        return (int64_t)(intptr_t)__t28;
 }
 
 static int64_t call_hyfat(int64_t f, int64_t x) {

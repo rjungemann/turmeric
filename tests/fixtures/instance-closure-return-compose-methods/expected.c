@@ -3370,7 +3370,7 @@ static int64_t __inst_HasArr_inc_hyby_ArrW(int64_t self, int64_t n) {
         __t20->__fn = (tur_thunk_int64_t_int64_t_t)__fn_897;
         __t20->n = n;
         void *__t21 = __t20;
-        return __t21;
+        return (int64_t)(intptr_t)__t21;
 }
 
 struct __env_905 { tur_thunk_int64_t_int64_t_t __fn; int64_t k; };
@@ -3384,7 +3384,7 @@ static int64_t __inst_HasArr_mul_hyby_ArrW(int64_t self, int64_t k) {
         __t22->__fn = (tur_thunk_int64_t_int64_t_t)__fn_903;
         __t22->k = k;
         void *__t23 = __t22;
-        return __t23;
+        return (int64_t)(intptr_t)__t23;
 }
 
 typedef struct dict_HasArr_ArrW {

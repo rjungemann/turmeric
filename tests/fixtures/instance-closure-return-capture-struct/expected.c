@@ -3378,7 +3378,7 @@ static int64_t __inst_HasArr_arr_hyof_ArrW(int64_t self, int64_t n) {
             void *__t22 = __t21;
             __t20 = __t22;
         }
-        return __t20;
+        return (int64_t)(intptr_t)__t20;
 }
 
 typedef struct dict_HasArr_ArrW {
