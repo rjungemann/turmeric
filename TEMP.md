@@ -1,117 +1,71 @@
-# Plan Ordering -- Working Scratch
+## Current (do now)
 
-## Format
+### The two anchors
 
-This file is an ordered, grouped checklist of the plans under `docs/upcoming/`
-(excluding `docs/upcoming/v1/`) and the bug reports under `docs/reported/`,
-sorted so that each entry's prerequisites appear above it. Each entry has:
+- [ ] docs/upcoming/tur-signal-rebuild-plan.md -- the goal itself
+- [ ] docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md -- mostly delivered (2026-06-05), but follow-ups
+(arrow-class.tur merge-back, snapshot refresh) still open
+- [ ] docs/upcoming/stdlib-arrow-scaleback-plan.md -- superseded but the bare-combinator surface it locks in is what
+signal's >>> will sit on
 
-- `N. <path>.md` -- the plan or report file, relative to `docs/`
-  (`upcoming/...` or `reported/...`)
-- A `Kind:` line -- `plan` or `report`
-- A `Goal:` line -- one-line summary of what the plan does (or, for a
-  report, the bug being tracked)
-- A `Deps:` line -- either `independent` or a list of earlier entries it depends on
-- A `Status:` line -- current implementation status as recorded in the plan,
-  or the disposition of the report (open / resolved-by-N / etc.)
+### Hard prerequisites from still-in-flight-plan.md (these are tur-signal's own gating list)
 
-Phases are coarse groupings, not strict gates: items within a phase have no
-ordering between them, but every item in phase N has all its dependencies
-satisfied by phases <= N. When editing this file, keep the format intact --
-do not collapse phases, do not reword entries into prose, and update the
-`Deps:` lines if you move things around.
+- [+] "Language readiness for typed signal" -- G2 (poly-defn shared inner closure body) + G7 amber edge (>>> int-typed
+in stdlib/arrow.tur)
+- [+] "Signal Phase 0 spike" -- __sig_call_f macro + Option B bit-cast helper
+- [ ] "tur-signal spice broken build" -- Phase 0a (restore build, __arrow_call1 decision), 0b (closure-ABI cleanup), 0c
+(:float sample migration)
+- [ ] "Closure representation unification" + "Typed closure invocation ABI" -- both feed G1/G7
 
----
+### Closure / fn-first-class work feeding G1+G7
 
-## Phase 6 -- Typeclass reintroduction
+- [-] bare-fat-result-type-inference-plan.md -- unblocks :float-returning fat closures (G1)
+- [-] fn-type-first-class-application-plan.md -- one predictable rule for callable :fn, needed for typed >>>
+- [ ] fn-first-class-stdlib-deworkaround-plan.md -- validates the above end-to-end
+- [ ] return-type-dispatch-nullary-arrow-methods-plan.md -- required for Category.ident / ArrowZero.zeroArrow to resolve
 
-33. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
-    - Kind: plan
-    - Goal: Reintroduce Arrow / ArrowChoice / ArrowLoop typeclasses on
-      `(->)`
-    - Deps: 7, 19, 32
-    - Status: Draft -- blocked on prerequisites (T1-T12 tasks defined)
+### Reports on the critical path (docs/reported/)
 
-    - docs/upcoming/fn-type-first-class-application-plan.md
-      - F6 deferred
+- [ ] function-arrow-not-instantiable-as-typeclass-head.md
+- [ ] fat-closure-dispatch-does-not-handle-struct-return.md
+- [ ] fat-closure-env-leak.md
+- [ ] fn-first-class-float-carrier-gap.md
+- [ ] ascribing-fat-closure-value-to-fn-type-double-shims.md
+- [ ] stale-pair-signals-typed-snapshot.md (signal-specific)
+- [ ] typeclass-methods-share-value-namespace-with-defns.md (resolved, but verify before signal lands)
+- [ ] result-param-order-blocks-functor-monad.md (resolved in 8596bce4 area -- confirm; needed by HKT-on-arrow combinators)
 
-## Phase 7 -- Signal rebuild
+## Defer (post-arrow / post-signal)
 
-35. `upcoming/tur-signal-rebuild-plan.md`
-    - Kind: plan
-    - Goal: Rebuild the tur-signal spice on top of the modern typed
-      infrastructure
-    - Deps: 14, 15, 20, 31, 34
-    - Status: Draft -- blocked on 14 + 15 (polymorphic `constant` and
-      struct-returning closures) if needed on critical path; otherwise
-      blocked only on 20 + 31 (Phases 1-6 designed)
+### Stdlib evolution that's broader than arrows
 
-## Other notes
+- [ ] stdlib-hkt-consolidation-plan.md -- benefits from arrow landing but isn't a blocker
+- [ ] stdlib-linearity-affinity-plan.md
+- [ ] stdlib-refinement-collections-plan.md
+- [ ] stdlib-session-typed-channels-plan.md
+- [ ] stdlib-type-erasure-cleanup-plan.md (B6 already gated)
+- [ ] range-gadt-typeclass-migration-plan.md
 
-One cosmetic note: re-canonicalizing surfaced some pre-existing top-level
-blank-line/section-comment shuffling in httpd-compress.tur (e.g. an extra
-blank before a docstring'd defn). I confirmed it's lossless, idempotent,
-and that gendocs.py still associates those docstrings (blank lines don't
-reset its doc buffer). Tightening that top-level blank-line handling
-would be a separate, larger change
+### Hygiene / tooling
 
-Investigate Phase B of `upcoming/bare-fat-result-type-inference-plan.md`
-later.
+- [ ] reversible-name-mangling-plan.md
+- [ ] Spaced-type annotation Phase 6/7 (CI enforcement)
+- [ ] defmodule per-file scoping, "drop leading colons inside (fn ...) types" (both in still-in-flight)
+- [ ] Stdlib opaque handle types tail (io/file-open annotation)
+- [ ] HTTPD compression + tur/zlib spice
 
-`docs/upcoming/stdlib-opaque-handle-types-plan.md` follow-ups:
-- stm error fixture -- the STM-block guard (TUR-E0009) fires before
-  argument type-checking, so a standalone wrong-handle case can't reach
-  the TUR-E0001. The typing is validated by compile + suite.
-- tur/ref -- its handle is an `:int` with unannotated (effectively
-  polymorphic) params and a Clone instance returning raw `:int`; clean
-  newtyping needs more than a signature pass.
+### Unrelated reports
 
-`upcoming/stdlib-type-erasure-cleanup-plan.md` follow-ups:
-- Mangling scheme: `- -> _hy`, `_ -> __ (or _us)`, `/ -> _sl`
-- Full reversible scheme implemented but demangler omitted because the
-  `-`/`/`/`_` -> `_` folding makes the encoding non-self-delimiting (a
-  general inverse would mis-decode `foo_bar` -> `foo|r`), and diagnostics
-  already report source names, not mangled ones. Documented in
-  mangle.h. Resolves the plan's open question #1.
-- If we ever do want demangling (pretty cc-error passthrough), the
-  better fix is option (1) from the report -- a name-reference splice so
-  inline-C stops hardcoding mangled names at all -- rather than making
-  the whole scheme self-delimiting just to enable demangling.
+- [ ] generic-struct-opaque-element-miscompile.md
+- [ ] instance-method-returning-untyped-param-loses-result-type.md
+- [ ] io-file-open-untyped-params-default-to-int.md
+- [ ] load-not-idempotent-typeclass.md
+- [ ] parameterized-defopaque.md
+- [ ] taskgroup-wrapper-macros-emit-nil-head.md
+- [ ] unsafe-block-capture-misses-ascription-vars.md
 
-`docs/reported/generic-struct-opaque-element-miscompile.md`:
-Variant 2 (phantom element type recoverable only from an opaque argument,
-e.g. generic recv returning (Pair T (SChan R))) is the harder case the report
-flags as needing phantom-element recovery in emit_abi_instantiate_type (fix
-direction #3). It's not exercised by any shipping code — the real
-stdlib/schan.tur recv was already respecified to avoid the shape — so I updated
-the report to mark variant 1 resolved and variant 2 as a tracked limitation
-rather than risk a speculative inference change.
+## One ambiguous case worth calling out
 
-Do an inline-c reduction pass for the new typeclass work and related
-
-`docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`:
-Category is not in stalib, so per T9 I'll inline composition into Arrow (no
-Category instance). Let me check whether the bare-layer fixtures carry
-expected. c snapshots (T11 requires them stable) and how they load arrow.tur.
-
-Reported complete - io-file-open-untyped-params-default-to-int.md
-Reported complete = stale-pair-signals-typed-snapshot.md
-Complete - unsafe-block-capture-misses-ascription-vars.md
-Not started - load-not-idempotent-typeclass.md - Depends on reversible-name-mangling-plan.md
-Complete - generic-struct-opaque-element-miscompile.md
-Complete - result-param-order-blocks-functor-monad.md
-
-Can you pick a report from docs/reported/ that is able to be worked on, and execute it? Don't work on:
-io-file-open-untyped-params-default-to-int.md
-stale-pair-signals-typed-snapshot.md
-unsafe-block-capture-misses-ascription-vars.md
-load-not-idempotent-typeclass.md
-instance-method-returning-untyped-param-loses-result-type.md
-taskgroup-wrapper-macros-emit-nil-head.md
-result-param-order-blocks-functor-monad.md
-fn-first-class-float-carrier-gap.md
-stale-pair-signals-typed-snapshot.md
-fat-closure-dispatch-does-not-handle-struct-return
-ascribing-fat-closure-value-to-fn-type-double-shims
-generic-struct-opaque-element-miscompile.md
-
+- [ ] return-type-dispatch-nullary-arrow-methods-plan.md is on the current side because it closes fix-direction #3 of the
+- [ ] function-arrow-as-typeclass-head report -- but it's narrower than the typeclass reintroduction itself. If
+- [ ] Category.ident / ArrowZero.zeroArrow aren't on tur-signal's actual call surface, you could defer it. Worth checking the signal plan's combinator list before committing time.
