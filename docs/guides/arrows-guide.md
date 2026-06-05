@@ -18,12 +18,12 @@ DSP graphs from pure building blocks.
 
 ## Two surfaces: bare functions and typeclass dispatch
 
-Turmeric ships the arrow API as **two parallel surfaces**:
+Turmeric ships the arrow API as **two surfaces in one module**, `stdlib/arrow.tur`:
 
-| Surface | Module | When to reach for it |
-|---------|--------|----------------------|
-| Bare functions | `stdlib/arrow.tur` | The simple, default path. You are working concretely with the function arrow `(->)` and do not need to be polymorphic over the arrow constructor. |
-| Typeclass dispatch | `stdlib/arrow-class.tur` | You want code parametric over *any* `Arrow` instance, resolved through the instance dictionary -- the Haskell-style `Arrow` / `ArrowChoice` / `ArrowLoop` / `ArrowApply` hierarchy. |
+| Surface | When to reach for it |
+|---------|----------------------|
+| Bare functions | The simple, default path. You are working concretely with the function arrow `(->)` and do not need to be polymorphic over the arrow constructor. |
+| Typeclass dispatch | You want code parametric over *any* `Arrow` instance, resolved through the instance dictionary -- the Haskell-style `Arrow` / `ArrowChoice` / `ArrowLoop` / `ArrowApply` hierarchy. |
 
 The bare layer exposes plain functions: `arr`, `>>>`, `arrow-first`,
 `arrow-second`, `par-comp`, `arrow-split`, `arrow-const`, `arrow-dup`. The
@@ -31,9 +31,13 @@ typeclass layer declares the classes and instantiates them at `(->)` with the
 canonical method names (`arr`, `>>>`, `<<<`, `first`, `second`, `left`,
 `right`, `+++`, `|||`, `app`).
 
-The two surfaces are **not loaded together** -- a typeclass method and a free
-`defn` cannot share a name in one module, and both layers bind `arr` / `>>>`.
-Load whichever surface a given file needs.
+Both surfaces live in the **same module** and share the names `arr` / `>>>`. A
+bare call dispatches to the matching instance when the receiver's type selects
+one, and falls back to the bare combinator otherwise -- so a single `(load
+"stdlib/arrow.tur")` gives you both. (This unification became possible once a
+free `defn` and a typeclass method of the same name were allowed to coexist;
+see
+[`docs/reported/typeclass-methods-share-value-namespace-with-defns.md`](../reported/typeclass-methods-share-value-namespace-with-defns.md).)
 
 For the function arrow, `arr` lifts a function (the identity up to eta), and
 `>>>` is left-to-right composition; both surfaces compute identical values --
@@ -158,7 +162,7 @@ arrow-const(42)(999)          ; => 42
 tuple2-1st arrow-dup(7)       ; => 7
 ```
 
-## Typeclass dispatch (`stdlib/arrow-class.tur`)
+## Typeclass dispatch (`stdlib/arrow.tur`)
 
 When you want to write code that is parametric over the arrow constructor --
 not hard-wired to `(->)` -- use the typeclass layer. It declares the
@@ -177,7 +181,7 @@ Every call resolves through the instance dictionary rather than a free
 function:
 
 ```turmeric
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 (defn add1 [x : int] : int (+ x 1))
 (defn mul2 [x : int] : int (* x 2))
@@ -203,7 +207,7 @@ see `docs/reported/instance-method-returning-untyped-param-loses-result-type.md`
 two arms, and `|||` collapses both arms to a common result:
 
 ```turmeric
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 (defn add1 [x : int] : int (+ x 1))
 (defn mul2 [x : int] : int (* x 2))

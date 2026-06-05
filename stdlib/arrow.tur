@@ -1,10 +1,22 @@
-;;; tur/arrow -- bare-function arrow combinators over the (->) function arrow.
+;;; tur/arrow -- arrow combinators over the (->) function arrow, in two surfaces.
 ;;;
-;;; Provides arr, >>>, arrow-first, arrow-second, par-comp, arrow-split,
-;;; arrow-const, and arrow-dup as plain functions. The Haskell-style Arrow
-;;; typeclass hierarchy was scaled back in docs/upcoming/stdlib-arrow-scaleback-plan.md
-;;; -- see that plan for the rationale and the conditions under which it would
-;;; be reintroduced.
+;;; Bare functions (the simple path): arr, >>>, compose-float, arrow-first,
+;;; arrow-second, par-comp, arrow-split, arrow-const, and arrow-dup as plain
+;;; functions -- use these when you do not need polymorphism over the arrow
+;;; constructor.
+;;;
+;;; Typeclass dispatch (parametric over any Arrow): the Haskell-style Arrow /
+;;; ArrowZero / ArrowPlus / ArrowChoice / ArrowLoop / ArrowApply hierarchy with
+;;; its (->) instances, declared lower in this file. Use these when you want
+;;; code resolved through the instance dictionary. The two surfaces share the
+;;; method names arr / >>>: a bare call dispatches to the matching instance when
+;;; the receiver's type selects one, and falls back to the bare combinator
+;;; otherwise (see docs/reported/typeclass-methods-share-value-namespace-with-defns.md).
+;;;
+;;; The typeclass layer was scaled back in
+;;; docs/upcoming/stdlib-arrow-scaleback-plan.md and reintroduced -- then merged
+;;; back into this single module -- per
+;;; docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md.
 ;;;
 ;;; Since: Phase CA0
 ;; =============================================================================
@@ -174,9 +186,10 @@
 
 (defn arrow-split [a b c ^fat f ^fat g]
   (let [fv f gv g] (fn [x] (__arrow_pair_split fv gv x))))
-;; <<< (reverse composition) is omitted. Both <<< and >>> mangle to the
-;; same C identifier (___), so they can't coexist as free defns. Write
-;; (>>> f g) with the arguments in the order you want them applied.
+;; No bare <<< (reverse composition) free defn: write (>>> f g) with the
+;; arguments in the order you want them applied. Reverse composition is
+;; available through the typeclass surface instead -- the Arrow [(->)] instance
+;; below provides <<< (operator mangling now keeps >>> and <<< distinct).
 ;;; arrow-const -- arrow that ignores its input and always returns v.
 ;;;
 ;;; Parameters:
@@ -206,3 +219,173 @@
 ;;; Since: Phase B2
 
 (defn arrow-dup [x] : int (__arrow_pair_dup x))
+
+;; =============================================================================
+;; Typeclass dispatch surface
+;; =============================================================================
+;; The Haskell-style Arrow hierarchy over the (->) function arrow. Where the
+;; bare layer above exposes arr, >>>, arrow-first, ... as plain functions, the
+;; classes below let code be written parametric over any Arrow instance and
+;; resolved through the instance dictionary. The shared names arr / >>> coexist
+;; with the bare defns: a bare call dispatches to the matching instance when the
+;; receiver's type selects one, else falls back to the bare combinator.
+;;
+;; The <<< / >>> pair relies on operator-name mangling: each sigil method
+;; encodes to a distinct C identifier (>>> -> _gt_gt_gt, <<< -> _lt_lt_lt,
+;; +++ -> _pl_pl_pl, ||| -> _ba_ba_ba) instead of colliding on ___.
+;;
+;; Product representation: first/second/arrow-loop/app thread a heap-allocated
+;; pair of two int64 slots (the shape the bare layer uses); see the __ac_pair_*
+;; helpers. This is T3 Option A (reuse heap pairs); a zero-allocation product is
+;; a future optimisation.
+;; ---------------------------------------------------------------------------
+(load "stdlib/either.tur")
+
+;;; __ac_pair_first -- inline-C: apply fv to slot 0 of a heap pair, copy slot 1.
+(defn __ac_pair_first [fv p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *s = (P *)(intptr_t)p;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = TUR_APPLY1(fv, s->e1);
+  r->e2 = s->e2;
+  return (int64_t)(intptr_t)r; ```)
+
+;;; __ac_pair_second -- inline-C: copy slot 0 of a heap pair, apply fv to slot 1.
+(defn __ac_pair_second [fv p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *s = (P *)(intptr_t)p;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = s->e1;
+  r->e2 = TUR_APPLY1(fv, s->e2);
+  return (int64_t)(intptr_t)r; ```)
+
+;;; __ac_loop_step -- inline-C: non-recursive ArrowLoop step.  Build the input
+;;; pair (b, 0), apply the looped arrow fv, and project the first slot of the
+;;; result pair.  The fed-back slot is a sentinel 0; this is the non-recursive
+;;; subset only (fv must not read it).  See arrow-loop.
+(defn __ac_loop_step [fv b] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *in = (P *)malloc(sizeof(P));
+  in->e1 = b;
+  in->e2 = 0;
+  int64_t rp = TUR_APPLY1(fv, (int64_t)(intptr_t)in);
+  P *r = (P *)(intptr_t)rp;
+  return r->e1; ```)
+
+;;; __ac_app -- inline-C: ArrowApply for (->).  The input pair carries an arrow
+;;; in slot 0 and its argument in slot 1; apply the arrow to the argument.
+(defn __ac_app [p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *s = (P *)(intptr_t)p;
+  return TUR_APPLY1(s->e1, s->e2); ```)
+
+;;; Arrow [a] -- lift functions into arrows and wire them together.
+;;;
+;;; Methods:
+;;;   arr    -- lift a plain function (b -> c) into an arrow a b c.
+;;;   >>>    -- left-to-right composition: run the left arrow, then the right.
+;;;   <<<    -- right-to-left composition (flipped >>>).
+;;;   first  -- act on the first component of a pair, passing the second through.
+;;;   second -- act on the second component of a pair, passing the first through.
+;;;
+;;; Since: Phase CA1
+(defclass Arrow [a]
+  (arr    [f]   : a)
+  (>>>    [f g] : a)
+  (<<<    [f g] : a)
+  (first  [f]   : a)
+  (second [f]   : a))
+
+;;; ArrowZero [a] -- an arrow with a distinguished empty/zero arrow.
+;;;
+;;; Methods:
+;;;   zero-arrow -- the arrow with no behaviour (nullary; result is the arrow).
+;;;
+;;; The function arrow (->) is deliberately NOT made an instance: a total
+;;; function b -> c with no input requires choosing an inhabitant of c, which
+;;; (->) cannot do generically.  The class is declared so other arrow
+;;; constructors (e.g. a future Kleisli) can instantiate it.
+;;;
+;;; Since: Phase CA1
+(defclass ArrowZero [a]
+  (zero-arrow [] : a))
+
+;;; ArrowPlus [a] -- an ArrowZero whose arrows form a monoid under choice.
+;;;
+;;; Methods:
+;;;   plus-arrow -- combine two arrows (the monoid append).
+;;;
+;;; Like ArrowZero, (->) is not instantiated here; the class exists for arrow
+;;; constructors that carry a sensible alternative/merge.
+;;;
+;;; Since: Phase CA1
+(defclass ArrowPlus [a]
+  (plus-arrow [f g] : a))
+
+;;; ArrowChoice [a] -- route an arrow over one arm of a sum (Either).
+;;;
+;;; Methods:
+;;;   left  -- apply the arrow to a Left payload, pass Right through unchanged.
+;;;   right -- apply the arrow to a Right payload, pass Left through unchanged.
+;;;   +++   -- run the left arrow on Left, the right arrow on Right (fan over sum).
+;;;   |||   -- run either arrow and collapse both arms to a common result.
+;;;
+;;; Requires the Either sum type (stdlib/either.tur).
+;;;
+;;; Since: Phase CA1
+(defclass ArrowChoice [a]
+  (left  [f]   : a)
+  (right [f]   : a)
+  (+++   [f g] : a)
+  (|||   [f g] : a))
+
+;;; ArrowLoop [a] -- feed part of an arrow's output back as input.
+;;;
+;;; Methods:
+;;;   arrow-loop -- given an arrow a (b, d) (c, d), produce an arrow a b c by
+;;;                 feeding the d output back as the d input.
+;;;
+;;; Turmeric is strict and has no lazy thunks, so the (->) instance implements
+;;; only the NON-RECURSIVE subset: it is correct exactly when the looped arrow
+;;; does not read the fed-back component.  True lazy feedback is future work.
+;;;
+;;; Since: Phase CA1
+(defclass ArrowLoop [a]
+  (arrow-loop [f] : a))
+
+;;; ArrowApply [a] -- apply an arrow that is itself a value flowing through.
+;;;
+;;; Methods:
+;;;   app -- the arrow a (a b c, b) c that applies its first component (an
+;;;          arrow) to its second (nullary; result is the arrow).
+;;;
+;;; Since: Phase CA1
+(defclass ArrowApply [a]
+  (app [] : a))
+
+;;; Arrow [(->)] -- the function arrow: arr is the identity (a plain function
+;;; is already an arrow), >>> / <<< are composition, first / second act on a
+;;; heap pair.
+(definstance Arrow [(->)]
+  (arr    [f]   f)
+  (>>>    [f g] (fn [x] (g (f x))))
+  (<<<    [f g] (fn [x] (f (g x))))
+  (first  [f]   (fn [p] (__ac_pair_first f p)))
+  (second [f]   (fn [p] (__ac_pair_second f p))))
+
+;;; ArrowChoice [(->)] -- map an arrow over one arm of an Either, passing the
+;;; other arm through; +++ fans two arrows over the two arms, ||| collapses them.
+(definstance ArrowChoice [(->)]
+  (left  [f]   (fn [e] (match e (Left b) (Left (f b)) (Right d) (Right d))))
+  (right [f]   (fn [e] (match e (Left b) (Left b)     (Right d) (Right (f d)))))
+  (+++   [f g] (fn [e] (match e (Left b) (Left (f b)) (Right d) (Right (g d)))))
+  (|||   [f g] (fn [e] (match e (Left b) (f b)        (Right d) (g d)))))
+
+;;; ArrowLoop [(->)] -- non-recursive feedback: project the first output slot
+;;; after running the arrow on (b, sentinel).  Valid only when f ignores d.
+(definstance ArrowLoop [(->)]
+  (arrow-loop [f] (fn [b] (__ac_loop_step f b))))
+
+;;; ArrowApply [(->)] -- the apply arrow: run the arrow in slot 0 on slot 1.
+(definstance ArrowApply [(->)]
+  (app [] (fn [p] (__ac_app p))))

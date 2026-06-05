@@ -5,7 +5,7 @@
 ;; arms to a common result.  All four methods dispatch through the (->) instance
 ;; and destructure Either with `match` inside the instance bodies.
 
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 (defn add1 [x : int] : int (+ x 1))
 (defn mul2 [x : int] : int (* x 2))

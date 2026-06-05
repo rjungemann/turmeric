@@ -1,4 +1,4 @@
-;; arrow-instance-stdlib-basic -- Arrow [(->)] dispatch through stdlib/arrow-class.tur.
+;; arrow-instance-stdlib-basic -- Arrow [(->)] dispatch through stdlib/arrow.tur.
 ;;
 ;; Builds a small arrow network using the typeclass methods arr, >>>, <<<,
 ;; first, and second resolved through the (->) instance dictionary (NOT the
@@ -6,7 +6,7 @@
 ;; the typeclass surface dispatches to the function-arrow instance and computes
 ;; the same values.
 
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 ;; A heap pair of two int64 slots, matching the layout the Arrow instance's
 ;; first/second methods thread through.

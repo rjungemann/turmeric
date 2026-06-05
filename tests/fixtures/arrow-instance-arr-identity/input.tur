@@ -7,7 +7,7 @@
 ;; Regression for
 ;; docs/reported/instance-method-returning-untyped-param-loses-result-type.md.
 
-(load "stdlib/arrow-class.tur")
+(load "stdlib/arrow.tur")
 
 (defn add1 [x : int] : int (+ x 1))
 (defn addmul [x : int y : int] : int (+ x (* y 2)))
