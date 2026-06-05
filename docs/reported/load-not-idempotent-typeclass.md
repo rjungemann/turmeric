@@ -34,7 +34,7 @@ description: Loading the same stdlib module twice (directly, or once directly an
 > from declaring a `load` dependency on `typeclass.tur` if any co-loaded
 > module already pulls it in transitively.
 > **Found:** 2026-06-04, executing
-> [range-gadt-typeclass-migration-plan](../upcoming/range-gadt-typeclass-migration-plan.md)
+> [range-gadt-typeclass-migration-plan](../archive/history/range-gadt-typeclass-migration-plan.md)
 > phase B2 (Show/Ord instances for `Bound`/`Range`).
 > **Status:** RESOLVED (2026-06-05).
 
