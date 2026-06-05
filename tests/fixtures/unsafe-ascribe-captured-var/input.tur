@@ -1,0 +1,28 @@
+;; Regression: a variable captured by an (unsafe ...) block must be copied into
+;; the handler env even when its only use inside the block is under a
+;; (:: expr T) ascription. Previously collect_handle_captures did not descend
+;; into EX_ASCRIBE, so `v` was missed and the lifted __handle_body referenced a
+;; bare `v_NNNN` local -- a hard C 'undeclared identifier' error.
+;; See docs/reported/unsafe-block-capture-misses-ascription-vars.md.
+
+(defmodule m
+  (export f)
+  ;; Raw inline-C op: stash b into slot 0 of the cell pointed to by a.
+  (defn raw [a : ptr<void> b : int] : nil
+    ```c ((int64_t *)(intptr_t)a)[0] = b; ```)
+
+  (defn cell-new [] : ptr<void>
+    ```c return (void *)malloc(8); ```)
+
+  (defn cell-read [a : ptr<void>] : int
+    ```c return ((int64_t *)(intptr_t)a)[0]; ```)
+
+  ;; v is referenced only through (:: v :int) inside the unsafe block.
+  (defn f [x : ptr<void> v : int] : nil
+    (unsafe (raw x (:: v :int))))
+
+  (defn main [] : int
+    (let [c (cell-new)]
+      (f c 42)
+      (println (cell-read c))
+      0)))

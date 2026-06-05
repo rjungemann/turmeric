@@ -2098,6 +2098,19 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                 }
                 break;
             }
+            case EX_ASCRIBE: {
+                /* (:: expr type) is erased at codegen but its inner expression
+                 * still references variables that must be captured. Descend so a
+                 * variable used only inside an ascription is collected. */
+                PUSH_EXPR(cur->as.ascribe_.inner);
+                break;
+            }
+            case EX_REINTERPRET: {
+                /* Bit-reinterpret wrapper: descend into the operand so its var
+                 * references are captured like a bare reference would be. */
+                PUSH_EXPR(cur->as.reinterpret_.expr);
+                break;
+            }
             default:
                 break;
         }

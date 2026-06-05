@@ -6,6 +6,16 @@ description: An `(unsafe ...)` block is lowered to a fiber/handler body whose fr
 
 # `(unsafe ...)` block drops ascription-wrapped captured variables
 
+> **RESOLVED (2026-06-05).** `collect_handle_captures`
+> (`src/compiler/emit_core.c`) now descends into `EX_ASCRIBE` and
+> `EX_REINTERPRET` wrapper nodes, so a variable used only inside `(:: v T)`
+> within an `(unsafe ...)` block is copied into the handler env (`__HEnv_N`).
+> The minimal repro builds and runs (exit 0); regression fixture
+> `tests/fixtures/unsafe-ascribe-captured-var`. Full suite green
+> (1473 passed, 0 failed). The sibling closure scanner gap was already fixed
+> separately (see `ascribe-captured-var-in-closure`); this closes the
+> unsafe-block (fiber/handler) scanner, item 1 of the proposed fix directions.
+
 > **Severity:** silent-miscompile -> hard cc error ("undeclared identifier").
 > Easy to trip and the message points at generated C, not the source.
 > **Found:** 2026-06-04, executing
