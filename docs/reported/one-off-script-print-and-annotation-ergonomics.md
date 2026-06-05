@@ -45,10 +45,18 @@ freestanding probe.
   is what the hint now suggests. (Whether math/bits *should* be promoted to
   exporting `defmodule`s is a separate design question, not pursued here.)
 
-- **Finding 3 -- open.** Off-tree resolution (a `/tmp/foo.tur` that
-  `(load ...)`s or imports stdlib without being run from the repo root, or
-  resolving against an installed stdlib via `TUR_STDLIB_DIR`) is a
-  module-resolution enhancement, not a defect, and remains to be scheduled.
+- **Finding 3 -- FIXED.** A freestanding `/tmp/foo.tur` that does
+  `(load "stdlib/math.tur")` now resolves the stdlib off-tree. `import` already
+  fell back to the resolved stdlib root (`TUR_STDLIB_DIR`, set to an absolute
+  path by `main.c`'s `resolve_stdlib_root` via an exe-relative walk); `(load
+  ...)` was purely cwd-relative and so failed when run from outside the repo.
+  The load expander now mirrors the import fallback: a `"stdlib/<rest>"` path
+  that is not found cwd-relative is retried under the resolved stdlib dir (the
+  leading `stdlib/` component is dropped to avoid `.../stdlib/stdlib/...`). See
+  the off-tree fallback in `src/compiler/elab_toplevel.c` (Phase M `(load ...)`
+  expansion) and the regression harness `tests/run-offtree-load.sh` (registered
+  as the `tur_offtree_load` ctest). With this, the `(load ...)` line that the
+  Finding 2 hint suggests works from any cwd, not just the repo root.
 
 ## Finding 1 -- misleading diagnostic for a misplaced effect annotation
 

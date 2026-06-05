@@ -81,6 +81,15 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Off-tree (load "stdlib/<file>") resolution: a freestanding script run from
+# outside the repo resolves the stdlib via the exe-relative root, not just
+# cwd-relative. See docs/reported/one-off-script-print-and-annotation-ergonomics.md
+# (Finding 3).
+add_test(
+  NAME tur_offtree_load
+  COMMAND bash tests/run-offtree-load.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # End-to-end MCP + LSP server tests: drives `tur mcp` and `tur lsp` over
 # stdio JSON-RPC and checks tools, hover, definition, documentSymbol,
 # completion (incl. dynamic stdlib discovery), and the TUR_NO_MCP kill

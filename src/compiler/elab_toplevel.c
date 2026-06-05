@@ -726,9 +726,37 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         char *src_raw = NULL;
         size_t src_len = 0;
         if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
-            diag_emit(DIAG_ERROR, path_f->span, "load: cannot open '%s'", path_buf);
-            lx->rc = -1;
-            continue;
+            /* Off-tree fallback (one-off-script-print-and-annotation-ergonomics,
+             * Finding 3): a freestanding `/tmp/foo.tur` that does
+             * `(load "stdlib/math.tur")` cannot find the file cwd-relative when
+             * run from outside the repo. `import` already falls back to the
+             * resolved stdlib root (TUR_STDLIB_DIR, set absolute by main.c's
+             * resolve_stdlib_root); mirror that here so the load-line the
+             * "unknown function" hint suggests actually resolves off-tree.
+             *
+             * A "stdlib/<rest>" path is retried as "<stdlib_dir>/<rest>": the
+             * resolved stdlib dir already ends in ".../stdlib", so the leading
+             * "stdlib/" component is dropped to avoid ".../stdlib/stdlib/...".
+             * When module_stdlib_dir is the legacy literal "stdlib" this
+             * reproduces the original cwd-relative path (no regression). */
+            bool recovered = false;
+            const char *sdir = e->module_stdlib_dir;
+            if (sdir && strncmp(path_buf, "stdlib/", 7) == 0) {
+                char alt[4096];
+                int an = snprintf(alt, sizeof(alt), "%s/%s", sdir, path_buf + 7);
+                if (an > 0 && (size_t)an < sizeof(alt) &&
+                    strcmp(alt, path_buf) != 0 &&
+                    elab_read_file(alt, &src_raw, &src_len) == 0) {
+                    memcpy(path_buf, alt, (size_t)an + 1);
+                    plen = (uint32_t)an;
+                    recovered = true;
+                }
+            }
+            if (!recovered) {
+                diag_emit(DIAG_ERROR, path_f->span, "load: cannot open '%s'", path_buf);
+                lx->rc = -1;
+                continue;
+            }
         }
         char *src_copy = (char *)arena_alloc(arena, src_len + 1);
         memcpy(src_copy, src_raw, src_len);
