@@ -6,13 +6,13 @@ description: Make the `:fn` closure type (the typeclass-method continuation carr
 
 # First-Class `:fn` Closure Values -- Plan
 
-> **Status:** Draft
+> **Status:** COMPLETE (F1-F6 landed; all validation fixtures green)
 > **Type:** compiler -- closure ABI / type system
 > **Builds on (all COMPLETE):**
-> - [closure-first-class-type-plan.md](../archive/closure-first-class-type-plan.md)
+> - [closure-first-class-type-plan.md](history/closure-first-class-type-plan.md)
 >   -- boxed `TY_FN` first-class closure type (Option B); made a bare `^fat g`
 >   directly callable.
-> - [poly-to-fat-typed-shim-plan.md](../archive/poly-to-fat-typed-shim-plan.md)
+> - [poly-to-fat-typed-shim-plan.md](history/poly-to-fat-typed-shim-plan.md)
 >   and #252 -- N-ary `__tur_poly_to_fat<N>` carrier; routes a typeclass-method
 >   poly closure into a `^fat` sink.
 > **Reports / gaps this resolves:**
@@ -21,7 +21,7 @@ description: Make the `:fn` closure type (the typeclass-method continuation carr
 >   instance bodies still had to delegate through `^fat`-sink workers because a
 >   `:fn` value is not itself callable.
 > - Supersedes the still-open residue of
->   [fat-fn-param-capturing-closure-gap.md](../archive/fat-fn-param-capturing-closure-gap.md)
+>   [fat-fn-param-capturing-closure-gap.md](history/fat-fn-param-capturing-closure-gap.md)
 >   for the `:fn` spelling specifically.
 
 ---
@@ -178,24 +178,24 @@ and rank-2 `is_poly_fn`:
 
 ## Phasing (each phase ends suite-green)
 
-1. **F1 -- unify the type.** Represent `:fn` as a `TY_FN` flavoured
+1. **F1 -- unify the type. (COMPLETE)** Represent `:fn` as a `TY_FN` flavoured
    "poly/boxed closure, unary `int64` default" instead of a def-less
    `TY_STRUCT`, in **both** the regular-defn and typeclass-method parse paths
    (`elab_fns.c`, `elab_typeclasses.c:622,678`). No behaviour change intended;
    the point is that `:fn` now carries an arrow signature. Snapshot churn is the
    risk -- regenerate fixtures. *Exit:* P3 still works; suite green.
-2. **F2 -- direct application (P1).** In `elab_call_fn`, route a call through a
-   `:fn`-flavoured binding into the `elab_poly_call` emit
+2. **F2 -- direct application (P1). (COMPLETE)** In `elab_call_fn`, route a call
+   through a `:fn`-flavoured binding into the `elab_poly_call` emit
    (`g.fn(g.env, args...)`). *Exit:* P1 prints the expected value for `:int`.
-3. **F3 -- `:fn` into a `^fat` sink (P2).** Generalise the `EX_POLY_TO_FAT`
-   argument coercion to fire for the `:fn` flavour, not only rank-2
-   `is_poly_fn`. The N-ary shim from #252 is reused unchanged. *Exit:* P2
+3. **F3 -- `:fn` into a `^fat` sink (P2). (COMPLETE)** Generalise the
+   `EX_POLY_TO_FAT` argument coercion to fire for the `:fn` flavour, not only
+   rank-2 `is_poly_fn`. The N-ary shim from #252 is reused unchanged. *Exit:* P2
    compiles/runs; the `stdlib-hkt-consolidation` `^fat`-sink wrappers become
    removable (follow-up).
-4. **F4 -- construct a `:fn` from a lambda / closure (P4, P5).** Add the inverse
-   coercion `EX_FN_TO_POLY` / `EX_FAT_TO_POLY`: at a `:fn` parameter, box a
-   `(fn ...)` literal's thunk+env, or an existing boxed-closure/`^fat` handle,
-   into `{env, fn}`. *Exit:* P4 and P5 compile/run.
+4. **F4 -- construct a `:fn` from a lambda / closure (P4, P5). (COMPLETE)** Add
+   the inverse coercion `EX_FN_TO_POLY` / `EX_FAT_TO_POLY`: at a `:fn` parameter,
+   box a `(fn ...)` literal's thunk+env, or an existing boxed-closure/`^fat`
+   handle, into `{env, fn}`. *Exit:* P4 and P5 compile/run.
 5. **F5 -- typed signatures + non-int round-trip. (COMPLETE)** A plain
    carrier-safe `(fn [A...] :R)` parameter now *is* the typed `:fn` carrier: it
    threads its concrete signature through the `tur_poly_fn_t` carrier so
@@ -217,7 +217,7 @@ and rank-2 `is_poly_fn`:
    closure-capture path missed a `:fn` carrier referenced only through a
    conversion shim, and the poly-dispatch callee name skipped the env rewrite).
    **Split out into its own plan:**
-   [fn-first-class-stdlib-deworkaround-plan.md](fn-first-class-stdlib-deworkaround-plan.md).
+   [fn-first-class-stdlib-deworkaround-plan.md](../upcoming/fn-first-class-stdlib-deworkaround-plan.md).
 
 ## Risks
 
@@ -258,9 +258,9 @@ and rank-2 `is_poly_fn`:
 
 ## Cross-references
 
-- [closure-first-class-type-plan.md](../archive/closure-first-class-type-plan.md)
+- [closure-first-class-type-plan.md](history/closure-first-class-type-plan.md)
   -- the boxed-`TY_FN` model this extends to the `:fn` flavour.
-- [poly-to-fat-typed-shim-plan.md](../archive/poly-to-fat-typed-shim-plan.md)
+- [poly-to-fat-typed-shim-plan.md](history/poly-to-fat-typed-shim-plan.md)
   + #252 -- the N-ary `__tur_poly_to_fat<N>` carrier F3 reuses.
-- [stdlib-hkt-consolidation-plan.md](stdlib-hkt-consolidation-plan.md) -- the
+- [stdlib-hkt-consolidation-plan.md](../upcoming/stdlib-hkt-consolidation-plan.md) -- the
   consumer whose instance bodies motivated this; F6 closes the loop.
