@@ -1,7 +1,7 @@
 ;; Phase HKT-P8: do-m with option monad
 ;; Tests that do-m works with option<T> and short-circuits on none
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [ma fn] : int))
 
 (defn __opt_some [x] : int
@@ -44,7 +44,7 @@
   return TUR_APPLY1(fn, opt->value);
   ```)
 
-(definstance Monad [option]
+(definstance TestMonad [option]
   (bind [ma fn] (__bind_option ma fn)))
 
 ;; Helper: add two options, propagating none

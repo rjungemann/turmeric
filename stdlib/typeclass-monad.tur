@@ -1,0 +1,13 @@
+;;; tur/typeclass-monad -- minimal Monad typeclass stub.
+;;;
+;;; Auto-loaded (and loadable directly) so a module can declare
+;;; (definstance Monad [...] ...) without importing the full typeclass.tur.
+;;; The full typeclass.tur (with every typeclass) remains available on demand
+;;; via (load "stdlib/typeclass.tur"); defclass redefinition is idempotent, so
+;;; the two coexist.
+;;;
+;;; Since: stdlib-hkt-consolidation T1
+;; Monad -- sequencing with flatMap/bind.
+;;   bind :: m a -> (a -> m b) -> m b
+;;   fn is declared :fn so capturing closures can be passed.
+(defclass Monad [^m] (bind [ma [fn :fn]] : int))

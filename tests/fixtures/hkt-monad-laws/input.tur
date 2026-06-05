@@ -1,8 +1,8 @@
-;; Phase HKT H6: Monad laws for option.
+;; Phase HKT H6: TestMonad laws for option.
 ;; Left identity:   bind (pure a) f = f a
 ;; Right identity:  bind m pure     = m
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [ma fn] : int))
 
 ;; Option helpers
@@ -41,7 +41,7 @@
   return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
   ```)
 
-(definstance Monad [option]
+(definstance TestMonad [option]
   (bind [ma fn] (__bind_option ma fn)))
 
 (defn main [] : int

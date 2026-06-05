@@ -673,6 +673,16 @@ static int compile_to_c(const char *path, Buf *out_c,
          * content-keyed maps without importing typeclass.tur.  Loaded before
          * map.tur, which conceptually requires Hash[K]. */
         "typeclass-hash.tur",
+        /* stdlib-hkt-consolidation T1: Applicative / Alternative / Monad /
+         * Bifunctor class stubs preloaded (before option.tur / result.tur) so
+         * those type modules can declare their HKT instances without importing
+         * the full typeclass.tur. defclass is idempotent, so loading the full
+         * typeclass.tur on demand coexists with these stubs. Preloaded classes
+         * emit no code into a program that never uses them. */
+        "typeclass-applicative.tur",
+        "typeclass-alternative.tur",
+        "typeclass-monad.tur",
+        "typeclass-bifunctor.tur",
         /* Phase TM0/TC1/TC2/F5: typed parameterized collection stdlib files
          * (now under unprefixed module names). */
         "map.tur",
@@ -6188,6 +6198,13 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
                 "macros.tur",
                 "safe.tur",
                 "hamt.tur",
+                /* stdlib-hkt-consolidation T1: HKT class stubs so option.tur /
+                 * result.tur HKT instances resolve in the worker eval path. */
+                "typeclass-functor.tur",
+                "typeclass-applicative.tur",
+                "typeclass-alternative.tur",
+                "typeclass-monad.tur",
+                "typeclass-bifunctor.tur",
                 /* Bug-5 follow-up: result.tur preloaded so ok/ok?/ok-val are
                  * globally available in the worker eval path too. */
                 "result.tur",

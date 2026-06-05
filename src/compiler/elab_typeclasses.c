@@ -3027,6 +3027,20 @@ Expr *elab_method_call(Elab *e, const Form *call) {
     /* Phase D0: count fallback candidates and track whether an exact match was found. */
     int fallback_count = 0;
     bool exact_match_found = false;
+    /* stdlib-hkt-consolidation T1: when the receiver type is erased to int64_t,
+     * every name-matching instance becomes a "fallback" and >1 of them is
+     * reported as ambiguous (TUR_E0020). Adding stdlib HKT instances (e.g.
+     * Functor/Monad [Option]) introduces a second fallback for programs that
+     * define their own same-shaped instance, turning previously-unambiguous
+     * dispatch into an error. To keep a locally-defined instance authoritative,
+     * prefer the unique *user* (non-stdlib) fallback when the only other
+     * candidates are stdlib-provided. This is purely additive: it only changes
+     * cases that today emit TUR_E0020, so no currently-resolving dispatch is
+     * affected. The key is the instance's *origin* file (not the call span,
+     * which for macro-expanded `.bind`/`.fmap` points at stdlib/macros.tur). */
+    FnDef *user_fallback_method = NULL;
+    TypeClassInstance *user_fallback_inst = NULL;
+    int user_fallback_count = 0;
 
     /* GHE (constrained-generic-instance-dispatch): when the receiver is a bare
      * type variable `K` (a constrained generic type parameter, e.g. the `x : K`
@@ -3127,6 +3141,27 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     /* Record as fallback but keep searching. */
                     fallback_count++;
                     if (!best_method) { best_method = inst->method_impls[i]; best_inst = inst; }
+                    /* Track user (non-stdlib) fallbacks so an ambiguity between a
+                     * local instance and a stdlib one resolves to the local one. */
+                    {
+                        const char *opath = diag_file_path(inst->origin_file_id);
+                        /* stdlib files always live directly under a dir ending
+                         * in "stdlib" (see resolve_stdlib_root in main.c), so the
+                         * path contains "stdlib/<basename>". The root may be
+                         * relative ("stdlib/option.tur") or absolute, so match
+                         * the "stdlib/" component without requiring a leading
+                         * slash. Classify purely by path: file_id 0 is the entry
+                         * (user) file, NOT unknown -- its path is the user's
+                         * program, so it must count as a user instance. */
+                        bool is_stdlib = (opath && strstr(opath, "stdlib/") != NULL);
+                        if (!is_stdlib) {
+                            user_fallback_count++;
+                            if (!user_fallback_method) {
+                                user_fallback_method = inst->method_impls[i];
+                                user_fallback_inst = inst;
+                            }
+                        }
+                    }
                     continue;
                 }
             }
@@ -3179,6 +3214,14 @@ found_method:;
      * more than one instance matched by name, emit TUR_E0020 so the user
      * gets a clear error instead of a silent wrong-instance selection. */
     if (!exact_match_found && fallback_count > 1) {
+        /* stdlib-hkt-consolidation T1: if exactly one of the ambiguous
+         * candidates is a user-defined (non-stdlib) instance, it shadows the
+         * stdlib instance(s) and dispatch resolves to it instead of erroring. */
+        if (user_fallback_count == 1 && user_fallback_method) {
+            best_method = user_fallback_method;
+            best_inst = user_fallback_inst;
+            goto resolved_user_fallback;
+        }
         /* Build a comma-separated list of matching instance names for the message. */
         char inst_list[512];
         int pos = 0;
@@ -3214,6 +3257,7 @@ found_method:;
                             (int)method_name_len, method_name, fallback_count, inst_list);
         return NULL;
     }
+resolved_user_fallback:;
 
     /* obj was already elaborated above for dispatch; elaborate the remaining args. */
     uint32_t n_args = call->as.list.len - 2;

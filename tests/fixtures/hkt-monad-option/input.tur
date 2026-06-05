@@ -1,4 +1,4 @@
-;; Phase HKT H3: Monad instance for option.
+;; Phase HKT H3: TestMonad instance for option.
 ;; bind (some x) f = f x
 ;; bind none     _ = none
 
@@ -6,7 +6,7 @@
 (defclass TestFunctor [^f]
   (fmap [container fn] : int))
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [ma fn] : int))
 
 ;; Option helpers
@@ -37,7 +37,7 @@
   return (int)(p->value);
   ```)
 
-;; TestFunctor[option] — needed to satisfy Monad superclass structure.
+;; TestFunctor[option] — needed to satisfy TestMonad superclass structure.
 (defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
@@ -52,7 +52,7 @@
 (definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
-;; Monad[option]: bind (some x) f = f x; bind none _ = none.
+;; TestMonad[option]: bind (some x) f = f x; bind none _ = none.
 (defn __bind_option [ma fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
@@ -61,7 +61,7 @@
   return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
   ```)
 
-(definstance Monad [option]
+(definstance TestMonad [option]
   (bind [ma fn] (__bind_option ma fn)))
 
 ;; A monadic function: safe-reciprocal

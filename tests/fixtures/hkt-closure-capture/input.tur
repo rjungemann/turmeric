@@ -5,7 +5,7 @@
 (defclass TestFunctor [^f]
   (fmap [container [fn :fn]] : int))
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [ma [fn :fn]] : int))
 
 ;; Option helpers
@@ -50,8 +50,8 @@
     return (int64_t)(intptr_t)r;
     ```))
 
-;; Monad [option] -- fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Monad [option]
+;; TestMonad [option] -- fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
+(definstance TestMonad [option]
   (bind [ma fn]
     ```c
     struct { bool is_some; int64_t value; } *opt =

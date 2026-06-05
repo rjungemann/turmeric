@@ -5,18 +5,18 @@
 (defclass TestFunctor [^f]
   (fmap [container fn] : int))
 
-(defclass Applicative [^f]
+(defclass TestApplicative [^f]
   (pure [x] : int)
   (ap [ff fa] : int))
 
-(defclass Monad [^m]
+(defclass TestMonad [^m]
   (bind [ma fn] : int))
 
 (defclass Foldable [^t]
   (foldl [ta init fn] : int)
   (foldr [ta init fn] : int))
 
-(defclass Bifunctor [^^f]
+(defclass TestBifunctor [^^f]
   (bimap [container fn-left fn-right] : int))
 
 ;; ── Option helpers ──────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@
   (foldl [ta init fn] (__foldable_option_foldl ta init fn))
   (foldr [ta init fn] (__foldable_option_foldr ta init fn)))
 
-;; Option Applicative
+;; Option TestApplicative
 (defn __applicative_option_pure [x] : int
   (__opt_some x))
 
@@ -100,11 +100,11 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Applicative [option]
+(definstance TestApplicative [option]
   (pure [x] (__applicative_option_pure x))
   (ap [ff fa] (__applicative_option_ap ff fa)))
 
-;; Option Monad
+;; Option TestMonad
 (defn __monad_option_bind [ma fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
@@ -113,7 +113,7 @@
   return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
   ```)
 
-(definstance Monad [option]
+(definstance TestMonad [option]
   (bind [ma fn] (__monad_option_bind ma fn)))
 
 ;; ── Vec helpers ─────────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@
   (foldl [ta init fn] (__foldable_vec_foldl ta init fn))
   (foldr [ta init fn] (__foldable_vec_foldr ta init fn)))
 
-;; Vec Applicative
+;; Vec TestApplicative
 (defn __applicative_vec_pure [x] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -211,11 +211,11 @@
   return (int64_t)(intptr_t)v;
   ```)
 
-(definstance Applicative [vec]
+(definstance TestApplicative [vec]
   (pure [x] (__applicative_vec_pure x))
   (ap [ff fa] 0))
 
-;; Vec Monad
+;; Vec TestMonad
 (defn __monad_vec_bind [ma fn] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
@@ -244,7 +244,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Monad [vec]
+(definstance TestMonad [vec]
   (bind [ma fn] (__monad_vec_bind ma fn)))
 
 ;; ── List (Cons/nil) helpers ─────────────────────────────────────────────────
@@ -347,15 +347,15 @@
   (foldl [ta init fn] (__foldable_list_foldl ta init fn))
   (foldr [ta init fn] (__foldable_list_foldr ta init fn)))
 
-;; List Applicative
+;; List TestApplicative
 (defn __applicative_list_pure [x] : int
   (__list_cons x (__list_nil)))
 
-(definstance Applicative [list]
+(definstance TestApplicative [list]
   (pure [x] (__applicative_list_pure x))
   (ap [ff fa] 0))
 
-;; List Monad
+;; List TestMonad
 (defn __monad_list_bind [ma fn] : int
   ```c
   struct { int64_t value; int64_t next; } *cell =
@@ -386,7 +386,7 @@
   return (int64_t)(intptr_t)result;
   ```)
 
-(definstance Monad [list]
+(definstance TestMonad [list]
   (bind [ma fn] (__monad_list_bind ma fn)))
 
 ;; ── Result helpers ──────────────────────────────────────────────────────────
@@ -462,15 +462,15 @@
   (foldl [ta init fn] (__foldable_result_foldl ta init fn))
   (foldr [ta init fn] (__foldable_result_foldr ta init fn)))
 
-;; Result Applicative
+;; Result TestApplicative
 (defn __applicative_result_pure [x] : int
   (__res_ok x))
 
-(definstance Applicative [result]
+(definstance TestApplicative [result]
   (pure [x] (__applicative_result_pure x))
   (ap [ff fa] 0))
 
-;; Result Monad
+;; Result TestMonad
 (defn __monad_result_bind [ma fn] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -479,10 +479,10 @@
   return ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
   ```)
 
-(definstance Monad [result]
+(definstance TestMonad [result]
   (bind [ma fn] (__monad_result_bind ma fn)))
 
-;; Result Bifunctor
+;; Result TestBifunctor
 (defn __bimap_result [container fn-left fn-right] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -501,7 +501,7 @@
   return (int64_t)(intptr_t)out;
   ```)
 
-(definstance Bifunctor [result]
+(definstance TestBifunctor [result]
   (bimap [container fn-left fn-right] (__bimap_result container fn-left fn-right)))
 
 ;; ── Pair helpers ────────────────────────────────────────────────────────────
@@ -522,7 +522,7 @@
   return ((struct { int64_t fst; int64_t snd; } *)(intptr_t)p)->snd;
   ```)
 
-;; Pair Bifunctor
+;; Pair TestBifunctor
 (defn __bimap_pair [container fn-left fn-right] : int
   ```c
   struct { int64_t fst; int64_t snd; } *p =
@@ -533,7 +533,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Bifunctor [pair]
+(definstance TestBifunctor [pair]
   (bimap [container fn-left fn-right] (__bimap_pair container fn-left fn-right)))
 
 ;; ── Shared helpers ──────────────────────────────────────────────────────────
@@ -703,7 +703,7 @@
         (println (__res_ok? rb3))           ;; false
         (println (__res_err_val rb3))))     ;; 5
 
-    ;; ── Pair Bifunctor tests ──────────────────────────────────────
+    ;; ── Pair TestBifunctor tests ──────────────────────────────────────
     ;; bimap double inc (10, 20) => (20, 21)
     (let [p (__pair_make 10 20)]
       (let [mapped (__bimap_pair p twice inc)]
