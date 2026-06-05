@@ -63,7 +63,7 @@ When a method declares a function return type, e.g.
 
 ```turmeric
 (defclass HasArr [a]
-  (arr-of [self n : int] : (fn [:int] :int)))
+  (arr-of [self n : int] : (fn [int] int)))
 ```
 
 the instance-method elaborator (`elab_definstance`,

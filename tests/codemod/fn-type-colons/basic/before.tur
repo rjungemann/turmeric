@@ -1,0 +1,6 @@
+;; Parameter and result types inside (fn ...) lose their leading colons.
+(defn apply1 [f : (fn [:int] :int) x : int] : int
+  (f x))
+
+(defn apply2 [^fat cmp : (fn [:int :int] :bool)] : bool
+  (cmp 3 4))

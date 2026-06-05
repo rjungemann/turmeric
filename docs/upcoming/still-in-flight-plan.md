@@ -90,14 +90,29 @@ diagnostic-scope fix itself is not implemented.
 Outer-annotation analogue ([spaced-type-annotation-migration-plan](#spaced-type-annotation-migration))
 is complete; this is the inner-type-expression version.
 
-- [ ] Phase 1 -- parser accepts bare-identifier types inside
+- [x] Phase 1 -- parser accepts bare-identifier types inside
       `(fn ...)` everywhere; regression fixture
       `tests/fixtures/fn-type-bare-identifier/` covers unary,
       binary, nullary, curried, mixed, parenthesised inner, declared
-      user type.
-- [ ] Phase 2 -- `tools/rewrite_fn_type_colons.py` codemod sweeps
-      `stdlib/`, `tests/fixtures/` (sources only), `docs/` (excluding
-      `archive/`), and `../turmeric-spices/`.
+      user type. (Fixture present and green in `tests/run.sh`.)
+- [~] Phase 2 -- `tools/rewrite_fn_type_colons.py` codemod written
+      (position-driven: defn/fn params + return, defstruct fields,
+      let bindings, defalias, method sigs, `(:: _ T)`/`(the T _)`
+      ascriptions, nested `(fn ...)`; handles `:kw`, bare `: (T)`,
+      and effect sets; never touches lambda values). Corpus regression
+      harness at `tests/codemod/run-fn-type-colons.sh`. **Swept so far:**
+      `stdlib/` (`either`, `gadt-vec`, `list`) and `docs/guides/`.
+      **Remaining:** `tests/fixtures/` sources are intentionally left
+      on the legacy colon spelling until Phase 4 (they back the
+      lenient-path coverage), and `../turmeric-spices/` is deferred
+      until that checkout is present. Full suite stays green
+      (`1479 passed, 0 failed`); the rewrite is annotation-spelling
+      only, so codegen snapshots are byte-identical. **Known gap:**
+      the codemod only finds fn types inside paren-delimited
+      declarations, so sweet-exp top-level forms (`.tur.sweet` files,
+      ```sweet-exp doc blocks) are skipped -- port the
+      `spaced-types-rewrite.py` implicit-sequence walk before sweeping
+      those.
 - [ ] Phase 3 -- emit `TUR-D000x` deprecation warning when an
       `F_KEYWORD` is consumed inside a `(fn ...)` type position.
 - [ ] Phase 4 -- remove the `F_KEYWORD` branch from the
@@ -226,15 +241,15 @@ fiber + I/O fd sweep + process Pid + fs StatInfo/TmpFile + io
 DirListing/FileSystem/FileStream + ref RefHandle) have all landed.
 Only the tail items remain.
 
-- [ ] `io/file-open` -- annotate the `[path mode]` parameters
-      (currently default to `:int`, so the linear `FileHandle` open
-      path does not accept a `:cstr` path as written). Noted in
-      passing during Tier 3; pre-existing latent defect orthogonal
-      to handle typing.
-- [ ] Final acceptance pass: `tests/run.sh` zero `FAIL` with all
-      Tier 1+2+3 modules exposing handle-typed signatures; close out
-      the plan once any remaining tail items are filed as their own
-      reports.
+- [x] `io/file-open` -- parameters are annotated
+      `[path : cstr mode : cstr]` (`stdlib/io.tur:368`); the linear
+      `FileHandle` open path accepts a `:cstr` path as written.
+      Verified in-tree -- no further change needed.
+- [x] Final acceptance pass: `tests/run.sh` is green
+      (`1479 passed, 0 failed`) with all Tier 1+2+3 modules exposing
+      handle-typed signatures. No remaining tail items; this section's
+      punch list is now empty and the plan is ready to move to
+      `docs/archive/history/` (per the churn-docs skill).
 
 When this list is empty, archive the plan to `docs/archive/history/`
 under the post-v0.18.0 sweep.

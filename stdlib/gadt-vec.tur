@@ -147,7 +147,7 @@
 ;; wraps any callee into a tur_poly_fn_t, so `(f x y)` dispatches correctly via
 ;; fn.fn(fn.env, x, y) for both bare functions and capturing closures.
 
-(defn gvzip-with [f : (fn [int int] :int) v1 v2] : GVec
+(defn gvzip-with [f : (fn [int int] int) v1 v2] : GVec
   (match v1
     (GVNil)
     (GVNil)
