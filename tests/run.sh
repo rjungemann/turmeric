@@ -106,6 +106,25 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
 trap 'rm -rf "$RESULTS_DIR"' EXIT
 
+# A killed or interrupted run must NEVER print a success-looking summary.
+# Without this guard, a SIGINT/SIGTERM that the parent shell survives (e.g. the
+# harness signals only the xargs workers, or the run is cut short for time)
+# would fall straight through to the "summary: N passed, 0 failed" tally below
+# and report a *partial* run as green.  Trap the catchable signals and bail with
+# a loud, non-zero status; the completeness check at the very end is the backstop
+# for the cases a trap cannot see (SIGKILLed workers).  _INTERRUPTED is also read
+# by that final check.
+_INTERRUPTED=0
+_abort_on_signal() {
+    _INTERRUPTED=1
+    echo
+    echo "ABORTED: run.sh caught a signal before finishing -- results are PARTIAL, NOT a pass." >&2
+    # 130 = 128 + SIGINT(2); a conventional "interrupted" status that is clearly
+    # not 0 (success) and not 1 (test failures).
+    exit 130
+}
+trap _abort_on_signal INT TERM
+
 # Optional regex filter for fixture names (relative path under tests/fixtures).
 # Example: TUR_TEST_FILTER='^rc-auto-drop|^rc-ref-conversion$'
 TUR_TEST_FILTER="${TUR_TEST_FILTER:-}"
@@ -274,7 +293,7 @@ run_happy() {
     local input
     if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
-    else echo "SKIP $name (no input)" ; return; fi
+    else echo "SKIP $name (no input)" ; write_result "PASS" "$name" "(no input -- skipped)" "" ; return; fi
 
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
@@ -360,11 +379,20 @@ run_happy() {
         done < "$dir/run.args"
     fi
 
+    # Codegen phase: wrap in _run_timed.  A compiler infinite loop in emit-c was
+    # previously UNTIMED -- it stalled the worker (and the whole suite) forever,
+    # because the per-fixture timeout only covered running the compiled binary,
+    # never the emit-c/build phases.  A hung emit-c now FAILs on timeout instead.
     if [ "$TUR_EMIT_C_MODE" = "always" ] || [ "$needs_codegen_check" -eq 1 ]; then
-        "$TUR" $fixture_flags emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
-        if [ $? -ne 0 ]; then
+        _run_timed "$fixture_timeout" "$TUR" $fixture_flags emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
+        _emit_rc=$?
+        if [ $_emit_rc -ne 0 ]; then
             {
-                echo "FAIL $name — tur emit-c failed"
+                if [ $_emit_rc -eq 124 ]; then
+                    echo "FAIL $name — tur emit-c timed out (>${fixture_timeout}s)"
+                else
+                    echo "FAIL $name — tur emit-c failed"
+                fi
                 cat "$out_dir/actual.stderr"
             } > "$log_file"
             write_result "FAIL" "$name" "emit-c failed" "$log_file"
@@ -378,10 +406,18 @@ run_happy() {
         # Spawns cc + a new executable; triggers syspolicyd on macOS.
         local exe
         exe=$(mktemp -t tur-test-XXXXXX)
-        CC="$BUILD_CC" "$TUR" $fixture_flags build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
-        if [ $? -ne 0 ]; then
+        # Build phase (compiler frontend + cc/ccache): also wrap in _run_timed.
+        # This was untimed too, so a hung codegen or a wedged C compiler stalled
+        # the suite indefinitely.  A timeout here is now a FAIL, not a hang.
+        CC="$BUILD_CC" _run_timed "$fixture_timeout" "$TUR" $fixture_flags build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
+        _build_rc=$?
+        if [ $_build_rc -ne 0 ]; then
             {
-                echo "FAIL $name — tur build failed"
+                if [ $_build_rc -eq 124 ]; then
+                    echo "FAIL $name — tur build timed out (>${fixture_timeout}s)"
+                else
+                    echo "FAIL $name — tur build failed"
+                fi
                 cat "$out_dir/actual.stderr"
             } > "$log_file"
             write_result "FAIL" "$name" "build failed" "$log_file"
@@ -492,7 +528,15 @@ run_negative() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
     local input="$dir/input.tur"
-    [ -f "$input" ] || { echo "SKIP $name (no input)"; return; }
+    [ -f "$input" ] || { echo "SKIP $name (no input)"; write_result "PASS" "$name" "(no input -- skipped)" "" ; return; }
+
+    # Per-fixture timeout (default 10s) -- negative fixtures only emit-c, but an
+    # untimed front-end hang stalled the suite just like the happy path did.
+    local fixture_timeout=10
+    if [ -f "$dir/expected.timeout" ]; then
+        local _nt; _nt=$(tr -d '[:space:]' < "$dir/expected.timeout")
+        case "$_nt" in [0-9]*) fixture_timeout=$_nt ;; esac
+    fi
 
     local log_file="$RESULTS_DIR/$(printf '%s' "neg-$name" | tr '/ ' '__').log"
 
@@ -506,8 +550,15 @@ run_negative() {
     if [ -f "$dir/flags" ]; then
         neg_flags=$(cat "$dir/flags")
     fi
-    $TUR $neg_flags emit-c "$input" > /dev/null 2> "$dir/actual.stderr"
+    _run_timed "$fixture_timeout" $TUR $neg_flags emit-c "$input" > /dev/null 2> "$dir/actual.stderr"
     local rc=$?
+    if [ $rc -eq 124 ]; then
+        {
+            echo "FAIL $name — tur emit-c timed out (>${fixture_timeout}s)"
+        } > "$log_file"
+        write_result "FAIL" "$name" "emit-c timed out" "$log_file"
+        return
+    fi
     if [ $rc -eq 0 ]; then
         {
             echo "FAIL $name — expected error, but tur exited 0"
@@ -573,10 +624,14 @@ for d in tests/fixtures/*/; do
     fixture_ordinal=$((fixture_ordinal + 1))
 done
 
+HAPPY_XARGS_RC=0
 if [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
     HAPPY_LIST_FILE="$RESULTS_DIR/happy_dirs.list"
     printf '%s\n' "${HAPPY_DIRS[@]}" > "$HAPPY_LIST_FILE"
-    xargs -P "$JOBS" -I{} bash -c 'run_happy_worker "$@"' _ {} < "$HAPPY_LIST_FILE" 2>/dev/null
+    # Capture xargs' exit status.  Workers always exit 0 (test failures are
+    # recorded in .result files, not via exit code), so a non-zero rc here means
+    # xargs or a worker was killed by a signal -- i.e. the run was interrupted.
+    xargs -P "$JOBS" -I{} bash -c 'run_happy_worker "$@"' _ {} < "$HAPPY_LIST_FILE" 2>/dev/null || HAPPY_XARGS_RC=$?
 fi
 
 # Error fixtures
@@ -592,10 +647,11 @@ for d in tests/fixtures/errors/*/; do
     error_ordinal=$((error_ordinal + 1))
 done
 
+ERROR_XARGS_RC=0
 if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
     ERROR_LIST_FILE="$RESULTS_DIR/error_dirs.list"
     printf '%s\n' "${ERROR_DIRS[@]}" > "$ERROR_LIST_FILE"
-    xargs -P "$JOBS" -I{} bash -c 'run_negative_worker "$@"' _ {} < "$ERROR_LIST_FILE" 2>/dev/null
+    xargs -P "$JOBS" -I{} bash -c 'run_negative_worker "$@"' _ {} < "$ERROR_LIST_FILE" 2>/dev/null || ERROR_XARGS_RC=$?
 fi
 
 for result_file in "$RESULTS_DIR"/*.result; do
@@ -619,7 +675,31 @@ for result_file in "$RESULTS_DIR"/*.result; do
     fi
 done
 
+# Completeness guard -- the core invariant: a partial run is NEVER a pass.
+# Every dispatched fixture writes exactly one .result file (PASS or FAIL, incl.
+# every skip path).  If fewer results landed than we dispatched, or if either
+# xargs reported a signal-killed worker, or a signal trap fired, then the run
+# was cut short and the tally above is partial.  Refuse to print the
+# success-looking "summary: N passed, 0 failed" line in that case.
+DISPATCHED=$(( ${#HAPPY_DIRS[@]} + ${#ERROR_DIRS[@]} ))
+RESULT_COUNT=$(find "$RESULTS_DIR" -maxdepth 1 -name '*.result' 2>/dev/null | wc -l | tr -d '[:space:]')
+: "${RESULT_COUNT:=0}"
+
 echo
+if [ "$_INTERRUPTED" -ne 0 ] \
+   || [ "$HAPPY_XARGS_RC" -ne 0 ] \
+   || [ "$ERROR_XARGS_RC" -ne 0 ] \
+   || [ "$RESULT_COUNT" -lt "$DISPATCHED" ]; then
+    echo "ABORTED: run did NOT complete -- $RESULT_COUNT of $DISPATCHED fixtures reported."
+    echo "  (xargs rc: happy=$HAPPY_XARGS_RC error=$ERROR_XARGS_RC, interrupted=$_INTERRUPTED)"
+    echo "  partial tally so far: $PASS passed, $FAIL failed -- THIS IS NOT A PASS."
+    if [ $FAIL -ne 0 ]; then
+        for f in "${FAILED[@]}"; do echo "  - $f"; done
+    fi
+    # 2 = incomplete/aborted; distinct from 0 (all passed) and 1 (test failures).
+    exit 2
+fi
+
 echo "summary: $PASS passed, $FAIL failed"
 if [ $FAIL -ne 0 ]; then
     for f in "${FAILED[@]}"; do echo "  - $f"; done

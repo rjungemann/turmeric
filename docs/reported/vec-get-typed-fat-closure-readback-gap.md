@@ -7,6 +7,41 @@ description: `vec-get` is declared `[A] [v :int i :int] :A`, but reading back an
 
 # `vec-get` of a `Vec<typed fat closure>` cannot be re-called as the typed closure
 
+> **Status: RESOLVED.** The `Vec<SF>` fold now elaborates, builds, and runs
+> leak-clean. The readback uses the documented `::` ascription idiom
+> (`(:: (vec-get effects i) :ptr<void>)`); the gaps that actually blocked the
+> shape were five interacting closure/fat-dispatch bugs, all fixed:
+>
+> 1. **Recursion `arg_fat` propagation** (`elab_fns.c`, Phase HRT5 early-update):
+>    a self-recursive call passing a `:ptr<void>` fat box into the function's own
+>    `^fat` fn param saw the stale pass-1 `arg_fat=false` and rejected the arg
+>    with a spurious `expected (fn [] : ?), got ptr<void>`. The forward binding
+>    now carries `arg_fat`/`result_fat` before the body is elaborated.
+> 2. **`if`-branch fat/`:ptr<void>` unification** (`elab_forms.c`, `elab_if`):
+>    the fold base case `(if done sig (loop ... (apply ...)))` mixes a `^fat` fn
+>    value (`sig`, `TY_FN`) with the threaded `:ptr<void>` recursive arm. Both
+>    are fat boxes, so the `if` now widens to `:ptr<void>` instead of reporting a
+>    `then=(fn ...) else=ptr<void>` mismatch.
+> 3. **`^fat` in `let`-binding position** (`elab_forms.c`, `elab_let`): the
+>    `^fat out :(fn ...)` form the diagnostic help text already recommended is
+>    now accepted -- it re-types a `:ptr<void>` fat-box result into a
+>    directly-callable fat closure.
+> 4. **Closure thunk `arg_fat` shift** (`elab_fns.c`, capturing-lambda env
+>    prepend): a closure that captures BOTH a plain value and a `^fat` param
+>    gained a hidden env param, but `arg_fat` was not shifted with
+>    `arg_full_types`, so a captureless lambda passed into one of the closure's
+>    `^fat` params skipped the `EX_FN_TO_FAT` shim and a bare fn pointer reached
+>    a fat-dispatch consumer -> slot-0 SEGV.
+> 5. **Fat-dispatch thunk ABI** (`emit_expr.c`, typed `^fat`/boxed `TY_FN` call):
+>    `(sf sig)` cast slot 0 using the *actual argument*'s static type (`sig`'s
+>    `:float` thunk -> `R(*)(void*, double)`) instead of `sf`'s *declared*
+>    `:ptr<void>` param ABI, passing the fat-box pointer in an FP register. Now
+>    keyed off the callee's declared param types.
+>
+> A LeakSanitizer leak in the `if`-branch-mismatch diagnostic (`type_name` on a
+> composite `fn` type) was fixed in passing. Regression coverage:
+> `tests/fixtures/vec-typed-fat-closure-readback/` (prints `6`).
+
 ## Summary
 
 Reading a fat-closure value out of a `Vec[A]` via `vec-get` and then
