@@ -1,0 +1,38 @@
+;; Regression: fat-closure envs must not leak when a capturing closure is
+;; constructed in a hot path (a loop body or a repeatedly-invoked effect
+;; handler).  Each non-escaping `(fn ...)` heap-allocates an env that the
+;; scoped-free pass releases at scope exit; without it, this program leaks one
+;; env per loop iteration and one per handler invocation.
+;; See docs/reported/fat-closure-env-leak.md.
+;;
+;; This fixture is owned by its own ASan ctest target (tur_closure_env_leak),
+;; which compiles the emitted C with -fsanitize=address and ASAN_OPTIONS
+;; detect_leaks=1 and asserts a clean exit.  run.sh PASS-skips it (the default
+;; suite toolchain does not sanitize the spawned program).
+
+(defeffect Ask [] :int)
+
+;; Handler body constructs a local closure `f` that captures `base`; the handler
+;; runs once per `perform`, so a leak here grows with the number of effects.
+(defn run-handler [base : int] : int
+  (handle
+    (+ (perform (Ask)) (perform (Ask)))
+    (Ask [] k)
+    (let [f (fn [x : int] : int (+ x base))]
+      (resume k (f 1)))))
+
+;; A capturing closure built fresh on every loop iteration.
+(defn sum-loop [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i n)
+      (let [base i
+            f    (fn [x : int] : int (+ x base))]
+        (set! acc (+ acc (f 1))))
+      (set! i (+ i 1)))
+    acc))
+
+(defn main [] : int
+  (println (run-handler 100))         ;; => 202
+  (println (sum-loop 1000))           ;; => sum(i+1 for i in 0..999) = 500500
+  0)

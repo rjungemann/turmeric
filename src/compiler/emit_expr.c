@@ -298,6 +298,39 @@ static void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name,
     buf_puts(body, ";\n");
 }
 
+/* Fat-closure-env scoped free (docs/reported/fat-closure-env-leak.md): decide
+ * whether let-binding `idx` of `e` holds a freshly-constructed fat closure whose
+ * heap env can be `free`d when the let scope exits.  Sound iff:
+ *   - the initializer is an EX_CLOSURE (so the value is a `malloc`'d env), and
+ *   - the closure returns a scalar value, so its result can never alias the env
+ *     (no interior reference can outlive the free), and
+ *   - the bound name does not escape -- it is used only as a direct-call callee
+ *     within the let body and never escapes through a sibling binding's
+ *     initializer (which could capture it into a longer-lived closure).
+ * The conservative `closure_binding_escapes` check only ever greenlights a free,
+ * so a false negative merely preserves the status-quo leak; it never frees a
+ * still-live env. */
+static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
+    const Expr *init = e->as.let_.bindings[idx].init;
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    if (!init || !b) return false;
+    if (init->kind != EX_CLOSURE) return false;
+    /* Scalar-result gate: a closure returning a reference/struct/pointer could
+     * hand back a value derived from its env; restrict to scalar returns whose
+     * result is copied out by value. */
+    if (b->type.kind != TY_FN) return false;
+    switch (b->type.as.fn.result_kind) {
+        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: break;
+        default: return false;
+    }
+    if (closure_binding_escapes(e->as.let_.body, b)) return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (closure_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+    }
+    return true;
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -317,6 +350,23 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_puts(body, "{\n");
     ctx->indent += 4;
+
+    /* Fat-closure-env scoped free: collect the C names of let-bound,
+     * non-escaping fat closures so their heap env can be released at scope
+     * exit.  Only on the clean (non return/throw) paths -- an early return
+     * would skip the trailing free, which is a leak, not a UAF. */
+    char **env_free_names = NULL;
+    uint32_t n_env_free = 0;
+    if (!body_has_return_or_throw) {
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            if (let_binding_env_freeable(e, i)) {
+                env_free_names = (char **)realloc(env_free_names,
+                                                  (n_env_free + 1) * sizeof(char *));
+                env_free_names[n_env_free++] =
+                    name_for_binding(ctx, e->as.let_.bindings[i].binding);
+            }
+        }
+    }
 
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
@@ -439,10 +489,19 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(bv);
     }
 
+    /* Fat-closure-env scoped free: release non-escaping closure envs now that
+     * the let body (their last use) has been emitted. */
+    for (uint32_t i = 0; i < n_env_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "free((void *)(intptr_t)%s);\n", env_free_names[i]);
+        free(env_free_names[i]);
+    }
+    free(env_free_names);
+
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);
     buf_puts(body, "}\n");
-    
+
     return nil_result ? atom_nil() : tmp;
 }
 

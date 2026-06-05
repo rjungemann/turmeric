@@ -4434,6 +4434,7 @@ int main(int argc, char **argv) {
                 int64_t __t29;
                 __t29 = INT64_C(0);
                 __t26 = __t29;
+                free((void *)(intptr_t)f_878);
             }
             __t25 = __t26;
         }

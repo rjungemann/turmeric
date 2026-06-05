@@ -336,6 +336,217 @@ bool expr_contains_return_or_throw(const Expr *e) {
     }
 }
 
+/* Fat-closure-env scoped-free escape analysis
+ * (docs/reported/fat-closure-env-leak.md).
+ *
+ * Returns true if the binding `b` -- which holds a freshly-constructed fat
+ * closure value (the heap env `malloc`'d by the EX_CLOSURE emitter) -- is used
+ * anywhere in `e` as a *value* (passed as an argument, stored into a field/var,
+ * captured by a nested closure, returned, borrowed, ...) rather than solely as
+ * the callee of a direct call `(b ...)`.  When this returns false the closure
+ * provably does not escape its defining scope, so its env may be `free`d at
+ * scope exit (see emit_let_value).
+ *
+ * Soundness posture: the analysis only ever GREENLIGHTS a free, so it must
+ * never miss an escape.  The `default` arm therefore reports an escape (true)
+ * for any Expr kind not explicitly understood -- a new or rare node kind that
+ * could hide a reference to `b` conservatively disables the optimization rather
+ * than risking a use-after-free.  A reference to `b` inside a nested closure is
+ * detected via that closure's precomputed capture set (EX_CLOSURE/EX_FN_DEF),
+ * so the "callee position is fine" relaxation never leaks into a nested body.
+ * EX_DEFER is treated as an escape because a deferred body runs at the same
+ * scope-exit point as the free, making the ordering unsafe to reason about. */
+bool closure_binding_escapes(const Expr *e, const Binding *b) {
+    if (!e || !b) return true;
+    size_t cap = 256;
+    const Expr **stack = (const Expr **)malloc(cap * sizeof(const Expr *));
+    if (!stack) { fprintf(stderr, "tur: oom\n"); abort(); }
+    int sp = 0;
+    bool escapes = false;
+
+#define ESC_PUSH(x) do {                                                       \
+        const Expr *_x = (x);                                                  \
+        if (_x) {                                                              \
+            if ((size_t)sp >= cap) {                                           \
+                cap *= 2;                                                       \
+                stack = (const Expr **)realloc(stack, cap * sizeof(Expr *));   \
+                if (!stack) { fprintf(stderr, "tur: oom\n"); abort(); }        \
+            }                                                                  \
+            stack[sp++] = _x;                                                  \
+        }                                                                      \
+    } while (0)
+
+    ESC_PUSH(e);
+    while (sp > 0) {
+        const Expr *cur = stack[--sp];
+        switch (cur->kind) {
+            case EX_VAR:
+                if (cur->as.var.binding == b) { escapes = true; goto esc_done; }
+                break;
+            /* A direct call `(b ...)` is the one allowed, non-escaping use of
+             * `b`: the callee is carried in fn_binding (not an EX_VAR child), so
+             * it is simply not pushed here.  An indirect call whose callee slot
+             * is the bare value `b` (fn_expr == EX_VAR(b)) is likewise an
+             * invocation, not retention -- skip that child too.  Everything else
+             * (args, dict arg, a non-`b` callee) is walked normally. */
+            case EX_CALL: {
+                const Expr *fe = cur->as.call_.fn_expr;
+                if (fe && !(fe->kind == EX_VAR && fe->as.var.binding == b))
+                    ESC_PUSH(fe);
+                for (uint32_t i = 0; i < cur->as.call_.n_args; i++)
+                    ESC_PUSH(cur->as.call_.args[i]);
+                ESC_PUSH(cur->as.call_.dict_arg);
+                break;
+            }
+            /* A nested closure that captures `b` makes it escape: do not descend
+             * (the body accesses captures through its own env), just consult the
+             * precomputed capture set. */
+            case EX_CLOSURE:
+                if (cur->as.closure_.closure) {
+                    struct Closure *c = cur->as.closure_.closure;
+                    for (uint32_t i = 0; i < c->n_captures; i++)
+                        if (c->captures[i] == b) { escapes = true; goto esc_done; }
+                }
+                break;
+            case EX_FN_DEF:
+                if (cur->as.fn_def_.fn && cur->as.fn_def_.fn->closure) {
+                    struct Closure *c = cur->as.fn_def_.fn->closure;
+                    for (uint32_t i = 0; i < c->n_captures; i++)
+                        if (c->captures[i] == b) { escapes = true; goto esc_done; }
+                }
+                break;
+            /* Inline-C may name `b` through its capture array (__TUR_CAP_N__) in
+             * addition to its evaluated sub-expressions. */
+            case EX_INLINE_C: {
+                InlineC *ic = cur->as.inline_c_.inline_c;
+                if (ic) {
+                    for (uint8_t i = 0; i < ic->n_captures; i++)
+                        if (ic->captures[i] == b) { escapes = true; goto esc_done; }
+                    for (uint8_t i = 0; i < ic->n_val_exprs; i++)
+                        ESC_PUSH(ic->val_exprs[i]);
+                }
+                break;
+            }
+
+            /* ---- container kinds: walk every sub-expression ---- */
+            case EX_LET:
+            case EX_LETREC:
+                for (uint32_t i = 0; i < cur->as.let_.n; i++)
+                    ESC_PUSH(cur->as.let_.bindings[i].init);
+                ESC_PUSH(cur->as.let_.body);
+                break;
+            case EX_IF:
+                ESC_PUSH(cur->as.if_.cond);
+                ESC_PUSH(cur->as.if_.then_);
+                ESC_PUSH(cur->as.if_.else_or_null);
+                break;
+            case EX_DO:
+                for (uint32_t i = 0; i < cur->as.do_.n; i++)
+                    ESC_PUSH(cur->as.do_.items[i]);
+                break;
+            case EX_WHILE:
+                ESC_PUSH(cur->as.while_.cond);
+                ESC_PUSH(cur->as.while_.body);
+                break;
+            case EX_SET:
+                ESC_PUSH(cur->as.set_.value);
+                break;
+            case EX_BUILTIN:
+                for (uint32_t i = 0; i < cur->as.builtin.n; i++)
+                    ESC_PUSH(cur->as.builtin.args[i]);
+                break;
+            case EX_MAKE_STRUCT:
+                for (uint32_t i = 0; i < cur->as.make_struct_.n_fields; i++)
+                    ESC_PUSH(cur->as.make_struct_.field_values[i]);
+                break;
+            case EX_SET_LIT:
+                for (uint32_t i = 0; i < cur->as.set_lit_.n; i++)
+                    ESC_PUSH(cur->as.set_lit_.items[i]);
+                break;
+            case EX_CONS_LIST:
+                for (uint32_t i = 0; i < cur->as.cons_list_.n; i++)
+                    ESC_PUSH(cur->as.cons_list_.items[i]);
+                break;
+            case EX_GET_FIELD:
+                ESC_PUSH(cur->as.get_field_.struct_expr);
+                break;
+            case EX_SET_FIELD:
+                ESC_PUSH(cur->as.set_field_.receiver);
+                ESC_PUSH(cur->as.set_field_.value);
+                break;
+            case EX_REF:        ESC_PUSH(cur->as.ref_.expr);        break;
+            case EX_DEREF:      ESC_PUSH(cur->as.deref_.expr);      break;
+            case EX_BORROW_IMMUT: ESC_PUSH(cur->as.borrow_immut_.expr); break;
+            case EX_BORROW_MUT:   ESC_PUSH(cur->as.borrow_mut_.expr);   break;
+            case EX_SET_DEREF:
+                ESC_PUSH(cur->as.set_deref_.ref);
+                ESC_PUSH(cur->as.set_deref_.value);
+                break;
+            /* EX_PERFORM is a continuation-capture point: a multi-shot handler
+             * could resume the captured continuation -- which spans this scope's
+             * trailing free -- more than once, double-freeing the shared env.
+             * Conservatively report an escape so the env is left to leak rather
+             * than risk a double free.  (shift/reset/await/call-cc and the other
+             * capture forms are not modeled below and reach `default` -> escape.) */
+            case EX_PERFORM:
+                escapes = true;
+                goto esc_done;
+            case EX_HANDLE:
+                ESC_PUSH(cur->as.handle_.handle->body);
+                for (uint8_t i = 0; i < cur->as.handle_.handle->n_cases; i++)
+                    ESC_PUSH(cur->as.handle_.handle->cases[i].body);
+                break;
+            case EX_RESUME:
+                ESC_PUSH(cur->as.resume_.resume->k);
+                ESC_PUSH(cur->as.resume_.resume->value);
+                break;
+            case EX_DISCONTINUE:
+                ESC_PUSH(cur->as.discontinue_.discontinue->k);
+                ESC_PUSH(cur->as.discontinue_.discontinue->exception);
+                break;
+            case EX_RETURN:
+                ESC_PUSH(cur->as.return_.value);
+                break;
+            case EX_PANIC:
+                ESC_PUSH(cur->as.panic_.payload);
+                break;
+            case EX_MATCH:
+                ESC_PUSH(cur->as.match_.scrutinee);
+                for (uint32_t i = 0; i < cur->as.match_.n_arms; i++) {
+                    ESC_PUSH(cur->as.match_.arms[i].guard);
+                    ESC_PUSH(cur->as.match_.arms[i].body);
+                }
+                break;
+            case EX_ASCRIBE:
+                ESC_PUSH(cur->as.ascribe_.inner);
+                break;
+            case EX_CAST:
+                ESC_PUSH(cur->as.cast_.expr);
+                break;
+
+            /* ---- leaves: cannot reference `b` ---- */
+            case EX_NIL_LIT:
+            case EX_BOOL_LIT:
+            case EX_INT_LIT:
+            case EX_FLOAT_LIT:
+            case EX_CSTR_LIT:
+            case EX_SYM_LIT:
+            case EX_DICT:
+                break;
+
+            default:
+                /* Unknown / unmodeled kind: conservatively treat as an escape so
+                 * we never free an env that is still reachable. */
+                escapes = true;
+                goto esc_done;
+        }
+    }
+esc_done:
+#undef ESC_PUSH
+    free(stack);
+    return escapes;
+}
+
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every
  * path through `e` ends in a return/panic.  Unlike expr_is_divergent (which
  * only inspects the last item of a `do`), this treats a `do` as divergent when
