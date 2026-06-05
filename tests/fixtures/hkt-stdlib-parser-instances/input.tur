@@ -1,0 +1,51 @@
+;; stdlib-hkt-consolidation T2: HKT typeclass instances for stdlib Parser.
+;;
+;; Parser is exposed as a kind-(* -> *) opaque so it carries Functor /
+;; Applicative / Monad / Alternative. Parser programs are now written with the
+;; generic do-m / for / bind / alt-or surface from stdlib/macros.tur instead of
+;; the bespoke bind-parser / or-parser combinators. A typeclass-method result
+;; carries the int erasure, so it is ascribed back to (Parser T) at the point a
+;; typed handle is needed (the run boundary).
+
+(load "stdlib/parsec.tur")
+
+;; Extract the value from a run-parser-full result cell (value-wrapped, unlike
+;; run-parser's Pair-wrapped cells which parse-value reads).
+(defn full-value [cell : int] : int
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)cell; return c ? c->value : -1; ```)
+
+;; A pure parser of an int, ascribed to the Parser handle so do-m chains type.
+(defn punit [x : int] : (Parser int) (:: (pure-parser x) :Parser))
+
+;; Monad [Parser] via do-m: parse two chars, return their sum.
+(defn two-sum [] : int
+  (do-m
+    a (item)
+    b (item)
+    (punit (+ a b))))
+
+;; Monad [Parser] via bind directly: parse two chars, keep the second.
+(defn second-char [] : int
+  (bind (item) (fn [_a] (item))))
+
+;; Functor [Parser]: map (+1) over a single parsed char.
+(defn succ-char [] : (Parser int)
+  (:: (fmap (item) (fn [c : int] (+ c 1))) (Parser int)))
+
+;; Alternative [Parser]: match 'A' or 'B'.
+(defn a-or-b [] : (Parser int)
+  (:: (alt-or (pchar 65) (pchar 66)) (Parser int)))
+
+(defn main [] : int
+  ;; do-m: 'A'(65) + 'B'(66) = 131, full input consumed
+  (println (full-value (run-parser-full (:: (two-sum) (Parser int)) "AB")))    ; 131
+  ;; bind: second char of "AB" = 'B'(66)
+  (println (full-value (run-parser-full (:: (second-char) (Parser int)) "AB"))) ; 66
+  ;; fmap: succ of 'A'(65) = 66
+  (println (parse-value (run-parser (succ-char) "A")))                         ; 66
+  ;; alt-or: matches 'B'(66) on "B"
+  (println (parse-value (run-parser (a-or-b) "B")))                            ; 66
+  ;; alt-or: neither matches on "X" -> 0 results
+  (println (parse-result-count (run-parser (a-or-b) "X")))                     ; 0
+  0)

@@ -6,9 +6,11 @@ description: Result is declared (defstruct Result [A B]) with the ok type FIRST 
 
 # Result's `[A=ok B=err]` parameter order blocks Functor/Monad/MonadError
 
-> **Status:** OPEN. T1 of the stdlib HKT consolidation otherwise landed
-> (Option got Functor/Applicative/Monad/Alternative; Result got Bifunctor).
-> This records the one instance family that remains inexpressible.
+> **Status:** OPEN. The stdlib HKT consolidation otherwise landed in full --
+> T1 (Option got Functor/Applicative/Monad/Alternative; Result got Bifunctor),
+> T2 (Parser), and T3 (Backtrack + logic Goal) all carry the four instances.
+> This records the one instance family that remains inexpressible:
+> `MonadError [Result]` (and the ok-biased `Functor`/`Monad [Result]`).
 
 ## Summary
 

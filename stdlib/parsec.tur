@@ -20,6 +20,20 @@
 ;;     return as `^fat :ptr<void>` so the compiler boxes the bare function
 ;;     pointer into a one-cell fat closure at the tail. This replaces the
 ;;     old dead-`sentinel`-capture trick that forced the fat ABI by hand.
+;;
+;; stdlib-hkt-consolidation T2: Parser is exposed as a kind-(* -> *) opaque type
+;; constructor `(Parser A)` so it can carry real Functor / Applicative / Monad /
+;; Alternative instances. The runtime carrier is unchanged -- a Parser handle is
+;; still the same fat-closure pointer the raw combinators below build -- the
+;; phantom parameter A only lets us spell the instance heads. With the instances
+;; in place, parser code uses the generic `do-m` / `for` / `bind` / `alt-or`
+;; surface from stdlib/macros.tur instead of the bespoke bind-parser/or-parser
+;; combinators (which remain as the internal workers the instances delegate to).
+;;; Parser -- a kind-(* -> *) handle over a backtracking parser; carrier is the
+;;; fat-closure pointer (Input -> list (Pair A Input)).
+;;;
+;;; Since: stdlib-hkt-consolidation T2
+(defopaque Parser [A] :ptr<void>)
 ;;; ── Backtracking monad (inlined from backtrack.tur) ──────────────────────────
 ;;; mzero -- return the empty backtracking result (failure).
 ;;;
@@ -342,7 +356,18 @@
 ;;;   (run-parser (pfail) "abc")  ; => 0  (no results)
 
 
-(defn pfail [] ^fat :ptr<void> (fn [inp] (mzero)))
+(defn pfail-raw [] ^fat :ptr<void> (fn [inp] (mzero)))
+;;; pfail -- a Parser that always fails, consuming no input.
+;;;
+;;; Returns:
+;;;   A (Parser A) that yields no results for any input. This is the
+;;;   `Alternative`/`MonadPlus` zero for parsers (see `empty`).
+;;;
+;;; Example:
+;;;   (run-parser (pfail) "abc")  ; => 0  (no results)
+;;;
+;;; Since: stdlib-hkt-consolidation T2
+(defn pfail [A] [] : (Parser A) (:: (pfail-raw) :Parser))
 ;; pure v: succeed with v, consume no input
 ;;; pure-impl -- internal implementation for pure.
 ;;; Parameters:
@@ -361,7 +386,7 @@
 ;;; Example:
 ;;;   (run-parser (pure 99) "")  ; => Cell{Pair(99, Input@0)}
 
-(defn pure [v] : ptr<void>
+(defn pure-parser [v] : ptr<void>
   (let [_v v] (fn [inp] (let [_ _v] (pure-impl _v inp)))))
 ;; item: consume one character; fail at end of input
 ;;; item-impl -- internal implementation for item.
@@ -381,7 +406,18 @@
 ;;; Example:
 ;;;   (parse-value (run-parser (item) "A"))  ; => 65  ; 'A'
 
-(defn item [] ^fat :ptr<void> (fn [inp] (item-impl inp)))
+(defn item-raw [] ^fat :ptr<void> (fn [inp] (item-impl inp)))
+;;; item -- a Parser that consumes exactly one character.
+;;;
+;;; Returns:
+;;;   A (Parser int) yielding the ASCII code of the next character, or
+;;;   failure if at end of input.
+;;;
+;;; Example:
+;;;   (parse-value (run-parser (item) "A"))  ; => 65  ; 'A'
+;;;
+;;; Since: Phase B1
+(defn item [] : (Parser int) (:: (item-raw) :Parser))
 ;; pchar c: consume if current char equals c (c is ASCII int)
 ;;; pchar-impl -- internal implementation for pchar.
 ;;; Parameters:
@@ -406,8 +442,8 @@
 ;;; Example:
 ;;;   (parse-value (run-parser (pchar 65) "ABC"))  ; => 65  ; 'A'
 
-(defn pchar [c] : ptr<void>
-  (let [_c c] (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
+(defn pchar [c] : (Parser int)
+  (:: (let [_c c] (fn [inp] (let [_ _c] (pchar-impl _c inp)))) :Parser))
 ;; pstring s: consume if input starts with the C string s (passed as :cstr)
 ;;; pstring-c-impl -- internal C implementation for pstring.
 ;;; Parameters:
@@ -452,8 +488,8 @@
 ;;; Example:
 ;;;   (run-parser (pstring "hi") "hi there")  ; => Cell{Pair("hi", Input@2)}
 
-(defn pstring [s : cstr] : ptr<void>
-  (let [_s (cstr->int s)] (fn [inp] (let [_ _s] (pstring-c-impl _s inp)))))
+(defn pstring [s : cstr] : (Parser int)
+  (:: (let [_s (cstr->int s)] (fn [inp] (let [_ _s] (pstring-c-impl _s inp)))) :Parser))
 ;;; ── Combinators ──────────────────────────────────────────────────────────────
 ;; or-parser p q: try p, then q, return all successes (backtracking)
 ;;; or-parser-impl -- internal implementation for or-parser.
@@ -465,7 +501,13 @@
 
 (defn or-parser-impl [lp lq inp] : int
   (mplus (apply-parser lp inp) (apply-parser lq inp)))
+;;; or-parser-raw -- int-carrier worker behind or-parser / Alternative alt-or.
+(defn or-parser-raw [p q] : ptr<void>
+  (let [lp p lq q] (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
 ;;; or-parser -- try two parsers and return all successes from either.
+;;;
+;;; This is the typed `(Parser A)` worker behind the `Alternative [Parser]`
+;;; `alt-or` method.
 ;;;
 ;;; Parameters:
 ;;;   p -- the first parser to try.
@@ -477,9 +519,10 @@
 ;;;
 ;;; Example:
 ;;;   (run-parser (or-parser (pchar 65) (pchar 66)) "B")  ; => Cell{Pair(66, ...)}
-
-(defn or-parser [p q] : ptr<void>
-  (let [lp p lq q] (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
+;;;
+;;; Since: Phase B1
+(defn or-parser [A] [p : (Parser A) q : (Parser A)] : (Parser A)
+  (:: (or-parser-raw (:: p :int) (:: q :int)) :Parser))
 ;; bind-parser p f: apply p, then for each (v, inp'), apply (f v) as a parser
 ;; f must be a fat closure: value -> Parser
 ;;; bind-parser-inner -- apply continuation f to a single parse Pair.
@@ -527,7 +570,12 @@
   (let [lq2 lq]
     (mbind (apply-parser lp inp)
       (fn [pair] (let [_ lq2] (apply-parser lq2 (pair-second pair)))))))
+;;; then-parser-raw -- int-carrier worker behind then-parser.
+(defn then-parser-raw [p q] : ptr<void>
+  (let [lp p lq q] (fn [inp] (let [_ lp] (then-parser-impl lp lq inp)))))
 ;;; then-parser -- sequence two parsers, discarding the first result.
+;;;
+;;; Equivalent to `(bind p (fn [_] q))` against the `Monad [Parser]` instance.
 ;;;
 ;;; Parameters:
 ;;;   p -- parser whose result is discarded.
@@ -540,9 +588,10 @@
 ;;; Example:
 ;;;   (run-parser (then-parser (pchar 40) (item)) "(x")
 ;;;   ; => Cell{Pair(120, Input@2)}  ; 'x' only
-
-(defn then-parser [p q] : ptr<void>
-  (let [lp p lq q] (fn [inp] (let [_ lp] (then-parser-impl lp lq inp)))))
+;;;
+;;; Since: Phase B1
+(defn then-parser [A B] [p : (Parser A) q : (Parser B)] : (Parser B)
+  (:: (then-parser-raw (:: p :int) (:: q :int)) :Parser))
 ;; many p: match p zero or more times (greedy); returns one result
 ;;; many-c-impl -- internal C implementation of greedy zero-or-more repetition.
 ;;; Parameters:
@@ -590,8 +639,8 @@
 ;;;   (run-parser (many (pchar 97)) "aab")
 ;;;   ; => Cell{Pair(Cell{97,97}, Input@2)}
 
-(defn many [p] : ptr<void>
-  (let [_p p] (fn [inp] (let [_ _p] (many-c-impl _p inp)))))
+(defn many [A] [p : (Parser A)] : (Parser int)
+  (:: (let [_p (:: p :int)] (fn [inp] (let [_ _p] (many-c-impl _p inp)))) :Parser))
 ;; many1 p: one or more; fails if p doesn't match at least once
 ;;; many1-impl -- internal implementation for many1.
 ;;; Parameters:
@@ -617,8 +666,8 @@
 ;;;   ; => Cell{Pair(Cell{97,97}, Input@2)}
 ;;;   (run-parser (many1 (pchar 97)) "bbb")  ; => 0  (fails)
 
-(defn many1 [p] : ptr<void>
-  (let [_p p] (fn [inp] (let [_ _p] (many1-impl _p inp)))))
+(defn many1 [A] [p : (Parser A)] : (Parser int)
+  (:: (let [_p (:: p :int)] (fn [inp] (let [_ _p] (many1-impl _p inp)))) :Parser))
 ;; optional p: match p zero or one times; 0 = none, pair-first = some-value
 ;;; optional-impl -- internal implementation for optional.
 ;;; Parameters:
@@ -641,8 +690,8 @@
 ;;;   (run-parser (optional (pchar 65)) "ABC")  ; => two results
 ;;;   (run-parser (optional (pchar 65)) "XYZ")  ; => Cell{Pair(0, Input@0)}
 
-(defn optional [p] : ptr<void>
-  (let [_p p] (fn [inp] (let [_ _p] (optional-impl _p inp)))))
+(defn optional [A] [p : (Parser A)] : (Parser int)
+  (:: (let [_p (:: p :int)] (fn [inp] (let [_ _p] (optional-impl _p inp)))) :Parser))
 ;;; ── Runners ──────────────────────────────────────────────────────────────────
 ;; run-parser p s: run parser p on string s; return all partial+full parses
 ;;; run-parser -- run a parser against a raw C string.
@@ -659,8 +708,8 @@
 ;;;   (run-parser (pchar 65) "ABC")  ; => Cell{Pair(65, Input@1)}
 
 
-(defn run-parser [p s : cstr] : int
-  (let [inp (input-new s 0)] (apply-parser p inp)))
+(defn run-parser [A] [p : (Parser A) s : cstr] : int
+  (let [inp (input-new s 0)] (apply-parser (:: p :int) inp)))
 ;; run-parser-full p s: return mreturn(value) for first full-input parse, mzero if none
 ;;; run-parser-full-c -- internal C helper to extract the first full-input parse.
 ;;; Parameters:
@@ -697,7 +746,8 @@
 ;;;   ; => Cell{value=Cell{97,97,97}}
 ;;;   (run-parser-full (pchar 97) "ab")  ; => 0  (leftover input)
 
-(defn run-parser-full [p s : cstr] : int (run-parser-full-c (run-parser p s)))
+(defn run-parser-full [A] [p : (Parser A) s : cstr] : int
+  (run-parser-full-c (run-parser p s)))
 ;;; ── Result helpers ───────────────────────────────────────────────────────────
 ;; parse-value: extract value from first parse result (first = result value)
 ;;; parse-value -- extract the parsed value from the first result in a Cell list.
@@ -762,3 +812,83 @@
 ;;;   (char-list-length (bt-cons 1 (bt-cons 2 (bt-nil))))  ; => 2
 
 (defn char-list-length [lst] : int (bt-length lst))
+;;; ── HKT typeclass instances (stdlib-hkt-consolidation T2) ────────────────────
+;;
+;; Parser is a kind-(* -> *) handle (carrier: the fat-closure pointer), so the
+;; standard Functor / Applicative / Monad / Alternative instances are all
+;; directly expressible and own their type (no orphans). Each method delegates
+;; to an int-carrier worker above. The continuation parameter of `fmap` / `bind`
+;; arrives as a typeclass-method poly closure; handing it to a worker whose
+;; parameter is declared `^fat` lets the compiler box it into the fat-closure
+;; protocol automatically (EX_POLY_TO_FAT), so the instance bodies stay pure
+;; Turmeric -- no hand-written `__tur_poly_to_fat` box.
+;;; fmap-parser-raw -- worker: map a fat-closure fn over the value arm of a parser.
+(defn fmap-parser-raw [p ^fat f] : ptr<void>
+  (let [lp p lf (:: f :int)]
+    (fn [inp]
+      (let [_ lp]
+        (mbind (apply-parser lp inp)
+          (fn [pair]
+            (let [_ lf]
+              (mreturn (pair-new (apply-fat lf (pair-first pair))
+                                 (pair-second pair))))))))))
+;;; ap-parser-raw -- int worker: sequential application of a parser of functions.
+(defn ap-parser-raw [pf pa] : ptr<void>
+  (let [lpf pf lpa pa]
+    (fn [inp]
+      (let [_ lpf]
+        (mbind (apply-parser lpf inp)
+          (fn [fpair]
+            (let [_ lpa]
+              (mbind (apply-parser lpa (pair-second fpair))
+                (fn [apair]
+                  (mreturn (pair-new (apply-fat (pair-first fpair) (pair-first apair))
+                                     (pair-second apair))))))))))))
+;;; Functor [Parser] -- map a function over each parsed value.
+;;;
+;;; Example:
+;;;   (fmap (item) (fn [c] (+ c 1)))  ; parse a char, return its successor
+;;;
+;;; Since: stdlib-hkt-consolidation T2
+(definstance Functor [Parser]
+  (fmap [container fn]
+    (:: (fmap-parser-raw (:: container :int) fn) :Parser)))
+;;; Applicative [Parser] -- pure injects a value without consuming input; ap
+;;; runs a parser of functions then a parser of arguments, applying one to the
+;;; other.
+;;;
+;;; Example:
+;;;   (ap (pure (fn [x] (* x 2))) (item))
+;;;
+;;; Since: stdlib-hkt-consolidation T2
+(definstance Applicative [Parser]
+  (pure [x]
+    (:: (pure-parser x) :Parser))
+  (ap [ff fa]
+    (:: (ap-parser-raw (:: ff :int) (:: fa :int)) :Parser)))
+;;; Monad [Parser] -- bind sequences parsers, threading each parsed value into
+;;; the continuation. This is what `do-m` / `for` lower onto.
+;;;
+;;; Example:
+;;;   (do-m a (item) b (item) (pure (+ a b)))
+;;;
+;;; Since: stdlib-hkt-consolidation T2
+;;; bind-parser-fat -- ^fat-sink wrapper so the Monad instance can hand its poly
+;;; continuation to bind-parser without a hand-written poly-to-fat box.
+(defn bind-parser-fat [p ^fat f] : ptr<void>
+  (bind-parser p (:: f :int)))
+(definstance Monad [Parser]
+  (bind [ma fn]
+    (:: (bind-parser-fat (:: ma :int) fn) :Parser)))
+;;; Alternative [Parser] -- empty is the always-failing parser; alt-or runs both
+;;; parsers and unions their results (full backtracking choice).
+;;;
+;;; Example:
+;;;   (alt-or (pchar 65) (pchar 66))  ; match 'A' or 'B'
+;;;
+;;; Since: stdlib-hkt-consolidation T2
+(definstance Alternative [Parser]
+  (empty [a]
+    (:: (pfail-raw) :Parser))
+  (alt-or [a b]
+    (:: (or-parser-raw (:: a :int) (:: b :int)) :Parser)))
