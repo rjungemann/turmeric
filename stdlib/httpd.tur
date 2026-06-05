@@ -465,7 +465,7 @@
       }
       /* M3: free any cached JSON body parsed by httpd-req-json / mw-json-body. */
       if (conn->req_json_cache) {
-          json_free(conn->req_json_cache);
+          json_slfree(conn->req_json_cache);
           conn->req_json_cache = 0;
       }
       /* M7: free any cached multipart parts. */
@@ -560,7 +560,7 @@
               continue;
           }
       }
-      httpd_handle((int64_t)fd, hb->handler, tls);
+      httpd_hyhandle((int64_t)fd, hb->handler, tls);
   }
   return NULL;
   ```)
@@ -689,7 +689,7 @@
       tur_reactor_free(hb->reactor);
       free(hb->fdq); close(fd); free(hb); return NULL;
   }
-  clos[0] = (int64_t)(intptr_t)httpd_accept_cb;
+  clos[0] = (int64_t)(intptr_t)httpd_hyaccept_hycb;
   clos[1] = (int64_t)(intptr_t)hb;
   hb->accept_clos = (void *)clos;
   hb->listen_src_id = (int)tur_reactor_add_fd(hb->reactor, fd, 1,
@@ -709,7 +709,7 @@
   }
   for (int i = 0; i < workers; i++) {
       pthread_create(&hb->workers[i], NULL,
-                     (void *(*)(void *))httpd_worker, (void *)hb);
+                     (void *(*)(void *))httpd_hyworker, (void *)hb);
   }
   return (void *)hb;
   ```)
@@ -791,7 +791,7 @@
           "-- did you forget to import tls/httpd and call tls-httpd-init?\n");
       return NULL;
   }
-  HttpdBlock *hb = (HttpdBlock *)httpd_new_pool((int64_t)port,
+  HttpdBlock *hb = (HttpdBlock *)httpd_hynew_hypool((int64_t)port,
                                                 (int64_t)workers,
                                                 (int64_t)handler);
   if (!hb) return NULL;
@@ -1506,8 +1506,8 @@
   HttpdConn *c = (HttpdConn *)conn;
   if (c->req_json_cache) return c->req_json_cache;
   if (!c->body || c->body_len <= 0) return 0;
-  /* json_decode is the C name for json/decode. */
-  int64_t tree = json_decode(c->body);
+  /* json_sldecode is the C name for json/decode. */
+  int64_t tree = json_sldecode(c->body);
   c->req_json_cache = tree;
   return tree;
   ```)
@@ -1549,7 +1549,7 @@
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->body || c->body_len <= 0) return 0;  /* empty body -> not malformed */
   if (c->req_json_cache) return 0;             /* already parsed once -> ok */
-  int64_t tree = json_decode(c->body);
+  int64_t tree = json_sldecode(c->body);
   if (tree == 0) return 1;                     /* parse failed -> malformed */
   c->req_json_cache = tree;
   return 0;
@@ -1618,7 +1618,7 @@
 
 (defn httpd-mw-cors-is-preflight [conn :ptr<void>] :int
   ```c if (!conn) return 0;
-  const char *m = httpd_req_method((void *)conn);
+  const char *m = httpd_hyreq_hymethod((void *)conn);
   if (!m || strcmp(m, "OPTIONS") != 0) return 0;
   return __TUR_CNAME_httpd-req-header?__((void *)conn, "Access-Control-Request-Method");
   ```)
@@ -1813,7 +1813,7 @@
 
 (defn httpd-mw-basic-auth-check [conn :ptr<void> verifier :int] :int
   ```c if (!conn || !verifier) return 0;
-  const char *hdr = httpd_req_header((void *)conn, "Authorization");
+  const char *hdr = httpd_hyreq_hyheader((void *)conn, "Authorization");
   if (!hdr || !*hdr) return 0;
   /* Must start with "Basic ", case-insensitive. */
   if (strncasecmp(hdr, "Basic ", 6) != 0) return 0;
@@ -1952,7 +1952,7 @@
   if (c->req_multipart_parts) return 1;
   if (!c->body || c->body_len <= 0) return 0;
   /* Extract boundary from Content-Type. */
-  const char *ct = httpd_req_header((void *)conn, "Content-Type");
+  const char *ct = httpd_hyreq_hyheader((void *)conn, "Content-Type");
   if (!ct || !*ct) return 0;
   const char *bk = strstr(ct, "boundary=");
   if (!bk) return 0;
@@ -2094,8 +2094,8 @@
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->req_multipart_parts) {
       /* Trigger lazy parse via the Turmeric entry point.  C-level call
-       * works fine: the function name is `httpd_req_multipart_parse`. */
-      (void)httpd_req_multipart_parse((void *)conn);
+       * works fine: the function name is `httpd_hyreq_hymultipart_hyparse`. */
+      (void)httpd_hyreq_hymultipart_hyparse((void *)conn);
   }
   HttpdPart *p = (HttpdPart *)c->req_multipart_parts;
   while (p) {
@@ -2513,7 +2513,7 @@
               rh = nx;
           }
       }
-      if (conn->req_json_cache) { json_free(conn->req_json_cache); conn->req_json_cache = 0; }
+      if (conn->req_json_cache) { json_slfree(conn->req_json_cache); conn->req_json_cache = 0; }
   }
   close(fd);
   /* A4: release the in-flight slot. */
@@ -2639,13 +2639,13 @@
   /* Synthetic fat closure for the accept callback: { __fn, ha }. */
   int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
   if (!clos) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
-  clos[0] = (int64_t)(intptr_t)httpd_async_accept_cb;
+  clos[0] = (int64_t)(intptr_t)httpd_hyasync_hyaccept_hycb;
   clos[1] = (int64_t)(intptr_t)ha;
   ha->accept_clos = (void *)clos;
   /* Synthetic fat closure for the fiber body. */
   int64_t *body_clos = (int64_t *)malloc(2 * sizeof(int64_t));
   if (!body_clos) { free(clos); tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
-  body_clos[0] = (int64_t)(intptr_t)httpd_async_fiber_body;
+  body_clos[0] = (int64_t)(intptr_t)httpd_hyasync_hyfiber_hybody;
   body_clos[1] = 0;
   ha->body_closure = (int64_t)(intptr_t)body_clos;
   ha->listen_src_id = (int)tur_reactor_add_fd(ha->reactor, fd, 1,
@@ -3291,7 +3291,7 @@
 (defn httpd-mw-content-length [conn :ptr<void>] :int
   ```c if (!conn) return -1;
   if (!__TUR_CNAME_httpd-req-header?__((void *)conn, "Content-Length")) return -1;
-  const char *v = httpd_req_header((void *)conn, "Content-Length");
+  const char *v = httpd_hyreq_hyheader((void *)conn, "Content-Length");
   if (!v || !*v) return -1;
   /* Skip leading whitespace; require at least one digit. */
   while (*v == ' ' || *v == '\t') v++;
@@ -3445,7 +3445,7 @@
   HttpdConn *c = (HttpdConn *)conn;
   /* Stash the formatted address on an attr so it lives as long as the
    * request and gets freed in the cleanup path automatically. */
-  const char *cached = httpd_req_attr((void *)conn, "__remote_ip");
+  const char *cached = httpd_hyreq_hyattr((void *)conn, "__remote_ip");
   if (cached && *cached) return cached;
   struct sockaddr_storage ss;
   socklen_t sl = (socklen_t)sizeof(ss);
@@ -3461,7 +3461,7 @@
   }
   if (!ipbuf[0]) return "";
   __TUR_CNAME_httpd-set-attr!__((void *)conn, "__remote_ip", ipbuf);
-  return httpd_req_attr((void *)conn, "__remote_ip");
+  return httpd_hyreq_hyattr((void *)conn, "__remote_ip");
   ```)
 ;; =============================================================================
 ;; MW2: mw-rate-limit -- sliding-window per-IP rate limiter
@@ -3700,7 +3700,7 @@
            (unsigned long long)sb.st_size,
            (unsigned long long)sb.st_mtime);
   /* Conditional request: If-None-Match. */
-  const char *inm = httpd_req_header((void *)conn, "If-None-Match");
+  const char *inm = httpd_hyreq_hyheader((void *)conn, "If-None-Match");
   if (inm && *inm && strcmp(inm, etag) == 0) {
       __TUR_CNAME_httpd-resp-status!__((void *)conn, 304);
       __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
@@ -3729,7 +3729,7 @@
    * binary safety is a future enhancement. */
   __TUR_CNAME_httpd-resp-body!__((void *)conn, buf);
   free(buf);
-  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Content-Type", httpd_mw_static_mime(c->path));
+  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Content-Type", httpd_hymw_hystatic_hymime(c->path));
   __TUR_CNAME_httpd-resp-header!__((void *)conn, "ETag", etag);
   return 1;
   ```)
@@ -3761,8 +3761,8 @@
 
 (defn httpd-mw-static-fallback [conn :ptr<void> root :cstr] :nil
   ```c if (!conn) return;
-  if (httpd_resp_status_get((void *)conn) != 404) return;
-  (void)httpd_mw_static_try((void *)conn, root);
+  if (httpd_hyresp_hystatus_hyget((void *)conn) != 404) return;
+  (void)httpd_hymw_hystatic_hytry((void *)conn, root);
   ```)
 
 (defn mw-static [root-dir :cstr ^fat next :int] :ptr<void>

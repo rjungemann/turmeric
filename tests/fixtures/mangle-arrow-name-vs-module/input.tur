@@ -1,0 +1,14 @@
+;; mangle-arrow-name-vs-module -- an arrow-operator name `list->vec` and the
+;; module-path-shaped name `list/vec` no longer collide. Old lossy fold:
+;; `list->vec` -> `list__vec`, which aliased a module-qualified `list/vec`.
+;; Injective scheme: `list->vec` -> `list_hy_gtvec`, `list/vec` -> `list_slvec`,
+;; and kebab `list-vec` -> `list_hyvec` -- three distinct C symbols.
+(defn list->vec [] : int 10)
+(defn list/vec  [] : int 20)
+(defn list-vec  [] : int 30)
+
+(defn main [] : int
+  (println (list->vec))   ;; => 10
+  (println (list/vec))    ;; => 20
+  (println (list-vec))    ;; => 30
+  0)

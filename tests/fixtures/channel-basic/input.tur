@@ -110,7 +110,7 @@
   } ChanBlock;
   typedef struct { void *ch; int64_t result; } TArg;
   void *ch = ((TArg *)arg)->ch;
-  /* inline chan_send */
+  /* inline chan_hysend */
   int64_t vals[3] = {1, 2, 3};
   int i;
   for (i = 0; i < 3; i++) {

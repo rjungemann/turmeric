@@ -399,7 +399,7 @@
   }
 
   for (int i = 0; i < n; i++) {
-      int rc = pthread_create(&tp->threads[i], NULL, (void *(*)(void *))tp_worker, (void *)tp);
+      int rc = pthread_create(&tp->threads[i], NULL, (void *(*)(void *))tp_hyworker, (void *)tp);
       if (rc != 0) {
           fprintf(stderr, "thread-pool-new: pthread_create failed (%d)\n", rc);
           abort();
@@ -634,7 +634,7 @@
   }
 
   for (int i = 0; i < min_threads; i++) {
-      int rc = pthread_create(&tp->threads[tp->n_threads++], NULL, (void *(*)(void *))tp_dyn_worker, (void *)tp);
+      int rc = pthread_create(&tp->threads[tp->n_threads++], NULL, (void *(*)(void *))tp_hydyn_hyworker, (void *)tp);
       if (rc != 0) {
           fprintf(stderr, "thread-pool-new-dynamic: pthread_create failed (%d)\n", rc);
           abort();
@@ -814,7 +814,7 @@
   q->count++;
 
   if (pool->idle_count == 0 && pool->n_threads < pool->max_threads) {
-      int rc = pthread_create(&pool->threads[pool->n_threads++], NULL, (void *(*)(void *))tp_dyn_worker, (void *)pool);
+      int rc = pthread_create(&pool->threads[pool->n_threads++], NULL, (void *(*)(void *))tp_hydyn_hyworker, (void *)pool);
       if (rc != 0) {
           fprintf(stderr, "thread-pool-dynamic-submit: pthread_create failed (%d)\n", rc);
           abort();

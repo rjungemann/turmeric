@@ -115,7 +115,7 @@
   arg->future = (void *)future;
 
   /* Spawn fiber: entry reads fn+future from fiber_local */
-  FiberBlock *fiber = tur_fiber_block_new((void(*)(void))__tg_async_entry, 0);
+  FiberBlock *fiber = tur_fiber_block_new((void(*)(void))_un_untg_hyasync_hyentry, 0);
   if (!fiber) { fprintf(stderr, "tg-spawn-async: fiber oom\n"); abort(); }
   fiber->fiber_local = (void *)arg;
   fiber->task_group  = (void *)g;   /* enables auto-notify on done */

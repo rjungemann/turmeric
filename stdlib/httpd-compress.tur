@@ -47,7 +47,7 @@
   /* Negotiate: substring "gzip" in Accept-Encoding (case-insensitive).
    * Full RFC 7231 q-value parsing is M6-OQ5 and deferred. */
   if (!__TUR_CNAME_httpd-req-header?__((void *)conn, "Accept-Encoding")) return;
-  const char *ae = httpd_req_header((void *)conn, "Accept-Encoding");
+  const char *ae = httpd_hyreq_hyheader((void *)conn, "Accept-Encoding");
   if (!ae || !*ae) return;
   int found = 0;
   for (const char *p = ae; *p; p++) {

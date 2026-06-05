@@ -97,7 +97,7 @@
   tp->threads = (pthread_t *)malloc(2 * sizeof(pthread_t));
   for (int i = 0; i < 2; i++) {
       pthread_create(&tp->threads[i], NULL,
-                     (void *(*)(void *))tp_worker_fn, (void *)tp);
+                     (void *(*)(void *))tp_hyworker_hyfn, (void *)tp);
   }
 
   /* Submit 10 tasks */
@@ -110,7 +110,7 @@
       futures[i]->is_set = false; futures[i]->is_ok = false;
 
       TPTask *task = (TPTask *)malloc(sizeof(TPTask));
-      task->fn = (void *(*)(void *))tp_identity;
+      task->fn = (void *(*)(void *))tp_hyidentity;
       task->arg = (void *)(uintptr_t)i;
       task->promise_cell = (void *)futures[i];
 

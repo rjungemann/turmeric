@@ -60,12 +60,12 @@
   ```)
 
 (defn run-server [h : ptr<void>] : ptr<void>
-  ```c httpd_run(h); return NULL; ```)
+  ```c httpd_hyrun(h); return NULL; ```)
 
 (defn spawn-server [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
   return (void *)t;
   ```)
 
@@ -74,7 +74,7 @@
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
   return (void *)t;
   ```)
 

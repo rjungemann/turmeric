@@ -736,7 +736,7 @@
   e[0] = (int64_t)(intptr_t)strdup(path ? path : "");
   e[1] = (int64_t)(intptr_t)strdup(msg);
   e[2] = val;
-  sch_vpush_(errs, (int64_t)(intptr_t)e);
+  sch_hyvpush_hy(errs, (int64_t)(intptr_t)e);
   ```)
 
 (defn sch-mkpath- [base : cstr key : cstr] : ptr
@@ -787,16 +787,16 @@
   tur_sch_vec_t *ep = (tur_sch_vec_t *)errs;
   if (!s) return 0;
   char buf[128];
-  int64_t jt = sch_jtype_(node);
-  int64_t jp = node ? sch_jpayload_(node) : 0;
+  int64_t jt = sch_hyjtype_hy(node);
+  int64_t jp = node ? sch_hyjpayload_hy(node) : 0;
   switch (s->kind) {
     case 0: case 1: case 2: case 3: case 4: { /* scalars */
       int64_t want = (s->kind == 0) ? 4 : (s->kind == 1) ? 2 :
                      (s->kind == 2) ? 3 : (s->kind == 3) ? 1 : 0;
       if (jt != want) {
         snprintf(buf, sizeof(buf), "expected %s, got %s",
-                 sch_want_name_(s->kind), sch_tyname_(jt));
-        sch_push_err_(errs, path, buf, node);
+                 sch_hywant_hyname_hy(s->kind), sch_hytyname_hy(jt));
+        sch_hypush_hyerr_hy(errs, path, buf, node);
         return 0;
       }
       return jp;
@@ -805,7 +805,7 @@
       if (s->a == 2) { /* int literal */
         if (jt != 2 || jp != s->b) {
           snprintf(buf, sizeof(buf), "expected literal %lld", (long long)s->b);
-          sch_push_err_(errs, path, buf, node);
+          sch_hypush_hyerr_hy(errs, path, buf, node);
           return 0;
         }
         return s->b;
@@ -813,7 +813,7 @@
         const char *want = (const char*)(intptr_t)s->b;
         if (jt != 4 || strcmp((const char*)(intptr_t)jp, want) != 0) {
           snprintf(buf, sizeof(buf), "expected literal \"%s\"", want);
-          sch_push_err_(errs, path, buf, node);
+          sch_hypush_hyerr_hy(errs, path, buf, node);
           return 0;
         }
         return jp;
@@ -821,8 +821,8 @@
     }
     case 6: { /* object */
       if (jt != 6) {
-        snprintf(buf, sizeof(buf), "expected :object, got %s", sch_tyname_(jt));
-        sch_push_err_(errs, path, buf, node);
+        snprintf(buf, sizeof(buf), "expected :object, got %s", sch_hytyname_hy(jt));
+        sch_hypush_hyerr_hy(errs, path, buf, node);
         return 0;
       }
       int64_t fcount = s->a;
@@ -840,12 +840,12 @@
             }
             cur = ent[2];
           }
-          char *fpath = (char *)sch_mkpath_(path, key);
+          char *fpath = (char *)sch_hymkpath_hy(path, key);
           if (!present) {
             if (fsch && fsch->kind == 8) { free(fpath); continue; }
-            sch_push_err_(errs, fpath, "missing required field", 0);
+            sch_hypush_hyerr_hy(errs, fpath, "missing required field", 0);
           } else {
-            sch_decode_rec_((int64_t)(intptr_t)fsch, found, fpath, errs);
+            sch_hydecode_hyrec_hy((int64_t)(intptr_t)fsch, found, fpath, errs);
           }
           free(fpath);
         }
@@ -854,8 +854,8 @@
     }
     case 7: { /* array */
       if (jt != 5) {
-        snprintf(buf, sizeof(buf), "expected :array, got %s", sch_tyname_(jt));
-        sch_push_err_(errs, path, buf, node);
+        snprintf(buf, sizeof(buf), "expected :array, got %s", sch_hytyname_hy(jt));
+        sch_hypush_hyerr_hy(errs, path, buf, node);
         return 0;
       }
       tur_sch_t *elem = (tur_sch_t*)(intptr_t)s->a;
@@ -864,34 +864,34 @@
       out->data = NULL; out->len = 0; out->cap = 0;
       if (jarr) {
         for (size_t i = 0; i < jarr->len; i++) {
-          char *ipath = (char *)sch_mkidx_(path, (int64_t)i);
-          int64_t dv = sch_decode_rec_((int64_t)(intptr_t)elem, jarr->data[i], ipath, errs);
+          char *ipath = (char *)sch_hymkidx_hy(path, (int64_t)i);
+          int64_t dv = sch_hydecode_hyrec_hy((int64_t)(intptr_t)elem, jarr->data[i], ipath, errs);
           free(ipath);
-          sch_vpush_((void *)out, dv);
+          sch_hyvpush_hy((void *)out, dv);
         }
       }
       return (int64_t)(intptr_t)out;
     }
     case 8: { /* optional */
       if (jt == 0 || node == 0) return 0;
-      return sch_decode_rec_(s->a, node, path, errs);
+      return sch_hydecode_hyrec_hy(s->a, node, path, errs);
     }
     case 9: { /* union: first arm that matches wins */
       tur_sch_vec_t *arms = (tur_sch_vec_t*)(intptr_t)s->a;
       if (!arms || arms->len == 0) return 0;
       for (size_t i = 0; i < arms->len; i++) {
         size_t before = ep->len;
-        int64_t dv = sch_decode_rec_(arms->data[i], node, path, errs);
+        int64_t dv = sch_hydecode_hyrec_hy(arms->data[i], node, path, errs);
         if (ep->len == before) return dv;
         ep->len = before;
       }
-      snprintf(buf, sizeof(buf), "no union arm matched (got %s)", sch_tyname_(jt));
-      sch_push_err_(errs, path, buf, node);
+      snprintf(buf, sizeof(buf), "no union arm matched (got %s)", sch_hytyname_hy(jt));
+      sch_hypush_hyerr_hy(errs, path, buf, node);
       return 0;
     }
     case 10: { /* transform */
       size_t before = ep->len;
-      int64_t dv = sch_decode_rec_(s->a, node, path, errs);
+      int64_t dv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
       if (ep->len != before) return 0;
       return TUR_APPLY1(s->b, dv);
     }
@@ -900,32 +900,32 @@
         int64_t (*f)(int64_t) = (int64_t(*)(int64_t))(intptr_t)s->a;
         s->c = f((int64_t)(intptr_t)s);
       }
-      return sch_decode_rec_(s->c, node, path, errs);
+      return sch_hydecode_hyrec_hy(s->c, node, path, errs);
     }
     case 12: return s->a; /* always */
     case 13: { /* never */
-      sch_push_err_(errs, path, (const char*)(intptr_t)s->a, node);
+      sch_hypush_hyerr_hy(errs, path, (const char*)(intptr_t)s->a, node);
       return 0;
     }
     case 14: { /* ap */
       size_t before = ep->len;
-      int64_t fv = sch_decode_rec_(s->a, node, path, errs);
-      int64_t av = sch_decode_rec_(s->b, node, path, errs);
+      int64_t fv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
+      int64_t av = sch_hydecode_hyrec_hy(s->b, node, path, errs);
       if (ep->len != before) return 0;
       int64_t (*f)(int64_t) = (int64_t(*)(int64_t))(intptr_t)fv;
       return f(av);
     }
     case 16: { /* ap-fat */
       size_t before = ep->len;
-      int64_t fv = sch_decode_rec_(s->a, node, path, errs);
-      int64_t av = sch_decode_rec_(s->b, node, path, errs);
+      int64_t fv = sch_hydecode_hyrec_hy(s->a, node, path, errs);
+      int64_t av = sch_hydecode_hyrec_hy(s->b, node, path, errs);
       if (ep->len != before) return 0;
       return TUR_APPLY1(fv, av);
     }
     case 15: { /* field-of */
       if (jt != 6) {
-        snprintf(buf, sizeof(buf), "expected :object, got %s", sch_tyname_(jt));
-        sch_push_err_(errs, path, buf, node);
+        snprintf(buf, sizeof(buf), "expected :object, got %s", sch_hytyname_hy(jt));
+        sch_hypush_hyerr_hy(errs, path, buf, node);
         return 0;
       }
       const char *key = (const char*)(intptr_t)s->a;
@@ -939,13 +939,13 @@
         }
         cur = ent[2];
       }
-      char *fpath = (char *)sch_mkpath_(path, key);
+      char *fpath = (char *)sch_hymkpath_hy(path, key);
       int64_t result;
       if (!present) {
         if (inner && inner->kind == 8) { result = 0; }
-        else { sch_push_err_(errs, fpath, "missing required field", 0); result = 0; }
+        else { sch_hypush_hyerr_hy(errs, fpath, "missing required field", 0); result = 0; }
       } else {
-        result = sch_decode_rec_((int64_t)(intptr_t)inner, found, fpath, errs);
+        result = sch_hydecode_hyrec_hy((int64_t)(intptr_t)inner, found, fpath, errs);
       }
       free(fpath);
       return result;
@@ -959,7 +959,7 @@
   tur_sch_vec_t *errs = malloc(sizeof(*errs));
   errs->data = NULL; errs->len = 0; errs->cap = 0;
 
-  int64_t value = sch_decode_rec_(schema, node, "", (void *)errs);
+  int64_t value = sch_hydecode_hyrec_hy(schema, node, "", (void *)errs);
 
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   if (errs->len == 0) {

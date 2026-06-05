@@ -37,7 +37,7 @@
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
   int rc = pthread_create(t, NULL,
-      (void *(*)(void *))thread_worker_fn,
+      (void *(*)(void *))thread_hyworker_hyfn,
       (void *)arg);
   if (rc != 0) { fprintf(stderr, "thread-spawn: pthread_create failed\n"); abort(); }
   return (void *)t;

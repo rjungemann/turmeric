@@ -123,7 +123,7 @@
 ;; Yields if the channel is full (non-blocking try-send with backpressure).
 (defn producer [] : nil
   ```c
-  void *ch = chan_slot(NULL, 0);
+  void *ch = chan_hyslot(NULL, 0);
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
@@ -150,7 +150,7 @@
 ;; Yields if the channel is empty (non-blocking try-recv with backpressure).
 (defn consumer [] : nil
   ```c
-  void *ch = chan_slot(NULL, 0);
+  void *ch = chan_hyslot(NULL, 0);
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;

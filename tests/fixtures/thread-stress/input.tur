@@ -68,7 +68,7 @@
       pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
       if (!t) { fprintf(stderr, "spawn-all: thread oom\n"); abort(); }
       pthread_create(t, NULL,
-          (void *(*)(void *))stress_worker,
+          (void *(*)(void *))stress_hyworker,
           (void *)counter);
       handles[i] = t;
   }

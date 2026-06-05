@@ -1,0 +1,116 @@
+/* mangle_test.c -- unit tests for the injective name mangler in
+ * src/compiler/mangle.c (reversible-name-mangling-plan, task T2).
+ *
+ * Asserts:
+ *   (a) the T1 oracle table mangles to the expected C spelling,
+ *   (b) every entry round-trips mangle -> demangle back to the source,
+ *   (c) injectivity: no two distinct source names share a mangled output.
+ */
+#include "mangle.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int failures = 0;
+
+#define CHECK(cond, ...)                                                        \
+    do {                                                                        \
+        if (!(cond)) {                                                          \
+            failures++;                                                         \
+            fprintf(stderr, "FAIL: ");                                          \
+            fprintf(stderr, __VA_ARGS__);                                       \
+            fprintf(stderr, "\n");                                              \
+        }                                                                       \
+    } while (0)
+
+/* The T1 oracle: source name -> expected mangled spelling. */
+static const struct {
+    const char *src;
+    const char *mangled;
+} oracle[] = {
+    /* pure alnum passes through */
+    {"x",            "x"},
+    {"foo123",       "foo123"},
+    /* the headline collision: kebab vs snake are now distinct */
+    {"foo-bar",      "foo_hybar"},
+    {"foo_bar",      "foo_unbar"},
+    {"a-b",          "a_hyb"},
+    {"a_b",          "a_unb"},
+    {"a/b",          "a_slb"},
+    /* sigil mnemonics (unchanged from A3) */
+    {"eq?",          "eq_qu"},
+    {"empty!",       "empty_ex"},
+    {">>>",          "_gt_gt_gt"},
+    {"<<<",          "_lt_lt_lt"},
+    {"+",            "_pl"},
+    {"*",            "_st"},
+    {"=",            "_eq"},
+    /* arrow vs module-path no longer collide */
+    {"list->vec",    "list_hy_gtvec"},
+    /* earmuff-ish and mixed separators */
+    {"under_score-dash", "under_unscore_hydash"},
+    {"a.b:c",        "a_dob_clc"},
+    {"plus+minus",   "plus_plminus"},
+    {"map&filter",   "map_amfilter"},
+    {"a|b",          "a_bab"},
+    {"x~y",          "x_tdy"},
+    {"$dollar",      "_dldollar"},
+    {"at@sign",      "at_atsign"},
+    {"hash#tag",     "hash_hstag"},
+    {"semi;colon",   "semi_sccolon"},
+    {"comma,sep",    "comma_cmsep"},
+    {"q'prime",      "q_qtprime"},
+    {"pct%mod",      "pct_pcmod"},
+    {"car^et",       "car_cret"},
+};
+
+#define ORACLE_N ((int)(sizeof(oracle) / sizeof(oracle[0])))
+
+int main(void) {
+    char m[256], d[256];
+
+    /* (a) mangle matches the oracle, and (b) round-trips back. */
+    for (int i = 0; i < ORACLE_N; i++) {
+        tur_mangle_ident(oracle[i].src, m, sizeof m);
+        CHECK(strcmp(m, oracle[i].mangled) == 0,
+              "mangle(%s) = %s, expected %s", oracle[i].src, m,
+              oracle[i].mangled);
+
+        size_t n = tur_demangle(m, d, sizeof d);
+        CHECK(n == strlen(oracle[i].src) && strcmp(d, oracle[i].src) == 0,
+              "demangle(%s) = %s, expected %s", m, d, oracle[i].src);
+    }
+
+    /* (c) injectivity: no two distinct sources share a mangled output. */
+    for (int i = 0; i < ORACLE_N; i++) {
+        char mi[256];
+        tur_mangle_ident(oracle[i].src, mi, sizeof mi);
+        for (int j = i + 1; j < ORACLE_N; j++) {
+            char mj[256];
+            tur_mangle_ident(oracle[j].src, mj, sizeof mj);
+            CHECK(strcmp(mi, mj) != 0,
+                  "collision: %s and %s both mangle to %s",
+                  oracle[i].src, oracle[j].src, mi);
+        }
+    }
+
+    /* The "__" structural separator decodes to '/'. */
+    CHECK(tur_demangle("geom__vector__add2", d, sizeof d) > 0 &&
+              strcmp(d, "geom/vector/add2") == 0,
+          "demangle structural separator: got %s", d);
+
+    /* A malformed escape (lone trailing '_') is rejected. */
+    CHECK(tur_demangle("foo_", d, sizeof d) == 0,
+          "malformed trailing '_' should return 0");
+    /* An unknown mnemonic pair is rejected. */
+    CHECK(tur_demangle("foo_zz", d, sizeof d) == 0,
+          "unknown mnemonic should return 0");
+
+    if (failures == 0) {
+        printf("mangle_test: all checks passed (%d oracle entries)\n",
+               ORACLE_N);
+        return 0;
+    }
+    fprintf(stderr, "mangle_test: %d failure(s)\n", failures);
+    return 1;
+}
