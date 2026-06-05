@@ -1,0 +1,25 @@
+;; boxed-fn-typed-closure-return -- a `defn` whose declared return type is a
+;; non-boxed function value (fn [..] R) but whose body yields a *capturing*
+;; closure (a fat box).
+;;
+;; Regression for boxed-fn-typed-closure-return-miscompiles: the producer's C
+;; signature lowered the declared TY_FN return to the function's *result* type
+;; (`double` for (fn [float] float)) instead of the fat-closure carrier, so the
+;; body returned a `void *` box where `double` was expected -- a hard `cc` error
+;; for float/cstr results, and an int-only `-Wint-conversion` "works by luck".
+;; The declared result type is now marked `boxed` during elaboration when the
+;; body is a capturing closure, so the signature, forward declaration, and the
+;; consumer let-binding all carry the void* fat-closure carrier in lockstep.
+
+(defn make-scale [k : float] : (fn [float] #{} float)
+  (fn [x : float] : float (* x k)))     ;; captures k -> fat box
+
+(defn make-adder [k : int] : (fn [int] #{} int)
+  (fn [x : int] : int (+ x k)))         ;; captures k -> fat box
+
+(defn main [] : int
+  (let [f (make-scale 0.5)
+        g (make-adder 5)]
+    (println (f 3.1))    ;; 1.55
+    (println (g 3)))     ;; 8
+  0)

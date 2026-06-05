@@ -2654,6 +2654,35 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * itself a fat closure box (capturing lambda body) vs a thin fn pointer. */
     b->returns_boxed_closure = (body && body->type.kind == TY_FN &&
                                 body->type.as.fn.boxed);
+    /* boxed-fn-typed-closure-return: a plain defn whose declared return is a
+     * non-boxed function type but whose body yields a *capturing* closure (a
+     * fat box) must carry that return value as the void* fat-closure carrier,
+     * not the function's result type.  type_c_name(TY_FN non-boxed) lowers to
+     * the function's *result* type's C name ("double" for (fn [float] float)),
+     * but the body actually returns the heap fat box (void*) -- a hard `cc`
+     * error for float/cstr results and an int-only "works by luck" otherwise.
+     * Marking the declared result type `boxed` steers the signature, forward
+     * declaration, and consumer let-binding all onto the void* carrier in
+     * lockstep (type_c_name(TY_FN boxed) == "void *").  Typeclass-method impls
+     * (__inst_) keep their dict-driven carrier path (emit_inst_fn_return_carrier),
+     * and ^fat returns are already shimmed into a fat box at the call site.
+     *
+     * Scope this narrowly to the exact mis-lowered shape: type_c_name(TY_FN)
+     * only picks the *result* type's C name when the result kind is a concrete
+     * leaf (not TY_FN/TY_UNKNOWN).  A curried/nested closure return
+     * (result_kind == TY_FN or TY_UNKNOWN) is already carried as int64_t there,
+     * so it is correct as-is and must not be re-spelled to void*. */
+    if (b->returns_boxed_closure &&
+        fn_type.as.fn.result_full_type &&
+        fn_type.as.fn.result_full_type->kind == TY_FN &&
+        !fn_type.as.fn.result_full_type->as.fn.boxed &&
+        fn_type.as.fn.result_full_type->as.fn.result_kind != TY_FN &&
+        fn_type.as.fn.result_full_type->as.fn.result_kind != TY_UNKNOWN &&
+        !fn_type.as.fn.result_fat &&
+        !(b->name && b->name->name &&
+          strncmp(b->name->name, "__inst_", 7) == 0)) {
+        fn_type.as.fn.result_full_type->as.fn.boxed = true;
+    }
     /* Phase M6: Store ^:export-as C name on the binding */
     b->c_export_name = c_export_name;
     /* F4: Store ^deprecated attribute on the binding */

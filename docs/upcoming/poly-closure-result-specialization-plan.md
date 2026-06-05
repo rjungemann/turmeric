@@ -68,10 +68,9 @@ and the risk center.
 >    declared `: (fn [float] float)` whose body is a capturing closure emits its
 >    C return type as the *result* type (`double`) instead of the fat-closure
 >    carrier, so float/cstr closures are a hard `cc` error and int closures
->    compile with a `-Wint-conversion` "works by luck". **This must be fixed
->    before Stage E** can retype `sf-compose-typed` to pass `:float` SFs as
->    fn-typed closures. Add it as **Stage 0** (carrier fallback for plain
->    closure-returning defns; mirror `emit_inst_fn_return_carrier`).
+>    compile with a `-Wint-conversion` "works by luck". This was **fixed as
+>    Stage 0 (2026-06-05)** -- see the Stage 0 entry below -- so a `defn` can now
+>    produce the fn-typed `:float` closures Stage E needs.
 
 ## Confirmed root-cause map (file:line)
 
@@ -137,16 +136,22 @@ and that tyvar binds to a float kind (2938).
 > retyped polymorphic `>>>` type-checks but still hits E0705 on float. Land 1->4
 > as one change (or behind a flag) -- do not ship A alone.
 
-0. **Stage 0 (carrier fallback for plain closure-returning defns) -- NEW,
-   prerequisite for Stage E.** Fix
-   `docs/reported/boxed-fn-typed-closure-return-miscompiles.md`: a plain `defn`
-   whose declared return is a non-boxed `TY_FN` and whose body yields a
-   capturing closure must lower its C return type (signature `emit_fns.c:414`,
-   forward decl `emit_module.c:1332`, consumer let-binding) to the fat-closure
-   carrier, not `type_c_name(TY_FN)` (the result type). Mirror
-   `emit_inst_fn_return_carrier` (`emit_core.c:214`) but drop the `__inst_`
-   name gate. Without this, no `defn` can produce the fn-typed `:float` closures
-   that Stage B+C need to specialize on.
+0. **Stage 0 (carrier fallback for plain closure-returning defns) -- DONE
+   (2026-06-05).** Fixed
+   `docs/reported/boxed-fn-typed-closure-return-miscompiles.md` via the report's
+   **Direction B** (source-level boxing) rather than the emit-side Direction A
+   originally sketched here: a plain (non-`__inst_`) `defn` whose body yields a
+   capturing closure (`returns_boxed_closure`) and whose declared return is a
+   non-boxed, non-`^fat` `TY_FN` now has its declared result type marked `boxed`
+   during elaboration (`src/compiler/elab_fns.c`, just after
+   `returns_boxed_closure` is computed). Because `type_c_name(TY_FN boxed)`
+   already lowers to `void *`, this steers the signature (`emit_fns.c:414`),
+   forward decl (`emit_module.c:1342`), and consumer let-binding all onto the
+   fat-closure carrier in lockstep with **no** new emit-side machinery and no
+   change to the thin-fn-pointer or `__inst_` paths. Fixture
+   `tests/fixtures/boxed-fn-typed-closure-return/` (float prints `1.55`, int
+   prints `8`); full suite green. This unblocks Stage E producing fn-typed
+   `:float` closures from a `defn`.
 
 1. **Stage A (elaboration acceptance) -- DONE (2026-06-05).** Added the `TY_FN`
    case to `call_collect_type_bindings` (elab_call.c) and the tyvar-argument
