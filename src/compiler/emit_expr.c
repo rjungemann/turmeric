@@ -3543,10 +3543,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_POLY_TO_FAT: {
             /* SC7: box a tur_poly_fn_t {env,fn} into a fat-closure handle
-             * { __tur_poly_to_fat1, fn, env }.  TUR_APPLY1 invokes the handle by
-             * calling slot 0 with the box itself as the env, so the preamble
-             * thunk reads the original fn (slot 1) and its captured env (slot 2)
-             * and forwards the argument. */
+             * { __tur_poly_to_fat<N>, fn, env }.  The sink's N-ary fat-call
+             * invokes the handle by calling slot 0 with the box itself as the
+             * env, so the thunk reads the original fn (slot 1) and its captured
+             * env (slot 2) and forwards every argument.  Slot 1 holds the
+             * method's real N-ary thunk (make_poly_wrapper), so binary or
+             * higher-arity poly methods round-trip into a matching ^fat sink. */
             const Expr *inner = e->as.poly_to_fat_.inner;
             char *pv = emit_value(ctx, body, inner);
             char *pf = fresh_tmp(ctx);
@@ -3555,29 +3557,36 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *box = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t *%s = (int64_t *)malloc(3 * sizeof(int64_t));\n", box);
-            /* poly-to-fat-typed-shim-plan: when the sink's ^fat param has a
-             * concrete (non-int64) fn signature, slot 0 must carry a typed shim
-             * whose ABI matches the typed-thunk cast the sink applies on
-             * invocation -- otherwise a :float/:cstr method would be read through
-             * the int64 carrier ABI from the wrong register class.  For an
-             * int64/pointer signature (or no threaded signature) the preamble
-             * __tur_poly_to_fat1 shim already matches; keep it (churn-free). */
+            /* poly-to-fat-typed-shim-plan + multiarg fix: pick the slot-0 shim
+             * arity from the sink's declared ^fat fn signature.  When that
+             * signature is concrete and non-int64, ensure_typed_poly_to_fat
+             * emits a typed shim whose ABI matches the typed-thunk cast the sink
+             * applies on invocation -- otherwise a :float/:cstr arg would be read
+             * through the int64 carrier ABI from the wrong register class.  For
+             * an int64/pointer signature (or no threaded signature) the preamble
+             * __tur_poly_to_fat<N> shim already matches; keep it (churn-free). */
             char *poly_shim = NULL;
+            uint32_t poly_arity = 1;
             const Type *sft = e->as.poly_to_fat_.sink_fn_type;
-            if (sft && sft->kind == TY_FN && sft->as.fn.arity == 1) {
+            if (sft && sft->kind == TY_FN) {
+                poly_arity = sft->as.fn.arity;
                 Type pr = sft->as.fn.result_full_type
                               ? *sft->as.fn.result_full_type
                               : emit_type_from_kind(sft->as.fn.result_kind);
-                Type pa = (sft->as.fn.arg_full_types && sft->as.fn.arg_full_types[0])
-                              ? *sft->as.fn.arg_full_types[0]
-                              : emit_type_from_kind(sft->as.fn.arg_kinds[0]);
-                poly_shim = ensure_typed_poly_to_fat(ctx, pr, pa);
+                Type pa[MAX_FN_ARITY];
+                for (uint32_t i = 0; i < poly_arity && i < MAX_FN_ARITY; i++) {
+                    pa[i] = (sft->as.fn.arg_full_types && sft->as.fn.arg_full_types[i])
+                                ? *sft->as.fn.arg_full_types[i]
+                                : emit_type_from_kind(sft->as.fn.arg_kinds[i]);
+                }
+                poly_shim = ensure_typed_poly_to_fat(ctx, pr, pa, poly_arity);
             }
             indent_buf(body, ctx->indent);
             if (poly_shim) {
                 buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", box, poly_shim);
             } else {
-                buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;\n", box);
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_poly_to_fat%u;\n",
+                           box, (unsigned)poly_arity);
             }
             free(poly_shim);
             indent_buf(body, ctx->indent);

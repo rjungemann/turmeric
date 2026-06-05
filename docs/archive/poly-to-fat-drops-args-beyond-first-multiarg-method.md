@@ -1,10 +1,14 @@
 # Multi-arg typeclass-method closure into a `^fat` sink silently drops every argument after the first
 
-> **Status:** Defused (Fix direction 1 landed) -- the silent miscompile is
-> now a hard compile error at the `EX_POLY_TO_FAT` box site. The structural
-> limitation remains: the `tur_poly_fn_t` carrier is unary by construction, so
-> the real N-ary fix (Fix direction 2) is still tracked as a separate, larger
-> follow-up.
+> **Status:** Fixed (Fix direction 2 landed) -- the poly-to-fat carrier and
+> shim family are now N-ary. A binary (or higher-arity) typeclass-method
+> closure boxed into a matching `^fat` sink forwards every argument: the box's
+> slot-0 shim is `__tur_poly_to_fat<N>` (int64 carrier) or
+> `__tur_poly_to_fat<N>_<R>_<Ai...>` (typed), and slot 1 holds the method's
+> real N-ary thunk from `make_poly_wrapper`. The earlier Fix-direction-1 hard
+> diagnostic at the box site has been removed -- the case now compiles and
+> runs correctly instead of erroring. Validated by
+> `tests/fixtures/poly-to-fat-multiarg-roundtrip` (prints `7`).
 
 **One-line summary:** When a typeclass method whose closure parameter is
 **binary or higher arity** is handed to a `^fat` sink, `EX_POLY_TO_FAT`
