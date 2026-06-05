@@ -1,0 +1,20 @@
+;; load-typeclass-idempotent -- (load "stdlib/typeclass.tur") must coexist with
+;; the auto-loaded partial typeclass stubs (typeclass-clone.tur, ...) that
+;; already supply some of the same primitive instances, and loading the same
+;; module twice must be a no-op.
+;;
+;; Before the idempotent-definstance guard in elab_definstance, the duplicate
+;; `Clone [int]` instance (present in BOTH the auto-loaded typeclass-clone.tur
+;; stub and the full typeclass.tur) re-emitted `dict_Clone_int` and
+;; `__inst_Clone_clone_int`, producing a hard C "redefinition" ODR error -- so
+;; no program could load typeclass.tur at all. Now the redundant instance is a
+;; silent no-op (first definition wins).
+;;
+;; See docs/reported/load-not-idempotent-typeclass.md.
+(load "stdlib/typeclass.tur")
+(load "stdlib/typeclass.tur")
+
+(defn main [] : int
+  (println (show 42))            ;; => 42  (Show [int] from typeclass.tur)
+  (println (show (clone 7)))     ;; => 7   (Clone [int]: single, deduped instance)
+  0)

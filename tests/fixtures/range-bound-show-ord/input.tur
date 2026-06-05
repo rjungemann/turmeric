@@ -1,0 +1,33 @@
+; range-gadt-typeclass-migration-plan B2: the deferred Show [Bound] and
+; Ord [Bound] instances now live in range.tur (alongside Eq [Bound]), enabled by
+; the idempotent-definstance fix (docs/reported/load-not-idempotent-typeclass.md)
+; plus range.tur loading the full typeclass.tur for the Show/Ord classes.
+;
+; This also exercises the depth-first load expander: range.tur self-loads
+; typeclass.tur, and this file ALSO loads typeclass.tur explicitly AFTER
+; range-bound.tur -- the class must still be expanded before range.tur's
+; Show/Ord [Bound] instances (the old multi-pass expander mis-ordered this).
+(load "stdlib/range-bound.tur")
+(load "stdlib/typeclass.tur")
+
+(defn main [] : int
+  ; Show [Bound]: lone-endpoint rendering.
+  (println (show (Inclusive 3)))   ; [3
+  (println (show (Exclusive 7)))   ; (7
+  (println (show (Unbounded)))     ; unbounded
+
+  ; Show [int] from the explicitly-loaded full typeclass.tur coexists.
+  (println (show 42))              ; 42
+
+  ; Ord [Bound]: Unbounded is least; value ascending; Inclusive < Exclusive at
+  ; equal value.
+  (println (if (.lt? (Unbounded) (Inclusive 0)) "unb-lt-incl" "BAD"))
+  (println (if (.lt? (Inclusive 5) (Exclusive 5)) "incl-lt-excl" "BAD"))
+  (println (if (.gt? (Exclusive 5) (Inclusive 5)) "excl-gt-incl" "BAD"))
+  (println (if (.lte? (Inclusive 4) (Inclusive 4)) "le-eq" "BAD"))
+  (println (if (.gte? (Exclusive 9) (Inclusive 2)) "ge" "BAD"))
+  (println (if (.lt? (Inclusive 2) (Inclusive 3)) "2-lt-3" "BAD"))
+
+  ; Ord [int] from the full typeclass.tur also dispatches.
+  (println (if (.lt? 1 2) "int-lt" "BAD"))
+  0)

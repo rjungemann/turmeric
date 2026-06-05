@@ -6,6 +6,29 @@ description: Loading the same stdlib module twice (directly, or once directly an
 
 # `(load ...)` is not idempotent -- double-load miscompiles typeclass modules
 
+> **RESOLVED (2026-06-05).** Fixed at the root: `definstance` is now idempotent.
+> `elab_definstance` (`src/compiler/elab_typeclasses.c`) computes the instance's
+> codegen type-arg suffix once up front (factored into the new
+> `build_inst_type_suffix` helper, shared with the `__inst_*` method-name
+> builder so the dedup key can never drift from the emitted names) and, before
+> registering/elaborating, scans the instance env for an already-registered
+> instance of the same `(typeclass, suffix)`. On a match the redundant
+> definition is a silent no-op (first definition wins) -- no second dictionary
+> struct/singleton or `__inst_*` function is emitted, so the ODR collision is
+> gone. This fixes both the direct double-`load` and the
+> partial-stub-plus-full-`typeclass.tur` case, since the duplicate is caught by
+> the emitted symbol it would collide on rather than by file path. Regression
+> fixture: `tests/fixtures/load-typeclass-idempotent`. Full suite green
+> (1483 passed, 0 failed).
+>
+> Note: the *actual* collision in the minimal repro is even tighter than the
+> original diagnosis -- a **single** `(load "stdlib/typeclass.tur")` already
+> collides with the auto-loaded `typeclass-clone.tur` stub (both define
+> `Clone [int]`), so a path-keyed load guard (proposed direction 1) alone would
+> NOT have fixed it. The instance-level dedup (direction 2) is the correct root
+> cause. The deferred `Show`/`Ord [Bound]` instances can now be added to
+> `range.tur` to close range-gadt phase B2.
+
 > **Severity:** hard compile error (cc fails) on a benign-looking double
 > `load`; also an expressiveness/ergonomics blocker -- it prevents a module
 > from declaring a `load` dependency on `typeclass.tur` if any co-loaded
@@ -13,7 +36,7 @@ description: Loading the same stdlib module twice (directly, or once directly an
 > **Found:** 2026-06-04, executing
 > [range-gadt-typeclass-migration-plan](../upcoming/range-gadt-typeclass-migration-plan.md)
 > phase B2 (Show/Ord instances for `Bound`/`Range`).
-> **Status:** OPEN.
+> **Status:** RESOLVED (2026-06-05).
 
 ## Summary
 

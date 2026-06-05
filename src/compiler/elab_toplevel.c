@@ -653,6 +653,114 @@ const Ls2ResolverCtx *ls2_resolver_ctx_active(void) {
     return g_ls2_resolver_ctx;
 }
 
+/* Phase M: (load "path") expansion -- shared visited set + output accumulator
+ * threaded through a depth-first, in-order recursive walk. */
+typedef struct {
+    const Symbol **loaded;     /* interned canonical paths already expanded */
+    uint32_t       n_loaded, cap_loaded;
+    Form         **out;        /* accumulated, fully-expanded form list */
+    uint32_t       out_n, out_cap;
+    int            rc;         /* -1 on any load error */
+} LoadExpandCtx;
+
+static void load_expand_emit(LoadExpandCtx *lx, Arena *arena, Form *f) {
+    if (lx->out_n >= lx->out_cap) {
+        lx->out_cap = lx->out_cap ? lx->out_cap * 2 : 16;
+        Form **n = (Form **)arena_alloc(arena, lx->out_cap * sizeof(Form *));
+        for (uint32_t k = 0; k < lx->out_n; k++) n[k] = lx->out[k];
+        lx->out = n;
+    }
+    lx->out[lx->out_n++] = f;
+}
+
+/* Expand every top-level (load "path") in `forms` in place, depth-first and
+ * in source order: a file's transitive loads are fully expanded at the point
+ * they appear, BEFORE the rest of that file's forms. A path is expanded at
+ * most once (the visited set), and because the walk is depth-first a module
+ * that self-loads a dependency always emits that dependency ahead of its own
+ * dependent forms -- so e.g. range.tur's `(load "stdlib/typeclass.tur")`
+ * lands its `defclass Show` before range.tur's `Show [Bound]` instance, even
+ * when a sibling file later loads typeclass.tur explicitly. (The old
+ * multi-pass fixpoint deferred transitive loads a pass behind sibling
+ * explicit loads, letting the later one claim the path and relocate the
+ * expansion; see docs/reported/load-not-idempotent-typeclass.md.) */
+static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
+                              SymbolTable *st, Form *const *forms, uint32_t nforms) {
+    for (uint32_t i = 0; i < nforms; i++) {
+        Form *f = forms[i];
+        const Form *path_f = NULL;
+        if (f->tag == F_LIST && f->as.list.len == 2 &&
+            f->as.list.items[0]->tag == F_SYM &&
+            f->as.list.items[0]->as.sym == e->sym_load &&
+            f->as.list.items[1]->tag == F_STR) {
+            path_f = f->as.list.items[1];
+        }
+        if (!path_f) { load_expand_emit(lx, arena, f); continue; }
+
+        /* (load "path") -- read & parse */
+        uint32_t plen = path_f->as.s.len;
+        if (plen == 0 || plen >= 4096) {
+            diag_emit(DIAG_ERROR, path_f->span,
+                      "load: path must be non-empty and < 4096 chars");
+            lx->rc = -1;
+            continue;
+        }
+        char path_buf[4096];
+        memcpy(path_buf, path_f->as.s.p, plen);
+        path_buf[plen] = '\0';
+        const Symbol *key = intern_cstr(st, path_buf);
+        bool already = false;
+        for (uint32_t k = 0; k < lx->n_loaded; k++) {
+            if (lx->loaded[k] == key) { already = true; break; }
+        }
+        if (already) continue;  /* idempotent: a path is expanded at most once */
+        if (lx->n_loaded >= lx->cap_loaded) {
+            lx->cap_loaded = lx->cap_loaded ? lx->cap_loaded * 2 : 8;
+            lx->loaded = (const Symbol **)realloc((void *)lx->loaded,
+                          lx->cap_loaded * sizeof(const Symbol *));
+            if (!lx->loaded) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
+        /* Mark visited BEFORE recursing so a self/cyclic load is skipped. */
+        lx->loaded[lx->n_loaded++] = key;
+
+        char *src_raw = NULL;
+        size_t src_len = 0;
+        if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+            diag_emit(DIAG_ERROR, path_f->span, "load: cannot open '%s'", path_buf);
+            lx->rc = -1;
+            continue;
+        }
+        char *src_copy = (char *)arena_alloc(arena, src_len + 1);
+        memcpy(src_copy, src_raw, src_len);
+        src_copy[src_len] = '\0';
+        free(src_raw);
+        char *path_copy = (char *)arena_alloc(arena, plen + 1);
+        memcpy(path_copy, path_buf, plen + 1);
+        SourceFile *sfile = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
+        *sfile = (SourceFile){0};
+        sfile->path = path_copy;
+        sfile->src = src_copy;
+        sfile->len = src_len;
+        sfile->file_id = e->next_import_file_id++;
+        sfile->reader_type = reader_type_from_extension(path_buf);
+        if (sfile->reader_type == READER_UNKNOWN) sfile->reader_type = READER_TURMERIC;
+        diag_register_file(sfile);
+        /* Transitive-RM (T2): share the entry file's macro registry. */
+        uint32_t lf_n = 0;
+        bool had_error_before_load = diag_had_error();
+        Form **lf = read_all_with_registry(arena, st, sfile, e->user_macros, &lf_n);
+        if (!lf) {
+            if (!had_error_before_load && diag_had_error()) {
+                diag_emit(DIAG_NOTE, path_f->span, "while loading '%s'", path_buf);
+            }
+            lx->rc = -1;
+            continue;
+        }
+        /* Depth-first: expand this file's own loads in place before continuing. */
+        load_expand_forms(lx, e, arena, st, lf, lf_n);
+    }
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -694,132 +802,22 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     int rc = 0;
 
     /* Phase M: (load "path") preprocessing.
-     * Recursively expand all top-level (load "path") forms in place by
-     * parsing the referenced file and splicing its forms into the form list.
-     * Tracks visited paths to prevent duplicate loads and detect cycles.
-     * Loaded forms then participate in the normal two-pass elaboration. */
+     * Expand all top-level (load "path") forms in place, depth-first and in
+     * source order, parsing each referenced file and splicing its (already
+     * expanded) forms into the form list. A shared visited set keeps each path
+     * to a single expansion and breaks cycles. Loaded forms then participate
+     * in the normal two-pass elaboration. */
     {
-        const Symbol **loaded = NULL;
-        uint32_t n_loaded = 0, cap_loaded = 0;
-        Form **work = (Form **)arena_alloc(arena, nforms * sizeof(Form *));
-        for (uint32_t i = 0; i < nforms; i++) work[i] = forms[i];
-        uint32_t n_work = nforms;
-        uint32_t cap_work = nforms;
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            uint32_t out_n = 0;
-            uint32_t out_cap = n_work + 16;
-            Form **out = (Form **)arena_alloc(arena, out_cap * sizeof(Form *));
-            for (uint32_t i = 0; i < n_work; i++) {
-                Form *f = work[i];
-                bool is_load = false;
-                const Form *path_f = NULL;
-                if (f->tag == F_LIST && f->as.list.len == 2 &&
-                    f->as.list.items[0]->tag == F_SYM &&
-                    f->as.list.items[0]->as.sym == e.sym_load &&
-                    f->as.list.items[1]->tag == F_STR) {
-                    is_load = true;
-                    path_f = f->as.list.items[1];
-                }
-                if (!is_load) {
-                    if (out_n >= out_cap) {
-                        out_cap *= 2;
-                        Form **nout = (Form **)arena_alloc(arena, out_cap * sizeof(Form *));
-                        for (uint32_t k = 0; k < out_n; k++) nout[k] = out[k];
-                        out = nout;
-                    }
-                    out[out_n++] = f;
-                    continue;
-                }
-                /* (load "path") — read & parse */
-                uint32_t plen = path_f->as.s.len;
-                if (plen == 0 || plen >= 4096) {
-                    diag_emit(DIAG_ERROR, path_f->span,
-                              "load: path must be non-empty and < 4096 chars");
-                    rc = -1;
-                    continue;
-                }
-                char path_buf[4096];
-                memcpy(path_buf, path_f->as.s.p, plen);
-                path_buf[plen] = '\0';
-                const Symbol *key = intern_cstr(st, path_buf);
-                /* Already loaded? Skip silently (idempotent). */
-                bool already = false;
-                for (uint32_t k = 0; k < n_loaded; k++) {
-                    if (loaded[k] == key) { already = true; break; }
-                }
-                if (already) continue;
-                if (n_loaded >= cap_loaded) {
-                    cap_loaded = cap_loaded ? cap_loaded * 2 : 8;
-                    loaded = (const Symbol **)realloc((void *)loaded,
-                              cap_loaded * sizeof(const Symbol *));
-                    if (!loaded) { fprintf(stderr, "tur: oom\n"); abort(); }
-                }
-                loaded[n_loaded++] = key;
-                /* Read source */
-                char *src_raw = NULL;
-                size_t src_len = 0;
-                if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
-                    diag_emit(DIAG_ERROR, path_f->span,
-                              "load: cannot open '%s'", path_buf);
-                    rc = -1;
-                    continue;
-                }
-                char *src_copy = (char *)arena_alloc(arena, src_len + 1);
-                memcpy(src_copy, src_raw, src_len);
-                src_copy[src_len] = '\0';
-                free(src_raw);
-                char *path_copy = (char *)arena_alloc(arena, plen + 1);
-                memcpy(path_copy, path_buf, plen + 1);
-                SourceFile *sfile = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
-                *sfile = (SourceFile){0};
-                sfile->path = path_copy;
-                sfile->src = src_copy;
-                sfile->len = src_len;
-                sfile->file_id = e.next_import_file_id++;
-                sfile->reader_type = reader_type_from_extension(path_buf);
-                if (sfile->reader_type == READER_UNKNOWN) sfile->reader_type = READER_TURMERIC;
-                diag_register_file(sfile);
-                /* Transitive-RM (T2): use the shared `user_macros`
-                 * registry so the loaded file sees the entry file's
-                 * macros. `(load ...)` and `(import ...)` populate the
-                 * same registry -- see docs/reader-macros-plan.md
-                 * ("Loading semantics") for the user-facing contract. */
-                uint32_t lf_n = 0;
-                bool had_error_before_load = diag_had_error();
-                Form **lf = read_all_with_registry(arena, st, sfile,
-                                                   e.user_macros, &lf_n);
-                if (!lf) {
-                    /* Same import-chain note as elab_module.c's T1
-                     * handling (decision #4). */
-                    if (!had_error_before_load && diag_had_error()) {
-                        diag_emit(DIAG_NOTE, path_f->span,
-                                  "while loading '%s'", path_buf);
-                    }
-                    rc = -1;
-                    continue;
-                }
-                /* Splice loaded forms into output list */
-                if (out_n + lf_n > out_cap) {
-                    while (out_n + lf_n > out_cap) out_cap *= 2;
-                    Form **nout = (Form **)arena_alloc(arena, out_cap * sizeof(Form *));
-                    for (uint32_t k = 0; k < out_n; k++) nout[k] = out[k];
-                    out = nout;
-                }
-                for (uint32_t k = 0; k < lf_n; k++) out[out_n++] = lf[k];
-                changed = true; /* a new load may appear in loaded forms */
-            }
-            work = out;
-            n_work = out_n;
-            cap_work = out_cap;
-            (void)cap_work;
-        }
-        free((void *)loaded);
+        LoadExpandCtx lx = {0};
+        lx.out_cap = nforms + 16;
+        lx.out = (Form **)arena_alloc(arena, lx.out_cap * sizeof(Form *));
+        load_expand_forms(&lx, &e, arena, st, forms, nforms);
+        if (lx.rc != 0) rc = lx.rc;
+        free((void *)lx.loaded);
         /* Replace forms/nforms with the expanded list for the rest of
          * elaborate_program.  Cast away const since we're in our own copy. */
-        forms = (Form *const *)work;
-        nforms = n_work;
+        forms = (Form *const *)lx.out;
+        nforms = lx.out_n;
     }
 
     Expr **items = (nforms == 0) ? NULL :
