@@ -51,3 +51,14 @@ jobs:
         run: cmake --build build -j --target tur
       - name: Check guide pairs (AST-verified via tur parse-check)
         run: python3 tools/check-guide-pairs.py --tur build/tur docs/guides/
+
+  check-spaced-types:
+    name: Check spaced-type annotations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check fused annotations in stdlib/ and docs/guides/
+        run: python3 tools/spaced-types-rewrite.py --check stdlib/ docs/guides/

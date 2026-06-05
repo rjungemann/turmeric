@@ -16,39 +16,6 @@ and delete the section from this file.
 
 ---
 
-## Closure representation unification
-
-> Full plan: [../archive/closure-representation-unification-plan.md](../archive/closure-representation-unification-plan.md)
-
-All three phases are now executed; the punch list is empty and the
-plan is ready to move to `docs/archive/history/`.
-
-- [x] Phase 1 -- stdlib thin-call consumers migrated off the bare
-      int64 thin cast: `arrow`/`option-map`/`pair`/`mutmap` use `^fat`
-      + fat dispatch; `comonad` `extend` takes its function as a `:fn`
-      poly-closure carrier and applies it directly (a `:fn` typeclass
-      method param is the right surface for a dispatch-erased receiver,
-      where `^fat` does not thread). Fixing comonad surfaced and
-      resolved a closure-carrier miscompile -- see
-      [poly-wrap-of-capturing-closure-value-references-local-env.md](../reported/poly-wrap-of-capturing-closure-value-references-local-env.md).
-- [x] Phase 2 -- the nullary `:ptr<void>` direct-call path already
-      fat-dispatches when the sink is `is_fat` (CRU B-2: the `n == 0`
-      branch in `emit_expr.c` gates on `!fn_binding->is_fat`, so a fat
-      sink falls through to slot-0 dispatch while a raw C callback
-      stays thin).
-- [x] Phase 3 -- Option B (first-class closure type) shipped;
-      captureless fns are boxed at fat-dispatched sinks and raw
-      C-callbacks (`contract.tur`) keep the bare representation.
-- [x] Capturing-closure fixtures: `comonad-capturing-closure` and
-      `poly-fn-typeclass-capturing-closure` (`:int`); `arrow`/`option`
-      capturing + `:float` covered by `float-fat-closure`,
-      `arrow-capturing-closure`, `eq-carrier-capturing-comparator`,
-      etc. (comonad is an int64-carrier comonad; its `:fn` carrier is
-      the int register class by design). `contract.tur` C-callback path
-      still works.
-- [x] `bash tests/run.sh` zero `FAIL` with leak detection on
-      (`1482 passed, 0 failed`).
-
 ## Typed closure invocation ABI
 
 > Full plan: [../archive/closure-typed-invocation-abi-plan.md](../archive/closure-typed-invocation-abi-plan.md)
@@ -87,21 +54,23 @@ arg/return types all the way to the C invocation site.
 The `tur/zlib` workaround shipped (M6 dropped `defmodule`); the
 diagnostic-scope fix itself is not implemented.
 
-- [ ] D0 -- happy fixture `tests/fixtures/elab-defmodule-after-load/`
+- [x] D0 -- happy fixture `tests/fixtures/elab-defmodule-after-load/`
       + negative fixture `tests/fixtures/errors/elab-defmodule-not-first/`.
-- [ ] D1 -- track per-file form boundaries through pass 1 (side
-      array `file_id[nforms]`).
-- [ ] D2 -- rewrite the check at `elab_toplevel.c:896-912` to
-      operate per file (continue past the first defmodule; flag
-      misplaced defmodules in later loaded files).
-- [ ] D3 -- generalise the M7 `e.has_defmodule = false` reset to
-      fire at every user-side file boundary, not just stdlib.
+- [x] D1 -- per-file form boundaries tracked via `span.file_id` on
+      each form (no side array needed; the existing span field serves as
+      the file-of-origin key).
+- [x] D2 -- check at `elab_toplevel.c` rewritten to operate per file
+      using `span.file_id`; continues past first defmodule so later
+      loaded files are also validated.
+- [x] D3 -- M7 reset generalised: fires at every `span.file_id`
+      boundary in the user range, not just after auto-stdlib defmodules.
 - [ ] D4 -- restore `(defmodule tur/zlib ...)` in
       `../turmeric-spices/spices/zlib/src/tur/zlib.tur`; verify
       `tests/fixtures/httpd-mw-compress/` and the spice roundtrip
-      test still compile.
-- [ ] D5 -- single-paragraph correction wherever `defmodule`'s "must
-      be the first form" rule is documented.
+      test still compile. (Deferred: requires `../turmeric-spices` checkout.)
+- [x] D5 -- `docs/guides/module-system-guide.md` updated to clarify
+      "the file" means the source file; `(load ...)`-spliced files get
+      a fresh scope for the check.
 
 ## Drop leading colons inside `(fn ...)` types
 
@@ -215,36 +184,21 @@ needs to be split.
 Phases 1-5 are complete (named-let, let/let*, codemod, repo + spices
 rewrite, docs). Only enforcement and optional deprecation remain.
 
-- [ ] Phase 6 -- add a CI step running
-      `tools/spaced-types-rewrite.py --check` over the repo. Fused
-      annotations in `.tur` / `.tur.sweet` cause CI failure. Mirror
-      the hook in `../turmeric-spices`. Optionally lift the codemod
-      into `tur fmt`.
+- [x] Phase 6 -- CI step added (`.github/workflows/ci.yml`
+      `check-spaced-types` job) running
+      `tools/spaced-types-rewrite.py --check stdlib/ docs/guides/`.
+      Three remaining stdlib files (`httpd.tur`, `comonad.tur`,
+      `docstrings.tur`) were swept clean before the gate was added.
+      Two compiler bugs surfaced and fixed in the same pass:
+      (a) pass-1 forward-decl didn't recognise `: nil`
+      (`F_TYPE_ANN(F_NIL)`) as `TY_NIL` -- fixed in `elab_toplevel.c`;
+      (b) `defclass` method-param parsing didn't recognise `: fn`
+      (`F_TYPE_ANN(F_SYM("fn"))`) as the poly-closure carrier -- fixed
+      in `elab_typeclasses.c`. Mirror the hook in `../turmeric-spices`
+      and lift the codemod into `tur fmt` remain optional/deferred.
 - [ ] Phase 7 (optional, deferred) -- once the ecosystem is fully
       migrated and CI prevents regressions, emit a deprecation
       warning for fused `F_KEYWORD` in recognised type-annotation
       positions. Not committed; revisit after several release
       cycles.
 
-## Stdlib opaque handle types
-
-> Full plan: [../archive/history/stdlib-opaque-handle-types-plan.md](../archive/history/stdlib-opaque-handle-types-plan.md)
-
-Tier 1 (threadpool, future, chan), Tier 2 (timer, reactor,
-taskgroup, mutex/condvar/rwlock), and Tier 3 (atomic, stm, thread,
-fiber + I/O fd sweep + process Pid + fs StatInfo/TmpFile + io
-DirListing/FileSystem/FileStream + ref RefHandle) have all landed.
-Only the tail items remain.
-
-- [x] `io/file-open` -- parameters are annotated
-      `[path : cstr mode : cstr]` (`stdlib/io.tur:368`); the linear
-      `FileHandle` open path accepts a `:cstr` path as written.
-      Verified in-tree -- no further change needed.
-- [x] Final acceptance pass: `tests/run.sh` is green
-      (`1479 passed, 0 failed`) with all Tier 1+2+3 modules exposing
-      handle-typed signatures. No remaining tail items; this section's
-      punch list is now empty and the plan is ready to move to
-      `docs/archive/history/` (per the churn-docs skill).
-
-When this list is empty, archive the plan to `docs/archive/history/`
-under the post-v0.18.0 sweep.

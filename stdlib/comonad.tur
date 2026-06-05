@@ -27,7 +27,7 @@
 ;;; Since: Phase CA0
 (defclass Comonad [^w]
   (extract [wa] : int)
-  (extend [wa f :fn] : int)
+  (extend [wa f : fn] : int)
   (duplicate [wa] : int))
 ;; -- Identity comonad ────────────────────────────────────────────────────────
 ;; Identity w a = Identity a
@@ -61,7 +61,7 @@
 ;;; closure round-trip through the carrier, so `extend` no longer crashes on a
 ;;; capturing closure the way the old bare-thin-cast `int64_t(*)(int64_t,int64_t)`
 ;;; invocation did.
-(defn __identity_extend [wa f :fn] : int
+(defn __identity_extend [wa f : fn] : int
   ;; extend f w = Identity (f w)
   (__identity_new (f wa)))
 ;;; __identity_duplicate -- wrap an Identity cell inside another Identity cell.
@@ -113,7 +113,7 @@
 ;;;
 ;;; CRU Phase 1: extend takes its function as a `:fn` poly-closure carrier (see
 ;;; __identity_extend) so a capturing closure works.
-(defn __pair_extend [wa f :fn] : int
+(defn __pair_extend [wa f : fn] : int
   ;; extend f (e, a) = (e, f (e, a))
   (__pair_new (__pair_env wa) (f wa)))
 ;;; __pair_duplicate -- duplicate a Pair cell: (e, a) -> (e, (e, a)).

@@ -673,15 +673,26 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                               "type annotation without preceding parameter");
                     return NULL;
                 }
-                Type *ft = (p->as.list.len > 0)
-                    ? type_expr_from_form(e, p->as.list.items[0], NULL, NULL, NULL, 0)
-                    : NULL;
-                if (!ft) {
-                    diag_emit(DIAG_ERROR, p->span,
-                              "unsupported type in typeclass method parameter");
-                    return NULL;
+                /* Phase CCL: `: fn` (F_TYPE_ANN wrapping F_SYM("fn")) is the
+                 * spaced form of `:fn` -- the poly-closure carrier marker. */
+                Form *inner_f = (p->as.list.len > 0) ? p->as.list.items[0] : NULL;
+                if (inner_f &&
+                    (inner_f->tag == F_SYM || inner_f->tag == F_KEYWORD) &&
+                    inner_f->as.sym->len == 2 &&
+                    memcmp(inner_f->as.sym->name, "fn", 2) == 0) {
+                    param_types[actual_p - 1] = TYPE_PTR_VOID;
+                    param_is_fn[actual_p - 1] = true;
+                } else {
+                    Type *ft = inner_f
+                        ? type_expr_from_form(e, inner_f, NULL, NULL, NULL, 0)
+                        : NULL;
+                    if (!ft) {
+                        diag_emit(DIAG_ERROR, p->span,
+                                  "unsupported type in typeclass method parameter");
+                        return NULL;
+                    }
+                    param_types[actual_p - 1] = *ft;
                 }
-                param_types[actual_p - 1] = *ft;
             } else if (p->tag == F_VEC && p->as.list.len >= 2) {
                 /* [name : type] or [name :fn] nested vector syntax */
                 Form *name_f = p->as.list.items[0];
@@ -717,16 +728,27 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                         return NULL;
                     }
                 } else if (type_f->tag == F_TYPE_ANN) {
-                    /* `: type-expr` compound annotation */
-                    Type *ft = (type_f->as.list.len > 0)
-                        ? type_expr_from_form(e, type_f->as.list.items[0], NULL, NULL, NULL, 0)
-                        : NULL;
-                    if (!ft) {
-                        diag_emit(DIAG_ERROR, type_f->span,
-                                  "unsupported type form in typeclass method parameter");
-                        return NULL;
+                    /* `: type-expr` compound annotation; special-case `: fn`
+                     * (the poly-closure carrier) before falling through to the
+                     * generic type-expression parser. */
+                    Form *ti = (type_f->as.list.len > 0) ? type_f->as.list.items[0] : NULL;
+                    if (ti &&
+                        (ti->tag == F_SYM || ti->tag == F_KEYWORD) &&
+                        ti->as.sym->len == 2 &&
+                        memcmp(ti->as.sym->name, "fn", 2) == 0) {
+                        param_types[actual_p] = TYPE_PTR_VOID;
+                        param_is_fn[actual_p] = true;
+                    } else {
+                        Type *ft = ti
+                            ? type_expr_from_form(e, ti, NULL, NULL, NULL, 0)
+                            : NULL;
+                        if (!ft) {
+                            diag_emit(DIAG_ERROR, type_f->span,
+                                      "unsupported type form in typeclass method parameter");
+                            return NULL;
+                        }
+                        param_types[actual_p] = *ft;
                     }
-                    param_types[actual_p] = *ft;
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
                     Type *ft = type_expr_from_form(e, type_f, NULL, NULL, NULL, 0);
