@@ -300,10 +300,11 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
 /* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the
- * given (result, arg) method signature, returning its C function name.  Returns
- * NULL for the all-int64_t carrier case (caller uses the preamble
- * __tur_poly_to_fat1 shim instead), keeping int64 poly boxes churn-free. */
-char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type, Type arg_type);
+ * given (result, arg0..argN) method signature, returning its C function name.
+ * Returns NULL for the all-int64_t carrier case (caller uses the preamble
+ * __tur_poly_to_fat<N> shim instead), keeping int64 poly boxes churn-free. */
+char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
+                               const Type *arg_types, uint32_t n_args);
 
 /* ------------ emit_effects.c: effects/CPS expression emission ------------ */
 /* Region C -- algebraic effects (EX_DEFECT, EX_PERFORM, EX_HANDLE, EX_RESUME,

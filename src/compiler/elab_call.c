@@ -2543,30 +2543,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                      * closure argument to a ^fat schema combinator. */
                     /* poly-to-fat-typed-shim-plan: thread the sink's declared
                      * ^fat fn signature (when it is a concrete TY_FN) so the
-                     * emitter can select a typed slot-0 shim matching the
-                     * typed-thunk cast the sink applies on invocation.  For an
-                     * int64/pointer-carrier ^fat param (no concrete fn type) this
-                     * stays NULL and the int64 __tur_poly_to_fat1 shim is used. */
+                     * emitter can select a slot-0 shim of the matching arity
+                     * whose typed-thunk-cast ABI matches the invocation the sink
+                     * applies.  For an int64/pointer-carrier ^fat param (no
+                     * concrete fn type) this stays NULL and the int64
+                     * __tur_poly_to_fat1 shim is used.  A binary or higher-arity
+                     * sink selects __tur_poly_to_fat<N>: the carrier's slot 1
+                     * holds the method's real N-ary thunk (make_poly_wrapper), so
+                     * every argument is forwarded.  (See
+                     * docs/reported/poly-to-fat-drops-args-beyond-first-multiarg-method.md.) */
                     const Type *eft = (fn_type.as.fn.arg_full_types &&
                                        fn_arg_idx_fat < fn_type.as.fn.arity)
                         ? fn_type.as.fn.arg_full_types[fn_arg_idx_fat] : NULL;
-                    /* The tur_poly_fn_t carrier is inherently unary
-                     * ((env, arg) -> result) and so are the poly-to-fat slot-0
-                     * shims.  When the sink's declared ^fat signature is binary
-                     * or higher, boxing through the unary carrier would forward
-                     * only the first argument and silently drop the rest -- a
-                     * silent miscompile.  Reject it with a hard diagnostic
-                     * instead.  (See
-                     * docs/reported/poly-to-fat-drops-args-beyond-first-multiarg-method.md.) */
-                    if (eft && eft->kind == TY_FN && eft->as.fn.arity > 1) {
-                        diag_emit(DIAG_ERROR, args[i]->span,
-                            "a typeclass-method closure with arity %u > 1 cannot "
-                            "be boxed into a fat (^fat) parameter of '%s'; the "
-                            "tur_poly_fn_t carrier is unary and would drop every "
-                            "argument after the first",
-                            (unsigned)eft->as.fn.arity, fn_binding->name->name);
-                        return NULL;
-                    }
                     Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID,
                                           args[i]->span);
                     conv->as.poly_to_fat_.inner = args[i];

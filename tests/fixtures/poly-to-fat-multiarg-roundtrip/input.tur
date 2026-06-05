@@ -1,0 +1,29 @@
+;; poly-to-fat-drops-args-beyond-first-multiarg-method.md (real fix): a
+;; typeclass-method closure whose poly argument is BINARY (or higher arity) is
+;; boxed into a `^fat` sink through the now N-ary tur_poly_fn_t carrier.  The
+;; carrier's slot 1 holds the method's real binary thunk (make_poly_wrapper),
+;; and the box's slot-0 shim is __tur_poly_to_fat2 -- a binary forwarder -- so
+;; BOTH arguments reach the underlying method.  Before the fix the unary
+;; __tur_poly_to_fat1 shim forwarded only `a0` and silently dropped the `4`,
+;; printing 3 (= add2(3, 0)).  With the fix it prints 7 (= add2(3, 4)).
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+;; binary ^fat sink
+(defn call2 [^fat f :(fn [:int :int] #{} :int) a : int b : int] : int
+  (f a b))
+
+(defstruct BoxW [A] (raw :int))
+
+;; instance method whose closure argument is binary -> boxed into call2's ^fat
+(definstance Functor [BoxW]
+  (fmap [container fn]
+    (call2 fn 3 4)))
+
+(defn add2 [x : int y : int] : int (+ x y))
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    (println (.fmap b add2)))    ; add2(3, 4) -> 7
+  0)

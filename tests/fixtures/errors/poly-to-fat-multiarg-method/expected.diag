@@ -1,1 +1,0 @@
-a typeclass-method closure with arity 2 > 1 cannot be boxed into a fat (^fat) parameter of 'call2'

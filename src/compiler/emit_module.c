@@ -194,13 +194,18 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     return name;
 }
 
-static char *typed_poly_to_fat_name(Type result_type, Type arg_type) {
+static char *typed_poly_to_fat_name(Type result_type, const Type *arg_types,
+                                    uint32_t n_args) {
     Buf name;
     buf_init(&name);
-    buf_puts(&name, "__tur_poly_to_fat1_");
+    /* The arity tag mirrors __tur_poly_to_fat<N>; keep "1" backward-compatible
+     * for the unary family so existing fixtures stay churn-free. */
+    buf_printf(&name, "__tur_poly_to_fat%u_", (unsigned)n_args);
     append_sanitized_c_token(&name, type_c_name(result_type));
-    buf_putc(&name, '_');
-    append_sanitized_c_token(&name, type_c_name(arg_type));
+    for (uint32_t i = 0; i < n_args; i++) {
+        buf_putc(&name, '_');
+        append_sanitized_c_token(&name, type_c_name(arg_types[i]));
+    }
     buf_putc(&name, '\0');
     char *result = strdup(name.data);
     buf_free(&name);
@@ -208,22 +213,23 @@ static char *typed_poly_to_fat_name(Type result_type, Type arg_type) {
     return result;
 }
 
-char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type, Type arg_type) {
-    /* tur_poly_fn_t is inherently unary, so a single (R, A0) shim family
-     * suffices.  The sink invokes the boxed handle through the typed-thunk cast
-     * only when use_typed_thunk_abi holds for (R, A0); otherwise it falls back
-     * to the int64_t carrier (TUR_APPLY1) that the preamble __tur_poly_to_fat1
-     * already satisfies. */
-    if (!use_typed_thunk_abi(result_type, &arg_type, 1)) return NULL;
+char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
+                               const Type *arg_types, uint32_t n_args) {
+    /* The sink invokes the boxed handle through the typed-thunk cast only when
+     * use_typed_thunk_abi holds for (R, A0..An); otherwise it falls back to the
+     * int64_t carrier that the preamble __tur_poly_to_fat<N> shim already
+     * satisfies. */
+    if (!use_typed_thunk_abi(result_type, (Type *)arg_types, (uint8_t)n_args)) return NULL;
     /* All-int64_t carrier signatures are likewise served by the preamble shim
-     * (its int64_t (*)(void *, int64_t) ABI equals the typed-thunk cast), so
+     * (its int64_t (*)(void *, int64_t...) ABI equals the typed-thunk cast), so
      * emit nothing new and keep int64/pointer poly boxes churn-free. */
-    if (strcmp(type_c_name(result_type), "int64_t") == 0 &&
-        strcmp(type_c_name(arg_type), "int64_t") == 0) {
-        return NULL;
+    bool all_int64 = strcmp(type_c_name(result_type), "int64_t") == 0;
+    for (uint32_t i = 0; all_int64 && i < n_args; i++) {
+        if (strcmp(type_c_name(arg_types[i]), "int64_t") != 0) all_int64 = false;
     }
+    if (all_int64) return NULL;
 
-    char *name = typed_poly_to_fat_name(result_type, arg_type);
+    char *name = typed_poly_to_fat_name(result_type, arg_types, n_args);
     for (uint32_t i = 0; i < ctx->n_poly_fatshim_names; i++) {
         if (strcmp(ctx->poly_fatshim_names[i], name) == 0) return name;
     }
@@ -240,23 +246,29 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type, Type arg_type) {
         abort();
     }
 
-    /* static R name(void *__e, A0 a0) {
+    /* static R name(void *__e, A0 a0, ...) {
      *     int64_t *__b = (int64_t *)__e;
-     *     return ((R (*)(void *, A0))(intptr_t)__b[1])((void *)(intptr_t)__b[2], a0);
+     *     return ((R (*)(void *, A0, ...))(intptr_t)__b[1])((void *)(intptr_t)__b[2], a0, ...);
      * }
-     * Slot 1 holds the method's real (typed) fn pointer; slot 2 its env.  The
-     * carrier erases the signature to int64_t (*)(void *, int64_t); this shim
-     * re-types it back to the true R (*)(void *, A0) so the sink's typed-thunk
-     * cast at slot 0 matches the actual ABI. */
+     * Slot 1 holds the method's real (typed) N-ary fn pointer; slot 2 its env.
+     * The carrier erases the signature to int64_t (*)(void *, int64_t...); this
+     * shim re-types it back to the true R (*)(void *, A0..An) so the sink's
+     * typed-thunk cast at slot 0 matches the actual ABI and every argument is
+     * forwarded. */
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     const char *rc = type_c_name(result_type);
-    const char *ac = type_c_name(arg_type);
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
-    buf_printf(target, "static %s %s(void *__e, %s a0) {\n", rc, name, ac);
-    buf_puts(target, "    int64_t *__b = (int64_t *)__e;\n    ");
+    buf_printf(target, "static %s %s(void *__e", rc, name);
+    for (uint32_t i = 0; i < n_args; i++) {
+        buf_printf(target, ", %s a%u", type_c_name(arg_types[i]), (unsigned)i);
+    }
+    buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
     if (has_ret) buf_puts(target, "return ");
-    buf_printf(target, "((%s (*)(void *, %s))(intptr_t)__b[1])((void *)(intptr_t)__b[2], a0);\n}\n",
-               rc, ac);
+    buf_printf(target, "((%s (*)(void *", rc);
+    for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", %s", type_c_name(arg_types[i]));
+    buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
+    for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", a%u", (unsigned)i);
+    buf_puts(target, ");\n}\n");
     return name;
 }
 
@@ -2275,20 +2287,31 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3);\n}\n");
     buf_puts(out, "static int64_t __tur_fatshim5(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {\n");
     buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3, a4);\n}\n");
-    /* SC7: EX_POLY_TO_FAT thunk.  Converts a tur_poly_fn_t {env,fn} (a
+    /* SC7: EX_POLY_TO_FAT thunks.  Convert a tur_poly_fn_t {env,fn} (a
      * typeclass-method closure param) into the fat-closure protocol: the fat box
-     * is { __tur_poly_to_fat1, fn, env }, and TUR_APPLY1 passes the box as the
-     * env, so this thunk reads the original fn (slot 1) + its env (slot 2) and
-     * forwards the argument.  tur_poly_fn_t is inherently unary, so one arity
-     * suffices. */
-    buf_puts(out, "static int64_t __tur_poly_to_fat1(void *__e, int64_t a0) {\n");
-    buf_puts(out, "    int64_t *__b = (int64_t *)__e;\n");
-    buf_puts(out, "    return ((int64_t (*)(void *, int64_t))(intptr_t)__b[1])((void *)(intptr_t)__b[2], a0);\n}\n");
+     * is { __tur_poly_to_fat<N>, fn, env }, and the sink's N-ary fat-call passes
+     * the box as the env, so the thunk reads the original fn (slot 1) + its env
+     * (slot 2) and forwards every argument.  The carrier stores the method's
+     * real N-ary thunk in slot 1 (make_poly_wrapper builds it), so a binary or
+     * higher-arity poly method round-trips when boxed into a ^fat sink of the
+     * matching arity. */
+    for (int n = 0; n <= 5; n++) {
+        buf_printf(out, "static int64_t __tur_poly_to_fat%d(void *__e", n);
+        for (int i = 0; i < n; i++) buf_printf(out, ", int64_t a%d", i);
+        buf_puts(out, ") {\n    int64_t *__b = (int64_t *)__e;\n");
+        buf_puts(out, "    return ((int64_t (*)(void *");
+        for (int i = 0; i < n; i++) buf_puts(out, ", int64_t");
+        buf_puts(out, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
+        for (int i = 0; i < n; i++) buf_printf(out, ", a%d", i);
+        buf_puts(out, ");\n}\n");
+    }
     /* Suppress -Wunused-function for shim arities a program does not use. */
     buf_puts(out, "static void *__tur_fatshim_keep[] __attribute__((unused)) = {\n");
     buf_puts(out, "    (void *)__tur_fatshim0, (void *)__tur_fatshim1, (void *)__tur_fatshim2,\n");
     buf_puts(out, "    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5,\n");
-    buf_puts(out, "    (void *)__tur_poly_to_fat1 };\n");
+    buf_puts(out, "    (void *)__tur_poly_to_fat0, (void *)__tur_poly_to_fat1,\n");
+    buf_puts(out, "    (void *)__tur_poly_to_fat2, (void *)__tur_poly_to_fat3,\n");
+    buf_puts(out, "    (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };\n");
     /* IT4/TY2.4: (type-of x) helper — maps a TypeKind tag to a cstr type name.
      * The tag stored in tur_tagged_t is the value's TypeKind enum value, so the
      * struct/ADT cases are emitted from the actual enum constants rather than
