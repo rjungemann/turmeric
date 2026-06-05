@@ -210,7 +210,7 @@ needs to be split.
 
 ## Spaced-type annotation migration
 
-> Full plan: [../archive/spaced-type-annotation-migration-plan.md](../archive/spaced-type-annotation-migration-plan.md)
+> Full plan: [../archive/history/spaced-type-annotation-migration-plan.md](../archive/history/spaced-type-annotation-migration-plan.md)
 
 Phases 1-5 are complete (named-let, let/let*, codemod, repo + spices
 rewrite, docs). Only enforcement and optional deprecation remain.
@@ -228,7 +228,7 @@ rewrite, docs). Only enforcement and optional deprecation remain.
 
 ## Stdlib opaque handle types
 
-> Full plan: [../archive/stdlib-opaque-handle-types-plan.md](../archive/stdlib-opaque-handle-types-plan.md)
+> Full plan: [../archive/history/stdlib-opaque-handle-types-plan.md](../archive/history/stdlib-opaque-handle-types-plan.md)
 
 Tier 1 (threadpool, future, chan), Tier 2 (timer, reactor,
 taskgroup, mutex/condvar/rwlock), and Tier 3 (atomic, stm, thread,

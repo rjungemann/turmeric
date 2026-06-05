@@ -123,7 +123,9 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [module-system-guide.md](../guides/module-system-guide.md) | `module-system-plan.md` (history) |
 | [package-management-guide.md](../guides/package-management-guide.md) | `package-management-plan.md`, `tur-cli-plan.md` |
 | [serializable-continuations-guide.md](../guides/serializable-continuations-guide.md) | `serializable-continuations-plan.md` (history) |
-| [session-types-guide.md](../guides/session-types-guide.md) | `session-types-plan.md` (history; SS0--SS8 complete); `stdlib-session-typed-channels-plan.md` (complete; S1--S3) |
+| [session-types-guide.md](../guides/session-types-guide.md) | `session-types-plan.md` (history; SS0--SS8 complete); `stdlib-session-typed-channels-plan.md` (history; S1--S3 complete) |
+| [opaques-guide.md](../guides/opaques-guide.md) | augmented by `stdlib-opaque-handle-types-plan.md` (history; Tier 1--3 complete) |
+| [type-annotations-guide.md](../guides/type-annotations-guide.md) | augmented by `spaced-type-annotation-migration-plan.md` (history; Phases 1--5 complete) |
 | [sized-types-guide.md](../guides/sized-types-guide.md) | `sized-types-plan.md` (history; SZ3 complete) |
 | [stm-guide.md](../guides/stm-guide.md) | `stm-plan-2.md` (history) |
 | [substructural-types-guide.md](../guides/substructural-types-guide.md) | `substructural-types-plan.md` (complete); `linear-types-plan.md` (history) |
@@ -280,6 +282,15 @@ Post-v0.18.0 sweep:
 - **[stdlib-linear-handle-borrows.md](history/stdlib-linear-handle-borrows.md)** -- `^borrow` parameter attribute for non-consuming accessors on linear handles; RESOLVED 2026-06-04
 - **[defgadt-copy-and-shared-bounds.md](history/defgadt-copy-and-shared-bounds.md)** -- `defgadt :copy` opt-out for shared GADT values; resolved 2026-06-04
 - **[range-gadt-typeclass-migration-plan.md](history/range-gadt-typeclass-migration-plan.md)** -- Fold the `Bound` GADT into `range.tur`'s endpoint representation + graduate `-Xgadt` to default-on (A1/B1/B2); complete; `Show`/`Eq`/`Ord [Bound]` instances; see [gadts-guide.md](../guides/gadts-guide.md)
+
+Post-v0.18.0 followup sweep:
+
+- **[fn-type-first-class-application-plan.md](history/fn-type-first-class-application-plan.md)** -- First-class `:fn` closure values; F1--F6 landed; suite green
+- **[fn-first-class-stdlib-deworkaround-plan.md](history/fn-first-class-stdlib-deworkaround-plan.md)** -- Retire `^fat`-sink shims in parser/backtrack/logic combinators on top of first-class `:fn`; complete
+- **[stdlib-session-typed-channels-plan.md](history/stdlib-session-typed-channels-plan.md)** -- `stdlib/schan.tur` session-typed channel wrappers (S1--S3); complete; see [session-types-guide.md](../guides/session-types-guide.md)
+- **[stdlib-opaque-handle-types-plan.md](history/stdlib-opaque-handle-types-plan.md)** -- `defopaque` handle types across stdlib (threadpool, future, chan, timer, reactor, taskgroup, mutex/condvar/rwlock, atomic, stm, thread, fiber, process, fs, io, ref); Tier 1--3 complete; see [opaques-guide.md](../guides/opaques-guide.md)
+- **[spaced-type-annotation-migration-plan.md](history/spaced-type-annotation-migration-plan.md)** -- Spaced `name : type` annotation migration; Phases 1--5 (codemod + repo + spices + docs) complete; Phase 6 CI enforcement and Phase 7 reader deprecation are deferred follow-ups; see [type-annotations-guide.md](../guides/type-annotations-guide.md)
+- **[let-bound-sf-loses-outer-arg-type-when-inner-captures.md](history/let-bound-sf-loses-outer-arg-type-when-inner-captures.md)** -- `let`-bound SF outer-arg type lost when inner closure captures it; type-check half resolved (`tests/check-sf-let-bind-inner-call.sh`); native-codegen half tracked separately in `sf-two-level-closure-return-miscompiles-out-binding`
 
 Earlier additions:
 
