@@ -490,6 +490,19 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
          * returns a bare fn reference, e.g. ((pick) 5) -> inc) the head
          * resolves to NULL here and stays a thin pointer call. */
         tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
+    } else if (head_kind == TY_FN && source_expr &&
+               source_expr->type.kind == TY_PTR_VOID) {
+        /* aggregate-return-fat-box-ascription: a :ptr<void> fat-closure box
+         * ascribed to a (fn ...) type, then applied --
+         * e.g. ((:: ps (fn [float] (Pair float float))) 0.0) where `ps` came
+         * from a closure-returning helper.  The `::` re-types the box to TY_FN,
+         * so neither the TY_PTR_VOID branch nor the EX_CALL branch above fires;
+         * but the runtime value is still a heap closure box and MUST dispatch
+         * through slot 0 (read __fn, pass the box as env).  Without this it is
+         * called as a thin function pointer -- a jump into the env struct, i.e.
+         * a segfault.  Gated on the underlying source actually carrying closure
+         * thunk metadata so a raw :ptr<void> callback stays a thin call. */
+        tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
     }
     if (source_expr && source_expr->kind == EX_VAR && source_expr->as.var.binding) {
         Binding *source_b = source_expr->as.var.binding;

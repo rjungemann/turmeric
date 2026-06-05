@@ -7,7 +7,7 @@ description: `tests/fixtures/vec-typed-fat-closure-readback/` -- the fixture PR 
 
 # `vec-typed-fat-closure-readback` fixture regressed at codegen
 
-> **Status (2026-06-05): mostly RESOLVED.**
+> **Status (2026-06-05): RESOLVED.**
 > - The `tests/fixtures/vec-typed-fat-closure-readback/` fixture **passes** on
 >   current HEAD (the original four `-Wint-conversion` mismatches are gone).
 > - The broader **`^fat`-arg call-slot** gap (the first Update below: applying
@@ -20,11 +20,15 @@ description: `tests/fixtures/vec-typed-fat-closure-readback/` -- the fixture PR 
 >   int64_t carriers in that bridge. Regression fixture:
 >   `tests/fixtures/sf-apply-fat-arg-bridge/`.
 > - The **third pattern** (a closure that *returns* a typed aggregate, applied
->   through a dynamically-dispatched `:ptr<void>` box, then field-accessed) is
->   **still broken** -- see the "Remaining gap" section at the bottom. It is a
->   distinct code path (fat-dynamic-dispatch struct readback), not the
->   `^fat`-arg-slot path fixed above, and now manifests as a runtime
->   **segfault** rather than the compile error originally reported.
+>   through a `::`-ascribed `:ptr<void>` box, then field-accessed) is now
+>   **fixed too** -- see the "Remaining gap" section at the bottom for the
+>   root cause. Root cause was *not* in the carrier-bridge pass: the `::`
+>   ascription re-typed the fat box to `TY_FN`, so `elab_call_head_expr`
+>   skipped the closure-dispatch branches and called the box as a *thin*
+>   function pointer (a jump into the env struct -> segfault). The fix routes
+>   a `:ptr<void>` source ascribed to a `(fn ...)` head through the
+>   closure-thunk dispatch. Regression fixture:
+>   `tests/fixtures/fat-box-ascribed-aggregate-return/`.
 
 ## Update (2026-06-05): the same gap blocks any caller of an `^fat`-taking SF
 
@@ -222,11 +226,11 @@ bridge already does for the closure result.
   `^fat out : (fn [float] float)`, and `(out 0.0)` returns the product
   of the gains. No `-Wint-conversion` in the emitted C.
 
-## Remaining gap (still open): aggregate-returning closure read back through a `:ptr<void>` box
+## Remaining gap (FIXED): aggregate-returning closure read back through a `:ptr<void>` box
 
 A closure that **returns a typed aggregate** (e.g. `(Pair float float)`),
-stored as a `:ptr<void>` box, applied via dynamic fat-dispatch, and then
-field-accessed, is still broken. Minimal standalone repro (no spices repo
+stored as a `:ptr<void>` box, ascribed to a `(fn ...)` type, applied, and
+then field-accessed, was crashing. Minimal standalone repro (no spices repo
 needed; `Pair`/`pair`/`pair-fst` are auto-loaded from `stdlib/pair.tur`):
 
 ```turmeric
@@ -240,32 +244,50 @@ needed; `Pair`/`pair`/`pair-fst` are auto-loaded from `stdlib/pair.tur`):
   0)
 ```
 
-- **Observed (current HEAD):** compiles, then **segfaults** at runtime
-  (exit 139). This is a *change* from the originally-reported symptom (a
-  hard `-Wint-conversion` / `incompatible type 'Pair__float__float'`
-  compile error); intervening commits (#289-#291) moved it from a compile
-  error to a silent miscompile + crash, which is arguably worse.
-- **Expected:** prints `1.5`.
+- **Was (before fix):** compiled, then **segfaulted** at runtime (exit 139).
+  This was already a *change* from the originally-reported symptom (a hard
+  `-Wint-conversion` / `incompatible type 'Pair__float__float'` compile
+  error); intervening commits (#289-#291) had moved it from a compile error
+  to a silent miscompile + crash.
+- **Now:** prints `1.5` (exit 0).
 
-This is a **different code path** from the `^fat`-arg-slot bridge fixed
-above. The apply site `((:: ps ...) 0.0)` dispatches through the
-`TY_PTR_VOID` fat-dynamic-dispatch branch in `emit_expr.c` (the
-`(*( thunk_typedef *)(fn_ptr))(fn_ptr, args...)` path), and the struct
-return value comes back through the int64_t carrier without being
-reconstituted into the by-value `Pair__float__float` the `pair-fst`
-specialization expects. The G4 fixture `tests/fixtures/pair-signals-typed/`
-passes because it does not go through the dynamic `:ptr<void>` box +
-`::`-ascribed re-application combination that triggers this.
+**Root cause (corrected).** This was *not* a missing carrier bridge in the
+codegen pass, and the apply site does *not* go through the `TY_PTR_VOID`
+dynamic-dispatch branch. The crash was upstream, in `elab_call_head_expr`
+(`src/compiler/elab_call.c`). The call head `(:: ps (fn [float] (Pair float
+float)))` is an `EX_ASCRIBE` whose *type* is `TY_FN` (the ascription
+re-types the box). The head-elaboration helper picks the dispatch strategy
+from `head_kind`:
 
-Confirmed independent of the `^fat`-arg-slot fix: the segfault reproduces
-with that `emit_expr.c` change reverted, so this is a pre-existing,
-orthogonal gap in the fat-dynamic-dispatch struct-return readback.
+- the `TY_PTR_VOID` branch (set `closure_fn_binding`, i.e. fat dispatch)
+  was skipped because `head_kind == TY_FN`;
+- the `TY_FN` branch only handled an `EX_CALL` head, but the unwrapped
+  source is an `EX_VAR` (`ps`).
 
-**Fix direction (next session):** in the `TY_PTR_VOID` fat-dispatch branch
-of `emit_expr.c`, when the dispatched closure's result type is a by-value
-carrier-ABI aggregate, bridge the int64_t carrier result back to the
-concrete struct (mirror `emit_carrier_bridge` `CK_CARRIER -> CK_CONCRETE`
-the way the direct-call path does) before the field access consumes it.
+So `closure_fn_binding` stayed `NULL` and the head was emitted as a **thin
+function-pointer call** on a fat box:
+
+```c
+int64_t (*__call_head)(double) = ps;          /* ps points at the env struct */
+((Pair__float__float (*)(double))__call_head)(0.0);  /* jump into the struct -> SIGSEGV */
+```
+
+**Fix.** Add a third branch in `elab_call_head_expr`: when `head_kind ==
+TY_FN` but the unwrapped source's own type is `TY_PTR_VOID`, route through
+`expr_closure_fn_binding(source_expr)` (gated on that being non-NULL, so a
+raw `:ptr<void>` callback with no thunk metadata still stays a thin call).
+The box then dispatches through its known thunk with the box as the env
+arg, and the `Pair__float__float` by-value return flows through correctly:
+
+```c
+__t27 = __fn_892((void *)(intptr_t)(ps), 0.0);   /* box passed as env; struct returned by value */
+```
+
+The G4 fixture `tests/fixtures/pair-signals-typed/` passed all along
+because it does not go through the `:ptr<void>` box + `::`-ascribed
+re-application combination that triggers this. Regression fixture:
+`tests/fixtures/fat-box-ascribed-aggregate-return/` (covers let-bound and
+direct application, float and int element types, both field accessors).
 
 ## Related
 
