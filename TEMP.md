@@ -23,9 +23,6 @@ do not collapse phases, do not reword entries into prose, and update the
 
 ---
 
-Reported complete - io-file-open-untyped-params-default-to-int.md
-In progress - unsafe-block-capture-misses-ascription-vars.md
-
 ## Phase 6 -- Typeclass reintroduction
 
 33. `upcoming/stdlib-arrow-typeclass-reintroduction-plan.md`
@@ -48,20 +45,6 @@ In progress - unsafe-block-capture-misses-ascription-vars.md
     - Status: Draft -- blocked on 14 + 15 (polymorphic `constant` and
       struct-returning closures) if needed on critical path; otherwise
       blocked only on 20 + 31 (Phases 1-6 designed)
-
-## docs/reported/result-param-order-blocks-functor-monad.md — OPEN
-
-- T1 of stdlib-hkt-consolidation-plan landed (8157f053): Option got
-  Functor/Applicative/Monad/Alternative; Result got Bifunctor only.
-- MonadError[Result] deferred: Result's `[A=ok B=err]` order conflicts
-  with Turmeric's left-biased instance heads (partial application fixes
-  the leftmost param, e.g. `(Either E)`). A right-biased `(Result _ E)`
-  head is not expressible, so Functor/Monad/MonadError instances on the
-  ok arm cannot be written.
-- Proposed fix directions (per report):
-  1. Add instance-head syntax for fixing a trailing parameter.
-  2. Reorder Result to `[B=err A=ok]` (breaking change).
-- No resolving commits since filing; gap remains.
 
 ## Other notes
 
@@ -110,3 +93,25 @@ Do an inline-c reduction pass for the new typeclass work and related
 Category is not in stalib, so per T9 I'll inline composition into Arrow (no
 Category instance). Let me check whether the bare-layer fixtures carry
 expected. c snapshots (T11 requires them stable) and how they load arrow.tur.
+
+Reported complete - io-file-open-untyped-params-default-to-int.md
+Reported complete = stale-pair-signals-typed-snapshot.md
+Complete - unsafe-block-capture-misses-ascription-vars.md
+Not started - load-not-idempotent-typeclass.md - Depends on reversible-name-mangling-plan.md
+Complete - generic-struct-opaque-element-miscompile.md
+Complete - result-param-order-blocks-functor-monad.md
+
+Can you pick a report from docs/reported/ that is able to be worked on, and execute it? Don't work on:
+io-file-open-untyped-params-default-to-int.md
+stale-pair-signals-typed-snapshot.md
+unsafe-block-capture-misses-ascription-vars.md
+load-not-idempotent-typeclass.md
+instance-method-returning-untyped-param-loses-result-type.md
+taskgroup-wrapper-macros-emit-nil-head.md
+result-param-order-blocks-functor-monad.md
+fn-first-class-float-carrier-gap.md
+stale-pair-signals-typed-snapshot.md
+fat-closure-dispatch-does-not-handle-struct-return
+ascribing-fat-closure-value-to-fn-type-double-shims
+generic-struct-opaque-element-miscompile.md
+
