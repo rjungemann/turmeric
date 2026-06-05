@@ -1,0 +1,29 @@
+;;
+;; Regression: a generic function `recv` that returns a parametric aggregate
+;; (Pair[T ptr<void>]) and is called from *another* generic forwarder `fwd`
+;; must have its inner call re-specialized when the forwarder is monomorphized
+;; at a concrete leaf -- composing the relay's still-abstract bindings (T,R ->
+;; the forwarder's T,R) through the forwarder's concrete bindings.  Before the
+;; fix the inner `recv` call fell back to the broken int64 carrier template
+;; `(int64_t){.fst = ...}` (invalid C).  Variant 2 of
+;; docs/reported/generic-struct-opaque-element-miscompile.md.
+
+(defopaque SChan [P] :ptr<void>)
+(defopaque SRecv [T R] :ptr<void>)
+
+(defn chan-val [c : ptr<void>] : int
+  ```c return 7; ```)
+
+(defn recv [T R] [c : (SChan (SRecv T R))] : (Pair T ptr<void>)
+  (:: (make-struct Pair (chan-val (:: c :ptr<void>)) (:: 0 :ptr<void>))
+      (Pair T ptr<void>)))
+
+;; Generic forwarder: relays to the generic `recv` with still-abstract T,R.
+(defn fwd [T R] [c : (SChan (SRecv T R))] : (Pair T ptr<void>)
+  (recv c))
+
+(defn main [] : int
+  (let [c (:: (:: 0 :ptr<void>) (SChan (SRecv int ptr<void>)))
+        p (fwd c)]
+    (println (pair-fst p)))
+  0)
