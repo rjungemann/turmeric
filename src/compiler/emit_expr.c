@@ -1862,14 +1862,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * any other int64_t-carrier kind) and the actual is a
                      * pointer (TY_PTR_VOID closure value or TY_FN), wrap with
                      * the standard (int64_t)(intptr_t) coercion -- otherwise
-                     * clang rejects the implicit pointer-to-int conversion. */
+                     * clang rejects the implicit pointer-to-int conversion.
+                     *
+                     * vec-typed-fat-closure-readback: a TY_FN formal (a `^fat`
+                     * closure param, e.g. `(sf sig)` where `sig` is declared
+                     * `(fn [float] float)`) is *also* emitted as the int64_t
+                     * carrier (emit_fns.c: closure params of kind TY_FN -> int64_t).
+                     * Applying such a closure to a `:ptr<void>` SF box passed the
+                     * void* straight into the int64_t slot with no cast, tripping
+                     * -Wint-conversion (and "working" only because pointers and
+                     * int64 share a width).  Treat TY_FN formals as int64_t
+                     * carriers here too. */
                     TypeKind formal = TY_INT;
                     if (thunk_binding->type.kind == TY_FN &&
                         (uint8_t)(i + 1) < thunk_binding->type.as.fn.arity) {
                         formal = thunk_binding->type.as.fn.arg_kinds[i + 1];
                     }
                     TypeKind actual = e->as.call_.args[i]->type.kind;
-                    if (formal == TY_INT &&
+                    bool formal_is_int64_carrier =
+                        (formal == TY_INT || formal == TY_FN);
+                    if (formal_is_int64_carrier &&
                         (actual == TY_PTR_VOID || actual == TY_FN)) {
                         Buf cast; buf_init(&cast);
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);

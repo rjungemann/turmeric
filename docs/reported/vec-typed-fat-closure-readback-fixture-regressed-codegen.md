@@ -7,6 +7,25 @@ description: `tests/fixtures/vec-typed-fat-closure-readback/` -- the fixture PR 
 
 # `vec-typed-fat-closure-readback` fixture regressed at codegen
 
+> **Status (2026-06-05): mostly RESOLVED.**
+> - The `tests/fixtures/vec-typed-fat-closure-readback/` fixture **passes** on
+>   current HEAD (the original four `-Wint-conversion` mismatches are gone).
+> - The broader **`^fat`-arg call-slot** gap (the first Update below: applying
+>   `(sine ...)` to a `:ptr<void>` signal box through a `^fat` param) is now
+>   **fixed**. The closure-dispatch path in `emit_expr.c` only bridged
+>   `:ptr<void>`/`:fn` actuals when the formal kind was `TY_INT`; a `^fat`
+>   closure param is declared `TY_FN` but emitted as the `int64_t` carrier
+>   (`emit_fns.c`: closure params of kind `TY_FN` -> `int64_t`), so the void*
+>   flowed into the int64_t slot uncast. The fix treats `TY_FN` formals as
+>   int64_t carriers in that bridge. Regression fixture:
+>   `tests/fixtures/sf-apply-fat-arg-bridge/`.
+> - The **third pattern** (a closure that *returns* a typed aggregate, applied
+>   through a dynamically-dispatched `:ptr<void>` box, then field-accessed) is
+>   **still broken** -- see the "Remaining gap" section at the bottom. It is a
+>   distinct code path (fat-dynamic-dispatch struct readback), not the
+>   `^fat`-arg-slot path fixed above, and now manifests as a runtime
+>   **segfault** rather than the compile error originally reported.
+
 ## Update (2026-06-05): the same gap blocks any caller of an `^fat`-taking SF
 
 The same int↔ptr<void> carrier-bridge gap surfaces in the **simplest**
@@ -202,6 +221,51 @@ bridge already does for the closure result.
   `(effects-chain v (constant 1.0))`, re-bind the result with
   `^fat out : (fn [float] float)`, and `(out 0.0)` returns the product
   of the gains. No `-Wint-conversion` in the emitted C.
+
+## Remaining gap (still open): aggregate-returning closure read back through a `:ptr<void>` box
+
+A closure that **returns a typed aggregate** (e.g. `(Pair float float)`),
+stored as a `:ptr<void>` box, applied via dynamic fat-dispatch, and then
+field-accessed, is still broken. Minimal standalone repro (no spices repo
+needed; `Pair`/`pair`/`pair-fst` are auto-loaded from `stdlib/pair.tur`):
+
+```turmeric
+(defn pair-signals [a : float b : float] : ptr<void>
+  (fn [t : float] : (Pair float float) (pair a b)))
+
+(defn main [] : int
+  (let [ps (pair-signals 1.5 2.5)
+        p  ((:: ps (fn [float] #{} (Pair float float))) 0.0)]
+    (println (pair-fst p)))
+  0)
+```
+
+- **Observed (current HEAD):** compiles, then **segfaults** at runtime
+  (exit 139). This is a *change* from the originally-reported symptom (a
+  hard `-Wint-conversion` / `incompatible type 'Pair__float__float'`
+  compile error); intervening commits (#289-#291) moved it from a compile
+  error to a silent miscompile + crash, which is arguably worse.
+- **Expected:** prints `1.5`.
+
+This is a **different code path** from the `^fat`-arg-slot bridge fixed
+above. The apply site `((:: ps ...) 0.0)` dispatches through the
+`TY_PTR_VOID` fat-dynamic-dispatch branch in `emit_expr.c` (the
+`(*( thunk_typedef *)(fn_ptr))(fn_ptr, args...)` path), and the struct
+return value comes back through the int64_t carrier without being
+reconstituted into the by-value `Pair__float__float` the `pair-fst`
+specialization expects. The G4 fixture `tests/fixtures/pair-signals-typed/`
+passes because it does not go through the dynamic `:ptr<void>` box +
+`::`-ascribed re-application combination that triggers this.
+
+Confirmed independent of the `^fat`-arg-slot fix: the segfault reproduces
+with that `emit_expr.c` change reverted, so this is a pre-existing,
+orthogonal gap in the fat-dynamic-dispatch struct-return readback.
+
+**Fix direction (next session):** in the `TY_PTR_VOID` fat-dispatch branch
+of `emit_expr.c`, when the dispatched closure's result type is a by-value
+carrier-ABI aggregate, bridge the int64_t carrier result back to the
+concrete struct (mirror `emit_carrier_bridge` `CK_CARRIER -> CK_CONCRETE`
+the way the direct-call path does) before the field access consumes it.
 
 ## Related
 
