@@ -390,20 +390,23 @@
 ;; Backtrack is a kind-(* -> *) handle (carrier: the int Cell-list pointer), so
 ;; the standard Functor / Applicative / Monad / Alternative instances are all
 ;; directly expressible and own their type. Each method delegates to an
-;; int-carrier operation above; the continuation parameter of `fmap` / `bind`
-;; arrives as a `tur_poly_fn_t`, so the body boxes it into the fat-closure
-;; protocol via `__tur_poly_to_fat1` (the same shim the compiler emits for
-;; poly-to-fat coercions) before handing it to the worker.
+;; int-carrier operation above. The continuation parameter of `fmap` / `bind`
+;; arrives as a typeclass-method poly closure; handing it to a worker whose
+;; parameter is declared `^fat` lets the compiler box it into the fat-closure
+;; protocol automatically (EX_POLY_TO_FAT), so the instance bodies stay pure
+;; Turmeric -- no hand-written `__tur_poly_to_fat` box.
 ;;; bt-apply-fat -- invoke a fat-closure box with a single argument.
 (defn bt-apply-fat [f x] : int
   ```c int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, x);
   ```)
-;;; fmap-backtrack-raw -- int worker: map a fat-closure fn over every result.
-(defn fmap-backtrack-raw [xs f] : int
-  (let [lf f]
+;;; fmap-backtrack-raw -- worker: map a fat-closure fn over every result.
+(defn fmap-backtrack-raw [xs ^fat f] : int
+  (let [lf (:: f :int)]
     (mbind xs (fn [x] (let [_ lf] (mreturn (bt-apply-fat lf x)))))))
+;;; mbind-fat -- ^fat-sink wrapper around mbind for the Monad instance.
+(defn mbind-fat [ma ^fat f] : int (mbind ma (:: f :int)))
 ;;; ap-backtrack-raw -- int worker: cartesian application of fns to arguments.
 (defn ap-backtrack-raw [fs xs] : int
   (let [lxs xs]
@@ -419,13 +422,7 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Functor [Backtrack]
   (fmap [container fn]
-    ```c
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    box[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;
-    box[1] = (int64_t)(intptr_t)fn.fn;
-    box[2] = (int64_t)(intptr_t)fn.env;
-    return fmap_backtrack_raw((int64_t)(intptr_t)container, (int64_t)(intptr_t)box);
-    ```))
+    (fmap-backtrack-raw (:: container :int) fn)))
 ;;; Applicative [Backtrack] -- pure is a singleton result; ap forms the cartesian
 ;;; product, applying each function result to each argument result.
 ;;;
@@ -435,9 +432,9 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Applicative [Backtrack]
   (pure [x]
-    ```c return mreturn(x); ```)
+    (mreturn x))
   (ap [ff fa]
-    ```c return ap_backtrack_raw((int64_t)(intptr_t)ff, (int64_t)(intptr_t)fa); ```))
+    (ap-backtrack-raw (:: ff :int) (:: fa :int))))
 ;;; Monad [Backtrack] -- bind is concatMap: feed every result into the
 ;;; continuation and union the outputs. This is what `do-m` / `for` lower onto.
 ;;;
@@ -447,13 +444,7 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Monad [Backtrack]
   (bind [ma fn]
-    ```c
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    box[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;
-    box[1] = (int64_t)(intptr_t)fn.fn;
-    box[2] = (int64_t)(intptr_t)fn.env;
-    return mbind((int64_t)(intptr_t)ma, (int64_t)(intptr_t)box);
-    ```))
+    (mbind-fat (:: ma :int) fn)))
 ;;; Alternative [Backtrack] -- empty is the failing search; alt-or unions the
 ;;; results of both searches (the backtracking choice).
 ;;;
@@ -463,6 +454,6 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Alternative [Backtrack]
   (empty [a]
-    ```c (void)a; return 0; ```)
+    (mzero))
   (alt-or [a b]
-    ```c return mplus((int64_t)(intptr_t)a, (int64_t)(intptr_t)b); ```))
+    (mplus (:: a :int) (:: b :int))))

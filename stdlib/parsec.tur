@@ -817,13 +817,14 @@
 ;; Parser is a kind-(* -> *) handle (carrier: the fat-closure pointer), so the
 ;; standard Functor / Applicative / Monad / Alternative instances are all
 ;; directly expressible and own their type (no orphans). Each method delegates
-;; to an int-carrier worker above; the continuation parameter of `fmap` / `bind`
-;; arrives as a `tur_poly_fn_t` (the typeclass-method closure ABI), so the body
-;; boxes it into the fat-closure protocol via `__tur_poly_to_fat1` before handing
-;; it to the worker (the same shim the compiler emits for poly-to-fat coercions).
-;;; fmap-parser-raw -- int worker: map fn over the value arm of a parser.
-(defn fmap-parser-raw [p f] : ptr<void>
-  (let [lp p lf f]
+;; to an int-carrier worker above. The continuation parameter of `fmap` / `bind`
+;; arrives as a typeclass-method poly closure; handing it to a worker whose
+;; parameter is declared `^fat` lets the compiler box it into the fat-closure
+;; protocol automatically (EX_POLY_TO_FAT), so the instance bodies stay pure
+;; Turmeric -- no hand-written `__tur_poly_to_fat` box.
+;;; fmap-parser-raw -- worker: map a fat-closure fn over the value arm of a parser.
+(defn fmap-parser-raw [p ^fat f] : ptr<void>
+  (let [lp p lf (:: f :int)]
     (fn [inp]
       (let [_ lp]
         (mbind (apply-parser lp inp)
@@ -851,14 +852,7 @@
 ;;; Since: stdlib-hkt-consolidation T2
 (definstance Functor [Parser]
   (fmap [container fn]
-    ```c
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    box[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;
-    box[1] = (int64_t)(intptr_t)fn.fn;
-    box[2] = (int64_t)(intptr_t)fn.env;
-    return (int64_t)(intptr_t)fmap_parser_raw((int64_t)(intptr_t)container,
-                                              (int64_t)(intptr_t)box);
-    ```))
+    (:: (fmap-parser-raw (:: container :int) fn) :Parser)))
 ;;; Applicative [Parser] -- pure injects a value without consuming input; ap
 ;;; runs a parser of functions then a parser of arguments, applying one to the
 ;;; other.
@@ -869,10 +863,9 @@
 ;;; Since: stdlib-hkt-consolidation T2
 (definstance Applicative [Parser]
   (pure [x]
-    ```c return (int64_t)(intptr_t)pure_parser(x); ```)
+    (:: (pure-parser x) :Parser))
   (ap [ff fa]
-    ```c return (int64_t)(intptr_t)ap_parser_raw((int64_t)(intptr_t)ff,
-                                                 (int64_t)(intptr_t)fa); ```))
+    (:: (ap-parser-raw (:: ff :int) (:: fa :int)) :Parser)))
 ;;; Monad [Parser] -- bind sequences parsers, threading each parsed value into
 ;;; the continuation. This is what `do-m` / `for` lower onto.
 ;;;
@@ -880,16 +873,13 @@
 ;;;   (do-m a (item) b (item) (pure (+ a b)))
 ;;;
 ;;; Since: stdlib-hkt-consolidation T2
+;;; bind-parser-fat -- ^fat-sink wrapper so the Monad instance can hand its poly
+;;; continuation to bind-parser without a hand-written poly-to-fat box.
+(defn bind-parser-fat [p ^fat f] : ptr<void>
+  (bind-parser p (:: f :int)))
 (definstance Monad [Parser]
   (bind [ma fn]
-    ```c
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    box[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;
-    box[1] = (int64_t)(intptr_t)fn.fn;
-    box[2] = (int64_t)(intptr_t)fn.env;
-    return (int64_t)(intptr_t)bind_parser((int64_t)(intptr_t)ma,
-                                          (int64_t)(intptr_t)box);
-    ```))
+    (:: (bind-parser-fat (:: ma :int) fn) :Parser)))
 ;;; Alternative [Parser] -- empty is the always-failing parser; alt-or runs both
 ;;; parsers and unions their results (full backtracking choice).
 ;;;
@@ -899,7 +889,6 @@
 ;;; Since: stdlib-hkt-consolidation T2
 (definstance Alternative [Parser]
   (empty [a]
-    ```c (void)a; return (int64_t)(intptr_t)pfail_raw(); ```)
+    (:: (pfail-raw) :Parser))
   (alt-or [a b]
-    ```c return (int64_t)(intptr_t)or_parser_raw((int64_t)(intptr_t)a,
-                                                 (int64_t)(intptr_t)b); ```))
+    (:: (or-parser-raw (:: a :int) (:: b :int)) :Parser)))

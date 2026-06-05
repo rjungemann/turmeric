@@ -570,23 +570,24 @@
 ;;; -- HKT typeclass instances (stdlib-hkt-consolidation T3) ────────────────────
 ;;
 ;; Goal is a kind-(* -> *) handle (carrier: the goal fat-closure pointer). The
-;; instances are built on the inlined solution-stream monad above; the
-;; continuation parameter of `fmap` / `bind` arrives as a `tur_poly_fn_t`, so the
-;; body boxes it into the fat-closure protocol via `__tur_poly_to_fat1` (the same
-;; shim the compiler emits for poly-to-fat coercions) before handing it to the
-;; worker.
-;;; bind-goal-raw -- int worker: conjunction that threads the substitution into
-;;; the (fat-closure) continuation, which returns the next goal.
-(defn bind-goal-raw [g k] : ptr<void>
-  (let [lg g lk k]
+;; instances are built on the inlined solution-stream monad above. The
+;; continuation parameter of `fmap` / `bind` arrives as a typeclass-method poly
+;; closure; handing it to a worker whose parameter is declared `^fat` lets the
+;; compiler box it into the fat-closure protocol automatically (EX_POLY_TO_FAT),
+;; so the instance bodies stay pure Turmeric -- no hand-written
+;; `__tur_poly_to_fat` box.
+;;; bind-goal-raw -- worker: conjunction that threads the substitution into the
+;;; (fat-closure) continuation, which returns the next goal.
+(defn bind-goal-raw [g ^fat k] : ptr<void>
+  (let [lg g lk (:: k :int)]
     (fn [state]
       (let [_ lg]
         (mbind (apply-goal lg state)
           (fn [s] (let [_ lk] (apply-goal (apply-fat lk s) s))))))))
-;;; fmap-goal-raw -- int worker: map a fat-closure fn over each solution
+;;; fmap-goal-raw -- worker: map a fat-closure fn over each solution
 ;;; substitution.
-(defn fmap-goal-raw [g f] : ptr<void>
-  (let [lg g lf f]
+(defn fmap-goal-raw [g ^fat f] : ptr<void>
+  (let [lg g lf (:: f :int)]
     (fn [state]
       (let [_ lg]
         (mbind (apply-goal lg state)
@@ -596,24 +597,16 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Functor [Goal]
   (fmap [container fn]
-    ```c
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    box[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;
-    box[1] = (int64_t)(intptr_t)fn.fn;
-    box[2] = (int64_t)(intptr_t)fn.env;
-    return (int64_t)(intptr_t)fmap_goal_raw((int64_t)(intptr_t)container,
-                                            (int64_t)(intptr_t)box);
-    ```))
+    (:: (fmap-goal-raw (:: container :int) fn) :Goal)))
 ;;; Applicative [Goal] -- pure is the always-succeeding goal (state preserved);
 ;;; ap sequences the two goals (conjunction) keeping the second's substitutions.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Applicative [Goal]
   (pure [x]
-    ```c (void)x; return (int64_t)(intptr_t)succeed(); ```)
+    (succeed))
   (ap [ff fa]
-    ```c return (int64_t)(intptr_t)conjoined_raw((int64_t)(intptr_t)ff,
-                                                 (int64_t)(intptr_t)fa); ```))
+    (:: (conjoined-raw (:: ff :int) (:: fa :int)) :Goal)))
 ;;; Monad [Goal] -- bind is conjunction: run the goal, then feed each resulting
 ;;; substitution into the continuation (which returns the next goal). This is
 ;;; what `do-m` / `for` lower onto for goal-conjunction chains.
@@ -624,14 +617,7 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Monad [Goal]
   (bind [ma fn]
-    ```c
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    box[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;
-    box[1] = (int64_t)(intptr_t)fn.fn;
-    box[2] = (int64_t)(intptr_t)fn.env;
-    return (int64_t)(intptr_t)bind_goal_raw((int64_t)(intptr_t)ma,
-                                            (int64_t)(intptr_t)box);
-    ```))
+    (:: (bind-goal-raw (:: ma :int) fn) :Goal)))
 ;;; Alternative [Goal] -- empty is the failing goal; alt-or is disjunction (the
 ;;; miniKanren disj): it unions the solutions of both goals.
 ;;;
@@ -641,7 +627,6 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Alternative [Goal]
   (empty [a]
-    ```c (void)a; return (int64_t)(intptr_t)fail(); ```)
+    (fail))
   (alt-or [a b]
-    ```c return (int64_t)(intptr_t)disjoined_raw((int64_t)(intptr_t)a,
-                                                 (int64_t)(intptr_t)b); ```))
+    (:: (disjoined-raw (:: a :int) (:: b :int)) :Goal)))

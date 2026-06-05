@@ -24,9 +24,12 @@ description: Delete hand-rolled monad interfaces in parsec/logic/backtrack by ad
 >   `tests/fixtures/hkt-stdlib-logic-instances/`.
 >
 > The enabling pattern for all three: each instance method delegates to the
-> module's existing int-carrier worker, boxing the typeclass-method's
-> `tur_poly_fn_t` continuation into the fat-closure protocol via
-> `__tur_poly_to_fat1`. See the per-module "HKT typeclass instances" sections.
+> module's existing int-carrier worker. The worker declares its continuation
+> parameter `^fat`, so handing it the typeclass-method's poly closure lets the
+> compiler box it into the fat-closure protocol automatically (EX_POLY_TO_FAT /
+> the N-ary `__tur_poly_to_fat<N>` carrier landed in #252). The instance bodies
+> are therefore pure Turmeric -- no hand-written poly-to-fat box. See the
+> per-module "HKT typeclass instances" sections.
 
 ## Motivation
 
