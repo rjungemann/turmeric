@@ -13,7 +13,7 @@ signal's >>> will sit on
 - [+] "Language readiness for typed signal" -- G2 (poly-defn shared inner closure body) + G7 amber edge (>>> int-typed
 in stdlib/arrow.tur)
 - [+] "Signal Phase 0 spike" -- __sig_call_f macro + Option B bit-cast helper
-- [+] "tur-signal spice broken build" -- Phase 0a (restore build, __arrow_call1 decision), 0b (closure-ABI cleanup), 0c
+- [-] "tur-signal spice broken build" -- Phase 0a (restore build, __arrow_call1 decision), 0b (closure-ABI cleanup), 0c
 (:float sample migration)
 - [-] "Closure representation unification" + "Typed closure invocation ABI" -- both feed G1/G7
 
@@ -22,7 +22,7 @@ in stdlib/arrow.tur)
 - [+] bare-fat-result-type-inference-plan.md -- unblocks :float-returning fat closures (G1)
 - [+] fn-type-first-class-application-plan.md -- one predictable rule for callable :fn, needed for typed >>>
 - [+] fn-first-class-stdlib-deworkaround-plan.md -- validates the above end-to-end
-- [ ] return-type-dispatch-nullary-arrow-methods-plan.md -- required for Category.ident / ArrowZero.zeroArrow to resolve
+- [-] return-type-dispatch-nullary-arrow-methods-plan.md -- required for Category.ident / ArrowZero.zeroArrow to resolve
 
 ### Reports on the critical path (docs/reported/)
 
@@ -48,7 +48,7 @@ in stdlib/arrow.tur)
 
 ### Hygiene / tooling
 
-- [ ] reversible-name-mangling-plan.md
+- [-] reversible-name-mangling-plan.md
 - [ ] Spaced-type annotation Phase 6/7 (CI enforcement)
 - [ ] defmodule per-file scoping, "drop leading colons inside (fn ...) types" (both in still-in-flight)
 - [ ] Stdlib opaque handle types tail (io/file-open annotation)
