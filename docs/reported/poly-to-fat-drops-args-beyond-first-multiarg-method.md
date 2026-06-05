@@ -1,7 +1,10 @@
 # Multi-arg typeclass-method closure into a `^fat` sink silently drops every argument after the first
 
-> **Status:** Reported (open) -- structural; the `tur_poly_fn_t` carrier is
-> unary by construction. See Fix directions for the defuse vs. the real fix.
+> **Status:** Defused (Fix direction 1 landed) -- the silent miscompile is
+> now a hard compile error at the `EX_POLY_TO_FAT` box site. The structural
+> limitation remains: the `tur_poly_fn_t` carrier is unary by construction, so
+> the real N-ary fix (Fix direction 2) is still tracked as a separate, larger
+> follow-up.
 
 **One-line summary:** When a typeclass method whose closure parameter is
 **binary or higher arity** is handed to a `^fat` sink, `EX_POLY_TO_FAT`
