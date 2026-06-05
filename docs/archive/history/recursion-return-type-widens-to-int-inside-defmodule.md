@@ -7,6 +7,20 @@ description: A self-recursive function declared to return `:ptr<void>` (e.g. an 
 
 # Recursion return type widens to `int` inside `(defmodule ...)`
 
+> **RESOLVED (2026-06-05).** Root cause confirmed and fixed in
+> `src/compiler/elab_module.c` pass-1 (forward-declare defn bodies). The
+> defmodule forward-declaration scan only recognised a return type written as a
+> bare `F_KEYWORD`; a *spaced* `: ptr<void>` annotation parses as an
+> `F_TYPE_ANN` wrapping the keyword and fell through to the `TY_INT`
+> placeholder, so the recursive call site was typed `int` and the if-branch
+> unifier rejected the body (`then=ptr<void> else=int`). The fix mirrors the
+> top-level pre-pass in `elab_toplevel.c`: unwrap a single-element `F_TYPE_ANN`
+> (symbol/keyword) to its inner form, and accept both `F_KEYWORD` and `F_SYM`
+> return-type forms. Regression locked in by
+> `tests/fixtures/recursion-ptr-void-return-in-defmodule/`. The minimal repro
+> below now `tur check`s clean inside a `defmodule`, matching top-level
+> behaviour; full suite green.
+
 ## Summary
 
 This `__chain-loop` function -- the standard Vec<typed fat closure>
