@@ -205,6 +205,9 @@ and rank-2 `is_poly_fn`:
    wrappers (`bind-parser-fat`, `mbind-fat`, `bind-goal-raw`'s `^fat` param,
    etc.) where a direct `:fn` application is now legal, validating the cleanup
    end-to-end against the existing `hkt-stdlib-*-instances` fixtures.
+   **Split out into its own plan** (it hinges on a distinct capability --
+   captured-and-deferred `:fn` application -- not exercised by F1-F4):
+   [fn-first-class-stdlib-deworkaround-plan.md](fn-first-class-stdlib-deworkaround-plan.md).
 
 ## Risks
 
