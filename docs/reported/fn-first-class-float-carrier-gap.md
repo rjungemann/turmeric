@@ -1,5 +1,12 @@
 # `:fn` first-class carrier does not round-trip float-class types
 
+> **Status: RESOLVED (F5 landed).** A *typed* `:fn` carrier -- a `(fn [A...] :
+> R)` parameter -- now threads its concrete signature through the
+> `tur_poly_fn_t` carrier, so `float`/`cstr`/`ptr<T>` arguments and results
+> round-trip. The two guards below remain in force for the *bare* `:fn` carrier
+> (which has no result-type information and so still defaults to the int64
+> signature). See the Resolution section at the bottom.
+
 **Summary:** A first-class `:fn` value (the `tur_poly_fn_t {env, fn}` carrier) is
 the int64 register class. Integer-register kinds (`int`, `cstr`, `ptr<T>`,
 `bool`) round-trip through it, but a **float-class** argument or result
@@ -62,7 +69,50 @@ relax the two guards above once the typed path lands.
 
 ## Validation
 
-- `tests/fixtures/errors/fn-float-carrier-unsupported/` asserts the guard fires.
-- A future `tests/fixtures/fn-first-class-application-typed/` should cover
-  `:float`/`:cstr`/`:ptr<T>` round-trips once F5 lands (the plan's `*-typed`
-  fixture).
+- `tests/fixtures/errors/fn-float-carrier-unsupported/` asserts the guard fires
+  for the *bare* `:fn` carrier.
+- `tests/fixtures/fn-first-class-application-typed/` covers `:float`/`:cstr`
+  round-trips through the *typed* carrier -- for a named fn, a non-capturing
+  lambda, a capturing closure, a multi-arg signature, and the `:fn` -> `:fn`
+  pass-through.
+
+## Resolution (F5 -- typed carrier)
+
+Landed as the "full carrier unification" variant of plan phase F5
+([fn-type-first-class-application-plan.md](../upcoming/fn-type-first-class-application-plan.md)).
+A plain `(fn [A...] : R)` *parameter* whose every argument and result is a
+single-register scalar kind (int/bool/float in a GP/xmm register, or a pointer:
+`cstr` / `ptr<T>` / `ptr<void>`) is now routed through the `tur_poly_fn_t`
+carrier with its concrete signature attached, rather than the old
+bare-function-pointer path. Consequences:
+
+- **Float/cstr round-trip.** The carrier stores a *natively typed* thunk
+  (`make_poly_wrapper` retypes every argument to its native kind for a typed
+  carrier; a capturing closure stores its own concrete thunk), and the call site
+  casts `g.fn` to the concrete `R(*)(void*, A...)` -- so a `float` arg/result
+  survives the xmm register class and a `cstr`/`ptr` no longer truncates through
+  int64 (the prior `-Wint-conversion` "works by luck" path is gone).
+- **Capturing closures now work** through a typed `(fn ...)` parameter. The old
+  bare-pointer representation had no env slot, so passing a capturing closure to
+  a `(fn [int] : int)` / `(fn [float] : float)` parameter *segfaulted* (the box
+  pointer was called as raw code) -- regardless of the argument type. Routing
+  through the `{env, fn}` carrier fixes that uniformly.
+
+Kept on the nominal `TY_FN` (bare-pointer) representation -- so existing
+behaviour is unchanged -- are: `^fat` and substructural (`^linear`/`^unique`/
+`^affine`/`^relevant`/`^borrow`) parameters, function types carrying an effect
+row (`#{...}`), polymorphic/named-tyvar signatures, variadic signatures, and any
+signature with a non-scalar (struct/ADT/nested-fn) argument or result.
+
+### Implementation pointers
+
+- `elab_fns.c` -- parse a plain carrier-safe `(fn [A...]:R)` param as the typed
+  carrier (`is_poly_fn`, `poly_type` = the concrete `TY_FN`); `fn_kind_is_carrier_scalar`
+  / `fn_type_is_carrier_safe` gate eligibility; the forward-binding early update
+  also propagates `arg_poly_fn` so a *recursive* self-call boxes its argument.
+- `elab_call.c` -- `make_poly_wrapper` grows a `typed_concrete` flag that retypes
+  every wrapper argument to its native kind; the construction-side float guard is
+  skipped for a typed-carrier parameter; `elab_poly_call` infers the result kind
+  from the concrete signature.
+- `emit_expr.c` -- the `is_poly_call` branch uses the concrete-cast path whenever
+  the carrier binding has a concrete `TY_FN` `poly_type`.

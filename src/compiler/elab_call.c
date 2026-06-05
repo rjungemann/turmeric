@@ -1728,7 +1728,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
                 uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                     ? inner_fn_b->type.as.fn.arity : 1;
                 if (inner_fn_b->closure_fn_binding) inner_arity--;
-                Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, elab_args[i]->span);
+                Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, elab_args[i]->span, false);
                 if (!wrapper_b) return NULL;
                 wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
             }
@@ -2493,7 +2493,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     ? inner_fn_b->type.as.fn.arity : 1;
                 /* Closures have an env param counted in arity — subtract it */
                 if (inner_fn_b->closure_fn_binding) inner_arity--;
-                Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, args[i]->span);
+                Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, args[i]->span, false);
                 if (!wrapper_b) return NULL;
                 wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
             }
@@ -2514,12 +2514,24 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if (fn_arg_idx_pf < fn_type.as.fn.arity &&
                 fn_type.as.fn.arg_poly_fn[fn_arg_idx_pf]) {
                 Binding *inner_fn_b = poly_arg_fn_binding(args[i]);
-                /* Phase CCL: the `:fn` carrier is the int64 register class.  A
+                /* F5: a *typed* `:fn` carrier (the param's full type is a concrete
+                 * TY_FN signature) stores a natively typed thunk -- make_poly_wrapper
+                 * retypes float args, and the closure pass-through stores the
+                 * closure's own concrete thunk -- and the call site casts fn.fn to
+                 * the concrete R(*)(void*, A...).  So a float-class arg/result
+                 * round-trips and the guard below must NOT fire.  Only the *bare*
+                 * `:fn` carrier (full type TY_PTR_VOID, int64 default signature)
+                 * cannot carry floats. */
+                const Type *param_full = (fn_type.as.fn.arg_full_types &&
+                                          fn_arg_idx_pf < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fn_arg_idx_pf] : NULL;
+                bool param_typed_carrier = param_full && param_full->kind == TY_FN;
+                /* Phase CCL: the bare `:fn` carrier is the int64 register class.  A
                  * function whose signature has a float-class argument or result
                  * cannot round-trip through it without a register-class miscompile
                  * (xmm vs gp); reject the coercion rather than miscompile.  See
                  * docs/reported/fn-first-class-float-carrier-gap.md. */
-                if (inner_fn_b && inner_fn_b->type.kind == TY_FN) {
+                if (!param_typed_carrier && inner_fn_b && inner_fn_b->type.kind == TY_FN) {
                     const Type *ft = &inner_fn_b->type;
                     bool has_float = (kind_is_non_int_register_class(ft->as.fn.result_kind) ||
                                       ft->as.fn.result_kind == TY_FLOAT32 ||
@@ -2553,7 +2565,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                             ? inner_fn_b->type.as.fn.arity : 1;
                         if (inner_fn_b->closure_fn_binding) inner_arity--;
                         Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity,
-                                                               args[i]->span);
+                                                               args[i]->span, param_typed_carrier);
                         if (!wrapper_b) return NULL;
                         wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
                     }
@@ -2883,7 +2895,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
  * The wrapper has signature: int64_t __poly_N(void *env, int64_t x0, ..., int64_t x_{arity-1})
  * Its body calls inner_b(x0, ..., x_{arity-1}), ignoring env.
  * Registers the wrapper as a file-level EX_FN_DEF and returns the wrapper Binding. */
-Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span) {
+Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span, bool typed_concrete) {
     /* Wrapper name */
     char wname[32];
     snprintf(wname, sizeof(wname), "__poly_%u", e->next_id++);
@@ -2927,7 +2939,14 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
                 ? inner_b->type.as.fn.arg_full_types[i] : NULL;
             bool is_poly = aft && aft->kind == TY_FORALL;
             bool is_float = (k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64);
-            if (is_float && !is_poly) rk = k;
+            /* F5: for a *typed* `:fn` carrier the call site casts fn.fn to the
+             * concrete signature, so the wrapper must accept each argument in its
+             * native kind (cstr/ptr/sub-int/float) -- not the int64 carrier --
+             * otherwise the wrapper would truncate the value through int64 (a
+             * -Wint-conversion at the inner call, "works by luck" for pointers).
+             * For the bare carrier we keep the int64 default (only float, which
+             * the bare carrier rejects, is retyped). */
+            if (!is_poly && (is_float || typed_concrete)) rk = k;
         }
         real_arg_kinds[i] = rk;
     }
@@ -3079,7 +3098,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     } else {
                         uint8_t inner_arity = (inner_b->type.kind == TY_FN)
                             ? (uint8_t)inner_b->type.as.fn.arity : 1;
-                        Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span);
+                        Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span, false);
                         if (!wrapper_b) return NULL;
                         wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
                     }
@@ -3094,6 +3113,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * For (forall [a] (-> a a)): result matches first arg's type.
      * For (forall [s] (-> s int)): result is int (concrete). */
     TypeKind result_kind = TY_INT;
+    const Type *result_full = NULL;
     if (poly && poly->kind == TY_FORALL) {
         const Type *body = poly->as.forall_.body;
         if (body && body->kind == TY_FN) {
@@ -3107,9 +3127,16 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                 result_kind = body->as.fn.result_kind;
             }
         }
+    } else if (poly && poly->kind == TY_FN) {
+        /* F5 typed `:fn` carrier: the concrete signature fixes the result kind,
+         * so a float/cstr/ptr result round-trips (the carrier stores a natively
+         * typed thunk; emit casts fn.fn to the concrete R(*)(void*, A...)). */
+        result_kind = poly->as.fn.result_kind;
+        result_full = poly->as.fn.result_full_type;
     }
 
-    Expr *out = expr_new(e->arena, EX_CALL, type_from_kind(result_kind), call->span);
+    Type result_ty = result_full ? *result_full : type_from_kind(result_kind);
+    Expr *out = expr_new(e->arena, EX_CALL, result_ty, call->span);
     out->as.call_.fn_binding = fn_binding;
     out->as.call_.args = n_args > 0 ? args : NULL;
     out->as.call_.n_args = n_args;
