@@ -57,6 +57,13 @@ struct Binding {
     /* Returned-closure metadata: if evaluating this binding yields a closure value,
      * this points at the closure's thunk binding. */
     struct Binding *returns_closure_fn_binding;
+    /* let-bound-sf-loses-outer-arg-type: true when this function's *return value*
+     * is itself a fat closure box (its body evaluates to a capturing closure),
+     * as opposed to a thin function pointer that merely returns a closure when
+     * called.  Lets a let-binding of (f ...) decide between marking the result a
+     * closure value (closure_fn_binding) vs a thin closure-returning fn
+     * (returns_closure_fn_binding). */
+    bool          returns_boxed_closure;
     /* Phase 5: Move semantics - whether this ref binding has been moved */
     bool          is_moved;
     /* Phase 11: span of first move for note chaining diagnostics */
