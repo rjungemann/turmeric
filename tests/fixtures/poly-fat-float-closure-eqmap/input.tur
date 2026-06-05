@@ -1,0 +1,26 @@
+;; Regression: stdlib poly-instance codegen must materialize the fat-closure
+;; box (and the Eq [Map] / map-eq-dynamic delegation) instead of emitting the
+;; original Turmeric parameter names (m1 / x / y / val-cmp) as undeclared C
+;; identifiers.  Previously, a freestanding `tur build` with 4+ let bindings,
+;; a ^fat typed-fn parameter, an inline-C helper, and a `.eq?` over a Map
+;; tripped the broken path, producing
+;;   call to undeclared function 'm1'; use of undeclared identifier 'x'
+;; See docs/reported/stdlib-poly-codegen-undeclared-identifier.md.
+
+(defn invoke-float [^fat f : (fn [float] float)] :float
+  (f 7.1))
+
+(defn print-f [x :float] :int
+  ```c
+  printf("%.3f\n", x);
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [c (fn [x :float] :float (* x 2.0))
+        r (invoke-float c)
+        a (map-assoc (:: (map-new) (Map int int)) 1 100)
+        b (map-assoc (:: (map-new) (Map int int)) 1 100)]
+    (print-f r)
+    (println (if (.eq? a b) 1 0))
+    0))
