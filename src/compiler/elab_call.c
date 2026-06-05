@@ -2704,6 +2704,23 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         args[i] = args[i]->as.ascribe_.inner;
                     }
                 }
+                /* two-level-sf-closure-return-miscompiles-out-binding: an
+                 * already-fat value -- a ^fat parameter (or a let-alias of one),
+                 * marked is_fat -- whose declared type is a concrete `(fn ...)`
+                 * is ALREADY a { thunk, env } box, carried as the int64_t/ptr
+                 * carrier.  The bare-fn auto-shim branch below keys off
+                 * `ak == TY_FN && !boxed` and would wrap this box in a SECOND
+                 * __tur_fatshim adapter (double-boxing), so the consumer reads
+                 * the inner box's first word as code and SEGVs.  Retype it to the
+                 * :ptr<void> carrier so it flows through the already-fat
+                 * pass-through branch -- identical to a bare `^fat` parameter
+                 * (which carries TY_PTR_VOID and works). */
+                if (args[i]->kind == EX_VAR && args[i]->as.var.binding &&
+                    args[i]->as.var.binding->is_fat &&
+                    args[i]->type.kind == TY_FN &&
+                    !args[i]->type.as.fn.boxed) {
+                    args[i]->type = TYPE_PTR_VOID;
+                }
                 TypeKind ak = args[i]->type.kind;
                 bool arg_is_poly_fn = (args[i]->kind == EX_VAR &&
                                        args[i]->as.var.binding &&
