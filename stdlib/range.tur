@@ -20,6 +20,16 @@
 ;; does NOT auto-load seq; fixtures that need seq/from-range must load
 ;; stdlib/seq/core.tur (or any seq layer) before or after this file.
 (load "stdlib/seq/core.tur")
+;; Eq is auto-loaded (typeclass-eq.tur), but Show and Ord live only in the full
+;; stdlib/typeclass.tur. Pull it in so the Show/Ord [Bound] instances below can
+;; be declared in Bound's own module (the orphan rule keeps them here, alongside
+;; Eq [Bound]). This is safe now that definstance is idempotent -- the primitive
+;; instances typeclass.tur shares with the auto-loaded partial stubs
+;; (Clone [int], ...) dedupe instead of colliding; see
+;; docs/reported/load-not-idempotent-typeclass.md. range.tur is on-demand (not
+;; auto-loaded, not pulled by `for`/`#r{}`), so the extra instances reach only
+;; programs that actually use ranges. (range-gadt-typeclass-migration-plan B2.)
+(load "stdlib/typeclass.tur")
 ;; -------------------------------------------------------------------
 ;; Bound GADT and accessors
 ;; -------------------------------------------------------------------
@@ -118,6 +128,81 @@
       (Inclusive a) (match y (Inclusive b) (= a b) (Exclusive _) false (Unbounded) false)
       (Exclusive a) (match y (Inclusive _) false (Exclusive b) (= a b) (Unbounded) false)
       (Unbounded)   (match y (Inclusive _) false (Exclusive _) false (Unbounded) true))))
+;; bound-show-fmt -- inline-C formatter for a single inclusive/exclusive
+;; endpoint: "[v" (kind 1) or "(v" (kind 2).  Backs Show [Bound].
+(defn bound-show-fmt [kind : int v : int] : cstr
+  ```c char *buf = (char *)malloc(32);
+  if (kind == 1) snprintf(buf, 32, "[%lld", (long long)v);
+  else           snprintf(buf, 32, "(%lld", (long long)v);
+  return (const char *)buf;
+  ```)
+;;; Show [Bound] -- render a lone endpoint: "[v" (Inclusive), "(v" (Exclusive),
+;;; or "unbounded".  This is the lower-side bracket form for a single endpoint;
+;;; use range->str for a full interval like "[1, 5)".
+;;;
+;;; Show lives in stdlib/typeclass.tur, loaded at the top of this file, so this
+;;; instance can sit in Bound's own module as the orphan rule requires.
+;;;
+;;; Example:
+;;;   (show (Inclusive 3))  ; => "[3"
+;;;   (show (Unbounded))    ; => "unbounded"
+;;;
+;;; Since: range-gadt-typeclass-migration-plan B2
+
+(definstance Show [Bound]
+  (show [x]
+    (match x
+      (Inclusive v) (bound-show-fmt 1 v)
+      (Exclusive v) (bound-show-fmt 2 v)
+      (Unbounded)   "unbounded")))
+;;; bound-lt? -- strict total order on Bound endpoints, backing Ord [Bound].
+;;;
+;;; Orders endpoints by position on the number line: Unbounded is the least
+;;; element (an open end extends past every bound), endpoints sort by value
+;;; ascending, and at an equal value an Inclusive endpoint precedes an Exclusive
+;;; one (the inclusive end covers its boundary point, so it lies "to the left").
+;;; This is a standalone total order; the directional set-operation selectors
+;;; (range-lower-min / range-upper-max / ...) keep their own context-specific
+;;; tie-breaking because "unbounded" means -inf on a lower side and +inf on an
+;;; upper side -- a distinction a lone Bound cannot carry.
+;;;
+;;; Parameters:
+;;;   x -- the left (Bound int)
+;;;   y -- the right (Bound int)
+;;;
+;;; Returns:
+;;;   true when x sorts strictly before y.
+;;;
+;;; Example:
+;;;   (bound-lt? (Unbounded) (Inclusive 0))    ; => true
+;;;   (bound-lt? (Inclusive 5) (Exclusive 5))  ; => true
+;;;
+;;; Since: range-gadt-typeclass-migration-plan B2
+
+(defn bound-lt? [x : Bound y : Bound] : bool
+  (match x
+    (Unbounded)
+    (match y
+      (Unbounded)   false
+      (Inclusive _) true
+      (Exclusive _) true)
+    (Inclusive a)
+    (match y
+      (Unbounded)   false
+      (Inclusive b) (< a b)
+      (Exclusive b) (if (= a b) true (< a b)))
+    (Exclusive a)
+    (match y
+      (Unbounded)   false
+      (Inclusive b) (if (= a b) false (< a b))
+      (Exclusive b) (< a b))))
+;;; Ord [Bound] -- total ordering on endpoints (see bound-lt? for semantics).
+
+(definstance Ord [Bound]
+  (lt?  [x y] (bound-lt? x y))
+  (lte? [x y] (not (bound-lt? y x)))
+  (gt?  [x y] (bound-lt? y x))
+  (gte? [x y] (not (bound-lt? x y))))
 ;; -------------------------------------------------------------------
 ;; Range allocation and accessors (inline-C)
 ;; -------------------------------------------------------------------

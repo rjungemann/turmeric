@@ -200,15 +200,17 @@
 ;; -------------------------------------------------------------------
 ;; Rendering (range-gadt-typeclass-migration-plan B2)
 ;; -------------------------------------------------------------------
-;; The plan called for `Show` instances on Bound and Range. `Show` (and `Ord`)
-;; live only in stdlib/typeclass.tur, which is NOT auto-loaded and whose
-;; non-idempotent `load` collides with the partial typeclass modules already
-;; pulled in transitively by range.tur (see
-;; docs/reported/load-not-idempotent-typeclass.md). Range is also a bare :int
-;; with no nominal type, so `(definstance Show [Range] ...)` is not even
-;; expressible. The structural `Eq [Bound]` instance (cleanly expressible, Eq
-;; being auto-loaded) lives in range.tur; rendering is provided here as
-;; self-contained functions instead of Show instances.
+;; `Show [Bound]` and `Ord [Bound]` now live in range.tur alongside `Eq [Bound]`
+;; (the orphan rule puts them in Bound's own module). The earlier blocker -- the
+;; non-idempotent `load` of stdlib/typeclass.tur colliding with the auto-loaded
+;; partial typeclass stubs -- is fixed (definstance is now idempotent; see
+;; docs/reported/load-not-idempotent-typeclass.md), so range.tur loads
+;; typeclass.tur to bring Show/Ord into scope. `(show b)` renders a lone
+;; endpoint exactly like `bound->str` below.
+;;
+;; `Range` remains a bare :int with no nominal type, so `(definstance Show
+;; [Range] ...)` is still not expressible; the full-interval `range->str` /
+;; `range-fmt` helpers below stay as self-contained functions.
 
 ;; range-fmt -- inline-C formatter for a range's decomposed endpoints.
 ;; kind: 0 = unbounded, 1 = inclusive, 2 = exclusive.
