@@ -239,6 +239,67 @@ else
     fi
 fi
 
+# F1 regression: prelude macros (when/cond/for/unless) must be visible inside
+# a defmodule body compiled by project mode (`tur build <dir>`).  Before F1 the
+# project-mode entry points (compile_to_h / compile_to_implementation) skipped
+# the stdlib auto-load entirely, so `when` was "unknown function or operator".
+WHEN_PROJ="$WORK/prelude-when"
+mkdir -p "$WHEN_PROJ/src/app"
+cat > "$WHEN_PROJ/build.tur" <<'EOF'
+(defpackage prelude-when :name "prelude-when" :version "0.1.0")
+EOF
+cat > "$WHEN_PROJ/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (defn classify [x : int] : int
+    (cond
+      (> x 0) 3
+      (< x 0) 7
+      :else   0))
+  (defn main [] : int
+    ;; when/cond are prelude macros; using cond with an :else branch gives a
+    ;; deterministic return value -- 3 if x>0, which proves the prelude loaded.
+    (classify 5)))
+EOF
+when_out=$(cd "$WORK" && "$TUR" build "$WHEN_PROJ" -o "$WORK/whenbin" 2>&1)
+when_rc=$?
+if [ $when_rc -ne 0 ]; then
+    fail "build-project-prelude-when" "tur build exit=$when_rc: $when_out"
+else
+    "$WORK/whenbin"
+    when_run_rc=$?
+    if [ "$when_run_rc" -eq 3 ]; then
+        pass "build-project-prelude-when"
+    else
+        fail "build-project-prelude-when" "exit=$when_run_rc (expected 3)"
+    fi
+fi
+
+# F4 regression: min/max macros added to stdlib/macros.tur must be visible
+# inside a defmodule body compiled by project mode.
+MINMAX_PROJ="$WORK/prelude-minmax"
+mkdir -p "$MINMAX_PROJ/src/app"
+cat > "$MINMAX_PROJ/build.tur" <<'EOF'
+(defpackage prelude-minmax :name "prelude-minmax" :version "0.1.0")
+EOF
+cat > "$MINMAX_PROJ/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (defn main [] : int
+    (+ (min 3 7) (max 2 5))))
+EOF
+minmax_out=$(cd "$WORK" && "$TUR" build "$MINMAX_PROJ" -o "$WORK/minmaxbin" 2>&1)
+minmax_rc=$?
+if [ $minmax_rc -ne 0 ]; then
+    fail "build-project-prelude-minmax" "tur build exit=$minmax_rc: $minmax_out"
+else
+    "$WORK/minmaxbin"
+    minmax_run_rc=$?
+    if [ "$minmax_run_rc" -eq 8 ]; then
+        pass "build-project-prelude-minmax"
+    else
+        fail "build-project-prelude-minmax" "exit=$minmax_run_rc (expected 8)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

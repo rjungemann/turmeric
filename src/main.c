@@ -860,6 +860,77 @@ static int compile_to_c(const char *path, Buf *out_c,
     return rc;
 }
 
+/* Load macro-only prelude files (macros.tur) into an arena/symtab so that
+ * project-mode compilation (compile_to_h / compile_to_implementation) has the
+ * same prelude macros visible as single-file mode.  Only macro-providing files
+ * are loaded here to avoid the separate-compilation defn-emission gap (F6 in
+ * the prelude-macros bug report): macros are compile-time only and emit no
+ * object code, so they are safe to inject into every module's elaboration.
+ *
+ * Returns a new forms array with prelude forms prepended before user_forms.
+ * *stdlib_count_out is set to the number of prepended prelude forms.
+ * On any load failure the returned array equals user_forms unchanged and
+ * *stdlib_count_out = 0. */
+static Form **load_project_prelude(Arena *arena, SymbolTable *st,
+                                    Form **user_forms, uint32_t nuser,
+                                    uint32_t *stdlib_count_out) {
+    *stdlib_count_out = 0;
+
+    static const char *prelude_files[] = {
+        "macros.tur",
+        NULL
+    };
+
+    uint32_t total = 0;
+    Form **all = NULL;
+    uint8_t fid = 1;
+
+    for (int i = 0; prelude_files[i] != NULL; i++) {
+        char path_buf[4096];
+        tur_stdlib_path(prelude_files[i], path_buf, sizeof(path_buf));
+        char *stdlib_src = NULL;
+        size_t stdlib_len = 0;
+        if (read_entire_file_quiet(path_buf, &stdlib_src, &stdlib_len) != 0)
+            continue;
+
+        char *src_copy = (char *)arena_alloc(arena, stdlib_len);
+        memcpy(src_copy, stdlib_src, stdlib_len);
+        char *path_copy = (char *)arena_alloc(arena, strlen(path_buf) + 1);
+        memcpy(path_copy, path_buf, strlen(path_buf) + 1);
+        free(stdlib_src);
+
+        SourceFile *sf = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
+        *sf = (SourceFile){0};
+        sf->path       = path_copy;
+        sf->src        = src_copy;
+        sf->len        = stdlib_len;
+        sf->file_id    = fid++;
+        sf->reader_type = READER_TURMERIC;
+        diag_register_file(sf);
+
+        uint32_t n = 0;
+        Form **f = read_all(arena, st, sf, &n);
+
+        if (f && n > 0) {
+            Form **merged = (Form **)arena_alloc(arena, (total + n) * sizeof(Form *));
+            for (uint32_t j = 0; j < total; j++) merged[j] = all[j];
+            for (uint32_t j = 0; j < n;     j++) merged[total + j] = f[j];
+            all   = merged;
+            total += n;
+        }
+    }
+
+    if (total == 0)
+        return user_forms;
+
+    Form **combined = (Form **)arena_alloc(arena, (total + nuser) * sizeof(Form *));
+    for (uint32_t i = 0; i < total; i++) combined[i]         = all[i];
+    for (uint32_t i = 0; i < nuser;  i++) combined[total + i] = user_forms[i];
+
+    *stdlib_count_out = total;
+    return combined;
+}
+
 /* Compile a .tur file to a C header (.h). Returns 0 on success.
  * J5/J6: forced/n_forced inject ABI clone decls for cross-module borrow specs. */
 static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
@@ -909,6 +980,11 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     Form **forms = read_all_with_registry(&arena, &st, &file,
                                           &reader_macros_reg, &nforms);
 
+    /* F1: inject macro-only prelude so project-mode files see when/cond/for/min/max. */
+    uint32_t stdlib_prefix = 0;
+    forms = load_project_prelude(&arena, &st, forms, nforms, &stdlib_prefix);
+    nforms += stdlib_prefix;
+
     int rc = 0;
     if (!forms || diag_had_error()) {
         rc = 1;
@@ -920,6 +996,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
         ctx.st     = &st;
         ctx.forms  = forms;
         ctx.nforms = nforms;
+        ctx.stdlib_prefix    = stdlib_prefix;
         ctx.module_base_dir = base_dir;
         ctx.include_dirs    = include_dirs;
         ctx.n_include_dirs  = n_include_dirs;
@@ -993,6 +1070,11 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     Form **forms = read_all_with_registry(&arena, &st, &file,
                                           &reader_macros_reg, &nforms);
 
+    /* F1: inject macro-only prelude so project-mode files see when/cond/for/min/max. */
+    uint32_t stdlib_prefix = 0;
+    forms = load_project_prelude(&arena, &st, forms, nforms, &stdlib_prefix);
+    nforms += stdlib_prefix;
+
     int rc = 0;
     if (!forms || diag_had_error()) {
         rc = 1;
@@ -1004,6 +1086,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
         ctx.st     = &st;
         ctx.forms  = forms;
         ctx.nforms = nforms;
+        ctx.stdlib_prefix    = stdlib_prefix;
         ctx.module_base_dir = base_dir;
         ctx.include_dirs    = include_dirs;
         ctx.n_include_dirs  = n_include_dirs;
@@ -3067,7 +3150,13 @@ static bool file_has_main_defn(const char *path) {
     return found;
 }
 
+/* n_own: number of files at the front of tur_files that belong to the
+ * project itself and should be linked into the output.  Dep modules beyond
+ * n_own are compiled only to generate headers (so importers can #include
+ * them) but their .c files are excluded from the link step.  Pass n_files
+ * (== n_own) when there are no dep-only files. */
 static int cmd_build_multi_files(char **tur_files, int n_files,
+                                 int n_own,
                                  const char *dir, const char *src_root,
                                  const char **file_src_roots,
                                  const char *out_path,
@@ -3414,13 +3503,20 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     /* RP0: shared-library link gets -fPIC -shared and skips _main.c.
      * Position-independent code is required on Linux/macOS for symbols
      * loaded via dlopen; -shared tells the driver to emit a .so/.dylib
-     * instead of an executable. */
-    if (shared) buf_puts(&cmd, " -fPIC -shared");
+     * instead of an executable. On macOS, -undefined dynamic_lookup allows
+     * cross-library symbols (e.g. httpd in tourist) to resolve at load time. */
+    if (shared) {
+        buf_puts(&cmd, " -fPIC -shared");
+#ifdef __APPLE__
+        buf_puts(&cmd, " -undefined dynamic_lookup");
+#endif
+    }
     buf_printf(&cmd, " -o %s", out_path);
     /* Add _main.c first (executable mode only) */
     if (!shared) buf_puts(&cmd, " _main.c");
-    /* Add all .c files */
-    for (int i = 0; i < n_files; i++) {
+    /* Add own .c files only (dep-only files beyond n_own supply headers but
+     * are not linked into this output -- they ship as separate libraries). */
+    for (int i = 0; i < n_own; i++) {
         buf_printf(&cmd, " %s", c_files[i]);
     }
     /* Append cmake dep flags (-I/-L/-l). */
@@ -3484,8 +3580,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
         free_tur_files(tur_files, n_files);
         return 1;
     }
-    return cmd_build_multi_files(tur_files, n_files, dir, NULL, NULL, out_path,
-                                 shared, manifest_path, NULL, 0);
+    return cmd_build_multi_files(tur_files, n_files, n_files, dir, NULL, NULL,
+                                 out_path, shared, manifest_path, NULL, 0);
 }
 
 /* Manifest-driven project build: `tur build <dir>` where <dir>/build.tur
@@ -3614,7 +3710,12 @@ static int cmd_build_project(const char *root, const char *out_path,
     }
     for (int i = 0; i < n_files; i++) all_roots[i] = src_root;
 
-    if (!shared) {
+    /* Always collect dep modules: in executable mode they are linked in;
+     * in shared-library mode they are compiled to headers only (so the
+     * generated #include "dep__mod.h" in the project's C files resolves)
+     * but their .c files are NOT linked into the output -- n_files tracks
+     * the boundary.  Transitive deps-of-deps remain out of scope. */
+    {
         char mpath[4096];
         snprintf(mpath, sizeof(mpath), "%s/build.tur", root);
         PkgManifest dm;
@@ -3667,8 +3768,12 @@ static int cmd_build_project(const char *root, const char *out_path,
         free(seen);
     }
 
-    int rc = cmd_build_multi_files(all_files, n_all, root, src_root, all_roots,
-                                   out_path, shared, manifest_path, inc, n_inc);
+    /* n_own = project's own modules (link these); n_all - n_own = dep modules
+     * compiled only for header generation (shared mode skips their link). */
+    int n_own = shared ? n_files : n_all;
+    int rc = cmd_build_multi_files(all_files, n_all, n_own, root, src_root,
+                                   all_roots, out_path, shared, manifest_path,
+                                   inc, n_inc);
 
     free(all_roots);
     for (int k = 0; k < n_dep_dirs; k++) free((char *)dep_dirs[k]);
