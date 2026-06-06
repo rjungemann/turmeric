@@ -20,12 +20,11 @@ Audit run against `main` at 945cabc6 with a fresh `build/tur`. Verdict:
   (`summary: 9 passed, 0 failed`). The G1-G8 verdict block in the
   archived [[language-readiness-for-typed-signal-plan]] still reflects
   reality.
-- **Arrow scale-back surface** -- `stdlib/arrow.tur` exports
-  `compose-float` at line 87 (typed `:float -> :float` compose), which
-  is what Phase 5 `effects-chain` consumes per G7's amber edge. The
-  bare `>>>` at line 57 remains int-class until
-  [[poly-closure-result-specialization-plan]] generalises it; the plan
-  already documents using `compose-float` in the interim.
+- **Arrow composition (updated 2026-06-06)** -- `stdlib/arrow.tur`'s
+  `>>>` is now the polymorphic typed compositor (Stage E,
+  [[poly-closure-result-specialization-plan]] done). `compose-float`
+  deleted. Phase 5 `effects-chain` should use `>>>` directly;
+  `compose-float` callers need to be migrated. G7 amber cleared.
 - **Stale background** -- the "Background" section below says the
   `../turmeric-spices/spices/signal/` tree no longer exists. **This is
   stale.** The spice was revived in `turmeric-spices` (commits

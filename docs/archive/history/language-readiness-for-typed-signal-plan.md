@@ -19,7 +19,7 @@ typed signal rebuild. Summary:
 | G4 typed `Pair` through closures | green | build `Pair` inside the closure body; read via `pair-fst`/`pair-snd` |
 | G5 typed state cells | green | `:ptr<:float>` state, inline-C body uses `double *` directly |
 | G6 `Vec[Closure]` reads | green | `(vec-get v i)` + `:ptr<void>` ascription into a `^fat` sink |
-| G7 typed `>>>` | green (amber edge) | use `stdlib/arrow.tur`'s `compose-float` (register-class-correct `:float -> :float` compose) or a local typed-compose; the operator `>>>` itself stays int-class until [poly-closure-result-specialization-plan](../../upcoming/poly-closure-result-specialization-plan.md) generalises it |
+| G7 typed `>>>` | **green** | `stdlib/arrow.tur`'s `>>>` is now the polymorphic typed compositor (Stage E, 2026-06-06); `compose-float` deleted; `sf-compose-typed` and `arrow-compose-float` fixtures pass with correct float ABI |
 | G8 integration smoke | green | the typed two-osc + filter chain compiles, runs leak-clean |
 
 **G2 decision:** amber, not red. The original silent miscompile is
@@ -35,17 +35,16 @@ polymorphic `constant` over a float-class `A`. Making the float case
 *work* polymorphically (fix directions 1/2 in the report) is end-state
 work, not a blocker for the rebuild.
 
-**G7 decision:** the signal rebuild composes `:float` SFs with
-`stdlib/arrow.tur`'s `compose-float` (a register-class-correct
-`:float -> :float` sequential-composition combinator, fixture
-`tests/fixtures/arrow-compose-float/`) or a local typed-compose. The
-operator `>>>` itself stays int-register-class: generalising it to all
-register classes needs the per-monomorphization inner-closure
-specialization tracked in
-[poly-closure-result-specialization-plan](../../upcoming/poly-closure-result-specialization-plan.md);
-[stdlib-arrow-scaleback-plan](../../upcoming/stdlib-arrow-scaleback-plan.md)
-keeps `>>>` a bare-function combinator in the meantime. The rebuild does
-not wait on either.
+**G7 decision (updated 2026-06-06):** amber cleared. `stdlib/arrow.tur`'s
+`>>>` is now the polymorphic typed compositor
+(`defn >>> [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)]`);
+`compose-float` deleted. The per-monomorphization inner-closure
+specialization (Stage E of
+[poly-closure-result-specialization-plan](../../upcoming/poly-closure-result-specialization-plan.md))
+landed: Direction 3 in `emit_expr.c` recovers the concrete result type
+through the spec bindings so the float inner body uses
+`tur_thunk_double_double_t`. Full suite: 1524 passed, 0 failed.
+`docs/upcoming/tur-signal-rebuild-plan.md` is now unblocked.
 
 **Handoff:** [tur-signal-rebuild-plan](../../upcoming/tur-signal-rebuild-plan.md)
 (hard prerequisites G1/G7 green, G3 amber-ok, G4 green, G2/G5/G6
@@ -92,7 +91,7 @@ Spike status:
 | G4 | green | `tests/fixtures/pair-signals-typed/` | Fixed: the fat-closure result type `(Pair float float)` is now preserved through the fn-type annotation and the lambda return, so the lifted thunk's C return type matches its struct-returning body and the dispatch site invokes it with the right signature. |
 | G5 | green | `tests/fixtures/typed-state-cell/` | Inline-C body uses `double *` directly, no `(intptr_t)` cast on the state pointer. ABI signature is `void *` (acceptable). |
 | G6 | green | `tests/fixtures/vec-get-closure/` | `(vec-get v i)` ascribed `:ptr<void>` is directly usable as a `^fat` closure argument. |
-| G7 | green | `tests/fixtures/sf-compose-typed/` | Local typed-compose over two `(fn [:float] :float)` closures composes cleanly; result is itself composable. **Amber edge**: `stdlib/arrow.tur`'s `>>>` itself is still int-typed; use a local typed-compose until the stdlib is generalised. |
+| G7 | **green** | `tests/fixtures/sf-compose-typed/`, `tests/fixtures/arrow-compose-float/` | `stdlib/arrow.tur`'s `>>>` is now the polymorphic typed compositor (Stage E, 2026-06-06); amber edge cleared; `compose-float` deleted. |
 | G8 | green | `tests/fixtures/typed-signal-smoke/` | Two-oscillator + filter chain with all `:float` fat closures evaluates cleanly at four sample positions; output matches hand-computed reference. |
 
 G2 is now amber (resolved to a hard error in the float case -- see the

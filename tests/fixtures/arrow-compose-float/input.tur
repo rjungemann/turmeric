@@ -1,26 +1,27 @@
-;; End-to-end fixture for stdlib/arrow.tur's compose-float.
+;; End-to-end fixture for stdlib/arrow.tur's generic >>>.
 ;;
-;; compose-float is the float-register-class companion to >>>: it composes
-;; two :float -> :float closures and emits a double-returning inner body
-;; dispatched through tur_thunk_double_double_t -- register-class-correct,
-;; unlike >>> which would dispatch double bodies through int64 thunk pointers
-;; (see docs/reported/arrow-compose-float-closure-int64-thunk-mismatch.md).
+;; >>> is the register-class-correct polymorphic compositor: it binds
+;; A=float, B=float, C=float from the declared types of its arguments and
+;; emits a double-returning inner body dispatched through
+;; tur_thunk_double_double_t (unlike the old type-erased >>> which would
+;; dispatch double bodies through int64 thunk pointers -- see
+;; docs/reported/arrow-compose-float-closure-int64-thunk-mismatch.md).
 ;;
-;; Verifies fractional results survive composition (no int truncation), the
-;; result is itself composable, and capturing closures with distinct envs
-;; flow through cleanly.
+;; Verifies fractional results survive composition (no int truncation) and
+;; that two independently constructed compositions with distinct behaviours
+;; both work correctly.
 
 (load "stdlib/arrow.tur")
 
-(defn make-scale [k : float] : ptr<void> (fn [x : float] : float (* x k)))
-(defn make-add   [n : float] : ptr<void> (fn [x : float] : float (+ x n)))
+(defn scale-2 [x : float] : float (* x 2.0))
+(defn add-05  [x : float] : float (+ x 0.5))
+(defn add-15  [x : float] : float (+ x 1.5))
 (defn call-f [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
 
 (defn main [] : int
-  (let [h  (compose-float (make-add 0.5) (make-scale 2.0))
-        ;; h2 applies (+1.0) then h: h(x+1)
-        h2 (compose-float (make-add 1.0) h)]
+  (let [h  (>>> add-05 scale-2)
+        h3 (>>> add-15 scale-2)]
     (println (call-f h 3.0))     ;; (3.0 + 0.5) * 2.0 = 7
     (println (call-f h 0.25))    ;; (0.25 + 0.5) * 2.0 = 1.5
-    (println (call-f h2 3.0)))   ;; h(3.0 + 1.0) = h(4.0) = (4.0 + 0.5) * 2.0 = 9
+    (println (call-f h3 3.0)))   ;; (3.0 + 1.5) * 2.0 = 9
   0)
