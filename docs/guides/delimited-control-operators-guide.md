@@ -178,7 +178,7 @@ computation (possibly composed, possibly more than once with `call/cc*`),
 > runtime-backed today. `call/cc`/`escape` are delimited sugar over them; the
 > full early-exit lowering (`escape` via `shift0`, an enforced enclosing
 > boundary) is tracked in
-> [`call-cc-completion-plan.md`](../upcoming/call-cc-completion-plan.md). Until
+> [`call-cc-completion-plan.md`](../archive/history/call-cc-completion-plan.md). Until
 > that lands, treat the semantics above as the contract and check the plan for
 > the current stub caveats.
 
@@ -231,7 +231,7 @@ runtime structures are in
 - [Checkpointing Guide](checkpointing-guide.md) -- Cloneable continuations for persistent workflows
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- Capturing and resuming across process boundaries
 - [Compiler Internals](compiler-internals.md) -- Effect lowering and the CPS pass
-- [`call-cc-completion-plan.md`](../upcoming/call-cc-completion-plan.md) -- The plan finishing `call/cc`/`escape`
+- [`call-cc-completion-plan.md`](../archive/history/call-cc-completion-plan.md) -- The plan finishing `call/cc`/`escape`
 - [Bibliography](bibliography.md#delimited-continuations) -- Papers behind these operators
 
 ## References

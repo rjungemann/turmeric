@@ -390,7 +390,7 @@ through any number of middleware wraps.
 ## Not yet shipped
 
 The following items are tracked in
-[`docs/upcoming/httpd-middleware-plan.md`](../upcoming/httpd-middleware-plan.md)
+[`docs/archive/httpd-middleware-plan.md`](../archive/httpd-middleware-plan.md)
 but not yet in stdlib:
 
 - **`mw-timeout`** -- per-request wall-clock budget. Needs a
@@ -404,7 +404,7 @@ but not yet in stdlib:
   [`src/compiler/emit_expr.c`](../../src/compiler/emit_expr.c) under
   `EX_CATCH_UNWIND`.
 - **Compression middleware** -- spun out into its own plan
-  [`docs/upcoming/httpd-compression-zlib-spice-plan.md`](../upcoming/httpd-compression-zlib-spice-plan.md).
+  [`docs/archive/httpd-compression-zlib-spice-plan.md`](../archive/httpd-compression-zlib-spice-plan.md).
 
 ## See also
 
