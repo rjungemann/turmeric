@@ -62,3 +62,25 @@ jobs:
           python-version: '3.12'
       - name: Check fused annotations in stdlib/ and docs/guides/
         run: python3 tools/spaced-types-rewrite.py --check stdlib/ docs/guides/
+
+  check-snapshots:
+    name: Check codegen snapshots
+    runs-on: ubuntu-latest
+    # Only run when src/codegen/ changed or expected.c files changed.
+    # This prevents the job from failing on PRs that don't touch codegen at all.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install dependencies (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+
+      - name: Configure (Debug)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build tur
+        run: cmake --build build -j --target tur
+
+      - name: Check for snapshot drift
+        run: ./build/tur run regen-snapshots -- --check
