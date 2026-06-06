@@ -344,6 +344,58 @@ else
     fi
 fi
 
+# project-mode-defstruct-typedef-missing: a (defstruct ...) defined in a
+# project-mode module must emit `typedef struct Name { ... } Name;` into the
+# generated header so both the owning .c and any importing modules see the
+# type.  Without the fix, the .h was missing the typedef and the .c emitted a
+# spurious `Name Name_N;` variable declaration referring to an undeclared
+# type, failing cc with "unknown type name".
+DSPROJ="$WORK/defstruct-proj"
+mkdir -p "$DSPROJ/src/foo"
+cat > "$DSPROJ/build.tur" <<'EOF'
+(defpackage tur-defstruct-proj
+  :name    "tur-defstruct-proj"
+  :version "0.1.0"
+  :exports #{ "foo/box" ["Box" "make-box" "box-x"] })
+EOF
+# Box is declared via defstruct; make-box returns a heap pointer cast via the
+# Box typedef in inline-C, which only links if `typedef struct Box {...} Box;`
+# is visible.  box-x reads the x field as proof the layout matches.
+cat > "$DSPROJ/src/foo/box.tur" <<'EOF'
+(defmodule foo/box
+  (export Box make-box box-x)
+  (defstruct Box [x : float y : float])
+  (defn make-box [a : float b : float] : int
+    ```c
+    typedef struct { double x; double y; } Box_;
+    Box_ *p = (Box_ *)malloc(sizeof(*p));
+    p->x = a; p->y = b;
+    return (int64_t)(intptr_t)p;
+    ```)
+  (defn box-x [b : int] : float
+    ```c
+    typedef struct { double x; double y; } Box_;
+    return ((Box_ *)(intptr_t)b)->x;
+    ```)
+  (defn fto-i [x : float] : int
+    ```c return (int64_t)x; ```)
+  (defn main [] : int
+    (fto-i (box-x (make-box 21.0 0.0)))))
+EOF
+ds_out=$(cd "$WORK" && "$TUR" build "$DSPROJ" -o "$WORK/dsbin" 2>&1)
+ds_rc=$?
+if [ $ds_rc -ne 0 ]; then
+    fail "build-project-defstruct-typedef" "tur build exit=$ds_rc: $ds_out"
+else
+    "$WORK/dsbin"
+    ds_run_rc=$?
+    if [ "$ds_run_rc" -eq 21 ]; then
+        pass "build-project-defstruct-typedef"
+    else
+        fail "build-project-defstruct-typedef" "exit=$ds_run_rc (expected 21)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
