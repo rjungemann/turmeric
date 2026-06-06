@@ -400,8 +400,8 @@ emitted). See the
 the semantics and typing (`f : cont<T> -> T`, one-shot by default, `^linear`
 opt-in, `call/cc*` for multi-shot).
 
-**See also:** [cps-transform-plan.md](../upcoming/cps-transform-plan.md) (the
-substrate), [call-cc-completion-plan.md](../upcoming/call-cc-completion-plan.md)
+**See also:** [cps-transform-plan.md](../archive/history/cps-transform-plan.md) (the
+substrate), [call-cc-completion-plan.md](../archive/history/call-cc-completion-plan.md)
 (this work)
 
 ---

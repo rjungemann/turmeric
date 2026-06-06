@@ -413,7 +413,7 @@ Effects interact with Turmeric's `defer` mechanism:
 
 Delimited control in Turmeric is moving onto a single **multi-prompt** substrate
 (the Dybvig--Peyton-Jones--Sabry model), built by
-[`cps-transform-plan.md`](../upcoming/cps-transform-plan.md). The operators you
+[`cps-transform-plan.md`](../archive/history/cps-transform-plan.md). The operators you
 already use map onto prompts and sub-continuations:
 
 | Operator | Prompt action |
@@ -508,7 +508,7 @@ For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead
 
 ## See Also
 
-- [Whole-Program CPS Transform Plan](../upcoming/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
+- [Whole-Program CPS Transform Plan](../archive/history/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- a heap-reified sub-continuation is a flat chain, directly serializable
 - [Async/Await Guide](async-await-guide.md) -- Effects-based async/await syntax
 - [Logic Programming Guide](logic-programming-guide.md) -- Backtracking via cloneable continuations

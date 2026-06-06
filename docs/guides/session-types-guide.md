@@ -6,6 +6,11 @@ description: Model protocols as types, whether the protocol has two participants
 
 # Session Types Guide
 
+> This guide supersedes the archived
+> [`stdlib-session-typed-channels-plan`](../archive/history/stdlib-session-typed-channels-plan.md).
+> All phases (S1--S3) shipped; the user-facing reference for `stdlib/schan.tur`
+> and the broader session-types story is here.
+
 Turmeric supports session types -- a type discipline that statically verifies
 communication protocols between concurrent processes. The feature is enabled with
 the `-Xsessions` compiler flag.

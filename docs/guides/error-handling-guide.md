@@ -674,7 +674,7 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 > 4. On the WASM target, panics lower to the WebAssembly `unreachable`
 >    instruction.
 
-> See [docs/upcoming/cps-transform-plan.md](../upcoming/cps-transform-plan.md)
+> See [docs/upcoming/cps-transform-plan.md](../archive/history/cps-transform-plan.md)
 > for the fiber-based async runtime these v2 semantics depend on.
 
 ---
@@ -715,5 +715,5 @@ for the current error-handling surface.
   semantics referenced above
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- `--no-contracts`,
   `--warn-unused-result`, and `--lint-panic`
-- [cps-transform-plan.md](../upcoming/cps-transform-plan.md) -- the fiber-based
+- [cps-transform-plan.md](../archive/history/cps-transform-plan.md) -- the fiber-based
   async runtime behind the v2 async-panic semantics
