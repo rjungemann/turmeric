@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.18.0` -- ships the `tur/httpd` standard middleware library and async server, the `?` query operator with `catch-unwind` panic handling on the compiled path, intersection/union types, and an MCP LSP integration.
+**Latest release:** `v0.19.0` -- typed closure invocation ABI, injective name mangling, stdlib `Option`/`Result` monad instances, and a cluster of fat-dispatch codegen fixes.
 
 ## What
 

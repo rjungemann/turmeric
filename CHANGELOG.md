@@ -4,27 +4,67 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.19.0] -- 2026-06-05
+
 ### Added
 
-- **stdlib HKT typeclass instances for `Option` and `Result` (consolidation
-  T1)** -- `Option` gains `Functor` / `Applicative` / `Monad` / `Alternative`
-  instances and `Result` gains a `Bifunctor` instance (err = left arm, ok =
-  right arm), so `fmap` / `bind` / `pure` / `ap` / `alt-or` / `bimap` and the
-  `do-m` / `for` macros work over stdlib optionals/results. Adds the
-  `tur/typeclass-monad` and `tur/typeclass-bifunctor` class stubs (auto-loaded
-  alongside the existing Applicative/Alternative stubs). See
-  `docs/upcoming/stdlib-hkt-consolidation-plan.md`. `Functor` / `Monad` /
-  `MonadError` for `Result` remain unavailable pending a fix to instance-head
-  parameter ordering (see
-  `docs/reported/result-param-order-blocks-functor-monad.md`).
+- **Typed closure invocation ABI (#276)** -- `TUR_APPLY{0..4}_T` macros thread
+  declared `fn` argument and return types to the C invocation site, retiring
+  int64-only erasure through `TUR_APPLYn` / fat-shims. Closures taking or
+  returning `:float`, `:ptr`, `:bool`, and `:cstr` now codegen with correct C
+  signatures end-to-end.
+- **`Category` typeclass and Kleisli `ArrowZero` (#290)** -- `stdlib/arrow.tur`
+  gains an honest `Category` with `id`/`compose` and `ArrowZero` with
+  `zero-arrow`; the full `Arrow` hierarchy consolidates into `stdlib/arrow.tur`.
+- **stdlib `Functor`/`Monad`/`Alternative` instances for `Option` (T1)** --
+  `Option` gains `Functor`, `Applicative`, `Monad`, and `Alternative` instances;
+  `Result` gains `Bifunctor`; `do-m`/`for`/`fmap`/`bind`/`alt-or` work over
+  stdlib optionals and results without manual imports.
+- **`min` and `max` prelude macros** -- available in every module alongside
+  `when`/`cond`/`for`/`unless` without an explicit import.
+- **Codegen snapshot CI guard and `regen-snapshots` recipe (#298)** -- `tur run
+  regen-snapshots` bulk-regenerates fixture snapshots; a CI gate prevents
+  snapshot drift from landing undetected.
 
 ### Changed
 
-- **Local typeclass instances shadow stdlib instances on erased dispatch** --
-  when a `.method` dot-dispatch on an `int64_t`-erased receiver is otherwise
-  ambiguous and exactly one matching instance is user-defined (not from
-  `stdlib/`), that local instance is now selected instead of erroring with
-  `TUR-E0020`. Purely additive: only previously-erroring dispatch is affected.
+- **Injective Turmeric-to-C name mangling (#275)** -- `-` maps to `_hy`, `_` to
+  `_un`, `/` to `_sl`; the scheme is now injective and reversible. Manual
+  `extern` declarations in spice inline-C must be updated to use the new
+  mangled names.
+- **`(fn [...] ...)` leading colons deprecated (TUR-D0001)** -- `(fn [:float]
+  :float)` now emits a deprecation warning; the bare-identifier form `(fn
+  [float] float)` is the target. A codemod swept `stdlib/` and `tests/` in
+  #270.
+- **`tur build` compiles dep modules for shared-library spices** -- library
+  spices with no `main` (e.g. tourist) previously skipped dep-module header
+  generation. Dep headers are now always emitted; dep `.c` files are excluded
+  from the link via the new `n_own` parameter.
+- **Project-mode prelude auto-load** -- `tur build <dir>` auto-loads the stdlib
+  prelude in per-module compile paths, making `when`/`cond`/`for`/`unless`
+  available inside `defmodule` bodies without explicit imports.
+- **Local typeclass instances shadow stdlib on erased dispatch** -- when
+  `.method` dot-dispatch on an erased receiver is otherwise ambiguous and
+  exactly one matching instance is user-defined, that local instance is selected
+  instead of failing with `TUR-E0020`.
+
+### Fixed
+
+- **Fat-closure / typed-SF dispatch (cluster)** -- resolved interacting closure
+  codegen bugs: poly-closure inner dispatch result erasure, `copy_kind`
+  initialization, two-level SF return miscompilation, `Vec<SF>` fold blockage,
+  `int`-to-`ptr<void>` carrier casts, let-bound SF type-check routing, and
+  `^fat` param emission in inline-C bodies (#276, #283, #286, #287, #292, #293,
+  #294, #295, #296).
+- **Recursive `defn` return type in `defmodule` (#291)** -- `F_TYPE_ANN`
+  wrapper was not unwrapped for recursive defn return-type slots, causing
+  spurious type errors in self-recursive functions inside a `defmodule`.
+- **`definstance` idempotency (#278)** -- repeated `(load ...)` of a file
+  containing `definstance` no longer duplicates the instance.
+- **macOS codegen miscompile: uninitialized `arg_poly_fn` (#274)** -- silent
+  wrong-code on macOS in the poly-function path; covered by a new fixture.
+- **`definstance` ergonomics (#284)** -- stdlib helper resolution gains better
+  hints, a load fallback path, and corrected effect annotations.
 
 ## [0.18.0] -- 2026-06-02
 
