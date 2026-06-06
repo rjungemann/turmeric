@@ -1,0 +1,14 @@
+;; The imported module does a top-level (load ...) of a bare-defn stdlib file.
+;; Before load-not-expanded-in-imported-or-project-modules was fixed, this
+;; (load ...) at column 1 of an imported file was NOT expanded by the entry
+;; preprocessor, so it survived to elaboration and errored "load is only valid
+;; at the top level" -- even though it already is at the top level.
+(load "stdlib/math.tur")
+
+(defmodule mathwrap/ops
+  (export hypot-floor)
+;; hypot-floor uses sqrt/floor, which only exist because the (load ...) above
+;; was expanded into this module AND its spliced bare defns reached codegen.
+(defn hypot-floor [a : float b : float] : int
+  (float->int (floor (sqrt (+ (* a a) (* b b))))))
+) ;; end

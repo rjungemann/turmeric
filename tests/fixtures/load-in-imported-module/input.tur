@@ -1,0 +1,8 @@
+;; Entry: import a module that itself (load ...)s a bare-defn stdlib file at the
+;; top level, then call a name that depends on the loaded (spliced) defns.
+;; Expected: 5  (floor(sqrt(3*3 + 4*4)) = floor(5.0) = 5)
+(defmodule prog
+  (import mathwrap/ops :refer [hypot-floor])
+  (defn main [] : int
+    (println (hypot-floor 3.0 4.0))
+    0))

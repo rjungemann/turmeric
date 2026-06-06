@@ -2,20 +2,43 @@
 title: Resolved / paper-trail reports -- consolidated index
 category: Bug Report
 status: RESOLVED -- no further action; preserved for traceability per CLAUDE.md "Reporting Bugs" rule
-description: Index of bug reports that landed fixes, were paper-trail removals, or were rediagnosed as source bugs in a sibling repo. Each entry links to the verbatim original under `archive/` and records the resolution shape so the next time the area is touched the fix isn't reinvented or the report mistaken for an open task.
+description: Index of bug reports that landed fixes, were paper-trail removals, or were rediagnosed as source bugs in a sibling repo. Each entry links to the verbatim original under `../archive/` and records the resolution shape so the next time the area is touched the fix isn't reinvented or the report mistaken for an open task.
 ---
 
 # Resolved / paper-trail reports
 
 These reports are closed. Originals preserved verbatim under
-[`archive/`](archive/). Listed here so they remain greppable and link-walkable
+[`../archive/`](../archive/). Listed here so they remain greppable and link-walkable
 without cluttering the active `docs/reported/` index with completed work.
 
 ## Compiler / language fixes (landed)
 
+### captureless closure not boxed at a `ptr<void>` `^fat` boundary (FIXED)
+
+[`../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md`](../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md)
+
+A closure that captures nothing (e.g. the SF returned by a nullary `(invert)`)
+is codegen'd as a **bare C function pointer**, not a `{ thunk, env }` fat box.
+When such a value was ascribed to the carrier with `(:: <captureless-fn>
+:ptr<void>)` and passed to a `^fat` parameter, `elab_call`'s `^fat` handler saw
+a `TY_PTR_VOID` argument, assumed it was already a fat box, and passed it
+through unshimmed. The consumer then fat-dispatched the code address as slot 0
+and **segfaulted**. This was the captureless sibling of
+`fat-shim-void-ptr-calls-bare-not-fat.md` (PR #302, which fixed only
+*capturing* closures). **Fix:** in `src/compiler/elab_call.c`, strip the erased
+`(:: <bare-fn> :ptr<void>)` ascription when the inner value is an unboxed
+`TY_FN`, so it reaches the existing bare-fn auto-shim branch and is boxed via
+`EX_FN_TO_FAT` -- the mirror image of the already-fat ascription strip directly
+above it. A *capturing* closure's inner is a boxed `TY_FN` / `TY_PTR_VOID` and
+is left untouched. Regression fixture:
+`tests/fixtures/fat-captureless-closure-ptr-void/` (captureless SF + capturing
+control through the `__apply-sf` direct-dispatch shape, both print `-0.5`).
+Unblocks `tur-signal` Phase 5 `>>>` with the captureless Tier-1 shapers
+(`invert`, `abs-sf`).
+
 ### use-after-move on local let-bound `:float` (FIXED)
 
-[`archive/use-after-move-on-local-let-bound-float-vs-captured.md`](archive/use-after-move-on-local-let-bound-float-vs-captured.md)
+[`../archive/use-after-move-on-local-let-bound-float-vs-captured.md`](../archive/use-after-move-on-local-let-bound-float-vs-captured.md)
 
 A `let`-bound `:float` used twice in a single `if` tripped `TUR-E0005`
 ("binding was moved"). Root cause was **not** local-vs-captured asymmetry and
@@ -28,7 +51,7 @@ Regression fixture: `tests/fixtures/use-after-move-float-let-vs-captured/`.
 
 ### One-off script print + annotation ergonomics (FIXED -- 3 findings)
 
-[`archive/one-off-script-print-and-annotation-ergonomics.md`](archive/one-off-script-print-and-annotation-ergonomics.md)
+[`../archive/one-off-script-print-and-annotation-ergonomics.md`](../archive/one-off-script-print-and-annotation-ergonomics.md)
 
 Three papercuts around the freestanding `tur run /tmp/foo.tur` loop, all
 resolved:
@@ -52,7 +75,7 @@ resolved:
 
 ### `__dsp_pair_*_float` bit-cast helpers removed
 
-[`archive/dsp-pair-bit-cast-helpers-obsolete.md`](archive/dsp-pair-bit-cast-helpers-obsolete.md)
+[`../archive/dsp-pair-bit-cast-helpers-obsolete.md`](../archive/dsp-pair-bit-cast-helpers-obsolete.md)
 
 The pre-rebuild `tur-signal` spice's `dsp.tur` hand-rolled `Pair64
 {int64_t first, second}` and `memcpy(&v, &bits, 8)` to read floats out of a
@@ -64,7 +87,7 @@ cleanly. `dsp.tur` deleted; `signal/shaper`'s `mix`/`add`/`multiply` now use
 
 ### `svf-low-pass` removed (no consumers, was a half-stub)
 
-[`archive/svf-low-pass-removed-no-consumers.md`](archive/svf-low-pass-removed-no-consumers.md)
+[`../archive/svf-low-pass-removed-no-consumers.md`](../archive/svf-low-pass-removed-no-consumers.md)
 
 Pre-rebuild `signal/synth.tur` exposed `svf-low-pass freq q` whose body wrapped
 the 1-pole `low-pass alpha` and discarded `q` -- the "half-stub primitive"
@@ -76,7 +99,7 @@ and lands behind a real consumer.
 
 ### `linalg/decomp.tur` unterminated list (source bug, not compiler)
 
-[`archive/linalg-decomp-qr-parser-unterminated-list.md`](archive/linalg-decomp-qr-parser-unterminated-list.md)
+[`../archive/linalg-decomp-qr-parser-unterminated-list.md`](../archive/linalg-decomp-qr-parser-unterminated-list.md)
 
 Initial sweep flagged `tur build linalg/` failing on `decomp.tur:185`.
 Investigation: the source genuinely has **4 unmatched `(`** across `qr`

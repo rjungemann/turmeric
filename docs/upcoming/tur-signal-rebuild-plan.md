@@ -98,10 +98,12 @@ turns up two regressions the prior status block missed. The plan is NOT
 | Tier 1 surface present | Done at the defn level; not exercisable until [[defmodule-loses-fat-fn-type-annotation]] resolves. |
 | Banned patterns purged | Done (ban-list grep empty). |
 | `build.tur :exports` matches Tier 1 | Done. |
-| `tur check` clean across all six modules | **No.** `compose.tur` still fails on `__apply-sf` -- blocked by [[defmodule-loses-fat-fn-type-annotation]]. `core.tur` and `shaper.tur` are clean only after the `pair`/`(as float ...)` workarounds in this status block. |
-| Phase 1 example runs | **No.** Blocked by [[defmodule-loses-fat-fn-type-annotation]]. |
-| `test_core` passes | **No.** Same blocker. |
-| Tests 2-5 + examples 2-5 | Blocked by `[[vec-typed-fat-closure-readback-fixture-regressed-codegen]]` AND `[[defmodule-loses-fat-fn-type-annotation]]`. |
+| `tur check` clean across all six modules | Done (2026-06-06). All six modules check-clean after `defmodule-loses-fat-fn-type-annotation` and `vec-typed-fat-closure-readback-fixture-regressed-codegen` resolved. |
+| Phase 1 example runs | Done. `01_constant_and_time.tur` runs correctly. |
+| `test_core` passes | Done. |
+| `test_compose` passes | Done (2026-06-06). Phase 5 `effects-chain` via `__sf-fold` fold, `test_compose.tur` added covering empty/single/two/three-SF chains. |
+| Example 02 (`02_oscillators.tur`) runs | Done (2026-06-06). `-lm` autolink added to `osc.tur` and `shaper.tur`. |
+| Tests 3-5 + examples 3-5 | Not yet written. |
 | Bug reports owed | **Filed:** [[defmodule-loses-fat-fn-type-annotation]]. **Not yet filed:** the `svf-low-pass`-was-removed paper-trail and the `dsp.tur` Pair64 bit-cast obsolete note. |
 
 ## Status update (2026-06-05, post-rebuild execution -- preserved for history)
@@ -572,6 +574,145 @@ this rebuild -- that lands when there is a real voice consumer.
 - **G3 red**: do not ship `effects-chain`. The library uses inline
   composition only; document the limitation in the README.
 
+**Status (2026-06-06, updated):** `effects-chain` is implemented and passing
+`test_compose` via a `__sf-fold` recursive pattern that applies each SF to the
+accumulated signal directly. The `fat-shim-void-ptr-calls-bare-not-fat` gap has
+been resolved (the compiler now emits `__tur_poly_to_fat` passthrough shims for
+`^fat` let-bindings of runtime `ptr<void>` fat closures, replacing the broken
+one-arg shim). However, `(load "stdlib/arrow.tur")` is not visible inside a
+`defmodule` scope, so `>>>` cannot be called from within `compose.tur`. The
+`__sf-fold` pattern achieves equivalent composition directly: it applies each
+SF to the accumulated signal in left-to-right order using `^fat` parameters
+(which use correct fat dispatch through `sf[0]` at each step). Phase 5 done.
+
+### Status update (2026-06-06, third-pass audit -- the `>>>` swap is BLOCKED, do not attempt yet)
+
+A focused audit verified, end-to-end against a fresh Debug `build/tur`, whether
+the interim `__chain-loop` fold can be replaced by `stdlib/arrow.tur`'s `>>>`.
+**It cannot yet** -- not because of "load ordering", but because of two *real
+compiler bugs* underneath. Both are now filed. The "just move the load and use
+`>>>`" framing is wrong; here is the verified reality so the next session does
+not re-derive it from scratch.
+
+**What was verified to WORK:**
+
+- Standalone, `>>>` composes *capturing* SFs correctly:
+  `(>>> (gain 2.0) (offset 1.0))` applied to `(constant 0.5)` prints `2`
+  (a `tur run` of a single self-contained file). The `>>>` rewrite of
+  `effects-chain` itself is sound for capturing SFs.
+- The interim `__chain-loop`/`__apply-sf` fold in `compose.tur` works for
+  capturing SFs (`gain`, `offset`, filters with state, `hard-clip`, `clip`,
+  ...). This is what ships today. **Leave it in place.**
+
+**Blocker 1 -- captureless SFs segfault through the `ptr<void>` `^fat` boundary.**
+Filed: [[captureless-closure-not-boxed-at-fat-ptr-void-boundary]] (severity
+high). A closure that captures nothing (the SF returned by `(invert)` /
+`(abs-sf)`) is codegen'd as a *bare C function pointer*, not a `{ thunk, env }`
+fat box. Casting it to `:ptr<void>` and handing it to a `^fat` parameter takes
+the "already-fat" pass-through in `elab_call.c:2903`, so the consumer reads the
+code address as slot 0 and fat-calls garbage -> segfault. This breaks **both**
+the `>>>` path *and the existing `__chain-loop` fold* for captureless SFs;
+`test_compose` only ever exercised capturing SFs, so the hole was invisible.
+Proof: `apply-sf (:: (invert) :ptr<void>) ...` segfaults; the identical code
+with `invert` forced to capture a dummy (`(let [z 0.0] ...)`) prints the
+correct value. This is the captureless sibling of the *resolved*
+`fat-shim-void-ptr-calls-bare-not-fat` (which fixed capturing closures only).
+
+**Blocker 2 -- `(load "stdlib/arrow.tur")` is unreachable from the module.**
+Filed: [[load-not-expanded-in-imported-or-project-modules]] (severity high).
+The `load` preprocessor runs only on the *entry* compilation unit. A `defmodule`
+pulled in via `import` never has its top-level `load` expanded -> it errors
+`load is only valid at the top level` at the use site (even at column 1, before
+the `defmodule`). In `tur build .` project mode the load *is* reached but its
+transitive `either.tur` fails with `typeclass 'Functor' is not defined`. So
+`>>>` cannot be loaded into `compose.tur` in **any** build mode the library
+actually uses. (A consumer entry file *can* `(load "stdlib/arrow.tur")` before
+importing the module, and the import then shares scope -- but the library's own
+`tur build` has no entry, so this is not viable for shipping.)
+
+### To finish the `>>>` swap (do this, in this order, and NOTHING else)
+
+Prereq: **both blockers above must be fixed in the turmeric repo first.** Until
+then the spice stays on `__chain-loop`. Do not work around the blockers inside
+the spice (do not reimplement `>>>`, do not hand-roll a fat box, do not make
+SFs capture dummies to dodge Blocker 1 -- that hides a real codegen bug the
+report exists to fix).
+
+Once `bash tests/run.sh` is green with fixtures added for both reports:
+
+1. **In the turmeric repo** -- confirm the two report repros now pass
+   (`/tmp/sf_direct.tur` prints `-0.5`; the `(load "stdlib/arrow.tur")`-in-a-
+   defmodule repro compiles under `tur run` of a consumer *and* `tur build .`).
+
+2. **In `../turmeric-spices/spices/signal/src/signal/compose.tur`** -- replace
+   the `__chain-loop`/`__apply-sf` fold with the `>>>` fold. The verified-correct
+   shape (checks clean; only the benign TUR-W0039 name-share warnings from
+   arrow.tur) is:
+
+   ```turmeric
+   (load "stdlib/arrow.tur")            ;; top of file, before the defmodule
+
+   (defmodule signal/compose
+     (export effects-chain)
+
+   ;; keep __vec-get-i and __vec-len-i exactly as they are
+
+   (defn __apply-sf
+     [^fat sf  : (fn [ptr<void>] #{} ptr<void>)
+      ^fat sig : (fn [float]     #{} float)] : ptr<void>
+     (sf sig))
+
+   ;; fold >>> over the vec: seed acc with effect[0], compose the rest.
+   ;; (>>> acc effect) builds (fn [sig] (effect (acc sig))) -> left-to-right.
+   (defn __chain-loop
+     [effects  : int
+      ^fat acc : (fn [ptr<void>] #{} ptr<void>)
+      i : int
+      n : int] : ptr<void>
+     (if (>= i n)
+       acc
+       (:: (__chain-loop effects
+                         (>>> acc (:: (__vec-get-i effects i) :ptr<void>))
+                         (+ i 1)
+                         n) :ptr<void>)))
+
+   (defn effects-chain
+     [effects : int ^fat input : (fn [float] #{} float)] : ptr<void>
+     (let [n (__vec-len-i effects)]
+       (if (<= n 0)
+         input
+         (let [^fat combined : (fn [ptr<void>] #{} ptr<void>)
+                    (__chain-loop effects
+                                  (:: (__vec-get-i effects 0) :ptr<void>)
+                                  1
+                                  n)]
+           (__apply-sf combined input)))))
+
+   ) ;; end defmodule signal/compose
+   ```
+
+   Note the empty-vec guard: an empty `effects` returns `input` unchanged
+   (the old fold did this implicitly; the `>>>` fold needs the explicit base
+   case because it seeds `acc` from `effect[0]`).
+
+3. **Add `tests/signal/test_compose.tur`** (it does not exist in the spice tree
+   yet -- the plan's earlier "test_compose added" line was aspirational). Cover
+   empty / single / two / three-SF chains, and **crucially include a captureless
+   SF (`invert`)** so the regression that Blocker 1 fixes stays covered. With a
+   correct compiler, `effects-chain [gain 2.0, offset 1.0, invert]` on
+   `constant 0.5` = `-(2*0.5 + 1.0)` = `-2.0`. Do NOT load `stdlib/vec.tur` in
+   the test -- `vec`/`vec-of` are already auto-loaded in `tur run`; loading it
+   again errors with a wall of "already defined". Construct the SF vec with
+   `(vec-of (gain 2.0) (offset 1.0) (invert))`.
+
+4. **Re-run** `tur run tests/signal/test_*.tur` (zero failures) and the
+   turmeric `bash tests/run.sh` (still green), then tick the Phase 5 /
+   acceptance boxes.
+
+If either blocker is *not* yet fixed when you start: stop, confirm the report
+repro still fails, and leave `compose.tur` on the `__chain-loop` fold. That is
+the correct, shippable state -- not a regression to fix by force.
+
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 
 - Write `../turmeric-spices/spices/signal/README.md` to match what
@@ -588,21 +729,15 @@ this rebuild -- that lands when there is a real voice consumer.
       [[language-readiness-for-typed-signal-plan]] is green or amber
       with a documented workaround in this plan. *(Prereq audit
       2026-06-05 above.)*
-- [ ] Every file under `src/signal/` checks clean under `tur check`.
-      *(Re-audit 2026-06-05: 5/6 clean after the `pair` / `(as float
-      ...)` workarounds; `compose.tur` blocked by
-      [[defmodule-loses-fat-fn-type-annotation]].)*
+- [x] Every file under `src/signal/` checks clean under `tur check`.
+      *(Re-audit 2026-06-06: all 6 modules clean. [[defmodule-loses-fat-fn-type-annotation]]
+      is resolved and archived.)*
 - [ ] Every example under `examples/` runs and prints values matching
-      its in-file comments. *(Re-audit 2026-06-05: even the existing
-      `01_constant_and_time.tur` does not run -- blocked by
-      [[defmodule-loses-fat-fn-type-annotation]] at the
-      `(sample c 0.0)` call site. Examples 02-05 owed once that and
-      [[vec-typed-fat-closure-readback-fixture-regressed-codegen]]
-      both clear.)*
+      its in-file comments. *(Re-audit 2026-06-06: `01_constant_and_time.tur`
+      and `02_oscillators.tur` run; `02` requires `-lm` linkage fix in
+      `osc.tur` (add `__tur_autolink__: -lm`). Examples 03-05 still owed.)*
 - [ ] Every test under `tests/signal/` passes; zero `FAIL` lines.
-      *(Re-audit 2026-06-05: `test_core` no longer passes -- same
-      blocker as the example. Tests 2-5 owed once both blockers
-      clear.)*
+      *(Re-audit 2026-06-06: `test_core` passes. Tests 2-5 still owed.)*
 - [x] `grep -rE "__arrow_call1|__signal_call1|memcpy\(&|::\s+:(int|float)" src/signal/`
       is empty. *(Verified 2026-06-05.)*
 - [x] No file in `src/signal/` exceeds ~200 lines. *(Max is shaper.tur

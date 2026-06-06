@@ -363,6 +363,19 @@ static Expr *box_synth_comparator(Elab *e, Expr *inner) {
 static Expr *arrow_fat_shim(Elab *e, Expr *a) {
     if (!a) return a;
     if (a->type.kind == TY_FN && !a->type.as.fn.boxed) {
+        /* fat-closure-var-passthrough: a ^fat let-binding or parameter whose
+         * type was set to a concrete (fn ...) annotation is ALREADY a fat
+         * closure carried as int64_t.  Re-type to ptr<void> (the natural fat
+         * carrier) so it passes through without being double-boxed into a
+         * __tur_fatshim_void___void__ wrapper.  That shim calls slot[1] as a
+         * bare one-arg fn, but slot[1] here IS a fat closure whose thunk
+         * expects two arguments (env + arg), causing a segfault.
+         * Mirrors the is_fat guard in elab_call.c (two-level-sf-closure-
+         * return-miscompiles-out-binding). */
+        if (a->kind == EX_VAR && a->as.var.binding && a->as.var.binding->is_fat) {
+            a->type = TYPE_PTR_VOID;
+            return a;
+        }
         Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, a->span);
         shim->as.fn_to_fat_.inner = a;
         return shim;

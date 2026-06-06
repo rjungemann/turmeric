@@ -32,13 +32,13 @@ static bool module_name_valid(const char *name, uint32_t len) {
  * Syntax: (load "relative/or/absolute/path.tur")
  */
 /* Phase M: (load "path") — handled by load-expansion preprocessor in
- * elaborate_program before the two-pass elab.  This dispatch path should be
- * unreachable for top-level loads; we return nil to allow stray (load ...)
- * inside e.g. (do ...) blocks to no-op (loaded forms are already expanded
- * at top level by then).  See expand_loads_in_forms. */
+ * elaborate_program before the two-pass elab.  Any (load ...) that reaches
+ * this point is inside a defmodule or defn body, which the preprocessor does
+ * not descend into.  Emit a hard error so the programmer knows to move it. */
 Expr *elab_load(Elab *e, const Form *call) {
-    (void)call;
-    return expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
+    diag_emit(DIAG_ERROR, call->span,
+              "load is only valid at the top level; move it before the enclosing defmodule or defn");
+    return NULL;
 }
 
 /* Phase M2: Load and elaborate an imported module file.
@@ -243,6 +243,28 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     bool had_error_before = diag_had_error();
     Form **forms = read_all_with_registry(e->arena, e->st, sfile,
                                           e->user_macros, &nforms);
+    if (forms) {
+        /* load-not-expanded-in-imported-or-project-modules: expand this
+         * module's top-level (load "path") forms before elaboration, exactly as
+         * the entry unit does. Without this a `(load ...)` at column 1 of an
+         * imported file survives to elab_load and errors "load is only valid at
+         * the top level". The visited set is shared with the entry, so a path
+         * loaded by both is spliced once. */
+        Form **expanded = NULL;
+        uint32_t n_expanded = 0;
+        int lrc = elab_expand_module_loads(e, e->arena, e->st, forms, nforms,
+                                           &expanded, &n_expanded);
+        if (lrc != 0) {
+            slot->is_loading = false;
+            if (!had_error_before && diag_had_error()) {
+                diag_emit(DIAG_NOTE, import_span,
+                          "while loading module '%s'", name->name);
+            }
+            return NULL;
+        }
+        forms = expanded;
+        nforms = n_expanded;
+    }
     if (!forms) {
         slot->is_loading = false;
         /* Transitive-RM (T1) decision #4: if the sub-read introduced a
@@ -287,6 +309,16 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         if (ex->kind == EX_DEFMODULE) {
             loaded_defmod = ex->as.defmodule_.mod; /* Phase M4 */
             if (!e->separate_compilation) elab_register_file_def(e, ex);
+        } else if (ex->kind != EX_NIL_LIT && !e->separate_compilation) {
+            /* load-not-expanded-in-imported-or-project-modules: a top-level
+             * (load ...) spliced bare definitions (e.g. arrow.tur's `>>>`)
+             * ahead of this file's defmodule. The entry path emits every such
+             * returned expr via items[]; mirror that here by registering it for
+             * file-scope emission, otherwise the spliced defns elaborate into
+             * scope but never reach codegen -> link errors. Self-registering
+             * forms (defclass/definstance/nested defns) already returned nil and
+             * are skipped by the EX_NIL guard. */
+            elab_register_file_def(e, ex);
         }
     }
 
