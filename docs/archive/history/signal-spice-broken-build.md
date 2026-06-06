@@ -5,6 +5,12 @@ severity: high
 description: The signal spice's source files reference `__arrow_call1` (removed from stdlib) plus several un-imported stdlib symbols, so `tur check` fails on `core.tur` and `synth.tur` before any :float migration work begins. The plan in `docs/upcoming/signal-primitives-expansion-plan.md` assumes a "half-done :float migration on otherwise working code" baseline that no longer matches reality.
 ---
 
+> **Resolved:** The signal spice build was restored as part of the closure-ABI
+> and Phase 0a/0b work. `tur check` on all `src/signal/*.tur` files now passes
+> cleanly. The Phase 0 split (0a restore-build, 0b fat-dispatch cleanup, 0c
+> float migration) was incorporated into the signal-primitives-expansion-plan.
+---
+
 # `tur-signal` spice: broken build + closure-ABI latent bug
 
 ## Summary

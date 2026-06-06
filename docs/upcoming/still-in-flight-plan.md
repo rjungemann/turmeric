@@ -156,7 +156,7 @@ unstarted.
 
 ## `tur-signal` spice broken build
 
-> Full plan: [../archive/signal-spice-broken-build.md](../archive/signal-spice-broken-build.md)
+> Full plan: [../archive/history/signal-spice-broken-build.md](../archive/history/signal-spice-broken-build.md) *(resolved)*
 
 Spice does not currently compile; Phase 0 of the expansion plan
 needs to be split.

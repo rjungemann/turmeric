@@ -83,17 +83,21 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[defstruct-field-types-plan.md](defstruct-field-types-plan.md)** -- Residual hardening after F8 landed; `exg5-exists-cycle` and `exg4-pack-into-struct` still blocked
 - **[existential-gc-followup-plan.md](existential-gc-followup-plan.md)** -- GC integration for packed existentials; cycle-construction fixtures blocked on defstruct compound annotations
 - **[existential-types-plan.md](existential-types-plan.md)** -- `pack`/`open` with typeclass constraints; phases partially in progress
+- **[httpd-compression-zlib-spice-plan.md](httpd-compression-zlib-spice-plan.md)** -- New `tur/zlib` spice wrapping system zlib + `mw-compress` gzip middleware (M6) in `stdlib/httpd-compress.tur`; draft, not started; see [httpd-guide.md](../guides/httpd-guide.md) for planned destination section
 
 ### Language Ergonomics (Planned)
 
+- **[fn-type-bare-identifier-plan.md](fn-type-bare-identifier-plan.md)** -- Drop leading colons inside `(fn [...] ...)` type expressions; Phases 1-3 shipped (parser, codemod, TUR-D0001 deprecation warning); Phase 4 (hard error) pending
 - **[internal-define-plan.md](history/internal-define-plan.md)** *(history)* -- body-level `define` (let\* semantics); implemented; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
 - **[letrec-and-named-let-plan.md](history/letrec-and-named-let-plan.md)** *(history)* -- `letrec` + named let; implemented; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
 
 ### Compiler and Codegen (Active)
 
 - **[arbitrary-arity-kinds-plan.md](arbitrary-arity-kinds-plan.md)** -- Lift the `Tuple5` / `KIND_ARROW5` cap; replace closed `Kind` enum with an integer-backed representation; not started
+- **[closure-typed-invocation-abi-plan.md](closure-typed-invocation-abi-plan.md)** -- Thread declared `fn` arg/return types through to C invocation sites; retire `TUR_APPLYn` / fat-shim int64 erasure; not started
 - **[codegen-clang-int-pointer-cleanup-plan.md](codegen-clang-int-pointer-cleanup-plan.md)** -- Clean `int<->pointer` casts in generated C to fix modern Clang warnings; not started
 - **[cross-module-specialization-cache-plan.md](cross-module-specialization-cache-plan.md)** -- Cross-module ABI specialization cache (Phase J of unboxing plan); prerequisites A--I landed; not started
+- **[defmodule-per-file-scoping-plan.md](defmodule-per-file-scoping-plan.md)** -- Fix "defmodule must be first form" diagnostic to scope per-file instead of per-compilation-unit; unblocks `(defmodule tur/zlib ...)` in the zlib spice; not started
 - **[unboxing-and-monomorphization-plan.md](unboxing-and-monomorphization-plan.md)** -- Unboxed structs, monomorphization, and sized primitives; partial (sized types landed); remaining work in phases B/C
 
 ### Tooling (Active)
@@ -251,6 +255,7 @@ Post-v0.18.0 sweep:
 - **[log-capability-vtable-uncompilable.md](history/log-capability-vtable-uncompilable.md)** -- `stdlib/log.tur` and `test/capability.tur` vtable defects (same root cause as io); resolved
 - **[sourcefile-uninit-xform-map-fix.md](history/sourcefile-uninit-xform-map-fix.md)** -- `SourceFile` uninitialised `xform_map` crash; done
 - **[stale-fn-gensym-snapshots-on-main.md](history/stale-fn-gensym-snapshots-on-main.md)** -- Off-by-one `__fn_*` gensym in two committed snapshots; regenerated
+- **[signal-spice-broken-build.md](history/signal-spice-broken-build.md)** -- `tur-signal` spice failed `tur check` due to removed `__arrow_call1` and missing imports; resolved as part of closure-ABI Phase 0a/0b work
 - **[stdlib-future-linearity-aliasing.md](history/stdlib-future-linearity-aliasing.md)** -- Refcount the shared `FutureCell` so `Future` can be `:affine`; resolved
 - **[fn-typed-return-lowered-to-result-type.md](history/fn-typed-return-lowered-to-result-type.md)** -- `defn` returning `(fn [...] T)` mis-lowered to `T`; producer side resolved
 - **[nested-closure-transitive-capture.md](history/nested-closure-transitive-capture.md)** -- Two-level nested closures failing to thread grandparent captures; resolved

@@ -322,7 +322,7 @@ swept under the rug:
 The previous `tur-signal` spice was removed wholesale (commit accompanying
 this plan; the tree at `../turmeric-spices/spices/signal/` no longer
 exists). The reasons are documented in
-`docs/reported/signal-spice-broken-build.md` and revisited briefly here:
+`docs/archive/history/signal-spice-broken-build.md` (resolved) and revisited briefly here:
 
 - The build did not pass against the current `tur` / stdlib. Symbols the
   spice depended on (`__arrow_call1`, `vec-length`, `vec-create`,
@@ -676,4 +676,4 @@ bash tests/run.sh                                # main suite still green
 - Direct prerequisite: [[language-readiness-for-typed-signal-plan]].
 - Direct prerequisite: [[stdlib-arrow-scaleback-plan]].
 - Findings that triggered the rebuild:
-  `docs/reported/signal-spice-broken-build.md`.
+  `docs/archive/history/signal-spice-broken-build.md` (resolved).

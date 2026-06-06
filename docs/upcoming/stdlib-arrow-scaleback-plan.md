@@ -226,7 +226,7 @@ stops pretending it is already partly there.
 ## Cross-references
 
 - Triggered by the analysis in
-  `docs/reported/signal-spice-broken-build.md`.
+  `docs/archive/history/signal-spice-broken-build.md` (resolved).
 - Coordinates with [[language-readiness-for-typed-signal-plan]] (the
   same typeclass codegen bug is one of the gaps that plan investigates).
 - Coordinates with [[tur-signal-rebuild-plan]] -- the rebuild explicitly
