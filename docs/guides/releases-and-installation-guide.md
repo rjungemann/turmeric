@@ -18,7 +18,7 @@ This guide covers two audiences:
 
 ## Installing Turmeric
 
-There are three supported paths today.
+There are four supported paths today.
 
 ### Option 1: Prebuilt binary from GitHub Releases
 
@@ -159,6 +159,54 @@ This is a known limitation, tracked in
 "Discovered during execution: runtime sources also missing". Until it's
 resolved, the `--interpret` and library-embedding paths are the
 fully-supported uses of a downloaded release.
+
+### Option 4: Docker
+
+The repository ships a [`Dockerfile`](../../Dockerfile) that builds `tur` from
+the local source tree and packages it into a self-contained Ubuntu 22.04 image.
+This is the easiest path on Linux if you do not want to install CMake or deal
+with libedit versions.
+
+**Build the image** (run from the repository root):
+
+```sh
+docker build -t turmeric .
+```
+
+The multi-stage build compiles a Release binary and copies only the binary,
+stdlib, and C runtime sources into the final image (~200 MB).
+
+**REPL:**
+
+```sh
+docker run --rm -it turmeric
+```
+
+**Interpret a file** (no C compiler involved):
+
+```sh
+docker run --rm -v "$(pwd)":/workspace turmeric \
+    tur --interpret /workspace/hello.tur
+```
+
+**Compile and run a file:**
+
+```sh
+docker run --rm -v "$(pwd)":/workspace turmeric \
+    tur run /workspace/hello.tur
+```
+
+**Type-check a file:**
+
+```sh
+docker run --rm -v "$(pwd)":/workspace turmeric \
+    tur check /workspace/hello.tur
+```
+
+The image sets `TUR_STDLIB_DIR` and wraps the `tur` binary in a small shell
+script so that `tur run`/`tur build` can resolve the C runtime sources (which
+are referenced by relative paths at compile time). Mount your project with
+`-v "$(pwd)":/workspace` and pass the absolute container path to your file.
 
 ---
 

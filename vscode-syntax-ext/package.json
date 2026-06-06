@@ -70,6 +70,13 @@
           "meta.embedded.block.turmeric": "turmeric"
         }
       }
+    ],
+    "themes": [
+      {
+        "label": "Turmeric Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/turmeric-dark-color-theme.json"
+      }
     ]
   },
   "repository": {

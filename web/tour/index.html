@@ -74,6 +74,16 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 /* CTA font size */
 .cta-title { font-size: clamp(32px, 4vw, 52px); }
 
+/* Hero buttons -- inline, don't stretch */
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 40px;
+}
+
 /* Tour index */
 .tour-index {
   max-width: 1100px;
@@ -210,17 +220,17 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     </a>
     <a href="#neoteric" class="tour-index-card">
       <span class="tour-stop-num">08</span>
-      <span class="tour-card-label">Neoteric Syntax</span>
+      <span class="tour-card-label">Sweet-Exp Syntax</span>
       <span class="tour-card-icon">≋</span>
     </a>
     <a href="#contracts" class="tour-index-card">
       <span class="tour-stop-num">09</span>
-      <span class="tour-card-label">Runtime Contracts</span>
+      <span class="tour-card-label">Contract Types</span>
       <span class="tour-card-icon">⊛</span>
     </a>
     <a href="#spice" class="tour-index-card">
       <span class="tour-stop-num">10</span>
-      <span class="tour-card-label">Spice Package Manager</span>
+      <span class="tour-card-label">Spice -- Package Manager</span>
       <span class="tour-card-icon">✶</span>
     </a>
     <a href="#structural" class="tour-index-card">
@@ -237,9 +247,9 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <div class="split-section reveal" id="effects">
   <div>
     <p class="section-label">01 -- Algebraic Effects</p>
-    <h2 class="section-title">Side effects,<br><em>tamed.</em></h2>
-    <p class="section-desc">Declare what your functions can do, not how they do it. Effects are first-class operations that any caller can intercept and handle, without touching your core logic.</p>
-    <p class="section-desc">Swap between production, test, and mock handlers at the call site. The type system ensures you never forget to handle an effect.</p>
+    <h2 class="section-title">Effects declared.<br>Handlers <em>swapped.</em></h2>
+    <p class="section-desc">Your functions declare what side effects they may perform. Their callers decide how to handle them -- in production, in tests, or as mocks.</p>
+    <p class="section-desc">The type system ensures no effect goes unhandled. Swap between handlers at the call site without touching the core logic.</p>
     <span class="feat-badge">defeffect · perform · handle · resume</span>
   </div>
   <div class="code-card">
@@ -277,9 +287,9 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <div class="split-section reverse reveal" id="typeclasses">
   <div>
     <p class="section-label">02 -- Typeclasses</p>
-    <h2 class="section-title">Polymorphism<br>that <em>scales.</em></h2>
-    <p class="section-desc">Define a typeclass once, implement it for any type, and let the compiler verify that every call site has a valid instance. Zero virtual tables, zero runtime cost.</p>
-    <p class="section-desc">Typeclass constraints keep your functions general without sacrificing precision. The <code>^Show</code> syntax reads "must implement Show."</p>
+    <h2 class="section-title">Compile-time dispatch.<br>Zero <em>overhead.</em></h2>
+    <p class="section-desc">Typeclass dispatch resolves to a concrete instance at compile time -- no virtual tables, no runtime cost. Define a typeclass once and the compiler verifies every call site has a valid instance.</p>
+    <p class="section-desc">The <code>^Show</code> constraint syntax expresses type requirements without sacrificing precision or performance.</p>
     <span class="feat-badge">defclass · definstance · ^Constraint</span>
   </div>
   <div class="code-card" style="font-size:12.5px;">
@@ -316,9 +326,9 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <div class="split-section reveal" id="adts">
   <div>
     <p class="section-label">03 -- ADTs, GADTs &amp; Pattern Matching</p>
-    <h2 class="section-title">Data that<br><em>speaks.</em></h2>
-    <p class="section-desc">Algebraic data types let you model your domain precisely. <code>defdata</code> declares a plain sum type; <code>defgadt</code> goes further, letting each constructor specialize its own type parameters.</p>
-    <p class="section-desc">The type-checker learns those specializations inside each <code>match</code> arm. No casts, no runtime tags, no missing branches -- every case is statically verified.</p>
+    <h2 class="section-title">A missing case<br>is a <em>compile error.</em></h2>
+    <p class="section-desc"><code>defdata</code> declares sum types; <code>defgadt</code> lets each constructor specialize its own type parameters. Every <code>match</code> arm refines what the checker knows -- no casts, no runtime tags.</p>
+    <p class="section-desc">Missing branches are compile errors, not runtime surprises. Every case is statically verified before your program runs.</p>
     <span class="feat-badge">defdata · defgadt · match · -Xgadt</span>
   </div>
   <div class="code-card">
@@ -356,9 +366,9 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <div class="split-section reverse reveal" id="continuations">
   <div>
     <p class="section-label">04 -- Delimited Continuations</p>
-    <h2 class="section-title">Control that<br><em>bends.</em></h2>
-    <p class="section-desc">Delimited continuations let you capture, store, and resume a slice of the call stack as an ordinary value. Coroutines, generators, and backtracking are just library code.</p>
-    <p class="section-desc"><code>reset</code> delimits a region; <code>shift</code> captures the continuation up to that boundary and lets you reify it as a function you call at will.</p>
+    <h2 class="section-title">Coroutines are<br>plain <em>library code.</em></h2>
+    <p class="section-desc">Turmeric reifies a slice of the call stack as an ordinary value. <code>reset</code> delimits the region; <code>shift</code> captures it.</p>
+    <p class="section-desc">Generators, async/await, and backtracking are all built on those two primitives -- no special syntax, no compiler magic.</p>
     <span class="feat-badge">reset · shift · delimited</span>
   </div>
   <div class="code-card">
@@ -395,9 +405,9 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <div class="split-section reveal" id="macros">
   <div>
     <p class="section-label">05 -- Macro System</p>
-    <h2 class="section-title">Syntax that<br><em>grows.</em></h2>
-    <p class="section-desc">Turmeric's macro system runs at compile time and operates directly on the syntax tree. Define new control flow, DSLs, or syntactic sugar without any runtime overhead.</p>
-    <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make template-style code construction natural and readable. The result is indistinguishable from hand-written code.</p>
+    <h2 class="section-title">Compile-time transforms.<br>Zero runtime <em>cost.</em></h2>
+    <p class="section-desc">Macros in Turmeric operate directly on the syntax tree at compile time. New control flow, DSLs, and syntactic sugar are defined with <code>defmacro</code> -- the output is indistinguishable from hand-written code.</p>
+    <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make code templates readable. No runtime overhead, ever.</p>
     <span class="feat-badge">defmacro · quasiquote · unquote · splice</span>
   </div>
   <div class="code-card">
@@ -433,9 +443,9 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <div class="split-section reverse reveal" id="rc">
   <div>
     <p class="section-label">06 -- Reference Counting</p>
-    <h2 class="section-title">Memory without<br><em>compromise.</em></h2>
-    <p class="section-desc">Turmeric manages heap values through explicit reference counting with compiler-assisted elision. You get deterministic cleanup -- no GC pauses, no dangling pointers, no runtime surprises.</p>
-    <p class="section-desc"><code>rc/clone</code> increments the count; <code>rc/drop</code> decrements it. When the count hits zero, the value is freed immediately -- right there, at that line.</p>
+    <h2 class="section-title">Freed immediately<br>when count <em>hits zero.</em></h2>
+    <p class="section-desc">Turmeric uses reference counting with compiler-assisted elision. <code>rc/clone</code> increments; <code>rc/drop</code> decrements. Cleanup is deterministic -- no GC pauses, no dangling pointers.</p>
+    <p class="section-desc">When the count hits zero, the value is freed right there, at that line. You can see exactly where memory is released.</p>
     <span class="feat-badge">rc/of · rc/clone · rc/drop · rc/strong-count</span>
   </div>
   <div class="code-card">
@@ -466,9 +476,9 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <div class="split-section reveal" id="hof">
   <div>
     <p class="section-label">07 -- Higher-Order Functions</p>
-    <h2 class="section-title">Functions as<br><em>values.</em></h2>
-    <p class="section-desc">Functions are first-class in Turmeric -- pass them, return them, store them, compose them. Closures capture their environment lexically, with full type inference.</p>
-    <p class="section-desc">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure -- not just lists.</p>
+    <h2 class="section-title">Closures capture<br>their <em>environment.</em></h2>
+    <p class="section-desc">Functions are first-class values in Turmeric -- pass them, return them, store them, compose them. Closures capture their lexical environment with full type inference.</p>
+    <p class="section-desc">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure, not just lists.</p>
     <span class="feat-badge">fn · closure · map · filter · reduce</span>
   </div>
   <div class="code-card">
@@ -502,10 +512,10 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 08 NEOTERIC SYNTAX ─────────────── -->
 <div class="split-section reverse reveal" id="neoteric">
   <div>
-    <p class="section-label">08 -- Neoteric Syntax</p>
-    <h2 class="section-title">Two syntaxes,<br>one <em>language.</em></h2>
-    <p class="section-desc">Not a fan of nested parentheses? Switch to Neoteric mode with a single <code>#lang</code> declaration. Function calls use <code>f(args)</code> notation while keeping all of Turmeric's semantics intact.</p>
-    <p class="section-desc">Both syntaxes compile to the same AST. Mix and match across files in the same project -- or share libraries between Turmeric and Neoteric code freely.</p>
+    <p class="section-label">08 -- Sweet-Exp Syntax</p>
+    <h2 class="section-title">Two syntaxes,<br>one <em>AST.</em></h2>
+    <p class="section-desc">A single <code>#lang</code> declaration switches from Lisp-style parentheses to Sweet-Exp notation -- indentation-sensitive, with <code>f(args)</code> for inline calls and <code>$</code> to avoid extra nesting.</p>
+    <p class="section-desc">Both syntaxes compile to the same AST. Sweet-Exp code and classic Turmeric code share libraries freely and can coexist in the same project.</p>
     <span class="feat-badge">#lang turmeric/neoteric · f(args)</span>
   </div>
   <div class="code-card">
@@ -516,7 +526,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
       <span class="code-card-filename" id="neoteric-filename" data-turmeric="classic.tur" data-sweet-exp="neoteric.tur">classic.tur</span>
       <div class="code-syntax-toggle">
         <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
-        <button class="seg-btn" data-syntax="sweet-exp">neoteric</button>
+        <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
       </div>
     </div>
     <div class="code-card-body" style="padding:20px 22px;font-size:12px;"><div class="code-version turmeric-version"><span class="cmt">;; Standard Lisp-style syntax</span>
@@ -549,11 +559,11 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 <!-- ── 09 RUNTIME CONTRACTS ──────────── -->
 <div class="split-section reveal" id="contracts">
   <div>
-    <p class="section-label">09 -- Runtime Contracts</p>
-    <h2 class="section-title">Correctness<br>by <em>contract.</em></h2>
-    <p class="section-desc">When the type system can't catch every invariant, contracts step in. <code>require!</code> asserts preconditions at the call site; <code>ensure!</code> checks postconditions on return. Both produce clear, structured errors in development and can be stripped in release builds.</p>
-    <p class="section-desc">Contracts are opt-in and composable -- layer them wherever correctness matters most without changing function signatures.</p>
-    <span class="feat-badge">require! · ensure! · assert!</span>
+    <p class="section-label">09 -- Contract Types</p>
+    <h2 class="section-title">Predicates live<br>in the <em>type.</em></h2>
+    <p class="section-desc"><code>{ x : T | p }</code> is a contract type -- a value of type <code>T</code> that satisfies predicate <code>p</code>, checked automatically at every call site. Name them with <code>deftype</code> or write them inline in any parameter or return position.</p>
+    <p class="section-desc">Declare invariants once in the signature with <code>:pre</code> and <code>:post</code>. The compiler inserts the checks -- you don't have to remember to. Strip them from release builds with no code changes.</p>
+    <span class="feat-badge">{ x : T | p } · deftype · :pre · :post · -Xcontracts</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -562,24 +572,19 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
       <div class="win-dot wd-g"></div>
       <span class="code-card-filename">contracts.tur</span>
     </div>
-    <div class="code-card-body"><span class="cmt">;; require! asserts preconditions</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">safe-sqrt</span> <span class="pnc">[</span>x <span class="tp">:float</span><span class="pnc">]</span> <span class="tp">:float</span>
-  <span class="pnc">(</span>require! <span class="pnc">(</span><span class="op">&gt;=</span> x <span class="num">0.0</span><span class="pnc">)</span>
-    <span class="str">"safe-sqrt: x must be non-negative"</span><span class="pnc">)</span>
-  <span class="pnc">(</span>sqrt x<span class="pnc">))</span>
+    <div class="code-card-body"><span class="cmt">;; Named contract types -- predicates as types</span>
+<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">Nat</span>     <span class="pnc">{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">&gt;=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
+<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">NonZero</span> <span class="pnc">{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">!=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
 
-<span class="cmt">;; ensure! checks postconditions on return</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">sorted-insert</span> <span class="pnc">[</span>vec v<span class="pnc">]</span> <span class="tp">:vec</span>
-  <span class="pnc">(</span>require! <span class="pnc">(</span>sorted? vec<span class="pnc">)</span>
-    <span class="str">"vec must be sorted before insert"</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>result <span class="pnc">(</span>insert-sorted vec v<span class="pnc">)]</span>
-    <span class="pnc">(</span>ensure! <span class="pnc">(</span>sorted? result<span class="pnc">)</span>
-      <span class="str">"postcondition: result must be sorted"</span><span class="pnc">)</span>
-    result<span class="pnc">))</span>
+<span class="cmt">;; Predicates live in the signature, not the body</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">safe-div</span> <span class="pnc">[</span>x <span class="tp">: Nat</span>  y <span class="tp">: NonZero</span><span class="pnc">]</span> <span class="tp">: Nat</span>
+  <span class="tp">:post</span> <span class="pnc">(</span><span class="op">=</span> <span class="pnc">(</span><span class="op">*</span> result y<span class="pnc">)</span> x<span class="pnc">)</span>
+  <span class="pnc">(</span><span class="op">/</span> x y<span class="pnc">))</span>
 
-<span class="cmt">;; assert! for general invariant checks</span>
-<span class="pnc">(</span>assert! <span class="pnc">(</span><span class="op">=</span> <span class="pnc">(</span><span class="fn">safe-sqrt</span> <span class="num">4.0</span><span class="pnc">)</span> <span class="num">2.0</span><span class="pnc">)</span>
-  <span class="str">"sqrt(4) should be 2"</span><span class="pnc">)</span></div>
+<span class="cmt">;; Compiler inserts checks at every call site</span>
+<span class="cmt">;; Requires: -Xcontracts</span>
+<span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">2</span><span class="pnc">)</span>  <span class="cmt">;; => 5</span>
+<span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">0</span><span class="pnc">)</span>  <span class="cmt">;; contract violated: y != 0</span></div>
   </div>
 </div>
 
@@ -588,10 +593,10 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 <!-- ── 10 SPICE PACKAGE MANAGER ───────── -->
 <div class="split-section reverse reveal" id="spice">
   <div>
-    <p class="section-label">10 -- Spice Package Manager</p>
-    <h2 class="section-title">Dependencies,<br><em>simplified.</em></h2>
-    <p class="section-desc">One <code>build.tur</code> file describes your package and every dependency -- called <em>spices</em>. Git URLs and version refs are all you need. No separate binary, no lock file ceremony.</p>
-    <p class="section-desc">Need a C library? Add it under <code>:cmake-deps</code>. Turmeric fetches, builds, and links it automatically via CPM -- no manual CMake required.</p>
+    <p class="section-label">10 -- Spice -- Package Manager</p>
+    <h2 class="section-title">One file.<br>Every dependency <em>resolved.</em></h2>
+    <p class="section-desc">One <code>build.tur</code> file describes your package and all its spices -- Turmeric fetches, builds, and links them automatically. Git URLs and version refs are all you need.</p>
+    <p class="section-desc">C and CMake dependencies go under <code>:cmake-deps</code> and are wired in via CPM -- no manual CMake configuration required.</p>
     <span class="feat-badge">defpackage · :spices · :cmake-deps</span>
   </div>
   <div class="code-card" style="font-size:12.5px;">
@@ -630,9 +635,9 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 <div class="split-section reveal" id="structural">
   <div>
     <p class="section-label">11 -- Structural Typing</p>
-    <h2 class="section-title">Types that<br><em>flow.</em></h2>
-    <p class="section-desc">Union types let a function accept several concrete types without boxing. <code>(int | bool)</code> is a structural union -- the compiler generates exhaustiveness-checked tag dispatch for you, and every union member must be handled.</p>
-    <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Enable both features with <code>-Xunion-types</code>.</p>
+    <h2 class="section-title">Union types are structural.<br>Every branch <em>checked.</em></h2>
+    <p class="section-desc"><code>(int | bool)</code> is a structural union -- the compiler generates exhaustiveness-checked dispatch for every member with no boxing or runtime overhead. Every union member must be handled.</p>
+    <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Enable both with <code>-Xunion-types</code>.</p>
     <span class="feat-badge">(A | B) · any · type-of · -Xunion-types</span>
   </div>
   <div class="code-card">

@@ -20,9 +20,25 @@ Turmeric exists to explore the intersection of Lisp expressiveness and systems-l
 curl -sSf https://turmeric-lang.com/install | sh
 ```
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rjungemann/turmeric)
-
 This installs the `tur` compiler via the Homebrew formula in this repo.
+
+**Linux / Docker:**
+
+```sh
+docker build -t turmeric .
+docker run --rm -it turmeric                                         # REPL
+docker run --rm -v "$(pwd)":/workspace turmeric tur run /workspace/hello.tur
+docker run --rm -v "$(pwd)":/workspace turmeric tur --interpret /workspace/hello.tur
+```
+
+The image builds `tur` from the local source tree. See
+[`Dockerfile`](Dockerfile) for details and the
+[installation guide](docs/guides/releases-and-installation-guide.md) for
+alternative Linux install paths (prebuilt binaries, build-from-source).
+
+**GitHub Codespaces:**
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rjungemann/turmeric)
 
 **Build from source:**
 
