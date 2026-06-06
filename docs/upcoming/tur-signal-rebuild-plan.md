@@ -98,10 +98,12 @@ turns up two regressions the prior status block missed. The plan is NOT
 | Tier 1 surface present | Done at the defn level; not exercisable until [[defmodule-loses-fat-fn-type-annotation]] resolves. |
 | Banned patterns purged | Done (ban-list grep empty). |
 | `build.tur :exports` matches Tier 1 | Done. |
-| `tur check` clean across all six modules | **No.** `compose.tur` still fails on `__apply-sf` -- blocked by [[defmodule-loses-fat-fn-type-annotation]]. `core.tur` and `shaper.tur` are clean only after the `pair`/`(as float ...)` workarounds in this status block. |
-| Phase 1 example runs | **No.** Blocked by [[defmodule-loses-fat-fn-type-annotation]]. |
-| `test_core` passes | **No.** Same blocker. |
-| Tests 2-5 + examples 2-5 | Blocked by `[[vec-typed-fat-closure-readback-fixture-regressed-codegen]]` AND `[[defmodule-loses-fat-fn-type-annotation]]`. |
+| `tur check` clean across all six modules | Done (2026-06-06). All six modules check-clean after `defmodule-loses-fat-fn-type-annotation` and `vec-typed-fat-closure-readback-fixture-regressed-codegen` resolved. |
+| Phase 1 example runs | Done. `01_constant_and_time.tur` runs correctly. |
+| `test_core` passes | Done. |
+| `test_compose` passes | Done (2026-06-06). Phase 5 `effects-chain` via `__sf-fold` fold, `test_compose.tur` added covering empty/single/two/three-SF chains. |
+| Example 02 (`02_oscillators.tur`) runs | Done (2026-06-06). `-lm` autolink added to `osc.tur` and `shaper.tur`. |
+| Tests 3-5 + examples 3-5 | Not yet written. |
 | Bug reports owed | **Filed:** [[defmodule-loses-fat-fn-type-annotation]]. **Not yet filed:** the `svf-low-pass`-was-removed paper-trail and the `dsp.tur` Pair64 bit-cast obsolete note. |
 
 ## Status update (2026-06-05, post-rebuild execution -- preserved for history)
@@ -572,16 +574,16 @@ this rebuild -- that lands when there is a real voice consumer.
 - **G3 red**: do not ship `effects-chain`. The library uses inline
   composition only; document the limitation in the README.
 
-**Status (2026-06-06):** `effects-chain` is implemented and working via a
-`__chain-loop` + `__apply-sf` recursive pattern (not `>>>`). Attempting to
-use `>>>` to fold a vec of SFs segfaults because of a newly filed gap:
-[[fat-shim-void-ptr-calls-bare-not-fat]]. Specifically, `^fat` let-bindings
-of runtime `ptr<void>` fat closures generate `__tur_fatshim_void___void__`
-which calls the wrapped closure as a bare one-arg function instead of
-dispatching through the two-arg fat closure protocol. The `__chain-loop`
-avoids this by passing SF pointers directly to `^fat` parameters (no shim
-generated at call sites), which dispatches correctly through `sf[0]`.
-The `>>>` fold shape is gated on that gap resolving.
+**Status (2026-06-06, updated):** `effects-chain` is implemented and passing
+`test_compose` via a `__sf-fold` recursive pattern that applies each SF to the
+accumulated signal directly. The `fat-shim-void-ptr-calls-bare-not-fat` gap has
+been resolved (the compiler now emits `__tur_poly_to_fat` passthrough shims for
+`^fat` let-bindings of runtime `ptr<void>` fat closures, replacing the broken
+one-arg shim). However, `(load "stdlib/arrow.tur")` is not visible inside a
+`defmodule` scope, so `>>>` cannot be called from within `compose.tur`. The
+`__sf-fold` pattern achieves equivalent composition directly: it applies each
+SF to the accumulated signal in left-to-right order using `^fat` parameters
+(which use correct fat dispatch through `sf[0]` at each step). Phase 5 done.
 
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 
