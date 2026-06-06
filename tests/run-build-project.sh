@@ -300,6 +300,50 @@ else
     fi
 fi
 
+# file-scope-c-block-emit-order: a module with a file-scope ```c typedef block
+# placed AFTER the defns that use it.  Without the Pass 1a pre-pass fix in
+# emit_implementation, the typedef lands after the function bodies in the
+# generated .c and cc fails with "use of undeclared identifier".  With the fix
+# all EX_INLINE_C blocks are emitted before any defn body regardless of source
+# position in the flat item array.
+CBLOCK="$WORK/cblock"
+mkdir -p "$CBLOCK/src"
+cat > "$CBLOCK/build.tur" <<'EOF'
+(defpackage cblock-order :name "cblock-order" :version "0.1.0")
+EOF
+# __mk-cell references tur_cell_t, which is declared in the file-scope C block.
+# The C block appears AFTER __mk-cell in source.  Without the fix the typedef
+# ends up after the function body in the generated .c and cc rejects it.
+cat > "$CBLOCK/src/main.tur" <<'EOF'
+(defmodule main
+  (defn main [] : int
+    (__mk-cell 21))
+
+  (defn __mk-cell [v : int] #{Unsafe} : int
+    ```c
+    tur_cell_t *p = (tur_cell_t *)malloc(sizeof(tur_cell_t));
+    p->val = v * 2;
+    return p->val;
+    ```)
+
+  ```c
+  typedef struct { int64_t val; } tur_cell_t;
+  ```)
+EOF
+cblock_out=$(cd "$WORK" && "$TUR" build "$CBLOCK" -o "$WORK/cblockbin" 2>&1)
+cblock_rc=$?
+if [ $cblock_rc -ne 0 ]; then
+    fail "build-project-cblock-emit-order" "tur build exit=$cblock_rc: $cblock_out"
+else
+    "$WORK/cblockbin"
+    cblock_run_rc=$?
+    if [ "$cblock_run_rc" -eq 42 ]; then
+        pass "build-project-cblock-emit-order"
+    else
+        fail "build-project-cblock-emit-order" "exit=$cblock_run_rc (expected 42)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

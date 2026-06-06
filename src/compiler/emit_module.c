@@ -5768,7 +5768,22 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         }
     }
 
-    /* Pass 1: emit all top-level definitions */
+    /* Pass 1a: emit all file-scope inline-C blocks before any defn body.
+     * Dependency-based reordering (or a top-level C block that lands after
+     * its defmodule in the flat array) can otherwise place a defn body before
+     * the typedefs/helpers it needs from the C block.  Collecting all C blocks
+     * first mirrors what emit_program does via the dedicated cprelude buffer. */
+    for (uint32_t i = 0; i < impl_n_items; i++) {
+        const Expr *e = impl_items[i];
+        if (e->kind != EX_INLINE_C) continue;
+        InlineC *ic = e->as.inline_c_.inline_c;
+        if (ic && ic->code.p && ic->code.len > 0) {
+            buf_write(&file, ic->code.p, ic->code.len);
+            buf_putc(&file, '\n');
+        }
+    }
+
+    /* Pass 1b: emit all top-level definitions (EX_INLINE_C already handled). */
     for (uint32_t i = 0; i < impl_n_items; i++) {
         const Expr *e = impl_items[i];
         if (e->kind == EX_DEFER) {
@@ -5807,14 +5822,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
             }
             buf_puts(&file, ");\n");
         } else if (e->kind == EX_INLINE_C) {
-            /* file-scope-c-block: a top-level ```c ... ``` block is raw C emitted
-             * at file scope (parity with emit_program). Emitted in source order
-             * into `file`, so it must precede any defn that references it. */
-            InlineC *ic = e->as.inline_c_.inline_c;
-            if (ic && ic->code.p && ic->code.len > 0) {
-                buf_write(&file, ic->code.p, ic->code.len);
-                buf_putc(&file, '\n');
-            }
+            /* Already emitted in Pass 1a above. */
+            continue;
         } else {
             emit_stmt(&ctx, &body, e);
         }
