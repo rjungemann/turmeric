@@ -722,7 +722,6 @@ dispatching through the two-arg fat closure protocol. The `__chain-loop`
 avoids this by passing SF pointers directly to `^fat` parameters (no shim
 generated at call sites), which dispatches correctly through `sf[0]`.
 The `>>>` fold shape is gated on that gap resolving.
-
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 
 - Write `../turmeric-spices/spices/signal/README.md` to match what
