@@ -1,0 +1,3 @@
+(defn outer [] : float
+  (load "stdlib/arrow.tur")
+  1.0)
