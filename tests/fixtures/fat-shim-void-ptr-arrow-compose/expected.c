@@ -2538,10 +2538,10 @@ static bool __fn_689(int64_t, int64_t);
 static bool __fn_693(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Result(int64_t, int64_t);
 static int64_t __inst_Bifunctor_bimap_Result(int64_t, int64_t, int64_t);
-static int64_t __inst_Functor_fmap_Result__struct_(int64_t, tur_poly_fn_t);
-static int64_t __inst_Monad_bind_Result__struct_(int64_t, tur_poly_fn_t);
-static int64_t __inst_MonadError_throw_hyerror_Result__struct_(int64_t);
-static int64_t __inst_MonadError_catch_hyerror_Result__struct_(int64_t, tur_poly_fn_t);
+static int64_t __inst_Functor_fmap_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
+static int64_t __inst_Monad_bind_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
+static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
+static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __fn_727(int64_t, int64_t);
 static bool __fn_731(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
@@ -2559,7 +2559,7 @@ static int64_t __fn_948(void *, int64_t);
 static int64_t __fn_962(void *, int64_t);
 static int64_t __fn_975(void *, int64_t);
 static int64_t __fn_983(void *, int64_t);
-static int64_t __inst_Functor_fmap_Either__struct_(int64_t, tur_poly_fn_t);
+static int64_t __inst_Functor_fmap_Either__ltstruct_gt(int64_t, tur_poly_fn_t);
 static void * __inst_Arrow_arr_arrow(void *);
 static int64_t __fn_1041(void *, int64_t);
 static void * __inst_Arrow__gt_gt_gt_arrow(void *, void *);
@@ -3286,7 +3286,7 @@ static dict_Bifunctor_Result dict_Bifunctor_Result_singleton = {
     .bimap = __inst_Bifunctor_bimap_Result,
 };
 
-static int64_t __inst_Functor_fmap_Result__struct_(int64_t container, tur_poly_fn_t fn) {
+static int64_t __inst_Functor_fmap_Result__ltstruct_gt(int64_t container, tur_poly_fn_t fn) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
     if (!r) return 0;
     if (r->is_ok) return tur_ok(fn.fn(fn.env, r->ok_val));
@@ -3294,48 +3294,48 @@ static int64_t __inst_Functor_fmap_Result__struct_(int64_t container, tur_poly_f
     
 }
 
-typedef struct dict_Functor_Result__struct_ {
+typedef struct dict_Functor_Result__ltstruct_gt {
     int64_t (*fmap)(int64_t, tur_poly_fn_t);
-} dict_Functor_Result__struct_;
+} dict_Functor_Result__ltstruct_gt;
 
-static dict_Functor_Result__struct_ dict_Functor_Result__struct__singleton = {
-    .fmap = __inst_Functor_fmap_Result__struct_,
+static dict_Functor_Result__ltstruct_gt dict_Functor_Result__ltstruct_gt_singleton = {
+    .fmap = __inst_Functor_fmap_Result__ltstruct_gt,
 };
 
-static int64_t __inst_Monad_bind_Result__struct_(int64_t ma, tur_poly_fn_t fn) {
+static int64_t __inst_Monad_bind_Result__ltstruct_gt(int64_t ma, tur_poly_fn_t fn) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
     if (!r || !r->is_ok) return ma;
     return fn.fn(fn.env, r->ok_val);
     
 }
 
-typedef struct dict_Monad_Result__struct_ {
+typedef struct dict_Monad_Result__ltstruct_gt {
     int64_t (*bind)(int64_t, tur_poly_fn_t);
-} dict_Monad_Result__struct_;
+} dict_Monad_Result__ltstruct_gt;
 
-static dict_Monad_Result__struct_ dict_Monad_Result__struct__singleton = {
-    .bind = __inst_Monad_bind_Result__struct_,
+static dict_Monad_Result__ltstruct_gt dict_Monad_Result__ltstruct_gt_singleton = {
+    .bind = __inst_Monad_bind_Result__ltstruct_gt,
 };
 
-static int64_t __inst_MonadError_throw_hyerror_Result__struct_(int64_t err) {
+static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t err) {
         return tur_err(err); 
 }
 
-static int64_t __inst_MonadError_catch_hyerror_Result__struct_(int64_t ma, tur_poly_fn_t handler) {
+static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t ma, tur_poly_fn_t handler) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
     if (!r || r->is_ok) return ma;
     return handler.fn(handler.env, r->err_val);
     
 }
 
-typedef struct dict_MonadError_Result__struct_ {
+typedef struct dict_MonadError_Result__ltstruct_gt {
     int64_t (*throw_hyerror)(int64_t);
     int64_t (*catch_hyerror)(int64_t, tur_poly_fn_t);
-} dict_MonadError_Result__struct_;
+} dict_MonadError_Result__ltstruct_gt;
 
-static dict_MonadError_Result__struct_ dict_MonadError_Result__struct__singleton = {
-    .throw_hyerror = __inst_MonadError_throw_hyerror_Result__struct_,
-    .catch_hyerror = __inst_MonadError_catch_hyerror_Result__struct_,
+static dict_MonadError_Result__ltstruct_gt dict_MonadError_Result__ltstruct_gt_singleton = {
+    .throw_hyerror = __inst_MonadError_throw_hyerror_Result__ltstruct_gt,
+    .catch_hyerror = __inst_MonadError_catch_hyerror_Result__ltstruct_gt,
 };
 
 static bool __fn_727(int64_t a, int64_t b) {
@@ -3474,19 +3474,19 @@ static int64_t __fn_983(void * __env_p_986, int64_t _) {
         return __env___env_985->cv;
 }
 
-static int64_t __inst_Functor_fmap_Either__struct_(int64_t container, tur_poly_fn_t fn) {
+static int64_t __inst_Functor_fmap_Either__ltstruct_gt(int64_t container, tur_poly_fn_t fn) {
         tur_adt_Either *p = (tur_adt_Either *)(intptr_t)container;
     if (p->tag != 1) return container;
     return ctor_Right(fn.fn(fn.env, p->as.Right._0));
     
 }
 
-typedef struct dict_Functor_Either__struct_ {
+typedef struct dict_Functor_Either__ltstruct_gt {
     int64_t (*fmap)(int64_t, tur_poly_fn_t);
-} dict_Functor_Either__struct_;
+} dict_Functor_Either__ltstruct_gt;
 
-static dict_Functor_Either__struct_ dict_Functor_Either__struct__singleton = {
-    .fmap = __inst_Functor_fmap_Either__struct_,
+static dict_Functor_Either__ltstruct_gt dict_Functor_Either__ltstruct_gt_singleton = {
+    .fmap = __inst_Functor_fmap_Either__ltstruct_gt,
 };
 
 static void * __inst_Arrow_arr_arrow(void * f) {
