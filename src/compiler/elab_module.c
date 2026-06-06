@@ -32,13 +32,13 @@ static bool module_name_valid(const char *name, uint32_t len) {
  * Syntax: (load "relative/or/absolute/path.tur")
  */
 /* Phase M: (load "path") — handled by load-expansion preprocessor in
- * elaborate_program before the two-pass elab.  This dispatch path should be
- * unreachable for top-level loads; we return nil to allow stray (load ...)
- * inside e.g. (do ...) blocks to no-op (loaded forms are already expanded
- * at top level by then).  See expand_loads_in_forms. */
+ * elaborate_program before the two-pass elab.  Any (load ...) that reaches
+ * this point is inside a defmodule or defn body, which the preprocessor does
+ * not descend into.  Emit a hard error so the programmer knows to move it. */
 Expr *elab_load(Elab *e, const Form *call) {
-    (void)call;
-    return expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
+    diag_emit(DIAG_ERROR, call->span,
+              "load is only valid at the top level; move it before the enclosing defmodule or defn");
+    return NULL;
 }
 
 /* Phase M2: Load and elaborate an imported module file.
