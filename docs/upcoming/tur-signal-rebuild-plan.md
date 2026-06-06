@@ -572,6 +572,17 @@ this rebuild -- that lands when there is a real voice consumer.
 - **G3 red**: do not ship `effects-chain`. The library uses inline
   composition only; document the limitation in the README.
 
+**Status (2026-06-06):** `effects-chain` is implemented and working via a
+`__chain-loop` + `__apply-sf` recursive pattern (not `>>>`). Attempting to
+use `>>>` to fold a vec of SFs segfaults because of a newly filed gap:
+[[fat-shim-void-ptr-calls-bare-not-fat]]. Specifically, `^fat` let-bindings
+of runtime `ptr<void>` fat closures generate `__tur_fatshim_void___void__`
+which calls the wrapped closure as a bare one-arg function instead of
+dispatching through the two-arg fat closure protocol. The `__chain-loop`
+avoids this by passing SF pointers directly to `^fat` parameters (no shim
+generated at call sites), which dispatches correctly through `sf[0]`.
+The `>>>` fold shape is gated on that gap resolving.
+
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 
 - Write `../turmeric-spices/spices/signal/README.md` to match what
@@ -588,21 +599,15 @@ this rebuild -- that lands when there is a real voice consumer.
       [[language-readiness-for-typed-signal-plan]] is green or amber
       with a documented workaround in this plan. *(Prereq audit
       2026-06-05 above.)*
-- [ ] Every file under `src/signal/` checks clean under `tur check`.
-      *(Re-audit 2026-06-05: 5/6 clean after the `pair` / `(as float
-      ...)` workarounds; `compose.tur` blocked by
-      [[defmodule-loses-fat-fn-type-annotation]].)*
+- [x] Every file under `src/signal/` checks clean under `tur check`.
+      *(Re-audit 2026-06-06: all 6 modules clean. [[defmodule-loses-fat-fn-type-annotation]]
+      is resolved and archived.)*
 - [ ] Every example under `examples/` runs and prints values matching
-      its in-file comments. *(Re-audit 2026-06-05: even the existing
-      `01_constant_and_time.tur` does not run -- blocked by
-      [[defmodule-loses-fat-fn-type-annotation]] at the
-      `(sample c 0.0)` call site. Examples 02-05 owed once that and
-      [[vec-typed-fat-closure-readback-fixture-regressed-codegen]]
-      both clear.)*
+      its in-file comments. *(Re-audit 2026-06-06: `01_constant_and_time.tur`
+      and `02_oscillators.tur` run; `02` requires `-lm` linkage fix in
+      `osc.tur` (add `__tur_autolink__: -lm`). Examples 03-05 still owed.)*
 - [ ] Every test under `tests/signal/` passes; zero `FAIL` lines.
-      *(Re-audit 2026-06-05: `test_core` no longer passes -- same
-      blocker as the example. Tests 2-5 owed once both blockers
-      clear.)*
+      *(Re-audit 2026-06-06: `test_core` passes. Tests 2-5 still owed.)*
 - [x] `grep -rE "__arrow_call1|__signal_call1|memcpy\(&|::\s+:(int|float)" src/signal/`
       is empty. *(Verified 2026-06-05.)*
 - [x] No file in `src/signal/` exceeds ~200 lines. *(Max is shaper.tur
