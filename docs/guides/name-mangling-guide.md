@@ -1,111 +1,130 @@
 ---
-title: Name Mangling -- Turmeric to C identifiers
+title: Name Mangling Guide
 category: Compiler Internals
-description: How Turmeric binding names become C identifiers. The global-symbol scheme is injective and self-delimiting (a literal `_` encodes as `_un`, `-` as `_hy`, `/` as `_sl`); struct fields, dynvars, and function-locals keep the legacy `-`/`/` -> `_` fold for inline-C interop. Includes the demangler algorithm and the inline-C calling convention.
+description: How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies.
 ---
 
-# Name Mangling -- Turmeric to C identifiers
+# Name Mangling Guide
 
-Turmeric identifiers may contain characters a C identifier cannot (`-`, `/`,
-`>`, `?`, `!`, ...). The compiler mangles them into valid C identifiers in
-`src/compiler/mangle.c`. There are **two** schemes, applied to different
-categories of name, plus a small set of verbatim/escape-hatch cases.
+## Why mangling exists
 
-## 1. Injective scheme -- linker-visible global symbols
+Turmeric identifiers can contain characters that are illegal in C (`-`, `/`, `?`,
+`!`, `>`, `<`, ...). The compiler maps every source name to a valid C identifier
+before emitting code. Two requirements govern that mapping:
 
-Top-level `defn`/`def` names (the C function/global symbols a program links
-against) use the **injective, self-delimiting** encoding:
+1. **Injectivity** -- distinct source names must map to distinct C identifiers.
+   Without this, `(defn foo-bar [] : int 1)` and `(defn foo_bar [] : int 2)`
+   would both emit `foo_bar`, a hard C redefinition error.
+2. **Invertibility** -- given a C symbol, the original source name should be
+   recoverable (useful for ABI traces, `nm` output, crash backtraces).
 
-| Source byte | Encoding | Notes |
-|-------------|----------|-------|
+## The injective scheme (linker-visible symbols)
+
+All global, linker-visible symbols use the injective scheme defined in
+`src/compiler/mangle.c` / `src/compiler/mangle.h`.
+
+| Source byte | Output | Notes |
+|-------------|--------|-------|
 | `[A-Za-z0-9]` | itself | unchanged |
-| `_` (literal) | `_un` | so a lone `_` always *introduces* an escape |
-| `-` (hyphen) | `_hy` | |
-| `/` (slash) | `_sl` | when a raw `/` reaches the mangler |
-| operator sigils (`>` `<` `+` `=` `?` `!` ...) | `_` + 2-letter mnemonic | `>` -> `_gt`, `?` -> `_qu`, ... |
-| any other byte | `_xHH` | two uppercase hex digits |
-| `__` (double underscore) | structural separator | module/prefix boundary only |
+| `_` (literal underscore) | `_un` | was passthrough in old scheme |
+| `-` (hyphen / kebab) | `_hy` | was `_` in old scheme |
+| `/` (slash, if raw) | `_sl` | was `_` in old scheme |
+| `>` `<` `=` `?` `!` ... | `_` + 2-letter mnemonic | e.g. `>` -> `_gt`, `?` -> `_qu` |
+| any other byte | `_xHH` (hex) | escape hatch |
+| `__` (double underscore) | **reserved structural separator** | module-path boundaries only |
 
-Module-qualified globals keep `__` as the structural separator
-(`geom/vector` `add2` -> `geom__vector__add2`); because a literal `_` is now
-`_un`, two adjacent underscores can never arise from data, so `__` is
+### Why a single `_` always introduces an escape
+
+Because a literal `_` in a source name encodes as `_un`, a lone `_` in the
+output can never be data. Every `_` in a mangled identifier is the start of a
+two-letter mnemonic (`_hy`, `_gt`, `_un`, ...) or the four-byte hex escape
+`_xHH`. This makes the encoding self-delimiting and the demangler
 unambiguous.
 
-### Why injective
+### Why `__` is exclusively structural
 
-The old scheme folded `-`, `/`, and a literal `_` **all** to `_`, so distinct
-Turmeric names collided in C:
+Because data can never produce two adjacent underscores (a literal `_` in the
+source encodes as `_un`, and two adjacent `_un` encodings produce `_un_un`),
+`__` is free to mean "module/namespace boundary". The module prefix convention
+`<module>__<name>` (e.g. `geom/vector` -> `geom__vector__`, binding `add2` ->
+`geom__vector__add2`) works exactly because of this invariant.
 
-```turmeric
-(defn foo-bar [] : int 1)
-(defn foo_bar [] : int 2)   ;; old: both -> C `foo_bar` (redefinition error!)
-```
+### Worked examples
 
-The injective scheme spells them `foo_hybar` and `foo_unbar` -- they coexist.
-See `tests/fixtures/mangle-kebab-snake-coexist/` and
-`tests/fixtures/mangle-arrow-name-vs-module/`.
+| Source name | Injective C spelling | Note |
+|-------------|----------------------|------|
+| `foo-bar` | `foo_hybar` | kebab hyphen |
+| `foo_bar` | `foo_unbar` | literal underscore |
+| `eq?` | `eq_qu` | question-mark sigil |
+| `>>>` | `_gt_gt_gt` | three `>` sigils |
+| `list->vec` | `list_hy_gtvec` | distinct from `list/vec` |
+| `list/vec` | `list_slvec` | raw slash (within a name) |
+| `geom/vector` (module prefix) | `geom__vector__` | `/` -> `__` structural sep |
+| `add2` in `geom/vector` | `geom__vector__add2` | full qualified name |
 
 ### Demangling
 
-Because the encoding is self-delimiting, `tur_demangle` (in `mangle.c`) is the
-exact inverse: scan left to right; copy alnum; on `__` emit `/`; on a lone `_`
-read either `x` + two hex digits, or a two-letter mnemonic. A round-trip +
-injectivity unit test lives in `tests/mangle_test.c` (`tur_mangle_unit`).
+`tur_demangle(mangled, out, cap)` (in `src/compiler/mangle.c`) inverts the
+encoding: copy alnum; on `__` emit `/`; on a lone `_` read the next two bytes
+as a mnemonic or `x`+two hex digits. The decoded form is never longer than
+the input, so `cap >= strlen(mangled) + 1` always suffices. Returns 0 on
+malformed input.
 
-## 2. Legacy fold -- fields, dynvars, and function-locals
+## The legacy fold (function-local names, struct fields, file basenames)
 
-Struct field names, dynamic-variable names, and **function-local** bindings
-(parameters and locals) keep the **legacy** fold: `[A-Za-z0-9_]` passes
-through, `-`/`/` become `_`, sigils still get mnemonics. This is *deliberate*
-and is the plan's "consciously documented" exception:
+Some contexts intentionally use the older lossy fold:
 
-- These names are referenced from **inline-C** by their stable legacy spelling
-  (a field `is-some` is read as `opt->is_some`; a parameter `val-cmp` is read as
-  `val_cmp`). The injective scheme would change that spelling.
-- Field names routinely **coincide** with parameter names (a `Zipper` field
-  `left-len` and a `zipper-new` parameter `left-len`). Since parameters are
-  legacy-folded, an injective field name would desync the two for the same
-  inline-C token.
-- Fields and locals are struct/function-scoped and **never** cause linker
-  collisions, so injectivity buys nothing here.
+| Context | Scheme | Reason |
+|---------|--------|--------|
+| Function parameters and locals | legacy fold | inline-C bodies reference them by source spelling (`my-param` -> `my_param` in C) |
+| Struct fields | legacy fold | same: inline-C accesses `obj->my_field` |
+| `extern-c` bindings | legacy fold | the C function already has a fixed name |
+| File base names (`foo-bar.c`) | legacy fold | filesystem names; injectivity is irrelevant, long mnemonics hurt readability |
 
-## 3. Verbatim and escape-hatch cases
+The legacy fold is implemented as `tur_mangle_legacy_append` in `mangle.c`:
+`[A-Za-z0-9_]` passes through, `-`/`/` become `_`, other sigils get their
+two-letter mnemonic, remaining bytes get `_xHH`. Crucially, a literal `_` is
+*not* re-encoded, so `foo_bar` and `foo-bar` both produce `foo_bar`.
 
-- **`extern-c` names** are real C symbols. They use the legacy fold via
-  `mangle_field_name` (so `tur_hamt_new` stays itself and `tvar/new` becomes
-  `tvar_new`), consistently at the prototype, every call site
-  (`raw_name_for_binding` special-cases `is_extern_c`), and any inline-C
-  reference.
-- **`(export-as "name")`** pins an exact C name (`c_export_name`), bypassing
-  mangling entirely -- the stable-name escape hatch.
-- **Compiler-synthesized `__`-prefixed pure-C-identifier names**
-  (anonymous lambdas `__fn_N`, instance dicts `__inst_*`, internal helpers like
-  `__fiber_set_cancelled`) are emitted **verbatim** -- their use sites reference
-  them by that exact spelling. The module prefix is still applied, so two
-  module-private `__h` helpers stay distinct (`alpha____h` vs `beta____h`).
-  Names that merely *start* with `__` but still hold kebab/sigil bytes
-  (e.g. `__tg-async-entry`) are NOT pure C identifiers and go through the
-  injective scheme like any other global.
+**Locals cannot collide across the program** (they are block-scoped), so the
+lossy fold is safe there. Struct fields are scoped to their struct, so no
+linker collision is possible.
 
-## Calling Turmeric globals from inline-C
+## Module/file-name split
 
-Inline-C bodies that call a Turmeric global must use its **mangled** C name.
-Under the injective scheme a kebab/slash global re-spells:
+`mangle_mod_basename` in `src/main.c` maps `/` -> `__`, `-` -> `_` for the
+on-disk `.c`/`.h` filenames emitted by `tur build`. This is Option A from the
+plan: filenames stay legacy-lossy, only *symbol* names go injective.
 
-```turmeric
-(defn run-server [h : ptr<void>] : nil ...)
-;; inline-C must call it as run_hyserver, NOT run_server:
-(defn start [] : nil
-  ```c run_hyserver(the_handle); ```)
-```
+The linker-visible binding prefix (e.g. `my-mod__fn`) still uses the injective
+scheme via `raw_name_for_binding`, so `my-mod/fn` and `my_mod/fn` emit
+distinct symbols even though their generated filenames might collide.
 
-To avoid hardcoding the spelling, inline-C can use the
-`__TUR_CNAME_<source-name>__` splice, which routes `<source-name>` through the
-same injective mangler the emitter uses:
+## API reference
 
-```turmeric
-  ```c __TUR_CNAME_run-server__(the_handle); ```
-```
+| Function | Location | Use for |
+|----------|----------|---------|
+| `tur_mangle_append(dst, pk, name, len)` | `mangle.c` | Append mangled bytes into a pre-allocated buffer |
+| `tur_mangle_legacy_append(dst, pk, name, len)` | `mangle.c` | Append legacy-folded bytes |
+| `tur_mangle_ident(name, out, cap)` | `mangle.c` | NUL-terminated convenience wrapper |
+| `tur_demangle(mangled, out, cap)` | `mangle.c` | Inverse: C identifier -> source name |
+| `tur_mangle_bound(src_len)` | `mangle.h` | Worst-case output length (4x input) |
+| `tur_name_is_c_identifier(name, len)` | `mangle.h` | True if name needs no mangling |
 
-(`extern-c` names and `__`-prefixed pure-C-id helpers keep their verbatim
-spelling and need no change.)
+## Spice manifests
+
+The `exports.manifest` file generated by `tur build --manifest <path>` stores
+`<mod>/<name> -> <mangled> :: ...` lines, where `<mangled>` is the C symbol
+as emitted by the injective scheme. The spice loader (`src/turi/spice_loader.c`)
+reads these at runtime via `dlsym`. As long as the manifest is regenerated
+whenever the `.so` is rebuilt (`tur repl` handles this automatically), no
+manual update is needed when the mangling scheme changes.
+
+## Cross-references
+
+- Scheme implementation: `src/compiler/mangle.c`, `src/compiler/mangle.h`
+- Unit test (oracle + round-trip + injectivity): `tests/mangle_test.c` /
+  `tur_mangle_unit` ctest target
+- Regression fixtures: `tests/fixtures/mangle-kebab-snake-coexist/` and
+  `tests/fixtures/mangle-arrow-name-vs-module/`
+- Plan: `docs/upcoming/reversible-name-mangling-plan.md`
