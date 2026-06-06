@@ -414,23 +414,17 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                             const char *n = type_name(*inst->type_args[i].as.app.arg);
                             if (n) arg_part = n;
                         }
-                        char app_comp[48];
-                        snprintf(app_comp, sizeof(app_comp), "%s_%s", fn_part, arg_part);
-                        for (char *p = app_comp; *p; p++) {
-                            if (!isalnum((unsigned char)*p)) *p = '_';
-                        }
+                        char mfn[128], marg[128], app_comp[260];
+                        tur_mangle_ident(fn_part, mfn, sizeof(mfn));
+                        tur_mangle_ident(arg_part, marg, sizeof(marg));
+                        snprintf(app_comp, sizeof(app_comp), "%s_%s", mfn, marg);
                         strncat(type_suffix, app_comp, sizeof(type_suffix) - strlen(type_suffix) - 1);
                         continue;
                     }
                     default: break;
                 }
-                /* Sanitise component: replace non-alnum chars with _ */
-                char comp_buf[32];
-                strncpy(comp_buf, component, sizeof(comp_buf) - 1);
-                comp_buf[sizeof(comp_buf) - 1] = '\0';
-                for (char *p = comp_buf; *p; p++) {
-                    if (!isalnum((unsigned char)*p)) *p = '_';
-                }
+                char comp_buf[128];
+                tur_mangle_ident(component, comp_buf, sizeof(comp_buf));
                 strncat(type_suffix, comp_buf, sizeof(type_suffix) - strlen(type_suffix) - 1);
             }
             snprintf(dict_name, sizeof(dict_name), "dict_%s%s", tc->name->name, type_suffix);

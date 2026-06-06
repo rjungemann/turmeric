@@ -761,25 +761,20 @@ void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
 
 
 /* DV2: Return a malloc'd C identifier for a dynamic var name.
- * Strips leading/trailing '*' (earmuffs), then converts non-alphanumeric
- * characters to '_'. E.g. "*log-level*" -> "log_level". Caller frees. */
+ * Strips leading/trailing '*' (earmuffs), then applies the injective mangler.
+ * E.g. "*log-level*" -> "log_hydlevel", "*log_level*" -> "log_unlevel".
+ * Caller frees. */
 char *mangle_dynvar_name(const char *name) {
     const char *start = name;
     size_t mlen = strlen(name);
     if (mlen > 0 && start[0] == '*') { start++; mlen--; }
     if (mlen > 0 && start[mlen - 1] == '*') { mlen--; }
-    char *p = (char *)malloc(mlen + 1);
+    size_t cap = tur_mangle_bound(mlen) + 1;
+    char *p = (char *)malloc(cap);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
-    for (size_t i = 0; i < mlen; i++) {
-        char c = start[i];
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '_') {
-            p[i] = c;
-        } else {
-            p[i] = '_';
-        }
-    }
-    p[mlen] = '\0';
+    size_t k = 0;
+    tur_mangle_append(p, &k, start, mlen);
+    p[k] = '\0';
     return p;
 }
 
@@ -959,39 +954,24 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
      * dict-name switches.  Without this, an aggregate-keyed constrained-generic
      * call falls back to the int carrier representative (the same failure float
      * keys hit before TY_FLOAT was added to the suffix manglers). */
-    char struct_comp[64];
+    char struct_comp[256];
     if (!component && resolved.kind == TY_STRUCT &&
         resolved.as.struct_.def && resolved.as.struct_.def->name) {
-        const char *nm = resolved.as.struct_.def->name;
-        size_t i = 0;
-        for (; nm[i] && i < sizeof(struct_comp) - 1; i++) {
-            unsigned char c = (unsigned char)nm[i];
-            struct_comp[i] = (char)(((c >= '0' && c <= '9') ||
-                                     (c >= 'A' && c <= 'Z') ||
-                                     (c >= 'a' && c <= 'z')) ? (char)c : '_');
-        }
-        struct_comp[i] = '\0';
+        tur_mangle_ident(resolved.as.struct_.def->name, struct_comp,
+                         sizeof(struct_comp));
         component = struct_comp;
     }
     /* GDE2: a TY_APP receiver (e.g. Map[cstr int]) needs the head constructor
      * name as the instance suffix component, mirroring the HKT-instance naming
      * on the definition side (__inst_Eq_eq__Map for definstance Eq [Map]).
      * Walk the app-chain to the constructor, which must be a TY_STRUCT. */
-    char app_comp[64];
+    char app_comp[256];
     if (!component && resolved.kind == TY_APP) {
         Type head = resolved;
         while (head.kind == TY_APP && head.as.app.fn)
             head = *head.as.app.fn;
         if (head.kind == TY_STRUCT && head.as.struct_.def && head.as.struct_.def->name) {
-            const char *nm = head.as.struct_.def->name;
-            size_t i = 0;
-            for (; nm[i] && i < sizeof(app_comp) - 1; i++) {
-                unsigned char c = (unsigned char)nm[i];
-                app_comp[i] = (char)(((c >= '0' && c <= '9') ||
-                                      (c >= 'A' && c <= 'Z') ||
-                                      (c >= 'a' && c <= 'z')) ? (char)c : '_');
-            }
-            app_comp[i] = '\0';
+            tur_mangle_ident(head.as.struct_.def->name, app_comp, sizeof(app_comp));
             component = app_comp;
         }
     }
@@ -1755,23 +1735,18 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
                     const char *n = type_name(*inst->type_args[i].as.app.arg);
                     if (n) arg_part = n;
                 }
-                char app_comp[48];
-                snprintf(app_comp, sizeof(app_comp), "%s_%s", fn_part, arg_part);
-                for (char *p = app_comp; *p; p++) {
-                    if (!isalnum((unsigned char)*p)) *p = '_';
-                }
+                char mfn[128], marg[128], app_comp[260];
+                tur_mangle_ident(fn_part, mfn, sizeof(mfn));
+                tur_mangle_ident(arg_part, marg, sizeof(marg));
+                snprintf(app_comp, sizeof(app_comp), "%s_%s", mfn, marg);
                 strncat(type_suffix, app_comp,
                         sizeof(type_suffix) - strlen(type_suffix) - 1);
                 continue;
             }
             default: break;
         }
-        char comp_buf[32];
-        strncpy(comp_buf, component, sizeof(comp_buf) - 1);
-        comp_buf[sizeof(comp_buf) - 1] = '\0';
-        for (char *p = comp_buf; *p; p++) {
-            if (!isalnum((unsigned char)*p)) *p = '_';
-        }
+        char comp_buf[128];
+        tur_mangle_ident(component, comp_buf, sizeof(comp_buf));
         strncat(type_suffix, comp_buf, sizeof(type_suffix) - strlen(type_suffix) - 1);
     }
     snprintf(buf, buflen, "dict_%s%s", tc->name->name, type_suffix);

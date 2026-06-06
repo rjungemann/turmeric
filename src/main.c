@@ -3081,9 +3081,15 @@ static int cmd_check_dir(const char *dir) {
  * `dir`.  `inc`/`n_inc` are include search dirs threaded into every
  * compile_to_h / compile_to_implementation call so cross-module imports
  * resolve; they are borrowed (not freed here). */
-/* Mangle a module name for use as a C header/impl base name, matching the
- * compiler's sanitize_module_name / mangle_module_name: '/' -> "__",
- * '-' -> '_', other non-identifier chars -> '_'. */
+/* Mangle a module name for use as a C header/impl base name.
+ * '/' -> "__", '-' -> '_', other non-identifier chars -> '_'.
+ *
+ * Deliberately keeps the LEGACY (lossy) fold for on-disk filenames:
+ * injectivity matters for linker-visible C symbols but not for filesystem
+ * paths -- and over-long "_hy"/"_xHH" expansions hurt readability.
+ * Binding symbols in the generated C use the injective scheme (via
+ * raw_name_for_binding / tur_mangle_append); only the header/impl base
+ * names produced here stay legacy. See docs/guides/name-mangling-guide.md. */
 static void mangle_mod_basename(const char *name, char *out, size_t cap) {
     size_t k = 0;
     for (size_t i = 0; name[i] && k + 2 < cap; i++) {

@@ -1273,7 +1273,8 @@ static bool build_inst_type_suffix(const Type *type_args,
     out[0] = '\0';
     for (uint8_t j = 0; j < n_type_args; j++) {
         const char *type_component = NULL;
-        char ctor_name_buf[32];  /* for TY_STRUCT/TY_APP constructor names */
+        char ctor_name_buf[32];  /* for TY_STRUCT/TY_APP constructor names (source) */
+        char ctor_mangle_buf[128]; /* injective-mangled form of ctor_name_buf */
         switch (type_args[j].kind) {
             case TY_INT:     type_component = "int";     break;
             case TY_BOOL:    type_component = "bool";    break;
@@ -1301,10 +1302,8 @@ static bool build_inst_type_suffix(const Type *type_args,
                         sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
                     memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
                     ctor_name_buf[sym_len] = '\0';
-                    for (char *p = ctor_name_buf; *p; p++) {
-                        if (!isalnum((unsigned char)*p)) *p = '_';
-                    }
-                    type_component = ctor_name_buf;
+                    tur_mangle_ident(ctor_name_buf, ctor_mangle_buf, sizeof(ctor_mangle_buf));
+                    type_component = ctor_mangle_buf;
                 } else if (type_args[j].as.struct_.def) {
                     type_component = type_args[j].as.struct_.def->name;
                 } else {
@@ -1322,11 +1321,11 @@ static bool build_inst_type_suffix(const Type *type_args,
                     const char *n = type_name(*type_args[j].as.app.arg);
                     if (n) arg_part = n;
                 }
-                snprintf(ctor_name_buf, sizeof(ctor_name_buf), "%s_%s", ctor_part, arg_part);
-                for (char *p = ctor_name_buf; *p; p++) {
-                    if (!isalnum((unsigned char)*p)) *p = '_';
-                }
-                type_component = ctor_name_buf;
+                char mctor[64], marg[64];
+                tur_mangle_ident(ctor_part, mctor, sizeof(mctor));
+                tur_mangle_ident(arg_part, marg, sizeof(marg));
+                snprintf(ctor_mangle_buf, sizeof(ctor_mangle_buf), "%s_%s", mctor, marg);
+                type_component = ctor_mangle_buf;
                 break;
             }
             default: type_component = "T"; break;
@@ -2691,12 +2690,8 @@ static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
                 break;
             default: break;
         }
-        char comp_buf[32];
-        strncpy(comp_buf, component, sizeof(comp_buf) - 1);
-        comp_buf[sizeof(comp_buf) - 1] = '\0';
-        for (char *p = comp_buf; *p; p++) {
-            if (!isalnum((unsigned char)*p)) *p = '_';
-        }
+        char comp_buf[128];
+        tur_mangle_ident(component, comp_buf, sizeof(comp_buf));
         strncat(type_suffix, comp_buf, sizeof(type_suffix) - strlen(type_suffix) - 1);
     }
     snprintf(dst, dstlen, "dict_%s%s", tc->name->name, type_suffix);
