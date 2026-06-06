@@ -5302,6 +5302,62 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
      * In separate_compilation mode, only emit exported symbols. */
     uint32_t h_n_items;
     const Expr **h_items = flatten_program_items(program, &h_n_items);
+
+    /* project-mode-defstruct-typedef-missing: emit `typedef struct Name {
+     * fields... } Name;` into the header so both this module's .c and any
+     * importing modules see the type.  Mirrors the Pass 0 in emit_program
+     * (single-file mode) at the top of this file, minus the drop_glue/
+     * walk_glue functions -- those stay `static` in the implementation file. */
+    if (separate_compilation) {
+        for (uint32_t i = 0; i < h_n_items; i++) {
+            const Expr *e = h_items[i];
+            if (e->kind != EX_DEF || !e->as.def_.struct_def) continue;
+            StructDef *def = e->as.def_.struct_def;
+            if (def->is_opaque) continue;
+            /* Pre-register fn-ptr typedefs for concrete fn fields so they
+             * land before the struct typedef that references them. */
+            for (uint32_t j = 0; j < def->n_fields; j++) {
+                StructField *f = &def->fields[j];
+                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
+                    const char *td = register_fn_ptr_typedef(f->full_type);
+                    if (td) type_codegen_emit_fn_ptr_typedefs(out);
+                }
+            }
+            buf_printf(out, "typedef struct %s {\n", def->name);
+            for (uint32_t j = 0; j < def->n_fields; j++) {
+                StructField *f = &def->fields[j];
+                const char *ctype;
+                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
+                    const char *td = register_fn_ptr_typedef(f->full_type);
+                    ctype = td ? td : "int64_t";
+                } else switch (f->kind) {
+                    case TY_INT:      ctype = "int64_t"; break;
+                    case TY_BOOL:     ctype = "bool"; break;
+                    case TY_FLOAT:    ctype = "double"; break;
+                    case TY_CSTR:     ctype = "const char *"; break;
+                    case TY_PTR_VOID: ctype = "void *"; break;
+                    case TY_RC:
+                    case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                    case TY_REF:
+                    case TY_LREF:     ctype = "void *"; break;
+                    case TY_INT8:     ctype = "int8_t"; break;
+                    case TY_INT16:    ctype = "int16_t"; break;
+                    case TY_INT32:    ctype = "int32_t"; break;
+                    case TY_UINT8:    ctype = "uint8_t"; break;
+                    case TY_UINT16:   ctype = "uint16_t"; break;
+                    case TY_UINT32:   ctype = "uint32_t"; break;
+                    case TY_UINT64:   ctype = "uint64_t"; break;
+                    case TY_FLOAT32:  ctype = "float"; break;
+                    default:          ctype = "int64_t"; break;
+                }
+                char *mfn = mangle_field_name(f->name);
+                buf_printf(out, "    %s %s;\n", ctype, mfn);
+                free(mfn);
+            }
+            buf_printf(out, "} %s;\n\n", def->name);
+        }
+    }
+
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
         if (e->kind == EX_FN_DEF) {
@@ -5790,6 +5846,11 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
             /* Phase M5: module-level defers are handled after this pass. */
             continue;
         } else if (e->kind == EX_DEF) {
+            /* project-mode-defstruct-typedef-missing: a struct-def EX_DEF
+             * represents a type declaration, not a runtime value.  The
+             * typedef itself is emitted into the header (emit_header);
+             * skip the bogus `Name Name_N;` variable declaration here. */
+            if (e->as.def_.struct_def) continue;
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
             /* Phase M6: exported def bindings get extern linkage in separate
              * compilation mode so other modules can reference them. */
