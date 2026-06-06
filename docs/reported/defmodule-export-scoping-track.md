@@ -11,11 +11,11 @@ description: Consolidates two reports about how the `defmodule`/`export` boundar
 Two independent but adjacent defects that both surface as "the spice builds
 under `tur emit-c`/`tur check` but breaks the moment a real consumer or
 project-mode build engages." Originals preserved verbatim under
-[`archive/`](archive/).
+[`../archive/`](../archive/).
 
 ## Defect A -- `^fat ... :(fn ...)` annotation lost across the export boundary
 
-[`archive/defmodule-loses-fat-fn-type-annotation.md`](archive/defmodule-loses-fat-fn-type-annotation.md)
+[`../archive/defmodule-loses-fat-fn-type-annotation.md`](../archive/defmodule-loses-fat-fn-type-annotation.md)
 
 Inside `(defmodule mod (export name) ...)`, a defn declared with
 `(defn name [^fat arg : (fn [param-types] ret-type)] ret) ...)` registers and
@@ -51,7 +51,7 @@ any `(defmodule probe/m1 ...)` is callable from an importer.
 
 ## Defect B -- project-mode build skips stdlib prelude auto-load
 
-[`archive/prelude-macros-not-importable-inside-defmodule.md`](archive/prelude-macros-not-importable-inside-defmodule.md)
+[`../archive/prelude-macros-not-importable-inside-defmodule.md`](../archive/prelude-macros-not-importable-inside-defmodule.md)
 
 `compile_to_c` (single-file mode, `src/main.c:589`) prepends ~20 stdlib files
 to the user program and passes `stdlib_prefix` so `elab_toplevel.c:1131-1148`

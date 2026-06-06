@@ -10,7 +10,7 @@ description: Consolidates three related reports about typed/polymorphic closure-
 
 This track gathers three reports that describe one end-state defect with three
 distinct layers. Originals are preserved verbatim in
-[`archive/`](archive/) -- link targets below. **Do not delete the originals**;
+[`../archive/`](../archive/) -- link targets below. **Do not delete the originals**;
 they hold the file:line root-cause analysis the fix work needs.
 
 ## The end state we are trying to reach
@@ -28,7 +28,7 @@ Tracking plan (the cross-referenced upstream artifact):
 
 ### Layer 1 -- the outermost symptom: `>>>` itself
 
-[`archive/arrow-compose-float-closure-int64-thunk-mismatch.md`](archive/arrow-compose-float-closure-int64-thunk-mismatch.md)
+[`../archive/arrow-compose-float-closure-int64-thunk-mismatch.md`](../archive/arrow-compose-float-closure-int64-thunk-mismatch.md)
 -- the untyped stdlib `>>>` commits its inner closure body to the int64 thunk
 ABI; when applied to `:float -> :float` closures the emitted C makes three
 disagreeing function-pointer-type casts at the producer, inner body, and
@@ -43,7 +43,7 @@ but `>>>` itself is **not** yet retyped pending Stages B-E.
 
 ### Layer 2 -- prerequisite: capturing-closure return-type lowering (RESOLVED)
 
-[`archive/boxed-fn-typed-closure-return-miscompiles.md`](archive/boxed-fn-typed-closure-return-miscompiles.md)
+[`../archive/boxed-fn-typed-closure-return-miscompiles.md`](../archive/boxed-fn-typed-closure-return-miscompiles.md)
 -- a plain `defn` whose declared return type was a concrete non-boxed `(fn
 [..] R)` and whose body yielded a capturing closure lowered to the wrong C
 signature (the function's *result* type instead of the fat-closure carrier).
@@ -59,7 +59,7 @@ prerequisite for Layer 1 Direction B and is now off the critical path.
 
 ### Layer 3 -- the open blocker: dispatching inner body erases intermediate types
 
-[`archive/poly-closure-inner-dispatch-result-erased.md`](archive/poly-closure-inner-dispatch-result-erased.md)
+[`../archive/poly-closure-inner-dispatch-result-erased.md`](../archive/poly-closure-inner-dispatch-result-erased.md)
 -- per-monomorphization inner-body specialization works for the **dispatch-free**
 shape (e.g. `(fn [t] : A val)`), verified by
 `tests/fixtures/poly-closure-result-tyvar-float`. It does **not** work for the
