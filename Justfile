@@ -47,6 +47,47 @@ doctest: build
 test-tur: build
     bash tests/run.sh
 
+# Regenerate all expected.c codegen snapshots from the current compiler output.
+# Pass --check to exit non-zero if any snapshot is out of date (used as a CI guard).
+regen-snapshots *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TUR=./build/tur
+    [ -x "$TUR" ] || { echo "error: $TUR not built; run 'just build' first" >&2; exit 2; }
+    CHECK_MODE=0
+    for _arg in {{ARGS}}; do
+        [ "$_arg" = "--check" ] && CHECK_MODE=1
+    done
+    FAILED=0
+    COUNT=0
+    for dir in tests/fixtures/*/; do
+        [ -f "$dir/expected.c" ] || continue
+        name=$(basename "$dir")
+        input="$dir/input.tur"
+        [ -f "$input" ] || input="$dir/${name}.tur"
+        [ -f "$input" ] || continue
+        COUNT=$((COUNT + 1))
+        if [ "$CHECK_MODE" = "1" ]; then
+            actual=$("$TUR" emit-c "$input" 2>/dev/null || true)
+            if ! diff -q <(echo "$actual") "$dir/expected.c" >/dev/null 2>&1; then
+                echo "DRIFT: $name"
+                FAILED=$((FAILED + 1))
+            fi
+        else
+            "$TUR" emit-c "$input" > "$dir/expected.c" 2>/dev/null || true
+        fi
+    done
+    if [ "$CHECK_MODE" = "1" ]; then
+        if [ "$FAILED" -gt 0 ]; then
+            echo "error: $FAILED/$COUNT snapshots are out of date. Run 'tur run regen-snapshots' to fix." >&2
+            exit 1
+        else
+            echo "$COUNT snapshots are up to date."
+        fi
+    else
+        echo "Regenerated $COUNT snapshots."
+    fi
+
 # Run the interpreter fixture test suite (turi tests).
 test-turi: build
     bash tests/run-turi.sh
