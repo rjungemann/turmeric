@@ -23,6 +23,14 @@
 ;;; same way Option[A] / Result[A B] erase theirs.
 ;;;
 ;;; Since: Phase sum-types-either
+;; load-not-expanded-in-imported-or-project-modules: either.tur's Functor
+;; instance (below) needs the Functor class in scope.  In normal builds the
+;; stdlib auto-load supplies the typeclass-functor.tur stub, but project-mode
+;; (`tur build .`) and on-demand loads (arrow.tur -> either.tur) do not run the
+;; full stdlib auto-load, so declare the dependency explicitly.  defclass is
+;; idempotent, so this coexists with the auto-loaded stub and the on-demand
+;; full typeclass.tur with no double-emission.
+(load "stdlib/typeclass-functor.tur")
 ;; Either[L R] -- binary sum; Left l | Right r.
 ;; :copy -- an Either handle is an immutable tagged scalar pair with no owned
 ;; resources, so it is freely copyable (like a primitive); this matches the

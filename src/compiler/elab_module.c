@@ -243,6 +243,28 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     bool had_error_before = diag_had_error();
     Form **forms = read_all_with_registry(e->arena, e->st, sfile,
                                           e->user_macros, &nforms);
+    if (forms) {
+        /* load-not-expanded-in-imported-or-project-modules: expand this
+         * module's top-level (load "path") forms before elaboration, exactly as
+         * the entry unit does. Without this a `(load ...)` at column 1 of an
+         * imported file survives to elab_load and errors "load is only valid at
+         * the top level". The visited set is shared with the entry, so a path
+         * loaded by both is spliced once. */
+        Form **expanded = NULL;
+        uint32_t n_expanded = 0;
+        int lrc = elab_expand_module_loads(e, e->arena, e->st, forms, nforms,
+                                           &expanded, &n_expanded);
+        if (lrc != 0) {
+            slot->is_loading = false;
+            if (!had_error_before && diag_had_error()) {
+                diag_emit(DIAG_NOTE, import_span,
+                          "while loading module '%s'", name->name);
+            }
+            return NULL;
+        }
+        forms = expanded;
+        nforms = n_expanded;
+    }
     if (!forms) {
         slot->is_loading = false;
         /* Transitive-RM (T1) decision #4: if the sub-read introduced a
@@ -287,6 +309,16 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         if (ex->kind == EX_DEFMODULE) {
             loaded_defmod = ex->as.defmodule_.mod; /* Phase M4 */
             if (!e->separate_compilation) elab_register_file_def(e, ex);
+        } else if (ex->kind != EX_NIL_LIT && !e->separate_compilation) {
+            /* load-not-expanded-in-imported-or-project-modules: a top-level
+             * (load ...) spliced bare definitions (e.g. arrow.tur's `>>>`)
+             * ahead of this file's defmodule. The entry path emits every such
+             * returned expr via items[]; mirror that here by registering it for
+             * file-scope emission, otherwise the spliced defns elaborate into
+             * scope but never reach codegen -> link errors. Self-registering
+             * forms (defclass/definstance/nested defns) already returned nil and
+             * are skipped by the EX_NIL guard. */
+            elab_register_file_def(e, ex);
         }
     }
 

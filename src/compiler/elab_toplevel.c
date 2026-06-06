@@ -656,8 +656,6 @@ const Ls2ResolverCtx *ls2_resolver_ctx_active(void) {
 /* Phase M: (load "path") expansion -- shared visited set + output accumulator
  * threaded through a depth-first, in-order recursive walk. */
 typedef struct {
-    const Symbol **loaded;     /* interned canonical paths already expanded */
-    uint32_t       n_loaded, cap_loaded;
     Form         **out;        /* accumulated, fully-expanded form list */
     uint32_t       out_n, out_cap;
     int            rc;         /* -1 on any load error */
@@ -709,19 +707,24 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         memcpy(path_buf, path_f->as.s.p, plen);
         path_buf[plen] = '\0';
         const Symbol *key = intern_cstr(st, path_buf);
+        /* The visited set is compilation-global (on the Elab) so a path the
+         * entry already spliced is not re-spliced when an imported module loads
+         * it too -- and vice versa. See load_expanded_paths in elab_internal.h. */
         bool already = false;
-        for (uint32_t k = 0; k < lx->n_loaded; k++) {
-            if (lx->loaded[k] == key) { already = true; break; }
+        for (uint32_t k = 0; k < e->n_load_expanded_paths; k++) {
+            if (e->load_expanded_paths[k] == key) { already = true; break; }
         }
         if (already) continue;  /* idempotent: a path is expanded at most once */
-        if (lx->n_loaded >= lx->cap_loaded) {
-            lx->cap_loaded = lx->cap_loaded ? lx->cap_loaded * 2 : 8;
-            lx->loaded = (const Symbol **)realloc((void *)lx->loaded,
-                          lx->cap_loaded * sizeof(const Symbol *));
-            if (!lx->loaded) { fprintf(stderr, "tur: oom\n"); abort(); }
+        if (e->n_load_expanded_paths >= e->cap_load_expanded_paths) {
+            e->cap_load_expanded_paths = e->cap_load_expanded_paths
+                                             ? e->cap_load_expanded_paths * 2 : 8;
+            e->load_expanded_paths = (const Symbol **)realloc(
+                (void *)e->load_expanded_paths,
+                e->cap_load_expanded_paths * sizeof(const Symbol *));
+            if (!e->load_expanded_paths) { fprintf(stderr, "tur: oom\n"); abort(); }
         }
         /* Mark visited BEFORE recursing so a self/cyclic load is skipped. */
-        lx->loaded[lx->n_loaded++] = key;
+        e->load_expanded_paths[e->n_load_expanded_paths++] = key;
 
         char *src_raw = NULL;
         size_t src_len = 0;
@@ -789,6 +792,28 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
     }
 }
 
+/* load-not-expanded-in-imported-or-project-modules: expand the top-level
+ * (load "path") forms of an *imported* module's form list the same way
+ * elaborate_program does for the entry unit. The entry preprocessor only ran
+ * over the entry's own forms, so without this an imported file's top-level
+ * `(load ...)` survived to elaboration and errored ("load is only valid at the
+ * top level"). The visited set lives on the Elab and is shared with the entry
+ * expansion, so a path loaded by both is spliced exactly once.
+ *
+ * Writes the fully-expanded form list to *out_forms / *out_n (arena-allocated)
+ * and returns 0 on success, -1 if any load failed. */
+int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
+                             Form *const *forms, uint32_t nforms,
+                             Form ***out_forms, uint32_t *out_n) {
+    LoadExpandCtx lx = {0};
+    lx.out_cap = nforms + 16;
+    lx.out = (Form **)arena_alloc(arena, lx.out_cap * sizeof(Form *));
+    load_expand_forms(&lx, e, arena, st, forms, nforms);
+    *out_forms = lx.out;
+    *out_n = lx.out_n;
+    return lx.rc;
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -841,7 +866,6 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         lx.out = (Form **)arena_alloc(arena, lx.out_cap * sizeof(Form *));
         load_expand_forms(&lx, &e, arena, st, forms, nforms);
         if (lx.rc != 0) rc = lx.rc;
-        free((void *)lx.loaded);
         /* Replace forms/nforms with the expanded list for the rest of
          * elaborate_program.  Cast away const since we're in our own copy. */
         forms = (Form *const *)lx.out;
@@ -1106,6 +1130,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         free(e.forward_type_syms);
         free(e.handled_effect_names);
         free(e.macros);
+        free((void *)e.load_expanded_paths);
         return NULL;
     }
 
@@ -1265,6 +1290,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     free(e.loaded_modules); /* Phase M2 */
     free(e.dynvar_entries);
     free(e.active_dynvar_bindings);
+    free((void *)e.load_expanded_paths);
     if (rc != 0) return NULL;
 
     Expr *prog = expr_new(arena, EX_PROGRAM, TYPE_NIL,
