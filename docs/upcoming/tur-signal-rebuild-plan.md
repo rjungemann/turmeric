@@ -712,6 +712,16 @@ Once `bash tests/run.sh` is green with fixtures added for both reports:
 If either blocker is *not* yet fixed when you start: stop, confirm the report
 repro still fails, and leave `compose.tur` on the `__chain-loop` fold. That is
 the correct, shippable state -- not a regression to fix by force.
+**Status (2026-06-06):** `effects-chain` is implemented and working via a
+`__chain-loop` + `__apply-sf` recursive pattern (not `>>>`). Attempting to
+use `>>>` to fold a vec of SFs segfaults because of a newly filed gap:
+[[fat-shim-void-ptr-calls-bare-not-fat]]. Specifically, `^fat` let-bindings
+of runtime `ptr<void>` fat closures generate `__tur_fatshim_void___void__`
+which calls the wrapped closure as a bare one-arg function instead of
+dispatching through the two-arg fat closure protocol. The `__chain-loop`
+avoids this by passing SF pointers directly to `^fat` parameters (no shim
+generated at call sites), which dispatches correctly through `sf[0]`.
+The `>>>` fold shape is gated on that gap resolving.
 
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 
