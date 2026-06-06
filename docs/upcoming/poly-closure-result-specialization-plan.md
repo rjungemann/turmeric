@@ -215,18 +215,19 @@ and that tyvar binds to a float kind (2938).
    resolved report (`docs/archive/history/poly-defn-shares-inner-closure-body-...`)
    is updated to "RESOLVED via direction 1/2 (dispatch-free shape)".
 
-4. **Stage E (generalize `>>>`) -- BLOCKED, NOT done.** `>>>`'s inner body
-   (`(fn [x] (gv (fv x)))`) is the dispatching shape, so retyping `>>>` to the
-   polymorphic typed spelling triggers the inner-dispatch erasure miscompile
-   documented in `docs/reported/poly-closure-inner-dispatch-result-erased.md`.
-   The retype + `sf-compose-typed` rewrite were spiked and **reverted** to avoid
-   shipping a register-class miscompile; `>>>` keeps its type-erased spelling and
-   `compose-float` remains the float path. Stage E is unblocked only once the
-   inner-dispatch result types are recoverable per spec (report's fix directions
-   1-3, which also need the fn-typed-`^fat`-param nested-tyvar preservation noted
-   in that report). The G7 amber note in
-   `docs/archive/history/language-readiness-for-typed-signal-plan.md` stays
-   amber.
+4. **Stage E (generalize `>>>`) -- DONE (2026-06-06).** `>>>` rewritten to the
+   polymorphic typed spelling
+   `(defn >>> [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+     (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))`.
+   `compose-float` deleted from `stdlib/arrow.tur`; its callers migrated to
+   `>>>`. `sf-compose-typed` and `arrow-compose-float` fixtures rewritten to use
+   non-capturing named float functions so the call site binds A=float, B=float,
+   C=float and the inner body is emitted via `tur_thunk_double_double_t` --
+   register-class-correct end to end. Full suite: 1524 passed, 0 failed.
+   G7 amber cleared in
+   `docs/archive/history/language-readiness-for-typed-signal-plan.md`.
+   Tracking report `docs/reported/poly-closure-inner-dispatch-result-erased.md`
+   flipped to RESOLVED and archived to `docs/archive/history/`.
 
 ## Risk + validation
 - Fixtures to diff/regenerate (shared-inner-body / `>>>` / sibling

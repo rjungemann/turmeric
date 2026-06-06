@@ -1,6 +1,6 @@
 ;;; tur/arrow -- arrow combinators over the (->) function arrow, in two surfaces.
 ;;;
-;;; Bare functions (the simple path): arr, >>>, compose-float, arrow-first,
+;;; Bare functions (the simple path): arr, >>>, arrow-first,
 ;;; arrow-second, par-comp, arrow-split, arrow-const, and arrow-dup as plain
 ;;; functions -- use these when you do not need polymorphism over the arrow
 ;;; constructor.
@@ -42,52 +42,29 @@
 ;;; Example:
 ;;;   (arr (fn [x] (+ x 1)))  ; => identity for functions
 (defn arr [^fat f] f)
-;;; >>> -- compose two function arrows sequentially.
+;;; >>> -- compose two function arrows sequentially (register-class-correct).
+;;;
+;;; Polymorphic over the element type: the type parameters A, B, C are bound
+;;; at each call site from the declared types of f and g, so a float pipeline
+;;; emits a double-returning inner body dispatched through
+;;; tur_thunk_double_double_t (register-class-correct), and an int pipeline
+;;; uses the standard int64 thunk ABI.
 ;;;
 ;;; Parameters:
-;;;   f -- first arrow (a -> b)
-;;;   g -- second arrow (b -> c)
+;;;   f -- first arrow (A -> B)
+;;;   g -- second arrow (B -> C)
 ;;;
 ;;; Returns:
-;;;   A function (a -> c) that applies f then g.
+;;;   A ptr<void> closure (A -> C) that applies f then g.
 ;;;
 ;;; Example:
-;;;   ((>>> (fn [x] (+ x 1)) (fn [x] (* x 2))) 3)  ; => 8
-
-(defn >>> [^fat f ^fat g] (let [fv f gv g] (fn [x] (gv (fv x)))))
-;;; compose-float -- sequential composition of two :float -> :float arrows.
-;;;
-;;; The float-register-class companion to `>>>`. `>>>` is type-erased over its
-;;; argument closures and lowers its inner body to the int64 thunk ABI, so
-;;; composing :float -> :float closures through it dispatches double-returning
-;;; bodies via int64 thunk pointers -- undefined behavior that only happens to
-;;; work by SysV register-class accident (see
-;;; docs/reported/arrow-compose-float-closure-int64-thunk-mismatch.md).
-;;; `compose-float` declares both arguments and the inner closure as :float, so
-;;; codegen emits a double-returning inner body dispatched through
-;;; tur_thunk_double_double_t -- register-class-correct end to end.
-;;;
-;;; Generalizing `>>>` itself to all register classes needs a compiler change
-;;; (per-monomorphization inner-closure specialization); that work is tracked in
-;;; docs/upcoming/poly-closure-result-specialization-plan.md. Until it lands,
-;;; use `compose-float` for float pipelines (e.g. signal SFs, Time -> Sample).
-;;;
-;;; Parameters:
-;;;   f -- first arrow (:float -> :float)
-;;;   g -- second arrow (:float -> :float)
-;;;
-;;; Returns:
-;;;   A :float -> :float closure that applies f then g.
-;;;
-;;; Example:
-;;;   ((compose-float (fn [x : float] : float (+ x 1.0))
-;;;                   (fn [x : float] : float (* x 2.0))) 3.0)  ; => 8.0
+;;;   ((>>> (fn [x : float] : float (+ x 1.0))
+;;;         (fn [x : float] : float (* x 2.0))) 3.0)  ; => 8.0
 ;;;
 ;;; Since: Phase CA1
-(defn compose-float
-  [^fat f :(fn [float] #{} float)
-   ^fat g :(fn [float] #{} float)] : ptr<void>
-  (let [fv f gv g] (fn [x : float] : float (gv (fv x)))))
+(defn >>> [A B C]
+  [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+  (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
 ;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,
 ;;; return a new heap Tuple2 *.  Used by arrow-first.
 
