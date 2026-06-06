@@ -16,7 +16,6 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 /* Phase X3: tur_set_t — sorted int64_t array */
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
@@ -127,9 +126,11 @@ static void tur_handler_table_free(tur_handler_table_t *t) {
 #define TUR_CONTRACTS_ENABLED 1
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
-#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})
-#define TUR_UNTAG(x)   ((x).val)
-#define TUR_GETTAG(x)  ((x).tag)
+#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})
+#define TUR_UNTAG(x)    ((x).val)
+#define TUR_GETTAG(x)   ((x).tag)
+#define TUR_PTAG(p)     ((p)->tag)
+#define TUR_PVAL(p)     ((p)->val)
 #define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]
 #define TUR_APPLY0_T(R, f) \
     (((R (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \

@@ -13,29 +13,29 @@
 ;;   4. free-run on Suspend calls the interpreter.
 
 ;; ---- Free monad (inline C, tag-based struct) --------------------------------
-;;   { int tag; int64_t val }
-;;   tag = 0 => PureFree val
-;;   tag = 1 => Suspend  val
+;;   Uses the preamble's tur_tagged_t: { int64_t tag; int64_t val }
+;;   TUR_TAG(0, x)  => PureFree x
+;;   TUR_TAG(1, x)  => Suspend  x
+;; Accessor macros: TUR_PTAG(p) reads p->tag, TUR_PVAL(p) reads p->val.
 
 (defn free-pure [x] : int
   ```c
-  struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
+  tur_tagged_t *r = malloc(sizeof(*r));
   r->tag = 0; r->val = x;
   return (int64_t)(intptr_t)r;
   ```)
 
 (defn free-lift [x] : int
   ```c
-  struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
+  tur_tagged_t *r = malloc(sizeof(*r));
   r->tag = 1; r->val = x;
   return (int64_t)(intptr_t)r;
   ```)
 
 (defn free-pure? [m] : bool
   ```c
-  struct { int tag; int64_t val; } *r =
-      (struct { int tag; int64_t val; } *)(intptr_t)m;
-  return r->tag == 0;
+  tur_tagged_t *r = (tur_tagged_t *)(intptr_t)m;
+  return TUR_PTAG(r) == 0;
   ```)
 
 ;; free-run: run with a fat-closure interpreter.
@@ -43,13 +43,12 @@
 ;;   Suspend  x -> interp(x)  (interp is a fat closure)
 (defn free-run [interp m] : int
   ```c
-  struct { int tag; int64_t val; } *fr =
-      (struct { int tag; int64_t val; } *)(intptr_t)m;
-  if (fr->tag == 0) {
-      return fr->val;
+  tur_tagged_t *fr = (tur_tagged_t *)(intptr_t)m;
+  if (TUR_PTAG(fr) == 0) {
+      return TUR_PVAL(fr);
   }
   int64_t *fat = (int64_t *)(intptr_t)interp;
-  return TUR_APPLY1(fat, fr->val);
+  return TUR_APPLY1(fat, TUR_PVAL(fr));
   ```)
 
 ;; free-bind: monadic bind (fat-closure kont).
@@ -57,11 +56,10 @@
 ;;   Suspend  x >>= kont = Suspend x  (single-layer pass-through)
 (defn free-bind [m kont] : int
   ```c
-  struct { int tag; int64_t val; } *fr =
-      (struct { int tag; int64_t val; } *)(intptr_t)m;
-  if (fr->tag == 0) {
+  tur_tagged_t *fr = (tur_tagged_t *)(intptr_t)m;
+  if (TUR_PTAG(fr) == 0) {
       int64_t *fat = (int64_t *)(intptr_t)kont;
-      return TUR_APPLY1(fat, fr->val);
+      return TUR_APPLY1(fat, TUR_PVAL(fr));
   }
   return m;
   ```)

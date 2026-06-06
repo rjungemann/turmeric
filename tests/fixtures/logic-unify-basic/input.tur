@@ -26,7 +26,7 @@
   int64_t cur = t;
   for (;;) {
       Term *ct = (Term*)(intptr_t)cur;
-      if (ct->tag != 1) return cur;
+      if (TUR_PTAG(ct) != 1) return cur;
       int64_t vid = ct->data1;
       SubsE *s = (SubsE*)(intptr_t)subs;
       int64_t found = 0;
@@ -43,12 +43,12 @@
   int64_t wt1 = logic_hywalk(t1, subs);
   int64_t wt2 = logic_hywalk(t2, subs);
   Term *ct1 = (Term*)(intptr_t)wt1; Term *ct2 = (Term*)(intptr_t)wt2;
-  if (ct1->tag == 1 && ct2->tag == 1 && ct1->data1 == ct2->data1) return subs;
-  if (ct1->tag == 0 && ct2->tag == 0 && ct1->data1 == ct2->data1) return subs;
-  if (ct1->tag == 3 && ct2->tag == 3) return subs;
-  if (ct1->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct1->data1; e->term_ptr = wt2; e->next = subs; return (int64_t)(intptr_t)e; }
-  if (ct2->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct2->data1; e->term_ptr = wt1; e->next = subs; return (int64_t)(intptr_t)e; }
-  if (ct1->tag == 2 && ct2->tag == 2) { int64_t s2 = logic_hyunify(ct1->data1, ct2->data1, subs); if (s2 == -1) return -1; return logic_hyunify(ct1->data2, ct2->data2, s2); }
+  if (TUR_PTAG(ct1) == 1 && TUR_PTAG(ct2) == 1 && ct1->data1 == ct2->data1) return subs;
+  if (TUR_PTAG(ct1) == 0 && TUR_PTAG(ct2) == 0 && ct1->data1 == ct2->data1) return subs;
+  if (TUR_PTAG(ct1) == 3 && TUR_PTAG(ct2) == 3) return subs;
+  if (TUR_PTAG(ct1) == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct1->data1; e->term_ptr = wt2; e->next = subs; return (int64_t)(intptr_t)e; }
+  if (TUR_PTAG(ct2) == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct2->data1; e->term_ptr = wt1; e->next = subs; return (int64_t)(intptr_t)e; }
+  if (TUR_PTAG(ct1) == 2 && TUR_PTAG(ct2) == 2) { int64_t s2 = logic_hyunify(ct1->data1, ct2->data1, subs); if (s2 == -1) return -1; return logic_hyunify(ct1->data2, ct2->data2, s2); }
   return -1;
   ```)
 
