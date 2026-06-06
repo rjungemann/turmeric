@@ -2833,6 +2833,26 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         args[i] = args[i]->as.ascribe_.inner;
                     }
                 }
+                /* captureless-closure-not-boxed-at-fat-ptr-void-boundary: the
+                 * mirror image of the strip above.  A *captureless* closure
+                 * (e.g. the SF returned by a nullary `(invert)`) is codegen'd as
+                 * a BARE fn pointer, not a { thunk, env } fat box.  When it is
+                 * ascribed to the carrier with `(:: <captureless-fn> :ptr<void>)`
+                 * the ascription retypes the value to TY_PTR_VOID, which would
+                 * sail through the already-fat pass-through branch below
+                 * unshimmed -- the ^fat consumer then reads the code address as
+                 * slot 0 of a fat box and fat-calls garbage (segfault).  Strip
+                 * the erased ascription so the inner bare (unboxed) TY_FN reaches
+                 * the auto-shim branch and gets boxed via EX_FN_TO_FAT, exactly
+                 * like an un-ascribed bare fn argument.  A *capturing* closure's
+                 * inner is a boxed TY_FN / TY_PTR_VOID and is left untouched
+                 * (stripping it would not change the already-fat pass-through). */
+                if (args[i]->kind == EX_ASCRIBE && args[i]->as.ascribe_.inner &&
+                    args[i]->type.kind == TY_PTR_VOID &&
+                    args[i]->as.ascribe_.inner->type.kind == TY_FN &&
+                    !args[i]->as.ascribe_.inner->type.as.fn.boxed) {
+                    args[i] = args[i]->as.ascribe_.inner;
+                }
                 /* two-level-sf-closure-return-miscompiles-out-binding: an
                  * already-fat value -- a ^fat parameter (or a let-alias of one),
                  * marked is_fat -- whose declared type is a concrete `(fn ...)`

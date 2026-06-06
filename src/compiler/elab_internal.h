@@ -531,6 +531,15 @@ typedef struct Elab {
     uint32_t         n_loaded_modules;
     uint32_t         cap_loaded_modules;
     uint16_t         next_import_file_id; /* file_id counter for imported source files */
+    /* load-not-expanded-in-imported-or-project-modules: compilation-global set
+     * of canonical (load "path") paths already spliced+elaborated, shared by the
+     * entry preprocessor (elaborate_program) and every imported module's
+     * preprocessor (elab_load_module) so a path is expanded exactly once across
+     * the whole build -- no duplicate symbols when the entry and an imported
+     * module both `(load ...)` the same file. */
+    const Symbol   **load_expanded_paths;
+    uint32_t         n_load_expanded_paths;
+    uint32_t         cap_load_expanded_paths;
     /* Phase M3: Separate compilation — skip inlining imported modules */
     bool             separate_compilation;
     /* SB2: When true, (import ...) is forbidden (sandboxed environment). */
@@ -731,6 +740,9 @@ Binding *scope_lookup(Scope *s, const Symbol *name);
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     uint32_t *n_out);
 void elab_register_file_def(Elab *e, Expr *def_expr);
+int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
+                             Form *const *forms, uint32_t nforms,
+                             Form ***out_forms, uint32_t *out_n);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_check_not_moved(Binding *b, Span use_span, const char *use_desc);

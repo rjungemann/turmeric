@@ -2,10 +2,39 @@
 title: Top-level (load "...") is not expanded inside imported / project-mode modules -- arrow.tur's >>> is unreachable from a defmodule that is imported or project-built
 category: Reported
 severity: high
+status: PARTIALLY RESOLVED -- import path fixed; project-mode (`tur build .`) typeclass-ordering fixed; a deeper separate-compilation codegen blocker remains (see "Status").
 description: The (load "path") preprocessor runs only on the entry compilation unit (elaborate_program). A module pulled in via `import` (elab_load_module) elaborates its forms directly and never runs the preprocessor, so a top-level `(load ...)` in that file hits elab_load and errors with "load is only valid at the top level". In `tur build .` project mode the load is reached but its transitive loads resolve against an incomplete typeclass environment ("typeclass 'Functor' is not defined" from either.tur). Net effect: a defmodule cannot `(load "stdlib/arrow.tur")` to reach `>>>` in any build mode that goes through the module system.
 ---
 
 # `load` is a no-op-then-error inside imported / project-built modules
+
+## Status (2026-06-06)
+
+- **Import path (`tur run`/`tur check` of a consumer that `import`s the module):
+  FIXED.** `elab_load_module` now runs the `(load ...)` preprocessor over the
+  imported file's forms before elaboration (sharing a compilation-global
+  visited set with the entry), and registers the spliced top-level definitions
+  for emission. A `defmodule` that `(load "stdlib/arrow.tur")`s can now reach
+  `>>>` through `import`. Regression fixture:
+  `tests/fixtures/load-in-imported-module/`.
+- **Project-mode typeclass ordering (`tur build .`): FIXED.** `stdlib/either.tur`
+  now `(load "stdlib/typeclass-functor.tur")`s its own `Functor` dependency
+  instead of relying on the full stdlib auto-load (which project mode does not
+  run). The "typeclass 'Functor' is not defined" error is gone.
+- **Project-mode separate-compilation codegen: STILL BROKEN (new finding).**
+  With the ordering fixed, `tur build .` of a module that `(load ...)`s
+  arrow.tur now fails at the **C-compile** stage: the spliced stdlib content
+  (arrow.tur's typeclasses, either.tur's ADT + `Functor` instance) is emitted
+  into the single module's `.c` without the runtime typedefs / typeclass-dict
+  plumbing the whole-program path provides -- e.g. `unknown type name
+  'tur_poly_fn_t'`, `unknown type name 'tur_adt_Either'`,
+  `dict_Functor_Either__struct_ has no member named 'fmap'`, and a
+  `conflicting types for '<mod>__use_compose'`. This is a distinct,
+  separate-compilation-specific root cause (the spliced-load codegen does not
+  fit the per-module `.c` + header model), not the missing-expansion or
+  typeclass-ordering bug this report originally described. It remains open; the
+  guarded `!e->separate_compilation` branch in `elab_load_module` is the
+  intentional no-op for that mode until the codegen side is designed.
 
 ## Summary
 
