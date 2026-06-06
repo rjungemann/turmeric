@@ -2271,7 +2271,6 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#include <pthread.h>\n");
     /* Phase 20-21: Software Transactional Memory */
     buf_puts(out, "#include <stdlib.h>\n");
-    buf_puts(out, "#include <stdbool.h>\n");
     buf_puts(out, "#include <string.h>\n");
     /* POSIX regex (stdlib/re.tur): hoist regex.h to file scope so every
      * generated re_* function sees regex_t and friends. Per-function
@@ -2441,9 +2440,14 @@ int emit_program(Buf *out, const Expr *program) {
 
     buf_puts(out, "/* IT4: tagged union runtime representation */\n");
     buf_puts(out, "typedef struct { int64_t tag; int64_t val; } tur_tagged_t;\n");
-    buf_puts(out, "#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
-    buf_puts(out, "#define TUR_UNTAG(x)   ((x).val)\n");
-    buf_puts(out, "#define TUR_GETTAG(x)  ((x).tag)\n");
+    buf_puts(out, "#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
+    buf_puts(out, "#define TUR_UNTAG(x)    ((x).val)\n");
+    buf_puts(out, "#define TUR_GETTAG(x)   ((x).tag)\n");
+    /* Pointer accessors for tur_tagged_t*.  Inline-C that allocates tagged
+     * nodes on the heap should use these instead of raw ->tag / ->val so the
+     * access site does not depend on the struct field layout. */
+    buf_puts(out, "#define TUR_PTAG(p)     ((p)->tag)\n");
+    buf_puts(out, "#define TUR_PVAL(p)     ((p)->val)\n");
     /* Fat-closure application helpers for inline-C blocks.
      * A fat closure is a heap struct { int64_t __fn; <captures...> }; the thunk
      * has signature (void *env, int64_t arg...) -> int64_t.  TUR_APPLYn reads the
