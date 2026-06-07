@@ -585,57 +585,35 @@ one-arg shim). However, `(load "stdlib/arrow.tur")` is not visible inside a
 SF to the accumulated signal in left-to-right order using `^fat` parameters
 (which use correct fat dispatch through `sf[0]` at each step). Phase 5 done.
 
-### Status update (2026-06-06, fourth-pass -- `>>>` swap partially complete)
+### Status update (2026-06-07, sixth-pass -- blocker 1 partially resolved, new sub-bug found)
 
 **Blocker 1 -- captureless SFs segfault through the `ptr<void>` `^fat` boundary.**
-Filed: [[captureless-closure-not-boxed-at-fat-ptr-void-boundary]] (severity
-high). A closure that captures nothing (the SF returned by `(invert)` /
-`(abs-sf)`) is codegen'd as a *bare C function pointer*, not a `{ thunk, env }`
-fat box. Casting it to `:ptr<void>` and handing it to a `^fat` parameter takes
-the "already-fat" pass-through in `elab_call.c:2903`, so the consumer reads the
-code address as slot 0 and fat-calls garbage -> segfault. This breaks `__sf-fold`
-for captureless SFs; `test_compose` only exercised capturing SFs (`gain`,
-`offset`), so the hole is invisible there. This is the captureless sibling of
-the resolved `fat-shim-void-ptr-calls-bare-not-fat`. **Still open.**
+Filed: [[captureless-closure-not-boxed-at-fat-ptr-void-boundary]].
+**PARTIALLY RESOLVED.** The ascription-stripping fix (`elab_call.c`) resolves
+the *direct-ascription* case: `(:: (invert) :ptr<void>)` as a `^fat` argument
+now correctly shims via `EX_FN_TO_FAT`. Fixture `fat-captureless-closure-ptr-void`
+passes (`-0.5 -0.5`). `>>>` applied directly to `(invert)` also works.
+
+**New sub-bug found:** When a captureless closure is stored in a `Vec` (e.g.
+`(vec-of (gain 2.0) (invert))`), its bare fn-pointer is cast to `int64_t` at
+`vec-push!` time. `vec-get` retrieves it as opaque `TY_INT` -- fn-pointer
+provenance is gone. A subsequent `^fat` cast then fat-dispatches the code address
+as a fat-box slot 0 -> segfault. The ascription-stripping fix never fires because
+no `EX_ASCRIBE` wrapper survives `vec-get`. Filed:
+[[captureless-closure-lost-through-untyped-vec]].
+
+This blocks `effects-chain` with captureless SFs. `test_compose` covers the
+capturing chains (empty, single, two, three SF); the captureless case (`invert`
+via `effects-chain`) is deferred pending the vec-path fix.
 
 **Blocker 2 -- `(load "stdlib/arrow.tur")` unreachable from imported module.**
 Filed: [[load-not-expanded-in-imported-or-project-modules]].
-**RESOLVED (import path, 2026-06-06, #305).** `elab_load_module` now runs the
-load preprocessor over the imported file's forms. A `defmodule` that
-`(load "stdlib/arrow.tur")`s before its `defmodule` line can reach `>>>` when
-built via `tur run`/`tur check` of a consumer. Regression fixture:
-`tests/fixtures/load-in-imported-module/`. Project-mode (`tur build .`)
-separate-compilation codegen remains broken for spliced loads (see the report's
-Status section), but `tur run`/`tur check` is what the spice test harness uses.
+**RESOLVED (import path, 2026-06-06, #305).** Fixture: `tests/fixtures/load-in-imported-module/`.
 
-**Current state of `compose.tur` in the spice (2026-06-06):**
-- `(load "stdlib/arrow.tur")` is before the `defmodule`.
-- `__sf-fold` uses `(>>> acc sf)` directly.
-- `test_compose.tur` passes for capturing SFs (empty, single, two, three chains).
-- Captureless SFs (`invert`, `abs-sf`) are **not yet tested** -- they segfault
-  until Blocker 1 resolves. Do not add them to the test until then.
-
-### To finish Phase 5 -- one remaining step
-
-**When Blocker 1 resolves** (watch [[captureless-closure-not-boxed-at-fat-ptr-void-boundary]]):
-
-1. Confirm the repro passes in the turmeric fixture suite
-   (`tests/fixtures/fat-captureless-closure-ptr-void/`).
-
-2. Extend `tests/signal/test_compose.tur` with a captureless SF case:
-
-   ```turmeric
-   ;; gain 2x then invert: constant 0.5 -> 1.0 -> -1.0
-   (let [chain (effects-chain (vec-of (gain 2.0) (invert)) src)
-         ^fat out : (fn [float] #{} float) chain]
-     (fail-if (not (approx= (out 0.0) -1.0)) "FAIL: gain then invert"))
-   ```
-
-   Do NOT `(load "stdlib/vec.tur")` in the test -- `vec-of` is auto-loaded;
-   a second load errors with "already defined".
-
-3. Run `tur run tests/signal/test_compose.tur` (zero failures) and
-   `bash tests/run.sh` (still green), then tick the Phase 5 acceptance box.
+**Phase 5 partial.** `compose.tur` uses `(load "stdlib/arrow.tur")` + `>>>`.
+`test_compose` covers empty, single, two, and three-SF capturing chains. All
+pass. Captureless SF coverage (`invert` via `effects-chain`) blocked pending
+[[captureless-closure-lost-through-untyped-vec]] fix.
 
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 
