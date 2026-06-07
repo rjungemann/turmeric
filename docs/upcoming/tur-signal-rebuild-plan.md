@@ -611,10 +611,10 @@ Filed: [[load-not-expanded-in-imported-or-project-modules]].
 **RESOLVED (import path, 2026-06-06, #305).** Fixture: `tests/fixtures/load-in-imported-module/`.
 
 **Phase 5 complete.** `compose.tur` uses `(load "stdlib/arrow.tur")` + `>>>`.
-`test_compose` covers empty, single, two, and three-SF capturing chains. All
-pass. Captureless SF coverage (`invert` via `effects-chain`) is now unblocked --
-[[captureless-closure-lost-through-untyped-vec]] is fixed (captureless closures
-are boxed into a uniform fat box when they escape into a `Vec`).
+`test_compose` covers empty, single, two, three-SF capturing chains, and a
+captureless SF (`gain 2x` then `invert`, expected `-1.0`). All five pass.
+[[captureless-closure-lost-through-untyped-vec]] resolved: captureless closures
+are boxed into a uniform fat box when they escape into a `Vec`.
 
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 

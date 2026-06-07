@@ -1,7 +1,8 @@
 ---
 title: Captureless closure stored in an untyped Vec loses its fn-pointer identity -- fat-dispatch at retrieval segfaults
-category: Reported
+category: Resolved
 severity: high
+status: fixed in #307 (box captureless closures at TY_TYVAR-parameter boundary in elab_call.c)
 description: When a captureless closure (bare fn ptr) is stored in a Vec[A] (e.g. via `vec-of`) and then retrieved with `vec-get`, the elaborator sees the result as TY_INT with no fn-pointer provenance. A subsequent `^fat` binding or `(:: ... :ptr<void>)` cast then treats the code address as a fat-box pointer and dispatches garbage -- segfault. The fix in elab_call.c that strips `(:: captureless :ptr<void>)` ascriptions at ^fat call sites (PR #302 followup, captureless-closure-not-boxed-at-fat-ptr-void-boundary.md) only covers the DIRECT ascription path; once the value passes through vec-push!/vec-get the provenance is irreversibly gone.
 ---
 
