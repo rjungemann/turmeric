@@ -16,6 +16,21 @@ Turmeric exposes two complementary interfaces for AI-assisted development:
 
 Both are built into the `tur` binary -- no extra installation is required.
 
+## Transport framing
+
+`tur mcp` and `tur lsp` use **different framing** over stdio. Getting this
+wrong is the most common cause of a client receiving no output.
+
+| Server | Transport | Format |
+|--------|-----------|--------|
+| `tur mcp` | MCP 2024-11-05 stdio | One JSON object per line, terminated by `\n`. No headers. |
+| `tur lsp` | Language Server Protocol | `Content-Length: N\r\n\r\n` header, then N bytes of JSON. |
+
+MCP clients (opencode, Claude Code, VS Code Copilot agent mode, etc.) all
+implement the MCP stdio spec and send/read newline-delimited JSON. If you wire
+a client that expects MCP framing to `tur lsp` (or vice versa), you will get
+silence.
+
 ## MCP tools reference
 
 The MCP server exposes eight tools:
@@ -139,12 +154,11 @@ tur --version
 Without opening a full session, you can verify the server protocol directly:
 
 ```sh
-MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}'
-printf "Content-Length: %d\r\n\r\n%s" ${#MSG} "$MSG" | tur mcp
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}\n' | tur mcp
 ```
 
-Expected output begins with `Content-Length:` followed by a JSON response
-containing `"serverInfo":{"name":"turmeric",...}`.
+Expected output is a single JSON line containing
+`"serverInfo":{"name":"turmeric",...}`.
 
 ### Disabling for a session
 
@@ -288,40 +302,39 @@ above.
 
 These tests work without any AI client and are useful for CI or troubleshooting.
 
+`tur mcp` uses the MCP 2024-11-05 stdio transport: **one JSON object per line,
+terminated by `\n`**. No `Content-Length` headers. Each `printf` below
+produces exactly one `\n`-terminated JSON line.
+
 ### Test initialize
 
 ```sh
-MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}'
-printf "Content-Length: %d\r\n\r\n%s" ${#MSG} "$MSG" | tur mcp
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}\n' | tur mcp
 ```
+
+Expected: a single JSON line with `"serverInfo":{"name":"turmeric",...}`.
 
 ### Test tools/list
 
 ```sh
-MSG1='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}'
-MSG2='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-(
-  printf "Content-Length: %d\r\n\r\n%s" ${#MSG1} "$MSG1"
-  printf "Content-Length: %d\r\n\r\n%s" ${#MSG2} "$MSG2"
-) | tur mcp
+printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | tur mcp
 ```
 
-The response to `tools/list` should contain all eight tool names.
+The second response line should contain all eight tool names.
 
 ### Test check_file
 
 ```sh
-# Writes a tiny Turmeric program to a temp file and checks it
 TMP=$(mktemp /tmp/test_XXXX.tur)
-printf '(defn add [a :int b :int] :int (+ a b))\n' > "$TMP"
+printf '(defn add [a : int b : int] : int (+ a b))\n' > "$TMP"
 
-ARGS="{\"path\":\"$TMP\"}"
-MSG="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"check_file\",\"arguments\":$ARGS}}"
-INIT='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}'
-(
-  printf "Content-Length: %d\r\n\r\n%s" ${#INIT} "$INIT"
-  printf "Content-Length: %d\r\n\r\n%s" ${#MSG} "$MSG"
-) | tur mcp
+printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}' \
+  "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"check_file\",\"arguments\":{\"path\":\"$TMP\"}}}" \
+  | tur mcp
 rm "$TMP"
 ```
 
@@ -335,6 +348,7 @@ A clean file produces `"content":[{"type":"text","text":"[]"}]` in the response
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `tur: command not found` | `tur` not on PATH | Add `build/` to `PATH`, or run `just install` |
+| `tur mcp` produces no output at all | Wrong framing: client sent `Content-Length` headers instead of newline-delimited JSON | `tur mcp` speaks MCP stdio (newline-terminated JSON), not LSP. Check the [Transport framing](#transport-framing) section. |
 | Tools missing from Copilot/OpenCode | Config file not loaded | Confirm you opened the repo root, not a subdirectory |
 | Empty tool responses | File path not absolute | Use full `/path/to/file.tur` paths |
 | `tur mcp: disabled by TUR_NO_MCP` | Env variable set | `unset TUR_NO_MCP` |
@@ -353,11 +367,12 @@ working with this integration.
 End-to-end JSON-RPC coverage for the MCP server and the new LSP handlers
 lives in `tests/lsp/mcp_lsp_test.py` (driven by `tests/lsp/run-mcp-lsp.sh`,
 wired into ctest as `tur_mcp_lsp_tests`). It spawns `tur mcp` and `tur lsp`
-as subprocesses, sends framed JSON-RPC, and asserts on responses for every
-tool except `build` (which is exercised indirectly via the rest of the
-suite) -- including the `TUR_NO_MCP=1` kill switch. The
-`tests/lsp/docscanner_test.c` unit test is wired in as
-`tur_docscanner_unit`.
+as subprocesses and drives each with its correct framing: **newline-delimited
+JSON for MCP** and **Content-Length headers for LSP**. Assertions cover all
+eight MCP tools (except `build`, exercised indirectly via the suite) and the
+three LSP handlers (hover, definition, documentSymbol), including the
+`TUR_NO_MCP=1` kill switch. The `tests/lsp/docscanner_test.c` unit test is
+wired in as `tur_docscanner_unit`.
 
 `tur build` is not driven from `mcp_lsp_test.py` because it shells out to a
 full project compile; if the rest of the test suite passes, the MCP

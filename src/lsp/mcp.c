@@ -15,7 +15,6 @@
  */
 
 #include "mcp.h"
-#include "lsp_io.h"
 #include "lsp_json.h"
 #include "lsp_docs.h"
 #include "lsp_sym.h"
@@ -30,6 +29,59 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <dirent.h>
+
+/* -------------------------------------------------------------------------
+ * MCP stdio transport (MCP 2024-11-05 spec: newline-delimited JSON-RPC)
+ *
+ * Each message is a single UTF-8 JSON object terminated by exactly one '\n'.
+ * This differs from the LSP transport used by `tur lsp`, which uses
+ * Content-Length headers.  MCP clients (opencode, Claude Code, VS Code
+ * Copilot in agent mode, etc.) all implement the newline-delimited variant.
+ * --------------------------------------------------------------------- */
+
+/* Read one newline-terminated message from fd_in.
+ * Returns a heap-allocated NUL-terminated JSON string, or NULL on EOF/error.
+ * Blank lines (e.g. bare \r\n from HTTP-style clients) are silently skipped. */
+static char *mcp_read_message(int fd_in) {
+    size_t cap = 4096, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) return NULL;
+
+    for (;;) {
+        char c;
+        ssize_t n = read(fd_in, &c, 1);
+        if (n <= 0) {
+            /* EOF */
+            if (len == 0) { free(buf); return NULL; }
+            break;
+        }
+        if (c == '\n') {
+            if (len == 0) continue;  /* skip blank lines */
+            break;
+        }
+        if (c == '\r') continue;     /* strip CR from CRLF sequences */
+        if (len + 2 >= cap) {
+            cap *= 2;
+            char *nb = realloc(buf, cap);
+            if (!nb) { free(buf); return NULL; }
+            buf = nb;
+        }
+        buf[len++] = c;
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+/* Write one message to fd_out, terminated by a single '\n'. */
+static void mcp_write_message(int fd_out, const char *json, size_t len) {
+    size_t written = 0;
+    while (written < len) {
+        ssize_t n = write(fd_out, json + written, len - written);
+        if (n <= 0) return;
+        written += (size_t)n;
+    }
+    write(fd_out, "\n", 1);
+}
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -76,7 +128,7 @@ static void send_response(int fd_out, const char *id_raw, size_t id_len,
     buf_puts(&b, ",\"result\":");
     buf_puts(&b, result_json ? result_json : "null");
     buf_puts(&b, "}");
-    lsp_write_message(fd_out, b.data, b.len);
+    mcp_write_message(fd_out, b.data, b.len);
     buf_free(&b);
 }
 
@@ -107,7 +159,7 @@ static void send_error_response(int fd_out, const char *id_raw, size_t id_len,
     buf_printf(&b, ",\"error\":{\"code\":%d,\"message\":", code);
     json_str(&b, msg);
     buf_puts(&b, "}}");
-    lsp_write_message(fd_out, b.data, b.len);
+    mcp_write_message(fd_out, b.data, b.len);
     buf_free(&b);
 }
 
@@ -717,7 +769,7 @@ void mcp_server_run(int fd_in, int fd_out) {
         return;
     }
     char *msg;
-    while ((msg = lsp_read_message(fd_in)) != NULL) {
+    while ((msg = mcp_read_message(fd_in)) != NULL) {
         size_t method_len;
         const char *method_raw = lsp_json_str(msg, "method", &method_len);
         if (!method_raw) { free(msg); continue; }

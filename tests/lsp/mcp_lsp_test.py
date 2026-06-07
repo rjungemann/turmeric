@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """End-to-end JSON-RPC tests for `tur mcp` and `tur lsp`.
 
-Spawns the servers as subprocesses, drives them over stdio with the LSP
-Content-Length framing, and asserts on response substrings. Covers all
-eight MCP tools (except `build`, which is exercised indirectly via the
-underlying `tur build`) and the three new LSP handlers (hover,
-definition, documentSymbol).
+Spawns the servers as subprocesses and drives them over stdio.
+
+Transport framing:
+  tur mcp -- MCP 2024-11-05 stdio: newline-delimited JSON  (one JSON object
+             per line, terminated by '\n', no headers).
+  tur lsp -- LSP stdio: Content-Length headers followed by the JSON body.
 
 Exit code 0 = all tests passed. Non-zero = at least one assertion failed.
 """
@@ -35,15 +36,34 @@ def check(cond: bool, msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# JSON-RPC framing helpers
+# MCP transport: newline-delimited JSON (MCP 2024-11-05 stdio spec)
 # ---------------------------------------------------------------------------
 
-def encode(msg: dict) -> bytes:
+def mcp_encode(msg: dict) -> bytes:
+    return json.dumps(msg).encode("utf-8") + b"\n"
+
+
+def mcp_read_one(stream) -> dict | None:
+    while True:
+        line = stream.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            continue
+        return json.loads(line)
+
+
+# ---------------------------------------------------------------------------
+# LSP transport: Content-Length header framing (Language Server Protocol)
+# ---------------------------------------------------------------------------
+
+def lsp_encode(msg: dict) -> bytes:
     body = json.dumps(msg).encode("utf-8")
     return f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
 
 
-def read_one(stream) -> dict | None:
+def lsp_read_one(stream) -> dict | None:
     headers = b""
     while b"\r\n\r\n" not in headers:
         ch = stream.read(1)
@@ -66,7 +86,7 @@ def read_one(stream) -> dict | None:
 
 
 class Server:
-    def __init__(self, args: list[str]):
+    def __init__(self, args: list[str], transport: str = "mcp"):
         self.proc = subprocess.Popen(
             args,
             stdin=subprocess.PIPE,
@@ -75,6 +95,8 @@ class Server:
             cwd=ROOT,
         )
         self._next_id = 0
+        self._encode   = mcp_encode   if transport == "mcp" else lsp_encode
+        self._read_one = mcp_read_one if transport == "mcp" else lsp_read_one
 
     def call(self, method: str, params: dict | None = None,
              notification: bool = False, expect_response: bool = True) -> dict | None:
@@ -84,15 +106,14 @@ class Server:
         if not notification:
             self._next_id += 1
             msg["id"] = self._next_id
-        self.proc.stdin.write(encode(msg))
+        self.proc.stdin.write(self._encode(msg))
         self.proc.stdin.flush()
         if notification or not expect_response:
             return None
         # The LSP server may emit publishDiagnostics notifications before the
-        # response — skip over them and return the first message that carries
-        # our id.
+        # response -- skip over them and return the first message with our id.
         while True:
-            r = read_one(self.proc.stdout)
+            r = self._read_one(self.proc.stdout)
             if r is None:
                 return None
             if r.get("id") == msg["id"]:
@@ -149,7 +170,7 @@ def test_mcp() -> None:
     good_path = make_tempfile(GOOD_TUR)
     bad_path  = make_tempfile(BAD_TUR)
     try:
-        srv = Server([TUR, "mcp"])
+        srv = Server([TUR, "mcp"], transport="mcp")
 
         # initialize
         r = srv.call("initialize", {
@@ -286,7 +307,7 @@ def test_lsp() -> None:
     good_path = make_tempfile(GOOD_TUR)
     uri = "file://" + good_path
     try:
-        srv = Server([TUR, "lsp"])
+        srv = Server([TUR, "lsp"], transport="lsp")
 
         r = srv.call("initialize", {
             "processId": None, "rootUri": None, "capabilities": {},

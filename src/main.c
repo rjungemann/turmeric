@@ -8103,8 +8103,21 @@ int main(int argc, char **argv) {
                 }
                 pkg_manifest_free(&bm);
             }
+            /* Mirror emit-c / emit-h / check / run: widen the include
+             * path with the enclosing spice's src/ and every declared
+             * `:spices` dep's src/. Short-circuits when --no-auto-spice
+             * is set or there is no enclosing build.tur. */
+            char **b_owned = NULL; int n_b_owned = 0;
+            Ls2ResolverCtx b_ls2 = {0};
+            auto_append_spice_includes(input, &build_inc, &n_build_inc,
+                                       &b_owned, &n_b_owned, &b_ls2);
+            ls2_resolver_ctx_set(&b_ls2);
             rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
                            build_target, (const char **)b_rm, b_n);
+            ls2_resolver_ctx_set(NULL);
+            ls2_resolver_ctx_dispose(&b_ls2);
+            for (int i = 0; i < n_b_owned; i++) free(b_owned[i]);
+            free(b_owned);
             free_reader_macro_paths(b_rm, b_n);
             free(b_root);
         }
