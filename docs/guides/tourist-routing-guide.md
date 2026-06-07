@@ -185,12 +185,13 @@ tourist 3000
     serve-static! "/" "./public"
 ```
 
-`cascade-with!` takes an explicit pass-through list. Use it when the
-first app should also fall through on, say, 503 (maintenance):
+`cascade-with!` takes an explicit pass-through list, built with the
+variadic `passes!` constructor. Use it when the first app should also
+fall through on, say, 503 (maintenance):
 
 ```turmeric
 ;; Treat 404, 405, and 503 as fall-through statuses.
-(cascade-with! (cons 404 (cons 405 (cons 503 0)))
+(cascade-with! (passes! 404 405 503)
                primary
                fallback)
 ```
@@ -198,7 +199,7 @@ first app should also fall through on, say, 503 (maintenance):
 ```sweet-exp
 ;; Treat 404, 405, and 503 as fall-through statuses.
 cascade-with!
-  cons 404 (cons 405 (cons 503 0))
+  passes! 404 405 503
   primary
   fallback
 ```
@@ -281,6 +282,7 @@ tourist's function-composition middleware model.
 | `cascade! & apps :int` | `tourist/routing` | sub-app `:int` | Pass-through = `{404, 405}` |
 | `cascade-with! passes :int & apps :int` | `tourist/routing` | sub-app `:int` | Custom pass-through set |
 | `mount! prefix :cstr item :int` | `tourist/routing` | mount handle `:int` | For `url-map!` only |
+| `passes! & statuses :int` | `tourist/routing` | status-list `:int` | For `cascade-with!` only |
 | `req-full-path ctx :int` | `tourist/param` | `:cstr` | Original path, unstripped |
 
 See also: [web-stack-guide.md](web-stack-guide.md) for the broader

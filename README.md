@@ -1,5 +1,7 @@
 # Turmeric
 
+[![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
+
 A Lisp that compiles to C99.
 
 **Latest release:** `v0.19.1` -- editor color themes (Emacs/Vim/VS Code), reversible name mangling, fat-closure codegen fixes for project-mode spice builds, and a fixture-codegen decoupling that strips ~200 KLOC of snapshot churn.
