@@ -4,6 +4,41 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.19.1] -- 2026-06-06
+
+### Added
+
+- **Editor color themes** -- ships Emacs (`turmeric-dark-theme.el`), Vim
+  (`vim-syntax/colors/turmeric-dark.vim`), and VS Code
+  (`vscode-syntax-ext/themes/turmeric-dark-color-theme.json`) dark themes
+  tuned for Turmeric syntax.
+- **Reversible name mangling (#301)** -- executes plan stages T3/T5/T6/T7/T8;
+  kebab/snake coexistence and operator mangling are now round-trippable.
+
+### Changed
+
+- **`>>>` rewritten to polymorphic typed form** -- removes the float-specific
+  `compose-float-*` helpers in favor of a single typed `compose` arrow.
+- **Fixture-codegen decoupling (#299)** -- Phase 1 of the fixture-churn-paydown
+  plan strips ~200 KLOC of preamble noise from `tests/fixtures/*/expected.c`,
+  so future codegen tweaks no longer ripple through hundreds of snapshots.
+
+### Fixed
+
+- **Project-mode `defstruct` typedef missing** -- `emit_module` now hoists
+  struct typedefs ahead of the inline-C uses that reference them, fixing
+  project-mode spice builds.
+- **File-scope inline-C block emit ordering** -- elements in inline-C blocks
+  now emit in source order, fixing a latent miscompile.
+- **`^fat` let-binding of `ptr<void>` fat closure** -- partially addressed in
+  `emit_module`; remaining cases tracked in `docs/reported/` (#305, #306).
+
+### Docs
+
+- Guides refresh for v0.19 (arrows, effects, error-handling, GADTs, httpd
+  middleware, session types, compiler flags, delimited control).
+- Docs archive curated: completed plans moved under `docs/archive/history/`.
+
 ## [0.19.0] -- 2026-06-05
 
 ### Added
