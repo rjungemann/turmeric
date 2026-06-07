@@ -38,7 +38,7 @@ Unblocks `tur-signal` Phase 5 `>>>` with the captureless Tier-1 shapers
 
 ### use-after-move on local let-bound `:float` (FIXED)
 
-[`../archive/use-after-move-on-local-let-bound-float-vs-captured.md`](../archive/use-after-move-on-local-let-bound-float-vs-captured.md)
+[`../archive/history/use-after-move-on-local-let-bound-float-vs-captured.md`](../archive/history/use-after-move-on-local-let-bound-float-vs-captured.md)
 
 A `let`-bound `:float` used twice in a single `if` tripped `TUR-E0005`
 ("binding was moved"). Root cause was **not** local-vs-captured asymmetry and
@@ -51,7 +51,7 @@ Regression fixture: `tests/fixtures/use-after-move-float-let-vs-captured/`.
 
 ### One-off script print + annotation ergonomics (FIXED -- 3 findings)
 
-[`../archive/one-off-script-print-and-annotation-ergonomics.md`](../archive/one-off-script-print-and-annotation-ergonomics.md)
+[`../archive/history/one-off-script-print-and-annotation-ergonomics.md`](../archive/history/one-off-script-print-and-annotation-ergonomics.md)
 
 Three papercuts around the freestanding `tur run /tmp/foo.tur` loop, all
 resolved:
@@ -75,7 +75,7 @@ resolved:
 
 ### `__dsp_pair_*_float` bit-cast helpers removed
 
-[`../archive/dsp-pair-bit-cast-helpers-obsolete.md`](../archive/dsp-pair-bit-cast-helpers-obsolete.md)
+[`../archive/history/dsp-pair-bit-cast-helpers-obsolete.md`](../archive/history/dsp-pair-bit-cast-helpers-obsolete.md)
 
 The pre-rebuild `tur-signal` spice's `dsp.tur` hand-rolled `Pair64
 {int64_t first, second}` and `memcpy(&v, &bits, 8)` to read floats out of a
@@ -87,7 +87,7 @@ cleanly. `dsp.tur` deleted; `signal/shaper`'s `mix`/`add`/`multiply` now use
 
 ### `svf-low-pass` removed (no consumers, was a half-stub)
 
-[`../archive/svf-low-pass-removed-no-consumers.md`](../archive/svf-low-pass-removed-no-consumers.md)
+[`../archive/history/svf-low-pass-removed-no-consumers.md`](../archive/history/svf-low-pass-removed-no-consumers.md)
 
 Pre-rebuild `signal/synth.tur` exposed `svf-low-pass freq q` whose body wrapped
 the 1-pole `low-pass alpha` and discarded `q` -- the "half-stub primitive"
@@ -99,7 +99,7 @@ and lands behind a real consumer.
 
 ### `linalg/decomp.tur` unterminated list (source bug, not compiler)
 
-[`../archive/linalg-decomp-qr-parser-unterminated-list.md`](../archive/linalg-decomp-qr-parser-unterminated-list.md)
+[`../archive/history/linalg-decomp-qr-parser-unterminated-list.md`](../archive/history/linalg-decomp-qr-parser-unterminated-list.md)
 
 Initial sweep flagged `tur build linalg/` failing on `decomp.tur:185`.
 Investigation: the source genuinely has **4 unmatched `(`** across `qr`

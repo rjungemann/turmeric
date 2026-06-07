@@ -588,12 +588,12 @@ let [dummy  constant(())
 ## Extended Arrow Typeclasses
 
 An earlier scaleback
-([`docs/archive/stdlib-arrow-scaleback-plan.md`](../archive/stdlib-arrow-scaleback-plan.md))
+([`docs/archive/history/stdlib-arrow-scaleback-plan.md`](../archive/history/stdlib-arrow-scaleback-plan.md))
 removed `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`, and `ArrowApply`
 because no instances backed them (closure-returning instance methods tripped a
 codegen bug, and several stubs needed `Either`/`Left`/`Right` sum types). Both
 gaps have since closed, so the hierarchy was **reintroduced**
-([`docs/archive/stdlib-arrow-typeclass-reintroduction-plan.md`](../archive/stdlib-arrow-typeclass-reintroduction-plan.md))
+([`docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md`](../archive/history/stdlib-arrow-typeclass-reintroduction-plan.md))
 and is now live in `stdlib/arrow.tur` -- see the **Typeclass dispatch** section
 above for the full table and per-class examples. `Category` and the honest
 `Kleisli` `ArrowZero` were added on top

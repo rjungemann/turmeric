@@ -288,6 +288,23 @@ Post-v0.18.0 sweep:
 - **[defgadt-copy-and-shared-bounds.md](history/defgadt-copy-and-shared-bounds.md)** -- `defgadt :copy` opt-out for shared GADT values; resolved 2026-06-04
 - **[range-gadt-typeclass-migration-plan.md](history/range-gadt-typeclass-migration-plan.md)** -- Fold the `Bound` GADT into `range.tur`'s endpoint representation + graduate `-Xgadt` to default-on (A1/B1/B2); complete; `Show`/`Eq`/`Ord [Bound]` instances; see [gadts-guide.md](../guides/gadts-guide.md)
 
+Post-v0.19.0 sweep:
+
+- **[stdlib-arrow-typeclass-reintroduction-plan.md](history/stdlib-arrow-typeclass-reintroduction-plan.md)** -- Re-introduce the Arrow typeclass; delivered 2026-06-05; supersedes `stdlib-arrow-scaleback-plan.md`
+- **[stdlib-arrow-scaleback-plan.md](history/stdlib-arrow-scaleback-plan.md)** -- Superseded by the typeclass reintroduction (2026-06-05)
+- **[stdlib-inline-c-deworkaround-plan.md](history/stdlib-inline-c-deworkaround-plan.md)** -- Stdlib inline-C de-workaround Phases 1--4; complete 2026-06-04
+- **[stdlib-inline-c-tier3-triage.md](history/stdlib-inline-c-tier3-triage.md)** -- Tier-3 inline-C triage classification artifact; complete 2026-06-04
+- **[stdlib-linearity-affinity-plan.md](history/stdlib-linearity-affinity-plan.md)** -- Promote remaining stdlib handles to `:affine`; complete 2026-06-04 (Future was the last item)
+- **[stdlib-refinement-collections-plan.md](history/stdlib-refinement-collections-plan.md)** -- Refinement collections shipped 2026-06-04
+- **[one-off-script-print-and-annotation-ergonomics.md](history/one-off-script-print-and-annotation-ergonomics.md)** -- Script print/annotation ergonomics findings; all FIXED
+- **[arrow-compose-float-closure-int64-thunk-mismatch.md](history/arrow-compose-float-closure-int64-thunk-mismatch.md)** -- Arrow-compose float closure int64 thunk mismatch; Direction B Stage A landed 2026-06-05
+- **[boxed-fn-typed-closure-return-miscompiles.md](history/boxed-fn-typed-closure-return-miscompiles.md)** -- Boxed fn-typed closure return miscompile; RESOLVED 2026-06-05 (`src/compiler/elab_fns.c`)
+- **[poly-closure-inner-dispatch-result-erased.md](history/poly-closure-inner-dispatch-result-erased.md)** -- Poly-closure inner-dispatch result erasure; RESOLVED 2026-06-06 via `poly-closure-result-specialization-plan` Stage E
+- **[use-after-move-on-local-let-bound-float-vs-captured.md](history/use-after-move-on-local-let-bound-float-vs-captured.md)** -- Use-after-move on let-bound float; FIXED in `elab_call.c` with regression fixture
+- **[dsp-pair-bit-cast-helpers-obsolete.md](history/dsp-pair-bit-cast-helpers-obsolete.md)** -- DSP pair bit-cast helpers obsolete; resolved by the rebuild (`dsp.tur` deleted)
+- **[svf-low-pass-removed-no-consumers.md](history/svf-low-pass-removed-no-consumers.md)** -- `svf-low-pass` removed; resolved by the rebuild (no consumers)
+- **[linalg-decomp-qr-parser-unterminated-list.md](history/linalg-decomp-qr-parser-unterminated-list.md)** -- Resolved as a source bug in turmeric-spices, not a compiler bug
+
 Post-v0.18.0 followup sweep:
 
 - **[category-arrowzero-implementation-plan.md](history/category-arrowzero-implementation-plan.md)** -- `Category` typeclass + honest Kleisli `ArrowZero`; shipped in #290 under maintainer override (audit recommendation was resolved-by-audit); see [arrows-guide.md](../guides/arrows-guide.md)
