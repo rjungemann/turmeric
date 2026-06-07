@@ -1,6 +1,6 @@
 ---
 title: Approaches to Polymorphism
-category: Language Features
+category: Type System
 description: A tour of the polymorphism mechanisms Turmeric provides -- parametric, ad-hoc, structural, row, kind, rank, and substructural -- with guidance on which one to reach for
 ---
 

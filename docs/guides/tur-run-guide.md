@@ -1,3 +1,9 @@
+---
+title: Tur Run Guide
+category: Tools and IDE
+description: Built-in Justfile-compatible task runner for building, testing, and managing Turmeric projects without installing just
+---
+
 # tur run -- Justfile-compatible task runner
 
 `tur run` is a built-in Justfile task runner. Any spice that ships a

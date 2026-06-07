@@ -1,6 +1,6 @@
 ---
 title: Compiler Flags
-category: Reference
+category: Tools and IDE
 description: All -X feature flags and diagnostic flags: status, what each enables, dependency graph, and common combinations
 ---
 

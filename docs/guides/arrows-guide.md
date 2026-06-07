@@ -1,6 +1,6 @@
 ---
 title: Arrows and Signal Processing
-category: Language Features
+category: Functional Patterns
 description: Bare-function arrow combinators and building DSP signal graphs with stdlib/arrow.tur and stdlib/signal/
 ---
 

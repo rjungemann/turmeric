@@ -1,6 +1,6 @@
 ---
 title: C Integration Guide
-category: Language Features
+category: Interoperability
 description: Foreign function interface (FFI) and C interop
 ---
 

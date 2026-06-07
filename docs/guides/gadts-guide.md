@@ -1,6 +1,6 @@
 ---
 title: GADTs -- A Practical Guide
-category: Language Features
+category: Type System
 description: GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 ---
 

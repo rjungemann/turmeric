@@ -1,6 +1,6 @@
 ---
 title: Opaque Types (`defopaque`)
-category: Language Features
+category: Type System
 description: Named nominal newtypes over a representation type -- what they are, what they're for, and how to construct, unwrap, and combine them with substructural disciplines
 ---
 

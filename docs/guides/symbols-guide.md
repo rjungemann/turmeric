@@ -1,3 +1,9 @@
+---
+title: Symbols Guide
+category: Language Features
+description: First-class runtime symbols (:Sym type) with compile-time interning and optional dynamic str->sym table, enabled by -Xsymbols
+---
+
 # Runtime Symbols: `:Sym`
 
 > **Status:** experimental, opt-in behind `-Xsymbols`. All phases (SYM0--SYM6)

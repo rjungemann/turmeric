@@ -1,3 +1,9 @@
+---
+title: Data Literals Guide
+category: Language Basics
+description: Compact literal syntax for maps, vecs, and sets using #map{...}, #set{...}, and [...] with -Xdata-literals
+---
+
 # Data Literals: `#map{...}`, `#set{...}`, and `[...]`
 
 > **Status:** experimental, opt-in behind `-Xdata-literals`.

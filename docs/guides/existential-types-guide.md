@@ -1,6 +1,6 @@
 ---
 title: Existential Types
-category: Language Features
+category: Type System
 description: Existential types: pack/open, typeclass constraints, hiding concrete types behind opaque boundaries
 ---
 

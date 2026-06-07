@@ -1,6 +1,6 @@
 ---
 title: Generators and Lazy Sequences Guide
-category: Language Features
+category: Functional Patterns
 description: Zero-overhead generators with `gen`/`yield`, lazy `Seq` combinators, and the `Range` type
 ---
 

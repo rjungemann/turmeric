@@ -1,6 +1,6 @@
 ---
 title: Test Runner Contract
-category: Reference
+category: Tools and IDE
 description: Test framework API and contract
 ---
 

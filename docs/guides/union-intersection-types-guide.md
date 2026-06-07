@@ -1,6 +1,6 @@
 ---
 title: Union and Intersection Types Guide
-category: Language Features
+category: Type System
 description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
 ---
 

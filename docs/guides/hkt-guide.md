@@ -1,6 +1,6 @@
 ---
 title: Higher-Kinded Types
-category: Language Features
+category: Type System
 description: Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 ---
 

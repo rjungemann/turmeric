@@ -1,6 +1,6 @@
 ---
 title: Sized Types
-category: Language Features
+category: Type System
 description: Tracking data-structure sizes in the type system for memory layout, stack allocation, and type-safe array operations (`-Xsized-types`)
 ---
 

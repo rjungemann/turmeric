@@ -1,3 +1,9 @@
+---
+title: Tur New Guide
+category: Tools and IDE
+description: Scaffold a new Turmeric spice (library or binary) with standard layout, build manifest, tests, and optional CI
+---
+
 # tur new -- spice scaffolder
 
 `tur new` creates a new Turmeric spice (library or binary) with a

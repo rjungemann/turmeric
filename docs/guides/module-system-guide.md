@@ -1,6 +1,6 @@
 ---
 title: Module System Guide
-category: Language Features
+category: Language Basics
 description: Module system, namespacing, exports
 ---
 

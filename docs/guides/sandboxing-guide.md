@@ -1,6 +1,6 @@
 ---
 title: Sandboxing Guide
-category: Reference
+category: Tools and IDE
 description: Running untrusted Turmeric code safely inside a C host using turi_env_new_sandboxed, capability flags, and resource limits
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Effects vs. Monads
-category: Language Features
+category: Functional Patterns
 description: Design rationale: why effects instead of Haskell-style monads
 ---
 

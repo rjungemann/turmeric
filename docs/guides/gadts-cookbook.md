@@ -1,6 +1,6 @@
 ---
 title: GADTs Cookbook
-category: Language Features
+category: Type System
 description: GADTs cookbook: practical patterns and recipes
 ---
 

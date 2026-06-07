@@ -406,6 +406,13 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     print(f'  {stem}.html')
 
 
+def _fmt_inline(text: str) -> str:
+    """HTML-escape text and convert backtick spans to <code> elements."""
+    text = _html.escape(text)
+    text = re.sub(r'`([^`]+)`', lambda m: f'<code>{m.group(1)}</code>', text)
+    return text
+
+
 def _fmt_desc(text: str) -> str:
     """Normalize and render a guide description for the index page.
 
@@ -414,9 +421,7 @@ def _fmt_desc(text: str) -> str:
     - Converts backtick spans to <code> elements
     """
     text = text.replace('—', '--')
-    text = _html.escape(text)
-    text = re.sub(r'`([^`]+)`', lambda m: f'<code>{m.group(1)}</code>', text)
-    return text
+    return _fmt_inline(text)
 
 
 def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
@@ -427,7 +432,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     def guide_item(g: dict) -> str:
         if g['stem'] not in all_stems:
             return ''
-        return (f'<li><a href="{g["stem"]}.html">{g["label"]}</a>'
+        return (f'<li><a href="{g["stem"]}.html">{_fmt_inline(g["label"])}</a>'
                 f'<span style="color:var(--text-sec)"> -- {_fmt_desc(g["desc"])}</span></li>')
 
     cards = []
@@ -465,7 +470,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     recent_html = ''
     if recent:
         recent_items = ''.join(
-            f'<li><a href="{r["stem"]}.html">{r["label"]}</a>'
+            f'<li><a href="{r["stem"]}.html">{_fmt_inline(r["label"])}</a>'
             f'<span style="color:var(--text-sec)"> -- {r["date"]}</span></li>'
             for r in recent
         )

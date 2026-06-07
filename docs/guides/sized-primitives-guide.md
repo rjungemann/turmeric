@@ -1,6 +1,6 @@
 ---
 title: Sized Primitive Types
-category: Language Features
+category: Type System
 description: Fixed-width numeric types (int8/i8 through uint64/u64, float32/f32) -- literal syntax, coercion rules, and casting
 ---
 

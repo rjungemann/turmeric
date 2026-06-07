@@ -1,6 +1,6 @@
 ---
 title: Structs
-category: Language Features
+category: Language Basics
 description: Defining and using struct types with `defstruct`
 ---
 

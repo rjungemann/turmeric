@@ -1,6 +1,6 @@
 ---
 title: Higher-Ranked Types
-category: Language Features
+category: Type System
 description: Higher-ranked types: rank-2/3 polymorphic function parameters
 ---
 

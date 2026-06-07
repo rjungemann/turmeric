@@ -1,6 +1,6 @@
 ---
 title: Type Annotation Syntax
-category: Language Features
+category: Language Basics
 description: Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
 ---
 
