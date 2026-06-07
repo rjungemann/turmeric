@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <poll.h>
 #include <signal.h>
@@ -1385,9 +1386,21 @@ static int cmd_emit_h(const char *path,
     return rc;
 }
 
-/* Choose an output executable name from the input path: foo.tur -> foo. */
+/* Choose an output executable name from the input path: foo.tur -> foo.
+ *
+ * For inputs that resolve to "the current directory" (".", "./", "" after
+ * basename), basename_of() returns "." or "" -- which would yield artifact
+ * names like "lib..so" downstream. Resolve to an absolute path via realpath()
+ * so the cwd's real basename is used instead. */
 static void default_output_name(const char *input, char *out, size_t cap) {
     const char *base = basename_of(input);
+    char resolved[PATH_MAX];
+    if (base[0] == '\0' || (base[0] == '.' && base[1] == '\0')) {
+        if (realpath(input && input[0] ? input : ".", resolved)) {
+            base = basename_of(resolved);
+            if (base[0] == '\0') base = "root";  /* realpath("/") -> "/" */
+        }
+    }
     size_t n = strlen(base);
     if (n >= cap) n = cap - 1;
     memcpy(out, base, n);
