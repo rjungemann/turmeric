@@ -5518,15 +5518,28 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             buf_printf(out, " %s(", fn_name);
             for (uint8_t j = 0; j < fd->n_params; j++) {
                 if (j > 0) buf_puts(out, ", ");
-                /* Phase D: mirror emit_fn_def's pass-by-ptr logic. */
-                bool _hdr_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
-                Type _hdr_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
-                    ? *e->type.as.fn.arg_full_types[j]
-                    : fd->param_types[j];
-                if (!fd->closure && !_hdr_inline_c && type_struct_pass_by_ptr(_hdr_pty)) {
-                    buf_printf(out, "const %s *", type_c_name(_hdr_pty));
+                /* header-fat-param-emitted-as-inner-type.md: mirror the
+                 * forward-decl carrier logic from emit_implementation so the
+                 * header prototype agrees with the .c definition. ^fat params
+                 * are always the int64_t carrier in the prototype; TY_FN
+                 * params are also int64_t; poly-fn params use the poly carrier. */
+                if (fd->params[j]->is_poly_fn) {
+                    buf_puts(out, "tur_poly_fn_t");
+                } else if (fd->param_types[j].kind == TY_FN) {
+                    buf_puts(out, "int64_t");
+                } else if (fd->params[j]->is_fat) {
+                    buf_puts(out, "int64_t");
                 } else {
-                    buf_puts(out, type_c_name(_hdr_pty));
+                    /* Phase D: mirror emit_fn_def's pass-by-ptr logic. */
+                    bool _hdr_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+                    Type _hdr_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                        ? *e->type.as.fn.arg_full_types[j]
+                        : fd->param_types[j];
+                    if (!fd->closure && !_hdr_inline_c && type_struct_pass_by_ptr(_hdr_pty)) {
+                        buf_printf(out, "const %s *", type_c_name(_hdr_pty));
+                    } else {
+                        buf_puts(out, type_c_name(_hdr_pty));
+                    }
                 }
             }
             buf_puts(out, ");\n");
