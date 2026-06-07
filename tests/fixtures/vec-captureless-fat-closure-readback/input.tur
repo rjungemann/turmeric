@@ -1,0 +1,49 @@
+;; vec-captureless-fat-closure-readback: a *captureless* closure (the SF
+;; returned by nullary `invert`, which captures nothing -> bare fn pointer)
+;; stored in an untyped Vec alongside a *capturing* closure (`gain`, a fat
+;; box), then read back with the `::` ascription idiom and fat-dispatched.
+;;
+;; Before the fix (captureless-closure-lost-through-untyped-vec), the
+;; captureless closure was stored as a raw code address (no fn-pointer
+;; provenance survived `vec-get`), so the `^fat` dispatch read the code
+;; address as slot 0 of a fat box and fat-called garbage -> segfault.  The
+;; fix boxes captureless closures into a uniform { shim, fn } fat box at the
+;; point they escape into the polymorphic `val :A` carrier of `vec-push!`.
+;;
+;; Chain: gain 2.0 then invert, applied to constant 0.5 -> 0.5*2 = 1.0,
+;; negated = -1.0.
+
+(defn apply-sf
+  [^fat sf  :(fn [:ptr<void>] #{} :ptr<void>)
+   ^fat sig :(fn [:float]     #{} :float)] :ptr<void>
+  (sf sig))
+
+(defn chain-loop
+  [effects :int
+   ^fat sig :(fn [:float] #{} :float)
+   i :int n :int] :ptr<void>
+  (if (>= i n)
+    sig
+    (chain-loop effects (apply-sf (:: (vec-get effects i) :ptr<void>) sig) (+ i 1) n)))
+
+(defn effects-chain
+  [effects :int ^fat input :(fn [:float] #{} :float)] :ptr<void>
+  (chain-loop effects input 0 (vec-len effects)))
+
+;; A capturing SF: captures gv (a plain value) and the ^fat sig.
+(defn gain [g :float]
+  (let [gv g]
+    (fn [^fat sig : (fn [:float] #{} :float)] :ptr<void>
+      (fn [t :float] :float (* gv (sig t))))))
+
+;; A captureless SF: captures nothing -> bare fn pointer.
+(defn invert []
+  (fn [^fat sig : (fn [:float] #{} :float)] :ptr<void>
+    (fn [t :float] :float (- 0.0 (sig t)))))
+
+(defn main [] : int
+  (let [v (vec-of (gain 2.0) (invert))
+        base (fn [t : float] : float t)
+        ^fat out :(fn [:float] #{} :float) (effects-chain v base)]
+    (println (out 0.5)))
+  0)

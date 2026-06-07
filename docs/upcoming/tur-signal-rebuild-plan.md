@@ -594,26 +594,27 @@ the *direct-ascription* case: `(:: (invert) :ptr<void>)` as a `^fat` argument
 now correctly shims via `EX_FN_TO_FAT`. Fixture `fat-captureless-closure-ptr-void`
 passes (`-0.5 -0.5`). `>>>` applied directly to `(invert)` also works.
 
-**New sub-bug found:** When a captureless closure is stored in a `Vec` (e.g.
-`(vec-of (gain 2.0) (invert))`), its bare fn-pointer is cast to `int64_t` at
-`vec-push!` time. `vec-get` retrieves it as opaque `TY_INT` -- fn-pointer
-provenance is gone. A subsequent `^fat` cast then fat-dispatches the code address
-as a fat-box slot 0 -> segfault. The ascription-stripping fix never fires because
-no `EX_ASCRIBE` wrapper survives `vec-get`. Filed:
-[[captureless-closure-lost-through-untyped-vec]].
-
-This blocks `effects-chain` with captureless SFs. `test_compose` covers the
-capturing chains (empty, single, two, three SF); the captureless case (`invert`
-via `effects-chain`) is deferred pending the vec-path fix.
+**New sub-bug found (RESOLVED).** When a captureless closure is stored in a
+`Vec` (e.g. `(vec-of (gain 2.0) (invert))`), its bare fn-pointer was cast to
+`int64_t` at `vec-push!` time. `vec-get` retrieved it as opaque `TY_INT` --
+fn-pointer provenance was gone. A subsequent `^fat` cast then fat-dispatched the
+code address as a fat-box slot 0 -> segfault. The ascription-stripping fix never
+fired because no `EX_ASCRIBE` wrapper survives `vec-get`. Filed and fixed:
+[[captureless-closure-lost-through-untyped-vec]]. The elaborator now boxes a
+captureless closure into a uniform `{ shim, fn }` fat box (`EX_FN_TO_FAT`) at the
+point it escapes into a polymorphic (`TY_TYVAR`) carrier such as the `val :A`
+parameter of `vec-push!`, so the stored value is a valid fat box regardless of
+capture. Fixture: `tests/fixtures/vec-captureless-fat-closure-readback/`.
 
 **Blocker 2 -- `(load "stdlib/arrow.tur")` unreachable from imported module.**
 Filed: [[load-not-expanded-in-imported-or-project-modules]].
 **RESOLVED (import path, 2026-06-06, #305).** Fixture: `tests/fixtures/load-in-imported-module/`.
 
-**Phase 5 partial.** `compose.tur` uses `(load "stdlib/arrow.tur")` + `>>>`.
+**Phase 5 complete.** `compose.tur` uses `(load "stdlib/arrow.tur")` + `>>>`.
 `test_compose` covers empty, single, two, and three-SF capturing chains. All
-pass. Captureless SF coverage (`invert` via `effects-chain`) blocked pending
-[[captureless-closure-lost-through-untyped-vec]] fix.
+pass. Captureless SF coverage (`invert` via `effects-chain`) is now unblocked --
+[[captureless-closure-lost-through-untyped-vec]] is fixed (captureless closures
+are boxed into a uniform fat box when they escape into a `Vec`).
 
 ### Phase 6 -- README + arrows-guide cross-references (depends: Phases 1-5)
 
