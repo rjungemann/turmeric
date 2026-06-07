@@ -2338,6 +2338,31 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * The concrete type is resolved per-arm inside a GADT match. */
         if (!arg_ok && expected_arg_kind == TY_TYVAR) {
             arg_ok = true;
+            /* captureless-closure-lost-through-untyped-vec: a *captureless*
+             * closure (e.g. the SF returned by a nullary `(invert)`) is
+             * codegen'd as a BARE fn pointer, not a { thunk, env } fat box.
+             * When it escapes into a polymorphic (TY_TYVAR) parameter -- the
+             * `val :A` of `vec-push!`, the `a :A`/`b :A` of a generic helper --
+             * it is stored as the opaque int64_t carrier (a raw code address).
+             * A later `vec-get` + `(:: v :ptr<void>)` + `^fat` dispatch then
+             * reads that code address as slot 0 of a fat box and fat-calls
+             * garbage -> segfault, and the carrier has lost all fn-pointer
+             * provenance by then so the retrieval side cannot recover.  Box the
+             * captureless closure here, at the escape point, via EX_FN_TO_FAT
+             * (the same { shim, fn } box the ^fat auto-shim produces) so every
+             * closure value stored through a generic carrier is a uniform fat
+             * box.  A *capturing* closure's value is TY_PTR_VOID (already a fat
+             * box) and a boxed TY_FN is left untouched; only a bare, unboxed
+             * TY_FN is shimmed.  Mirrors the ^fat auto-shim arity bound (<=5). */
+            if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed) {
+                uint8_t inner_arity = args[i]->type.as.fn.arity;
+                if (inner_arity >= 1 && inner_arity <= 5) {
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                          args[i]->span);
+                    shim->as.fn_to_fat_.inner = args[i];
+                    args[i] = shim;
+                }
+            }
         }
         /* poly-closure-result-specialization (Stage A2): the symmetric rule for
          * a tyvar-typed *argument*.  Inside a generic body, a parameter such as

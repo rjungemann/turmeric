@@ -7,6 +7,29 @@ description: When a captureless closure (bare fn ptr) is stored in a Vec[A] (e.g
 
 # Captureless closure lost through an untyped `Vec`
 
+## Resolution (2026-06-07)
+
+**Fixed** via proposed Direction 1 (box at the escape point), applied at the
+polymorphic-carrier boundary rather than only the `TY_INT` boundary. In
+`src/compiler/elab_call.c`, the `TY_TYVAR`-parameter acceptance hatch now boxes a
+captureless closure argument (`TY_FN && !boxed`, arity 1-5) into a uniform
+`{ shim, fn }` fat box via `EX_FN_TO_FAT` -- the same box the `^fat` auto-shim
+produces. This fires for `vec-push!`'s `val :A` parameter (and any generic
+`:A`-typed sink), so a captureless closure stored in a `Vec` is a valid fat box
+regardless of capture; `vec-get` + `(:: v :ptr<void>)` + `^fat` dispatch then
+reads a real slot-0 thunk instead of a code address.
+
+A *capturing* closure value is `TY_PTR_VOID` (already a fat box) and an
+already-boxed `TY_FN` is left untouched, so only bare captureless closures are
+shimmed -- no double-boxing. The TY5 HKT-method concern does not arise: generic
+`TY_TYVAR` parameters are never directly fat-called as a known-arity fn inside
+the generic body, so the uniform fat-box representation is transparent to them.
+
+Regression fixture: `tests/fixtures/vec-captureless-fat-closure-readback/`
+(gain-then-invert chain over a `vec-of` mixing a capturing and a captureless SF,
+asserts `-1`). The direct-path fixture `fat-captureless-closure-ptr-void` stays
+green and `bash tests/run.sh` is green (1530 passed, 0 failed).
+
 ## Summary
 
 **Severity: High.** A captureless closure (bare C function pointer) stored in a
