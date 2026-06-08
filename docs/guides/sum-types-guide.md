@@ -21,6 +21,21 @@ with `defdata` and takes them apart with `match`.
     (Rect  w h)  (* w h)))
 ```
 
+Sweet-exp equivalent:
+
+```turmeric
+#lang sweet-exp
+
+defdata Shape
+  Circle(:int)          ; radius
+  Rect(:int :int)       ; width, height
+
+defn area [s : int] : int
+  match s
+    Circle(r)   *(3 *(r r))
+    Rect(w h)   *(w h)
+```
+
 The canonical binary sum is `Either L R` from `stdlib/either.tur`: a value is
 either `(Left l)` carrying an `L`, or `(Right r)` carrying an `R`.
 
@@ -68,6 +83,16 @@ Constructors become ordinary callables: `(Left 3)`, `(Right "ok")`.
   (Right r)  (use r))
 ```
 
+Sweet-exp equivalent:
+
+```turmeric
+#lang sweet-exp
+
+match e
+  Left(l)   handle-error(l)
+  Right(r)  use(r)
+```
+
 - Bind a payload to a name (`l`, `r`) to use it in that arm's body.
 - Use `_` to ignore a payload: `(Left _)`.
 - Sub-match a payload that is itself a sum by matching again on the bound
@@ -79,6 +104,18 @@ Constructors become ordinary callables: `(Left 3)`, `(Right "ok")`.
   (Right r)  (match r
                (Nada)   -1
                (Just k) k))
+```
+
+Sweet-exp equivalent:
+
+```turmeric
+#lang sweet-exp
+
+match outer
+  Left(n)   n
+  Right(r)  match r
+              Nada()   -1
+              Just(k)  k
 ```
 
 ## Exhaustiveness
@@ -105,11 +142,21 @@ suppress the diagnostic:
     (Right r) r))      ; Left is statically impossible here, by construction
 ```
 
+Sweet-exp equivalent:
+
+```turmeric
+#lang sweet-exp
+
+defn unwrap-right [e : int] : int
+  match #{NonExhaustive} e
+    Right(r)  r         ; Left is statically impossible here, by construction
+```
+
 The marker is the *only* escape hatch; without it a non-exhaustive match does
 not compile. Use it sparingly and leave a comment explaining why the missing
 arm is unreachable.
 
-> Note: this guide's plan ([[sum-types-either-plan]]) originally specced
+> Note: this guide's plan ([sum-types-either-plan](../archive/history/sum-types-either-plan.md)) originally specced
 > exhaustiveness as a *warning*. The implementation keeps it a hard **error**
 > (the stronger, pre-existing behaviour) and adds `#{NonExhaustive}` as the
 > deliberate opt-out -- see that plan's ADR for the rationale.
@@ -222,7 +269,7 @@ instance.
 
 ## See also
 
-- [[sum-types-either-plan]] -- the design plan and ADR.
+- [sum-types-either-plan](../archive/history/sum-types-either-plan.md) -- the design plan and ADR.
 - [`stdlib/result.tur`](../../stdlib/result.tur) / `stdlib/option.tur` --
   the unary-payload tagged structs that predate `Either`.
 - [[data-literals-guide]] -- literal construction syntax that composes with

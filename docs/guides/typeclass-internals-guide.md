@@ -131,12 +131,12 @@ production-grade example of the dictionary-lowering rules above: `Category`
 names and exercise both the closure-handle convention and the method-vs-defn
 namespace rules. See [arrows-guide.md](arrows-guide.md).
 
-## Related
+## See also
 
 - [closure-returning-instance-method-codegen-plan](../archive/closure-returning-instance-method-codegen-plan.md)
   -- the plan this rule was extracted from.
-- `docs/archive/history/nested-closure-transitive-capture.md` -- an *orthogonal*
+- [`docs/archive/history/nested-closure-transitive-capture.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/nested-closure-transitive-capture.md) -- an *orthogonal*
   capture-set defect (a grandchild closure's free var not threaded through the
   middle closure), independent of the carrier type.
-- `docs/archive/history/intra-instance-method-dispatch-unsupported.md` -- calling a
+- [`docs/archive/history/intra-instance-method-dispatch-unsupported.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/intra-instance-method-dispatch-unsupported.md) -- calling a
   sibling method via `(.other self ...)` inside an instance body.

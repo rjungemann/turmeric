@@ -120,11 +120,11 @@ reads these at runtime via `dlsym`. As long as the manifest is regenerated
 whenever the `.so` is rebuilt (`tur repl` handles this automatically), no
 manual update is needed when the mangling scheme changes.
 
-## Cross-references
+## See also
 
-- Scheme implementation: `src/compiler/mangle.c`, `src/compiler/mangle.h`
-- Unit test (oracle + round-trip + injectivity): `tests/mangle_test.c` /
+- Scheme implementation: [`src/compiler/mangle.c`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/mangle.c), [`src/compiler/mangle.h`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/mangle.h)
+- Unit test (oracle + round-trip + injectivity): [`tests/mangle_test.c`](https://github.com/rjungemann/turmeric/blob/main/tests/mangle_test.c) /
   `tur_mangle_unit` ctest target
-- Regression fixtures: `tests/fixtures/mangle-kebab-snake-coexist/` and
-  `tests/fixtures/mangle-arrow-name-vs-module/`
-- Plan: `docs/upcoming/reversible-name-mangling-plan.md`
+- Regression fixtures: [`tests/fixtures/mangle-kebab-snake-coexist/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-kebab-snake-coexist) and
+  [`tests/fixtures/mangle-arrow-name-vs-module/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-arrow-name-vs-module)
+- Plan: [reversible-name-mangling-plan](../upcoming/reversible-name-mangling-plan.md)

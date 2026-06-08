@@ -19,7 +19,7 @@ reach for it.
 
 ---
 
-## 1. Two closure representations
+## Two closure representations
 
 A function value in Turmeric compiles to one of two ABIs:
 
@@ -37,7 +37,7 @@ This is a real type-system distinction, tracked by `arg_fat[]` and
 `result_fat` bits on the function `Type`. A captureless `fn` and a
 captureful `fn` are *not* interchangeable.
 
-## 2. Why this matters at call sites
+## Why this matters at call sites
 
 `apply-fat` (and its `TUR_APPLY1`/`TUR_APPLY2`/... macros) load the
 thunk from slot 0 of a fat closure and pass the closure itself as the
@@ -73,7 +73,7 @@ force a capture by hand:
 
 That workaround is obsolete. The replacement is `^fat`.
 
-## 3. `^fat` on a parameter
+## `^fat` on a parameter
 
 Annotating a function-typed parameter `^fat` declares that the body
 calls it through the fat-closure ABI. The elaborator then auto-shims
@@ -119,7 +119,7 @@ that wants to *receive* a closure handle from Turmeric should take it as
 `int64_t`. Do not spell it as `void *` -- inline-C ascription is scanned
 for captures (#264) and the carrier type is what the codegen agrees on.
 
-## 4. `^fat` on a return type
+## `^fat` on a return type
 
 The parameter form only fires at **call-argument** sites. A different
 situation arises when a *factory* function returns a fat closure built
@@ -145,7 +145,7 @@ combinator library, that is essentially every public constructor
 (`pfail`, `item`, `pure`, `or-parser`, the `*-ref` thunks for
 mutually recursive non-terminals).
 
-## 4a. Result type: bare `^fat` is int-carrier only
+## Result type: bare `^fat` is int-carrier only
 
 There are two ways to spell a `^fat` *parameter*, and they differ in what
 they know about the closure's **result type**:
@@ -196,7 +196,7 @@ position; that is tracked in
 a real consumer exists). The annotated form remains the *checked* path in
 all positions.
 
-## 5. When you do *not* need `^fat`
+## When you do *not* need `^fat`
 
 - The function value is called with the normal `f(arg)` syntax (direct
   invocation, not `apply-fat`). The compiler dispatches against the
@@ -210,14 +210,14 @@ If unsure: try without `^fat` first; if the program SEGVs at an
 `apply-fat`/`TUR_APPLY1` site, the missing annotation is almost
 certainly the cause.
 
-## 6. Arity bound
+## Arity bound
 
 The auto-shim ships with `__tur_fatshim0` through `__tur_fatshim5`,
 covering 0–5 argument lambdas. Higher arities are rejected at
 elaboration time. In practice every combinator in the stdlib that
 uses `^fat` is 1- or 2-ary, so this rarely binds.
 
-## 7. Interaction with other annotations
+## Interaction with other annotations
 
 - `^fat` is independent of `#{Unsafe}`, `:linear`, and effect rows.
   It is a representation marker, not a discipline or capability.
@@ -228,7 +228,7 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
   compiler decides to **produce** a fat vs. bare value at the marked
   position.
 
-## 8. Quick reference
+## Quick reference
 
 | Situation | Annotation |
 |---|---|
@@ -242,5 +242,5 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
 For a worked example end-to-end, see
 [parser-combinators-tutorial.md](parser-combinators-tutorial.md)
 sections 4, 5, and 8. The historical design rationale lives in
-`docs/archive/history/captureless-lambda-abi-plan.md` and
-`docs/archive/history/fat-closure-return-position-plan.md`.
+[`docs/archive/history/captureless-lambda-abi-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/captureless-lambda-abi-plan.md) and
+[`docs/archive/history/fat-closure-return-position-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fat-closure-return-position-plan.md).
