@@ -33,7 +33,7 @@ and links to a deeper guide for the rules and edge cases.
 | Be effect-polymorphic | Effect rows (`{Io \| e}`) | [effects-system-guide.md](effects-system-guide.md) |
 | Branch on a tagged value | ADTs (`defdata`) | [gadts-guide.md](gadts-guide.md) |
 | Track usage discipline (linear / affine / unique) | Substructural annotations | [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md) |
-| Accept any number of same-typed values | `& rest :T` variadics | `CLAUDE.md` "Function Arity Style Guide" |
+| Accept any number of same-typed values | `& rest :T` variadics | [function-arity-guide.md](function-arity-guide.md) |
 | Drop type-checking at the boundary | Inline-C with `#{Unsafe}` | [c-integration-guide.md](c-integration-guide.md) |
 
 The rest of this guide walks each row.
@@ -375,8 +375,8 @@ defn println-all [first : cstr  & rest : cstr] : void
 ```
 
 The rest type is type-checked (including opaques and user-defined types), and
-calling with zero rest args passes `nil`. The full rules are in `CLAUDE.md`
-under "Function Arity Style Guide".
+calling with zero rest args passes `nil`. The full rules are in
+[function-arity-guide.md](function-arity-guide.md).
 
 **Reach for it when** the arguments are genuinely a homogeneous sequence.
 For "lots of named, independent inputs", a `defstruct` options value is
@@ -475,5 +475,5 @@ weaker one starts requiring boilerplate at every call site.
 - [substructural-types-guide.md](substructural-types-guide.md),
   [uniqueness-types-guide.md](uniqueness-types-guide.md) -- linear / affine /
   unique disciplines
-- `CLAUDE.md`, "Function Arity Style Guide" -- variadics, struct-of-options,
-  arity limits
+- [function-arity-guide.md](function-arity-guide.md) -- variadics,
+  struct-of-options, arity limits

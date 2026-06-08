@@ -39,15 +39,15 @@ PAGE_HEADER = '''\
     <button class="hamburger" aria-label="Toggle navigation">
       <span></span><span></span><span></span>
     </button>
-    <a class="nav-logo" href="/">
+    <a class="nav-logo" href="https://turmeric-lang.com/">
       <img src="/logo-icon.svg" width="28" height="28" alt="">
       <img src="/logo.svg" width="101" height="28" alt="Turmeric">
     </a>
     <nav>
-      <a href="/docs/html/guides/">Guides</a>
-      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://turmeric-lang.com/docs/html/guides/">Guides</a>
+      <a href="https://turmeric-lang.com/docs/html/api/">API Docs</a>
       <a href="/docs/html/spices/" class="active">Spices</a>
-      <a href="/try">Try It</a>
+      <a href="https://turmeric-lang.com/try">Try It</a>
     </nav>
   </header>'''
 
@@ -161,7 +161,7 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = (
-        '<a class="sidebar-back" href="/">&larr; Back to home</a>\n      '
+        '<a class="sidebar-back" href="https://turmeric-lang.com/">&larr; Back to home</a>\n      '
         '<div style="margin-bottom:1.25rem">'
         '<a href="../index.html" style="font-size:0.8rem;color:var(--text-sec)">&larr; All Spices</a>'
         '</div>\n      '
@@ -281,7 +281,7 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
     )
 
     sidebar_html = (
-        '<a class="sidebar-back" href="/">&larr; Back to home</a>\n      '
+        '<a class="sidebar-back" href="https://turmeric-lang.com/">&larr; Back to home</a>\n      '
         '<h3>About</h3>\n'
         '      <ul>\n'
         f'        <li><a href="{GITHUB_BASE}">GitHub repo</a></li>\n'

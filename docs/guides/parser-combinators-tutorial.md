@@ -757,7 +757,7 @@ to the type checker.
 
 ## See Also
 
-- [stdlib/parsec.tur](../../stdlib/parsec.tur) -- production parser-combinator library
+- [`stdlib/parsec.tur`](https://github.com/rjungemann/turmeric/tree/main/stdlib/parsec.tur) -- production parser-combinator library
 - [backtracking-guide.md](backtracking-guide.md) -- list monad / nondeterminism
 - [stm-tutorial.md](stm-tutorial.md) -- style template (sweet-exp pairing)
 - [c-integration-guide.md](c-integration-guide.md) -- inline-C, fat closures, `TUR_APPLY1`
