@@ -19,7 +19,7 @@ Run the example:
 
 ---
 
-## 1. Why Index?
+## Why Index?
 
 The minimal `db-q` scans every datum in the database for every query. With `n`
 datums this is O(n) per query. For a blog with a thousand posts and ten thousand
@@ -32,7 +32,7 @@ follow the chain of matching entries.
 
 ---
 
-## 2. Index Data Structures
+## Index Data Structures
 
 The index uses two C structs:
 
@@ -68,7 +68,7 @@ defn eavt-idx-lookup [idx entity attr] :ptr<void>  ...
 
 ---
 
-## 3. Hash Function
+## Hash Function
 
 The bucket is chosen by:
 
@@ -84,7 +84,7 @@ hash map.
 
 ---
 
-## 4. Insertion
+## Insertion
 
 `eavt-idx-insert!` prepends a new `eavt_entry` to the appropriate bucket chain:
 
@@ -116,7 +116,7 @@ Prepending is O(1) and maintains insertion order within each chain.
 
 ---
 
-## 5. Lookup
+## Lookup
 
 `eavt-idx-lookup` iterates the chain for the computed bucket, collecting all
 entries that match `(entity, attr)` exactly:
@@ -159,7 +159,7 @@ practice.
 
 ---
 
-## 6. Indexed Database (`idb`)
+## Indexed Database (`idb`)
 
 The indexed database wraps a raw database and its EAVT index together:
 
@@ -220,7 +220,7 @@ defn idb-q-ea [idb :int entity :int attr :cstr] :ptr<void>
 
 ---
 
-## 7. Performance Comparison
+## Performance Comparison
 
 | Operation | Minimal (db-q) | Indexed (idb-q-ea) |
 |-----------|---------------|-------------------|
@@ -235,7 +235,7 @@ while `db-q` would take milliseconds.
 
 ---
 
-## 8. Demo Walkthrough
+## Demo Walkthrough
 
 The `demo` in `indexed.tur` inserts three users and then does indexed lookups:
 
@@ -282,7 +282,7 @@ Alice
 
 ---
 
-## 9. Limitations and Extensions
+## Limitations and Extensions
 
 **Hash collisions** -- the 64-bucket table degrades to O(n/64) per chain as n
 grows. A production implementation would rehash when the load factor exceeds a

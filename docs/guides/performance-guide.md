@@ -28,7 +28,7 @@ optimisations; its timing numbers are not meaningful for comparison.
 
 ---
 
-## 1. Numerical computation
+## Numerical computation
 
 ### Integer and floating-point arithmetic
 
@@ -219,7 +219,7 @@ defn estimate-pi [samples] :float
 
 ---
 
-## 2. Data structures
+## Data structures
 
 ### Lists vs vecs
 
@@ -296,7 +296,7 @@ let [v vec/of(5 3 8 1 9 2)]
 
 ---
 
-## 3. String and text processing
+## String and text processing
 
 ### Avoid repeated concatenation
 
@@ -368,7 +368,7 @@ let [s "hello world"]
 
 ---
 
-## 4. Concurrency and parallelism
+## Concurrency and parallelism
 
 ### Thread creation
 
@@ -446,7 +446,7 @@ defn with-indent [body] :any
 
 ---
 
-## 5. Memory and allocation
+## Memory and allocation
 
 ### Allocation patterns
 
@@ -505,7 +505,7 @@ defn no-churn [n] :void
 
 ---
 
-## 6. Recursion and stack usage
+## Recursion and stack usage
 
 ### Tail recursion
 
@@ -577,7 +577,7 @@ trampoline/run(even?(100000))   ; => true, O(1) stack
 
 ---
 
-## 7. I/O operations
+## I/O operations
 
 ### Sequential file I/O
 
@@ -637,7 +637,7 @@ need crash-safety.
 
 ---
 
-## 8. Real-world algorithms
+## Real-world algorithms
 
 ### N-body simulation
 
@@ -676,7 +676,7 @@ defn dot [ax ay az bx by bz] :float
 
 ---
 
-## 9. Benchmarking methodology
+## Benchmarking methodology
 
 ### Harness structure
 
@@ -765,7 +765,7 @@ include this output alongside benchmark results so readers can reproduce.
 
 ---
 
-## 10. Performance checklist
+## Performance checklist
 
 Use this list before calling a hot path done:
 

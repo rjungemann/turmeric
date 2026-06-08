@@ -12,7 +12,7 @@ For a full step-by-step walkthrough with a complete guestbook example, see [web-
 
 ---
 
-## 1. The `send-form-and-wait` Pattern
+## The `send-form-and-wait` Pattern
 
 The canonical idiom for a page in a multi-step flow:
 
@@ -49,7 +49,7 @@ defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
 
 ---
 
-## 2. Continuation Store Contract
+## Continuation Store Contract
 
 The continuation store (`conts.tur`) must satisfy:
 
@@ -107,7 +107,7 @@ Alternatively use the `StoredCont` struct (tutorial Step 9) to embed the creatio
 
 ---
 
-## 3. Serializable Structs for Flow State
+## Serializable Structs for Flow State
 
 Any value captured inside a `serial-reset` boundary must implement `Serializable`. For custom structs, write a `definstance`:
 
@@ -156,7 +156,7 @@ definstance Serializable MyStruct
 
 ---
 
-## 4. Routing Model
+## Routing Model
 
 The router maps `POST /submit?k=TOKEN` to `serial-resume`:
 
@@ -195,7 +195,7 @@ The flow never explicitly returns a response. All output goes through `HttpEffec
 
 ---
 
-## 5. Composing Flows
+## Composing Flows
 
 ### Sequential Sub-Flows
 
@@ -243,7 +243,7 @@ If a continuation token is stored in one HTTP request and resumed in a completel
 
 ---
 
-## 6. Comparison to Racket's `send/suspend`
+## Comparison to Racket's `send/suspend`
 
 | Concept | Racket | Turmeric |
 |---------|--------|----------|
@@ -257,7 +257,7 @@ If a continuation token is stored in one HTTP request and resumed in a completel
 
 ---
 
-## 7. Limitations
+## Limitations
 
 **No true call/cc semantics.** `serial-shift` is a *delimited* shift -- it captures only up to the enclosing `serial-reset`. You cannot capture the continuation of the entire program.
 

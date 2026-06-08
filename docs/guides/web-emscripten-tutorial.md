@@ -18,7 +18,7 @@ Turmeric program on a web page.
 
 ---
 
-## 0. Prerequisites
+## Prerequisites
 
 | Requirement | How to get it |
 |---|---|
@@ -39,7 +39,7 @@ node --version
 
 ---
 
-## 1. How the Turmeric WASM Build Works
+## How the Turmeric WASM Build Works
 
 The build pipeline has four stages:
 
@@ -80,7 +80,7 @@ module object.
 
 ---
 
-## 2. Project A: "Hello WASM" -- Inline Script, No Bundler
+## Project A: "Hello WASM" -- Inline Script, No Bundler
 
 The simplest possible end-to-end example. You create a single `index.html` that
 loads the pre-built `turmeric.js` / `turmeric.wasm` from the Turmeric repo and
@@ -225,7 +225,7 @@ hello-wasm/
 
 ---
 
-## 3. Project B: Evaluating a Full .tur File
+## Project B: Evaluating a Full .tur File
 
 Extend the previous example to load a `.tur` source file at runtime via `fetch`
 rather than embedding a string literal in the HTML.
@@ -308,7 +308,7 @@ layer with its own allocator.
 
 ---
 
-## 4. Project C: A Vite-Based Web App
+## Project C: A Vite-Based Web App
 
 A production-ready setup using Vite as a bundler -- mirroring the approach used
 by the Turmeric repository's own `web/` directory.
@@ -422,7 +422,7 @@ expression in the textarea and click Run.
 
 ---
 
-## 5. Rebuilding the WASM Module
+## Rebuilding the WASM Module
 
 When you modify Turmeric itself or the glue layer (`src/web/wasm_glue.c`):
 
@@ -449,14 +449,14 @@ just wasm
 
 ---
 
-## 6. Using the Doc-Lookup API
+## Using the Doc-Lookup API
 
 `turi_doc_lookup` retrieves the stdlib documentation string for any named
 function or macro. It backs the doc panel in the web REPL.
 
 ```js
 async function docLookup(name) {
-  var mod = await init();           // reuse the singleton from Section 4
+  var mod = await init();           // reuse the singleton from Project C: A Vite-Based Web App
   var ptr = mod.allocateUTF8(name);
   var rp  = mod._turi_doc_lookup(ptr);
   var doc = rp ? mod.UTF8ToString(rp) : '(no documentation)';
@@ -478,7 +478,7 @@ and rebuild the WASM module to see the changes.
 
 ---
 
-## 7. COOP/COEP and pthreads -- Common Pitfalls
+## COOP/COEP and pthreads -- Common Pitfalls
 
 | Problem | Cause | Fix |
 |---|---|---|
@@ -491,7 +491,7 @@ and rebuild the WASM module to see the changes.
 
 ---
 
-## 8. Deploying
+## Deploying
 
 ### Deploying the Turmeric REPL (just deploy-web)
 
@@ -561,7 +561,7 @@ export default defineConfig({
 
 ---
 
-## 9. Next Steps
+## Next Steps
 
 - `docs/guides/c-integration-guide.md` -- calling C from Turmeric (native builds)
 - `docs/guides/effects-system-guide.md` -- algebraic effects in Turmeric

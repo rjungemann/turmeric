@@ -21,7 +21,7 @@ This guide covers the two directions:
 
 ---
 
-## 1. The Compilation Model
+## The Compilation Model
 
 Running `./build/tur build path/to/file.tur` internally does:
 
@@ -45,7 +45,7 @@ To inspect the emitted C without building, use:
 This makes debugging integration problems much easier because you can see
 exactly what the C side of the equation looks like.
 
-### 1.1 Interpreter-only natives are not available to compiled code
+### Interpreter-only natives are not available to compiled code
 
 A handful of list primitives -- `cons`, `head`, `tail`, `nil-value`, and
 `cstr->parse-int` -- are **interpreter natives** registered by `tur run` / the
@@ -86,9 +86,9 @@ See the "CLI Argument Parsing" rule in `CLAUDE.md` for the `*args*` conventions.
 
 ---
 
-## 2. Calling C from Turmeric
+## Calling C from Turmeric
 
-### 2.1 `extern-c` -- Importing a C symbol
+### `extern-c` -- Importing a C symbol
 
 ```turmeric
 (extern-c function-name [arg-types...] return-type)
@@ -185,7 +185,7 @@ extern-c stderr [^] :ptr   ;; FILE* stderr -- accessed as stderr()
 extern-c rand   [^] :int   ;; int rand(void)
 ```
 
-### 2.2 Inline C blocks -- Arbitrary C inside a Turmeric expression
+### Inline C blocks -- Arbitrary C inside a Turmeric expression
 
 Surround C source with triple backticks and a `c` tag:
 
@@ -282,7 +282,7 @@ for referencing an unprefixed global in another translation unit that the
 current module does not import -- e.g. stdlib carrier helpers referenced across
 files without an explicit `import`.
 
-### 2.3 Capability structs -- The idiomatic pattern for C APIs
+### Capability structs -- The idiomatic pattern for C APIs
 
 The stdlib uses **capability structs** to wrap C APIs behind a Turmeric-visible
 interface. This pattern keeps the unsafe pointer juggling isolated:
@@ -357,12 +357,12 @@ memory yet, so the caller is responsible for cleanup.
 
 ---
 
-## 3. Calling Turmeric from C
+## Calling Turmeric from C
 
 Turmeric does not yet produce a linkable `.a` or `.so`. However, there are two
 practical ways to use compiled Turmeric code inside a larger C project:
 
-### 3.1 Include the emitted `.c` directly
+### Include the emitted `.c` directly
 
 ```
 ./build/tur emit-c mylib.tur > generated/mylib.c
@@ -379,17 +379,17 @@ and friends covered analogously -- so any Turmeric global name round-trips
 cleanly to C and back. Closures and anonymous functions get mangled names
 like `tur__closure_N`. See [name-mangling-guide.md](name-mangling-guide.md)
 for the full table and the demangler. **Inside an inline-C body, prefer the
-`__TUR_CNAME_<source-name>__` splice** (Section 2.2) over hand-spelling the
+`__TUR_CNAME_<source-name>__` splice** (Inline C blocks) over hand-spelling the
 mangled name; the splice tracks the live mangler so a future scheme change
 does not silently break your code.
 
-### 3.2 Subprocess / build-step integration
+### Subprocess / build-step integration
 
 Use `./build/tur build` as a build step that produces an executable, then have
 your C application invoke it as a subprocess. This is the zero-coupling option:
 the Turmeric binary handles I/O independently.
 
-### 3.3 Linking `runtime.c`
+### Linking `runtime.c`
 
 Whichever approach you use, if the generated code uses `defer` you must compile
 and link `src/runtime.c`. Its public surface is small:
@@ -418,17 +418,17 @@ void tur_frame_fire_chain(tur_frame *f);
 
 ---
 
-## 4. Memory Management
+## Memory Management
 
 Turmeric has three memory tiers. Understanding which tier a value lives in is
 essential when crossing the C boundary.
 
-### 4.1 Arena (compile-time only)
+### Arena (compile-time only)
 
 The compiler itself uses a bump-allocator arena (`src/arena.h`). This is
 **compiler-internal only** -- generated programs do not use it.
 
-### 4.2 Reference counting -- `rc<T>`
+### Reference counting -- `rc<T>`
 
 `rc<T>` is Turmeric's primary heap type. In generated C it is represented as a
 pointer to an `RcControlBlock` followed immediately by the value. The control
@@ -458,14 +458,14 @@ collector, but only Turmeric-managed `rc<T>` nodes are tracked. If you create
 a cycle that involves a raw C pointer (e.g. a C struct that holds a `void *`
 back to an `rc<T>`), the cycle collector will not see it and memory will leak.
 
-### 4.3 Weak pointers -- `weak<T>`
+### Weak pointers -- `weak<T>`
 
 A `weak<T>` holds only the control block pointer (strong count = 0 is allowed).
 `upgrade` returns a value wrapped in `Option`; if the strong count has reached
 zero it returns `nil`. Weak pointers crossing the C boundary have the same
 concern as `rc<T>` -- do not `free()` them directly.
 
-### 4.4 Manual heap (`malloc`/`free` via `extern-c`)
+### Manual heap (`malloc`/`free` via `extern-c`)
 
 When an inline C block or `extern-c` call allocates memory with `malloc`, that
 memory is invisible to the cycle collector and the borrow checker. You must
@@ -491,7 +491,7 @@ let [buf malloc(1024)]
 
 ---
 
-## 5. The `defer` System
+## The `defer` System
 
 `defer` registers a cleanup thunk that fires in LIFO order at scope exit,
 including on exception unwind. This maps directly to `tur_frame_fire_lifo` in
@@ -526,7 +526,7 @@ defers.
 
 ---
 
-## 6. Exception Handling
+## Exception Handling
 
 Exceptions are non-resumable and use `setjmp`/`longjmp`:
 
@@ -565,7 +565,7 @@ exception payload yet.
 
 ---
 
-## 7. Type System Boundary Rules
+## Type System Boundary Rules
 
 | Turmeric concept | Safe to pass to C? | Notes |
 |-----------------|--------------------|-------|
@@ -575,7 +575,7 @@ exception payload yet.
 | `ref<T>` | No | Borrow-checker-managed; do not store across call |
 | `rc<T>` | No | Contains control block; use `ptr` wrappers instead |
 | `weak<T>` | No | Same issue as `rc<T>` |
-| closures (annotated `^fat`) | Yes (as `int64_t`) | Unified-representation handle; see §8.1 |
+| closures (annotated `^fat`) | Yes (as `int64_t`) | Unified-representation handle; see Callbacks |
 | closures (unannotated) | No | Compiler chooses bare vs. fat; carrier is not stable across positions |
 | structs (copy) | Yes (by value) | Passed as C value types |
 | structs (move) | With care | Passing implies ownership transfer |
@@ -585,7 +585,7 @@ that crosses the boundary**, and keep `rc<T>`/`ref<T>` on the Turmeric side.
 
 ---
 
-## 8. Inline C and the Type Checker
+## Inline C and the Type Checker
 
 The elaborator (`src/elab.c`) does not parse inline C. It treats an inline
 block as a black box and trusts the annotated return type. This means:
@@ -599,7 +599,7 @@ block as a black box and trusts the annotated return type. This means:
   the top of the inline block. The latter is valid C99 (an `#include` can
   appear anywhere a declaration can appear).
 
-### 8.1 Callbacks: `^fat` parameters are `int64_t` in inline-C
+### Callbacks: `^fat` parameters are `int64_t` in inline-C
 
 Under the unified closure representation, a function-typed parameter marked
 `^fat` is emitted in the generated C signature as **`int64_t`** -- the
@@ -632,9 +632,9 @@ they cross as `int64_t` and must be annotated at the boundary.
 
 ---
 
-## 9. Build and Linking
+## Build and Linking
 
-### 9.1 Building the compiler
+### Building the compiler
 
 ```sh
 make           # debug build -- -Og, ASan+UBSan, -DTUR_DEBUG=1
@@ -643,7 +643,7 @@ make release   # -O2, -DNDEBUG
 
 The compiler binary is `build/tur`.
 
-### 9.2 Compiler flags for generated code
+### Compiler flags for generated code
 
 The compiler invokes `$(CC)` (defaulting to `cc`) with:
 
@@ -663,7 +663,7 @@ it includes will be a build error. Common sources of warnings in inline C:
 
 Cast liberally and include headers explicitly.
 
-### 9.3 Linking external libraries
+### Linking external libraries
 
 `extern-c` imports must be resolvable at link time. Pass extra linker flags via
 the `LDFLAGS` environment variable:
@@ -675,7 +675,7 @@ LDFLAGS="-lraylib -framework OpenGL" make release
 For system libraries (`-lm`, `-lpthread`, etc.) add them to `LDFLAGS` in your
 build script or `Makefile` wrapper.
 
-### 9.4 Multi-file builds
+### Multi-file builds
 
 ```sh
 ./build/tur build src/main.tur   # compiles main.tur and any (require ...) deps
@@ -689,7 +689,7 @@ shared `.tur` file.
 
 ---
 
-## 10. Common Pitfalls Summary
+## Common Pitfalls Summary
 
 | Pitfall | Consequence | Fix |
 |---------|-------------|-----|
@@ -703,11 +703,11 @@ shared `.tur` file.
 | Storing a `ref<T>` across an `extern-c` call | Borrow checker does not track C call boundaries | Use copy or `rc<T>` for data that outlives a single call |
 | Varadic `extern-c` with wrong arg types | UB at runtime | Check generated C with `emit-c`; cast explicitly in callers |
 | `static` name collision in multiple inline blocks | ODR violation / linker error | Prefix static helper names with a module-specific prefix |
-| Using `cons`/`head`/`tail` in compiled code | `error: unknown function or operator 'cons'` (they are interpreter-only natives) | Define inline-C stubs, use a stdlib list helper, or pass `0` for an empty list (see §1.1) |
+| Using `cons`/`head`/`tail` in compiled code | `error: unknown function or operator 'cons'` (they are interpreter-only natives) | Define inline-C stubs, use a stdlib list helper, or pass `0` for an empty list (see Interpreter-only natives) |
 
 ---
 
-## 11. Worked Example -- Wrapping a C Library
+## Worked Example -- Wrapping a C Library
 
 This example wraps a hypothetical `libmath` C library with a Turmeric module.
 
@@ -793,7 +793,7 @@ LDFLAGS="-L. -lmath" ./build/tur build math_wrap.tur
 
 ---
 
-## 12. Future Directions
+## Future Directions
 
 These are not yet available in v1 but are planned:
 

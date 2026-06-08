@@ -19,7 +19,7 @@ deprecated no-op for source compatibility; see
 
 ---
 
-## 1. Plain ADTs First (`defdata` + `match`)
+## Plain ADTs First (`defdata` + `match`)
 
 Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
 `defdata` form declares a sum type; `match` dispatches on its constructors.
@@ -107,7 +107,7 @@ compiler reports the missing arm.
 
 ---
 
-## 2. Your First GADT (`defgadt`)
+## Your First GADT (`defgadt`)
 
 A GADT is declared with `defgadt`. The key difference from `defdata` is that
 each constructor carries an explicit `: return-type` annotation:
@@ -172,7 +172,7 @@ defn eval-expr [e] :int
 
 ---
 
-## 3. Type Refinement in Match Arms
+## Type Refinement in Match Arms
 
 The power of GADTs shows up when constructors specialize different type
 parameters. Consider a typed tag:
@@ -314,7 +314,7 @@ defn main [] :int
 
 ---
 
-## 4. The `Equal` GADT and `coerce`
+## The `Equal` GADT and `coerce`
 
 The standard library provides a built-in equality witness GADT:
 
@@ -380,7 +380,7 @@ defn sym [eq] :(Equal b a)
 
 ---
 
-## 5. Guard Clauses (`when`) in Match
+## Guard Clauses (`when`) in Match
 
 Guard clauses let you refine which arm fires based on a runtime predicate.
 They work in both plain ADT and GADT matches:
@@ -427,7 +427,7 @@ is tried.
 
 ---
 
-## 6. Common Errors and How to Fix Them
+## Common Errors and How to Fix Them
 
 | Mistake | Error message (excerpt) | Fix |
 |---|---|---|
@@ -454,7 +454,7 @@ default`).
 
 ---
 
-## 7. Union Types and Gradual Typing (`-Xunion-types`)
+## Union Types and Gradual Typing (`-Xunion-types`)
 
 Turmeric also supports structural union types as a complement to GADTs.
 Enable them with `-Xunion-types`. Union types and GADTs are independent
@@ -571,7 +571,7 @@ defn print-as-int [x : any] :int
 
 ---
 
-## 8. Current Limitations
+## Current Limitations
 
 **Unsupported:**
 

@@ -85,7 +85,7 @@ import frame/print  :refer [print-frame frame-describe]
 
 ---
 
-## 1. Building a Frame
+## Building a Frame
 
 ### From parallel columns
 
@@ -213,7 +213,7 @@ write-csv(df "output.csv" default-csv-opts())
 
 ---
 
-## 2. Selecting, Filtering, and Mutating
+## Selecting, Filtering, and Mutating
 
 Frames are **immutable values**. Every transformation returns a new frame;
 unchanged columns are shared with the original (no copying).
@@ -324,7 +324,7 @@ let [df2 (mutate df "grade" (type-utf8)
 
 ---
 
-## 3. Sorting and De-duplicating
+## Sorting and De-duplicating
 
 `arrange` sorts by one or more columns. The `keys` argument is two parallel
 lists: column names and sort directions (0 = ascending, 1 = descending):
@@ -379,7 +379,7 @@ let [top-per-name distinct(arrange(df list("score") list(1))
 
 ---
 
-## 4. Group-By and Aggregation
+## Group-By and Aggregation
 
 `group-by` returns an opaque *grouped-frame*. Call `agg` on it to produce one
 summary row per group. The `agg` argument is three parallel lists:
@@ -457,7 +457,7 @@ print-frame frame-describe(df)
 
 ---
 
-## 5. Joining Two Frames
+## Joining Two Frames
 
 All joins return `result<frame>`. The `keys` argument is two parallel lists
 of column names -- left-side key names and right-side key names.
@@ -525,7 +525,7 @@ right-frame copy gets a `_r` suffix in the output.
 
 ---
 
-## 6. Reshaping with `melt`
+## Reshaping with `melt`
 
 `melt` converts a wide frame to long format. The identity columns stay unchanged;
 the remaining columns each become a row, with their name stored in `var-name` and
@@ -575,7 +575,7 @@ do not.
 
 ---
 
-## 7. Arrow C Data Interface
+## Arrow C Data Interface
 
 `tur-frame` stores data in the Arrow in-memory format. Zero-copy hand-off to
 other runtimes uses the Arrow C Data Interface -- two small C structs

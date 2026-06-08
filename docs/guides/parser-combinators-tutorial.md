@@ -26,7 +26,7 @@ The runnable end-to-end version of every snippet here lives in
 
 ---
 
-## 1. Why combinators?
+## Why combinators?
 
 A parser is a function that takes input and produces zero or more parses.
 "Zero" is failure, "one" is the usual happy path, and "more than one" is the
@@ -68,7 +68,7 @@ That target is forty lines of grammar away.
 
 ---
 
-## 2. The `Input` type
+## The `Input` type
 
 The first abstraction is an explicit cursor over the source string. We avoid
 slicing -- that would allocate a new C string at every step. Instead, an
@@ -110,7 +110,7 @@ trivial to capture inside fat closures.
 
 ---
 
-## 3. The shape of `Parser<a>`
+## The shape of `Parser<a>`
 
 A parser of values of type `a` takes an `Input` and returns a *list* of
 `(value, leftover-input)` pairs:
@@ -169,7 +169,7 @@ three monad operations.
 
 ---
 
-## 4. Three primitive parsers
+## Three primitive parsers
 
 ### `pfail` -- always fail
 
@@ -195,7 +195,7 @@ The `^fat` marker on the return type is not cosmetic: the inner `fn` captures
 nothing, so the compiler would otherwise emit it as a bare C function pointer,
 which is *not* callable through `apply-fat`. `^fat` makes the compiler box the
 bare pointer into a fat closure at the tail, so consumers can fat-call it. We
-will see this marker repeatedly. (Section 8 explains why.)
+will see this marker repeatedly. (Comparing to `stdlib/parsec` explains why.)
 
 ### `item` -- consume one character
 
@@ -299,7 +299,7 @@ avoids one closure allocation per character.
 
 ---
 
-## 5. The two core combinators
+## The two core combinators
 
 Two combinators take us from primitives to a real library. They are exactly
 the list monad's `mplus` and `mbind`, specialised to parser closures.
@@ -377,7 +377,7 @@ The `^fat` marker on `f` tells the compiler that `bind-parser` calls its
 continuation through the fat-closure ABI (`apply-fat`). When a caller passes
 a captureless `(fn ...)`, the compiler boxes it into a one-cell fat closure
 at the call site, so the continuation dispatches correctly with no manual
-workaround. (Section 8 explains the underlying ABI.)
+workaround. (Comparing to `stdlib/parsec` explains the underlying ABI.)
 
 `or-parser` and `bind-parser` are everything. Every other combinator is a
 short, mechanical definition on top of them, and `mzero`/`mreturn` give us
@@ -385,7 +385,7 @@ the unit and zero of the parser monoid.
 
 ---
 
-## 6. Derived combinators
+## Derived combinators
 
 ### `then-parser` (`>>`) -- discard the first result
 
@@ -558,7 +558,7 @@ are short, mechanical exercises -- try writing them out before peeking.
 
 ---
 
-## 7. Worked example: arithmetic
+## Worked example: arithmetic
 
 We will parse the grammar
 
@@ -612,8 +612,8 @@ defn number [] :ptr<void>
 
 The continuation `(fn [digs] ...)` captures nothing, but we no longer need a
 dead capture to coerce it into a fat closure: `bind-parser` declares its
-continuation `^fat` (section 5), so the compiler boxes this captureless
-lambda at the call site automatically. See section 8.
+continuation `^fat` (The two core combinators), so the compiler boxes this captureless
+lambda at the call site automatically. See Comparing to `stdlib/parsec`.
 
 ### `factor`, `term`, `expr`
 
@@ -698,7 +698,7 @@ would give a normaliser without touching the parser code.
 
 ---
 
-## 8. Comparing to `stdlib/parsec`
+## Comparing to `stdlib/parsec`
 
 The tutorial code and [`stdlib/parsec.tur`](../../stdlib/parsec.tur) share a
 common shape, but the production library is tighter in three ways.
@@ -730,7 +730,7 @@ parameter directly -- the old "bind parameters to locals first" rule no
 longer applies. See
 [fat-closure-annotation-guide.md](fat-closure-annotation-guide.md) for the
 full annotation reference and
-[c-integration-guide.md §8.1](c-integration-guide.md#81-callbacks-fat-parameters-are-int64_t-in-inline-c)
+[c-integration-guide.md Callbacks](c-integration-guide.md#callbacks-fat-parameters-are-int64_t-in-inline-c)
 for the inline-C carrier rule (`^fat` params are `int64_t` at the C level).
 
 **Pointer-to-int casting.** Both the tutorial and the production library
@@ -742,7 +742,7 @@ to the type checker.
 
 ---
 
-## 9. Where to go next
+## Where to go next
 
 - **Exercise:** write a JSON parser. The hard cases (strings with escapes,
   numbers with exponents) need only the combinators in this tutorial. The

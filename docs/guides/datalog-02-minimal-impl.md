@@ -18,7 +18,7 @@ Run the complete example at any time:
 
 ---
 
-## 1. The Value ADT
+## The Value ADT
 
 The first design decision is how to represent typed values. The tutorial uses a
 simple tagged union (algebraic data type) with three variants:
@@ -80,7 +80,7 @@ defn print-value [v :int] :nil
 
 ---
 
-## 2. Datum Layout
+## Datum Layout
 
 A datum is four 64-bit integers stored consecutively on the heap:
 
@@ -137,7 +137,7 @@ hand a heap pointer back to Turmeric as an opaque `:int`.
 
 ---
 
-## 3. The Database
+## The Database
 
 The database is a two-word header on the heap:
 
@@ -200,7 +200,7 @@ The doubling-growth vector ensures amortized O(1) append.
 
 ---
 
-## 4. Result Vec
+## Result Vec
 
 Query results are collected in a `rvec` -- another growable C vector, typed
 `:ptr<void>` to keep the Turmeric ownership checker out of query logic:
@@ -225,7 +225,7 @@ outlives all uses of its contents.
 
 ---
 
-## 5. String Helpers
+## String Helpers
 
 Attribute names are C string literals. Two helpers convert between Turmeric
 `:cstr` and the opaque `:int` representation used inside the database:
@@ -256,7 +256,7 @@ stored strings using `strcmp`.
 
 ---
 
-## 6. Query Combinators
+## Query Combinators
 
 `db-q` is the core query driver -- it accepts a predicate and returns a fresh
 result vec of all matching datums:
@@ -322,7 +322,7 @@ let [names db-q(db q-attr(":user/name"))
 
 ---
 
-## 7. Running the Demo
+## Running the Demo
 
 The `demo` function in `minimal.tur` asserts six facts (two users, three
 attributes each), then exercises the query combinators:
@@ -368,7 +368,7 @@ alice@example.com
 
 ---
 
-## 8. Memory Note
+## Memory Note
 
 The tutorial uses `malloc` directly with no `free`. For a real application you
 would want to free each datum, the internal vector, and the database header when

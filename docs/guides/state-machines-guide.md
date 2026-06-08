@@ -20,7 +20,7 @@ Five approaches, from simplest to most sophisticated:
 
 ---
 
-## 1. Pure Transition Function
+## Pure Transition Function
 
 Model states and events as `defdata` variants, write a `transition` function
 with nested `match`. Guards (`when`) handle conditional transitions.
@@ -70,7 +70,7 @@ defn transition [state :State event :Event] :State
 
 ---
 
-## 2. State + Algebraic Effects
+## State + Algebraic Effects
 
 When transitions need side effects, declare them with `defeffect` and keep the
 transition logic pure. A `handle` block wires in the real implementation later,
@@ -112,7 +112,7 @@ See `stdlib/effects.tur` and `docs/guides/effects-system-guide.md`.
 
 ---
 
-## 3. Free Monad
+## Free Monad
 
 Use `Free` from `stdlib/free.tur` to describe transitions as data. The machine
 produces a description of what it wants to do; a separate interpreter decides
@@ -123,7 +123,7 @@ See `stdlib/free.tur`.
 
 ---
 
-## 4. Arrow Composition
+## Arrow Composition
 
 `stdlib/arrow.tur` provides `>>>` for sequential composition and `ArrowLoop`
 for feedback. Suited to machines that are really signal-processing pipelines
@@ -143,7 +143,7 @@ See `stdlib/arrow.tur`.
 
 ---
 
-## 5. Serializable Workflows
+## Serializable Workflows
 
 `stdlib/workflow.tur` provides `serial-shift`/`serial-reset` for machines that
 need to suspend and resume across process restarts -- e.g. a multi-step approval

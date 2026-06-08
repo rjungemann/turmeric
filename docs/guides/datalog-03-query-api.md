@@ -24,7 +24,7 @@ Run the example:
 
 ---
 
-## 1. Value Equality
+## Value Equality
 
 The minimal implementation uses `cstr-eq?` to compare attribute strings but has
 no way to compare Values. `query.tur` adds `value-eq?`:
@@ -68,7 +68,7 @@ A wildcard arm `_ false` handles mismatched constructors (e.g. comparing a
 
 ---
 
-## 2. Attribute+Value Query (`q-av`)
+## Attribute+Value Query (`q-av`)
 
 `q-av` finds all datums with a specific attribute name AND value:
 
@@ -100,7 +100,7 @@ This returns all datums where `attr = :user/age` AND `value = LongVal(31)`.
 
 ---
 
-## 3. Temporal As-Of (`db-as-of`)
+## Temporal As-Of (`db-as-of`)
 
 `db-as-of` returns a filtered result vec containing only datums recorded at or
 before a given transaction number:
@@ -145,7 +145,7 @@ heap-allocated datum structs, which are immutable.
 
 ---
 
-## 4. Pull (`pull`)
+## Pull (`pull`)
 
 Pull collects every datum for a single entity:
 
@@ -168,7 +168,7 @@ filtering is left as an exercise.
 
 ---
 
-## 5. History (`history`)
+## History (`history`)
 
 History returns all datums for a given entity and attribute, sorted by
 transaction number ascending:
@@ -218,7 +218,7 @@ Each datum in `hist` carries its `tx`, so you can print `(datum-tx d)` next to
 
 ---
 
-## 6. Retraction
+## Retraction
 
 Retraction is represented as a new fact, not a deletion:
 
@@ -296,7 +296,7 @@ The retraction is itself a datum with a transaction number, so you can ask
 
 ---
 
-## 7. Demo Walkthrough
+## Demo Walkthrough
 
 The `demo` function in `query.tur` exercises all of the above:
 
@@ -335,7 +335,7 @@ true
 
 ---
 
-## 8. Combining Combinators
+## Combining Combinators
 
 The query combinators compose. To find all non-retracted ages above 25 you
 could write:

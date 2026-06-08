@@ -23,7 +23,7 @@ The integration was designed under the constraints in
 
 ---
 
-## 1. What the spice provides
+## What the spice provides
 
 The spice exports four Turmeric modules:
 
@@ -40,7 +40,7 @@ plaintext-only to TLS-capable.
 
 ---
 
-## 2. Generating a server certificate
+## Generating a server certificate
 
 For local development and CI, the spice ships
 [`tools/gen-cert.sh`](https://github.com/rjungemann/turmeric-spices/blob/main/spices/tls/tools/gen-cert.sh).
@@ -91,7 +91,7 @@ These are explicitly punted to follow-ups in the
 
 ---
 
-## 3. Migrating a server from `httpd-new` to `httpd-new-tls`
+## Migrating a server from `httpd-new` to `httpd-new-tls`
 
 The plaintext version:
 
@@ -182,7 +182,7 @@ the HTTP/1.1 parser; the handler sees a byte stream.
 
 ---
 
-## 4. What happens under the hood
+## What happens under the hood
 
 After `tls-httpd-init`:
 
@@ -207,7 +207,7 @@ the missing-init hint to stderr.
 
 ---
 
-## 5. Verifying a server locally
+## Verifying a server locally
 
 With the test cert in `/tmp/tls-smoke-test/` and an HTTPS server bound
 to 8443, both of these should print `Hello over HTTPS`:
@@ -223,7 +223,7 @@ real CA-issued cert these flags drop away.
 
 ---
 
-## 6. Test fixtures
+## Test fixtures
 
 Two fixtures cover the integration:
 
@@ -240,7 +240,7 @@ Two fixtures cover the integration:
 
 ---
 
-## 7. See also
+## See also
 
 - [tur-tls plan](../tur-tls-plan.md) -- design rationale + roadmap.
 - [tur-httpd plan](../tur-httpd-plan.md) -- the H1-H7 milestones that

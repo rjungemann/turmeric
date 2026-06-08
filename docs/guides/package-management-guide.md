@@ -26,7 +26,7 @@ This guide covers:
 
 ---
 
-## 1. Creating a New Project
+## Creating a New Project
 
 ```sh
 tur new my-app          # executable project (new directory)
@@ -93,7 +93,7 @@ tur run
 
 ---
 
-## 2. The `build.tur` Manifest
+## The `build.tur` Manifest
 
 Every Turmeric project has one `build.tur` at its root. It is a valid
 Turmeric source file evaluated at build time. The top-level form is
@@ -227,7 +227,7 @@ A standalone binary with no dependencies:
 
 ---
 
-## 3. Adding Dependencies (Spices)
+## Adding Dependencies (Spices)
 
 Dependencies in Turmeric are called *spices*. Use `tur add` to add one; it
 updates both `build.tur` and `tur.lock` for you.
@@ -342,7 +342,7 @@ defpackage my-app
 
 ---
 
-## 4. The Lock File (`tur.lock`)
+## The Lock File (`tur.lock`)
 
 `tur.lock` records the exact resolved commit SHA and SHA-256 hash for every
 fetched spice. It uses the same Turmeric S-expression syntax as `build.tur`
@@ -412,7 +412,7 @@ deflockfile
 
 ---
 
-## 5. Building and Running
+## Building and Running
 
 ### Run the project
 
@@ -462,7 +462,7 @@ API.
 
 ---
 
-## 6. Project Directory Layout
+## Project Directory Layout
 
 ```turmeric no-check
 my-project/
@@ -518,7 +518,7 @@ cmake/SpiceDeps.cmake
 
 ---
 
-## 7. C/CMake Dependencies
+## C/CMake Dependencies
 
 The `:cmake-deps` block declares C and C++ packages to link against. The
 `tur build` command generates `cmake/SpiceDeps.cmake` from this block and
@@ -561,7 +561,7 @@ For projects that need direct control of the CMake build, see
 
 ---
 
-## 8. Common CLI Reference
+## Common CLI Reference
 
 ```sh
 # Project creation
@@ -591,7 +591,7 @@ tur emit-c src/main.tur    # print generated C to stdout
 
 ---
 
-## 9. Module Integration
+## Module Integration
 
 Spice names map directly to module import paths. Given a spice named `geom`
 that exports `geom/vector` and `geom/matrix`:
@@ -619,7 +619,7 @@ for the full module system reference.
 
 ---
 
-## 10. Versioning and Security
+## Versioning and Security
 
 ### Semantic versioning
 

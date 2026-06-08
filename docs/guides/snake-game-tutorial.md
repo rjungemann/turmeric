@@ -37,20 +37,20 @@ A **hands-on guide** to building the Snake game with CMake + CPM + Raylib + Turm
 
 ## Step 0: Project Setup
 
-### 0.1 Create Directory Structure
+### Create Directory Structure
 
 ```bash
 # From fith/ root
 mkdir -p examples/snake/src examples/snake/assets cmake
 ```
 
-### 0.2 Download CPM.cmake
+### Download CPM.cmake
 
 ```bash
 curl -o cmake/CPM.cmake https://raw.githubusercontent.com/cpm-cmake/CPM.cmake/master/CPM.cmake
 ```
 
-### 0.3 Create Root CMakeLists.txt
+### Create Root CMakeLists.txt
 
 ```cmake
 # fith/CMakeLists.txt
@@ -67,7 +67,7 @@ add_subdirectory(src)
 add_subdirectory(examples)
 ```
 
-### 0.4 Create Snake CMakeLists.txt
+### Create Snake CMakeLists.txt
 
 ```cmake
 # fith/examples/snake/CMakeLists.txt
@@ -92,7 +92,7 @@ add_custom_command(
 )
 ```
 
-### 0.5 Create the C Shim
+### Create the C Shim
 
 ```c
 // fith/examples/snake/src/rayLibShim.c
@@ -116,7 +116,7 @@ void tur_set_fps(int fps) { SetTargetFPS(fps); }
 int tur_is_key_down(int key) { return IsKeyDown(key); }
 ```
 
-### 0.6 Build and Test
+### Build and Test
 
 ```bash
 mkdir -p build && cd build
@@ -1426,7 +1426,7 @@ defn -main []
 
 Final touches to make the game feel polished.
 
-### 13.1 Frame-Independent Movement
+### Frame-Independent Movement
 
 Use actual time instead of fixed speed.
 
@@ -1528,7 +1528,7 @@ defn game-loop [^state/GameState state]
       resume(k)
 ```
 
-### 13.2 Score Display
+### Score Display
 
 Show the score during gameplay.
 
@@ -1618,7 +1618,7 @@ defn game-loop [^state/GameState state]
       resume(k)
 ```
 
-### 13.3 Grid-Based Movement
+### Grid-Based Movement
 
 Make the snake move in a grid (20x20 pixels per cell).
 

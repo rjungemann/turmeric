@@ -22,7 +22,7 @@ This guide covers everything a working programmer needs to know:
 
 ---
 
-## 1. Declaring a Module
+## Declaring a Module
 
 A module is a single `.tur` file with a `defmodule` form at the top:
 
@@ -90,7 +90,7 @@ will produce confusing "module not found" errors.
 
 ---
 
-## 2. Importing Other Modules
+## Importing Other Modules
 
 Use `(import ...)` inside `defmodule` to bring in another module:
 
@@ -142,7 +142,7 @@ helper module.
 
 ---
 
-## 3. Exports and Visibility
+## Exports and Visibility
 
 Everything declared inside a `defmodule` is **private by default**. Only names
 listed in `(export ...)` are visible to other modules.
@@ -173,7 +173,7 @@ defmodule list-utils
 
 - **Same module**: all bindings (public and private) are visible.
 - **Other module, qualified or `:refer`'d**: only exported names are visible.
-- **Stdlib (`tur/...`) bindings**: globally visible -- see §6.
+- **Stdlib (`tur/...`) bindings**: globally visible -- see Auto-Loaded Stdlib Modules.
 
 ### Macros are exported the same way
 
@@ -199,7 +199,7 @@ defining module (the elaborator tracks the "expansion module" for this).
 
 ---
 
-## 4. Module-Level Defer
+## Module-Level Defer
 
 Top-level `(defer ...)` forms inside a module run at process exit via
 `atexit`:
@@ -231,7 +231,7 @@ function-level defer semantics. Across modules they fire in reverse load order.
 
 ---
 
-## 5. C Symbol Mangling and FFI Naming
+## C Symbol Mangling and FFI Naming
 
 When a module exports a symbol, the emitted C name is prefixed with the
 mangled module name to prevent linker collisions:
@@ -290,7 +290,7 @@ The argument must be a string literal.
 
 ---
 
-## 6. Auto-Loaded Stdlib Modules
+## Auto-Loaded Stdlib Modules
 
 Two stdlib files are auto-loaded into every program:
 
@@ -312,7 +312,7 @@ modules under `tur/`.
 
 ---
 
-## 7. Building Multi-Module Programs
+## Building Multi-Module Programs
 
 For a single-file program, `./build/tur build app.tur -o app` works as before
 -- the elaborator finds and inlines any `(import ...)` targets.
@@ -354,7 +354,7 @@ own dependencies' headers.
 
 ---
 
-## 8. Common Errors
+## Common Errors
 
 ### `defmodule must be the first form in the file`
 
@@ -396,7 +396,7 @@ or use `(export-as "...")` to override the C name explicitly.
 
 ---
 
-## 9. A Complete Example
+## A Complete Example
 
 ```turmeric
 ;; src/math.tur
@@ -465,7 +465,7 @@ Build with `./build/tur build src/app.tur -o app`.
 
 ---
 
-## 10. Limitations and v1 Caveats
+## Limitations and v1 Caveats
 
 - **No dynamic imports**: all `(import ...)` statements must be at the top of
   a module body. No `(require)` at function scope.

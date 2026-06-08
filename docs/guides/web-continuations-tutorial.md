@@ -96,7 +96,7 @@ Turmeric's `serial-shift` plays the same role as `send/suspend`, with the differ
 
 ## Step 0: Project Layout
 
-### 0.1 Directory Structure
+### Directory Structure
 
 The guestbook lives at `examples/guestbook/`:
 
@@ -119,7 +119,7 @@ examples/guestbook/
 
 The `data/` directory is created at runtime by the server on first start. You do not need to create it manually.
 
-### 0.2 Adding the Build Target
+### Adding the Build Target
 
 In the root `CMakeLists.txt`, the guestbook is included when `TUR_EXAMPLES=ON`:
 
@@ -131,7 +131,7 @@ endif()
 
 The guestbook `CMakeLists.txt` links only against the Turmeric runtime and the C standard library -- no external HTTP library is required.
 
-### 0.3 Justfile Recipe
+### Justfile Recipe
 
 After following this tutorial, the root `Justfile` gains:
 
@@ -145,7 +145,7 @@ run-guestbook: configure-examples
 
 ## Step 1: Minimal HTTP Listener
 
-### 1.1 The C Shim
+### The C Shim
 
 Rather than pulling in a third-party library, the tutorial ships a tiny `httpd.c` (around 150 lines) that uses only POSIX sockets. This keeps dependencies at zero and makes the networking layer fully transparent.
 
@@ -175,7 +175,7 @@ void httpd_send_response(int status, const char *content_type,
                          const char *body);
 ```
 
-### 1.2 Turmeric Bindings
+### Turmeric Bindings
 
 Declare the three C functions using `extern-c`:
 
@@ -289,7 +289,7 @@ extern-c httpd-send-response [(status : int64) (content-type : cstr) (body : cst
   "httpd_send_response"
 ```
 
-### 1.3 Request and Response Structs
+### Request and Response Structs
 
 ```turmeric
 ;;; HttpRequest -- parsed HTTP request from the listener.
@@ -318,7 +318,7 @@ defstruct HttpRequest
 
 ## Step 2: Hello World Handler
 
-### 2.1 Defining `HttpEffect`
+### Defining `HttpEffect`
 
 Algebraic effects decouple handler logic from transport. Define one effect operation:
 
@@ -337,7 +337,7 @@ defeffect HttpEffect
   send-html [body : cstr] : unit
 ```
 
-### 2.2 A Trivial Handler
+### A Trivial Handler
 
 ```turmeric
 ;;; hello-handler -- send a minimal HTML page.
@@ -373,7 +373,7 @@ defn hello-handler [req : HttpRequest] : unit
     send-html("<h1>Hello from Turmeric!</h1>")
 ```
 
-### 2.3 The Effect Handler in `main.tur`
+### The Effect Handler in `main.tur`
 
 The top-level loop in `main.tur` interprets `HttpEffect` by calling the C shim:
 
@@ -427,7 +427,7 @@ The `dispatch` function (defined in `router.tur`) routes requests to the appropr
 
 Before introducing continuations, build a plain single-page form to establish the baseline.
 
-### 3.1 Rendering the Name Form
+### Rendering the Name Form
 
 ```turmeric
 ;;; render-name-form -- render the name-entry page.
@@ -472,7 +472,7 @@ defn render-name-form [action : cstr] : cstr
       "</form></body></html>")
 ```
 
-### 3.2 Parsing Form Fields
+### Parsing Form Fields
 
 URL-encoded POST bodies have the form `name=Alice&message=Hello+World`. Extract a single named field:
 
@@ -571,7 +571,7 @@ defn percent-decode [s : cstr] : cstr
 
 ## Step 4: Introducing Continuations
 
-### 4.1 The Core Idea
+### The Core Idea
 
 `serial-reset` marks the outer boundary of a serializable computation. `serial-shift` pauses the computation and hands a serialized continuation to the body:
 
@@ -626,7 +626,7 @@ The two `send-form-and-wait` calls look like blocking reads but each one:
 
 When the browser submits the form, the router loads the token, deserializes the continuation, and calls `serial-resume`.
 
-### 4.2 The `send-form-and-wait` Helper
+### The `send-form-and-wait` Helper
 
 This helper encapsulates the pattern:
 
@@ -674,7 +674,7 @@ defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
 
 After `perform HttpEffect (send-html html)`, the current fiber is done -- the HTTP loop will call `serial-resume k body` the next time that token is POSTed.
 
-### 4.3 Token Generation and Storage
+### Token Generation and Storage
 
 `conts.tur` provides two operations:
 
@@ -754,7 +754,7 @@ defn load-continuation [token : cstr] : (Option (serial-continuation cstr))
       Some(k)
 ```
 
-### 4.4 The Router
+### The Router
 
 ```turmeric
 ;;; dispatch -- route an HTTP request to the appropriate handler.
@@ -904,7 +904,7 @@ defn run-guestbook-flow [req : HttpRequest] : unit
     def message or(parse-form-field(msg-body "message") "")
 ```
 
-### 5.1 What Happens at Runtime
+### What Happens at Runtime
 
 Walk through the sequence for `name = "Alice"` and `message = "Hello"`:
 
@@ -960,7 +960,7 @@ Add a preview page between message entry and posting. The user can click "Edit" 
                          t-confirm))))))
 ```
 
-### 6.1 How Back Navigation Works
+### How Back Navigation Works
 
 Two continuations are stored on the preview page:
 
@@ -971,7 +971,7 @@ When the user clicks "Edit", the browser POSTs to `/submit?k=<t-back>`. The rout
 
 Back navigation is completely free -- the server already serialized both continuations. No extra state tracking is needed.
 
-### 6.2 The Preview Template
+### The Preview Template
 
 ```turmeric
 ;;; render-preview -- render the preview page with confirm and back links.
@@ -1038,7 +1038,7 @@ defn render-preview [name    : cstr,
 
 ## Step 7: Persisting the Guestbook Store
 
-### 7.1 The `GuestEntry` Struct
+### The `GuestEntry` Struct
 
 ```turmeric
 ;;; GuestEntry -- a single guestbook post.
@@ -1059,7 +1059,7 @@ defstruct GuestEntry
    posted-at : int64]  ; Unix timestamp (seconds since epoch)
 ```
 
-### 7.2 The `Serializable` Instance
+### The `Serializable` Instance
 
 Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
 
@@ -1098,7 +1098,7 @@ definstance Serializable GuestEntry
         Ok(GuestEntry(:name Vec.get(parts 0) :message Vec.get(parts 1) :posted-at cstr->int64(Vec.get(parts 2))))
 ```
 
-### 7.3 The Store API
+### The Store API
 
 `store.tur` exposes three functions:
 
@@ -1234,7 +1234,7 @@ defn run-guestbook-flow [req : HttpRequest] : unit
 
 > **How confirm vs. back is handled:** The preview page has two forms pointing to two different tokens. The router dispatches entirely based on which token was POSTed. No `action` field inspection is needed in the flow itself.
 
-### 8.1 The Thank-You Template
+### The Thank-You Template
 
 ```turmeric
 ;;; render-thankyou -- render the thank-you page with the full guestbook.
@@ -1284,7 +1284,7 @@ defn render-thankyou [entries : (Vec GuestEntry)] : cstr
 
 ## Step 9: Security Hardening
 
-### 9.1 HMAC Token Signing
+### HMAC Token Signing
 
 Random tokens prevent guessing, but they do not prevent token forgery if an attacker observes a valid token. Sign each token with a server secret using HMAC-SHA256:
 
@@ -1375,7 +1375,7 @@ def SERVER-SECRET
 
 Replace `store-continuation` and `load-continuation` with signed variants that call `sign-token` / `verify-token` before returning or looking up a token.
 
-### 9.2 Token Expiry
+### Token Expiry
 
 Store a creation timestamp alongside the continuation bytes. Reject tokens older than 30 minutes:
 
@@ -1410,7 +1410,7 @@ defn continuation-expired? [sc : StoredCont] : bool
 
 `load-continuation` checks `continuation-expired?` and returns `None` for stale tokens.
 
-### 9.3 Input Sanitization
+### Input Sanitization
 
 Escape `<`, `>`, `&`, and `"` before inserting user input into HTML:
 
@@ -1455,7 +1455,7 @@ defn html-escape [s : cstr] : cstr
 
 Call `html-escape` on every user-supplied string before embedding it in a template. The preview page and thank-you page in Step 8 already do this.
 
-### 9.4 Single-Threaded Note
+### Single-Threaded Note
 
 This tutorial server handles one request at a time. If a reader opens two browser tabs simultaneously, the second `GET /` starts a new flow concurrently -- but because the socket listener is single-threaded, requests are serialized at the OS level. For a multi-threaded extension, see the [threading-guide.md](threading-guide.md) and [stm-guide.md](stm-guide.md).
 

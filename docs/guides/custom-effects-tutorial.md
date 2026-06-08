@@ -14,25 +14,25 @@ A step-by-step guide to algebraic effects in Turmeric. Each section builds on th
 
 ## Table of Contents
 
-1. [What are algebraic effects?](#1-what-are-algebraic-effects)
-2. [Defining and performing an effect](#2-defining-and-performing-an-effect)
-3. [Resuming with a value](#3-resuming-with-a-value)
-4. [Effects with parameters](#4-effects-with-parameters)
-5. [Multiple effects in one handler](#5-multiple-effects-in-one-handler)
-6. [Nested handlers](#6-nested-handlers)
-7. [Multiple sequential performs](#7-multiple-sequential-performs)
-8. [Effects with `defer`](#8-effects-with-defer)
-9. [Effects with refs and rc](#9-effects-with-refs-and-rc)
-10. [Wrapping a handler in a macro](#10-wrapping-a-handler-in-a-macro)
-11. [Bridging effects to exceptions](#11-bridging-effects-to-exceptions)
-12. [Checking the continuation with `cont?`](#12-checking-the-continuation-with-cont)
-13. [Real-world pattern: mock I/O](#13-real-world-pattern-mock-io)
-14. [Real-world pattern: injectable logging](#14-real-world-pattern-injectable-logging)
-15. [Summary and next steps](#15-summary-and-next-steps)
+[What are algebraic effects?](#what-are-algebraic-effects)
+[Defining and performing an effect](#defining-and-performing-an-effect)
+[Resuming with a value](#resuming-with-a-value)
+[Effects with parameters](#effects-with-parameters)
+[Multiple effects in one handler](#multiple-effects-in-one-handler)
+[Nested handlers](#nested-handlers)
+[Multiple sequential performs](#multiple-sequential-performs)
+[Effects with `defer`](#effects-with-defer)
+[Effects with refs and rc](#effects-with-refs-and-rc)
+[Wrapping a handler in a macro](#wrapping-a-handler-in-a-macro)
+[Bridging effects to exceptions](#bridging-effects-to-exceptions)
+[Checking the continuation with `cont?`](#checking-the-continuation-with-cont)
+[Real-world pattern: mock I/O](#real-world-pattern-mock-io)
+[Real-world pattern: injectable logging](#real-world-pattern-injectable-logging)
+[Summary and next steps](#summary-and-next-steps)
 
 ---
 
-## 1. What are algebraic effects?
+## What are algebraic effects?
 
 An algebraic effect is a typed, named operation that a function can **perform** without knowing who will handle it. The caller supplies a **handler** that intercepts the operation and decides what to do, including whether to resume the suspended computation with a return value.
 
@@ -52,7 +52,7 @@ The three primitives are:
 
 ---
 
-## 2. Defining and performing an effect
+## Defining and performing an effect
 
 The simplest effect takes no parameters and returns nothing useful. It is a signal.
 
@@ -102,7 +102,7 @@ Key points:
 
 ---
 
-## 3. Resuming with a value
+## Resuming with a value
 
 When an effect has a non-`nil` return type, `resume` passes a value back to the call site of `perform`. This is how you inject values into otherwise pure code.
 
@@ -123,7 +123,7 @@ The return type of `perform (Ask)` is `:int` (the declared return type of the `A
 
 ---
 
-## 4. Effects with parameters
+## Effects with parameters
 
 Effects can carry data to the handler. Declare typed parameters just like function arguments.
 
@@ -156,7 +156,7 @@ The handler pattern `(Double [x] k)` binds `x` to the argument supplied by the p
 
 ---
 
-## 5. Multiple effects in one handler
+## Multiple effects in one handler
 
 A single `handle` block can match several different effects.
 
@@ -230,7 +230,7 @@ println
 
 ---
 
-## 6. Nested handlers
+## Nested handlers
 
 Handlers nest lexically. The innermost matching handler wins.
 
@@ -270,7 +270,7 @@ Use this to test functions under different conditions without changing the funct
 
 ---
 
-## 7. Multiple sequential performs
+## Multiple sequential performs
 
 Each `perform` is an independent suspension. The handler is re-entered for every perform, and each invocation gets its own fresh `k`.
 
@@ -307,7 +307,7 @@ Continuations are **one-shot**: you must call `resume k` exactly once per handle
 
 ---
 
-## 8. Effects with `defer`
+## Effects with `defer`
 
 `defer` cleanup runs correctly even when `perform` is inside the same `do` block. The continuation is resumed before deferred forms unwind.
 
@@ -344,7 +344,7 @@ The `defer` fires when `deferred-ask` returns, which happens after the handler r
 
 ---
 
-## 9. Effects with refs and rc
+## Effects with refs and rc
 
 Borrows and reference-counted values that are live at the point of `perform` remain valid across the perform/resume boundary.
 
@@ -406,7 +406,7 @@ The borrow checker enforces that no borrow escapes its declared scope, even thro
 
 ---
 
-## 10. Wrapping a handler in a macro
+## Wrapping a handler in a macro
 
 Handlers that are used in many places can be packaged as macros for a cleaner call site.
 
@@ -450,7 +450,7 @@ This is the standard pattern used in `stdlib/effects.tur` for `with-write`, `wit
 
 ---
 
-## 11. Bridging effects to exceptions
+## Bridging effects to exceptions
 
 An effect handler can abort the computation (not resume) and throw an exception instead.
 
@@ -496,7 +496,7 @@ Not calling `resume` at all is valid -- the computation past the `perform` is si
 
 ---
 
-## 12. Checking the continuation with `cont?`
+## Checking the continuation with `cont?`
 
 `(cont? k)` returns `true` if the continuation has not been consumed. For algebraic effects the static one-shot check guarantees `k` is always unconsumed in the handler body, so this is mostly useful for defensive assertions.
 
@@ -532,7 +532,7 @@ println
 
 ---
 
-## 13. Real-world pattern: mock I/O
+## Real-world pattern: mock I/O
 
 Replace real I/O with a test double by swapping the handler. The business logic never changes.
 
@@ -609,7 +609,7 @@ The function `echo-doubled` is completely isolated from I/O. Swapping the handle
 
 ---
 
-## 14. Real-world pattern: injectable logging
+## Real-world pattern: injectable logging
 
 Define a `Log` effect with levels. Wire it to a real logger in production, suppress it in benchmarks, and capture it in tests.
 
@@ -690,7 +690,7 @@ with-stderr-log
 
 ---
 
-## 15. Summary and next steps
+## Summary and next steps
 
 ### What you've learned
 

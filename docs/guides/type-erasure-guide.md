@@ -42,7 +42,7 @@ it is not.
 
 ## The three mechanisms
 
-### 1. Pointer-as-int
+### Pointer-as-int
 
 Heap-allocated values are cast through `(int64_t)(intptr_t)` and stored
 as raw integers. The runtime keeps a pointer; the type system pretends
@@ -56,7 +56,7 @@ it's an int.
 Call sites that marshal these into generic positions live in
 `src/compiler/elab_call.c:1570-1576`.
 
-### 2. Opaque-by-default
+### Opaque-by-default
 
 Anything the type checker cannot lower to a concrete C layout falls
 through to `int64_t`. This is how parametric polymorphism is
@@ -72,7 +72,7 @@ succeeds, the application gets a real struct via `register_struct_app()`.
 Otherwise it collapses. This is the seam where HKT specialization can
 hook in.
 
-### 3. Tagged pair
+### Tagged pair
 
 For runtime-discriminated values, both the tag and the payload are
 `int64_t`:

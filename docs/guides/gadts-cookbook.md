@@ -14,7 +14,7 @@ required for any pattern in this cookbook.
 
 ---
 
-## 1. Typed AST Interpreter
+## Typed AST Interpreter
 
 The classic GADT motivation: an expression tree whose type parameter tracks
 the result type, so the interpreter is total and type-safe.
@@ -83,7 +83,7 @@ value.
 
 ---
 
-## 2. Length-Indexed Vectors
+## Length-Indexed Vectors
 
 Use a type-level natural number to track vector length at compile time. Safe
 `head` and `vzip-with` become expressible without `option`.
@@ -181,7 +181,7 @@ module. Import it with `(load "stdlib/gadt-vec.tur")`.
 
 ---
 
-## 3. Type-Safe Printf Format Strings
+## Type-Safe Printf Format Strings
 
 Encode the expected argument list in the type so the wrong number or type of
 arguments is a compile-time error.
@@ -247,7 +247,7 @@ with fixed arity.
 
 ---
 
-## 4. Equality Witnesses
+## Equality Witnesses
 
 The built-in `Equal` GADT lets you carry proofs of type equality across
 function boundaries. Use `coerce` to convert values across proven equalities.
@@ -374,7 +374,7 @@ defn main [] :int
 
 ---
 
-## 5. GADT + Union Types Together
+## GADT + Union Types Together
 
 GADTs and union types (`-Xgadt -Xunion-types`) can be combined. A function
 can accept either a GADT value or a plain value through a union type:

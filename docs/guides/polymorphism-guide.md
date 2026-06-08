@@ -40,7 +40,7 @@ The rest of this guide walks each row.
 
 ---
 
-## 1. Parametric polymorphism
+## Parametric polymorphism
 
 The simplest form: write a function over a *type variable* that the compiler
 fills in at each call site. The body cannot inspect the value -- it must treat
@@ -85,7 +85,7 @@ serialize the value, you have crossed into typeclass territory.
 
 ---
 
-## 2. Typeclasses (ad-hoc polymorphism)
+## Typeclasses (ad-hoc polymorphism)
 
 Typeclasses let one name (`eq?`, `fmap`, `show`) resolve to a *different*
 implementation depending on the type of the argument. The class declares the
@@ -156,7 +156,7 @@ than appending a duplicate. The most recent elaboration wins.
 
 ---
 
-## 3. Higher-kinded types
+## Higher-kinded types
 
 Typeclasses get more powerful once they can abstract not just over *types* but
 over *type constructors*. `Functor` is the canonical case: it makes sense for
@@ -186,7 +186,7 @@ performance model, and dispatch in [hkt-guide.md](hkt-guide.md).
 
 ---
 
-## 4. Higher-ranked types
+## Higher-ranked types
 
 Normally a polymorphic function is instantiated by its caller. Higher-ranked
 types flip that: the *callee* receives a still-polymorphic function and
@@ -207,7 +207,7 @@ defn apply-poly [f : (forall [a] (-> a a))  x : int] : int
 
 ---
 
-## 5. ADTs and GADTs
+## ADTs and GADTs
 
 `defdata` builds an ordinary tagged sum (`Option`, `Result`, `Tree`). Pattern
 matches are exhaustiveness-checked.
@@ -252,7 +252,7 @@ enable with `-Xgadt`.
 
 ---
 
-## 6. Union and intersection types
+## Union and intersection types
 
 Sometimes you want "any of these concrete types" without inventing a sum
 constructor for each one. Union types (`A | B`) say "this is exactly one of
@@ -284,7 +284,7 @@ several typeclass constraints. Enable with `-Xunion-types` /
 
 ---
 
-## 7. Existential types
+## Existential types
 
 The dual of `forall`: instead of "the caller picks the type", the *callee*
 picks the type and hides it, exposing only the capabilities the caller is
@@ -306,7 +306,7 @@ concrete plugin type. See [existential-types-guide.md](existential-types-guide.m
 
 ---
 
-## 8. Effect-row polymorphism
+## Effect-row polymorphism
 
 Effects in Turmeric are tracked as a *row* on the function type. You can be
 polymorphic over the "tail" of that row -- "I add `Io`, I leave the rest of
@@ -333,7 +333,7 @@ rationale in [effects-vs-monads.md](effects-vs-monads.md).
 
 ---
 
-## 9. Substructural polymorphism (resource discipline)
+## Substructural polymorphism (resource discipline)
 
 Annotations on a parameter declare *how often* it may be used. The same
 function body can be reused at different disciplines, and the compiler will
@@ -359,7 +359,7 @@ file handles, sockets, single-owner buffers, session-typed channels. See
 
 ---
 
-## 10. Variadic functions (`& rest :T`)
+## Variadic functions (`& rest :T`)
 
 Real ad-hoc polymorphism over *arity* is rare in Turmeric: most "many
 arguments" cases are better served by a struct. But for genuine
@@ -384,7 +384,7 @@ almost always clearer.
 
 ---
 
-## 11. First-class functions
+## First-class functions
 
 Functions are values, so any function that takes a function-typed parameter
 is, in a small sense, polymorphic over behaviour. This is the original
@@ -415,7 +415,7 @@ call.)
 
 ---
 
-## 12. The unsafe escape hatch
+## The unsafe escape hatch
 
 When no static encoding works -- because the actual operation lives on the C
 side, or the cost of an indirect dispatch is unacceptable -- drop into an
