@@ -55,7 +55,7 @@ typed variadic `compose-middleware-of`), not `compose-mw`.
 | **Panic-recovery middleware** | **Pending** (blocked) | -- requires usable `catch-unwind` over fat-closure thunks (today's lowering passes `NULL` env -- see `src/compiler/emit_expr.c` `EX_CATCH_UNWIND`) |
 | Request attributes (`httpd-set-attr!` / `httpd-req-attr`) | Shipped | MW2; `attr_list` field on `HttpdConn`; `mw-basic-auth` publishes `"user"`; fixture `httpd-mw-basic-auth-attr` |
 | Remote-IP helper (`httpd-req-remote-ip`) | Shipped (bonus) | MW2; backs `mw-rate-limit`; cached on the request attr `__remote_ip` |
-| Compression middleware     | Spun out   | See [httpd-compression-zlib-spice-plan](httpd-compression-zlib-spice-plan.md) |
+| Compression middleware     | Spun out   | See [httpd-compression-zlib-spice-plan](history/httpd-compression-zlib-spice-plan.md) |
 
 Fixtures landed alongside each shipped middleware under
 `tests/fixtures/httpd-mw-*` and `tests/fixtures/httpd-async-*`. A
@@ -95,7 +95,7 @@ written** -- see Phase MW3 below.
   `httpd-resp-body!` string. (Track A adds awaitable I/O primitives but
   the response body remains a single buffer.)
 - No gzip / brotli response compression here -- tracked separately in
-  [httpd-compression-zlib-spice-plan](httpd-compression-zlib-spice-plan.md).
+  [httpd-compression-zlib-spice-plan](history/httpd-compression-zlib-spice-plan.md).
 - No session / cookie store (build on top of cookies + request attrs).
 - No JWT validation (composable in user code using inline-C + mbedtls).
 - No HTTP/2 push.
@@ -326,7 +326,7 @@ negligible for single-digit key counts.
 - [httpd-tls-guide.md](../guides/httpd-tls-guide.md) -- TLS layer
 - [httpd-async-guide.md](../guides/httpd-async-guide.md) -- async handlers (Track A)
 - [httpd-middleware-async-plan.md](../archive/history/httpd-middleware-async-plan.md) -- archived plan that shipped M0-M8 + A0-A4
-- [httpd-compression-zlib-spice-plan.md](httpd-compression-zlib-spice-plan.md) -- compression middleware spun out into its own plan
+- [history/httpd-compression-zlib-spice-plan.md](history/httpd-compression-zlib-spice-plan.md) -- compression middleware spun out into its own plan
 - [curried-call-cast-rough-edges-plan.md](curried-call-cast-rough-edges-plan.md) -- codegen rough edges surfaced during M4+M5
 - [websocket-server-plan.md](websocket-server-plan.md) -- WebSocket upgrade (compatible with middleware)
 - [threading-guide.md](../guides/threading-guide.md) -- `Mutex` and worker pool details

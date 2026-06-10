@@ -4,7 +4,7 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(deftype Logger (fn [:cstr] #{Log} : nil))
+(deftype Logger (fn [cstr] #{Log}  nil))
 
 (defstruct App :copy [run : fn #{Log}])
 

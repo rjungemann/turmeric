@@ -2,7 +2,7 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn run-e [f :(fn [] #{e} :nil)] #{e} : nil
+(defn run-e [f :(fn [] #{e} nil)] #{e} : nil
   (f))
 
 (defn write-and-e [] #{Write e} : nil

@@ -83,11 +83,11 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[defstruct-field-types-plan.md](defstruct-field-types-plan.md)** -- Residual hardening after F8 landed; `exg5-exists-cycle` and `exg4-pack-into-struct` still blocked
 - **[existential-gc-followup-plan.md](existential-gc-followup-plan.md)** -- GC integration for packed existentials; cycle-construction fixtures blocked on defstruct compound annotations
 - **[existential-types-plan.md](existential-types-plan.md)** -- `pack`/`open` with typeclass constraints; phases partially in progress
-- **[httpd-compression-zlib-spice-plan.md](httpd-compression-zlib-spice-plan.md)** -- New `tur/zlib` spice wrapping system zlib + `mw-compress` gzip middleware (M6) in `stdlib/httpd-compress.tur`; draft, not started; see [httpd-guide.md](../guides/httpd-guide.md) for planned destination section
+- **[history/httpd-compression-zlib-spice-plan.md](history/httpd-compression-zlib-spice-plan.md)** -- New `tur/zlib` spice wrapping system zlib + `mw-compress` gzip middleware (M6) in `stdlib/httpd-compress.tur`; draft, not started; see [httpd-guide.md](../guides/httpd-guide.md) for planned destination section
 
 ### Language Ergonomics (Planned)
 
-- **[fn-type-bare-identifier-plan.md](fn-type-bare-identifier-plan.md)** -- Drop leading colons inside `(fn [...] ...)` type expressions; Phases 1-3 shipped (parser, codemod, TUR-D0001 deprecation warning); Phase 4 (hard error) pending
+- **[fn-type-bare-identifier-plan.md](history/fn-type-bare-identifier-plan.md)** -- Drop leading colons inside `(fn [...] ...)` type expressions; all four phases shipped (parser, codemod, TUR-D0001 deprecation warning, then hard reject)
 - **[internal-define-plan.md](history/internal-define-plan.md)** *(history)* -- body-level `define` (let\* semantics); implemented; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
 - **[letrec-and-named-let-plan.md](history/letrec-and-named-let-plan.md)** *(history)* -- `letrec` + named let; implemented; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
 

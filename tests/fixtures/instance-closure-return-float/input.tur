@@ -14,7 +14,7 @@
 ;; apply it through a thin (captureless) cast.
 
 (defclass HasArr [a]
-  (arr-of [self] : (fn [:float] :float)))
+  (arr-of [self] : (fn [float] float)))
 
 (defstruct ArrW [a]
   (raw :int))

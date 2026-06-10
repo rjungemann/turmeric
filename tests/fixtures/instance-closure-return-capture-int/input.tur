@@ -7,7 +7,7 @@
 ;; fix emits is the same handle TUR_APPLY1 expects.
 
 (defclass HasArr [a]
-  (arr-of [self n :int] : (fn [:int] :int)))
+  (arr-of [self n :int] : (fn [int] int)))
 
 (defstruct ArrW [a]
   (raw :int))

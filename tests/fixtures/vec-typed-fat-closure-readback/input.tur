@@ -22,27 +22,27 @@
 ;; Expected: 2*3*1.0 = 6.
 
 (defn apply-sf
-  [^fat sf  :(fn [:ptr<void>] #{} :ptr<void>)
-   ^fat sig :(fn [:float]     #{} :float)] :ptr<void>
+  [^fat sf  :(fn [ptr<void>] #{} ptr<void>)
+   ^fat sig :(fn [float]     #{} float)] :ptr<void>
   (sf sig))
 
 (defn chain-loop
   [effects :int
-   ^fat sig :(fn [:float] #{} :float)
+   ^fat sig :(fn [float] #{} float)
    i :int n :int] :ptr<void>
   (if (>= i n)
     sig
     (chain-loop effects (apply-sf (:: (vec-get effects i) :ptr<void>) sig) (+ i 1) n)))
 
 (defn effects-chain
-  [effects :int ^fat input :(fn [:float] #{} :float)] :ptr<void>
+  [effects :int ^fat input :(fn [float] #{} float)] :ptr<void>
   (chain-loop effects input 0 (vec-len effects)))
 
 ;; A gain SF: takes a signal, returns a scaled signal.  The inner closure
 ;; captures BOTH gv (a plain value) and sig (a ^fat param).
 (defn gain [g :float]
   (let [gv g]
-    (fn [^fat sig : (fn [:float] #{} :float)] :ptr<void>
+    (fn [^fat sig : (fn [float] #{} float)] :ptr<void>
       (fn [t :float] :float (* gv (sig t))))))
 
 (defn main [] : int
@@ -50,6 +50,6 @@
     (vec-push! v (gain 2.0))
     (vec-push! v (gain 3.0))
     (let [base (fn [t : float] : float t)
-          ^fat out :(fn [:float] #{} :float) (effects-chain v base)]
+          ^fat out :(fn [float] #{} float) (effects-chain v base)]
       (println (out 1.0))))
   0)

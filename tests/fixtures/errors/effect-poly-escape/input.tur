@@ -4,7 +4,7 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn relay [f :(fn [] #{e} :nil)] #{e} : nil
+(defn relay [f :(fn [] #{e} nil)] #{e} : nil
   (f))
 
 (defn write-relay [] #{Write e} : nil

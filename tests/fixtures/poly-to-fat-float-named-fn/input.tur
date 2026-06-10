@@ -15,7 +15,7 @@
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 
-(defn call-ff [^fat f :(fn [:float] #{} :float) x : float] : float
+(defn call-ff [^fat f :(fn [float] #{} float) x : float] : float
   (f x))
 
 (defstruct BoxW [A]

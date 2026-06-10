@@ -21,7 +21,7 @@
 ;; apply-mw -- dispatch an already-fat closure carried as :int. The ^fat
 ;; parameter takes the value untouched (no re-shim) and the inline-C reads the
 ;; standard { thunk, env } layout.
-(defn apply-mw [^fat mw : (fn [int] :ptr<void>) cur : int] : int
+(defn apply-mw [^fat mw : (fn [int] ptr<void>) cur : int] : int
   ```c
   typedef int64_t (*thunk_t)(void*, int64_t);
   int64_t *fat = (int64_t *)(intptr_t)mw;
@@ -40,7 +40,7 @@
 (defn fold [base : int mws : int] : int
   (if (tnil? mws)
     base
-    (apply-mw (:: (list-head mws) (fn [int] :ptr<void>))
+    (apply-mw (:: (list-head mws) (fn [int] ptr<void>))
               (fold base (list-tail mws)))))
 
 (defn main [] : int

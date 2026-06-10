@@ -13,8 +13,8 @@
 ;; Both levels are fat closures here (the middle now captures `n`), so apply
 ;; each through the fat protocol.
 
-(defn adder [n :int] : (fn [:int] (fn [:int] :int))
-  (fn [x :int] : (fn [:int] :int)
+(defn adder [n :int] : (fn [int] (fn [int] int))
+  (fn [x :int] : (fn [int] int)
     (fn [y :int] :int (+ (+ x y) n))))   ;; inner reads x (parent) AND n (grandparent)
 
 (defn call-fat [f x] :int

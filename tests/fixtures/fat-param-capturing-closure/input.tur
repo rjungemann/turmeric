@@ -6,10 +6,10 @@
 ;; over state (the whole point of a closure) could not be passed to a directly
 ;; callable closure parameter.  Covers int and float (register-class-distinct).
 
-(defn apply-int [^fat g :(fn [:int] #{} :int) x : int] : int
+(defn apply-int [^fat g :(fn [int] #{} int) x : int] : int
   (g x))
 
-(defn apply-float [^fat g :(fn [:float] #{} :float) x : float] : float
+(defn apply-float [^fat g :(fn [float] #{} float) x : float] : float
   (g x))
 
 (defn make-adder [n : int] : ptr<void>

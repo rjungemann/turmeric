@@ -10,17 +10,17 @@
   (fn [x : float] : float (* x k)))
 
 (defn sum2
-  [^fat a :(fn [:float] #{} :float)
-   ^fat b :(fn [:float] #{} :float)] : ptr<void>
+  [^fat a :(fn [float] #{} float)
+   ^fat b :(fn [float] #{} float)] : ptr<void>
   (let [av a bv b]
     (fn [t : float] : float (+ (av t) (bv t)))))
 
 (defn compose-f
-  [^fat f :(fn [:float] #{} :float)
-   ^fat g :(fn [:float] #{} :float)] : ptr<void>
+  [^fat f :(fn [float] #{} float)
+   ^fat g :(fn [float] #{} float)] : ptr<void>
   (let [fv f gv g] (fn [x : float] : float (gv (fv x)))))
 
-(defn call-f [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+(defn call-f [^fat f :(fn [float] #{} float) x : float] : float (f x))
 
 (defn main [] : int
   (let [osc1   (make-const 1.0)

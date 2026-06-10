@@ -12,7 +12,7 @@
 ;; apply it through a thin (captureless) cast.
 
 (defclass HasPred [a]
-  (pred-of [self] : (fn [:int] :bool)))
+  (pred-of [self] : (fn [int] bool)))
 
 (defstruct PredW [a]
   (raw :int))

@@ -13,8 +13,8 @@
 ;; keeps composing the two closures at the *call* site to exercise that path.)
 
 (defclass HasArr [a]
-  (inc-by [self n :int] : (fn [:int] :int))
-  (mul-by [self k :int] : (fn [:int] :int)))
+  (inc-by [self n :int] : (fn [int] int))
+  (mul-by [self k :int] : (fn [int] int)))
 
 (defstruct ArrW [a]
   (raw :int))

@@ -23,7 +23,7 @@
 ;; (.base self ...) on the receiver -- the "via other method" idiom.
 (defclass HasArr [a]
   (bump  [self d :int] :int)
-  (adder [self] : (fn [:int] :int)))
+  (adder [self] : (fn [int] int)))
 
 (defstruct Box [a]
   (raw :int))

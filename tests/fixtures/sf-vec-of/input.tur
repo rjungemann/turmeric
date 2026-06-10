@@ -6,7 +6,7 @@
 (defn make-add [n : int] : ptr<void> (fn [x : int] : int (+ x n)))
 (defn make-mul [k : int] : ptr<void> (fn [x : int] : int (* x k)))
 
-(defn call1 [^fat f :(fn [:int] #{} :int) x : int] : int (f x))
+(defn call1 [^fat f :(fn [int] #{} int) x : int] : int (f x))
 
 (defn main [] : int
   (let [f1 (make-add 1)

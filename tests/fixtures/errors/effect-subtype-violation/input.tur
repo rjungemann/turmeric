@@ -3,7 +3,7 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn apply-pure [f :(fn [] #{} :nil)] #{} : nil
+(defn apply-pure [f :(fn [] #{} nil)] #{} : nil
   (f))
 
 (defn write-fn [] #{Write} : nil

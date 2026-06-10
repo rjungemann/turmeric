@@ -6,7 +6,7 @@
   (fn [x : int] : int (+ x n)))
 
 (defn main [] : int
-  (let [run (fn [^fat g :(fn [:int] #{} :int) x : int] : int
+  (let [run (fn [^fat g :(fn [int] #{} int) x : int] : int
               (g x))]
     (println (run (make-adder 10) 5)))   ;; (5 + 10) => 15
   0)

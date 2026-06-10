@@ -8,7 +8,7 @@
 (defstruct Box [n :int])
 
 (defclass HasArr [a]
-  (arr-of [self n :int] : (fn [:int] :int)))
+  (arr-of [self n :int] : (fn [int] int)))
 
 (defstruct ArrW [a]
   (raw :int))

@@ -31,6 +31,6 @@
 
   ;; Regression for the already-working ascription path: an explicit (fn ...)
   ;; expected type drives return-dispatch directly.
-  (let [j (:: (ident) (fn [:int] : int))]
+  (let [j (:: (ident) (fn [int] int))]
     (println (j 7)))             ;; 7
   0)

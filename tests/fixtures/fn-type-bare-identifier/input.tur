@@ -41,7 +41,7 @@
   (f x))
 
 ;; mixed legacy ':int' + bare 'int' in one signature (lenient transition path)
-(defn applymix [f : (fn [:int] int) x : int] : int
+(defn applymix [f : (fn [int] int) x : int] : int
   (f x))
 
 ;; declared user type used bare inside (fn ...)

@@ -2,7 +2,7 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn identity-fn [f :(fn [] #{e} :int)] #{e} : int
+(defn identity-fn [f :(fn [] #{e} int)] #{e} : int
   (f))
 
 (defn main [] : int

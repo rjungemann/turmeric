@@ -13,18 +13,18 @@
 ;; works where the bare-function-pointer path used to segfault.
 
 ;; --- float: named fn, lambda, capturing closure, multi-arg ---
-(defn apply-f [g : (fn [float] : float) x : float] : float (g x))
+(defn apply-f [g : (fn [float]  float) x : float] : float (g x))
 (defn dbl-f [n : float] : float (* n 2.0))
 
-(defn apply2-f [g : (fn [float float] : float) a : float b : float] : float
+(defn apply2-f [g : (fn [float float]  float) a : float b : float] : float
   (g a b))
 (defn add-f [x : float y : float] : float (+ x y))
 
 ;; forward a typed carrier to another typed carrier (the `:fn` -> `:fn` pass-through)
-(defn forward-f [g : (fn [float] : float) x : float] : float (apply-f g x))
+(defn forward-f [g : (fn [float]  float) x : float] : float (apply-f g x))
 
 ;; --- cstr round-trip through the typed carrier ---
-(defn apply-s [g : (fn [cstr] : cstr) s : cstr] : cstr (g s))
+(defn apply-s [g : (fn [cstr]  cstr) s : cstr] : cstr (g s))
 (defn id-s [s : cstr] : cstr s)
 
 (defn main [] : int

@@ -17,7 +17,7 @@
 
   (defn scale-2 [x : float] : float (* x 2.0))
   (defn add-05  [x : float] : float (+ x 0.5))
-  (defn call-f  [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+  (defn call-f  [^fat f :(fn [float] #{} float) x : float] : float (f x))
 
   (defn main [] : int
     (let [h (>>> add-05 scale-2)]

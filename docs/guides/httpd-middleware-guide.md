@@ -404,7 +404,7 @@ but not yet in stdlib:
   [`src/compiler/emit_expr.c`](../../src/compiler/emit_expr.c) under
   `EX_CATCH_UNWIND`.
 - **Compression middleware** -- spun out into its own plan
-  [`docs/archive/httpd-compression-zlib-spice-plan.md`](../archive/httpd-compression-zlib-spice-plan.md).
+  [`docs/archive/history/httpd-compression-zlib-spice-plan.md`](../archive/history/httpd-compression-zlib-spice-plan.md).
 
 ## See also
 

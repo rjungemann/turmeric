@@ -3,7 +3,7 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn run-twice [f :(fn [] #{e} :int)] #{e} : int
+(defn run-twice [f :(fn [] #{e} int)] #{e} : int
   (+ (f) (f)))
 
 (defn pure-caller [] #{} : int

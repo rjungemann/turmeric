@@ -5,7 +5,7 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(defn apply [f :(fn [:int] #{e} :int) x : int] #{e} : int
+(defn apply [f :(fn [int] #{e} int) x : int] #{e} : int
   (f x))
 
 (defn apply-logged [x : int] #{Log} : int

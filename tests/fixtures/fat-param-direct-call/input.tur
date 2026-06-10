@@ -8,13 +8,13 @@
 (defn first-byte [s : cstr] : int
   ```c return (int64_t)(unsigned char)((const char *)(intptr_t)s)[0]; ```)
 
-(defn run-float [^fat g :(fn [:float] #{} :float) x : float] : float
+(defn run-float [^fat g :(fn [float] #{} float) x : float] : float
   (g x))
 
-(defn run-nullary [^fat g :(fn [] #{} :int)] : int
+(defn run-nullary [^fat g :(fn [] #{} int)] : int
   (g))
 
-(defn run-cstr [^fat g :(fn [:cstr] #{} :int) s : cstr] : int
+(defn run-cstr [^fat g :(fn [cstr] #{} int) s : cstr] : int
   (g s))
 
 (defn main [] : int

@@ -5,7 +5,7 @@
 (defeffect Write [s :cstr] :nil)
 
 ;;; call-writer -- invoke a function annotated with #{Write}.
-(defn call-writer [f :(fn [:cstr] #{Write} :nil)] #{Write} : nil
+(defn call-writer [f :(fn [cstr] #{Write} nil)] #{Write} : nil
   (f "fn type annot test"))
 
 (defn main [] : int

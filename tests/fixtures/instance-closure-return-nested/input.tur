@@ -14,14 +14,14 @@
 ;; protocol.
 
 (defclass HasAdder [a]
-  (adder [self] : (fn [:int] #{} (fn [:int] :int))))
+  (adder [self] : (fn [int] #{} (fn [int] int))))
 
 (defstruct AddW [a]
   (raw :int))
 
 (definstance HasAdder [AddW]
   (adder [self]
-    (fn [x :int] : (fn [:int] :int)
+    (fn [x :int] : (fn [int] int)
       (fn [y :int] :int (+ x y)))))
 
 (defn call-thin [f x] :int

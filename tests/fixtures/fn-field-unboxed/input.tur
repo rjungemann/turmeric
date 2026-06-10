@@ -5,7 +5,7 @@
 ;; through (.op cb) should need no intptr_t cast.
 
 (defstruct Callback :copy
-  [op (fn [:int32] :int32)])
+  [op (fn [int32] int32)])
 
 (defn double-it [x : int32] : int32
   (as int32 (* (as int x) (as int x))))

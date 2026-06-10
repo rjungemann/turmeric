@@ -9,11 +9,11 @@
 ;; matching fn-ptr typedef, agreeing with the thin-fn-pointer let binding the
 ;; consumer emits.
 
-(defn make-add1 [] : (fn [:int] :int)
+(defn make-add1 [] : (fn [int] int)
   (fn [x :int] :int (+ x 1)))
 
 ;; result type differs from the arg type -- exercises the typedef arg/result split.
-(defn make-trunc [] : (fn [:float] :int)
+(defn make-trunc [] : (fn [float] int)
   (fn [x :float] :int 7))
 
 (defn main [] :int

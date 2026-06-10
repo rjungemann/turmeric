@@ -16,7 +16,7 @@
 
 ;; A ^fat sink with a concrete :float -> :float signature.  `f` is invoked
 ;; through the typed-thunk cast, which is what forces the typed slot-0 shim.
-(defn call-ff [^fat f :(fn [:float] #{} :float) x : float] : float
+(defn call-ff [^fat f :(fn [float] #{} float) x : float] : float
   (f x))
 
 (defstruct BoxW [A]

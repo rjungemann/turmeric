@@ -1,0 +1,17 @@
+;; fn-type-colon-rejected -- a leading colon on a type inside a (fn ...)
+;; type expression is a hard error (TUR-D0001).  See
+;; docs/archive/history/fn-type-bare-identifier-plan.md (Phase 4).
+;;
+;; Phase 3 carried this as a deprecation warning (promotable to an error
+;; under --Werror=deprecated); Phase 4 promoted it to an unconditional
+;; reject.  Position alone marks the param/result slots of a (fn ...) type
+;; as types, so the colon is noise.
+(defn apply-legacy [f : (fn [:int] :int) x : int] : int
+  (f x))
+
+(defn inc [x : int] : int
+  (+ x 1))
+
+(defn main [] : int
+  (println (apply-legacy inc 20))
+  0)

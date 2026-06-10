@@ -18,7 +18,7 @@ and delete the section from this file.
 
 ## Drop leading colons inside `(fn ...)` types
 
-> Full plan: [../archive/fn-type-bare-identifier-plan.md](../archive/fn-type-bare-identifier-plan.md)
+> Full plan: [../archive/history/fn-type-bare-identifier-plan.md](../archive/history/fn-type-bare-identifier-plan.md)
 
 Outer-annotation analogue ([spaced-type-annotation-migration-plan](#spaced-type-annotation-migration))
 is complete; this is the inner-type-expression version.
@@ -63,38 +63,21 @@ is complete; this is the inner-type-expression version.
       `tests/fixtures/fn-type-colon-deprecation/` (warns + still runs)
       and negative fixture `tests/fixtures/errors/fn-type-colon-werror/`
       (`--Werror=deprecated` -> hard error).
-- [ ] Phase 4 -- remove the `F_KEYWORD`/`F_TYPE_ANN` colon branch from
-      the `(fn ...)` type-expression handler (delete
-      `warn_fn_type_colon` and reject instead); sweep the remaining
-      legacy spellings in `tests/fixtures/` inputs, macro expansions
-      (`contract.tur`/`macros.tur`), and `../turmeric-spices/`; convert
-      the lenient-path fixture `tests/fixtures/fn-type-bare-identifier/`
-      into an `errors/` fixture asserting the hard diagnostic. Gated on
-      at least one minor release with the warning live.
-
-## HTTPD compression + `tur/zlib` spice -- LANDED
-
-> Full plan: [../archive/httpd-compression-zlib-spice-plan.md](../archive/httpd-compression-zlib-spice-plan.md)
-
-Both tracks shipped; the open-questions resolved themselves during
-implementation. Kept in this index for traceability; remove the
-section the next time this tracker is touched.
-
-- [x] Z0 -- `../turmeric-spices/spices/zlib/` scaffolded with
-      `build.tur` pinning upstream zlib via `:cmake-deps`.
-- [x] Z1 -- `src/tur/zlib.tur` exposes `gzip-encode`/`gzip-decode` and
-      raw deflate counterparts over `:ptr<void>` (binary-safe).
-- [x] Z2 -- `tests/tur/zlib/roundtrip_test.tur` exercises the
-      encode/decode roundtrip.
-- [x] Z3 -- `../turmeric-spices/spices/zlib/README.md`.
-- [x] M6-0 -- `stdlib/httpd-compress.tur` loads `tur/zlib` with a
-      clear load-time error if the spice is absent.
-- [x] M6-1 -- `mw-compress` factory parses `Accept-Encoding`, gates
-      on `min-bytes`, compresses, and sets `Content-Encoding`.
-- [x] M6-2 -- `tests/fixtures/httpd-mw-compress/` (carries
-      `requires.spices`, `requires.dedicated-runner`,
-      `requires.no-leak-check`).
-- [x] M6-3 -- docs entry.
+- [x] Phase 4 -- removed the `F_KEYWORD`/`F_TYPE_ANN` colon branch from
+      the `(fn ...)` type-expression handler (`warn_fn_type_colon` ->
+      `reject_fn_type_colon` in `src/compiler/elab_types.c`; still emits
+      TUR-D0001 so `tur explain` keeps working, but now unconditionally
+      `DIAG_ERROR`). Swept the remaining legacy spellings in
+      `tests/fixtures/` inputs via the existing codemod plus two manual
+      fixes for ascription-position fn types (`(:: _ (fn ...))`) the
+      codemod missed (`arrow-instance-nullary`, `fat-closure-ascription`).
+      `contract.tur`/`macros.tur` already had no fn-type colon spellings;
+      `../turmeric-spices/` was swept in Phase 2.  Repurposed the lenient
+      fixture: removed `tests/fixtures/fn-type-colon-deprecation/`
+      (warning gone), renamed `errors/fn-type-colon-werror/` ->
+      `errors/fn-type-colon-rejected/` with the legacy spelling restored
+      and `--Werror=deprecated` dropped from flags. Plan archived to
+      [`../archive/history/fn-type-bare-identifier-plan.md`](../archive/history/fn-type-bare-identifier-plan.md).
 
 ## Spaced-type annotation migration
 
