@@ -95,6 +95,14 @@ should compile and link, mirroring single-file `emit-c`.
 
 ## Implementation spec (turn-key)
 
+> **Start here:** two tracks are specified below. The **whole-program track**
+> (further down) is *proven* to fix RC for project-mode **executables** with no
+> compiler changes and should land first. The **owner-TU track** (T3-T11, next)
+> is the more involved change still required for `--shared` `.so` builds. T1
+> (preamble extraction) is already committed; the struct drop/walk-glue task
+> (T9) is needed by both tracks for `rc<T>` *struct fields*.
+
+
 The single-file inline runtime is emitted **only** by `emit_program`
 (`src/compiler/emit_module.c`), as one contiguous assembly block to `out`
 spanning roughly **lines 2303-5100** (interleaved with feature-flag sub-blocks:
@@ -238,3 +246,216 @@ executables and may be worth doing first.
 5. Existing single-file RC fixtures (`rc-struct-auto-drop`,
    `rc-struct-nested-rc-fields`, `arc-basic`, `weak-upgrade-option`, ...) must
    not regress.
+
+## Research findings (de-risking the owner-TU design)
+
+These were gathered by auditing the codegen emitters
+(`emit_core.c`, `emit_cps.c`, `emit_effects.c`, `emit_expr.c`, `emit_fns.c`,
+`emit_stmt.c`) for the runtime symbols they emit into *module* C, and by
+enumerating the preamble's typedefs/helpers. They sharply narrow the
+declarations-only header's surface.
+
+### Only 4 runtime globals are referenced by generated module code
+
+Despite ~30 shared-state globals existing in the runtime, generated module code
+emits a *direct* reference to only **four** of them (ref counts across the
+emitters):
+
+| Global | refs | linkage |
+| --- | --- | --- |
+| `tur_current_fiber` | 12 | `__thread` |
+| `tur_current_reset_ctx` | 5 | `__thread` |
+| `g_tur_args` | 4 | plain |
+| `global_effect_handler_chain` | 3 | `__thread` |
+
+Everything else (`gc_*`, `rc_free_queue*`, panic `jmpbuf`/`payload`, STM tx,
+scheduler/timers/IO, cancel `jmpbuf`, ...) is touched **only by runtime
+functions**. Under the owner-TU design those stay `static` inside the single
+`tur_runtime.c`, with **zero** externalization. **Only these 4 globals need an
+`extern` declaration in `tur_runtime.h`** (3 of them `extern __thread`), and
+only these 4 lose their `static` in the owner TU.
+
+### The `static inline` helpers are pure (safe in a per-TU header)
+
+The three `static inline` helpers (`tur_frame_init`, `tur_frame_push_defer`,
+`tur_cps_apply`) operate solely on their arguments -- verified no global
+references -- so they can live in `tur_runtime.h` as `static inline` and be
+replicated per-TU with no shared-state hazard.
+
+### Public function surface module code calls (-> extern prototypes)
+
+RC: `rc_cb_alloc`, `rc_cb_alloc_struct`, `rc_cb_alloc_kinded`,
+`rc_strong_increment`, `rc_strong_decrement`, `rc_weak_increment`,
+`rc_weak_decrement`, `rc_strong_count`, `rc_free_queue_drain`, `rc_upgrade`,
+`rc_get_value`, `tur_rc_from_ref`, `tur_ref_from_rc`. Frame:
+`tur_frame_fire_lifo`, `tur_frame_fire_chain` (pure -- could be header `static`
+or extern). Panic: `tur_panic_with`, `tur_panic_set_frame`, `tur_panic_abort`,
+`tur_catch_unwind_box`, `tur_catch_panic_of_box` (stateful). Cloneable:
+`tur_cloneable_cont_resume`, `tur_cloneable_cont_clone`. STM:
+`tur_stm_new_transaction`, `tur_tvar_new`, `tur_tvar_read`, `tur_tvar_write`,
+`tur_stm_commit`, `tur_atomically`. Sets: `tur_set_from_items`,
+`tur_set_member`. Option/Result/Cons (pure): `tur_some`, `tur_ok`, `tur_err`,
+`tur_opt_value`, `tur_ok_value`, `tur_err_value`, `__tur_cons_of`. Handlers:
+`tur_handler_table_new`.
+
+**Classification rule for the header:** a module-called function whose body
+references one of the ~30 owner-static globals must get an `extern` prototype
+(body stays in the owner TU); a *pure* one (no shared-global ref, e.g. the frame
+fire/init helpers and the option/result/cons accessors) may instead be emitted
+as a `static`/`static inline` definition in the header. The simplest robust
+rule is to give *every* module-called function an `extern` prototype + a single
+body in the owner TU, and additionally inline only the 3 pure `static inline`
+helpers in the header for the hot paths.
+
+### Typedefs the header must carry (~45)
+
+One-line typedefs: `EffectHandlerCase`, `EffectHandlerFrame`, `FiberBlock`,
+`FiberLocalEntry`, `GcColor`, `GcMode`, `RcControlBlock`, `STM_Transaction`,
+`TVar`, `TurAsyncTask`, `TurContK`, `TurEffectCaptureCtx`, `TurFuture`,
+`TurFutureStatus`, `TurScheduler`, `TurSelectClause`, `TurSelectWaiter`,
+`__tur_cons_cell`, `tur_cloneable_cont`, `tur_exists_t`, `tur_handler_entry_t`,
+`tur_handler_t`, `tur_handler_table_t`, `tur_option_t`, `tur_panic_payload`,
+`tur_poly_fn_t`, `tur_result`, `tur_result_box_t`, `tur_result_tag`,
+`tur_set_t`, `tur_tagged_t`. Struct/enum/union typedefs (`} Name;`):
+`TurChannel`, `TurIOWaiter`, `TurRole`, `TurRouter`, `TurSchedulerMT`,
+`TurSyncCh`, `TurThreadHandle`, `TurThreadSpawnArg`, `TurThreadState`,
+`TurTimerEntry`, `TurTimerWheel`, `tur_cloneable_reset_ctx`, `tur_cps_cont_t`,
+`tur_existential_t`, `tur_frame`. (53 `typedef` lines total in the preamble.)
+
+Because many of these are referenced by exported function signatures in module
+headers, the cleanest approach is to emit **all** of the preamble's typedefs
+into `tur_runtime.h` rather than try to subset them.
+
+## Detailed implementation tasks
+
+Ordered, each independently testable. Items T1-T2 are landed; start at T3.
+
+- **T1 (done).** Extract the preamble into
+  `emit_runtime_preamble(Buf *out, const Expr *program)`. Byte-identical;
+  suite 1532/0. *(committed)*
+
+- **T2 (done).** Verify single-file output unchanged and capture the shared-state
+  catalog + emitter audit above. *(this doc)*
+
+- **T3 -- `shared` parameter + CPS force-on.** Add a `bool shared` parameter to
+  `emit_runtime_preamble`. When `shared` is true, force every `program`-gated
+  CPS block on (6 `if (...)` sites: prepend `shared ||`) so the shared runtime
+  is feature-complete regardless of which module drove generation; allow
+  `program == NULL`. `emit_program` passes `shared = false` (byte-identical).
+  *Test:* full suite stays 1532/0.
+
+- **T4 -- owner/extern split for the 4 globals.** In `shared` mode emit the four
+  module-referenced globals (`tur_current_fiber`, `tur_current_reset_ctx`,
+  `g_tur_args`, `global_effect_handler_chain`) as
+  `#ifdef TUR_RT_OWNER <def> #else extern <decl> #endif` (preserve `__thread`
+  and existing initializers/comments); all other globals stay `static`
+  untouched. *Test:* `shared=false` still byte-identical.
+
+- **T5 -- public-function extern prototypes.** In `shared` mode, after the
+  function bodies, emit `extern` prototypes for the public function surface
+  listed above (or, equivalently, gate each body behind
+  `#ifdef TUR_RT_OWNER` with a prototype in the `#else`). Keep the 3 pure
+  `static inline` helpers inline in the header. *Test:* `shared=false`
+  byte-identical; a hand-written 2-TU C smoke (`tur_runtime.h` + two `.c`
+  files) links with exactly one definition of each public symbol (`nm`).
+
+- **T6 -- generated `tur_runtime.{h,c}`.** Add an exported
+  `emit_shared_runtime_header(Buf*)` (include-guarded wrapper around
+  `emit_runtime_preamble(out, NULL, /*shared=*/true)`) and
+  `emit_shared_runtime_owner(Buf*)` (emits `#define TUR_RT_OWNER` then
+  `#include "tur_runtime.h"`). Declare both in `emit.h`.
+
+- **T7 -- build-driver wiring** (`cmd_build_multi_files`, `src/main.c`, near the
+  cc invocation at ~3525-3552). Write `tur_runtime.h` and `tur_runtime.c` into
+  the build's working dir; add `tur_runtime.c` to the cc inputs (alongside
+  `_main.c` and the module `.c` files; for `--shared` it must be in the `.so`
+  too). Clean both up like `_main.c`.
+
+- **T8 -- module headers include the runtime.** In `emit_header`
+  (separate-compilation path), emit `#include "tur_runtime.h"` as the **first**
+  line after the guard, *before* the `<stdint.h>` block, so the preamble's
+  `#define _DEFAULT_SOURCE 1` precedes all system includes. Drop any now-duplicated
+  std includes if they conflict.
+
+- **T9 -- struct drop/walk glue in module `.c`.** In `emit_implementation`,
+  before `if (e->as.def_.struct_def) continue;` (emit_module.c:5936-5941), emit
+  `drop_glue_<Name>`/`walk_glue_<Name>` for any struct with `needs_drop_glue`
+  (mirror the single-file Pass 0 at emit_module.c:1824-1866). `static`, local to
+  the module `.c`.
+
+- **T10 -- end-to-end + cross-TU ASan tests.** Add to
+  `tests/run-build-project.sh`: (a) Repro A (`rc/of`, no struct) and Repro B
+  (`rc<T>` struct field) build/link/run; (b) a 2-module project where module A
+  allocates an `rc`/`rc<T>` and module B drops it, run under
+  `ASAN_OPTIONS=detect_leaks=1` to prove a single shared GC registry; (c) `nm`
+  assertion that `gc_all_blocks` and `rc_cb_alloc` are single-definition.
+
+- **T11 -- regression sweep.** Full `bash tests/run.sh` at 0 FAIL; signal spice
+  still builds; the `build-project-*` dedicated runner green.
+
+## Whole-program track for executables (PROVEN -- recommended to do first)
+
+This route needs **no compiler/runtime-emission changes at all** and is proven
+to work for RC across modules today. It should land before the owner-TU work;
+the owner-TU design (T3-T8) is then only required for `--shared` `.so` builds.
+
+### Evidence
+
+`tur build <file>` single-file mode routes through `compile_to_c` ->
+`emit_program` (`src/main.c:847`), which inlines every transitively-imported
+module's code into **one** TU with the full inline runtime. Verified end to end:
+
+```
+/tmp/wp/src/foo/alloc.tur:  (defmodule foo/alloc (export alloc-and-count)
+                              (defn alloc-and-count [] : int
+                                (let [r (rc/of 10)] (rc/strong-count r))))
+/tmp/wp/src/foo/main.tur:   (defmodule foo/main
+                              (import foo/alloc :refer [alloc-and-count])
+                              (defn main [] : int (alloc-and-count)))
+
+$ tur build /tmp/wp/src/foo/main.tur -I /tmp/wp/src -o /tmp/wp/bin   # rc=0
+$ ASAN_OPTIONS=detect_leaks=1 /tmp/wp/bin ; echo $?                  # 1  (clean)
+```
+
+One TU, one copy of every runtime global, RC alloc/count correct across the
+module boundary, ASan-clean. (`tur build <dir>` project mode fails the same
+program at cc.) Note: a single source *file* may hold only one `defmodule`, so
+the modules must live in separate files reached via `import` + `-I`, exactly as
+above -- the build driver already resolves that include path.
+
+### Tasks (whole-program executable route)
+
+- **W1 -- locate the entry module.** In `cmd_build_project` /
+  `cmd_build_multi_files`, find the module whose body defines `main`. Error
+  clearly if zero or more than one across the project.
+
+- **W2 -- route executables through single-file build.** When `!shared`, instead
+  of emitting per-module `.h`/`.c` + `_main.c` and separately compiling, invoke
+  the existing single-file build on the entry module's file with the project's
+  full include path (own `src/` + every `:spices` dep's `src/`, exactly what
+  project mode already computes for `-I`). This reuses the battle-tested
+  `emit_program` path verbatim.
+
+- **W3 -- keep `--shared` on the separate-compilation path** (it needs the
+  owner-TU design; do not reroute it).
+
+- **W4 -- validate.** `tests/run-build-project.sh`: Repro A/B build+run; the
+  cross-module RC ASan case (module A allocs, module B drops) under
+  `detect_leaks=1`; and confirm the existing `build-project-*` cases
+  (cross-spice dep, prelude macros, sym cross-TU, cblock order, defstruct
+  typedef) still pass through the rerouted executable path. Full
+  `bash tests/run.sh` at 0 FAIL.
+
+### Open questions for W2
+
+- Cross-spice `:path` deps: project mode currently *compiles* each dep's modules
+  into the link (see `build-project-links-cross-spice-dep`). Under whole-program
+  the entry file's `import` of a dep module must pull that dep's source into the
+  same TU -- confirm the single-file resolver follows `:spices` `src/` dirs the
+  same way `tur run` does (it appears to; `tur run <file>` already auto-discovers
+  spice includes).
+- Build artifacts / incremental rebuild: separate compilation caches per-module
+  ABI under `.tur-abi-cache/`; whole-program recompiles everything each time.
+  Acceptable for correctness now; note as a perf follow-up.
+- The defstruct-typedef and prelude-macro project cases must keep passing when
+  routed whole-program (they should -- single-file mode is a superset).
