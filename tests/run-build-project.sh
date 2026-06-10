@@ -435,6 +435,53 @@ else
     fi
 fi
 
+# load-not-expanded-in-imported-or-project-modules: a module that does a
+# top-level (load "stdlib/...") of a bare-defn stdlib file, consumed across
+# modules in a `tur build <dir>` project.  The (load ...) must be expanded in
+# separate-compilation (project) mode -- exactly as the entry unit does -- and
+# the spliced bare defns (sqrt/floor from stdlib/math.tur) must reach codegen so
+# the exported defn that calls them links.  Before this fix the load either
+# survived to elab_load ("load is only valid at the top level") or its spliced
+# defns never reached the per-module .c.
+LOADP="$WORK/loadproj"
+mkdir -p "$LOADP/src/app"
+cat > "$LOADP/build.tur" <<'EOF'
+(defpackage tur-loadproj
+  :name    "tur-loadproj"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] "app/ops" ["hypot-floor"] })
+EOF
+# app/ops top-level-loads stdlib/math.tur (bare defns) and exports a defn that
+# uses the spliced sqrt/floor.  app/main imports it cross-module.
+cat > "$LOADP/src/app/ops.tur" <<'EOF'
+(load "stdlib/math.tur")
+
+(defmodule app/ops
+  (export hypot-floor)
+(defn hypot-floor [a : float b : float] : int
+  (float->int (floor (sqrt (+ (* a a) (* b b)))))))
+EOF
+cat > "$LOADP/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (import app/ops :refer [hypot-floor])
+  (defn main [] : int
+    ;; floor(sqrt(3*3 + 4*4)) = floor(5.0) = 5 -- the process exit code.
+    (hypot-floor 3.0 4.0)))
+EOF
+loadp_out=$(cd "$WORK" && "$TUR" build "$LOADP" -o "$WORK/loadpbin" 2>&1)
+loadp_rc=$?
+if [ $loadp_rc -ne 0 ]; then
+    fail "build-project-load-bare-defn-module" "tur build exit=$loadp_rc: $loadp_out"
+else
+    "$WORK/loadpbin"
+    loadp_run_rc=$?
+    if [ "$loadp_run_rc" -eq 5 ]; then
+        pass "build-project-load-bare-defn-module"
+    else
+        fail "build-project-load-bare-defn-module" "exit=$loadp_run_rc (expected 5)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

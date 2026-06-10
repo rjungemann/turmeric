@@ -2,7 +2,7 @@
 title: Top-level (load "...") is not expanded inside imported / project-mode modules -- arrow.tur's >>> is unreachable from a defmodule that is imported or project-built
 category: Reported
 severity: high
-status: PARTIALLY RESOLVED -- import path fixed; project-mode (`tur build .`) typeclass-ordering fixed; a deeper separate-compilation codegen blocker remains (see "Status").
+status: PARTIALLY RESOLVED -- import path fixed; project-mode (`tur build <dir>`) typeclass-ordering fixed; project-mode bare-defn `load` fixed + regression-covered; a narrowed separate-compilation codegen blocker remains for runtime-preamble-dependent loads (poly-fn / higher-kinded dicts / spliced ADTs). See "Status".
 description: The (load "path") preprocessor runs only on the entry compilation unit (elaborate_program). A module pulled in via `import` (elab_load_module) elaborates its forms directly and never runs the preprocessor, so a top-level `(load ...)` in that file hits elab_load and errors with "load is only valid at the top level". In `tur build .` project mode the load is reached but its transitive loads resolve against an incomplete typeclass environment ("typeclass 'Functor' is not defined" from either.tur). Net effect: a defmodule cannot `(load "stdlib/arrow.tur")` to reach `>>>` in any build mode that goes through the module system.
 ---
 
@@ -21,20 +21,50 @@ description: The (load "path") preprocessor runs only on the entry compilation u
   now `(load "stdlib/typeclass-functor.tur")`s its own `Functor` dependency
   instead of relying on the full stdlib auto-load (which project mode does not
   run). The "typeclass 'Functor' is not defined" error is gone.
-- **Project-mode separate-compilation codegen: STILL BROKEN (new finding).**
-  With the ordering fixed, `tur build .` of a module that `(load ...)`s
-  arrow.tur now fails at the **C-compile** stage: the spliced stdlib content
-  (arrow.tur's typeclasses, either.tur's ADT + `Functor` instance) is emitted
-  into the single module's `.c` without the runtime typedefs / typeclass-dict
-  plumbing the whole-program path provides -- e.g. `unknown type name
-  'tur_poly_fn_t'`, `unknown type name 'tur_adt_Either'`,
-  `dict_Functor_Either__struct_ has no member named 'fmap'`, and a
-  `conflicting types for '<mod>__use_compose'`. This is a distinct,
-  separate-compilation-specific root cause (the spliced-load codegen does not
+- **Project-mode bare-defn `load` (`tur build <dir>`): FIXED + regression-covered
+  (2026-06-10).** A `defmodule` that top-level-`(load ...)`s a *bare-defn* stdlib
+  file (e.g. `stdlib/math.tur`) now builds and links in separate-compilation
+  project mode, and an exported defn that uses the spliced names (`sqrt`/`floor`)
+  is callable cross-module. Locked in by the
+  `build-project-load-bare-defn-module` scenario in
+  `tests/run-build-project.sh` (builds a two-module project where `app/ops`
+  loads `stdlib/math.tur` and `app/main` imports it; the binary returns
+  `floor(sqrt(3*3+4*4)) = 5`).
+- **Project-mode separate-compilation codegen for *runtime-preamble-dependent*
+  loads: STILL BROKEN (scope narrowed 2026-06-10).** The blocker is **not**
+  "any typeclass in project mode" -- a *monomorphic* instance compiles and runs
+  fine under `tur build <dir>` (verified: `(defclass Eqx [a] (eqx? [x y] :bool))`
+  + `(definstance Eqx [int] ...)` inside a `defmodule` links and returns the
+  expected value). What breaks is loading content that needs the **whole-program
+  runtime preamble** the per-module `.c` does not emit: higher-kinded /
+  rank-2 dispatch typed `tur_poly_fn_t`, spliced ADTs needing `tur_adt_*`, the
+  on-demand `tur_fnptr_*` fn-ptr typedefs, and the associated typeclass-dict
+  structs. So `tur build <dir>` of a module that `(load ...)`s arrow.tur (which
+  transitively loads either.tur's `Either` ADT + higher-kinded `Functor`
+  instance) fails at the **C-compile** stage with `unknown type name
+  'tur_poly_fn_t'`, `unknown type name 'tur_fnptr_int64_t_int64_t_t'`,
+  `unknown type name 'tur_adt_Either'`,
+  `dict_Functor_Either__struct_ has no member named 'fmap'`, and
+  `conflicting types for '<mod>__use_compose'`.
+
+  Root cause confirmed at `src/compiler/emit_module.c`: the fixed runtime
+  preamble (the `tur_poly_fn_t` / `tur_handler_t` / `tur_set_t` typedefs +
+  `static` helpers) is emitted **inline inside `emit_program`** (the
+  whole-program path, ~`emit_module.c:2417`+) and is *never* emitted by the
+  separate-compilation path. `emit_implementation` (`emit_module.c:5630`+)
+  only `#include`s the module header and explicitly omits the standard preamble
+  (see the `CLI-ARGS` comment near `emit_module.c:5862`: "the standard preamble
+  ... is NOT included"). `emit_header` (`emit_module.c:5293`+) registers struct
+  / ADT / fn-ptr typedefs only for **exported** items, so an ADT or poly-fn used
+  only *internally* (as the spliced either.tur `Either` + its `Functor` instance
+  are) gets no typedef in either file. This is a distinct,
+  separate-compilation-specific codegen gap (the spliced-load codegen does not
   fit the per-module `.c` + header model), not the missing-expansion or
-  typeclass-ordering bug this report originally described. It remains open; the
-  guarded `!e->separate_compilation` branch in `elab_load_module` is the
-  intentional no-op for that mode until the codegen side is designed.
+  typeclass-ordering bug this report originally described, and it is the same
+  gap any *directly written* higher-kinded instance in a project module would
+  hit. It remains open until the codegen side is designed; the guarded
+  `!e->separate_compilation` branch in `elab_load_module` is the intentional
+  no-op for the import path under that mode.
 
 ## Summary
 
@@ -131,12 +161,24 @@ ordering bug on top of the missing-expansion bug.
 
 ## How to validate
 
-- The repro above compiles and runs under all three of: standalone
-  `tur check`, `tur run` of an importing consumer, and `tur build .`.
+- **Done:** standalone `tur check` (preprocessor runs), `tur run`/`emit-c` of an
+  importing consumer (fixture `tests/fixtures/load-in-imported-module/`), and
+  `tur build <dir>` of a project whose module top-level-`load`s a *bare-defn*
+  stdlib file (scenario `build-project-load-bare-defn-module` in
+  `tests/run-build-project.sh`). Run with
+  `ASAN_OPTIONS=detect_leaks=0 bash tests/run-build-project.sh`.
 - A loaded path is spliced **once** even when both the entry and an imported
   module load it (no duplicate-symbol C errors).
-- `bash tests/run.sh` stays green; add a fixture with a defmodule that
-  `(load ...)`s a bare-defn stdlib file and calls a loaded name.
+- `bash tests/run.sh` stays green.
+- **Still open:** `tur build <dir>` of a module that `(load ...)`s a
+  *runtime-preamble-dependent* stdlib file (arrow.tur -> either.tur: poly-fn /
+  higher-kinded `Functor` instance / `Either` ADT). Fixing it means teaching the
+  separate-compilation path (`emit_implementation` / `emit_header` in
+  `src/compiler/emit_module.c`) to emit the fixed runtime preamble **and** the
+  internal (non-exported) ADT / fn-ptr / dict typedefs the module body uses --
+  the same emission `emit_program` performs for the whole-program path. A
+  monomorphic instance already works in project mode, so the validation target
+  is specifically the higher-kinded / poly-fn / spliced-ADT case.
 
 ## Impact
 
