@@ -6,7 +6,7 @@ description: Make a signature-less `^fat g` parameter return a non-int register-
 
 # Bare `^fat` Result-Kind Monomorphization -- Plan (Phase B)
 
-> **Status:** Deferred -- not started. The reported gap is already closed by
+> **Status:** Not started. The reported gap is already closed by
 > Phase A (tail-position retype pass), which shipped and merged in #208. This
 > plan is the *follow-through* that handles the one case Phase A structurally
 > cannot: a bare-`^fat` non-int result consumed in a **non-tail** position.
@@ -150,3 +150,147 @@ These are the reason Phase B is *large* and was deferred:
 B1' specialize callee per result-kind -> B2 call-site typing -> non-tail gate
 fixture -> B3 retire the tail pass where covered -> B4 generalize -> regenerate
 snapshots -> Phase B validation.
+
+---
+
+## Implementation slice (concrete touch points)
+
+> **Added 2026-06-10** after a scoping pass that reproduced the gap (probe
+> `(let [y (g x)] (use-float y))` -> `TUR-E0001: arg 1: expected float, got
+> int`) and verified the elaborator has no pre-existing scaffold for deferred
+> body elaboration. This slice is what the eventual PR must do; it is **not**
+> yet implemented.
+
+### Why deferred elab is unavoidable
+
+The probe body **cannot elaborate at defn time** with `g`'s result stamped
+TY_INT: `(g x)` is int, so `y` is int, so `(use-float y)` fails TUR-E0001
+before the body ever produces an EX_FN_DEF to clone. So we cannot start from
+an elaborated body and retype call sites (Phase A's approach extended
+whole-body); we must **retain the pre-elab `Form`** and re-run elaboration
+under each (callee, result_kind) specialization.
+
+### Step 1 -- detect "needs deferred elab" defns
+
+In `elab_defn` (`src/compiler/elab_fns.c:552`), after parsing the param vector
+and **before** elaborating body forms:
+
+- If any param has `is_fat == true` AND no fn-type annotation
+  (`param_full_types[i] == NULL` or its kind is not TY_FN), set a new
+  `bool needs_lazy_body` on the synthesized `FnDef`.
+- For such defns, also store `const Form **body_forms` + `uint8_t
+  n_body_forms` on `FnDef` -- a slice of `call->as.list.items[body_start ..]`
+  (the post-`:return-type` tail). Arena-owned pointers into the parser's form
+  tree, no deep copy needed.
+
+This keeps the legacy path (no bare-`^fat` param) byte-identical: no Form
+retention, no behavior change. Only bare-`^fat` defns pay the cost.
+
+The defn's **canonical** body elaboration still happens (with the bare-fat
+param's `bare_fat_result_kind = TY_INT`), so existing `:int`-result callers
+keep working. The clone is only created on demand for non-int kinds.
+
+### Step 2 -- carry result-kind on the bare-^fat Binding
+
+Add to `struct Binding` (`src/compiler/expr.h:43`):
+
+```c
+/* B1' bare-fat-result-monomorphization: kind stamped on a bare ^fat param's
+ * call result during a specialized re-elab.  TY_INT for the canonical body
+ * (current behavior); set to e.g. TY_FLOAT in a specialized clone before
+ * elab_call's CY2 fat-dispatch path (elab_call.c:2034) stamps the call. */
+TypeKind bare_fat_result_kind;
+```
+
+Read it in `elab_call.c:2034`:
+
+```c
+TypeKind rk = (fn_binding->is_fat && fn_binding->bare_fat_result_kind != TY_UNKNOWN)
+              ? fn_binding->bare_fat_result_kind : TY_INT;
+Expr *out = expr_new(e->arena, EX_CALL, type_from_kind(rk), call->span);
+```
+
+This subsumes the Phase A tail-retype pass for **any** call inside a
+specialized clone -- not just tail positions.
+
+### Step 3 -- per-call-site specialization at the caller
+
+In the caller-side argument check loop (`elab_call.c` ~line 2403, the
+fn-arg-coercion zone where `EX_FN_TO_FAT` shimming already lives):
+
+When the formal slot is bare-`^fat` (i.e. `fn_type.as.fn.arg_fat[i]` true AND
+`arg_full_types[i]` lacks a TY_FN), inspect the actual arg's closure result
+kind. Reachable via `args[i]->type.as.fn.result_kind` for a TY_FN literal,
+or via the closure's `closure_fn_binding->type.as.fn.result_kind` for a
+TY_PTR_VOID capturing-closure value.
+
+If that kind is `kind_is_non_int_register_class(k)` (the predicate already in
+`elab_fns.c:370`):
+
+1. Look up `(callee_binding, k)` in a new per-Elab cache
+   `bare_fat_specs[]` (small array, dedup by linear scan -- specs per defn
+   should be few).
+2. On miss: invoke a new `elab_defn_specialize(e, callee_fndef, k)` that:
+   - Clones the callee's `Binding *` with a mangled name
+     (`<callee>__bf_<kind-suffix>`, e.g. `run_with__bf_float`). Use a small
+     hand-rolled suffix (kind char) rather than `elab_mangle_binding_name`,
+     which is reserved for export-name mangling.
+   - Clones the param bindings; on the bare-`^fat` param sets
+     `bare_fat_result_kind = k`.
+   - Re-runs the body elaboration loop on the retained `body_forms`, with the
+     new param scope. The CY2 bare-fat dispatch path (step 2) now stamps the
+     correct kind, so `(use-float y)` typechecks.
+   - Synthesizes a new `FnDef` and registers it with `elab_register_file_def`
+     (same registration EX_FN_DEF uses; see `elab_fns.c:3429`).
+3. Redirect `out->as.call_.fn_binding` to the specialized binding.
+
+### Step 4 -- non-tail gate fixture (the regression seed)
+
+Add `tests/fixtures/bare-fat-nontail-float-noannot/`:
+
+```turmeric
+;; Phase B gate: bare-^fat :float result consumed in non-tail position
+;; with NO annotation on the let binding -- the case Phase A cannot reach.
+(defn use-float [y : float] : float y)
+(defn run-with [^fat g x : float] : float
+  (let [y (g x)]
+    (use-float y)))
+(defn make-scale [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+(defn main [] : int
+  (println (run-with (make-scale 2.0) 3.5))   ;; 7
+  0)
+```
+
+Expected stdout: `7\n`. Until B1'+B2 lands, the fixture fails elaboration
+(verified 2026-06-10: `TUR-E0001: arg 1: expected float, got int` at the
+`(use-float y)` callsite). Land the fixture in the same PR as the fix.
+
+### Step 5 -- dedup + int-only caller of a bare-^fat combinator
+
+Add `tests/fixtures/bare-fat-int-and-float-no-annot/`: one combinator, two
+call sites passing an `:int` closure and a `:float` closure respectively.
+Assert in `expected.c` that exactly two specializations are emitted
+(`run_with` and `run_with__bf_float`) and the `:int` path emits the
+unspecialized name (canonical body unchanged).
+
+### Open issues this slice still defers
+
+- **Self-recursion**: a specialized clone calling itself must redirect to the
+  same specialized binding (lookup in the cache by `(callee_fndef, k)` during
+  the re-elab, keyed off the cloned binding's `source_binding` pointer).
+- **Mutual recursion**: same scheme but the cache must be seeded **before**
+  starting re-elab so the partner can find it.
+- **Exports**: a specialization of an exported function is itself a fresh
+  internal symbol; do not export the clone. Block specialization of imported
+  bindings from other modules (no body to re-elab).
+- **Cross-module dedup**: out of scope for the first PR. Each TU may emit its
+  own copy of `run_with__bf_float`; if the linker complains, make the
+  specialization `static` in the emitted C.
+
+### Estimated size
+
+~600-1000 LOC across `expr.h`, `elab_fns.c`, `elab_call.c`, plus 2 fixtures
+and a ~1442-fixture snapshot regen. Single PR is feasible but takes a
+multi-session commitment, not one execution turn. The fixture-only seed
+(step 4) is a safe sub-PR to land first so the gap is visible in CI.
