@@ -1,11 +1,17 @@
 ;; Module B: reads the .y field of the same shared carrier struct.
-;; Its file-scope ```c block is byte-identical to module A's; without dedup the
-;; combined TU would emit two `struct __shape { ... };` definitions at file
-;; scope and cc would reject it with `redefinition of 'struct __shape'`.
+;; Its file-scope ```c block declares the SAME struct as module A but with
+;; different formatting (multi-line vs one-line) -- exactly how two hand-written
+;; module files realistically diverge.  The dedup compares whitespace-
+;; insensitively, so these two equivalent declarations collapse to a single
+;; file-scope definition.  A regression to byte-exact comparison would let both
+;; through and cc would reject the TU with `redefinition of 'struct __shape'`.
 (defmodule shape/b
   (export b-get)
   ```c
-  struct __shape { int64_t x; int64_t y; };
+  struct __shape {
+      int64_t x;
+      int64_t y;
+  };
   ```
   (defn b-get [p : int] : int
     ```c
