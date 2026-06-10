@@ -1,0 +1,8 @@
+#lang sweet-exp
+
+;; Param and result fn types lose their leading colons in sweet-exp too.
+defn apply1 [f :(fn [int] int) x :int] :int
+  f(x)
+
+defn run-twice [f :(fn [] int)] :int
+  {f() + f()}

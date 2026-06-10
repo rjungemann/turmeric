@@ -43,13 +43,20 @@ is complete; this is the inner-type-expression version.
       and the lone legacy form under `docs/upcoming/v1/fn-type-colons-
       sweet-exp-plan.md` is the intentional before/after illustration
       (do not rewrite it). The rewrite is annotation-spelling only, so
-      codegen snapshots are byte-identical. **Known gap (deferred):**
-      the codemod only finds fn types inside paren-delimited
-      declarations, so sweet-exp top-level forms (`.tur.sweet` files,
-      ```sweet-exp doc blocks) are skipped. Currently moot -- no
-      sweet-exp tree carries fn types that need rewriting -- but porting
-      the `spaced-types-rewrite.py` implicit-sequence walk is the right
-      fix when one does. Not a blocker for Phase 4.
+      codegen snapshots are byte-identical. **Sweet-exp coverage (done
+      2026-06-10):** the codemod now carries the
+      `spaced-types-rewrite.py`-style implicit-sequence walk, so sweet-exp
+      top-level forms are rewritten too -- enabled by a `#lang sweet-exp`
+      directive, for every `.tur.sweet` file, and for ```sweet-exp markdown
+      fences. Corpus cases `sweet-basic`/`sweet-effects`/
+      `sweet-lambda-untouched`/`sweet-md` under
+      `tests/codemod/fn-type-colons/` cover it (including the
+      "missed, never corrupted" guarantee for a nested lambda value), and a
+      re-sweep of `docs/guides/`/`stdlib/` is a clean no-op. Type forms
+      reachable only by deeper indentation than the top-level scan visits
+      are still missed (never corrupted); revisit only if a real source
+      needs it. See
+      [`fn-type-colons-sweet-exp-plan.md`](../upcoming/fn-type-colons-sweet-exp-plan.md).
 - [x] Phase 3 -- `TUR-D0001` deprecation warning fires when a leading
       colon (the fused `F_KEYWORD` `:int` form **or** the spaced-but-
       redundant `F_TYPE_ANN` `: int` form) is consumed in a `(fn ...)`

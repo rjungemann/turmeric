@@ -1,0 +1,13 @@
+#lang sweet-exp
+
+;; Top-level defns whose bodies are fn lambda VALUES.  The implicit-seq
+;; scan reaches these `fn` heads, but a lambda's own param/return
+;; annotations are plain types -- there are no inner fn-type colons to
+;; strip -- so nothing here changes (missed, never corrupted).
+defn make-adder [n :int] :ptr<void>
+  fn [x :int] :int
+    {x + n}
+
+defn apply-twice [x :int] :int
+  let [f fn([y :int] :int {y * 2})]
+    f(f(x))

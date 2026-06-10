@@ -1,0 +1,8 @@
+#lang sweet-exp
+
+;; Effect sets are preserved; inner colons are stripped on both sides.
+defn run-twice [f :(fn [] #{e} int)] #{e} :int
+  {f() + f()}
+
+defn compose [^fat f :(fn [float] #{} float)] : (fn [float] float)
+  f
