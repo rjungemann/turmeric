@@ -1652,6 +1652,108 @@ static void emit_cons_helper(Buf *out) {
     buf_puts(out, "#endif\n");
 }
 
+/* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`
+ * plus one `ctor_<Ctor>` allocator per constructor for an ADT (defdata/defgadt).
+ *
+ * Shared by the whole-program path (emit_program) and the
+ * separate-compilation implementation path (emit_implementation) so that an
+ * ADT used only *inside* a module's .c -- e.g. one spliced in by a top-level
+ * (load "stdlib/either.tur") -- gets its base layout typedef + constructors
+ * regardless of build mode.  The header (emit_header) never emits the base ADT
+ * typedef, only monomorphized type-applications, so without this the per-module
+ * .c references `tur_adt_Either` / `ctor_Left` with no definition.  See
+ * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
+    char adt_c_name[256];
+    {
+        char *_mn = mangle_field_name(def->name);
+        snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
+        free(_mn);
+    }
+    buf_printf(out, "typedef struct %s {\n", adt_c_name);
+    buf_printf(out, "    int tag;\n");
+    buf_printf(out, "    union {\n");
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        char *mctor = mangle_field_name(ctor->name);
+        buf_printf(out, "        struct {");
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const char *ctype;
+            switch (ctor->fields[fi].kind) {
+                case TY_INT:      ctype = "int64_t"; break;
+                case TY_BOOL:     ctype = "bool"; break;
+                case TY_FLOAT:    ctype = "double"; break;
+                case TY_CSTR:     ctype = "const char *"; break;
+                case TY_PTR_VOID: ctype = "void *"; break;
+                case TY_RC:
+                case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                case TY_REF:
+                case TY_LREF:     ctype = "void *"; break;
+                case TY_INT8:     ctype = "int8_t"; break;
+                case TY_INT16:    ctype = "int16_t"; break;
+                case TY_INT32:    ctype = "int32_t"; break;
+                case TY_INT64:    ctype = "int64_t"; break;
+                case TY_UINT8:    ctype = "uint8_t"; break;
+                case TY_UINT16:   ctype = "uint16_t"; break;
+                case TY_UINT32:   ctype = "uint32_t"; break;
+                case TY_UINT64:   ctype = "uint64_t"; break;
+                case TY_FLOAT32:  ctype = "float"; break;
+                case TY_FLOAT64:  ctype = "double"; break;
+                default:          ctype = "int64_t"; break;
+            }
+            buf_printf(out, " %s _%u;", ctype, fi);
+        }
+        buf_printf(out, " } %s;\n", mctor);
+        free(mctor);
+    }
+    buf_printf(out, "    } as;\n");
+    buf_printf(out, "} %s;\n\n", adt_c_name);
+
+    /* Emit constructor functions */
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        char *mctor = mangle_field_name(ctor->name);
+        buf_printf(out, "static int64_t ctor_%s(", mctor);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            if (fi > 0) buf_puts(out, ", ");
+            const char *ctype;
+            switch (ctor->fields[fi].kind) {
+                case TY_INT:      ctype = "int64_t"; break;
+                case TY_BOOL:     ctype = "bool"; break;
+                case TY_FLOAT:    ctype = "double"; break;
+                case TY_CSTR:     ctype = "const char *"; break;
+                case TY_PTR_VOID: ctype = "void *"; break;
+                case TY_RC:
+                case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                case TY_REF:
+                case TY_LREF:     ctype = "void *"; break;
+                case TY_INT8:     ctype = "int8_t"; break;
+                case TY_INT16:    ctype = "int16_t"; break;
+                case TY_INT32:    ctype = "int32_t"; break;
+                case TY_INT64:    ctype = "int64_t"; break;
+                case TY_UINT8:    ctype = "uint8_t"; break;
+                case TY_UINT16:   ctype = "uint16_t"; break;
+                case TY_UINT32:   ctype = "uint32_t"; break;
+                case TY_UINT64:   ctype = "uint64_t"; break;
+                case TY_FLOAT32:  ctype = "float"; break;
+                case TY_FLOAT64:  ctype = "double"; break;
+                default:          ctype = "int64_t"; break;
+            }
+            buf_printf(out, "%s _%u", ctype, fi);
+        }
+        buf_printf(out, ") {\n");
+        buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                   adt_c_name, adt_c_name, adt_c_name);
+        buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+        }
+        buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
+        buf_printf(out, "}\n\n");
+        free(mctor);
+    }
+}
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -1891,95 +1993,7 @@ int emit_program(Buf *out, const Expr *program) {
         /* Phase G0/G1: ADT typedef + constructor functions */
         else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
             AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
-            char adt_c_name[256];
-            {
-                char *_mn = mangle_field_name(def->name);
-                snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
-                free(_mn);
-            }
-            buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
-            buf_printf(&early_file, "    int tag;\n");
-            buf_printf(&early_file, "    union {\n");
-            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
-                CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
-                buf_printf(&early_file, "        struct {");
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    const char *ctype;
-                    switch (ctor->fields[fi].kind) {
-                        case TY_INT:      ctype = "int64_t"; break;
-                        case TY_BOOL:     ctype = "bool"; break;
-                        case TY_FLOAT:    ctype = "double"; break;
-                        case TY_CSTR:     ctype = "const char *"; break;
-                        case TY_PTR_VOID: ctype = "void *"; break;
-                        case TY_RC:
-                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:
-                        case TY_LREF:     ctype = "void *"; break;
-                        case TY_INT8:     ctype = "int8_t"; break;
-                        case TY_INT16:    ctype = "int16_t"; break;
-                        case TY_INT32:    ctype = "int32_t"; break;
-                        case TY_INT64:    ctype = "int64_t"; break;
-                        case TY_UINT8:    ctype = "uint8_t"; break;
-                        case TY_UINT16:   ctype = "uint16_t"; break;
-                        case TY_UINT32:   ctype = "uint32_t"; break;
-                        case TY_UINT64:   ctype = "uint64_t"; break;
-                        case TY_FLOAT32:  ctype = "float"; break;
-                        case TY_FLOAT64:  ctype = "double"; break;
-                        default:          ctype = "int64_t"; break;
-                    }
-                    buf_printf(&early_file, " %s _%u;", ctype, fi);
-                }
-                buf_printf(&early_file, " } %s;\n", mctor);
-                free(mctor);
-            }
-            buf_printf(&early_file, "    } as;\n");
-            buf_printf(&early_file, "} %s;\n\n", adt_c_name);
-
-            /* Emit constructor functions */
-            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
-                CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
-                buf_printf(&early_file, "static int64_t ctor_%s(", mctor);
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    if (fi > 0) buf_puts(&early_file, ", ");
-                    const char *ctype;
-                    switch (ctor->fields[fi].kind) {
-                        case TY_INT:      ctype = "int64_t"; break;
-                        case TY_BOOL:     ctype = "bool"; break;
-                        case TY_FLOAT:    ctype = "double"; break;
-                        case TY_CSTR:     ctype = "const char *"; break;
-                        case TY_PTR_VOID: ctype = "void *"; break;
-                        case TY_RC:
-                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:
-                        case TY_LREF:     ctype = "void *"; break;
-                        case TY_INT8:     ctype = "int8_t"; break;
-                        case TY_INT16:    ctype = "int16_t"; break;
-                        case TY_INT32:    ctype = "int32_t"; break;
-                        case TY_INT64:    ctype = "int64_t"; break;
-                        case TY_UINT8:    ctype = "uint8_t"; break;
-                        case TY_UINT16:   ctype = "uint16_t"; break;
-                        case TY_UINT32:   ctype = "uint32_t"; break;
-                        case TY_UINT64:   ctype = "uint64_t"; break;
-                        case TY_FLOAT32:  ctype = "float"; break;
-                        case TY_FLOAT64:  ctype = "double"; break;
-                        default:          ctype = "int64_t"; break;
-                    }
-                    buf_printf(&early_file, "%s _%u", ctype, fi);
-                }
-                buf_printf(&early_file, ") {\n");
-                buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                           adt_c_name, adt_c_name, adt_c_name);
-                buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
-                               mctor, fi, fi);
-                }
-                buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
-                buf_printf(&early_file, "}\n\n");
-                free(mctor);
-            }
+            emit_adt_typedef_and_ctors(&early_file, def);
         }
     }
 
@@ -5361,6 +5375,24 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n\n");
 
+    /* load-not-expanded-in-imported-or-project-modules: the whole-program path
+     * emits the rank-2 polymorphic closure type `tur_poly_fn_t` as part of its
+     * runtime preamble (emit_program), but the separate-compilation path does
+     * not emit that preamble.  Exported signatures in this header -- and the
+     * internal typeclass-method signatures in the matching .c (e.g. a spliced
+     * `Functor` instance's `fmap`) -- can both reference it, so declare it once
+     * here where every consumer (.c includers and importing modules) sees it. */
+    if (separate_compilation) {
+        /* Guarded so a module that includes several module headers (each of
+         * which may declare this carrier) does not redefine the anonymous
+         * struct -- which the C front-end reads as conflicting types. */
+        buf_puts(out, "/* rank-2 polymorphic closure carrier (typeclass-method params) */\n");
+        buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n");
+        buf_puts(out, "#define TUR_POLY_FN_T_DEFINED\n");
+        buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+        buf_puts(out, "#endif\n\n");
+    }
+
     /* SYM2 (runtime-symbols-plan): forward-declare the interned-symbol tag so
      * that exported signatures using `const struct __tur_sym *` (a :Sym param
      * or result) refer to a single file-scope tag.  Without this, a :Sym in
@@ -5934,6 +5966,28 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         }
     }
 
+    /* Pass 0: emit base ADT typedefs + constructor functions for every
+     * defdata/defgadt in this module.  The header (emit_header) never emits the
+     * base `tur_adt_<Name>` typedef -- only monomorphized type-applications --
+     * so an ADT used internally (e.g. one spliced in by a top-level
+     * (load "stdlib/either.tur")) would otherwise reference `tur_adt_Either` /
+     * `ctor_Left` with no definition.  Mirrors emit_program's Pass 0 (which
+     * routes through the same helper) but lands in the per-module .c.  Emitted
+     * into a dedicated buffer so it precedes the forward decls and bodies that
+     * reference these types in the final assembly.  Struct typedefs are NOT
+     * emitted here -- emit_header already emits every struct typedef into the
+     * header this .c #includes.  See
+     * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+    Buf impl_early; buf_init(&impl_early);
+    for (uint32_t i = 0; i < impl_n_items; i++) {
+        const Expr *e = impl_items[i];
+        if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
+            const AdtDef *adef = (e->kind == EX_DEFGADT)
+                ? e->as.defgadt_.def : e->as.defdata_.def;
+            emit_adt_typedef_and_ctors(&impl_early, adef);
+        }
+    }
+
     /* Pass 1a: emit all file-scope inline-C blocks before any defn body.
      * Dependency-based reordering (or a top-level C block that lands after
      * its defmodule in the flat array) can otherwise place a defn body before
@@ -6062,6 +6116,25 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     sym_codegen_emit(&sym_records2, separate_compilation);
     if (sym_records2.len) { buf_write(out, sym_records2.data, sym_records2.len); buf_putc(out, '\n'); }
     buf_free(&sym_records2);
+    /* load-not-expanded-in-imported-or-project-modules: base ADT typedefs +
+     * ctors (Pass 0 above), then the on-demand type-application + fn-ptr
+     * typedefs registered while emitting the bodies (e.g. `tur_fnptr_*` carriers
+     * returned by typeclass-method impls).  These must precede the forward decls
+     * and function definitions that reference them.  Mirrors the whole-program
+     * assembly order in emit_program (early_file, adt_apps, fn_ptr_typedefs). */
+    if (impl_early.len) { buf_write(out, impl_early.data, impl_early.len); buf_putc(out, '\n'); }
+    buf_free(&impl_early);
+    /* fn-ptr typedefs (e.g. `tur_fnptr_int64_t_int64_t_t`) registered while
+     * emitting the bodies.  A typedef name that also appears in an exported
+     * signature is emitted into the header too, but an identical fn-ptr typedef
+     * redefinition is well-formed (same type), so this stays conflict-free.
+     * Monomorphized ADT-application structs are deliberately NOT re-flushed here:
+     * those carry anonymous-struct payloads the header already emits for exported
+     * uses, and re-emitting one would be a struct redefinition. */
+    Buf impl_fn_ptr_typedefs; buf_init(&impl_fn_ptr_typedefs);
+    type_codegen_emit_fn_ptr_typedefs(&impl_fn_ptr_typedefs);
+    if (impl_fn_ptr_typedefs.len) { buf_write(out, impl_fn_ptr_typedefs.data, impl_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
+    buf_free(&impl_fn_ptr_typedefs);
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
     /* J2: Clone forward decls precede function definitions. */
     if (impl_fwd_decls.len) { buf_write(out, impl_fwd_decls.data, impl_fwd_decls.len); buf_putc(out, '\n'); }

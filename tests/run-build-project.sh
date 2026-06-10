@@ -482,6 +482,47 @@ else
     fi
 fi
 
+# load-not-expanded-in-imported-or-project-modules (codegen): a module that
+# top-level-(load ...)s a *runtime-preamble-dependent* stdlib file -- here
+# stdlib/either.tur, which brings in the `Either` ADT and a higher-kinded
+# `Functor` instance whose `fmap` dispatches through `tur_poly_fn_t` -- must
+# build in separate-compilation (project) mode.  This exercises the per-module
+# emission of the base ADT typedef + constructors, the `tur_poly_fn_t` carrier,
+# and the on-demand fn-ptr typedefs that the whole-program preamble provides but
+# the separate-compilation path historically omitted (unknown type name
+# 'tur_poly_fn_t' / 'tur_adt_Either').  fmap (*2) over (Right 21) = 42.
+LOADHK="$WORK/loadhk"
+mkdir -p "$LOADHK/src/app"
+cat > "$LOADHK/build.tur" <<'EOF'
+(defpackage tur-loadhk
+  :name    "tur-loadhk"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] })
+EOF
+cat > "$LOADHK/src/app/main.tur" <<'EOF'
+(load "stdlib/either.tur")
+
+(defmodule app/main
+  (defn main [] : int
+    (let [e (Right 21)]
+      (match (fmap e (fn [x : int] : int (* x 2)))
+        (Left l)  l
+        (Right r) r))))
+EOF
+loadhk_out=$(cd "$WORK" && "$TUR" build "$LOADHK" -o "$WORK/loadhkbin" 2>&1)
+loadhk_rc=$?
+if [ $loadhk_rc -ne 0 ]; then
+    fail "build-project-load-higher-kinded-module" "tur build exit=$loadhk_rc: $loadhk_out"
+else
+    "$WORK/loadhkbin"
+    loadhk_run_rc=$?
+    if [ "$loadhk_run_rc" -eq 42 ]; then
+        pass "build-project-load-higher-kinded-module"
+    else
+        fail "build-project-load-higher-kinded-module" "exit=$loadhk_run_rc (expected 42)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

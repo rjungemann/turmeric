@@ -2,7 +2,7 @@
 title: Top-level (load "...") is not expanded inside imported / project-mode modules -- arrow.tur's >>> is unreachable from a defmodule that is imported or project-built
 category: Reported
 severity: high
-status: PARTIALLY RESOLVED -- import path fixed; project-mode (`tur build <dir>`) typeclass-ordering fixed; project-mode bare-defn `load` fixed + regression-covered; a narrowed separate-compilation codegen blocker remains for runtime-preamble-dependent loads (poly-fn / higher-kinded dicts / spliced ADTs). See "Status".
+status: LARGELY RESOLVED -- import path fixed; project-mode typeclass-ordering fixed; project-mode bare-defn `load` fixed; project-mode single-module `load` of a runtime-preamble-dependent file (poly-fn / higher-kinded dict / spliced ADT) now emits the missing per-module scaffolding (`tur_poly_fn_t`, base `tur_adt_*` typedef + ctors, fn-ptr typedefs) and compiles + runs. All regression-covered. Two narrower follow-ons remain: (a) stdlib files that use ambient types they do not themselves `(load ...)` (e.g. arrow.tur's `Tuple2`), and (b) a typeclass instance leaking into an *importer's* TU. See "Status".
 description: The (load "path") preprocessor runs only on the entry compilation unit (elaborate_program). A module pulled in via `import` (elab_load_module) elaborates its forms directly and never runs the preprocessor, so a top-level `(load ...)` in that file hits elab_load and errors with "load is only valid at the top level". In `tur build .` project mode the load is reached but its transitive loads resolve against an incomplete typeclass environment ("typeclass 'Functor' is not defined" from either.tur). Net effect: a defmodule cannot `(load "stdlib/arrow.tur")` to reach `>>>` in any build mode that goes through the module system.
 ---
 
@@ -31,40 +31,55 @@ description: The (load "path") preprocessor runs only on the entry compilation u
   loads `stdlib/math.tur` and `app/main` imports it; the binary returns
   `floor(sqrt(3*3+4*4)) = 5`).
 - **Project-mode separate-compilation codegen for *runtime-preamble-dependent*
-  loads: STILL BROKEN (scope narrowed 2026-06-10).** The blocker is **not**
-  "any typeclass in project mode" -- a *monomorphic* instance compiles and runs
-  fine under `tur build <dir>` (verified: `(defclass Eqx [a] (eqx? [x y] :bool))`
-  + `(definstance Eqx [int] ...)` inside a `defmodule` links and returns the
-  expected value). What breaks is loading content that needs the **whole-program
-  runtime preamble** the per-module `.c` does not emit: higher-kinded /
-  rank-2 dispatch typed `tur_poly_fn_t`, spliced ADTs needing `tur_adt_*`, the
-  on-demand `tur_fnptr_*` fn-ptr typedefs, and the associated typeclass-dict
-  structs. So `tur build <dir>` of a module that `(load ...)`s arrow.tur (which
-  transitively loads either.tur's `Either` ADT + higher-kinded `Functor`
-  instance) fails at the **C-compile** stage with `unknown type name
-  'tur_poly_fn_t'`, `unknown type name 'tur_fnptr_int64_t_int64_t_t'`,
-  `unknown type name 'tur_adt_Either'`,
-  `dict_Functor_Either__struct_ has no member named 'fmap'`, and
-  `conflicting types for '<mod>__use_compose'`.
+  loads: FIXED for the single-module case + regression-covered (2026-06-10).**
+  The blocker was **not** "any typeclass in project mode" -- a *monomorphic*
+  instance always compiled and ran under `tur build <dir>` (verified:
+  `(defclass Eqx [a] (eqx? [x y] :bool))` + `(definstance Eqx [int] ...)`). What
+  broke was loading content that needs runtime scaffolding the per-module `.c`
+  never emitted: rank-2 dispatch typed `tur_poly_fn_t`, the base `tur_adt_*`
+  typedef + its `ctor_*` allocators for a spliced ADT, and the on-demand
+  `tur_fnptr_*` fn-ptr typedefs. A `tur build <dir>` of a single module that
+  `(load "stdlib/either.tur")`s (pulling in the `Either` ADT + the higher-kinded
+  `Functor` instance whose `fmap` dispatches through `tur_poly_fn_t`) now
+  compiles, links, and runs: `fmap (*2)` over `(Right 21)` yields `42`. Locked in
+  by `build-project-load-higher-kinded-module` in `tests/run-build-project.sh`.
 
-  Root cause confirmed at `src/compiler/emit_module.c`: the fixed runtime
-  preamble (the `tur_poly_fn_t` / `tur_handler_t` / `tur_set_t` typedefs +
-  `static` helpers) is emitted **inline inside `emit_program`** (the
-  whole-program path, ~`emit_module.c:2417`+) and is *never* emitted by the
-  separate-compilation path. `emit_implementation` (`emit_module.c:5630`+)
-  only `#include`s the module header and explicitly omits the standard preamble
-  (see the `CLI-ARGS` comment near `emit_module.c:5862`: "the standard preamble
-  ... is NOT included"). `emit_header` (`emit_module.c:5293`+) registers struct
-  / ADT / fn-ptr typedefs only for **exported** items, so an ADT or poly-fn used
-  only *internally* (as the spliced either.tur `Either` + its `Functor` instance
-  are) gets no typedef in either file. This is a distinct,
-  separate-compilation-specific codegen gap (the spliced-load codegen does not
-  fit the per-module `.c` + header model), not the missing-expansion or
-  typeclass-ordering bug this report originally described, and it is the same
-  gap any *directly written* higher-kinded instance in a project module would
-  hit. It remains open until the codegen side is designed; the guarded
-  `!e->separate_compilation` branch in `elab_load_module` is the intentional
-  no-op for the import path under that mode.
+  Fix (`src/compiler/emit_module.c`):
+  1. The base ADT Pass-0 emission (`typedef struct tur_adt_<Name>` + one
+     `ctor_<Ctor>` per constructor) was extracted into a shared
+     `emit_adt_typedef_and_ctors` helper, now called by both `emit_program`
+     (whole-program) and a new Pass 0 in `emit_implementation` (per-module
+     `.c`). Base ADT typedefs/ctors live in the `.c`, not the header, so they
+     are TU-local and never collide across modules. Struct typedefs are *not*
+     re-emitted in the `.c` -- the header already emits them all.
+  2. `emit_header` now declares `tur_poly_fn_t` (guarded by
+     `#ifndef TUR_POLY_FN_T_DEFINED` so a module that includes several module
+     headers does not redefine the anonymous struct), so both the header's
+     exported signatures and the `.c`'s internal typeclass-method signatures
+     resolve it.
+  3. `emit_implementation` flushes the `tur_fnptr_*` fn-ptr typedefs registered
+     while emitting bodies (identical fn-ptr typedef redefinition is well-formed,
+     so this stays conflict-free). Monomorphized ADT-application structs are
+     deliberately *not* re-flushed here -- the header already emits them for
+     exported uses and an anonymous-struct redefinition would be ill-formed.
+
+- **Remaining follow-ons (narrower, distinct from the load-codegen gap):**
+  1. **Ambient-stdlib dependencies in a loaded file.** `tur build <dir>` of a
+     module that `(load "stdlib/arrow.tur")`s still fails, but now on
+     `unknown type name 'Tuple2'`: arrow.tur's inline-C uses `Tuple2` (a
+     `stdlib/tuple.tur` defstruct) without `(load "stdlib/tuple.tur")`ing it,
+     relying on the whole-program stdlib auto-load that project mode does not
+     run. The fix is stdlib hygiene -- arrow.tur should load its own `Tuple2`
+     dependency (as it already does for `Functor` via either.tur) -- not a
+     codegen change.
+  2. **Instance leaking into an importer's TU.** When module B `(import)`s
+     module A, and A `(load ...)`s a typeclass instance, elaborating B
+     re-runs A's load and emits A's instance method (with inline-C referencing
+     `tur_adt_*`) into B's `.c`, where the base ADT typedef is absent
+     (`unknown type name 'tur_adt_Either'` in B). B should call A's exported
+     entry points and dispatch through A's dictionary rather than re-emitting
+     the instance; this is a cross-module typeclass-instance ownership issue,
+     separate from per-module load codegen.
 
 ## Summary
 
@@ -162,23 +177,23 @@ ordering bug on top of the missing-expansion bug.
 ## How to validate
 
 - **Done:** standalone `tur check` (preprocessor runs), `tur run`/`emit-c` of an
-  importing consumer (fixture `tests/fixtures/load-in-imported-module/`), and
+  importing consumer (fixture `tests/fixtures/load-in-imported-module/`),
   `tur build <dir>` of a project whose module top-level-`load`s a *bare-defn*
-  stdlib file (scenario `build-project-load-bare-defn-module` in
-  `tests/run-build-project.sh`). Run with
+  stdlib file (scenario `build-project-load-bare-defn-module`), and
+  `tur build <dir>` of a single module that `load`s a *runtime-preamble-dependent*
+  stdlib file -- `stdlib/either.tur`, exercising the `Either` ADT + higher-kinded
+  `Functor` instance + `tur_poly_fn_t` dispatch (scenario
+  `build-project-load-higher-kinded-module`). Both project-mode scenarios live in
+  `tests/run-build-project.sh`; run with
   `ASAN_OPTIONS=detect_leaks=0 bash tests/run-build-project.sh`.
 - A loaded path is spliced **once** even when both the entry and an imported
   module load it (no duplicate-symbol C errors).
 - `bash tests/run.sh` stays green.
-- **Still open:** `tur build <dir>` of a module that `(load ...)`s a
-  *runtime-preamble-dependent* stdlib file (arrow.tur -> either.tur: poly-fn /
-  higher-kinded `Functor` instance / `Either` ADT). Fixing it means teaching the
-  separate-compilation path (`emit_implementation` / `emit_header` in
-  `src/compiler/emit_module.c`) to emit the fixed runtime preamble **and** the
-  internal (non-exported) ADT / fn-ptr / dict typedefs the module body uses --
-  the same emission `emit_program` performs for the whole-program path. A
-  monomorphic instance already works in project mode, so the validation target
-  is specifically the higher-kinded / poly-fn / spliced-ADT case.
+- **Still open (narrower follow-ons, see Status):** (a) a loaded stdlib file
+  that uses an ambient type it does not itself `(load ...)` (arrow.tur's
+  `Tuple2`) -- an stdlib-hygiene fix, not codegen; and (b) a typeclass instance
+  re-emitted into an *importer's* TU when the importer transitively re-runs the
+  load -- a cross-module instance-ownership issue.
 
 ## Impact
 
