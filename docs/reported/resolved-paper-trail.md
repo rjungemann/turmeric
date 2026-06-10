@@ -180,6 +180,59 @@ dependency. Plain `http-get` compiles and runs on bare hosts. The
 cascade fixture itself still fails on a residual struct-redef pattern
 tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
 
+### defmodule export scoping & project-mode build -- consolidated track (FIXED)
+
+[`../archive/defmodule-export-scoping-track.md`](../archive/defmodule-export-scoping-track.md)
+
+Consolidated two adjacent defects breaking spice project-mode builds: (A) typed
+`^fat` parameter annotations were lost across the `defmodule`/`export`
+boundary because `param_poly_types` wasn't populated for `^fat TY_FN` params,
+and (B) project mode skipped the stdlib prelude auto-load that single-file
+mode performed (prelude macros `cons`, `head`, `tail`, plus runtime
+constructors). **Fix:** Defect A landed 2026-06-09 (`param_poly_types`
+populated for `^fat TY_FN` params, recovering the typed annotation through
+separate compilation); Defect B landed 2026-06-10 across F1/F4 (prelude
+macros + min/max) and F3/F6 (the user-callable `cons` runtime constructor
+now resolves under project mode). F2/F5 (selective `:refer` of math/bits)
+remain as non-blocking enhancements rather than defects. Together they
+unblock the `tur-signal` surface and 5+ other spices' project-mode builds.
+
+### `(load ...)` inside imported / project-mode modules -- unreachable scaffolding (FIXED)
+
+[`../archive/load-not-expanded-in-imported-or-project-modules.md`](../archive/load-not-expanded-in-imported-or-project-modules.md)
+
+Top-level `(load "...")` was not expanded inside imported or project-built
+`defmodule` bodies, so `stdlib/arrow.tur`'s `>>>` (and any other module
+whose runtime preamble was load-pulled) was unreachable from a `defmodule`
+that was imported or project-built. Cascaded into typeclass-ordering and
+runtime-preamble holes under separate compilation. **Fix:** import-path
+`load` expansion fixed; project-mode typeclass ordering fixed; project-mode
+bare-defn `load` fixed; project-mode `load` of a runtime-preamble-dependent
+file (poly-fn / higher-kinded dict / spliced ADT / `^fat` combinators) now
+emits the missing per-module scaffolding (`tur_poly_fn_t`, base `tur_adt_*`
+typedef + ctors, fn-ptr typedefs, `__tur_fatshim*` / `__tur_poly_to_fat*` /
+`TUR_APPLY*`); `arrow.tur` is self-contained re: `tuple.tur`'s `Tuple2`;
+imported typeclass instances no longer leak into the importer's TU under
+separate compilation. All regression-covered by `tests/run-build-project.sh`.
+
+### Generic parametric-struct-by-value lowering -- internally inconsistent in separate compilation (FIXED)
+
+[`../archive/parametric-struct-by-value-carrier-inconsistency.md`](../archive/parametric-struct-by-value-carrier-inconsistency.md)
+
+For a parametric struct (`n_type_params > 0`) erased to the `int64_t` carrier,
+`EX_MAKE_STRUCT` emitted an invalid `(int64_t){.e1=..}` compound literal while
+`EX_GET_FIELD`'s `through_carrier` path read it as a heap pointer
+`((Name *)(intptr_t)v)->field` -- the two sides disagreed on carrier
+representation, so the generic (unspecialized) form of e.g. `tuple2`/
+`tuple2-1st` could not be emitted as valid, self-consistent C under separate
+compilation. **Fix (2026-06-10):** separate compilation now mirrors
+whole-program -- the invalid generic carrier body is pruned (`emit_implementation`
+skips it via `emit_abi_fn_skip_generic`) and the monomorphized struct-app
+typedef is emitted in the header ahead of the spec-clone decls
+(`emit_header` registers spec result/arg types before the struct-app flush).
+Regression-covered by `build-project-parametric-struct-by-value` in
+`tests/run-build-project.sh`; the report's `tuple.tur` repro also builds.
+
 ### `tur build --shared .` produced `lib..so` / `lib..so.manifest` (FIXED)
 
 [`../archive/history/tur-build-shared-cwd-lib-double-dot.md`](../archive/history/tur-build-shared-cwd-lib-double-dot.md)
