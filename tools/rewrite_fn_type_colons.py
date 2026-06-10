@@ -33,15 +33,17 @@ Modes (mutually exclusive):
   --check     Exit 1 if any file would be rewritten.
 
 `.md` files are handled by rewriting only fenced ```turmeric / ```tur
-code blocks; surrounding prose is left untouched.
+(and ```sweet-exp) code blocks; surrounding prose is left untouched.
 
-Limitation: like the structural walk, fn types are only found when they
-sit inside a paren-delimited declaration.  A *sweet-exp* top-level form
-(`defn foo [...] ...` with no enclosing parens) is not yet recognised,
-so fn types in `.tur.sweet` files and ```sweet-exp doc blocks are left
-alone.  Migrating those needs the implicit-sequence walk that
-`spaced-types-rewrite.py` carries; add it before sweeping sweet-exp
-sources.
+Sweet-exp coverage: a *sweet-exp* top-level form (`defn foo [...] ...`
+with no enclosing parens) is recognised via an implicit-sequence walk,
+the same shape `spaced-types-rewrite.py` carries.  It is enabled
+automatically when a `#lang sweet-exp` directive is present, for every
+`.tur.sweet` file, and for ```sweet-exp markdown fences.  Inner `(fn ...)`
+type forms are still explicitly paren-delimited in sweet-exp, so only the
+outer declaration head needs the flat-sequence treatment; type forms only
+reachable by deeper indentation than the top-level scan visits are missed
+(never corrupted) -- the legacy `:int` spelling still parses.
 """
 
 from __future__ import annotations
@@ -468,13 +470,15 @@ def rewrite_fn_type(form: Form, stats: Stats) -> None:
         _strip_slot_seq(code, idx, stats)
 
 
-def _process_signature(form: Form, stats: Stats, name_slots: int) -> None:
-    """defn/fn/method signature shape:
-        (HEAD NAME? [TYPEPARAMS]? [PARAMS] #{eff}? :RET? body...)
-    `name_slots` is how many leading code items to skip before the param
-    bracket(s): 1 for the head symbol, +1 if a name follows it."""
-    code = code_children(form)
-    idx = name_slots
+def _process_signature_items(code: list, start: int, stats: Stats):
+    """Slot-finding core of a defn/fn/method signature, decoupled from
+    `Form` so both the paren walk and the implicit-sequence (sweet-exp)
+    walk can share it.  `code` is the list of `(orig_index, node)` code
+    items; `start` is the index of the first leading bracket (i.e. past the
+    head symbol and any name).  Rewrites the param-vec and return-type
+    slots; returns `(leading_brackets, ret_form)` so a Form-based caller can
+    skip them when walking the body."""
+    idx = start
     # Collect leading bracket vectors (type-params then params).  Any
     # `(fn ...)` directly inside a parameter bracket is a type annotation.
     leading_brackets = []
@@ -506,11 +510,49 @@ def _process_signature(form: Form, stats: Stats, name_slots: int) -> None:
                     ret_form = rt
             break
         break
+    return leading_brackets, ret_form
+
+
+def _process_signature(form: Form, stats: Stats, name_slots: int) -> None:
+    """defn/fn/method signature shape:
+        (HEAD NAME? [TYPEPARAMS]? [PARAMS] #{eff}? :RET? body...)
+    `name_slots` is how many leading code items to skip before the param
+    bracket(s): 1 for the head symbol, +1 if a name follows it."""
+    code = code_children(form)
+    leading_brackets, ret_form = _process_signature_items(code, name_slots, stats)
     # Body: walk every remaining child form except the param brackets and
     # the return-type form.
     for child in form.children:
         if isinstance(child, Form) and child not in leading_brackets and child is not ret_form:
             walk(child, stats)
+
+
+def _process_struct_field_vec(vec: Form, stats: Stats) -> None:
+    """Rewrite fn types in a defstruct field bracket: every Form child sits
+    in a field-type slot."""
+    for _, child in code_children(vec):
+        if isinstance(child, Form):
+            process_type_slot(child, stats)
+
+
+def _process_let_binding_vec(vec: Form, stats: Stats) -> None:
+    """Rewrite fn types in a let/loop binding bracket: a Form preceded by a
+    bare `:` is a binding type annotation; otherwise it is a value form to
+    walk normally."""
+    items = code_children(vec)
+    for k, (_, node) in enumerate(items):
+        if not isinstance(node, Form):
+            continue
+        prev = items[k - 1][1] if k > 0 else None
+        is_type = (
+            isinstance(prev, Tok)
+            and prev.kind == TK_SYMBOL
+            and prev.value == ":"
+        )
+        if is_type:
+            process_type_slot(node, stats)
+        else:
+            walk(node, stats)
 
 
 def _process_struct(form: Form, stats: Stats) -> None:
@@ -519,9 +561,7 @@ def _process_struct(form: Form, stats: Stats) -> None:
     while idx < len(code):
         _, node = code[idx]
         if isinstance(node, Form) and node.is_bracket():
-            for _, child in code_children(node):
-                if isinstance(child, Form):
-                    process_type_slot(child, stats)
+            _process_struct_field_vec(node, stats)
             idx += 1
             break
         idx += 1
@@ -545,20 +585,7 @@ def _process_let(form: Form, stats: Stats) -> None:
             bind_vec = node
             idx += 1
     if bind_vec is not None:
-        items = code_children(bind_vec)
-        for k, (_, node) in enumerate(items):
-            if not isinstance(node, Form):
-                continue
-            prev = items[k - 1][1] if k > 0 else None
-            is_type = (
-                isinstance(prev, Tok)
-                and prev.kind == TK_SYMBOL
-                and prev.value == ":"
-            )
-            if is_type:
-                process_type_slot(node, stats)
-            else:
-                walk(node, stats)
+        _process_let_binding_vec(bind_vec, stats)
     # Body forms.
     for child in form.children:
         if isinstance(child, Form) and child is not bind_vec:
@@ -648,13 +675,93 @@ def serialize(nodes) -> str:
     return "".join(out)
 
 
-def rewrite_source(src: str) -> tuple[str, int]:
+def _walk_implicit_seq(nodes: list, stats: Stats) -> None:
+    """Walk a flat sequence of nodes looking for sweet-exp top-level forms
+    that have no surrounding paren -- e.g. `defn NAME [VEC] :RET` directly at
+    file scope.  Matches the same head symbols as `walk` and applies the
+    fn-type slot processors to the immediately-following items.
+
+    Inner `(fn ...)` type forms are still explicitly paren-delimited, so the
+    flat scan only has to locate the outer declaration head; the per-slot
+    rewriter is shared verbatim with the paren walk.  Body expressions are
+    paren/bracket-delimited siblings, so they are reached by the normal
+    paren walk -- this pass does not descend into them."""
+    code = []
+    for i, node in enumerate(nodes):
+        if isinstance(node, Tok) and node.kind in TRIVIA_KINDS:
+            continue
+        code.append((i, node))
+    n = len(code)
+    ci = 0
+    while ci < n:
+        _, node = code[ci]
+        if not (isinstance(node, Tok) and node.kind == TK_SYMBOL):
+            ci += 1
+            continue
+        head = node.value
+        if head in DEFN_HEADS:
+            start = ci + 1
+            # defn/defmacro carry a name before the param vec; fn does not.
+            if head != "fn" and start < n:
+                _, name_node = code[start]
+                if isinstance(name_node, Tok) and name_node.kind == TK_SYMBOL:
+                    start += 1
+            _process_signature_items(code, start, stats)
+            ci = start
+            continue
+        if head in STRUCT_HEADS:
+            start = ci + 1
+            if start < n:  # skip name
+                start += 1
+            while start < n:
+                _, nn = code[start]
+                if isinstance(nn, Form) and nn.is_bracket():
+                    _process_struct_field_vec(nn, stats)
+                    start += 1
+                    break
+                start += 1
+            ci = start
+            continue
+        if head in LET_HEADS:
+            start = ci + 1
+            if start < n:  # optional named-let name
+                _, nn = code[start]
+                if isinstance(nn, Tok) and nn.kind == TK_SYMBOL:
+                    start += 1
+            if start < n:
+                _, nn = code[start]
+                if isinstance(nn, Form) and nn.is_bracket():
+                    _process_let_binding_vec(nn, stats)
+                    start += 1
+            ci = start
+            continue
+        if head in ALIAS_HEADS:
+            # defalias/deftype NAME TYPE
+            start = ci + 1
+            if start < n:  # skip name
+                start += 1
+            if start < n:
+                process_type_slot(code[start][1], stats)
+                start += 1
+            ci = start
+            continue
+        ci += 1
+
+
+def rewrite_source(src: str, force_sweet: bool = False) -> tuple[str, int]:
     toks = tokenize(src)
     tree = parse(toks)
     stats = Stats()
+    is_sweet = force_sweet or any(
+        isinstance(t, Tok) and t.kind == TK_LANG_LINE and "sweet-exp" in t.text
+        for t in tree
+        if isinstance(t, Tok)
+    )
     for node in tree:
         if isinstance(node, Form):
             walk(node, stats)
+    if is_sweet:
+        _walk_implicit_seq(tree, stats)
     return serialize(tree), stats.rewrites
 
 
@@ -666,6 +773,7 @@ _FENCE_RE = re.compile(
 )
 
 _TUR_INFO = {"turmeric", "tur", "scheme", "lisp", "clojure"}
+_SWEET_INFO = {"sweet-exp", "sweet"}
 
 
 def rewrite_markdown(src: str) -> tuple[str, int]:
@@ -674,9 +782,12 @@ def rewrite_markdown(src: str) -> tuple[str, int]:
     def repl(m: re.Match) -> str:
         nonlocal total
         info = m.group("info").strip().lower()
-        if info not in _TUR_INFO:
+        if info in _TUR_INFO:
+            new_body, n = rewrite_source(m.group("body"))
+        elif info in _SWEET_INFO:
+            new_body, n = rewrite_source(m.group("body"), force_sweet=True)
+        else:
             return m.group(0)
-        new_body, n = rewrite_source(m.group("body"))
         total += n
         return m.group("fence") + m.group("info") + "\n" + new_body + m.group("close")
 
@@ -725,6 +836,8 @@ def main() -> int:
         try:
             if path.endswith(".md"):
                 new_src, n = rewrite_markdown(src)
+            elif path.endswith(".tur.sweet"):
+                new_src, n = rewrite_source(src, force_sweet=True)
             else:
                 new_src, n = rewrite_source(src)
         except Exception as e:

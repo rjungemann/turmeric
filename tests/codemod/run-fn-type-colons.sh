@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Runner for tools/rewrite_fn_type_colons.py against the test corpus.
 #
-# Each fixture directory under tests/codemod/fn-type-colons/ contains:
-#   before.tur   -- input
-#   after.tur    -- expected output (byte-for-byte)
+# Each fixture directory under tests/codemod/fn-type-colons/ contains a
+# before/after pair sharing one of these extensions:
+#   before.tur        / after.tur        -- s-expression source
+#   before.tur.sweet  / after.tur.sweet  -- sweet-exp source
+#   before.md         / after.md         -- markdown with fenced blocks
 #
-# The script copies before.tur to a temp file, runs the rewriter, and
-# diffs against after.tur.
+# The script copies the before file to a temp file (preserving the
+# extension so the tool routes it correctly), runs the rewriter, and diffs
+# against the after file.  Idempotency is checked by re-running the tool on
+# the output and asserting no further change.
 
 set -u
 
@@ -27,13 +31,26 @@ trap 'rm -rf "$tmp"' EXIT
 
 for dir in "$CORPUS_DIR"/*/; do
     name="$(basename "$dir")"
-    before="$dir/before.tur"
-    after="$dir/after.tur"
-    if [ ! -f "$before" ] || [ ! -f "$after" ]; then
-        echo "SKIP $name (missing before.tur or after.tur)"
+    # Locate the before.* file and its matching extension.
+    before=""
+    ext=""
+    for cand in "$dir"before.tur.sweet "$dir"before.tur "$dir"before.md; do
+        if [ -f "$cand" ]; then
+            before="$cand"
+            ext="${cand#"$dir"before}"
+            break
+        fi
+    done
+    if [ -z "$before" ]; then
+        echo "SKIP $name (no before.* file)"
         continue
     fi
-    work="$tmp/$name.tur"
+    after="$dir/after$ext"
+    if [ ! -f "$after" ]; then
+        echo "SKIP $name (missing after$ext)"
+        continue
+    fi
+    work="$tmp/$name$ext"
     cp "$before" "$work"
     if ! python3 "$TOOL" --write "$work" >/dev/null 2>"$tmp/$name.err"; then
         echo "FAIL $name -- rewriter exited non-zero"
@@ -42,15 +59,22 @@ for dir in "$CORPUS_DIR"/*/; do
         failed+=("$name")
         continue
     fi
-    if diff -u "$after" "$work" >/dev/null 2>&1; then
-        echo "PASS $name"
-        pass=$((pass + 1))
-    else
-        echo "FAIL $name -- output diverges from after.tur"
+    if ! diff -u "$after" "$work" >/dev/null 2>&1; then
+        echo "FAIL $name -- output diverges from after$ext"
         diff -u "$after" "$work"
         fail=$((fail + 1))
         failed+=("$name")
+        continue
     fi
+    # Idempotency: re-running on the output must be a no-op.
+    if ! python3 "$TOOL" --check "$work" >/dev/null 2>&1; then
+        echo "FAIL $name -- not idempotent (--check flagged after$ext)"
+        fail=$((fail + 1))
+        failed+=("$name")
+        continue
+    fi
+    echo "PASS $name"
+    pass=$((pass + 1))
 done
 
 echo
