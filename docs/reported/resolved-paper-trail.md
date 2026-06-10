@@ -180,6 +180,22 @@ dependency. Plain `http-get` compiles and runs on bare hosts. The
 cascade fixture itself still fails on a residual struct-redef pattern
 tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
 
+### `cons` builtin rejected `:cstr` head (FIXED)
+
+[`../archive/cons-builtin-rejects-cstr-head.md`](../archive/cons-builtin-rejects-cstr-head.md)
+
+The user-callable `cons` builtin (added in `bc2074ad` to make project-mode
+`defmodule` reach the runtime list constructor without stdlib auto-load)
+was registered `arity 2..2 arg=int result=int`, so `(cons "hello" 0)`
+raised `unknown function or operator 'cons'` -- blocking the
+spices-cons-workaround paydown plan. **Fix:** the builtin's spec arg type
+is now `TY_UNKNOWN` and `elab_call.c` (`cons_wildcard`) bypasses the
+strict per-arg type check for the `cons` builtin, since the cell layout
+(`{int64_t head; int64_t tail;}`) is already pointer-agnostic and codegen
+casts via `(int64_t)(intptr_t)` -- so any 64-bit-sized head (`:cstr`,
+opaque handle, pointer, int) round-trips. Regression-covered by
+`tests/fixtures/cons-builtin-cstr-head/`.
+
 ### "unterminated list" caret ribbon spans opener-to-EOF (FIXED)
 
 [`../archive/unterminated-list-caret-anchors-outermost.md`](../archive/unterminated-list-caret-anchors-outermost.md)
