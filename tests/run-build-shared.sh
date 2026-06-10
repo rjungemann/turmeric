@@ -119,6 +119,36 @@ else
     pass "build-shared-smoke-manifest-override"
 fi
 
+# Default output name for a cwd-relative target ("." / "./") must derive the
+# basename from the resolved directory, NOT produce "lib..so" / "lib.so".
+# Regression guard for docs/reported/tur-build-shared-cwd-lib-double-dot.md.
+# We copy the module into a freshly named subdir so the expected artifact name
+# is predictable, then run `tur build --shared .` from inside it (no -o).
+NAMED_DIR="$WORK/cwdlib"
+mkdir -p "$NAMED_DIR"
+cp "$FIXTURE/add.tur" "$NAMED_DIR/add.tur"
+TUR_ABS="$(cd "$(dirname "$TUR")" && pwd)/$(basename "$TUR")"
+(
+    cd "$NAMED_DIR" || exit 3
+    "$TUR_ABS" build --shared . >build-cwd.log 2>&1
+)
+cwd_rc=$?
+if [ "$cwd_rc" -ne 0 ]; then
+    fail "build-shared-smoke-cwd-default-name" \
+         "tur build --shared . exit=$cwd_rc: $(cat "$NAMED_DIR/build-cwd.log" 2>/dev/null)"
+elif [ -e "$NAMED_DIR/lib..so" ] || [ -e "$NAMED_DIR/lib..so.manifest" ]; then
+    fail "build-shared-smoke-cwd-default-name" \
+         "produced lib..so artifact(s): $(ls "$NAMED_DIR"/lib*.so* 2>/dev/null)"
+elif [ -e "$NAMED_DIR/lib.so" ]; then
+    fail "build-shared-smoke-cwd-default-name" \
+         "produced nameless lib.so: $(ls "$NAMED_DIR"/lib*.so* 2>/dev/null)"
+elif [ ! -e "$NAMED_DIR/libcwdlib.so" ]; then
+    fail "build-shared-smoke-cwd-default-name" \
+         "expected libcwdlib.so (cwd basename); got: $(ls "$NAMED_DIR"/lib*.so* 2>/dev/null)"
+else
+    pass "build-shared-smoke-cwd-default-name"
+fi
+
 # --manifest without --shared must be rejected.
 if "$TUR" build "$FIXTURE" --manifest /tmp/should-not-exist.manifest \
         >"$WORK/build3.log" 2>&1; then
