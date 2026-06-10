@@ -35,7 +35,7 @@ static bool module_name_valid(const char *name, uint32_t len) {
  * elaborate_program before the two-pass elab.  The preprocessor expands loads
  * at the compilation-unit top level AND descends into defmodule bodies (so a
  * load inside a module splices the loaded file's forms into the module scope;
- * see docs/archive/load-inside-defmodule-silently-loses-names.md).  Any
+ * see docs/archive/history/load-inside-defmodule-silently-loses-names.md).  Any
  * (load ...) that still reaches this point is in genuine expression position
  * (a defn/let/do body), where it cannot act as a compile-time include; emit a
  * hard error so the programmer knows to move it to the top level or a

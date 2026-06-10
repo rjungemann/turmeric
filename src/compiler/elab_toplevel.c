@@ -695,7 +695,7 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
          * defmodule's head/name/export/import items are not load forms, so
          * they pass through this nested walk unchanged; only the `(load ...)`
          * body items expand in place. See
-         * docs/archive/load-inside-defmodule-silently-loses-names.md. */
+         * docs/archive/history/load-inside-defmodule-silently-loses-names.md. */
         if (f->tag == F_LIST && f->as.list.len >= 1 &&
             f->as.list.items[0]->tag == F_SYM &&
             f->as.list.items[0]->as.sym == e->sym_defmodule) {

@@ -316,6 +316,18 @@ Post-v0.18.0 followup sweep:
 - **[spaced-type-annotation-migration-plan.md](history/spaced-type-annotation-migration-plan.md)** -- Spaced `name : type` annotation migration; Phases 1--5 (codemod + repo + spices + docs) complete; Phase 6 CI enforcement and Phase 7 reader deprecation are deferred follow-ups; see [type-annotations-guide.md](../guides/type-annotations-guide.md)
 - **[let-bound-sf-loses-outer-arg-type-when-inner-captures.md](history/let-bound-sf-loses-outer-arg-type-when-inner-captures.md)** -- `let`-bound SF outer-arg type lost when inner closure captures it; type-check half resolved (`tests/check-sf-let-bind-inner-call.sh`); native-codegen half tracked separately in `sf-two-level-closure-return-miscompiles-out-binding`
 
+Post-v0.19.1 sweep:
+
+- **[captureless-closure-lost-through-untyped-vec.md](history/captureless-closure-lost-through-untyped-vec.md)** -- Captureless closures losing fn-pointer identity through untyped `Vec`; FIXED in #307 (box at `TY_TYVAR`-param boundary in `elab_call.c`)
+- **[defmodule-export-scoping-track.md](history/defmodule-export-scoping-track.md)** -- Consolidated defmodule export-scoping + project-mode `cons` resolution track; Defects A+B FIXED 2026-06-09/10; F2/F5 (selective `:refer` of math/bits) deferred as non-blocking enhancements
+- **[load-inside-defmodule-silently-loses-names.md](history/load-inside-defmodule-silently-loses-names.md)** -- `(load "...")` inside `defmodule`/`defn` bodies silently dropped; RESOLVED 2026-06-10 (Option A: load expansion)
+- **[load-not-expanded-in-imported-or-project-modules.md](history/load-not-expanded-in-imported-or-project-modules.md)** -- Top-level `(load ...)` not expanded in imported/project-mode modules; RESOLVED (per-module fixed-runtime emission + import path); covered by `tests/run-build-project.sh`
+- **[parametric-struct-by-value-carrier-inconsistency.md](history/parametric-struct-by-value-carrier-inconsistency.md)** -- Generic parametric-struct-by-value carrier inconsistency between `make-struct` and `(.field t)`; RESOLVED 2026-06-10 in `emit_implementation`/`emit_header`
+- **[project-mode-defstruct-typedef-missing.md](history/project-mode-defstruct-typedef-missing.md)** -- Project-mode codegen missing `defstruct` typedef in per-module headers; FIXED
+- **[project-mode-file-scope-c-block-emit-order.md](history/project-mode-file-scope-c-block-emit-order.md)** -- Project-mode emitted file-scope `` ```c `` blocks after dependent defn bodies; FIXED
+- **[project-mode-rc-runtime-preamble-missing.md](history/project-mode-rc-runtime-preamble-missing.md)** -- Project-mode RC/frame runtime preamble + struct drop/walk glue missing; FIXED (T1--T11 landed); per-module fixed-runtime emission is now idempotent
+- **[tur-signal-rebuild-plan.md](history/tur-signal-rebuild-plan.md)** -- `tur-signal` spice rebuild on modern typed + fat-closure infra; functionally complete; source-side rebuild landed in `../turmeric-spices/spices/signal/` (2026-06-06)
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

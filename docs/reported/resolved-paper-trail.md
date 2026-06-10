@@ -40,7 +40,7 @@ previously-E0705 dispatching shape) prints exact fractional output
 
 ### `load` inside a `defmodule` body silently lost loaded names (FIXED)
 
-[`../archive/load-inside-defmodule-silently-loses-names.md`](../archive/load-inside-defmodule-silently-loses-names.md)
+[`../archive/history/load-inside-defmodule-silently-loses-names.md`](../archive/history/load-inside-defmodule-silently-loses-names.md)
 
 A `(load "path")` placed inside a `defmodule` body was first silently
 accepted as a no-op (loaded names never injected; use-site errored with
@@ -258,7 +258,7 @@ resolves directly.
 
 ### Project-mode codegen: `defstruct` typedef missing from header/impl (FIXED)
 
-[`../archive/project-mode-defstruct-typedef-missing.md`](../archive/project-mode-defstruct-typedef-missing.md)
+[`../archive/history/project-mode-defstruct-typedef-missing.md`](../archive/history/project-mode-defstruct-typedef-missing.md)
 
 In project mode (`tur build <dir>` / separate compilation), generated
 headers/implementations omitted the `typedef struct Name { ... } Name;`
@@ -274,7 +274,7 @@ variable declaration is suppressed. Regression-covered by
 
 ### Project-mode codegen: RC/frame runtime preamble + struct drop/walk glue missing (FIXED -- #321)
 
-[`../archive/project-mode-rc-runtime-preamble-missing.md`](../archive/project-mode-rc-runtime-preamble-missing.md)
+[`../archive/history/project-mode-rc-runtime-preamble-missing.md`](../archive/history/project-mode-rc-runtime-preamble-missing.md)
 
 The broader sibling of the defstruct typedef report: any project-mode module
 using reference counting (`rc/of`, `rc<T>` fields, auto-drop) failed to
@@ -295,7 +295,7 @@ Full suite: 1535 passed, 0 failed.
 
 ### defmodule export scoping & project-mode build -- consolidated track (FIXED)
 
-[`../archive/defmodule-export-scoping-track.md`](../archive/defmodule-export-scoping-track.md)
+[`../archive/history/defmodule-export-scoping-track.md`](../archive/history/defmodule-export-scoping-track.md)
 
 Consolidated two adjacent defects breaking spice project-mode builds: (A) typed
 `^fat` parameter annotations were lost across the `defmodule`/`export`
@@ -312,7 +312,7 @@ unblock the `tur-signal` surface and 5+ other spices' project-mode builds.
 
 ### `(load ...)` inside imported / project-mode modules -- unreachable scaffolding (FIXED)
 
-[`../archive/load-not-expanded-in-imported-or-project-modules.md`](../archive/load-not-expanded-in-imported-or-project-modules.md)
+[`../archive/history/load-not-expanded-in-imported-or-project-modules.md`](../archive/history/load-not-expanded-in-imported-or-project-modules.md)
 
 Top-level `(load "...")` was not expanded inside imported or project-built
 `defmodule` bodies, so `stdlib/arrow.tur`'s `>>>` (and any other module
@@ -330,7 +330,7 @@ separate compilation. All regression-covered by `tests/run-build-project.sh`.
 
 ### Generic parametric-struct-by-value lowering -- internally inconsistent in separate compilation (FIXED)
 
-[`../archive/parametric-struct-by-value-carrier-inconsistency.md`](../archive/parametric-struct-by-value-carrier-inconsistency.md)
+[`../archive/history/parametric-struct-by-value-carrier-inconsistency.md`](../archive/history/parametric-struct-by-value-carrier-inconsistency.md)
 
 For a parametric struct (`n_type_params > 0`) erased to the `int64_t` carrier,
 `EX_MAKE_STRUCT` emitted an invalid `(int64_t){.e1=..}` compound literal while
