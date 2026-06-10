@@ -8,11 +8,26 @@ context: building turmeric-spices/spices/tourist/tests/fixtures/cascade/cascade.
 
 ## Resolution (2026-06-10)
 
-Fixed by de-duplicating identical **file-scope** inline-C blocks within a
+Fixed by de-duplicating equivalent **file-scope** inline-C blocks within a
 single TU (proposed fix #2 below). See `inline_c_dedup_seen` in
 `src/compiler/emit_module.c` and its use in both the `emit_program`
 (`cprelude`) and `emit_implementation` (Pass 1a) emit paths. Regression
 fixture: `tests/fixtures/inline-c-file-scope-struct-dedup/`.
+
+**Correction (same day): the first cut compared blocks byte-for-byte and
+was insufficient.** The real httpd/tourist case declares the same carrier
+struct in *different module files*, whose captured text differs in
+indentation and line-breaks, so a raw `memcmp` never matched and the copies
+still collided -- i.e. the bug remained reachable despite the first
+"resolved" claim (a follow-up repro with two differently-formatted but
+field-identical blocks reproduced it). The comparison is now
+**whitespace-insensitive**: each block is normalized (runs of whitespace
+collapsed to one space, ends trimmed) before comparison, so reformatted-but-
+identical declarations dedup. Blocks that differ in any *token* (struct tag,
+field name/type/order) still produce distinct keys and are NOT deduped, so a
+genuine layout disagreement still reaches cc as a real `redefinition` error.
+The regression fixture's two modules now use deliberately different
+formatting to guard this.
 
 **Correction to the root-cause sketch below.** The original analysis
 assumed each inline-C block's *leading decls* are hoisted to file scope.

@@ -7,43 +7,67 @@
 
 /* file-scope-inline-c-dedup: a top-level ```c ... ``` block lowers to file-scope
  * C (typedefs, struct tags, helper fns).  When several modules linked into one
- * TU each carry an *identical* such block -- the documented "redeclare the
+ * TU each carry an *equivalent* such block -- the documented "redeclare the
  * carrier struct in every module that touches its fields" idiom (see the httpd
  * / tourist spices) -- emitting every copy verbatim at file scope is a C
- * redefinition error (`redefinition of 'struct __foo'`).  De-duplicate by exact
- * text so each distinct block is emitted exactly once per TU.  Distinct blocks
- * that genuinely conflict (same struct tag, different body) are not identical
- * text, so they still reach cc unchanged and surface as a real user error. */
+ * redefinition error (`redefinition of 'struct __foo'`).  De-duplicate so each
+ * distinct block is emitted exactly once per TU.
+ *
+ * The comparison is *whitespace-insensitive*: the same struct declared in two
+ * different module files almost never matches byte-for-byte (indentation and
+ * line-breaks differ across hand-written files), so a raw memcmp would let the
+ * reformatted-but-identical copies collide anyway.  We compare a normalized key
+ * (every run of whitespace collapsed to a single space, ends trimmed) instead.
+ * Two blocks that genuinely differ in *content* (different struct tag, fields,
+ * field order, or types -- anything beyond whitespace) produce different keys,
+ * are NOT de-duplicated, and still reach cc as a real `redefinition` error, so
+ * a genuine layout disagreement is never silently masked. */
 typedef struct {
-    const char **blocks;   /* borrowed pointers into each InlineC's code */
-    size_t      *lens;
-    uint32_t     n;
-    uint32_t     cap;
+    char     **keys;   /* owned, whitespace-normalized text of each kept block */
+    uint32_t   n;
+    uint32_t   cap;
 } InlineCDedup;
 
-/* Return true if a byte-identical block was already recorded; otherwise record
- * this one and return false.  Callers emit the block only when this is false. */
+/* Collapse every run of ASCII whitespace to a single space and trim both ends,
+ * returning a freshly malloc'd NUL-terminated string.  This is the dedup key:
+ * indentation/line-break differences between two copies of the same declaration
+ * normalize away, while any token difference survives. */
+static char *inline_c_normalize_ws(const char *p, size_t len) {
+    char *out = (char *)malloc(len + 1);
+    size_t w = 0;
+    bool pending_space = false;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)p[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v') {
+            if (w > 0) pending_space = true;  /* defer; trims leading + trailing */
+            continue;
+        }
+        if (pending_space) { out[w++] = ' '; pending_space = false; }
+        out[w++] = (char)c;
+    }
+    out[w] = '\0';
+    return out;
+}
+
+/* Return true if a whitespace-equivalent block was already recorded; otherwise
+ * record this one and return false.  Callers emit the block only when false. */
 static bool inline_c_dedup_seen(InlineCDedup *d, const char *p, size_t len) {
+    char *key = inline_c_normalize_ws(p, len);
     for (uint32_t i = 0; i < d->n; i++) {
-        if (d->lens[i] == len && memcmp(d->blocks[i], p, len) == 0)
-            return true;
+        if (strcmp(d->keys[i], key) == 0) { free(key); return true; }
     }
     if (d->n == d->cap) {
         d->cap = d->cap ? d->cap * 2 : 8;
-        d->blocks = (const char **)realloc(d->blocks, d->cap * sizeof(*d->blocks));
-        d->lens   = (size_t *)realloc(d->lens, d->cap * sizeof(*d->lens));
+        d->keys = (char **)realloc(d->keys, d->cap * sizeof(*d->keys));
     }
-    d->blocks[d->n] = p;
-    d->lens[d->n]   = len;
-    d->n++;
+    d->keys[d->n++] = key;  /* ownership transferred to the dedup */
     return false;
 }
 
 static void inline_c_dedup_free(InlineCDedup *d) {
-    free(d->blocks);
-    free(d->lens);
-    d->blocks = NULL;
-    d->lens   = NULL;
+    for (uint32_t i = 0; i < d->n; i++) free(d->keys[i]);
+    free(d->keys);
+    d->keys = NULL;
     d->n = d->cap = 0;
 }
 
