@@ -1,8 +1,9 @@
 ---
 title: `tur build <file>` does not auto-discover the enclosing spice; sibling per-file commands do
 severity: ergonomics gap -- the only per-file subcommand that lacks auto-spice discovery, causing "module not found" for intra-spice imports that work everywhere else
-status: open
+status: fixed
 discovered: 2026-06-06
+fixed: 2026-06-10
 discovered-in: turmeric (src/main.c command dispatch)
 ---
 
@@ -172,3 +173,33 @@ behavior still have an escape hatch.
   `tur format <file>` also skips include-path resolution. That is by
   design -- the formatter does not need to resolve imports -- and the
   guide already documents it, so no fix is implied.
+
+## Resolution
+
+Fixed in `src/main.c`'s single-file `build` branch (the `else` arm of the
+`is_directory(input)` check). Before the `cmd_build(...)` call it now invokes
+`auto_append_spice_includes(input, &build_inc, &n_build_inc, ...)` with the
+same shape `emit-c` / `emit-h` / `check` / `run` use, sets/disposes the LS2
+resolver context, and frees the owned include paths -- exactly the
+proposed-fix sketch above. The pre-existing `:reader-macros` discovery
+(`RM4`) is preserved; the new include-path widening sits alongside it.
+
+Because `auto_append_spice_includes` short-circuits when `g_no_auto_spice`
+is set, `--no-auto-spice` still opts out, and the single-file build stays a
+single-file build -- auto-discovery only widens the include path for
+resolving imports, it does not change the compilation entry point.
+
+Validated by extending the dedicated-runner suite
+`tests/spice-resolver-tests.sh` (ctest target `tur_spice_resolver_tests`):
+
+- **SC4-build**: `tur build <file>` on `spice-resolver-ok/src/foo/b.tur`
+  (which `(import foo/a)`) now compiles with no `-I` and the produced binary
+  returns 42.
+- **SC4-build regression**: `tur --no-auto-spice build <file>` still fails
+  with the SC0 "intra-spice import" diagnostic, confirming the opt-out.
+- **SC5-build**: `tur build spice-resolver-deps/src/app/main.tur` resolves the
+  `:spices :path` producer and the binary returns the dep's value (100).
+
+Suite passes `64 passed, 0 failed`, leak-clean (detect_leaks=1). The guide's
+"When auto-discovery does not apply" bullet for `tur build <file>` was
+removed and the per-file family list updated to include it.

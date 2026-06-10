@@ -784,10 +784,11 @@ resolve the include path from the project's own `src/` plus each
 `:spices` dep's `src/`, and verify each declared `:exports` module has a
 backing source file -- failing loudly otherwise. (See
 [manifest-driven-build-descent-plan.md](../manifest-driven-build-descent-plan.md).)
-The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`, and
-`tur run <file>` get the same module resolution automatically -- they
-walk up from the input file looking for a sibling `build.tur` and add
-that spice's `src/` (and its `:spices` deps' `src/`) to the include path.
+The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`,
+`tur build <file>`, and `tur run <file>` get the same module resolution
+automatically -- they walk up from the input file looking for a sibling
+`build.tur` and add that spice's `src/` (and its `:spices` deps' `src/`)
+to the include path.
 
 This means editors, format-on-save hooks, LSP clients, and quick
 "compile this one file" loops work without per-spice configuration:
@@ -796,6 +797,7 @@ This means editors, format-on-save hooks, LSP clients, and quick
 cd spices/frame
 tur check src/frame/frame.tur     # resolves intra-spice imports
 tur emit-c src/frame/schema.tur   # same
+tur build src/frame/quickstart.tur -o /tmp/qs  # compiles one file, keeps the binary
 tur run src/frame/quickstart.tur  # builds and executes
 ```
 
@@ -832,10 +834,9 @@ own directory, the stdlib, and any explicit `-I` paths are searched.
 
 - `tur build <dir>` -- already configures itself from the directory's
   `build.tur` (reads the manifest, descends into `src/`, and resolves the
-  include path); the per-file walk-up does not apply.
-- `tur build <file>` -- the single-file build doesn't auto-discover;
-  use `tur run <file>` if you want the same convenience for a one-off
-  invocation, or pass `-I` explicitly.
+  include path); the per-file walk-up does not apply. Note that the
+  single-file `tur build <file>` *does* auto-discover (it joins the
+  per-file family above); only the directory form is manifest-driven.
 - `tur format <file>` -- the formatter doesn't resolve imports, so
   include paths are irrelevant.
 
