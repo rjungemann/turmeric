@@ -70,33 +70,29 @@ is complete; this is the inner-type-expression version.
       into an `errors/` fixture asserting the hard diagnostic. Gated on
       at least one minor release with the warning live.
 
-## HTTPD compression + `tur/zlib` spice
+## HTTPD compression + `tur/zlib` spice -- LANDED
 
 > Full plan: [../archive/httpd-compression-zlib-spice-plan.md](../archive/httpd-compression-zlib-spice-plan.md)
 
-Track Z (spice) and Track M6 (`stdlib/httpd-compress.tur`) both
-unstarted.
+Both tracks shipped; the open-questions resolved themselves during
+implementation. Kept in this index for traceability; remove the
+section the next time this tracker is touched.
 
-- [ ] Z0 -- scaffold `../turmeric-spices/spices/zlib/` mirroring the
-      `png`/`json` layout; pin upstream zlib via `:cmake-deps`.
-- [ ] Z1 -- `src/zlib.tur` exposes `gzip-encode` / `gzip-decode` /
-      `deflate-raw` / `inflate-raw` + `GzipBuf` accessors over
-      `:ptr<void>` (binary-safe).
-- [ ] Z2 -- `tests/zlib-roundtrip/` fixture (encode large input,
-      decode, byte-for-byte equality).
-- [ ] Z3 -- spice README.
-- [ ] M6-0 -- `stdlib/httpd-compress.tur` scaffold loading
-      `tur/zlib` with a clear load-time error if the spice is
-      missing.
-- [ ] M6-1 -- `mw-compress` factory: parse `Accept-Encoding`, gate
-      on `min-bytes` threshold (default 256; revisit per OQ3),
-      compress + set `Content-Encoding`.
-- [ ] M6-2 -- spice-gated fixture (`requires.spices` marker).
-- [ ] M6-3 -- brief docs entry.
-- [ ] Resolve OQs: `(load "tur/zlib")` vs `(import ...)` spice
-      form (M6-OQ1); `httpd-resp-body-bytes!` setter vs
-      length-prefixed `httpd-resp-body!` (M6-OQ2); default
-      `min-bytes` threshold (M6-OQ3).
+- [x] Z0 -- `../turmeric-spices/spices/zlib/` scaffolded with
+      `build.tur` pinning upstream zlib via `:cmake-deps`.
+- [x] Z1 -- `src/tur/zlib.tur` exposes `gzip-encode`/`gzip-decode` and
+      raw deflate counterparts over `:ptr<void>` (binary-safe).
+- [x] Z2 -- `tests/tur/zlib/roundtrip_test.tur` exercises the
+      encode/decode roundtrip.
+- [x] Z3 -- `../turmeric-spices/spices/zlib/README.md`.
+- [x] M6-0 -- `stdlib/httpd-compress.tur` loads `tur/zlib` with a
+      clear load-time error if the spice is absent.
+- [x] M6-1 -- `mw-compress` factory parses `Accept-Encoding`, gates
+      on `min-bytes`, compresses, and sets `Content-Encoding`.
+- [x] M6-2 -- `tests/fixtures/httpd-mw-compress/` (carries
+      `requires.spices`, `requires.dedicated-runner`,
+      `requires.no-leak-check`).
+- [x] M6-3 -- docs entry.
 
 ## Spaced-type annotation migration
 
