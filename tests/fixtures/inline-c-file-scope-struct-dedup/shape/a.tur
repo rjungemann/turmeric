@@ -1,0 +1,15 @@
+;; Module A: reads the .x field of a shared carrier struct.
+;; The carrier layout is re-declared at file scope -- the documented idiom for
+;; "every module that touches the struct's fields declares it once."  Module B
+;; declares a byte-identical block; the emitter must de-duplicate them so the TU
+;; does not contain two file-scope `struct __shape` definitions (a C error).
+(defmodule shape/a
+  (export a-get)
+  ```c
+  struct __shape { int64_t x; int64_t y; };
+  ```
+  (defn a-get [p : int] : int
+    ```c
+    struct __shape *s = (struct __shape *)(intptr_t)p;
+    return (int)s->x;
+    ```))

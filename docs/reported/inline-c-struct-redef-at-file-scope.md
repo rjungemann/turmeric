@@ -2,8 +2,34 @@
 title: Inline-C struct redefinitions at file scope break multi-block codegen
 severity: high (hard compile error; blocks any TU that imports multiple files with overlapping inline-C struct decls)
 discovered: 2026-06-07
+resolved: 2026-06-10
 context: building turmeric-spices/spices/tourist/tests/fixtures/cascade/cascade.tur with `tur run`
 ---
+
+## Resolution (2026-06-10)
+
+Fixed by de-duplicating identical **file-scope** inline-C blocks within a
+single TU (proposed fix #2 below). See `inline_c_dedup_seen` in
+`src/compiler/emit_module.c` and its use in both the `emit_program`
+(`cprelude`) and `emit_implementation` (Pass 1a) emit paths. Regression
+fixture: `tests/fixtures/inline-c-file-scope-struct-dedup/`.
+
+**Correction to the root-cause sketch below.** The original analysis
+assumed each inline-C block's *leading decls* are hoisted to file scope.
+That is not what happens: an inline-C block used as a `defn` **body** is
+emitted entirely *inside* the generated `static` function, so its
+`struct __foo { ... };` is function-local and identical copies across
+modules never collide (confirmed by repro). The collision is specifically
+between **top-level** ```` ```c ... ``` ```` blocks (raw C at file scope --
+the idiom tourist/httpd use to declare a shared carrier layout once per
+module). Two modules emitting a byte-identical such block into one TU is
+the actual `redefinition of 'struct __foo'`. Hence fix #1 (function-local
+scope) does not apply -- those decls are already function-local -- and the
+correct fix is #2: emit each distinct file-scope block once per TU.
+
+Distinct-but-conflicting blocks (same struct tag, different body) are not
+byte-identical, so they are *not* de-duplicated and still surface as a real
+cc error -- the fix does not mask genuine layout disagreements.
 
 ## Summary
 

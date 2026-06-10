@@ -1,0 +1,18 @@
+;; Regression: file-scope inline-C struct redefinition across modules.
+;; Two imported modules each carry an identical file-scope ```c struct decl.
+;; Before the dedup fix the combined TU emitted both at file scope and cc
+;; failed with `redefinition of 'struct __shape'`.  Expected output: 42.
+;; See docs/reported/inline-c-struct-redef-at-file-scope.md.
+(defmodule shape-main
+  (import shape/a :as a)
+  (import shape/b :as b)
+  (defn make-shape [] : int
+    ```c
+    struct __shape { int64_t x; int64_t y; };
+    struct __shape *s = (struct __shape *)malloc(sizeof(*s));
+    s->x = 10; s->y = 32;
+    return (int64_t)(intptr_t)s;
+    ```)
+  (defn main [] : int
+    (let [p (make-shape)]
+      (println (+ (a/a-get p) (b/b-get p))))))
