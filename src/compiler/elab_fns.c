@@ -626,6 +626,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
         return NULL;
     }
     Binding *existing = scope_lookup(e->scope, name_f->as.sym);
+    /* bare-fat-result-monomorphization: a specialized clone re-elaborates the
+     * same `(defn ...)` Form under a mangled name, so the original (lazy)
+     * binding is still in scope under the source name.  Do not treat it as a
+     * redefinition / forward decl -- the clone gets a fresh binding below. */
+    if (e->bare_fat_spec_active) existing = NULL;
     if (existing) {
         /* MF3: hard-error on collision with an auto-loaded stdlib name. The
          * elaborator otherwise treats stdlib bindings as forward declarations
@@ -1471,6 +1476,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
             b->type = TYPE_PTR_VOID;
             param_kinds[n_params] = TY_PTR_VOID;
             next_param_fat = false;
+            /* bare-fat-result-monomorphization: stamp the kind a direct call
+             * `(g x)` yields.  The canonical body uses the int64 carrier (TY_INT,
+             * the prior behavior); a specialized clone uses the incoming
+             * closure's result kind so the call types correctly off the tail. */
+            b->bare_fat_result_kind = e->bare_fat_spec_active
+                                    ? e->bare_fat_spec_kind : TY_INT;
         }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
@@ -2041,6 +2052,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
 
+    /* bare-fat-result-monomorphization: a defn with a bare `^fat` param (no fn
+     * annotation) may have a body that only typechecks once the closure's
+     * result kind is known (e.g. a :float result consumed off the tail).  Try
+     * the canonical (int-carrier) body under a diagnostic-capture frame; if it
+     * does not typecheck, defer it -- emit no canonical FnDef and re-elaborate
+     * per call site (elab_specialize_bare_fat).  Specialization is the only
+     * sound way to type `(g x)` as a non-int register class off the tail. */
+    bool has_bare_fat = false;
+    for (uint8_t _i = 0; _i < n_params; _i++)
+        if (params[_i]->is_fat && params[_i]->type.kind == TY_PTR_VOID) {
+            has_bare_fat = true;
+            break;
+        }
+    bool needs_lazy_probe = has_bare_fat && !e->bare_fat_spec_active
+                            && !e->bare_fat_force_canonical;
+    bool lazy_defer = false;
+    uint32_t fsd_mark = e->n_file_scope_defs;
+    if (needs_lazy_probe) diag_push_capture();
+
     e->fn_body_depth++;
     /* Phase R6: Track current function name for linting */
     e->current_fn_name = name_f->as.sym;
@@ -2052,6 +2082,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
         if (spliced) {
             body = elab_form(e, spliced);
             if (!body) {
+                if (needs_lazy_probe) { lazy_defer = true; body = e_nil(e, call->span); }
+                else {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
@@ -2060,10 +2092,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
+                }
             }
         } else if (n_body == 1) {
             body = elab_form(e, call->as.list.items[body_start]);
             if (!body) {
+                if (needs_lazy_probe) { lazy_defer = true; body = e_nil(e, call->span); }
+                else {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
@@ -2073,12 +2108,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
+                }
             }
         } else {
             Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
             for (uint32_t i = 0; i < n_body; i++) {
                 items[i] = elab_form(e, call->as.list.items[body_start + i]);
                 if (!items[i]) {
+                    if (needs_lazy_probe) { lazy_defer = true; break; }
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
@@ -2090,6 +2127,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     return NULL;
                 }
             }
+            if (lazy_defer) {
+                body = e_nil(e, call->span);
+            } else {
             /* Phase R6: Warn on discarded result values in function bodies */
             if (g_warn_unused_result) {
                 for (uint32_t i = 0; i < n_body - 1; i++) {
@@ -2102,6 +2142,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
             body->as.do_.items = items;
             body->as.do_.n = n_body;
+            }
         }
     }
     if (fn_declared_unsafe) e->unsafe_depth--;
@@ -2110,6 +2151,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
+
+    /* bare-fat-result-monomorphization: close the canonical-body capture frame.
+     * Suppressed errors (cerr > 0) -- or any sub-form that bailed -- mean the
+     * body is not int-typeable; defer it.  Roll back any file-scope defs the
+     * failed attempt registered (e.g. a nested lambda) so they do not leak into
+     * emission and then re-appear from the specialization. */
+    if (needs_lazy_probe) {
+        uint32_t cerr = diag_pop_capture();
+        if (cerr > 0 || lazy_defer) {
+            lazy_defer = true;
+            body = e_nil(e, call->span);
+            e->n_file_scope_defs = fsd_mark;
+        } else {
+            lazy_defer = false;
+        }
+    }
 
     /* TY2.2: return-position widening to `any`.  A function declared `: any`
      * whose body yields a narrower type must box the result, otherwise the
@@ -2649,9 +2706,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * Override defining_module_name with the actual module the defn is in. */
         b->defining_module_name = e->current_module_name;
     } else {
-        b = binding_new(e, name_f->as.sym, fn_type, false, true, name_f->span);
+        /* bare-fat-result-monomorphization: a clone takes a distinct mangled
+         * name (e.g. run-with__bf_float) so it emits as its own C symbol. */
+        const Symbol *bind_name = (e->bare_fat_spec_active && e->bare_fat_spec_name)
+                                  ? e->bare_fat_spec_name : name_f->as.sym;
+        b = binding_new(e, bind_name, fn_type, false, true, name_f->span);
         scope_add(&e->global, b);
     }
+    /* bare-fat-result-monomorphization: hand the freshly-built clone binding
+     * back to elab_specialize_bare_fat, which redirects the call site to it. */
+    if (e->bare_fat_spec_active) e->bare_fat_spec_result = b;
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
@@ -2790,6 +2854,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 type_c_name(type_from_kind(k)));
             if (g_werror_inline_c_narrow_params) return NULL;
         }
+    }
+
+    /* bare-fat-result-monomorphization: the canonical (int) body did not
+     * typecheck -- emit no FnDef.  The binding keeps its honest TY_FN (declared
+     * return + ^fat arg flags) so call sites resolve it, retains the Form for
+     * per-call-site re-elaboration, and is swept after top-level elaboration so
+     * a never-specialized one still surfaces its deferred diagnostic. */
+    if (lazy_defer) {
+        b->bare_fat_lazy = true;
+        b->defn_form = call;
+        elab_track_bare_fat_lazy(e, b);
+        return e_nil(e, call->span);
     }
 
     Expr *out = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);

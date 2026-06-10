@@ -1,0 +1,14 @@
+;; Phase B dedup (bare-fat-result-monomorphization-plan, Step 5): a single
+;; bare-^fat combinator reused across two :float call sites emits exactly ONE
+;; specialization (run-with__bf_float), deduped by (callee, result-kind).
+;; Verified in expected.c: a single `run_..._unbf_unfloat` definition.
+(defn use-float [y : float] : float y)
+(defn run-with [^fat g x : float] : float
+  (let [y (g x)]
+    (use-float y)))
+(defn make-scale [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+(defn main [] : int
+  (println (run-with (make-scale 2.0) 3.5))   ;; 7
+  (println (run-with (make-scale 3.0) 4.0))   ;; 12
+  0)

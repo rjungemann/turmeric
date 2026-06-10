@@ -1201,6 +1201,16 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
 
+    /* bare-fat-result-monomorphization (Phase B): surface the deferred
+     * diagnostic for any lazy bare-^fat binding that no call site specialized
+     * (e.g. a float-only combinator that is defined but never called).  Must
+     * run after the whole program is elaborated so all call sites have had a
+     * chance to specialize.  Done before the file-scope prepend so its emitted
+     * specializations (registered during the main loop) are already counted. */
+    elab_sweep_bare_fat_lazy(&e);
+    free(e.bare_fat_specs);
+    free(e.bare_fat_lazy_bindings);
+
     /* Phase 3: Prepend file-scope definitions (from nested fn) */
     if (e.n_file_scope_defs > 0) {
         /* Allocate new items array with room for file-scope defs */

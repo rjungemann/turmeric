@@ -658,6 +658,26 @@ typedef struct Elab {
     /* CF6 (control-flow-completeness-plan): set true while elaborating an inline async closure body.
      * Used by elab_await to check that bindings in scope are Send. */
     bool              in_async_body;
+    /* bare-fat-result-monomorphization-plan (Phase B): per-call-site
+     * specialization of a bare-^fat callee over the incoming closure's result
+     * kind.  See elab_specialize_bare_fat (elab_call.c) and elab_defn. */
+    bool              bare_fat_spec_active;     /* re-elaborating a clone now */
+    bool              bare_fat_force_canonical;  /* sweep: emit the deferred error */
+    TypeKind          bare_fat_spec_kind;       /* the bare-^fat param's result kind */
+    const Symbol     *bare_fat_spec_name;       /* mangled name for the clone */
+    Binding          *bare_fat_spec_result;     /* clone's binding, filled by elab_defn */
+    /* Memo of (orig callee, result kind) -> specialized binding.  A NULL spec
+     * with matching (orig,kind) marks an in-progress specialization, so a
+     * recursive reference is caught instead of looping forever. */
+    struct BareFatSpec { Binding *orig; TypeKind kind; Binding *spec; } *bare_fat_specs;
+    uint32_t          n_bare_fat_specs;
+    uint32_t          cap_bare_fat_specs;
+    /* Lazy bare-^fat bindings whose canonical (int) body was deferred; swept
+     * after top-level elaboration so a never-specialized one still surfaces its
+     * real (deferred) diagnostic instead of silently vanishing. */
+    Binding         **bare_fat_lazy_bindings;
+    uint32_t          n_bare_fat_lazy_bindings;
+    uint32_t          cap_bare_fat_lazy_bindings;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
@@ -891,6 +911,19 @@ Expr *elab_fn(Elab *e, const Form *call);
 /* bare-fat-param-non-int-result inference (Phase A); see
  * docs/upcoming/bare-fat-result-type-inference-plan.md. */
 bool kind_is_non_int_register_class(TypeKind k);
+
+/* bare-fat-result-monomorphization (Phase B); see
+ * docs/upcoming/bare-fat-result-monomorphization-plan.md.
+ *  - elab_specialize_bare_fat: re-elaborate `callee`'s retained body with its
+ *    bare-^fat param result kind set to `k`, returning the clone's binding
+ *    (memoized by (callee, k)); NULL if it cannot be specialized.
+ *  - elab_track_bare_fat_lazy: register a deferred-canonical binding for the
+ *    end-of-pass sweep.
+ *  - elab_sweep_bare_fat_lazy: surface the deferred diagnostic for any lazy
+ *    binding no call site specialized. */
+Binding *elab_specialize_bare_fat(Elab *e, Binding *callee, TypeKind k);
+void     elab_track_bare_fat_lazy(Elab *e, Binding *b);
+void     elab_sweep_bare_fat_lazy(Elab *e);
 bool retype_bare_fat_tail_calls(Expr *tail, TypeKind target);
 Expr *elab_extern_c(Elab *e, const Form *call);
 Expr *elab_def(Elab *e, const Form *call);

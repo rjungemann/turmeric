@@ -6,14 +6,34 @@ description: Make a signature-less `^fat g` parameter return a non-int register-
 
 # Bare `^fat` Result-Kind Monomorphization -- Plan (Phase B)
 
-> **Status:** Not started. The reported gap is already closed by
-> Phase A (tail-position retype pass), which shipped and merged in #208. This
-> plan is the *follow-through* that handles the one case Phase A structurally
-> cannot: a bare-`^fat` non-int result consumed in a **non-tail** position.
-> **Re-open trigger:** a real (non-fixture) caller that needs a bare-`^fat`
-> `:float` (or any future non-int register-class) result off the tail, **or**
-> bare-`^fat` lambda params surfacing the same need.
-> **Last updated:** 2026-06-05
+> **Status:** **Implemented** (intra-module, non-recursive, float register
+> class). The non-tail gap Phase A structurally cannot reach -- a bare-`^fat`
+> non-int result consumed off the tail -- now compiles via per-call-site
+> monomorphization. Deferred sub-cases (recursion, exports, cross-module dedup,
+> a single combinator shared by `:int` *and* `:float`) raise a **clean error**
+> or are simply not triggered today; see "Deferred sub-cases" below.
+> **What landed (2026-06-10):**
+> - `diag_push_capture()/diag_pop_capture()` (diag.c) -- speculative
+>   elaboration: errors are swallowed + counted, warnings pass through.
+> - A bare-`^fat` defn whose canonical (int) body does not typecheck is
+>   *deferred* (no canonical FnDef); the binding retains its `(defn ...)` Form
+>   (`Binding.defn_form`, `bare_fat_lazy`).
+> - `elab_specialize_bare_fat` (elab_call.c) re-elaborates that Form per
+>   incoming closure result kind, mangled `<callee>__bf_<kind>`, memoized by
+>   `(callee, kind)`; the call site is redirected to the clone.
+> - CY2 fat-dispatch types `(g x)` from `Binding.bare_fat_result_kind`.
+> - End-of-pass sweep (`elab_sweep_bare_fat_lazy`) re-surfaces the deferred
+>   diagnostic for a lazy binding no call site specialized.
+> - Phase A's tail retype is **kept** (it still covers its non-lazy tail cases
+>   with zero churn); B2 only handles the bodies Phase A could never compile,
+>   so there was nothing to retire.
+> - Fixtures: `bare-fat-nontail-float-noannot` (the gate, stdout 7),
+>   `bare-fat-float-result-dedup` (one clone across two float call sites).
+>   No existing fixture/snapshot churned (only deferred bodies specialize).
+> **Re-open trigger (for the deferred sub-cases):** a real caller needing a
+> recursive bare-`^fat` non-int result, a cross-module/exported bare-`^fat`
+> float combinator, or one bare-`^fat` combinator shared by `:int` and `:float`.
+> **Last updated:** 2026-06-10
 > **Type:** compiler -- closure ABI / monomorphization
 > **Supersedes Phase B of:**
 > - [bare-fat-result-type-inference-plan.md](../../archive/history/bare-fat-result-type-inference-plan.md) (Phase A shipped; this is its deferred Phase B)
@@ -121,20 +141,43 @@ These are the reason Phase B is *large* and was deferred:
   `tests/fixtures/*/expected.c` in the same PR (see CLAUDE.md "Fixture
   Snapshots").
 
+## Deferred sub-cases (raise a clean error or are not triggered today)
+
+- **Recursion / mutual recursion.** A specialized clone that calls itself (or a
+  partner) through the bare-`^fat` param cannot recover the param's result kind
+  (the param carries no signature), so the call site emits a clear error --
+  "cannot specialize bare-`^fat` function '%s' ... recursive ... not yet
+  supported" -- instead of a body-less symbol that fails at link time. An
+  in-progress cache marker also guards against an infinite specialization loop.
+- **Exports / cross-module dedup.** A clone is a fresh `static` C symbol in the
+  TU that specializes it; it is never exported, and two TUs may each emit their
+  own copy. No stdlib bare-`^fat` defn is float-only (they are all int carriers,
+  hence non-lazy), so this cannot arise in-tree today. An *exported* float-only
+  bare-`^fat` defn that is also called externally is unsupported.
+- **One combinator shared by `:int` and `:float`.** The minimal-churn design
+  only specializes bodies that fail the canonical int elaboration (float-only).
+  A body that typechecks as int is non-lazy and keeps the canonical path, so a
+  single lazy combinator cannot also serve an int closure. Supporting both from
+  one combinator needs the non-lazy specialization path (future work).
+
 ## Validation
 
-- [ ] Every Phase A fixture still passes (B2 covers them from the call site):
-      `bare-fat-float-result`, `bare-fat-int-and-float-combinator`,
-      `bare-fat-nontail-int-roundtrip`, `bare-fat-let-float-binding`.
-- [ ] **New gate (the deliverable):** a bare-`^fat` `:float` result consumed in
-      a **non-tail** position with no annotation round-trips correctly --
-      `(let [y (g x)] (use-float y))`, which Phase A leaves int64.
-- [ ] A bare-`^fat` combinator reused across `:int` and `:float` closures in the
-      same file, with no annotation and no tail-position requirement, emits one
-      specialization per result kind (dedup verified in `expected.c`).
-- [ ] Arrow `>>>` / `option-map` / `fat-param-*` fixtures stay green (int-carrier
-      path is the `result_kind == TY_INT` specialization, unchanged shape).
-- [ ] `bash tests/run.sh`: 0 FAIL, leak detection on.
+- [x] Every Phase A fixture still passes, **byte-identical** -- non-lazy bodies
+      keep the canonical path + Phase A tail retype; only deferred (lazy) bodies
+      specialize, so `bare-fat-float-result` / `bare-fat-int-and-float-combinator`
+      / `bare-fat-nontail-int-roundtrip` / `bare-fat-let-float-binding` and their
+      `expected.c` snapshots are untouched.
+- [x] **New gate (the deliverable):** `bare-fat-nontail-float-noannot` --
+      `(let [y (g x)] (use-float y))` with a `:float` closure round-trips to 7.
+- [x] Dedup: `bare-fat-float-result-dedup` -- one bare-`^fat` combinator across
+      two `:float` call sites emits exactly one clone (`expected.c` shows a
+      single `run_..._unbf_unfloat`). (The mixed `:int`+`:float` variant is a
+      deferred sub-case above.)
+- [x] Arrow `>>>` / `option-map` / `fat-param-*` fixtures stay green (int carrier
+      is non-lazy, unchanged shape -- verified by zero snapshot churn).
+- [x] `bash tests/run.sh`: 1541 passed, 0 failed, leak detection on.
+- [x] Captureless and capturing `:float` closures both round-trip; a recursive
+      or unrecoverable-kind call errors cleanly (no link-time failure).
 
 ## Risks
 
@@ -264,7 +307,13 @@ Add `tests/fixtures/bare-fat-nontail-float-noannot/`:
 
 Expected stdout: `7\n`. Until B1'+B2 lands, the fixture fails elaboration
 (verified 2026-06-10: `TUR-E0001: arg 1: expected float, got int` at the
-`(use-float y)` callsite). Land the fixture in the same PR as the fix.
+`(use-float y)` callsite). Land the positive fixture in the same PR as the fix.
+
+> **Landed 2026-06-10 (implemented).** The positive fixture
+> `tests/fixtures/bare-fat-nontail-float-noannot/` now compiles and prints 7.
+> (The interim negative seed under `tests/fixtures/errors/` was removed when the
+> mechanism landed, as planned.) The int-carrier analogue compiles via the
+> canonical path; only the non-int register-class body is deferred + specialized.
 
 ### Step 5 -- dedup + int-only caller of a bare-^fat combinator
 
@@ -293,4 +342,29 @@ unspecialized name (canonical body unchanged).
 ~600-1000 LOC across `expr.h`, `elab_fns.c`, `elab_call.c`, plus 2 fixtures
 and a ~1442-fixture snapshot regen. Single PR is feasible but takes a
 multi-session commitment, not one execution turn. The fixture-only seed
-(step 4) is a safe sub-PR to land first so the gap is visible in CI.
+(step 4) is a safe sub-PR to land first so the gap is visible in CI **(done
+2026-06-10, as the negative fixture noted in step 4)**.
+
+### Two enabling primitives the core PR must build first (confirmed missing 2026-06-10)
+
+A scoping pass through the elaborator confirmed neither piece of infrastructure
+the mechanism depends on exists yet -- both must be built as part of the core PR:
+
+1. **Function-body re-elaboration (clone + re-elab).** There is no existing
+   "clone a defn body and re-elaborate it under a new param scope" helper. The
+   "ADT monomorphization" precedent the plan cites (`elab_call.c`, TY_APP path)
+   is *type-level* struct/constructor codegen, not body re-elaboration -- it is
+   not reusable here. The cheapest route is to retain the defn's `Form` (step 1)
+   and re-invoke the signature+body machinery of `elab_defn` under a
+   specialization context (mangled name, `bare_fat_result_kind` set, no
+   re-export, no forward-decl rematch) rather than hand-factoring its ~2000-line
+   body.
+2. **Speculative elaboration with diagnostic rollback.** `diag.c` emits straight
+   to stderr (only a `had_error_` bool; no capture/count/restore). The probe's
+   canonical (int) body genuinely *fails* to elaborate (`(use-float y)` ->
+   `TUR-E0001`), so deciding "this body is non-int-only, defer it" cannot be done
+   without a `diag_push_capture()/diag_pop_capture(emit?)` primitive that
+   suppresses + counts errors and restores `had_error_`. Without it, the lazy-body
+   detection in step 1 spews spurious errors on every non-int-only bare-`^fat`
+   defn. Build this primitive first; the common (int-carrier) case must stay
+   byte-identical so existing fixtures/snapshots do not churn.

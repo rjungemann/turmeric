@@ -286,6 +286,19 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
 bool diag_had_error(void);
 void diag_reset(void);
 
+/* Speculative-elaboration capture (bare-fat-result-monomorphization-plan).
+ * While a capture frame is active, every diag_emit* call is suppressed
+ * (nothing is rendered to stderr) and DIAG_ERROR emissions are counted into
+ * the innermost frame.  diag_pop_capture() restores had_error_ to its value
+ * at the matching push and returns how many errors were suppressed in the
+ * frame.  This lets the elaborator *try* to elaborate a bare-^fat body at the
+ * default int result kind, detect that it does not typecheck, and defer it to
+ * per-call-site specialization -- without leaking spurious diagnostics. Frames
+ * nest (bounded depth); a caller that wants the real diagnostics simply
+ * re-runs the elaboration with no capture frame active. */
+void     diag_push_capture(void);
+uint32_t diag_pop_capture(void);
+
 /* Snippet rendering */
 void diag_render_snippet(const SourceFile *f, Span span, const SnippetOpts *opts);
 
