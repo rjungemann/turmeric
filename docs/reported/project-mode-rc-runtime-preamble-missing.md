@@ -93,23 +93,116 @@ signal spice). RC structs need both gaps closed.
 `tur build <dir>` of a module that uses `rc/of` or an `rc<T>` struct field
 should compile and link, mirroring single-file `emit-c`.
 
-## Proposed fix directions
+## Implementation spec (turn-key)
 
-1. Factor the RC/frame runtime preamble that `emit_program` emits into a shared
-   helper and emit it (or `#include` a generated runtime header that declares
-   it) from `emit_header`/`emit_implementation` when the module uses RC. A
-   `#include "tur_runtime.h"` approach keeps the typedefs single-sourced across
-   the many TUs of a project build.
-2. In `emit_implementation`, before the `if (e->as.def_.struct_def) continue;`
-   early-out, emit the `drop_glue_<Name>`/`walk_glue_<Name>` functions for any
-   struct with `needs_drop_glue` (mirroring emit_module.c:1824-1866). They are
-   `static` and called only from local code, so they belong in the `.c`, not
-   the `.h`.
+The single-file inline runtime is emitted **only** by `emit_program`
+(`src/compiler/emit_module.c`), as one contiguous assembly block to `out`
+spanning roughly **lines 2303-5100** (interleaved with feature-flag sub-blocks:
+effects/handlers, sets, frame/defer, panic, CPS, test registry, RC/GC,
+`-Xsessions` channels). `emit_header`/`emit_implementation` (the
+separate-compilation path used by `tur build <dir>`) emit none of it.
+
+### The hard constraint: shared global state
+
+The runtime keeps **process-global mutable state** as file-scope `static`
+globals. These must live in **exactly one** TU -- duplicating them per module
+TU gives each TU its own GC registry / free queue, so an `rc` allocated in
+module A and dropped in module B touches different state -> leaks and
+use-after-free (a **silent miscompile**, not a link error). The 16 globals
+(name @ emitting line in `emit_program`):
+
+| Global | Line |
+| --- | --- |
+| `tur_panic_in_progress` | 2953 |
+| `global_panic_frame` | 2954 |
+| `tur_test_registry_names` | 2882 |
+| `tur_test_registry_fns` | 2883 |
+| `tur_test_registry_count` | 2884 |
+| `__tur_fatshim_keep` | 2646 |
+| `rc_free_queue` | 4511 |
+| `rc_free_queue_count` | 4512 |
+| `gc_all_blocks` | 4527 |
+| `gc_all_blocks_count` | 4528 |
+| `gc_suspect_roots` | 4535 |
+| `gc_suspect_count` | 4536 |
+| `gc_grey_queue` | 4537 |
+| `gc_grey_count` | 4538 |
+| `gc_mode` | 4539 |
+| `gc_enabled` | 4540 |
+
+The 13 **non-`static` (extern) functions** would also collide if emitted in
+multiple TUs: `rc_cb_alloc_kinded` (4655), `rc_cb_alloc` (4673),
+`rc_cb_alloc_struct` (4680), `rc_strong_decrement` (4686),
+`rc_strong_increment` (4692), `rc_weak_increment` (4700),
+`rc_weak_decrement` (4704), `rc_strong_count` (4728), `rc_weak_count` (4732),
+`rc_is_alive` (4736), `rc_upgrade` (4740), `rc_get_value` (4748),
+`tur_rc_from_ref` (4756).
+
+**Everything else is already `static` / `static inline`** (all typedefs, the
+`gc_*` helpers, `tur_frame_*`, `rc_free_queue_push/drain`, set ops, panic
+helpers). `static` storage means each TU safely gets its own copy *of the
+code*, and those copies all reference the single `extern` globals -- so
+replicating them per-TU is correct.
+
+The public surface generated user code calls directly (must be visible in every
+module TU): `rc_cb_alloc`, `rc_cb_alloc_struct`, `rc_cb_alloc_kinded`,
+`rc_strong_decrement`, `rc_weak_decrement`, `rc_free_queue_drain`,
+`tur_frame_init`, `tur_frame_push_defer`, `tur_frame_fire_lifo`,
+`tur_frame_fire_chain`, plus per-struct `drop_glue_<Name>`/`walk_glue_<Name>`.
+
+### Recommended design: shared header + single owner TU
+
+1. **Extract** the contiguous preamble emission out of `emit_program` into
+   `void emit_runtime_preamble(Buf *out, bool shared)` (pure move first; in the
+   default `shared == false` path the single-file output must stay
+   **byte-identical** -- verify with the fixture snapshots and the full suite
+   before layering any behavior change). `emit_program` then calls it with
+   `shared = false`.
+2. In the `shared == true` path, wrap **only** the 16 global definitions and
+   the 13 extern-function bodies in `#ifdef TUR_RT_OWNER ... #else <extern decl
+   / prototype> #endif`. All other (`static`) code emits unchanged.
+3. **Build driver** (`cmd_build_multi` / `cmd_emit_c_to_dir` in `src/main.c`):
+   - Generate `tur_runtime.h` = `emit_runtime_preamble(buf, /*shared=*/true)`
+     wrapped in an include guard.
+   - Generate `tur_runtime.c` = `#define TUR_RT_OWNER\n#include "tur_runtime.h"`
+     -- the **single** TU that defines the globals + 13 extern functions.
+   - Add `tur_runtime.c` to the cc input set; have every module `.h`
+     `#include "tur_runtime.h"` (so typedefs are visible in exported
+     signatures), and `_main.c` already includes the module headers.
+4. In `emit_implementation`, before the `if (e->as.def_.struct_def) continue;`
+   early-out (emit_module.c:5936-5941), emit `drop_glue_<Name>` /
+   `walk_glue_<Name>` for any struct with `needs_drop_glue` (mirror
+   emit_module.c:1824-1866). They are `static`, called only from local code, so
+   they belong in the module `.c`, not the shared header.
+
+### Alternative considered (rejected)
+
+Emitting the full inline runtime into every module TU with
+`__attribute__((weak))` on the 29 collide-prone symbols lets the linker fold
+duplicates, but relies on platform-specific weak-folding semantics (ELF vs
+Mach-O differ) -- "works because the linker folds it" is precisely the
+luck-based correctness this repo forbids. Use the owner-macro design.
+
+A whole-program route for executables (concatenate the project's module sources
+and run the already-validated `emit_program` once) avoids touching the runtime
+emission entirely, but changes `tur build <dir>` from separate compilation to
+whole-program, which risks the cross-spice-dep and `--shared` scenarios the
+`run-build-project.sh` smoke tests cover. Viable but a larger behavioral
+change; the shared-header design preserves the existing build model.
 
 ## Validation
 
-1. Repro A and Repro B above compile and link with `tur build` and run.
-2. A new entry in `tests/run-build-project.sh` exercising an `rc/of` module and
-   an `rc<T>`-field struct module end-to-end.
-3. Existing single-file RC fixtures (`rc-struct-auto-drop`,
-   `rc-struct-nested-rc-fields`, `arc-basic`, ...) must not regress.
+1. Repro A and Repro B above compile, link, and run under `tur build`.
+2. **Single source of truth check:** the `shared == false` extraction must keep
+   single-file `emit-c` output byte-identical -- regenerate fixture snapshots
+   (none should change) and confirm `bash tests/run.sh` stays at 0 FAIL before
+   adding the shared path.
+3. **Cross-TU GC-state check (the whole point):** a project with module A
+   allocating an `rc`/`rc<T>` struct and module B dropping it must run clean
+   under `ASAN_OPTIONS=detect_leaks=1` -- proving both TUs share one
+   `gc_all_blocks`/`rc_free_queue`. Add this to `tests/run-build-project.sh`.
+4. A `nm` assertion that `gc_all_blocks` / `rc_cb_alloc` resolve to a single
+   definition in the linked binary.
+5. Existing single-file RC fixtures (`rc-struct-auto-drop`,
+   `rc-struct-nested-rc-fields`, `arc-basic`, `weak-upgrade-option`, ...) must
+   not regress.
