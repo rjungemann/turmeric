@@ -13,6 +13,31 @@ without cluttering the active `docs/reported/` index with completed work.
 
 ## Compiler / language fixes (landed)
 
+### Poly-closure / typed fat-closure dispatch -- consolidated track (FIXED)
+
+[`../archive/history/poly-closure-typed-dispatch-track.md`](../archive/history/poly-closure-typed-dispatch-track.md)
+
+Consolidated three reports on typed/polymorphic closure-returning combinators
+(`>>>`, `cmp`) miscompiling at float result types -- the inner thunk body rode
+the `int64_t(*)(void*, int64_t)` ABI and produced correct float output only by
+SysV register-class accident. **All three layers landed:** Layer 2
+(capturing-closure return-type lowering) via source-level boxing in
+`elab_fns.c`; Layer 3 (fn-typed `^fat` param tyvar propagation + per-spec
+inner-body retention under fat dispatch) via Direction 3 recovery in
+`emit_expr.c` (#297); and Layer 1 (the combinator itself) via Stage E (#300),
+which rewrote `stdlib/arrow.tur`'s `>>>` to the polymorphic typed spelling
+`(defn >>> [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+...)` and deleted the monomorphic `compose-float` workaround. A `:float ->
+:float` pipeline now emits `tur_thunk_double_double_t` end-to-end (xmm0). The
+`TUR-E0705` guard was narrowed to `closure_return_dispatches_untyped`, so it
+fires only for the genuinely-untyped dispatch shape, never the typed `>>>`/`cmp`
+form. Validation fixture: `tests/fixtures/poly-closure-compose-float/` (the
+previously-E0705 dispatching shape) prints exact fractional output
+(`3.675`, `1.75`). Originals preserved verbatim under `../archive/history/`
+(`arrow-compose-float-closure-int64-thunk-mismatch.md`,
+`boxed-fn-typed-closure-return-miscompiles.md`,
+`poly-closure-inner-dispatch-result-erased.md`).
+
 ### `load` inside a `defmodule` body silently lost loaded names (FIXED)
 
 [`../archive/load-inside-defmodule-silently-loses-names.md`](../archive/load-inside-defmodule-silently-loses-names.md)

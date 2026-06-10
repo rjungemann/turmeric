@@ -1,16 +1,39 @@
 ---
 title: Poly-closure / typed fat-closure dispatch -- consolidated track
 category: Bug Report
-status: PARTIAL -- one prerequisite resolved; full `>>>` generalization still open
-severity: latent silent miscompile (guarded by TUR-E0705 for the dispatching shape)
-description: Consolidates three related reports about typed/polymorphic closure-returning combinators (`>>>`, `cmp`) miscompiling when float result types are involved. The end-state is a register-class-correct generic `>>>` that composes `:float -> :float` closures through xmm0 instead of riding the SysV register-class accident through int64 thunks. One prerequisite is resolved (capturing-closure return-type lowering); two remain open (fn-typed `^fat` param tyvar propagation, and per-spec retention of inner-body intermediate types under fat dispatch).
+status: RESOLVED -- all three layers landed; register-class-correct typed `>>>` shipped
+severity: was latent silent miscompile (guarded by TUR-E0705 for the dispatching shape); now resolved
+description: Consolidates three related reports about typed/polymorphic closure-returning combinators (`>>>`, `cmp`) miscompiling when float result types are involved. The end-state is a register-class-correct generic `>>>` that composes `:float -> :float` closures through xmm0 instead of riding the SysV register-class accident through int64 thunks. All three layers are now resolved: capturing-closure return-type lowering (Layer 2), fn-typed `^fat` param tyvar propagation + per-spec inner-body retention under fat dispatch (Layer 3, Direction 3), and the generalized typed `>>>` itself (Layer 1, Stage E).
 ---
 
 # Poly-closure / typed fat-closure dispatch -- consolidated track
 
+> **Status:** RESOLVED (2026-06-10). All three layers of this track landed across
+> commits #293 (Stage A elaboration acceptance), #296 (dispatch-free float spec),
+> #297 (Layer 3 inner-dispatch erasure -- Part 1 + Direction 3), and #300 (Stage E
+> -- `>>>` rewritten to the polymorphic typed spelling, `compose-float` deleted).
+>
+> `stdlib/arrow.tur`'s `>>>` is now the polymorphic typed combinator
+> `(defn >>> [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void> ...)`.
+> A `:float -> :float` pipeline composed through it emits `tur_thunk_double_double_t`
+> end-to-end (xmm0), no longer riding the SysV register-class accident. The E0705
+> guard now keys on `closure_return_dispatches_untyped`, so it fires only for the
+> genuinely-untyped dispatch shape it still cannot specialize -- never for the typed
+> `>>>`/`cmp` form.
+>
+> Validation fixture: `tests/fixtures/poly-closure-compose-float/` -- the
+> "dispatching" shape that previously tripped TUR-E0705 -- composes `fadd`/`fhalf`
+> through a generic `cmp` and prints exact fractional output (`3.675`, `1.75`);
+> its emitted C uses `tur_thunk_double_double_t`. The three Layer originals are
+> preserved verbatim under `docs/archive/history/` (all RESOLVED). This track is
+> closed; see `docs/reported/resolved-paper-trail.md`.
+>
+> The "Proposed fix sequencing (next actions)" section below is the historical
+> plan; it is kept verbatim for traceability and is now fully implemented.
+
 This track gathers three reports that describe one end-state defect with three
 distinct layers. Originals are preserved verbatim in
-[`../archive/`](../archive/) -- link targets below. **Do not delete the originals**;
+[`../`](../) -- link targets below. **Do not delete the originals**;
 they hold the file:line root-cause analysis the fix work needs.
 
 ## The end state we are trying to reach
@@ -28,7 +51,7 @@ Tracking plan (the cross-referenced upstream artifact):
 
 ### Layer 1 -- the outermost symptom: `>>>` itself
 
-[`../archive/history/arrow-compose-float-closure-int64-thunk-mismatch.md`](../archive/history/arrow-compose-float-closure-int64-thunk-mismatch.md)
+[`./arrow-compose-float-closure-int64-thunk-mismatch.md`](./arrow-compose-float-closure-int64-thunk-mismatch.md)
 -- the untyped stdlib `>>>` commits its inner closure body to the int64 thunk
 ABI; when applied to `:float -> :float` closures the emitted C makes three
 disagreeing function-pointer-type casts at the producer, inner body, and
@@ -43,7 +66,7 @@ but `>>>` itself is **not** yet retyped pending Stages B-E.
 
 ### Layer 2 -- prerequisite: capturing-closure return-type lowering (RESOLVED)
 
-[`../archive/history/boxed-fn-typed-closure-return-miscompiles.md`](../archive/history/boxed-fn-typed-closure-return-miscompiles.md)
+[`./boxed-fn-typed-closure-return-miscompiles.md`](./boxed-fn-typed-closure-return-miscompiles.md)
 -- a plain `defn` whose declared return type was a concrete non-boxed `(fn
 [..] R)` and whose body yielded a capturing closure lowered to the wrong C
 signature (the function's *result* type instead of the fat-closure carrier).
@@ -59,7 +82,7 @@ prerequisite for Layer 1 Direction B and is now off the critical path.
 
 ### Layer 3 -- the open blocker: dispatching inner body erases intermediate types
 
-[`../archive/history/poly-closure-inner-dispatch-result-erased.md`](../archive/history/poly-closure-inner-dispatch-result-erased.md)
+[`./poly-closure-inner-dispatch-result-erased.md`](./poly-closure-inner-dispatch-result-erased.md)
 -- per-monomorphization inner-body specialization works for the **dispatch-free**
 shape (e.g. `(fn [t] : A val)`), verified by
 `tests/fixtures/poly-closure-result-tyvar-float`. It does **not** work for the
