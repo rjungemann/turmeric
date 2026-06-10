@@ -18,6 +18,7 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "buf.h"
 
@@ -166,6 +167,18 @@ typedef struct PkgLockFile {
 /* Parse a build.tur file.  All returned strings are heap-allocated.
  * Returns true on success; prints diagnostics to stderr on failure. */
 bool pkg_manifest_read(const char *path, PkgManifest *out);
+
+/* Resolve a manifest filename in `dir`. Writes the full path into `out`
+ * (size `cap`). Probes `build.tur` first, then `build.tur.sweet`.
+ * Returns true if either exists as a regular file. */
+bool pkg_resolve_manifest_path(const char *dir, char *out, size_t cap);
+
+/* Same, but the path is cwd-relative ("build.tur" or "build.tur.sweet"). */
+bool pkg_resolve_manifest_cwd(char *out, size_t cap);
+
+/* Returns true if `name` is one of the recognised manifest filenames
+ * ("build.tur" or "build.tur.sweet"). */
+bool pkg_is_manifest_name(const char *name);
 
 /* Write a build.tur file from a PkgManifest struct. */
 bool pkg_manifest_write(const char *path, const PkgManifest *m);

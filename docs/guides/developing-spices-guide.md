@@ -57,6 +57,14 @@ prefix as the import alias: `tur-geom` becomes `geom`, `tur-math` becomes
 
 ## The `build.tur` Manifest
 
+The manifest filename can be either `build.tur` (plain s-expression) or
+`build.tur.sweet` (sweet-exp syntax). Both are equivalent everywhere the
+toolchain consults the manifest -- walk-up discovery, workspace member
+resolution, transitive `:spices` deps, and the cwd-relative `tur add` /
+`tur fetch` paths all accept either. When both files exist in the same
+directory the plain `build.tur` takes precedence. `tur init --sweet`
+scaffolds the sweet variant.
+
 A complete library manifest:
 
 ```turmeric no-check

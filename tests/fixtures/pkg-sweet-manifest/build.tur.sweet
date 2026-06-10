@@ -1,0 +1,7 @@
+#lang sweet-exp
+;; Sweet-exp manifest. Exercised by tests/run-sweet-manifest.sh: tur check
+;; and tur emit-c must auto-discover this file (via the build.tur ->
+;; build.tur.sweet fallback in pkg_resolve_manifest_path) and run it through
+;; the sweet-exp reader (via reader_type_from_extension in pkg_manifest_read).
+defpackage "pkg-sweet-manifest"
+  :version "0.1.0"

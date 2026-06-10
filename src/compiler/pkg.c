@@ -330,6 +330,46 @@ static bool parse_exports(const Form *f, char ***out, int *n_out) {
 }
 
 /* ================================================================== */
+/* Manifest filename resolution (build.tur, build.tur.sweet)            */
+/* ================================================================== */
+
+bool pkg_is_manifest_name(const char *name) {
+    if (!name) return false;
+    return strcmp(name, "build.tur") == 0
+        || strcmp(name, "build.tur.sweet") == 0;
+}
+
+bool pkg_resolve_manifest_path(const char *dir, char *out, size_t cap) {
+    if (!dir || !out || cap == 0) return false;
+    struct stat st;
+    int n = snprintf(out, cap, "%s/build.tur", dir);
+    if (n > 0 && (size_t)n < cap
+        && stat(out, &st) == 0 && S_ISREG(st.st_mode))
+        return true;
+    n = snprintf(out, cap, "%s/build.tur.sweet", dir);
+    if (n > 0 && (size_t)n < cap
+        && stat(out, &st) == 0 && S_ISREG(st.st_mode))
+        return true;
+    out[0] = '\0';
+    return false;
+}
+
+bool pkg_resolve_manifest_cwd(char *out, size_t cap) {
+    if (!out || cap == 0) return false;
+    struct stat st;
+    if (cap > strlen("build.tur")) {
+        strcpy(out, "build.tur");
+        if (stat(out, &st) == 0 && S_ISREG(st.st_mode)) return true;
+    }
+    if (cap > strlen("build.tur.sweet")) {
+        strcpy(out, "build.tur.sweet");
+        if (stat(out, &st) == 0 && S_ISREG(st.st_mode)) return true;
+    }
+    out[0] = '\0';
+    return false;
+}
+
+/* ================================================================== */
 /* pkg_manifest_read                                                    */
 /* ================================================================== */
 
@@ -366,12 +406,27 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
     free(src);
     src = src_arena;
 
+    /* Strip a leading "#lang ..." directive (if any) before parsing.  The
+     * sweet-exp preprocessor and the s-expr reader both choke on the bare
+     * '#' of an unhandled "#lang" line; main.c's single-file paths run the
+     * same detect_lang sweep before reading. */
+    const char *src_eff = src;
+    size_t      len_eff = (size_t)sz;
+    {
+        const char *src_rest = src;
+        size_t      len_rest = (size_t)sz;
+        ReaderType  lang_type = detect_lang(src, (size_t)sz, &src_rest, &len_rest);
+        (void)lang_type;
+        src_eff = src_rest;
+        len_eff = len_rest;
+    }
+
     SourceFile file = {0};
     file.path    = path;
-    file.src     = src;
-    file.len     = (uint32_t)sz;
+    file.src     = src_eff;
+    file.len     = (uint32_t)len_eff;
     file.file_id = 0;
-    /* Use READER_TURMERIC (value 0) */
+    file.reader_type = reader_type_from_extension(path);
     diag_register_file(&file);
 
     uint32_t nforms = 0;
@@ -1187,12 +1242,8 @@ static char **collect_workspace_member_names(const char *project_dir,
         *last = '\0';
 
         char ws_manifest[4096];
-        int wn = snprintf(ws_manifest, sizeof(ws_manifest),
-                          "%s/build.tur", anc);
-        if (wn <= 0 || (size_t)wn >= sizeof(ws_manifest)) continue;
-
-        struct stat wst;
-        if (stat(ws_manifest, &wst) != 0 || !S_ISREG(wst.st_mode))
+        if (!pkg_resolve_manifest_path(anc, ws_manifest,
+                                       sizeof(ws_manifest)))
             continue;
 
         PkgManifest wm;
@@ -1232,20 +1283,20 @@ static char **collect_workspace_member_names(const char *project_dir,
         if (!names) { pkg_manifest_free(&wm); return NULL; }
         int n = 0;
         for (int i = 0; i < wm.n_members; i++) {
+            char member_dir[4096];
+            int mn = snprintf(member_dir, sizeof(member_dir),
+                              "%s/%s", anc, wm.members[i]);
             char member_manifest[4096];
-            int mn = snprintf(member_manifest, sizeof(member_manifest),
-                              "%s/%s/build.tur", anc, wm.members[i]);
             const char *resolved_name = NULL;
             PkgManifest mm;
             memset(&mm, 0, sizeof(mm));
             bool mm_ok = false;
-            if (mn > 0 && (size_t)mn < sizeof(member_manifest)) {
-                struct stat mst;
-                if (stat(member_manifest, &mst) == 0 && S_ISREG(mst.st_mode)
-                    && pkg_manifest_read(member_manifest, &mm)) {
-                    mm_ok = true;
-                    if (mm.name && mm.name[0]) resolved_name = mm.name;
-                }
+            if (mn > 0 && (size_t)mn < sizeof(member_dir)
+                && pkg_resolve_manifest_path(member_dir, member_manifest,
+                                             sizeof(member_manifest))
+                && pkg_manifest_read(member_manifest, &mm)) {
+                mm_ok = true;
+                if (mm.name && mm.name[0]) resolved_name = mm.name;
             }
             if (!resolved_name) {
                 /* Fall back to the basename of the member path. */
@@ -1314,12 +1365,8 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name) {
         *last = '\0';
 
         char ws_manifest[4096];
-        int wn = snprintf(ws_manifest, sizeof(ws_manifest),
-                          "%s/build.tur", anc);
-        if (wn <= 0 || (size_t)wn >= sizeof(ws_manifest)) continue;
-
-        struct stat wst;
-        if (stat(ws_manifest, &wst) != 0 || !S_ISREG(wst.st_mode))
+        if (!pkg_resolve_manifest_path(anc, ws_manifest,
+                                       sizeof(ws_manifest)))
             continue;
 
         PkgManifest wm;
@@ -1345,20 +1392,20 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name) {
 
         char *found = NULL;
         for (int i = 0; i < wm.n_members && !found; i++) {
+            char member_dir[4096];
+            int mn = snprintf(member_dir, sizeof(member_dir),
+                              "%s/%s", anc, wm.members[i]);
             char member_manifest[4096];
-            int mn = snprintf(member_manifest, sizeof(member_manifest),
-                              "%s/%s/build.tur", anc, wm.members[i]);
             const char *resolved_name = NULL;
             PkgManifest mm;
             memset(&mm, 0, sizeof(mm));
             bool mm_ok = false;
-            if (mn > 0 && (size_t)mn < sizeof(member_manifest)) {
-                struct stat mst;
-                if (stat(member_manifest, &mst) == 0 && S_ISREG(mst.st_mode)
-                    && pkg_manifest_read(member_manifest, &mm)) {
-                    mm_ok = true;
-                    if (mm.name && mm.name[0]) resolved_name = mm.name;
-                }
+            if (mn > 0 && (size_t)mn < sizeof(member_dir)
+                && pkg_resolve_manifest_path(member_dir, member_manifest,
+                                             sizeof(member_manifest))
+                && pkg_manifest_read(member_manifest, &mm)) {
+                mm_ok = true;
+                if (mm.name && mm.name[0]) resolved_name = mm.name;
             }
             if (!resolved_name) {
                 const char *slash = strrchr(wm.members[i], '/');
@@ -1597,14 +1644,13 @@ bool pkg_fetch_all(const char *project_dir,
 
         /* Read transitive deps from this spice's build.tur.
          * If :subdir is set, the manifest lives inside the monorepo subdir. */
-        char sub_build[4096];
+        char sub_dir[4096];
         if (it->subdir)
-            snprintf(sub_build, sizeof(sub_build), "%s/%s/build.tur",
-                     dest, it->subdir);
+            snprintf(sub_dir, sizeof(sub_dir), "%s/%s", dest, it->subdir);
         else
-            snprintf(sub_build, sizeof(sub_build), "%s/build.tur", dest);
-        struct stat sub_st;
-        if (stat(sub_build, &sub_st) == 0) {
+            snprintf(sub_dir, sizeof(sub_dir), "%s", dest);
+        char sub_build[4096];
+        if (pkg_resolve_manifest_path(sub_dir, sub_build, sizeof(sub_build))) {
             PkgManifest sub;
             if (pkg_manifest_read(sub_build, &sub)) {
                 /* Record transitive deps in lock entry */
@@ -2041,10 +2087,8 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
         visited[n_visited++] = tur_strdup(canon);
 
         char sib_manifest[4096];
-        snprintf(sib_manifest, sizeof(sib_manifest),
-                 "%s/build.tur", sib_dir);
-        struct stat mst;
-        if (stat(sib_manifest, &mst) != 0 || !S_ISREG(mst.st_mode)) {
+        if (!pkg_resolve_manifest_path(sib_dir, sib_manifest,
+                                       sizeof(sib_manifest))) {
             free(sib_dir);
             continue;
         }
@@ -2715,6 +2759,7 @@ typedef struct {
     bool        no_justfile; /* --no-justfile */
     bool        dry_run;     /* --dry-run */
     bool        here;        /* --here (scaffold into cwd) */
+    bool        sweet;       /* --sweet (emit build.tur.sweet instead of build.tur) */
     const char *author;      /* --author "Name <email>" */
     const char *license;     /* --license MIT|Apache-2.0|BSD-3-Clause|none */
 } ScaffoldOpts;
@@ -2804,18 +2849,37 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
         }
     }
 
-    /* ---- build.tur ---- */
+    /* ---- build.tur (or build.tur.sweet) ---- */
     {
-        snprintf(path, sizeof(path), "%s/build.tur", dir);
+        const char *manifest_name = opts->sweet ? "build.tur.sweet" : "build.tur";
+        snprintf(path, sizeof(path), "%s/%s", dir, manifest_name);
         if (!opts->dry_run) {
-            PkgManifest m;
-            memset(&m, 0, sizeof(m));
-            m.name    = (char *)name;
-            m.version = "0.1.0";
-            if (!pkg_manifest_write(path, &m)) return 1;
-            printf("  build.tur\n");
+            if (opts->sweet) {
+                /* Sweet-exp scaffold: simple defpackage in t-expr form. */
+                char sweet_buf[1024];
+                snprintf(sweet_buf, sizeof(sweet_buf),
+                         "#lang sweet-exp\n"
+                         "defpackage \"%s\"\n"
+                         "  :version \"0.1.0\"\n",
+                         name);
+                FILE *f = fopen(path, "w");
+                if (!f) {
+                    fprintf(stderr, "tur: cannot write '%s': %s\n",
+                            path, strerror(errno));
+                    return 1;
+                }
+                fputs(sweet_buf, f);
+                fclose(f);
+            } else {
+                PkgManifest m;
+                memset(&m, 0, sizeof(m));
+                m.name    = (char *)name;
+                m.version = "0.1.0";
+                if (!pkg_manifest_write(path, &m)) return 1;
+            }
+            printf("  %s\n", manifest_name);
         } else {
-            printf("  build.tur\n");
+            printf("  %s\n", manifest_name);
         }
     }
 
@@ -3018,19 +3082,6 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
     return 0;
 }
 
-/* Legacy shim used by cmd_pkg_init and other callers. */
-static int scaffold_project(const char *dir, const char *name,
-                             bool is_bin, bool no_git) {
-    ScaffoldOpts opts;
-    memset(&opts, 0, sizeof(opts));
-    opts.dir     = dir;
-    opts.name    = name;
-    opts.is_bin  = is_bin;
-    opts.no_git  = no_git;
-    opts.license = "none";
-    return scaffold_project_ext(&opts);
-}
-
 /* ================================================================== */
 /* CLI: tur new                                                         */
 /* ================================================================== */
@@ -3058,6 +3109,7 @@ int cmd_pkg_new(int argc, char **argv) {
         else if (strcmp(argv[i], "--no-justfile") == 0) opts.no_justfile= true;
         else if (strcmp(argv[i], "--dry-run") == 0)   opts.dry_run     = true;
         else if (strcmp(argv[i], "--here") == 0)      opts.here        = true;
+        else if (strcmp(argv[i], "--sweet") == 0)     opts.sweet       = true;
         else if (strcmp(argv[i], "--kind") == 0 && i + 1 < argc) {
             i++;
             if (strcmp(argv[i], "bin") == 0)       opts.is_bin = true;
@@ -3100,6 +3152,7 @@ int cmd_pkg_new(int argc, char **argv) {
             "  --dry-run          print files that would be created; "
                                  "do not write\n"
             "  --here             scaffold into the current directory\n"
+            "  --sweet            emit build.tur.sweet (sweet-exp syntax)\n"
             "\n"
             "generated layout:\n"
             "  build.tur, tur.lock, src/<name>.tur, tests/<name>_test.tur\n"
@@ -3132,11 +3185,13 @@ int cmd_pkg_new(int argc, char **argv) {
             return 1;
         }
         /* Check the dir is empty (allow hidden files / .git) */
-        struct stat st;
-        if (stat("build.tur", &st) == 0) {
-            fprintf(stderr, "tur new: build.tur already exists in cwd "
-                    "(already initialised?)\n");
-            return 1;
+        {
+            char found[64];
+            if (pkg_resolve_manifest_cwd(found, sizeof(found))) {
+                fprintf(stderr, "tur new: %s already exists in cwd "
+                        "(already initialised?)\n", found);
+                return 1;
+            }
         }
         const char *base = strrchr(cwd, '/');
         opts.name = base ? base + 1 : cwd;
@@ -3192,15 +3247,17 @@ int cmd_pkg_new(int argc, char **argv) {
 /* ================================================================== */
 
 int cmd_pkg_init(int argc, char **argv) {
-    /* Usage: tur init [--bin|--lib] [--no-git] [<name>] */
+    /* Usage: tur init [--bin|--lib] [--no-git] [--sweet] [<name>] */
     bool is_bin = true;
     bool no_git = false;
+    bool sweet  = false;
     const char *name = NULL;
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--bin") == 0)         is_bin = true;
         else if (strcmp(argv[i], "--lib") == 0)    is_bin = false;
         else if (strcmp(argv[i], "--no-git") == 0) no_git = true;
+        else if (strcmp(argv[i], "--sweet") == 0)  sweet  = true;
         else if (argv[i][0] != '-') {
             if (name) {
                 fprintf(stderr, "tur init: unexpected argument '%s'\n", argv[i]);
@@ -3234,14 +3291,24 @@ int cmd_pkg_init(int argc, char **argv) {
         return 1;
     }
 
-    /* Refuse if build.tur already exists */
-    struct stat st;
-    if (stat("build.tur", &st) == 0) {
-        fprintf(stderr, "tur init: build.tur already exists\n");
-        return 1;
+    /* Refuse if build.tur or build.tur.sweet already exists */
+    {
+        char found[64];
+        if (pkg_resolve_manifest_cwd(found, sizeof(found))) {
+            fprintf(stderr, "tur init: %s already exists\n", found);
+            return 1;
+        }
     }
 
-    return scaffold_project(".", name, is_bin, no_git);
+    ScaffoldOpts opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.dir     = ".";
+    opts.name    = name;
+    opts.is_bin  = is_bin;
+    opts.no_git  = no_git;
+    opts.sweet   = sweet;
+    opts.license = "none";
+    return scaffold_project_ext(&opts);
 }
 
 /* ================================================================== */
@@ -3539,12 +3606,14 @@ int cmd_pkg_add(int argc, char **argv) {
                 url_or_path);
             return 1;
         }
-        struct stat ws_st;
-        if (stat("build.tur", &ws_st) != 0) {
-            fprintf(stderr,
-                "tur add --workspace: no build.tur found in current "
-                "directory; run from inside a workspace member\n");
-            return 1;
+        {
+            char ws_found[64];
+            if (!pkg_resolve_manifest_cwd(ws_found, sizeof(ws_found))) {
+                fprintf(stderr,
+                    "tur add --workspace: no build.tur found in current "
+                    "directory; run from inside a workspace member\n");
+                return 1;
+            }
         }
         if (!pkg_is_workspace_member(".", url_or_path)) {
             fprintf(stderr,
@@ -3574,16 +3643,16 @@ int cmd_pkg_add(int argc, char **argv) {
         return 1;
     }
 
-    /* Load existing build.tur */
-    struct stat st;
-    if (stat("build.tur", &st) != 0) {
+    /* Load existing manifest */
+    char manifest_path[64];
+    if (!pkg_resolve_manifest_cwd(manifest_path, sizeof(manifest_path))) {
         fprintf(stderr,
             "No build.tur found. Run `tur new <name>` to create a project.\n");
         return 1;
     }
     PkgManifest m;
     memset(&m, 0, sizeof(m));
-    if (!pkg_manifest_read("build.tur", &m)) return 1;
+    if (!pkg_manifest_read(manifest_path, &m)) return 1;
 
     /* Derive package name from URL/path or --name override */
     char name_buf[256];
@@ -3627,7 +3696,7 @@ int cmd_pkg_add(int argc, char **argv) {
     /* Write build.tur via form-based round-trip (preserves comments). */
     const char *spice_url  = is_path ? NULL : url_or_path;
     const char *spice_path = is_path ? url_or_path : NULL;
-    if (!pkg_build_tur_add_spice("build.tur", name_buf,
+    if (!pkg_build_tur_add_spice(manifest_path, name_buf,
                                   spice_url, ref, spice_path,
                                   is_path ? NULL : subdir, optional)) {
         pkg_manifest_free(&m);
@@ -3723,15 +3792,15 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
         return 1;
     }
 
-    struct stat st;
-    if (stat("build.tur", &st) != 0) {
+    char manifest_path[64];
+    if (!pkg_resolve_manifest_cwd(manifest_path, sizeof(manifest_path))) {
         fprintf(stderr, "tur add-cmake: no build.tur; run `tur init` first\n");
         return 1;
     }
 
     PkgManifest m;
     memset(&m, 0, sizeof(m));
-    if (!pkg_manifest_read("build.tur", &m)) return 1;
+    if (!pkg_manifest_read(manifest_path, &m)) return 1;
 
     /* Derive name from URL */
     char name_buf[256];
@@ -3778,7 +3847,7 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
         }
     }
 
-    if (!pkg_manifest_write("build.tur", &m)) {
+    if (!pkg_manifest_write(manifest_path, &m)) {
         pkg_manifest_free(&m);
         return 1;
     }
@@ -3810,15 +3879,15 @@ int cmd_pkg_fetch(int argc, char **argv) {
      * var and passes -DTUR_FETCH_FORCE_FETCH=ON to the cmake configure. */
     if (refetch) setenv("TUR_FETCH_FORCE_FETCH", "1", 1);
 
-    struct stat st;
-    if (stat("build.tur", &st) != 0) {
+    char manifest_path[64];
+    if (!pkg_resolve_manifest_cwd(manifest_path, sizeof(manifest_path))) {
         fprintf(stderr, "tur fetch: no build.tur found in current directory\n");
         return 1;
     }
 
     PkgManifest m;
     memset(&m, 0, sizeof(m));
-    if (!pkg_manifest_read("build.tur", &m)) return 1;
+    if (!pkg_manifest_read(manifest_path, &m)) return 1;
 
     /* LS6 (local-spice-dev-workflow): --dry-run classifies each direct
      * dep without performing any fetches or touching tur.lock.  Useful
@@ -4118,8 +4187,8 @@ int cmd_pkg_emit_cmake(int argc, char **argv) {
         }
     }
 
-    struct stat st;
-    if (stat("build.tur", &st) != 0) {
+    char manifest_path[64];
+    if (!pkg_resolve_manifest_cwd(manifest_path, sizeof(manifest_path))) {
         fprintf(stderr,
             "tur emit-cmake: no build.tur found in current directory\n"
             "  Run `tur init --lib <name>` to create a library project.\n");
@@ -4128,7 +4197,7 @@ int cmd_pkg_emit_cmake(int argc, char **argv) {
 
     PkgManifest m;
     memset(&m, 0, sizeof(m));
-    if (!pkg_manifest_read("build.tur", &m)) return 1;
+    if (!pkg_manifest_read(manifest_path, &m)) return 1;
 
     if (!m.name) {
         fprintf(stderr, "tur emit-cmake: build.tur has no :name field\n");

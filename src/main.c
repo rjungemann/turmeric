@@ -1486,7 +1486,7 @@ static char *resolve_build_dir(const char *input_or_root, const char *cli_flag) 
         if (root) {
             snprintf(manifest_dir, sizeof(manifest_dir), "%s", root);
             char mp[4096];
-            snprintf(mp, sizeof(mp), "%s/build.tur", root);
+            (void)pkg_resolve_manifest_path(root, mp, sizeof(mp));
             PkgManifest m;
             memset(&m, 0, sizeof(m));
             if (pkg_manifest_read(mp, &m) && m.build_dir && *m.build_dir) {
@@ -2027,9 +2027,7 @@ static char *find_project_root(const char *start) {
     dir[sizeof(dir) - 1] = '\0';
     for (;;) {
         char candidate[4096];
-        snprintf(candidate, sizeof(candidate), "%s/build.tur", dir);
-        struct stat st;
-        if (stat(candidate, &st) == 0) {
+        if (pkg_resolve_manifest_path(dir, candidate, sizeof(candidate))) {
             char *res = (char *)malloc(strlen(dir) + 1);
             if (res) strcpy(res, dir);
             return res;
@@ -2088,15 +2086,11 @@ static char *find_spice_root(const char *file_path) {
 
     for (int steps = 0; steps < TUR_SPICE_WALK_MAX; steps++) {
         char candidate[4096];
-        int n = snprintf(candidate, sizeof(candidate), "%s/build.tur", dir);
-        if (n > 0 && (size_t)n < sizeof(candidate)) {
-            struct stat st;
-            if (stat(candidate, &st) == 0 && S_ISREG(st.st_mode)) {
-                size_t dl = strlen(dir);
-                char *res = (char *)malloc(dl + 1);
-                if (res) memcpy(res, dir, dl + 1);
-                return res;
-            }
+        if (pkg_resolve_manifest_path(dir, candidate, sizeof(candidate))) {
+            size_t dl = strlen(dir);
+            char *res = (char *)malloc(dl + 1);
+            if (res) memcpy(res, dir, dl + 1);
+            return res;
         }
         char *slash = strrchr(dir, '/');
         if (!slash || slash == dir) break;
@@ -2112,7 +2106,10 @@ static char **discover_manifest_reader_macros(const char *input_path,
     char *sroot = find_spice_root(input_path);
     if (!sroot) return NULL;
     char mp[4096];
-    snprintf(mp, sizeof(mp), "%s/build.tur", sroot);
+    if (!pkg_resolve_manifest_path(sroot, mp, sizeof(mp))) {
+        free(sroot);
+        return NULL;
+    }
     PkgManifest m;
     memset(&m, 0, sizeof(m));
     char **out = NULL;
@@ -2245,8 +2242,7 @@ static int auto_append_spice_includes(const char *input,
      * first, then look for src/.  If no src/ exists, fall back to the
      * dep dir itself so the user gets *some* search path. */
     char manifest_path[4096];
-    int mn = snprintf(manifest_path, sizeof(manifest_path), "%s/build.tur", root);
-    if (mn > 0 && (size_t)mn < sizeof(manifest_path)) {
+    if (pkg_resolve_manifest_path(root, manifest_path, sizeof(manifest_path))) {
         PkgManifest m;
         memset(&m, 0, sizeof(m));
         if (pkg_manifest_read(manifest_path, &m)) {
@@ -2325,12 +2321,8 @@ static int auto_append_spice_includes(const char *input,
                 *last = '\0';
 
                 char ws_manifest[4096];
-                int wn = snprintf(ws_manifest, sizeof(ws_manifest),
-                                  "%s/build.tur", anc);
-                if (wn <= 0 || (size_t)wn >= sizeof(ws_manifest)) continue;
-
-                struct stat wst;
-                if (stat(ws_manifest, &wst) != 0 || !S_ISREG(wst.st_mode))
+                if (!pkg_resolve_manifest_path(anc, ws_manifest,
+                                               sizeof(ws_manifest)))
                     continue;
 
                 PkgManifest wm;
@@ -2492,7 +2484,7 @@ static void collect_tur_recursive(const char *dir,
         } else if (S_ISREG(st.st_mode)) {
             size_t len = strlen(ent->d_name);
             if (len < 4 || strcmp(ent->d_name + len - 4, ".tur") != 0) continue;
-            if (strcmp(ent->d_name, "build.tur") == 0) continue; /* manifest */
+            if (pkg_is_manifest_name(ent->d_name)) continue; /* manifest */
             if (*n >= *cap) {
                 *cap = *cap ? *cap * 2 : 8;
                 *files = (char **)realloc(*files, (size_t)*cap * sizeof(char *));
@@ -2523,7 +2515,7 @@ static char **collect_project_src_files(const char *root, int *n_out) {
         int rn = 0;
         char **raw = collect_tur_files(root, &rn);
         for (int i = 0; i < rn; i++) {
-            if (strcmp(basename_of(raw[i]), "build.tur") == 0) {
+            if (pkg_is_manifest_name(basename_of(raw[i]))) {
                 free(raw[i]);
                 continue;
             }
@@ -2663,7 +2655,11 @@ static void resolve_project_include_dirs(const char *dir,
     if (!proj_root) return;
 
     char manifest_path[4096];
-    snprintf(manifest_path, sizeof(manifest_path), "%s/build.tur", proj_root);
+    if (!pkg_resolve_manifest_path(proj_root, manifest_path,
+                                   sizeof(manifest_path))) {
+        free(proj_root);
+        return;
+    }
     PkgManifest m;
     if (!pkg_manifest_read(manifest_path, &m)) {
         free(proj_root);
@@ -2844,7 +2840,7 @@ static int cmd_run(int argc, char **argv) {
             char *sroot = find_spice_root(explicit_file);
             if (sroot) {
                 char mp[4096];
-                snprintf(mp, sizeof(mp), "%s/build.tur", sroot);
+                (void)pkg_resolve_manifest_path(sroot, mp, sizeof(mp));
                 PkgManifest sm; memset(&sm, 0, sizeof(sm));
                 if (pkg_manifest_read(mp, &sm)) {
                     rm_paths_owned = resolve_manifest_reader_macros(
@@ -2877,7 +2873,11 @@ static int cmd_run(int argc, char **argv) {
 
     /* Parse manifest for entry point configuration. */
     char manifest_path[4096];
-    snprintf(manifest_path, sizeof(manifest_path), "%s/build.tur", root);
+    if (!pkg_resolve_manifest_path(root, manifest_path,
+                                   sizeof(manifest_path))) {
+        free(root);
+        return 1;
+    }
     PkgManifest m;
     memset(&m, 0, sizeof(m));
     if (!pkg_manifest_read(manifest_path, &m)) { free(root); return 1; }
@@ -3352,7 +3352,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             char *proj_root = find_project_root(dir);
             if (proj_root) {
                 char mp[4096];
-                snprintf(mp, sizeof(mp), "%s/build.tur", proj_root);
+                (void)pkg_resolve_manifest_path(proj_root, mp, sizeof(mp));
                 PkgManifest mm;
                 memset(&mm, 0, sizeof(mm));
                 if (pkg_manifest_read(mp, &mm) && mm.name && mm.name[0]) {
@@ -3887,7 +3887,7 @@ static int cmd_build_project(const char *root, const char *out_path,
      * loudly rather than silently shipping an incomplete library. */
     {
         char mpath[4096];
-        snprintf(mpath, sizeof(mpath), "%s/build.tur", root);
+        (void)pkg_resolve_manifest_path(root, mpath, sizeof(mpath));
         PkgManifest em;
         if (pkg_manifest_read(mpath, &em)) {
             int missing = 0;
@@ -3967,7 +3967,7 @@ static int cmd_build_project(const char *root, const char *out_path,
                 if (bd) {
                     char base[1024];
                     char mp[4096];
-                    snprintf(mp, sizeof(mp), "%s/build.tur", root);
+                    (void)pkg_resolve_manifest_path(root, mp, sizeof(mp));
                     PkgManifest mm; memset(&mm, 0, sizeof(mm));
                     if (pkg_manifest_read(mp, &mm) && mm.name && mm.name[0]) {
                         snprintf(base, sizeof(base), "%s", mm.name);
@@ -4032,7 +4032,7 @@ static int cmd_build_project(const char *root, const char *out_path,
      * the boundary.  Transitive deps-of-deps remain out of scope. */
     {
         char mpath[4096];
-        snprintf(mpath, sizeof(mpath), "%s/build.tur", root);
+        (void)pkg_resolve_manifest_path(root, mpath, sizeof(mpath));
         PkgManifest dm;
         if (pkg_manifest_read(mpath, &dm)) {
             resolve_include_dirs_from_manifest(root, &dm, /*include_own_src=*/false,
@@ -8414,7 +8414,7 @@ int main(int argc, char **argv) {
             int    b_n   = 0;
             if (b_root) {
                 char mp[4096];
-                snprintf(mp, sizeof(mp), "%s/build.tur", b_root);
+                (void)pkg_resolve_manifest_path(b_root, mp, sizeof(mp));
                 PkgManifest bm; memset(&bm, 0, sizeof(bm));
                 if (pkg_manifest_read(mp, &bm)) {
                     b_rm = resolve_manifest_reader_macros(b_root, &bm, &b_n);

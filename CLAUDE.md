@@ -117,6 +117,17 @@ The main turmeric compiler is built with CMake directly. Once `tur` is on
 `PATH`, project-level recipes (build, test, docs, wasm, web-dev) are invoked
 via `tur run`, which reads the same Justfile.
 
+### Manifest filename: `build.tur` or `build.tur.sweet`
+
+Wherever the manifest is read (walk-up discovery, workspace member
+resolution, transitive `:spices` deps, cwd-relative `tur add`/`tur fetch`),
+both `build.tur` (plain s-expr) and `build.tur.sweet` (sweet-exp syntax)
+are accepted. When both exist in the same directory the plain `build.tur`
+wins. `pkg_manifest_read` selects the reader from the extension, so a
+`.tur.sweet` manifest goes through the sweet-exp preprocessor without any
+caller change. `tur init --sweet` scaffolds the sweet variant; bare
+`tur init` still emits `build.tur`.
+
 ### Bootstrap (compile `tur` from source)
 
 ```sh

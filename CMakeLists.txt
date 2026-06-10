@@ -156,6 +156,14 @@ add_test(
   COMMAND bash tests/run-build-project.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Sweet-exp manifest support: verifies build.tur.sweet is treated as a
+# fully equivalent manifest by walk-up discovery, pkg_manifest_read, and
+# tur init --sweet.  See docs/upcoming/build-tur-sweet-manifest-plan.md.
+add_test(
+  NAME tur_sweet_manifest
+  COMMAND bash tests/run-sweet-manifest.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # scscm-compile: build the scscm-compile fixture project (imports the scscm
 # spice via :path) and diff its stdout against expected.stdout.  Skips with
 # PASS when ../turmeric-spices is absent.
