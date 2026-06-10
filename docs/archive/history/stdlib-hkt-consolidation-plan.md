@@ -232,16 +232,19 @@ open-coding in `httpd` / `csv` / `json` becomes `fmap` / `bimap` /
 - [x] `bash tests/run.sh` passes with zero `FAIL` lines.
 - [x] `tur run docs` regenerated (`stdlib/docstrings.tur`,
   `web/public/doc-names.json`).
-- [ ] **T4** -- Instance-head syntax admits a single hole at any position
-  (`(Result _ B)`), validated by a fixture on a non-`Result` constructor and
-  a negative fixture rejecting multi-hole heads.
-- [ ] **T4** -- `Functor`/`Applicative`/`Monad`/`MonadError [Result]` ok-biased
-  instances exist in `stdlib/result.tur` and are exercised by a fixture
-  including the report's two-line proof case.
-- [ ] **T4** -- The report
-  `docs/reported/result-param-order-blocks-functor-monad.md` is marked
-  resolved (or moved per the prevailing convention) with a pointer to the
-  T4 commit and fixture.
+- [x] **T4** -- Instance-head syntax admits a single hole at any position
+  (`(Result _ B)`), validated by `tests/fixtures/instance-head-hole-pair/`
+  (non-`Result` constructor) and `tests/fixtures/instance-head-two-holes/`
+  (negative -- multi-hole heads rejected).
+- [x] **T4** -- `Functor`/`Monad`/`MonadError [(Result _ B)]` ok-biased
+  instances exist in `stdlib/result.tur` and are exercised by
+  `tests/fixtures/hkt-stdlib-result-ok-biased/`. `Applicative [(Result _ B)]`
+  is intentionally deferred -- its no-receiver `pure` is argument-dispatched
+  and collides with `Applicative [Option]`, a cross-cutting return-vs-argument
+  dispatch limitation independent of instance-head expressiveness.
+- [x] **T4** -- `docs/reported/result-param-order-blocks-functor-monad.md`
+  moved to `docs/archive/history/`; all named blockers
+  (`MonadError`/ok-biased `Functor`/`Monad`) are shipped.
 
 ## Cross-references
 
