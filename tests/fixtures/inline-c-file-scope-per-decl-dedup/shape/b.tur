@@ -1,0 +1,18 @@
+;; Module B: different #include set, the SAME __shape decl, AND a sibling
+;; __aux decl that only this module emits.  The block as a whole differs
+;; from module A's, but the __shape chunk is identical.  Per-decl dedup
+;; must collapse __shape and still emit __aux + B's #include.
+(defmodule shape/b
+  (export b-get)
+  ```c
+  #include <stdlib.h>
+  #include <string.h>
+  struct __shape { int64_t x; int64_t y; };
+  struct __aux { int64_t tag; };
+  ```
+  (defn b-get [p : int] : int
+    ```c
+    struct __shape *s = (struct __shape *)(intptr_t)p;
+    struct __aux a; a.tag = 0; (void)a;
+    return (int)s->y;
+    ```))

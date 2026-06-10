@@ -1,0 +1,22 @@
+;; Regression: file-scope inline-C struct dedup across NON-identical blocks.
+;; Module A's block has one #include + a struct.  Module B's block has a
+;; different #include set + the SAME struct + a sibling struct.  The
+;; block-level dedup would key the whole blocks separately (they differ in the
+;; surrounding text), emit both, and produce two file-scope `struct __shape`
+;; decls -- cc rejects with `redefinition of 'struct __shape'`.  Per-decl
+;; dedup splits each block into chunks, keeps the first `struct __shape`,
+;; emits B's sibling `struct __aux`, and the TU compiles.  Expected: 42.
+;; See docs/reported/cascade-struct-redef-non-identical-blocks.md.
+(defmodule shape-main
+  (import shape/a :as a)
+  (import shape/b :as b)
+  (defn make-shape [] : int
+    ```c
+    struct __shape { int64_t x; int64_t y; };
+    struct __shape *s = (struct __shape *)malloc(sizeof(*s));
+    s->x = 10; s->y = 32;
+    return (int64_t)(intptr_t)s;
+    ```)
+  (defn main [] : int
+    (let [p (make-shape)]
+      (println (+ (a/a-get p) (b/b-get p))))))

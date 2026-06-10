@@ -71,6 +71,150 @@ static void inline_c_dedup_free(InlineCDedup *d) {
     d->n = d->cap = 0;
 }
 
+/* Scan a file-scope inline-C block and split it into "chunks": one chunk per
+ * preprocessor directive (a line starting with '#') and one chunk per
+ * top-level declaration (text up to a `;` at brace-depth 0). String and
+ * char literals, line comments (`//`) and block comments are passed
+ * through verbatim and never split a chunk.
+ *
+ * Why: two modules can each emit a file-scope inline-C block that shares a
+ * `struct __foo { ... };` declaration but is otherwise different (different
+ * `#include` set, different sibling decls). The block-level dedup misses
+ * them; the resulting TU has two file-scope `struct __foo` declarations and
+ * cc rejects with `redefinition`. Per-declaration dedup catches the shared
+ * decl while still emitting the differing siblings.
+ *
+ * `out_starts[i]` and `out_lens[i]` describe chunk i within the original
+ * buffer (i.e. into `p`). Returned arrays are freshly malloc'd; caller frees.
+ *
+ * Tokenization heuristic: this is *not* a C parser. It tracks string/char
+ * literals, line and block comments, and `{}` depth to find top-level
+ * `;`-terminators and bare directive lines. It does not understand
+ * `extern "C" { ... }` blocks or `typedef struct { ... } NAME;` differently
+ * from any other brace block -- the close-brace at depth 1 returns to 0, and
+ * the trailing `;` ends the chunk. Adequate for the patterns the codegen
+ * actually emits (header includes, struct/typedef/extern/static decls). */
+static void inline_c_split_chunks(const char *p, size_t len,
+                                   size_t **out_starts, size_t **out_lens,
+                                   uint32_t *out_n) {
+    size_t *starts = NULL;
+    size_t *lens   = NULL;
+    uint32_t n = 0, cap = 0;
+
+    size_t i = 0;
+    while (i < len) {
+        /* Skip leading inter-chunk whitespace. */
+        while (i < len && (p[i] == ' ' || p[i] == '\t' || p[i] == '\n' ||
+                            p[i] == '\r' || p[i] == '\f' || p[i] == '\v'))
+            i++;
+        if (i >= len) break;
+
+        size_t chunk_start = i;
+        bool   directive   = (p[i] == '#');
+        int    brace_depth = 0;
+
+        while (i < len) {
+            char c = p[i];
+            /* Preprocessor directive: chunk ends at end of line (with
+             * support for `\`-continued lines). */
+            if (directive) {
+                if (c == '\n') { i++; break; }
+                if (c == '\\' && i + 1 < len &&
+                    (p[i+1] == '\n' || p[i+1] == '\r')) {
+                    i += 2;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+            /* Line comment: pass through, ends at newline. */
+            if (c == '/' && i + 1 < len && p[i+1] == '/') {
+                i += 2;
+                while (i < len && p[i] != '\n') i++;
+                continue;
+            }
+            /* Block comment: pass through, ends at closing star-slash. */
+            if (c == '/' && i + 1 < len && p[i+1] == '*') {
+                i += 2;
+                while (i + 1 < len && !(p[i] == '*' && p[i+1] == '/')) i++;
+                if (i + 1 < len) i += 2;
+                continue;
+            }
+            /* String literal: pass through, handle escapes. */
+            if (c == '"') {
+                i++;
+                while (i < len && p[i] != '"') {
+                    if (p[i] == '\\' && i + 1 < len) i += 2;
+                    else i++;
+                }
+                if (i < len) i++;
+                continue;
+            }
+            /* Char literal: same. */
+            if (c == '\'') {
+                i++;
+                while (i < len && p[i] != '\'') {
+                    if (p[i] == '\\' && i + 1 < len) i += 2;
+                    else i++;
+                }
+                if (i < len) i++;
+                continue;
+            }
+            if (c == '{') { brace_depth++; i++; continue; }
+            if (c == '}') { if (brace_depth > 0) brace_depth--; i++; continue; }
+            if (c == ';' && brace_depth == 0) { i++; break; }
+            i++;
+        }
+
+        size_t chunk_len = i - chunk_start;
+        /* Trim trailing whitespace from the recorded slice (so chunks
+         * normalize cleanly under inline_c_normalize_ws). */
+        while (chunk_len > 0) {
+            char last = p[chunk_start + chunk_len - 1];
+            if (last == ' ' || last == '\t' || last == '\n' || last == '\r' ||
+                last == '\f' || last == '\v')
+                chunk_len--;
+            else break;
+        }
+        if (chunk_len == 0) continue;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 8;
+            starts = (size_t *)realloc(starts, cap * sizeof(*starts));
+            lens   = (size_t *)realloc(lens,   cap * sizeof(*lens));
+        }
+        starts[n] = chunk_start;
+        lens[n]   = chunk_len;
+        n++;
+    }
+
+    *out_starts = starts;
+    *out_lens   = lens;
+    *out_n      = n;
+}
+
+/* Emit a file-scope inline-C block with per-declaration dedup. Chunks
+ * already seen by the dedup are silently dropped; new chunks are appended
+ * to `buf` separated by newlines. Returns true if at least one chunk was
+ * emitted (so the caller can append a trailing newline only when needed). */
+static bool inline_c_emit_block_deduped(Buf *buf, InlineCDedup *d,
+                                         const char *p, size_t len) {
+    size_t   *starts = NULL;
+    size_t   *lens   = NULL;
+    uint32_t  n      = 0;
+    inline_c_split_chunks(p, len, &starts, &lens, &n);
+
+    bool any_emitted = false;
+    for (uint32_t i = 0; i < n; i++) {
+        if (inline_c_dedup_seen(d, p + starts[i], lens[i])) continue;
+        buf_write(buf, p + starts[i], lens[i]);
+        buf_putc(buf, '\n');
+        any_emitted = true;
+    }
+    free(starts);
+    free(lens);
+    return any_emitted;
+}
+
 static bool thunk_type_has_concrete_c_abi(Type t) {
     switch (t.kind) {
         case TY_NIL:
@@ -5233,10 +5377,9 @@ int emit_program(Buf *out, const Expr *program) {
              * verbatim at file scope, not a statement in main().  It carries no
              * captures/val-exprs, so emit its text directly. */
             InlineC *ic = e->as.inline_c_.inline_c;
-            if (ic && ic->code.p && ic->code.len > 0 &&
-                !inline_c_dedup_seen(&cprelude_dedup, ic->code.p, ic->code.len)) {
-                buf_write(&cprelude, ic->code.p, ic->code.len);
-                buf_putc(&cprelude, '\n');
+            if (ic && ic->code.p && ic->code.len > 0) {
+                inline_c_emit_block_deduped(&cprelude, &cprelude_dedup,
+                                             ic->code.p, ic->code.len);
             }
         } else {
             emit_stmt(&ctx, &body, e);
@@ -6215,10 +6358,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         const Expr *e = impl_items[i];
         if (e->kind != EX_INLINE_C) continue;
         InlineC *ic = e->as.inline_c_.inline_c;
-        if (ic && ic->code.p && ic->code.len > 0 &&
-            !inline_c_dedup_seen(&impl_dedup, ic->code.p, ic->code.len)) {
-            buf_write(&file, ic->code.p, ic->code.len);
-            buf_putc(&file, '\n');
+        if (ic && ic->code.p && ic->code.len > 0) {
+            inline_c_emit_block_deduped(&file, &impl_dedup,
+                                         ic->code.p, ic->code.len);
         }
     }
     inline_c_dedup_free(&impl_dedup);

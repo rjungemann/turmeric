@@ -1,0 +1,12 @@
+;; Module A: block has one #include + the carrier struct decl.
+(defmodule shape/a
+  (export a-get)
+  ```c
+  #include <stdlib.h>
+  struct __shape { int64_t x; int64_t y; };
+  ```
+  (defn a-get [p : int] : int
+    ```c
+    struct __shape *s = (struct __shape *)(intptr_t)p;
+    return (int)s->x;
+    ```))

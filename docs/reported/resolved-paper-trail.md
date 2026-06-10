@@ -180,6 +180,31 @@ dependency. Plain `http-get` compiles and runs on bare hosts. The
 cascade fixture itself still fails on a residual struct-redef pattern
 tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
 
+### File-scope inline-C struct redefinitions across non-identical blocks (FIXED)
+
+[`../archive/cascade-struct-redef-non-identical-blocks.md`](../archive/cascade-struct-redef-non-identical-blocks.md)
+
+The previous file-scope inline-C dedup keyed on whole-block normalized text,
+which only collapsed byte-identical blocks across modules. The tourist
+cascade exposed the next layer: two modules each emitting a top-level block
+with the same `struct __httpd_resp { ... };` decl but different surrounding
+`#include` preludes and sibling decls. The block keys diverged, both blocks
+were emitted, and cc rejected the TU with `redefinition of '__httpd_resp'`.
+**Fix (Proposal #1, per-declaration dedup):** `inline_c_split_chunks` in
+`src/compiler/emit_module.c` tokenizes each file-scope inline-C block into
+chunks -- one per preprocessor directive (line starting with `#`) and one
+per top-level `;`-terminated decl -- tracking string/char literals,
+line/block comments, and `{}` depth so braces in struct bodies do not split
+a decl. `inline_c_emit_block_deduped` dedupes chunks individually (under
+the existing whitespace-normalized key) and emits only unseen chunks.
+Applies to both the `cprelude` and `impl` dedup sites. Regression coverage:
+`tests/fixtures/inline-c-file-scope-per-decl-dedup/` (two modules with
+different `#include` sets sharing a struct decl plus a sibling decl) and
+the existing byte-identical case in
+`inline-c-file-scope-struct-dedup/` still passes. End-to-end validated by
+`tur run ../turmeric-spices/spices/tourist/tests/fixtures/cascade/cascade.tur`
+(4 tests, all green).
+
 ### `cons` builtin rejected `:cstr` head (FIXED)
 
 [`../archive/cons-builtin-rejects-cstr-head.md`](../archive/cons-builtin-rejects-cstr-head.md)
