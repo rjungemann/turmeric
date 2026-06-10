@@ -223,18 +223,31 @@ if [ $sym_rc -ne 0 ] || [ ! -x "$WORK/symbin" ]; then
 else
     "$WORK/symbin"
     sym_run_rc=$?
+    # Exit 0 proves the two modules' `:foo` are the same interned record -- the
+    # single-record guarantee, however it is realized.  project-mode executables
+    # now build whole-program (the entry module single-file; see
+    # project-mode-rc-runtime-preamble-missing.md), so the two modules land in one
+    # TU and `:foo` interns once as a file-local `static` record rather than a
+    # weak global folded across TUs -- nm cannot observe a static, so the
+    # single-weak-symbol check below is moved to the --shared (.so) build, which
+    # keeps separate compilation and is where cross-TU weak-folding still applies.
     if [ "$sym_run_rc" -eq 0 ]; then
         pass "build-project-sym-cross-tu"
     else
         fail "build-project-sym-cross-tu" "exit=$sym_run_rc (expected 0; :foo not folded across TUs)"
     fi
-    # nm: exactly one __tur_sym_foo object in the linked binary (weak-folded).
-    if command -v nm >/dev/null 2>&1; then
-        sym_count=$(nm "$WORK/symbin" 2>/dev/null | grep -c "__tur_sym_foo")
+    # Cross-TU weak-folding: build the same modules as a shared library (which
+    # retains separate compilation), then assert exactly one weak __tur_sym_foo
+    # object survives in the .so -- i.e. the per-TU records folded to one.
+    symlib_out=$(cd "$WORK" && "$TUR" -Xsymbols build "$SYMP" --shared -o "$WORK/symlib.so" 2>&1)
+    if [ $? -ne 0 ] || [ ! -f "$WORK/symlib.so" ]; then
+        fail "build-project-sym-cross-tu-single-symbol" "shared build failed: $symlib_out"
+    elif command -v nm >/dev/null 2>&1; then
+        sym_count=$(nm "$WORK/symlib.so" 2>/dev/null | grep -c "__tur_sym_foo")
         if [ "$sym_count" -eq 1 ]; then
             pass "build-project-sym-cross-tu-single-symbol"
         else
-            fail "build-project-sym-cross-tu-single-symbol" "nm found $sym_count __tur_sym_foo symbols (expected 1)"
+            fail "build-project-sym-cross-tu-single-symbol" "nm found $sym_count __tur_sym_foo symbols in .so (expected 1)"
         fi
     fi
 fi
@@ -305,6 +318,11 @@ fi
 # `cons` is registered as a builtin lowering to a {head,tail} cons-cell helper
 # emitted into each TU's preamble, so it resolves without the stdlib auto-load
 # that project mode skips (closes the c-dsl/glsl gap; F6 in the report).
+# NOTE (project-mode-rc-runtime-preamble-missing): executable project builds now
+# compile whole-program (entry module single-file), which DOES auto-load stdlib
+# -- so a local defn named `list-head`/`list-tail` would collide with stdlib's.
+# The local cell accessors are named `cell-head`/`cell-tail` to avoid that; the
+# assertion (cons builtin + {head,tail} layout -> 33) is unchanged.
 CONS_PROJ="$WORK/prelude-cons"
 mkdir -p "$CONS_PROJ/src/app"
 cat > "$CONS_PROJ/build.tur" <<'EOF'
@@ -312,10 +330,10 @@ cat > "$CONS_PROJ/build.tur" <<'EOF'
 EOF
 cat > "$CONS_PROJ/src/app/main.tur" <<'EOF'
 (defmodule app/main
-  (defn list-head [l : int] : int
+  (defn cell-head [l : int] : int
     ```c struct __tur_cell_t { int64_t head; int64_t tail; };
     return ((struct __tur_cell_t *)(intptr_t)l)->head; ```)
-  (defn list-tail [l : int] : int
+  (defn cell-tail [l : int] : int
     ```c struct __tur_cell_t { int64_t head; int64_t tail; };
     return ((struct __tur_cell_t *)(intptr_t)l)->tail; ```)
   (defn main [] : int
@@ -323,7 +341,7 @@ cat > "$CONS_PROJ/src/app/main.tur" <<'EOF'
     ;; head=11, head(tail)=22 -> 33 proves cons cells are allocated and the
     ;; {head,tail} layout matches the list.tur walkers.
     (let [lst (cons 11 (cons 22 0))]
-      (+ (list-head lst) (list-head (list-tail lst))))))
+      (+ (cell-head lst) (cell-head (cell-tail lst))))))
 EOF
 cons_out=$(cd "$WORK" && "$TUR" build "$CONS_PROJ" -o "$WORK/consbin" 2>&1)
 cons_rc=$?
@@ -641,6 +659,93 @@ else
     else
         fail "build-project-parametric-struct-by-value" "exit=$pstruct_run_rc (expected 21)"
     fi
+fi
+
+# project-mode-rc-runtime-preamble-missing: rc<T> / reference counting in a
+# project-mode build.  Separate compilation omitted the inline RC/frame runtime
+# (RcControlBlock, rc_cb_alloc, tur_frame, ...), so any `rc/of` failed at cc with
+# "unknown type name 'RcControlBlock'".  Executable project builds now compile
+# the entry module whole-program (single-file), inlining every imported module
+# into one TU that carries the full runtime, so RC works and there is a single
+# GC registry by construction.  Run under leak detection to prove the rc is
+# allocated, counted, and freed cleanly.
+RCPROJ="$WORK/rc-proj"
+mkdir -p "$RCPROJ/src/foo"
+cat > "$RCPROJ/build.tur" <<'EOF'
+(defpackage tur-rc-proj :name "tur-rc-proj" :version "0.1.0"
+  :exports #{ "foo/alloc" ["alloc-and-count"] })
+EOF
+# Module A allocates an rc<int> and an rc<struct-with-rc-field>; module B (main)
+# calls into it.  A returns the struct rc's strong count (1) as the exit code.
+cat > "$RCPROJ/src/foo/alloc.tur" <<'EOF'
+(defmodule foo/alloc
+  (export alloc-and-count)
+  (defstruct Wrapper :move [val : rc<int>])
+  (defn alloc-and-count [] : int
+    (let [inner (rc/of 10)]
+      (let [w (rc/of (make-struct Wrapper inner))]
+        (rc/strong-count w)))))
+EOF
+cat > "$RCPROJ/src/foo/main.tur" <<'EOF'
+(defmodule foo/main
+  (import foo/alloc :refer [alloc-and-count])
+  (defn main [] : int
+    (alloc-and-count)))
+EOF
+rc_out=$(cd "$WORK" && "$TUR" build "$RCPROJ" -o "$WORK/rcbin" 2>&1)
+rc_rc=$?
+if [ $rc_rc -ne 0 ] || [ ! -x "$WORK/rcbin" ]; then
+    fail "build-project-rc-runtime" "tur build exit=$rc_rc: $rc_out"
+else
+    ASAN_OPTIONS=detect_leaks=1 "$WORK/rcbin"
+    rc_run_rc=$?
+    if [ "$rc_run_rc" -eq 1 ]; then
+        pass "build-project-rc-runtime"
+    else
+        fail "build-project-rc-runtime" "exit=$rc_run_rc (expected 1; rc strong-count or a leak/ASan abort)"
+    fi
+fi
+
+# project-mode-rc-runtime-preamble-missing (owner-TU design): a --shared spice
+# that EXPORTS a module using rc<T> compiles via separate compilation, where the
+# runtime cannot be inlined per-module (duplicate GC state / duplicate symbols).
+# The owner-TU design gives every module .c a static replica of the runtime
+# functions plus an extern view of the runtime globals, defined once in the
+# generated tur_runtime.c.  Assert the .so links, exports the rc-using function,
+# and that the GC registry global has exactly one owning definition.
+RCSO="$WORK/rc-so"
+mkdir -p "$RCSO/src/widget"
+cat > "$RCSO/build.tur" <<'EOF'
+(defpackage rc-so :name "rc-so" :version "0.1.0"
+  :exports #{ "widget/box" ["alloc-box"] })
+EOF
+cat > "$RCSO/src/widget/box.tur" <<'EOF'
+(defmodule widget/box
+  (export alloc-box)
+  (defstruct Wrapper :move [val : rc<int>])
+  (defn alloc-box [] : int
+    (let [inner (rc/of 10)]
+      (let [w (rc/of (make-struct Wrapper inner))]
+        (rc/strong-count w)))))
+EOF
+rcso_out=$(cd "$WORK" && "$TUR" build "$RCSO" --shared -o "$WORK/rcbox.so" 2>&1)
+rcso_rc=$?
+if [ $rcso_rc -ne 0 ] || [ ! -f "$WORK/rcbox.so" ]; then
+    fail "build-shared-rc-runtime" "tur build --shared exit=$rcso_rc: $rcso_out"
+elif command -v nm >/dev/null 2>&1; then
+    # The exported rc-using function must be present, and the GC registry global
+    # must resolve to exactly one owning definition (the owner TU), not one per
+    # module .c -- proving single shared GC state across the separately-compiled
+    # translation units.
+    has_export=$(nm -D "$WORK/rcbox.so" 2>/dev/null | grep -cE 'widget__box__alloc_hybox')
+    gc_owners=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' [A-Za-z] gc_all_blocks$')
+    if [ "$has_export" -ge 1 ] && [ "$gc_owners" -eq 1 ]; then
+        pass "build-shared-rc-runtime"
+    else
+        fail "build-shared-rc-runtime" "export=$has_export gc_all_blocks_owners=$gc_owners (expected >=1 and 1)"
+    fi
+else
+    pass "build-shared-rc-runtime"
 fi
 
 echo

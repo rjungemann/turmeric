@@ -9,6 +9,14 @@
  * 0 on success, -1 on error (diagnostics already emitted). */
 int emit_program(Buf *out, const Expr *program);
 
+/* project-mode-rc-runtime-preamble-missing (owner-TU design): emit the shared
+ * inline C runtime as an include-guarded header (`tur_runtime.h`).  Every module
+ * TU of a separate-compilation (`--shared`) build includes this; the single TU
+ * that #defines TUR_RT_OWNER before including it (the generated tur_runtime.c)
+ * supplies the one definition of each runtime global, while the runtime
+ * functions are file-local (static) replicas operating on that shared state. */
+void emit_shared_runtime_header(Buf *out);
+
 /* J5/J6: A forced ABI specialization -- a clone that a borrower module needs
  * emitted by the owner module (even when the owner has no local call sites).
  * Passed from cmd_build_multi / cmd_emit_c_to_dir to emit_header and
