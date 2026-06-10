@@ -37,6 +37,14 @@ add_test(
   COMMAND bash tests/run-tur-new.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Regression for tur-run-alias-breaks-snapshot-ci-guard: `alias NAME :=
+# TARGET` lines used to abort the whole Justfile parse, making recipes
+# after them unreachable.
+add_test(
+  NAME tur_run_alias
+  COMMAND bash tests/run-tur-run-alias.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_fmt_tests
   COMMAND bash tests/run-fmt.sh

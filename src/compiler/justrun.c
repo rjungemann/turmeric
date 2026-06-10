@@ -64,6 +64,7 @@ extern _Bool use_json_output;
 #define JR_MAX_LINES   512
 #define JR_MAX_RECIPES 256
 #define JR_MAX_VARS    128
+#define JR_MAX_ALIASES 64
 #define JR_MAX_SHELL     8
 
 /* ================================================================== */
@@ -114,10 +115,17 @@ typedef struct {
 } JSettings;
 
 typedef struct {
+    char *name;
+    char *target;
+} JAlias;
+
+typedef struct {
     JRecipe  recipes[JR_MAX_RECIPES];
     int      n_recipes;
     JVar     vars[JR_MAX_VARS];
     int      n_vars;
+    JAlias   aliases[JR_MAX_ALIASES];
+    int      n_aliases;
     JSettings settings;
     char    *justfile_dir;
 } JFile;
@@ -356,14 +364,7 @@ static int check_unsupported(const char *line, int lineno, const char *path) {
         }
     }
 
-    /* Alias */
-    if (jr_starts_with(p, "alias ") && strstr(p, " := ")) {
-        fprintf(stderr,
-            "tur run: unsupported Justfile feature at %s:%d: alias\n"
-            "        Install `just` (https://just.systems) for aliases.\n",
-            path, lineno);
-        return 1;
-    }
+    /* Alias is handled directly in the parse loop now (see parse_justfile). */
 
     return 0;
 }
@@ -539,6 +540,38 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
         /* ---- Blank line ---- */
         const char *t = jr_ltrim(line);
         if (*t == '\0') {
+            free(pending_doc);
+            pending_doc = NULL;
+            free(line);
+            continue;
+        }
+
+        /* ---- Alias: `alias NAME := TARGET` ---- */
+        if (jr_starts_with(t, "alias ") && strstr(t, ":=")) {
+            const char *q = t + 6;
+            while (*q == ' ' || *q == '\t') q++;
+            const char *name_start = q;
+            while (*q && *q != ' ' && *q != '\t' && *q != ':' && *q != '\n') q++;
+            char *aname = jr_strndup(name_start, (size_t)(q - name_start));
+            const char *eq = strstr(q, ":=");
+            if (aname && eq) {
+                const char *rhs = eq + 2;
+                while (*rhs == ' ' || *rhs == '\t') rhs++;
+                const char *tgt_start = rhs;
+                while (*rhs && *rhs != ' ' && *rhs != '\t' &&
+                       *rhs != '\n' && *rhs != '\r' && *rhs != '#') rhs++;
+                char *target = jr_strndup(tgt_start, (size_t)(rhs - tgt_start));
+                if (target && *target && jf->n_aliases < JR_MAX_ALIASES) {
+                    jf->aliases[jf->n_aliases].name   = aname;
+                    jf->aliases[jf->n_aliases].target = target;
+                    jf->n_aliases++;
+                } else {
+                    free(aname);
+                    free(target);
+                }
+            } else {
+                free(aname);
+            }
             free(pending_doc);
             pending_doc = NULL;
             free(line);
@@ -802,6 +835,10 @@ static void jfile_free(JFile *jf) {
         free(jf->vars[i].name);
         free(jf->vars[i].value);
     }
+    for (int i = 0; i < jf->n_aliases; i++) {
+        free(jf->aliases[i].name);
+        free(jf->aliases[i].target);
+    }
     for (int i = 0; i < jf->settings.n_shell; i++) free(jf->settings.shell[i]);
     free(jf->justfile_dir);
 }
@@ -979,6 +1016,16 @@ static JRecipe *find_recipe(JFile *jf, const char *name) {
     for (int i = 0; i < jf->n_recipes; i++)
         if (jf->recipes[i].name && strcmp(jf->recipes[i].name, name) == 0)
             return &jf->recipes[i];
+    /* Resolve aliases (single hop is enough for typical Justfiles). */
+    for (int i = 0; i < jf->n_aliases; i++) {
+        if (jf->aliases[i].name && strcmp(jf->aliases[i].name, name) == 0) {
+            const char *tgt = jf->aliases[i].target;
+            for (int j = 0; j < jf->n_recipes; j++)
+                if (jf->recipes[j].name && strcmp(jf->recipes[j].name, tgt) == 0)
+                    return &jf->recipes[j];
+            return NULL;
+        }
+    }
     return NULL;
 }
 
@@ -1058,6 +1105,8 @@ static int exec_recipe(JFile *jf, const char *name, const char **args, int n_arg
             fprintf(stderr, "  available:");
             for (int i = 0; i < jf->n_recipes; i++)
                 fprintf(stderr, " %s", jf->recipes[i].name);
+            for (int i = 0; i < jf->n_aliases; i++)
+                fprintf(stderr, " %s", jf->aliases[i].name);
             fprintf(stderr, "\n");
         }
         return 2;

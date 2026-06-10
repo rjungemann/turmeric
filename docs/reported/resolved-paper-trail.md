@@ -180,6 +180,24 @@ dependency. Plain `http-get` compiles and runs on bare hosts. The
 cascade fixture itself still fails on a residual struct-redef pattern
 tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
 
+### `tur run` aborts on Justfile `alias`, silently disabling snapshot-drift guard (FIXED)
+
+[`../archive/tur-run-alias-breaks-snapshot-ci-guard.md`](../archive/tur-run-alias-breaks-snapshot-ci-guard.md)
+
+`tur run`'s embedded Justfile parser treated `alias NAME := TARGET` as an
+unsupported feature and aborted the whole-file parse, so every recipe
+after the alias was unreachable -- which silently disabled the Phase 0.3
+snapshot-drift CI guard `./build/tur run regen-snapshots -- --check`.
+**Fix (proposed #1):** `src/compiler/justrun.c` now parses aliases into a
+new `JAlias` table on `JFile` (cap `JR_MAX_ALIASES = 64`); `find_recipe`
+resolves alias name -> target recipe in a single hop and the
+recipe-not-found "available" hint lists aliases alongside recipes. The
+`check_unsupported` branch for `alias` is gone. Regression-covered by
+`tests/run-tur-run-alias.sh` (registered as the `tur_run_alias` ctest):
+asserts the alias resolves to its target, recipes *after* the alias remain
+reachable (the original blast radius), and the original target name still
+resolves directly.
+
 ### Project-mode codegen: `defstruct` typedef missing from header/impl (FIXED)
 
 [`../archive/project-mode-defstruct-typedef-missing.md`](../archive/project-mode-defstruct-typedef-missing.md)
