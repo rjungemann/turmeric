@@ -122,8 +122,10 @@ fi
 # Default output name for a cwd-relative target ("." / "./") must derive the
 # basename from the resolved directory, NOT produce "lib..so" / "lib.so".
 # Regression guard for docs/reported/tur-build-shared-cwd-lib-double-dot.md.
-# We copy the module into a freshly named subdir so the expected artifact name
-# is predictable, then run `tur build --shared .` from inside it (no -o).
+# build-output-directory-plan: artifacts now land in <root>/build/lib/, so the
+# assertion checks that path instead of the cwd.  We copy the module into a
+# freshly named subdir so the expected artifact name is predictable, then run
+# `tur build --shared .` from inside it (no -o).
 NAMED_DIR="$WORK/cwdlib"
 mkdir -p "$NAMED_DIR"
 cp "$FIXTURE/add.tur" "$NAMED_DIR/add.tur"
@@ -136,15 +138,16 @@ cwd_rc=$?
 if [ "$cwd_rc" -ne 0 ]; then
     fail "build-shared-smoke-cwd-default-name" \
          "tur build --shared . exit=$cwd_rc: $(cat "$NAMED_DIR/build-cwd.log" 2>/dev/null)"
-elif [ -e "$NAMED_DIR/lib..so" ] || [ -e "$NAMED_DIR/lib..so.manifest" ]; then
+elif [ -e "$NAMED_DIR/build/lib/lib..so" ] || \
+     [ -e "$NAMED_DIR/build/lib/lib..so.manifest" ]; then
     fail "build-shared-smoke-cwd-default-name" \
-         "produced lib..so artifact(s): $(ls "$NAMED_DIR"/lib*.so* 2>/dev/null)"
-elif [ -e "$NAMED_DIR/lib.so" ]; then
+         "produced lib..so artifact(s): $(ls "$NAMED_DIR"/build/lib/lib*.so* 2>/dev/null)"
+elif [ -e "$NAMED_DIR/build/lib/lib.so" ]; then
     fail "build-shared-smoke-cwd-default-name" \
-         "produced nameless lib.so: $(ls "$NAMED_DIR"/lib*.so* 2>/dev/null)"
-elif [ ! -e "$NAMED_DIR/libcwdlib.so" ]; then
+         "produced nameless lib.so: $(ls "$NAMED_DIR"/build/lib/lib*.so* 2>/dev/null)"
+elif [ ! -e "$NAMED_DIR/build/lib/libcwdlib.so" ]; then
     fail "build-shared-smoke-cwd-default-name" \
-         "expected libcwdlib.so (cwd basename); got: $(ls "$NAMED_DIR"/lib*.so* 2>/dev/null)"
+         "expected build/lib/libcwdlib.so (cwd basename); got: $(ls "$NAMED_DIR"/build/lib/lib*.so* 2>/dev/null)"
 else
     pass "build-shared-smoke-cwd-default-name"
 fi
@@ -159,6 +162,50 @@ elif ! grep -q -- '--manifest requires --shared' "$WORK/build3.log"; then
          "missing expected diagnostic; got: $(cat "$WORK/build3.log")"
 else
     pass "build-shared-smoke-manifest-requires-shared"
+fi
+
+# build-output-directory-plan: assert intermediate .c/.h land under
+# <build_dir>/obj/ and not in the source tree.  Uses an explicit
+# --build-dir <tmp> so the test is hermetic and never touches the fixture's
+# own `build/` (if a previous local run left one behind).
+BDR_FIXTURE="tests/fixtures/build-dir-relocates-artifacts"
+BDR_BUILD="$WORK/bdr"
+"$TUR" build --shared "$BDR_FIXTURE" --build-dir "$BDR_BUILD" \
+    >"$WORK/bdr.log" 2>&1
+bdr_rc=$?
+if [ "$bdr_rc" -ne 0 ]; then
+    fail "build-dir-relocates-artifacts" \
+         "tur build exit=$bdr_rc: $(cat "$WORK/bdr.log")"
+elif [ ! -f "$BDR_BUILD/obj/m.c" ] || [ ! -f "$BDR_BUILD/obj/m.h" ]; then
+    fail "build-dir-relocates-artifacts" \
+         "expected obj/m.{c,h} under $BDR_BUILD; got: $(ls -R "$BDR_BUILD" 2>/dev/null)"
+elif [ ! -f "$BDR_BUILD/lib/libbdrelocates.so" ] && \
+     [ ! -f "$BDR_BUILD/lib/libbdrelocates.dylib" ]; then
+    fail "build-dir-relocates-artifacts" \
+         "expected lib/libbdrelocates.{so,dylib} under $BDR_BUILD; got: $(ls "$BDR_BUILD/lib" 2>/dev/null)"
+elif [ -f "$BDR_FIXTURE/src/m.c" ] || [ -f "$BDR_FIXTURE/src/m.h" ]; then
+    fail "build-dir-relocates-artifacts" \
+         "intermediates leaked into source tree: $(ls "$BDR_FIXTURE/src" 2>/dev/null)"
+elif [ ! -f "$BDR_BUILD/.gitignore" ]; then
+    fail "build-dir-relocates-artifacts" \
+         "expected auto-.gitignore under $BDR_BUILD"
+else
+    pass "build-dir-relocates-artifacts"
+fi
+
+# build-output-directory-plan: TUR_BUILD_DIR env var override (no flag).
+BDR_ENV="$WORK/bdr-env"
+TUR_BUILD_DIR="$BDR_ENV" "$TUR" build --shared "$BDR_FIXTURE" \
+    >"$WORK/bdr-env.log" 2>&1
+bdr_env_rc=$?
+if [ "$bdr_env_rc" -ne 0 ]; then
+    fail "build-dir-env-override" \
+         "tur build exit=$bdr_env_rc: $(cat "$WORK/bdr-env.log")"
+elif [ ! -f "$BDR_ENV/obj/m.c" ]; then
+    fail "build-dir-env-override" \
+         "TUR_BUILD_DIR not honored; got: $(ls -R "$BDR_ENV" 2>/dev/null)"
+else
+    pass "build-dir-env-override"
 fi
 
 echo

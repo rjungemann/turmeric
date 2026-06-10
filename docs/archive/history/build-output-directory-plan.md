@@ -1,14 +1,20 @@
 # Build Output Directory Plan
 
-> **Partial landing (2026-06-09):** the default-output-name half landed
-> at `src/main.c`'s `cmd_build_multi_files` site -- when an enclosing
-> `build.tur` is in play, its `:name` is used for the default
-> `-o lib<name>.so` / `-o <name>` output instead of the cwd basename.
-> Eliminates the `lib..so` empty-basename regression and gives
-> workspace-member builds-from-`.` a sane default. The rest of the plan
-> (artifact relocation under `<root>/build/{obj,bin,lib}/`, `:build-dir`
-> manifest field, `TUR_BUILD_DIR` env var, `--build-dir` flag) is still
-> outstanding.
+> **LANDED 2026-06-10.** Both halves are in: the earlier default-output-name
+> fix from 2026-06-09, plus the full artifact-relocation flow added on
+> 2026-06-10. `tur build <dir>`, `tur build --shared <dir>`, and
+> `tur emit-c --build-dir` now route every intermediate `.c`/`.h`/`.o`,
+> the `.tur-abi-cache/`, and the final executable / shared library into
+> `<build-dir>/{obj,bin,lib}/` (default `<project-root>/build/` or
+> `<cwd>/build/`).  The dir gets an auto-`.gitignore` containing `*` on
+> first creation.  Override layers in precedence order: `--build-dir` / `-B`
+> on the command line, `TUR_BUILD_DIR` env var, `:build-dir "<path>"` in
+> the nearest `build.tur`.  `tests/fixtures/build-dir-relocates-artifacts/`
+> plus the `build-dir-*` assertions in `tests/run-build-shared.sh` cover the
+> new layout, env override, and the source-tree no-leak guarantee.
+> Single-file `tur build <file.tur>` still uses `/tmp/tur-build/` for its
+> intermediate `.c` (already off-tree); when invoked inside a manifest-rooted
+> project with no `-o`, the binary is anchored under `<build-dir>/bin/`.
 
 ## Problem
 

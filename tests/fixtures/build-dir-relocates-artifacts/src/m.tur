@@ -1,0 +1,3 @@
+(defmodule m
+  (export sample)
+  (defn sample [x : int] : int (+ x 7)))

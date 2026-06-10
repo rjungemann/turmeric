@@ -1,0 +1,3 @@
+Exercised by tests/run-build-shared.sh's build-output-directory-plan checks.
+Not run via the bare-fixture loop in tests/run.sh (no input.tur entry point;
+the assertions are about file-system layout under build/, not stdout/stderr).

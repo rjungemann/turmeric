@@ -151,6 +151,27 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MI
 cmake --build build-release -j
 ```
 
+### Build output directory
+
+`tur build <dir>`, `tur build --shared <dir>`, and `tur emit-c --build-dir`
+route every intermediate `.c`/`.h`/`.o`, the `.tur-abi-cache/`, and the final
+executable / shared library into a single build directory laid out as
+`<build-dir>/{obj,bin,lib}/`. The dir is created on first use and gets a
+`.gitignore` containing `*` so the contents never get accidentally committed.
+
+Precedence (highest first):
+
+1. `--build-dir <dir>` / `-B <dir>` on the command line.
+2. `TUR_BUILD_DIR=<dir>` environment variable.
+3. `:build-dir "<path>"` in the nearest `build.tur` (relative to the manifest dir).
+4. Default: `<project-root>/build/` when a manifest exists, else `<cwd>/build/`.
+
+Single-file `tur build <file.tur>` still uses `/tmp/tur-build/` for its
+intermediate `.c` (already off-tree) and lands the binary wherever `-o` says;
+when no `-o` is given inside a manifest-rooted single-main project, the
+output is anchored under `<build-dir>/bin/`. To restore the legacy
+"artifact in cwd" layout for a one-off, pass `--build-dir .`.
+
 ### Project tasks (`tur run`)
 
 ```sh

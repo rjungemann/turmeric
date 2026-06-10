@@ -782,7 +782,15 @@ that means: descend into `src/` (recursively, including nested
 `src/<pkg>/` trees), skip the manifest itself, compile every module,
 resolve the include path from the project's own `src/` plus each
 `:spices` dep's `src/`, and verify each declared `:exports` module has a
-backing source file -- failing loudly otherwise. (See
+backing source file -- failing loudly otherwise.
+
+Generated `.c`/`.h`/`.o` and the final library/exe land under
+`<spice-root>/build/{obj,bin,lib}/` by default. Override per-build with
+`--build-dir <dir>` / `-B <dir>`, with the `TUR_BUILD_DIR` env var, or
+durably with `:build-dir "<path>"` in `build.tur` (path is relative to
+the manifest dir). Precedence runs CLI flag > env > manifest > default.
+The build dir is auto-created with a `.gitignore` of `*`, so its
+contents never leak into VCS even if the dir itself gets tracked. (See
 [manifest-driven-build-descent-plan.md](../manifest-driven-build-descent-plan.md).)
 The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`,
 `tur build <file>`, and `tur run <file>` get the same module resolution

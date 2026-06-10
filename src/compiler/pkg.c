@@ -443,6 +443,9 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
              * manifest. A non-empty list makes this manifest a workspace
              * root; the resolver auto-links sibling members. */
             parse_str_vec(vf, &out->members, &out->n_members);
+        } else if (strcmp(kw, "build-dir") == 0) {
+            /* build-output-directory-plan: relative path for build artifacts. */
+            out->build_dir = form_str_dup(vf);
         } else if (strcmp(kw, "reader-macros") == 0) {
             /* RM4: vector of paths to reader-macro definition files. */
             parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);
@@ -617,6 +620,9 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "]\n");
     }
 
+    if (m->build_dir)
+        fprintf(f, "  :build-dir   \"%s\"\n", m->build_dir);
+
     if (m->n_reader_macros > 0) {
         fprintf(f, "\n  :reader-macros [");
         for (int i = 0; i < m->n_reader_macros; i++) {
@@ -694,6 +700,7 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->bin_paths);
     for (int i = 0; i < m->n_members; i++) free(m->members[i]);
     free(m->members);
+    free(m->build_dir);
     memset(m, 0, sizeof(*m));
 }
 

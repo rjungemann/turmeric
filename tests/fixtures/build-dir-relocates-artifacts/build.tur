@@ -1,0 +1,7 @@
+;;; build-output-directory-plan fixture: a minimal spice used by
+;;; tests/run-build-shared.sh to assert that intermediate .c/.h artifacts
+;;; from `tur build <dir>` land under `<build_dir>/obj/`, not next to the
+;;; source files.
+(defpackage bdrelocates
+  :name    "bdrelocates"
+  :version "0.1.0")

@@ -1426,6 +1426,130 @@ static int cmd_build(const char *input, const char *out_path,
                      int n_reader_macro_paths);
 static char *find_project_root(const char *start);
 
+/* build-output-directory-plan: ensure_dir(path) creates a directory tree with
+ * mkdir -p semantics.  Returns 0 on success (or if the directory already
+ * exists), -1 with errno set on failure.  Walks `path` component-wise so a
+ * fresh `<root>/build/obj` works even when only `<root>` exists. */
+static int ensure_dir(const char *path) {
+    if (!path || !*path) return -1;
+    char tmp[4096];
+    size_t n = strlen(path);
+    if (n >= sizeof(tmp)) { errno = ENAMETOOLONG; return -1; }
+    memcpy(tmp, path, n + 1);
+    /* Strip trailing slashes (except a bare "/"). */
+    while (n > 1 && tmp[n - 1] == '/') tmp[--n] = '\0';
+    /* Skip leading slash (or "./") so the loop starts on the first real component. */
+    char *p = tmp;
+    if (*p == '/') p++;
+    while (*p) {
+        while (*p && *p != '/') p++;
+        if (!*p) break;
+        *p = '\0';
+        if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+        *p++ = '/';
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
+/* build-output-directory-plan: resolve the absolute build directory for a
+ * compile.  Precedence (highest first):
+ *   1. cli_flag (--build-dir / -B / TUR's emit-c --build-dir).
+ *   2. TUR_BUILD_DIR env var.
+ *   3. The nearest `build.tur`'s `:build-dir` (walking up from input_or_root),
+ *      resolved relative to that manifest's directory.
+ *   4. `<project-root>/build` when a manifest exists; otherwise `<cwd>/build`.
+ *
+ * On success returns a heap-allocated absolute path with the directory plus
+ * `obj/`, `bin/`, `lib/` subdirs created, and a `.gitignore` containing
+ * `*\n` dropped in on first creation.  Returns NULL with a diagnostic on
+ * failure.  Caller frees with free(). */
+static char *resolve_build_dir(const char *input_or_root, const char *cli_flag) {
+    /* Step 1: pick the raw (unresolved) path string. */
+    char raw[4096] = {0};
+    char manifest_dir[4096] = {0};
+
+    if (cli_flag && *cli_flag) {
+        snprintf(raw, sizeof(raw), "%s", cli_flag);
+    } else if (getenv("TUR_BUILD_DIR") && *getenv("TUR_BUILD_DIR")) {
+        snprintf(raw, sizeof(raw), "%s", getenv("TUR_BUILD_DIR"));
+    } else {
+        const char *start = (input_or_root && *input_or_root) ? input_or_root : ".";
+        char start_dir[4096];
+        struct stat st;
+        if (stat(start, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(start_dir, sizeof(start_dir), "%s", start);
+        } else {
+            dir_of_path(start, start_dir, sizeof(start_dir));
+        }
+        char *root = find_project_root(start_dir);
+        if (root) {
+            snprintf(manifest_dir, sizeof(manifest_dir), "%s", root);
+            char mp[4096];
+            snprintf(mp, sizeof(mp), "%s/build.tur", root);
+            PkgManifest m;
+            memset(&m, 0, sizeof(m));
+            if (pkg_manifest_read(mp, &m) && m.build_dir && *m.build_dir) {
+                if (m.build_dir[0] == '/')
+                    snprintf(raw, sizeof(raw), "%s", m.build_dir);
+                else
+                    snprintf(raw, sizeof(raw), "%s/%s", root, m.build_dir);
+            } else {
+                snprintf(raw, sizeof(raw), "%s/build", root);
+            }
+            pkg_manifest_free(&m);
+            free(root);
+        } else {
+            snprintf(raw, sizeof(raw), "./build");
+        }
+    }
+
+    /* Step 2: ensure the directory exists, then canonicalize. */
+    if (ensure_dir(raw) != 0) {
+        fprintf(stderr, "tur: cannot create build directory '%s': %s\n",
+                raw, strerror(errno));
+        return NULL;
+    }
+
+    char abs[PATH_MAX];
+    if (!realpath(raw, abs)) {
+        fprintf(stderr, "tur: cannot resolve build directory '%s': %s\n",
+                raw, strerror(errno));
+        return NULL;
+    }
+
+    /* Create obj/, bin/, lib/ subdirs. */
+    char sub[PATH_MAX + 16];
+    const char *subs[] = {"obj", "bin", "lib"};
+    for (size_t i = 0; i < sizeof(subs) / sizeof(*subs); i++) {
+        snprintf(sub, sizeof(sub), "%s/%s", abs, subs[i]);
+        if (mkdir(sub, 0755) != 0 && errno != EEXIST) {
+            fprintf(stderr, "tur: cannot create '%s': %s\n", sub, strerror(errno));
+            return NULL;
+        }
+    }
+
+    /* Drop a `.gitignore` containing `*` on first creation so the build dir
+     * is never accidentally committed even if it gets tracked. Skip if one
+     * already exists -- the user may have customized it. */
+    char gi[PATH_MAX + 16];
+    snprintf(gi, sizeof(gi), "%s/.gitignore", abs);
+    struct stat gst;
+    if (stat(gi, &gst) != 0) {
+        FILE *gf = fopen(gi, "w");
+        if (gf) { fprintf(gf, "*\n"); fclose(gf); }
+    }
+
+    (void)manifest_dir;  /* reserved for future workspace-member resolution */
+
+    /* Return heap copy. */
+    size_t n = strlen(abs);
+    char *res = (char *)malloc(n + 1);
+    if (!res) return NULL;
+    memcpy(res, abs, n + 1);
+    return res;
+}
+
 /* Scan generated C source for "__tur_include__" comments and prepend each
  * captured line to the top of the buffer so the include lands at file
  * scope. The literal marker is the comment "__tur_include__: LINE" inside
@@ -3207,8 +3331,16 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                                  const char **file_src_roots,
                                  const char *out_path,
                                  bool shared, const char *manifest_path,
-                                 const char **inc, int n_inc) {
-    char chosen_out[1024];
+                                 const char **inc, int n_inc,
+                                 const char *build_dir) {
+    /* build-output-directory-plan: every intermediate (.c/.h/_main.c/
+     * tur_runtime.{c,h}) lands under `<build_dir>/obj/`; the final exe goes
+     * to `<build_dir>/bin/<name>` and shared libs to `<build_dir>/lib/lib<name>.so`.
+     * build_dir is required: callers must call resolve_build_dir() first. */
+    char obj_dir[PATH_MAX + 8];
+    snprintf(obj_dir, sizeof(obj_dir), "%s/obj", build_dir);
+
+    char chosen_out[PATH_MAX + 32];
     if (!out_path) {
         /* Prefer the manifest's :name over the directory basename so a
          * workspace member built from `.` gets `lib<pkg-name>.so` rather
@@ -3231,20 +3363,23 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                 free(proj_root);
             }
         }
+        char base[1024];
         if (shared) {
-            char base[1024];
             if (manifest_base[0]) {
                 snprintf(base, sizeof(base), "%s", manifest_base);
             } else {
                 default_output_name(dir, base, sizeof(base));
             }
-            snprintf(chosen_out, sizeof(chosen_out), "lib%s.so", base);
+            snprintf(chosen_out, sizeof(chosen_out),
+                     "%s/lib/lib%s.so", build_dir, base);
         } else {
             if (manifest_base[0]) {
-                snprintf(chosen_out, sizeof(chosen_out), "%s", manifest_base);
+                snprintf(base, sizeof(base), "%s", manifest_base);
             } else {
-                default_output_name(dir, chosen_out, sizeof(chosen_out));
+                default_output_name(dir, base, sizeof(base));
             }
+            snprintf(chosen_out, sizeof(chosen_out),
+                     "%s/bin/%s", build_dir, base);
         }
         out_path = chosen_out;
     }
@@ -3278,10 +3413,12 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         char mangled[512];
         mangle_mod_basename(mod_names[i], mangled, sizeof(mangled));
         size_t mlen = strlen(mangled);
-        h_files[i] = (char *)malloc(mlen + 3);
-        c_files[i] = (char *)malloc(mlen + 3);
-        snprintf(h_files[i], mlen + 3, "%s.h", mangled);
-        snprintf(c_files[i], mlen + 3, "%s.c", mangled);
+        size_t prefix_len = strlen(obj_dir) + 1;  /* "obj_dir/" */
+        size_t need = prefix_len + mlen + 3;
+        h_files[i] = (char *)malloc(need);
+        c_files[i] = (char *)malloc(need);
+        snprintf(h_files[i], need, "%s/%s.h", obj_dir, mangled);
+        snprintf(c_files[i], need, "%s/%s.c", obj_dir, mangled);
     }
 
     /* J6: Two-pass ABI specialization.
@@ -3473,19 +3610,14 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * J6: skipped entirely when the cache is disabled (--no-abi-cache /
      * TUR_NO_ABI_CACHE); the build is still correct without it. */
     if (!g_no_abi_cache) {
-        char cache_dir[4096];
-        snprintf(cache_dir, sizeof(cache_dir), "%s/.tur-abi-cache", dir);
+        /* build-output-directory-plan: .tur-abi-cache/ lives inside the build
+         * dir; the dir's own auto-.gitignore (`*`) already covers it, so no
+         * separate gitignore append is needed. */
+        char cache_dir[PATH_MAX + 32];
+        snprintf(cache_dir, sizeof(cache_dir), "%s/.tur-abi-cache", build_dir);
         struct stat st_cache;
-        bool cache_dir_new = (stat(cache_dir, &st_cache) != 0);
-        if (cache_dir_new) {
-            mkdir(cache_dir, 0755);
-            /* Append to .gitignore if present. */
-            char gitignore[4096];
-            snprintf(gitignore, sizeof(gitignore), "%s/.gitignore", dir);
-            FILE *gi = fopen(gitignore, "a");
-            if (gi) { fprintf(gi, ".tur-abi-cache/\n"); fclose(gi); }
-        }
-        char idx_tmp[4096];
+        if (stat(cache_dir, &st_cache) != 0) mkdir(cache_dir, 0755);
+        char idx_tmp[PATH_MAX + 48];
         snprintf(idx_tmp, sizeof(idx_tmp), "%s/index.tmp", cache_dir);
         FILE *cf = fopen(idx_tmp, "w");
         if (cf) {
@@ -3503,7 +3635,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                 }
             }
             fclose(cf);
-            char idx_path[4096];
+            char idx_path[PATH_MAX + 48];
             snprintf(idx_path, sizeof(idx_path), "%s/index", cache_dir);
             rename(idx_tmp, idx_path);
         }
@@ -3522,6 +3654,15 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     free(all_borrow); free(all_n_borrow);
     free(forced_for); free(n_forced_for); free(cap_forced_for);
 
+    /* build-output-directory-plan: _main.c / tur_runtime.{c,h} all land in
+     * `<build_dir>/obj/` next to the per-module .c/.h pairs. */
+    char main_c_path[PATH_MAX + 32];
+    char rt_c_path[PATH_MAX + 32];
+    char rt_h_path[PATH_MAX + 32];
+    snprintf(main_c_path, sizeof(main_c_path), "%s/_main.c", obj_dir);
+    snprintf(rt_c_path,   sizeof(rt_c_path),   "%s/tur_runtime.c", obj_dir);
+    snprintf(rt_h_path,   sizeof(rt_h_path),   "%s/tur_runtime.h", obj_dir);
+
     /* Generate _main.c (skipped in shared-library mode: the .so has no
      * entry point; the host invokes exported defns directly via dlsym). */
     if (!shared) {
@@ -3535,8 +3676,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             free_tur_files(tur_files, n_files);
             return 1;
         }
-        if (buf_to_path(&main_c, "_main.c") != 0) {
-            fprintf(stderr, "tur: failed to write _main.c\n");
+        if (buf_to_path(&main_c, main_c_path) != 0) {
+            fprintf(stderr, "tur: failed to write %s\n", main_c_path);
             buf_free(&main_c);
             for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
@@ -3561,8 +3702,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         buf_puts(&rt_c, "/* generated by tur -- shared runtime owner TU */\n");
         buf_puts(&rt_c, "#define TUR_RT_OWNER 1\n");
         buf_puts(&rt_c, "#include \"tur_runtime.h\"\n");
-        int rt_ok = (buf_to_path(&rt_h, "tur_runtime.h") == 0 &&
-                     buf_to_path(&rt_c, "tur_runtime.c") == 0);
+        int rt_ok = (buf_to_path(&rt_h, rt_h_path) == 0 &&
+                     buf_to_path(&rt_c, rt_c_path) == 0);
         buf_free(&rt_h); buf_free(&rt_c);
         if (!rt_ok) {
             fprintf(stderr, "tur: failed to write tur_runtime.{h,c}\n");
@@ -3614,10 +3755,14 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 #endif
     }
     buf_printf(&cmd, " -o %s", out_path);
+    /* build-output-directory-plan: every generated .c includes its sibling .h
+     * by bare name (`#include "modname.h"`), so the obj dir must be on the
+     * include path even when it's not cwd. */
+    buf_printf(&cmd, " -I%s", obj_dir);
     /* Add _main.c first (executable mode only) */
-    if (!shared) buf_puts(&cmd, " _main.c");
+    if (!shared) buf_printf(&cmd, " %s", main_c_path);
     /* The shared-runtime owner TU (defines the runtime globals once). */
-    buf_puts(&cmd, " tur_runtime.c");
+    buf_printf(&cmd, " %s", rt_c_path);
     /* Add own .c files only (dep-only files beyond n_own supply headers but
      * are not linked into this output -- they ship as separate libraries). */
     for (int i = 0; i < n_own; i++) {
@@ -3635,9 +3780,10 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     for (int i = 0; i < n_files; i++) { free(h_files[i]); free(c_files[i]); free(mod_names[i]); }
     free(h_files); free(c_files); free(mod_names);
     free_tur_files(tur_files, n_files);
-    if (!shared) unlink("_main.c");
-    unlink("tur_runtime.c");
-    unlink("tur_runtime.h");
+    /* build-output-directory-plan: leave the intermediates in <build_dir>/obj/
+     * so re-runs can ccache them and so users can inspect generated C. The
+     * build dir is .gitignore'd on creation, so they don't leak into VCS. */
+    (void)main_c_path; (void)rt_c_path; (void)rt_h_path;
 
     if (sys_rc != 0) {
         buf_free(&manifest);
@@ -3678,7 +3824,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 /* Bare-directory build: glob the directory's top-level .tur files and build
  * them.  Used for ad-hoc multi-file directories with no build.tur manifest. */
 static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
-                           const char *manifest_path) {
+                           const char *manifest_path, const char *cli_build_dir) {
     int n_files;
     char **tur_files = collect_tur_files(dir, &n_files);
     if (!tur_files || n_files == 0) {
@@ -3686,8 +3832,13 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
         free_tur_files(tur_files, n_files);
         return 1;
     }
-    return cmd_build_multi_files(tur_files, n_files, n_files, dir, NULL, NULL,
-                                 out_path, shared, manifest_path, NULL, 0);
+    char *build_dir = resolve_build_dir(dir, cli_build_dir);
+    if (!build_dir) { free_tur_files(tur_files, n_files); return 2; }
+    int rc = cmd_build_multi_files(tur_files, n_files, n_files, dir, NULL, NULL,
+                                   out_path, shared, manifest_path, NULL, 0,
+                                   build_dir);
+    free(build_dir);
+    return rc;
 }
 
 /* Manifest-driven project build: `tur build <dir>` where <dir>/build.tur
@@ -3698,7 +3849,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
  * and the test runner already perform. */
 static int cmd_build_project(const char *root, const char *out_path,
                              bool shared, const char *manifest_path,
-                             const char **user_inc, int n_user_inc) {
+                             const char **user_inc, int n_user_inc,
+                             const char *cli_build_dir) {
     int n_files = 0;
     char **tur_files = collect_project_src_files(root, &n_files);
     if (!tur_files || n_files == 0) {
@@ -3804,8 +3956,33 @@ static int cmd_build_project(const char *root, const char *out_path,
         if (n_main == 1) {
             int    n_rm = 0;
             char **rm   = discover_manifest_reader_macros(entry, &n_rm);
-            int rc = cmd_build(entry, out_path, inc, n_inc, NULL,
+            /* build-output-directory-plan: when no -o was given, anchor the
+             * executable inside the project's build dir so the single-main
+             * fast path matches the separate-compilation default. */
+            char *bd = NULL;
+            char synth_out[PATH_MAX + 32];
+            const char *eff_out = out_path;
+            if (!out_path) {
+                bd = resolve_build_dir(root, cli_build_dir);
+                if (bd) {
+                    char base[1024];
+                    char mp[4096];
+                    snprintf(mp, sizeof(mp), "%s/build.tur", root);
+                    PkgManifest mm; memset(&mm, 0, sizeof(mm));
+                    if (pkg_manifest_read(mp, &mm) && mm.name && mm.name[0]) {
+                        snprintf(base, sizeof(base), "%s", mm.name);
+                    } else {
+                        default_output_name(root, base, sizeof(base));
+                    }
+                    pkg_manifest_free(&mm);
+                    snprintf(synth_out, sizeof(synth_out),
+                             "%s/bin/%s", bd, base);
+                    eff_out = synth_out;
+                }
+            }
+            int rc = cmd_build(entry, eff_out, inc, n_inc, NULL,
                                (const char **)rm, n_rm);
+            free(bd);
             free_reader_macro_paths(rm, n_rm);
             free(inc);
             for (int i = 0; i < n_proj_inc; i++) free((char *)proj_inc[i]);
@@ -3909,9 +4086,16 @@ static int cmd_build_project(const char *root, const char *out_path,
     /* n_own = project's own modules (link these); n_all - n_own = dep modules
      * compiled only for header generation (shared mode skips their link). */
     int n_own = shared ? n_files : n_all;
-    int rc = cmd_build_multi_files(all_files, n_all, n_own, root, src_root,
+    char *build_dir = resolve_build_dir(root, cli_build_dir);
+    int rc;
+    if (!build_dir) {
+        rc = 2;
+    } else {
+        rc = cmd_build_multi_files(all_files, n_all, n_own, root, src_root,
                                    all_roots, out_path, shared, manifest_path,
-                                   inc, n_inc);
+                                   inc, n_inc, build_dir);
+        free(build_dir);
+    }
 
     free(all_roots);
     for (int k = 0; k < n_dep_dirs; k++) free((char *)dep_dirs[k]);
@@ -7027,7 +7211,7 @@ static int usage_build(void) {
         "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
         "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library (.so)\n"
         "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
-        "  tur emit-c [-I <dir>...] --output-dir <dir> <files...>  emit per-module .h/.c\n"
+        "  tur emit-c [-I <dir>...] --build-dir <dir> <files...>  emit per-module .h/.c\n"
         "  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout\n"
         "\n"
         "flags:\n"
@@ -7035,6 +7219,10 @@ static int usage_build(void) {
         "  -I <dir>          add include directory for module resolution\n"
         "                    (repeat to add multiple; intra-spice imports usually\n"
         "                    want `-I src` from the spice root)\n"
+        "  -B, --build-dir <d>  route generated .c/.h/.o + final artifact into <d>\n"
+        "                    (subdirs: obj/, bin/, lib/). Defaults to\n"
+        "                    <project-root>/build or <cwd>/build. Override layers:\n"
+        "                    CLI flag > TUR_BUILD_DIR env > build.tur :build-dir.\n"
         "  --shared          build a shared library (`-fPIC -shared`, no main);\n"
         "                    requires a directory argument. Exported defns are\n"
         "                    callable via dlopen/dlsym as `<module>__<name>`.\n"
@@ -7951,12 +8139,17 @@ int main(int argc, char **argv) {
         int    n_emit_inc = parse_include_flags(argc, argv, 2, &emit_inc);
         if (n_emit_inc < 0) { free(emit_inc); return usage_build(); }
 
-        /* tur emit-c [-I <dir>...] --output-dir <dir> <file1> [<file2> ...] */
+        /* tur emit-c [-I <dir>...] [--output-dir <dir> | --build-dir <dir> | -B <dir>]
+         *            <file1> [<file2> ...]
+         * build-output-directory-plan: --build-dir / -B are the new spellings;
+         * --output-dir stays as a deprecated alias. */
         int od_idx = -1;
         for (int i = 2; i < argc; i++) {
             int c;
             if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
-            if (strcmp(argv[i], "--output-dir") == 0) { od_idx = i; break; }
+            if (strcmp(argv[i], "--output-dir") == 0 ||
+                strcmp(argv[i], "--build-dir")  == 0 ||
+                strcmp(argv[i], "-B")            == 0) { od_idx = i; break; }
         }
         if (od_idx >= 0) {
             if (od_idx + 1 >= argc) { free(emit_inc); return usage_build(); }
@@ -8138,6 +8331,7 @@ int main(int argc, char **argv) {
         const char *build_target = NULL;
         bool        shared = false;  /* RP0: --shared selects shared-library build */
         const char *manifest_out = NULL; /* RP1: --manifest <path> override */
+        const char *cli_build_dir = NULL; /* build-output-directory-plan: --build-dir/-B */
         /* SC1: collect -I flags once via the shared helper, then walk argv
          * a second time for the build-specific flags (`-o`, `--target`)
          * and the positional input. */
@@ -8157,6 +8351,9 @@ int main(int argc, char **argv) {
                 /* J6: consumed globally by parse_no_abi_cache; no-op here. */
             } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
                 manifest_out = argv[++i];
+            } else if ((strcmp(argv[i], "--build-dir") == 0 ||
+                        strcmp(argv[i], "-B") == 0) && i + 1 < argc) {
+                cli_build_dir = argv[++i];
             } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
                 build_target = argv[++i];
                 if (strcmp(build_target, "wasm") != 0) {
@@ -8202,9 +8399,11 @@ int main(int argc, char **argv) {
             struct stat mst;
             if (stat(proj_manifest, &mst) == 0 && S_ISREG(mst.st_mode)) {
                 rc = cmd_build_project(input, out, shared, manifest_out,
-                                       (const char **)build_inc, n_build_inc);
+                                       (const char **)build_inc, n_build_inc,
+                                       cli_build_dir);
             } else {
-                rc = cmd_build_multi(input, out, shared, manifest_out);
+                rc = cmd_build_multi(input, out, shared, manifest_out,
+                                     cli_build_dir);
             }
         } else {
             /* RM4: auto-discover the spice manifest containing `input` so

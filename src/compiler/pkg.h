@@ -126,6 +126,9 @@ typedef struct PkgManifest {
      * import each other without an explicit :spices entry. */
     char       **members;
     int          n_members;
+    /* build-output-directory-plan: relative path (from the manifest dir) for
+     * generated artifacts. NULL = use the default (`<manifest-dir>/build`). */
+    char        *build_dir;
 } PkgManifest;
 
 /* ------------------------------------------------------------------ */
