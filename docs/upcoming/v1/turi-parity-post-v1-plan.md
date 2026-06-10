@@ -1,7 +1,7 @@
 # turi ↔ tur Parity (post-v1) Plan
 
 > **Status:** Draft Plan
-> **Last Updated:** 2026-06-01
+> **Last Updated:** 2026-06-10
 > **Type:** Interpreter / Test Infra / Docs
 > **Scope:** post-v1 -- not blocking the v1 release
 
@@ -19,14 +19,16 @@ documented escape-hatch list).
 
 Today there is a real, measurable gap:
 
-- **Expression kinds:** 35 of 113 `EX_*` kinds defined in
+- **Expression kinds:** 36 of 114 `EX_*` kinds defined in
   `src/compiler/expr.h` have **no case arm** in `src/turi/eval.c`. The
   default arm returns `eval: unhandled expression kind N (not yet
-  implemented in interpreter)` (`src/turi/eval.c:3699-3702`).
+  implemented in interpreter)` (`src/turi/eval.c:3725-3727`).
 - **Fixture coverage:** `tests/run-turi.sh` runs a hand-curated allowlist
-  of **118 fixtures out of 1,013** in `tests/fixtures/` (~11.6%). Anything
-  not in the allowlist emits `SKIP %s (not in turi allowlist)` rather
-  than failing -- so allowlist gaps are silent.
+  of **120 fixtures out of 1,268** in `tests/fixtures/` (~9.5% -- the
+  gap has *widened* since the 2026-06-01 draft, as ~250 new fixtures
+  have landed without entering the allowlist). Anything not in the
+  allowlist emits `SKIP %s (not in turi allowlist)` rather than failing
+  -- so allowlist gaps are silent.
 - **Documented limitation:** The `eval-api` guide
   (`docs/guides/eval-api.md:77`) only notes that inline-C and a subset of
   async builtins are disabled in sandbox mode. There is no published
@@ -70,8 +72,8 @@ prevents the gap from growing.
   than compiled code. This plan does not target speed; it targets
   *behaviour* parity.
 - Inline-C execution. `EX_INLINE_C` stays a documented limitation
-  (`src/turi/eval.c:3105-3110`). The existing native-override mechanism
-  in `eval.c:2390-2419` (the `try_exec_simple_inline_c` pattern matcher
+  (`src/turi/eval.c:3141-3145`). The existing native-override mechanism
+  in `eval.c:2427-2455` (the `try_exec_simple_inline_c` pattern matcher
   for malloc/field-store/field-load shapes) covers the stdlib cases that
   need it; user inline-C requires the compiled path.
 - Async parity for WASM. The fiber scheduler is intentionally stubbed in
@@ -85,22 +87,29 @@ prevents the gap from growing.
 
 ```
 EX_ATOMICALLY            EX_OR_ELSE               EX_STM
-EX_CATCH_PANIC_OF        EX_PANIC_PAYLOAD_DOWNS   EX_SYM_LIT
-EX_CHECK                 EX_PANIC_PAYLOAD_FILE    EX_TVAR_CAS
-EX_CLONEABLE_RESET       EX_PANIC_PAYLOAD_LINE    EX_TVAR_MODIFY
-EX_CLONEABLE_SHIFT       EX_PANIC_PAYLOAD_TYPE    EX_TVAR_NEW
-EX_COMPOSE_HANDLERS      EX_PANIC_PAYLOAD_VALUE   EX_TVAR_READ
-EX_CONS_LIST             EX_RESET                 EX_TVAR_SWAP
-EX_GEN                   EX_RETRY                 EX_TVAR_WRITE
-EX_GEN_DONE              EX_SELECT                EX_WITH_HANDLER
-EX_GEN_NEXT              EX_SERIAL_SHIFT          EX_YIELD
-EX_HANDLER_LIT           EX_SET_FIELD
-EX_LETREC                EX_SHIFT
-                         EX_SHIFT0
+EX_CALLCC                EX_PANIC_PAYLOAD_DOWNS   EX_SYM_LIT
+EX_CATCH_PANIC_OF        EX_PANIC_PAYLOAD_FILE    EX_TVAR_CAS
+EX_CHECK                 EX_PANIC_PAYLOAD_LINE    EX_TVAR_MODIFY
+EX_CLONEABLE_RESET       EX_PANIC_PAYLOAD_TYPE    EX_TVAR_NEW
+EX_CLONEABLE_SHIFT       EX_PANIC_PAYLOAD_VALUE   EX_TVAR_READ
+EX_COMPOSE_HANDLERS      EX_RESET                 EX_TVAR_SWAP
+EX_CONS_LIST             EX_RETRY                 EX_TVAR_WRITE
+EX_CPS_CONT_APP          EX_SELECT                EX_WITH_HANDLER
+EX_GEN                   EX_SERIAL_SHIFT          EX_YIELD
+EX_GEN_DONE              EX_SET_FIELD
+EX_GEN_NEXT              EX_SHIFT
+EX_HANDLER_LIT
+EX_LETREC
 ```
 
 `EX_SERIAL_RESET` is handled but only as a "not yet implemented" error
-(`src/turi/eval.c:3694-3697`); it is functionally in the same bucket.
+(`src/turi/eval.c:3720-3722`); it is functionally in the same bucket.
+
+`EX_SHIFT0` *was* on the original list and **has since landed** -- one
+of two kinds the interpreter picked up since 2026-06-01. The other new
+entries `EX_CALLCC` and `EX_CPS_CONT_APP` did not exist when the plan
+was drafted; both come from the CPS-transform work and should be tackled
+alongside it (see Risks #5 and Sequencing).
 
 ### Categorised
 
@@ -108,9 +117,9 @@ EX_LETREC                EX_SHIFT
    `EX_CONS_LIST`, `EX_SET_FIELD`, `EX_HANDLER_LIT`,
    `EX_COMPOSE_HANDLERS`, `EX_OR_ELSE`, `EX_CHECK`.
 2. **Generators:** `EX_GEN`, `EX_GEN_NEXT`, `EX_GEN_DONE`, `EX_YIELD`.
-3. **Delimited control:** `EX_SHIFT`, `EX_RESET`, `EX_SHIFT0`,
+3. **Delimited control:** `EX_SHIFT`, `EX_RESET`,
    `EX_CLONEABLE_SHIFT`, `EX_CLONEABLE_RESET`, `EX_SERIAL_SHIFT`,
-   `EX_SERIAL_RESET`.
+   `EX_SERIAL_RESET`. (`EX_SHIFT0` is now implemented.)
 4. **STM:** `EX_STM`, `EX_ATOMICALLY`, `EX_RETRY`, `EX_TVAR_NEW`,
    `EX_TVAR_READ`, `EX_TVAR_WRITE`, `EX_TVAR_MODIFY`, `EX_TVAR_SWAP`,
    `EX_TVAR_CAS`.
@@ -119,6 +128,11 @@ EX_LETREC                EX_SHIFT
    `EX_PANIC_PAYLOAD_FILE`, `EX_PANIC_PAYLOAD_LINE`,
    `EX_PANIC_PAYLOAD_DOWNS`.
 6. **Effect / channel select:** `EX_WITH_HANDLER`, `EX_SELECT`.
+7. **CPS transform (new since 2026-06-01):** `EX_CALLCC`,
+   `EX_CPS_CONT_APP`. Both originate in the CPS pipeline
+   (`docs/upcoming/cps-transform-plan.md`); the interpreter strategy
+   for them should fall out of however that plan lands -- adding case
+   arms ahead of it risks rework.
 
 ### Builtin natives registered only on the compiler side
 
@@ -145,10 +159,79 @@ same CI ratchet. Until then, treat any new `register_builtin` in
 `src/compiler/builtins.c` without a matching `turi_register_native` as
 a TI-gap to file.
 
+### Typeclass-correctness churn since 2026-06-01 (audited 2026-06-10)
+
+Between the 2026-06-01 draft and now, a stack of typeclass / poly-closure
+fixes landed:
+
+- Poly-closure typed-dispatch (all three layers): #293, #296, #297, #300
+  -- inner-body intermediate-type erasure, capturing-closure return-type
+  lowering, and `^fat`-param tyvar propagation through Direction 3 in
+  `emit_expr.c`.
+- Arrow `(->)` carrier-class routing (#318): `elab_call.c` refuses the
+  int64-carrier `Arrow [(->)]` instance when the receiver's carrier
+  type is float-class, falling back to the typed free `>>>` defn
+  (`fn_type_has_float_carrier` at `src/compiler/elab_call.c:730`,
+  gating `elab_user_method_instance_matches` at `:794`).
+- `stdlib-hkt-consolidation` closed (new fixtures
+  `hkt-stdlib-result-ok-biased`, `instance-head-hole-pair`,
+  `errors/instance-head-two-holes`; Applicative `[(Result _ B)]` is
+  deferred per that plan).
+- `stdlib-type-erasure-cleanup` closed; Phase B1 spun into
+  `stdlib-arrow-typeclass-reintroduction-plan`.
+
+### TI0 audit result -- **clean, no gaps to file**
+
+The interpreter consumes the *elaborated* `Expr` tree (entry at
+`main.c:351` `elaborate_program`, then either compile or `turi_eval`).
+That means the dispatch decisions made in `elab_call.c` -- the carrier
+check, `prefer_method_dispatch`, the user-vs-stdlib `from_stdlib`
+exclusion -- have **already happened** by the time turi sees the tree.
+At evaluation time the interpreter just dereferences the elab-chosen
+`e->as.dict_.instance` (`src/turi/eval.c:3327`). It cannot
+re-introduce the #318 miscompile because it does not redo dispatch.
+
+12 fixtures were run against `./build/tur run` on 2026-06-10 to confirm:
+
+| Fixture                                | Result |
+| -------------------------------------- | ------ |
+| `arrow-compose-float`                  | PASS   |
+| `arrow-instance-apply`                 | PASS   |
+| `arrow-instance-arr-identity`          | PASS   |
+| `arrow-instance-basic`                 | PASS   |
+| `arrow-instance-choice`                | PASS   |
+| `arrow-instance-stdlib-basic`          | PASS   |
+| `fat-shim-void-ptr-arrow-compose`      | PASS   |
+| `hkt-stdlib-result-ok-biased`          | PASS   |
+| `instance-head-hole-pair`              | PASS   |
+| `poly-closure-compose-float`           | PASS   |
+| `poly-closure-result-tyvar-float`      | PASS   |
+| `errors/instance-head-two-holes`       | PASS (diag matches, exit 1) |
+
+All 12 are now on the TURI allowlist (commit at TI0 close); they
+previously SKIPped because nobody had thought to add them. The
+`errors/` fixture exercises the elaborator-error path manually --
+`tests/run-turi.sh:330` excludes `tests/fixtures/errors/` from the
+harness, so error-fixture coverage under turi remains a separate gap
+(small follow-up: opt the `errors/` subtree into the turi harness, or
+add a one-shot pass that runs them and only checks exit + diag).
+
+**Residual TI0 work** -- the audit found one structural gap worth
+filing as a small follow-up rather than blocking TI1:
+
+- `tests/fixtures/errors/` is skipped wholesale by `run-turi.sh`. Worth
+  opting in (separate flag, diag-only comparison) so the elaborator
+  error path gets CI coverage under turi.
+
+The carrier-class / free-defn-preference rule diff against the
+interpreter is **moot**: there is no separate interpreter dispatch
+path. TI9's parity matrix can list typeclass dispatch as `OK / OK`
+truthfully.
+
 ### Test-harness gap
 
 - `tests/run-turi.sh` ships an inline `TURI_FIXTURES_DEFAULT` string
-  (around line 60-185) listing the 118 fixtures known to pass under
+  (around line 82-200) listing the 120 fixtures known to pass under
   turi. Everything else SKIPs with `(not in turi allowlist)`.
 - Five fixtures carry `requires.compiled`; only one carries
   `requires.interp` (`tests/fixtures/tuple-arity-6`).
@@ -369,15 +452,17 @@ versioning."
 
 ## Phase TI5 -- Panic payloads + `catch-panic-of`
 
-**Depends on:** `error-handling-deferred-plan.md` Phase R2
-(`catch-unwind` lands in tur with a real runtime payload).
+**Depends on:** `error-handling-deferred-plan.md` Phase R2 -- **landed**
+(commit `0de95bcc`, "Phase R2 + R6c: catch-unwind and panic handling on
+compiled path"). TI5 is no longer blocked; it can run in parallel with
+TI2-TI4.
 
 ### Implementation
 
 The interpreter already has a `catch_jmp` setjmp boundary in
 `src/turi/env.h:154`. Extend it to carry a `tur_panic_payload`
-(matching the compiled-path struct from
-`src/runtime/runtime.h:238`). The accessors
+(matching the compiled-path struct at
+`src/runtime/runtime.h:261`). The accessors
 (`EX_PANIC_PAYLOAD_TYPE`, `_VALUE`, `_FILE`, `_LINE`, `_DOWNS`) read
 fields off that payload. `EX_CATCH_PANIC_OF` does the type-tag
 downcast before deciding whether to catch or re-raise.
@@ -446,7 +531,7 @@ Once TI1-TI6 land, almost every fixture should run under turi.
 ### Implementation
 
 1. Delete the `TURI_FIXTURES_DEFAULT` allowlist from
-   `tests/run-turi.sh`.
+   `tests/run-turi.sh` (lines 82-211 as of 2026-06-10).
 2. Default to "run every fixture under tests/fixtures/" minus those
    carrying:
    - `requires.compiled`
@@ -499,20 +584,23 @@ Add to `docs/guides/README.md` and the per-module doc index.
 ## Sequencing & dependencies
 
 ```
-TI1 (quick wins) ─────────► TI8 (harness flip; >=80% coverage)
-                       │              │
-TI2 (generators) ──────┤              ├─► TI9 (parity matrix doc)
-TI3 (delim control) ───┤              │
-TI4 (STM) ─────────────┤              │
-TI6 (with-handler + select) ──────────┘
-
-TI5 (panic payloads) ──── waits on error-handling-deferred-plan R2
+TI0 (typeclass audit -- DONE 2026-06-10) ─► TI1 (quick wins) ──► TI8 (harness flip; >=80%)
+                                                  │                  │
+                                  TI2 (generators) ┤                  ├─► TI9 (parity matrix doc)
+                                  TI3 (delim control) ─┤              │
+                                  TI4 (STM) ───────────┤              │
+                                  TI5 (panic payloads) ┤              │
+                                  TI6 (with-handler + select) ────────┘
 
 TI7 (carve-outs) ── independent; can land any time
 ```
 
-Suggested order: **TI1 → TI7 → TI8 (partial; just the marker + script)
-→ TI2 → TI3 → TI4 → TI6 → TI5 → TI8 (full flip) → TI9**.
+TI5 was blocked on `error-handling-deferred-plan.md` R2 in the original
+draft; that has since landed (`0de95bcc`) and TI5 is now free-floating.
+
+Suggested order: **TI0 (done) → TI1 → TI7 → TI8 (partial; just the
+marker + script) → TI2 → TI3 → TI4 → TI6 → TI5 → TI8 (full flip) →
+TI9**.
 
 TI7 + the partial TI8 ship first so we have a CI ratchet preventing
 the gap from growing while the bigger phases land.
@@ -524,7 +612,7 @@ the gap from growing while the bigger phases land.
 1. **Generator / shift-reset stack juggling.** `ucontext` is
    deprecated on POSIX and stubbed on macOS/AArch64; the existing
    fiber code already works around this with the platform `#pragma`s
-   visible at `src/turi/eval.c:3088-3094`. Expect the same friction
+   visible at `src/turi/eval.c:44-52` and `:155-188`. Expect the same friction
    for TI2 and TI3. Mitigate by reusing the fiber primitives rather
    than rolling new ones.
 2. **STM semantics drift.** A single-threaded STM is sound for testing

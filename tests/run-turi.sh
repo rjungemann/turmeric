@@ -198,6 +198,23 @@ union-types-threeway
 unique-basic
 weak-dangling
 weak-upgrade
+
+# TI0 (typeclass-correctness audit, 2026-06-10): fixtures verified to pass under
+# turi after the poly-closure typed-dispatch (#293/#296/#297/#300), arrow
+# carrier-class routing (#318), and HKT consolidation work landed.  Dispatch
+# is shared via the elaborated Expr tree, so these were healthy from day one
+# but were not on the allowlist.
+arrow-compose-float
+arrow-instance-apply
+arrow-instance-arr-identity
+arrow-instance-basic
+arrow-instance-choice
+arrow-instance-stdlib-basic
+fat-shim-void-ptr-arrow-compose
+hkt-stdlib-result-ok-biased
+instance-head-hole-pair
+poly-closure-compose-float
+poly-closure-result-tyvar-float
 "
 
 # Build an associative-set from the default list for O(1) lookup.
@@ -206,6 +223,7 @@ while IFS= read -r _fixture; do
     _fixture="${_fixture#"${_fixture%%[![:space:]]*}"}"  # ltrim
     _fixture="${_fixture%"${_fixture##*[![:space:]]}"}"  # rtrim
     [ -z "$_fixture" ] && continue
+    case "$_fixture" in \#*) continue ;; esac
     # sanitize name for use as shell variable: replace - and / with _
     _key="$(printf '%s' "$_fixture" | tr '-' '_' | tr '/' '_')"
     eval "export TURI_INCL_${_key}=1"
