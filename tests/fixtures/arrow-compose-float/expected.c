@@ -2735,6 +2735,8 @@ static double scale_hy2(double);
 static double add_hy05(double);
 static double add_hy15(double);
 static double call_hyf(int64_t, double);
+static void * _____spec__void___int64_t_int64_t(int64_t, int64_t);
+static double __fn_923__spec__double_void___double(void *, double);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -5240,7 +5242,7 @@ int main(int argc, char **argv) {
             __t76[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
             __t76[1] = (int64_t)(intptr_t)scale_hy2;
             void *__t77 = __t76;
-            int64_t h_1138 = (int64_t)(intptr_t)(__inst_Arrow__gt_gt_gt_arrow((void *)(intptr_t)(__t75), (void *)(intptr_t)(__t77)));
+            void * h_1138 = _____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t75), (int64_t)(intptr_t)(__t77));
             (void)h_1138;
             int64_t *__t78 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t78[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
@@ -5250,7 +5252,7 @@ int main(int argc, char **argv) {
             __t80[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
             __t80[1] = (int64_t)(intptr_t)scale_hy2;
             void *__t81 = __t80;
-            int64_t h3_1139 = (int64_t)(intptr_t)(__inst_Arrow__gt_gt_gt_arrow((void *)(intptr_t)(__t79), (void *)(intptr_t)(__t81)));
+            void * h3_1139 = _____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t79), (int64_t)(intptr_t)(__t81));
             (void)h3_1139;
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h_1138), 3.0)));
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h_1138), 0.25)));
@@ -5259,6 +5261,29 @@ int main(int argc, char **argv) {
         int64_t __t82;
         __t82 = INT64_C(0);
         return (int)__t82;
+}
+
+struct __env_925__spec__double { tur_thunk_double_double_t __fn; int64_t gv; int64_t fv; };
+static double __fn_923__spec__double_void___double(void * __env_p_926, double x) {
+        struct __env_925__spec__double *__env___env_925__spec__double = (struct __env_925__spec__double *)__env_p_926;
+        return (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_925__spec__double->gv)))((void *)(intptr_t)(__env___env_925__spec__double->gv), (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_925__spec__double->fv)))((void *)(intptr_t)(__env___env_925__spec__double->fv), x));
+}
+
+static void * _____spec__void___int64_t_int64_t(int64_t f, int64_t g) {
+        void * __t83;
+        {
+            int64_t fv = (int64_t)(intptr_t)(f);
+            (void)fv;
+            int64_t gv = (int64_t)(intptr_t)(g);
+            (void)gv;
+            struct __env_925__spec__double *__t84 = (struct __env_925__spec__double *)malloc(sizeof(struct __env_925__spec__double));
+            __t84->__fn = (tur_thunk_double_double_t)__fn_923__spec__double_void___double;
+            __t84->gv = gv;
+            __t84->fv = fv;
+            void *__t85 = __t84;
+            __t83 = __t85;
+        }
+        return __t83;
 }
 
 

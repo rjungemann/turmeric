@@ -2734,6 +2734,8 @@ static int64_t __ac_app(int64_t);
 static double scale_hy2(double);
 static double add_hy1(double);
 static double call_hyf(int64_t, double);
+static void * _____spec__void___int64_t_int64_t(int64_t, int64_t);
+static double __fn_922__spec__double_void___double(void *, double);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -5235,7 +5237,7 @@ int main(int argc, char **argv) {
             __t76[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
             __t76[1] = (int64_t)(intptr_t)scale_hy2;
             void *__t77 = __t76;
-            int64_t h1_1136 = (int64_t)(intptr_t)(__inst_Arrow__gt_gt_gt_arrow((void *)(intptr_t)(__t75), (void *)(intptr_t)(__t77)));
+            void * h1_1136 = _____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t75), (int64_t)(intptr_t)(__t77));
             (void)h1_1136;
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h1_1136), 3.0)));
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h1_1136), 4.0)));
@@ -5243,6 +5245,29 @@ int main(int argc, char **argv) {
         int64_t __t78;
         __t78 = INT64_C(0);
         return (int)__t78;
+}
+
+struct __env_924__spec__double { tur_thunk_double_double_t __fn; int64_t gv; int64_t fv; };
+static double __fn_922__spec__double_void___double(void * __env_p_925, double x) {
+        struct __env_924__spec__double *__env___env_924__spec__double = (struct __env_924__spec__double *)__env_p_925;
+        return (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_924__spec__double->gv)))((void *)(intptr_t)(__env___env_924__spec__double->gv), (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_924__spec__double->fv)))((void *)(intptr_t)(__env___env_924__spec__double->fv), x));
+}
+
+static void * _____spec__void___int64_t_int64_t(int64_t f, int64_t g) {
+        void * __t79;
+        {
+            int64_t fv = (int64_t)(intptr_t)(f);
+            (void)fv;
+            int64_t gv = (int64_t)(intptr_t)(g);
+            (void)gv;
+            struct __env_924__spec__double *__t80 = (struct __env_924__spec__double *)malloc(sizeof(struct __env_924__spec__double));
+            __t80->__fn = (tur_thunk_double_double_t)__fn_922__spec__double_void___double;
+            __t80->gv = gv;
+            __t80->fv = fv;
+            void *__t81 = __t80;
+            __t79 = __t81;
+        }
+        return __t79;
 }
 
 
