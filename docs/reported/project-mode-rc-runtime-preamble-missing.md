@@ -7,21 +7,58 @@ broader sibling of `project-mode-defstruct-typedef-missing.md` (now resolved):
 that report fixed the *struct typedef* emission, but RC support in project mode
 is still entirely absent.
 
-## Status: FIXED for executables (whole-program track landed)
+## Status: FIXED (both tracks landed)
 
-The **whole-program track (W1-W4)** below is **implemented**:
-`cmd_build_project` now builds an executable project by compiling its single
-entry module *whole-program* (`src/main.c`, in `cmd_build_project`), so every
-imported module is inlined into one TU carrying the full inline runtime. Repro A
-and Repro B (including a cross-module `rc<T>` struct field) build, link, and run
-**ASan-clean**; covered by `build-project-rc-runtime` in
-`tests/run-build-project.sh`. Full suite stays at 0 FAIL and the signal spice
-still builds.
+> Rebased onto main after #320 ("separate-compilation runtime scaffolding"),
+> which independently added per-module emission of the closure/fat runtime
+> (`emit_closure_fat_runtime`), `tur_poly_fn_t`, the `cons` builtin, and a
+> per-module ADT Pass-0. Reconciled by keeping #320 intact and making the
+> overlapping fixed-runtime emissions **idempotent**: `emit_closure_fat_runtime`
+> takes a `guarded` flag (wraps its body in `#ifndef TUR_RT_CLOSURE_FAT` in
+> separate compilation) and the preamble's `tur_poly_fn_t` reuses #320's
+> `TUR_POLY_FN_T_DEFINED` guard in shared mode, so the shared `tur_runtime.h` and
+> #320's per-module copies dedupe to one definition; single-file output stays
+> byte-identical (both flags are off there). The whole-program executable reroute
+> now auto-loads stdlib (it uses the single-file path), so the `prelude-cons`
+> regression test renames its local cell accessors off the stdlib names
+> (`list-head`->`cell-head`) to avoid the redefinition the compiler correctly
+> flags; its assertion is unchanged. Full suite: 1535 passed, 0 failed.
 
-**`--shared` `.so` builds still use separate compilation and therefore still
-lack the runtime** -- a spice that *itself* uses `rc<T>` in an exported,
-separately-compiled module is not yet covered. That remaining case needs the
-**owner-TU track (T3-T11)**; it stays open.
+**Whole-program track (W1-W4)** -- executables: `cmd_build_project` builds an
+executable project by compiling its single entry module *whole-program*, so
+every imported module is inlined into one TU carrying the full inline runtime.
+Repro A and Repro B build, link, and run ASan-clean (`build-project-rc-runtime`).
+
+**Owner-TU track (T3-T11)** -- `--shared` `.so`: the runtime preamble is now
+emitted, in a shared-linkage form, into a generated `tur_runtime.h` that every
+separately-compiled module `.c` includes, plus a single owner TU
+`tur_runtime.c` (it alone `#define`s `TUR_RT_OWNER`, so it alone defines the
+runtime's ~34 file-scope globals -- one GC registry / free queue / panic +
+scheduler state). The runtime *functions* are demoted to `static` and replicated
+per module TU, operating on those shared globals (verified safe: no
+function-local statics, no cross-TU function-pointer identity, no fn-ptr equality
+compares). A `--shared` spice exporting an `rc<T>` module now links, dlopens, and
+its exported RC functions return correct strong-counts across the `.so` boundary
+(`build-shared-rc-runtime`; manually verified via dlopen under ASan). Both the
+executable and `.so` cases are covered; full suite at 0 FAIL, signal spice
+builds.
+
+Three further gaps surfaced and fixed while wiring the owner TU up:
+- **More extern runtime functions than the initial 22.** Four single-line
+  `tur_stm_*` definitions (`tur_stm_current_tx/set_current_tx/retry/check`) also
+  had external linkage and were duplicate-defined across the owner + module TUs;
+  demoted to `static` like the rest.
+- **Function-level defer thunks were never emitted in separate compilation.**
+  `emit_implementation` built module-level defers but never drained
+  `pending_defer_thunks` (RC auto-drop and explicit `(defer ...)` generate
+  these), so a body referenced an undefined `__defer_N` / `struct
+  __defer_env_N`. Now drained and emitted before the bodies, mirroring
+  `emit_program`. (Pre-existing latent gap, masked because RC never compiled
+  this far in project mode before.)
+- **`g_tur_args` double-declaration.** `emit_implementation` used to emit a
+  local `static g_tur_args` for a main-defining module; that now clashes with
+  the `extern g_tur_args` from `tur_runtime.h`. Removed -- the global comes from
+  the shared runtime header / owner TU.
 
 Two intentional behavior changes for **executable** project builds (both
 documented and tested):
@@ -358,7 +395,12 @@ into `tur_runtime.h` rather than try to subset them.
 
 ## Detailed implementation tasks
 
-Ordered, each independently testable. Items T1-T2 are landed; start at T3.
+Ordered, each independently testable. **All landed (T1-T11 done).** The
+implementation followed this plan; deviations and extra gaps found along the way
+are recorded under "Status" above (notably: ~34 globals externalized not 16; 26
+functions demoted not 22; defer-thunk emission added to `emit_implementation`;
+the declarations-header idea was unnecessary because demoting functions to
+`static` lets them be replicated per-TU while the owner TU owns the globals).
 
 - **T1 (done).** Extract the preamble into
   `emit_runtime_preamble(Buf *out, const Expr *program)`. Byte-identical;

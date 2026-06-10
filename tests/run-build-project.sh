@@ -318,6 +318,11 @@ fi
 # `cons` is registered as a builtin lowering to a {head,tail} cons-cell helper
 # emitted into each TU's preamble, so it resolves without the stdlib auto-load
 # that project mode skips (closes the c-dsl/glsl gap; F6 in the report).
+# NOTE (project-mode-rc-runtime-preamble-missing): executable project builds now
+# compile whole-program (entry module single-file), which DOES auto-load stdlib
+# -- so a local defn named `list-head`/`list-tail` would collide with stdlib's.
+# The local cell accessors are named `cell-head`/`cell-tail` to avoid that; the
+# assertion (cons builtin + {head,tail} layout -> 33) is unchanged.
 CONS_PROJ="$WORK/prelude-cons"
 mkdir -p "$CONS_PROJ/src/app"
 cat > "$CONS_PROJ/build.tur" <<'EOF'
@@ -325,10 +330,10 @@ cat > "$CONS_PROJ/build.tur" <<'EOF'
 EOF
 cat > "$CONS_PROJ/src/app/main.tur" <<'EOF'
 (defmodule app/main
-  (defn list-head [l : int] : int
+  (defn cell-head [l : int] : int
     ```c struct __tur_cell_t { int64_t head; int64_t tail; };
     return ((struct __tur_cell_t *)(intptr_t)l)->head; ```)
-  (defn list-tail [l : int] : int
+  (defn cell-tail [l : int] : int
     ```c struct __tur_cell_t { int64_t head; int64_t tail; };
     return ((struct __tur_cell_t *)(intptr_t)l)->tail; ```)
   (defn main [] : int
@@ -336,7 +341,7 @@ cat > "$CONS_PROJ/src/app/main.tur" <<'EOF'
     ;; head=11, head(tail)=22 -> 33 proves cons cells are allocated and the
     ;; {head,tail} layout matches the list.tur walkers.
     (let [lst (cons 11 (cons 22 0))]
-      (+ (list-head lst) (list-head (list-tail lst))))))
+      (+ (cell-head lst) (cell-head (cell-tail lst))))))
 EOF
 cons_out=$(cd "$WORK" && "$TUR" build "$CONS_PROJ" -o "$WORK/consbin" 2>&1)
 cons_rc=$?
@@ -699,6 +704,48 @@ else
     else
         fail "build-project-rc-runtime" "exit=$rc_run_rc (expected 1; rc strong-count or a leak/ASan abort)"
     fi
+fi
+
+# project-mode-rc-runtime-preamble-missing (owner-TU design): a --shared spice
+# that EXPORTS a module using rc<T> compiles via separate compilation, where the
+# runtime cannot be inlined per-module (duplicate GC state / duplicate symbols).
+# The owner-TU design gives every module .c a static replica of the runtime
+# functions plus an extern view of the runtime globals, defined once in the
+# generated tur_runtime.c.  Assert the .so links, exports the rc-using function,
+# and that the GC registry global has exactly one owning definition.
+RCSO="$WORK/rc-so"
+mkdir -p "$RCSO/src/widget"
+cat > "$RCSO/build.tur" <<'EOF'
+(defpackage rc-so :name "rc-so" :version "0.1.0"
+  :exports #{ "widget/box" ["alloc-box"] })
+EOF
+cat > "$RCSO/src/widget/box.tur" <<'EOF'
+(defmodule widget/box
+  (export alloc-box)
+  (defstruct Wrapper :move [val : rc<int>])
+  (defn alloc-box [] : int
+    (let [inner (rc/of 10)]
+      (let [w (rc/of (make-struct Wrapper inner))]
+        (rc/strong-count w)))))
+EOF
+rcso_out=$(cd "$WORK" && "$TUR" build "$RCSO" --shared -o "$WORK/rcbox.so" 2>&1)
+rcso_rc=$?
+if [ $rcso_rc -ne 0 ] || [ ! -f "$WORK/rcbox.so" ]; then
+    fail "build-shared-rc-runtime" "tur build --shared exit=$rcso_rc: $rcso_out"
+elif command -v nm >/dev/null 2>&1; then
+    # The exported rc-using function must be present, and the GC registry global
+    # must resolve to exactly one owning definition (the owner TU), not one per
+    # module .c -- proving single shared GC state across the separately-compiled
+    # translation units.
+    has_export=$(nm -D "$WORK/rcbox.so" 2>/dev/null | grep -cE 'widget__box__alloc_hybox')
+    gc_owners=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' [A-Za-z] gc_all_blocks$')
+    if [ "$has_export" -ge 1 ] && [ "$gc_owners" -eq 1 ]; then
+        pass "build-shared-rc-runtime"
+    else
+        fail "build-shared-rc-runtime" "export=$has_export gc_all_blocks_owners=$gc_owners (expected >=1 and 1)"
+    fi
+else
+    pass "build-shared-rc-runtime"
 fi
 
 echo
