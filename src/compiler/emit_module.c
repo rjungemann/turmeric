@@ -5,6 +5,48 @@
 
 /* ------------ program-level emit ------------ */
 
+/* file-scope-inline-c-dedup: a top-level ```c ... ``` block lowers to file-scope
+ * C (typedefs, struct tags, helper fns).  When several modules linked into one
+ * TU each carry an *identical* such block -- the documented "redeclare the
+ * carrier struct in every module that touches its fields" idiom (see the httpd
+ * / tourist spices) -- emitting every copy verbatim at file scope is a C
+ * redefinition error (`redefinition of 'struct __foo'`).  De-duplicate by exact
+ * text so each distinct block is emitted exactly once per TU.  Distinct blocks
+ * that genuinely conflict (same struct tag, different body) are not identical
+ * text, so they still reach cc unchanged and surface as a real user error. */
+typedef struct {
+    const char **blocks;   /* borrowed pointers into each InlineC's code */
+    size_t      *lens;
+    uint32_t     n;
+    uint32_t     cap;
+} InlineCDedup;
+
+/* Return true if a byte-identical block was already recorded; otherwise record
+ * this one and return false.  Callers emit the block only when this is false. */
+static bool inline_c_dedup_seen(InlineCDedup *d, const char *p, size_t len) {
+    for (uint32_t i = 0; i < d->n; i++) {
+        if (d->lens[i] == len && memcmp(d->blocks[i], p, len) == 0)
+            return true;
+    }
+    if (d->n == d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 8;
+        d->blocks = (const char **)realloc(d->blocks, d->cap * sizeof(*d->blocks));
+        d->lens   = (size_t *)realloc(d->lens, d->cap * sizeof(*d->lens));
+    }
+    d->blocks[d->n] = p;
+    d->lens[d->n]   = len;
+    d->n++;
+    return false;
+}
+
+static void inline_c_dedup_free(InlineCDedup *d) {
+    free(d->blocks);
+    free(d->lens);
+    d->blocks = NULL;
+    d->lens   = NULL;
+    d->n = d->cap = 0;
+}
+
 static bool thunk_type_has_concrete_c_abi(Type t) {
     switch (t.kind) {
         case TY_NIL:
@@ -1591,6 +1633,7 @@ int emit_program(Buf *out, const Expr *program) {
      * they can define file-scope helper functions/structs that Turmeric defns
      * reference -- e.g. the capability vtables in stdlib/io.tur and log.tur. */
     Buf cprelude; buf_init(&cprelude);
+    InlineCDedup cprelude_dedup = {0};  /* file-scope-inline-c-dedup */
 
     EmitCtx ctx;
     ctx.file = &file;
@@ -2166,7 +2209,8 @@ int emit_program(Buf *out, const Expr *program) {
              * verbatim at file scope, not a statement in main().  It carries no
              * captures/val-exprs, so emit its text directly. */
             InlineC *ic = e->as.inline_c_.inline_c;
-            if (ic && ic->code.p && ic->code.len > 0) {
+            if (ic && ic->code.p && ic->code.len > 0 &&
+                !inline_c_dedup_seen(&cprelude_dedup, ic->code.p, ic->code.len)) {
                 buf_write(&cprelude, ic->code.p, ic->code.len);
                 buf_putc(&cprelude, '\n');
             }
@@ -5069,6 +5113,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&fwd_decls);
     buf_free(&defer_thunks);
     buf_free(&cprelude);
+    inline_c_dedup_free(&cprelude_dedup);
     buf_free(&concrete_struct_apps);
     buf_free(&concrete_adt_apps);
     buf_free(&concrete_fn_ptr_typedefs);
@@ -5841,16 +5886,22 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * Dependency-based reordering (or a top-level C block that lands after
      * its defmodule in the flat array) can otherwise place a defn body before
      * the typedefs/helpers it needs from the C block.  Collecting all C blocks
-     * first mirrors what emit_program does via the dedicated cprelude buffer. */
+     * first mirrors what emit_program does via the dedicated cprelude buffer.
+     * file-scope-inline-c-dedup: skip byte-identical repeats so the shared
+     * "redeclare the carrier struct per module" idiom does not produce a C
+     * `redefinition of 'struct __foo'` when several modules land in one TU. */
+    InlineCDedup impl_dedup = {0};
     for (uint32_t i = 0; i < impl_n_items; i++) {
         const Expr *e = impl_items[i];
         if (e->kind != EX_INLINE_C) continue;
         InlineC *ic = e->as.inline_c_.inline_c;
-        if (ic && ic->code.p && ic->code.len > 0) {
+        if (ic && ic->code.p && ic->code.len > 0 &&
+            !inline_c_dedup_seen(&impl_dedup, ic->code.p, ic->code.len)) {
             buf_write(&file, ic->code.p, ic->code.len);
             buf_putc(&file, '\n');
         }
     }
+    inline_c_dedup_free(&impl_dedup);
 
     /* Pass 1b: emit all top-level definitions (EX_INLINE_C already handled). */
     for (uint32_t i = 0; i < impl_n_items; i++) {

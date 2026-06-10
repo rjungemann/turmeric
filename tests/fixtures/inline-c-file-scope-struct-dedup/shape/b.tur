@@ -1,0 +1,14 @@
+;; Module B: reads the .y field of the same shared carrier struct.
+;; Its file-scope ```c block is byte-identical to module A's; without dedup the
+;; combined TU would emit two `struct __shape { ... };` definitions at file
+;; scope and cc would reject it with `redefinition of 'struct __shape'`.
+(defmodule shape/b
+  (export b-get)
+  ```c
+  struct __shape { int64_t x; int64_t y; };
+  ```
+  (defn b-get [p : int] : int
+    ```c
+    struct __shape *s = (struct __shape *)(intptr_t)p;
+    return (int)s->y;
+    ```))
