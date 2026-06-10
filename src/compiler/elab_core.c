@@ -69,6 +69,62 @@ TypeKind typekind_from_symbol(const char *name) {
     return TY_UNKNOWN;
 }
 
+/* Forward-declaration param scan for the defmodule / top-level pre-pass.
+ *
+ * Mirrors the real param parse closely enough that a sibling forward-reference
+ * (a defn whose body calls another defn declared later in the same module)
+ * sees the right arity and the right scalar argument kinds:
+ *
+ *  - `^`-prefixed markers (^fat, ^mut, ^borrow, ^linear, ...) annotate the
+ *    *next* parameter and are NOT slots -- counting them over-states the arity,
+ *    which made a saturated call look under-saturated and synthesised a bogus
+ *    extra-arg partial-application wrapper that failed to C-compile
+ *    (docs/reported/pap-defmodule-fat-fn-too-many-args.md);
+ *  - a fused `:T` (F_KEYWORD) or spaced `: T` (F_TYPE_ANN) annotates the most
+ *    recently opened slot;
+ *  - scalar primitive annotations (float/bool/cstr/sized numerics/...) are
+ *    recorded so a saturated forward-ref call type-checks against the real
+ *    kind instead of the TY_INT placeholder; compound/unknown types (fn,
+ *    structs, ptr, type applications) stay TY_INT and are resolved later by
+ *    the HRT5 early-update once the callee's body is elaborated.
+ *
+ * Fills arg_kinds[0..arity) (capacity MAX_FN_ARITY) and returns the arity. */
+uint32_t fwd_decl_scan_params(const Form *params_f, TypeKind *arg_kinds) {
+    uint32_t arity = 0;
+    if (!params_f || params_f->tag != F_VEC) return 0;
+    for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
+        const Form *p = params_f->as.list.items[pi];
+        /* `^`-prefixed substructural / fat / mut markers annotate the next
+         * param; they are not slots. */
+        if (p->tag == F_SYM && p->as.sym->name && p->as.sym->name[0] == '^')
+            continue;
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
+            /* Type annotation for the most recent slot. */
+            if (arity == 0) continue;
+            const Form *t = p;
+            if (p->tag == F_TYPE_ANN && p->as.list.len >= 1)
+                t = p->as.list.items[0];
+            if (t->tag == F_SYM || t->tag == F_KEYWORD) {
+                TypeKind k = typekind_from_symbol(t->as.sym->name);
+                /* Only commit primitive scalar kinds; leave compound/unknown
+                 * as the TY_INT placeholder (matches prior pre-pass behavior). */
+                if (k != TY_UNKNOWN && k != TY_INT &&
+                    (typekind_is_numeric(k) || k == TY_BOOL || k == TY_CSTR ||
+                     k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM) &&
+                    arity - 1 < MAX_FN_ARITY) {
+                    arg_kinds[arity - 1] = k;
+                }
+            }
+            continue;
+        }
+        /* Otherwise this form opens a new parameter slot. */
+        if (arity < MAX_FN_ARITY) arg_kinds[arity] = TY_INT;
+        arity++;
+    }
+    if (arity > MAX_FN_ARITY) arity = MAX_FN_ARITY;
+    return arity;
+}
+
 /* Phase N: returns true if kind is any numeric type */
 bool typekind_is_numeric(TypeKind k) {
     switch (k) {

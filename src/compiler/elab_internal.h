@@ -727,6 +727,7 @@ struct CtFn {
 /* elab_core.c */
 Type type_from_kind(TypeKind k);
 TypeKind typekind_from_symbol(const char *name);
+uint32_t fwd_decl_scan_params(const Form *params_f, TypeKind *arg_kinds);
 bool typekind_is_numeric(TypeKind k);
 int type_size_bytes(TypeKind kind);
 bool typekind_is_concrete_for_disjoint(TypeKind k);
