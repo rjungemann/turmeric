@@ -1989,6 +1989,145 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     return let_expr;
 }
 
+/* bare-fat-result-monomorphization (Phase B) -------------------------------
+ * See docs/upcoming/bare-fat-result-monomorphization-plan.md. */
+
+/* Recover the result kind of a closure passed into a bare-^fat slot, from any
+ * of its surface forms: a bare/auto-shimmed function value (TY_FN, possibly
+ * wrapped in EX_FN_TO_FAT / EX_ASCRIBE), a capturing-closure value (TY_PTR_VOID
+ * with a closure_fn_binding / returns_closure_fn_binding), or a plain fn-typed
+ * variable.  TY_UNKNOWN when it cannot be recovered (e.g. a bare-^fat param
+ * passed through, which carries no signature -- the recursive case). */
+static TypeKind bare_fat_arg_result_kind(const Expr *a) {
+    while (a) {
+        if (a->kind == EX_FN_TO_FAT) { a = a->as.fn_to_fat_.inner; continue; }
+        if (a->kind == EX_ASCRIBE)   { a = a->as.ascribe_.inner;   continue; }
+        break;
+    }
+    if (!a) return TY_UNKNOWN;
+    if (a->type.kind == TY_FN) return a->type.as.fn.result_kind;
+    Binding *cl = expr_closure_fn_binding(a);
+    if (cl && cl->type.kind == TY_FN) return cl->type.as.fn.result_kind;
+    if (a->kind == EX_VAR && a->as.var.binding &&
+        a->as.var.binding->type.kind == TY_FN)
+        return a->as.var.binding->type.as.fn.result_kind;
+    return TY_UNKNOWN;
+}
+
+void elab_track_bare_fat_lazy(Elab *e, Binding *b) {
+    if (!b) return;
+    for (uint32_t i = 0; i < e->n_bare_fat_lazy_bindings; i++)
+        if (e->bare_fat_lazy_bindings[i] == b) return;
+    if (e->n_bare_fat_lazy_bindings >= e->cap_bare_fat_lazy_bindings) {
+        e->cap_bare_fat_lazy_bindings =
+            e->cap_bare_fat_lazy_bindings ? e->cap_bare_fat_lazy_bindings * 2 : 8;
+        e->bare_fat_lazy_bindings = (Binding **)realloc(
+            e->bare_fat_lazy_bindings,
+            e->cap_bare_fat_lazy_bindings * sizeof(Binding *));
+    }
+    e->bare_fat_lazy_bindings[e->n_bare_fat_lazy_bindings++] = b;
+}
+
+/* A short, C-identifier-safe suffix naming a result kind for a clone symbol.
+ * Returns NULL for kinds we do not (yet) specialize over. */
+static const char *bare_fat_kind_suffix(TypeKind k) {
+    switch (k) {
+        case TY_FLOAT:   return "float";
+        case TY_FLOAT32: return "f32";
+        case TY_FLOAT64: return "f64";
+        default:         return NULL;
+    }
+}
+
+Binding *elab_specialize_bare_fat(Elab *e, Binding *callee, TypeKind k) {
+    if (!callee || !callee->defn_form) return NULL;
+    const char *suffix = bare_fat_kind_suffix(k);
+    if (!suffix) return NULL;
+
+    /* A cache slot's spec field encodes three post-lookup states: NULL means a
+     * specialization is *in progress* (a re-entry is therefore recursion);
+     * BARE_FAT_FAILED means it already failed (its diagnostic was reported --
+     * do not re-report); any other pointer is the finished clone. */
+    static Binding BARE_FAT_FAILED_;
+    Binding *const FAILED = &BARE_FAT_FAILED_;
+
+    /* Dedup, and detect an in-progress (recursive) specialization. */
+    for (uint32_t i = 0; i < e->n_bare_fat_specs; i++) {
+        if (e->bare_fat_specs[i].orig == callee && e->bare_fat_specs[i].kind == k) {
+            if (e->bare_fat_specs[i].spec == NULL) {
+                diag_emit(DIAG_ERROR, callee->span,
+                    "bare-^fat function '%s' cannot be specialized at a non-int "
+                    "result kind through recursion (not yet supported)",
+                    callee->name->name);
+                return NULL;
+            }
+            if (e->bare_fat_specs[i].spec == FAILED) return NULL;
+            return e->bare_fat_specs[i].spec;
+        }
+    }
+    if (e->n_bare_fat_specs >= e->cap_bare_fat_specs) {
+        e->cap_bare_fat_specs = e->cap_bare_fat_specs ? e->cap_bare_fat_specs * 2 : 8;
+        e->bare_fat_specs = (struct BareFatSpec *)realloc(
+            e->bare_fat_specs, e->cap_bare_fat_specs * sizeof(*e->bare_fat_specs));
+    }
+    uint32_t slot = e->n_bare_fat_specs++;
+    e->bare_fat_specs[slot].orig = callee;
+    e->bare_fat_specs[slot].kind = k;
+    e->bare_fat_specs[slot].spec = NULL;  /* in-progress marker */
+
+    char nbuf[256];
+    snprintf(nbuf, sizeof(nbuf), "%s__bf_%s", callee->name->name, suffix);
+    const Symbol *mname = symtab_intern(e->st, strslice(nbuf, (uint32_t)strlen(nbuf)));
+
+    /* Re-elaborate the retained Form under the specialization context, at file
+     * scope so the clone's params do not capture the caller's locals. */
+    bool          sv_active = e->bare_fat_spec_active;
+    TypeKind      sv_kind   = e->bare_fat_spec_kind;
+    const Symbol *sv_name   = e->bare_fat_spec_name;
+    Binding      *sv_result = e->bare_fat_spec_result;
+    Scope        *sv_scope  = e->scope;
+
+    e->bare_fat_spec_active = true;
+    e->bare_fat_spec_kind   = k;
+    e->bare_fat_spec_name   = mname;
+    e->bare_fat_spec_result = NULL;
+    e->scope = &e->global;
+
+    Expr   *def  = elab_defn(e, callee->defn_form);
+    Binding *spec = e->bare_fat_spec_result;
+
+    e->bare_fat_spec_active = sv_active;
+    e->bare_fat_spec_kind   = sv_kind;
+    e->bare_fat_spec_name   = sv_name;
+    e->bare_fat_spec_result = sv_result;
+    e->scope = sv_scope;
+
+    if (!def || !spec) {
+        /* Mark finished-failed so a later identical call returns NULL silently
+         * instead of tripping the in-progress (recursion) check above. */
+        e->bare_fat_specs[slot].spec = FAILED;
+        return NULL;
+    }
+    if (def->kind == EX_FN_DEF) elab_register_file_def(e, def);
+
+    callee->bare_fat_specialized = true;
+    spec->bare_fat_specialized   = true;
+    e->bare_fat_specs[slot].spec = spec;
+    return spec;
+}
+
+void elab_sweep_bare_fat_lazy(Elab *e) {
+    for (uint32_t i = 0; i < e->n_bare_fat_lazy_bindings; i++) {
+        Binding *b = e->bare_fat_lazy_bindings[i];
+        if (!b || b->bare_fat_specialized || !b->defn_form) continue;
+        /* Never specialized: re-run the canonical (int) body with capture OFF so
+         * the real diagnostic that caused the deferral is surfaced. */
+        e->bare_fat_force_canonical = true;
+        (void)elab_defn(e, b->defn_form);
+        e->bare_fat_force_canonical = false;
+    }
+}
+
 /* Phase 2: Elaborate a function call (f a b c) */
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
@@ -2031,7 +2170,15 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 if (!cb_args[i]) return NULL;
             }
         }
-        Expr *out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+        /* bare-fat-result-monomorphization (Phase B): type `(g x)` from the
+         * bare-^fat param's recorded result kind.  TY_UNKNOWN (the zero default,
+         * i.e. the canonical body) falls back to the int64 carrier -- identical
+         * to the prior always-int behavior; a specialized clone stamps the
+         * incoming closure's kind (e.g. TY_FLOAT) so the result lands in the
+         * right register in ANY position, not just the tail Phase A retypes. */
+        TypeKind rk = (fn_binding->bare_fat_result_kind != TY_UNKNOWN)
+                    ? fn_binding->bare_fat_result_kind : TY_INT;
+        Expr *out = expr_new(e->arena, EX_CALL, type_from_kind(rk), call->span);
         out->as.call_.fn_binding = fn_binding;
         out->as.call_.args = cb_args;
         out->as.call_.n_args = n_args;
@@ -3213,8 +3360,44 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
+    /* bare-fat-result-monomorphization (Phase B): a deferred (lazy) bare-^fat
+     * callee has no canonical body -- its `(g x)` only types once the incoming
+     * closure's result kind is known.  Recover that kind from the bare-^fat
+     * argument slot and redirect the call to a per-call-site clone.  Non-lazy
+     * callees (the common int-carrier case, including Phase A float fixtures)
+     * are untouched, so existing codegen/snapshots do not change. */
+    Binding *bound_fn = fn_binding;
+    if (fn_binding && fn_binding->bare_fat_lazy &&
+        fn_binding->type.kind == TY_FN) {
+        for (uint32_t i = 0; i < n_args; i++) {
+            if (i >= fn_binding->type.as.fn.arity ||
+                !fn_binding->type.as.fn.arg_fat[i])
+                continue;
+            TypeKind rk = bare_fat_arg_result_kind(args[i]);
+            if (rk != TY_UNKNOWN) {
+                Binding *sp = elab_specialize_bare_fat(e, fn_binding, rk);
+                if (sp) bound_fn = sp;
+            }
+            break;  /* the first bare-^fat slot drives specialization */
+        }
+        if (bound_fn == fn_binding) {
+            /* A lazy bare-^fat callee has no canonical body; if we could not
+             * recover the closure's result kind (e.g. a self-recursive call
+             * passing the bare-^fat param itself, which carries no signature)
+             * the call cannot be specialized.  Recursion / mutual recursion is
+             * a deferred open issue in the plan -- emit a clear error rather
+             * than a body-less symbol that fails at link time. */
+            diag_emit(DIAG_ERROR, call->span,
+                "cannot specialize bare-^fat function '%s' at this call site: "
+                "the closure's result kind is not recoverable here "
+                "(recursive / non-literal bare-^fat results are not yet supported)",
+                fn_binding->name->name);
+            return NULL;
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
-    out->as.call_.fn_binding = fn_binding;
+    out->as.call_.fn_binding = bound_fn;
     out->as.call_.args = args;
     out->as.call_.n_args = n_args;
     out->as.call_.fn_expr = NULL;

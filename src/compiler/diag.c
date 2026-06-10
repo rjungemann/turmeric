@@ -46,6 +46,47 @@ void diag_register_file(const SourceFile *file) {
 
 bool diag_had_error(void) { return had_error_; }
 
+/* Speculative-elaboration capture frames (see diag.h). */
+#define MAX_CAPTURE_DEPTH 16
+static int      capture_depth_;
+static uint32_t capture_err_[MAX_CAPTURE_DEPTH];
+static bool     capture_saved_had_[MAX_CAPTURE_DEPTH];
+
+void diag_push_capture(void) {
+    if (capture_depth_ < MAX_CAPTURE_DEPTH) {
+        capture_saved_had_[capture_depth_] = had_error_;
+        capture_err_[capture_depth_] = 0;
+    }
+    capture_depth_++;
+}
+
+uint32_t diag_pop_capture(void) {
+    if (capture_depth_ <= 0) return 0;
+    capture_depth_--;
+    if (capture_depth_ < MAX_CAPTURE_DEPTH) {
+        had_error_ = capture_saved_had_[capture_depth_];
+        return capture_err_[capture_depth_];
+    }
+    return 0;
+}
+
+/* Returns true when the current emission must be suppressed (a capture frame
+ * is active); also tallies suppressed errors into the innermost frame.
+ *
+ * Warnings pass through untouched: the capture frame's job is to detect (and
+ * swallow) the *errors* that a speculative elaboration produces, not to mute
+ * a body's warnings.  A body that captures cleanly (no errors) is kept as-is,
+ * so letting its warnings out keeps that common case byte-identical to the
+ * pre-capture behavior.  Errors and their subordinate notes/help are
+ * suppressed together so a swallowed error never leaves orphaned notes. */
+static bool diag_intercept(DiagLevel level) {
+    if (capture_depth_ <= 0) return false;
+    if (level == DIAG_WARNING) return false;
+    if (level == DIAG_ERROR && capture_depth_ <= MAX_CAPTURE_DEPTH)
+        capture_err_[capture_depth_ - 1]++;
+    return true;
+}
+
 const char *diag_file_path(uint16_t file_id) {
     if (file_id < MAX_FILES && files_[file_id])
         return files_[file_id]->path;
@@ -1707,6 +1748,7 @@ void diag_render_snippet(const SourceFile *f, Span span, const SnippetOpts *opts
 }
 
 void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
+    if (diag_intercept(level)) return;
     if (level == DIAG_ERROR) had_error_ = true;
 
     if (lsp_collect_) {
@@ -1752,6 +1794,7 @@ void diag_emit(DiagLevel level, Span span, const char *fmt, ...) {
 
 /* Emit diagnostic with error code (Phase 8) */
 void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *fmt, ...) {
+    if (diag_intercept(level)) return;
     if (level == DIAG_ERROR) had_error_ = true;
 
     if (lsp_collect_) {
@@ -1804,6 +1847,7 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
 /* Emit diagnostic with related notes (Phase 8) */
 void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
                           DiagNote *notes, size_t note_count) {
+    if (diag_intercept(level)) return;
     if (level == DIAG_ERROR) had_error_ = true;
 
     if (lsp_collect_) {
@@ -1860,6 +1904,7 @@ void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
 /* Emit diagnostic with suggestion (Phase 8) */
 void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,
                                const DiagSuggestion *suggestion) {
+    if (diag_intercept(level)) return;
     if (level == DIAG_ERROR) had_error_ = true;
 
     if (lsp_collect_) {
@@ -1916,6 +1961,7 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
                          Span primary_span, const char *primary_label,
                          Span *secondary_spans, const char **secondary_labels,
                          size_t secondary_count) {
+    if (diag_intercept(level)) return;
     if (level == DIAG_ERROR) had_error_ = true;
 
     if (lsp_collect_) {

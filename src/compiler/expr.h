@@ -162,6 +162,28 @@ struct Binding {
      * wrap, keeping the two ABI emitters in sync. Set in elab_fns.c when
      * the FnDef is built. */
     bool          body_is_inline_c;
+    /* bare-fat-result-monomorphization-plan (Phase B):
+     *
+     * bare_fat_result_kind -- on a bare `^fat g` *parameter* binding, the
+     *   TypeKind a direct call `(g x)` yields.  TY_UNKNOWN (the zero default)
+     *   means "use the int64 carrier" (the canonical body, current behavior);
+     *   a specialized clone stamps the incoming closure's result kind (e.g.
+     *   TY_FLOAT) here, and elab_call's CY2 fat-dispatch reads it so `(g x)`
+     *   types correctly in ANY position (not just the tail Phase A covers).
+     *
+     * defn_form / bare_fat_lazy -- on a top-level fn *binding* that has at
+     *   least one bare-^fat param.  defn_form retains the `(defn ...)` Form so
+     *   the body can be re-elaborated per closure result kind.  bare_fat_lazy
+     *   is set when the canonical (int) body did NOT typecheck (it is float-
+     *   only, like the plan's gate): no canonical FnDef was emitted, and the
+     *   binding becomes callable only through a per-call-site specialization.
+     *   bare_fat_specialized records that at least one clone was produced (so
+     *   the end-of-pass sweep does not re-surface the deferred canonical
+     *   error for a binding that a caller successfully specialized). */
+    TypeKind            bare_fat_result_kind;
+    const struct Form  *defn_form;
+    bool                bare_fat_lazy;
+    bool                bare_fat_specialized;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */
