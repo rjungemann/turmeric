@@ -1,5 +1,15 @@
 # Build Output Directory Plan
 
+> **Partial landing (2026-06-09):** the default-output-name half landed
+> at `src/main.c`'s `cmd_build_multi_files` site -- when an enclosing
+> `build.tur` is in play, its `:name` is used for the default
+> `-o lib<name>.so` / `-o <name>` output instead of the cwd basename.
+> Eliminates the `lib..so` empty-basename regression and gives
+> workspace-member builds-from-`.` a sane default. The rest of the plan
+> (artifact relocation under `<root>/build/{obj,bin,lib}/`, `:build-dir`
+> manifest field, `TUR_BUILD_DIR` env var, `--build-dir` flag) is still
+> outstanding.
+
 ## Problem
 
 `tur build <dir>` and the shared-library spice build drop generated artifacts

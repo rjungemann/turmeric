@@ -49,6 +49,31 @@ Audit run against `main` at 945cabc6 with a fresh `build/tur`. Verdict:
 The "Background" prose below is preserved verbatim for the historical
 record but should be read with this audit in mind.
 
+## Status update (2026-06-09, third-pass audit)
+
+The two regressions called out in the 2026-06-05 audit are both
+resolved:
+
+1. **`make-struct Pair` / `(Pair float float)` type-spec** -- in-tree
+   workaround (use the `pair` constructor + `(as float ...)` reads)
+   has landed across `core.tur` and `shaper.tur`.
+2. **`^fat name : (fn ...)` annotation lost across defmodule boundary**
+   ([[defmodule-loses-fat-fn-type-annotation]]) -- resolved
+   compiler-side. The Phase 1 example runs end-to-end.
+
+A full sweep on 2026-06-09 against `build/tur`:
+
+- All five example programs (`01_constant_and_time`, `02_oscillators`,
+  `03_filters_and_shapers`, `04_envelopes`, `05_simple_voice`) run and
+  emit the expected sample sequences.
+- All six tests (`test_core`, `test_osc`, `test_filter`, `test_shaper`,
+  `test_envelope`, `test_compose`) print `PASS`.
+- `tur build .` is clean for the whole spice tree.
+
+The rebuild is **functionally complete**. Remaining items are
+follow-ups (Tier 2 surface, performance tuning, docs polish), not
+blockers, and live in their own plan if pursued.
+
 ## Status update (2026-06-05, second-pass audit)
 
 A re-audit against the live tree against turmeric `main` at `21d11393`

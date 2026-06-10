@@ -6,6 +6,40 @@ description: Audit and remediation plan for breakage in `../turmeric-spices` cau
 
 # Spices Migration to Post-v0.17 Advanced Typing + Mangling -- Plan
 
+## Status (2026-06-09)
+
+**Substantially complete.** A fresh sweep across the spice tree with
+`build/tur` shows the P1 (inline-C mangling drift) and P2
+(prelude-macros-from-`defmodule`) classes of breakage are resolved across
+every spice the plan listed:
+
+- `frame`, `watch`, `sdf-raylib` -- inline-C mangling rewrites landed;
+  `tur build .` is clean (sdf-raylib still needs `raylib.h` on the
+  include path, but that's a `:cmake-deps` issue, not the typing wave).
+- `tourist`, `httpd`, `c-dsl`, `glsl`, `stats` -- prelude-macro reach
+  fixed compiler-side via the F1+F3+F4+F6 wave (see
+  [`defmodule-export-scoping-track`](../reported/defmodule-export-scoping-track.md)
+  and the now-archived spices-cons-workaround-paydown plan); no per-spice
+  `(load ...)` workarounds remain.
+- `signal`, `math`, `ansi`, `tls`, `template` -- `tur build .` is clean.
+
+Outstanding items are no longer typing-wave regressions:
+
+- `linalg` -- WIP `decomp.tur` with 4 unmatched parens; never built.
+  Tracked separately at
+  [`linalg-decomp-qr-parser-unterminated-list`](../reported/linalg-decomp-qr-parser-unterminated-list.md).
+- `opengl`, `json`, `http`, `regex`, `sdf-raylib` (raylib portion) --
+  third-party headers absent on this host; orthogonal to the typing
+  migration and tracked by
+  [`transitive-cmake-deps`](transitive-cmake-deps-plan.md).
+- `zlib` -- a residual `<sys/_types/_fd_def.h>` macOS SDK collision in
+  the generated inline-C; needs its own minimal repro report before any
+  fix. Not a typing-wave issue.
+
+The detailed P1/P2 punch lists below are preserved for historical
+record; treat the per-spice "FAIL" rows in the table as the state at
+the time of the audit (commit `c60ba4ca` on 2026-06-04), not today.
+
 ## Summary
 
 `v0.18.0` (tagged 2026-06-02) shipped before the advanced-typing wave landed

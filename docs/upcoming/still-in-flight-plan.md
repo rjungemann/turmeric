@@ -16,62 +16,6 @@ and delete the section from this file.
 
 ---
 
-## Typed closure invocation ABI
-
-> Full plan: [../archive/closure-typed-invocation-abi-plan.md](../archive/closure-typed-invocation-abi-plan.md)
-
-Companion to the representation-unification plan; threads declared
-arg/return types all the way to the C invocation site.
-
-- [x] Phase 1 -- `TUR_APPLY{0..4}_T(R, A_i..., f, args...)` macros
-      emitted (`emit_module.c`); legacy `TUR_APPLY{0..4}` are int64
-      aliases of the `_T` forms; signature-keyed typed fat-shims
-      (`ensure_typed_fatshim`) and the typed `__tur_poly_to_fat`
-      generalisation (`ensure_typed_poly_to_fat`) land.
-- [x] Phase 2 -- inline-C lowering, typeclass dispatch, and
-      `EX_FN_TO_FAT`/`EX_POLY_TO_FAT` emit typed calls keyed off
-      `result_full_type` + `param_types` via
-      `ensure_typed_thunk_typedef` / `use_typed_thunk_abi`.
-- [x] Phase 3 -- stdlib migrations: `httpd.tur` `mw-cors` (`^fat`)
-      and `list.tur` `__cons-fmap` (`^fat` + direct call) done; the
-      `seq-call-fn{0,1,2}` / `seq-call-bool-fn1` helpers (in
-      `stdlib/seq/`, not `select.tur`) now dispatch through
-      `TUR_APPLY0/1/2` and `TUR_APPLY1_T(bool, ...)` instead of
-      bespoke slot-0 casts.
-- [ ] Phase 4 -- migrate `turmeric-spices/signal` (`__signal_call1`
-      returns `:float` and drops `int64_t sig_val; memcpy(...)`
-      blocks). Sibling-repo work; deferred until the
-      `../turmeric-spices` checkout is present.
-- [x] Round-trip fixtures cover `:float`, `:ptr`, `:bool` returns and
-      a `:cstr` argument (`tur-apply-t-fatshim-float`,
-      `poly-to-fat-float-roundtrip`, `bare-fat-float-result`,
-      `option-result-c-abi`, ...).
-
-## `defmodule` per-file scoping
-
-> Full plan: [../archive/defmodule-per-file-scoping-plan.md](../archive/defmodule-per-file-scoping-plan.md)
-
-The `tur/zlib` workaround shipped (M6 dropped `defmodule`); the
-diagnostic-scope fix itself is not implemented.
-
-- [x] D0 -- happy fixture `tests/fixtures/elab-defmodule-after-load/`
-      + negative fixture `tests/fixtures/errors/elab-defmodule-not-first/`.
-- [x] D1 -- per-file form boundaries tracked via `span.file_id` on
-      each form (no side array needed; the existing span field serves as
-      the file-of-origin key).
-- [x] D2 -- check at `elab_toplevel.c` rewritten to operate per file
-      using `span.file_id`; continues past first defmodule so later
-      loaded files are also validated.
-- [x] D3 -- M7 reset generalised: fires at every `span.file_id`
-      boundary in the user range, not just after auto-stdlib defmodules.
-- [ ] D4 -- restore `(defmodule tur/zlib ...)` in
-      `../turmeric-spices/spices/zlib/src/tur/zlib.tur`; verify
-      `tests/fixtures/httpd-mw-compress/` and the spice roundtrip
-      test still compile. (Deferred: requires `../turmeric-spices` checkout.)
-- [x] D5 -- `docs/guides/module-system-guide.md` updated to clarify
-      "the file" means the source file; `(load ...)`-spliced files get
-      a fresh scope for the check.
-
 ## Drop leading colons inside `(fn ...)` types
 
 > Full plan: [../archive/fn-type-bare-identifier-plan.md](../archive/fn-type-bare-identifier-plan.md)
@@ -153,29 +97,6 @@ unstarted.
       form (M6-OQ1); `httpd-resp-body-bytes!` setter vs
       length-prefixed `httpd-resp-body!` (M6-OQ2); default
       `min-bytes` threshold (M6-OQ3).
-
-## `tur-signal` spice broken build
-
-> Full plan: [../archive/history/signal-spice-broken-build.md](../archive/history/signal-spice-broken-build.md) *(resolved)*
-
-Spice does not currently compile; Phase 0 of the expansion plan
-needs to be split.
-
-- [ ] Phase 0a -- restore the build. Either reintroduce
-      `__arrow_call1` as a stdlib-side fat-dispatch shim, or rewrite
-      every call site to direct closure invocation `(sv t)` plus
-      `^fat` annotation; add missing `(import ...)` forms to
-      `synth.tur` and `tests/signal/arrow_tests.tur`. Validation:
-      `./build/tur check` clean on every spice source + test file.
-- [ ] Phase 0b -- closure-ABI cleanup: replace raw
-      `int64_t(*)(int64_t)` inline-C casts in `dsp.tur` with
-      fat-dispatch helpers (`TUR_APPLY1` or typed Turmeric
-      trampoline).
-- [ ] Phase 0c -- `:float` sample migration (the originally-named
-      Phase 0). Gate on compiler support for `:float`-returning
-      closures through fat dispatch.
-- [ ] Confirm DSP filter tests (`low-pass` / `high-pass` / `gain`)
-      run a multi-sample sequence rather than a single dispatch.
 
 ## Spaced-type annotation migration
 

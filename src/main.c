@@ -2882,19 +2882,39 @@ static int cmd_run(int argc, char **argv) {
                                            &spice_inc_dirs, &n_spice_inc_dirs);
     }
 
-    /* CMake dependency handling: generate and build if cmake-deps present. */
-    if (m.n_cmake_deps > 0) {
-        /* Only (re)build if cmake/CMakeLists.txt doesn't already exist,
-         * or if --update was requested.  For tur run we do a best-effort
-         * build without --update so repeated runs stay fast. */
+    /* CMake dependency handling: generate and build if cmake-deps present.
+     * Walk the enclosing manifest's :spices block transitively so a
+     * workspace sibling's :cmake-deps participate in this TU's build --
+     * see docs/upcoming/transitive-cmake-deps-plan.md. */
+    PkgCmakeDep *closure_deps = NULL;
+    int          n_closure_deps = 0;
+    if (!pkg_collect_transitive_cmake_deps(root, &m,
+                                           &closure_deps, &n_closure_deps)) {
+        fprintf(stderr, "tur run: transitive cmake-deps resolution failed\n");
+        pkg_lock_free(&lock);
+        pkg_manifest_free(&m);
+        for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]);
+        free(spice_inc_dirs);
+        free(root);
+        return 1;
+    }
+    if (n_closure_deps > 0) {
+        /* Build a synthetic manifest aliasing `m`'s other fields and
+         * swapping in the unioned cmake_deps so pkg_gen_cmake_deps and
+         * pkg_cmake_build see the full set. */
+        PkgManifest mu = m;
+        mu.cmake_deps   = closure_deps;
+        mu.n_cmake_deps = n_closure_deps;
+
         char cmake_lists[4096];
         snprintf(cmake_lists, sizeof(cmake_lists), "%s/cmake/CMakeLists.txt", root);
         struct stat _cmst;
         bool cmake_built = (stat(cmake_lists, &_cmst) == 0);
         if (!cmake_built) {
-            if (!pkg_gen_cmake_deps(root, &m) ||
-                !pkg_cmake_build(root, &m, &lock, NULL)) {
+            if (!pkg_gen_cmake_deps(root, &mu) ||
+                !pkg_cmake_build(root, &mu, &lock, NULL)) {
                 fprintf(stderr, "tur run: cmake dependency build failed\n");
+                pkg_cmake_deps_free(closure_deps, n_closure_deps);
                 pkg_lock_free(&lock);
                 pkg_manifest_free(&m);
                 for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]);
@@ -2905,6 +2925,7 @@ static int cmd_run(int argc, char **argv) {
             pkg_lock_write(lock_path, &lock);
         }
     }
+    pkg_cmake_deps_free(closure_deps, n_closure_deps);
 
     pkg_lock_free(&lock);
 
@@ -3189,12 +3210,41 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                                  const char **inc, int n_inc) {
     char chosen_out[1024];
     if (!out_path) {
+        /* Prefer the manifest's :name over the directory basename so a
+         * workspace member built from `.` gets `lib<pkg-name>.so` rather
+         * than `lib<workspace-cwd>.so` -- and so a single-spice build
+         * from `.` cannot regress to `lib..so` if default_output_name's
+         * realpath fallback ever fails. */
+        char manifest_base[1024] = {0};
+        {
+            char *proj_root = find_project_root(dir);
+            if (proj_root) {
+                char mp[4096];
+                snprintf(mp, sizeof(mp), "%s/build.tur", proj_root);
+                PkgManifest mm;
+                memset(&mm, 0, sizeof(mm));
+                if (pkg_manifest_read(mp, &mm) && mm.name && mm.name[0]) {
+                    snprintf(manifest_base, sizeof(manifest_base),
+                             "%s", mm.name);
+                }
+                pkg_manifest_free(&mm);
+                free(proj_root);
+            }
+        }
         if (shared) {
             char base[1024];
-            default_output_name(dir, base, sizeof(base));
+            if (manifest_base[0]) {
+                snprintf(base, sizeof(base), "%s", manifest_base);
+            } else {
+                default_output_name(dir, base, sizeof(base));
+            }
             snprintf(chosen_out, sizeof(chosen_out), "lib%s.so", base);
         } else {
-            default_output_name(dir, chosen_out, sizeof(chosen_out));
+            if (manifest_base[0]) {
+                snprintf(chosen_out, sizeof(chosen_out), "%s", manifest_base);
+            } else {
+                default_output_name(dir, chosen_out, sizeof(chosen_out));
+            }
         }
         out_path = chosen_out;
     }

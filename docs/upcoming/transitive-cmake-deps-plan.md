@@ -1,6 +1,6 @@
 # Transitive `:cmake-deps` Resolution Plan
 
-> **Status:** Draft
+> **Status:** Phase 1+2 landed (single-level walk); deeper recursion + dedicated fixtures still pending
 > **Last Updated:** 2026-06-09
 > **Type:** Build system / `tur` resolver
 > **Affects:** `src/main.c` (`tur run` / `tur build <dir>` / `tur test`),
@@ -10,6 +10,54 @@
 > [docs/reported/cascade-mbedtls-header-not-found.md](../reported/cascade-mbedtls-header-not-found.md)
 
 ---
+
+## Landed (2026-06-09)
+
+A first-cut implementation shipped as part of the `tur run` project-mode
+gate (`src/main.c` around the former `if (m.n_cmake_deps > 0)` site):
+
+- New public API in `src/compiler/pkg.{c,h}`:
+  `pkg_collect_transitive_cmake_deps(root_dir, root_manifest, &out_deps, &out_n)`
+  and its counterpart free `pkg_cmake_deps_free`.
+- The resolver walks the enclosing manifest's `:spices` block **one
+  level deep**, resolves each spice to its on-disk directory (workspace
+  sibling first, then `:path`, then `<root>/spices/<name>[-<ref>]`,
+  then optional `:subdir`), reads each sibling's `build.tur`, and
+  unions its `:cmake-deps` block into a freshly allocated
+  `PkgCmakeDep[]` after deep-copy.
+- Conflict policy keys on `:name`: identical `(url, ref, path)` is a
+  silent dedup; mismatched is a hard error with both origin dirs
+  printed to stderr (does not reach the cmake generator).
+- `:path`-form deps from sibling manifests are absolutized against
+  the sibling's directory so the existing
+  `pkg_gen_cmake_deps`/`pkg_cmake_build` join (`%s/%s`) still resolves
+  correctly when the root project is a different directory.
+- The gate at the original site is now an unconditional
+  `pkg_collect_transitive_cmake_deps` call followed by a synthetic
+  manifest pass to the existing cmake generator + builder. No change
+  to the on-disk CMake layout (still `<root>/cmake/CMakeLists.txt`
+  and `<root>/cmake/spice-deps-manifest.json`).
+
+Out of scope for this first cut (tracked as follow-ups below):
+
+- **Deep transitive walk.** Only the enclosing manifest's `:spices`
+  entries are inspected. Sibling-of-sibling cmake-deps aren't picked
+  up. Add a visited set keyed on absolute path + recursion before
+  declaring the plan complete.
+- **`cmd_pkg_fetch` gate** (`src/compiler/pkg.c:3537`) and any other
+  `n_cmake_deps > 0` site outside `cmd_run` still see the un-unioned
+  manifest. Walk them in a follow-up.
+- **`cmd_build`'s flag-read path** (`src/main.c:1656` ff.) consumes
+  the generated `spice-deps-manifest.json` directly, so once the run
+  generates the merged manifest it Just Works -- but a fresh
+  `tur build <file>` invocation without a prior `tur run` won't
+  trigger cmake generation.
+- **Regression fixtures** (`transitive-cmake-deps-basic`,
+  `transitive-cmake-deps-conflict`, `transitive-cmake-deps-cycle`)
+  are NOT added; the cascade fixture in `../turmeric-spices` does
+  not stress the path because http's mbedtls includes are guarded by
+  `__has_include`, so the compile proceeds (without TLS) even when
+  cmake-deps are unresolved.
 
 ## Problem
 

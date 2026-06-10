@@ -1777,6 +1777,265 @@ static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
     }
 }
 
+/* ================================================================== */
+/* Transitive :cmake-deps resolution                                   */
+/* ================================================================== */
+
+static char *dup_cstr_or_null(const char *s) {
+    return s ? tur_strdup(s) : NULL;
+}
+
+static bool deep_copy_cmake_dep(PkgCmakeDep *dst, const PkgCmakeDep *src) {
+    memset(dst, 0, sizeof(*dst));
+    dst->name          = dup_cstr_or_null(src->name);
+    dst->url           = dup_cstr_or_null(src->url);
+    dst->ref           = dup_cstr_or_null(src->ref);
+    dst->path          = dup_cstr_or_null(src->path);
+    dst->cmake_name    = dup_cstr_or_null(src->cmake_name);
+    dst->cmake_version = dup_cstr_or_null(src->cmake_version);
+    dst->prefer_system = src->prefer_system;
+    if (src->n_targets > 0) {
+        dst->targets   = (char **)calloc((size_t)src->n_targets, sizeof(char *));
+        if (!dst->targets) return false;
+        for (int i = 0; i < src->n_targets; i++)
+            dst->targets[i] = dup_cstr_or_null(src->targets[i]);
+        dst->n_targets = src->n_targets;
+    }
+    if (src->n_opts > 0) {
+        dst->opts = (PkgCmakeOpt *)calloc((size_t)src->n_opts, sizeof(PkgCmakeOpt));
+        if (!dst->opts) return false;
+        for (int i = 0; i < src->n_opts; i++) {
+            dst->opts[i].key = dup_cstr_or_null(src->opts[i].key);
+            dst->opts[i].val = dup_cstr_or_null(src->opts[i].val);
+        }
+        dst->n_opts = src->n_opts;
+    }
+    return true;
+}
+
+static void free_one_cmake_dep(PkgCmakeDep *d) {
+    free(d->name);
+    free(d->url);
+    free(d->ref);
+    free(d->path);
+    free(d->cmake_name);
+    free(d->cmake_version);
+    for (int i = 0; i < d->n_targets; i++) free(d->targets[i]);
+    free(d->targets);
+    for (int i = 0; i < d->n_opts; i++) {
+        free(d->opts[i].key);
+        free(d->opts[i].val);
+    }
+    free(d->opts);
+    memset(d, 0, sizeof(*d));
+}
+
+void pkg_cmake_deps_free(PkgCmakeDep *deps, int n) {
+    if (!deps) return;
+    for (int i = 0; i < n; i++) free_one_cmake_dep(&deps[i]);
+    free(deps);
+}
+
+static bool str_eq_or_both_null(const char *a, const char *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    return strcmp(a, b) == 0;
+}
+
+/* Resolve a :spices entry to its on-disk directory, mirroring the
+ * priority used in main.c's resolve_include_dirs_from_manifest:
+ *   workspace-sibling -> :path -> <root>/spices/<name>-<ref> -> <root>/spices/<name>
+ * Returns a heap-allocated absolute (or root-relative) path.  Returns
+ * NULL when the resolved directory does not exist (best-effort silent
+ * skip, matching pkg_fetch_all's "continuing with healthy deps" policy).
+ * Caller frees. */
+static char *resolve_spice_dep_dir(const char *root_project_dir,
+                                   const PkgSpice *s) {
+    if (!root_project_dir || !s || !s->name) return NULL;
+    char dep_dir[4096];
+    char *ws = s->path ? NULL
+                       : pkg_workspace_member_path(root_project_dir, s->name);
+    if (ws) {
+        snprintf(dep_dir, sizeof(dep_dir), "%s", ws);
+        free(ws);
+    } else if (s->path) {
+        snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root_project_dir, s->path);
+    } else if (s->ref) {
+        snprintf(dep_dir, sizeof(dep_dir), "%s/spices/%s-%s",
+                 root_project_dir, s->name, s->ref);
+    } else {
+        snprintf(dep_dir, sizeof(dep_dir), "%s/spices/%s",
+                 root_project_dir, s->name);
+    }
+    if (s->subdir) {
+        char tmp[4096];
+        snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
+        snprintf(dep_dir, sizeof(dep_dir), "%s", tmp);
+    }
+    struct stat ss;
+    if (stat(dep_dir, &ss) != 0 || !S_ISDIR(ss.st_mode)) return NULL;
+    return tur_strdup(dep_dir);
+}
+
+/* Append `dep` (deep-copied) into *out_deps, applying conflict-detection
+ * keyed on `dep->name`.  `origin_dir` is reported in conflict diagnostics
+ * (typically the manifest directory the dep was read from). */
+static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
+                                                  int *out_n,
+                                                  int *out_cap,
+                                                  const PkgCmakeDep *dep,
+                                                  const char *origin_dir,
+                                                  const char **origins) {
+    for (int i = 0; i < *out_n; i++) {
+        if (!str_eq_or_both_null((*out_deps)[i].name, dep->name)) continue;
+        /* Same name -- require :url and :ref to match (path-form deps
+         * are compared by :path).  Mismatched :cmake-name or :options
+         * is silently kept on the existing copy. */
+        bool url_match  = str_eq_or_both_null((*out_deps)[i].url,  dep->url);
+        bool ref_match  = str_eq_or_both_null((*out_deps)[i].ref,  dep->ref);
+        bool path_match = str_eq_or_both_null((*out_deps)[i].path, dep->path);
+        if (url_match && ref_match && path_match) return true; /* dup */
+        fprintf(stderr,
+            "tur: conflicting :cmake-deps for \"%s\":\n"
+            "  %s: url=%s, ref=%s, path=%s\n"
+            "  %s: url=%s, ref=%s, path=%s\n",
+            dep->name,
+            origins[i] ? origins[i] : "<unknown>",
+            (*out_deps)[i].url  ? (*out_deps)[i].url  : "(none)",
+            (*out_deps)[i].ref  ? (*out_deps)[i].ref  : "(none)",
+            (*out_deps)[i].path ? (*out_deps)[i].path : "(none)",
+            origin_dir ? origin_dir : "<unknown>",
+            dep->url  ? dep->url  : "(none)",
+            dep->ref  ? dep->ref  : "(none)",
+            dep->path ? dep->path : "(none)");
+        return false;
+    }
+    if (*out_n >= *out_cap) {
+        int new_cap = *out_cap ? *out_cap * 2 : 4;
+        PkgCmakeDep *nd = (PkgCmakeDep *)realloc(
+            *out_deps, (size_t)new_cap * sizeof(PkgCmakeDep));
+        if (!nd) return false;
+        *out_deps = nd;
+        *out_cap  = new_cap;
+        /* parallel origins[] array grows in the caller */
+    }
+    if (!deep_copy_cmake_dep(&(*out_deps)[*out_n], dep)) return false;
+    /* Absolutize :path-form deps relative to their origin dir so the
+     * downstream generator's `<project_dir>/<path>` join still resolves
+     * correctly when the dep came from a sibling. */
+    if ((*out_deps)[*out_n].path && (*out_deps)[*out_n].path[0] != '/'
+        && origin_dir) {
+        char abs[4096];
+        snprintf(abs, sizeof(abs), "%s/%s",
+                 origin_dir, (*out_deps)[*out_n].path);
+        free((*out_deps)[*out_n].path);
+        (*out_deps)[*out_n].path = tur_strdup(abs);
+    }
+    (*out_n)++;
+    return true;
+}
+
+bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
+                                       const PkgManifest *root_manifest,
+                                       PkgCmakeDep      **out_deps,
+                                       int               *out_n) {
+    *out_deps = NULL;
+    *out_n    = 0;
+    if (!root_project_dir || !root_manifest) return true;
+
+    PkgCmakeDep *deps     = NULL;
+    int          n_deps   = 0;
+    int          cap_deps = 0;
+    const char **origins  = NULL;
+    int          n_origins = 0;
+    int          cap_origins = 0;
+
+#define GROW_ORIGINS_TO(n_target) do {                                       \
+    if ((n_target) > cap_origins) {                                          \
+        int nc = cap_origins ? cap_origins * 2 : 4;                          \
+        while (nc < (n_target)) nc *= 2;                                     \
+        const char **no = (const char **)realloc(                            \
+            origins, (size_t)nc * sizeof(char *));                           \
+        if (!no) goto fail;                                                  \
+        origins = no;                                                        \
+        cap_origins = nc;                                                    \
+    }                                                                        \
+} while (0)
+
+    /* Root manifest's own deps go first. */
+    for (int i = 0; i < root_manifest->n_cmake_deps; i++) {
+        GROW_ORIGINS_TO(n_origins + 1);
+        if (!append_cmake_dep_with_conflict_check(
+                &deps, &n_deps, &cap_deps,
+                &root_manifest->cmake_deps[i],
+                root_project_dir, origins))
+            goto fail;
+        origins[n_origins++] = root_project_dir;
+    }
+
+    /* Single-level walk over :spices entries.  We deliberately do not
+     * recurse into siblings' :spices for the first cut: the cascade
+     * use-case is one workspace level deep, and recursing requires a
+     * visited set keyed on resolved real path.  TODO follow-up. */
+    for (int i = 0; i < root_manifest->n_spices; i++) {
+        const PkgSpice *s = &root_manifest->spices[i];
+        char *sib_dir = resolve_spice_dep_dir(root_project_dir, s);
+        if (!sib_dir) continue;  /* missing/optional dep: skip */
+
+        char sib_manifest[4096];
+        snprintf(sib_manifest, sizeof(sib_manifest),
+                 "%s/build.tur", sib_dir);
+        struct stat mst;
+        if (stat(sib_manifest, &mst) != 0 || !S_ISREG(mst.st_mode)) {
+            free(sib_dir);
+            continue;
+        }
+        PkgManifest sm;
+        memset(&sm, 0, sizeof(sm));
+        if (!pkg_manifest_read(sib_manifest, &sm)) {
+            free(sib_dir);
+            continue;
+        }
+
+        for (int j = 0; j < sm.n_cmake_deps; j++) {
+            GROW_ORIGINS_TO(n_origins + 1);
+            if (!append_cmake_dep_with_conflict_check(
+                    &deps, &n_deps, &cap_deps,
+                    &sm.cmake_deps[j], sib_dir, origins)) {
+                pkg_manifest_free(&sm);
+                free(sib_dir);
+                goto fail;
+            }
+            /* origins[] stores borrowed pointers; sib_dir is heap-owned
+             * and freed at the end of this iteration, so dup it. */
+            origins[n_origins++] = tur_strdup(sib_dir);
+        }
+
+        pkg_manifest_free(&sm);
+        free(sib_dir);
+    }
+
+    /* origins[] entries i >= root_manifest->n_cmake_deps are
+     * heap-allocated copies; free them now that conflict diagnostics
+     * have been emitted (or not). */
+    for (int i = root_manifest->n_cmake_deps; i < n_origins; i++)
+        free((char *)origins[i]);
+    free(origins);
+
+#undef GROW_ORIGINS_TO
+
+    *out_deps = deps;
+    *out_n    = n_deps;
+    return true;
+
+fail:
+    for (int i = root_manifest->n_cmake_deps; i < n_origins; i++)
+        free((char *)origins[i]);
+    free(origins);
+    pkg_cmake_deps_free(deps, n_deps);
+    return false;
+}
+
 bool pkg_gen_cmake_deps(const char *project_dir,
                         const PkgManifest *manifest) {
     if (manifest->n_cmake_deps == 0) return true;

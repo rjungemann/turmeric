@@ -258,6 +258,34 @@ bool pkg_is_workspace_member(const char *project_dir, const char *name);
  * lists a matching sibling member.  Caller frees. */
 char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
 
+/* Walk `root_manifest`'s :spices block transitively, resolving each spice
+ * to its on-disk directory (workspace-sibling preferred, then :path, then
+ * fetched <root>/spices/<name>[-<ref>][/<subdir>]), reading the sibling's
+ * own build.tur, and unioning all :cmake-deps blocks encountered into a
+ * freshly-allocated PkgCmakeDep array.  The root manifest's own cmake_deps
+ * are included first so its declarations win in any ordering-sensitive
+ * downstream consumer.
+ *
+ * Conflict policy:
+ *   - identical (name, url, ref) entries are silently deduplicated
+ *     (workspace siblings sharing a system dep coexist cleanly);
+ *   - same-name entries with mismatched :url or :ref are a hard error --
+ *     stderr gets both origins and the function returns false.
+ *
+ * On success, *out_deps points to a newly-allocated array of PkgCmakeDep
+ * (deep-copied from source manifests; :path entries are absolutized so
+ * the existing CMake generator's `%s/%s` join with the root project_dir
+ * does not break).  *out_n is the count.  Caller must free with
+ * pkg_cmake_deps_free.  Returns true on success (including the no-deps
+ * case where *out_n stays 0). */
+bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
+                                       const PkgManifest *root_manifest,
+                                       PkgCmakeDep      **out_deps,
+                                       int               *out_n);
+
+/* Free an array allocated by pkg_collect_transitive_cmake_deps. */
+void pkg_cmake_deps_free(PkgCmakeDep *deps, int n);
+
 /* Verify that each cmake dep's resolved SHA still matches tur.lock.
  * Returns true if all match (or lock has no entry yet).
  * Prints a diagnostic and returns false if a mismatch is found. */
