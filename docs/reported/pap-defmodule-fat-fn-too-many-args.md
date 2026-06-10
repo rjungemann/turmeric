@@ -1,8 +1,9 @@
 ---
 title: Sibling forward-reference inside defmodule generates PAP wrapper with one extra arg vs callee signature
 severity: hard error -- C compile fails with "too many arguments to function call"
-status: open
+status: fixed
 discovered: 2026-06-09
+fixed: 2026-06-10
 discovered-in: defect-A regression fixture (defmodule-fat-fn-param-export)
 ---
 
@@ -52,7 +53,39 @@ signature is `(int64_t, double)`.
 
 Expected output: `4`.
 
-## Likely root cause
+## Root cause (confirmed)
+
+The defmodule pass-1 forward-declaration in `elab_module.c` (and the
+identical top-level pre-pass in `elab_toplevel.c`) counted arity by walking
+the params vector and incrementing for every form that is not a type
+annotation:
+
+```c
+if (p->tag != F_KEYWORD && p->tag != F_TYPE_ANN)
+    param_arity++;
+```
+
+A `^fat` (or `^mut`, `^borrow`, `^linear`, ...) annotation is an `F_SYM`, not
+a keyword or type-ann, so it was **counted as a parameter slot**.  For
+`(defn sample [^fat sig : (fn [float] float) t : float] ...)` this yields
+arity **3** (`^fat`, `sig`, `t`) instead of 2.
+
+When the sibling `apply-twice` -- declared *earlier* in the same defmodule --
+forward-references `sample`, it sees the pass-1 binding (the HRT5 early-update
+that would fix the arity has not run yet, because `sample` is elaborated
+later).  A saturated 2-arg `(sample f x)` then looks under-saturated (2 of 3),
+so `elab_partial_apply` synthesises a PAP wrapper.  The wrapper closes over the
+fat fn `f` (one logical arg) plus `x`, then appends the "remaining" arg, and
+calls the real arity-2 `sample` with three scalars -- the `cc` error.
+
+A second, latent defect was hiding behind the first: the forward decl filled
+all `arg_kinds` with the `TY_INT` placeholder.  Once the arity was corrected,
+the now-saturated call type-checked `x : float` against `int` and reported
+`arg 2: expected int, got float`.  The wrong arity had been masking this hole
+by routing the call through the partial-application path, which skips the
+positional kind check.
+
+## Likely root cause (original triage)
 
 The pap-wrapper synthesis treats `sample` as having arity-3 because the
 forward-decl binding it consulted (pass-1 / early-update) records an
@@ -69,7 +102,22 @@ Either way the PAP body needs to match the resolved callee's true arity,
 which means the synthesis must read the **post-pass-2** binding type, not
 the pass-1 forward-decl shape.
 
-## Workaround
+## Fix
+
+A shared helper `fwd_decl_scan_params` (in `elab_core.c`, declared in
+`elab_internal.h`) now performs the pre-pass param scan in one place:
+
+- skips `^`-prefixed marker symbols so they no longer inflate the arity, and
+- records primitive scalar argument kinds (float/bool/cstr/sized numerics/...)
+  from each param's annotation, closing the `TY_INT`-placeholder hole;
+  compound/unknown types stay `TY_INT` (resolved later by the HRT5 early
+  update).
+
+All three previously-duplicated pre-pass loops call it: the defmodule pass-1
+forward decl (`elab_module.c`), the top-level pre-pass (`elab_toplevel.c`),
+and the `letrec` fn-literal pre-register (`elab_forms.c`).
+
+## Workaround (no longer needed)
 
 Inline the call site -- do not introduce a partial application of a
 sibling forward-reference inside a defmodule.  Single-file mode with both
@@ -88,10 +136,11 @@ defns in dependency order also avoids the bug.
 
 ## Validation
 
-- Add a fixture `tests/fixtures/defmodule-pap-forward-ref-fat-fn/` exercising
-  the apply-twice shape above; expect output `4`.
-- Re-run the signal spice (`tur build .` in `../turmeric-spices/spices/signal`)
-  and verify no fixtures regress.
+- Added fixture `tests/fixtures/defmodule-pap-forward-ref-fat-fn/` exercising
+  the apply-twice shape above; output is `4` and the generated C contains no
+  `__pap` wrappers (the call lowers to a direct saturated
+  `sig__probe__sample(...)`).
+- Full `bash tests/run.sh` passes with zero `FAIL` lines.
 
 ## Cross-references
 

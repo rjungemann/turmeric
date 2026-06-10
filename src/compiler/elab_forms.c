@@ -1401,14 +1401,11 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                 (ih->as.sym == e->sym_fn || ih->as.sym == e->sym_lambda)) {
                 Form *params_f = init_f->as.list.items[1];
                 if (params_f->tag == F_VEC) {
-                    uint32_t arity = 0;
-                    for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
-                        Form *p = params_f->as.list.items[pi];
-                        if (p->tag != F_KEYWORD && p->tag != F_TYPE_ANN) arity++;
-                    }
-                    if (arity > MAX_FN_ARITY) arity = MAX_FN_ARITY;
+                    /* Same `^`-marker-aware scan as the defmodule/top-level
+                     * forward-decl pre-pass: a `(fn [^fat g ...] ...)` literal
+                     * must not count its ^fat marker as a parameter slot. */
                     TypeKind arg_kinds[MAX_FN_ARITY];
-                    for (uint32_t ai = 0; ai < arity; ai++) arg_kinds[ai] = TY_INT;
+                    uint32_t arity = fwd_decl_scan_params(params_f, arg_kinds);
                     /* Peek at the return-type keyword at index 2 (fn [params] :ret body). */
                     TypeKind ret_kind = TY_INT;
                     if (init_f->as.list.len >= 4) {

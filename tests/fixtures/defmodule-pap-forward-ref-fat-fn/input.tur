@@ -1,0 +1,26 @@
+;; Regression: a (defn ...) inside a (defmodule ...) that forward-references a
+;; sibling ^fat fn-typed defn declared LATER in the same module, and passes its
+;; own ^fat param through to that sibling, must elaborate as a saturated call --
+;; not a partial application.
+;;
+;; The pass-1 forward declaration used to count the `^fat` marker symbol as a
+;; parameter slot, over-stating sample's arity (2 -> 3).  A saturated 2-arg call
+;; then looked under-saturated and synthesised a partial-application wrapper
+;; whose body passed THREE scalar args to sample's two-arg C prototype:
+;;   error: too many arguments to function call, expected 2, have 3
+;; See docs/reported/pap-defmodule-fat-fn-too-many-args.md
+
+(defmodule sig/probe
+  (export sample apply-twice)
+
+  ;; Forward-references sample, defined later in this defmodule.
+  (defn apply-twice [^fat f : (fn [float] float) x : float] : float
+    (sample f (sample f x)))
+
+  (defn sample [^fat sig : (fn [float] float) t : float] : float
+    (sig t)))
+
+(defn main [] : int
+  (let [double-it (fn [x : float] : float (* x 2.0))]
+    (println (apply-twice double-it 1.0))    ;; double twice: 1 -> 2 -> 4
+    0))

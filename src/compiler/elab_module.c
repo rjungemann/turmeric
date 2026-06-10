@@ -822,21 +822,18 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                                     /* Other compound types keep TY_INT placeholder */
                                 }
                             }
-                            /* Count actual arity from params vector */
-                            uint32_t param_arity = 0;
-                            if (name_idx + 1 < (uint32_t)f->as.list.len) {
-                                Form *params_f = f->as.list.items[name_idx + 1];
-                                if (params_f->tag == F_VEC) {
-                                    for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
-                                        Form *p = params_f->as.list.items[pi];
-                                        if (p->tag != F_KEYWORD && p->tag != F_TYPE_ANN)
-                                            param_arity++;
-                                    }
-                                }
-                            }
-                            if (param_arity > MAX_FN_ARITY) param_arity = MAX_FN_ARITY;
+                            /* Count actual arity + scalar arg kinds from the
+                             * params vector.  fwd_decl_scan_params skips
+                             * `^`-prefixed markers (^fat/^mut/...) so the arity
+                             * is not over-stated -- counting `^fat` as a slot
+                             * made a sibling forward-reference call look
+                             * under-saturated and synthesised a bogus extra-arg
+                             * PAP wrapper.  See
+                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md */
                             TypeKind arg_kinds[MAX_FN_ARITY];
-                            for (uint32_t ai = 0; ai < param_arity; ai++) arg_kinds[ai] = TY_INT;
+                            uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
+                                ? fwd_decl_scan_params(f->as.list.items[name_idx + 1], arg_kinds)
+                                : 0;
                             Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
                             Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
                             scope_add(&e->global, b);
