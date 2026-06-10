@@ -1,7 +1,7 @@
 # Transitive `:cmake-deps` Resolution Plan
 
-> **Status:** Phase 1+2 landed (single-level walk); deeper recursion + dedicated fixtures still pending
-> **Last Updated:** 2026-06-09
+> **Status:** Phase 1+2 landed (single-level walk); deeper recursion landed 2026-06-10; dedicated fixtures still pending
+> **Last Updated:** 2026-06-10
 > **Type:** Build system / `tur` resolver
 > **Affects:** `src/main.c` (`tur run` / `tur build <dir>` / `tur test`),
 > `src/compiler/pkg.{c,h}`, fixture coverage in this repo, and unblocks
@@ -40,10 +40,14 @@ gate (`src/main.c` around the former `if (m.n_cmake_deps > 0)` site):
 
 Out of scope for this first cut (tracked as follow-ups below):
 
-- **Deep transitive walk.** Only the enclosing manifest's `:spices`
-  entries are inspected. Sibling-of-sibling cmake-deps aren't picked
-  up. Add a visited set keyed on absolute path + recursion before
-  declaring the plan complete.
+- ~~**Deep transitive walk.**~~ **Landed 2026-06-10.**
+  `pkg_collect_transitive_cmake_deps` in `src/compiler/pkg.c` is now a
+  worklist walk: each spice's `:spices` entries are enqueued and a
+  visited set keyed on `realpath()` of the resolved directory
+  guarantees cycle and diamond termination. Conflict-checking and
+  origin tracking are preserved across the recursion. Sibling-of-
+  sibling cmake-deps are now unioned into the generated
+  `spice-deps-manifest.json`.
 - **`cmd_pkg_fetch` gate** (`src/compiler/pkg.c:3537`) and any other
   `n_cmake_deps > 0` site outside `cmd_run` still see the un-unioned
   manifest. Walk them in a follow-up.

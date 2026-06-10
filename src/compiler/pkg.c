@@ -1973,14 +1973,65 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
         origins[n_origins++] = root_project_dir;
     }
 
-    /* Single-level walk over :spices entries.  We deliberately do not
-     * recurse into siblings' :spices for the first cut: the cascade
-     * use-case is one workspace level deep, and recursing requires a
-     * visited set keyed on resolved real path.  TODO follow-up. */
+    /* Multi-level walk over :spices entries.  The worklist holds
+     * absolute-real-path directories of spices whose `build.tur` we
+     * still need to inspect; the visited set is keyed on those same
+     * paths so cycles and diamond shapes terminate.  Each visit
+     * unions the spice's :cmake-deps and appends its own :spices to
+     * the worklist. */
+    char **worklist  = NULL;
+    int    n_work    = 0;
+    int    cap_work  = 0;
+    char **visited   = NULL;
+    int    n_visited = 0;
+    int    cap_vis   = 0;
+
+#define GROW_WORK_TO(n_target) do {                                         \
+    if ((n_target) > cap_work) {                                            \
+        int nc = cap_work ? cap_work * 2 : 4;                               \
+        while (nc < (n_target)) nc *= 2;                                    \
+        char **nw = (char **)realloc(worklist, (size_t)nc * sizeof(char *));\
+        if (!nw) goto walk_fail;                                            \
+        worklist = nw;                                                      \
+        cap_work = nc;                                                      \
+    }                                                                       \
+} while (0)
+#define GROW_VIS_TO(n_target) do {                                          \
+    if ((n_target) > cap_vis) {                                             \
+        int nc = cap_vis ? cap_vis * 2 : 4;                                 \
+        while (nc < (n_target)) nc *= 2;                                    \
+        char **nv = (char **)realloc(visited, (size_t)nc * sizeof(char *)); \
+        if (!nv) goto walk_fail;                                            \
+        visited = nv;                                                       \
+        cap_vis = nc;                                                       \
+    }                                                                       \
+} while (0)
+
+    /* Helper: canonical key for the visited set.  realpath() if the dir
+     * exists; otherwise the input. */
+    /* Seed: the root's own :spices entries. */
     for (int i = 0; i < root_manifest->n_spices; i++) {
-        const PkgSpice *s = &root_manifest->spices[i];
-        char *sib_dir = resolve_spice_dep_dir(root_project_dir, s);
-        if (!sib_dir) continue;  /* missing/optional dep: skip */
+        char *sib_dir = resolve_spice_dep_dir(root_project_dir,
+                                              &root_manifest->spices[i]);
+        if (!sib_dir) continue;
+        GROW_WORK_TO(n_work + 1);
+        worklist[n_work++] = sib_dir;
+    }
+
+    while (n_work > 0) {
+        char *sib_dir = worklist[--n_work];
+
+        /* Visited check (canonical key via realpath when available). */
+        char canon_buf[4096];
+        const char *canon = sib_dir;
+        if (realpath(sib_dir, canon_buf)) canon = canon_buf;
+        bool seen = false;
+        for (int v = 0; v < n_visited; v++) {
+            if (strcmp(visited[v], canon) == 0) { seen = true; break; }
+        }
+        if (seen) { free(sib_dir); continue; }
+        GROW_VIS_TO(n_visited + 1);
+        visited[n_visited++] = tur_strdup(canon);
 
         char sib_manifest[4096];
         snprintf(sib_manifest, sizeof(sib_manifest),
@@ -2004,16 +2055,28 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                     &sm.cmake_deps[j], sib_dir, origins)) {
                 pkg_manifest_free(&sm);
                 free(sib_dir);
-                goto fail;
+                goto walk_fail;
             }
-            /* origins[] stores borrowed pointers; sib_dir is heap-owned
-             * and freed at the end of this iteration, so dup it. */
             origins[n_origins++] = tur_strdup(sib_dir);
+        }
+
+        /* Enqueue this sibling's own :spices for the next level. */
+        for (int j = 0; j < sm.n_spices; j++) {
+            char *grand_dir = resolve_spice_dep_dir(sib_dir, &sm.spices[j]);
+            if (!grand_dir) continue;
+            GROW_WORK_TO(n_work + 1);
+            worklist[n_work++] = grand_dir;
         }
 
         pkg_manifest_free(&sm);
         free(sib_dir);
     }
+
+    for (int v = 0; v < n_visited; v++) free(visited[v]);
+    free(visited);
+    free(worklist);
+#undef GROW_WORK_TO
+#undef GROW_VIS_TO
 
     /* origins[] entries i >= root_manifest->n_cmake_deps are
      * heap-allocated copies; free them now that conflict diagnostics
@@ -2029,6 +2092,17 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
     return true;
 
 fail:
+    for (int i = root_manifest->n_cmake_deps; i < n_origins; i++)
+        free((char *)origins[i]);
+    free(origins);
+    pkg_cmake_deps_free(deps, n_deps);
+    return false;
+
+walk_fail:
+    for (int i = 0; i < n_work; i++) free(worklist[i]);
+    free(worklist);
+    for (int v = 0; v < n_visited; v++) free(visited[v]);
+    free(visited);
     for (int i = root_manifest->n_cmake_deps; i < n_origins; i++)
         free((char *)origins[i]);
     free(origins);
