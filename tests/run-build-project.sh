@@ -523,6 +523,89 @@ else
     fi
 fi
 
+# load-not-expanded-in-imported-or-project-modules (^fat / closure runtime): a
+# module that loads arrow.tur and composes via the bare `>>>` arrow exercises
+# the `^fat` auto-shim (__tur_fatshim1) and the closure-application macros that
+# the whole-program runtime preamble provides but separate compilation must emit
+# per module .c.  arrow.tur is also self-contained re: tuple.tur's `Tuple2` (it
+# uses a local layout-compatible pair struct), so no ambient stdlib type leaks.
+# (3+1)*2 = 8.
+ARROWP="$WORK/arrowproj"
+mkdir -p "$ARROWP/src/app"
+cat > "$ARROWP/build.tur" <<'EOF'
+(defpackage tur-arrowproj
+  :name    "tur-arrowproj"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] })
+EOF
+cat > "$ARROWP/src/app/main.tur" <<'EOF'
+(load "stdlib/arrow.tur")
+
+(defmodule app/main
+  (defn main [] : int
+    (let [inc (fn [x : int] : int (+ x 1))
+          dbl (fn [x : int] : int (* x 2))
+          c   (>>> inc dbl)]
+      (c 3))))
+EOF
+arrowp_out=$(cd "$WORK" && "$TUR" build "$ARROWP" -o "$WORK/arrowpbin" 2>&1)
+arrowp_rc=$?
+if [ $arrowp_rc -ne 0 ]; then
+    fail "build-project-load-arrow-fatshim" "tur build exit=$arrowp_rc: $arrowp_out"
+else
+    "$WORK/arrowpbin"
+    arrowp_run_rc=$?
+    if [ "$arrowp_run_rc" -eq 8 ]; then
+        pass "build-project-load-arrow-fatshim"
+    else
+        fail "build-project-load-arrow-fatshim" "exit=$arrowp_run_rc (expected 8)"
+    fi
+fi
+
+# load-not-expanded-in-imported-or-project-modules (cross-module instance): a
+# module A that (load ...)s a higher-kinded typeclass instance (either.tur's
+# Functor [Either]) and is consumed by a module B via `import`.  The instance
+# must NOT leak into B's translation unit (where the owner's internal ADT
+# typedef is absent); B calls A's exported entry point and A dispatches through
+# its own dictionary.  fmap (*2) over (Right 21) = 42.
+IMPHK="$WORK/imphk"
+mkdir -p "$IMPHK/src/app"
+cat > "$IMPHK/build.tur" <<'EOF'
+(defpackage tur-imphk
+  :name    "tur-imphk"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] "app/lib" ["run"] })
+EOF
+cat > "$IMPHK/src/app/lib.tur" <<'EOF'
+(load "stdlib/either.tur")
+
+(defmodule app/lib
+  (export run)
+(defn run [] : int
+  (let [e (Right 21)]
+    (match (fmap e (fn [x : int] : int (* x 2)))
+      (Left l)  l
+      (Right r) r))))
+EOF
+cat > "$IMPHK/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (import app/lib :refer [run])
+  (defn main [] : int (run)))
+EOF
+imphk_out=$(cd "$WORK" && "$TUR" build "$IMPHK" -o "$WORK/imphkbin" 2>&1)
+imphk_rc=$?
+if [ $imphk_rc -ne 0 ]; then
+    fail "build-project-import-higher-kinded" "tur build exit=$imphk_rc: $imphk_out"
+else
+    "$WORK/imphkbin"
+    imphk_run_rc=$?
+    if [ "$imphk_run_rc" -eq 42 ]; then
+        pass "build-project-import-higher-kinded"
+    else
+        fail "build-project-import-higher-kinded" "exit=$imphk_run_rc (expected 42)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

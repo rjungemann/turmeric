@@ -542,6 +542,15 @@ typedef struct Elab {
     uint32_t         cap_load_expanded_paths;
     /* Phase M3: Separate compilation — skip inlining imported modules */
     bool             separate_compilation;
+    /* load-not-expanded-in-imported-or-project-modules: true while elaborating
+     * the forms of a module pulled in via `import` (inside elab_load_module).
+     * Under separate compilation an imported module's definitions belong to its
+     * own translation unit; registering them for emission in the importer's TU
+     * re-emits them (e.g. a typeclass instance's method body referencing the
+     * owner's internal ADT) where the supporting typedefs are absent.  The
+     * emission-registration sites consult this flag (together with
+     * separate_compilation) to skip re-registering imported defs. */
+    bool             in_imported_module;
     /* SB2: When true, (import ...) is forbidden (sandboxed environment). */
     bool             sandboxed;
     /* MF3: true while elaborating the auto-loaded stdlib prefix; new global

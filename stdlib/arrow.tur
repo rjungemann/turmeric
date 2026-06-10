@@ -65,22 +65,34 @@
 (defn >>> [A B C]
   [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
   (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
-;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,
-;;; return a new heap Tuple2 *.  Used by arrow-first.
+;; The arrow-pair helpers operate on heap two-slot pairs.  They use a local
+;; layout-compatible struct `P { int64_t e1; int64_t e2; }` rather than
+;; tuple.tur's `Tuple2` typedef so this module stays self-contained: a
+;; `tur build <dir>` of a module that (load ...)s arrow.tur runs no whole-program
+;; stdlib auto-load, so an external `Tuple2` would be undefined in the per-module
+;; .c.  `P` is byte-for-byte the erased `Tuple2` layout (both {int64_t e1; e2;}),
+;; so values produced by tuple.tur's `(tuple2 ...)` flow through these helpers
+;; and vice versa.  This mirrors the self-contained `__ac_pair_*` helpers in the
+;; Arrow [(->)] instance below.  See
+;; docs/reported/load-not-expanded-in-imported-or-project-modules.md.
+;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap pair *p,
+;;; return a new heap pair.  Used by arrow-first.
 
 (defn __arrow_pair_first [fv p] : int
-  ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
-  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *src = (P *)(intptr_t)p;
+  P *r   = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, src->e1);
   r->e2 = src->e2;
   return (int64_t)(intptr_t)r;
   ```)
-;;; __arrow_pair_second -- inline-C: apply fv to e2 of a heap Tuple2 *p,
-;;; return a new heap Tuple2 *.  Used by arrow-second.
+;;; __arrow_pair_second -- inline-C: apply fv to e2 of a heap pair *p,
+;;; return a new heap pair.  Used by arrow-second.
 
 (defn __arrow_pair_second [fv p] : int
-  ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
-  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *src = (P *)(intptr_t)p;
+  P *r   = (P *)malloc(sizeof(P));
   r->e1 = src->e1;
   r->e2 = TUR_APPLY1(fv, src->e2);
   return (int64_t)(intptr_t)r;
@@ -88,24 +100,27 @@
 ;;; __arrow_pair_par -- inline-C: apply fv to e1 and gv to e2 of *p.
 
 (defn __arrow_pair_par [fv gv p] : int
-  ```c Tuple2 *src = (Tuple2 *)(intptr_t)p;
-  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *src = (P *)(intptr_t)p;
+  P *r   = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, src->e1);
   r->e2 = TUR_APPLY1(gv, src->e2);
   return (int64_t)(intptr_t)r;
   ```)
-;;; __arrow_pair_split -- inline-C: produce a heap Tuple2 from (fv x, gv x).
+;;; __arrow_pair_split -- inline-C: produce a heap pair from (fv x, gv x).
 
 (defn __arrow_pair_split [fv gv x] : int
-  ```c Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *r = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, x);
   r->e2 = TUR_APPLY1(gv, x);
   return (int64_t)(intptr_t)r;
   ```)
-;;; __arrow_pair_dup -- inline-C: produce a heap Tuple2 with both fields = x.
+;;; __arrow_pair_dup -- inline-C: produce a heap pair with both fields = x.
 
 (defn __arrow_pair_dup [x] : int
-  ```c Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *r = (P *)malloc(sizeof(P));
   r->e1 = x;
   r->e2 = x;
   return (int64_t)(intptr_t)r;
