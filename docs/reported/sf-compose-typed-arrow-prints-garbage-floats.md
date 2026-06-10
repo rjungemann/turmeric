@@ -1,8 +1,11 @@
 ---
 title: sf-compose-typed fixture prints garbage floats (`2.1e-314`) instead of `8` / `10`
 severity: silent miscompile -- compiles cleanly, runs to completion, prints uninitialised bytes
-status: open (pre-existing -- predates the Defect-A elab fix in this session)
+status: FIXED -- bare `>>>` over float-carrier functions now routes to the
+  register-class-correct free defn instead of the int64-carrier (->) instance
+  method; inner thunk is `double` end-to-end (see Resolution below)
 discovered: 2026-06-09
+fixed: 2026-06-10
 discovered-in: tests/fixtures/sf-compose-typed -- "stdout mismatch" failure in run.sh
 ---
 
@@ -91,6 +94,54 @@ composition.
   `>>>`-monomorphised-at-float should show `double` end-to-end (not
   `int64_t`).
 - `bash tests/run.sh` no longer lists `sf-compose-typed` as a FAIL.
+
+## Resolution (2026-06-10)
+
+The original "garbage float" symptom had already been masked by later
+session work: by the time this was revisited, the fixture *printed* `8` /
+`10` -- but only **by luck**. The actual code path is not the typed free
+`>>>` the fixture comment expects; the bare call `(>>> add-1 scale-2)`
+dispatches to the **`Arrow [(->)]` typeclass instance method**
+`(>>> [f g] (fn [x] (g (f x))))`, whose element types are erased at the
+instance boundary. That instance body is emitted once with an int64
+carrier thunk (`tur_thunk_int64_t_int64_t_t`), so it calls the float
+fat-shims (`__tur_fatshim_double_double`) through the wrong register class.
+It produced the right answer only because the int64-typed thunk emits no
+XMM instructions at all, so the `double` in XMM0 threaded through
+untouched between the two mismatched calls -- exactly the
+"works by luck because the register classes happen to match" miscompile
+CLAUDE.md flags as a real bug. The moment a combinator body did float
+arithmetic on the carrier, the luck would run out.
+
+### Root cause
+
+The type-erased `(->)` Arrow instance method *cannot* be made
+register-class-correct for floats: it is monomorphic over the element
+type. The register-class-correct implementation is the typed free defn
+`(defn >>> [A B C] ...)`, which specializes per carrier (verified: it
+emits `__env_..__spec__double` with `tur_thunk_double_double_t` end to
+end). But dispatch never reached it: `elab_user_method_instance_matches`
+(src/compiler/elab_call.c) reported the `(->)` instance as a match for any
+concrete function receiver (the `itk == TY_FN && rk == TY_FN` arm), so
+`prefer_method_dispatch` always picked the int64-carrier instance over the
+free defn.
+
+### Fix
+
+In `src/compiler/elab_call.c`, when the receiver is a concrete function
+type whose carrier (any argument or the result) is float-class, the
+function-arrow `(->)` instance no longer shadows a same-named free defn --
+the call stays on the register-class-correct free combinator. Int-carrier
+function composition is unchanged and still dispatches through the
+instance dictionary (so `tests/fixtures/arrow-instance-stdlib-basic`'s
+intent and snapshot are preserved). `<<<` and `first`/`second`, which have
+no free defn, are unaffected.
+
+Added helper `fn_type_has_float_carrier`; gated the `TY_FN`/`TY_FN`
+match arm on it. After the fix the lifted thunk for the float pipeline is
+`double __fn_..__spec__double_void___double(void *, double)` dispatching
+`fv`/`gv` via `tur_thunk_double_double_t` -- `double` end to end, as the
+validation requires.
 
 ## Cross-references
 

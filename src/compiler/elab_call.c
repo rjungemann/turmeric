@@ -719,6 +719,25 @@ static bool elab_name_is_typeclass_method(Elab *e, const Symbol *name) {
     return false;
 }
 
+/* True when a TY_FN receiver carries a float-class value in any argument or in
+ * its result.  Used to keep float-carrier function composition (e.g. a float
+ * `>>>` pipeline) on the register-class-correct free defn instead of the
+ * type-erased (->) typeclass instance method -- see
+ * docs/reported/sf-compose-typed-arrow-prints-garbage-floats.md.  The
+ * (->) instance body is emitted once with an int64 carrier thunk (rax), so a
+ * float carrier (xmm0) would be a register-class miscompile that only works by
+ * luck; the free typed combinator specializes per-carrier and is correct. */
+static bool fn_type_has_float_carrier(const Type *t) {
+    if (!t || t->kind != TY_FN) return false;
+    TypeKind rk = t->as.fn.result_kind;
+    if (rk == TY_FLOAT || rk == TY_FLOAT32 || rk == TY_FLOAT64) return true;
+    for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+        TypeKind ak = t->as.fn.arg_kinds[i];
+        if (ak == TY_FLOAT || ak == TY_FLOAT32 || ak == TY_FLOAT64) return true;
+    }
+    return false;
+}
+
 /* Method/defn namespace separation (fix (1) of
  * docs/reported/typeclass-methods-share-value-namespace-with-defns.md).
  *
@@ -764,7 +783,17 @@ static bool elab_user_method_instance_matches(Elab *e, const Symbol *name,
                                itk == TY_SYM);
         if (inst_primitive) continue;
         if (itk == TY_FN || rk == TY_FN) {
-            if (itk == TY_FN && rk == TY_FN) return true;
+            if (itk == TY_FN && rk == TY_FN) {
+                /* sf-compose-typed: the function-arrow (->) instance method is
+                 * emitted with an int64 carrier thunk and cannot carry a float
+                 * value correctly.  When the receiver is a concrete function
+                 * with a float-class carrier and a same-named free defn exists
+                 * (this matcher is only consulted when one does), keep the call
+                 * on the register-class-correct free defn instead of routing to
+                 * the int64-carrier instance method. */
+                if (fn_type_has_float_carrier(recv)) continue;
+                return true;
+            }
             continue;
         }
         if (rk == TY_APP && itk == TY_STRUCT) {
