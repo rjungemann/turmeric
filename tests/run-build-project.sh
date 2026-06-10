@@ -300,6 +300,45 @@ else
     fi
 fi
 
+# F3 regression: the user-callable `cons` runtime list constructor must be
+# available inside a defmodule body compiled by project mode (`tur build <dir>`).
+# `cons` is registered as a builtin lowering to a {head,tail} cons-cell helper
+# emitted into each TU's preamble, so it resolves without the stdlib auto-load
+# that project mode skips (closes the c-dsl/glsl gap; F6 in the report).
+CONS_PROJ="$WORK/prelude-cons"
+mkdir -p "$CONS_PROJ/src/app"
+cat > "$CONS_PROJ/build.tur" <<'EOF'
+(defpackage prelude-cons :name "prelude-cons" :version "0.1.0")
+EOF
+cat > "$CONS_PROJ/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (defn list-head [l : int] : int
+    ```c struct __tur_cell_t { int64_t head; int64_t tail; };
+    return ((struct __tur_cell_t *)(intptr_t)l)->head; ```)
+  (defn list-tail [l : int] : int
+    ```c struct __tur_cell_t { int64_t head; int64_t tail; };
+    return ((struct __tur_cell_t *)(intptr_t)l)->tail; ```)
+  (defn main [] : int
+    ;; Build a cons list with the runtime `cons` builtin and walk two cells.
+    ;; head=11, head(tail)=22 -> 33 proves cons cells are allocated and the
+    ;; {head,tail} layout matches the list.tur walkers.
+    (let [lst (cons 11 (cons 22 0))]
+      (+ (list-head lst) (list-head (list-tail lst))))))
+EOF
+cons_out=$(cd "$WORK" && "$TUR" build "$CONS_PROJ" -o "$WORK/consbin" 2>&1)
+cons_rc=$?
+if [ $cons_rc -ne 0 ]; then
+    fail "build-project-prelude-cons" "tur build exit=$cons_rc: $cons_out"
+else
+    "$WORK/consbin"
+    cons_run_rc=$?
+    if [ "$cons_run_rc" -eq 33 ]; then
+        pass "build-project-prelude-cons"
+    else
+        fail "build-project-prelude-cons" "exit=$cons_run_rc (expected 33)"
+    fi
+fi
+
 # file-scope-c-block-emit-order: a module with a file-scope ```c typedef block
 # placed AFTER the defns that use it.  Without the Pass 1a pre-pass fix in
 # emit_implementation, the typedef lands after the function bodies in the

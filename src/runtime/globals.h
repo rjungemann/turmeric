@@ -44,6 +44,10 @@ extern bool g_needs_hamt;
 /* AR8: Variadic rest parameters -- set when any variadic defn is compiled */
 extern bool g_has_variadics;
 
+/* prelude-macros (Defect B / F3): set when the user-callable `cons` runtime
+ * list constructor is referenced. */
+extern bool g_uses_cons;
+
 /* Phase G1: -Xgadt flag — enable defgadt syntax */
 extern bool g_gadt_enabled;
 

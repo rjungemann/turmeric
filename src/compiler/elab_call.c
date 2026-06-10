@@ -1618,6 +1618,15 @@ Expr *elab_call(Elab *e, Form *call) {
      * like rc<T>/weak<T>, whose default is already CK_MOVE). */
     Type result_type = spec->result_type;
     result_type.copy_kind = typekind_default_copy_kind(result_type.kind);
+    /* prelude-macros (Defect B / F3): record that the `cons` runtime list
+     * constructor is referenced so the emitter injects its cons-cell helper
+     * into this TU's preamble.  Keyed on c_op identity (the only BS_FUNC_CALL
+     * builtin whose C name is "cons"). */
+    if (spec->shape == BS_FUNC_CALL && spec->c_op &&
+        strcmp(spec->c_op, "cons") == 0) {
+        extern bool g_uses_cons;
+        g_uses_cons = true;
+    }
     Expr *out = expr_new(e->arena, EX_BUILTIN, result_type, call->span);
     out->as.builtin.spec = spec;
     out->as.builtin.args = args;
