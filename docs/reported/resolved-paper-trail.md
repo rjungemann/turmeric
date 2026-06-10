@@ -180,6 +180,23 @@ dependency. Plain `http-get` compiles and runs on bare hosts. The
 cascade fixture itself still fails on a residual struct-redef pattern
 tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
 
+### "unterminated list" caret ribbon spans opener-to-EOF (FIXED)
+
+[`../archive/unterminated-list-caret-anchors-outermost.md`](../archive/unterminated-list-caret-anchors-outermost.md)
+
+`read_seq` in `src/compiler/reader.c` emitted its "unterminated list
+(missing ')')" diagnostic with a `Span` running from the opener to the
+current EOF offset; on real files (e.g. `linalg/decomp.tur` qr defn,
+~110 lines) this produced a multi-screen `^^^^^^...` ribbon that buried
+the actual location. The anchor itself was already at the deepest
+unclosed `(` (read_seq recurses, so only the innermost emits), but the
+*length* of the span was the problem. **Fix:** anchor at the opening
+delimiter only (`start_off..start_off + 1`) so the caret is a single
+character at the deepest unclosed `(`. No new failures in
+`tests/run.sh` (one fixture actually moved from FAIL to PASS).
+Companion paper-trail follow-up to the linalg/decomp.tur
+rediagnosis-as-source-bug.
+
 ### `tur run` aborts on Justfile `alias`, silently disabling snapshot-drift guard (FIXED)
 
 [`../archive/tur-run-alias-breaks-snapshot-ci-guard.md`](../archive/tur-run-alias-breaks-snapshot-ci-guard.md)

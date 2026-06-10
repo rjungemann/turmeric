@@ -843,7 +843,13 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
         skip_ws_and_comments(r);
         int c = peek(r);
         if (c == -1) {
-            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            /* Anchor the caret at the opening delimiter only (a single
+             * character), not the whole span from opener to EOF. On real
+             * files an open form can span hundreds of lines, which used
+             * to produce a multi-screen `^^^^^^...` ribbon that buried
+             * the actual problem location. */
+            Span s = span_from_to(r, start_line, start_col,
+                                  start_off, start_off + 1);
             diag_emit(DIAG_ERROR, s, "%s", unterminated_msg);
             r->error = true;
             free(items);
