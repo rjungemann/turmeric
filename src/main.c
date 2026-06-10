@@ -3702,6 +3702,38 @@ static int cmd_build_project(const char *root, const char *out_path,
         for (int i = 0; i < n_proj_inc; i++) inc[n_user_inc + i] = proj_inc[i];
     }
 
+    /* Whole-program executable route (project-mode-rc-runtime-preamble-missing).
+     * Separate compilation (cmd_build_multi_files, below) emits one TU per
+     * module and omits the inline C runtime, so rc<T>/frame/effects fail to
+     * link.  For an executable there is exactly one reachable entry, so we can
+     * instead build that entry module *single-file*: compile_to_c -> emit_program
+     * inlines every transitively-imported module into one TU carrying the full
+     * runtime (the same path `tur build <file>` and the whole test suite
+     * exercise).  Shared-library (.so) builds keep separate compilation -- they
+     * have no single entry and link their deps separately. */
+    if (!shared) {
+        const char *entry = NULL;
+        int n_main = 0;
+        for (int i = 0; i < n_files; i++) {
+            if (file_has_main_defn(tur_files[i])) { entry = tur_files[i]; n_main++; }
+        }
+        /* Reroute only the unambiguous single-main case; a project with more
+         * than one `main` falls through to the existing separate-compilation
+         * path unchanged (no behavioral regression). */
+        if (n_main == 1) {
+            int    n_rm = 0;
+            char **rm   = discover_manifest_reader_macros(entry, &n_rm);
+            int rc = cmd_build(entry, out_path, inc, n_inc, NULL,
+                               (const char **)rm, n_rm);
+            free_reader_macro_paths(rm, n_rm);
+            free(inc);
+            for (int i = 0; i < n_proj_inc; i++) free((char *)proj_inc[i]);
+            free(proj_inc);
+            free_tur_files(tur_files, n_files);
+            return rc;
+        }
+    }
+
     /* T3: pull each resolved :spices dep's modules into the build set so a
      * cross-spice `(import dep/mod)` links under separate compilation.  The
      * include path (proj_inc) already lets the importer type-check against the

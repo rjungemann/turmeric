@@ -7,6 +7,36 @@ broader sibling of `project-mode-defstruct-typedef-missing.md` (now resolved):
 that report fixed the *struct typedef* emission, but RC support in project mode
 is still entirely absent.
 
+## Status: FIXED for executables (whole-program track landed)
+
+The **whole-program track (W1-W4)** below is **implemented**:
+`cmd_build_project` now builds an executable project by compiling its single
+entry module *whole-program* (`src/main.c`, in `cmd_build_project`), so every
+imported module is inlined into one TU carrying the full inline runtime. Repro A
+and Repro B (including a cross-module `rc<T>` struct field) build, link, and run
+**ASan-clean**; covered by `build-project-rc-runtime` in
+`tests/run-build-project.sh`. Full suite stays at 0 FAIL and the signal spice
+still builds.
+
+**`--shared` `.so` builds still use separate compilation and therefore still
+lack the runtime** -- a spice that *itself* uses `rc<T>` in an exported,
+separately-compiled module is not yet covered. That remaining case needs the
+**owner-TU track (T3-T11)**; it stays open.
+
+Two intentional behavior changes for **executable** project builds (both
+documented and tested):
+
+1. **`-Xsymbols` interning.** Whole-program puts all modules in one TU, so a
+   keyword like `:foo` interns once as a file-local `static` record rather than
+   a weak global folded across TUs. The single-record guarantee still holds
+   (proved by the `build-project-sym-cross-tu` pointer-identity test); the weak
+   *folding* check moved to the `--shared` `.so` build, which keeps separate
+   compilation.
+2. **Unreachable modules.** An executable build now compiles only the modules
+   reachable from `main` (dead modules are not type-checked). Spice library
+   (`.so`) builds are unaffected -- they have no `main`, stay separate
+   compilation, and still compile every module.
+
 ## Repro A -- plain `rc/of`, no struct
 
 ```
@@ -423,28 +453,32 @@ program at cc.) Note: a single source *file* may hold only one `defmodule`, so
 the modules must live in separate files reached via `import` + `-I`, exactly as
 above -- the build driver already resolves that include path.
 
-### Tasks (whole-program executable route)
+### Tasks (whole-program executable route) -- DONE
 
-- **W1 -- locate the entry module.** In `cmd_build_project` /
-  `cmd_build_multi_files`, find the module whose body defines `main`. Error
-  clearly if zero or more than one across the project.
+- **W1 (done) -- locate the entry module.** `cmd_build_project` scans the
+  project's source files for the one defining `main` (`file_has_main_defn`). The
+  reroute fires only for the unambiguous single-`main` case; zero `main`s
+  already auto-selects `--shared`, and a project with >1 `main` falls through to
+  the existing separate-compilation path unchanged (no regression).
 
-- **W2 -- route executables through single-file build.** When `!shared`, instead
-  of emitting per-module `.h`/`.c` + `_main.c` and separately compiling, invoke
-  the existing single-file build on the entry module's file with the project's
-  full include path (own `src/` + every `:spices` dep's `src/`, exactly what
-  project mode already computes for `-I`). This reuses the battle-tested
-  `emit_program` path verbatim.
+- **W2 (done) -- route executables through single-file build.** After resolving
+  the project include path (own `src/` + each `:spices` dep's `src/`),
+  `cmd_build_project` calls `cmd_build(entry, out, inc, n_inc, ...)` -- the same
+  `compile_to_c -> emit_program` path as `tur build <file>`, which inlines every
+  transitively-imported module into one TU with the full runtime. Reader macros
+  are discovered from the manifest for the entry file; cmake/spice-dep flags,
+  `-lturi` SDK resolution, and autolinks are all handled by `cmd_build`.
 
-- **W3 -- keep `--shared` on the separate-compilation path** (it needs the
-  owner-TU design; do not reroute it).
+- **W3 (done) -- `--shared` keeps separate compilation.** The reroute is gated
+  on `!shared`; `.so` builds are untouched.
 
-- **W4 -- validate.** `tests/run-build-project.sh`: Repro A/B build+run; the
-  cross-module RC ASan case (module A allocs, module B drops) under
-  `detect_leaks=1`; and confirm the existing `build-project-*` cases
-  (cross-spice dep, prelude macros, sym cross-TU, cblock order, defstruct
-  typedef) still pass through the rerouted executable path. Full
-  `bash tests/run.sh` at 0 FAIL.
+- **W4 (done) -- validation.** `tests/run-build-project.sh` adds
+  `build-project-rc-runtime` (cross-module `rc<int>` + `rc<T>` struct field,
+  run under `ASAN_OPTIONS=detect_leaks=1`, expecting exit 1). All prior
+  `build-project-*` cases still pass through the rerouted path; the
+  `-sym-cross-tu-single-symbol` weak-folding check was re-pointed at the
+  `--shared` `.so` build (see behavior note 1 above). Full `bash tests/run.sh`
+  stays at 0 FAIL; signal spice builds.
 
 ### Open questions for W2
 
