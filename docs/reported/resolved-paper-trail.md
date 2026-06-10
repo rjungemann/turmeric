@@ -13,6 +13,27 @@ without cluttering the active `docs/reported/` index with completed work.
 
 ## Compiler / language fixes (landed)
 
+### `load` inside a `defmodule` body silently lost loaded names (FIXED)
+
+[`../archive/load-inside-defmodule-silently-loses-names.md`](../archive/load-inside-defmodule-silently-loses-names.md)
+
+A `(load "path")` placed inside a `defmodule` body was first silently
+accepted as a no-op (loaded names never injected; use-site errored with
+"unknown function or operator"), then -- as a stopgap -- made a hard error
+(#303). **Fix (Option A):** the load-expansion preprocessor
+`load_expand_forms` in `src/compiler/elab_toplevel.c` now descends into
+`(defmodule ...)` forms, splicing a body-level load's forms into the
+module scope exactly as a top-level load splices into the compilation
+unit (sharing the compilation-global visited set, so each path expands at
+most once). A load in genuine expression position (`defn`/`let`/`do`
+body) remains a hard error -- `elab_load` in
+`src/compiler/elab_module.c` carries the updated diagnostic. Regression
+fixtures: `tests/fixtures/load-inside-defmodule-injects-names/` (positive)
+and `tests/fixtures/errors/load-inside-defn/` (negative); the obsolete
+`errors/load-inside-defmodule` negative fixture was removed. The `^fat`
+let-binding `>>>` segfault seen while validating is the orthogonal
+`fat-shim-void-ptr-calls-bare-not-fat.md`, not a load-scope bug.
+
 ### captureless closure not boxed at a `ptr<void>` `^fat` boundary (FIXED)
 
 [`../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md`](../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md)
