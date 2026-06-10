@@ -13,6 +13,78 @@ without cluttering the active `docs/reported/` index with completed work.
 
 ## Compiler / language fixes (landed)
 
+### Poly-closure / typed fat-closure dispatch -- consolidated track (FIXED)
+
+[`../archive/history/poly-closure-typed-dispatch-track.md`](../archive/history/poly-closure-typed-dispatch-track.md)
+
+Consolidated three reports on typed/polymorphic closure-returning combinators
+(`>>>`, `cmp`) miscompiling at float result types -- the inner thunk body rode
+the `int64_t(*)(void*, int64_t)` ABI and produced correct float output only by
+SysV register-class accident. **All three layers landed:** Layer 2
+(capturing-closure return-type lowering) via source-level boxing in
+`elab_fns.c`; Layer 3 (fn-typed `^fat` param tyvar propagation + per-spec
+inner-body retention under fat dispatch) via Direction 3 recovery in
+`emit_expr.c` (#297); and Layer 1 (the combinator itself) via Stage E (#300),
+which rewrote `stdlib/arrow.tur`'s `>>>` to the polymorphic typed spelling
+`(defn >>> [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+...)` and deleted the monomorphic `compose-float` workaround. A `:float ->
+:float` pipeline now emits `tur_thunk_double_double_t` end-to-end (xmm0). The
+`TUR-E0705` guard was narrowed to `closure_return_dispatches_untyped`, so it
+fires only for the genuinely-untyped dispatch shape, never the typed `>>>`/`cmp`
+form. Validation fixture: `tests/fixtures/poly-closure-compose-float/` (the
+previously-E0705 dispatching shape) prints exact fractional output
+(`3.675`, `1.75`). Originals preserved verbatim under `../archive/history/`
+(`arrow-compose-float-closure-int64-thunk-mismatch.md`,
+`boxed-fn-typed-closure-return-miscompiles.md`,
+`poly-closure-inner-dispatch-result-erased.md`).
+
+### `load` inside a `defmodule` body silently lost loaded names (FIXED)
+
+[`../archive/load-inside-defmodule-silently-loses-names.md`](../archive/load-inside-defmodule-silently-loses-names.md)
+
+A `(load "path")` placed inside a `defmodule` body was first silently
+accepted as a no-op (loaded names never injected; use-site errored with
+"unknown function or operator"), then -- as a stopgap -- made a hard error
+(#303). **Fix (Option A):** the load-expansion preprocessor
+`load_expand_forms` in `src/compiler/elab_toplevel.c` now descends into
+`(defmodule ...)` forms, splicing a body-level load's forms into the
+module scope exactly as a top-level load splices into the compilation
+unit (sharing the compilation-global visited set, so each path expands at
+most once). A load in genuine expression position (`defn`/`let`/`do`
+body) remains a hard error -- `elab_load` in
+`src/compiler/elab_module.c` carries the updated diagnostic. Regression
+fixtures: `tests/fixtures/load-inside-defmodule-injects-names/` (positive)
+and `tests/fixtures/errors/load-inside-defn/` (negative); the obsolete
+`errors/load-inside-defmodule` negative fixture was removed. The `^fat`
+let-binding `>>>` segfault seen while validating is the orthogonal
+`fat-shim-void-ptr-calls-bare-not-fat.md`, not a load-scope bug.
+
+### `^fat` let-binding of a runtime `ptr<void>` fat closure re-shimmed as a bare fn (FIXED)
+
+[`../archive/fat-shim-void-ptr-calls-bare-not-fat.md`](../archive/fat-shim-void-ptr-calls-bare-not-fat.md)
+
+A `^fat` let-binding carrying a runtime `ptr<void>` fat closure but annotated
+with a concrete `(fn ...)` type (e.g. `^fat sf : (fn [ptr<void>] #{} ptr<void>)
+(make-scale 2.0)`) was retyped to `TY_FN`. When that binding was then passed to
+a `>>>` whose receiver selects the arrow typeclass instance, `arrow_fat_shim`
+in `src/compiler/elab_typeclasses.c` mistook the `TY_FN` value for a bare
+non-capturing function and wrapped it in a `__tur_fatshim_void___void__` box.
+That shim reads slot 1 (the original fat closure) and calls it as a **bare
+one-arg** function, but the fat-closure thunk expects two arguments (env + arg),
+**segfaulting** at the composed call site. This blocked `tur-signal` Phase 5
+`effects-chain` from folding a Vec of SFs with `>>>`. **Fix (PR #302/#305):**
+add an `is_fat` guard in `arrow_fat_shim`, mirroring the existing guard in
+`elab_call.c` (`two-level-sf-closure-return-miscompiles-out-binding`): when the
+argument is an `EX_VAR` whose binding is `is_fat` with an unboxed `TY_FN` type,
+it is already a fat closure carried as `int64_t` -- retype it to `ptr<void>` so
+it flows through the already-fat pass-through branch instead of being
+double-boxed. Regression fixture:
+`tests/fixtures/fat-shim-void-ptr-arrow-compose/` (the report's minimal repro;
+prints `6` instead of segfaulting). A recursive `>>>`-fold over `^fat`
+let-bindings -- the `__sf-fold` shape the report flagged as the real blocker --
+also composes correctly. The captureless sibling of this report is the next
+entry.
+
 ### captureless closure not boxed at a `ptr<void>` `^fat` boundary (FIXED)
 
 [`../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md`](../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md)

@@ -1,8 +1,0 @@
-(defmodule test/load-inside
-  (export dummy)
-
-(load "stdlib/arrow.tur")
-
-(defn dummy [] : int 0)
-
-)

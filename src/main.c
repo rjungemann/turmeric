@@ -1395,18 +1395,24 @@ static int cmd_emit_h(const char *path,
 static void default_output_name(const char *input, char *out, size_t cap) {
     const char *base = basename_of(input);
     char resolved[PATH_MAX];
+    /* True when base came from resolving a "current directory" input to its
+     * real path: the basename is then a directory name, which has no
+     * extension to strip (a "." in "my.project" is part of the name). */
+    bool resolved_dir = false;
     if (base[0] == '\0' || (base[0] == '.' && base[1] == '\0')) {
         if (realpath(input && input[0] ? input : ".", resolved)) {
             base = basename_of(resolved);
             if (base[0] == '\0') base = "root";  /* realpath("/") -> "/" */
+            resolved_dir = true;
         }
     }
     size_t n = strlen(base);
     if (n >= cap) n = cap - 1;
     memcpy(out, base, n);
     out[n] = '\0';
-    /* Only strip extension if this looks like a file (has a dot that's not at the start) */
-    if (n > 0 && out[n-1] != '/') {
+    /* Only strip extension if this looks like a file (has a dot that's not at
+     * the start) -- never for a resolved directory name. */
+    if (!resolved_dir && n > 0 && out[n-1] != '/') {
         char *dot = strrchr(out, '.');
         if (dot && dot != out) { *dot = '\0'; }
     }

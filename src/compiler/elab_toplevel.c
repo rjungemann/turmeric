@@ -686,6 +686,32 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
                               SymbolTable *st, Form *const *forms, uint32_t nforms) {
     for (uint32_t i = 0; i < nforms; i++) {
         Form *f = forms[i];
+
+        /* Option A: descend into a (defmodule ...) body so a `(load "path")`
+         * placed inside the module body splices the loaded file's forms into
+         * the module's scope, exactly as a top-level load splices into the
+         * compilation unit. Without this, a load nested in a defmodule body
+         * survives the preprocessor and reaches elab_load, which errors. The
+         * defmodule's head/name/export/import items are not load forms, so
+         * they pass through this nested walk unchanged; only the `(load ...)`
+         * body items expand in place. See
+         * docs/archive/load-inside-defmodule-silently-loses-names.md. */
+        if (f->tag == F_LIST && f->as.list.len >= 1 &&
+            f->as.list.items[0]->tag == F_SYM &&
+            f->as.list.items[0]->as.sym == e->sym_defmodule) {
+            LoadExpandCtx sub = {0};
+            sub.out_cap = f->as.list.len + 8;
+            sub.out = (Form **)arena_alloc(arena, sub.out_cap * sizeof(Form *));
+            /* Shares the compilation-global visited set on `e`, so a path
+             * already spliced elsewhere is not re-spliced here. */
+            load_expand_forms(&sub, e, arena, st,
+                              f->as.list.items, f->as.list.len);
+            if (sub.rc != 0) lx->rc = sub.rc;
+            Form *expanded = form_list(arena, f->span, sub.out, sub.out_n);
+            load_expand_emit(lx, arena, expanded);
+            continue;
+        }
+
         const Form *path_f = NULL;
         if (f->tag == F_LIST && f->as.list.len == 2 &&
             f->as.list.items[0]->tag == F_SYM &&

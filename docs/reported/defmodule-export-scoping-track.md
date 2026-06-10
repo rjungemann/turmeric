@@ -1,7 +1,7 @@
 ---
 title: defmodule export scoping & project-mode build -- consolidated track
 category: Bug Report
-status: OPEN -- both reports active; affects every spice that ships through `(defmodule ... (export ...))`
+status: Defect A FIXED 2026-06-09 (`param_poly_types` now populated for `^fat` TY_FN params); Defect B still OPEN
 severity: high (blocks the `tur-signal` spice surface and 5+ other spices' project-mode builds)
 description: Consolidates two reports about how the `defmodule`/`export` boundary and the `tur build .` (project / separate-compilation) entry points lose information that single-file mode preserves. Together they make a non-trivial fraction of the spice ecosystem unbuildable in the shipping configuration: typed `^fat` parameters in exported defns lose their `(fn ...)` annotation across the boundary; project mode skips the stdlib prelude auto-load that single-file mode performs.
 ---
@@ -97,11 +97,41 @@ any code runs; Defect A breaks the runtime API the build was producing.
 Fixing one without the other still leaves the spice ecosystem half-broken --
 they should be sequenced together rather than tackled in isolation.
 
+## Defect A fix (2026-06-09)
+
+`src/compiler/elab_fns.c` (the `^fat` + `TY_FN` parameter-annotation branch
+around line ~1144): `param_poly_types[n_params - 1]` is now populated
+unconditionally for the plain (non-carrier) function-type annotation case,
+not just under `-Xlinear`.  This was the missing assignment that left
+`arg_full_types` NULL on the forward-declaration binding (the HRT5 early-update
+path at line ~1900), so cross-file importers and same-defmodule
+forward-references saw the zero-arg placeholder `(fn [] : ?)` instead of the
+real `(fn [float] float)`.
+
+Regression fixture: `tests/fixtures/defmodule-fat-fn-param-export/`.
+
+## Follow-ups discovered while fixing Defect A
+
+The fix surfaced two adjacent bugs that are *not* Defect A but are next door
+to it; both have their own reports:
+
+- `[[pap-defmodule-fat-fn-too-many-args]]` -- a sibling forward-reference
+  inside a defmodule that partially applies a `^fat` fn-typed sibling
+  synthesises a PAP wrapper with one extra arg vs the callee's C signature
+  (`cc` rejects).  The Defect-A fix is what made this PAP path *try* to
+  compile; before, the forward-ref errored out at elab.
+- `[[sf-compose-typed-arrow-prints-garbage-floats]]` -- pre-existing
+  (not regression): `stdlib/arrow.tur`'s typed `>>>` over float SFs prints
+  uninitialised float bytes instead of the composed result.  Same shape as
+  the historical XMM/int64 register-class mismatch bugs.
+
 ## Cross-references
 
-- `[[tur-signal-rebuild-plan]]` -- gated on Defect A clearing.
+- `[[tur-signal-rebuild-plan]]` -- Defect A is now cleared; ungated.
 - `docs/upcoming/spices-v0.18-typing-migration-plan.md` -- gated on Defect B.
 - `tests/fixtures/pair-signals-typed/`,
   `tests/fixtures/vec-typed-fat-closure-readback/` -- non-defmodule
   baselines that demonstrate the typed `^fat` shape works outside a
   `(defmodule ...)` wrapper.
+- `tests/fixtures/defmodule-fat-fn-param-export/` -- new regression fixture
+  for Defect A.

@@ -1,0 +1,26 @@
+;; load-inside-defmodule-injects-names -- a (load "path") placed INSIDE a
+;; defmodule body splices the loaded file's top-level forms into the module's
+;; scope, so names it defines are visible to subsequent body forms. Before the
+;; fix, the load survived the preprocessor (which only walked the compilation
+;; unit's top level) and reached elab_load, leaving stdlib/arrow.tur's >>>
+;; unresolved ("unknown function or operator '>>>'"). See
+;; docs/archive/load-inside-defmodule-silently-loses-names.md.
+;;
+;; Uses the named-function >>> shape (not a ^fat let-binding) to sidestep the
+;; orthogonal fat-shim segfault tracked in
+;; docs/reported/fat-shim-void-ptr-calls-bare-not-fat.md.
+
+(defmodule prog
+  (export main)
+
+  (load "stdlib/arrow.tur")
+
+  (defn scale-2 [x : float] : float (* x 2.0))
+  (defn add-05  [x : float] : float (+ x 0.5))
+  (defn call-f  [^fat f :(fn [:float] #{} :float) x : float] : float (f x))
+
+  (defn main [] : int
+    (let [h (>>> add-05 scale-2)]
+      (println (call-f h 3.0))     ;; (3.0 + 0.5) * 2.0 = 7
+      (println (call-f h 0.25)))   ;; (0.25 + 0.5) * 2.0 = 1.5
+    0))
