@@ -1,7 +1,7 @@
 ---
 title: defmodule export scoping & project-mode build -- consolidated track
 category: Bug Report
-status: Defect A FIXED 2026-06-09 (`param_poly_types` now populated for `^fat` TY_FN params); Defect B still OPEN
+status: Defect A FIXED 2026-06-09 (`param_poly_types` now populated for `^fat` TY_FN params); Defect B FIXED 2026-06-10 (F1+F4 prelude macros / min-max landed earlier; F3+F6 now make the user-callable `cons` runtime constructor resolve in project mode). F2/F5 (selective `:refer` of math/bits) remain as non-blocking enhancements.
 severity: high (blocks the `tur-signal` spice surface and 5+ other spices' project-mode builds)
 description: Consolidates two reports about how the `defmodule`/`export` boundary and the `tur build .` (project / separate-compilation) entry points lose information that single-file mode preserves. Together they make a non-trivial fraction of the spice ecosystem unbuildable in the shipping configuration: typed `^fat` parameters in exported defns lose their `(fn ...)` annotation across the boundary; project mode skips the stdlib prelude auto-load that single-file mode performs.
 ---
@@ -65,14 +65,14 @@ The misleading proximate diagnostic is `unknown function or operator: when`.
 **Five independent sub-gaps compound this** (all enumerated in the original
 under "Root cause(s)"):
 
-| # | Gap | Affected | Fix sketch |
-|---|---|---|---|
-| 1 | Project mode skips stdlib auto-load | All project-mode builds | F1 -- factor `stdlib_files[]` loop into a shared helper, call from `compile_to_h`/`compile_to_implementation` |
-| 2 | `stdlib/macros.tur` declares `tur/macros` but lives at `stdlib/macros.tur`; resolver can't reach it | Any explicit `(import ...)` workaround | F2 -- either move files to `stdlib/tur/<name>.tur`, or register under both names |
-| 3 | `cons` has no user-callable defn (only `__tur_cons_of` compile-time form) | `c-dsl`, `glsl` | F3 -- add `(defn cons ...)` wrapping `__tur_cons_of` in `stdlib/list.tur` |
-| 4 | `min`/`max` do not exist anywhere | `stats` | F4 -- add as macros in `stdlib/macros.tur` |
-| 5 | `list.tur`/`math.tur`/`bits.tur` are bare files, not `defmodule`s | Selective `:refer` import | F5 -- wrap each in `(defmodule tur/<name> ...)` with explicit `(export ...)` |
-| 6 | Separate-compilation cannot emit auto-loaded `defmodule` bodies (`elab_module.c:289` blocks `EX_DEFMODULE` when `separate_compilation`) | F1 for defn-shaped prelude | F6 -- defer; restrict F1 to macro-providing files initially |
+| # | Gap | Affected | Fix sketch | Status |
+|---|---|---|---|---|
+| 1 | Project mode skips stdlib auto-load | All project-mode builds | F1 -- factor `stdlib_files[]` loop into a shared helper, call from `compile_to_h`/`compile_to_implementation` | DONE (`load_project_prelude`, macros-only) |
+| 2 | `stdlib/macros.tur` declares `tur/macros` but lives at `stdlib/macros.tur`; resolver can't reach it | Any explicit `(import ...)` workaround | F2 -- either move files to `stdlib/tur/<name>.tur`, or register under both names | OPEN (non-blocking) |
+| 3 | `cons` has no user-callable defn (only `__tur_cons_of` compile-time form) | `c-dsl`, `glsl` | F3 -- expose a user-callable `cons` | DONE (registered as a `BS_FUNC_CALL` builtin -> `cons(h,t)` helper, not a stdlib defn) |
+| 4 | `min`/`max` do not exist anywhere | `stats` | F4 -- add as macros in `stdlib/macros.tur` | DONE |
+| 5 | `list.tur`/`math.tur`/`bits.tur` are bare files, not `defmodule`s | Selective `:refer` import | F5 -- wrap each in `(defmodule tur/<name> ...)` with explicit `(export ...)` | OPEN (non-blocking) |
+| 6 | Separate-compilation cannot emit auto-loaded `defmodule` bodies (`elab_module.c:317` blocks `EX_DEFMODULE` when `separate_compilation`) | defn-shaped prelude (`cons`) in project mode | F6 -- sidestepped: `cons` is a builtin whose C helper is emitted per-TU, so it needs no auto-loaded defmodule body | DONE (for `cons`) |
 
 **Affected spices** (current `../turmeric-spices`): `tourist`, `httpd`, `stats`,
 `c-dsl`, `glsl`, `linalg` (knock-on). `bash tests/run.sh` is unaffected
@@ -109,6 +109,49 @@ forward-references saw the zero-arg placeholder `(fn [] : ?)` instead of the
 real `(fn [float] float)`.
 
 Regression fixture: `tests/fixtures/defmodule-fat-fn-param-export/`.
+
+## Defect B fix (2026-06-10)
+
+Closed in two waves:
+
+**F1 + F4 (earlier).** `load_project_prelude` (`src/main.c`) injects the
+macro-only prelude (`stdlib/macros.tur`) before the user forms in both
+`compile_to_h` and `compile_to_implementation`, so `when`/`cond`/`for`/`min`/`max`
+resolve inside a `defmodule` body under `tur build .`.  `min`/`max` were added as
+macros in `stdlib/macros.tur` (compile-time only, no separate-compilation
+emission gap).  This unblocked `tourist`, `httpd`, `stats`, `linalg`.
+
+**F3 + F6 (this change).** The remaining `c-dsl`/`glsl` blocker was the
+user-callable `cons` runtime list constructor.  Rather than a stdlib `defn`
+(which project mode would never auto-load, and which would hit the
+separate-compilation defmodule-emission gap, F6), `cons` is now a **builtin**:
+
+- `src/compiler/builtins.c` -- new table entry
+  `{ "cons", 2, 2, :int, :int, BS_FUNC_CALL, "cons" }`.  `(cons h t)` lowers to a
+  C call `cons(h, t)` and types as `:int`.
+- `src/compiler/emit_module.c` -- `emit_cons_helper` writes a guarded
+  `static int64_t cons(int64_t, int64_t)` that allocates a `{head,tail}` cell
+  (the same layout as `__tur_cons_of` / `tcons`, so cells interoperate with the
+  `list-head`/`list-tail` walkers in `stdlib/list.tur`).  It is emitted into the
+  preamble of `emit_program` (single-file) **and** `emit_implementation`
+  (project-mode `.c`), so the helper is present in every TU that references
+  `cons`, in both compilation modes -- no auto-loaded defmodule body required.
+- `src/compiler/elab_call.c` -- sets the new `g_uses_cons` global when the
+  `cons` builtin resolves, so the helper is gated (non-`cons` programs are
+  unchanged -- zero codegen-snapshot churn).
+- The compile-time `cons` form in `src/compiler/elab_macros.c` is unaffected: it
+  fires only during macro expansion (`ct_eval_builtin`), a distinct phase from
+  runtime call resolution, so the `dot` macro and friends still work.
+
+Regression coverage: `tests/fixtures/cons-builtin-list/` (single-file, exit 33)
+and `build-project-prelude-cons` in `tests/run-build-project.sh` (project mode,
+exit 33), alongside the existing `build-project-prelude-when` /
+`build-project-prelude-minmax`.
+
+F2 and F5 (the `tur/<name>` filesystem-path mismatch and wrapping
+`list`/`math`/`bits` in `defmodule`s) remain open but block no reported spice
+build -- they only matter for *selective* `(import tur/math :refer [...])`, which
+no affected spice relies on.
 
 ## Follow-ups discovered while fixing Defect A
 

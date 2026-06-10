@@ -36,6 +36,9 @@ extern bool g_needs_hamt;
 extern bool g_needs_regex_h;
 /* AR8: Variadic rest parameters - track if any variadic defn is compiled */
 extern bool g_has_variadics;
+/* prelude-macros (Defect B / F3): set when the user-callable `cons` runtime
+ * list constructor is referenced; gates the `cons` helper emission. */
+extern bool g_uses_cons;
 /* SS0a: Session types enabled (-Xsessions) */
 extern bool g_sessions_enabled;
 

@@ -135,6 +135,18 @@ static BuiltinSpec table_[] = {
     /* Phase 5: ref drop */
     { "drop!", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_NIL}, BS_PREFIX_UNARY_FREE, "free" },
 
+    /* prelude-macros (Defect B / F3): user-callable runtime cons-cell builder.
+     * `(cons h t)` allocates a `{int64_t head; int64_t tail;}` cell -- the same
+     * layout produced by `tcons` / `__tur_cons_of` and consumed by the
+     * `head`/`tail` walkers in stdlib/list.tur -- and returns its pointer as
+     * :int.  Registered as a builtin (rather than a stdlib defn) so it resolves
+     * in BOTH single-file and project/separate-compilation mode without the
+     * stdlib auto-load that project mode skips.  The C helper `cons` is emitted
+     * into the preamble of every TU that references it (gated on g_uses_cons).
+     * Distinct from the compile-time `cons` form in elab_macros.c, which only
+     * fires during macro expansion. */
+    { "cons", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "cons" },
+
     /* Phase 9: rc<T> operations */
     /* (rc/of x) - create a new rc<T> with x as the value */
     { "rc/of", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_RC}, BS_PREFIX_UNARY, NULL },

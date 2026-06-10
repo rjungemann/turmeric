@@ -53,6 +53,12 @@ bool g_needs_regex_h = false;
 /* AR8: Variadic rest parameters -- track if any variadic defn is compiled */
 bool g_has_variadics = false;
 
+/* prelude-macros (Defect B / F3): set when the user-callable `cons` runtime
+ * list constructor is referenced.  Gates emission of the `cons` cons-cell
+ * helper in both single-file (emit_program) and project-mode
+ * (emit_implementation) output so non-cons programs don't churn snapshots. */
+bool g_uses_cons = false;
+
 /* Phase G1: -Xgadt flag — enable defgadt syntax.
  * range-gadt-typeclass-migration-plan A1: graduated to default-on. defgadt and
  * GADT pattern matching now work without a flag; -Xgadt is a deprecated no-op

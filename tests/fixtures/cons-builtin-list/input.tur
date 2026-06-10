@@ -1,0 +1,8 @@
+;; prelude-macros (Defect B / F3): the user-callable `cons` runtime list
+;; constructor builds {head,tail} cells interoperable with stdlib/list.tur's
+;; list-head / list-tail accessors (auto-loaded in single-file mode).
+(defmodule cons-builtin-list
+  (defn main [] : int
+    (let [lst (cons 11 (cons 22 (cons 0 0)))]
+      ;; head = 11, head(tail) = 22 -> 33
+      (+ (list-head lst) (list-head (list-tail lst))))))
