@@ -36,6 +36,20 @@ SEMANTIC_NAME_PATTERNS = re.compile(
     r'|tco'             # tail-call optimisation: the `goto` loop IS the assertion
 )
 
+# Explicit keep-set: fixtures whose runtime assertion (expected.stdout) passes
+# "by luck" and whose expected.c snapshot is the *real* regression guard, but
+# whose names carry no codegen/mangle/abi keyword for SEMANTIC_NAME_PATTERNS to
+# catch. These are register-class-correctness guards for the float-carrier
+# arrow-composition miscompile (#318 -- "works by luck because the register
+# classes happen to match"). The runtime output was correct by luck with the
+# buggy int64 carrier, so deleting the snapshot would silently drop the only
+# reliable detector. See docs/reported/sf-compose-typed-arrow-prints-garbage-floats.md.
+CODEGEN_REGRESSION_GUARDS = frozenset({
+    'arrow-compose-float',
+    'sf-compose-typed',
+    'load-inside-defmodule-injects-names',
+})
+
 
 def classify(fixture_dir: str):
     """Return (keep: bool, reason: str) for a fixture directory."""
@@ -47,6 +61,10 @@ def classify(fixture_dir: str):
         return None, 'no expected.c'
     if not os.path.isfile(es):
         return True, 'no expected.stdout -- codegen-only fixture, keep'
+
+    # Explicit codegen regression guards (runtime assertion passes by luck).
+    if name in CODEGEN_REGRESSION_GUARDS:
+        return True, 'codegen regression guard -- runtime stdout passes by luck, snapshot is the real check'
 
     # Semantic name guard.
     if SEMANTIC_NAME_PATTERNS.search(name):

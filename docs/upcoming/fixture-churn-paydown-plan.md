@@ -1,7 +1,12 @@
 # Fixture-Churn Paydown Plan
 
-> **Status:** Proposed -- not started.
-> **Last Updated:** 2026-06-05
+> **Status:** Phase 0 landed (#298), Phase 1 landed (#299). Phase 1.1 is an
+> ongoing maintenance sweep -- re-run `tools/audit-fixture-snapshots.py` as new
+> fixtures accumulate (most recent pass: 2026-06-10, 86 -> 68). Phase 2 is gated
+> on the sibling plans (`reversible-name-mangling`, `poly-closure-result-specialization`)
+> being driven; Phase 3 is intentionally deferred until the policy has held in
+> practice.
+> **Last Updated:** 2026-06-10
 > **Type:** test infrastructure + batched codegen cleanup
 > **Sibling plans:**
 > - [reversible-name-mangling-plan.md](reversible-name-mangling-plan.md) -- T6 is a primary Phase 2 payload
