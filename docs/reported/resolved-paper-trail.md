@@ -143,6 +143,58 @@ resolved:
    `elab_toplevel.c` Phase M and `tests/run-offtree-load.sh` (registered as
    `tur_offtree_load` ctest).
 
+### Inline-C struct redefinitions at file scope broke multi-block codegen (FIXED)
+
+[`../archive/history/inline-c-struct-redef-at-file-scope.md`](../archive/history/inline-c-struct-redef-at-file-scope.md)
+
+Two modules in one TU each emitted a byte-identical top-level ```` ```c ... ``` ```` block
+declaring the same carrier struct (the idiom tourist/httpd use to share a
+layout across modules). The duplicate file-scope `struct __foo { ... };`
+collided in `cc`, breaking any cascade build that imported both modules.
+**Fix (proposed #2):** de-duplicate identical file-scope inline-C blocks
+within a single TU via `inline_c_dedup_seen` in
+`src/compiler/emit_module.c`, applied in both the `emit_program`
+(`cprelude`) and `emit_implementation` (Pass 1a) emit paths. Regression
+fixture: `tests/fixtures/inline-c-file-scope-struct-dedup/`. (Note: the
+original root-cause sketch assumed leading decls were hoisted to file
+scope; corrected in the archived report -- function-body inline-C is
+emitted *inside* the generated `static` function and never collides.)
+
+### httpd/tourist cascade `mbedtls/net_sockets.h` not found (FIXED -- spice-side)
+
+[`../archive/history/cascade-mbedtls-header-not-found.md`](../archive/history/cascade-mbedtls-header-not-found.md)
+
+`tur run` of the tourist cascade fixture failed in `cc` with
+`fatal error: 'mbedtls/net_sockets.h' file not found` on hosts without
+mbedTLS installed -- the `http` spice's client unconditionally `#include`d
+mbedtls headers even for plain `http://` requests, and similarly
+`http/response`'s `response-json` unconditionally pulled in `<yyjson.h>`.
+**Fix (proposed #2, in `../turmeric-spices`):** in
+`spices/http/src/http/client.tur`, rewrote the plain-HTTP path to use
+raw POSIX sockets (`socket`/`connect`/`send`/`recv`) and gated the
+mbedTLS includes + entire TLS branch behind
+`__has_include(<mbedtls/ssl.h>)`; `https://` now returns a runtime err
+with a rebuild hint when mbedTLS is absent. Same shape applied to
+`response-json` in `spices/http/src/http/response.tur` for the yyjson
+dependency. Plain `http-get` compiles and runs on bare hosts. The
+cascade fixture itself still fails on a residual struct-redef pattern
+tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
+
+### `tur build --shared .` produced `lib..so` / `lib..so.manifest` (FIXED)
+
+[`../archive/history/tur-build-shared-cwd-lib-double-dot.md`](../archive/history/tur-build-shared-cwd-lib-double-dot.md)
+
+Running `tur build --shared` with a cwd-relative target (`.` or `./`)
+produced shared libraries named `lib..so` / `lib.so` with matching
+`.manifest` sidecars, because `default_output_name` (`src/main.c:1389`)
+ran `basename_of(input)` directly and got back `"."` or `""`. **Fix
+(#56874ff3, hardened in #309):** when the basename resolves to a "current
+directory" sentinel, `default_output_name` now calls `realpath()` and
+uses the basename of the resolved absolute path, with a `resolved_dir`
+flag suppressing the trailing-extension strip so directory names like
+`my.project` survive intact. The companion manifest-`:name` preference
+landed alongside the build-output-directory plan.
+
 ## Spice-side cleanups (paper trail)
 
 ### `__dsp_pair_*_float` bit-cast helpers removed

@@ -2,9 +2,40 @@
 title: httpd/tourist cascade build fails with `mbedtls/net_sockets.h` not found
 severity: medium (hard compile error, but environment/dependency-driven, not a codegen defect; gates the cascade fixture only where mbedtls is absent)
 discovered: 2026-06-07
+resolved: 2026-06-09 (mbedtls + yyjson layers; struct redef is a residual separate bug)
 context: building turmeric-spices/spices/tourist/tests/fixtures/cascade/cascade.tur with `tur run`
 related: docs/reported/inline-c-struct-redef-at-file-scope.md
 ---
+
+## Resolution (2026-06-09)
+
+Applied proposed fix #2 in `../turmeric-spices`:
+
+1. **`spices/http/src/http/client.tur`** — rewrote the plain-HTTP path
+   in `__do-request` to use raw POSIX sockets (`socket`/`connect`/
+   `send`/`recv`); the mbedTLS `#include`s and the entire TLS branch are
+   gated behind `__has_include(<mbedtls/ssl.h>)`. `https://` returns a
+   runtime err with a rebuild hint when mbedTLS is absent; `http://`
+   works either way.
+2. **`spices/http/src/http/response.tur`** — `response-json` similarly
+   gates its `#include <yyjson.h>` and body behind
+   `__has_include(<yyjson.h>)`, returning an err at runtime when yyjson
+   is absent. (Surfaced as the next file-not-found error once the
+   mbedtls includes were gone — same class of bug, same shape of fix.)
+
+The smoke test `(http-get "http://...")` now compiles and runs on a host
+with neither `mbedtls/` nor `yyjson.h` on the include path.
+
+The cascade fixture itself still does not build end-to-end: with both
+header-not-found errors gone, the next failure is a recurrence of the
+inline-C struct-redefinition pattern from
+[`docs/archive/history/inline-c-struct-redef-at-file-scope.md`](../archive/history/inline-c-struct-redef-at-file-scope.md).
+That fix de-duplicated *byte-identical* file-scope inline-C blocks; the
+cascade case emits non-identical blocks (different surrounding
+`#include` sets) that each declare the same struct names
+(`__httpd_req`, `__httpd_resp`, `__httpd_warg`). That residual pattern
+is tracked in
+[`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
 
 ## Summary
 
