@@ -1,0 +1,25 @@
+;; Regression seed for docs/upcoming/bare-fat-result-monomorphization-plan.md
+;; (Phase B). A bare `^fat g` parameter (no fn-type annotation) whose call
+;; `(g x)` is consumed in a NON-tail position and must yield a non-int
+;; register-class result (:float here) currently fails elaboration: the bare-
+;; fat dispatch stamps `(g x)` int64, so `y` is int and `(use-float y)` is a
+;; type mismatch.
+;;
+;; Phase A (shipped, #208) re-stamps bare-^fat calls in TAIL positions only, so
+;; it structurally cannot reach this let-init call. The fix is per-call-site
+;; monomorphization of `run-with` over the incoming closure's result kind --
+;; tracked by the plan above. When that lands, this negative fixture is removed
+;; and replaced by the positive `bare-fat-nontail-float-noannot` fixture from
+;; the plan's Step 4 (expected stdout: 7).
+;;
+;; NOTE: the int-carrier analogue compiles fine today (int is the default
+;; carrier), so this gap is specific to non-int register-class results.
+(defn use-float [y : float] : float y)
+(defn run-with [^fat g x : float] : float
+  (let [y (g x)]
+    (use-float y)))
+(defn make-scale [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+(defn main [] : int
+  (println (run-with (make-scale 2.0) 3.5))   ;; want 7
+  0)

@@ -6,14 +6,15 @@ description: Make a signature-less `^fat g` parameter return a non-int register-
 
 # Bare `^fat` Result-Kind Monomorphization -- Plan (Phase B)
 
-> **Status:** Not started. The reported gap is already closed by
-> Phase A (tail-position retype pass), which shipped and merged in #208. This
-> plan is the *follow-through* that handles the one case Phase A structurally
-> cannot: a bare-`^fat` non-int result consumed in a **non-tail** position.
+> **Status:** Core mechanism not started; **regression seed landed**. The
+> reported gap is already closed by Phase A (tail-position retype pass), which
+> shipped and merged in #208. This plan is the *follow-through* that handles the
+> one case Phase A structurally cannot: a bare-`^fat` non-int result consumed in
+> a **non-tail** position.
 > **Re-open trigger:** a real (non-fixture) caller that needs a bare-`^fat`
 > `:float` (or any future non-int register-class) result off the tail, **or**
 > bare-`^fat` lambda params surfacing the same need.
-> **Last updated:** 2026-06-05
+> **Last updated:** 2026-06-10
 > **Type:** compiler -- closure ABI / monomorphization
 > **Supersedes Phase B of:**
 > - [bare-fat-result-type-inference-plan.md](../../archive/history/bare-fat-result-type-inference-plan.md) (Phase A shipped; this is its deferred Phase B)
@@ -264,7 +265,16 @@ Add `tests/fixtures/bare-fat-nontail-float-noannot/`:
 
 Expected stdout: `7\n`. Until B1'+B2 lands, the fixture fails elaboration
 (verified 2026-06-10: `TUR-E0001: arg 1: expected float, got int` at the
-`(use-float y)` callsite). Land the fixture in the same PR as the fix.
+`(use-float y)` callsite). Land the positive fixture in the same PR as the fix.
+
+> **Landed 2026-06-10 (regression seed).** Because the positive fixture cannot
+> pass until the core mechanism ships, the gap is pinned today as a *negative*
+> fixture, `tests/fixtures/errors/bare-fat-nontail-float-noannot/`, asserting
+> the current `TUR-E0001` (`expected float, got int`). It passes the suite now
+> and acts as the CI tripwire. **When B1'+B2 land, delete this errors fixture
+> and add the positive `tests/fixtures/bare-fat-nontail-float-noannot/` above.**
+> The int-carrier analogue of this body compiles fine today (int is the default
+> carrier), so the gap is specific to non-int register-class results.
 
 ### Step 5 -- dedup + int-only caller of a bare-^fat combinator
 
@@ -293,4 +303,29 @@ unspecialized name (canonical body unchanged).
 ~600-1000 LOC across `expr.h`, `elab_fns.c`, `elab_call.c`, plus 2 fixtures
 and a ~1442-fixture snapshot regen. Single PR is feasible but takes a
 multi-session commitment, not one execution turn. The fixture-only seed
-(step 4) is a safe sub-PR to land first so the gap is visible in CI.
+(step 4) is a safe sub-PR to land first so the gap is visible in CI **(done
+2026-06-10, as the negative fixture noted in step 4)**.
+
+### Two enabling primitives the core PR must build first (confirmed missing 2026-06-10)
+
+A scoping pass through the elaborator confirmed neither piece of infrastructure
+the mechanism depends on exists yet -- both must be built as part of the core PR:
+
+1. **Function-body re-elaboration (clone + re-elab).** There is no existing
+   "clone a defn body and re-elaborate it under a new param scope" helper. The
+   "ADT monomorphization" precedent the plan cites (`elab_call.c`, TY_APP path)
+   is *type-level* struct/constructor codegen, not body re-elaboration -- it is
+   not reusable here. The cheapest route is to retain the defn's `Form` (step 1)
+   and re-invoke the signature+body machinery of `elab_defn` under a
+   specialization context (mangled name, `bare_fat_result_kind` set, no
+   re-export, no forward-decl rematch) rather than hand-factoring its ~2000-line
+   body.
+2. **Speculative elaboration with diagnostic rollback.** `diag.c` emits straight
+   to stderr (only a `had_error_` bool; no capture/count/restore). The probe's
+   canonical (int) body genuinely *fails* to elaborate (`(use-float y)` ->
+   `TUR-E0001`), so deciding "this body is non-int-only, defer it" cannot be done
+   without a `diag_push_capture()/diag_pop_capture(emit?)` primitive that
+   suppresses + counts errors and restores `had_error_`. Without it, the lazy-body
+   detection in step 1 spews spurious errors on every non-int-only bare-`^fat`
+   defn. Build this primitive first; the common (int-carrier) case must stay
+   byte-identical so existing fixtures/snapshots do not churn.
