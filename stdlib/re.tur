@@ -7,12 +7,10 @@
 ;;
 ;; Uses regcomp(3)/regexec(3) which are always available on POSIX systems.
 ;; Capture groups are returned as vecs of freshly allocated cstr copies.
-
 ;; re/union-patterns and re/compile-union assemble alternation patterns from
 ;; str-concat; pull in str.tur (the load registry dedups, so this is a no-op
 ;; when the host program has already loaded it).
 (load "stdlib/str.tur")
-
 ;;; re/compile -- compile a regular expression pattern.
 ;;;
 ;;; Parameters:
@@ -26,6 +24,7 @@
 ;;;   (re/compile "([0-9]+)")  ; => <handle>
 ;;;
 ;;; Since: Phase B2
+
 (defn re/compile [pattern : cstr] : int
   ```c #include <regex.h>
   regex_t *re = malloc(sizeof(regex_t));
@@ -238,11 +237,8 @@
 ;;; re/wrap-paren -- internal: wrap one pattern as "(p)" (heap; caller frees).
 
 (defn re/wrap-paren [p : cstr] : cstr
-  (let [open (str-concat "(" p)
-        out  (str-concat open ")")]
-    (do
-      (str-free (:: open int))
-      out)))
+  (let [open (str-concat "(" p) out (str-concat open ")")]
+    (do (str-free (:: open int)) out)))
 ;;; re/union-acc -- internal: right-fold the rest onto acc, joining with "|".
 
 (defn re/union-acc [acc : cstr patterns : int] : cstr
@@ -309,10 +305,7 @@
   (let [pat (re/union-patterns patterns)]
     (if (= (:: pat int) 0)
       0
-      (let [r (re/compile pat)]
-        (do
-          (str-free (:: pat int))
-          r)))))
+      (let [r (re/compile pat)] (do (str-free (:: pat int)) r)))))
 ;;; re/replace-all -- replace all non-overlapping matches of a regex.
 ;;;
 ;;; Parameters:

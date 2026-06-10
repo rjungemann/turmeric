@@ -32,10 +32,12 @@
 ;; process/ppid) to process/wait, and vice versa. Like Pid it lowers to :int in
 ;; the C ABI; process/spawn still encodes fork failure as a ChildHandle wrapping
 ;; -1, recoverable with (:: child :int).
+
 (defopaque ChildHandle :int :linear)
 ;; stdlib-effect-rows: every process/* entry point touches OS process state, so
 ;; each carries the #{Proc} capability tag.  Callers that opt into effect-row
 ;; checking (by annotating their own row) must declare #{Proc} to use them.
+
 (load "stdlib/effects.tur")
 ;;; process/pid -- return the current process ID.
 ;;;
@@ -47,7 +49,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/pid [] #{Proc} : Pid
+(defn process/pid []
+  #{Proc}
+  : Pid
   ```c #include <unistd.h>
   return (int64_t)getpid();
   ```)
@@ -61,7 +65,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/ppid [] #{Proc} : Pid
+(defn process/ppid []
+  #{Proc}
+  : Pid
   ```c #include <unistd.h>
   return (int64_t)getppid();
   ```)
@@ -75,7 +81,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/exit [code : int] #{Proc} : void
+(defn process/exit [code : int]
+  #{Proc}
+  : void
   ```c exit((int)code);
   ```)
 ;;; process/exec -- replace the current process image with a new program.
@@ -95,7 +103,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/exec [path : cstr argv : int] #{Proc} : int
+(defn process/exec [path : cstr argv : int]
+  #{Proc}
+  : int
   ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -129,7 +139,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/spawn [path : cstr argv : int] #{Proc} : ChildHandle
+(defn process/spawn [path : cstr argv : int]
+  #{Proc}
+  : ChildHandle
   ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -161,7 +173,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/wait [child : ChildHandle] #{Proc} : int
+(defn process/wait [child : ChildHandle]
+  #{Proc}
+  : int
   ```c #include <sys/wait.h>
   int status = 0;
   if (waitpid((pid_t)child, &status, 0) < 0) return -1;
@@ -184,7 +198,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/run [path : cstr argv : int] #{Proc} : int
+(defn process/run [path : cstr argv : int]
+  #{Proc}
+  : int
   ```c #include <unistd.h>
   #include <sys/wait.h>
   int argc = 0;
@@ -233,7 +249,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/capture [path : cstr argv : int] #{Proc} : int
+(defn process/capture [path : cstr argv : int]
+  #{Proc}
+  : int
   ```c int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -292,7 +310,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/cwd [] #{Proc} : cstr
+(defn process/cwd []
+  #{Proc}
+  : cstr
   ```c #include <unistd.h>
   char *buf = malloc(4096);
   if (!getcwd(buf, 4096)) { free(buf); return NULL; }
@@ -311,7 +331,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn process/chdir [path : cstr] #{Proc} : int
+(defn process/chdir [path : cstr]
+  #{Proc}
+  : int
   ```c #include <unistd.h>
   return (int64_t)chdir(path);
   ```)

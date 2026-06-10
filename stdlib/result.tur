@@ -212,7 +212,8 @@
 ;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.
 
-(definstance Eq [Result] [(Eq A) (Eq B)]
+(definstance Eq [Result]
+  [(Eq A) (Eq B)]
   (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
 ;;; result-bimap -- map fn-left over the err arm and fn-right over the ok arm.
 ;;;
@@ -233,11 +234,11 @@
 ;;;   (result-bimap (err 5) neg inc)  ; => err(-5)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T1
+
 (defn result-bimap [container : int fn-left fn-right]
   #{}
   : int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
   if (!res) return 0;
   if (res->is_ok)
       return tur_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
@@ -268,9 +269,9 @@
 ;;;   (bimap (err 5) neg inc)  ; => err(-5)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T1
+
 (definstance Bifunctor [Result]
-  (bimap [container fn-left fn-right]
-    (result-bimap container fn-left fn-right)))
+  (bimap [container fn-left fn-right] (result-bimap container fn-left fn-right)))
 ;; ---------------------------------------------------------------------------
 ;; Ok-biased kind-(* -> *) instances (stdlib-hkt-consolidation T4)
 ;;
@@ -286,10 +287,9 @@
 ;;;   (fmap (:: (err 5) (Result int int)) (fn [x] (* x 2)))  ; => err(5)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T4
+
 (definstance Functor [(Result _ B)]
-  (fmap [container fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
+  (fmap [container fn] ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
     if (!r) return 0;
     if (r->is_ok) return tur_ok(fn.fn(fn.env, r->ok_val));
     return tur_err(r->err_val);
@@ -300,10 +300,9 @@
 ;;;   (bind (ok 20) (fn [x] (ok (+ x 1))))  ; => ok(21)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T4
+
 (definstance Monad [(Result _ B)]
-  (bind [ma fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+  (bind [ma fn] ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
     if (!r || !r->is_ok) return ma;
     return fn.fn(fn.env, r->ok_val);
     ```))
@@ -316,12 +315,10 @@
 ;;;   (catch-error (ok 7) (fn [e] (ok 0)))           ; => ok(7)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T4
+
 (definstance MonadError [(Result _ B)]
-  (throw-error [err]
-    ```c return tur_err(err); ```)
-  (catch-error [ma handler]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+  (throw-error [err] ```c return tur_err(err); ```)
+  (catch-error [ma handler] ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
     if (!r || r->is_ok) return ma;
     return handler.fn(handler.env, r->err_val);
     ```))

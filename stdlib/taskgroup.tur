@@ -558,8 +558,7 @@
 ;; TaskGroup::with [group & body] - runs body, waits for all spawned tasks
 
 
-(defmacro task-group-with [group & body]
-  `(do ~@body (task-group-wait ~group)))
+(defmacro task-group-with [group & body] `(do ~@body (task-group-wait ~group)))
 ;; ---- TaskGroup::with-timeout macro (Phase T22) ----
 ;; TaskGroup::with-timeout [group ms & body] - runs body, auto-cancels after ms milliseconds
 ;; Uses a background thread to sleep and then cancel the group

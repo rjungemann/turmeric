@@ -459,7 +459,6 @@
 ;;; reach for tuple2-eq? above for working call-site equality.
 ;;;
 ;;; Since: Phase TP2
-
 ;; The Eq [Tuple2] instance below needs the Eq typeclass in scope.  The
 ;; whole-program stdlib auto-load supplies the typeclass-eq.tur stub, but
 ;; project-mode (`tur build <dir>`) and on-demand loads do not run the full
@@ -467,7 +466,9 @@
 ;; this coexists with the auto-loaded stub and the on-demand full typeclass.tur
 ;; with no double-emission.  Mirrors either.tur's typeclass-functor.tur load.
 ;; See docs/reported/load-not-expanded-in-imported-or-project-modules.md.
+
 (load "stdlib/typeclass-eq.tur")
 
-(definstance Eq [Tuple2] [(Eq A) (Eq B)]
+(definstance Eq [Tuple2]
+  [(Eq A) (Eq B)]
   (eq? [x y] (tuple2-eq-carrier? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

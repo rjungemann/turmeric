@@ -55,7 +55,8 @@
 ;;; Since: Phase HKT H3
 ;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 
-(definstance Functor [rc] (fmap [container fn] ```c void *rc_ptr = (void *)(intptr_t)container;
+(definstance Functor [rc]
+  (fmap [container fn] ```c void *rc_ptr = (void *)(intptr_t)container;
     void *cloned = tur_rc_clone(rc_ptr);
     if (!cloned) return 0;
     int64_t value = *(int64_t*)tur_rc_ptr(cloned);
@@ -87,7 +88,8 @@
 ;;;
 ;;; Since: Phase HKT S6
 
-(definstance Foldable [rc] (foldl [ta init fn] ```c /* In v1, rc<T> is an RcControlBlock*.  tur_rc_ptr returns the
+(definstance Foldable [rc]
+  (foldl [ta init fn] ```c /* In v1, rc<T> is an RcControlBlock*.  tur_rc_ptr returns the
      * pointer to the stored value (an int64_t in v1). */
     void *rc_ptr = (void *)(intptr_t)ta;
     if (!rc_ptr) return init;
@@ -115,7 +117,8 @@
 ;; of this instance has been removed -- rc dispatches on its own TY_RC home
 ;; type, which is kind-correct and non-orphan.
 
-(definstance Clone [rc] (clone [x] : int ```c /* x is RcControlBlock *; increment refcount, return same pointer. */
+(definstance Clone [rc]
+  (clone [x] : int ```c /* x is RcControlBlock *; increment refcount, return same pointer. */
     rc_strong_increment(x);
     return (int64_t)(intptr_t)x;
     ```))

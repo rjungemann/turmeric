@@ -118,13 +118,7 @@
 ;;; Since: R3
 
 (defn bound-value [b : Bound] : int
-  (match b
-    (Inclusive v)
-    v
-    (Exclusive v)
-    v
-    (Unbounded)
-    0))
+  (match b (Inclusive v) v (Exclusive v) v (Unbounded) 0))
 ;;; bound-inclusive? -- true when an endpoint is inclusive.
 ;;;
 ;;; Parameters:
@@ -139,13 +133,7 @@
 ;;; Since: R3
 
 (defn bound-inclusive? [b : Bound] : bool
-  (match b
-    (Inclusive _)
-    true
-    (Exclusive _)
-    false
-    (Unbounded)
-    false))
+  (match b (Inclusive _) true (Exclusive _) false (Unbounded) false))
 ;; bound-unbounded? is provided by range.tur (it is range.tur's internal
 ;; Unbounded test as of range-gadt-typeclass-migration-plan B1); no redefinition
 ;; here.
@@ -211,9 +199,9 @@
 ;; `Range` remains a bare :int with no nominal type, so `(definstance Show
 ;; [Range] ...)` is still not expressible; the full-interval `range->str` /
 ;; `range-fmt` helpers below stay as self-contained functions.
-
 ;; range-fmt -- inline-C formatter for a range's decomposed endpoints.
 ;; kind: 0 = unbounded, 1 = inclusive, 2 = exclusive.
+
 (defn range-fmt [lo-kind : int lo-val : int hi-kind : int hi-val : int] : cstr
   ```c char *buf = (char *)malloc(80);
   char lo[32], hi[32];
@@ -227,11 +215,9 @@
   return (const char *)buf;
   ```)
 ;; bound-kind -- 0 for Unbounded, 1 for Inclusive, 2 for Exclusive.
+
 (defn bound-kind [b : Bound] : int
-  (match b
-    (Inclusive _) 1
-    (Exclusive _) 2
-    (Unbounded)   0))
+  (match b (Inclusive _) 1 (Exclusive _) 2 (Unbounded) 0))
 ;;; range->str -- render a Range in interval notation.
 ;;;
 ;;; Renders the endpoints with bracket/paren according to inclusivity, e.g.
@@ -250,10 +236,11 @@
 ;;; Since: range-gadt-typeclass-migration-plan B2
 
 (defn range->str [r : int] : cstr
-  (let [lo (range-lower r)
-        hi (range-upper r)]
-    (range-fmt (bound-kind lo) (range-bound-value lo)
-      (bound-kind hi) (range-bound-value hi))))
+  (let [lo (range-lower r) hi (range-upper r)]
+    (range-fmt (bound-kind lo)
+      (range-bound-value lo)
+      (bound-kind hi)
+      (range-bound-value hi))))
 ;;; bound->str -- render a single Bound endpoint.
 ;;;
 ;;; Renders "[v" for Inclusive, "(v" for Exclusive, or "unbounded".  A lone
@@ -274,10 +261,14 @@
 
 (defn bound->str [b : Bound] : cstr
   (match b
-    (Inclusive v) (bound-fmt 1 v)
-    (Exclusive v) (bound-fmt 2 v)
-    (Unbounded)   "unbounded"))
+    (Inclusive v)
+    (bound-fmt 1 v)
+    (Exclusive v)
+    (bound-fmt 2 v)
+    (Unbounded)
+    "unbounded"))
 ;; bound-fmt -- inline-C formatter for a single inclusive/exclusive endpoint.
+
 (defn bound-fmt [kind : int v : int] : cstr
   ```c char *buf = (char *)malloc(32);
   if (kind == 1) snprintf(buf, 32, "[%lld", (long long)v);

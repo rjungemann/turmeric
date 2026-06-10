@@ -26,6 +26,7 @@
 ;; (async-socket-send (socket-fd s) ...). load is idempotent.
 
 (load "stdlib/fd.tur")
+
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: socket-close releases a live network resource, so it
 ;; carries the #{Net} capability tag.  The pure accessors socket-fd /
@@ -75,7 +76,9 @@
 ;;;
 ;;; Since: LT4
 
-(defn socket-close [s : Socket] #{Net} : int
+(defn socket-close [s : Socket]
+  #{Net}
+  : int
   ```c if (s.fd < 0) return -1;
   return close(s.fd);
   ```)

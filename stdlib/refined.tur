@@ -54,7 +54,10 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-of [A] [x : A xs : int] : (NonEmpty A) (:: (tcons (:: x :int) xs) :NonEmpty))
+(defn ne-of [A]
+  [x : A xs : int]
+  : (NonEmpty A)
+  (:: (tcons (:: x :int) xs) :NonEmpty))
 ;;; ne-singleton -- build a one-element NonEmpty.
 ;;;
 ;;; Parameters:
@@ -150,8 +153,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-from? [xs : int] : int
-  (if (tnil? xs) (none) (some (:: xs :NonEmpty))))
+(defn ne-from? [xs : int] : int (if (tnil? xs) (none) (some (:: xs :NonEmpty))))
 ;;; ne-unwrap -- recover the NonEmpty payload from a non-none Option.
 ;;;
 ;;; Pair with ne-from? after a some? check; on a none Option this yields a
@@ -182,6 +184,7 @@
 ;;; constructor rather than in the type, pending parameterized defopaque.)
 ;;;
 ;;; Since: R2
+
 (defopaque BoundedIdx :int)
 ;;; bidx->int -- recover the raw :int index from a BoundedIdx.
 ;;;
@@ -266,4 +269,5 @@
 ;;;
 ;;; Since: R2
 
-(defn slice-get-checked [s : int b : BoundedIdx] : int (slice-get s (bidx->int b)))
+(defn slice-get-checked [s : int b : BoundedIdx] : int
+  (slice-get s (bidx->int b)))

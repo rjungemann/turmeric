@@ -15,11 +15,11 @@
 (extern-c fwrite [^ptr ^int ^int ^ptr] :int)
 
 (extern-c remove [^cstr] :int)
-
 ;; opendir/readdir/closedir are NOT extern-c-declared here: the directory
 ;; helpers below call them from inline-C that #include <dirent.h>, and a
 ;; hand-rolled `extern int64_t opendir(int64_t)` would conflict with the real
 ;; libc prototypes once that header is in scope (matches stdlib/fs.tur's style).
+
 
 (extern-c malloc [^ptr size] :ptr)
 
@@ -126,7 +126,6 @@
 ;;; Since: Phase 16
 ;; Real-FileSystem implementation
 ;; Returns a FileSystem capability struct with libc-based implementations
-
 ;; file-scope-c-block: the FileSystem capability is a struct of function
 ;; pointers, so its libc-backed implementations must be FILE-SCOPE C functions.
 ;; A vtable returned from Real-FileSystem cannot point at functions nested
@@ -134,8 +133,8 @@
 ;; another function, and even a GCC nested function would dangle once the struct
 ;; outlives the enclosing call). Hoisting them into a top-level c-block keeps the
 ;; original libc implementations while giving them stable file-scope addresses.
-```c
-#include <dirent.h>
+
+```c #include <dirent.h>
 typedef struct __tur_io_fs {
     int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
     int (*write_file)(const char* path, const unsigned char* data, int data_len);

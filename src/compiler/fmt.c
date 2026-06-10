@@ -682,7 +682,10 @@ static void fmt_defclass(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
-/* (definstance Name Class Type\n  impl...) */
+/* (definstance Class [Type]\n  impl...) — the header is the 3 items
+ * `definstance`, the class name, and the `[Type]` vector; every method
+ * implementation goes on its own indented body line (2-space body indent,
+ * matching the documented special-form style). */
 static void fmt_definstance(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
     uint32_t paren_col = s->col;
@@ -690,12 +693,12 @@ static void fmt_definstance(FmtState *s, const Form *f) {
 
     fs_putc(s, '(');
 
-    for (uint32_t i = 0; i < 4 && i < n; i++) {
+    for (uint32_t i = 0; i < 3 && i < n; i++) {
         if (i) fs_putc(s, ' ');
         fmt_form(s, f->as.list.items[i]);
     }
 
-    fmt_body_forms(s, f, 4, body_col);
+    fmt_body_forms(s, f, 3, body_col);
 
     fs_putc(s, ')');
 }

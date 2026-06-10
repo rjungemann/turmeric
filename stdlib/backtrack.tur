@@ -30,6 +30,7 @@
 ;;;
 ;;; Returns:
 ;;;   0 (null pointer representing the empty list).
+
 (defn bt-nil [] : int ```c return 0; ```)
 ;;; bt-cons -- prepend a value to a backtrack result list.
 ;;;
@@ -398,15 +399,17 @@
 ;;; bt-apply-fat -- invoke a fat-closure box with a single argument.
 ;; Still used by `ap` to dispatch *function elements* pulled from a result list
 ;; (genuine int-carried fat boxes, not poly `:fn` continuations).
+
 (defn bt-apply-fat [f x] : int
   ```c int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, x);
   ```)
 ;;; fmap-backtrack-raw -- worker: map a `:fn` callback over every result.
-(defn fmap-backtrack-raw [xs f : fn] : int
-  (mbind xs (fn [x] (mreturn (f x)))))
+
+(defn fmap-backtrack-raw [xs f : fn] : int (mbind xs (fn [x] (mreturn (f x)))))
 ;;; ap-backtrack-raw -- int worker: cartesian application of fns to arguments.
+
 (defn ap-backtrack-raw [fs xs] : int
   (let [lxs xs]
     (mbind fs
@@ -419,9 +422,9 @@
 ;;;   (fmap (mreturn 21) (fn [x] (* x 2)))  ; => [42]
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Functor [Backtrack]
-  (fmap [container fn]
-    (fmap-backtrack-raw (:: container :int) fn)))
+  (fmap [container fn] (fmap-backtrack-raw (:: container :int) fn)))
 ;;; Applicative [Backtrack] -- pure is a singleton result; ap forms the cartesian
 ;;; product, applying each function result to each argument result.
 ;;;
@@ -429,11 +432,10 @@
 ;;;   (ap (mreturn (fn [x] (+ x 1))) (mreturn 41))  ; => [42]
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Applicative [Backtrack]
-  (pure [x]
-    (mreturn x))
-  (ap [ff fa]
-    (ap-backtrack-raw (:: ff :int) (:: fa :int))))
+  (pure [x] (mreturn x))
+  (ap [ff fa] (ap-backtrack-raw (:: ff :int) (:: fa :int))))
 ;;; Monad [Backtrack] -- bind is concatMap: feed every result into the
 ;;; continuation and union the outputs. This is what `do-m` / `for` lower onto.
 ;;;
@@ -441,9 +443,9 @@
 ;;;   (do-m x (mplus (mreturn 1) (mreturn 2)) (mreturn (* x 10)))  ; => [10 20]
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Monad [Backtrack]
-  (bind [ma k]
-    (mbind (:: ma :int) (fn [x] (k x)))))
+  (bind [ma k] (mbind (:: ma :int) (fn [x] (k x)))))
 ;;; Alternative [Backtrack] -- empty is the failing search; alt-or unions the
 ;;; results of both searches (the backtracking choice).
 ;;;
@@ -451,8 +453,7 @@
 ;;;   (alt-or (mreturn 1) (mreturn 2))  ; => [1 2]
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Alternative [Backtrack]
-  (empty [a]
-    (mzero))
-  (alt-or [a b]
-    (mplus (:: a :int) (:: b :int))))
+  (empty [a] (mzero))
+  (alt-or [a b] (mplus (:: a :int) (:: b :int))))

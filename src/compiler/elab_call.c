@@ -2630,6 +2630,17 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * Allow passing a TY_ADT where int64_t is expected. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_SESSION) {
+            /* SS: a Session[...] channel is an opaque int64_t pointer at runtime.
+             * A forward-declared callee records compound (Session ...) params as
+             * the TY_INT placeholder (fwd_decl_scan_params only commits scalar
+             * kinds), so a forward call such as `(loop-b ch ...)` would otherwise
+             * see `expected int, got Session[...]`.  Accept it -- mirrors the
+             * TY_STRUCT / TY_ADT int64_t hatches above.  Backward references,
+             * where the callee's real Session signature is already installed, are
+             * still checked precisely against the full protocol type. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_APP) {
             /* Phase HKT §3: Allow passing a partially-applied type (TY_APP) where int64_t
              * is expected.  Partial type application values are opaque int64_t at runtime. */

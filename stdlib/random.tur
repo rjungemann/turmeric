@@ -15,6 +15,7 @@
 (extern-c malloc [^ptr size] :ptr)
 
 (extern-c free [^ptr p] :void)
+
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: the rand-* draws consume non-deterministic randomness,
 ;; so each carries the #{Rand} capability tag.
@@ -168,7 +169,9 @@
 ;; Get a random integer in range [min, max]
 
 
-(defn rand-int [min max] #{Rand} : int
+(defn rand-int [min max]
+  #{Rand}
+  : int
   ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
@@ -191,7 +194,9 @@
 ;; Get a random float in range [0, 1)
 ;; Returns value scaled by 10000 (divide by 10000.0 to get actual float)
 
-(defn rand-float [] #{Rand} : int
+(defn rand-float []
+  #{Rand}
+  : int
   ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
@@ -213,7 +218,9 @@
 ;;; Since: Phase 16
 ;; Roll a die with n sides (1 to n)
 
-(defn rand-die [sides] #{Rand} : int
+(defn rand-die [sides]
+  #{Rand}
+  : int
   ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
@@ -232,7 +239,9 @@
 ;;; Since: Phase 16
 ;; Random boolean (true or false)
 
-(defn rand-bool [] #{Rand} : int
+(defn rand-bool []
+  #{Rand}
+  : int
   ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));

@@ -570,10 +570,9 @@
 (defstruct Schema [A] (raw :int))
 ;;; Functor [Schema] -- map a function over a schema's decoded value.
 
-(definstance Functor [Schema] (fmap [container fn]
-                                (:: (make-struct Schema
-                                      (schema/fmap (.raw container) fn))
-                                  (Schema int))))
+(definstance Functor [Schema]
+  (fmap [container fn]
+    (:: (make-struct Schema (schema/fmap (.raw container) fn)) (Schema int))))
 ;;; Applicative [Schema] -- Validation applicative: pure + accumulating ap.
 ;;;
 ;;; `pure` lifts a value (schema/always); `ap` applies a decoded function arm to
@@ -581,17 +580,16 @@
 ;;; arms' errors (Validation, not fail-fast).  Monad is deliberately omitted: the
 ;;; lawful fail-fast >>= contradicts this accumulating <*> (see schema/ap).
 
-(definstance Applicative [Schema] (pure [x]
-                                    (:: (make-struct Schema (schema/always x))
-                                      (Schema int)))
+(definstance Applicative [Schema]
+  (pure [x] (:: (make-struct Schema (schema/always x)) (Schema int)))
   (ap [ff fa]
     (:: (make-struct Schema (schema/ap-fat (.raw ff) (.raw fa))) (Schema int))))
 ;;; Alternative [Schema] -- first-match choice (`alt-or`) + the empty schema.
 
-(definstance Alternative [Schema] (empty [a]
-                                    (:: (make-struct Schema
-                                          (schema/never "no alternative matched"))
-                                      (Schema int)))
+(definstance Alternative [Schema]
+  (empty [a]
+    (:: (make-struct Schema (schema/never "no alternative matched"))
+      (Schema int)))
   (alt-or [a b]
     (:: (make-struct Schema (schema/alt (.raw a) (.raw b))) (Schema int))))
 ;; ---------------------------------------------------------------------------

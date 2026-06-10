@@ -354,5 +354,6 @@
 ;; The cross-plan-followups F3-5 dispatcher synthesises the value
 ;; comparator at the call site when V is itself a TY_APP.
 
-(definstance Eq [MutableMap] [(Eq V)]
+(definstance Eq [MutableMap]
+  [(Eq V)]
   (eq? [x y] (mutmap-eq? x y (fn [a b] (= a b)))))

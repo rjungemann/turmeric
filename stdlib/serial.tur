@@ -36,6 +36,7 @@
 ;; cont-to-file / cont-from-file helpers continue to traffic in raw :ptr<void>
 ;; marshalled buffers -- they are a separate, return-type-polymorphic surface
 ;; that is not part of the owned-buffer resource discipline.
+
 (defopaque Bytes :ptr<void> :linear)
 ;; Allocate a fresh bytes value of `n` bytes (zeroed).
 ;;; bytes-alloc -- allocate a zeroed length-prefixed byte buffer of n bytes.
@@ -158,7 +159,8 @@
 ;;; Since: Phase 21
 
 
-(definstance Serializable [int] (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
+(definstance Serializable [int]
+  (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
     if (!buf) { fprintf(stderr, "serialize int: oom\n"); exit(1); }
     buf[0] = 8;
     uint8_t *p = (uint8_t*)(buf + 1);
@@ -193,7 +195,8 @@
 ;;;
 ;;; Since: Phase 21
 
-(definstance Serializable [bool] (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 1);
+(definstance Serializable [bool]
+  (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 1);
     if (!buf) { fprintf(stderr, "serialize bool: oom\n"); exit(1); }
     buf[0] = 1;
     ((uint8_t*)(buf + 1))[0] = x ? 1 : 0;
@@ -209,7 +212,8 @@
 ;;;
 ;;; Since: Phase 21
 
-(definstance Serializable [float] (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
+(definstance Serializable [float]
+  (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
     if (!buf) { fprintf(stderr, "serialize float: oom\n"); exit(1); }
     buf[0] = 8;
     double dv = *(double*)&x;
@@ -248,7 +252,8 @@
 ;;;
 ;;; Since: Phase 21
 
-(definstance Serializable [cstr] (serialize [x] ```c const char *s = (const char*)x;
+(definstance Serializable [cstr]
+  (serialize [x] ```c const char *s = (const char*)x;
     int64_t slen = s ? (int64_t)strlen(s) : 0;
     int64_t total = 4 + slen;          /* 4-byte length prefix */
     int64_t *buf = malloc(sizeof(int64_t) + (size_t)total);
@@ -285,7 +290,8 @@
 ;;;
 ;;; Since: Phase 21
 
-(definstance Serializable [ptr<void>] (serialize [x] ```c int64_t *inner = (int64_t*)x;
+(definstance Serializable [ptr<void>]
+  (serialize [x] ```c int64_t *inner = (int64_t*)x;
     int64_t dlen = inner ? inner[0] : 0;
     int64_t total = 8 + dlen;
     int64_t *buf = malloc(sizeof(int64_t) + (size_t)total);
@@ -345,7 +351,8 @@
 ;;; Since: cps-transform-plan (value-typed cont env codec)
 
 
-(definstance Serializable [Pair] [(Serializable A) (Serializable B)]
+(definstance Serializable [Pair]
+  [(Serializable A) (Serializable B)]
   (serialize [x] ```c struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Pair: oom\n"); exit(1); }
@@ -369,7 +376,8 @@
 ;;;
 ;;; Since: cps-transform-plan (value-typed cont env codec)
 
-(definstance Serializable [Option] [(Serializable A)]
+(definstance Serializable [Option]
+  [(Serializable A)]
   (serialize [x] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Option: oom\n"); exit(1); }

@@ -24,8 +24,7 @@
   ;; bespoke slot-0 cast (closure-typed-invocation-abi-plan, de-workaround).
   ```c return TUR_APPLY0(f); ```)
 
-(defn seq-call-fn1 [f : int x : int] : int
-  ```c return TUR_APPLY1(f, x); ```)
+(defn seq-call-fn1 [f : int x : int] : int ```c return TUR_APPLY1(f, x); ```)
 ;; -------------------------------------------------------------------
 ;; Option helpers for seq/unfold (no #{Unsafe}, usable in gen bodies)
 ;; -------------------------------------------------------------------

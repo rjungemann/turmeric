@@ -106,5 +106,6 @@
 ;; TC1-25: Phase PTC4 -- constrained Eq instance for Pair[A B].
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.
 
-(definstance Eq [Pair] [(Eq A) (Eq B)]
+(definstance Eq [Pair]
+  [(Eq A) (Eq B)]
   (eq? [x y] (pair-eq-carrier? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

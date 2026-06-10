@@ -18,6 +18,7 @@
 ;; Fds returned by listen/accept/connect are Fd handles (a :int newtype); a
 ;; returned -1 still signals failure -- test with fd-valid? or fd->int.
 (load "stdlib/fd.tur")
+
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: the async-socket network operations add the #{Net}
 ;; capability tag alongside their existing #{Unsafe}.  The recv-buf / recv-len

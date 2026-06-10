@@ -56,6 +56,7 @@
 ;;;   (defn read-config [p : cstr] #{FS} : cstr ...)
 ;;;
 ;;; Since: stdlib-effect-rows
+
 (defeffect FS [] :nil ^extends IO ^capability)
 ;;; Net -- capability tag for network access (net, async_socket, httpd).
 ;;;
@@ -66,6 +67,7 @@
 ;;;   (defn http-get [url : cstr] #{Net} : cstr ...)
 ;;;
 ;;; Since: stdlib-effect-rows
+
 (defeffect Net [] :nil ^extends IO ^capability)
 ;;; Proc -- capability tag for process/environment access (process, env).
 ;;;
@@ -76,6 +78,7 @@
 ;;;   (defn spawn [cmd : cstr] #{Proc} : int ...)
 ;;;
 ;;; Since: stdlib-effect-rows
+
 (defeffect Proc [] :nil ^extends IO ^capability)
 ;;; Rand -- capability tag for non-deterministic randomness (random).
 ;;;
@@ -86,6 +89,7 @@
 ;;;   (defn rand-u64 [] #{Rand} : int ...)
 ;;;
 ;;; Since: stdlib-effect-rows
+
 (defeffect Rand [] :nil ^extends IO ^capability)
 ;; -- Write ------------------------------------------------------------------
 ;; Perform a string write operation.
