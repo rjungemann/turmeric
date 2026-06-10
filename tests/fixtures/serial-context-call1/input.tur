@@ -1,0 +1,25 @@
+;; Phase 21 (capture-grammar generalization): 1-arg call frames.
+;;
+;; collect_ctx previously accepted only 2-arg call frames in a captured serial
+;; context, so a 1-arg call around the shift -- (f (serial-shift k v)) -- silently
+;; fell out of the supported grammar and the shift lowered to a placeholder 0.
+;; 1-arg call frames now capture: the sole argument carries the hole and the
+;; frame applies f to the resume value (no env to marshal). They compose with
+;; arithmetic frames and with each other, and round-trip through save-cont! /
+;; resume-cont!.
+
+(load "stdlib/workflow.tur")
+
+(defn dbl  [x : int] : int (* x 2))
+(defn inc1 [x : int] : int (+ x 1))
+
+;; capture + marshal + resume on 5.
+(defn rt5 [k : ptr<void>] : int
+  (resume-cont! (save-cont! k) 5))
+
+(defn main [] : int
+  (println (serial-reset (dbl (serial-shift rt5 0))))           ; dbl(5)      = 10
+  (println (serial-reset (inc1 (dbl (serial-shift rt5 0)))))    ; inc1(dbl 5) = 11
+  (println (serial-reset (+ 100 (dbl (serial-shift rt5 0)))))   ; 100+dbl(5)  = 110
+  (println (serial-reset (dbl (+ 1 (serial-shift rt5 0)))))     ; dbl(1+5)    = 12
+  0)

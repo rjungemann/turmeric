@@ -729,6 +729,27 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             frames[n].env_deser = edeser;
             n++;
             cur = h0 ? a0 : a1;
+        } else if (cur && cur->kind == EX_CALL && cur->as.call_.n_args == 1 &&
+                   cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            /* 1-arg call frame: (f HOLE) -- the sole argument is the hole, so
+             * there is no captured env. The frame applies f to the resume
+             * value; it marshals as the target name with a zero (unused) env. */
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
+            if (fb->closure_fn_binding) return NULL;   /* needs hidden env arg */
+            if (!env_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
+            const Expr *a0 = cur->as.call_.args[0];
+            if (!reaches_shift_kind(a0, target)) return NULL;
+            if (!env_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;
+            frames[n].c_op = NULL;
+            frames[n].call_fn = fb;
+            frames[n].hole_left = true;   /* sole arg carries the hole */
+            frames[n].other = NULL;       /* no env */
+            frames[n].env_kind = TY_INT;  /* marshaled as an inline zero env */
+            frames[n].env_ser = NULL;
+            frames[n].env_deser = NULL;
+            n++;
+            cur = a0;
         } else {
             break;
         }
@@ -928,6 +949,15 @@ static void cl_emit_frame_body(Buf *hb, const char *name, const ClFrame *f) {
     /* Call frame: invoke target(arg0, arg1), casting env/value to the param
      * types. The hole flows in as `value`; `env` is the captured other arg. */
     char *rn = raw_name_for_binding(f->call_fn);
+    if (f->call_fn->type.as.fn.arity == 1) {
+        /* 1-arg call: no env -- apply target to the resume value alone. */
+        TypeKind k0 = f->call_fn->type.as.fn.arg_kinds[0];
+        buf_printf(hb,
+            "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+            name, rn, c_cast_for_kind(k0));
+        free(rn);
+        return;
+    }
     TypeKind k0 = f->call_fn->type.as.fn.arg_kinds[0];
     TypeKind k1 = f->call_fn->type.as.fn.arg_kinds[1];
     const char *a0 = f->hole_left ? "value" : "env";   /* arg0 */
@@ -1011,7 +1041,8 @@ static char *emit_cloneable_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
     }
     char *op_vals[CL_MAX_CTX_FRAMES];
     for (uint32_t i = 0; i < nf; i++)
-        op_vals[i] = emit_value(ctx, body, frames[i].other);
+        op_vals[i] = frames[i].other ? emit_value(ctx, body, frames[i].other)
+                                     : strdup("0");  /* no-env (1-arg) frame */
     char *k_fn_val = emit_value(ctx, body, k_fn);
 
     char *chain = fresh_tmp(ctx);
@@ -1306,7 +1337,8 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
     char *op_vals[CL_MAX_CTX_FRAMES];
     char  frame_fn[CL_MAX_CTX_FRAMES][48];
     for (uint32_t i = 0; i < nf; i++) {
-        op_vals[i] = emit_value(ctx, body, frames[i].other);
+        op_vals[i] = frames[i].other ? emit_value(ctx, body, frames[i].other)
+                                     : strdup("0");  /* no-env (1-arg) frame */
         if (!frames[i].call_fn) {
             snprintf(frame_fn[i], sizeof frame_fn[i],
                      "__sk_frame_for_tag(%d)", sk_tag_for_frame(&frames[i]));
