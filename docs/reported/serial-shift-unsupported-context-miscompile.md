@@ -64,15 +64,22 @@ returns false -> `emit_cps_serial_reset` returns NULL ->
   gate to `emit_cps_program_contains_serial` (presence of any serial node, not
   just lowerable resets) at `src/compiler/emit_module.c:2916,2927`. The prelude
   is now always present when serial syntax is used, so the references resolve.
-- **Remaining (pre-existing) crash:** with the prelude present, Test B *still*
-  `SIGILL`s -- because a `serial-shift`/`serial-reset` in **statement
-  position** (its value discarded, e.g. the non-final item of a `do`) lowers to
-  `__builtin_trap()` (`src/compiler/emit_stmt.c:360-363`). This mirrors the
-  identical `cloneable` trap two cases above and predates this work. It is a
-  blunt "unsupported" marker (a trap, not a silent wrong answer), but a bare
-  `SIGILL` with no diagnostic is poor ergonomics -- it should be a named
-  `TUR-E00xx` error. Tracked here as the statement-position facet of the same
-  underlying gap.
+- **Statement-position do-shape (now SUPPORTED for the common case):** the
+  `(do PRELUDE... (serial-shift k v) (tail-0-arg-call))` shape -- the
+  "skip expensive-init, resume into the loop" pattern -- now lowers: prelude
+  items run once at capture, the single 0-arg tail call becomes an ignore-value
+  continuation frame (`collect_ctx` EX_DO branch). It composes with arithmetic
+  frames and round-trips through `save-cont!`/`resume-cont!`
+  (`tests/fixtures/serial-context-do`).
+- **Remaining gap:** do-tails that are *not* a single 0-arg top-level call
+  (multi-statement tails, tails with arguments, or tails closing over locals)
+  still fall outside the grammar. A multi-statement / value-using tail in
+  statement position falls back and a `serial-shift` whose *value is discarded
+  outside a supported do* still lowers to `__builtin_trap()`
+  (`src/compiler/emit_stmt.c:360-363`, mirroring the `cloneable` trap). General
+  tails need lifting the continuation into a registered function with a
+  marshaled (Serializable) env -- the next increment toward full
+  `application-image-dumps` support.
 
 ---
 

@@ -1,0 +1,34 @@
+;; Phase 21 (capture-grammar generalization): do-sequence / statement-position
+;; shift -- the "skip expensive-init, resume into the loop" shape that backs the
+;; application-image-dumps plan.
+;;
+;;   (serial-reset (do (init) (serial-shift k v) (loop)))
+;;
+;; The items before the shift (init) are side-effecting prelude, evaluated once
+;; at capture time. The single tail item (loop) is the captured continuation: a
+;; 0-arg call lowered to an ignore-value frame that runs on resume regardless of
+;; the resume value. The continuation marshals through save-cont!/resume-cont!,
+;; and -- crucially -- init is NOT part of it: resuming the saved bytes runs only
+;; the loop, never re-running init.
+
+(load "stdlib/workflow.tur")
+
+(defn init [] : int (println "init once") 0)
+(defn loop [] : int (println "loop body") 7)
+
+;; resume the captured continuation immediately, on the cold path.
+(defn rt [k : ptr<void>] : int
+  (resume-cont! (save-cont! k) 0))
+
+;; save the continuation, then resume the SAVED BYTES twice -- init must run only
+;; once (it is prelude), loop runs once per resume.
+(defn twice [k : ptr<void>] : int
+  (let [b (save-cont! k)]
+    (let [a (resume-cont! b 0)
+          c (resume-cont! b 0)]
+      (+ a c))))
+
+(defn main [] : int
+  (println (serial-reset (do (init) (serial-shift rt 0) (loop))))     ; init once, loop, 7
+  (println (serial-reset (do (init) (serial-shift twice 0) (loop))))  ; init once, loop x2, 14
+  0)

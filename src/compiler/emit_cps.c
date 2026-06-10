@@ -663,6 +663,59 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             cur = body;
             continue;
         }
+        if (cur && cur->kind == EX_DO) {
+            /* do-sequence with a statement-position shift:
+             *   (do PRELUDE... (shift k v) TAIL)
+             * The items before the shift are side-effecting prelude, evaluated
+             * once at capture time (recorded as binding-less prelude entries).
+             * The single optional tail item is the captured continuation: an
+             * ignore-value frame that, on resume, runs regardless of the resume
+             * value. This is the "skip expensive-init, resume into the loop"
+             * shape the application-image-dumps plan targets. */
+            if (!lets || !n_lets_out) return NULL;
+            uint32_t N = cur->as.do_.n;
+            int32_t m = -1;
+            for (uint32_t i = 0; i < N; i++) {
+                if (reaches_shift_kind(cur->as.do_.items[i], target)) {
+                    if (m >= 0) return NULL;   /* at most one hole */
+                    m = (int32_t)i;
+                }
+            }
+            if (m < 0) return NULL;
+            /* The shift must sit in statement position (be the do item itself),
+             * and the tail must be at most one item (a single continuation
+             * call). Richer shapes are a later increment. */
+            if (cur->as.do_.items[m]->kind != target) return NULL;
+            if (N - (uint32_t)m - 1 > 1) return NULL;
+            /* Prelude items [0, m): emitted for side effect at the reset site. */
+            for (int32_t i = 0; i < m; i++) {
+                if (nl >= CL_MAX_CTX_LETS) return NULL;
+                if (expr_contains_return_or_throw(cur->as.do_.items[i])) return NULL;
+                lets[nl].binding = NULL;                 /* side-effect prelude */
+                lets[nl].init    = cur->as.do_.items[i];
+                nl++;
+            }
+            /* Tail item (if any): a 0-arg top-level call -> ignore-value frame. */
+            if (N - (uint32_t)m - 1 == 1) {
+                const Expr *tail = cur->as.do_.items[m + 1];
+                if (tail->kind != EX_CALL || tail->as.call_.n_args != 0 ||
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                const Binding *fb = tail->as.call_.fn_binding;
+                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
+                if (fb->closure_fn_binding) return NULL;
+                if (!env_kind_ok(tail->type.kind)) return NULL;  /* result: scalar */
+                frames[n].c_op = NULL;
+                frames[n].call_fn = fb;
+                frames[n].hole_left = true;   /* unused for a 0-arg frame */
+                frames[n].other = NULL;       /* no env */
+                frames[n].env_kind = TY_INT;  /* inline zero env */
+                frames[n].env_ser = NULL;
+                frames[n].env_deser = NULL;
+                n++;
+            }
+            cur = cur->as.do_.items[m];   /* the shift; loop exits below */
+            continue;
+        }
         if (cur && cur->kind == EX_BUILTIN) {
             /* Arithmetic frame: a single-hole int binop (+, -, *, /). */
             const BuiltinSpec *spec = cur->as.builtin.spec;
@@ -949,6 +1002,15 @@ static void cl_emit_frame_body(Buf *hb, const char *name, const ClFrame *f) {
     /* Call frame: invoke target(arg0, arg1), casting env/value to the param
      * types. The hole flows in as `value`; `env` is the captured other arg. */
     char *rn = raw_name_for_binding(f->call_fn);
+    if (f->call_fn->type.as.fn.arity == 0) {
+        /* 0-arg call: ignore-value continuation frame -- run target() on resume
+         * regardless of the resume value (a do-sequence tail). */
+        buf_printf(hb,
+            "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+            name, rn);
+        free(rn);
+        return;
+    }
     if (f->call_fn->type.as.fn.arity == 1) {
         /* 1-arg call: no env -- apply target to the resume value alone. */
         TypeKind k0 = f->call_fn->type.as.fn.arg_kinds[0];
@@ -1029,8 +1091,14 @@ static char *emit_cloneable_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
      *    the non-hole operands (once, in source order) and the receiver's env,
      *    build the DK chain, and run it. */
     for (uint32_t i = 0; i < nl; i++) {
-        char *bn = name_for_binding(ctx, lets[i].binding);
         char *iv = emit_value(ctx, body, lets[i].init);
+        if (!lets[i].binding) {           /* side-effect prelude (do prefix) */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(void)(%s);\n", iv);
+            free(iv);
+            continue;
+        }
+        char *bn = name_for_binding(ctx, lets[i].binding);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s = %s;\n",
                    emit_type_c_name(ctx, lets[i].binding->type), bn, iv);
@@ -1042,7 +1110,7 @@ static char *emit_cloneable_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
     char *op_vals[CL_MAX_CTX_FRAMES];
     for (uint32_t i = 0; i < nf; i++)
         op_vals[i] = frames[i].other ? emit_value(ctx, body, frames[i].other)
-                                     : strdup("0");  /* no-env (1-arg) frame */
+                                     : strdup("0");  /* no-env (0/1-arg) frame */
     char *k_fn_val = emit_value(ctx, body, k_fn);
 
     char *chain = fresh_tmp(ctx);
@@ -1322,10 +1390,17 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
      * the frame to a stable name and back. frame_fn[i] is the C expression naming
      * the DKFrame to install. */
     /* Emit any pure prelude `let` bindings as C locals first, so captured
-     * operands that reference them resolve (mirrors the cloneable path). */
+     * operands that reference them resolve (mirrors the cloneable path). A
+     * binding-less entry is a do-prefix statement, emitted for side effect. */
     for (uint32_t i = 0; i < nl; i++) {
-        char *bn = name_for_binding(ctx, lets[i].binding);
         char *iv = emit_value(ctx, body, lets[i].init);
+        if (!lets[i].binding) {           /* side-effect prelude (do prefix) */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(void)(%s);\n", iv);
+            free(iv);
+            continue;
+        }
+        char *bn = name_for_binding(ctx, lets[i].binding);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s = %s;\n",
                    emit_type_c_name(ctx, lets[i].binding->type), bn, iv);
