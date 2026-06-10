@@ -940,7 +940,7 @@ abstractions in your spice:
 
 ```turmeric
 ;; Wrong (TUR-D0001):
-(defn map-fn [^fat g :(fn [:int] :int) n :int] :int (g n))
+(defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))
 
 ;; Right:
 (defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))

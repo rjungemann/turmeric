@@ -28,26 +28,28 @@ is complete; this is the inner-type-expression version.
       `tests/fixtures/fn-type-bare-identifier/` covers unary,
       binary, nullary, curried, mixed, parenthesised inner, declared
       user type. (Fixture present and green in `tests/run.sh`.)
-- [~] Phase 2 -- `tools/rewrite_fn_type_colons.py` codemod written
+- [x] Phase 2 -- `tools/rewrite_fn_type_colons.py` codemod written
       (position-driven: defn/fn params + return, defstruct fields,
       let bindings, defalias, method sigs, `(:: _ T)`/`(the T _)`
       ascriptions, nested `(fn ...)`; handles `:kw`, bare `: (T)`,
       and effect sets; never touches lambda values). Corpus regression
       harness at `tests/codemod/run-fn-type-colons.sh`. **Swept:**
-      all of `stdlib/` (`either`, `gadt-vec`, `list`, and `arrow`) and
-      `docs/guides/`; `python3 tools/rewrite_fn_type_colons.py --check
-      stdlib/ docs/guides/` is now clean.
-      **Remaining:** `tests/fixtures/` sources are intentionally left
-      on the legacy colon spelling until Phase 4 (they back the
-      lenient-path coverage), and the lone legacy form left under
-      `docs/upcoming/` is the intentional before/after illustration in
-      `v1/fn-type-colons-sweet-exp-plan.md` (do not rewrite it). The
-      rewrite is annotation-spelling only, so codegen snapshots are
-      byte-identical. **Known gap:** the codemod only finds fn types
-      inside paren-delimited declarations, so sweet-exp top-level forms
-      (`.tur.sweet` files, ```sweet-exp doc blocks) are skipped -- port
-      the `spaced-types-rewrite.py` implicit-sequence walk before
-      sweeping those.
+      all of `stdlib/`, `docs/guides/`, AND `../turmeric-spices/` (the
+      last stray in `developing-spices-guide.md` rewritten 2026-06-10);
+      `python3 tools/rewrite_fn_type_colons.py --check stdlib/ docs/guides/`
+      is clean and the same check is clean against `../turmeric-spices/`.
+      **Intentionally left:** `tests/fixtures/` sources keep the legacy
+      colon spelling until Phase 4 (they back the lenient-path coverage),
+      and the lone legacy form under `docs/upcoming/v1/fn-type-colons-
+      sweet-exp-plan.md` is the intentional before/after illustration
+      (do not rewrite it). The rewrite is annotation-spelling only, so
+      codegen snapshots are byte-identical. **Known gap (deferred):**
+      the codemod only finds fn types inside paren-delimited
+      declarations, so sweet-exp top-level forms (`.tur.sweet` files,
+      ```sweet-exp doc blocks) are skipped. Currently moot -- no
+      sweet-exp tree carries fn types that need rewriting -- but porting
+      the `spaced-types-rewrite.py` implicit-sequence walk is the right
+      fix when one does. Not a blocker for Phase 4.
 - [x] Phase 3 -- `TUR-D0001` deprecation warning fires when a leading
       colon (the fused `F_KEYWORD` `:int` form **or** the spaced-but-
       redundant `F_TYPE_ANN` `: int` form) is consumed in a `(fn ...)`
