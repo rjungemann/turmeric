@@ -121,3 +121,35 @@ Validation:
 3. A new fixture under `tests/fixtures/project-mode-defstruct/` should
    exercise the path end-to-end.
 4. Existing single-file fixtures must not regress.
+
+## Resolution
+
+The typedef gap is **fixed**. `emit_header`
+(src/compiler/emit_module.c:5375-5428) now emits `typedef struct Name {
+fields... } Name;` into the project-mode header for every non-opaque struct
+def, and the `emit_implementation` `EX_DEF` arm
+(src/compiler/emit_module.c:5936-5941) early-outs on struct defs so the
+spurious `Name Name_N;` variable declaration is no longer emitted.
+
+Validation status:
+
+1. Minimal repro -- covered by `build-project-defstruct-typedef` in
+   `tests/run-build-project.sh` (asserts `tur build` compiles, links, and the
+   binary returns 21). Passing.
+2. `spices/signal` (`ADSRParams`, float-only fields) -- `tur build .` succeeds
+   end-to-end through `signal__envelope.c`. Verified.
+3. End-to-end coverage lives in `tests/run-build-project.sh` rather than a
+   `tests/fixtures/project-mode-defstruct/` directory, matching the convention
+   that project-mode (`build.tur`) cases are exercised by the dedicated
+   build-project runner, not the single-file `emit-c` fixture suite.
+4. Full `tests/run.sh` suite passes with no regressions.
+
+### Follow-up split out
+
+RC support in project mode is still entirely missing -- the RC/frame runtime
+preamble (`RcControlBlock`, `rc_cb_alloc`, `tur_frame`, ...) is not emitted in
+separate compilation, and per-struct `drop_glue_<Name>`/`walk_glue_<Name>` are
+never emitted in the implementation file (despite the `emit_header` comment
+claiming they "stay `static` in the implementation file"). This is broader than
+the typedef fix here and is tracked in
+[project-mode-rc-runtime-preamble-missing.md](project-mode-rc-runtime-preamble-missing.md).
