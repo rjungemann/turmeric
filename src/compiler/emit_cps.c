@@ -1420,10 +1420,20 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
 /* Program scan: does any serial-reset lower onto the DK machine? Gates the DK
  * runtime prelude + the serial marshaling runtime. Mirrors sk_can_lower. */
 static const Expr *g_sk_scan_root = NULL;  /* whole program, for the instance scan */
+/* When true, the walk reports mere *presence* of serial syntax (any
+ * serial-shift), not just lowerable resets. The serial runtime prelude
+ * (tur_serial_cont_*) must be emitted whenever stdlib save-cont!/resume-cont!
+ * could reference it -- i.e. whenever a serial-shift exists -- so an
+ * unsupported context degrades cleanly instead of emitting an implicit
+ * declaration that miscompiles. See
+ * docs/reported/serial-shift-unsupported-context-miscompile.md. */
+static bool g_sk_any_serial = false;
 
 static bool uses_serial_dk(const Expr *e) {
     if (!e) return false;
-    if (e->kind == EX_SERIAL_RESET && sk_can_lower(e, g_sk_scan_root)) return true;
+    if (e->kind == EX_SERIAL_SHIFT && g_sk_any_serial) return true;
+    if (e->kind == EX_SERIAL_RESET &&
+        (g_sk_any_serial || sk_can_lower(e, g_sk_scan_root))) return true;
     switch (e->kind) {
         case EX_PROGRAM:
             for (uint32_t i = 0; i < e->as.program.n; i++)
@@ -1478,6 +1488,18 @@ static bool uses_serial_dk(const Expr *e) {
 bool emit_cps_program_uses_serial_dk(const Expr *program) {
     g_sk_scan_root = program;   /* so sk_can_lower can scan for Serializable instances */
     bool r = uses_serial_dk(program);
+    g_sk_scan_root = NULL;
+    return r;
+}
+
+/* True if the program contains any serial-shift/serial-reset, lowerable or not.
+ * Gates emission of the DK machine + serial marshaling runtime so the stdlib
+ * save-cont!/resume-cont! references never dangle. */
+bool emit_cps_program_contains_serial(const Expr *program) {
+    g_sk_scan_root = program;
+    g_sk_any_serial = true;
+    bool r = uses_serial_dk(program);
+    g_sk_any_serial = false;
     g_sk_scan_root = NULL;
     return r;
 }

@@ -1,0 +1,26 @@
+;; Phase 21 (AI0.2): stdlib save-cont! / resume-cont! round-trip.
+;;
+;; serial-shift captures the delimited context as a marshalable DK chain;
+;; save-cont! serialises it to a `bytes` value and resume-cont! rebuilds the
+;; chain from those bytes and resumes it on a value -- so the post-save code
+;; path runs exactly as a direct resume would. This exercises the stdlib
+;; surface (save-cont!/resume-cont! and workflow-suspend/workflow-resume) that
+;; the application-image-dumps plan (AI2) builds on, not just the raw builtins.
+
+(load "stdlib/workflow.tur")
+
+;; round-trip k through bytes (save-cont! -> resume-cont!) and resume on 5.
+(defn rt5 [k : ptr<void>] : int
+  (resume-cont! (save-cont! k) 5))
+
+;; same, via the workflow-suspend / workflow-resume aliases, resume on 7.
+(defn susp7 [k : ptr<void>] : int
+  (workflow-resume (workflow-suspend k) 7))
+
+(defn main [] : int
+  (println (serial-reset (+ 10 (serial-shift rt5 0))))    ; (10+5)  = 15
+  (println (serial-reset (* 2 (serial-shift rt5 0))))     ; (2*5)   = 10
+  (println (serial-reset (- 100 (serial-shift rt5 0))))   ; (100-5) = 95
+  (println (serial-reset (serial-shift susp7 0)))         ; empty @7 = 7
+  (println (serial-reset (+ 1 (serial-shift susp7 0))))   ; (1+7)   = 8
+  0)

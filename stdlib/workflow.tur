@@ -27,14 +27,18 @@
 ;;;   k -- opaque continuation pointer from serial-shift
 ;;;
 ;;; Returns:
-;;;   A bytes :ptr<void> on success, or nil when codegen is not yet implemented.
+;;;   A bytes :ptr<void> on success (a length-prefixed {int64 len; data} buffer
+;;;   the caller owns and must free), or nil if k is nil.
 ;;;
 ;;; Since: Phase 21
 (defn save-cont! [k : ptr<void>] : ptr<void>
-  ```c /* Phase 21: placeholder -- serial-shift codegen not yet implemented.
-   * A real implementation would call serial_cont_to_bytes() here. */
-  (void)k;
-  return NULL;
+  ```c /* Phase 21: marshal the captured DK continuation chain to bytes.
+   * tur_serial_cont_serialize (emitted by the serial DK runtime prelude
+   * whenever the program uses serial-reset) walks the chain k and writes
+   * each frame's stable tag + env -- no code addresses -- to a length-prefixed
+   * buffer. k is a DK* carried as an opaque ptr<void>. */
+  if (!k) return NULL;
+  return (void *)(intptr_t)tur_serial_cont_serialize((int64_t)(intptr_t)k);
   ```)
 ;; resume-cont! -- deserialise a bytes value back to a continuation and resume it.
 ;;
@@ -48,15 +52,18 @@
 ;;;   v -- value to pass to the resumed continuation
 ;;;
 ;;; Returns:
-;;;   The continuation's return value; 0 when codegen is not yet implemented.
+;;;   The continuation's return value, after rebuilding the chain from b and
+;;;   resuming it with v.
 ;;;
 ;;; Since: Phase 21
 
 (defn resume-cont! [b : ptr<void> v : int] : int
-  ```c /* Phase 21: placeholder -- serial-shift codegen not yet implemented. */
-  (void)b;
-  (void)v;
-  return 0;
+  ```c /* Phase 21: rebuild the DK continuation chain from the marshaled bytes b
+   * (mapping each frame's tag/name back to its frame fn via the self-registered
+   * SkReg table) and resume it on v. */
+  if (!b) return 0;
+  int64_t __k = tur_serial_cont_deserialize((int64_t)(intptr_t)b);
+  return tur_serial_cont_resume(__k, (int64_t)v);
   ```)
 ;; ---------------------------------------------------------------------------
 ;; Workflow step helpers
