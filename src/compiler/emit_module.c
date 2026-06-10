@@ -1911,588 +1911,7 @@ static void emit_closure_fat_runtime(Buf *out) {
     buf_puts(out, "    (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };\n");
 }
 
-int emit_program(Buf *out, const Expr *program) {
-    if (!program || program->kind != EX_PROGRAM) {
-        fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
-        return -1;
-    }
-
-    /* Two buffers: file scope (statics) and main body. We assemble at the end. */
-    Buf file; buf_init(&file);
-    Buf body; buf_init(&body);
-    /* Phase 19: separate buffers for ordered final assembly:
-     *   early_file   - pass 0: struct typedefs + drop glue
-     *   fwd_decls    - pass 1: function forward declarations
-     *   extern_decls - user extern-c declarations
-     *   file         - pass 2: function definitions + globals
-     *   pending_handler_fns emitted between fwd_decls and file
-     * Order ensures: struct typedefs visible to fwd_decls; fwd_decls visible
-     * to handler functions; handler functions visible to fn definitions. */
-    Buf early_file;  buf_init(&early_file);
-    Buf thunk_typedefs; buf_init(&thunk_typedefs);
-    Buf fwd_decls;   buf_init(&fwd_decls);
-    Buf extern_decls; buf_init(&extern_decls);
-    Buf defer_thunks; buf_init(&defer_thunks);
-    /* file-scope-c-block: verbatim text of top-level ```c ... ``` blocks, emitted
-     * at file scope (after typedefs/fwd-decls, before function definitions) so
-     * they can define file-scope helper functions/structs that Turmeric defns
-     * reference -- e.g. the capability vtables in stdlib/io.tur and log.tur. */
-    Buf cprelude; buf_init(&cprelude);
-    InlineCDedup cprelude_dedup = {0};  /* file-scope-inline-c-dedup */
-
-    EmitCtx ctx;
-    ctx.file = &file;
-    ctx.main_ = &body;
-    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
-    ctx.thunk_typedefs = &thunk_typedefs;
-    ctx.indent = 4;
-    ctx.tmp_n = 0;
-    ctx.fn_params = NULL;
-    ctx.n_fn_params = 0;
-    /* Phase 3: closure tracking */
-    ctx.closure = NULL;
-    ctx.env_var_name = NULL;
-    /* Phase 3: env struct tracking */
-    ctx.env_struct_names = NULL;
-    ctx.n_env_struct_names = 0;
-    ctx.cap_env_struct_names = 0;
-    ctx.thunk_typedef_names = NULL;
-    ctx.n_thunk_typedef_names = 0;
-    ctx.cap_thunk_typedef_names = 0;
-    ctx.fatshim_names = NULL;
-    ctx.n_fatshim_names = 0;
-    ctx.cap_fatshim_names = 0;
-    ctx.poly_fatshim_names = NULL;
-    ctx.n_poly_fatshim_names = 0;
-    ctx.cap_poly_fatshim_names = 0;
-    /* Phase 4 v1: frame tracking */
-    ctx.frame_var = NULL;
-    ctx.in_scope_with_defers = false;
-    ctx.pending_defer_thunks = NULL;
-    /* Phase 4 v1: defer captures tracking */
-    ctx.defer_captures = NULL;
-    ctx.n_defer_captures = 0;
-    /* Phase 3/4: Track return emission */
-    ctx.return_emitted = false;
-    /* Phase 19: Pending effect handler function buffer */
-    Buf pending_hfns; buf_init(&pending_hfns);
-    ctx.pending_handler_fns = &pending_hfns;
-    /* Phase R5: no-unwind context (false at top level; set per-function) */
-    ctx.no_unwind = false;
-    /* Phase M3: emit_program always uses single-file (non-separate) mode */
-    ctx.separate_compilation = false;
-    /* Phase 19D: handle captures (NULL at top level) */
-    ctx.handle_captures = NULL;
-    ctx.n_handle_captures = 0;
-    ctx.handle_env_name = NULL;
-    /* GF1: generator struct context (NULL outside a _next function) */
-    ctx.gen_struct_bindings = NULL;
-    ctx.n_gen_struct_bindings = 0;
-    ctx.gen_var_name = NULL;
-    ctx.gen_struct_type = NULL;
-    ctx.gen_hdr_emitted = false;
-    ctx.abi_specializations = NULL;
-    ctx.n_abi_specializations = 0;
-    ctx.cap_abi_specializations = 0;
-    ctx.specialized_call_exprs = NULL;
-    ctx.specialized_call_names = NULL;
-    ctx.n_specialized_calls = 0;
-    ctx.cap_specialized_calls = 0;
-    ctx.carrier_call_bindings = NULL;
-    ctx.n_carrier_call_bindings = 0;
-    ctx.cap_carrier_call_bindings = 0;
-    ctx.current_abi_specialization = NULL;
-    ctx.current_scan_fn = NULL;
-    ctx.fn_name_override = NULL;
-    ctx.fn_name_override_external = false;  /* J3: must match fn_name_override */
-    ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
-    /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
-     * freed in bulk at the end of this function. */
-    Arena type_arena; arena_init(&type_arena, 0);
-    ctx.type_arena = &type_arena;
-    type_codegen_reset_struct_apps();
-    type_codegen_reset_adt_apps();
-    type_codegen_reset_fn_ptr_typedefs();
-    sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
-
-    /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
-    uint32_t n_items;
-    const Expr **items = flatten_program_items(program, &n_items);
-
-    /* J1: ABI specialization scan (extracted into emit_abi_scan_program). */
-    emit_abi_scan_program(&ctx, items, n_items);
-
-    /* Phase I: --emit-abi-trace -- report the resolved ABI path per call site. */
-    if (g_emit_abi_trace) {
-        for (uint32_t i = 0; i < n_items; i++) {
-            emit_abi_trace_expr(&ctx, items[i]);
-        }
-    }
-
-    /* TS4P1: Scan for concrete ADT-app types to register for monomorphisation. */
-    for (uint32_t i = 0; i < n_items; i++) {
-        scan_adt_apps_in_expr(items[i]);
-    }
-
-    /* Check if user defined a main function */
-    bool user_has_main = false;
-    for (uint32_t i = 0; i < n_items; i++) {
-        const Expr *e = items[i];
-        if (e->kind == EX_FN_DEF) {
-            FnDef *fd = e->as.fn_def_.fn;
-            if (strcmp(fd->binding->name->name, "main") == 0) {
-                user_has_main = true;
-                break;
-            }
-        }
-    }
-
-    /* Phase 2: Two-pass emission for mutual recursion support.
-     * Pass 0: Emit struct typedefs + drop glue (must precede function forward decls). */
-    for (uint32_t i = 0; i < n_items; i++) {
-        const Expr *e = items[i];
-        if (e->kind == EX_DEF && e->as.def_.struct_def) {
-            StructDef *def = e->as.def_.struct_def;
-            /* SI4-C: opaque types are just int64_t in C -- no typedef needed. */
-            if (def->is_opaque) continue;
-            /* Phase E: pre-register fn-ptr typedefs for concrete fn fields so
-             * they are emitted before the struct typedef that references them. */
-            for (uint32_t j = 0; j < def->n_fields; j++) {
-                StructField *f = &def->fields[j];
-                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
-                    const char *td = register_fn_ptr_typedef(f->full_type);
-                    if (td) {
-                        type_codegen_emit_fn_ptr_typedefs(&early_file);
-                    }
-                }
-            }
-            /* Emit: typedef struct Name { fields... } Name; */
-            buf_printf(&early_file, "typedef struct %s {\n", def->name);
-            for (uint32_t j = 0; j < def->n_fields; j++) {
-                StructField *f = &def->fields[j];
-                const char *ctype;
-                /* Phase E: typed function pointer for concrete fn fields. */
-                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
-                    const char *td = register_fn_ptr_typedef(f->full_type);
-                    ctype = td ? td : "int64_t";
-                } else switch (f->kind) {
-                    case TY_INT:      ctype = "int64_t"; break;
-                    case TY_BOOL:     ctype = "bool"; break;
-                    case TY_FLOAT:    ctype = "double"; break;
-                    case TY_CSTR:     ctype = "const char *"; break;
-                    case TY_PTR_VOID: ctype = "void *"; break;
-                    case TY_RC:
-                    case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                    case TY_REF:
-                    case TY_LREF:     ctype = "void *"; break;
-                    /* Phase N6: new numeric field types */
-                    case TY_INT8:     ctype = "int8_t"; break;
-                    case TY_INT16:    ctype = "int16_t"; break;
-                    case TY_INT32:    ctype = "int32_t"; break;
-                    case TY_UINT8:    ctype = "uint8_t"; break;
-                    case TY_UINT16:   ctype = "uint16_t"; break;
-                    case TY_UINT32:   ctype = "uint32_t"; break;
-                    case TY_UINT64:   ctype = "uint64_t"; break;
-                    case TY_FLOAT32:  ctype = "float"; break;
-                    default:          ctype = "int64_t"; break;
-                }
-                char *mfn = mangle_field_name(f->name);
-                buf_printf(&early_file, "    %s %s;\n", ctype, mfn);
-                free(mfn);
-            }
-            buf_printf(&early_file, "} %s;\n\n", def->name);
-            /* If any RC/ref/weak field, emit drop glue function */
-            if (def->needs_drop_glue) {
-                buf_printf(&early_file, "static void drop_glue_%s(void *ptr) {\n", def->name);
-                buf_printf(&early_file, "    if (!ptr) return;\n");
-                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
-                /* Drop fields in REVERSE order */
-                for (int32_t j = (int32_t)def->n_fields - 1; j >= 0; j--) {
-                    StructField *f = &def->fields[j];
-                    char *mfn = mangle_field_name(f->name);
-                    if (f->kind == TY_RC) {
-                        buf_printf(&early_file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
-                                   mfn, mfn);
-                    } else if (f->kind == TY_WEAK) {
-                        buf_printf(&early_file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
-                                   mfn, mfn);
-                    } else if (f->kind == TY_REF || f->kind == TY_LREF) {
-                        buf_printf(&early_file, "    if (s->%s) free(s->%s);\n",
-                                   mfn, mfn);
-                    }
-                    free(mfn);
-                }
-                buf_printf(&early_file, "    free(ptr);\n");
-                buf_printf(&early_file, "}\n\n");
-
-                /* DS3: walk glue -- mirrors drop glue but calls a child
-                 * callback for each rc-typed field instead of releasing.
-                 * The cycle walker uses this to trace through struct
-                 * payloads tagged RCK_STRUCT.  Weak / ref / lref fields
-                 * are not strong owners and are not enumerated. */
-                buf_printf(&early_file,
-                           "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
-                           def->name);
-                buf_printf(&early_file, "    if (!ptr || !cb) return;\n");
-                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
-                for (uint32_t j = 0; j < def->n_fields; j++) {
-                    StructField *f = &def->fields[j];
-                    if (f->kind == TY_RC) {
-                        char *mfn = mangle_field_name(f->name);
-                        buf_printf(&early_file, "    if (s->%s) cb(s->%s, ctx);\n",
-                                   mfn, mfn);
-                        free(mfn);
-                    }
-                }
-                buf_printf(&early_file, "}\n\n");
-            }
-        }
-        /* Phase G0/G1: ADT typedef + constructor functions */
-        else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
-            AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
-            emit_adt_typedef_and_ctors(&early_file, def);
-        }
-    }
-
-    /* DV2+DV3: Emit TurDynFrame typedef, pthread_key_t globals, constructors,
-     * cleanup functions, and (DV3) snapshot/convey infrastructure for every
-     * defdynamic declaration found in the program. */
-    {
-        bool any_dynvar = false;
-        for (uint32_t i = 0; i < n_items; i++) {
-            if (items[i]->kind == EX_DEFDYNAMIC) { any_dynvar = true; break; }
-        }
-        if (any_dynvar) {
-            /* DV2: TurDynFrame -- heap flag distinguishes DV3 snapshot frames
-             * (heap=1, owned) from DV2 stack frames (heap=0, not owned). */
-            buf_puts(&early_file,
-                "/* DV2+DV3: dynamic var frame stack */\n"
-                "typedef struct TurDynFrame {\n"
-                "    struct TurDynFrame *prev;\n"
-                "    void               *value;\n"
-                "    int                 heap; /* DV3: 1 = frame+value are heap-allocated */\n"
-                "} TurDynFrame;\n\n");
-
-            /* DV2: per-var storage, destructor, constructor, and binding pop */
-            for (uint32_t i = 0; i < n_items; i++) {
-                const Expr *e = items[i];
-                if (e->kind != EX_DEFDYNAMIC) continue;
-                DynVarEntry *entry = e->as.defdynamic_.entry;
-                char *mname = mangle_dynvar_name(entry->name->name);
-                const char *ctype = type_c_name(entry->value_type);
-                buf_printf(&early_file, "static %s _dynvar_root_%s;\n", ctype, mname);
-                buf_printf(&early_file, "static pthread_key_t _dynvar_key_%s;\n", mname);
-                /* DV3: destructor walks chain and frees heap frames on thread exit. */
-                buf_printf(&early_file,
-                    "static void _dynvar_cleanup_%s(void *f) {\n"
-                    "    TurDynFrame *frame = (TurDynFrame *)f;\n"
-                    "    while (frame && frame->heap) {\n"
-                    "        TurDynFrame *prev = frame->prev;\n"
-                    "        free(frame->value);\n"
-                    "        free(frame);\n"
-                    "        frame = prev;\n"
-                    "    }\n"
-                    "}\n"
-                    "__attribute__((constructor))\n"
-                    "static void _dynvar_init_%s(void) {\n"
-                    "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
-                    "}\n"
-                    "static void _dynvar_pop_%s(TurDynFrame **fp) {\n"
-                    "    pthread_setspecific(_dynvar_key_%s, (*fp)->prev);\n"
-                    "}\n\n",
-                    mname,
-                    mname, mname, mname,
-                    mname, mname);
-                free(mname);
-            }
-
-            /* DV3: _TurDynSnap struct -- one field pair per dynamic var. */
-            buf_puts(&early_file, "/* DV3: binding snapshot for spawn-conveying */\n");
-            buf_puts(&early_file, "typedef struct {\n");
-            for (uint32_t i = 0; i < n_items; i++) {
-                const Expr *e = items[i];
-                if (e->kind != EX_DEFDYNAMIC) continue;
-                DynVarEntry *entry = e->as.defdynamic_.entry;
-                char *mname = mangle_dynvar_name(entry->name->name);
-                const char *ctype = type_c_name(entry->value_type);
-                buf_printf(&early_file,
-                    "    int has_%s; %s val_%s;\n", mname, ctype, mname);
-                free(mname);
-            }
-            buf_puts(&early_file, "} _TurDynSnap;\n\n");
-
-            /* DV3: _tur_binding_snapshot_capture -- copy top frame value for each var. */
-            buf_puts(&early_file,
-                "static _TurDynSnap *_tur_binding_snapshot_capture(void) {\n"
-                "    _TurDynSnap *s = (_TurDynSnap *)calloc(1, sizeof(_TurDynSnap));\n"
-                "    if (!s) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n");
-            for (uint32_t i = 0; i < n_items; i++) {
-                const Expr *e = items[i];
-                if (e->kind != EX_DEFDYNAMIC) continue;
-                DynVarEntry *entry = e->as.defdynamic_.entry;
-                char *mname = mangle_dynvar_name(entry->name->name);
-                const char *ctype = type_c_name(entry->value_type);
-                buf_printf(&early_file,
-                    "    { TurDynFrame *_f = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n"
-                    "      if (_f) { s->has_%s = 1; s->val_%s = *(%s *)_f->value; } }\n",
-                    mname, mname, mname, ctype);
-                free(mname);
-            }
-            buf_puts(&early_file, "    return s;\n}\n\n");
-
-            /* DV3: _tur_binding_snapshot_install -- push heap frames on the new thread. */
-            buf_puts(&early_file,
-                "static void _tur_binding_snapshot_install(_TurDynSnap *s) {\n");
-            for (uint32_t i = 0; i < n_items; i++) {
-                const Expr *e = items[i];
-                if (e->kind != EX_DEFDYNAMIC) continue;
-                DynVarEntry *entry = e->as.defdynamic_.entry;
-                char *mname = mangle_dynvar_name(entry->name->name);
-                const char *ctype = type_c_name(entry->value_type);
-                buf_printf(&early_file,
-                    "    if (s->has_%s) {\n"
-                    "        %s *_v = (%s *)malloc(sizeof(%s));\n"
-                    "        if (!_v) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
-                    "        *_v = s->val_%s;\n"
-                    "        TurDynFrame *_fr = (TurDynFrame *)malloc(sizeof(TurDynFrame));\n"
-                    "        if (!_fr) { free(_v); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
-                    "        _fr->prev  = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n"
-                    "        _fr->value = _v;\n"
-                    "        _fr->heap  = 1;\n"
-                    "        pthread_setspecific(_dynvar_key_%s, _fr);\n"
-                    "    }\n",
-                    mname, ctype, ctype, ctype, mname, mname, mname);
-                free(mname);
-            }
-            buf_puts(&early_file, "}\n\n");
-
-            /* DV3: convey arg + trampoline + spawn-conveying entry point.
-             * These reference TurThreadState/TurThreadHandle which are emitted
-             * earlier in the output (before early_file is appended). */
-            buf_puts(&early_file,
-                "typedef struct {\n"
-                "    int64_t         closure;\n"
-                "    TurThreadState *state;\n"
-                "    _TurDynSnap    *snap;\n"
-                "} _TurConveyArg;\n\n"
-                "static void *_tur_convey_trampoline(void *raw) {\n"
-                "    _TurConveyArg *a = (_TurConveyArg *)raw;\n"
-                "    tur_current_thread_state = a->state;\n"
-                "    _tur_binding_snapshot_install(a->snap);\n"
-                "    free(a->snap);\n"
-                "    void (*fn)(void) = (void (*)(void))(intptr_t)a->closure;\n"
-                "    free(a);\n"
-                "    fn();\n"
-                "    return NULL;\n"
-                "}\n\n"
-                "static void *_tur_spawn_conveying(int64_t closure) {\n"
-                "    _TurDynSnap *snap = _tur_binding_snapshot_capture();\n"
-                "    TurThreadState *state = (TurThreadState *)calloc(1, sizeof(TurThreadState));\n"
-                "    if (!state) { free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
-                "    pthread_mutex_init(&state->cancel_mutex, NULL);\n"
-                "    pthread_cond_init(&state->cancel_cond, NULL);\n"
-                "    _TurConveyArg *arg = (_TurConveyArg *)malloc(sizeof(_TurConveyArg));\n"
-                "    if (!arg) { free(state); free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
-                "    arg->closure = closure;\n"
-                "    arg->state   = state;\n"
-                "    arg->snap    = snap;\n"
-                "    TurThreadHandle *h = (TurThreadHandle *)malloc(sizeof(TurThreadHandle));\n"
-                "    if (!h) { free(arg); free(state); free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
-                "    h->state = state;\n"
-                "    int _rc = pthread_create(&h->tid, NULL, _tur_convey_trampoline, arg);\n"
-                "    if (_rc != 0) {\n"
-                "        free(h); free(arg); free(state); free(snap);\n"
-                "        fprintf(stderr, \"tur: spawn-conveying: pthread_create failed (%d)\\n\", _rc);\n"
-                "        abort();\n"
-                "    }\n"
-                "    return (void *)h;\n"
-                "}\n\n");
-        }
-    }
-
-    /* Pass 1: Emit forward declarations for all functions.
-     * Written to fwd_decls buffer (emitted before pending_handler_fns in final
-     * assembly) so that effect handler functions can call user-defined functions. */
-    emit_fn_forward_decls(&ctx, &fwd_decls, items, n_items);
-    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
-        emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
-    }
-
-    /* Phase M5: collect top-level EX_DEFER nodes (module-level defers). */
-    uint32_t n_prog_defers = 0;
-    for (uint32_t i = 0; i < n_items; i++) {
-        if (items[i]->kind == EX_DEFER) n_prog_defers++;
-    }
-    const Expr **prog_defers = NULL;
-    if (n_prog_defers > 0) {
-        prog_defers = (const Expr **)malloc(n_prog_defers * sizeof(Expr *));
-        uint32_t di = 0;
-        for (uint32_t i = 0; i < n_items; i++) {
-            if (items[i]->kind == EX_DEFER)
-                prog_defers[di++] = items[i];
-        }
-    }
-
-    /* Pass 2: collect all top-level defs and fn_defs. */
-    for (uint32_t i = 0; i < n_items; i++) {
-        const Expr *e = items[i];
-        if (e->kind == EX_DEFER) {
-            /* Phase M5: module-level defers handled after this pass. */
-            continue;
-        } else if (e->kind == EX_DEFDATA) {
-            /* Phase G0: ADT typedefs and constructor functions already emitted in Pass 0 */
-            continue;
-        } else if (e->kind == EX_DEF) {
-            /* Phase 11: skip struct typedefs — already emitted in Pass 0 */
-            if (e->as.def_.struct_def) continue;
-            char *bn = name_for_binding(&ctx, e->as.def_.binding);
-            buf_printf(&file, "static %s %s;\n",
-                       type_c_name(e->as.def_.binding->type), bn);
-            if (e->as.def_.init) {
-                char *iv = emit_value(&ctx, &body, e->as.def_.init);
-                indent_buf(&body, ctx.indent);
-                buf_printf(&body, "%s = %s;\n", bn, iv);
-                free(iv);
-            }
-            free(bn);
-        } else if (e->kind == EX_FN_DEF) {
-            /* Emit function definition at file scope */
-            if (emit_abi_fn_skip_generic(&ctx, e)) {
-                continue;
-            }
-            emit_fn_def(&ctx, &file, e);
-        } else if (e->kind == EX_EXTERN_C) {
-            /* Emit extern-c declaration early (before handler functions) */
-            ExternC *ec = e->as.extern_c_.ext;
-            /* When HAMT lowering is active, hamt.h is already included and
-             * declares all tur_hamt_* functions; skip conflicting extern decls. */
-            /* Also suppress redeclarations of C stdlib functions already in the preamble. */
-            /* Functions declared in the runtime preamble (emit_runtime_preamble) or
-             * via headers always included (<stdio.h>, <stdlib.h>).
-             * Suppress redeclarations to avoid conflicting-types errors. */
-            static const char *preamble_decls[] = {
-                /* explicit extern decls in preamble */
-                "malloc","calloc","free","abort","atexit",
-                "memset","memmove","memcpy","memcmp","strcmp","strlen","strcpy","strncpy","strcat","strncat","strstr","strchr","strrchr","strdup",
-                /* <stdio.h> */
-                "printf","fprintf","sprintf","snprintf","scanf","sscanf","fscanf",
-                "fopen","fclose","fread","fwrite","fseek","ftell","fflush","rewind",
-                "puts","putchar","getchar","putc","getc","fputc","fgetc","fputs","fgets",
-                "perror","clearerr","feof","ferror","remove","rename","tmpfile",
-                /* <stdlib.h> */
-                "exit","getenv","putenv","system","rand","srand","bsearch","qsort",
-                "atoi","atol","atof","strtol","strtoul","strtod",
-                NULL
-            };
-            bool suppress_ec = false;
-            if (g_needs_hamt && strncmp(ec->c_name->name, "tur_hamt_", 9) == 0) {
-                suppress_ec = true; /* Suppress: declared by #include "hamt.h" */
-            } else {
-                for (int si = 0; preamble_decls[si]; si++) {
-                    if (strcmp(ec->c_name->name, preamble_decls[si]) == 0) {
-                        suppress_ec = true; /* Suppress: already in preamble */
-                        break;
-                    }
-                }
-            }
-            if (!suppress_ec) {
-            /* extern-c names map to a real C symbol via the LEGACY fold (e.g.
-             * `tur_hamt_new` stays itself; `tvar/new` -> `tvar_new`). This must
-             * stay legacy -- never the injective scheme -- so the prototype, the
-             * call sites (raw_name_for_binding special-cases is_extern_c), and
-             * any inline-C reference all agree on the real symbol name. */
-            char *ec_mangled = mangle_field_name(ec->c_name->name);
-            buf_printf(&extern_decls, "extern %s %s(",
-                       type_c_name(ec->return_type),
-                       ec_mangled);
-            free(ec_mangled);
-            for (uint8_t j = 0; j < ec->n_params; j++) {
-                if (j > 0) buf_puts(&extern_decls, ", ");
-                buf_printf(&extern_decls, "%s", type_c_name(ec->param_types[j]));
-            }
-            buf_puts(&extern_decls, ");\n");
-            }
-        } else if (e->kind == EX_DEFDYNAMIC) {
-            /* DV2: initialize the root value in main() body. */
-            DynVarEntry *entry = e->as.defdynamic_.entry;
-            char *mname = mangle_dynvar_name(entry->name->name);
-            char *rv = emit_value(&ctx, &body, e->as.defdynamic_.root_expr);
-            indent_buf(&body, ctx.indent);
-            buf_printf(&body, "_dynvar_root_%s = %s;\n", mname, rv);
-            free(rv);
-            free(mname);
-        } else if (e->kind == EX_INLINE_C) {
-            /* file-scope-c-block: a top-level ```c ... ``` block is raw C emitted
-             * verbatim at file scope, not a statement in main().  It carries no
-             * captures/val-exprs, so emit its text directly. */
-            InlineC *ic = e->as.inline_c_.inline_c;
-            if (ic && ic->code.p && ic->code.len > 0 &&
-                !inline_c_dedup_seen(&cprelude_dedup, ic->code.p, ic->code.len)) {
-                buf_write(&cprelude, ic->code.p, ic->code.len);
-                buf_putc(&cprelude, '\n');
-            }
-        } else {
-            emit_stmt(&ctx, &body, e);
-        }
-    }
-    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
-        EmitAbiSpecialization *sp = &ctx.abi_specializations[i];
-        /* poly-closure-result-specialization: hoist a linked inner-closure clone
-         * ahead of its outer so the suffixed env struct is defined at file scope
-         * before the outer body's EX_CLOSURE references it. */
-        if (sp->inner_closure_spec_idx >= 0) {
-            EmitAbiSpecialization *isp =
-                &ctx.abi_specializations[sp->inner_closure_spec_idx];
-            if (!isp->emitted) {
-                ctx.current_abi_specialization = isp;
-                ctx.fn_name_override = isp->clone_name;
-                ctx.fn_name_override_external = false;
-                emit_fn_def(&ctx, &file, isp->fn_expr);
-                isp->emitted = true;
-                ctx.fn_name_override = NULL;
-                ctx.fn_name_override_external = false;
-                ctx.current_abi_specialization = NULL;
-                ctx.current_scan_fn = NULL;
-            }
-        }
-        if (sp->emitted) continue;
-        ctx.current_abi_specialization = sp;
-        ctx.fn_name_override = sp->clone_name;
-        ctx.fn_name_override_external = false;  /* single-file clones stay static */
-        emit_fn_def(&ctx, &file, sp->fn_expr);
-        sp->emitted = true;
-        ctx.fn_name_override = NULL;
-        ctx.fn_name_override_external = false;
-        ctx.current_abi_specialization = NULL;
-        ctx.current_scan_fn = NULL;
-    }
-
-    /* Phase M5: emit module-level defer thunks + atexit constructor. */
-    if (n_prog_defers > 0) {
-        buf_puts(&file, "\n/* Phase M5: module-level defers */\n");
-        for (uint32_t i = 0; i < n_prog_defers; i++) {
-            buf_printf(&file, "static void __module_defer_%u(void) {\n", i);
-            Buf thunk_body; buf_init(&thunk_body);
-            const char *saved_frame = ctx.frame_var;
-            ctx.frame_var = NULL;
-            ctx.indent = 4;
-            emit_stmt(&ctx, &thunk_body, prog_defers[i]->as.defer_.body);
-            ctx.frame_var = saved_frame;
-            buf_write(&file, thunk_body.data, thunk_body.len);
-            buf_free(&thunk_body);
-            buf_puts(&file, "}\n");
-        }
-        buf_puts(&file,
-            "__attribute__((constructor))\n"
-            "static void __module_defers_init(void) {\n");
-        for (uint32_t i = 0; i < n_prog_defers; i++) {
-            buf_printf(&file, "    atexit(__module_defer_%u);\n", i);
-        }
-        buf_puts(&file, "}\n");
-        free(prog_defers);
-    }
-
-    /* Final assembly. */
+static void emit_runtime_preamble(Buf *out, const Expr *program) {
     buf_puts(out, "/* generated by tur (phase 2) */\n");
     /* Feature-test macro: must precede every #include so glibc exposes POSIX
      * declarations (clock_gettime, nanosleep, ...) used by the emitted runtime
@@ -5145,6 +4564,679 @@ int emit_program(Buf *out, const Expr *program) {
         buf_puts(out, "    free(role);\n");
         buf_puts(out, "}\n\n");
     }
+}
+
+int emit_program(Buf *out, const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) {
+        fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
+        return -1;
+    }
+
+    /* Two buffers: file scope (statics) and main body. We assemble at the end. */
+    Buf file; buf_init(&file);
+    Buf body; buf_init(&body);
+    /* Phase 19: separate buffers for ordered final assembly:
+     *   early_file   - pass 0: struct typedefs + drop glue
+     *   fwd_decls    - pass 1: function forward declarations
+     *   extern_decls - user extern-c declarations
+     *   file         - pass 2: function definitions + globals
+     *   pending_handler_fns emitted between fwd_decls and file
+     * Order ensures: struct typedefs visible to fwd_decls; fwd_decls visible
+     * to handler functions; handler functions visible to fn definitions. */
+    Buf early_file;  buf_init(&early_file);
+    Buf thunk_typedefs; buf_init(&thunk_typedefs);
+    Buf fwd_decls;   buf_init(&fwd_decls);
+    Buf extern_decls; buf_init(&extern_decls);
+    Buf defer_thunks; buf_init(&defer_thunks);
+    /* file-scope-c-block: verbatim text of top-level ```c ... ``` blocks, emitted
+     * at file scope (after typedefs/fwd-decls, before function definitions) so
+     * they can define file-scope helper functions/structs that Turmeric defns
+     * reference -- e.g. the capability vtables in stdlib/io.tur and log.tur. */
+    Buf cprelude; buf_init(&cprelude);
+    InlineCDedup cprelude_dedup = {0};  /* file-scope-inline-c-dedup */
+
+    EmitCtx ctx;
+    ctx.file = &file;
+    ctx.main_ = &body;
+    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
+    ctx.thunk_typedefs = &thunk_typedefs;
+    ctx.indent = 4;
+    ctx.tmp_n = 0;
+    ctx.fn_params = NULL;
+    ctx.n_fn_params = 0;
+    /* Phase 3: closure tracking */
+    ctx.closure = NULL;
+    ctx.env_var_name = NULL;
+    /* Phase 3: env struct tracking */
+    ctx.env_struct_names = NULL;
+    ctx.n_env_struct_names = 0;
+    ctx.cap_env_struct_names = 0;
+    ctx.thunk_typedef_names = NULL;
+    ctx.n_thunk_typedef_names = 0;
+    ctx.cap_thunk_typedef_names = 0;
+    ctx.fatshim_names = NULL;
+    ctx.n_fatshim_names = 0;
+    ctx.cap_fatshim_names = 0;
+    ctx.poly_fatshim_names = NULL;
+    ctx.n_poly_fatshim_names = 0;
+    ctx.cap_poly_fatshim_names = 0;
+    /* Phase 4 v1: frame tracking */
+    ctx.frame_var = NULL;
+    ctx.in_scope_with_defers = false;
+    ctx.pending_defer_thunks = NULL;
+    /* Phase 4 v1: defer captures tracking */
+    ctx.defer_captures = NULL;
+    ctx.n_defer_captures = 0;
+    /* Phase 3/4: Track return emission */
+    ctx.return_emitted = false;
+    /* Phase 19: Pending effect handler function buffer */
+    Buf pending_hfns; buf_init(&pending_hfns);
+    ctx.pending_handler_fns = &pending_hfns;
+    /* Phase R5: no-unwind context (false at top level; set per-function) */
+    ctx.no_unwind = false;
+    /* Phase M3: emit_program always uses single-file (non-separate) mode */
+    ctx.separate_compilation = false;
+    /* Phase 19D: handle captures (NULL at top level) */
+    ctx.handle_captures = NULL;
+    ctx.n_handle_captures = 0;
+    ctx.handle_env_name = NULL;
+    /* GF1: generator struct context (NULL outside a _next function) */
+    ctx.gen_struct_bindings = NULL;
+    ctx.n_gen_struct_bindings = 0;
+    ctx.gen_var_name = NULL;
+    ctx.gen_struct_type = NULL;
+    ctx.gen_hdr_emitted = false;
+    ctx.abi_specializations = NULL;
+    ctx.n_abi_specializations = 0;
+    ctx.cap_abi_specializations = 0;
+    ctx.specialized_call_exprs = NULL;
+    ctx.specialized_call_names = NULL;
+    ctx.n_specialized_calls = 0;
+    ctx.cap_specialized_calls = 0;
+    ctx.carrier_call_bindings = NULL;
+    ctx.n_carrier_call_bindings = 0;
+    ctx.cap_carrier_call_bindings = 0;
+    ctx.current_abi_specialization = NULL;
+    ctx.current_scan_fn = NULL;
+    ctx.fn_name_override = NULL;
+    ctx.fn_name_override_external = false;  /* J3: must match fn_name_override */
+    ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
+    /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
+     * freed in bulk at the end of this function. */
+    Arena type_arena; arena_init(&type_arena, 0);
+    ctx.type_arena = &type_arena;
+    type_codegen_reset_struct_apps();
+    type_codegen_reset_adt_apps();
+    type_codegen_reset_fn_ptr_typedefs();
+    sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
+
+    /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
+    uint32_t n_items;
+    const Expr **items = flatten_program_items(program, &n_items);
+
+    /* J1: ABI specialization scan (extracted into emit_abi_scan_program). */
+    emit_abi_scan_program(&ctx, items, n_items);
+
+    /* Phase I: --emit-abi-trace -- report the resolved ABI path per call site. */
+    if (g_emit_abi_trace) {
+        for (uint32_t i = 0; i < n_items; i++) {
+            emit_abi_trace_expr(&ctx, items[i]);
+        }
+    }
+
+    /* TS4P1: Scan for concrete ADT-app types to register for monomorphisation. */
+    for (uint32_t i = 0; i < n_items; i++) {
+        scan_adt_apps_in_expr(items[i]);
+    }
+
+    /* Check if user defined a main function */
+    bool user_has_main = false;
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind == EX_FN_DEF) {
+            FnDef *fd = e->as.fn_def_.fn;
+            if (strcmp(fd->binding->name->name, "main") == 0) {
+                user_has_main = true;
+                break;
+            }
+        }
+    }
+
+    /* Phase 2: Two-pass emission for mutual recursion support.
+     * Pass 0: Emit struct typedefs + drop glue (must precede function forward decls). */
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind == EX_DEF && e->as.def_.struct_def) {
+            StructDef *def = e->as.def_.struct_def;
+            /* SI4-C: opaque types are just int64_t in C -- no typedef needed. */
+            if (def->is_opaque) continue;
+            /* Phase E: pre-register fn-ptr typedefs for concrete fn fields so
+             * they are emitted before the struct typedef that references them. */
+            for (uint32_t j = 0; j < def->n_fields; j++) {
+                StructField *f = &def->fields[j];
+                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
+                    const char *td = register_fn_ptr_typedef(f->full_type);
+                    if (td) {
+                        type_codegen_emit_fn_ptr_typedefs(&early_file);
+                    }
+                }
+            }
+            /* Emit: typedef struct Name { fields... } Name; */
+            buf_printf(&early_file, "typedef struct %s {\n", def->name);
+            for (uint32_t j = 0; j < def->n_fields; j++) {
+                StructField *f = &def->fields[j];
+                const char *ctype;
+                /* Phase E: typed function pointer for concrete fn fields. */
+                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
+                    const char *td = register_fn_ptr_typedef(f->full_type);
+                    ctype = td ? td : "int64_t";
+                } else switch (f->kind) {
+                    case TY_INT:      ctype = "int64_t"; break;
+                    case TY_BOOL:     ctype = "bool"; break;
+                    case TY_FLOAT:    ctype = "double"; break;
+                    case TY_CSTR:     ctype = "const char *"; break;
+                    case TY_PTR_VOID: ctype = "void *"; break;
+                    case TY_RC:
+                    case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                    case TY_REF:
+                    case TY_LREF:     ctype = "void *"; break;
+                    /* Phase N6: new numeric field types */
+                    case TY_INT8:     ctype = "int8_t"; break;
+                    case TY_INT16:    ctype = "int16_t"; break;
+                    case TY_INT32:    ctype = "int32_t"; break;
+                    case TY_UINT8:    ctype = "uint8_t"; break;
+                    case TY_UINT16:   ctype = "uint16_t"; break;
+                    case TY_UINT32:   ctype = "uint32_t"; break;
+                    case TY_UINT64:   ctype = "uint64_t"; break;
+                    case TY_FLOAT32:  ctype = "float"; break;
+                    default:          ctype = "int64_t"; break;
+                }
+                char *mfn = mangle_field_name(f->name);
+                buf_printf(&early_file, "    %s %s;\n", ctype, mfn);
+                free(mfn);
+            }
+            buf_printf(&early_file, "} %s;\n\n", def->name);
+            /* If any RC/ref/weak field, emit drop glue function */
+            if (def->needs_drop_glue) {
+                buf_printf(&early_file, "static void drop_glue_%s(void *ptr) {\n", def->name);
+                buf_printf(&early_file, "    if (!ptr) return;\n");
+                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
+                /* Drop fields in REVERSE order */
+                for (int32_t j = (int32_t)def->n_fields - 1; j >= 0; j--) {
+                    StructField *f = &def->fields[j];
+                    char *mfn = mangle_field_name(f->name);
+                    if (f->kind == TY_RC) {
+                        buf_printf(&early_file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
+                                   mfn, mfn);
+                    } else if (f->kind == TY_WEAK) {
+                        buf_printf(&early_file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
+                                   mfn, mfn);
+                    } else if (f->kind == TY_REF || f->kind == TY_LREF) {
+                        buf_printf(&early_file, "    if (s->%s) free(s->%s);\n",
+                                   mfn, mfn);
+                    }
+                    free(mfn);
+                }
+                buf_printf(&early_file, "    free(ptr);\n");
+                buf_printf(&early_file, "}\n\n");
+
+                /* DS3: walk glue -- mirrors drop glue but calls a child
+                 * callback for each rc-typed field instead of releasing.
+                 * The cycle walker uses this to trace through struct
+                 * payloads tagged RCK_STRUCT.  Weak / ref / lref fields
+                 * are not strong owners and are not enumerated. */
+                buf_printf(&early_file,
+                           "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
+                           def->name);
+                buf_printf(&early_file, "    if (!ptr || !cb) return;\n");
+                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
+                for (uint32_t j = 0; j < def->n_fields; j++) {
+                    StructField *f = &def->fields[j];
+                    if (f->kind == TY_RC) {
+                        char *mfn = mangle_field_name(f->name);
+                        buf_printf(&early_file, "    if (s->%s) cb(s->%s, ctx);\n",
+                                   mfn, mfn);
+                        free(mfn);
+                    }
+                }
+                buf_printf(&early_file, "}\n\n");
+            }
+        }
+        /* Phase G0/G1: ADT typedef + constructor functions */
+        else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
+            AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
+            char adt_c_name[256];
+            {
+                char *_mn = mangle_field_name(def->name);
+                snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
+                free(_mn);
+            }
+            buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
+            buf_printf(&early_file, "    int tag;\n");
+            buf_printf(&early_file, "    union {\n");
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                CtorDef *ctor = def->ctors[ci];
+                char *mctor = mangle_field_name(ctor->name);
+                buf_printf(&early_file, "        struct {");
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    const char *ctype;
+                    switch (ctor->fields[fi].kind) {
+                        case TY_INT:      ctype = "int64_t"; break;
+                        case TY_BOOL:     ctype = "bool"; break;
+                        case TY_FLOAT:    ctype = "double"; break;
+                        case TY_CSTR:     ctype = "const char *"; break;
+                        case TY_PTR_VOID: ctype = "void *"; break;
+                        case TY_RC:
+                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                        case TY_REF:
+                        case TY_LREF:     ctype = "void *"; break;
+                        case TY_INT8:     ctype = "int8_t"; break;
+                        case TY_INT16:    ctype = "int16_t"; break;
+                        case TY_INT32:    ctype = "int32_t"; break;
+                        case TY_INT64:    ctype = "int64_t"; break;
+                        case TY_UINT8:    ctype = "uint8_t"; break;
+                        case TY_UINT16:   ctype = "uint16_t"; break;
+                        case TY_UINT32:   ctype = "uint32_t"; break;
+                        case TY_UINT64:   ctype = "uint64_t"; break;
+                        case TY_FLOAT32:  ctype = "float"; break;
+                        case TY_FLOAT64:  ctype = "double"; break;
+                        default:          ctype = "int64_t"; break;
+                    }
+                    buf_printf(&early_file, " %s _%u;", ctype, fi);
+                }
+                buf_printf(&early_file, " } %s;\n", mctor);
+                free(mctor);
+            }
+            buf_printf(&early_file, "    } as;\n");
+            buf_printf(&early_file, "} %s;\n\n", adt_c_name);
+
+            /* Emit constructor functions */
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                CtorDef *ctor = def->ctors[ci];
+                char *mctor = mangle_field_name(ctor->name);
+                buf_printf(&early_file, "static int64_t ctor_%s(", mctor);
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    if (fi > 0) buf_puts(&early_file, ", ");
+                    const char *ctype;
+                    switch (ctor->fields[fi].kind) {
+                        case TY_INT:      ctype = "int64_t"; break;
+                        case TY_BOOL:     ctype = "bool"; break;
+                        case TY_FLOAT:    ctype = "double"; break;
+                        case TY_CSTR:     ctype = "const char *"; break;
+                        case TY_PTR_VOID: ctype = "void *"; break;
+                        case TY_RC:
+                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                        case TY_REF:
+                        case TY_LREF:     ctype = "void *"; break;
+                        case TY_INT8:     ctype = "int8_t"; break;
+                        case TY_INT16:    ctype = "int16_t"; break;
+                        case TY_INT32:    ctype = "int32_t"; break;
+                        case TY_INT64:    ctype = "int64_t"; break;
+                        case TY_UINT8:    ctype = "uint8_t"; break;
+                        case TY_UINT16:   ctype = "uint16_t"; break;
+                        case TY_UINT32:   ctype = "uint32_t"; break;
+                        case TY_UINT64:   ctype = "uint64_t"; break;
+                        case TY_FLOAT32:  ctype = "float"; break;
+                        case TY_FLOAT64:  ctype = "double"; break;
+                        default:          ctype = "int64_t"; break;
+                    }
+                    buf_printf(&early_file, "%s _%u", ctype, fi);
+                }
+                buf_printf(&early_file, ") {\n");
+                buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                           adt_c_name, adt_c_name, adt_c_name);
+                buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
+                               mctor, fi, fi);
+                }
+                buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
+                buf_printf(&early_file, "}\n\n");
+                free(mctor);
+            }
+        }
+    }
+
+    /* DV2+DV3: Emit TurDynFrame typedef, pthread_key_t globals, constructors,
+     * cleanup functions, and (DV3) snapshot/convey infrastructure for every
+     * defdynamic declaration found in the program. */
+    {
+        bool any_dynvar = false;
+        for (uint32_t i = 0; i < n_items; i++) {
+            if (items[i]->kind == EX_DEFDYNAMIC) { any_dynvar = true; break; }
+        }
+        if (any_dynvar) {
+            /* DV2: TurDynFrame -- heap flag distinguishes DV3 snapshot frames
+             * (heap=1, owned) from DV2 stack frames (heap=0, not owned). */
+            buf_puts(&early_file,
+                "/* DV2+DV3: dynamic var frame stack */\n"
+                "typedef struct TurDynFrame {\n"
+                "    struct TurDynFrame *prev;\n"
+                "    void               *value;\n"
+                "    int                 heap; /* DV3: 1 = frame+value are heap-allocated */\n"
+                "} TurDynFrame;\n\n");
+
+            /* DV2: per-var storage, destructor, constructor, and binding pop */
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file, "static %s _dynvar_root_%s;\n", ctype, mname);
+                buf_printf(&early_file, "static pthread_key_t _dynvar_key_%s;\n", mname);
+                /* DV3: destructor walks chain and frees heap frames on thread exit. */
+                buf_printf(&early_file,
+                    "static void _dynvar_cleanup_%s(void *f) {\n"
+                    "    TurDynFrame *frame = (TurDynFrame *)f;\n"
+                    "    while (frame && frame->heap) {\n"
+                    "        TurDynFrame *prev = frame->prev;\n"
+                    "        free(frame->value);\n"
+                    "        free(frame);\n"
+                    "        frame = prev;\n"
+                    "    }\n"
+                    "}\n"
+                    "__attribute__((constructor))\n"
+                    "static void _dynvar_init_%s(void) {\n"
+                    "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
+                    "}\n"
+                    "static void _dynvar_pop_%s(TurDynFrame **fp) {\n"
+                    "    pthread_setspecific(_dynvar_key_%s, (*fp)->prev);\n"
+                    "}\n\n",
+                    mname,
+                    mname, mname, mname,
+                    mname, mname);
+                free(mname);
+            }
+
+            /* DV3: _TurDynSnap struct -- one field pair per dynamic var. */
+            buf_puts(&early_file, "/* DV3: binding snapshot for spawn-conveying */\n");
+            buf_puts(&early_file, "typedef struct {\n");
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file,
+                    "    int has_%s; %s val_%s;\n", mname, ctype, mname);
+                free(mname);
+            }
+            buf_puts(&early_file, "} _TurDynSnap;\n\n");
+
+            /* DV3: _tur_binding_snapshot_capture -- copy top frame value for each var. */
+            buf_puts(&early_file,
+                "static _TurDynSnap *_tur_binding_snapshot_capture(void) {\n"
+                "    _TurDynSnap *s = (_TurDynSnap *)calloc(1, sizeof(_TurDynSnap));\n"
+                "    if (!s) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n");
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file,
+                    "    { TurDynFrame *_f = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n"
+                    "      if (_f) { s->has_%s = 1; s->val_%s = *(%s *)_f->value; } }\n",
+                    mname, mname, mname, ctype);
+                free(mname);
+            }
+            buf_puts(&early_file, "    return s;\n}\n\n");
+
+            /* DV3: _tur_binding_snapshot_install -- push heap frames on the new thread. */
+            buf_puts(&early_file,
+                "static void _tur_binding_snapshot_install(_TurDynSnap *s) {\n");
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file,
+                    "    if (s->has_%s) {\n"
+                    "        %s *_v = (%s *)malloc(sizeof(%s));\n"
+                    "        if (!_v) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                    "        *_v = s->val_%s;\n"
+                    "        TurDynFrame *_fr = (TurDynFrame *)malloc(sizeof(TurDynFrame));\n"
+                    "        if (!_fr) { free(_v); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                    "        _fr->prev  = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n"
+                    "        _fr->value = _v;\n"
+                    "        _fr->heap  = 1;\n"
+                    "        pthread_setspecific(_dynvar_key_%s, _fr);\n"
+                    "    }\n",
+                    mname, ctype, ctype, ctype, mname, mname, mname);
+                free(mname);
+            }
+            buf_puts(&early_file, "}\n\n");
+
+            /* DV3: convey arg + trampoline + spawn-conveying entry point.
+             * These reference TurThreadState/TurThreadHandle which are emitted
+             * earlier in the output (before early_file is appended). */
+            buf_puts(&early_file,
+                "typedef struct {\n"
+                "    int64_t         closure;\n"
+                "    TurThreadState *state;\n"
+                "    _TurDynSnap    *snap;\n"
+                "} _TurConveyArg;\n\n"
+                "static void *_tur_convey_trampoline(void *raw) {\n"
+                "    _TurConveyArg *a = (_TurConveyArg *)raw;\n"
+                "    tur_current_thread_state = a->state;\n"
+                "    _tur_binding_snapshot_install(a->snap);\n"
+                "    free(a->snap);\n"
+                "    void (*fn)(void) = (void (*)(void))(intptr_t)a->closure;\n"
+                "    free(a);\n"
+                "    fn();\n"
+                "    return NULL;\n"
+                "}\n\n"
+                "static void *_tur_spawn_conveying(int64_t closure) {\n"
+                "    _TurDynSnap *snap = _tur_binding_snapshot_capture();\n"
+                "    TurThreadState *state = (TurThreadState *)calloc(1, sizeof(TurThreadState));\n"
+                "    if (!state) { free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                "    pthread_mutex_init(&state->cancel_mutex, NULL);\n"
+                "    pthread_cond_init(&state->cancel_cond, NULL);\n"
+                "    _TurConveyArg *arg = (_TurConveyArg *)malloc(sizeof(_TurConveyArg));\n"
+                "    if (!arg) { free(state); free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                "    arg->closure = closure;\n"
+                "    arg->state   = state;\n"
+                "    arg->snap    = snap;\n"
+                "    TurThreadHandle *h = (TurThreadHandle *)malloc(sizeof(TurThreadHandle));\n"
+                "    if (!h) { free(arg); free(state); free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                "    h->state = state;\n"
+                "    int _rc = pthread_create(&h->tid, NULL, _tur_convey_trampoline, arg);\n"
+                "    if (_rc != 0) {\n"
+                "        free(h); free(arg); free(state); free(snap);\n"
+                "        fprintf(stderr, \"tur: spawn-conveying: pthread_create failed (%d)\\n\", _rc);\n"
+                "        abort();\n"
+                "    }\n"
+                "    return (void *)h;\n"
+                "}\n\n");
+        }
+    }
+
+    /* Pass 1: Emit forward declarations for all functions.
+     * Written to fwd_decls buffer (emitted before pending_handler_fns in final
+     * assembly) so that effect handler functions can call user-defined functions. */
+    emit_fn_forward_decls(&ctx, &fwd_decls, items, n_items);
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+        emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
+    }
+
+    /* Phase M5: collect top-level EX_DEFER nodes (module-level defers). */
+    uint32_t n_prog_defers = 0;
+    for (uint32_t i = 0; i < n_items; i++) {
+        if (items[i]->kind == EX_DEFER) n_prog_defers++;
+    }
+    const Expr **prog_defers = NULL;
+    if (n_prog_defers > 0) {
+        prog_defers = (const Expr **)malloc(n_prog_defers * sizeof(Expr *));
+        uint32_t di = 0;
+        for (uint32_t i = 0; i < n_items; i++) {
+            if (items[i]->kind == EX_DEFER)
+                prog_defers[di++] = items[i];
+        }
+    }
+
+    /* Pass 2: collect all top-level defs and fn_defs. */
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind == EX_DEFER) {
+            /* Phase M5: module-level defers handled after this pass. */
+            continue;
+        } else if (e->kind == EX_DEFDATA) {
+            /* Phase G0: ADT typedefs and constructor functions already emitted in Pass 0 */
+            continue;
+        } else if (e->kind == EX_DEF) {
+            /* Phase 11: skip struct typedefs — already emitted in Pass 0 */
+            if (e->as.def_.struct_def) continue;
+            char *bn = name_for_binding(&ctx, e->as.def_.binding);
+            buf_printf(&file, "static %s %s;\n",
+                       type_c_name(e->as.def_.binding->type), bn);
+            if (e->as.def_.init) {
+                char *iv = emit_value(&ctx, &body, e->as.def_.init);
+                indent_buf(&body, ctx.indent);
+                buf_printf(&body, "%s = %s;\n", bn, iv);
+                free(iv);
+            }
+            free(bn);
+        } else if (e->kind == EX_FN_DEF) {
+            /* Emit function definition at file scope */
+            if (emit_abi_fn_skip_generic(&ctx, e)) {
+                continue;
+            }
+            emit_fn_def(&ctx, &file, e);
+        } else if (e->kind == EX_EXTERN_C) {
+            /* Emit extern-c declaration early (before handler functions) */
+            ExternC *ec = e->as.extern_c_.ext;
+            /* When HAMT lowering is active, hamt.h is already included and
+             * declares all tur_hamt_* functions; skip conflicting extern decls. */
+            /* Also suppress redeclarations of C stdlib functions already in the preamble. */
+            /* Functions declared in the runtime preamble (emit_runtime_preamble) or
+             * via headers always included (<stdio.h>, <stdlib.h>).
+             * Suppress redeclarations to avoid conflicting-types errors. */
+            static const char *preamble_decls[] = {
+                /* explicit extern decls in preamble */
+                "malloc","calloc","free","abort","atexit",
+                "memset","memmove","memcpy","memcmp","strcmp","strlen","strcpy","strncpy","strcat","strncat","strstr","strchr","strrchr","strdup",
+                /* <stdio.h> */
+                "printf","fprintf","sprintf","snprintf","scanf","sscanf","fscanf",
+                "fopen","fclose","fread","fwrite","fseek","ftell","fflush","rewind",
+                "puts","putchar","getchar","putc","getc","fputc","fgetc","fputs","fgets",
+                "perror","clearerr","feof","ferror","remove","rename","tmpfile",
+                /* <stdlib.h> */
+                "exit","getenv","putenv","system","rand","srand","bsearch","qsort",
+                "atoi","atol","atof","strtol","strtoul","strtod",
+                NULL
+            };
+            bool suppress_ec = false;
+            if (g_needs_hamt && strncmp(ec->c_name->name, "tur_hamt_", 9) == 0) {
+                suppress_ec = true; /* Suppress: declared by #include "hamt.h" */
+            } else {
+                for (int si = 0; preamble_decls[si]; si++) {
+                    if (strcmp(ec->c_name->name, preamble_decls[si]) == 0) {
+                        suppress_ec = true; /* Suppress: already in preamble */
+                        break;
+                    }
+                }
+            }
+            if (!suppress_ec) {
+            /* extern-c names map to a real C symbol via the LEGACY fold (e.g.
+             * `tur_hamt_new` stays itself; `tvar/new` -> `tvar_new`). This must
+             * stay legacy -- never the injective scheme -- so the prototype, the
+             * call sites (raw_name_for_binding special-cases is_extern_c), and
+             * any inline-C reference all agree on the real symbol name. */
+            char *ec_mangled = mangle_field_name(ec->c_name->name);
+            buf_printf(&extern_decls, "extern %s %s(",
+                       type_c_name(ec->return_type),
+                       ec_mangled);
+            free(ec_mangled);
+            for (uint8_t j = 0; j < ec->n_params; j++) {
+                if (j > 0) buf_puts(&extern_decls, ", ");
+                buf_printf(&extern_decls, "%s", type_c_name(ec->param_types[j]));
+            }
+            buf_puts(&extern_decls, ");\n");
+            }
+        } else if (e->kind == EX_DEFDYNAMIC) {
+            /* DV2: initialize the root value in main() body. */
+            DynVarEntry *entry = e->as.defdynamic_.entry;
+            char *mname = mangle_dynvar_name(entry->name->name);
+            char *rv = emit_value(&ctx, &body, e->as.defdynamic_.root_expr);
+            indent_buf(&body, ctx.indent);
+            buf_printf(&body, "_dynvar_root_%s = %s;\n", mname, rv);
+            free(rv);
+            free(mname);
+        } else if (e->kind == EX_INLINE_C) {
+            /* file-scope-c-block: a top-level ```c ... ``` block is raw C emitted
+             * verbatim at file scope, not a statement in main().  It carries no
+             * captures/val-exprs, so emit its text directly. */
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (ic && ic->code.p && ic->code.len > 0 &&
+                !inline_c_dedup_seen(&cprelude_dedup, ic->code.p, ic->code.len)) {
+                buf_write(&cprelude, ic->code.p, ic->code.len);
+                buf_putc(&cprelude, '\n');
+            }
+        } else {
+            emit_stmt(&ctx, &body, e);
+        }
+    }
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+        EmitAbiSpecialization *sp = &ctx.abi_specializations[i];
+        /* poly-closure-result-specialization: hoist a linked inner-closure clone
+         * ahead of its outer so the suffixed env struct is defined at file scope
+         * before the outer body's EX_CLOSURE references it. */
+        if (sp->inner_closure_spec_idx >= 0) {
+            EmitAbiSpecialization *isp =
+                &ctx.abi_specializations[sp->inner_closure_spec_idx];
+            if (!isp->emitted) {
+                ctx.current_abi_specialization = isp;
+                ctx.fn_name_override = isp->clone_name;
+                ctx.fn_name_override_external = false;
+                emit_fn_def(&ctx, &file, isp->fn_expr);
+                isp->emitted = true;
+                ctx.fn_name_override = NULL;
+                ctx.fn_name_override_external = false;
+                ctx.current_abi_specialization = NULL;
+                ctx.current_scan_fn = NULL;
+            }
+        }
+        if (sp->emitted) continue;
+        ctx.current_abi_specialization = sp;
+        ctx.fn_name_override = sp->clone_name;
+        ctx.fn_name_override_external = false;  /* single-file clones stay static */
+        emit_fn_def(&ctx, &file, sp->fn_expr);
+        sp->emitted = true;
+        ctx.fn_name_override = NULL;
+        ctx.fn_name_override_external = false;
+        ctx.current_abi_specialization = NULL;
+        ctx.current_scan_fn = NULL;
+    }
+
+    /* Phase M5: emit module-level defer thunks + atexit constructor. */
+    if (n_prog_defers > 0) {
+        buf_puts(&file, "\n/* Phase M5: module-level defers */\n");
+        for (uint32_t i = 0; i < n_prog_defers; i++) {
+            buf_printf(&file, "static void __module_defer_%u(void) {\n", i);
+            Buf thunk_body; buf_init(&thunk_body);
+            const char *saved_frame = ctx.frame_var;
+            ctx.frame_var = NULL;
+            ctx.indent = 4;
+            emit_stmt(&ctx, &thunk_body, prog_defers[i]->as.defer_.body);
+            ctx.frame_var = saved_frame;
+            buf_write(&file, thunk_body.data, thunk_body.len);
+            buf_free(&thunk_body);
+            buf_puts(&file, "}\n");
+        }
+        buf_puts(&file,
+            "__attribute__((constructor))\n"
+            "static void __module_defers_init(void) {\n");
+        for (uint32_t i = 0; i < n_prog_defers; i++) {
+            buf_printf(&file, "    atexit(__module_defer_%u);\n", i);
+        }
+        buf_puts(&file, "}\n");
+        free(prog_defers);
+    }
+
+    /* Final assembly. */
+    emit_runtime_preamble(out, program);
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
