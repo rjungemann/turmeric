@@ -1144,12 +1144,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 /* Plain function type annotation */
                 param_kinds[n_params - 1] = TY_FN;
                 params[n_params - 1]->type = *ann;
-                /* LT2: For function-typed parameters, store full type in param_poly_types
-                 * so it propagates into arg_full_types for linearity subtyping checks
-                 * at call sites (-Xlinear). */
-                if (g_linear_enabled) {
-                    param_poly_types[n_params - 1] = ann;
-                }
+                /* LT2 / Defect-A: always store full TY_FN type in param_poly_types so
+                 * it round-trips into arg_full_types for all callers -- including the
+                 * early-update path (lines 1896-1904) that propagates arg_full_types to
+                 * the forward-declaration binding before the body is elaborated.  Without
+                 * this, a sibling defn that forward-references a ^fat fn-typed parameter
+                 * sees arg_full_types=NULL on the forward binding and cannot subtype-check
+                 * against the declared (fn [...] ret) signature.  The -Xlinear gate was
+                 * a red herring: the full type is needed for all callers, not just linear
+                 * ones.  Non-fat plain TY_FN parameters that go through the carrier_ok
+                 * path above already set param_poly_types unconditionally. */
+                param_poly_types[n_params - 1] = ann;
             } else {
                 /* Other type annotation — use the kind */
                 param_kinds[n_params - 1] = ann->kind;

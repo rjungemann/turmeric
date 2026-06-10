@@ -1,0 +1,21 @@
+;; Defect-A regression: a ^fat param with an explicit (fn [...] ret) annotation
+;; inside a defmodule/export must round-trip through arg_full_types so that
+;; sibling forward-references in the same defmodule see the correct signature
+;; instead of the zero-arg placeholder (fn [] : ?).
+;;
+;; Before the fix, the early-update path in elab_defn left param_poly_types
+;; unset for ^fat TY_FN params, so the forward-declaration binding did not get
+;; arg_full_types populated.  The inner body of a sibling defn that
+;; forward-referenced sample would see:
+;;   error [TUR-E0001]: function 'sample' arg 1: expected (fn [] : ?), got ptr<void>
+
+(defmodule sig/probe
+  (export sample)
+
+  (defn sample [^fat sig : (fn [float] float) t : float] : float
+    (sig t)))
+
+(defn main [] : int
+  (let [double-it (fn [x : float] : float (* x 2.0))]
+    (println (sample double-it 1.5))
+    0))
