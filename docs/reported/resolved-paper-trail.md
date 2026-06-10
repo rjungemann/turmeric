@@ -180,6 +180,43 @@ dependency. Plain `http-get` compiles and runs on bare hosts. The
 cascade fixture itself still fails on a residual struct-redef pattern
 tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef-non-identical-blocks.md).
 
+### Project-mode codegen: `defstruct` typedef missing from header/impl (FIXED)
+
+[`../archive/project-mode-defstruct-typedef-missing.md`](../archive/project-mode-defstruct-typedef-missing.md)
+
+In project mode (`tur build <dir>` / separate compilation), generated
+headers/implementations omitted the `typedef struct Name { ... } Name;`
+declaration for every non-opaque struct -- single-file `emit-c` was fine,
+but any project-mode spice with a `defstruct` failed to link in `cc`.
+**Fix:** `emit_header` (`src/compiler/emit_module.c:5375-5428`) now emits
+the typedef for every non-opaque struct def, and the `emit_implementation`
+`EX_DEF` arm early-outs on struct defs so the spurious `Name Name_N;`
+variable declaration is suppressed. Regression-covered by
+`build-project-defstruct-typedef` in `tests/run-build-project.sh`; the
+`spices/signal` `ADSRParams` repro builds end-to-end through
+`signal__envelope.c`.
+
+### Project-mode codegen: RC/frame runtime preamble + struct drop/walk glue missing (FIXED -- #321)
+
+[`../archive/project-mode-rc-runtime-preamble-missing.md`](../archive/project-mode-rc-runtime-preamble-missing.md)
+
+The broader sibling of the defstruct typedef report: any project-mode module
+using reference counting (`rc/of`, `rc<T>` fields, auto-drop) failed to
+compile in `cc` because the RC/frame runtime preamble and per-struct
+drop/walk glue were absent from the generated header/impl, even though
+single-file `emit-c` emitted them. **Fix (#321):** rebased onto #320
+("separate-compilation runtime scaffolding") -- the overlapping fixed-runtime
+emissions are now **idempotent**: `emit_closure_fat_runtime` takes a
+`guarded` flag (wraps in `#ifndef TUR_RT_CLOSURE_FAT` under separate
+compilation), and the preamble's `tur_poly_fn_t` reuses #320's
+`TUR_POLY_FN_T_DEFINED` guard so the shared `tur_runtime.h` and #320's
+per-module copies dedupe to one definition. Single-file output stays
+byte-identical (both flags off). The whole-program executable reroute
+auto-loads stdlib via the single-file path; the `prelude-cons` regression
+renames its local cell accessors off the stdlib names
+(`list-head` -> `cell-head`) to avoid the now-correct redefinition flag.
+Full suite: 1535 passed, 0 failed.
+
 ### defmodule export scoping & project-mode build -- consolidated track (FIXED)
 
 [`../archive/defmodule-export-scoping-track.md`](../archive/defmodule-export-scoping-track.md)
