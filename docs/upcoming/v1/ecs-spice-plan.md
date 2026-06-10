@@ -44,13 +44,20 @@ holistic to compile-time" means here.
 
 ```turmeric
 ;; Opaque handle. Generationally-versioned so dangling references are
-;; a refinement violation, not a use-after-free.
+;; caught cheaply at runtime, not as use-after-free memory corruption.
 (defopaque Entity :int)
 ```
 
 Internally an `Entity` packs `index : u32` + `generation : u32`. We
 expose only `entity=?`, `entity-alive?`, and constructors via the
-`World` API. Dead-entity reads return `(none)` instead of stale rows.
+`World` API. **Dead-entity reads return `(none)`; this is the only API
+surface in v1** -- a "strict-aliveness" surface that turns
+use-after-despawn into a *type* error would require refinement types,
+which are not shipping (see
+[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md)).
+The `option`-returning forgiving surface is what every shipping ECS in
+every language exposes anyway; we are not giving anything up in
+practice.
 
 ### Components
 
@@ -102,18 +109,35 @@ Two worlds with overlapping but distinct component sets are
 apecs's `Has w c` constraint buys) in exchange for "the world is a
 named, closed type and the compiler knows every cell of it."
 
-We can recover some polymorphism by stating constraints structurally:
+Two recovery paths for systems that should be polymorphic over any
+world containing a given component set:
+
+**(a) Monomorphic systems against a concrete world (v1 default).** Every
+`defsystem` names its concrete world type. For a single-game project
+this is fine -- the world is declared once and reused. The raylib demo
+in E3 uses this path.
+
+**(b) Typeclass-bounded systems (v1 optional, lands with E2).** Each
+component generates a `HasComponent` class (`HasPos`, `HasVel`, ...).
+`defworld` emits the corresponding instances automatically. A system
+that wants polymorphism states it via class constraints:
 
 ```turmeric
-defn integrate [w :W] [W /has Pos /has Vel] :void
+defn integrate [W] [(HasPos W) (HasVel W)] [w : W dt : float] :void
   ...
 ```
 
-`/has` is a refinement on the world type that elaborates to a
-"contains this component" predicate -- statically resolved against the
-registry on `W`. This is closer to Rust's trait bounds than to Haskell's
-free-form constraints: every `/has` is checked when `integrate` is
-*called*, not solved at the top level by a global instance search.
+This is the apecs `Has w c` encoding, lifted into Turmeric's coherent
+class system. We *don't* need refinement types for this -- it falls out
+of the typeclass machinery we already have. The only thing we lose
+relative to a refinement-typed `/has` is that the class dispatch is
+resolved at call sites by dictionary lookup rather than by literal
+field-access elaboration; that is the same trade-off Haskell makes and
+the runtime cost is one indirection per call.
+
+Refinement-typed world bounds (`/has Pos /has Vel` as a predicate on
+the world type) remain a v2 ambition; see
+[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md).
 
 ### Queries
 
@@ -218,35 +242,64 @@ scheduler each frame.
 
 ## Where Turmeric's types pull ahead
 
+These are the v1 wins -- claims that hold against the type-system
+machinery actually shipping today (no refinement types required).
+
 1. **Closed world type.** `defworld` produces a single named struct.
    "Does this world have `Hp`?" is field lookup, not constraint
    solving. Adding a component is an explicit change to the world
    declaration; you cannot accidentally add one via instance import.
+   *Querying a component the world doesn't declare is an
+   unbound-name error from the elaborator -- compile-time membership
+   checking without needing refinements.*
 2. **Coherent typeclass dispatch.** `Component T` has exactly one
    instance per `T`. No orphan-instance footguns; storage choice is a
    property of the component, not the import graph.
 3. **Static read/write effects.** `:reads`/`:writes` become first-class
-   substructural capabilities. apecs's `cmap` does not have this; it
-   trusts the programmer.
-4. **Refinement-typed entities.** Generational `Entity` + alive-set
-   refinements turn "use-after-despawn" into a type error in the
-   strict API (`entity-alive!`) and a `(none)` result in the
-   forgiving API (`get-Pos`).
-5. **Sized-types-backed dense storage.** A dense storage of length `n`
-   yields a `Vec<n, T>`; zip of two dense storages over a shared
-   `n` is statically rectangular. See
-   `docs/guides/sized-types-guide.md`. (Resizes punch out of the
-   sized world via existentials; that is fine -- the per-frame inner
-   loop doesn't resize.)
-6. **No runtime `TypeRep` lookup.** aztecs's heterogeneous map is fast
+   substructural capabilities (we have `-Xsubstructural` shipping
+   today). apecs's `cmap` does not have this; it trusts the programmer.
+   The scheduler proves non-conflict statically and the elaborator only
+   exposes `set-X!` for `X` in `:writes`. **This is the single biggest
+   delta vs. Haskell ECSes and it needs zero new type-system work.**
+4. **Generational entity safety.** Use-after-despawn cannot corrupt
+   memory: a stale handle's generation counter mismatches the slot's
+   current generation, so `get-Pos` returns `(none)`. This is a
+   *runtime* check (one u32 compare per access), not a type error --
+   but every shipping ECS in every language does it this way. The
+   compile-time version (refinement-typed alive-set) is a v2 ambition,
+   not a v1 advantage.
+5. **No runtime `TypeRep` lookup.** aztecs's heterogeneous map is fast
    in practice but ultimately a hash-by-typerep. Our equivalent is a
-   struct field access resolved by the elaborator.
+   struct field access resolved by the elaborator -- zero overhead, and
+   a typo on a component name fails to compile rather than returning
+   `Nothing`.
+6. **Typeclass-bounded polymorphism, coherently dispatched.** Systems
+   that want to be world-polymorphic state it via `(HasPos W)
+   (HasVel W)` constraints (encoding (b) under "Concrete shape > World"
+   above). Closer to Rust trait bounds than Haskell free-form
+   constraints; checked at the call site, not by global instance search.
 
-The cost: less ad-hoc polymorphism. You cannot write a system that
-"works for any world containing `Pos`" without saying so via `/has`,
-and there is no global "instance Component (Maybe T)" sleight of
-hand. We think that is a fair trade for a game engine -- the world is
-known and finite.
+The cost: less ad-hoc polymorphism than Haskell, and no compile-time
+"this handle is alive" / "this world has component X" *refinement*
+guarantees. We get the latter via struct-field membership (which is
+arguably stronger -- it's structural, not predicate-based) and accept
+the former as runtime-checked.
+
+### Deferred to v2 (gated on refinement types)
+
+These were originally pitched as v1 advantages but require type-system
+features that are not shipping. See
+[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md).
+
+- **Refinement-typed entities** (`entity-alive!` strict API). The
+  forgiving `option`-returning API is the only v1 surface.
+- **Refinement-typed world bounds** (`/has Pos` as a predicate on `W`).
+  Use the typeclass encoding in v1.
+- **Statically-rectangular sized iteration.** `SizedVec<n, T>` is
+  shipping but the size index is currently phantom (see
+  [docs/reported/sized-types-phantom-index.md](../../reported/sized-types-phantom-index.md));
+  dense-storage zip checks length at runtime in v1. Lifts to compile
+  time when SZ6 lands -- no plan-level rewrite needed at that point.
 
 ## Out of scope (v1)
 
@@ -262,32 +315,77 @@ known and finite.
 
 ## Phasing
 
+The phasing below is split into a **v1 track** (everything that lands
+against the type system as it ships today) and a **v2 track** (gated on
+elaborator prerequisites). The split lets the v1 track ship the raylib
+demo and the comparison writeup *without* waiting on variadic HKT rows
+or refinement types.
+
+### v1 track -- ships against today's type system
+
 **E0 -- skeleton (1-2 days):** `defcomponent`, `defworld`, dense
 storage only, manual `spawn`/`get`/`set`, no queries yet. Smoke test:
 spawn 1000 entities, mutate `Pos` in a `for`. Goal: prove the
-elaborator integration.
+elaborator integration and the macro-driven world-registry pattern.
 
-**E1 -- queries (3-4 days, *gated by D1*):** `(query [...])` macro,
-both imperative `for-each` and functional `run-query!`. Sparse + tag
-storages. `with`/`without` filters. Fixture suite under
-`tests/fixtures/ecs-*/`. **Cannot start until variadic HKT rows
-(D1) land in the elaborator** -- if that work slips, E0 is the only
-publishable milestone in the interim.
+**E1' -- fixed-arity queries (3-4 days):** `(query1 [...])` ...
+`(query5 [...])` macro family (arity capped at 5), both imperative
+`for-each` and functional `run-query!`. Sparse + tag storages.
+`with`/`without` filters. **No kind-level row type required** -- each
+arity is a separately-generated macro that elaborates to tuple-typed
+iterators. Documented as the v1 surface; the variadic HKT replacement
+is a drop-in API change later (see E1).
 
 **E2 -- systems and scheduler (3-4 days):** `defsystem` with
 `:reads`/`:writes`, sequential scheduler first, then a parallel
 scheduler that proves non-conflict and runs disjoint systems on the
-fiber pool (`stdlib/fiber.tur`). This is also the right point to wire
-substructural capabilities for write access.
+fiber pool (`stdlib/fiber.tur`). Substructural capabilities back the
+write access -- this is the load-bearing v1 win and it works today.
+Auto-generated `HasComponent` classes (the typeclass-bounded
+polymorphism path) land here.
 
 **E3 -- raylib companion (2-3 days):** `tur-ecs-raylib` with standard
 components, `integrate-2d`, `render-sprites`, `with-game-loop`. Ship a
 small demo (`asteroids.tur` or similar) and a `docs/guides/ecs-guide.md`.
+Aliveness is `option`-returning throughout; demo uses
+typeclass-bounded systems where it makes sense and monomorphic systems
+where it doesn't.
 
 **E4 -- comparison writeup:** a guide,
 `docs/guides/ecs-vs-haskell-ecs.md`, that walks a small game in
 apecs/aztecs/tur-ecs side by side and tabulates what moved from
-runtime to compile time.
+runtime to compile time. The v1 column is honest about what's still
+runtime-checked (aliveness, query joins past arity 5, dense-storage
+length matching pre-SZ6) and what is *not* (component membership,
+read/write conflict detection, storage choice).
+
+### v2 track -- gated on elaborator prerequisites
+
+**E1 -- variadic queries (gated by D1).** Replace the arity-N macro
+family with a single `(query [...])` macro elaborating to row-typed
+iterators. **Hard prereq: variadic HKT rows** (see
+[docs/reported/variadic-hkt-rows-missing.md](../../reported/variadic-hkt-rows-missing.md)).
+The v1 `queryN` API is a deprecation alias once E1 lands.
+
+**E2b -- refinement-typed APIs (gated by RT0+).** Add the `entity-alive!`
+strict-aliveness surface (lifts the runtime check out of the inner loop
+when the elaborator can prove it) and the `/has Pos` refinement on
+world bounds (lets a polymorphic system state its world requirements
+without the `HasPos` class dictionary). Both are pure surface
+additions over the v1 substrate; nothing in v1 has to change to
+accommodate them. See
+[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md).
+
+**E2c -- sized-rectangular dense iteration (gated by SZ6).** Dense-vs-dense
+zip becomes statically rectangular. Until SZ6 the runtime length check
+stays. See
+[docs/reported/sized-types-phantom-index.md](../../reported/sized-types-phantom-index.md).
+
+**E2d -- associated-type storage projection (gated by associated types).**
+Replace the parallel macro-registry for storage selection with a real
+`type Storage : Type` member on `Component`. See
+[docs/reported/typeclass-associated-types-missing.md](../../reported/typeclass-associated-types-missing.md).
+v1's macro-registry stays callable; v2 swaps the elaboration path.
 
 ## Validation
 
@@ -328,9 +426,13 @@ shipped sooner. We are paying the implementation cost now because:
   than Haskell." Capping query arity at 5 via macro is exactly the
   retreat-to-runtime move we are trying to avoid.
 
-**Implication: D1 is a hard prerequisite for E1.** E0 (skeleton, no
-queries) can ship against the existing HKT machinery; queries cannot.
-The phasing below is updated accordingly.
+**Implication: D1 is a hard prerequisite for the variadic E1, not for
+shipping queries at all.** The v1 track ships an arity-capped
+`queryN` macro family (E1') against today's HKT machinery; the
+variadic single-`query` form lands as E1 once D1 does. The arity cap
+is acknowledged as the retreat-to-runtime move we wanted to avoid --
+we are taking it explicitly and time-boxed, with a documented
+migration path, rather than indefinitely.
 
 ### D2 -- Per-component storage, small Storage trait
 

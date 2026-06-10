@@ -6,6 +6,17 @@ description: Close the documented gap in tools/rewrite_fn_type_colons.py so it r
 
 # Plan: fn-type Colon Codemod -- Sweet-Exp Coverage
 
+**Status: LANDED (PR [#322](https://github.com/rjungemann/turmeric/pull/322), commit `f8c12dba`, 2026-06-10).**
+All phases S1-S5 shipped: slot processors refactored to `_items` form,
+`_walk_implicit_seq` added with sweet-exp auto-detection + `force_sweet`,
+`.tur.sweet` files and ` ```sweet-exp ` markdown fences routed through it,
+corpus cases (`sweet-basic`, `sweet-effects`, `sweet-lambda-untouched`,
+`sweet-md`) added with idempotency checks, and the docs/guides + stdlib
+re-sweep is a clean no-op (`check-guide-pairs.py` reports 0 failed).
+A follow-up plan covers `definstance`/`defclass`/`defprotocol` method
+signatures, which the current `_walk_implicit_seq` does not reach (still
+"missed, never corrupted"). Retained here for historical context.
+
 This plan closes the **known gap** recorded in the "Drop leading colons
 inside `(fn ...)` types" Phase 2 work (see
 [still-in-flight-plan.md](../still-in-flight-plan.md) and PR
@@ -208,27 +219,27 @@ toggle counterpart automatically.
 
 ### Phase S1 -- Refactor slot processors to `_items` form
 
-- [ ] Extract `_process_signature_items` (and, if needed,
+- [x] Extract `_process_signature_items` (and, if needed,
       `_process_struct`/`_process_let` item variants) so slot-finding is
       decoupled from `Form`.
-- [ ] Keep the existing `Form`-based handlers as adapters; no behaviour
+- [x] Keep the existing `Form`-based handlers as adapters; no behaviour
       change. Re-run `tests/codemod/run-fn-type-colons.sh` -- still 4/4.
 
 ### Phase S2 -- Implicit-sequence pass + detection
 
-- [ ] Add `_walk_implicit_seq`; wire it into `rewrite_source` behind
+- [x] Add `_walk_implicit_seq`; wire it into `rewrite_source` behind
       sweet-exp auto-detection plus a `force_sweet` flag.
-- [ ] Route `.tur.sweet` files through `force_sweet=True` in
+- [x] Route `.tur.sweet` files through `force_sweet=True` in
       `iter_files`/`main`.
 
 ### Phase S3 -- Markdown `sweet-exp` fences
 
-- [ ] Teach `rewrite_markdown` to rewrite `sweet-exp`/`sweet` fences via
+- [x] Teach `rewrite_markdown` to rewrite `sweet-exp`/`sweet` fences via
       `force_sweet=True`, leaving prose and non-Turmeric fences alone.
 
 ### Phase S4 -- Corpus + regression
 
-- [ ] Add sweet-exp corpus cases under
+- [x] Add sweet-exp corpus cases under
       `tests/codemod/fn-type-colons/` using `.tur.sweet` before/after
       pairs (extend `run-fn-type-colons.sh` to also accept
       `before.tur.sweet`/`after.tur.sweet`):
@@ -238,20 +249,20 @@ toggle counterpart automatically.
     `fn [...] ...` lambda value; asserts the value is **not** rewritten.
   - `sweet-md` -- a small `.md` with paired ` ```turmeric ` /
     ` ```sweet-exp ` blocks; asserts both sides converge.
-- [ ] Confirm idempotency (`--check` clean on every `after.*`).
+- [x] Confirm idempotency (`--check` clean on every `after.*`).
 
 ### Phase S5 -- Re-sweep + de-manualise
 
-- [ ] Re-run the codemod over `docs/guides/` including `sweet-exp`
+- [x] Re-run the codemod over `docs/guides/` including `sweet-exp`
       fences; verify it now reaches the `effects-system-guide.md`
       counterpart that was hand-patched, and that the result is a no-op
       (already migrated) -- i.e. the tool would have produced the same
       bytes.
-- [ ] Run `python3 tools/check-guide-pairs.py --tur build/tur
+- [x] Run `python3 tools/check-guide-pairs.py --tur build/tur
       docs/guides/` -- 0 pairs failed.
-- [ ] Sweep any `.tur.sweet` sources in `stdlib/`, `examples/`, and
+- [x] Sweep any `.tur.sweet` sources in `stdlib/`, `examples/`, and
       (when present) `../turmeric-spices/`.
-- [ ] Update the Phase 2 bullet in `still-in-flight-plan.md`: drop the
+- [x] Update the Phase 2 bullet in `still-in-flight-plan.md`: drop the
       "Known gap" note and mark the sweet-exp coverage done.
 
 ---
