@@ -5532,22 +5532,26 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             }
         }
     }
-    type_codegen_emit_struct_apps(out);
-    type_codegen_emit_adt_apps(out);
-    type_codegen_emit_fn_ptr_typedefs(out);
-
     /* J4: In separate-compilation mode, emit extern declarations for any
      * ABI-specialization clones that this module owns (i.e. the generic FnDef
      * is defined here).  Importing modules include this header and thereby pick
      * up the decls without needing their own extern bookkeeping.
-     * J5/J6: Also emit decls for forced specs from the cross-module cache. */
+     * J5/J6: Also emit decls for forced specs from the cross-module cache.
+     *
+     * parametric-struct-by-value-carrier-inconsistency: a spec clone can
+     * return/accept a *monomorphized* parametric struct by value (e.g.
+     * `Box2__int__int mk_box__spec...(...)`).  Collect the specs and register
+     * their concrete result/arg types FIRST, so the struct-app / adt-app /
+     * fn-ptr flush below emits the monomorphized typedef ahead of the spec decls
+     * that reference it.  Whole-program (emit_program) registers these during
+     * its single emit walk; the header has no body walk, so it registers them
+     * explicitly here. */
+    EmitCtx hdr_ctx;
+    memset(&hdr_ctx, 0, sizeof(hdr_ctx));
+    /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch. */
+    Arena hdr_type_arena; arena_init(&hdr_type_arena, 0);
     if (separate_compilation) {
-        EmitCtx hdr_ctx;
-        memset(&hdr_ctx, 0, sizeof(hdr_ctx));
         hdr_ctx.separate_compilation = true;
-        /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
-         * freed in bulk before this block returns. */
-        Arena hdr_type_arena; arena_init(&hdr_type_arena, 0);
         hdr_ctx.type_arena = &hdr_type_arena;
         emit_abi_scan_program(&hdr_ctx, h_items, h_n_items);
 
@@ -5603,6 +5607,23 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             sp->external_linkage = true;
         }
 
+        /* Register every owned spec's concrete result/arg types so their
+         * monomorphized struct-app / fn-ptr typedefs are emitted by the flush
+         * below -- before the spec decls (and the .c's spec bodies) use them. */
+        for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++) {
+            const EmitAbiSpecialization *spec = &hdr_ctx.abi_specializations[i];
+            if (!spec->fn) continue; /* skip borrow specs */
+            (void)type_c_name(spec->result_type);
+            for (uint8_t j = 0; j < spec->n_args; j++)
+                (void)type_c_name(spec->arg_types[j]);
+        }
+    }
+
+    type_codegen_emit_struct_apps(out);
+    type_codegen_emit_adt_apps(out);
+    type_codegen_emit_fn_ptr_typedefs(out);
+
+    if (separate_compilation) {
         uint32_t n_decls = 0;
         for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++) {
             const EmitAbiSpecialization *spec = &hdr_ctx.abi_specializations[i];
@@ -5629,9 +5650,9 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         free(hdr_ctx.specialized_call_exprs);
         free(hdr_ctx.specialized_call_names);
         free(hdr_ctx.carrier_call_bindings);
-        arena_free(&hdr_type_arena);
         if (n_decls > 0) buf_putc(out, '\n');
     }
+    arena_free(&hdr_type_arena);
 
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
@@ -6067,6 +6088,17 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
             }
             free(bn);
         } else if (e->kind == EX_FN_DEF) {
+            /* parametric-struct-by-value-carrier-inconsistency: skip the generic
+             * (unspecialized) body of a function whose by-value signature carries
+             * an abstract tyvar aggregate (e.g. `(defn mk-box [A B] ... :(Box2 A
+             * B) ...)`).  Its carrier body is invalid C -- a parametric struct
+             * erases to the int64_t carrier, so `(int64_t){.e1=..}` /  `(t).e1`
+             * are emitted against a non-aggregate.  Whole-program (emit_program)
+             * already skips it via this same predicate; it is a pure template,
+             * reachable only through its monomorphized ABI clones (emitted below /
+             * declared in the header).  Without this, separate compilation emits
+             * the broken generic body verbatim. */
+            if (emit_abi_fn_skip_generic(&ctx, e)) continue;
             /* Emit function definition */
             emit_fn_def(&ctx, &file, e);
         } else if (e->kind == EX_EXTERN_C) {

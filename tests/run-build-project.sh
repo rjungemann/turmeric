@@ -606,6 +606,43 @@ else
     fi
 fi
 
+# parametric-struct-by-value-carrier-inconsistency: a project module with a
+# generic parametric struct (`Box2 [A B]`), a by-value constructor, and a
+# by-value accessor.  Whole-program prunes the generic templates and emits the
+# monomorphized `Box2__int__int` struct by value; separate compilation must do
+# the same -- prune the invalid generic carrier bodies AND emit the
+# monomorphized struct-app typedef in the header before the spec-clone decls.
+# box-1st(mk-box(21, 99)) = 21.
+PSTRUCT="$WORK/pstruct"
+mkdir -p "$PSTRUCT/src/app"
+cat > "$PSTRUCT/build.tur" <<'EOF'
+(defpackage tur-pstruct
+  :name    "tur-pstruct"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] })
+EOF
+cat > "$PSTRUCT/src/app/main.tur" <<'EOF'
+(defmodule app/main
+(defstruct Box2 [A B] (e1 A) (e2 B))
+(defn mk-box [A B] [a :A b :B] : (Box2 A B) (make-struct Box2 a b))
+(defn box-1st [A B] [t : (Box2 A B)] :A (.e1 t))
+  (defn main [] : int
+    (box-1st (mk-box 21 99))))
+EOF
+pstruct_out=$(cd "$WORK" && "$TUR" build "$PSTRUCT" -o "$WORK/pstructbin" 2>&1)
+pstruct_rc=$?
+if [ $pstruct_rc -ne 0 ]; then
+    fail "build-project-parametric-struct-by-value" "tur build exit=$pstruct_rc: $pstruct_out"
+else
+    "$WORK/pstructbin"
+    pstruct_run_rc=$?
+    if [ "$pstruct_run_rc" -eq 21 ]; then
+        pass "build-project-parametric-struct-by-value"
+    else
+        fail "build-project-parametric-struct-by-value" "exit=$pstruct_run_rc (expected 21)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

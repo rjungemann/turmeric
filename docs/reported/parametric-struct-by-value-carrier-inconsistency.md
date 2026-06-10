@@ -2,7 +2,7 @@
 title: Generic parametric-struct-by-value lowering is internally inconsistent -- make-struct boxes into a carrier pointer while (.field t) reads it by value
 category: Reported
 severity: medium
-status: OPEN -- pre-existing; masked in whole-program mode by specialization/pruning, exposed under separate compilation (`tur build <dir>`) which emits every generic defn verbatim.
+status: RESOLVED (2026-06-10) -- separate compilation now mirrors whole-program: the invalid generic carrier body is pruned (emit_implementation skips it via emit_abi_fn_skip_generic) and the monomorphized struct-app typedef is emitted in the header ahead of the spec-clone decls (emit_header registers spec result/arg types before the struct-app flush). Regression-covered by `build-project-parametric-struct-by-value` in tests/run-build-project.sh; the report's tuple.tur repro also builds (tuple.tur now loads its own typeclass-eq.tur dependency).
 description: For a parametric struct (n_type_params > 0) erased to the int64_t carrier, EX_MAKE_STRUCT emits an invalid `(int64_t){.e1=..}` compound literal, while EX_GET_FIELD's `through_carrier` path reads it as a heap pointer `((Name *)(intptr_t)v)->field`. The two sides disagree on the carrier representation, so the generic (unspecialized) form of a function like tuple.tur's `tuple2`/`tuple2-1st` cannot be emitted as valid, self-consistent C.
 ---
 
@@ -94,11 +94,40 @@ specialized (monomorphized) path must not regress -- a naive gate on
 attempt that boxed `make-struct` on the carrier (`emit_type_c_name == "int64_t"`)
 fixed the constructor but then disagreed with a generic `(.e1 t)` that the same
 function lowered as a *value* `(t).e1`, confirming the read side is itself
-inconsistent across contexts (carrier vs value). A complete fix must unify the
-parametric-struct carrier discipline across make-struct, get-field, and the
-fn parameter/return ABI -- this is the "pre-existing
-typeclass-dispatch-on-parametric-struct issue" the `stdlib/tuple.tur` and
-`stdlib/pair.tur` comments already reference.
+inconsistent across contexts (carrier vs value).
+
+## Resolution (2026-06-10)
+
+The fix did **not** try to make the generic carrier body self-consistent
+(unifying make-struct / get-field / the fn ABI) -- that body is a template that
+is *never directly called*, only instantiated via monomorphized ABI clones.
+Instead, separate compilation was brought into line with whole-program, which
+already handles this by **pruning the generic template and emitting the
+monomorphized struct by value**:
+
+1. **Prune the broken generic body (`emit_implementation`,
+   `src/compiler/emit_module.c`).** The per-module `.c` fn-def loop now calls
+   `emit_abi_fn_skip_generic` -- the exact predicate `emit_program` uses -- so a
+   generic-unsafe defn (a by-value aggregate carrying an abstract tyvar, e.g.
+   `(Box2 A B)`) is not emitted. Its invalid `(int64_t){.e1=..}` / `(t).e1`
+   carrier body never reaches the C compiler. The function survives only through
+   its specialized clones.
+
+2. **Emit the monomorphized struct-app typedef in the header
+   (`emit_header`).** The spec clones return/accept e.g. `Box2__int__int` *by
+   value*, so the complete typedef must precede their decls. `emit_header` now
+   collects the ABI specializations and registers their concrete result/arg
+   types (`type_c_name`) **before** the `type_codegen_emit_struct_apps` flush,
+   so `typedef struct Box2__int__int {...}` lands ahead of the spec-clone decls
+   in the header (and the `.c`, which `#include`s it). Previously the header
+   referenced `Box2__int__int` with no definition.
+
+The result is byte-for-byte the shape whole-program emits: base + monomorphized
+struct typedefs, no generic template, spec clones using the real struct by
+value. The deeper "make the generic carrier body itself valid" project is moot
+for codegen (the template is never emitted) and remains only a latent concern
+for any future feature that would force a generic parametric-struct body to be
+emitted directly.
 
 ## How to validate
 
