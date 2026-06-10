@@ -158,6 +158,42 @@ assert_stderr_contains "intra-spice import" \
     "SC4: --no-auto-spice falls through to SC0 hint" \
     "$TUR" --no-auto-spice check "$ENTRY"
 
+# SC4-build (tur-build-single-file-no-spice-autodiscover): `tur build <file>`
+# is the last per-file subcommand to gain auto-discovery. Like check/emit-c/
+# emit-h/run, it now walks up from the input to the enclosing build.tur and
+# adds <root>/src to the include path, so the intra-spice `import foo/a`
+# resolves with no explicit -I. The produced binary runs and returns 42.
+SC4B_BIN=$(mktemp)
+"$TUR" build "$ENTRY" -o "$SC4B_BIN" >/dev/null 2>&1
+sc4b_rc=$?
+if [ "$sc4b_rc" -eq 0 ] && [ -x "$SC4B_BIN" ]; then
+    "$SC4B_BIN" >/dev/null 2>&1
+    sc4b_run=$?
+    if [ "$sc4b_run" -eq 42 ]; then
+        echo "PASS SC4-build: tur build auto-discovers spice src/ (binary returns 42)"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL SC4-build: tur build binary returned $sc4b_run (want 42)"
+        FAIL=$((FAIL + 1))
+        FAILED+=("SC4-build: tur build binary value")
+    fi
+else
+    echo "FAIL SC4-build: tur build did not auto-discover spice src/ (exit $sc4b_rc)"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SC4-build: tur build auto-discovery")
+fi
+rm -f "$SC4B_BIN"
+
+# SC4-build regression: --no-auto-spice opts the single-file build out too,
+# so the intra-spice import is unresolved and the build fails with the SC0
+# diagnostic (confirms the opt-out still composes with build).
+assert_exit 1 "SC4-build: --no-auto-spice disables build auto-discovery" \
+    "$TUR" --no-auto-spice build "$ENTRY" -o /dev/null
+
+assert_stderr_contains "intra-spice import" \
+    "SC4-build: --no-auto-spice build falls through to SC0 hint" \
+    "$TUR" --no-auto-spice build "$ENTRY" -o /dev/null
+
 # SC6: --json output exercises the same auto-discovery code path the LSP
 # server uses via tur_check_only().  No -I, no --no-auto-spice; expect a
 # successful JSON envelope and exit 0.
@@ -178,6 +214,31 @@ assert_exit 0 "SC5: tur emit-c resolves :spices :path dep via auto-discovery" \
 # The dep's `bonus` returns 100, so main's exit code is 100.
 assert_exit 100 "SC5: tur run with :spices :path dep returns dep's value (100)" \
     "$TUR" run "$DEPS_ENTRY"
+
+# SC5-build: cross-spice deps resolve under `tur build <file>` too -- the
+# manifest's `:spices :path` producer src/ joins the include path, so the
+# consumer's `import helper/util` resolves and the binary returns the dep's
+# value (100).
+SC5B_BIN=$(mktemp)
+"$TUR" build "$DEPS_ENTRY" -o "$SC5B_BIN" >/dev/null 2>&1
+sc5b_rc=$?
+if [ "$sc5b_rc" -eq 0 ] && [ -x "$SC5B_BIN" ]; then
+    "$SC5B_BIN" >/dev/null 2>&1
+    sc5b_run=$?
+    if [ "$sc5b_run" -eq 100 ]; then
+        echo "PASS SC5-build: tur build resolves :spices :path dep (binary returns 100)"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL SC5-build: tur build dep binary returned $sc5b_run (want 100)"
+        FAIL=$((FAIL + 1))
+        FAILED+=("SC5-build: tur build dep binary value")
+    fi
+else
+    echo "FAIL SC5-build: tur build did not resolve :spices :path dep (exit $sc5b_rc)"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SC5-build: tur build dep auto-discovery")
+fi
+rm -f "$SC5B_BIN"
 
 # SC5: --no-auto-spice disables the manifest read too, so the same check
 # falls back to the SC0 diagnostic for the missing helper/util.
