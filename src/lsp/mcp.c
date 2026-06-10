@@ -80,7 +80,8 @@ static void mcp_write_message(int fd_out, const char *json, size_t len) {
         if (n <= 0) return;
         written += (size_t)n;
     }
-    write(fd_out, "\n", 1);
+    ssize_t nl = write(fd_out, "\n", 1);
+    (void)nl;
 }
 
 #ifndef TUR_VERSION

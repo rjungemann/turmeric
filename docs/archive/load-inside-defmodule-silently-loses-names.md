@@ -3,7 +3,41 @@ title: ^load inside defmodule (or defn) silently accepted but loaded names not v
 category: Reported
 severity: medium
 description: A `(load "...")` form that appears inside a `defmodule` body is silently accepted (exit 0, no warning) but the names it loads are not injected into the module's resolution scope. Any use of a loaded name inside the same defmodule produces `TUR-E: unknown function or operator`. The same applies to `load` inside a `defn` body. `load` only takes effect at the top-level compilation unit; textual position inside any enclosing form makes it a no-op for name resolution.
+status: RESOLVED -- Option A implemented; see resolution note below.
 ---
+
+> **RESOLVED (2026-06-10).** Two-stage resolution:
+>
+> 1. The silent no-op was first closed by emitting a hard error
+>    (#303, "Option B" below).
+> 2. The ergonomic fix ("Option A") then landed: the load-expansion
+>    preprocessor (`load_expand_forms` in
+>    `src/compiler/elab_toplevel.c`) now **descends into `(defmodule ...)`
+>    bodies**, so a `(load "path")` placed directly in a module body
+>    splices the loaded file's top-level forms into the module's scope --
+>    exactly as a top-level load splices into the compilation unit. The
+>    nested walk shares the compilation-global visited set on the `Elab`,
+>    so a path already spliced elsewhere is not re-spliced. Loaded names
+>    (e.g. `stdlib/arrow.tur`'s `>>>`) are now visible to subsequent body
+>    forms.
+>
+> A `(load ...)` in genuine **expression position** (a `defn`/`let`/`do`
+> body) is still a hard error -- it cannot act as a compile-time include
+> there. `elab_load` in `src/compiler/elab_module.c` carries the updated
+> diagnostic.
+>
+> Regression coverage: positive
+> `tests/fixtures/load-inside-defmodule-injects-names/` (load inside a
+> module body, `>>>` resolves and the program runs); negative
+> `tests/fixtures/errors/load-inside-defn/` (expression-position load
+> still errors). The old `errors/load-inside-defmodule` negative fixture
+> was removed -- that input is now valid.
+>
+> Note: the `^fat` let-binding form of `>>>` (`^fat h : (fn ...) (>>> f g)`)
+> still segfaults at runtime regardless of load placement -- that is the
+> orthogonal, separately-tracked
+> [`../reported/fat-shim-void-ptr-calls-bare-not-fat.md`](../reported/fat-shim-void-ptr-calls-bare-not-fat.md),
+> not a load-scope issue. The named-function `>>>` shape works.
 
 # `load` inside `defmodule` silently loses names
 

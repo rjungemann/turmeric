@@ -31,13 +31,19 @@ static bool module_name_valid(const char *name, uint32_t len) {
  *
  * Syntax: (load "relative/or/absolute/path.tur")
  */
-/* Phase M: (load "path") — handled by load-expansion preprocessor in
- * elaborate_program before the two-pass elab.  Any (load ...) that reaches
- * this point is inside a defmodule or defn body, which the preprocessor does
- * not descend into.  Emit a hard error so the programmer knows to move it. */
+/* Phase M: (load "path") — handled by the load-expansion preprocessor in
+ * elaborate_program before the two-pass elab.  The preprocessor expands loads
+ * at the compilation-unit top level AND descends into defmodule bodies (so a
+ * load inside a module splices the loaded file's forms into the module scope;
+ * see docs/archive/load-inside-defmodule-silently-loses-names.md).  Any
+ * (load ...) that still reaches this point is in genuine expression position
+ * (a defn/let/do body), where it cannot act as a compile-time include; emit a
+ * hard error so the programmer knows to move it to the top level or a
+ * defmodule body. */
 Expr *elab_load(Elab *e, const Form *call) {
     diag_emit(DIAG_ERROR, call->span,
-              "load is only valid at the top level; move it before the enclosing defmodule or defn");
+              "load is only valid at the top level or directly in a defmodule body; "
+              "move it out of the enclosing defn/let body");
     return NULL;
 }
 
