@@ -1,0 +1,4 @@
+Exercised by tests/run-transitive-cmake-deps.sh's cycle-terminates check.
+Not run via tests/run.sh's bare-fixture loop (no top-level input.tur; the
+program lives under spice-a/src/main.tur and the assertion is about
+resolver termination, not stdout/stderr).

@@ -31,7 +31,7 @@ Outstanding items are no longer typing-wave regressions:
 - `opengl`, `json`, `http`, `regex`, `sdf-raylib` (raylib portion) --
   third-party headers absent on this host; orthogonal to the typing
   migration and tracked by
-  [`transitive-cmake-deps`](transitive-cmake-deps-plan.md).
+  [`transitive-cmake-deps`](history/transitive-cmake-deps-plan.md).
 - `zlib` -- a residual `<sys/_types/_fd_def.h>` macOS SDK collision in
   the generated inline-C; needs its own minimal repro report before any
   fix. Not a typing-wave issue.

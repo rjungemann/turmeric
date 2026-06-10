@@ -1,0 +1,3 @@
+Exercised by tests/run-transitive-cmake-deps.sh's conflict-detected check.
+Not run via tests/run.sh's bare-fixture loop -- it intentionally has no
+program to execute; the assertion is on the resolver's diagnostic.

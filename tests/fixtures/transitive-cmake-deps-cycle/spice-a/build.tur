@@ -1,0 +1,6 @@
+(defpackage spice-a
+  :name    "spice-a"
+  :version "0.1.0"
+  :spices #{
+    "spice-b" #{:path "../spice-b"}
+  })

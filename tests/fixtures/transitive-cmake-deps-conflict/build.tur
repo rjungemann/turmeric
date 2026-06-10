@@ -1,0 +1,12 @@
+;;; transitive-cmake-deps-plan regression: two workspace siblings each
+;;; declare a :cmake-deps entry with the same name but different :ref.
+;;; The transitive resolver must detect the divergence and emit the
+;;; "conflicting :cmake-deps" diagnostic, refusing to invoke cmake.
+(defpackage transitive-cmake-deps-conflict
+  :name    "transitive-cmake-deps-conflict"
+  :version "0.1.0"
+  :members ["spice-a" "spice-b"]
+  :spices #{
+    "spice-a" #{:path "spice-a"}
+    "spice-b" #{:path "spice-b"}
+  })

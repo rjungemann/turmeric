@@ -1,6 +1,21 @@
 # Transitive `:cmake-deps` Resolution Plan
 
-> **Status:** Phase 1+2 landed (single-level walk); deeper recursion landed 2026-06-10; dedicated fixtures still pending
+> **LANDED 2026-06-10.** All planned phases are in: single-level walk
+> (2026-06-09), deep transitive worklist with cycle handling (2026-06-10
+> morning), and `cmd_pkg_fetch` converted to the same transitive
+> collector (2026-06-10 afternoon). Two regression fixtures cover the
+> resolver:
+> `tests/fixtures/transitive-cmake-deps-cycle/` (A→B→A in `:spices`)
+> proves the resolver terminates and the program builds + runs;
+> `tests/fixtures/transitive-cmake-deps-conflict/` (two siblings declare
+> the same `:cmake-deps` name with mismatched `:ref`s) proves the
+> conflict diagnostic fires and `cmake` is never invoked. The harness at
+> `tests/run-transitive-cmake-deps.sh` ties them together. The plan's
+> proposed `transitive-cmake-deps-basic` end-to-end fixture is
+> intentionally not added here -- the cascade fixture in
+> `../turmeric-spices/spices/tourist/tests/fixtures/cascade/` already
+> covers that surface, and a hermetic in-repo version would need a
+> vendored cmake project plus a working `cmake` on the runner.
 > **Last Updated:** 2026-06-10
 > **Type:** Build system / `tur` resolver
 > **Affects:** `src/main.c` (`tur run` / `tur build <dir>` / `tur test`),

@@ -3873,8 +3873,23 @@ int cmd_pkg_fetch(int argc, char **argv) {
 
     bool ok = pkg_fetch_all(".", &m, &lock, update);
 
-    /* cmake deps: generate cmake/CMakeLists.txt, then configure+build */
-    if (m.n_cmake_deps > 0) {
+    /* cmake deps: generate cmake/CMakeLists.txt, then configure+build.
+     * transitive-cmake-deps-plan: union the enclosing manifest's :cmake-deps
+     * with any declared transitively by workspace siblings (and their own
+     * :spices) so `tur fetch` mirrors `tur run`'s view of the dep set. */
+    PkgCmakeDep *fetch_deps   = NULL;
+    int          n_fetch_deps = 0;
+    if (!pkg_collect_transitive_cmake_deps(".", &m,
+                                           &fetch_deps, &n_fetch_deps)) {
+        fprintf(stderr,
+                "spice: transitive cmake-deps resolution failed\n");
+        ok = false;
+    } else if (n_fetch_deps > 0) {
+        /* Alias `m` and swap in the unioned cmake_deps so the existing
+         * generator/builder pair sees the full set. */
+        PkgManifest mu = m;
+        mu.cmake_deps   = fetch_deps;
+        mu.n_cmake_deps = n_fetch_deps;
         /* On re-fetch without --update, verify existing SHAs first */
         if (!update) {
             if (!pkg_cmake_verify_lock(".", &lock)) {
@@ -3885,13 +3900,14 @@ int cmd_pkg_fetch(int argc, char **argv) {
             }
         }
         if (ok) {
-            if (!pkg_gen_cmake_deps(".", &m)) {
+            if (!pkg_gen_cmake_deps(".", &mu)) {
                 ok = false;
-            } else if (!pkg_cmake_build(".", &m, &lock, NULL)) {
+            } else if (!pkg_cmake_build(".", &mu, &lock, NULL)) {
                 ok = false;
             }
         }
     }
+    pkg_cmake_deps_free(fetch_deps, n_fetch_deps);
 
     /* Write updated lock file */
     if (!pkg_lock_write("tur.lock", &lock)) ok = false;

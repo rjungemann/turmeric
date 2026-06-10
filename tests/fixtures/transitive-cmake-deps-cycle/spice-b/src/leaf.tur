@@ -1,0 +1,3 @@
+(defmodule leaf
+  (export forty-two)
+  (defn forty-two [] : int 42))

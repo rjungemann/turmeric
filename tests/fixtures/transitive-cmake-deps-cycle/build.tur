@@ -1,0 +1,8 @@
+;;; transitive-cmake-deps-plan regression: workspace with a :spices cycle.
+;;; spice-a depends on spice-b which depends on spice-a (resolved as :path
+;;; siblings). The transitive cmake-deps collector must terminate via its
+;;; visited set; this fixture builds spice-a end-to-end to prove it does.
+(defpackage transitive-cmake-deps-cycle
+  :name    "transitive-cmake-deps-cycle"
+  :version "0.1.0"
+  :members ["spice-a" "spice-b"])
