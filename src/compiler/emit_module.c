@@ -1652,6 +1652,265 @@ static void emit_cons_helper(Buf *out) {
     buf_puts(out, "#endif\n");
 }
 
+/* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`
+ * plus one `ctor_<Ctor>` allocator per constructor for an ADT (defdata/defgadt).
+ *
+ * Shared by the whole-program path (emit_program) and the
+ * separate-compilation implementation path (emit_implementation) so that an
+ * ADT used only *inside* a module's .c -- e.g. one spliced in by a top-level
+ * (load "stdlib/either.tur") -- gets its base layout typedef + constructors
+ * regardless of build mode.  The header (emit_header) never emits the base ADT
+ * typedef, only monomorphized type-applications, so without this the per-module
+ * .c references `tur_adt_Either` / `ctor_Left` with no definition.  See
+ * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
+    char adt_c_name[256];
+    {
+        char *_mn = mangle_field_name(def->name);
+        snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
+        free(_mn);
+    }
+    buf_printf(out, "typedef struct %s {\n", adt_c_name);
+    buf_printf(out, "    int tag;\n");
+    buf_printf(out, "    union {\n");
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        char *mctor = mangle_field_name(ctor->name);
+        buf_printf(out, "        struct {");
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const char *ctype;
+            switch (ctor->fields[fi].kind) {
+                case TY_INT:      ctype = "int64_t"; break;
+                case TY_BOOL:     ctype = "bool"; break;
+                case TY_FLOAT:    ctype = "double"; break;
+                case TY_CSTR:     ctype = "const char *"; break;
+                case TY_PTR_VOID: ctype = "void *"; break;
+                case TY_RC:
+                case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                case TY_REF:
+                case TY_LREF:     ctype = "void *"; break;
+                case TY_INT8:     ctype = "int8_t"; break;
+                case TY_INT16:    ctype = "int16_t"; break;
+                case TY_INT32:    ctype = "int32_t"; break;
+                case TY_INT64:    ctype = "int64_t"; break;
+                case TY_UINT8:    ctype = "uint8_t"; break;
+                case TY_UINT16:   ctype = "uint16_t"; break;
+                case TY_UINT32:   ctype = "uint32_t"; break;
+                case TY_UINT64:   ctype = "uint64_t"; break;
+                case TY_FLOAT32:  ctype = "float"; break;
+                case TY_FLOAT64:  ctype = "double"; break;
+                default:          ctype = "int64_t"; break;
+            }
+            buf_printf(out, " %s _%u;", ctype, fi);
+        }
+        buf_printf(out, " } %s;\n", mctor);
+        free(mctor);
+    }
+    buf_printf(out, "    } as;\n");
+    buf_printf(out, "} %s;\n\n", adt_c_name);
+
+    /* Emit constructor functions */
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        char *mctor = mangle_field_name(ctor->name);
+        buf_printf(out, "static int64_t ctor_%s(", mctor);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            if (fi > 0) buf_puts(out, ", ");
+            const char *ctype;
+            switch (ctor->fields[fi].kind) {
+                case TY_INT:      ctype = "int64_t"; break;
+                case TY_BOOL:     ctype = "bool"; break;
+                case TY_FLOAT:    ctype = "double"; break;
+                case TY_CSTR:     ctype = "const char *"; break;
+                case TY_PTR_VOID: ctype = "void *"; break;
+                case TY_RC:
+                case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                case TY_REF:
+                case TY_LREF:     ctype = "void *"; break;
+                case TY_INT8:     ctype = "int8_t"; break;
+                case TY_INT16:    ctype = "int16_t"; break;
+                case TY_INT32:    ctype = "int32_t"; break;
+                case TY_INT64:    ctype = "int64_t"; break;
+                case TY_UINT8:    ctype = "uint8_t"; break;
+                case TY_UINT16:   ctype = "uint16_t"; break;
+                case TY_UINT32:   ctype = "uint32_t"; break;
+                case TY_UINT64:   ctype = "uint64_t"; break;
+                case TY_FLOAT32:  ctype = "float"; break;
+                case TY_FLOAT64:  ctype = "double"; break;
+                default:          ctype = "int64_t"; break;
+            }
+            buf_printf(out, "%s _%u", ctype, fi);
+        }
+        buf_printf(out, ") {\n");
+        buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                   adt_c_name, adt_c_name, adt_c_name);
+        buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+        }
+        buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
+        buf_printf(out, "}\n\n");
+        free(mctor);
+    }
+}
+
+/* Closure / fat-closure fixed runtime: tagged-union accessors, the
+ * TUR_APPLY/TUR_CLOSURE_FN inline-C macros, Option/Result inline-C helpers, the
+ * `^fat` auto-shim thunks (__tur_fatshim0..5), and the poly-to-fat thunks
+ * (__tur_poly_to_fat0..5).  Every symbol here is `static` or a macro/typedef --
+ * nothing has external linkage -- so it is safe to emit once per translation
+ * unit.  The whole-program path (emit_program) emits it inline as part of its
+ * runtime preamble; the separate-compilation path (emit_implementation) emits
+ * the same block per module .c so that `^fat` parameters, typeclass-method
+ * closures, and inline-C closure application work under `tur build <dir>` (which
+ * does not run the whole-program preamble).  See
+ * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+static void emit_closure_fat_runtime(Buf *out) {
+    buf_puts(out, "/* IT4: tagged union runtime representation */\n");
+    buf_puts(out, "typedef struct { int64_t tag; int64_t val; } tur_tagged_t;\n");
+    buf_puts(out, "#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
+    buf_puts(out, "#define TUR_UNTAG(x)    ((x).val)\n");
+    buf_puts(out, "#define TUR_GETTAG(x)   ((x).tag)\n");
+    /* Pointer accessors for tur_tagged_t*.  Inline-C that allocates tagged
+     * nodes on the heap should use these instead of raw ->tag / ->val so the
+     * access site does not depend on the struct field layout. */
+    buf_puts(out, "#define TUR_PTAG(p)     ((p)->tag)\n");
+    buf_puts(out, "#define TUR_PVAL(p)     ((p)->val)\n");
+    /* Fat-closure application helpers for inline-C blocks.
+     * A fat closure is a heap struct { int64_t __fn; <captures...> }; the thunk
+     * has signature (void *env, int64_t arg...) -> int64_t.  TUR_APPLYn reads the
+     * thunk pointer from slot 0 and invokes it with the closure as its env, so
+     * inline-C no longer hand-writes the ((int64_t(*)(void*, ...))...)[0] cast.
+     * The closure handle f and the arguments are taken as int64_t (the polymorphic
+     * carrier type used throughout the runtime). */
+    buf_puts(out, "#define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]\n");
+    /* Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1).
+     * TUR_APPLYn_T speaks the closure's *declared* C types instead of forcing
+     * everything through int64_t.  R is the closure's C return type; A0,A1,...
+     * are its C argument types in order.  An inline-C block that knows the
+     * concrete signature of a closure (e.g. a (fn [x :float] :float ...) signal
+     * body, or a (fn [p :ptr<T>] :ptr<T> ...) iterator step) invokes it through
+     * the matching _T form so the value never round-trips through an int64_t
+     * bit-cast.  The thunk is still read from slot 0 and called with the closure
+     * box as its env -- only the function-pointer cast changes.  Each argument
+     * is coerced with (Ai)(value) at the call site. */
+    buf_puts(out, "#define TUR_APPLY0_T(R, f) \\\n");
+    buf_puts(out, "    (((R (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f)))\n");
+    buf_puts(out, "#define TUR_APPLY1_T(R, A0, f, a) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a)))\n");
+    buf_puts(out, "#define TUR_APPLY2_T(R, A0, A1, f, a, b) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b)))\n");
+    buf_puts(out, "#define TUR_APPLY3_T(R, A0, A1, A2, f, a, b, c) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1, A2))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c)))\n");
+    buf_puts(out, "#define TUR_APPLY4_T(R, A0, A1, A2, A3, f, a, b, c, d) \\\n");
+    buf_puts(out, "    (((R (*)(void *, A0, A1, A2, A3))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c), (A3)(d)))\n");
+    /* Phase R2: nullary fat-closure apply -- a (fn [] :int) thunk is invoked
+     * through the standard closure protocol (thunk = slot 0, env = the box).
+     * The legacy TUR_APPLYn macros are the all-int64_t case of TUR_APPLYn_T,
+     * kept as literal-equivalent shorthands so existing hand-written inline-C
+     * (stdlib/arrow.tur et al.) compiles unchanged. */
+    buf_puts(out, "#define TUR_APPLY0(f)          TUR_APPLY0_T(int64_t, f)\n");
+    buf_puts(out, "#define TUR_APPLY1(f, a)       TUR_APPLY1_T(int64_t, int64_t, f, a)\n");
+    buf_puts(out, "#define TUR_APPLY2(f, a, b)    TUR_APPLY2_T(int64_t, int64_t, int64_t, f, a, b)\n");
+    buf_puts(out, "#define TUR_APPLY3(f, a, b, c) \\\n");
+    buf_puts(out, "    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)\n");
+    buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
+    buf_puts(out, "    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)\n");
+    /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
+     * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
+     * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
+     * { bool is_ok; int64_t ok_val; int64_t err_val; }.  These helpers let an
+     * inline-C block construct and inspect Option/Result values through the
+     * canonical layout instead of hand-rolling the struct cast + a magic
+     * sentinel integer (`-1`, `INT64_MIN`, `0`-as-absent).  The layout matches
+     * stdlib/option.tur and stdlib/result.tur byte-for-byte, so values built
+     * with tur_some/tur_ok flow transparently into the stdlib accessors and
+     * vice versa.  Marked unused so a program that touches neither type still
+     * compiles clean under -Wall. */
+    buf_puts(out, "typedef struct { bool is_some; int64_t value; } tur_option_t;\n");
+    buf_puts(out, "typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;\n");
+    buf_puts(out, "#define TUR_NONE ((int64_t)0)\n");
+    buf_puts(out, "static int64_t tur_some(int64_t __x) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_some(int64_t __x) {\n");
+    buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
+    buf_puts(out, "    __o->is_some = true; __o->value = __x;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
+    buf_puts(out, "static bool tur_is_some(int64_t __o) __attribute__((unused));\n");
+    buf_puts(out, "static bool tur_is_some(int64_t __o) {\n");
+    buf_puts(out, "    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->is_some;\n}\n");
+    buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
+    buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->value;\n}\n");
+    buf_puts(out, "static int64_t tur_ok(int64_t __v) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_ok(int64_t __v) {\n");
+    buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
+    buf_puts(out, "    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
+    buf_puts(out, "static int64_t tur_err(int64_t __e) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_err(int64_t __e) {\n");
+    buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
+    buf_puts(out, "    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
+    buf_puts(out, "static bool tur_is_ok(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static bool tur_is_ok(int64_t __r) {\n");
+    buf_puts(out, "    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->is_ok;\n}\n");
+    buf_puts(out, "static int64_t tur_ok_value(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_ok_value(int64_t __r) {\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->ok_val;\n}\n");
+    buf_puts(out, "static int64_t tur_err_value(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_err_value(int64_t __r) {\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->err_val;\n}\n");
+    /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
+     * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
+     * fn passed to a ^fat parameter is invoked through the standard fat-closure
+     * protocol (thunk = slot 0, env = the struct).  Each shim ignores the thunk
+     * slot, reads the original fn pointer from slot 1, and forwards its arguments
+     * using the int64_t carrier ABI (matching TUR_APPLY and the reactor casts).
+     * This retires the historical capture-forcing dummy ((let [_ x] (fn ...))). */
+    buf_puts(out, "static int64_t __tur_fatshim0(void *__e) {\n");
+    buf_puts(out, "    return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim1(void *__e, int64_t a0) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t))(intptr_t)((int64_t *)__e)[1])(a0);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim2(void *__e, int64_t a0, int64_t a1) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim3(void *__e, int64_t a0, int64_t a1, int64_t a2) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim4(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim5(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3, a4);\n}\n");
+    /* SC7: EX_POLY_TO_FAT thunks.  Convert a tur_poly_fn_t {env,fn} (a
+     * typeclass-method closure param) into the fat-closure protocol: the fat box
+     * is { __tur_poly_to_fat<N>, fn, env }, and the sink's N-ary fat-call passes
+     * the box as the env, so the thunk reads the original fn (slot 1) + its env
+     * (slot 2) and forwards every argument.  The carrier stores the method's
+     * real N-ary thunk in slot 1 (make_poly_wrapper builds it), so a binary or
+     * higher-arity poly method round-trips when boxed into a ^fat sink of the
+     * matching arity. */
+    for (int n = 0; n <= 5; n++) {
+        buf_printf(out, "static int64_t __tur_poly_to_fat%d(void *__e", n);
+        for (int i = 0; i < n; i++) buf_printf(out, ", int64_t a%d", i);
+        buf_puts(out, ") {\n    int64_t *__b = (int64_t *)__e;\n");
+        buf_puts(out, "    return ((int64_t (*)(void *");
+        for (int i = 0; i < n; i++) buf_puts(out, ", int64_t");
+        buf_puts(out, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
+        for (int i = 0; i < n; i++) buf_printf(out, ", a%d", i);
+        buf_puts(out, ");\n}\n");
+    }
+    /* Suppress -Wunused-function for shim arities a program does not use. */
+    buf_puts(out, "static void *__tur_fatshim_keep[] __attribute__((unused)) = {\n");
+    buf_puts(out, "    (void *)__tur_fatshim0, (void *)__tur_fatshim1, (void *)__tur_fatshim2,\n");
+    buf_puts(out, "    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5,\n");
+    buf_puts(out, "    (void *)__tur_poly_to_fat0, (void *)__tur_poly_to_fat1,\n");
+    buf_puts(out, "    (void *)__tur_poly_to_fat2, (void *)__tur_poly_to_fat3,\n");
+    buf_puts(out, "    (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };\n");
+}
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -1891,95 +2150,7 @@ int emit_program(Buf *out, const Expr *program) {
         /* Phase G0/G1: ADT typedef + constructor functions */
         else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
             AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
-            char adt_c_name[256];
-            {
-                char *_mn = mangle_field_name(def->name);
-                snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
-                free(_mn);
-            }
-            buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
-            buf_printf(&early_file, "    int tag;\n");
-            buf_printf(&early_file, "    union {\n");
-            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
-                CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
-                buf_printf(&early_file, "        struct {");
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    const char *ctype;
-                    switch (ctor->fields[fi].kind) {
-                        case TY_INT:      ctype = "int64_t"; break;
-                        case TY_BOOL:     ctype = "bool"; break;
-                        case TY_FLOAT:    ctype = "double"; break;
-                        case TY_CSTR:     ctype = "const char *"; break;
-                        case TY_PTR_VOID: ctype = "void *"; break;
-                        case TY_RC:
-                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:
-                        case TY_LREF:     ctype = "void *"; break;
-                        case TY_INT8:     ctype = "int8_t"; break;
-                        case TY_INT16:    ctype = "int16_t"; break;
-                        case TY_INT32:    ctype = "int32_t"; break;
-                        case TY_INT64:    ctype = "int64_t"; break;
-                        case TY_UINT8:    ctype = "uint8_t"; break;
-                        case TY_UINT16:   ctype = "uint16_t"; break;
-                        case TY_UINT32:   ctype = "uint32_t"; break;
-                        case TY_UINT64:   ctype = "uint64_t"; break;
-                        case TY_FLOAT32:  ctype = "float"; break;
-                        case TY_FLOAT64:  ctype = "double"; break;
-                        default:          ctype = "int64_t"; break;
-                    }
-                    buf_printf(&early_file, " %s _%u;", ctype, fi);
-                }
-                buf_printf(&early_file, " } %s;\n", mctor);
-                free(mctor);
-            }
-            buf_printf(&early_file, "    } as;\n");
-            buf_printf(&early_file, "} %s;\n\n", adt_c_name);
-
-            /* Emit constructor functions */
-            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
-                CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
-                buf_printf(&early_file, "static int64_t ctor_%s(", mctor);
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    if (fi > 0) buf_puts(&early_file, ", ");
-                    const char *ctype;
-                    switch (ctor->fields[fi].kind) {
-                        case TY_INT:      ctype = "int64_t"; break;
-                        case TY_BOOL:     ctype = "bool"; break;
-                        case TY_FLOAT:    ctype = "double"; break;
-                        case TY_CSTR:     ctype = "const char *"; break;
-                        case TY_PTR_VOID: ctype = "void *"; break;
-                        case TY_RC:
-                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:
-                        case TY_LREF:     ctype = "void *"; break;
-                        case TY_INT8:     ctype = "int8_t"; break;
-                        case TY_INT16:    ctype = "int16_t"; break;
-                        case TY_INT32:    ctype = "int32_t"; break;
-                        case TY_INT64:    ctype = "int64_t"; break;
-                        case TY_UINT8:    ctype = "uint8_t"; break;
-                        case TY_UINT16:   ctype = "uint16_t"; break;
-                        case TY_UINT32:   ctype = "uint32_t"; break;
-                        case TY_UINT64:   ctype = "uint64_t"; break;
-                        case TY_FLOAT32:  ctype = "float"; break;
-                        case TY_FLOAT64:  ctype = "double"; break;
-                        default:          ctype = "int64_t"; break;
-                    }
-                    buf_printf(&early_file, "%s _%u", ctype, fi);
-                }
-                buf_printf(&early_file, ") {\n");
-                buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                           adt_c_name, adt_c_name, adt_c_name);
-                buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
-                               mctor, fi, fi);
-                }
-                buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
-                buf_printf(&early_file, "}\n\n");
-                free(mctor);
-            }
+            emit_adt_typedef_and_ctors(&early_file, def);
         }
     }
 
@@ -2530,149 +2701,10 @@ int emit_program(Buf *out, const Expr *program) {
      * this constant lets inline-C also branch on the build mode. */
     buf_printf(out, "#define TUR_CONTRACTS_ENABLED %d\n", g_no_contracts ? 0 : 1);
 
-    buf_puts(out, "/* IT4: tagged union runtime representation */\n");
-    buf_puts(out, "typedef struct { int64_t tag; int64_t val; } tur_tagged_t;\n");
-    buf_puts(out, "#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
-    buf_puts(out, "#define TUR_UNTAG(x)    ((x).val)\n");
-    buf_puts(out, "#define TUR_GETTAG(x)   ((x).tag)\n");
-    /* Pointer accessors for tur_tagged_t*.  Inline-C that allocates tagged
-     * nodes on the heap should use these instead of raw ->tag / ->val so the
-     * access site does not depend on the struct field layout. */
-    buf_puts(out, "#define TUR_PTAG(p)     ((p)->tag)\n");
-    buf_puts(out, "#define TUR_PVAL(p)     ((p)->val)\n");
-    /* Fat-closure application helpers for inline-C blocks.
-     * A fat closure is a heap struct { int64_t __fn; <captures...> }; the thunk
-     * has signature (void *env, int64_t arg...) -> int64_t.  TUR_APPLYn reads the
-     * thunk pointer from slot 0 and invokes it with the closure as its env, so
-     * inline-C no longer hand-writes the ((int64_t(*)(void*, ...))...)[0] cast.
-     * The closure handle f and the arguments are taken as int64_t (the polymorphic
-     * carrier type used throughout the runtime). */
-    buf_puts(out, "#define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]\n");
-    /* Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1).
-     * TUR_APPLYn_T speaks the closure's *declared* C types instead of forcing
-     * everything through int64_t.  R is the closure's C return type; A0,A1,...
-     * are its C argument types in order.  An inline-C block that knows the
-     * concrete signature of a closure (e.g. a (fn [x :float] :float ...) signal
-     * body, or a (fn [p :ptr<T>] :ptr<T> ...) iterator step) invokes it through
-     * the matching _T form so the value never round-trips through an int64_t
-     * bit-cast.  The thunk is still read from slot 0 and called with the closure
-     * box as its env -- only the function-pointer cast changes.  Each argument
-     * is coerced with (Ai)(value) at the call site. */
-    buf_puts(out, "#define TUR_APPLY0_T(R, f) \\\n");
-    buf_puts(out, "    (((R (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f)))\n");
-    buf_puts(out, "#define TUR_APPLY1_T(R, A0, f, a) \\\n");
-    buf_puts(out, "    (((R (*)(void *, A0))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a)))\n");
-    buf_puts(out, "#define TUR_APPLY2_T(R, A0, A1, f, a, b) \\\n");
-    buf_puts(out, "    (((R (*)(void *, A0, A1))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b)))\n");
-    buf_puts(out, "#define TUR_APPLY3_T(R, A0, A1, A2, f, a, b, c) \\\n");
-    buf_puts(out, "    (((R (*)(void *, A0, A1, A2))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c)))\n");
-    buf_puts(out, "#define TUR_APPLY4_T(R, A0, A1, A2, A3, f, a, b, c, d) \\\n");
-    buf_puts(out, "    (((R (*)(void *, A0, A1, A2, A3))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
-    buf_puts(out, "        ((void *)(intptr_t)(f), (A0)(a), (A1)(b), (A2)(c), (A3)(d)))\n");
-    /* Phase R2: nullary fat-closure apply -- a (fn [] :int) thunk is invoked
-     * through the standard closure protocol (thunk = slot 0, env = the box).
-     * The legacy TUR_APPLYn macros are the all-int64_t case of TUR_APPLYn_T,
-     * kept as literal-equivalent shorthands so existing hand-written inline-C
-     * (stdlib/arrow.tur et al.) compiles unchanged. */
-    buf_puts(out, "#define TUR_APPLY0(f)          TUR_APPLY0_T(int64_t, f)\n");
-    buf_puts(out, "#define TUR_APPLY1(f, a)       TUR_APPLY1_T(int64_t, int64_t, f, a)\n");
-    buf_puts(out, "#define TUR_APPLY2(f, a, b)    TUR_APPLY2_T(int64_t, int64_t, int64_t, f, a, b)\n");
-    buf_puts(out, "#define TUR_APPLY3(f, a, b, c) \\\n");
-    buf_puts(out, "    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)\n");
-    buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
-    buf_puts(out, "    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)\n");
-    /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
-     * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
-     * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
-     * { bool is_ok; int64_t ok_val; int64_t err_val; }.  These helpers let an
-     * inline-C block construct and inspect Option/Result values through the
-     * canonical layout instead of hand-rolling the struct cast + a magic
-     * sentinel integer (`-1`, `INT64_MIN`, `0`-as-absent).  The layout matches
-     * stdlib/option.tur and stdlib/result.tur byte-for-byte, so values built
-     * with tur_some/tur_ok flow transparently into the stdlib accessors and
-     * vice versa.  Marked unused so a program that touches neither type still
-     * compiles clean under -Wall. */
-    buf_puts(out, "typedef struct { bool is_some; int64_t value; } tur_option_t;\n");
-    buf_puts(out, "typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;\n");
-    buf_puts(out, "#define TUR_NONE ((int64_t)0)\n");
-    buf_puts(out, "static int64_t tur_some(int64_t __x) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_some(int64_t __x) {\n");
-    buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
-    buf_puts(out, "    __o->is_some = true; __o->value = __x;\n");
-    buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
-    buf_puts(out, "static bool tur_is_some(int64_t __o) __attribute__((unused));\n");
-    buf_puts(out, "static bool tur_is_some(int64_t __o) {\n");
-    buf_puts(out, "    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->is_some;\n}\n");
-    buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
-    buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->value;\n}\n");
-    buf_puts(out, "static int64_t tur_ok(int64_t __v) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_ok(int64_t __v) {\n");
-    buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
-    buf_puts(out, "    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;\n");
-    buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
-    buf_puts(out, "static int64_t tur_err(int64_t __e) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_err(int64_t __e) {\n");
-    buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
-    buf_puts(out, "    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;\n");
-    buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
-    buf_puts(out, "static bool tur_is_ok(int64_t __r) __attribute__((unused));\n");
-    buf_puts(out, "static bool tur_is_ok(int64_t __r) {\n");
-    buf_puts(out, "    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->is_ok;\n}\n");
-    buf_puts(out, "static int64_t tur_ok_value(int64_t __r) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_ok_value(int64_t __r) {\n");
-    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->ok_val;\n}\n");
-    buf_puts(out, "static int64_t tur_err_value(int64_t __r) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_err_value(int64_t __r) {\n");
-    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->err_val;\n}\n");
-    /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
-     * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
-     * fn passed to a ^fat parameter is invoked through the standard fat-closure
-     * protocol (thunk = slot 0, env = the struct).  Each shim ignores the thunk
-     * slot, reads the original fn pointer from slot 1, and forwards its arguments
-     * using the int64_t carrier ABI (matching TUR_APPLY and the reactor casts).
-     * This retires the historical capture-forcing dummy ((let [_ x] (fn ...))). */
-    buf_puts(out, "static int64_t __tur_fatshim0(void *__e) {\n");
-    buf_puts(out, "    return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim1(void *__e, int64_t a0) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t))(intptr_t)((int64_t *)__e)[1])(a0);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim2(void *__e, int64_t a0, int64_t a1) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim3(void *__e, int64_t a0, int64_t a1, int64_t a2) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim4(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim5(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3, a4);\n}\n");
-    /* SC7: EX_POLY_TO_FAT thunks.  Convert a tur_poly_fn_t {env,fn} (a
-     * typeclass-method closure param) into the fat-closure protocol: the fat box
-     * is { __tur_poly_to_fat<N>, fn, env }, and the sink's N-ary fat-call passes
-     * the box as the env, so the thunk reads the original fn (slot 1) + its env
-     * (slot 2) and forwards every argument.  The carrier stores the method's
-     * real N-ary thunk in slot 1 (make_poly_wrapper builds it), so a binary or
-     * higher-arity poly method round-trips when boxed into a ^fat sink of the
-     * matching arity. */
-    for (int n = 0; n <= 5; n++) {
-        buf_printf(out, "static int64_t __tur_poly_to_fat%d(void *__e", n);
-        for (int i = 0; i < n; i++) buf_printf(out, ", int64_t a%d", i);
-        buf_puts(out, ") {\n    int64_t *__b = (int64_t *)__e;\n");
-        buf_puts(out, "    return ((int64_t (*)(void *");
-        for (int i = 0; i < n; i++) buf_puts(out, ", int64_t");
-        buf_puts(out, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
-        for (int i = 0; i < n; i++) buf_printf(out, ", a%d", i);
-        buf_puts(out, ");\n}\n");
-    }
-    /* Suppress -Wunused-function for shim arities a program does not use. */
-    buf_puts(out, "static void *__tur_fatshim_keep[] __attribute__((unused)) = {\n");
-    buf_puts(out, "    (void *)__tur_fatshim0, (void *)__tur_fatshim1, (void *)__tur_fatshim2,\n");
-    buf_puts(out, "    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5,\n");
-    buf_puts(out, "    (void *)__tur_poly_to_fat0, (void *)__tur_poly_to_fat1,\n");
-    buf_puts(out, "    (void *)__tur_poly_to_fat2, (void *)__tur_poly_to_fat3,\n");
-    buf_puts(out, "    (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };\n");
+    /* Closure / fat-closure fixed runtime (tagged union, TUR_APPLY macros,
+     * Option/Result helpers, fatshims, poly-to-fat thunks).  Shared with the
+     * separate-compilation path via emit_closure_fat_runtime. */
+    emit_closure_fat_runtime(out);
     /* IT4/TY2.4: (type-of x) helper — maps a TypeKind tag to a cstr type name.
      * The tag stored in tur_tagged_t is the value's TypeKind enum value, so the
      * struct/ADT cases are emitted from the actual enum constants rather than
@@ -5361,6 +5393,24 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n\n");
 
+    /* load-not-expanded-in-imported-or-project-modules: the whole-program path
+     * emits the rank-2 polymorphic closure type `tur_poly_fn_t` as part of its
+     * runtime preamble (emit_program), but the separate-compilation path does
+     * not emit that preamble.  Exported signatures in this header -- and the
+     * internal typeclass-method signatures in the matching .c (e.g. a spliced
+     * `Functor` instance's `fmap`) -- can both reference it, so declare it once
+     * here where every consumer (.c includers and importing modules) sees it. */
+    if (separate_compilation) {
+        /* Guarded so a module that includes several module headers (each of
+         * which may declare this carrier) does not redefine the anonymous
+         * struct -- which the C front-end reads as conflicting types. */
+        buf_puts(out, "/* rank-2 polymorphic closure carrier (typeclass-method params) */\n");
+        buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n");
+        buf_puts(out, "#define TUR_POLY_FN_T_DEFINED\n");
+        buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+        buf_puts(out, "#endif\n\n");
+    }
+
     /* SYM2 (runtime-symbols-plan): forward-declare the interned-symbol tag so
      * that exported signatures using `const struct __tur_sym *` (a :Sym param
      * or result) refer to a single file-scope tag.  Without this, a :Sym in
@@ -5482,22 +5532,26 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             }
         }
     }
-    type_codegen_emit_struct_apps(out);
-    type_codegen_emit_adt_apps(out);
-    type_codegen_emit_fn_ptr_typedefs(out);
-
     /* J4: In separate-compilation mode, emit extern declarations for any
      * ABI-specialization clones that this module owns (i.e. the generic FnDef
      * is defined here).  Importing modules include this header and thereby pick
      * up the decls without needing their own extern bookkeeping.
-     * J5/J6: Also emit decls for forced specs from the cross-module cache. */
+     * J5/J6: Also emit decls for forced specs from the cross-module cache.
+     *
+     * parametric-struct-by-value-carrier-inconsistency: a spec clone can
+     * return/accept a *monomorphized* parametric struct by value (e.g.
+     * `Box2__int__int mk_box__spec...(...)`).  Collect the specs and register
+     * their concrete result/arg types FIRST, so the struct-app / adt-app /
+     * fn-ptr flush below emits the monomorphized typedef ahead of the spec decls
+     * that reference it.  Whole-program (emit_program) registers these during
+     * its single emit walk; the header has no body walk, so it registers them
+     * explicitly here. */
+    EmitCtx hdr_ctx;
+    memset(&hdr_ctx, 0, sizeof(hdr_ctx));
+    /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch. */
+    Arena hdr_type_arena; arena_init(&hdr_type_arena, 0);
     if (separate_compilation) {
-        EmitCtx hdr_ctx;
-        memset(&hdr_ctx, 0, sizeof(hdr_ctx));
         hdr_ctx.separate_compilation = true;
-        /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
-         * freed in bulk before this block returns. */
-        Arena hdr_type_arena; arena_init(&hdr_type_arena, 0);
         hdr_ctx.type_arena = &hdr_type_arena;
         emit_abi_scan_program(&hdr_ctx, h_items, h_n_items);
 
@@ -5553,6 +5607,23 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             sp->external_linkage = true;
         }
 
+        /* Register every owned spec's concrete result/arg types so their
+         * monomorphized struct-app / fn-ptr typedefs are emitted by the flush
+         * below -- before the spec decls (and the .c's spec bodies) use them. */
+        for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++) {
+            const EmitAbiSpecialization *spec = &hdr_ctx.abi_specializations[i];
+            if (!spec->fn) continue; /* skip borrow specs */
+            (void)type_c_name(spec->result_type);
+            for (uint8_t j = 0; j < spec->n_args; j++)
+                (void)type_c_name(spec->arg_types[j]);
+        }
+    }
+
+    type_codegen_emit_struct_apps(out);
+    type_codegen_emit_adt_apps(out);
+    type_codegen_emit_fn_ptr_typedefs(out);
+
+    if (separate_compilation) {
         uint32_t n_decls = 0;
         for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++) {
             const EmitAbiSpecialization *spec = &hdr_ctx.abi_specializations[i];
@@ -5579,9 +5650,9 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         free(hdr_ctx.specialized_call_exprs);
         free(hdr_ctx.specialized_call_names);
         free(hdr_ctx.carrier_call_bindings);
-        arena_free(&hdr_type_arena);
         if (n_decls > 0) buf_putc(out, '\n');
     }
+    arena_free(&hdr_type_arena);
 
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
@@ -5776,6 +5847,18 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * minimal preamble, so project-mode TUs get the helper here. */
     emit_cons_helper(out);
 
+    /* load-not-expanded-in-imported-or-project-modules: the whole-program
+     * runtime preamble (emit_program) is not emitted in separate compilation, so
+     * emit the link-safe closure/fat-closure fixed runtime per module .c here.
+     * This unblocks `^fat` parameters (the __tur_fatshim* auto-shims),
+     * typeclass-method closure boxing (__tur_poly_to_fat*), and inline-C closure
+     * application (TUR_APPLY*) under `tur build <dir>`.  Every symbol it emits is
+     * static or a macro/typedef, so duplicating it per TU is link-safe. */
+    if (separate_compilation) {
+        emit_closure_fat_runtime(out);
+        buf_putc(out, '\n');
+    }
+
     uint32_t impl_n_items;
     const Expr **impl_items = flatten_program_items(program, &impl_n_items);
 
@@ -5934,6 +6017,28 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         }
     }
 
+    /* Pass 0: emit base ADT typedefs + constructor functions for every
+     * defdata/defgadt in this module.  The header (emit_header) never emits the
+     * base `tur_adt_<Name>` typedef -- only monomorphized type-applications --
+     * so an ADT used internally (e.g. one spliced in by a top-level
+     * (load "stdlib/either.tur")) would otherwise reference `tur_adt_Either` /
+     * `ctor_Left` with no definition.  Mirrors emit_program's Pass 0 (which
+     * routes through the same helper) but lands in the per-module .c.  Emitted
+     * into a dedicated buffer so it precedes the forward decls and bodies that
+     * reference these types in the final assembly.  Struct typedefs are NOT
+     * emitted here -- emit_header already emits every struct typedef into the
+     * header this .c #includes.  See
+     * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+    Buf impl_early; buf_init(&impl_early);
+    for (uint32_t i = 0; i < impl_n_items; i++) {
+        const Expr *e = impl_items[i];
+        if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
+            const AdtDef *adef = (e->kind == EX_DEFGADT)
+                ? e->as.defgadt_.def : e->as.defdata_.def;
+            emit_adt_typedef_and_ctors(&impl_early, adef);
+        }
+    }
+
     /* Pass 1a: emit all file-scope inline-C blocks before any defn body.
      * Dependency-based reordering (or a top-level C block that lands after
      * its defmodule in the flat array) can otherwise place a defn body before
@@ -5983,6 +6088,17 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
             }
             free(bn);
         } else if (e->kind == EX_FN_DEF) {
+            /* parametric-struct-by-value-carrier-inconsistency: skip the generic
+             * (unspecialized) body of a function whose by-value signature carries
+             * an abstract tyvar aggregate (e.g. `(defn mk-box [A B] ... :(Box2 A
+             * B) ...)`).  Its carrier body is invalid C -- a parametric struct
+             * erases to the int64_t carrier, so `(int64_t){.e1=..}` /  `(t).e1`
+             * are emitted against a non-aggregate.  Whole-program (emit_program)
+             * already skips it via this same predicate; it is a pure template,
+             * reachable only through its monomorphized ABI clones (emitted below /
+             * declared in the header).  Without this, separate compilation emits
+             * the broken generic body verbatim. */
+            if (emit_abi_fn_skip_generic(&ctx, e)) continue;
             /* Emit function definition */
             emit_fn_def(&ctx, &file, e);
         } else if (e->kind == EX_EXTERN_C) {
@@ -6062,6 +6178,25 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     sym_codegen_emit(&sym_records2, separate_compilation);
     if (sym_records2.len) { buf_write(out, sym_records2.data, sym_records2.len); buf_putc(out, '\n'); }
     buf_free(&sym_records2);
+    /* load-not-expanded-in-imported-or-project-modules: base ADT typedefs +
+     * ctors (Pass 0 above), then the on-demand type-application + fn-ptr
+     * typedefs registered while emitting the bodies (e.g. `tur_fnptr_*` carriers
+     * returned by typeclass-method impls).  These must precede the forward decls
+     * and function definitions that reference them.  Mirrors the whole-program
+     * assembly order in emit_program (early_file, adt_apps, fn_ptr_typedefs). */
+    if (impl_early.len) { buf_write(out, impl_early.data, impl_early.len); buf_putc(out, '\n'); }
+    buf_free(&impl_early);
+    /* fn-ptr typedefs (e.g. `tur_fnptr_int64_t_int64_t_t`) registered while
+     * emitting the bodies.  A typedef name that also appears in an exported
+     * signature is emitted into the header too, but an identical fn-ptr typedef
+     * redefinition is well-formed (same type), so this stays conflict-free.
+     * Monomorphized ADT-application structs are deliberately NOT re-flushed here:
+     * those carry anonymous-struct payloads the header already emits for exported
+     * uses, and re-emitting one would be a struct redefinition. */
+    Buf impl_fn_ptr_typedefs; buf_init(&impl_fn_ptr_typedefs);
+    type_codegen_emit_fn_ptr_typedefs(&impl_fn_ptr_typedefs);
+    if (impl_fn_ptr_typedefs.len) { buf_write(out, impl_fn_ptr_typedefs.data, impl_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
+    buf_free(&impl_fn_ptr_typedefs);
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
     /* J2: Clone forward decls precede function definitions. */
     if (impl_fwd_decls.len) { buf_write(out, impl_fwd_decls.data, impl_fwd_decls.len); buf_putc(out, '\n'); }

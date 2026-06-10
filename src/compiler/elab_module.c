@@ -294,6 +294,12 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     e->has_defmodule       = false;
     e->current_module_name = NULL;
     e->current_module      = NULL;
+    /* load-not-expanded-in-imported-or-project-modules: mark that the forms
+     * below belong to an imported module, so self-registering forms
+     * (defclass/definstance/method defs) do not register themselves for
+     * emission in the importer's TU under separate compilation. */
+    bool saved_in_imported_module = e->in_imported_module;
+    e->in_imported_module = true;
 
     /* Phase M4: capture the DefModule so we can check its export list for macros. */
     const DefModule *loaded_defmod = NULL;
@@ -304,6 +310,7 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
             e->has_defmodule       = saved_has_defmodule;
             e->current_module_name = saved_module_name;
             e->current_module      = saved_module;
+            e->in_imported_module  = saved_in_imported_module;
             slot = &e->loaded_modules[slot_idx];
             slot->is_loading = false;
             return NULL;
@@ -331,6 +338,7 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     e->has_defmodule       = saved_has_defmodule;
     e->current_module_name = saved_module_name;
     e->current_module      = saved_module;
+    e->in_imported_module  = saved_in_imported_module;
 
     /* Recursive imports during elab_form() can grow e->loaded_modules and
      * invalidate the earlier `slot` pointer. Re-acquire the reserved slot

@@ -4903,8 +4903,9 @@ static void * prog___gt_gt_gt(int64_t f, int64_t g) {
 }
 
 static int64_t prog____arrow_pair_first(int64_t fv, int64_t p) {
-        Tuple2 *src = (Tuple2 *)(intptr_t)p;
-  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+        typedef struct { int64_t e1; int64_t e2; } P;
+  P *src = (P *)(intptr_t)p;
+  P *r   = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, src->e1);
   r->e2 = src->e2;
   return (int64_t)(intptr_t)r;
@@ -4912,8 +4913,9 @@ static int64_t prog____arrow_pair_first(int64_t fv, int64_t p) {
 }
 
 static int64_t prog____arrow_pair_second(int64_t fv, int64_t p) {
-        Tuple2 *src = (Tuple2 *)(intptr_t)p;
-  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+        typedef struct { int64_t e1; int64_t e2; } P;
+  P *src = (P *)(intptr_t)p;
+  P *r   = (P *)malloc(sizeof(P));
   r->e1 = src->e1;
   r->e2 = TUR_APPLY1(fv, src->e2);
   return (int64_t)(intptr_t)r;
@@ -4921,8 +4923,9 @@ static int64_t prog____arrow_pair_second(int64_t fv, int64_t p) {
 }
 
 static int64_t prog____arrow_pair_par(int64_t fv, int64_t gv, int64_t p) {
-        Tuple2 *src = (Tuple2 *)(intptr_t)p;
-  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+        typedef struct { int64_t e1; int64_t e2; } P;
+  P *src = (P *)(intptr_t)p;
+  P *r   = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, src->e1);
   r->e2 = TUR_APPLY1(gv, src->e2);
   return (int64_t)(intptr_t)r;
@@ -4930,7 +4933,8 @@ static int64_t prog____arrow_pair_par(int64_t fv, int64_t gv, int64_t p) {
 }
 
 static int64_t prog____arrow_pair_split(int64_t fv, int64_t gv, int64_t x) {
-        Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
+        typedef struct { int64_t e1; int64_t e2; } P;
+  P *r = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, x);
   r->e2 = TUR_APPLY1(gv, x);
   return (int64_t)(intptr_t)r;
@@ -4938,7 +4942,8 @@ static int64_t prog____arrow_pair_split(int64_t fv, int64_t gv, int64_t x) {
 }
 
 static int64_t prog____arrow_pair_dup(int64_t x) {
-        Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
+        typedef struct { int64_t e1; int64_t e2; } P;
+  P *r = (P *)malloc(sizeof(P));
   r->e1 = x;
   r->e2 = x;
   return (int64_t)(intptr_t)r;

@@ -863,6 +863,16 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
 /* Phase 3: Register a file-scope definition to be emitted later */
 void elab_register_file_def(Elab *e, Expr *def_expr) {
     if (!def_expr) return;
+    /* load-not-expanded-in-imported-or-project-modules: under separate
+     * compilation, definitions elaborated while loading an imported module
+     * belong to that module's own translation unit -- it is compiled
+     * independently and the importer #includes its header.  Registering them
+     * here would re-emit them in the importer's TU (e.g. a typeclass instance's
+     * method body referencing the owner module's internal ADT, whose typedef is
+     * absent in this TU).  Skip; the self-registering forms (defclass /
+     * definstance / method defs) route through this function too, so this one
+     * gate covers them all. */
+    if (e->separate_compilation && e->in_imported_module) return;
     if (e->n_file_scope_defs >= e->cap_file_scope_defs) {
         e->cap_file_scope_defs = e->cap_file_scope_defs ? e->cap_file_scope_defs * 2 : 16;
         e->file_scope_defs = (Expr **)realloc(e->file_scope_defs, 
@@ -1493,6 +1503,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->cap_loaded_modules = 0;
     e->next_import_file_id = 10; /* 0-9 reserved for main + stdlib files */
     e->separate_compilation = false;
+    e->in_imported_module = false;
     e->macro_expansion_module = NULL;
     e->cloneable_reset_depth = 0;
     e->serial_reset_depth = 0;

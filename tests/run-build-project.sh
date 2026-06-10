@@ -435,6 +435,214 @@ else
     fi
 fi
 
+# load-not-expanded-in-imported-or-project-modules: a module that does a
+# top-level (load "stdlib/...") of a bare-defn stdlib file, consumed across
+# modules in a `tur build <dir>` project.  The (load ...) must be expanded in
+# separate-compilation (project) mode -- exactly as the entry unit does -- and
+# the spliced bare defns (sqrt/floor from stdlib/math.tur) must reach codegen so
+# the exported defn that calls them links.  Before this fix the load either
+# survived to elab_load ("load is only valid at the top level") or its spliced
+# defns never reached the per-module .c.
+LOADP="$WORK/loadproj"
+mkdir -p "$LOADP/src/app"
+cat > "$LOADP/build.tur" <<'EOF'
+(defpackage tur-loadproj
+  :name    "tur-loadproj"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] "app/ops" ["hypot-floor"] })
+EOF
+# app/ops top-level-loads stdlib/math.tur (bare defns) and exports a defn that
+# uses the spliced sqrt/floor.  app/main imports it cross-module.
+cat > "$LOADP/src/app/ops.tur" <<'EOF'
+(load "stdlib/math.tur")
+
+(defmodule app/ops
+  (export hypot-floor)
+(defn hypot-floor [a : float b : float] : int
+  (float->int (floor (sqrt (+ (* a a) (* b b)))))))
+EOF
+cat > "$LOADP/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (import app/ops :refer [hypot-floor])
+  (defn main [] : int
+    ;; floor(sqrt(3*3 + 4*4)) = floor(5.0) = 5 -- the process exit code.
+    (hypot-floor 3.0 4.0)))
+EOF
+loadp_out=$(cd "$WORK" && "$TUR" build "$LOADP" -o "$WORK/loadpbin" 2>&1)
+loadp_rc=$?
+if [ $loadp_rc -ne 0 ]; then
+    fail "build-project-load-bare-defn-module" "tur build exit=$loadp_rc: $loadp_out"
+else
+    "$WORK/loadpbin"
+    loadp_run_rc=$?
+    if [ "$loadp_run_rc" -eq 5 ]; then
+        pass "build-project-load-bare-defn-module"
+    else
+        fail "build-project-load-bare-defn-module" "exit=$loadp_run_rc (expected 5)"
+    fi
+fi
+
+# load-not-expanded-in-imported-or-project-modules (codegen): a module that
+# top-level-(load ...)s a *runtime-preamble-dependent* stdlib file -- here
+# stdlib/either.tur, which brings in the `Either` ADT and a higher-kinded
+# `Functor` instance whose `fmap` dispatches through `tur_poly_fn_t` -- must
+# build in separate-compilation (project) mode.  This exercises the per-module
+# emission of the base ADT typedef + constructors, the `tur_poly_fn_t` carrier,
+# and the on-demand fn-ptr typedefs that the whole-program preamble provides but
+# the separate-compilation path historically omitted (unknown type name
+# 'tur_poly_fn_t' / 'tur_adt_Either').  fmap (*2) over (Right 21) = 42.
+LOADHK="$WORK/loadhk"
+mkdir -p "$LOADHK/src/app"
+cat > "$LOADHK/build.tur" <<'EOF'
+(defpackage tur-loadhk
+  :name    "tur-loadhk"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] })
+EOF
+cat > "$LOADHK/src/app/main.tur" <<'EOF'
+(load "stdlib/either.tur")
+
+(defmodule app/main
+  (defn main [] : int
+    (let [e (Right 21)]
+      (match (fmap e (fn [x : int] : int (* x 2)))
+        (Left l)  l
+        (Right r) r))))
+EOF
+loadhk_out=$(cd "$WORK" && "$TUR" build "$LOADHK" -o "$WORK/loadhkbin" 2>&1)
+loadhk_rc=$?
+if [ $loadhk_rc -ne 0 ]; then
+    fail "build-project-load-higher-kinded-module" "tur build exit=$loadhk_rc: $loadhk_out"
+else
+    "$WORK/loadhkbin"
+    loadhk_run_rc=$?
+    if [ "$loadhk_run_rc" -eq 42 ]; then
+        pass "build-project-load-higher-kinded-module"
+    else
+        fail "build-project-load-higher-kinded-module" "exit=$loadhk_run_rc (expected 42)"
+    fi
+fi
+
+# load-not-expanded-in-imported-or-project-modules (^fat / closure runtime): a
+# module that loads arrow.tur and composes via the bare `>>>` arrow exercises
+# the `^fat` auto-shim (__tur_fatshim1) and the closure-application macros that
+# the whole-program runtime preamble provides but separate compilation must emit
+# per module .c.  arrow.tur is also self-contained re: tuple.tur's `Tuple2` (it
+# uses a local layout-compatible pair struct), so no ambient stdlib type leaks.
+# (3+1)*2 = 8.
+ARROWP="$WORK/arrowproj"
+mkdir -p "$ARROWP/src/app"
+cat > "$ARROWP/build.tur" <<'EOF'
+(defpackage tur-arrowproj
+  :name    "tur-arrowproj"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] })
+EOF
+cat > "$ARROWP/src/app/main.tur" <<'EOF'
+(load "stdlib/arrow.tur")
+
+(defmodule app/main
+  (defn main [] : int
+    (let [inc (fn [x : int] : int (+ x 1))
+          dbl (fn [x : int] : int (* x 2))
+          c   (>>> inc dbl)]
+      (c 3))))
+EOF
+arrowp_out=$(cd "$WORK" && "$TUR" build "$ARROWP" -o "$WORK/arrowpbin" 2>&1)
+arrowp_rc=$?
+if [ $arrowp_rc -ne 0 ]; then
+    fail "build-project-load-arrow-fatshim" "tur build exit=$arrowp_rc: $arrowp_out"
+else
+    "$WORK/arrowpbin"
+    arrowp_run_rc=$?
+    if [ "$arrowp_run_rc" -eq 8 ]; then
+        pass "build-project-load-arrow-fatshim"
+    else
+        fail "build-project-load-arrow-fatshim" "exit=$arrowp_run_rc (expected 8)"
+    fi
+fi
+
+# load-not-expanded-in-imported-or-project-modules (cross-module instance): a
+# module A that (load ...)s a higher-kinded typeclass instance (either.tur's
+# Functor [Either]) and is consumed by a module B via `import`.  The instance
+# must NOT leak into B's translation unit (where the owner's internal ADT
+# typedef is absent); B calls A's exported entry point and A dispatches through
+# its own dictionary.  fmap (*2) over (Right 21) = 42.
+IMPHK="$WORK/imphk"
+mkdir -p "$IMPHK/src/app"
+cat > "$IMPHK/build.tur" <<'EOF'
+(defpackage tur-imphk
+  :name    "tur-imphk"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] "app/lib" ["run"] })
+EOF
+cat > "$IMPHK/src/app/lib.tur" <<'EOF'
+(load "stdlib/either.tur")
+
+(defmodule app/lib
+  (export run)
+(defn run [] : int
+  (let [e (Right 21)]
+    (match (fmap e (fn [x : int] : int (* x 2)))
+      (Left l)  l
+      (Right r) r))))
+EOF
+cat > "$IMPHK/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (import app/lib :refer [run])
+  (defn main [] : int (run)))
+EOF
+imphk_out=$(cd "$WORK" && "$TUR" build "$IMPHK" -o "$WORK/imphkbin" 2>&1)
+imphk_rc=$?
+if [ $imphk_rc -ne 0 ]; then
+    fail "build-project-import-higher-kinded" "tur build exit=$imphk_rc: $imphk_out"
+else
+    "$WORK/imphkbin"
+    imphk_run_rc=$?
+    if [ "$imphk_run_rc" -eq 42 ]; then
+        pass "build-project-import-higher-kinded"
+    else
+        fail "build-project-import-higher-kinded" "exit=$imphk_run_rc (expected 42)"
+    fi
+fi
+
+# parametric-struct-by-value-carrier-inconsistency: a project module with a
+# generic parametric struct (`Box2 [A B]`), a by-value constructor, and a
+# by-value accessor.  Whole-program prunes the generic templates and emits the
+# monomorphized `Box2__int__int` struct by value; separate compilation must do
+# the same -- prune the invalid generic carrier bodies AND emit the
+# monomorphized struct-app typedef in the header before the spec-clone decls.
+# box-1st(mk-box(21, 99)) = 21.
+PSTRUCT="$WORK/pstruct"
+mkdir -p "$PSTRUCT/src/app"
+cat > "$PSTRUCT/build.tur" <<'EOF'
+(defpackage tur-pstruct
+  :name    "tur-pstruct"
+  :version "0.1.0"
+  :exports #{ "app/main" ["main"] })
+EOF
+cat > "$PSTRUCT/src/app/main.tur" <<'EOF'
+(defmodule app/main
+(defstruct Box2 [A B] (e1 A) (e2 B))
+(defn mk-box [A B] [a :A b :B] : (Box2 A B) (make-struct Box2 a b))
+(defn box-1st [A B] [t : (Box2 A B)] :A (.e1 t))
+  (defn main [] : int
+    (box-1st (mk-box 21 99))))
+EOF
+pstruct_out=$(cd "$WORK" && "$TUR" build "$PSTRUCT" -o "$WORK/pstructbin" 2>&1)
+pstruct_rc=$?
+if [ $pstruct_rc -ne 0 ]; then
+    fail "build-project-parametric-struct-by-value" "tur build exit=$pstruct_rc: $pstruct_out"
+else
+    "$WORK/pstructbin"
+    pstruct_run_rc=$?
+    if [ "$pstruct_run_rc" -eq 21 ]; then
+        pass "build-project-parametric-struct-by-value"
+    else
+        fail "build-project-parametric-struct-by-value" "exit=$pstruct_run_rc (expected 21)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
