@@ -1,12 +1,17 @@
 # Fixture-Churn Paydown Plan
 
-> **Status:** Phase 0 landed (#298), Phase 1 landed (#299). Phase 1.1 is an
-> ongoing maintenance sweep -- re-run `tools/audit-fixture-snapshots.py` as new
-> fixtures accumulate (most recent pass: 2026-06-10, 86 -> 68). Phase 2 is gated
-> on the sibling plans (`reversible-name-mangling`, `poly-closure-result-specialization`)
-> being driven; Phase 3 is intentionally deferred until the policy has held in
-> practice.
-> **Last Updated:** 2026-06-10
+> **Status:** Phase 0 landed (#298), Phase 1 landed (#299). Phase 2.1
+> (reversible name mangling) and Phase 2.2 (per-monomorphization closure-body
+> specialization) have landed -- both sibling plans are archived under
+> `docs/archive/history/`; #312 closed the closure-specialization track.
+> Phase 2.3 (defrecord + field accessors + bidirectional container inference)
+> is deferred to its own dedicated plan -- the scope is a substantial
+> reader/codegen/ABI project, not a fixture-churn rider. Phase 1.1 remains an
+> ongoing audit sweep (most recent pass: 2026-06-09, 71 -> 71, no candidates).
+> Phase 3 (policy amendment) is now active: CLAUDE.md's Fixture Snapshots
+> section has been amended with the "fixture churn is not a deferral reason"
+> rule.
+> **Last Updated:** 2026-06-09
 > **Type:** test infrastructure + batched codegen cleanup
 > **Sibling plans:**
 > - [reversible-name-mangling-plan.md](reversible-name-mangling-plan.md) -- T6 is a primary Phase 2 payload
@@ -148,30 +153,31 @@ coordinated regeneration window** rather than nibbled across many PRs.
 
 Sequence within Phase 2:
 
-### 2.1 Reversible name mangling (T6)
+### 2.1 Reversible name mangling (T6) -- LANDED
 
-Land the full mangling sweep from
-[reversible-name-mangling-plan.md](reversible-name-mangling-plan.md).
-This is the largest single source of identifier-level snapshot churn;
-regenerate once.
+Full mangling sweep from
+[../archive/history/reversible-name-mangling-plan.md](../archive/history/reversible-name-mangling-plan.md)
+shipped. Sibling plan archived.
 
-### 2.2 Per-monomorphization closure-body specialization (Stage B+C)
+### 2.2 Per-monomorphization closure-body specialization (Stage B+C) -- LANDED
 
-Land Stages B+C from
-[poly-closure-result-specialization-plan.md](poly-closure-result-specialization-plan.md).
-Affects `arrow-instance-*`, `sf-compose-typed`, `fat-closure-float-*`,
-`module-spec-*` -- known up front, so bundle in the same window.
+Stages B+C from
+[../archive/history/poly-closure-result-specialization-plan.md](../archive/history/poly-closure-result-specialization-plan.md)
+shipped; #312 closed out the poly-closure typed-dispatch track. Sibling plan
+archived.
 
-### 2.3 `defrecord` + field accessors + bidirectional container inference
+### 2.3 `defrecord` + field accessors + bidirectional container inference -- DEFERRED
 
-Pick up Phases D/E from the archived test-suite-idioms plan **only if
-Phase 1 reduced the relevant fixture surface enough to make this
-tractable in the same window**. Otherwise defer to a follow-up Phase 2b.
+Split out to its own dedicated plan rather than ridden in this window. The
+scope (reader + codegen + ABI lowering for a new record form, plus
+bidirectional inference for container literals) is substantially larger than
+"a deferred codegen cleanup" and does not belong as a tail-end task on a
+fixture-churn paydown plan.
 
-### 2.4 Regen + ship
+### 2.4 Regen + ship -- DONE INCREMENTALLY
 
-One PR. One regen pass. One review of the snapshot-diff summary
-output. Land it.
+2.1 and 2.2 each landed with their own regen pass under Phase 3's new "regen
+in the same PR" policy, rather than as one combined window.
 
 **Exit criteria for Phase 2:** every codegen cleanup currently
 deferred "due to fixture churn" has either landed or has an explicit
@@ -179,20 +185,20 @@ written reason why it is no longer wanted.
 
 ---
 
-## Phase 3 -- Policy (ongoing)
+## Phase 3 -- Policy (ACTIVE)
 
-Once Phase 0 makes regen cheap, the policy changes:
+Codified in `CLAUDE.md` under **Fixture Snapshots -> Fixture churn is not a
+deferral reason** (2026-06-09). The rules:
 
-- **Small codegen cleanups regenerate snapshots in the same PR.** No
-  more "punt the snapshot regen to a follow-up." Add this to
-  `CLAUDE.md` under Fixture Snapshots.
-- **"Fixture churn" is not, on its own, a reason to defer a fix.** It
-  may be a reason to coordinate timing (don't land two large regens
-  on the same day, give in-flight branches time to rebase), but not to
-  shelve the work indefinitely.
-- **Only batch a cleanup into a Phase 2-style window if it is itself
-  large enough to warrant coordination** (touches >500 fixtures, or
-  has interacting semantic changes that benefit from a single regen).
+- **Small codegen cleanups regenerate snapshots in the same PR.** No more
+  "punt the snapshot regen to a follow-up."
+- **"Fixture churn" is not, on its own, a reason to defer a fix.** It may
+  be a reason to coordinate timing (don't land two large regens on the same
+  day, give in-flight branches time to rebase), but not to shelve the work
+  indefinitely.
+- **Only batch a cleanup into a Phase 2-style window if it is itself large
+  enough to warrant coordination** (touches >500 fixtures, or has interacting
+  semantic changes that benefit from a single regen).
 
 ---
 

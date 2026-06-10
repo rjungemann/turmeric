@@ -207,7 +207,7 @@ name from `Arrow`'s `>>>`, so the two coexist without an operator collision.
 
 `ident` is **nullary** -- there is no argument to dispatch on, so it resolves by
 return-type / unique-instance dispatch (the mechanism from
-[`return-type-dispatch-nullary-arrow-methods-plan`](../upcoming/return-type-dispatch-nullary-arrow-methods-plan.md)).
+[`return-type-dispatch-nullary-arrow-methods-plan`](../archive/history/return-type-dispatch-nullary-arrow-methods-plan.md)).
 With only the `(->)` instance in scope, a bare `(ident)` resolves uniquely:
 
 ```turmeric

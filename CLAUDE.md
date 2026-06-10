@@ -73,6 +73,16 @@ it or open a PR with failing fixtures.
 
 **Before opening any PR**, run `bash tests/run.sh` and confirm zero `FAIL` lines.
 
+### Fixture churn is not a deferral reason
+
+Small codegen cleanups regenerate snapshots **in the same PR** -- never punt
+the regen to a follow-up. "Fixture churn" on its own is not a reason to defer
+a fix; it may be a reason to coordinate timing (don't land two large regens
+on the same day, give in-flight branches time to rebase), but not to shelve
+the work indefinitely. Only batch a cleanup into a coordinated regen window
+if it is itself large enough to warrant coordination (touches >500 fixtures,
+or carries interacting semantic changes that benefit from a single regen).
+
 ### Leak detection (ASan/LSan) policy
 
 The Debug build compiles `tur` with `-fsanitize=address,undefined`; on Linux
