@@ -1,8 +1,9 @@
 ---
 title: Header emits `^fat` (and `TY_FN`) params as inner type, conflicting with `.c` `int64_t`
 severity: hard error -- blocks separate-compilation build of any module exporting a `^fat`-param fn
-status: open
+status: fixed
 discovered: 2026-06-06
+fixed: 2026-06-10
 discovered-in: spices/signal (turmeric-spices)
 ---
 
@@ -81,3 +82,17 @@ gate -- the carrier ABI applies to the prototype regardless of body kind).
 - `bash tests/run.sh` -- no fixture regressions.
 - Sweep `tests/fixtures/` for any project-mode fixture exporting a
   `^fat`-param or `TY_FN`-param fn and verify generated headers.
+
+## Resolution
+
+Fixed in `src/compiler/emit_module.c::emit_header`'s param-emission loop: the
+three-way carrier logic from `emit_implementation`'s forward-decl loop is now
+mirrored -- `is_poly_fn` -> `tur_poly_fn_t`, `param_types[j].kind == TY_FN` ->
+`int64_t`, and `is_fat` -> `int64_t` unconditionally (no inline-C gate, since
+the carrier ABI applies to the prototype regardless of body kind). Normal
+params still fall through to the existing pass-by-ptr emission.
+
+Validated with a minimal project-mode repro exporting
+`(defn sample [^fat sig : (fn [float] float) t : float] : float ...)`: both
+the generated `.h` and `.c` now emit `double sig__core__sample(int64_t, double);`
+and the build compiles clean. Full fixture suite passes with no regressions.
