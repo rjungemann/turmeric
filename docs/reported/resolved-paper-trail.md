@@ -34,6 +34,32 @@ and `tests/fixtures/errors/load-inside-defn/` (negative); the obsolete
 let-binding `>>>` segfault seen while validating is the orthogonal
 `fat-shim-void-ptr-calls-bare-not-fat.md`, not a load-scope bug.
 
+### `^fat` let-binding of a runtime `ptr<void>` fat closure re-shimmed as a bare fn (FIXED)
+
+[`../archive/fat-shim-void-ptr-calls-bare-not-fat.md`](../archive/fat-shim-void-ptr-calls-bare-not-fat.md)
+
+A `^fat` let-binding carrying a runtime `ptr<void>` fat closure but annotated
+with a concrete `(fn ...)` type (e.g. `^fat sf : (fn [ptr<void>] #{} ptr<void>)
+(make-scale 2.0)`) was retyped to `TY_FN`. When that binding was then passed to
+a `>>>` whose receiver selects the arrow typeclass instance, `arrow_fat_shim`
+in `src/compiler/elab_typeclasses.c` mistook the `TY_FN` value for a bare
+non-capturing function and wrapped it in a `__tur_fatshim_void___void__` box.
+That shim reads slot 1 (the original fat closure) and calls it as a **bare
+one-arg** function, but the fat-closure thunk expects two arguments (env + arg),
+**segfaulting** at the composed call site. This blocked `tur-signal` Phase 5
+`effects-chain` from folding a Vec of SFs with `>>>`. **Fix (PR #302/#305):**
+add an `is_fat` guard in `arrow_fat_shim`, mirroring the existing guard in
+`elab_call.c` (`two-level-sf-closure-return-miscompiles-out-binding`): when the
+argument is an `EX_VAR` whose binding is `is_fat` with an unboxed `TY_FN` type,
+it is already a fat closure carried as `int64_t` -- retype it to `ptr<void>` so
+it flows through the already-fat pass-through branch instead of being
+double-boxed. Regression fixture:
+`tests/fixtures/fat-shim-void-ptr-arrow-compose/` (the report's minimal repro;
+prints `6` instead of segfaulting). A recursive `>>>`-fold over `^fat`
+let-bindings -- the `__sf-fold` shape the report flagged as the real blocker --
+also composes correctly. The captureless sibling of this report is the next
+entry.
+
 ### captureless closure not boxed at a `ptr<void>` `^fat` boundary (FIXED)
 
 [`../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md`](../archive/captureless-closure-not-boxed-at-fat-ptr-void-boundary.md)
