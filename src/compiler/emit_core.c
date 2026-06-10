@@ -1662,15 +1662,25 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Emit: dlclose(arg0) */
             buf_printf(&out, "dlclose(%s)", arg_strs[0]);
             break;
-        case BS_FUNC_CALL:
-            /* Generic function call: c_op(arg0, arg1, ...) */
+        case BS_FUNC_CALL: {
+            /* Generic function call: c_op(arg0, arg1, ...).  The `cons` builtin
+             * accepts any 64-bit-sized head/tail (int, cstr, opaque, pointer)
+             * -- cast through intptr_t so non-int args don't trip C's
+             * "incompatible pointer/int" warning.  Keyed on c_op identity to
+             * match the elab-side wildcard in elab_call.c. */
+            bool cast_args = (spec->c_op && strcmp(spec->c_op, "cons") == 0);
             buf_printf(&out, "%s(", spec->c_op);
             for (uint32_t i = 0; i < n; i++) {
                 if (i > 0) buf_puts(&out, ", ");
-                buf_puts(&out, arg_strs[i]);
+                if (cast_args) {
+                    buf_printf(&out, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                } else {
+                    buf_puts(&out, arg_strs[i]);
+                }
             }
             buf_putc(&out, ')');
             break;
+        }
         default:
             /* unreachable for the shapes handled above */
             buf_puts(&out, "((void)0)");

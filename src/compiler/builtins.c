@@ -145,7 +145,11 @@ static BuiltinSpec table_[] = {
      * into the preamble of every TU that references it (gated on g_uses_cons).
      * Distinct from the compile-time `cons` form in elab_macros.c, which only
      * fires during macro expansion. */
-    { "cons", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "cons" },
+    /* arg_type=TY_UNKNOWN: the head can be any 64-bit-sized value (int, cstr,
+     * opaque handle, pointer) and the tail can be either nil (0) or another
+     * cons-cell pointer (int).  Codegen casts both args via (int64_t)(intptr_t)
+     * so pointer-typed args don't trip C's "int from pointer" warning. */
+    { "cons", NULL, 2, 2, {.kind=TY_UNKNOWN}, {.kind=TY_INT}, BS_FUNC_CALL, "cons" },
 
     /* Phase 9: rc<T> operations */
     /* (rc/of x) - create a new rc<T> with x as the value */

@@ -1611,8 +1611,16 @@ Expr *elab_call(Elab *e, Form *call) {
         }
         return NULL;
     }
+    /* The `cons` builtin (BS_FUNC_CALL, c_op="cons") accepts any 64-bit-sized
+     * value for head and tail -- ints, cstrs, opaque handles, pointers --
+     * since cells are pointer-as-int64.  Bypass the strict per-arg check for
+     * it; codegen casts the args through intptr_t.  See
+     * docs/reported/cons-builtin-rejects-cstr-head.md. */
+    bool cons_wildcard = (spec->shape == BS_FUNC_CALL && spec->c_op &&
+                          strcmp(spec->c_op, "cons") == 0);
     /* All args must match the spec's arg type. */
     for (uint32_t i = 0; i < n_args; i++) {
+        if (cons_wildcard) continue;
         if (!type_eq(args[i]->type, spec->arg_type)) {
             const char *expected_str = type_name(spec->arg_type);
             const char *actual_str = type_name(args[i]->type);
