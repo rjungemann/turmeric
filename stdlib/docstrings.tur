@@ -2,7 +2,7 @@
 (defmodule tur/docstrings
   (export doc-lookup doc-verified?)
 
-(defn doc-lookup [name :cstr] :cstr
+(defn doc-lookup [name : cstr] : cstr
   ```c
   static const struct { const char *key; const char *val; } entries[] = {
     {"args/spec-new", "args/spec-new -- create a new empty argument specification.\n\nReturns:\n  Opaque pointer (as :int) to an empty arg spec.\n    Free with args/spec-free when done.\n\nExample:\n  (let [spec (args/spec-new)] ...)\n\nSince: Phase A1"},
@@ -26,11 +26,11 @@
     {"tur/args", "tur/args -- CLI argument parser with a builder-pattern API.\n\nSince: Phase B1"},
     {"arr", "arr -- lift a function to an arrow (identity for function arrows).\n\nParameters:\n  f -- the function to lift\n\nReturns:\n  The function itself.\n\nExample:\n  (arr (fn [x] (+ x 1)))  ; => identity for functions"},
     {">>>", ">>> -- compose two function arrows sequentially (register-class-correct).\n\nParameters:\n  f -- first arrow (A -> B)\n  g -- second arrow (B -> C)\n\nReturns:\n  A ptr<void> closure (A -> C) that applies f then g.\n\nExample:\n  ((>>> (fn [x : float] : float (+ x 1.0))\n          (fn [x : float] : float (* x 2.0))) 3.0)  ; => 8.0\n\nSince: Phase CA1"},
-    {"__arrow_pair_first", "__arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,"},
-    {"__arrow_pair_second", "__arrow_pair_second -- inline-C: apply fv to e2 of a heap Tuple2 *p,"},
+    {"__arrow_pair_first", "__arrow_pair_first -- inline-C: apply fv to e1 of a heap pair *p,"},
+    {"__arrow_pair_second", "__arrow_pair_second -- inline-C: apply fv to e2 of a heap pair *p,"},
     {"__arrow_pair_par", "__arrow_pair_par -- inline-C: apply fv to e1 and gv to e2 of *p."},
-    {"__arrow_pair_split", "__arrow_pair_split -- inline-C: produce a heap Tuple2 from (fv x, gv x)."},
-    {"__arrow_pair_dup", "__arrow_pair_dup -- inline-C: produce a heap Tuple2 with both fields = x."},
+    {"__arrow_pair_split", "__arrow_pair_split -- inline-C: produce a heap pair from (fv x, gv x)."},
+    {"__arrow_pair_dup", "__arrow_pair_dup -- inline-C: produce a heap pair with both fields = x."},
     {"arrow-first", "arrow-first -- apply a function to the first component of a Tuple2.\n\nParameters:\n  f -- function to apply\n\nReturns:\n  A function on Tuple2 that applies f to the first field.\n\nExample:\n  ((arrow-first (fn [x] (+ x 1))) <heap Tuple2 (5, 10)>)  ; => Tuple2(6, 10)"},
     {"arrow-second", "arrow-second -- apply a function to the second component of a Tuple2.\n\nParameters:\n  f -- function to apply\n\nReturns:\n  A function on Tuple2 that applies f to the second field.\n\nExample:\n  ((arrow-second (fn [x] (+ x 1))) <heap Tuple2 (5, 10)>)  ; => Tuple2(5, 11)"},
     {"par-comp", "par-comp -- parallel composition of two functions on Tuple2 types.\n\nParameters:\n  f -- function a -> b\n  g -- function c -> d\n\nReturns:\n  A function on Tuple2 a c -> Tuple2 b d:\n    (par-comp f g)(tuple2 x y) = tuple2(f x, g y).\n\nExample:\n  ((par-comp inc double) (tuple2 1 2))  ; => Tuple2(2, 4)"},
@@ -1568,7 +1568,7 @@
   return 0;
   ```)
 
-(defn doc-verified? [name :cstr] :bool
+(defn doc-verified? [name : cstr] : bool
   ```c
   static const char *verified[] = {
     NULL
