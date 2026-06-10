@@ -958,7 +958,7 @@ If your spice exposes any inline-C bodies that reference sibling Turmeric
 hand-spelling the mangled C identifier; the mangling scheme is reversible
 and injective (#275) but is still an internal detail. See
 [name-mangling-guide.md](name-mangling-guide.md) for the encoding and
-[c-integration-guide.md §2.2](c-integration-guide.md#22-inline-c-blocks----arbitrary-c-inside-a-turmeric-expression)
+[c-integration-guide.md "Inline C blocks"](c-integration-guide.md#calling-c-from-turmeric)
 for the splice form.
 
 ---

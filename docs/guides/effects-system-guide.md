@@ -406,7 +406,7 @@ enforce that it has the capabilities of everything it calls.
 
 Effects interact with Turmeric's `defer` mechanism:
 
-- `defer` cleanup runs correctly even when `perform` is inside the same `do` block (see [Custom Effects Tutorial](custom-effects-tutorial.md) §8).
+- `defer` cleanup runs correctly even when `perform` is inside the same `do` block (see [Custom Effects Tutorial](custom-effects-tutorial.md#effects-with-defer)).
 - Capturing a continuation across a `defer` boundary is handled: the continuation's environment is cleaned up if it crosses a `defer` boundary.
 
 ## The Prompt Model and Unbounded Capture (CPS substrate)
