@@ -1,11 +1,73 @@
 ---
 title: Typeclasses have no associated type members
 category: Expressiveness hole
+status: Resolved (minimal milestone landed -- single associated type member per class, dictionary-free type-level projection)
 severity: Forces a macro-driven parallel registry for any "class chooses an output type" pattern (ECS Component->Storage, Iterable->Iter, Collection->Elem). Workable, but adds per-plan boilerplate and loses elaborator-level coherence on the projection.
 description: `definstance` supports value members but no associated *type* members. Classes that want to project from an instance type to another type (Haskell `type Storage c = ...`, Rust `type Item;` on `Iterator`) cannot be expressed; every such pattern has to be flattened into a second class or encoded by macro-generated wrappers. ECS v1 absorbs this with a `defcomponent`-emitted registry; the swap to a real associated type is a transparent surface-API improvement (E2d).
 ---
 
 # Typeclass associated type members missing
+
+## Resolution
+
+Proposed direction #1 landed as a focused milestone: a class may declare one
+or more **associated type members** and each instance binds them to a concrete
+type, resolved at the type level by a precise (non-kind-erased) instance match.
+
+Surface syntax (matches the "Expected" sketch below):
+
+```turmeric
+(defclass Container [t]
+  (type Elem : Type)               ;; associated type member
+  (make-empty [self : t] : int))
+
+(definstance Container [(Vec int)]
+  (type Elem = int)                ;; per-instance binding
+  (make-empty [self] 0))
+
+(definstance Container [(Vec cstr)]
+  (type Elem = cstr)
+  (make-empty [self] 0))
+
+;; `(Elem (Vec int))` reduces to `int`, `(Elem (Vec cstr))` to `cstr`,
+;; in any type-annotation position:
+(defn take [x : (Elem (Vec int))] : int (+ x 1))
+```
+
+Scope of the milestone (matching the report's "no-arithmetic, no-fundep,
+single-output-type" recommendation):
+
+- Multiple `(type Name : Type)` members per class are allowed; each instance
+  must bind every one (a missing or unknown binding is a hard error on the
+  `definstance`, so a wrong/forgotten projection surfaces at the instance, not
+  a downstream use site).
+- Projection `(Name T)` is resolved for **single-parameter** classes. The
+  match on `T` uses `type_eq` (full structural equality), so two instances of
+  the same constructor (`Vec int` vs `Vec cstr`) project to distinct types --
+  the kind-erased dispatch `lookup_instance` cannot disambiguate these, hence a
+  dedicated resolver.
+- Associated types are **erased**: they exist only in the elaborator's
+  type-annotation parsing; no codegen, no dictionary field, zero runtime cost.
+
+Implementation:
+
+- `TypeClass.assoc_type_names` / `TypeClassInstance.assoc_types`
+  (`src/compiler/typeclass.h`), with `typeclass_env_find_assoc_type` and
+  `typeclass_env_resolve_assoc_type` (`src/compiler/typeclass.c`).
+- `defclass` / `definstance` parsing splits `(type ...)` members/bindings out
+  of the method list (`src/compiler/elab_typeclasses.c`).
+- The projection hook lives in both type-annotation parsers: the generic
+  `type_expr_from_form` (`src/compiler/elab_types.c`) and the `defn`
+  signature parser `fn_type_from_form` (`src/compiler/elab_fns.c`), which
+  builds type applications itself and never reaches the former.
+- Fixture: `tests/fixtures/assoc-type-projection/`.
+
+Not in scope (still open if a future plan needs them): multi-parameter classes
+/ functional dependencies (direction #3), and projecting through an associated
+type at the *value* level (a method whose C signature depends on `Elem`). The
+ECS `Component -> Storage` use case is now expressible at the type level; the
+value-level storage handle still rides the int64 carrier like any other
+opaque.
 
 ## Summary
 

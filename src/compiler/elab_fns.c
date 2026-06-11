@@ -105,6 +105,31 @@ Type *fn_type_from_form(Elab *e, const Form *form,
                 return t;
             }
         }
+        /* assoc-types-plan: type-level associated-type projection in annotation
+         * position, e.g. `x : (Elem (Vec int))`.  fn_type_from_form builds type
+         * applications itself (it never reaches type_expr_from_form's app path),
+         * so resolve the projection here too.  Fires only when `head` is a
+         * declared associated type member, leaving every ordinary application
+         * unchanged. */
+        if (form->as.list.len == 2) {
+            uint8_t assoc_idx;
+            if (typeclass_env_find_assoc_type(&e->typeclass_env, head, &assoc_idx)) {
+                Type *arg_t = fn_type_from_form(e, form->as.list.items[1],
+                                                type_params, type_param_kinds, n_type_params);
+                if (!arg_t) return NULL;
+                const Type *bound = typeclass_env_resolve_assoc_type(
+                    &e->typeclass_env, head, arg_t);
+                if (!bound) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "no instance binding for associated type '%s' at this type",
+                              head->name);
+                    return NULL;
+                }
+                Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *out = *bound;
+                return out;
+            }
+        }
         Type *cur = fn_type_from_form(e, form->as.list.items[0],
                                       type_params, type_param_kinds, n_type_params);
         if (!cur) return NULL;

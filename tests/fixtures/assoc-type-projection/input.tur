@@ -1,0 +1,37 @@
+;; assoc-type-projection -- associated type members on a typeclass.
+;;
+;; A class may declare an associated type member with `(type Name : Type)`.
+;; Each instance binds it to a concrete type with `(type Name = <type>)`, and a
+;; type-level projection `(Name <inst-type-arg>)` resolves -- in annotation
+;; position -- to whatever that instance bound.  Two instances of the SAME
+;; constructor (Vec int vs Vec cstr) bind distinct element types, and the
+;; projection disambiguates them by precise structural matching on the type
+;; argument: (Elem (Vec int)) is int, (Elem (Vec cstr)) is cstr.
+
+(defclass Container [t]
+  (type Elem : Type)
+  (make-empty [self : t] : int))
+
+(definstance Container [(Vec int)]
+  (type Elem = int)
+  (make-empty [self] 0))
+
+(definstance Container [(Vec cstr)]
+  (type Elem = cstr)
+  (make-empty [self] 0))
+
+;; (Elem (Vec int)) reduces to int; (Elem (Vec cstr)) reduces to cstr.
+(defn take-elem-int [x : (Elem (Vec int))] : int
+  (+ x 1))
+
+(defn take-elem-cstr [x : (Elem (Vec cstr))] : cstr
+  x)
+
+(defn main [] : int
+  ;; cstr projection: the argument typechecks as cstr and prints verbatim.
+  (println (take-elem-cstr "hello"))
+  ;; int projection: the argument typechecks as int and supports arithmetic.
+  (if (= (take-elem-int 41) 42)
+    (println "int-elem-ok")
+    (println "int-elem-bad"))
+  0)

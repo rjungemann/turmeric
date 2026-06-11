@@ -122,6 +122,58 @@ reader. Rename one of them when the shadowing is unintentional. See
 [arrows-guide.md](arrows-guide.md) for the worked example that originally
 surfaced the diagnostic.
 
+## Associated type members
+
+A class may declare **associated type members** alongside its value methods.
+An associated type is a type-level projection from the instance type to another
+type -- the Haskell `type Storage c = ...` / Rust `type Item;` pattern:
+
+```turmeric
+(defclass Container [t]
+  (type Elem : Type)               ;; associated type member
+  (make-empty [self : t] : int))   ;; ordinary value method
+
+(definstance Container [(Vec int)]
+  (type Elem = int)                ;; per-instance binding
+  (make-empty [self] 0))
+
+(definstance Container [(Vec cstr)]
+  (type Elem = cstr)
+  (make-empty [self] 0))
+```
+
+In any type-annotation position, the projection `(Elem (Vec int))` resolves to
+whatever the matching instance bound -- here `int`; `(Elem (Vec cstr))`
+resolves to `cstr`:
+
+```turmeric
+(defn take [x : (Elem (Vec int))] : int (+ x 1))   ;; x : int
+```
+
+Rules and representation:
+
+- **Parsing.** `(type Name : Type)` in a `defclass` body is an associated type
+  member; `(type Name = <type>)` in a `definstance` body binds it. The
+  discriminator is a `type` head whose second element is a bare symbol (a
+  method named `type` carries a `[params]` vector instead, so it is never
+  misclassified). Members are stored on `TypeClass.assoc_type_names`; bindings
+  on `TypeClassInstance.assoc_types` (`src/compiler/typeclass.h`).
+- **Every member must be bound.** A `definstance` that omits a member, or binds
+  a name the class never declared, is a hard error reported on the instance.
+- **Resolution is precise.** `(Name T)` matches the instance whose single type
+  argument is `type_eq` to `T`. This is *not* the kind-erased dispatch
+  `typeclass_env_lookup_instance` (which cannot tell `Vec int` from `Vec cstr`);
+  associated-type projection has its own `typeclass_env_resolve_assoc_type`.
+- **Erased.** Associated types live only in the elaborator's type-annotation
+  parsers (`type_expr_from_form` and the `defn` signature parser
+  `fn_type_from_form`, which must carry its own copy of the hook because it
+  builds type applications without delegating). There is no dictionary field
+  and no codegen -- zero runtime cost.
+- **Scope.** Single type-parameter classes; one output type per member; no
+  arithmetic or functional dependencies. Multi-parameter classes / fundeps are
+  the remaining open direction (see
+  [`docs/reported/typeclass-associated-types-missing.md`](../reported/typeclass-associated-types-missing.md)).
+
 ## See also -- the arrow / `Category` hierarchy
 
 The arrow surface in `stdlib/arrow.tur` and `stdlib/kleisli.tur` is a
