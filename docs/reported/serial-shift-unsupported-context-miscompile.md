@@ -73,10 +73,15 @@ returns false -> `emit_cps_serial_reset` returns NULL ->
   (`tests/fixtures/serial-context-do`).
 - **Now supported:** do-tails of N statements where each is a 0-arg top-level
   call, or a 1-arg top-level call whose argument is a pure value (int/cstr
-  inline, or a Serializable struct via its instance) -- so the loop can take
+  inline, or a Serializable value via its instance) -- so the loop can take
   captured scalar/Serializable config. Tail statements run in source order on
   resume and round-trip through `save-cont!`/`resume-cont!`
-  (`tests/fixtures/serial-context-do`, `serial-context-do-cfg`).
+  (`tests/fixtures/serial-context-do`, `serial-context-do-cfg`,
+  `serial-context-do-struct`). **Idiom for rich state:** pack the loop's state
+  into a single Serializable struct and pass it as the tail call's argument --
+  `(do (init) (shift k v) (run-loop state))` -- which captures and marshals the
+  whole struct via its instance. This is the recommended way to capture
+  arbitrary loop state and is what `application-image-dumps` should build on.
 - **Remaining gap:** tails whose calls take a hole-bearing or non-marshalable
   argument, take >1 argument, or *close over local variables that are not passed
   explicitly*, and `serial-shift` whose value is discarded *outside* a supported
