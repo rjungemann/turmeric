@@ -748,8 +748,13 @@ regressions). **W3** then found the "move/linearity divergence" bucket was a
 probe artifact -- those are `errors/*` negative fixtures the interpreter handles
 correctly -- and wired `errors/*` into the harness with diag comparison: **282
 of 298 pass** (the whole move/linearity/affine/type-error surface is now
-CI-validated under turi; 9 genuine divergences denylisted). The harness now
-stands at **463 passed, 0 failed**. The native-shim-conflicted modules
+CI-validated under turi; 9 genuine divergences denylisted). **W2** then carved
+the inline-C set via harness auto-detection, **W4** fixed the `ic_exec_accessor`
+boolean-return silent-miscompile class, and a **bulk-add** put every
+auto-verified-passing non-inline-C fixture on the allowlist. The harness now
+stands at **912 passed, 0 failed** (181 -> 463 -> 912), with the remaining gap
+down to **260** (~244 genuine failures: the W1b native-shim cluster + W4 silent
+miscompiles + a small semantic tail). The native-shim-conflicted modules
 (`result/map/set/hamt/contract`) stay excluded pending W1b -- see the
 [gap-closure plan](turi-interpreter-gap-closure-plan.md) for the per-workstream
 detail.

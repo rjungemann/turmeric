@@ -340,6 +340,460 @@ typed/pair-basic
 typed/pair-opaque-element
 typed/slice-basic
 typed/tuple-basic
+
+# TI8.b/(b) bulk-add (turi-interpreter-gap-closure-plan): every non-inline-C
+# fixture below was auto-verified to pass under tur --interpret (stdout + exit
+# match) and added in one sweep, shrinking the allowlist gap to the genuine
+# W1b/W4 failure surface.  Regenerate by re-running the pass-probe if needed.
+adt-param-match-type-pair
+annotated-fat-lambda-param
+any-box-cstr
+any-cast-checked
+any-is-predicate
+arrow-instance-nullary
+async-effect-spawn
+bare-fat-float-result
+bare-fat-float-result-dedup
+bare-fat-int-and-float-combinator
+bare-fat-lambda-closure-returning
+bare-fat-lambda-param
+bare-fat-let-float-binding
+bare-fat-nontail-float-noannot
+borrow-no-escape
+borrow-ptr
+borrow-ref
+borrow-through-deref
+borrow-unsafe
+boxed-fn-typed-closure-return
+capability-default
+capability-effect-poly
+capability-fs
+capability-logger
+capability-macro
+capability-test
+capability-thread
+category-instance-basic
+codegen-paren-precedence
+contract-assert-fail
+contract-ensure-fail
+contract-invariant-fail
+contract-post
+contract-pre
+contract-require-fail
+contract-type
+contracts-not-stripped
+copy-traits-basic
+cps-coloring
+cps-mixed-coloring
+curly-infix
+curried-call-pap-cast
+curried-fn-typed-param-application
+currying-curry-macro
+currying-effect-partial
+currying-over-apply
+currying-partial-basic
+currying-partial-chain
+currying-partial-struct-capture
+currying-point-free
+currying-rank2-partial
+data-literal-vec-in-defn
+datum-comment-basic
+datum-comment-inline
+datum-comment-multiline
+datum-comment-nested
+datum-comment-top-level
+defalias-basic
+defalias-float-literal
+defgadt-spaced-typeann
+define-annot
+define-basic
+define-in-ct-do
+define-in-defn
+define-in-fn
+define-in-let
+define-in-macro-body
+define-sees-prior
+definstance-spaced
+defn-basic
+defn-spaced-compound
+defn-spaced-multi-param
+defn-spaced-typeann
+defstruct-spaced-typeann
+deprecated-warning
+dump-kinds-basic
+dynvar-thread-locale
+effect-abort-panic
+effect-cont-unique
+effect-do-union
+effect-error-codes
+effect-flag-off
+effect-fn-type-annot
+effect-handle-reduce
+effect-handle-unreachable
+effect-handler-capture-loop
+effect-handler-capture-struct
+effect-handler-subtype
+effect-handler-type
+effect-let-subsumption
+effect-main-pure
+effect-over-annotated
+effect-poly-bracket
+effect-poly-infer
+effect-poly-map
+effect-poly-typeclass
+effect-rc
+effect-ref
+effect-reopen
+effect-row-compose
+effect-row-defn
+effect-row-ho
+effect-row-poly
+effect-row-var-concrete
+effect-row-var-unused
+effect-stdlib-io
+effect-stdlib-pure
+effect-strict-mode
+effect-struct-field-row
+effect-subtype-assign
+effect-subtype-capability
+effect-subtype-ho
+effect-type-alias
+effect-with-getenv
+effects-async
+error-from-into
+ex1d-open-nested
+ex1f-stdlib-show-it-bool
+ex2-1-phantom-substitution
+ex2-2-phantom-open
+ex2-3-phantom-escape-ok
+ex2-4-vec-existential
+ex2-5-vec-passthrough
+ex2-5-vec-roundtrip
+extern-printf
+fat-captureless-closure-ptr-void
+fat-closure-float-compose
+fat-param-capturing-closure
+fh-discharge-row
+fh-handler-value
+fh-multi-effect-type
+fix
+fizzbuzz
+float-fat-closure
+float-negative-exponent
+float-ops
+fn-field-unboxed
+fn-first-class-application
+fn-first-class-application-deferred
+fn-first-class-application-typed
+fn-spaced-typeann
+fn-type-bare-identifier
+fn-type-constraint
+fn-type-curried
+fn-type-neoteric
+fn-type-shorthand
+fn-type-spaced
+fn-typed-params
+fn-typed-return-thin-closure
+gadt-asan
+gadt-copy
+gadt-default-no-flag
+gadt-equal-coerce
+gadt-equal-cong
+gadt-equal-constraint
+gadt-equal-refl
+gadt-equal-sym
+gadt-equal-trans
+gadt-integration
+gadt-refine-nat
+gadt-refine-witness
+gadt-stdlib-nat
+gadt-stdlib-vec
+gadt-stdlib-vec-stdlib
+gadt-struct-namespace-prefer
+gadt-tilde
+generic-compose-int
+hkt-defrec-fix
+hkt-defrec-fix-with-body
+hkt-deftype-fix
+hkt-dispatch-basic
+hkt-dispatch-mixed
+hkt-dispatch-nested
+hkt-instances
+hkt-kind-alias
+hkt-multi-instance-typed
+hkt-row-ecs-query
+hkt-row-ecs-query-in-out
+hkt-row-ops-union
+hkt-row-query-phantom
+hkt-type-app-kind
+hkt-typeclass-declare
+hkt-typeclass-instance
+hkt-user-parametric-struct
+hrt-exists-adt
+hrt-exists-module
+hrt-exists-open
+hrt-exists-pack
+hrt-impred-closure
+hrt-impred-let
+hrt-impred-reuse
+hrt-integration
+hrt-rank2-annotation
+hrt-rank2-apply
+hrt-rank2-identity
+hrt-rankn-hkt
+hrt-rankn-propagation
+hrt-rankn-rank3
+hrt-rankn-typeclass
+hrt-stdlib-church
+hrt-stdlib-cont
+hrt-syntax-exists
+hrt-syntax-forall
+hrt-syntax-multi
+if-cond
+if-narrow-chained
+if-narrow-isq
+if-narrow-typeof-eq
+instance-intra-method-forward-ref
+intersection-types-basic
+kebab-case-capture
+kinds-basic
+lambda-call-head/basic
+lambda-call-head/capturing
+lambda-call-head/if-head
+lang-dispatch/default
+lang-dispatch/explicit-turmeric
+let-shadow
+let-typed-binding-complex-spaced
+let-typed-binding-fused
+let-typed-binding-spaced
+let-typed-binding-with-mut
+letrec-mutual
+letrec-non-fn-no-self-ref
+letrec-self-recursive
+letrec-shadows-outer
+letstar-typed-binding-spaced
+linear-basic
+linear-effect-handler
+linear-fn-param
+linear-fn-type
+linear-if-consume-after
+linear-if-consume-both
+linear-lref-param-kw
+linear-lref-propagation
+linear-lref-struct-field
+linear-lref-type-ann
+linear-stm
+lint-panic-file-allow
+lint-panic-off
+lint-panic-warn
+lint-unsafe-doc
+lint-unsafe-nested
+lint-unsafe-size
+load-typeclass-idempotent
+macro-body-if
+macro-body-let
+macro-defmacro
+macro-multi-arg
+macro-nested
+macro-quasiquote
+macro-quasiquote-special-form
+macro-quasiquote-unquote
+macro-quote
+macro-recursive
+macro-threading
+macro-threading-last
+macro-variadic
+mangle-arrow-name-vs-module
+mangle-kebab-snake-coexist
+module-defer-bare
+must-use-basic
+must-use-dup
+mutual-recursion
+named-let-loop
+named-let-loop-spaced-types
+named-let-shadowing
+neoteric
+nested-fn-basic
+numeric-types
+numeric-types-arith
+numeric-types-cast
+numeric-types-ffi
+numeric-types-literals
+numeric-types-struct
+opaque-ascription-copy-reuse
+operator-mangle-pair
+panic-catch-of-type
+panic-catch-unwind
+panic-catch-unwind-basic
+panic-catch-unwind-double
+panic-catch-unwind-nested
+panic-ffi-boundary
+panic-in-handler
+panic-no-unwind
+panic-no-unwind-abort
+panic-reset-clears
+phase-d-pass-by-ptr
+phase-f-poly-concrete
+phase-f-poly-concrete-unsigned
+phase11-snapshot-call-arg-copy-move
+phase11-snapshot-let-copy-move
+phase11-snapshot-return-transfer
+phase11-snapshot-set-copy-move
+positional-adt-poly-ok
+promise-linear
+ptc2-test
+ptc3-test
+range-reader-float
+rc-auto-drop-closure-capture
+rc-auto-drop-consumed-by-explicit-drop
+rc-auto-drop-consumed-by-ref-from-rc
+rc-auto-drop-early-return
+rc-auto-drop-explicit-drop
+rc-auto-drop-injection
+rc-auto-drop-multiple
+rc-auto-drop-negative-consumed
+rc-auto-drop-nested-scope
+rc-auto-drop-positive
+rc-auto-drop-test
+rc-cycle-leak
+rc-drop-hook-inner-rc
+rc-elision-barrier-call
+rc-elision-drop-pair-negative-barrier
+rc-elision-drop-pair-positive
+rc-elision-negative-closure-capture
+rc-elision-negative-conditional-drop
+rc-elision-negative-escape
+rc-elision-positive
+rc-elision-ref-from-rc-safety
+rc-elision-with-auto-drop
+rc-nested-free-queue
+rc-shared
+rc-struct-auto-drop
+rc-struct-nested-rc-fields
+rc-struct-simple-payload
+reactor-linear
+reader-macros-bare
+reader-macros-datum
+reader-macros-load-transitive
+reader-macros-raw
+reader-macros-string-body
+recursive-types/fix-type
+recursive-types/hkt-recursive
+recursive-types/mutual-recursion
+recursive-types/self-referential-struct
+recursive-types/simple-tree
+ref-auto-drop-moved-binding
+ref-deref
+ref-explicit-drop
+ref-if-branch-move-suppression
+ref-in-closure
+ref-move
+ref-nested
+ref-return
+ref-return-early-branch
+ref-return-nested-transfer
+relevant-basic
+result-from-into
+safe-arena
+schema-phantom-infer
+session-global-basic
+session-project-loop
+sf-apply-fat-arg-bridge
+sf-compose-typed
+sf-let-bind-with-inner-call
+shebang-sweet-lang
+show-bool
+show-cstr
+sized-cross-param-accept
+sized-size-arith
+sized-static-int
+sized-sz1-predicates
+sized-sz4-flag
+sized-sz6-erasure
+sized-sz6-indexed
+sized-sz8-inference
+sized-sz8-polymorphic
+sized-vec-basic
+stats-unsafe
+stdlib-arrow-load
+stdlib-case
+stdlib-effects-annotated
+stdlib-macros
+stdlib-option
+stdlib-result
+stdlib-slice
+stdlib-str
+stdlib-test-runner-callback
+stdlib-vec
+stm-or-else
+substructural-all-three
+substructural-ref-infer-let
+substructural-ref-infer-param
+substructural-relevant-param
+sum-either-basic
+sum-either-match
+sum-either-nested
+sum-either-nonexhaustive-opt-out
+sweet-exp-continuation
+sweet-exp-group
+sweet-exp-spaced-typeann
+t-expression-sweet-exp
+tco-non-tail-unchanged
+tmpfile-linear
+try-catch-compiled
+try-with-basic
+try-with-nested
+type-app
+typeclass-basic
+typeclass-closure
+typeclass-constraint
+typeclass-derived
+typeclass-effect-row
+typeclass-effect-row-caller
+typeclass-effect-row-default
+typeclass-macro
+typeclass-method-defn-clash
+typeclass-method-defn-coexist
+typeclass-multiple
+typeclass-operator
+typeclass-orphan-instance
+typeclass-primitives
+typed-signal-smoke
+typed-slots/adt-float-payload
+typed-slots/adt-float-payload-poly
+typed-slots/adt-poly-boundary
+typed-slots/ascribe-reinterpret
+typed-slots/coerce-carrier-to-struct
+typed-slots/float-closure
+typed-slots/generic-fn-binders
+typed-slots/generic-struct-fields
+typed-slots/generic-struct-layout
+typed-slots/gpair-instance
+typed-slots/sized-numeric-struct-app
+union-types-any
+union-types-type-of
+union-types-typeclass-dispatch
+unique-chain
+unique-drop
+unique-fn-param
+unique-mut-param
+unsafe-array
+unsafe-array-unchecked
+unsafe-basic
+unsafe-cast
+unsafe-defer
+unsafe-effect-row
+unsafe-empty
+unsafe-malloc
+unsafe-memcpy
+unsafe-nested
+unsafe-oversized
+unsafe-ptr-arith
+unsafe-ptr-deref
+unsafe-reinterpret
+use-after-move-float-let-vs-captured
+vec-basic
+with-resource-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.
@@ -460,6 +914,32 @@ run_turi_fixture() {
     local name="${dir#tests/fixtures/}"
     local input
 
+    # Locate input first.  A directory with no input.tur / <name>.tur is a
+    # container (e.g. tests/fixtures/typed/), not a fixture -- skip it silently
+    # so it does not inflate the SKIP_ALLOWLIST (coverage-gap) tally.
+    if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
+    elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
+    else return; fi
+
+    # Marker skips come FIRST so the SKIP_ALLOWLIST tally reflects the *true*
+    # remaining coverage gap (the W5 triage surface) rather than being inflated
+    # by marker-bearing fixtures.  Mirror of run.sh's skip set:
+    #   requires.compiled       -- needs the compiled path
+    #   requires.tur-only       -- a feature the interpreter deliberately omits
+    #   requires.dedicated-runner -- owned by its own ctest target
+    #   requires.spices         -- needs the sibling ../turmeric-spices checkout
+    #   requires.tsan           -- TSan-only fixture
+    if [ -f "$dir/requires.compiled" ]; then
+        printf 'SKIP %s (requires.compiled)\n' "$name"; return; fi
+    if [ -f "$dir/requires.tur-only" ]; then
+        printf 'SKIP %s (requires.tur-only)\n' "$name"; return; fi
+    if [ -f "$dir/requires.dedicated-runner" ]; then
+        printf 'SKIP %s (requires.dedicated-runner)\n' "$name"; return; fi
+    if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
+        printf 'SKIP %s (requires.spices; sibling checkout absent)\n' "$name"; return; fi
+    if [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then
+        printf 'SKIP %s (requires.tsan)\n' "$name"; return; fi
+
     # Skip if not in the turi include set.  Emit a visible SKIP so allowlist
     # gaps don't go unnoticed -- see KB-001 in docs/archive/history/known-bugs.md.
     #
@@ -484,28 +964,6 @@ run_turi_fixture() {
         fi
         return
     fi
-
-    # Skip fixtures that explicitly require compiled execution.
-    if [ -f "$dir/requires.compiled" ]; then
-        printf 'SKIP %s (requires.compiled)\n' "$name"
-        return
-    fi
-
-    # Skip fixtures explicitly marked as not interpretable under turi
-    # (TI1 turi-parity-post-v1-plan): a feature the tree-walking interpreter
-    # deliberately does not implement (mirror of requires.compiled, but keyed
-    # on interpreter capability rather than codegen need).  When the harness
-    # flips from allowlist to denylist (TI8) this marker is what keeps such a
-    # fixture out of the turi run.
-    if [ -f "$dir/requires.tur-only" ]; then
-        printf 'SKIP %s (requires.tur-only)\n' "$name"
-        return
-    fi
-
-    # Locate input file.
-    if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
-    elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
-    else printf 'SKIP %s (no input)\n' "$name"; return; fi
 
     # Stamp fast-path.
     if stamp_check "$name" "$input"; then

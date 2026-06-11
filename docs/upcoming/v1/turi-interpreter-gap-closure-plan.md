@@ -37,14 +37,28 @@ already carrying `requires.{compiled,tur-only,dedicated-runner,spices,tsan}`:
 
 ```
 post-defmodule-fix:  pass = 660   fail = 910   skip = 92
-post-W1 (current):   pass = 695   fail = 875   skip = 92   (+35)
+post-W1:             pass = 695   fail = 875   skip = 92   (+35)
 ```
 
+**Harness state (the live metric): 912 passed, 0 failed.** Progression:
+181 (post-defmodule) -> 463 (W3 wired `errors/*`, +282) -> **912** (the
+bulk-add of every auto-verified-passing non-inline-C fixture, +449). The harness
+summary now separates the work cleanly:
+
+```
+912 passed, 0 failed, 665 skipped
+  405 inline-c carve-outs   (TI7, permanent -- W2)
+  260 non-inline-C not yet on the allowlist  (the W5 triage surface)
+```
+
+The **260** is the real remaining gap: ~244 genuine pure-turi failures (W1b
+native-shim cluster + W4 silent miscompiles + an HKT/existential/continuation
+tail) plus a few container/edge dirs. Everything that passes under `--interpret`
+is now on the allowlist, so the allowlist == "everything that works," and a W5
+flip to denylist only needs the 260 fixed-or-carved.
+
 > The bucket tables below describe the **pre-W1 (910-failure)** snapshot, which
-> is still the right map for the remaining work: W1's +35 came out of the
-> typed-stdlib-prelude bucket, but that bucket is only partly closed (the
-> native-shim-conflicted modules -- result/map/set/hamt -- are still pending in
-> W1b). The harness allowlist now stands at **181 passed, 0 failed**.
+> is still the right map for the remaining failure work.
 
 EX_* expression-kind parity (the `check_turi_parity.py` ratchet):
 **109 / 115 handled, 6 carved out, 0 gaps.** So the remaining failures are
@@ -351,11 +365,20 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 
 ### W5 -- The flip itself
 
+**Groundwork done.** The harness already (a) auto-skips inline-C carve-outs (W2),
+(b) skips all `requires.*` markers before the allowlist check, (c) runs `errors/*`
+with diag comparison (W3), and (d) has every passing non-inline-C fixture on the
+allowlist (the bulk-add). So the allowlist now == "everything that works," and
+the flip is mechanically: replace "in allowlist?" with "not failing." The only
+thing standing between here and a green denylist is the **260** remaining
+allowlist-gap fixtures (~244 genuine failures) -- each must be fixed (W1b/W4) or
+carved with a marker.
+
 Once W1-W4 leave only carved fixtures failing:
 
 1. Delete `TURI_FIXTURES_DEFAULT` from `tests/run-turi.sh`; default to
    "run every fixture minus `requires.{compiled,tur-only,dedicated-runner,
-   spices}`."
+   spices}`" (inline-C auto-carve and the marker skips already in place).
 2. Retire the `KB-001` allowlist-gap workaround comment.
 3. Flip `tests/run-flags.sh`'s three `tur run` assertions (`:345` try-with-basic,
    `:355` try-with-nested, `:408` effect-export-explicit) to `--interpret`.
