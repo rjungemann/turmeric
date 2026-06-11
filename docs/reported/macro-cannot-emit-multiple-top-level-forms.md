@@ -3,9 +3,25 @@ title: A defmacro cannot emit more than one top-level form from a single invocat
 category: Reported
 severity: Blocks per-component accessor generation and other "one macro -> N defns" patterns
 discovered: 2026-06-11, executing ECS prereq plan step 3 (docs/upcoming/ecs-prereq-plan.md)
+resolved: 2026-06-11. Fix in `src/compiler/emit_core.c::flatten_program_items` --
+  top-level `(do ...)` forms are now spliced into the program-items array
+  alongside the existing `EX_DEFMODULE` splice. Matches Common Lisp's
+  top-level-progn semantics: a macro returning
+  `(do (defn ...) (def ...))` lands both forms in the items array as
+  siblings. Recursive splicing handles nested `(do ...)`. Regression
+  covered by `tests/fixtures/macro-emits-multiple-top-level-forms/`.
 ---
 
 # A defmacro cannot emit more than one top-level form from a single invocation
+
+> **Status: fixed 2026-06-11.** The minimal repro
+> `(defmacro pair-of-defns ...) ... (pair-of-defns foo)` expands,
+> compiles, and runs. Both `foo-a` and `foo-b` are visible at top
+> level. The fix splices top-level `(do ...)` recursively into the
+> program-items array during `flatten_program_items` (mirrors the
+> existing `EX_DEFMODULE` splice). The ECS spice's `defsystem` macro
+> shape -- `(do (defn name-impl ...) (def name (make-system ...
+> name-impl)))` -- now works as written.
 
 ## Summary
 

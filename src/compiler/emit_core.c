@@ -4,30 +4,65 @@
 
 /* ------------ helpers ------------ */
 
+/* Gap E: count items a single top-level Expr contributes after flattening.
+ * EX_DEFMODULE spreads its body; an EX_DO at top level recursively spreads
+ * each of its children (so a macro can emit `(do (defn ...) (defn ...))`
+ * and the children land as ordinary top-level items). Other forms count
+ * as one. */
+static uint32_t flatten_count(const Expr *e) {
+    if (!e) return 0;
+    if (e->kind == EX_DEFMODULE) {
+        DefModule *mod = e->as.defmodule_.mod;
+        uint32_t n = 0;
+        for (uint32_t j = 0; j < mod->n_body; j++) n += flatten_count(mod->body[j]);
+        return n;
+    }
+    if (e->kind == EX_DO) {
+        uint32_t n = 0;
+        for (uint32_t j = 0; j < e->as.do_.n; j++) n += flatten_count(e->as.do_.items[j]);
+        return n;
+    }
+    return 1;
+}
+
+/* Gap E counterpart of flatten_count: write each post-flatten item into
+ * `flat[*k]` and bump `*k`. */
+static void flatten_emit(const Expr *e, const Expr **flat, uint32_t *k) {
+    if (!e) return;
+    if (e->kind == EX_DEFMODULE) {
+        DefModule *mod = e->as.defmodule_.mod;
+        for (uint32_t j = 0; j < mod->n_body; j++) flatten_emit(mod->body[j], flat, k);
+        return;
+    }
+    if (e->kind == EX_DO) {
+        for (uint32_t j = 0; j < e->as.do_.n; j++) flatten_emit(e->as.do_.items[j], flat, k);
+        return;
+    }
+    flat[(*k)++] = e;
+}
+
 /* Phase M0: Flatten EX_PROGRAM items into a contiguous array, expanding any
- * EX_DEFMODULE nodes into their body items. The returned array is malloc'd
- * and must be freed by the caller. */
+ * EX_DEFMODULE nodes into their body items.
+ *
+ * Gap E (2026-06-11): also flatten top-level `(do ...)` forms recursively,
+ * matching Common Lisp's top-level-progn semantics. This lets a macro emit
+ * a single `(do (defn name-impl ...) (def name (make-system ... name-impl)))`
+ * expansion and have both top-level forms land in the items array as
+ * siblings. Without it, the do flows through emit_stmt() and aborts with
+ * "EX_FN_DEF in stmt position" the moment a defn appears inside. See
+ * docs/reported/macro-cannot-emit-multiple-top-level-forms.md.
+ *
+ * The returned array is malloc'd and must be freed by the caller. */
 const Expr **flatten_program_items(const Expr *program, uint32_t *out_n) {
     uint32_t total = 0;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
-        if (e->kind == EX_DEFMODULE)
-            total += e->as.defmodule_.mod->n_body;
-        else
-            total += 1;
+        total += flatten_count(program->as.program.items[i]);
     }
     const Expr **flat = (const Expr **)malloc(total * sizeof(Expr *));
     if (!flat && total > 0) { fprintf(stderr, "tur: oom\n"); abort(); }
     uint32_t k = 0;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
-        if (e->kind == EX_DEFMODULE) {
-            DefModule *mod = e->as.defmodule_.mod;
-            for (uint32_t j = 0; j < mod->n_body; j++)
-                flat[k++] = mod->body[j];
-        } else {
-            flat[k++] = e;
-        }
+        flatten_emit(program->as.program.items[i], flat, &k);
     }
     *out_n = total;
     return flat;

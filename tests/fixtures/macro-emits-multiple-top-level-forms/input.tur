@@ -1,0 +1,46 @@
+;; Regression for gap E: a defmacro that emits multiple top-level forms
+;; via (do ...) was aborting with "EX_FN_DEF in stmt position" at codegen.
+;; The fix splices top-level (do ...) into the program-items array during
+;; flatten_program_items (src/compiler/emit_core.c), matching Common
+;; Lisp's top-level-progn semantics. See
+;; docs/reported/macro-cannot-emit-multiple-top-level-forms.md.
+;;
+;; This fixture exercises the three shapes that mattered for the ECS
+;; spice's defsystem macro:
+;;   1. macro emitting two sibling defns
+;;   2. macro emitting a defn + def pair (the defsystem shape)
+;;   3. nested (do ...) inside the emitted form
+
+(defmacro pair-of-defns [name]
+  (let [s1 (str->sym (str-append (symbol-name name) "-a"))
+        s2 (str->sym (str-append (symbol-name name) "-b"))]
+    `(do
+       (defn ~s1 [] : int 1)
+       (defn ~s2 [] : int 2))))
+
+(defmacro fn-and-const [name body]
+  (let [impl-name (str->sym (str-append (symbol-name name) "-impl"))]
+    `(do
+       (defn ~impl-name [x : int] : int ~body)
+       (def  ~name 42))))
+
+(defmacro mk-trio []
+  `(do
+     (defn alpha [] : int 1)
+     (do
+       (defn beta  [] : int 2)
+       (defn gamma [] : int 3))))
+
+(pair-of-defns foo)
+(fn-and-const bar (* x 2))
+(mk-trio)
+
+(defn main [] : int
+  (println (foo-a))         ;; 1
+  (println (foo-b))         ;; 2
+  (println (bar-impl 21))   ;; 42
+  (println bar)             ;; 42
+  (println (alpha))         ;; 1
+  (println (beta))          ;; 2
+  (println (gamma))         ;; 3
+  0)
