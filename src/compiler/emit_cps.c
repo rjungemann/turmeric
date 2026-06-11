@@ -682,11 +682,9 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
                 }
             }
             if (m < 0) return NULL;
-            /* The shift must sit in statement position (be the do item itself),
-             * and the tail must be at most one item (a single continuation
-             * call). Richer shapes are a later increment. */
+            /* The shift must sit in statement position (be the do item itself).
+             * The tail items (m, N) are the captured continuation. */
             if (cur->as.do_.items[m]->kind != target) return NULL;
-            if (N - (uint32_t)m - 1 > 1) return NULL;
             /* Prelude items [0, m): emitted for side effect at the reset site. */
             for (int32_t i = 0; i < m; i++) {
                 if (nl >= CL_MAX_CTX_LETS) return NULL;
@@ -695,15 +693,22 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
                 lets[nl].init    = cur->as.do_.items[i];
                 nl++;
             }
-            /* Tail item (if any): a 0-arg top-level call -> ignore-value frame. */
-            if (N - (uint32_t)m - 1 == 1) {
-                const Expr *tail = cur->as.do_.items[m + 1];
+            /* Tail items (m, N): each a 0-arg top-level call -> an ignore-value
+             * frame. They run in source order on resume, so record them in
+             * reverse: the first tail item is innermost (adjacent to the shift,
+             * runs first), the last is outermost (runs last, its value is the
+             * reset's value). */
+            for (int32_t i = (int32_t)N - 1; i > m; i--) {
+                const Expr *tail = cur->as.do_.items[i];
                 if (tail->kind != EX_CALL || tail->as.call_.n_args != 0 ||
                     !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
                 const Binding *fb = tail->as.call_.fn_binding;
                 if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
                 if (fb->closure_fn_binding) return NULL;
-                if (!env_kind_ok(tail->type.kind)) return NULL;  /* result: scalar */
+                /* The outermost tail item yields the reset's value (scalar);
+                 * inner ones are run for effect and their value discarded. */
+                if (i == (int32_t)N - 1 && !env_kind_ok(tail->type.kind)) return NULL;
+                if (n >= CL_MAX_CTX_FRAMES) return NULL;
                 frames[n].c_op = NULL;
                 frames[n].call_fn = fb;
                 frames[n].hole_left = true;   /* unused for a 0-arg frame */

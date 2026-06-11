@@ -15,6 +15,8 @@
 
 (defn init [] : int (println "init once") 0)
 (defn loop [] : int (println "loop body") 7)
+(defn step1 [] : int (println "step1") 0)
+(defn step2 [] : int (println "step2") 0)
 
 ;; resume the captured continuation immediately, on the cold path.
 (defn rt [k : ptr<void>] : int
@@ -31,4 +33,6 @@
 (defn main [] : int
   (println (serial-reset (do (init) (serial-shift rt 0) (loop))))     ; init once, loop, 7
   (println (serial-reset (do (init) (serial-shift twice 0) (loop))))  ; init once, loop x2, 14
+  ;; multi-statement tail: resume runs step1, step2, loop in source order.
+  (println (serial-reset (do (init) (serial-shift rt 0) (step1) (step2) (loop)))) ; 7
   0)

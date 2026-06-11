@@ -5,3 +5,8 @@ init once
 loop body
 loop body
 14
+init once
+step1
+step2
+loop body
+7
