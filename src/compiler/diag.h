@@ -139,6 +139,11 @@ typedef enum DiagCode {
      * a floating-point specialization dispatches through the wrong register and
      * silently miscompiles.  Rejected until per-A inner-body specialization lands. */
     TUR_E0705_POLY_CLOSURE_RESULT_TYVAR,
+    /* serial-shift-unsupported-context-miscompile: a serial-shift whose
+     * delimited context falls outside the DK-lowering grammar (collect_ctx)
+     * cannot be reified into a marshalable continuation.  Rejected at codegen
+     * instead of silently lowering to a 0 placeholder / __builtin_trap(). */
+    TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

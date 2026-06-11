@@ -1,0 +1,15 @@
+;; serial-shift-unsupported-context-miscompile: negative fixture for TUR-E0706.
+;;
+;; The shift sits inside a 3-arg call, which falls outside the DK lowering
+;; grammar (collect_ctx only accepts 2-arg calls, arithmetic binops, scalar
+;; let preludes, one if, and the do-tail shape).  Such a context cannot be
+;; reified into a marshalable continuation, so it must be rejected at codegen
+;; rather than silently lowered to a `0` placeholder (a silent miscompile).
+
+(defn add3 [a : int b : int c : int] : int (+ a (+ b c)))
+
+(defn rt [k : ptr<void>] : int 5)
+
+(defn main [] : int
+  (println (serial-reset (add3 1 (serial-shift rt 0) 2)))
+  0)

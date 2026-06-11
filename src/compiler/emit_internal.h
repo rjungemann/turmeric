@@ -15,6 +15,7 @@
 #include "arena.h"
 #include "builtins.h"
 #include "cps.h"
+#include "diag.h"
 #include "rc.h"
 #include "rc_elision.h"
 #include "types.h"

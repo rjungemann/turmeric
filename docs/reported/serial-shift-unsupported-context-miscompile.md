@@ -1,5 +1,17 @@
 # `serial-shift` in an unsupported context silently miscompiles
 
+> **STATUS: FIXED.** Fix directions (1) and (2) are both implemented. The
+> unsupported case is now a hard codegen diagnostic
+> (`TUR-E0706: serial-shift context is not capturable`) instead of a silent
+> `0` placeholder (value position) or `__builtin_trap()` (statement position),
+> and the prelude gate is broadened to `emit_cps_program_contains_serial`.
+> Direction (3) (grammar generalization) has independently advanced: the
+> original repros A and B now *lower correctly* (A -> `10`, B -> `in main-loop`/
+> `42`); the diagnostic guards the genuinely-unsupported shapes that remain
+> (3-arg call context, 2-arg do-tail, etc.). Regression coverage:
+> `tests/fixtures/errors/serial-context-not-capturable` (value position) and
+> `tests/fixtures/errors/serial-context-do-not-capturable` (statement position).
+
 **One-line summary.** A `serial-reset`/`serial-shift` whose delimited context
 falls outside the DK-lowering grammar (`collect_ctx`) is silently lowered to a
 placeholder that returns `0` without calling the receiver -- a **silent
@@ -108,27 +120,47 @@ returns false -> `emit_cps_serial_reset` returns NULL ->
 
 ## Proposed fix directions
 
-1. **Make the unsupported case a hard error.** When a `serial-reset` contains a
-   `serial-shift` but `sk_can_lower` is false, emit a real diagnostic
-   (`TUR-E00xx: serial-shift context is not capturable`) instead of the silent
-   `0` placeholder. This closes both A and B (B never reaches the dangling
-   builtin ref because compilation stops). Lowest-risk, most honest.
-2. **Broaden the prelude gate** so the serial runtime (and its DK-machine
-   dependency) is emitted whenever a `serial-shift`/`serial-reset` node exists
-   *or* the `tur_serial_cont_*` builtins are referenced -- not only when a
-   reset lowers. This removes the crash in B but leaves A's silent-`0` result.
-   Pairs well with (1).
+1. **Make the unsupported case a hard error.** *(DONE)* When a `serial-reset`
+   contains a `serial-shift` but `sk_can_lower` is false, the codegen now emits
+   a real diagnostic (`TUR-E0706: serial-shift context is not capturable`)
+   instead of the silent `0` placeholder. This closes both A and B (B never
+   reaches the dangling builtin ref because compilation stops). Lowest-risk,
+   most honest. Implementation:
+   - New `DiagCode TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE` with code string,
+     reverse lookup, and a `tur explain TUR-E0706` long-form entry
+     (`src/compiler/diag.{h,c}`).
+   - Value-position fallback `emit_effects_serial_shift`
+     (`src/compiler/emit_effects.c`) emits the diagnostic in place of the
+     `int64_t t = 0` placeholder.
+   - Statement-position `EX_SERIAL_SHIFT` (`src/compiler/emit_stmt.c`) emits the
+     diagnostic in place of `__builtin_trap()`; the sibling `EX_SERIAL_RESET`
+     statement case is routed through `emit_value` so a lowerable / shift-free
+     reset still works as a statement.
+   - `emit_program` / `emit_implementation` now return
+     `diag_had_error() ? 1 : 0`, so a codegen-phase diagnostic fails the build
+     and the partial C is discarded.
+2. **Broaden the prelude gate** *(DONE -- already in tree)* so the serial
+   runtime (and its DK-machine dependency) is emitted whenever a
+   `serial-shift`/`serial-reset` node exists -- not only when a reset lowers.
+   `emit_module.c:2916,2930` gate on `emit_cps_program_contains_serial`. This
+   removes the crash in B.
 3. **Generalize the capture grammar** (large): a real CPS-based continuation
    serializer that handles `do` sequences, n-ary calls, and arbitrary control,
-   so contexts like B actually capture. This is what
-   `docs/upcoming/application-image-dumps-plan.md` (AI1-AI8) needs and is a
-   major compiler effort, not a wiring task.
+   so more contexts actually capture. This has independently advanced -- the
+   `do`-tail and several call/let/if shapes now lower (`collect_ctx`), and the
+   original repros A and B capture correctly. Fully general n-ary tails are
+   still future work and remain guarded by TUR-E0706. This is what
+   `docs/upcoming/application-image-dumps-plan.md` (AI1-AI8) builds on.
 
 ## Validation
 
-- A/B above must either produce the correct result (after grammar
-  generalization) or fail with a named compile error -- never a silent `0` or
-  an `Illegal instruction`.
-- Supported contexts (`tests/fixtures/serial-context-marshal`, and the
-  `save-cont!`/`resume-cont!` round-trip added in this session) must keep
-  passing.
+- A/B above produce the correct result (they now lower: A -> `10`,
+  B -> `in main-loop` then `42`) -- never a silent `0` or an
+  `Illegal instruction`.
+- Genuinely-unsupported shapes fail with the named compile error TUR-E0706:
+  `tests/fixtures/errors/serial-context-not-capturable` (3-arg call context,
+  value position) and `tests/fixtures/errors/serial-context-do-not-capturable`
+  (2-arg do-tail, statement position).
+- Supported contexts (`tests/fixtures/serial-context-*`, including the
+  `save-cont!`/`resume-cont!` round-trips) keep passing; the full suite is
+  `1563 passed, 0 failed`.
