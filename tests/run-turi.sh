@@ -267,6 +267,35 @@ fh-compose-handlers
 #   panic-with-catch-of  -- typed panic-with payload: :int matches, :cstr re-raises
 panic-catch-panic-of
 panic-with-catch-of
+
+# TI8.b (turi-parity-post-v1-plan): the interpreter now preloads macros.tur via
+# the load mechanism instead of source concatenation, so the macros module
+# defmodule gets its own file_id and no longer collides with a user fixtures
+# defmodule under the one-defmodule-per-file check.  The module/defmodule
+# fixtures below now evaluate correctly under tur --interpret.
+defmodule-fat-fn-param-export
+defmodule-pap-forward-ref-fat-fn
+effect-export-explicit
+effect-row-cross-private
+load-inside-defmodule-injects-names
+module-basic
+module-cross-module-call
+module-cross-module-effect
+module-cross-module-fullname
+module-cross-module-struct
+module-defer-basic
+module-defer-order
+module-effect-private
+module-export-as
+module-facade
+module-import
+module-macro-private
+module-macro-refer
+module-nested-path
+module-private-in-module
+module-refer
+module-self-qualified
+recursion-ptr-void-return-in-defmodule
 "
 
 # Build an associative-set from the default list for O(1) lookup.

@@ -718,21 +718,33 @@ The foundational correctness fix and the CI ratchet shipped:
   the harness is green at **122 passed, 0 failed**. The `requires.tur-only`
   marker (from TI1) is honored as the symmetric skip to `requires.compiled`.
 
-### TI8.b -- Full allowlist → denylist flip -- **DEFERRED (measured)**
+### TI8.b -- Full allowlist → denylist flip -- **IN PROGRESS (defmodule defect fixed)**
 
-Steps 1-3 below (delete the allowlist; default to run-everything-minus-markers;
-retire KB-001) are **not** done, because the blast radius is large and includes
-silent miscompiles that must be fixed or carved first. Measured on 2026-06-11:
-under `--interpret`, **637 pass / 933 fail / 92 skip** across all fixtures. The
-933 failures bucket into missing stdlib natives/struct-types, typeclass
-registration gaps during stdlib load, a `defmodule`-reprocessing defect,
-move/linearity-checker divergence, genuine inline-C carve-outs, and silent
-wrong-value miscompiles. Full catalogue + per-bucket counts in the
-reconciliation report. Closing them is multi-session work (the plan's "budget a
-day for triage"); each newly-red fixture must be fixed in `src/turi/eval.c` or
-tagged `requires.tur-only`/`requires.compiled` with a reason.
+The flip itself (delete the allowlist; default to run-everything-minus-markers)
+is **not** done -- the blast radius is large and includes silent miscompiles
+that must be fixed or carved first. Measured on 2026-06-11: under `--interpret`,
+**637 pass / 933 fail / 92 skip** across all fixtures.
 
-Remaining steps when TI8.b is tackled:
+**Landed in TI8.b so far -- the `defmodule` concatenation defect:** the 46
+`only one defmodule is allowed per file` failures were a real interpreter bug.
+`cmd_eval` preloaded `macros.tur` (which carries `(defmodule tur/macros ...)`)
+by **concatenating** its source into the single `<eval>` blob (`file_id 0`), so
+any user fixture with its own defmodule collided. Fixed by preloading
+`macros.tur` via a `(load ...)` form (which assigns it a distinct `file_id`, so
+the per-file `has_defmodule` reset fires). 23 module/defmodule fixtures now pass
+and were added to the allowlist (harness: **145 passed, 0 failed**); post-fix
+probe **660 / 910 / 92**. See the reconciliation report for the de-risked
+roadmap on the next-largest bucket (the typed-stdlib preload, which needs the
+`(load ...)` mechanism + dropping benchmark-stub conflicts + a perf
+consideration).
+
+Remaining buckets in the 910: typed-stdlib preload (missing natives/struct
+types), typeclass-registration gaps during stdlib load, move/linearity-checker
+divergence, inline-C carve-outs, and silent wrong-value miscompiles. Each must
+be fixed in `src/turi/eval.c` or tagged `requires.tur-only`/`requires.compiled`
+before the flip lands green.
+
+Remaining steps when the flip is tackled:
 
 1. Delete `TURI_FIXTURES_DEFAULT` from `tests/run-turi.sh`.
 2. Default to "run every fixture" minus `requires.{compiled,tur-only,

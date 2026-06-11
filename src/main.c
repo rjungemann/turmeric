@@ -4808,11 +4808,22 @@ static int cmd_eval(const char *path, bool use_color,
         return 1;
     }
     /* Preload macros.tur so that and/or/when/cond/for etc. are available.
-     * This is the minimum stdlib needed for any real Turmeric program to work. */
+     * This is the minimum stdlib needed for any real Turmeric program to work.
+     *
+     * TI8.b (turi-parity-post-v1-plan): load it via a `(load ...)` form rather
+     * than turi_eval_file().  turi_eval_file concatenates the source into the
+     * single <eval> blob (file_id 0); macros.tur carries `(defmodule tur/macros
+     * ...)`, so any user fixture that *also* declares a defmodule then collided
+     * with it under "only one defmodule is allowed per file" (both forms shared
+     * file_id 0, defeating the per-file reset).  The `(load ...)` path assigns
+     * macros.tur its own file_id, so the defmodule-per-file boundary reset
+     * fires and a user defmodule no longer conflicts with the preloaded one. */
     {
         char path_buf[4096];
         tur_stdlib_path("macros.tur", path_buf, sizeof(path_buf));
-        TuriValue sv = turi_eval_file(env, path_buf);
+        char load_form[4200];
+        snprintf(load_form, sizeof(load_form), "(load \"%s\")", path_buf);
+        TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
     /* Inject typed stubs so the elaborator knows the signatures of native
