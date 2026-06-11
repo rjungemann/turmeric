@@ -2187,6 +2187,28 @@ static TuriValue ic_exec_accessor(const char *body,
         }
     }
 
+    /* W4 (turi-interpreter-gap-closure-plan): refuse-rather-than-miscompile.
+     * The field-access paths below extract a single `ptr->field` value.  If the
+     * return expression is actually a boolean/relational combination over that
+     * field -- e.g. `return p == NULL || !p->is_ok;` -- reading the bare field
+     * silently drops the `== NULL`, `||`, and `!` and returns the WRONG answer
+     * (rc=0).  We cannot faithfully evaluate such expressions here, so decline:
+     * returning turi_nil makes try_exec_simple_inline_c fall through to the
+     * clean "inline-C not supported" error instead of a silent miscompile.
+     * (The `var ? var->field : fallback` and `field ? field : "def"` shapes are
+     * already handled above / below and contain none of these operators.)
+     * See docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md. */
+    for (const char *p = ret; *p && *p != ';'; p++) {
+        if (p[0] == '-' && p[1] == '>') { p++; continue; }   /* skip the arrow */
+        if ((p[0] == '|' && p[1] == '|') ||                  /* || */
+            (p[0] == '&' && p[1] == '&') ||                  /* && */
+            (p[0] == '=' && p[1] == '=') ||                  /* == */
+            p[0] == '!' ||                                   /* != or unary ! */
+            p[0] == '<' || p[0] == '>') {                    /* < > (arrow skipped) */
+            return turi_nil();
+        }
+    }
+
     /* Skip variable name and look for -> or . */
     const char *varstart = ret;
     while (isalnum((unsigned char)*ret)||*ret=='_') ret++;

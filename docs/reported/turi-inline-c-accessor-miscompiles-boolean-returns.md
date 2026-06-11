@@ -1,5 +1,16 @@
 # `ic_exec_accessor` silently miscompiles negated/disjunctive boolean returns
 
+> **FIXED (TI8.b/W4):** `ic_exec_accessor` now **refuses** (returns `turi_nil`
+> -> clean "inline-C not supported" error) any field-access return whose
+> expression contains a result-transforming operator (`||`, `&&`, `==`, `!=`,
+> unary `!`, `<`, `>`, with `->` skipped) instead of reading the bare field.
+> `result-basic`'s `u-err?` and the minimal repro below now error cleanly rather
+> than returning the inverted answer. Direction 2 (refuse) was chosen over
+> direction 1 (evaluate) to stay safe; the `var ? var->f : fb` and
+> `field ? field : "def"` shapes are unaffected (no such operators), and the
+> allowlisted inline-C fixtures (`inline-c-binop`, `gen-*`) still pass. See
+> `src/turi/eval.c` `ic_exec_accessor`.
+
 **Summary:** The interpreter's simple inline-C evaluator
 (`try_exec_simple_inline_c` -> `ic_exec_accessor`, `src/turi/eval.c:2114`)
 mis-evaluates a `return` whose expression is a boolean combination over a struct

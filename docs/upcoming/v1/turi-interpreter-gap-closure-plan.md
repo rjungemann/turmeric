@@ -312,22 +312,42 @@ shrink after W1 before acting):
   type defaults to `:int` when its module is not loaded; mostly subsumed by W1,
   re-measure after W1.
 
-### W4 -- Silent miscompiles (highest severity, do NOT bulk-carve)
+### W4 -- Silent miscompiles (highest severity) -- **IN PROGRESS (accessor class fixed)**
 
-~30 pure-turi fixtures run to completion (rc=0) with **wrong stdout**, plus ~6
-that should exit nonzero but return 0. The compile-based harness hid these
-entirely; they are the reason the flip matters. Known examples from the
-allowlist reconciliation: `result-basic` (returns 0 where 99 expected),
-`weak-dangling` (reports a dangling weak as live), `instance-head-hole-pair`
-(0/0 vs 42/7). The W1 empty-stderr bucket will surface more once symbols resolve.
+The silent-miscompile surface was measured precisely (post-W1/W3, `rc` matches
+expected but output is wrong):
 
-**Approach.** Each gets an individual `docs/reported/<slug>.md` with a minimal
-repro and observed-vs-expected. Fix in `src/turi/eval.c` where the root cause is
-clear; where it is deep, carve `requires.tur-only` reason `interp-miscompile`
-**with the report linked** so it is never forgotten. `weak-dangling` (weak-ref
-liveness) and `result-basic` (Result value/ordering) are the priority probes --
-they hint at value-representation bugs that may explain other empty-stderr
-fixtures.
+- **25 inline-C** silent miscompiles via `try_exec_simple_inline_c` (carve-outs
+  for the flip, but a real evaluator-trust bug).
+- **12 pure-turi** silent miscompiles (NOT carve-able; these block W5): 11 real
+  interpreter bugs + 1 legit reader-conditional carve (`reader-cond`).
+
+**Landed:** the `ic_exec_accessor` boolean-return class. The accessor now
+**refuses** any field-access return containing a result-transforming operator
+(`||`/`&&`/`==`/`!=`/unary-`!`/`<`/`>`, `->` skipped) instead of silently reading
+the bare field -- turning silent-wrong into a clean "inline-C not supported"
+error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
+(incl. `result-basic`) with **zero regressions** (allowlisted `inline-c-binop` /
+`gen-*` still pass; harness 463/0; compiled 1573/0). Reports:
+[turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md)
+(FIXED) and
+[turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md)
+(3 fixed, 22 remain via other `ic_exec_*` matchers).
+
+**Remaining W4:**
+
+- **22 inline-C** evaluator miscompiles via the other matchers (constructor /
+  snprintf / switch-string / linked-list / simple-return) -- e.g. the
+  `backtrack-*` (7), `show-*` (3), `arrow-instance-*` (2) clusters. Apply the
+  same refuse-rather-than-guess tightening per matcher. Inline-C carve-outs, so
+  they do not block W5 -- but they ship a wrong-answer hazard for real programs.
+- **11 pure-turi interpreter bugs** (the W5 blockers), catalogued in
+  [turi-pure-turi-silent-miscompiles.md](../../reported/turi-pure-turi-silent-miscompiles.md):
+  return-type dispatch showing `:bool` as `1` (`rt-return-dispatch-*`), Any-type
+  boxing tag/cast (`any-box-*`, `any-cast-mismatch-panic`), typed `eq?`
+  (`result-of-typed-eq`), and others. Each is its own root cause; start with
+  `rt-return-dispatch-*` (likely one fix, two fixtures). `reader-cond` is a legit
+  path-divergence -> carve `requires.compiled`.
 
 ### W5 -- The flip itself
 

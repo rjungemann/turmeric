@@ -1,5 +1,15 @@
 # 25 inline-C fixtures silently miscompile under `--interpret`
 
+> **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
+> [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md))
+> converted **3** of these (the accessor-path cases incl. `result-basic`) from
+> silent-wrong to clean-error. **22 remain**, miscompiling via the *other*
+> `ic_exec_*` matchers (constructor / snprintf / switch-string / linked-list /
+> simple-return) -- e.g. the `backtrack-*` (7), `show-*` (3), `arrow-instance-*`
+> (2), `workstealing-*` (2), `stdlib-*` (2) clusters. Each needs the same
+> refuse-rather-than-guess tightening applied to its matcher. They are inline-C
+> carve-outs for the flip, so they do not block W5.
+
 **Summary:** The interpreter's best-effort inline-C evaluator
 (`try_exec_simple_inline_c` and its `ic_exec_*` pattern matchers,
 `src/turi/eval.c`) **claims to handle** the inline-C in these 25 fixtures but
