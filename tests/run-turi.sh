@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
 # tests/run-turi.sh -- interpreter (turi) fixture runner.
 #
-# Runs a curated subset of tests/fixtures/ through `tur run` (the tree-walk
-# interpreter) instead of compiling each to a native binary.  Fixtures that
-# require compilation (requires.compiled), or whose features are not yet
-# complete in the interpreter, are skipped.
+# Runs a curated allowlist of tests/fixtures/ through `tur --interpret` (the
+# tree-walking turi interpreter, src/turi/eval.c) instead of compiling each to
+# a native binary.  Fixtures that require compilation (requires.compiled), or
+# whose features the interpreter deliberately does not implement
+# (requires.tur-only), are skipped.
+#
+# TI8 note (turi-parity-post-v1-plan): this harness used to invoke `tur run`,
+# which COMPILES and runs a native binary -- so the allowlist never actually
+# exercised src/turi/eval.c (see the now-resolved blocker report
+# docs/reported/turi-harness-compiles-instead-of-interpreting.md).  It now uses
+# `--interpret`.  Reconciling the allowlist to true interpretation removed 31
+# entries that only "passed" via codegen -- some are permanent carve-outs
+# (call/cc, inline-C), but several surfaced genuine interpreter gaps or silent
+# miscompiles, catalogued in
+# docs/reported/turi-harness-flip-reconciliation.md.  The full allowlist ->
+# denylist flip (run every fixture minus markers) is still future work: under
+# `--interpret` ~933 of ~1500 fixtures currently fail, spanning many distinct
+# interpreter bugs and missing-native gaps (see that report for the buckets).
 #
 # Usage:
 #   bash tests/run-turi.sh                  # run the default turi fixture set
@@ -101,19 +115,11 @@ borrow-mut-assign
 borrow-reborrow
 borrow-struct-field
 borrow-sugar
-call-cc-star
-clone-primitives
 closure-call
-clone-list
-clone-option
-clone-pair
 closure-multi-capture
 closure-multi-capture-ref
 continuation-advanced
 continuation-basic
-continuation-callcc
-continuation-escape
-continuation-escape-fn
 defer-conditional
 defer-early-return
 defer-in-loop
@@ -123,8 +129,6 @@ defer-order
 defstruct-copy-valid
 defstruct-move-annotation
 dynvar-binding
-dynvar-convey
-dynvar-convey-isolation
 dynvar-inject
 dynvar-log-level
 dynvar-multi
@@ -132,7 +136,6 @@ dynvar-nested
 dynvar-read
 dynvar-set
 effect-abort
-effect-capture-k
 effect-console
 effect-cont-abort
 effect-cont-linear
@@ -173,30 +176,14 @@ panic-downcast
 panic-ref
 panic-trace
 panic-with-typed
-ptc4-basic
 rc-basic
 rc-ref-conversion
 ref-basic
-result-basic
-typed/grid-basic
-typed/list-basic
-typed/list-macro
-typed/map-basic
-typed/map-collision
-typed/map-eq
-typed/option-basic
-typed/pair-basic
-typed/result-basic
-typed/set-basic
-typed/slice-basic
-typed/vec-basic
-typed/zipper-basic
 union-types-basic
 union-types-cast
 union-types-match
 union-types-threeway
 unique-basic
-weak-dangling
 weak-upgrade
 
 # TI0 (typeclass-correctness audit, 2026-06-10): fixtures verified to pass under
@@ -205,14 +192,10 @@ weak-upgrade
 # is shared via the elaborated Expr tree, so these were healthy from day one
 # but were not on the allowlist.
 arrow-compose-float
-arrow-instance-apply
 arrow-instance-arr-identity
 arrow-instance-basic
 arrow-instance-choice
-arrow-instance-stdlib-basic
 fat-shim-void-ptr-arrow-compose
-hkt-stdlib-result-ok-biased
-instance-head-hole-pair
 poly-closure-compose-float
 poly-closure-result-tyvar-float
 
@@ -365,18 +348,18 @@ run_turi_fixture() {
     local rc=0
     if [ -f "$dir/input.stdin" ]; then
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags run "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags run "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     else
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags run "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags run "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     fi

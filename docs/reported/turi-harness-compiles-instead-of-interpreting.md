@@ -1,5 +1,12 @@
 # `run-turi.sh` compiles fixtures instead of interpreting them
 
+> **RESOLVED (TI8):** `tests/run-turi.sh` now runs fixtures with
+> `tur --interpret`. Reconciling the allowlist to true interpretation removed
+> 31 false-green entries; the harness is green again at 122 passed. See
+> [turi-harness-flip-reconciliation.md](turi-harness-flip-reconciliation.md)
+> for the bucketed 31 + the full-denylist blast radius. `tests/run-flags.sh`'s
+> three `tur run` assertions are the only remaining instance of this wiring.
+
 **Summary:** The "interpreter parity" harness `tests/run-turi.sh` (and the
 fixture-running portions of `tests/run-flags.sh`) invoke `tur run <file>`,
 which **compiles and runs a native binary**, not the tree-walking `turi`

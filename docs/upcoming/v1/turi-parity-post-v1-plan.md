@@ -695,35 +695,51 @@ Permanent carve-out per `src/turi/fiber.c:172-288`. Document in
 
 ---
 
-## Phase TI8 -- Harness flip: allowlist → denylist
+## Phase TI8 -- Harness flip: allowlist → denylist -- **PARTIAL (ratchet + harness now interprets)**
 
-Once TI1-TI6 land, almost every fixture should run under turi.
+### TI8.a -- CI ratchet + harness genuinely interprets -- **LANDED**
 
-### Implementation
+The foundational correctness fix and the CI ratchet shipped:
 
-1. Delete the `TURI_FIXTURES_DEFAULT` allowlist from
-   `tests/run-turi.sh` (lines 82-211 as of 2026-06-10).
-2. Default to "run every fixture under tests/fixtures/" minus those
-   carrying:
-   - `requires.compiled`
-   - `requires.tur-only` (new marker from TI1)
-   - `requires.dedicated-runner`
-   - `requires.spices` (when `../turmeric-spices` is absent)
-3. The `KB-001` known-bug ("allowlist gaps go unnoticed") becomes
-   moot; remove the workaround comment.
-4. Add a flagging script `tools/check_turi_parity.py` that:
-   - Greps `src/compiler/expr.h` for `EX_*` enumerators.
-   - Greps `src/turi/eval.c` for `case EX_*` arms.
-   - Fails the build if any `EX_*` in (1) but not (2) is **not** in a
-     known carve-out allowlist (`docs/turi-carve-out.txt` -- a short
-     plain-text file).
-5. Wire the script into `tests/run.sh` (or the CMake build) as a
-   pre-test check.
+- **`tools/check_turi_parity.py`** (new) diffs the `EX_*` enumerators in
+  `src/compiler/expr.h` against the `case EX_*:` arms in `src/turi/eval.c`.
+  Any unhandled kind that is not listed in **`docs/turi-carve-out.txt`** (new,
+  6 entries with rationale) fails the check; a stale carve-out (a kind that is
+  actually handled, or a nonexistent kind) also fails, keeping the list honest.
+  Wired into `tests/run.sh` as a pre-test gate (opt out with
+  `TUR_SKIP_PARITY_CHECK=1`). Current state: **109/115 handled, 6 carved out,
+  0 gaps.**
+- **`tests/run-turi.sh` now runs `tur --interpret`**, not `tur run`. This
+  resolves the blocker
+  ([turi-harness-compiles-instead-of-interpreting.md](../../reported/turi-harness-compiles-instead-of-interpreting.md)):
+  the allowlist finally exercises `src/turi/eval.c`. Reconciling to true
+  interpretation removed **31 false-green entries** (catalogued in
+  [turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md));
+  the harness is green at **122 passed, 0 failed**. The `requires.tur-only`
+  marker (from TI1) is honored as the symmetric skip to `requires.compiled`.
 
-### Tests
+### TI8.b -- Full allowlist → denylist flip -- **DEFERRED (measured)**
 
-The harness flip itself is the test. CI run of `tests/run-turi.sh`
-should land near-zero `SKIP` lines that aren't `requires.compiled`.
+Steps 1-3 below (delete the allowlist; default to run-everything-minus-markers;
+retire KB-001) are **not** done, because the blast radius is large and includes
+silent miscompiles that must be fixed or carved first. Measured on 2026-06-11:
+under `--interpret`, **637 pass / 933 fail / 92 skip** across all fixtures. The
+933 failures bucket into missing stdlib natives/struct-types, typeclass
+registration gaps during stdlib load, a `defmodule`-reprocessing defect,
+move/linearity-checker divergence, genuine inline-C carve-outs, and silent
+wrong-value miscompiles. Full catalogue + per-bucket counts in the
+reconciliation report. Closing them is multi-session work (the plan's "budget a
+day for triage"); each newly-red fixture must be fixed in `src/turi/eval.c` or
+tagged `requires.tur-only`/`requires.compiled` with a reason.
+
+Remaining steps when TI8.b is tackled:
+
+1. Delete `TURI_FIXTURES_DEFAULT` from `tests/run-turi.sh`.
+2. Default to "run every fixture" minus `requires.{compiled,tur-only,
+   dedicated-runner,spices}`.
+3. Retire the `KB-001` allowlist-gap workaround comment.
+4. Also flip `tests/run-flags.sh`'s three `tur run` assertions (`:345`,
+   `:355`, `:408`) to `--interpret`.
 
 ---
 
