@@ -37,7 +37,8 @@
 (defn async-file-open [path : cstr flags : int]
   #{Unsafe}
   : Fd
-  ```c int oflags;
+  ```c
+  int oflags;
   switch ((int)flags) {
     case 1:  oflags = O_WRONLY | O_CREAT | O_TRUNC; break;
     case 2:  oflags = O_RDWR; break;
@@ -66,7 +67,8 @@
 (defn async-file-read [fd : Fd buf-size : int]
   #{Unsafe}
   : int
-  ```c char *buf = (char *)malloc((size_t)buf_size);
+  ```c
+  char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
   while (1) {
     ssize_t n = read((int)fd, buf, (size_t)buf_size);
@@ -111,7 +113,8 @@
 (defn async-file-write [fd : Fd data : cstr len : int]
   #{Unsafe}
   : int
-  ```c int64_t total = 0;
+  ```c
+  int64_t total = 0;
   while (total < len) {
     ssize_t n = write((int)fd, data + total, (size_t)(len - total));
     if (n >= 0) {
@@ -148,7 +151,8 @@
 (defn async-file-close [fd : Fd]
   #{Unsafe}
   : int
-  ```c tur_io_unregister((int)fd);
+  ```c
+  tur_io_unregister((int)fd);
   return (int64_t)close((int)fd);
   ```)
 ;; Retrieve the internal read buffer pointer after async-file-read.
@@ -166,7 +170,8 @@
 (defn async-file-read-buf []
   #{Unsafe}
   : ptr<void>
-  ```c if (!tur_current_fiber) return NULL;
+  ```c
+  if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51CF11E);
   ```)
 ;; Retrieve the number of bytes from the last async-file-read.
@@ -183,6 +188,7 @@
 (defn async-file-read-len []
   #{Unsafe}
   : int
-  ```c if (!tur_current_fiber) return 0;
+  ```c
+  if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51CF11F);
   ```)

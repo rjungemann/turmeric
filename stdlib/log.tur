@@ -38,7 +38,8 @@
 ;; cannot point at functions nested inside the constructor body). The shared
 ;; struct, the timestamp helpers, and every logger's method set are hoisted here.
 
-```c #include <time.h>
+```c
+#include <time.h>
 
 typedef struct __tur_logger {
     void (*debug)(const char* msg);
@@ -84,7 +85,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn Real-Logger []
   #{Unsafe}
   : int
-  ```c __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
+  ```c
+  __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
   logger->debug = __tur_log_real_debug;
   logger->info  = __tur_log_real_info;
   logger->warn  = __tur_log_real_warn;
@@ -102,7 +104,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn Real-Logger-free [log]
   #{Unsafe}
   : nil
-  ```c free((void*)(intptr_t)log);
+  ```c
+  free((void*)(intptr_t)log);
   ```)
 ;; ============================================================================
 ;; Simple logger without timestamps (faster)
@@ -125,7 +128,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn Simple-Logger []
   #{Unsafe}
   : int
-  ```c __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
+  ```c
+  __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
   logger->debug = __tur_log_simple_debug;
   logger->info  = __tur_log_simple_info;
   logger->warn  = __tur_log_simple_warn;
@@ -143,7 +147,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn Simple-Logger-free [log]
   #{Unsafe}
   : nil
-  ```c free((void*)(intptr_t)log);
+  ```c
+  free((void*)(intptr_t)log);
   ```)
 ;; ============================================================================
 ;; Null logger (silent)
@@ -165,7 +170,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn Null-Logger []
   #{Unsafe}
   : int
-  ```c __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
+  ```c
+  __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
   logger->debug = __tur_log_null;
   logger->info  = __tur_log_null;
   logger->warn  = __tur_log_null;
@@ -183,7 +189,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn Null-Logger-free [log]
   #{Unsafe}
   : nil
-  ```c free((void*)(intptr_t)log);
+  ```c
+  free((void*)(intptr_t)log);
   ```)
 ;; ============================================================================
 ;; Helper functions for direct logging (without capabilities)
@@ -204,7 +211,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn log-debug-direct [msg : cstr]
   #{Unsafe IO}
   : nil
-  ```c fprintf(stdout, "[DEBUG] %s\n", msg);
+  ```c
+  fprintf(stdout, "[DEBUG] %s\n", msg);
   fflush(stdout);
   ```)
 ;;; log-info-direct -- write an INFO message directly to stdout.
@@ -222,7 +230,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn log-info-direct [msg : cstr]
   #{Unsafe IO}
   : nil
-  ```c fprintf(stdout, "[INFO] %s\n", msg);
+  ```c
+  fprintf(stdout, "[INFO] %s\n", msg);
   fflush(stdout);
   ```)
 ;;; log-warn-direct -- write a WARN message directly to stderr.
@@ -240,7 +249,8 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn log-warn-direct [msg : cstr]
   #{Unsafe IO}
   : nil
-  ```c fprintf(stderr, "[WARN] %s\n", msg);
+  ```c
+  fprintf(stderr, "[WARN] %s\n", msg);
   fflush(stderr);
   ```)
 ;;; log-error-direct -- write an ERROR message directly to stderr.
@@ -258,6 +268,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 (defn log-error-direct [msg : cstr]
   #{Unsafe IO}
   : nil
-  ```c fprintf(stderr, "[ERROR] %s\n", msg);
+  ```c
+  fprintf(stderr, "[ERROR] %s\n", msg);
   fflush(stderr);
   ```)

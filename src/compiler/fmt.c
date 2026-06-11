@@ -861,7 +861,8 @@ static void fmt_list(FmtState *s, const Form *f) {
      * contains a comment, since the flat printer has no way to re-emit it and
      * the comment would be silently dropped. */
     uint32_t w = fmt_measure(f);
-    if (s->col + w <= s->opts.line_width && !span_has_comment(s, f)) {
+    if (w != UINT32_MAX && s->col + w <= s->opts.line_width
+        && !span_has_comment(s, f)) {
         fmt_emit_inline(s, f);
         return;
     }
@@ -912,11 +913,31 @@ static void fmt_form(FmtState *s, const Form *f) {
             fs_putc(s, ':');
             fs_write(s, f->as.sym->name, f->as.sym->len);
             break;
-        case F_CBLOCK:
-            fs_puts(s, "```c ");
-            fs_write(s, f->as.cblock.p, f->as.cblock.len);
-            fs_puts(s, "```");
+        case F_CBLOCK: {
+            const char *cp = f->as.cblock.p;
+            size_t clen = f->as.cblock.len;
+            bool multiline = false;
+            for (size_t i = 0; i < clen; i++) {
+                if (cp[i] == '\n') { multiline = true; break; }
+            }
+            if (multiline) {
+                /* Put the opening fence on its own line so the first code
+                 * line is not glued onto ```c (which a Markdown renderer
+                 * would otherwise swallow as the fence info string). The
+                 * block's trailing "\n<indent>" already positions the
+                 * closing fence. */
+                uint32_t cb_indent = s->col;
+                fs_puts(s, "```c");
+                fs_newline_indent(s, cb_indent);
+                fs_write(s, cp, clen);
+                fs_puts(s, "```");
+            } else {
+                fs_puts(s, "```c ");
+                fs_write(s, cp, clen);
+                fs_puts(s, "```");
+            }
             break;
+        }
         case F_QUOTE:
             fs_putc(s, '\'');
             if (f->as.list.len > 0) fmt_form(s, f->as.list.items[0]);

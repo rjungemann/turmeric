@@ -70,7 +70,8 @@
 (defn free-bind [ma : int ^fat kont : int]
   #{Unsafe}
   : int
-  ```c typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fb;
+  ```c
+  typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fb;
   tur_adt_Free_fb *fr = (tur_adt_Free_fb*)(intptr_t)ma;
   if (fr->tag == 0) { /* PureFree */
     int64_t *_fat = (int64_t*)(intptr_t)kont;
@@ -95,7 +96,8 @@
 (defn free-fmap [free : int ^fat f : int]
   #{Unsafe}
   : int
-  ```c typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free;
+  ```c
+  typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free;
   tur_adt_Free *fr = (tur_adt_Free*)(intptr_t)free;
   if (fr->tag == 0) { /* PureFree */
     int64_t *_fat = (int64_t*)(intptr_t)f;
@@ -124,7 +126,8 @@
 (defn free-run [^fat interp : int free : int]
   #{Unsafe}
   : int
-  ```c typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fr;
+  ```c
+  typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fr;
   tur_adt_Free_fr *fr = (tur_adt_Free_fr*)(intptr_t)free;
   if (fr->tag == 0) /* PureFree */
     return fr->as.PureFree._0;

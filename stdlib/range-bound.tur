@@ -203,7 +203,8 @@
 ;; kind: 0 = unbounded, 1 = inclusive, 2 = exclusive.
 
 (defn range-fmt [lo-kind : int lo-val : int hi-kind : int hi-val : int] : cstr
-  ```c char *buf = (char *)malloc(80);
+  ```c
+  char *buf = (char *)malloc(80);
   char lo[32], hi[32];
   if      (lo_kind == 0) snprintf(lo, sizeof lo, "(-inf");
   else if (lo_kind == 1) snprintf(lo, sizeof lo, "[%lld", (long long)lo_val);
@@ -270,7 +271,8 @@
 ;; bound-fmt -- inline-C formatter for a single inclusive/exclusive endpoint.
 
 (defn bound-fmt [kind : int v : int] : cstr
-  ```c char *buf = (char *)malloc(32);
+  ```c
+  char *buf = (char *)malloc(32);
   if (kind == 1) snprintf(buf, 32, "[%lld", (long long)v);
   else           snprintf(buf, 32, "(%lld", (long long)v);
   return (const char *)buf;

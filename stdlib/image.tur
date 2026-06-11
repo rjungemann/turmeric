@@ -45,7 +45,8 @@
 ;;;
 ;;; Since: Phase AI
 (defn image/build-stamp [] : int
-  ```c #include <stdint.h>
+  ```c
+  #include <stdint.h>
   /* Read the running executable. */
   FILE *exe = fopen("/proc/self/exe", "rb");
   if (!exe) return 0;
@@ -107,12 +108,14 @@
 ;;; image/free-stamp -- free a build stamp returned by image/build-stamp.
 
 (defn image/free-stamp [p : int] : void
-  ```c if (p) free((void *)(intptr_t)p);
+  ```c
+  if (p) free((void *)(intptr_t)p);
   ```)
 ;;; image/exists? -- 1 if a readable file exists at path, else 0.
 
 (defn image/exists? [path : cstr] : int
-  ```c FILE *f = fopen(path, "rb");
+  ```c
+  FILE *f = fopen(path, "rb");
   if (!f) return 0;
   fclose(f);
   return 1;
@@ -148,7 +151,8 @@
 
 
 (defn image/hook-registry [op : int arg : int] : int
-  ```c static int64_t reloads[64]; static int rn = 0;
+  ```c
+  static int64_t reloads[64]; static int rn = 0;
   static int64_t finals[64];  static int fn_ = 0;
   switch (op) {
     case 0: if (rn < 64) reloads[rn++] = arg; return rn;
@@ -257,7 +261,8 @@
 
 
 (defn image/save-cont-to-file! [path : cstr k : ptr<void> stamp : int] : int
-  ```c #include <stdint.h>
+  ```c
+  #include <stdint.h>
   #include <time.h>
   if (!k) return 0;
   uint8_t *bb = (uint8_t *)(intptr_t)tur_serial_cont_serialize((int64_t)(intptr_t)k);
@@ -293,7 +298,8 @@
 ;;; Since: Phase AI
 
 (defn image/loadable? [path : cstr stamp : int] : int
-  ```c #include <stdint.h>
+  ```c
+  #include <stdint.h>
   if (!stamp) return 0;
   FILE *f = fopen(path, "rb");
   if (!f) return 0;
@@ -328,7 +334,8 @@
 ;;; Since: Phase AI
 
 (defn image/load-resume-file! [path : cstr stamp : int v : int] : int
-  ```c #include <stdint.h>
+  ```c
+  #include <stdint.h>
   FILE *f = fopen(path, "rb");
   if (!f) return 0;
   uint8_t hdr[72];

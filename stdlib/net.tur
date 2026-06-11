@@ -45,7 +45,8 @@
 ;;; Since: LT4
 
 (defn socket-fd [s : Socket] : Fd
-  ```c return s.fd;
+  ```c
+  return s.fd;
   ```)
 ;;; socket-valid? -- return true if the Socket wraps a non-negative fd.
 ;;;
@@ -61,7 +62,8 @@
 ;;; Since: LT4
 
 (defn socket-valid? [s : Socket] : bool
-  ```c return s.fd >= 0;
+  ```c
+  return s.fd >= 0;
   ```)
 ;;; socket-close -- close a Socket and release the underlying fd.
 ;;;
@@ -79,6 +81,7 @@
 (defn socket-close [s : Socket]
   #{Net}
   : int
-  ```c if (s.fd < 0) return -1;
+  ```c
+  if (s.fd < 0) return -1;
   return close(s.fd);
   ```)

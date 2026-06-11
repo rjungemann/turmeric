@@ -29,7 +29,8 @@
 (defn ptr/null []
   #{Unsafe}
   : ptr
-  ```c return NULL;
+  ```c
+  return NULL;
   ```)
 ;;; tvar/new -- create a new transactional variable with an initial value.
 ;;;
@@ -47,7 +48,8 @@
 (defn tvar/new [init]
   #{Unsafe}
   : TVar
-  ```c TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
+  ```c
+  TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
   return (void*)tv;
   ```)
 ;;; tvar/read -- read the current value of a TVar within the active transaction.
@@ -66,7 +68,8 @@
 (defn tvar/read [tv : TVar]
   #{Unsafe}
   : ptr
-  ```c return (void*)tur_tvar_read(tur_stm_current_tx(), (TVar*)tv);
+  ```c
+  return (void*)tur_tvar_read(tur_stm_current_tx(), (TVar*)tv);
   ```)
 ;;; tvar/write -- write a new value to a TVar within the active transaction.
 ;;;
@@ -82,7 +85,8 @@
 (defn tvar/write [tv : TVar val : ptr]
   #{Unsafe}
   : nil
-  ```c tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
+  ```c
+  tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
   return 0;
   ```)
 ;;; tvar/swap -- atomically replace a TVar's value and return the old value.
@@ -102,7 +106,8 @@
 (defn tvar/swap [tv : TVar new : ptr]
   #{Unsafe}
   : ptr
-  ```c return (void*)tur_tvar_swap(tur_stm_current_tx(), (TVar*)tv, (void*)new);
+  ```c
+  return (void*)tur_tvar_swap(tur_stm_current_tx(), (TVar*)tv, (void*)new);
   ```)
 ;;; tvar/cas -- compare-and-swap a TVar within the active transaction.
 ;;;
@@ -122,5 +127,6 @@
 (defn tvar/cas [tv : TVar old : ptr new : ptr]
   #{Unsafe}
   : bool
-  ```c return tur_tvar_cas(tur_stm_current_tx(), (TVar*)tv, (void*)old, (void*)new);
+  ```c
+  return tur_tvar_cas(tur_stm_current_tx(), (TVar*)tv, (void*)old, (void*)new);
   ```)

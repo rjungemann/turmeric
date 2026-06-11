@@ -39,7 +39,8 @@
 ;;;
 ;;; Since: Phase B2
 (defn json/null [] : int
-  ```c int64_t *n = malloc(2 * sizeof(int64_t));
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 0; n[1] = 0;
   return (int64_t)(intptr_t)n;
   ```)
@@ -57,7 +58,8 @@
 ;;; Since: Phase B2
 
 (defn json/bool [v : int] : int
-  ```c int64_t *n = malloc(2 * sizeof(int64_t));
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 1; n[1] = v ? 1 : 0;
   return (int64_t)(intptr_t)n;
   ```)
@@ -75,7 +77,8 @@
 ;;; Since: Phase B2
 
 (defn json/int [v : int] : int
-  ```c int64_t *n = malloc(2 * sizeof(int64_t));
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 2; n[1] = v;
   return (int64_t)(intptr_t)n;
   ```)
@@ -93,7 +96,8 @@
 ;;; Since: Phase B2
 
 (defn json/float [v : float] : int
-  ```c int64_t *n = malloc(2 * sizeof(int64_t));
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 3;
   memcpy(&n[1], &v, sizeof(double));
   return (int64_t)(intptr_t)n;
@@ -112,7 +116,8 @@
 ;;; Since: Phase B2
 
 (defn json/string [s : cstr] : int
-  ```c int64_t *n = malloc(2 * sizeof(int64_t));
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 4; n[1] = (int64_t)(intptr_t)strdup(s);
   return (int64_t)(intptr_t)n;
   ```)
@@ -127,7 +132,8 @@
 ;;; Since: Phase B2
 
 (defn json/array-new [] : int
-  ```c struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 5; n[1] = (int64_t)(intptr_t)v;
@@ -148,7 +154,8 @@
 ;;; Since: Phase B2
 
 (defn json/array-push [arr : int elem : int] : int
-  ```c int64_t *n = (int64_t*)(intptr_t)arr;
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)arr;
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (void*)(intptr_t)n[1];
   if (v->len >= v->cap) {
@@ -169,7 +176,8 @@
 ;;; Since: Phase B2
 
 (defn json/object-new [] : int
-  ```c int64_t *n = malloc(2 * sizeof(int64_t));
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 6; n[1] = 0;
   return (int64_t)(intptr_t)n;
   ```)
@@ -189,7 +197,8 @@
 ;;; Since: Phase B2
 
 (defn json/object-put [obj : int key : cstr val : int] : int
-  ```c int64_t *n = (int64_t*)(intptr_t)obj;
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)obj;
   int64_t *entry = malloc(3 * sizeof(int64_t));
   entry[0] = (int64_t)(intptr_t)strdup(key);
   entry[1] = val;
@@ -211,7 +220,8 @@
 ;;; Since: Phase B2
 
 (defn json/type [node : int] : int
-  ```c if (!node) return 0;
+  ```c
+  if (!node) return 0;
   return ((int64_t*)(intptr_t)node)[0];
   ```)
 ;;; json/get-bool -- extract the boolean value from a bool node.
@@ -228,7 +238,8 @@
 ;;; Since: Phase B2
 
 (defn json/get-bool [node : int] : bool
-  ```c return ((int64_t*)(intptr_t)node)[1] != 0;
+  ```c
+  return ((int64_t*)(intptr_t)node)[1] != 0;
   ```)
 ;;; json/get-int -- extract the integer value from an int node.
 ;;;
@@ -244,7 +255,8 @@
 ;;; Since: Phase B2
 
 (defn json/get-int [node : int] : int
-  ```c return ((int64_t*)(intptr_t)node)[1];
+  ```c
+  return ((int64_t*)(intptr_t)node)[1];
   ```)
 ;;; json/get-float -- extract the float value from a float node.
 ;;;
@@ -260,7 +272,8 @@
 ;;; Since: Phase B2
 
 (defn json/get-float [node : int] : float
-  ```c double v;
+  ```c
+  double v;
   memcpy(&v, &((int64_t*)(intptr_t)node)[1], sizeof(double));
   return v;
   ```)
@@ -278,7 +291,8 @@
 ;;; Since: Phase B2
 
 (defn json/get-string [node : int] : cstr
-  ```c return (const char*)(intptr_t)((int64_t*)(intptr_t)node)[1];
+  ```c
+  return (const char*)(intptr_t)((int64_t*)(intptr_t)node)[1];
   ```)
 ;;; json/array-len -- return the number of elements in a JSON array node.
 ;;;
@@ -294,7 +308,8 @@
 ;;; Since: Phase B2
 
 (defn json/array-len [node : int] : int
-  ```c int64_t *n = (int64_t*)(intptr_t)node;
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)node;
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)n[1];
   return (int64_t)v->len;
   ```)
@@ -313,7 +328,8 @@
 ;;; Since: Phase B2
 
 (defn json/array-get [node : int i : int] : int
-  ```c int64_t *n = (int64_t*)(intptr_t)node;
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)node;
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)n[1];
   if (i < 0 || (size_t)i >= v->len) return 0;
   return v->data[i];
@@ -334,7 +350,8 @@
 ;;; Since: Phase B2
 
 (defn json/get [node : int key : cstr] : int
-  ```c if (!node) return 0;
+  ```c
+  if (!node) return 0;
   int64_t *n = (int64_t*)(intptr_t)node;
   int64_t cur = n[1];
   while (cur) {
@@ -364,7 +381,8 @@
 ;;; Since: Phase B2
 
 (defn json/get! [node : int key : cstr] : int
-  ```c if (!node) { fprintf(stderr, "json/get!: null node\n"); abort(); }
+  ```c
+  if (!node) { fprintf(stderr, "json/get!: null node\n"); abort(); }
   int64_t *n = (int64_t*)(intptr_t)node;
   int64_t cur = n[1];
   while (cur) {
@@ -393,7 +411,8 @@
 
 
 (defn json-enc-ensure- [b : ptr extra : int] : void
-  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  ```c
+  struct tur_json_buf { char *data; size_t len; size_t cap; };
   struct tur_json_buf *bp = (struct tur_json_buf *)b;
   if (bp->len + (size_t)extra + 1 > bp->cap) {
     bp->cap = (bp->len + (size_t)extra + 1) * 2 + 64;
@@ -402,7 +421,8 @@
   ```)
 
 (defn json-enc-append-s- [b : ptr s : cstr] : void
-  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  ```c
+  struct tur_json_buf { char *data; size_t len; size_t cap; };
   struct tur_json_buf *bp = (struct tur_json_buf *)b;
   size_t slen = strlen(s);
   json_hyenc_hyensure_hy(b, (int64_t)slen);
@@ -412,7 +432,8 @@
   ```)
 
 (defn json-enc-append-c- [b : ptr c : int] : void
-  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  ```c
+  struct tur_json_buf { char *data; size_t len; size_t cap; };
   struct tur_json_buf *bp = (struct tur_json_buf *)b;
   json_hyenc_hyensure_hy(b, 1);
   bp->data[bp->len++] = (char)c;
@@ -420,7 +441,8 @@
   ```)
 
 (defn json-enc-str- [b : ptr s : cstr] : void
-  ```c json_hyenc_hyappend_hyc_hy(b, (int64_t)'"');
+  ```c
+  json_hyenc_hyappend_hyc_hy(b, (int64_t)'"');
   for (const char *sp = s; *sp; sp++) {
     if (*sp == '"')       { json_hyenc_hyappend_hys_hy(b, "\\\""); }
     else if (*sp == '\\') { json_hyenc_hyappend_hys_hy(b, "\\\\"); }
@@ -433,7 +455,8 @@
   ```)
 
 (defn json-enc-node- [node : int b : ptr] : void
-  ```c if (!node) { json_hyenc_hyappend_hys_hy(b, "null"); return; }
+  ```c
+  if (!node) { json_hyenc_hyappend_hys_hy(b, "null"); return; }
   int64_t *np = (int64_t*)(intptr_t)node;
   int type = (int)np[0];
   char tmp[64];
@@ -477,7 +500,8 @@
   ```)
 
 (defn json/encode [node : int] : cstr
-  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  ```c
+  struct tur_json_buf { char *data; size_t len; size_t cap; };
   struct tur_json_buf b;
   b.data = malloc(256);
   b.data[0] = '\0';
@@ -504,7 +528,8 @@
 
 
 (defn json-dec-skip-ws- [c : ptr] : void
-  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  ```c
+  struct tur_json_ctx { const char *s; size_t pos; int err; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   while (cp->s[cp->pos] == ' ' || cp->s[cp->pos] == '\n' ||
          cp->s[cp->pos] == '\r' || cp->s[cp->pos] == '\t') cp->pos++;
@@ -512,7 +537,8 @@
 ;; Returns a heap-allocated mutable char* (caller owns) or NULL on error.
 
 (defn json-dec-parse-string- [c : ptr] : ptr
-  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  ```c
+  struct tur_json_ctx { const char *s; size_t pos; int err; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   if (cp->s[cp->pos] != '"') { cp->err = 1; return NULL; }
   cp->pos++;
@@ -545,7 +571,8 @@
   ```)
 
 (defn json-dec-parse-value- [c : ptr] : int
-  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  ```c
+  struct tur_json_ctx { const char *s; size_t pos; int err; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   json_hydec_hyskip_hyws_hy(c);
   char ch = cp->s[cp->pos];
@@ -649,7 +676,8 @@
   ```)
 
 (defn json/decode [s : cstr] : int
-  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  ```c
+  struct tur_json_ctx { const char *s; size_t pos; int err; };
   struct tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
   int64_t result = json_hydec_hyparse_hyvalue_hy((void *)&ctx);
   if (ctx.err) return 0;
@@ -667,7 +695,8 @@
 ;; Private recursive helper for json/free.
 
 (defn json-free-node- [node : int] : void
-  ```c if (!node) return;
+  ```c
+  if (!node) return;
   int64_t *np = (int64_t*)(intptr_t)node;
   int type = (int)np[0];
   if (type == 4) {
@@ -692,5 +721,6 @@
   ```)
 
 (defn json/free [node : int] : void
-  ```c json_hyfree_hynode_hy(node);
+  ```c
+  json_hyfree_hynode_hy(node);
   ```)

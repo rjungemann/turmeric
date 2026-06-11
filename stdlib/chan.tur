@@ -60,7 +60,8 @@
 ;;; Since: Phase T19-C
 
 (defn chan-new [cap : int] : Chan
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t  not_full;
       pthread_cond_t  not_empty;
@@ -95,7 +96,8 @@
 ;;; Since: Phase T19-C
 
 (defn chan-send [^borrow ch : Chan val : int] : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -134,7 +136,8 @@
 ;;; Since: Phase T19-C
 
 (defn chan-recv [^borrow ch : Chan] : int
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -171,7 +174,8 @@
 ;;; Since: Phase T19-C
 
 (defn chan-free [ch : Chan] : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -200,7 +204,8 @@
 
 
 (defn async-chan-new [cap : int] : AsyncChan
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t  not_full;
       pthread_cond_t  not_empty;
@@ -235,7 +240,8 @@
 ;;; Since: Phase T19-D
 
 (defn async-chan-send [^borrow ch : AsyncChan val : int] : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -274,7 +280,8 @@
 ;;; Since: Phase T19-D
 
 (defn async-chan-recv [^borrow ch : AsyncChan] : int
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -315,7 +322,8 @@
 ;;; Since: Phase T19-D
 
 (defn async-chan-try-send [^borrow ch : AsyncChan val : int] : bool
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -350,7 +358,8 @@
 ;;; Since: Phase T19-D
 
 (defn async-chan-try-recv [^borrow ch : AsyncChan] : int
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -383,7 +392,8 @@
 ;;; Since: Phase T19-D
 
 (defn async-chan-count [^borrow ch : AsyncChan] : int
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -405,7 +415,8 @@
 ;;; Since: Phase T19-D
 
 (defn async-chan-free [ch : AsyncChan] : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;

@@ -24,7 +24,8 @@
 (defn set-new []
   #{}
   : int
-  ```c struct { void *hamt; } *s = malloc(sizeof(*s));
+  ```c
+  struct { void *hamt; } *s = malloc(sizeof(*s));
   s->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)s;
   ```)
@@ -46,7 +47,8 @@
 (defn set-add [s : int h : int x : int]
   #{}
   : int
-  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
+  ```c
+  struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
@@ -70,7 +72,8 @@
 (defn set-remove [s : int h : int x : int]
   #{}
   : int
-  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
+  ```c
+  struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_del(set->hamt, h, (void*)(intptr_t)x);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
@@ -94,7 +97,8 @@
 (defn set-member? [s : int h : int x : int]
   #{}
   : bool
-  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
+  ```c
+  struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_has(set->hamt, h, (void*)(intptr_t)x);
   ```)
 ;;; set-count -- return the number of elements in the set.
@@ -113,7 +117,8 @@
 (defn set-count [s : int]
   #{}
   : int
-  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
+  ```c
+  struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_count(set->hamt);
   ```)
 ;;; set-union -- compute the union of two sets.
@@ -133,7 +138,8 @@
 (defn set-union [a : int b : int]
   #{}
   : int
-  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
+  ```c
+  struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(sa->hamt, sb->hamt);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -157,7 +163,8 @@
 (defn set-intersect [a : int b : int]
   #{}
   : int
-  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
+  ```c
+  struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
@@ -192,7 +199,8 @@
 (defn set-diff [a : int b : int]
   #{}
   : int
-  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
+  ```c
+  struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
@@ -227,7 +235,8 @@
 (defn set-eq? [a : int b : int]
   #{}
   : bool
-  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
+  ```c
+  struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
   uint64_t iter_buf[32];
@@ -264,7 +273,8 @@
 (defn set-eq-cmp? [a : int b : int ^fat cmp-fn]
   #{}
   : bool
-  ```c /* O(n*m) comparison: iterate a's elements, scan b for a structural
+  ```c
+  /* O(n*m) comparison: iterate a's elements, scan b for a structural
    * match per element.  Bigger constant than set-eq?'s hash lookup
    * but correct for arbitrarily-structured element types.  Used by
    * the F3-5 dispatcher synthesis for Set[T] where T is a TY_APP. */
@@ -312,7 +322,8 @@
 (defn set-free [s : int]
   #{}
   : void
-  ```c free((void*)(intptr_t)s);
+  ```c
+  free((void*)(intptr_t)s);
   ```)
 ;;; Eq [Set] -- membership equality using the HAMT structure.
 ;; TC2-15: Phase PTC4 -- constrained Eq instance for Set[A].

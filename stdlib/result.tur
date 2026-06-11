@@ -27,7 +27,8 @@
 (defn ok [x : int]
   #{}
   : int
-  ```c return tur_ok(x);
+  ```c
+  return tur_ok(x);
   ```)
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
@@ -45,7 +46,8 @@
 (defn err [e : int]
   #{}
   : int
-  ```c return tur_err(e);
+  ```c
+  return tur_err(e);
   ```)
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
@@ -64,7 +66,8 @@
 (defn ok? [r : int]
   #{}
   : bool
-  ```c return tur_is_ok(r);
+  ```c
+  return tur_is_ok(r);
   ```)
 ;;; err? -- check whether a Result[A B] is err.
 ;;;
@@ -82,7 +85,8 @@
 (defn err? [r : int]
   #{}
   : bool
-  ```c return !tur_is_ok(r);
+  ```c
+  return !tur_is_ok(r);
   ```)
 ;;; ok-val -- extract the ok value from a typed Result[A B].
 ;;;
@@ -127,7 +131,8 @@
 (defn result-free [r : int]
   #{}
   : void
-  ```c if (r) free((void*)(intptr_t)r);
+  ```c
+  if (r) free((void*)(intptr_t)r);
   ```)
 ;;; result-map -- apply a function to the ok value if ok.
 ;;;
@@ -149,7 +154,8 @@
 (defn result-map [r : int f]
   #{}
   : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   if (!res) return 0;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
   out->is_ok = res->is_ok;
@@ -181,7 +187,8 @@
 (defn result-eq? [r1 : int r2 : int ^fat ok-cmp ^fat err-cmp]
   #{}
   : bool
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
   if (!a && !b) return true;
   if (!a || !b) return false;
@@ -197,7 +204,8 @@
 (defn __tur-q-is-err? [r : ptr<void>]
   #{}
   : bool
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
   return !res || !res->is_ok;
   ```)
 ;;; __tur-q-ok-val -- ? operator helper; extracts the ok payload from a Result value.
@@ -205,7 +213,8 @@
 (defn __tur-q-ok-val [r : ptr<void>]
   #{}
   : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
   return res ? res->ok_val : 0;
   ```)
 ;;; Eq [Result] -- equality using the ok and err types' Eq instances.
@@ -238,7 +247,8 @@
 (defn result-bimap [container : int fn-left fn-right]
   #{}
   : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
   if (!res) return 0;
   if (res->is_ok)
       return tur_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
@@ -289,7 +299,9 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Functor [(Result _ B)]
-  (fmap [container fn] ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
+  (fmap [container fn]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
     if (!r) return 0;
     if (r->is_ok) return tur_ok(fn.fn(fn.env, r->ok_val));
     return tur_err(r->err_val);
@@ -302,7 +314,9 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Monad [(Result _ B)]
-  (bind [ma fn] ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+  (bind [ma fn]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
     if (!r || !r->is_ok) return ma;
     return fn.fn(fn.env, r->ok_val);
     ```))
@@ -318,7 +332,9 @@
 
 (definstance MonadError [(Result _ B)]
   (throw-error [err] ```c return tur_err(err); ```)
-  (catch-error [ma handler] ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
+  (catch-error [ma handler]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
     if (!r || r->is_ok) return ma;
     return handler.fn(handler.env, r->err_val);
     ```))

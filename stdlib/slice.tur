@@ -27,7 +27,8 @@
 (defn slice-new [data : ptr<void> length : int]
   #{}
   : int
-  ```c struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
+  ```c
+  struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
   s->p = (int64_t*)(intptr_t)data;
   s->len = (size_t)length;
   return (int64_t)(intptr_t)s;
@@ -48,7 +49,8 @@
 (defn slice-len [s : int]
   #{}
   : int
-  ```c struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
+  ```c
+  struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   return (int)slice->len;
   ```)
 ;;; slice-get -- bounds-checked element access.
@@ -68,7 +70,8 @@
 (defn slice-get [s : int i : int]
   #{}
   : int
-  ```c struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
+  ```c
+  struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   if (i >= 0 && (size_t)i < slice->len) return (int64_t)slice->p[i];
   fprintf(stderr, "tslice index out of bounds\n");
   exit(1);
@@ -87,7 +90,8 @@
 (defn slice-free [s : int]
   #{}
   : void
-  ```c free((void*)(intptr_t)s);
+  ```c
+  free((void*)(intptr_t)s);
   ```)
 ;;; slice-eq? -- compare two Slice[A] element-wise using a comparator.
 ;;;
@@ -107,7 +111,8 @@
 (defn slice-eq? [s1 : int s2 : int cmp-fn]
   #{}
   : bool
-  ```c struct { int64_t *p; size_t len; } *a = (void*)(intptr_t)s1;
+  ```c
+  struct { int64_t *p; size_t len; } *a = (void*)(intptr_t)s1;
   struct { int64_t *p; size_t len; } *b = (void*)(intptr_t)s2;
   if (a->len != b->len) return false;
   for (size_t i = 0; i < a->len; i++) {

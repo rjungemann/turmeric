@@ -570,7 +570,8 @@
 (defn sized-vec-from-list [lst]
   #{Unsafe}
   : SizedVec
-  ```c struct __sz_cons { int64_t value; int64_t next; };
+  ```c
+  struct __sz_cons { int64_t value; int64_t next; };
   /* Count elements */
   int64_t count = 0;
   int64_t cur = lst;

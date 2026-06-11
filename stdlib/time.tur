@@ -32,7 +32,8 @@
 ;; Uses libc time() and nanosleep()
 
 (defn Real-Time []
-  ```c /* Define the Time struct */
+  ```c
+  /* Define the Time struct */
   typedef struct Time Time;
   struct Time {
       int (*now)(void);
@@ -78,7 +79,8 @@
 ;; Free a Real-Time
 
 (defn Real-Time-free [t]
-  ```c free(t);
+  ```c
+  free(t);
   ```)
 ;; ============================================================================
 ;; High-resolution Time implementation
@@ -101,7 +103,8 @@
 
 
 (defn HighRes-Time []
-  ```c typedef struct Time Time;
+  ```c
+  typedef struct Time Time;
   struct Time {
       int (*now)(void);
       void (*sleep)(int ms);
@@ -144,7 +147,8 @@
 ;; Free a HighRes-Time
 
 (defn HighRes-Time-free [t]
-  ```c free(t);
+  ```c
+  free(t);
   ```)
 ;; ============================================================================
 ;; Mock Time implementation (for testing)
@@ -167,7 +171,8 @@
 
 
 (defn Mock-Time []
-  ```c /* Define the Time struct */
+  ```c
+  /* Define the Time struct */
   typedef struct MockTime MockTime;
   struct MockTime {
       int (*now)(void);
@@ -207,7 +212,8 @@
 ;; Free a Mock-Time
 
 (defn Mock-Time-free [t]
-  ```c free(t);
+  ```c
+  free(t);
   ```)
 ;;; mock-time-set -- set the current time on a Mock-Time instance.
 ;;;
@@ -223,7 +229,8 @@
 ;; Note: This modifies the global mock time state
 
 (defn mock-time-set [t new_time]
-  ```c typedef struct MockTime MockTime;
+  ```c
+  typedef struct MockTime MockTime;
   MockTime* mock_time = (MockTime*)t;
   mock_time->current_time = new_time;
   ```)
@@ -242,7 +249,8 @@
 ;; Get current mock time
 
 (defn mock-time-get [t]
-  ```c typedef struct MockTime MockTime;
+  ```c
+  typedef struct MockTime MockTime;
   MockTime* mock_time = (MockTime*)t;
   return mock_time->current_time;
   ```)
@@ -262,7 +270,8 @@
 
 
 (defn get-time-ms []
-  ```c time_t now = time(NULL);
+  ```c
+  time_t now = time(NULL);
   return (int)(now * 1000);
   ```)
 ;;; sleep-ms -- suspend execution for a given number of milliseconds.
@@ -277,7 +286,8 @@
 ;; Sleep for specified milliseconds
 
 (defn sleep-ms [ms]
-  ```c if (ms <= 0) return;
+  ```c
+  if (ms <= 0) return;
   long seconds = ms / 1000;
   long nanoseconds = (ms % 1000) * 1000000;
   struct timespec req = {.tv_sec = seconds, .tv_nsec = nanoseconds};
@@ -299,6 +309,7 @@
 ;; Get CPU time in milliseconds
 
 (defn get-cpu-time []
-  ```c clock_t now = clock();
+  ```c
+  clock_t now = clock();
   return (int)(now * 1000 / CLOCKS_PER_SEC);
   ```)

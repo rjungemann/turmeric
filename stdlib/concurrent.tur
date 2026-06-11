@@ -34,7 +34,8 @@
 ;;; Since: LT4
 
 (defn mutex-guard-lock [mutex] : MutexGuard
-  ```c pthread_mutex_lock((pthread_mutex_t*)mutex);
+  ```c
+  pthread_mutex_lock((pthread_mutex_t*)mutex);
   MutexGuard g;
   g.mutex = mutex;
   return g;
@@ -53,7 +54,8 @@
 ;;; Since: LT4
 
 (defn mutex-guard-unlock [guard : MutexGuard] : int
-  ```c if (!guard.mutex) return -1;
+  ```c
+  if (!guard.mutex) return -1;
   return pthread_mutex_unlock((pthread_mutex_t*)guard.mutex);
   ```)
 ;;; mutex-guard-valid? -- return true if the MutexGuard holds a non-NULL mutex.
@@ -70,5 +72,6 @@
 ;;; Since: LT4
 
 (defn mutex-guard-valid? [guard : MutexGuard] : bool
-  ```c return guard.mutex != NULL;
+  ```c
+  return guard.mutex != NULL;
   ```)

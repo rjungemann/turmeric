@@ -54,7 +54,8 @@
 
 
 (defn bytes-alloc [n : int] : Bytes
-  ```c int64_t *buf = malloc(sizeof(int64_t) + (size_t)n);
+  ```c
+  int64_t *buf = malloc(sizeof(int64_t) + (size_t)n);
   if (!buf) { fprintf(stderr, "bytes-alloc: out of memory\n"); exit(1); }
   buf[0] = (int64_t)n;
   memset(buf + 1, 0, (size_t)n);
@@ -72,7 +73,8 @@
 ;;; Since: Phase 21
 
 (defn bytes-len [^borrow b : Bytes] : int
-  ```c if (!b) return 0;
+  ```c
+  if (!b) return 0;
   return (int64_t)(((int64_t*)b)[0]);
   ```)
 ;; Return a pointer to the raw data inside a bytes value.
@@ -87,7 +89,8 @@
 ;;; Since: Phase 21
 
 (defn bytes-data [^borrow b : Bytes] : ptr<void>
-  ```c if (!b) return NULL;
+  ```c
+  if (!b) return NULL;
   return (void*)((int64_t*)b + 1);
   ```)
 ;; Free a bytes value.
@@ -99,7 +102,8 @@
 ;;; Since: Phase 21
 
 (defn bytes-free [b : Bytes] : void
-  ```c free(b);
+  ```c
+  free(b);
   ```)
 ;; Concatenate two bytes values into a new one.
 ;;; bytes-concat -- concatenate two bytes values into a new heap-allocated bytes value.
@@ -117,7 +121,8 @@
 ;;; Since: Phase 21
 
 (defn bytes-concat [^borrow a : Bytes ^borrow b : Bytes] : Bytes
-  ```c int64_t la = a ? ((int64_t*)a)[0] : 0;
+  ```c
+  int64_t la = a ? ((int64_t*)a)[0] : 0;
   int64_t lb = b ? ((int64_t*)b)[0] : 0;
   int64_t total = la + lb;
   int64_t *out = malloc(sizeof(int64_t) + (size_t)total);
@@ -160,7 +165,9 @@
 
 
 (definstance Serializable [int]
-  (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
+  (serialize [x]
+    ```c
+    int64_t *buf = malloc(sizeof(int64_t) + 8);
     if (!buf) { fprintf(stderr, "serialize int: oom\n"); exit(1); }
     buf[0] = 8;
     uint8_t *p = (uint8_t*)(buf + 1);
@@ -175,7 +182,9 @@
     p[7] = (uint8_t)((v >> 56) & 0xff);
     return buf;
     ```)
-  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 8) {
+  (deserialize [b]
+    ```c
+    if (!b || ((int64_t*)b)[0] < 8) {
       fprintf(stderr, "deserialize int: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -196,13 +205,17 @@
 ;;; Since: Phase 21
 
 (definstance Serializable [bool]
-  (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 1);
+  (serialize [x]
+    ```c
+    int64_t *buf = malloc(sizeof(int64_t) + 1);
     if (!buf) { fprintf(stderr, "serialize bool: oom\n"); exit(1); }
     buf[0] = 1;
     ((uint8_t*)(buf + 1))[0] = x ? 1 : 0;
     return buf;
     ```)
-  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 1) {
+  (deserialize [b]
+    ```c
+    if (!b || ((int64_t*)b)[0] < 1) {
       fprintf(stderr, "deserialize bool: short buffer\n"); exit(1);
     }
     return (int64_t)(((uint8_t*)((int64_t*)b + 1))[0] != 0);
@@ -213,7 +226,9 @@
 ;;; Since: Phase 21
 
 (definstance Serializable [float]
-  (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
+  (serialize [x]
+    ```c
+    int64_t *buf = malloc(sizeof(int64_t) + 8);
     if (!buf) { fprintf(stderr, "serialize float: oom\n"); exit(1); }
     buf[0] = 8;
     double dv = *(double*)&x;
@@ -230,7 +245,9 @@
     p[7] = (uint8_t)((bits >> 56) & 0xff);
     return buf;
     ```)
-  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 8) {
+  (deserialize [b]
+    ```c
+    if (!b || ((int64_t*)b)[0] < 8) {
       fprintf(stderr, "deserialize float: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -253,7 +270,9 @@
 ;;; Since: Phase 21
 
 (definstance Serializable [cstr]
-  (serialize [x] ```c const char *s = (const char*)x;
+  (serialize [x]
+    ```c
+    const char *s = (const char*)x;
     int64_t slen = s ? (int64_t)strlen(s) : 0;
     int64_t total = 4 + slen;          /* 4-byte length prefix */
     int64_t *buf = malloc(sizeof(int64_t) + (size_t)total);
@@ -267,7 +286,9 @@
     if (slen > 0) memcpy(p + 4, s, (size_t)slen);
     return buf;
     ```)
-  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 4) {
+  (deserialize [b]
+    ```c
+    if (!b || ((int64_t*)b)[0] < 4) {
       fprintf(stderr, "deserialize cstr: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -291,7 +312,9 @@
 ;;; Since: Phase 21
 
 (definstance Serializable [ptr<void>]
-  (serialize [x] ```c int64_t *inner = (int64_t*)x;
+  (serialize [x]
+    ```c
+    int64_t *inner = (int64_t*)x;
     int64_t dlen = inner ? inner[0] : 0;
     int64_t total = 8 + dlen;
     int64_t *buf = malloc(sizeof(int64_t) + (size_t)total);
@@ -309,7 +332,9 @@
     if (dlen > 0) memcpy(p + 8, (uint8_t*)(inner + 1), (size_t)dlen);
     return buf;
     ```)
-  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 8) {
+  (deserialize [b]
+    ```c
+    if (!b || ((int64_t*)b)[0] < 8) {
       fprintf(stderr, "deserialize bytes: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -353,7 +378,9 @@
 
 (definstance Serializable [Pair]
   [(Serializable A) (Serializable B)]
-  (serialize [x] ```c struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
+  (serialize [x]
+    ```c
+    struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Pair: oom\n"); exit(1); }
     buf[0] = 16;
@@ -361,7 +388,9 @@
     buf[2] = p ? p->snd : 0;
     return buf;
     ```)
-  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 16) {
+  (deserialize [b]
+    ```c
+    if (!b || ((int64_t*)b)[0] < 16) {
       fprintf(stderr, "deserialize Pair: short buffer\n"); exit(1);
     }
     int64_t *d = (int64_t*)b + 1;
@@ -378,7 +407,9 @@
 
 (definstance Serializable [Option]
   [(Serializable A)]
-  (serialize [x] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
+  (serialize [x]
+    ```c
+    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Option: oom\n"); exit(1); }
     buf[0] = 16;
@@ -386,7 +417,9 @@
     buf[2] = (o && o->is_some) ? o->value : 0;
     return buf;
     ```)
-  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 16) {
+  (deserialize [b]
+    ```c
+    if (!b || ((int64_t*)b)[0] < 16) {
       fprintf(stderr, "deserialize Option: short buffer\n"); exit(1);
     }
     int64_t *d = (int64_t*)b + 1;
@@ -429,7 +462,8 @@
 ;;; Since: Phase 21
 
 (defn cont-to-file [b : ptr<void> path : cstr] : int
-  ```c if (!b) return 0;
+  ```c
+  if (!b) return 0;
   FILE *f = fopen((const char*)path, "wb");
   if (!f) return 0;
   int64_t len = ((int64_t*)b)[0];
@@ -455,7 +489,8 @@
 ;;; Since: Phase 21
 
 (defn cont-from-file [path : cstr] : ptr<void>
-  ```c FILE *f = fopen((const char*)path, "rb");
+  ```c
+  FILE *f = fopen((const char*)path, "rb");
   if (!f) return NULL;
   int64_t len = 0;
   if ((int64_t)fread(&len, 1, 8, f) != 8 || len < 0) { fclose(f); return NULL; }

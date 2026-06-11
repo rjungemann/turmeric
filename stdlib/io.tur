@@ -58,7 +58,8 @@
 ;;; Since: I/O sweep
 
 (defn file-stream-open [path : cstr mode : cstr] : FileStream
-  ```c return (void*)fopen(path, mode);
+  ```c
+  return (void*)fopen(path, mode);
   ```)
 ;;; file-stream-ok? -- return true if the FileStream wraps a real FILE*.
 ;;;
@@ -74,7 +75,8 @@
 ;;; Since: I/O sweep
 
 (defn file-stream-ok? [f : FileStream] : bool
-  ```c return f != NULL;
+  ```c
+  return f != NULL;
   ```)
 ;;; file-stream-close -- close a FileStream and release the underlying FILE*.
 ;;;
@@ -90,7 +92,8 @@
 ;;; Since: I/O sweep
 
 (defn file-stream-close [f : FileStream] : int
-  ```c if (!f) return -1;
+  ```c
+  if (!f) return -1;
   return fclose((FILE*)f);
   ```)
 ;;; file-size -- return the byte size of an already-open FileStream.
@@ -106,7 +109,8 @@
 ;; Helper function to get file size
 
 (defn file-size [f : FileStream] : int
-  ```c FILE* file = (FILE*)f;
+  ```c
+  FILE* file = (FILE*)f;
   long pos = ftell(file);
   fseek(file, 0, SEEK_END);
   long size = ftell(file);
@@ -134,7 +138,8 @@
 ;; outlives the enclosing call). Hoisting them into a top-level c-block keeps the
 ;; original libc implementations while giving them stable file-scope addresses.
 
-```c #include <dirent.h>
+```c
+#include <dirent.h>
 typedef struct __tur_io_fs {
     int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
     int (*write_file)(const char* path, const unsigned char* data, int data_len);
@@ -180,7 +185,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ```
 
 (defn Real-FileSystem [] : FileSystem
-  ```c __tur_io_fs* fs = (__tur_io_fs*)malloc(sizeof(__tur_io_fs));
+  ```c
+  __tur_io_fs* fs = (__tur_io_fs*)malloc(sizeof(__tur_io_fs));
   fs->read_file  = __tur_io_fs_read_file;
   fs->write_file = __tur_io_fs_write_file;
   fs->delete     = __tur_io_fs_delete;
@@ -196,7 +202,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; Free a Real-FileSystem
 
 (defn Real-FileSystem-free [fs : FileSystem] : void
-  ```c free(fs);
+  ```c
+  free(fs);
   ```)
 ;; ============================================================================
 ;; Additional I/O helper functions
@@ -220,7 +227,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 
 
 (defn read-file [path : cstr] : ptr<void>
-  ```c FILE* f = fopen(path, "rb");
+  ```c
+  FILE* f = fopen(path, "rb");
   if (!f) return NULL;
   fseek(f, 0, SEEK_END);
   long size = ftell(f);
@@ -250,7 +258,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; Returns 0 on success, non-zero on error
 
 (defn write-file [path : cstr data : ptr<void> len : int] : int
-  ```c FILE* f = fopen(path, "wb");
+  ```c
+  FILE* f = fopen(path, "wb");
   if (!f) return -1;
   size_t n = fwrite(data, 1, len, f);
   fclose(f);
@@ -271,7 +280,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; Check if file exists
 
 (defn file-exists? [path : cstr] : int
-  ```c FILE* f = fopen(path, "rb");
+  ```c
+  FILE* f = fopen(path, "rb");
   if (f) { fclose(f); return 1; }
   return 0;
   ```)
@@ -293,7 +303,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; Returns array of strings (NULL-terminated), caller must free each string and the array
 
 (defn list-dir [path : cstr] : DirListing
-  ```c #include <dirent.h>
+  ```c
+  #include <dirent.h>
   DIR* d = opendir(path);
   if (!d) return NULL;
 
@@ -328,7 +339,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; Free directory listing returned by list-dir
 
 (defn free-dir-listing [entries : DirListing] : void
-  ```c if (!entries) return;
+  ```c
+  if (!entries) return;
   char** e = (char**)entries;
   for (int i = 0; e[i]; i++) {
       free(e[i]);
@@ -365,7 +377,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;;; Since: LT4
 
 (defn file-open [path : cstr mode : cstr] : FileHandle
-  ```c FileHandle fh;
+  ```c
+  FileHandle fh;
   fh.ptr = (void*)fopen(path, mode);
   return fh;
   ```)
@@ -383,7 +396,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;;; Since: LT4
 
 (defn file-handle-ok? [fh : FileHandle] : bool
-  ```c return fh.ptr != NULL;
+  ```c
+  return fh.ptr != NULL;
   ```)
 ;;; file-read -- read up to len bytes from fh into buf.
 ;;;
@@ -401,7 +415,8 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;;; Since: LT4
 
 (defn file-read [fh : FileHandle buf : ptr<void> len : int] : int
-  ```c if (!fh.ptr) return -1;
+  ```c
+  if (!fh.ptr) return -1;
   return (int)fread(buf, 1, len, (FILE*)fh.ptr);
   ```)
 ;;; file-close -- close a FileHandle and release the underlying FILE*.
@@ -418,6 +433,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;;; Since: LT4
 
 (defn file-close [fh : FileHandle] : int
-  ```c if (!fh.ptr) return -1;
+  ```c
+  if (!fh.ptr) return -1;
   return fclose((FILE*)fh.ptr);
   ```)

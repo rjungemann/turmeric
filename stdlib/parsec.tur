@@ -56,7 +56,8 @@
 ;;;   (mreturn 42)  ; => Cell{value=42, next=NULL}
 
 (defn mreturn [x] : int
-  ```c struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x; cell->next = 0;
   return (int64_t)(intptr_t)cell;
   ```)
@@ -73,7 +74,8 @@
 ;;;   (mplus (mreturn 1) (mreturn 2))  ; => Cell{1} -> Cell{2}
 
 (defn mplus [xs ys] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
   if (!xc) return ys;
   Cell *head = NULL, *tail = NULL;
@@ -100,7 +102,8 @@
 ;;;   (mbind (mreturn 1) (fn [x] (mreturn (* x 2))))  ; => Cell{2}
 
 (defn mbind [ma fn] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
   if (!cell) return 0;
   int64_t *fat = (int64_t*)(intptr_t)fn;
@@ -142,7 +145,8 @@
 ;;;   (bt-cons 3 (bt-nil))  ; => Cell{3, NULL}
 
 (defn bt-cons [v nxt] : int
-  ```c struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = v; cell->next = nxt;
   return (int64_t)(intptr_t)cell;
   ```)
@@ -158,7 +162,8 @@
 ;;;   (bt-length (bt-cons 1 (bt-cons 2 (bt-nil))))  ; => 2
 
 (defn bt-length [xs] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   int64_t n = 0;
   Cell *c = (Cell*)(intptr_t)xs;
   while (c) { n++; c = (Cell*)(intptr_t)c->next; }
@@ -179,7 +184,8 @@
 
 
 (defn pair-new [a b] : int
-  ```c Tuple2 *p = malloc(sizeof(Tuple2));
+  ```c
+  Tuple2 *p = malloc(sizeof(Tuple2));
   p->e1 = a; p->e2 = b;
   return (int64_t)(intptr_t)p;
   ```)
@@ -225,7 +231,8 @@
 
 
 (defn input-new [s : cstr pos] : int
-  ```c struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
+  ```c
+  struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
   inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
   return (int64_t)(intptr_t)inp;
   ```)
@@ -241,7 +248,8 @@
 ;;;   (input-at-end (input-new "" 0))  ; => true
 
 (defn input-at-end [inp] : bool
-  ```c struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   const char *s = (const char*)(intptr_t)i->str;
   return s[i->pos] == '\0';
   ```)
@@ -257,7 +265,8 @@
 ;;;   (input-current-char (input-new "abc" 0))  ; => 97  ; 'a'
 
 (defn input-current-char [inp] : int
-  ```c struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   const char *s = (const char*)(intptr_t)i->str;
   return (int64_t)(unsigned char)s[i->pos];
   ```)
@@ -273,7 +282,8 @@
 ;;;   (input-pos (input-advance (input-new "ab" 0)))  ; => 1
 
 (defn input-advance [inp] : int
-  ```c struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
   n->str = i->str; n->pos = i->pos + 1;
   return (int64_t)(intptr_t)n;
@@ -303,7 +313,8 @@
 ;;;   (input-remaining (input-new "abc" 1))  ; => 2
 
 (defn input-remaining [inp] : int
-  ```c struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
   const char *s = (const char*)(intptr_t)i->str;
   int64_t len = 0; while (s[i->pos + len]) len++;
   return len;
@@ -324,7 +335,8 @@
 
 
 (defn apply-fat [f arg] : int
-  ```c int64_t *fat = (int64_t*)(intptr_t)f;
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, arg);
   ```)
@@ -342,7 +354,8 @@
 ;;;   (apply-parser (item) (input-new "a" 0))  ; => Cell{Pair(97, Input@1)}
 
 (defn apply-parser [p inp] : int
-  ```c int64_t *fat = (int64_t*)(intptr_t)p;
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)p;
   int64_t thunk = fat[0];
   return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, inp);
   ```)
@@ -454,7 +467,8 @@
 ;;;   inp   -- the current Input.
 
 (defn pstring-c-impl [s_raw inp] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   typedef struct { int64_t str; int64_t pos; } Input;
   extern size_t strlen(const char *);
   const char *s = (const char*)(intptr_t)s_raw;
@@ -609,7 +623,8 @@
 ;;;   inp   -- the current Input.
 
 (defn many-c-impl [p_raw inp] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   typedef struct { int64_t str; int64_t pos; } Input;
   int64_t *fat_p = (int64_t*)(intptr_t)p_raw;
   int64_t thunk_p = fat_p[0];
@@ -737,7 +752,8 @@
 ;;;   results -- Cell list returned by run-parser.
 
 (defn run-parser-full-c [results] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   typedef struct { int64_t str; int64_t pos; } Input;
   Cell *c = (Cell*)(intptr_t)results;
   while (c) {
@@ -786,7 +802,8 @@
 
 
 (defn parse-value [results] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)results;
   if (!c) return 0;
   Tuple2 *pr = (Tuple2*)(intptr_t)c->value;
@@ -817,7 +834,8 @@
 ;;;   ; prints: 65 66
 
 (defn print-char-list [lst]
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)lst;
   while (c) { printf("%lld", (long long)c->value); if (c->next) printf(" "); c = (Cell*)(intptr_t)c->next; }
   printf("\n");

@@ -77,7 +77,8 @@
 ;;; TLS hook registry (see httpd-register-tls-impl and httpd-new-tls).
 
 (defn httpd/autolink-hint [] : int
-  ```c /* __tur_autolink__: -lturi -pthread */
+  ```c
+  /* __tur_autolink__: -lturi -pthread */
   /* __tur_include__: #include <stdint.h> */
   /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
@@ -109,7 +110,8 @@
                                write-fn : int
                                shutdown : int
                                free-fn : int] : nil
-  ```c httpd_tls_ops.wrap_fd   = (int64_t)wrap_fd;
+  ```c
+  httpd_tls_ops.wrap_fd   = (int64_t)wrap_fd;
   httpd_tls_ops.handshake = (int64_t)handshake;
   httpd_tls_ops.read_fn   = (int64_t)read_fn;
   httpd_tls_ops.write_fn  = (int64_t)write_fn;
@@ -159,7 +161,8 @@
 ;;; Since: Phase H1 (TLS path: Phase H5)
 
 (defn httpd-handle [fd : int handler : int tls : int] : nil
-  ```c typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
+  ```c
+  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
   /* 5 second receive timeout bounds idle keep-alive connections. */
   struct timeval tv;
@@ -519,7 +522,8 @@
 ;;; Since: Phase H3
 
 (defn httpd-worker [arg : ptr<void>] : ptr<void>
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -574,7 +578,8 @@
 ;;; Since: Phase H2
 
 (defn httpd-accept-cb [env : ptr<void> id : int events : int user : ptr<void>] : nil
-  ```c (void)id; (void)events; (void)user;
+  ```c
+  (void)id; (void)events; (void)user;
   typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
@@ -640,7 +645,8 @@
 (defn httpd-new-pool [port : int workers : int ^fat handler : int]
   #{Net}
   : ptr<void>
-  ```c #include <fcntl.h>
+  ```c
+  #include <fcntl.h>
   /* Ignore SIGPIPE so a peer closing early returns EPIPE from send()
    * instead of terminating the process. signal() is declared manually
    * to avoid pulling <signal.h> into this function-body scope. */
@@ -776,7 +782,8 @@
 (defn httpd-new-tls [port : int workers : int ^fat handler : int ctx : int]
   #{Net}
   : ptr<void>
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -818,7 +825,8 @@
 ;;; Since: Phase H1
 
 (defn httpd-port [h : ptr<void>] : int
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -842,7 +850,8 @@
 (defn httpd-run [h : ptr<void>]
   #{Net}
   : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -866,7 +875,8 @@
 (defn httpd-stop [h : ptr<void>]
   #{Net}
   : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -897,7 +907,8 @@
 ;;; Since: Phase H1
 
 (defn httpd-free [h : ptr<void>] : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -938,14 +949,16 @@
 ;;; Since: Phase H1
 
 (defn httpd-req-method [conn : ptr<void>] : cstr
-  ```c return ((HttpdConn *)conn)->method;
+  ```c
+  return ((HttpdConn *)conn)->method;
   ```)
 ;;; httpd-req-path -- return the request-target path from the parsed request.
 ;;;
 ;;; Since: Phase H1
 
 (defn httpd-req-path [conn : ptr<void>] : cstr
-  ```c return ((HttpdConn *)conn)->path;
+  ```c
+  return ((HttpdConn *)conn)->path;
   ```)
 ;;; httpd-req-version -- return the HTTP version from the parsed request line.
 ;;;
@@ -955,7 +968,8 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-version [conn : ptr<void>] : cstr
-  ```c return ((HttpdConn *)conn)->version;
+  ```c
+  return ((HttpdConn *)conn)->version;
   ```)
 ;;; httpd-req-body -- return the request body (NUL-terminated copy).
 ;;;
@@ -969,7 +983,8 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-body [conn : ptr<void>] : cstr
-  ```c HttpdConn *c = (HttpdConn *)conn;
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
   return c->body ? c->body : "";
   ```)
 ;;; httpd-req-body-len -- return the request body length in bytes.
@@ -980,7 +995,8 @@
 ;;; Since: Phase H4
 
 (defn httpd-req-body-len [conn : ptr<void>] : int
-  ```c return (int64_t)((HttpdConn *)conn)->body_len;
+  ```c
+  return (int64_t)((HttpdConn *)conn)->body_len;
   ```)
 ;;; httpd-resp-status-get -- return the currently-set response status code.
 ;;;
@@ -990,21 +1006,24 @@
 ;;; Since: Phase H6
 
 (defn httpd-resp-status-get [conn : ptr<void>] : int
-  ```c return (int64_t)((HttpdConn *)conn)->resp_status;
+  ```c
+  return (int64_t)((HttpdConn *)conn)->resp_status;
   ```)
 ;;; httpd-resp-status! -- set the HTTP response status code.
 ;;;
 ;;; Since: Phase H1
 
 (defn httpd-resp-status! [conn : ptr<void> status : int] : nil
-  ```c ((HttpdConn *)conn)->resp_status = (int)status;
+  ```c
+  ((HttpdConn *)conn)->resp_status = (int)status;
   ```)
 ;;; httpd-resp-body! -- set the HTTP response body (copies the string).
 ;;;
 ;;; Since: Phase H1
 
 (defn httpd-resp-body! [conn : ptr<void> body : cstr] : nil
-  ```c HttpdConn *c = (HttpdConn *)conn;
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
   if (c->resp_body) { free(c->resp_body); c->resp_body = NULL; c->resp_body_len = 0; }
   if (!body) return;
   size_t len = strlen(body);
@@ -1032,7 +1051,8 @@
 ;;; Since: Phase H8 (M6)
 
 (defn httpd-resp-body-bytes! [conn : ptr<void> bytes : ptr<void> len : int] : nil
-  ```c HttpdConn *c = (HttpdConn *)conn;
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
   if (c->resp_body) { free(c->resp_body); c->resp_body = NULL; c->resp_body_len = 0; }
   if (!bytes || len <= 0) return;
   c->resp_body = (char *)malloc((size_t)len + 1);
@@ -1076,7 +1096,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-req-header [conn : ptr<void> name : cstr] : cstr
-  ```c if (!conn || !name) return "";
+  ```c
+  if (!conn || !name) return "";
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   while (h) {
       if (h->name && strcasecmp(h->name, name) == 0) {
@@ -1101,7 +1122,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-req-header? [conn : ptr<void> name : cstr] : int
-  ```c if (!conn || !name) return 0;
+  ```c
+  if (!conn || !name) return 0;
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   while (h) {
       if (h->name && strcasecmp(h->name, name) == 0) return 1;
@@ -1126,7 +1148,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-resp-header! [conn : ptr<void> name : cstr value : cstr] : nil
-  ```c if (!conn || !name) return;
+  ```c
+  if (!conn || !name) return;
   HttpdConn *c = (HttpdConn *)conn;
   /* Replace if name already present. */
   HttpdHeader *h = (HttpdHeader *)c->resp_headers;
@@ -1183,7 +1206,8 @@
 ;;; Since: Phase H8 (M0)
 
 (defn httpd-resp-header-add! [conn : ptr<void> name : cstr value : cstr] : nil
-  ```c if (!conn || !name) return;
+  ```c
+  if (!conn || !name) return;
   HttpdConn *c = (HttpdConn *)conn;
   HttpdHeader *nh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
   if (!nh) return;
@@ -1253,7 +1277,8 @@
 ;;; Since: Phase H8 (M2)
 
 (defn httpd-req-cookie [conn : ptr<void> name : cstr] : cstr
-  ```c if (!conn || !name || !*name) return "";
+  ```c
+  if (!conn || !name || !*name) return "";
   HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
   const char *cookie_hdr = NULL;
   while (h) {
@@ -1383,7 +1408,8 @@
 ;;;        docs/upcoming/defstruct-inline-c-byvalue-callsite-plan.md.
 
 (defn httpd-set-cookie! [conn : ptr<void> opts : CookieOpts] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   const char *cname  = opts.name      ? opts.name      : "";
   const char *cval   = opts.value     ? opts.value     : "";
   const char *cpath  = opts.path      ? opts.path      : "";
@@ -1443,7 +1469,8 @@
 ;;; Since: Phase H8 (M3)
 
 (defn httpd-req-form [conn : ptr<void> field : cstr] : cstr
-  ```c if (!conn || !field || !*field) return "";
+  ```c
+  if (!conn || !field || !*field) return "";
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->body || c->body_len <= 0) return "";
   size_t flen = strlen(field);
@@ -1513,7 +1540,8 @@
 ;;; Since: Phase H8 (M3)
 
 (defn httpd-req-json [conn : ptr<void>] : int
-  ```c if (!conn) return 0;
+  ```c
+  if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (c->req_json_cache) return c->req_json_cache;
   if (!c->body || c->body_len <= 0) return 0;
@@ -1556,7 +1584,8 @@
 ;;; if-form inside mw-json-body can stay in Turmeric.
 
 (defn httpd-mw-json-body-precheck [conn : ptr<void>] : int
-  ```c if (!conn) return 0;
+  ```c
+  if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->body || c->body_len <= 0) return 0;  /* empty body -> not malformed */
   if (c->req_json_cache) return 0;             /* already parsed once -> ok */
@@ -1628,7 +1657,8 @@
 ;;; httpd-mw-cors-is-preflight -- internal: 1 iff this is a CORS preflight.
 
 (defn httpd-mw-cors-is-preflight [conn : ptr<void>] : int
-  ```c if (!conn) return 0;
+  ```c
+  if (!conn) return 0;
   const char *m = httpd_hyreq_hymethod((void *)conn);
   if (!m || strcmp(m, "OPTIONS") != 0) return 0;
   return __TUR_CNAME_httpd-req-header?__((void *)conn, "Access-Control-Request-Method");
@@ -1649,7 +1679,8 @@
                                     allow-headers : cstr
                                     allow-credentials : int
                                     max-age : int] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   __TUR_CNAME_httpd-resp-status!__((void *)conn, 204);
   __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
   const char *ao = allow_origin  ? allow_origin  : "*";
@@ -1673,7 +1704,8 @@
                               allow-origin : cstr
                               expose-headers : cstr
                               allow-credentials : int] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   const char *ao = allow_origin   ? allow_origin   : "*";
   const char *eh = expose_headers ? expose_headers : "";
   __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin", ao);
@@ -1812,7 +1844,8 @@
 ;;; Since: Phase H8 (M5)
 
 (defn cstr-eq-const-time [a : cstr b : cstr] : int
-  ```c if (!a || !b) return 0;
+  ```c
+  if (!a || !b) return 0;
   size_t la = strlen(a);
   size_t lb = strlen(b);
   if (la != lb) return 0;
@@ -1823,7 +1856,8 @@
 ;;; httpd-mw-basic-auth-check -- internal: decode + dispatch the verifier.
 
 (defn httpd-mw-basic-auth-check [conn : ptr<void> verifier : int] : int
-  ```c if (!conn || !verifier) return 0;
+  ```c
+  if (!conn || !verifier) return 0;
   const char *hdr = httpd_hyreq_hyheader((void *)conn, "Authorization");
   if (!hdr || !*hdr) return 0;
   /* Must start with "Basic ", case-insensitive. */
@@ -1883,7 +1917,8 @@
 ;;; httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate.
 
 (defn httpd-mw-basic-auth-challenge [conn : ptr<void> realm : cstr] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   __TUR_CNAME_httpd-resp-status!__((void *)conn, 401);
   __TUR_CNAME_httpd-resp-body!__((void *)conn, "Unauthorized");
   char buf[256];
@@ -1953,7 +1988,8 @@
 ;;; / non-multipart content.
 
 (defn httpd-req-multipart-parse [conn : ptr<void>] : int
-  ```c typedef struct __HttpdPart {
+  ```c
+  typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2096,7 +2132,8 @@
 ;;; Since: Phase H8 (M7)
 
 (defn httpd-req-file [conn : ptr<void> field : cstr] : ptr<void>
-  ```c typedef struct __HttpdPart {
+  ```c
+  typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2118,7 +2155,8 @@
 ;;; httpd-part-name -- form field name of a part (or "" if missing).
 
 (defn httpd-part-name [part : ptr<void>] : cstr
-  ```c typedef struct __HttpdPart {
+  ```c
+  typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2130,7 +2168,8 @@
 ;;; httpd-part-filename -- file name attribute (or "" for non-file parts).
 
 (defn httpd-part-filename [part : ptr<void>] : cstr
-  ```c typedef struct __HttpdPart {
+  ```c
+  typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2142,7 +2181,8 @@
 ;;; httpd-part-content-type -- per-part Content-Type (or "" if absent).
 
 (defn httpd-part-content-type [part : ptr<void>] : cstr
-  ```c typedef struct __HttpdPart {
+  ```c
+  typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2154,7 +2194,8 @@
 ;;; httpd-part-data -- raw byte buffer (binary-safe, may contain NUL).
 
 (defn httpd-part-data [part : ptr<void>] : ptr<void>
-  ```c typedef struct __HttpdPart {
+  ```c
+  typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2166,7 +2207,8 @@
 ;;; httpd-part-data-len -- byte count of the part's content.
 
 (defn httpd-part-data-len [part : ptr<void>] : int
-  ```c typedef struct __HttpdPart {
+  ```c
+  typedef struct __HttpdPart {
       char *name; char *filename; char *content_type;
       char *data; int data_len;
       struct __HttpdPart *next;
@@ -2211,7 +2253,8 @@
 ;;; EWOULDBLOCK), and loops on keep-alive.  Mirrors httpd-handle.
 
 (defn httpd-async-fiber-body [self : ptr<void> user-data : ptr<void>] : nil
-  ```c #include <fcntl.h>
+  ```c
+  #include <fcntl.h>
   #include <errno.h>
   (void)self;
   /* HttpdAsync layout (kept in sync with httpd-new-async below). */
@@ -2540,7 +2583,8 @@
                              id : int
                              events : int
                              user : ptr<void>] : nil
-  ```c (void)id; (void)events; (void)user;
+  ```c
+  (void)id; (void)events; (void)user;
   typedef struct {
       int   listen_fd;
       int64_t handler;
@@ -2614,7 +2658,8 @@
                                   max-in-flight : int]
   #{Net}
   : ptr<void>
-  ```c #include <fcntl.h>
+  ```c
+  #include <fcntl.h>
   typedef void (*tur_sig_fn)(int);
   extern tur_sig_fn signal(int, tur_sig_fn);
   signal(13, (tur_sig_fn)(intptr_t)1);  /* SIGPIPE -> SIG_IGN */
@@ -2695,7 +2740,8 @@
 (defn httpd-run-async [h : ptr<void>]
   #{Net}
   : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -2722,7 +2768,8 @@
 (defn httpd-stop-async [h : ptr<void>]
   #{Net}
   : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -2752,7 +2799,8 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-async-free [h : ptr<void>] : nil
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -2780,7 +2828,8 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-async-port [h : ptr<void>] : int
-  ```c typedef struct {
+  ```c
+  typedef struct {
       int   listen_fd;
       int64_t handler;
       void *reactor;
@@ -2809,7 +2858,8 @@
 ;;; Since: Phase H8 (A0)
 
 (defn httpd-await-readable [conn : ptr<void>] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
   (void)tur_local_park_fd(c->fiber_group, c->fd, 1, -1);
@@ -2817,7 +2867,8 @@
 ;;; httpd-await-writable -- suspend until conn fd is writable.
 
 (defn httpd-await-writable [conn : ptr<void>] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
   (void)tur_local_park_fd(c->fiber_group, c->fd, 2, -1);
@@ -2832,7 +2883,8 @@
 ;;; Since: Phase H8 (A0)
 
 (defn httpd-await-timer [conn : ptr<void> ms : int] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->fiber_group) return;
   /* Park on the fd with NO event mask (0): the timer alone wakes us. */
@@ -2867,7 +2919,8 @@
 
 
 (defn router-new [] : ptr<void>
-  ```c typedef struct { void *routes; } Router;
+  ```c
+  typedef struct { void *routes; } Router;
   Router *r = (Router *)malloc(sizeof(Router));
   if (!r) return NULL;
   r->routes = NULL;
@@ -2889,7 +2942,8 @@
 ;;; Since: Phase H6
 
 (defn router-add [r : ptr<void> method : cstr pattern : cstr ^fat handler : int] : nil
-  ```c typedef struct Route Route;
+  ```c
+  typedef struct Route Route;
   struct Route {
       char method[16];
       char pattern[1024];
@@ -2924,7 +2978,8 @@
 ;;; Since: Phase H6
 
 (defn router-free [r : ptr<void>] : nil
-  ```c typedef struct Route Route;
+  ```c
+  typedef struct Route Route;
   struct Route { char method[16]; char pattern[1024]; int64_t handler; Route *next; };
   typedef struct { Route *routes; } Router;
   Router *router = (Router *)r;
@@ -2949,7 +3004,8 @@
 ;;; Since: Phase H6
 
 (defn router-dispatch [r : ptr<void> conn : ptr<void>] : nil
-  ```c typedef struct Route Route;
+  ```c
+  typedef struct Route Route;
   struct Route { char method[16]; char pattern[1024]; int64_t handler; Route *next; };
   typedef struct { Route *routes; } Router;
   typedef struct RouteParam RouteParam;
@@ -3036,7 +3092,8 @@
 ;;; Since: Phase H6
 
 (defn httpd-param [conn : ptr<void> name : cstr] : cstr
-  ```c typedef struct RouteParam RouteParam;
+  ```c
+  typedef struct RouteParam RouteParam;
   struct RouteParam { char name[64]; char value[256]; RouteParam *next; };
   HttpdConn *c = (HttpdConn *)conn;
   RouteParam *p = (RouteParam *)c->route_params;
@@ -3085,7 +3142,8 @@
 
 
 (defn httpd-call [handler : int conn : ptr<void>] : nil
-  ```c if (!handler) return;
+  ```c
+  if (!handler) return;
   int64_t *fat = (int64_t *)(intptr_t)handler;
   typedef void (*fn1_t)(void *, int64_t);
   ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
@@ -3117,7 +3175,8 @@
 ;;; httpd-mw-mono-ms -- monotonic clock helper (milliseconds). Internal.
 
 (defn httpd-mw-mono-ms [] : int
-  ```c #include <time.h>
+  ```c
+  #include <time.h>
   struct timespec __ts;
   clock_gettime(CLOCK_MONOTONIC, &__ts);
   return (int64_t)__ts.tv_sec * 1000LL + (int64_t)__ts.tv_nsec / 1000000LL;
@@ -3125,7 +3184,8 @@
 ;;; httpd-mw-log-emit -- emit one log line for a completed request. Internal.
 
 (defn httpd-mw-log-emit [c : ptr<void> elapsed-ms : int] : nil
-  ```c HttpdConn *cn = (HttpdConn *)c;
+  ```c
+  HttpdConn *cn = (HttpdConn *)c;
   int status = cn->resp_status ? cn->resp_status : 200;
   fprintf(stdout, "%s %s -> %d %d %lldms\n",
           cn->method, cn->path, status, cn->resp_body_len,
@@ -3235,7 +3295,8 @@
 ;;; bare dereference of fat[0] here is safe.
 
 (defn httpd-mw-apply [mw : int cur : int] : int
-  ```c int64_t *fat = (int64_t *)(intptr_t)mw;
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)mw;
   typedef int64_t (*fn1_t)(void *, int64_t);
   return ((fn1_t)(intptr_t)fat[0])((void *)fat, cur);
   ```)
@@ -3308,7 +3369,8 @@
 ;;; return value is the announced body size in bytes.
 
 (defn httpd-mw-content-length [conn : ptr<void>] : int
-  ```c if (!conn) return -1;
+  ```c
+  if (!conn) return -1;
   if (!__TUR_CNAME_httpd-req-header?__((void *)conn, "Content-Length")) return -1;
   const char *v = httpd_hyreq_hyheader((void *)conn, "Content-Length");
   if (!v || !*v) return -1;
@@ -3386,7 +3448,8 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-set-attr! [conn : ptr<void> key : cstr val : cstr] : nil
-  ```c if (!conn || !key) return;
+  ```c
+  if (!conn || !key) return;
   HttpdConn *c = (HttpdConn *)conn;
   /* Overwrite if the key already exists. */
   HttpdAttr *ap = (HttpdAttr *)c->attr_list;
@@ -3425,7 +3488,8 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-req-attr [conn : ptr<void> key : cstr] : cstr
-  ```c if (!conn || !key) return "";
+  ```c
+  if (!conn || !key) return "";
   HttpdAttr *ap = (HttpdAttr *)((HttpdConn *)conn)->attr_list;
   while (ap) {
       if (ap->key && strcmp(ap->key, key) == 0) {
@@ -3458,7 +3522,8 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn httpd-req-remote-ip [conn : ptr<void>] : cstr
-  ```c #include <arpa/inet.h>
+  ```c
+  #include <arpa/inet.h>
   #include <sys/socket.h>
   if (!conn) return "";
   HttpdConn *c = (HttpdConn *)conn;
@@ -3511,7 +3576,8 @@
 ;;; httpd-mw-ratelimit-new -- internal: allocate a fresh RL state struct.
 
 (defn httpd-mw-ratelimit-new [requests : int window-s : int] : int
-  ```c typedef struct {
+  ```c
+  typedef struct {
       uint32_t ip_hash;
       int64_t  window_start_s;
       int32_t  count;
@@ -3538,7 +3604,8 @@
 ;;; ends when the request must be rejected.
 
 (defn httpd-mw-ratelimit-check [state : int ip : cstr] : int
-  ```c #include <time.h>
+  ```c
+  #include <time.h>
   typedef struct {
       uint32_t ip_hash;
       int64_t  window_start_s;
@@ -3604,7 +3671,8 @@
 ;;; httpd-mw-ratelimit-emit-429 -- internal: write the 429 response.
 
 (defn httpd-mw-ratelimit-emit-429 [conn : ptr<void> retry-s : int] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   __TUR_CNAME_httpd-resp-status!__((void *)conn, 429);
   __TUR_CNAME_httpd-resp-body!__((void *)conn, "Too Many Requests");
   char buf[32];
@@ -3655,7 +3723,8 @@
 ;;; httpd-mw-static-mime -- internal: map an extension to a Content-Type.
 
 (defn httpd-mw-static-mime [path : cstr] : cstr
-  ```c if (!path) return "application/octet-stream";
+  ```c
+  if (!path) return "application/octet-stream";
   const char *dot = strrchr(path, '.');
   if (!dot || !dot[1]) return "application/octet-stream";
   const char *ext = dot + 1;
@@ -3677,7 +3746,8 @@
 ;;; written), 0 if the file is not found / forbidden.
 
 (defn httpd-mw-static-try [conn : ptr<void> root : cstr] : int
-  ```c #include <sys/stat.h>
+  ```c
+  #include <sys/stat.h>
   #include <fcntl.h>
   #include <unistd.h>
   if (!conn || !root || !*root) return 0;
@@ -3779,7 +3849,8 @@
 
 
 (defn httpd-mw-static-fallback [conn : ptr<void> root : cstr] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   if (httpd_hyresp_hystatus_hyget((void *)conn) != 404) return;
   (void)httpd_hymw_hystatic_hytry((void *)conn, root);
   ```)

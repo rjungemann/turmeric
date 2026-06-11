@@ -28,7 +28,8 @@
 ;;;
 ;;; Since: RR4
 (defn float-range-bound-new [inclusive : int value : float] : int
-  ```c struct { bool is_inclusive; double value; } *b = malloc(sizeof(*b));
+  ```c
+  struct { bool is_inclusive; double value; } *b = malloc(sizeof(*b));
   b->is_inclusive = (bool)inclusive;
   b->value = value;
   return (int64_t)(intptr_t)b;
@@ -41,7 +42,8 @@
 ;;; Since: RR4
 
 (defn float-range-bound-inclusive? [b : int] : bool
-  ```c return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->is_inclusive;
+  ```c
+  return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->is_inclusive;
   ```)
 ;;; float-range-bound-value -- return the endpoint value of a bound.
 ;;;
@@ -51,7 +53,8 @@
 ;;; Since: RR4
 
 (defn float-range-bound-value [b : int] : float
-  ```c return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->value;
+  ```c
+  return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->value;
   ```)
 ;; -------------------------------------------------------------------
 ;; FloatRange allocation and accessors (inline-C)
@@ -69,7 +72,8 @@
 
 
 (defn float-range-new [lower : int upper : int] : int
-  ```c struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
+  ```c
+  struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
   r->lower = lower;
   r->upper = upper;
   return (int64_t)(intptr_t)r;
@@ -82,7 +86,8 @@
 ;;; Since: RR4
 
 (defn float-range-lower [r : int] : int
-  ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
+  ```c
+  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
   ```)
 ;;; float-range-upper -- return the upper bound pointer (0 = unbounded).
 ;;;
@@ -92,7 +97,8 @@
 ;;; Since: RR4
 
 (defn float-range-upper [r : int] : int
-  ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
+  ```c
+  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
   ```)
 ;; -------------------------------------------------------------------
 ;; Internal comparison helpers

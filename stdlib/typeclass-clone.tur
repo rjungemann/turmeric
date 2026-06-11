@@ -32,7 +32,10 @@
 ;;; Since: Phase B1
 
 (definstance Clone [ref]
-  (clone [x] : int ```c /* x is void *; allocate a new int64_t cell and copy the stored value. */
+  (clone [x]
+    : int
+    ```c
+    /* x is void *; allocate a new int64_t cell and copy the stored value. */
     int64_t *src = (int64_t *)x;
     int64_t *dst = (int64_t *)malloc(sizeof(int64_t));
     if (!dst) abort();

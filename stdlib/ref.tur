@@ -36,7 +36,8 @@
 ;;; Since: Phase B1
 
 (defn ref-new [value : int] : RefHandle
-  ```c struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
+  ```c
+  struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
   ref->value = value;
   return (int64_t)(intptr_t)ref;
   ```)
@@ -55,7 +56,8 @@
 ;;; Since: Phase B1
 
 (defn ref-get [r : RefHandle] : int
-  ```c struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
+  ```c
+  struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
   if (!ref) {
     fprintf(stderr, "ref-get: null ref\n");
     exit(1);
@@ -71,7 +73,8 @@
 ;;; Since: Phase B1
 
 (defn ref-free [r : RefHandle] : void
-  ```c free((void*)(intptr_t)r);
+  ```c
+  free((void*)(intptr_t)r);
   ```)
 ;; Phase B1: Clone instance for Ref
 ;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
@@ -83,7 +86,10 @@
 ;;; Since: Phase B1
 
 (definstance Clone [Ref]
-  (clone [x] : int ```c struct { int64_t value; } *dst = malloc(sizeof(Ref));
+  (clone [x]
+    : int
+    ```c
+    struct { int64_t value; } *dst = malloc(sizeof(Ref));
     dst->value = x.value;
     return (int64_t)(intptr_t)dst;
     ```))

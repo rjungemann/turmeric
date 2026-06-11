@@ -117,7 +117,8 @@
 ;;;   Non-zero on successful registration.
 
 (defn register-test [name : cstr test-fn : ptr<void>] : int
-  ```c extern int64_t tur_test_register(const char *name, void *test_fn);
+  ```c
+  extern int64_t tur_test_register(const char *name, void *test_fn);
   return (int)tur_test_register((const char *)name, (void *)test_fn);
   ```)
 ;; Run all registered tests and return exit code
@@ -127,7 +128,8 @@
 ;;;   0 if all tests passed, non-zero if any failed.
 
 (defn run-tests! [] : int
-  ```c extern int64_t tur_test_run_all(void);
+  ```c
+  extern int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
   ```)
 ;; Convenience macro: register a named test with multiple body expressions.

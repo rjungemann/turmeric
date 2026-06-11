@@ -38,20 +38,23 @@
 
 
 (defn __identity_new [x] : int
-  ```c int64_t *p = malloc(sizeof(int64_t));
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
   *p = x;
   return (int64_t)(intptr_t)p;
   ```)
 ;;; __identity_get -- read the value stored in an Identity comonad cell.
 
 (defn __identity_get [wa] : int
-  ```c int64_t *p = (int64_t *)(intptr_t)wa;
+  ```c
+  int64_t *p = (int64_t *)(intptr_t)wa;
   return *p;
   ```)
 ;;; __identity_extract -- extract the value from an Identity comonad cell.
 
 (defn __identity_extract [wa] : int
-  ```c int64_t *p = (int64_t *)(intptr_t)wa;
+  ```c
+  int64_t *p = (int64_t *)(intptr_t)wa;
   return *p;
   ```)
 ;;; __identity_extend -- apply fn to the Identity cell and wrap the result.
@@ -68,7 +71,8 @@
 ;;; __identity_duplicate -- wrap an Identity cell inside another Identity cell.
 
 (defn __identity_duplicate [wa] : int
-  ```c /* duplicate w = Identity w   (the outer Identity wraps the original) */
+  ```c
+  /* duplicate w = Identity w   (the outer Identity wraps the original) */
   int64_t *p = malloc(sizeof(int64_t));
   *p = wa;
   return (int64_t)(intptr_t)p;
@@ -88,7 +92,8 @@
 
 
 (defn __pair_new [env val] : int
-  ```c Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c
+  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
   p->e1 = env;
   p->e2 = val;
   return (int64_t)(intptr_t)p;
@@ -96,19 +101,22 @@
 ;;; __pair_env -- read the environment component of a Pair comonad cell.
 
 (defn __pair_env [wa] : int
-  ```c Tuple2 *p = (Tuple2 *)(intptr_t)wa;
+  ```c
+  Tuple2 *p = (Tuple2 *)(intptr_t)wa;
   return p->e1;
   ```)
 ;;; __pair_val -- read the value component of a Pair comonad cell.
 
 (defn __pair_val [wa] : int
-  ```c Tuple2 *p = (Tuple2 *)(intptr_t)wa;
+  ```c
+  Tuple2 *p = (Tuple2 *)(intptr_t)wa;
   return p->e2;
   ```)
 ;;; __pair_extract -- extract the value from a Pair comonad cell.
 
 (defn __pair_extract [wa] : int
-  ```c Tuple2 *p = (Tuple2 *)(intptr_t)wa;
+  ```c
+  Tuple2 *p = (Tuple2 *)(intptr_t)wa;
   return p->e2;
   ```)
 ;;; __pair_extend -- extend over a Pair cell: (e, a) -> (e, f (e, a)).
@@ -122,7 +130,8 @@
 ;;; __pair_duplicate -- duplicate a Pair cell: (e, a) -> (e, (e, a)).
 
 (defn __pair_duplicate [wa] : int
-  ```c /* duplicate (e, a) = (e, (e, a)) */
+  ```c
+  /* duplicate (e, a) = (e, (e, a)) */
   Tuple2 *src = (Tuple2 *)(intptr_t)wa;
   Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
   p->e1 = src->e1;

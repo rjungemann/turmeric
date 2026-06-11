@@ -35,7 +35,8 @@
 
 
 (defn httpd-mw-compress-step [conn : ptr<void> min-bytes : int] : nil
-  ```c if (!conn) return;
+  ```c
+  if (!conn) return;
   HttpdConn *c = (HttpdConn *)conn;
   if (c->resp_body_len < (int)min_bytes) return;
   /* Skip if handler already produced an encoded body. */

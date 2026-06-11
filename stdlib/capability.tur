@@ -26,7 +26,8 @@
 ;;; Since: Phase 16
 
 (defn FileSystem-type []
-  ```c typedef struct FileSystem FileSystem;
+  ```c
+  typedef struct FileSystem FileSystem;
   struct FileSystem {
       int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
       int (*write_file)(const char* path, const unsigned char* data, int data_len);
@@ -53,7 +54,8 @@
 ;;; Since: Phase 16
 
 (defn make-FileSystem [read_fn write_fn delete_fn list_fn]
-  ```c typedef struct FileSystem FileSystem;
+  ```c
+  typedef struct FileSystem FileSystem;
   FileSystem* fs = (FileSystem*)malloc(sizeof(FileSystem));
   fs->read_file = (int (*)(const char*, unsigned char*, int, int*))read_fn;
   fs->write_file = (int (*)(const char*, const unsigned char*, int))write_fn;
@@ -70,7 +72,8 @@
 ;;; Since: Phase 16
 
 (defn FileSystem-free [fs]
-  ```c free(fs);
+  ```c
+  free(fs);
   ```)
 ;; ============================================================================
 ;; Logger capability
@@ -86,7 +89,8 @@
 
 
 (defn Logger-type []
-  ```c typedef struct Logger Logger;
+  ```c
+  typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
       void (*info)(const char* msg);
@@ -109,7 +113,8 @@
 ;;; Since: Phase 16
 
 (defn make-Logger [debug_fn info_fn warn_fn error_fn]
-  ```c typedef struct Logger Logger;
+  ```c
+  typedef struct Logger Logger;
   Logger* logger = (Logger*)malloc(sizeof(Logger));
   logger->debug = (void (*)(const char*))debug_fn;
   logger->info = (void (*)(const char*))info_fn;
@@ -125,7 +130,8 @@
 ;;; Since: Phase 16
 
 (defn Logger-free [log]
-  ```c free(log);
+  ```c
+  free(log);
   ```)
 ;; ============================================================================
 ;; Random capability
@@ -139,7 +145,8 @@
 
 
 (defn Random-type []
-  ```c typedef struct Random Random;
+  ```c
+  typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
       int (*next_float)(void);
@@ -158,7 +165,8 @@
 ;;; Since: Phase 16
 
 (defn make-Random [next_int_fn next_float_fn]
-  ```c typedef struct Random Random;
+  ```c
+  typedef struct Random Random;
   Random* rng = (Random*)malloc(sizeof(Random));
   rng->next_int = (int (*)(int, int))next_int_fn;
   rng->next_float = (int (*)(void))next_float_fn;
@@ -172,7 +180,8 @@
 ;;; Since: Phase 16
 
 (defn Random-free [rng]
-  ```c free(rng);
+  ```c
+  free(rng);
   ```)
 ;; ============================================================================
 ;; Time capability
@@ -186,7 +195,8 @@
 
 
 (defn Time-type []
-  ```c typedef struct Time Time;
+  ```c
+  typedef struct Time Time;
   struct Time {
       int (*now)(void);
       void (*sleep)(int ms);
@@ -205,7 +215,8 @@
 ;;; Since: Phase 16
 
 (defn make-Time [now_fn sleep_fn]
-  ```c typedef struct Time Time;
+  ```c
+  typedef struct Time Time;
   Time* time = (Time*)malloc(sizeof(Time));
   time->now = (int (*)(void))now_fn;
   time->sleep = (void (*)(int))sleep_fn;
@@ -219,7 +230,8 @@
 ;;; Since: Phase 16
 
 (defn Time-free [t]
-  ```c free(t);
+  ```c
+  free(t);
   ```)
 ;; ============================================================================
 ;; Convenience macros
@@ -270,7 +282,8 @@
 
 
 (defn fs-read [fs path buf buf_len]
-  ```c typedef struct FileSystem FileSystem;
+  ```c
+  typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   int out_len;
   return f->read_file(path, (unsigned char*)buf, buf_len, &out_len);
@@ -290,7 +303,8 @@
 ;;; Since: Phase 16
 
 (defn fs-write [fs path data data_len]
-  ```c typedef struct FileSystem FileSystem;
+  ```c
+  typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   return f->write_file(path, (const unsigned char*)data, data_len);
   ```)
@@ -307,7 +321,8 @@
 ;;; Since: Phase 16
 
 (defn fs-delete [fs path]
-  ```c typedef struct FileSystem FileSystem;
+  ```c
+  typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   return f->delete(path);
   ```)
@@ -326,7 +341,8 @@
 ;;; Since: Phase 16
 
 (defn fs-list [fs path entries max_entries]
-  ```c typedef struct FileSystem FileSystem;
+  ```c
+  typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   int out_count;
   return f->list(path, (char**)entries, max_entries, &out_count);
@@ -341,7 +357,8 @@
 ;;; Since: Phase 16
 
 (defn log-debug [log msg]
-  ```c typedef struct Logger Logger;
+  ```c
+  typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->debug(msg);
   ```)
@@ -355,7 +372,8 @@
 ;;; Since: Phase 16
 
 (defn log-info [log msg]
-  ```c typedef struct Logger Logger;
+  ```c
+  typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->info(msg);
   ```)
@@ -369,7 +387,8 @@
 ;;; Since: Phase 16
 
 (defn log-warn [log msg]
-  ```c typedef struct Logger Logger;
+  ```c
+  typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->warn(msg);
   ```)
@@ -383,7 +402,8 @@
 ;;; Since: Phase 16
 
 (defn log-error [log msg]
-  ```c typedef struct Logger Logger;
+  ```c
+  typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->error(msg);
   ```)
@@ -401,7 +421,8 @@
 ;;; Since: Phase 16
 
 (defn rng-next-int [rng min max]
-  ```c typedef struct Random Random;
+  ```c
+  typedef struct Random Random;
   Random* r = (Random*)rng;
   return r->next_int(min, max);
   ```)
@@ -418,7 +439,8 @@
 ;;; Since: Phase 16
 
 (defn rng-next-float [rng]
-  ```c typedef struct Random Random;
+  ```c
+  typedef struct Random Random;
   Random* r = (Random*)rng;
   return r->next_float();
   ```)
@@ -434,7 +456,8 @@
 ;;; Since: Phase 16
 
 (defn time-now [t]
-  ```c typedef struct Time Time;
+  ```c
+  typedef struct Time Time;
   Time* time = (Time*)t;
   return time->now();
   ```)
@@ -448,7 +471,8 @@
 ;;; Since: Phase 16
 
 (defn time-sleep [t ms]
-  ```c typedef struct Time Time;
+  ```c
+  typedef struct Time Time;
   Time* time = (Time*)t;
   time->sleep(ms);
   ```)

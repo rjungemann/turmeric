@@ -32,7 +32,8 @@
 ;;; image-hooks/file-table -- backing store for tracked files (internal).
 
 (defn image-hooks/file-table [op : int arg : int aux : int] : int
-  ```c #define TUR_IMG_HOOK_MAX 64
+  ```c
+  #define TUR_IMG_HOOK_MAX 64
   static char  *paths[TUR_IMG_HOOK_MAX];
   static char  *modes[TUR_IMG_HOOK_MAX];
   static void  *handles[TUR_IMG_HOOK_MAX];

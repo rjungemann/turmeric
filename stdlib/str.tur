@@ -19,7 +19,8 @@
 ;;;   (str-from-cstr "hello")  ; => <str ptr>
 ;; Create a str from a C string (NUL-terminated)
 (defn str-from-cstr [cstr]
-  ```c const char *s = (const char*)cstr;
+  ```c
+  const char *s = (const char*)cstr;
   size_t len = strlen(s);
   struct { const char *p; size_t len; } *str = malloc(sizeof(*str));
   str->p = s;
@@ -39,7 +40,8 @@
 ;; Get string length in bytes
 
 (defn str-len [s] : int
-  ```c struct { const char *p; size_t len; } *str = (void*)s;
+  ```c
+  struct { const char *p; size_t len; } *str = (void*)s;
   return (int)str->len;
   ```)
 ;;; str-eq? -- check whether two str values have identical byte contents.
@@ -58,7 +60,8 @@
 ;; Check if two strings are equal
 
 (defn str-eq? [s1 s2] : bool
-  ```c struct { const char *p; size_t len; } *a = (void*)s1;
+  ```c
+  struct { const char *p; size_t len; } *a = (void*)s1;
   struct { const char *p; size_t len; } *b = (void*)s2;
   if (a == NULL || b == NULL) return a == b;
   if (a->len != b->len) return false;
@@ -74,7 +77,8 @@
 ;; Free the str struct (does NOT free the underlying string data)
 
 (defn str-free [s]
-  ```c free(s);
+  ```c
+  free(s);
   return 0;
   ```)
 ;;; str-concat -- concatenate two NUL-terminated strings into a new heap buffer.
@@ -93,7 +97,8 @@
 ;;; Since: Phase B1
 
 (defn str-concat [a : cstr b : cstr] : cstr
-  ```c const char *sa = (const char*)a;
+  ```c
+  const char *sa = (const char*)a;
   const char *sb = (const char*)b;
   size_t la = strlen(sa), lb = strlen(sb);
   char *out = malloc(la + lb + 1);
@@ -120,7 +125,8 @@
 ;;; Since: Phase B1
 
 (defn str->int [s : cstr] : int
-  ```c return s ? (int64_t)atoll((const char *)(intptr_t)s) : 0;
+  ```c
+  return s ? (int64_t)atoll((const char *)(intptr_t)s) : 0;
   ```)
 ;;; cstr->parse-int -- parse a raw int (cstr pointer stored as int64) to int64.
 ;;;
@@ -136,7 +142,8 @@
 ;;; Since: Phase B1
 
 (defn cstr->parse-int [s : int] : int
-  ```c const char *cs = (const char *)(intptr_t)s;
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
   return cs ? (int64_t)atoll(cs) : 0;
   ```)
 ;; Sum-types plan T9: Either-based migration of a lossy "value or error" site.
@@ -174,7 +181,8 @@
 ;;; Since: Phase sum-types-either
 
 (defn str->int-checked [s : cstr] : int
-  ```c const char *cs = (const char *)(intptr_t)s;
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
   if (!cs || *cs == '\0') return ctor_Left((int64_t)0);
   char *end = (char *)0;
   long long v = strtoll(cs, &end, 10);
