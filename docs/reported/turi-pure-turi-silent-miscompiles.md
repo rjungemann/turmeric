@@ -27,9 +27,11 @@
 > All fixed fixtures are on the `run-turi.sh` allowlist (harness 912 -> 919, 0
 > failed; compiled 1573/0, zero regressions).
 >
-> **4 remain, each deep and overlapping another workstream:**
-> - `result-of-typed-eq` -- recursive `.eq?` over `Result[Vec[int] cstr]`; needs
->   the Vec/Result native-shim reconciliation (**W1b**), not an isolated fix.
+> **Update 3 (W1b): `result-of-typed-eq` FIXED** -- recovered when `result.tur`
+> joined the prelude (dual-rep Result readers + `native_result_eq` +
+> `EX_GET_FIELD` carrier-box path). Now on the allowlist.
+>
+> **3 remain, each deep and overlapping another workstream:**
 > - `range-bound-show-ord` -- `bound-fmt` (stdlib inline-C) is
 >   `if (kind==1) snprintf("[...") else snprintf("(...")`; `ic_exec_snprintf_fmt`
 >   takes the *first* snprintf always, so Exclusive renders `[7` not `(7`. This

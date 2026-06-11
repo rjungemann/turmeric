@@ -809,6 +809,16 @@ rt-return-dispatch-param
 # TI8.b/W4 (cont.): native_extern_puts added so (extern-c puts ...) prints
 # under --interpret like the other known libc shims (printf/strlen/...).
 extern-c-spaced-typeann
+
+# TI8.b/W1b: result.tur joined the prelude (dual-rep Result readers +
+# native_result_eq + EX_GET_FIELD carrier-box path).  These Result/typed
+# fixtures now evaluate under tur --interpret; result-of-typed-eq was also a
+# W4 pure-turi silent miscompile, now fixed by the same work.
+result-of-typed-eq
+result-typed-basic
+typed-slots/cs4-stdlib-helpers
+typed-slots/stdlib-container-layout
+typed/result-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.

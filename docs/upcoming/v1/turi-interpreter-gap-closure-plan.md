@@ -161,44 +161,45 @@ layout -- which regressed `coerce-carrier-to-struct` /
 comes from the loaded `option.tur`; `vec-get`/`vec-set!`/`vec-free` stubs are
 dropped (vec.tur owns them).
 
-### W1b -- Reconcile the native-shim layer (NOT a module-load task) -- **groundwork laid; 2 blockers pinned**
+### W1b -- Reconcile the native-shim layer -- **Result LANDED (result.tur in the prelude)**
 
 > The naive plan was "fix the layouts, then add result/map/set/hamt to the
-> prelude." A spike on 2026-06-11 proved that is a **dead end as stated** -- the
-> real task is a representation-unification design problem. Findings below so
-> the next attempt is not mis-scoped.
+> prelude." It is really a per-type representation-unification problem. For
+> **Result** that unification is now done and `result.tur` is preloaded; the
+> same three-piece pattern applies to map/set/hamt next.
 
-**Progress (Result, the suggested first target).** The dual-representation
-*reader* groundwork is landed: `turi_struct_field` (eval.c/eval.h) plus the
-`result_field`/`result_field_int` helpers make `native_ok_pred`/`err_pred`/
-`ok_val`/`err_val` accept **both** a make-struct `TuriStruct` (fields
-`[is_ok, ok_val, err_val]`) and the native `int64[3]` box.  Verified: with
-`result.tur` temporarily preloaded, `(ok-val (make-struct Result true 42 0))`
-correctly returned 42 (the reader unification works), and the panic fixtures
-still passed.  The helpers are behaviour-preserving while `result.tur` stays out
-(a Result is always the box, so the struct branch never fires).
+**Result -- done.** Three pieces unified the int64-carrier-box and the
+make-struct `TuriStruct` representations so `result.tur`'s typed, field-access
+operations run under `--interpret`:
 
-**Blocker 2 -- `result-eq?` -- FIXED.** `native_result_eq` (main.c) now invokes
-the two `^fat` comparison closures via `turi_call` and reads both Results
-dual-rep, replacing the inline-C `result-eq?` `try_exec_simple_inline_c` could
-not run. Registered in `wk_register_stdlib_natives`. **Validated**: with
-`result.tur` temporarily preloaded, `typed/result-basic` passes 11/11 (the full
-Result surface -- `ok`/`err`/`ok?`/`err?`/`ok-val`/`err-val`/`result-map`/
-`result-eq?` plus `make-struct Result` -- works under `--interpret`). The native
-is inert today (registered, but `result-eq?` is only reachable once `result.tur`
-is loaded), so it carries no behaviour change while result.tur stays out.
+1. **Dual-rep readers** (`turi_struct_field` in eval.c/eval.h; `result_field`/
+   `result_field_int` + `native_ok_pred`/`err_pred`/`ok_val`/`err_val` in
+   main.c) accept both a make-struct `TuriStruct` (fields
+   `[is_ok, ok_val, err_val]`) and the native `int64[3]` box.
+2. **`native_result_eq`** invokes `result-eq?`'s two `^fat` comparison closures
+   via `turi_call` (the inline-C `try_exec_simple_inline_c` could not run).
+3. **`EX_GET_FIELD` carrier-box path** (eval.c): a struct that flowed via the
+   int64 carrier ABI (e.g. a Result that was `:int` and then
+   `(:: carrier (Result A B))`) reaches a field access as a `TURI_INT` pointer
+   to an `int64[n]` box; field access now reads word `idx` from the box, tagged
+   by the field's static type, instead of erroring "field access on non-struct".
+   This was the last gate -- it is what makes `result.tur`'s `ok-val`/`err-val`
+   accessors work on the box, not just on `make-struct` TuriStructs.
 
-**Blocker 1 -- `(:: carrier (Result A B))` ascription -- REMAINS (the last gate).**
-With `result.tur` preloaded, `Result` is a concrete struct, and the
-carrier->struct ascription in the allowlisted `typed-slots/coerce-carrier-to-
-struct` fails. Narrowed: it is an **elaboration error** (cmd_eval swallows it as
-"elaboration error"), not a runtime one -- `(:: int-carrier (Result int int))`
-does not elaborate cleanly once `Result` is concrete (without `result.tur`,
-`Result` is unresolved and the ascription is lenient, which is why coerce passes
-today). The compiled path bridges the int64 carrier to the struct (KB-004); the
-interpreter elaboration needs the equivalent. **This is the only thing left
-before `result.tur` can join the prelude** -- both readers (dual-rep) and
-`result-eq?` (native) are done, so it is a one-blocker change now.
+`result.tur` is now in the `cmd_eval` prelude (the `ok?`/`err?` stubs dropped,
+since it defines them). **Recovered 5 fixtures** -- `typed/result-basic`,
+`result-typed-basic`, `result-of-typed-eq` (also a W4 pure-turi silent
+miscompile, fixed by this), `typed-slots/cs4-stdlib-helpers`,
+`typed-slots/stdlib-container-layout` -- added to the allowlist (harness 919 ->
+**924**, 0 failed; compiled 1573/0; zero regressions, incl. the allowlisted
+`coerce-carrier-to-struct` which now passes via the carrier path).
+
+**Next (map/set/hamt).** Same pattern, harder: their values are HAMT-backed
+(`set.tur` is `(defstruct Set [A] (hamt :ptr<void>))`) and several natives
+(`native_set_count`) still assume the `#set{}` literal `int64[2]` layout -- a
+dual representation with no runtime tag (see
+[turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md)).
+Unify each type's value representation, then preload the module.
 
 **Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
 prelude (with the `ok?`/`err?` stubs dropped) **regressed** `coerce-carrier-to-

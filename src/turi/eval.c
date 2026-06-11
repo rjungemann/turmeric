@@ -3513,9 +3513,30 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_GET_FIELD: {
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
         if (turi_is_error(sv) || env->returning || env->throwing) return sv;
+        uint32_t idx = e->as.get_field_.field_idx;
+        /* W1b: a struct can reach a field access via the int64 carrier ABI
+         * rather than as a TuriStruct -- e.g. a Result that flowed as :int and
+         * was ascribed back to (Result A B) with `(:: carrier ...)`.  The
+         * carrier is a pointer to an int64[n] box laid out one word per field
+         * (this is how native ok/err/result-map build a Result), so read word
+         * idx and tag it by the field's static type.  This is what lets
+         * result.tur's field-access accessors (ok-val/err-val/...) work on the
+         * native box, not just on make-struct TuriStructs. */
+        if (sv.tag == TURI_INT) {
+            if (sv.as_int == 0)
+                return turi_error("eval: field access on null carrier");
+            int64_t w = ((int64_t *)(intptr_t)sv.as_int)[idx];
+            switch (e->type.kind) {
+            case TY_BOOL:  return turi_bool(w != 0);
+            case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: {
+                /* carrier stores the raw bits of the field */
+                double d; memcpy(&d, &w, sizeof(d)); return turi_float(d);
+            }
+            default: return turi_int(w);
+            }
+        }
         if (sv.tag != TURI_STRUCT)
             return turi_errorf("eval: field access on non-struct (tag %d)", sv.tag);
-        uint32_t idx = e->as.get_field_.field_idx;
         if (idx >= sv.as_struct->n_fields)
             return turi_errorf("eval: field index %u out of bounds (%u fields)",
                                idx, sv.as_struct->n_fields);

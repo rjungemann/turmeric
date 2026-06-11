@@ -4872,19 +4872,12 @@ static int cmd_eval(const char *path, bool use_color,
             "(defn run-ring [n :int m :int] :nil nil)\n"
             "(defn run-nbody [n :int steps :int] :nil nil)\n"
             "(defn run-raytracer [w :int h :int] :int 0)\n"
-            /* Result/Option predicate signatures the elaborator needs so the
-             * ok?/err?/some?/none? natives type as :bool (not :int, which then
-             * trips the strict "if condition must be bool" check).  The native
-             * shims provide the runtime behaviour.  TI8.b/W1: some? is dropped
-             * here because option.tur (preloaded below) defines it -- a stub
-             * would collide.  ok?/err? keep their stubs because result.tur is
-             * deliberately NOT preloaded (its native shims own the Result box;
-             * the W1b dual-rep readers below let make-struct Result coexist, but
-             * preloading result.tur regressed the carrier->struct ascription in
-             * coerce-carrier-to-struct, so it stays out -- see the gap plan).
-             * none? has no module defn, so its stub stays too. */
-            "(defn ok? [r :int] :bool false)\n"
-            "(defn err? [r :int] :bool false)\n"
+            /* none? predicate signature the elaborator needs so the native
+             * types as :bool (not :int, which trips the strict "if condition
+             * must be bool" check).  TI8.b/W1b: ok?/err?/some? are dropped here
+             * because result.tur / option.tur (both preloaded below) define them
+             * -- a stub would collide with the auto-loaded module defn.  none?
+             * has no module defn, so its stub stays. */
             "(defn none? [r :int] :bool false)\n"
         );
         (void)sv;
@@ -4907,30 +4900,29 @@ static int cmd_eval(const char *path, bool use_color,
      * execute.  Reader-backed modules (json/schema/sym) follow the same -X gates
      * as the compiled path. */
     {
-        /* W1 conflict-free subset.  Excluded on purpose:
+        /* W1/W1b conflict-free subset.  result.tur joined the prelude (W1b)
+         * once three pieces landed: the dual-rep Result readers
+         * (native_ok_val/...), native_result_eq (closure-caller), and the
+         * EX_GET_FIELD carrier-box path in eval.c (so result.tur's field-access
+         * accessors work on a Result that flowed as the :int carrier, e.g.
+         * `(:: carrier (Result A B))`).  Still excluded on purpose:
          *   contract.tur  -- its tur-contract-check inline-C conflicts with the
          *                    :pre/:post contract lowering (wk_eval_fixture skips
          *                    it for the same reason); loading it silently broke
          *                    contract-pre/post/type.
-         *   hamt/map/mutmap/set/result -- their interpreter native shims
-         *                    (native_set_count, native_ok/ok-val/result-map, the
-         *                    hamt invalidation guard, ...) implement a different
-         *                    in-memory layout than the real modules.  Loading the
-         *                    module makes the elaborator bind to the module defn
-         *                    while the runtime native reads the other layout,
-         *                    which regressed coerce-carrier-to-struct /
-         *                    hamt-transient-invalidated and heap-overflowed
-         *                    native_set_count.  Reconciling the native shim layer
-         *                    with these modules is its own follow-up (see the
-         *                    gap-closure plan); until then the native-only path
-         *                    for Result/Map/Set/Hamt stays. */
+         *   hamt/map/mutmap/set -- their interpreter native shims
+         *                    (native_set_count, the hamt invalidation guard, ...)
+         *                    implement a different in-memory layout than the real
+         *                    modules, regressing hamt-transient-invalidated and
+         *                    heap-overflowing native_set_count.  Same per-type
+         *                    reconciliation as result.tur is needed (gap plan). */
         static const char *prelude[] = {
             "safe.tur",
             "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
             "typeclass-hash.tur", "typeclass-applicative.tur",
             "typeclass-alternative.tur", "typeclass-monad.tur",
             "typeclass-monaderror.tur", "typeclass-bifunctor.tur",
-            "vec.tur", "slice.tur", "option.tur",
+            "vec.tur", "slice.tur", "option.tur", "result.tur",
             "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
             NULL
         };
@@ -5532,11 +5524,9 @@ static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
 /* W1b: a Result reaches these shims either as a native int64[3] box
  * {is_ok, ok_val, err_val} (from native_ok/err) or as a make-struct TuriStruct
  * with the same field order (from `(make-struct Result ...)`).  These helpers
- * read field `idx` from whichever representation so the two coexist -- the
- * groundwork for preloading result.tur once the remaining blockers (the
- * `:: carrier (Result A B)` ascription and a closure-calling result-eq? native)
- * are handled.  Behaviour-preserving today: without result.tur a Result is
- * always the int64 box, so the struct branch never fires. */
+ * read field `idx` from whichever representation so the two coexist -- one of
+ * the three pieces (with native_result_eq and the EX_GET_FIELD carrier path)
+ * that let result.tur join the prelude. */
 static TuriValue result_field(TuriValue r, int idx) {
     bool found = false;
     TuriValue f = turi_struct_field(r, (uint32_t)idx, &found);
