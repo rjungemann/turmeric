@@ -498,33 +498,58 @@ Cross-link from `docs/guides/delimited-control-operators-guide.md`.
 
 ---
 
-## Phase TI4 -- STM
+## Phase TI4 -- STM -- **LANDED (interpreter)**
 
-`EX_STM`, `EX_ATOMICALLY`, `EX_RETRY`, and the `EX_TVAR_*` family.
+`EX_STM`, `EX_ATOMICALLY`, `EX_RETRY`, `EX_CHECK`, `EX_OR_ELSE`, and the
+`EX_TVAR_*` family are now handled in `src/turi/eval.c`.
 
-### Implementation
+### Implementation (shipped)
 
-The interpreter is single-threaded, so the STM semantics collapse to
-a transaction-log model:
+The interpreter is single-threaded, so STM collapses to a write-log
+transaction model (no real concurrency, matching the plan):
 
-- A `TVar` is a heap-allocated `{ id; value; version }`.
-- `EX_ATOMICALLY` opens a fresh log, runs the body. On `commit`, walks
-  the log and bumps versions; on `EX_RETRY`, discards the log and runs
-  the body again (or yields control if combined with channels --
-  defer that complexity for now).
-- `EX_OR_ELSE` becomes meaningful here (see TI1.6): try the first
-  branch; if it retries, run the second.
-- `EX_TVAR_CAS`: compare the log's recorded version to the live one;
-  fail the transaction if mismatched.
+- A `TVar` is a heap cell `{ value; version }`. Values are int64 boxed
+  as `ptr<void>` (the compiled ABI stores `(void*)(intptr_t)init`),
+  represented as `TURI_INT`.
+- `EX_ATOMICALLY` (`eval_atomically`) runs the `EX_STM` body against a
+  fresh write-log transaction (thread-local `g_stm_tx`). Reads see
+  buffered writes (read-your-writes); on normal completion the log is
+  committed (writes applied, versions bumped). With no concurrent
+  writer, read-set validation always succeeds, so commit never fails.
+- `EX_TVAR_NEW`/`READ`/`WRITE`/`SWAP`/`CAS`/`MODIFY` operate on the
+  active transaction's write log. `cas` returns `bool`; `swap`/`modify`
+  return the old value.
+- `EX_CHECK`/`EX_RETRY` request a retry. A serial retry can never make
+  progress (nothing else mutates the TVars), so an unguarded retry that
+  reaches `atomically` errors out instead of hanging (the compiled path
+  blocks on a condvar forever). `EX_OR_ELSE` clears a retry from stm1
+  and runs stm2 in the same transaction, so well-formed `or-else` never
+  reaches that check.
 
-A single-threaded STM is functionally complete for testing; the
-multi-threaded story stays in the compiled path.
+Verified end-to-end under `tur --interpret` via the **`tur_eval_stm`**
+ctest target (`tests/turi/eval-stm.sh` + `eval-stm.tur`): tvar new/
+write/read/swap/cas, atomically/stm, check, and or-else (both the
+retry-fallback and the success-no-fallback paths).
 
-### Tests
+### Discovered: the compiled path is broken for cas/swap/modify
 
-`tests/fixtures/stm-basic/`, `stm-or-else/`, `stm-retry/`,
-`stm-tvar-cas/`. Most already exist on the compiled side and just
-need to enter the allowlist.
+Authoring the fixture surfaced a compiled-side bug:
+`tvar/cas` and `tvar/swap` **fail to link** (`tur build`/`tur run`
+emit calls to `tur_tvar_cas`/`tur_tvar_swap` that the emitted runtime
+never defines), and `tvar/modify` codegen is a **no-op stub**. So the
+interpreter is currently *more complete* than the compiled path for
+these three ops. Filed:
+[docs/reported/stm-tvar-cas-swap-modify-compiled-path-broken.md](../../reported/stm-tvar-cas-swap-modify-compiled-path-broken.md).
+
+### Tests / harness note
+
+The `tur run`-based harnesses cannot exercise this work (the
+harness-compiles blocker, and cas/swap don't link), so coverage lives
+in the dedicated `tur_eval_stm` ctest target rather than the
+`run-turi.sh` allowlist. When the harness is flipped to true
+interpretation (TI8), STM fixtures can move onto the allowlist; the
+broken compiled cas/swap/modify must be fixed first (see report) before
+they can be cross-checked on both paths.
 
 ### Doc
 
