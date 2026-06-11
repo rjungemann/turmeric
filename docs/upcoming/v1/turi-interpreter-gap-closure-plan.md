@@ -194,12 +194,40 @@ miscompile, fixed by this), `typed-slots/cs4-stdlib-helpers`,
 **924**, 0 failed; compiled 1573/0; zero regressions, incl. the allowlisted
 `coerce-carrier-to-struct` which now passes via the carrier path).
 
-**Next (map/set/hamt).** Same pattern, harder: their values are HAMT-backed
-(`set.tur` is `(defstruct Set [A] (hamt :ptr<void>))`) and several natives
-(`native_set_count`) still assume the `#set{}` literal `int64[2]` layout -- a
-dual representation with no runtime tag (see
-[turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md)).
-Unify each type's value representation, then preload the module.
+**Next: map/set/hamt -- the Result pattern does NOT directly transfer (spike 2026-06-11).**
+Loading `hamt.tur`/`map.tur`/`set.tur` into the prelude does **not** regress the
+allowlist (924/0), and the EX_GET_FIELD carrier path + `native_tur_hamt_*`
+(which wrap the real runtime HAMT) are in place -- but the target fixtures still
+do not work, for three reasons that make this materially harder than Result:
+
+1. **~18 missing native ops.** `typed/map-basic` (`map-new`/`map-assoc`/
+   `map-get`/`map-has?`/`map-count`/`map-free`/`map-dissoc`/`map-merge`) and
+   `typed/set-basic` (`set-new`/`set-add`/`set-count`/`set-member?`/`set-free`/
+   `set-remove`/`set-union`/`set-intersect`/`set-diff`/`set-eq?`) are inline-C
+   wrappers around `tur_hamt_*` with no native overrides, so they hit
+   "inline-C not supported" (map) or, worse, **heap-overflow** (`set-count` ->
+   `native_set_count`, which still reads the `#set{}` `int64[2]` layout off a
+   `{void* hamt}` set -- the documented bug).
+2. **C-callback eq/hash mismatch (the real blocker).** The content-keyed HAMT
+   ops (`tur_hamt_set_eq_o`/...) take the key-equality and hash as **C function
+   pointers**. A native `map-assoc` receives the interpreter's `keyeq` as a
+   *turi closure*, which cannot be handed to the runtime HAMT as a C callback.
+   For `int` keys it would "work by luck" until a hash collision invokes the
+   bogus callback (a latent crash -- "works by luck" is a bug, CLAUDE.md). A
+   correct fix needs either a turi-closure-aware HAMT path or natives that
+   re-implement the collision/eq logic in C over interpreter values.
+3. **Literal-vs-module representation, no runtime tag.** `#set{}`/`#map{}`
+   lower to one layout (`EX_SET_LIT` -> `int64[2]`) and `set.tur`/`map.tur` to
+   another (`{void* hamt}`), routed through the same `set-count`/`map-count`
+   natives with no way to tell them apart. Unifying requires changing the
+   literal lowering too.
+
+So map/set/hamt is its own focused sub-project, not a "land it now" change:
+unify the value representation (route `#set{}`/`#map{}` through the HAMT path),
+write the ~18 natives over `tur_hamt_*`, and resolve the C-callback eq/hash
+(turi-closure-aware HAMT). hamt.tur itself (over the existing `native_tur_hamt_*`)
+is the most tractable starting point. Tracked here + in
+[turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md).
 
 **Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
 prelude (with the `ok?`/`err?` stubs dropped) **regressed** `coerce-carrier-to-
