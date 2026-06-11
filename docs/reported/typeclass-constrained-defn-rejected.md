@@ -3,43 +3,51 @@ title: Typeclass-constraint syntax `[W] [(HasX W)] [w : W]` on defn is rejected
 category: Reported
 severity: Blocks typeclass-bounded polymorphism (the Has<Component> system pattern)
 discovered: 2026-06-11, executing ECS prereq plan E2 (HasComponent classes)
-partial-resolution: 2026-06-11. Item 2 (typed-method-param SEGV in
-  `elab_method_call`) is fixed with a defensive null-def check at
-  `src/compiler/elab_typeclasses.c:3229`. The compiler no longer aborts on
-  the shape; it emits a clean "no typeclass method found" diagnostic
-  instead. Item 1 (constraint-list syntax) is fixed: the Haskell-style
-  `(defn name [TyVars] [(Class1 V) (Class2 V) ...] [params] :ret body)`
-  shape now parses and elaborates, registers constraints, and dispatches
-  correctly through method calls -- end-to-end working when the carrier
-  doesn't trip item 3. Item 3 (carrier-int dispatch on struct receivers)
-  is still open and still blocks polymorphic wrappers over by-value struct
-  worlds. The monomorphic call-site path is shipped via
-  `defcomponent-class` + `defcomponent-class-instance`.
+resolution: 2026-06-11. All three items now fixed.
+  - Item 1: defn parser accepts the
+    `(defn name [TyVars] [(Class V) ...] [params] :ret body)` shape.
+  - Item 2: defensive null-def check in `elab_method_call` stops the SEGV.
+  - Item 3: `emit_abi_fn_skip_generic` now skips the carrier body of a
+    constrained polymorphic wrapper whose specialization spec has a
+    TY_STRUCT arg, eliminating the C-level type mismatch the carrier
+    body was emitting. Specialization clones already covered the
+    actual call sites correctly; the carrier body was dead code.
+  The ECS plan's spec'd "typeclass-bounded systems" surface now works
+  end-to-end over by-value struct worlds. Regressions:
+  `tests/fixtures/defn-class-constraint-list-syntax/`,
+  `tests/fixtures/errors/typeclass-typed-method-param-null-def-safe/`,
+  `tests/fixtures/typeclass-poly-wrapper-struct-receiver/`,
+  `tests/has-component-polymorphic.tur` (spice).
 ---
 
 # Typeclass-constraint syntax `[W] [(HasX W)] [w : W]` on defn is rejected
 
-> **Status update 2026-06-11**: items 1 and 2 fixed. Only item 3
-> (carrier-int dispatch on by-value struct receivers) remains open.
+> **Status update 2026-06-11**: items 1, 2, AND 3 are all fixed.
+> The ECS plan's spec'd "typeclass-bounded systems" surface now works
+> end-to-end over by-value struct worlds.
 >
-> Item 1 closure: the parser now accepts the optional
-> constraint-list slot when the user spells
+> Item 3 closure: the C compile failure for a polymorphic wrapper
+> over a struct receiver was coming from the dead-code carrier-form
+> body of the wrapper. The carrier-form body emitted a direct call
+> to the resolved instance method (which expects the struct by value)
+> passing the int64_t carrier arg -- a C type error. The per-
+> instantiation specialization clone already emitted the call with
+> the right struct type at every actual call site, so the carrier
+> body was unused.
+>
+> Fix: extend `emit_abi_fn_skip_generic` in `src/compiler/emit_module.c`
+> to also skip the carrier body of a constrained polymorphic wrapper
+> whose specialization spec has a `TY_STRUCT` arg. The "no carrier
+> call site" guard still applies, so bindings still reached via the
+> carrier ABI keep their body.
+>
+> Item 1 closure (earlier this session): the parser now accepts the
+> optional constraint-list slot when the user spells
 > `(defn name [TypeVars] [(Class1 V) ...] [params] :ret body)`.
-> Each `(Class V)` form is looked up, registered as a `TypeConstraint`,
-> and threaded through to the dispatcher. Verified end-to-end with int-
-> carried opaque receivers (`tests/fixtures/defn-class-constraint-list-syntax/`):
-> single-constraint and multi-constraint defns both parse, elaborate,
-> dispatch, and return correct results.
 >
 > Item 2 closure (earlier this session): defensive null-def check in
 > `elab_method_call` stops the SEGV when a typed method param
 > `[w : W]` produces a `TY_STRUCT` receiver with a NULL def.
->
-> Item 3 open: a polymorphic wrapper that calls a method on a by-value
-> struct receiver still fails at C compile with
-> "passing int64_t to parameter of incompatible type GameWorld" --
-> the carrier-int dispatcher doesn't honour the per-instantiation
-> struct ABI fix.
 
 ## Summary
 

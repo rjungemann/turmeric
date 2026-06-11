@@ -1,0 +1,37 @@
+;; Regression for gap H item 3: a polymorphic wrapper over a typeclass
+;; method, applied to a by-value struct receiver, used to fail at C
+;; compile with "passing int64_t to parameter of incompatible type
+;; <StructName>". The carrier-form body of the wrapper was emitting a
+;; direct call to the resolved instance method (which expects the
+;; struct by value) passing the int64_t carrier arg.
+;;
+;; Per-instantiation specialization already correctly emits a clone
+;; with the struct typed properly, and call sites use the clone. The
+;; carrier-form body is dead code -- skipping it removes the C-level
+;; type mismatch.
+;;
+;; The fix in src/compiler/emit_module.c::emit_abi_fn_skip_generic
+;; detects class-constrained functions whose specialization spec has a
+;; TY_STRUCT arg, and skips the carrier body for them (consistent with
+;; the existing "no carrier call site" guard so polymorphic-wrapper
+;; bindings only ever reached via specs get their carrier removed,
+;; while bindings still reached via the carrier ABI keep their body).
+;;
+;; See docs/reported/typeclass-constrained-defn-rejected.md.
+;;
+;; Expected output:
+;;   42  -- polymorphic wrapper over by-value GameWorld dispatches to
+;;          HasPos[GameWorld] and returns .Pos
+
+(defclass HasPos [W] (Pos-storage-of [^borrow w] : int))
+(defstruct GameWorld [Pos : int])
+(definstance HasPos [GameWorld]
+  (Pos-storage-of [w] (.Pos w)))
+
+(defn use-pos [W] [(HasPos W)] [^borrow w : W] : int
+  (Pos-storage-of w))
+
+(defn main [] : int
+  (let [w (make-struct GameWorld 42)]
+    (println (use-pos w))
+    0))

@@ -1654,9 +1654,30 @@ static bool emit_abi_has_carrier_call(const EmitCtx *ctx, const Binding *binding
  * otherwise keep suppressing it (the function is either unused here or fully
  * served by specialization clones, and its body may not be carrier-safe). */
 static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
-    if (!emit_abi_fn_is_generic_unsafe(e)) return false;
     if (e->kind != EX_FN_DEF || !e->as.fn_def_.fn) return false;
-    return !emit_abi_has_carrier_call(ctx, e->as.fn_def_.fn->binding);
+    FnDef *fd = e->as.fn_def_.fn;
+    /* Gap H item 3: when a class-constrained polymorphic wrapper has been
+     * specialized to an instance with a by-value struct carrier, the
+     * carrier-form body would dispatch through `__inst_X_Y_<StructName>`
+     * passing the int64_t carrier arg -- a C-level type error
+     * (incompatible: 'int64_t' -> 'struct Foo'). Specialization call sites
+     * route through the per-instance clone instead, so the carrier body is
+     * dead code; skip emitting it (and its forward decl). The existing
+     * "no carrier call" check still applies: if any caller invokes the
+     * binding through the carrier ABI, we keep the body. */
+    if (fd->constraints.n_constraints > 0) {
+        for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+            const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+            if (spec->binding != fd->binding) continue;
+            for (uint8_t j = 0; j < spec->n_args; j++) {
+                if (spec->arg_types[j].kind == TY_STRUCT) {
+                    return !emit_abi_has_carrier_call(ctx, fd->binding);
+                }
+            }
+        }
+    }
+    if (!emit_abi_fn_is_generic_unsafe(e)) return false;
+    return !emit_abi_has_carrier_call(ctx, fd->binding);
 }
 
 /* J1: Scan all items for ABI-specialization opportunities. */
