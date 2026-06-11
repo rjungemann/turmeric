@@ -1,0 +1,14 @@
+;; TI1.4 (turi-parity): in-place struct field write under the interpreter.
+;;
+;; (set! (.field s) v) mutates the struct slot directly.  The struct must be
+;; bound with ^mut.  A later read through (.field s) observes the new value.
+
+(defstruct Point [x : int y : int])
+
+(defn main [] : int
+  (let [^mut p (make-struct Point 3 7)]
+    (set! (.x p) 99)
+    (set! (.y p) (+ (.y p) 1))
+    (println (.x p))
+    (println (.y p))
+    0))

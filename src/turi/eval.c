@@ -2591,6 +2591,51 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return result;
     }
 
+    /* --- Letrec (mutually-recursive bindings) ---------------------------- */
+    /* EX_LETREC reuses the `as.let_` payload (see elab_forms.c).  Unlike
+     * EX_LET, every binding is evaluated in a single shared frame in which all
+     * names are pre-declared, so mutually-recursive closures can resolve each
+     * other.  Closures capture the frame by pointer and look siblings up by
+     * name at call time, so updating each binding in place is sufficient. */
+    case EX_LETREC: {
+        EvalFrame *new_frame = eval_frame_new(frame);
+        /* Pass 1: pre-bind every name to nil so RHS closures see each other. */
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name,
+                       turi_nil());
+        /* Pass 2: evaluate each RHS in the shared frame, updating in place.
+         *
+         * A recursive/mutually-recursive fn literal is hoisted by the
+         * elaborator to a top-level static fn: its init resolves (via EX_VAR)
+         * to a closure whose `captured` frame is NULL, registered globally
+         * only under a mangled name.  The body's recursive reference, however,
+         * resolves to the *lexical* letrec binding name (e.g. "fact"), which
+         * lives only in `new_frame`.  To let that name resolve at call time we
+         * bind a shallow copy of the closure whose captured frame is
+         * `new_frame`, so every sibling becomes reachable by name. */
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            TuriValue v = eval_expr(env, new_frame, e->as.let_.bindings[i].init);
+            if (turi_is_error(v)) { eval_frame_free(new_frame); return v; }
+            if (env->throwing)   { eval_frame_free(new_frame); return env->throw_value; }
+            if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
+            if (v.tag == TURI_CLOSURE && v.as_closure &&
+                v.as_closure->captured == NULL) {
+                TuriClosure *copy = (TuriClosure *)malloc(sizeof(TuriClosure));
+                *copy = *v.as_closure;
+                copy->captured = new_frame;
+                v = turi_closure(copy);
+            }
+            eval_frame_update(new_frame,
+                              e->as.let_.bindings[i].binding->name->name, v);
+        }
+        DeferItem *letrec_defer_mark = (DeferItem *)env->defer_stack;
+        TuriValue result = eval_expr(env, new_frame, e->as.let_.body);
+        if (!env->returning && !env->throwing)
+            fire_defers_to_mark(env, letrec_defer_mark, NULL);
+        eval_frame_free(new_frame);
+        return result;
+    }
+
     /* --- If -------------------------------------------------------------- */
     case EX_IF: {
         TuriValue cond = eval_expr(env, frame, e->as.if_.cond);
@@ -2862,6 +2907,32 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_errorf("eval: field index %u out of bounds (%u fields)",
                                idx, sv.as_struct->n_fields);
         return sv.as_struct->fields[idx];
+    }
+
+    /* --- Phase DS3: (set! (.field s) v) — struct field write ------------- */
+    case EX_SET_FIELD: {
+        TuriValue recv = eval_expr(env, frame, e->as.set_field_.receiver);
+        if (turi_is_error(recv) || env->returning || env->throwing) return recv;
+        /* Resolve the underlying struct.  A mutable borrow is represented as a
+         * TURI_REF to the binding holding the struct; an rc<Struct> stores the
+         * struct in the __rc payload (field[1]). */
+        if (recv.tag == TURI_REF && recv.as_ref)
+            recv = ((EvalBinding *)recv.as_ref)->value;
+        if (recv.tag != TURI_STRUCT || !recv.as_struct)
+            return turi_errorf("eval: set-field on non-struct (tag %d)", recv.tag);
+        TuriStruct *s = recv.as_struct;
+        if (e->as.set_field_.receiver_is_rc &&
+            s->name && strcmp(s->name, "__rc") == 0 && s->n_fields >= 2 &&
+            s->fields[1].tag == TURI_STRUCT && s->fields[1].as_struct)
+            s = s->fields[1].as_struct;
+        uint32_t idx = e->as.set_field_.field_idx;
+        if (idx >= s->n_fields)
+            return turi_errorf("eval: set-field index %u out of bounds (%u fields)",
+                               idx, s->n_fields);
+        TuriValue v = eval_expr(env, frame, e->as.set_field_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        s->fields[idx] = v;
+        return turi_nil();
     }
 
     /* --- Phase S4: Defer ------------------------------------------------ */

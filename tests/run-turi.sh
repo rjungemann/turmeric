@@ -215,6 +215,13 @@ hkt-stdlib-result-ok-biased
 instance-head-hole-pair
 poly-closure-compose-float
 poly-closure-result-tyvar-float
+
+# TI1 (turi-parity-post-v1-plan, quick wins): expression kinds newly handled
+# by the interpreter.
+#   letrec-basic     -- EX_LETREC: self- and mutual-recursion (TI1.1)
+#   struct-set-field -- EX_SET_FIELD: in-place struct field write (TI1.4)
+letrec-basic
+struct-set-field
 "
 
 # Build an associative-set from the default list for O(1) lookup.
@@ -252,6 +259,17 @@ run_turi_fixture() {
     # Skip fixtures that explicitly require compiled execution.
     if [ -f "$dir/requires.compiled" ]; then
         printf 'SKIP %s (requires.compiled)\n' "$name"
+        return
+    fi
+
+    # Skip fixtures explicitly marked as not interpretable under turi
+    # (TI1 turi-parity-post-v1-plan): a feature the tree-walking interpreter
+    # deliberately does not implement (mirror of requires.compiled, but keyed
+    # on interpreter capability rather than codegen need).  When the harness
+    # flips from allowlist to denylist (TI8) this marker is what keeps such a
+    # fixture out of the turi run.
+    if [ -f "$dir/requires.tur-only" ]; then
+        printf 'SKIP %s (requires.tur-only)\n' "$name"
         return
     fi
 

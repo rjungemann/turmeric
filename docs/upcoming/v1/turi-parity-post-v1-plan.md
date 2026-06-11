@@ -246,19 +246,30 @@ truthfully.
 Each item below is a 30-200 line case arm in `src/turi/eval.c` plus a
 fixture.
 
-### TI1.1 `EX_LETREC`
+### TI1.1 `EX_LETREC` -- **LANDED**
 
 Mutually recursive bindings. The compiler emits a `letrec` form for
 groups of `defn`/`defmacro` that reference each other. The interpreter
 currently rejects them.
 
-**Implementation:** Two-pass. First pass binds each name to a
-sentinel `turi_nil()`; second pass evaluates each RHS into the live
-binding. Reuse the `EvalBinding` machinery from `EX_LET`. Capture all
-RHS closures over the same updated frame so they see each other.
+**Implementation (shipped):** Two-pass over the shared `as.let_` payload.
+Pass 1 pre-binds each name to `turi_nil()` in one new frame; pass 2
+evaluates each RHS in that frame and updates the binding in place. One
+wrinkle the plan did not anticipate: the elaborator **hoists** a
+recursive fn literal to a top-level static fn, so the binding's init
+resolves (via `EX_VAR`) to a closure with `captured == NULL` registered
+globally only under a mangled name, while the body's recursive reference
+resolves to the lexical letrec name. The interpreter therefore binds a
+shallow copy of any `captured == NULL` closure whose `captured` frame is
+the shared letrec frame, so every sibling is reachable by its lexical
+name at call time. See `src/turi/eval.c` `case EX_LETREC`.
 
-**Fixture:** `tests/fixtures/letrec-basic/` (already exists -- audit and
-add to the turi run).
+**Fixture:** `tests/fixtures/letrec-basic/` (created -- self + mutual
+recursion with an `expected.stdout`). The pre-existing `letrec-mutual`,
+`letrec-self-recursive`, `letrec-shadows-outer`, and
+`letrec-non-fn-no-self-ref` are codegen-snapshot fixtures (no
+`expected.stdout`); all four now also evaluate correctly under
+`tur --interpret`.
 
 ### TI1.2 `EX_SYM_LIT`
 
@@ -284,17 +295,20 @@ boxed as `TURI_INT` (matches the codegen ABI). Free at frame exit.
 **Fixtures:** `tests/fixtures/variadic-basic/`,
 `tests/fixtures/variadic-typed/`.
 
-### TI1.4 `EX_SET_FIELD`
+### TI1.4 `EX_SET_FIELD` -- **LANDED**
 
 In-place struct field update (`(set! (.foo s) v)`). Compiled path
 mutates the struct slot directly.
 
-**Implementation:** Find the field index in `TuriStruct->ty`, store the
-evaluated RHS into the matching slot. Reject if the field is declared
-read-only (compiler already emits a diagnostic; interpreter just
-trusts the elaboration).
+**Implementation (shipped):** Evaluate the receiver; deref a `TURI_REF`
+mutable borrow and unwrap an `__rc` payload (`field[1]`) when
+`receiver_is_rc`; store the evaluated RHS into `TuriStruct->fields[idx]`.
+The compiler already rejects writes to immutable bindings during
+elaboration, so the interpreter trusts the elaboration. See
+`src/turi/eval.c` `case EX_SET_FIELD`.
 
-**Fixture:** `tests/fixtures/struct-set-field/`.
+**Fixture:** `tests/fixtures/struct-set-field/` (created; verified equal
+under `tur run` and `tur --interpret`).
 
 ### TI1.5 `EX_HANDLER_LIT` + `EX_COMPOSE_HANDLERS`
 
@@ -335,8 +349,47 @@ lowers to a runtime check when `--no-contracts` is off (see
 
 - Add a `requires.tur-only` marker. Update `tests/run-turi.sh` to
   PASS-skip fixtures bearing it (mirror of `requires.compiled`).
-- After TI1 lands, sweep the existing 1,013 fixtures and add the
-  newly-passing ones to the allowlist. Target: ≥250 fixtures.
+  **DONE** -- `tests/run-turi.sh` now PASS-skips `requires.tur-only`
+  fixtures alongside `requires.compiled`.
+- After TI1 lands, sweep the existing fixtures and add the
+  newly-passing ones to the allowlist. Target: >=250 fixtures.
+  `letrec-basic` and `struct-set-field` added; broad sweep is **blocked**
+  on the harness-wiring bug below.
+
+### BLOCKER discovered during TI1 -- the harness does not interpret
+
+`tests/run-turi.sh` (and the fixture-running parts of
+`tests/run-flags.sh`) invoke `tur run <file>`, which **compiles and runs
+a native binary**, not the `turi` interpreter (`tur --interpret` /
+`tur eval --file`). The allowlist has therefore never exercised
+`src/turi/eval.c`: allowlisted fixtures pass via codegen. Running the
+current allowlist through the real interpreter surfaces ~31 hidden
+failures (including four fixtures the TI0 audit "verified" via
+`./build/tur run`). The TI1 interpreter work here was consequently
+verified directly with `tur --interpret`, not through the harness.
+
+Full write-up, repro, and the recommended (cascading) fix:
+[docs/reported/turi-harness-compiles-instead-of-interpreting.md](../../reported/turi-harness-compiles-instead-of-interpreting.md).
+The wiring flip belongs with the TI8 triage (it turns CI red until the
+~31 fixtures are fixed or carved out) and is intentionally **not**
+bundled into TI1.
+
+### TI1 items still open
+
+`EX_SYM_LIT`, `EX_CONS_LIST`, `EX_HANDLER_LIT`/`EX_COMPOSE_HANDLERS`,
+`EX_OR_ELSE`, and `EX_CHECK` remain unimplemented. They are less
+self-contained than the plan's "quick wins" framing implies:
+
+- The existing `sym-*` and `variadic-*` fixtures pair `EX_SYM_LIT` /
+  `EX_CONS_LIST` with **user inline-C** (`__tur_sym` field reads,
+  `__tur_cons_cell` walks), which is a permanent interpreter carve-out
+  (TI7). Landing these usefully requires native `sym=?`/`sym->str` and
+  `cons-head`/`cons-tail` overrides, not just the literal case arm.
+- `EX_OR_ELSE` and `EX_CHECK` are only meaningful inside an STM
+  transaction (TI4); the plan itself says to "pin the exact semantics
+  in a fixture before writing the case arm." Best done alongside TI4.
+- `EX_HANDLER_LIT`/`EX_COMPOSE_HANDLERS` overlap with the handler-record
+  work in TI6.
 
 ---
 
