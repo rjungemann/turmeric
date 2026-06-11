@@ -5604,6 +5604,23 @@ static TuriValue native_result_map(TuriEnv *env, TuriValue *a, uint32_t n, void 
     out[0] = 1; out[1] = res.as_int; out[2] = 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)out; return v;
 }
+/* W1b: result-eq? -- (result-eq? r1 r2 ok-cmp err-cmp).  result.tur's version is
+ * inline-C that fat-dispatches the two comparison closures, which the simple
+ * inline-C evaluator cannot run; this native invokes them via turi_call so
+ * typed/result-basic and friends work under --interpret.  Reads both Results
+ * dual-rep (make-struct TuriStruct or native box) via result_field. */
+static TuriValue native_result_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_bool(false);
+    int64_t a_ok = result_field_int(a[0], 0);
+    int64_t b_ok = result_field_int(a[1], 0);
+    if ((a_ok != 0) != (b_ok != 0)) return turi_bool(false);
+    int idx = a_ok ? 1 : 2;                /* compare ok-vals or err-vals */
+    TuriValue cmp = a_ok ? a[2] : a[3];    /* ok-cmp or err-cmp */
+    TuriValue cargs[2] = { result_field(a[0], idx), result_field(a[1], idx) };
+    TuriValue res = turi_call(env, cmp, cargs, 2);
+    return turi_bool(res.tag == TURI_BOOL ? res.as_bool : res.as_int != 0);
+}
 /* result-map-err: apply fn to err value, return new result */
 static TuriValue native_result_map_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -6482,6 +6499,7 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "ok-val-ptr",      native_ok_val_ptr,      NULL);
     turi_env_register_native(env, "err-val-ptr",     native_err_val_ptr,     NULL);
     turi_env_register_native(env, "result-map",      native_result_map,      NULL);
+    turi_env_register_native(env, "result-eq?",      native_result_eq,       NULL);
     turi_env_register_native(env, "result-map-err",  native_result_map_err,  NULL);
     turi_env_register_native(env, "result-flat-map", native_result_flat_map, NULL);
     turi_env_register_native(env, "result-or",       native_result_or,       NULL);

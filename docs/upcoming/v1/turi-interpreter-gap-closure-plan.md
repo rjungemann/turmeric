@@ -178,21 +178,27 @@ correctly returned 42 (the reader unification works), and the panic fixtures
 still passed.  The helpers are behaviour-preserving while `result.tur` stays out
 (a Result is always the box, so the struct branch never fires).
 
-**The two remaining blockers to preloading `result.tur`** (so it is *not* yet in
-the prelude -- preloading it regressed an allowlisted fixture):
+**Blocker 2 -- `result-eq?` -- FIXED.** `native_result_eq` (main.c) now invokes
+the two `^fat` comparison closures via `turi_call` and reads both Results
+dual-rep, replacing the inline-C `result-eq?` `try_exec_simple_inline_c` could
+not run. Registered in `wk_register_stdlib_natives`. **Validated**: with
+`result.tur` temporarily preloaded, `typed/result-basic` passes 11/11 (the full
+Result surface -- `ok`/`err`/`ok?`/`err?`/`ok-val`/`err-val`/`result-map`/
+`result-eq?` plus `make-struct Result` -- works under `--interpret`). The native
+is inert today (registered, but `result-eq?` is only reachable once `result.tur`
+is loaded), so it carries no behaviour change while result.tur stays out.
 
-1. **`(:: carrier (Result A B))` ascription.** With `result.tur` loaded,
-   `Result` is a concrete struct and the carrier->struct ascription in
-   `typed-slots/coerce-carrier-to-struct` errors under `--interpret` (silent
-   rc=1). The compiled path bridges the int64 carrier to the struct (KB-004);
-   the interpreter needs the equivalent at the ascription/conversion node.
-2. **`result-eq?` is a closure-calling inline-C native.** `result.tur`'s
-   `result-eq?` takes two `^fat` comparison closures; `try_exec_simple_inline_c`
-   cannot run it, so `typed/result-basic` still fails on it. It needs a real
-   `native_result_eq` that invokes the closures via `eval_apply`.
-
-Until both land, `result.tur` stays excluded; the dual-rep readers are the
-foundation that makes adding it a small change once they do.
+**Blocker 1 -- `(:: carrier (Result A B))` ascription -- REMAINS (the last gate).**
+With `result.tur` preloaded, `Result` is a concrete struct, and the
+carrier->struct ascription in the allowlisted `typed-slots/coerce-carrier-to-
+struct` fails. Narrowed: it is an **elaboration error** (cmd_eval swallows it as
+"elaboration error"), not a runtime one -- `(:: int-carrier (Result int int))`
+does not elaborate cleanly once `Result` is concrete (without `result.tur`,
+`Result` is unresolved and the ascription is lenient, which is why coerce passes
+today). The compiled path bridges the int64 carrier to the struct (KB-004); the
+interpreter elaboration needs the equivalent. **This is the only thing left
+before `result.tur` can join the prelude** -- both readers (dual-rep) and
+`result-eq?` (native) are done, so it is a one-blocker change now.
 
 **Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
 prelude (with the `ok?`/`err?` stubs dropped) **regressed** `coerce-carrier-to-
