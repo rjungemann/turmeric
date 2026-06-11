@@ -123,6 +123,128 @@
   ```)
 
 ;; ---------------------------------------------------------------------------
+;; Resource-reacquisition hooks (AI5).
+;;
+;; OS-handle-backed values (files, sockets, GPU contexts) cannot ride in an
+;; image -- they are STAG_PTR opaque and `TUR-E0018` rejects them at the
+;; serial-shift site. The application re-acquires them with *reload hooks*,
+;; and flushes/releases transient state before a save with *finalize hooks*.
+;;
+;; The registry lives in a single function's static storage so it is wholly
+;; self-contained (no file-scope C global, which the single-file backend
+;; cannot link). Hooks are plain `(fn [] int)` values stored as int64 fat
+;; handles and invoked via TUR_APPLY0.
+;;
+;; Because a compiled program runs only `main` (top-level forms do not
+;; execute), hooks cannot self-register at load time the way the plan's
+;; `(defimage-reload-hook name ...)` sketch implies. Instead, *define* a hook
+;; with a top-level `defn` (or the `defimage-reload-hook` sugar) and *install*
+;; it with `image/register-reload-hook!` at the very top of `main` -- a point
+;; that runs on BOTH cold and warm starts. This matters: a warm start skips
+;; `init`, so anything registered inside `init` would be missing on exactly the
+;; run that needs the reacquisition. Register before the with-image-cache call.
+;; ---------------------------------------------------------------------------
+
+;;; image/hook-registry -- backing store for reload/finalize hooks (internal).
+;;;
+;;; op 0: register a reload hook (arg = fat handle); returns the new count.
+;;; op 1: run all reload hooks in registration order; returns the last result.
+;;; op 2: register a finalize hook (arg = fat handle); returns the new count.
+;;; op 3: run all finalize hooks in registration order; returns the last result.
+(defn image/hook-registry [op : int arg : int] : int
+  ```c
+  static int64_t reloads[64]; static int rn = 0;
+  static int64_t finals[64];  static int fn_ = 0;
+  switch (op) {
+    case 0: if (rn < 64) reloads[rn++] = arg; return rn;
+    case 1: { int64_t last = 0; for (int i = 0; i < rn; i++) last = TUR_APPLY0(reloads[i]); return last; }
+    case 2: if (fn_ < 64) finals[fn_++] = arg; return fn_;
+    case 3: { int64_t last = 0; for (int i = 0; i < fn_; i++) last = TUR_APPLY0(finals[i]); return last; }
+    default: return -1;
+  }
+  ```)
+
+;;; image/register-reload-hook! -- install a hook run on warm start before resume.
+;;;
+;;; The hook is invoked after a valid image is selected and before the captured
+;;; continuation resumes user code, in registration order. Use it to re-open
+;;; files, re-bind sockets, or otherwise re-acquire OS handles that could not be
+;;; serialised. Register at the top of `main`, before the with-image-cache call,
+;;; so it is present on warm starts (which skip `init`).
+;;;
+;;; Parameters:
+;;;   f -- a zero-arg hook (fn [] int); the return value is ignored
+;;;
+;;; Returns:
+;;;   The number of reload hooks registered so far.
+;;;
+;;; Since: Phase AI (AI5.1)
+(defn image/register-reload-hook! [^fat f : (fn [] int)] : int
+  (image/hook-registry 0 f))
+
+;;; image/run-reload-hooks -- invoke every registered reload hook in order.
+;;;
+;;; Returns the last hook's result (0 if none are registered). Called for you by
+;;; the with-image-cache combinators on the warm path; call it directly only if
+;;; you drive load-image! yourself.
+;;;
+;;; Since: Phase AI (AI5.1)
+(defn image/run-reload-hooks [] : int
+  (image/hook-registry 1 0))
+
+;;; image/register-finalize-hook! -- install a hook run just before a save.
+;;;
+;;; The hook is invoked immediately before the image bytes are written, in
+;;; registration order. Use it to flush buffers or release transient state that
+;;; should not be captured. Register alongside the reload hooks at the top of
+;;; `main`.
+;;;
+;;; Parameters:
+;;;   f -- a zero-arg hook (fn [] int); the return value is ignored
+;;;
+;;; Returns:
+;;;   The number of finalize hooks registered so far.
+;;;
+;;; Since: Phase AI (AI5.3)
+(defn image/register-finalize-hook! [^fat f : (fn [] int)] : int
+  (image/hook-registry 2 f))
+
+;;; image/run-finalize-hooks -- invoke every registered finalize hook in order.
+;;;
+;;; Returns the last hook's result (0 if none are registered). Called for you by
+;;; the with-image-cache combinators and save-image! just before writing bytes.
+;;;
+;;; Since: Phase AI (AI5.3)
+(defn image/run-finalize-hooks [] : int
+  (image/hook-registry 3 0))
+
+;;; defimage-reload-hook -- define a named reload hook function.
+;;;
+;;; Sugar for `(defn name [] : int body)`: it pins the `[] : int` hook signature
+;;; and gives the hook a stable top-level name (required -- the hook is invoked
+;;; by name, never as an anonymous closure). It does NOT auto-register: install
+;;; the hook with `(image/register-reload-hook! name)` at the top of `main`.
+;;;
+;;; Example:
+;;;   (defimage-reload-hook reopen-log
+;;;     (do (reopen-the-log!) 0))
+;;;   ;; ... in main, before with-image-cache-after-init:
+;;;   (image/register-reload-hook! reopen-log)
+;;;
+;;; Since: Phase AI (AI5.1)
+(defmacro defimage-reload-hook [name body]
+  `(defn ~name [] : int ~body))
+
+;;; defimage-finalize-hook -- define a named finalize hook function.
+;;;
+;;; Sugar for `(defn name [] : int body)`, the save-side companion of
+;;; defimage-reload-hook. Install with `(image/register-finalize-hook! name)`.
+;;;
+;;; Since: Phase AI (AI5.3)
+(defmacro defimage-finalize-hook [name body]
+  `(defn ~name [] : int ~body))
+
+;; ---------------------------------------------------------------------------
 ;; File I/O at the continuation boundary. All pointer juggling lives in C so
 ;; the Turmeric surface stays in plain ints/handles. The 4-line CRC-32 loop is
 ;; inlined at each site (no nested helper function, which the compiled backend
@@ -258,7 +380,8 @@
   (serial-reset
     (serial-shift
       (fn [k : ptr<void>] : int
-        (let [stamp (image/build-stamp)
+        (let [_     (image/run-finalize-hooks)
+              stamp (image/build-stamp)
               ok    (image/save-cont-to-file! path k stamp)]
           (do
             (image/free-stamp stamp)
@@ -279,6 +402,7 @@
 ;;; Since: Phase AI
 (defn load-image! [path : cstr] : int
   (let [stamp (image/build-stamp)
+        _     (image/run-reload-hooks)
         r     (image/load-resume-file! path stamp 0)]
     (do
       (image/free-stamp stamp)
@@ -311,8 +435,9 @@
   `(let [stamp (image/build-stamp)
          ok    (image/loadable? ~path stamp)]
      (if (= ok 1)
-       ;; warm: trust the pre-checked image and resume, whatever it returns.
-       (let [warm (image/load-resume-file! ~path stamp 0)]
+       ;; warm: re-acquire resources, then resume the pre-checked image.
+       (let [_    (image/run-reload-hooks)
+             warm (image/load-resume-file! ~path stamp 0)]
          (do (image/free-stamp stamp) warm))
        (do
          (image/free-stamp stamp)
@@ -321,7 +446,8 @@
              (~init)
              (serial-shift
                (fn [k : ptr<void>] : int
-                 (let [s (image/build-stamp)]
+                 (let [_ (image/run-finalize-hooks)
+                       s (image/build-stamp)]
                    (do
                      (image/save-cont-to-file! ~path k s)
                      (image/free-stamp s)
@@ -341,7 +467,8 @@
   (let [stamp (image/build-stamp)
         ok    (image/loadable? path stamp)]
     (if (= ok 1)
-      (let [warm (image/load-resume-file! path stamp 0)]
+      (let [_    (image/run-reload-hooks)
+            warm (image/load-resume-file! path stamp 0)]
         (do (image/free-stamp stamp) warm))
       (do
         (image/free-stamp stamp)

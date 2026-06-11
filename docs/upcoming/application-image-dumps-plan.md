@@ -8,13 +8,20 @@
 > running executable -- the safety contract of AI4.1 without the linker
 > section), **AI6.3/AI6.4** (`tur image-info` / `tur image-verify`),
 > **AI7.1** (`tests/fixtures/image-roundtrip`), **AI8.1-AI8.3**
-> (`docs/guides/image-dumps-guide.md` + cross-links). **Still open:** AI3
-> (`defimage-global` + `TUR-W0706` lint), AI5 (reload/finalize hooks +
-> `stdlib/image_hooks.tur`), AI6.1/AI6.2 (`tur run --image` +
-> `--unsafe-image-skip-build-check`), AI4.1 linker-section stamp,
-> AI7.2-AI7.5 (globals/hook/error fixtures + perf benchmark). See the guide
-> for the design deltas (build-stamp method; named-continuation constraint on
-> the resumed tail).
+> (`docs/guides/image-dumps-guide.md` + cross-links), **AI5**
+> (reload/finalize hooks: `image/register-reload-hook!` /
+> `image/register-finalize-hook!` + `defimage-reload-hook` /
+> `defimage-finalize-hook` sugar, wired into `save-image!` / `load-image!` /
+> both `with-image-cache` combinators; `stdlib/image_hooks.tur` standard
+> hooks -- tracked-file table + stdio flush), **AI7.3**
+> (`tests/fixtures/image-reload-hook`, `tests/fixtures/image-hooks-tracked`).
+> **Still open:** AI3 (`defimage-global` + `TUR-W0706` lint),
+> AI6.1/AI6.2 (`tur run --image` + `--unsafe-image-skip-build-check`),
+> AI4.1 linker-section stamp, AI7.2/AI7.4/AI7.5 (globals/error fixtures +
+> perf benchmark). See the guide for the design deltas (build-stamp method;
+> named-continuation constraint on the resumed tail; hooks register at the top
+> of `main` rather than self-registering, since compiled top-level forms do not
+> execute and warm starts skip `init`).
 >
 > Original plan text follows.
 
@@ -352,6 +359,27 @@ cheaply at load time.
 Files, sockets, GPU contexts, and other OS-handle-backed values cannot be
 in the image (they're STAG_PTR opaque -- `TUR-E0018` rejects them at the
 `serial-shift` site). The application must re-acquire them after load.
+
+> **Status (shipped).** `stdlib/image.tur` provides
+> `image/register-reload-hook!` / `image/register-finalize-hook!` (and
+> `defimage-reload-hook` / `defimage-finalize-hook` sugar for the named-`defn`
+> hook); the hook runners are wired into `save-image!`, `load-image!`, and both
+> `with-image-cache` combinators (reload hooks on the warm path before resume;
+> finalize hooks on the cold path before the bytes are written). The
+> standard-hooks library `stdlib/image_hooks.tur` ships the tracked-file table
+> (`image-hooks/track-file!` / `use-reopen-tracked!` / `slot-handle`) and a
+> stdio flush (`use-flush-stdio!`). Fixtures: `tests/fixtures/image-reload-hook`
+> and `tests/fixtures/image-hooks-tracked` (AI7.3).
+>
+> **Design delta from AI5.1's sketch:** a compiled program runs only `main`
+> (top-level forms do not execute), so the `(defimage-reload-hook name ...)`
+> form cannot self-register at load time. It instead *defines* a named hook,
+> and the application *installs* it with `image/register-*-hook!` at the top of
+> `main` -- a point that runs on both cold and warm starts. This is required:
+> a warm start skips `init`, so a hook registered inside `init` would be absent
+> on the very run that needs the reacquisition. The hook registry lives in a
+> single function's static storage (no file-scope C global, which the
+> single-file backend cannot link).
 
 - **AI5.1** Add `(defimage-reload-hook name (fn [] ...))` -- registers a
   callback invoked after `resume-cont!` returns control but before the

@@ -1,0 +1,55 @@
+;; application-image-dumps-plan (AI5.4 / AI7.3): the standard hooks library.
+;;
+;; stdlib/image_hooks.tur's tracked-file table re-acquires files an image cannot
+;; carry. The app declares files with image-hooks/track-file! during cold-start
+;; init, installs the reopen hook once with image-hooks/use-reopen-tracked!, and
+;; after a warm resume reads each fresh FILE* back via image-hooks/slot-handle.
+;;
+;; Single process, cold then warm:
+;;   cold  -- init writes 99 and tracks the path; reload hooks do NOT run, so the
+;;            slot handle is still 0 ("no handle").
+;;   warm  -- the reopen hook fires before resume, so slot 0 has a live handle
+;;            and the loop reads 99 back through it.
+;; A finalize hook (flush-stdio) flushes buffered output before each save.
+
+(load "stdlib/image.tur")
+(load "stdlib/image_hooks.tur")
+
+(defn img-rm [path : cstr] : void
+  ```c remove(path); ```)
+
+(defn write-data [path : cstr v : int] : int
+  ```c FILE *f=fopen(path,"w"); if(!f) return 0; fprintf(f,"%lld",(long long)v); fclose(f); return 1; ```)
+
+;; Read through a reopened handle (the resource the image could not carry).
+(defn read-and-report [h : int] : void
+  ```c
+  FILE *f=(FILE*)(intptr_t)h;
+  if(!f){ printf("loop: no handle\n"); return; }
+  long long v=-1; rewind(f); if(fscanf(f,"%lld",&v)!=1) v=-1;
+  printf("loop: read %lld via reopened handle\n",(long long)v);
+  ```)
+
+(defn do-init [] : int
+  (do
+    (write-data "/tmp/tur-image-hooks-tracked.txt" 99)
+    (image-hooks/track-file! "/tmp/tur-image-hooks-tracked.txt" "r")
+    (println "init: wrote + tracked data = 99")
+    0))
+
+(defn do-loop [] : int
+  (do (read-and-report (image-hooks/slot-handle 0)) 0))
+
+(defn main [] : int
+  (do
+    (image-hooks/use-reopen-tracked!)
+    (image-hooks/use-flush-stdio!)
+    (img-rm "/tmp/tur-image-hooks-tracked.img")
+    (img-rm "/tmp/tur-image-hooks-tracked.txt")
+    (println "cold:")
+    (with-image-cache-after-init "/tmp/tur-image-hooks-tracked.img" do-init do-loop)
+    (println "warm:")
+    (with-image-cache-after-init "/tmp/tur-image-hooks-tracked.img" do-init do-loop)
+    (img-rm "/tmp/tur-image-hooks-tracked.img")
+    (img-rm "/tmp/tur-image-hooks-tracked.txt")
+    0))

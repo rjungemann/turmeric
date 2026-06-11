@@ -1,0 +1,5 @@
+cold:
+init: wrote + tracked data = 99
+loop: no handle
+warm:
+loop: read 99 via reopened handle

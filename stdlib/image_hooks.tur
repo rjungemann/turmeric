@@ -1,0 +1,150 @@
+;;; tur/image-hooks -- standard resource-reacquisition hooks for image dumps.
+;;;
+;;; A small library of ready-made reload/finalize hooks for the most common
+;;; OS-handle cases, so applications do not hand-roll the same reopen logic.
+;;; Load this *after* stdlib/image.tur -- it builds on image/register-reload-hook!
+;;; and image/register-finalize-hook!.
+;;;
+;;; The marquee facility is a tracked-file table: declare the files an image
+;;; cannot carry with `image-hooks/track-file!` during cold-start init, install
+;;; the reopen hook once with `image-hooks/use-reopen-tracked!`, and after a warm
+;;; resume read each file's fresh FILE* back via `image-hooks/slot-handle`.
+;;;
+;;; Like image.tur's hook registry, the table lives in a single function's
+;;; static storage (self-contained, no file-scope C global) and survives across
+;;; the cold/warm boundary within one process.
+;;;
+;;; Since: Phase AI (application-image-dumps-plan, AI5.4)
+;; stdlib/image_hooks.tur -- depends on stdlib/image.tur
+
+;; ---------------------------------------------------------------------------
+;; Tracked-file table.
+;;
+;; op 0: track  -- arg = strdup'd path (int ptr), aux = strdup'd mode (int ptr);
+;;                 returns the new slot id (0-based), or -1 if the table is full.
+;; op 1: reopen -- reopen every tracked path in its mode, caching the FILE*;
+;;                 returns the number of slots successfully reopened.
+;; op 2: handle -- arg = slot id; returns the cached FILE* (0 until reopened).
+;; op 3: count  -- returns the number of tracked slots.
+;; ---------------------------------------------------------------------------
+
+;;; image-hooks/cstr->raw -- reinterpret a :cstr as its raw int64 pointer (internal).
+(defn image-hooks/cstr->raw [s : cstr] : int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+;;; image-hooks/file-table -- backing store for tracked files (internal).
+(defn image-hooks/file-table [op : int arg : int aux : int] : int
+  ```c
+  #define TUR_IMG_HOOK_MAX 64
+  static char  *paths[TUR_IMG_HOOK_MAX];
+  static char  *modes[TUR_IMG_HOOK_MAX];
+  static void  *handles[TUR_IMG_HOOK_MAX];
+  static int    n = 0;
+  switch (op) {
+    case 0: {
+      if (n >= TUR_IMG_HOOK_MAX) return -1;
+      const char *p = (const char *)(intptr_t)arg;
+      const char *m = (const char *)(intptr_t)aux;
+      paths[n]   = p ? strdup(p) : strdup("");
+      modes[n]   = (m && *m) ? strdup(m) : strdup("r");
+      handles[n] = NULL;
+      return n++;
+    }
+    case 1: {
+      int ok = 0;
+      for (int i = 0; i < n; i++) {
+        if (handles[i]) { fclose((FILE *)handles[i]); handles[i] = NULL; }
+        FILE *f = fopen(paths[i], modes[i]);
+        if (f) { handles[i] = f; ok++; }
+      }
+      return ok;
+    }
+    case 2: {
+      if (arg < 0 || arg >= n) return 0;
+      return (int64_t)(intptr_t)handles[arg];
+    }
+    case 3: return n;
+    default: return -1;
+  }
+  ```)
+
+;;; image-hooks/track-file! -- register a file path to reopen on warm start.
+;;;
+;;; Call this during cold-start init for each OS file the image cannot carry.
+;;; The handle itself is never serialised; after a warm resume the reopen hook
+;;; re-establishes it and you read it back via image-hooks/slot-handle.
+;;;
+;;; Parameters:
+;;;   path -- the file path to reopen
+;;;   mode -- the fopen mode (e.g. "r", "a", "rb"); empty defaults to "r"
+;;;
+;;; Returns:
+;;;   The 0-based slot id, or -1 if the table is full.
+;;;
+;;; Since: Phase AI (AI5.4)
+(defn image-hooks/track-file! [path : cstr mode : cstr] : int
+  (image-hooks/file-table 0
+                          (image-hooks/cstr->raw path)
+                          (image-hooks/cstr->raw mode)))
+
+;;; image-hooks/reopen-tracked-files -- the reload hook: reopen all tracked files.
+;;;
+;;; Returns the number of files successfully reopened. Registered for you by
+;;; image-hooks/use-reopen-tracked!; you rarely call it directly.
+;;;
+;;; Since: Phase AI (AI5.4)
+(defn image-hooks/reopen-tracked-files [] : int
+  (image-hooks/file-table 1 0 0))
+
+;;; image-hooks/slot-handle -- the current FILE* for a tracked slot.
+;;;
+;;; Returns 0 until the reopen hook has run; after a warm resume it is the fresh
+;;; FILE* for that slot. Pass it to inline-C that does the actual reads/writes.
+;;;
+;;; Parameters:
+;;;   id -- the slot id returned by image-hooks/track-file!
+;;;
+;;; Returns:
+;;;   The cached FILE* as an int handle (cast to FILE* in your inline-C), or 0
+;;;   if the slot has not been reopened yet.
+;;;
+;;; Since: Phase AI (AI5.4)
+(defn image-hooks/slot-handle [id : int] : int
+  (image-hooks/file-table 2 id 0))
+
+;;; image-hooks/tracked-count -- number of tracked file slots.
+(defn image-hooks/tracked-count [] : int
+  (image-hooks/file-table 3 0 0))
+
+;;; image-hooks/use-reopen-tracked! -- install the tracked-file reopen reload hook.
+;;;
+;;; Call once at the top of main (before the with-image-cache call) so the hook
+;;; is present on warm starts. After this, any file declared with
+;;; image-hooks/track-file! is reopened automatically on resume.
+;;;
+;;; Returns:
+;;;   The number of reload hooks registered so far (from image.tur).
+;;;
+;;; Since: Phase AI (AI5.4)
+(defn image-hooks/use-reopen-tracked! [] : int
+  (image/register-reload-hook! image-hooks/reopen-tracked-files))
+
+;; ---------------------------------------------------------------------------
+;; Stdio hooks.
+;; ---------------------------------------------------------------------------
+
+;;; image-hooks/flush-stdio -- the finalize hook: flush stdout and stderr.
+;;;
+;;; Ensures buffered output is on disk before the image is written. Returns 0.
+;;;
+;;; Since: Phase AI (AI5.4)
+(defn image-hooks/flush-stdio [] : int
+  ```c fflush(stdout); fflush(stderr); return 0; ```)
+
+;;; image-hooks/use-flush-stdio! -- install the stdout/stderr flush finalize hook.
+;;;
+;;; Call once at the top of main. Returns the number of finalize hooks registered.
+;;;
+;;; Since: Phase AI (AI5.4)
+(defn image-hooks/use-flush-stdio! [] : int
+  (image/register-finalize-hook! image-hooks/flush-stdio))

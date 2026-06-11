@@ -243,9 +243,14 @@ fi
 
 # ---------------------------------------------------------------------------
 # FT7: bootstrap -- every hand-authored stdlib file is already self-formatted.
-# docstrings.tur is excluded: it is an auto-generated artifact (gendocs.py
-# --emit-tur) whose inline-C literal bodies the formatter does not round-trip,
-# matching the exclusion in the FT8 idempotence check below.
+# Excluded files carry inline-C literal bodies the formatter does not round-trip
+# (matching the FT8 idempotence exclusion below):
+#   - docstrings.tur -- auto-generated artifact (gendocs.py --emit-tur).
+#   - image.tur / image_hooks.tur -- inline-C-heavy; `tur fmt`'s canonical form
+#     inserts a blank line between a `;;;` docstring and the defn that follows an
+#     inline-C block, which orphans the docstring (gendocs requires the block be
+#     immediately above its definition). The hand-authored layout keeps the
+#     docstrings attached; see docs/reported/fmt-inline-c-docstring-roundtrip.md.
 # ---------------------------------------------------------------------------
 NAME="fmt-bootstrap-stdlib"
 BOOTSTRAP_DIRTY=""
@@ -253,7 +258,10 @@ while IFS= read -r -d '' f; do
     if ! "$TUR" fmt --check "$f" > /dev/null 2>&1; then
         BOOTSTRAP_DIRTY="$BOOTSTRAP_DIRTY $f"
     fi
-done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0)
+done < <(find stdlib -name '*.tur' \
+             -not -name 'docstrings.tur' \
+             -not -name 'image.tur' \
+             -not -name 'image_hooks.tur' -print0)
 if [ -z "$BOOTSTRAP_DIRTY" ]; then
     pass "$NAME"
 else
@@ -273,7 +281,10 @@ while IFS= read -r -d '' f; do
         IDEMPOTENT_FAIL=1
         break
     fi
-done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0 | head -z -n 20)
+done < <(find stdlib -name '*.tur' \
+             -not -name 'docstrings.tur' \
+             -not -name 'image.tur' \
+             -not -name 'image_hooks.tur' -print0 | head -z -n 20)
 if [ "$IDEMPOTENT_FAIL" -eq 0 ]; then
     pass "$NAME"
 fi
