@@ -3,9 +3,32 @@ title: Unquote (`~symbol`) in type-annotation position is rejected by the type p
 category: Reported
 severity: Blocks "macro that emits a typed defn parameterized over the component type"
 discovered: 2026-06-11, executing ECS prereq plan step 3 (post-gap-E upgrade of defworld)
+resolved: 2026-06-11. Fix in `src/compiler/elab_macros.c::substitute_params` --
+  the F_TYPE_ANN case now recurses into the payload instead of returning
+  the wrapper as-is. Unquotes inside type-position slots participate in
+  the same substitution pass as everywhere else, so `~SymbolName` is
+  resolved to the macro argument before the expansion reaches the type
+  parser. Regression: `tests/fixtures/macro-unquote-in-type-position/`.
 ---
 
 # Unquote (`~symbol`) in type-annotation position is rejected by the type parser
+
+> **Status: fixed 2026-06-11.** The minimal repro `(defmacro mk-getter
+> [WName TName] \`(defn get-x [w : ~WName] : ~TName w))` now expands.
+> The ECS spice's `defcomponent-accessors` macro -- which mints typed
+> `get-<Comp>` / `set-<Comp>!` / `has-<Comp>?` for one (world, component)
+> pair -- works end-to-end against struct-by-value components and is
+> regression-tested by `tests/defcomponent-accessors.tur`.
+>
+> Root cause was upstream of the type parser: the reader wraps
+> `: type-expr` into an F_TYPE_ANN whose payload holds the type
+> expression. `substitute_params` had a leaf case for F_TYPE_ANN that
+> returned the wrapper untouched, so unquotes inside the payload were
+> never substituted from macro args -- they reached
+> `type_expr_from_form` as live F_UNQUOTE forms and tripped the
+> "unsupported type expression form" diagnostic. The fix recurses
+> into the payload, mirroring the F_VEC / F_LIST handling already in
+> the same function.
 
 ## Summary
 

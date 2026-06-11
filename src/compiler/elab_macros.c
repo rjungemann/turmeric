@@ -903,7 +903,6 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_KEYWORD:
         case F_CBLOCK:
         case F_QUOTE:
-        case F_TYPE_ANN:
         /* CT0: Contract type annotations are returned as-is in macro substitution */
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals are returned as-is in macro substitution */
@@ -912,6 +911,20 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_RANGE_VAR:
             /* Literals, quote forms, and type annotations are returned as-is */
             return f;
+        case F_TYPE_ANN: {
+            /* Gap G: the reader wraps `: type-expr` into an F_TYPE_ANN whose
+             * items[0] holds the type-expression sub-form. Returning the
+             * wrapper as-is leaves any unquote inside untouched, which then
+             * reaches type_expr_from_form and trips the
+             * "unsupported type expression form" diagnostic at expansion
+             * time. Recurse so `~Symbol` markers inside type-position
+             * unquotes get substituted from macro args. Filed and
+             * resolved under
+             * docs/reported/macro-unquote-in-type-position-rejected.md. */
+            if (f->as.list.len == 0) return f;
+            Form *inner = substitute_params(e, f->as.list.items[0], macro, args);
+            return form_type_ann(e->arena, f->span, inner);
+        }
         case F_QUASIQUOTE:
             /* Preserve the quasiquote wrapper so ct_eval_quasiquote can
              * later treat the inner form as data -- otherwise stripping

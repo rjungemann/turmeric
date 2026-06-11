@@ -1,0 +1,34 @@
+;; Regression for gap G: unquote (~Symbol) in a type-annotation slot
+;; inside a backquoted macro body must be substituted from macro args
+;; before reaching the type-expression parser.
+;;
+;; Pre-fix, the F_TYPE_ANN form was treated as a leaf in
+;; substitute_params (src/compiler/elab_macros.c) -- the reader's
+;; `: type-expr` wrapper held the unquote, but substitute_params
+;; returned the wrapper as-is, leaving the unquote untouched. When
+;; the expansion reached type_expr_from_form, the unquote tripped
+;; the "unsupported type expression form" diagnostic. Fix: recurse
+;; into F_TYPE_ANN's payload so unquotes inside type positions
+;; participate in the same substitution pass as everywhere else.
+;;
+;; See docs/reported/macro-unquote-in-type-position-rejected.md.
+
+(defstruct Pos [x : int y : int])
+
+;; Macro that emits a typed identity defn keyed on a type arg.
+(defmacro mk-id [TName]
+  (let [nm (str->sym (str-append "id-" (symbol-name TName)))]
+    `(defn ~nm [^borrow x : ~TName] : ~TName x)))
+
+(mk-id Pos)
+
+;; Round-trip: id-Pos takes a Pos and returns a Pos. The .x access on
+;; the return value forces the elaborator to recognise the return as
+;; a Pos -- if the unquoted type didn't substitute, A would default
+;; to the int carrier and .x would fail to dispatch.
+(defn main [] : int
+  (let [p (make-struct Pos 7 8)
+        q (id-Pos p)]
+    (println (.x q))   ;; 7
+    (println (.y q))   ;; 8
+    0))
