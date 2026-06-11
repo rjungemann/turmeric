@@ -207,6 +207,7 @@ static bool form_contains_ct_builtins(Form *f) {
                     ct_symbol_name(head, "vec?") ||
                     ct_symbol_name(head, "symbol-name") ||
                     ct_symbol_name(head, "dot-sym") ||
+                    ct_symbol_name(head, "str->sym") ||
                     ct_symbol_name(head, "str-append") ||
                     ct_symbol_name(head, "cons") ||
                     ct_symbol_name(head, "list") ||
@@ -311,6 +312,13 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         memcpy(buf + 1, sym->name, sym->len);
         buf[new_len] = '\0';
         const Symbol *new_sym = symtab_intern(env->elab->st, strslice(buf, new_len));
+        return ct_value_form(form_sym(env->elab->arena, span, new_sym));
+    }
+    if (ct_symbol_name(name, "str->sym")) {
+        /* (str->sym s) => intern s as a symbol */
+        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time str->sym expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        if (args[0]->tag != F_STR) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time str->sym expects a string"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        const Symbol *new_sym = symtab_intern(env->elab->st, strslice(args[0]->as.s.p, args[0]->as.s.len));
         return ct_value_form(form_sym(env->elab->arena, span, new_sym));
     }
     if (ct_symbol_name(name, "str-append")) {

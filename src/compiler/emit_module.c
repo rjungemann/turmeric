@@ -943,15 +943,18 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     } else {
         fd = fn_expr->as.fn_def_.fn;
         if (fd->closure || !fd->body) return;
-        /* Phase G: inline-C bodies only opt in to ABI specialization when they
-         * contain __TUR_TY_<NAME>__ template markers. Without the template, the
-         * body's C signature is hand-rolled (e.g. typedef'd as int64_t) and the
-         * specialized parameter widths would mismatch the inline code; fall back
-         * to the carrier path. */
-        if (fd->body->kind == EX_INLINE_C &&
-            !inline_c_has_ty_template(fd->body->as.inline_c_.inline_c)) {
-            return;
-        }
+        /* Per-instantiation monomorphization (docs/reported/generic-inline-c-
+         * struct-arg-monomorphises-to-int64.md): inline-C bodies *without*
+         * `__TUR_TY_<NAME>__` markers used to bail to the carrier int64 path,
+         * which silently miscompiled any struct-typed A.  We now proceed to
+         * compute abi_changes; when the lowering matches the carrier (int-
+         * carried A) the existing `!abi_changes && !instance_changes` branch
+         * below still notes a carrier call and emits no fresh spec, so vec.tur
+         * et al. stay byte-identical.  When the lowering changes (struct A,
+         * etc.) a fresh per-instantiation clone is emitted with the actual C
+         * type in the signature; bodies that hand-roll `int64_t` for an `:A`
+         * slot will surface a C compile error at the offending line, which is
+         * strictly better than today's silent int64 lowering at the call. */
     }
 
     bool abi_changes = false;
@@ -1047,6 +1050,39 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             emit_abi_note_carrier_call(ctx, fn_binding);
         }
         return;
+    }
+
+    /* Per-instantiation monomorphization (docs/reported/generic-inline-c-
+     * struct-arg-monomorphises-to-int64.md): an inline-C body without
+     * `__TUR_TY_<NAME>__` markers may have hand-rolled int64_t carriers in
+     * its C source.  Specializing such a body when no slot actually escapes
+     * the carrier ABI would emit a clone whose hand-rolled C contradicts
+     * its substituted signature -- exactly the breakage the original gate
+     * guarded against.  Only force the inline-C spec when at least one
+     * substituted parameter or the result is a non-carrier-ABI by-value
+     * type (a real TY_STRUCT, the by-value form the carrier path miscompiles).
+     * Other ABI changes (different opaque ints, pointers, type-apps) keep
+     * the carrier emit, which compiles cleanly through the int64 path. */
+    if (!borrow_path && fd && fd->body && fd->body->kind == EX_INLINE_C &&
+        !inline_c_has_ty_template(fd->body->as.inline_c_.inline_c)) {
+        bool needs_byvalue_spec = false;
+        for (uint8_t i = 0; i < n_spec_args; i++) {
+            if (!type_uses_carrier_abi(arg_types[i]) &&
+                arg_types[i].kind == TY_STRUCT) {
+                needs_byvalue_spec = true; break;
+            }
+        }
+        if (!needs_byvalue_spec &&
+            result_type.kind == TY_STRUCT &&
+            !type_uses_carrier_abi(result_type)) {
+            needs_byvalue_spec = true;
+        }
+        if (!needs_byvalue_spec) {
+            if (!emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {
+                emit_abi_note_carrier_call(ctx, fn_binding);
+            }
+            return;
+        }
     }
 
     uint32_t before_specs = ctx->n_abi_specializations;
@@ -1170,10 +1206,9 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
         if (!vfn_expr || !vfn_expr->as.fn_def_.fn) continue;
         FnDef *vfd = vfn_expr->as.fn_def_.fn;
         if (vfd->closure || !vfd->body) continue;
-        if (vfd->body->kind == EX_INLINE_C &&
-            !inline_c_has_ty_template(vfd->body->as.inline_c_.inline_c)) {
-            continue;
-        }
+        /* Per-instantiation monomorphization: see emit_abi_register_call's
+         * matching comment.  Drop the no-marker bail; the `if (!abi_changes)
+         * continue;` below already handles the int-carried case. */
 
         /* Derive the value-fn's specialized arg/result types by instantiating
          * its full types through the outer bindings.  Only proceed when this
@@ -1202,6 +1237,25 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
         if (strcmp(type_c_name(v_generic_result), type_c_name(v_result)) != 0)
             abi_changes = true;
         if (!abi_changes) continue;
+
+        /* Per-instantiation monomorphization: skip inline-C bodies without
+         * `__TUR_TY_<NAME>__` markers unless a slot escapes the carrier ABI
+         * (TY_STRUCT by-value).  Mirrors the same guard in
+         * emit_abi_register_call. */
+        if (vfd->body->kind == EX_INLINE_C &&
+            !inline_c_has_ty_template(vfd->body->as.inline_c_.inline_c)) {
+            bool needs_byvalue_spec = false;
+            for (uint8_t a = 0; a < v_nargs && !needs_byvalue_spec; a++) {
+                if (v_args[a].kind == TY_STRUCT &&
+                    !type_uses_carrier_abi(v_args[a]))
+                    needs_byvalue_spec = true;
+            }
+            if (!needs_byvalue_spec &&
+                v_result.kind == TY_STRUCT &&
+                !type_uses_carrier_abi(v_result))
+                needs_byvalue_spec = true;
+            if (!needs_byvalue_spec) continue;
+        }
 
         uint32_t before = ctx->n_abi_specializations;
         EmitAbiSpecialization *child = emit_abi_intern_spec(

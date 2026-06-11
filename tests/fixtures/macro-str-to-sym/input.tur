@@ -1,0 +1,15 @@
+;; Verify (str->sym ...) mints a fresh identifier symbol at macro expansion.
+;; (mint-getter Pos) should expand to (defn get-Pos [x] (+ x 1)).
+
+(defmacro mint-getter [TypeName]
+  (let [base   (symbol-name TypeName)
+        nm-str (str-append "get-" base)
+        nm-sym (str->sym nm-str)]
+    `(defn ~nm-sym [x : int] : int
+       (+ x 1))))
+
+(mint-getter Pos)
+
+(defn main [] : int
+  (println (get-Pos 41))
+  0)
