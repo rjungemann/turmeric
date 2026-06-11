@@ -115,26 +115,89 @@ machinery has a kind to attach a row to:
   round-trip, sentinel disjointness, the apply/unify algebra, and the
   diagnostic counts for the mismatch cases.
 
-### Remaining layers (not yet started)
+### Prerequisites surfaced by a code-level pass (do these first)
 
-2. **`TY_TYPEROW` type variant** -- a `Type` carrying an arena array of element
-   `Type`s, with `hkt_kind == KIND_TYPEROW`. Type equality compares rows
-   structurally (and a permutation-aware variant for the data-frame use case in
-   the validation section).
-3. **Surface syntax** -- read `[Pos Vel]` in *type-annotation* position into a
-   `TY_TYPEROW`. The parser already special-cases `[...]` in binding position;
-   this must only fire where a type is expected, and must not perturb the
-   existing `[...]`-as-binding / `vec-of` lowering (regression risk -- gate
-   behind the row contexts only).
-4. **Row HKT + `Row r` parameter** -- let a constructor parameter carry kind
-   `[*]`, so `Query` is functorial over a row and `(defn id-row [r] (fn [x : Row r] x))`
-   type-checks at distinct instantiations.
+A detailed read of the type/parser/codegen subsystems turned up three
+prerequisites that were *not* in the original layer list and that change the
+sequencing. Tackle them before the type-variant work.
+
+- **PRE-1 (decision, blocking Layer 3): the `[...]` row syntax in the report's
+  examples is already taken.** Since KB-029, a bracketed type list `[T1 T2 ...
+  Tn]` in *type-annotation position* lowers to the stdlib `TupleN` struct
+  (arity 2..8) -- see `elab_types.c:1519-1553` (`F_VEC` branch of
+  `type_expr_from_form`). So `Query [Pos Vel] [Pos]` as written would silently
+  become `Query (Tuple2 Pos Vel) (Tuple1 Pos)`, i.e. two `KIND_STAR` tuples,
+  not rows. The validation examples in this report are therefore not
+  implementable as literally written. Options:
+    1. **Distinct row syntax** -- e.g. a `(row Pos Vel)` form or a `Row[...]`
+       reader dispatch, kept separate from tuple sugar. Lowest risk; no change
+       to the tuple path. *Recommended for the first cut.*
+    2. **Context-driven `[...]`** -- make a bracket lower to a row iff the
+       surrounding context expects kind `[*]`, else a tuple. This needs
+       PRE-2.
+    3. **Unify tuple and row** -- treat `TupleN` as the `KIND_STAR`
+       fully-applied view of a row. Elegant but couples two features; defer.
+  This is a real design choice and should be decided before any parser work.
+
+- **PRE-2 (enabler, only if PRE-1 picks option 2): thread an expected kind into
+  type elaboration.** `type_expr_from_form` (`elab_types.c:271`) is essentially
+  context-free today (it takes the in-scope type params but no expected kind).
+  Context-driven bracket disambiguation requires passing an "expected kind"
+  down so `[...]` can choose row vs tuple. Independently testable; skip
+  entirely if PRE-1 picks option 1 or 3.
+
+- **PRE-3 (safety, blocking Layer 2): audit the `TypeKind` switches before
+  adding a variant.** A new `TY_TYPEROW` is a miscompile trap until every
+  switch handles it. The dangerous ones found:
+    - `type_eq` (`types.c:51`) ends in **`default: return 1`** -- two distinct
+      `TY_TYPEROW`s would compare **equal** (silent miscompile). MUST add an
+      explicit structural case (mirror the `TY_UNION`/`TY_INTERSECTION` member
+      loop at `types.c:179-201`).
+    - `type_name_buf` (`types.c:1503`) has **no default** -- a missing case
+      prints nothing.
+    - `type_c_name` (`types.c:1893`) falls back to `"void"`; add an explicit
+      erase case (rows are compile-time only, like `TY_TYPECLASS`/`TY_GLOBAL`
+      which already erase to `void`/`void*`).
+    - `type_effective_kind` (`kind_check.c:127`) defaults to `KIND_STAR`; add a
+      case returning `KIND_TYPEROW`.
+    - the `copy_kind` switch (`types.h:~300-400`) -- rows are compile-time, so
+      `CK_COPY`.
+  The `Type` union should mirror the `TY_UNION` representation exactly:
+  `struct { struct Type **elements; uint8_t n_elements; } typerow_;`
+  with an arena-allocated `Type*` array (`type_union_build` at `types.c:2712`
+  is the constructor to copy).
+
+### Remaining layers (revised order)
+
+2. **`TY_TYPEROW` type variant (no surface syntax yet).** Add the variant +
+   union member + a `type_typerow(arena, elements, n)` constructor, and handle
+   it in every switch from PRE-3. Equality is structural; add a separate
+   *permutation-aware* comparator for the data-frame zip case (validation
+   bullet 3). Build it programmatically and unit-test it at the C level exactly
+   like Layer 1 (`tur_kind_row_unit`) -- **no parser or codegen dependency**,
+   so it lands and validates in isolation. This is the natural next session.
+3. **Surface syntax** per the PRE-1 decision, with `tests/fixtures/hkt-row-*`
+   fixtures. Must not perturb the existing tuple-sugar / binding-vector paths.
+4. **Row-kinded type parameter.** Let a constructor parameter carry kind `[*]`
+   so `Query` is functorial over a row. NOTE a second syntax sub-decision: the
+   HKT param markers are `^f` -> `KIND_ARROW` and `^^f` -> `KIND_ARROW2`
+   (`elab_types.c:1740-1772`; the fn-param path caps kind-vars at 8 and keys
+   off a lowercase initial in `elab_fns.c:973-987`). A row-kinded parameter
+   needs its own marker (e.g. `^[f]`), wired through both sites.
 5. **Row operations** -- membership (`Pos in row`), union/`++` (query joins),
-   propagation through partial application. These are what the ECS query and
-   relational layers actually call.
-6. **Codegen erasure** -- rows are compile-time only; decide the runtime
-   representation (erased to the element tuple / iterator) and add an ECS query
-   fixture plus the `hkt-row-*` fixtures named in the validation section.
+   propagation through partial application (`kind_of_type_app` already rejects
+   applying a row; the *ops* are separate type-level functions).
+6. **Codegen erasure + ECS fixture.** Rows are compile-time only and should be
+   eliminated by `PASS_KIND_CHECK` (runs immediately after `PASS_ELABORATE`,
+   before any codegen pass; see `src/runtime/pass.h`). Decide the runtime
+   representation (erased to the element tuple / iterator), add the explicit
+   `type_c_name` erase case, and add an ECS query fixture plus the `hkt-row-*`
+   fixtures named in the validation section.
+
+**Revised critical path:** PRE-3 + Layer 2 are the high-value, low-risk next
+step (pure type-layer C work, unit-testable in isolation, no syntax decision
+needed). PRE-1 only gates Layer 3 onward, so the syntax decision can be made in
+parallel without blocking Layer 2.
 
 When all layers land, `ecs-spice-plan.md` E1 (the variadic `query` form) is
 unblocked and the `queryN` macro family becomes a deprecation alias per that
