@@ -293,11 +293,38 @@ heuristic mishandles the sentinel); a row that is *used in a field* (not just a
 phantom) is unvalidated. Both are follow-ups, noted here, not on the critical
 path for the ECS query use (phantom row argument).
 
+### Layer 5 -- row algebra (membership, union/++, intersection) [LANDED]
+
+The type-level operations the ECS query / relational layers build on, as both
+C primitives and a type-level surface.
+
+- **C primitives** (`types.c`, declared in `types.h`): `type_typerow_contains`
+  (membership), `type_typerow_concat` (`++`, order-preserving, dup-keeping),
+  `type_typerow_union` (deduplicated query join, order-preserving),
+  `type_typerow_intersect` (common components, x's order, deduplicated). Pure
+  compile-time `Type` operations.
+- **Type-level surface** (`elab_types.c`, routed from `fn_type_from_form` too):
+  `(row-concat A B ...)`, `(row-union A B ...)`, `(row-intersect A B ...)`
+  fold over N row operands and elaborate, in type position, to a `TY_TYPEROW`
+  usable wherever a row is -- e.g. a `^&` row-kinded type argument:
+  `(Query (row-union #row{...} #row{...}))`. A non-row operand is a clear error.
+- **Tests.** `tur_typerow_unit` gains exhaustive exact-content coverage of all
+  four primitives (membership hits/misses, concat dup-keeping, union dedup +
+  order, intersection + disjoint-empty). Fixtures: `hkt-row-ops-union` (a
+  `Query` over `(row-union ...)`, runs end-to-end) and
+  `errors/row-op-non-row-operand`.
+
+Note on the fixture split: a row is a *phantom* type argument, and phantom type
+arguments are not distinguished at value boundaries (pre-existing -- the same is
+true of an ordinary phantom param, e.g. `(Schema int)` vs `(Schema bool)`).
+So the fixtures validate that the surface parses, dispatches, yields a kind-`[*]`
+row that satisfies the `^&` parameter, and runs; the *exact* row contents
+(dedup, order, concat vs union) are validated by `tur_typerow_unit`. Reifying
+row arguments so distinct rows are distinguished at value boundaries needs
+witnesses and is a Layer 6+ concern.
+
 ### Remaining layers (revised order)
 
-5. **Row operations** -- membership (`Pos in row`), union/`++` (query joins),
-   propagation through partial application (`kind_of_type_app` already rejects
-   applying a row; the *ops* are separate type-level functions).
 6. **Codegen erasure + ECS fixture.** Rows are compile-time only and should be
    eliminated by `PASS_KIND_CHECK` (runs immediately after `PASS_ELABORATE`,
    before any codegen pass; see `src/runtime/pass.h`). Decide the runtime

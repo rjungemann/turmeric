@@ -89,6 +89,14 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
     if (form->tag == F_LIST && form->as.list.len >= 1 &&
         form->as.list.items[0]->tag == F_SYM) {
         const Symbol *head = form->as.list.items[0]->as.sym;
+        /* Variadic HKT rows (Layer 5): (row-concat/row-union/row-intersect ...)
+         * are type-level row operations handled by type_expr_from_form, not
+         * generic type applications. */
+        if (head->name && (strcmp(head->name, "row-concat") == 0 ||
+                           strcmp(head->name, "row-union") == 0 ||
+                           strcmp(head->name, "row-intersect") == 0)) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
         /* KB-008/KB-020/KB-018/KB-019: (-> T1 T2), (fn [...] :ret),
          * (lref T), (handler E V R), and the session/role type
          * constructors (Session, Send, Recv, Choose, Branch, Rec,

@@ -1,0 +1,4 @@
+;; Every operand of a row operation must itself be a #row{...} (kind [*]).
+;; Passing a bare `int` is a clear error.
+(defstruct Q [^&c] (w :int))
+(defn f [x : (Q (row-union #row{int} int))] : int 5)

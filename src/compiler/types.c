@@ -2904,6 +2904,80 @@ bool type_typerow_eq_perm(Type a, Type b) {
     return true;
 }
 
+/* Variadic HKT rows (Layer 5): row algebra.
+ *
+ * These are pure compile-time operations on TY_TYPEROW values -- the
+ * primitives the ECS query / relational layers build on (membership for
+ * `with`/`without` filters, union/concat for query joins, intersection for
+ * "entities matching both"). A non-row argument yields the empty row /
+ * `false`, so callers can pass through unchecked. */
+
+/* True if `row` contains an element type_eq to `elem`. */
+bool type_typerow_contains(Type row, Type elem) {
+    if (row.kind != TY_TYPEROW) return false;
+    for (uint8_t i = 0; i < row.as.typerow_.n_elements; i++) {
+        Type *e = row.as.typerow_.elements[i];
+        if (e && type_eq(*e, elem)) return true;
+    }
+    return false;
+}
+
+/* Concatenate two rows: x's elements then y's, order-preserving, duplicates
+ * kept (`++` / list semantics). The combined length is clamped to 255. */
+Type type_typerow_concat(Arena *a, Type x, Type y) {
+    uint32_t nx = (x.kind == TY_TYPEROW) ? x.as.typerow_.n_elements : 0;
+    uint32_t ny = (y.kind == TY_TYPEROW) ? y.as.typerow_.n_elements : 0;
+    uint32_t n = nx + ny;
+    if (n > 255) n = 255;
+    Type **elems = (n > 0) ? (Type **)arena_alloc(a, n * sizeof(Type *)) : NULL;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < nx && k < n; i++) elems[k++] = x.as.typerow_.elements[i];
+    for (uint32_t i = 0; i < ny && k < n; i++) elems[k++] = y.as.typerow_.elements[i];
+    return type_typerow(a, elems, (uint8_t)k);
+}
+
+/* Append `el` to `acc` (an array of n Type*) iff no existing entry is type_eq
+ * to it. Returns the new count. Used by union/intersect for dedup. */
+static uint32_t row_push_unique(Type **acc, uint32_t n, Type *el) {
+    if (!el) return n;
+    for (uint32_t i = 0; i < n; i++) {
+        if (acc[i] && type_eq(*acc[i], *el)) return n;
+    }
+    acc[n] = el;
+    return n + 1;
+}
+
+/* Set-union of two rows: x's elements (deduplicated) in order, then y's
+ * elements not already present (by type_eq). Order-preserving, no duplicates
+ * -- the join of two component rows. */
+Type type_typerow_union(Arena *a, Type x, Type y) {
+    uint32_t nx = (x.kind == TY_TYPEROW) ? x.as.typerow_.n_elements : 0;
+    uint32_t ny = (y.kind == TY_TYPEROW) ? y.as.typerow_.n_elements : 0;
+    uint32_t cap = nx + ny;
+    Type **elems = (cap > 0) ? (Type **)arena_alloc(a, cap * sizeof(Type *)) : NULL;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < nx; i++) n = row_push_unique(elems, n, x.as.typerow_.elements[i]);
+    for (uint32_t i = 0; i < ny; i++) n = row_push_unique(elems, n, y.as.typerow_.elements[i]);
+    if (n > 255) n = 255;
+    return type_typerow(a, elems, (uint8_t)n);
+}
+
+/* Intersection: x's elements that also appear in y (by type_eq), in x's order,
+ * deduplicated -- the components common to both queries. */
+Type type_typerow_intersect(Arena *a, Type x, Type y) {
+    if (x.kind != TY_TYPEROW || y.kind != TY_TYPEROW) {
+        return type_typerow(a, NULL, 0);
+    }
+    uint32_t nx = x.as.typerow_.n_elements;
+    Type **elems = (nx > 0) ? (Type **)arena_alloc(a, nx * sizeof(Type *)) : NULL;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < nx; i++) {
+        Type *e = x.as.typerow_.elements[i];
+        if (e && type_typerow_contains(y, *e)) n = row_push_unique(elems, n, e);
+    }
+    return type_typerow(a, elems, (uint8_t)n);
+}
+
 TypeKind typekind_from_name(const char *name) {
     if (!name) return TY_UNKNOWN;
     if (strcmp(name, "unknown") == 0) return TY_UNKNOWN;

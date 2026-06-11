@@ -490,6 +490,48 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
+        /* Variadic HKT rows (Layer 5): type-level row algebra.
+         *   (row-concat A B ...)    -- A ++ B ++ ...  (order-preserving, dup-keeping)
+         *   (row-union A B ...)     -- set-union (deduplicated query join)
+         *   (row-intersect A B ...) -- components common to all operands
+         * Each operand must resolve to a #row{...} (kind [*]); the result is a
+         * folded TY_TYPEROW usable wherever a row is (e.g. a row-kinded type
+         * argument). Zero operands yield the empty row; one operand passes
+         * through. */
+        if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
+            const char *h = form->as.list.items[0]->as.sym->name;
+            int rop = 0; /* 1=concat, 2=union, 3=intersect */
+            if      (strcmp(h, "row-concat")    == 0) rop = 1;
+            else if (strcmp(h, "row-union")     == 0) rop = 2;
+            else if (strcmp(h, "row-intersect") == 0) rop = 3;
+            if (rop != 0) {
+                uint32_t nargs = form->as.list.len - 1;
+                Type acc; /* accumulator row */
+                memset(&acc, 0, sizeof(acc));
+                bool have_acc = false;
+                for (uint32_t ai = 1; ai < form->as.list.len; ai++) {
+                    Type *operand = type_expr_from_form(e, form->as.list.items[ai],
+                        rec_name, type_params, type_param_kinds, n_type_params);
+                    if (!operand) return NULL;
+                    if (operand->kind != TY_TYPEROW) {
+                        diag_emit(DIAG_ERROR, form->as.list.items[ai]->span,
+                            "'%s' operand %u must be a #row{...} (kind [*]), "
+                            "got a non-row type", h, (unsigned)ai);
+                        return NULL;
+                    }
+                    if (!have_acc) { acc = *operand; have_acc = true; continue; }
+                    switch (rop) {
+                        case 1: acc = type_typerow_concat(e->arena, acc, *operand); break;
+                        case 2: acc = type_typerow_union(e->arena, acc, *operand); break;
+                        default: acc = type_typerow_intersect(e->arena, acc, *operand); break;
+                    }
+                }
+                if (nargs == 0) acc = type_typerow(e->arena, NULL, 0);
+                Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *out = acc;
+                return out;
+            }
+        }
         /* LS1: borrow *type* annotation -- &T / &mut T, optionally carrying a
          * Rust-style lifetime: &'a T / &mut 'a T.  The reader produces these as
          * a list whose head is the borrow operator (& or &mut):

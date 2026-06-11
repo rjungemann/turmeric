@@ -118,6 +118,38 @@ int main(void) {
     check_print("print(nested) == \"#row{#row{int} bool}\"",
                 row_nested, "#row{#row{int} bool}");
 
+    /* --- Layer 5: row algebra (contains / concat / union / intersect) --- */
+    Type t_cstr = type_simple(TY_CSTR, CK_COPY);
+    Type *bc[2] = { &t_bool, &t_cstr };  /* #row{bool cstr} -- overlaps row_ib on bool */
+    Type row_bc = type_typerow(&a, bc, 2);
+
+    /* membership */
+    check("contains(#row{int bool}, int)",   type_typerow_contains(row_ib, t_int));
+    check("contains(#row{int bool}, bool)",  type_typerow_contains(row_ib, t_bool));
+    check("!contains(#row{int bool}, cstr)", !type_typerow_contains(row_ib, t_cstr));
+    check("!contains(empty, int)",           !type_typerow_contains(row_empty, t_int));
+    check("!contains(non-row, int)",         !type_typerow_contains(t_int, t_int));
+
+    /* concat (++): order-preserving, duplicates kept */
+    check_print("#row{int bool} ++ #row{bool cstr} == #row{int bool bool cstr}",
+                type_typerow_concat(&a, row_ib, row_bc), "#row{int bool bool cstr}");
+    check_print("empty ++ #row{int bool} == #row{int bool}",
+                type_typerow_concat(&a, row_empty, row_ib), "#row{int bool}");
+
+    /* union (join): deduplicated, order-preserving (bool appears once) */
+    check_print("#row{int bool} U #row{bool cstr} == #row{int bool cstr}",
+                type_typerow_union(&a, row_ib, row_bc), "#row{int bool cstr}");
+    check_print("union is order-preserving from x then y",
+                type_typerow_union(&a, row_bc, row_ib), "#row{bool cstr int}");
+    check_print("union dedups within a self-union",
+                type_typerow_union(&a, row_ib, row_ib), "#row{int bool}");
+
+    /* intersection: common elements in x's order, deduplicated */
+    check_print("#row{int bool} & #row{bool cstr} == #row{bool}",
+                type_typerow_intersect(&a, row_ib, row_bc), "#row{bool}");
+    check_print("disjoint intersection is empty",
+                type_typerow_intersect(&a, row_i1, row_bc), "#row{}");
+
     arena_free(&a);
 
     if (failures == 0) {

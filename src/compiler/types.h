@@ -1168,6 +1168,17 @@ Type type_typerow(Arena *a, Type **elements, uint8_t n_elements);
  * is a no-op" case; ordinary `type_eq` on rows stays order-SENSITIVE. */
 bool type_typerow_eq_perm(Type a, Type b);
 
+/* Variadic HKT rows (Layer 5): row algebra -- the type-level operations the
+ * ECS query / relational layers build on. All are pure and compile-time. */
+/* Membership: true if `row` contains an element type_eq to `elem`. */
+bool type_typerow_contains(Type row, Type elem);
+/* Concatenation (`++`): x ++ y, order-preserving, duplicates kept (clamped 255). */
+Type type_typerow_concat(Arena *a, Type x, Type y);
+/* Set-union (query join): x then y-not-in-x, order-preserving, deduplicated. */
+Type type_typerow_union(Arena *a, Type x, Type y);
+/* Intersection: x's elements also in y, x's order, deduplicated. */
+Type type_typerow_intersect(Arena *a, Type x, Type y);
+
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */
 static inline Type type_exception(TypeKind payload_type) {
