@@ -4275,7 +4275,7 @@ static void parse_check_canon(SymbolTable *st, Form *f) {
         case F_QUOTE: case F_QUASIQUOTE: case F_UNQUOTE:
         case F_UNQUOTE_SPLICING: case F_TYPE_ANN: case F_CONTRACT_TYPE:
         case F_READER_COND: case F_RANGE_VAR:
-        case F_MAP_LITERAL: case F_SET_LITERAL:
+        case F_MAP_LITERAL: case F_SET_LITERAL: case F_ROW_LITERAL:
             for (uint32_t i = 0; i < f->as.list.len; i++)
                 parse_check_canon(st, f->as.list.items[i]);
             break;

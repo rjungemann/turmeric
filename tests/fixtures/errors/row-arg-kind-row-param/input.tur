@@ -1,0 +1,4 @@
+;; Query's first type parameter is row-kinded (^&), so a plain `int` argument
+;; (kind *) is a kind error -- it must be a #row{...}.
+(defstruct Query [^&r] (world :int))
+(defn rd [q : (Query int)] : int (.world q))

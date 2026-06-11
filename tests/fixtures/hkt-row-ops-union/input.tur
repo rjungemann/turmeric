@@ -1,0 +1,18 @@
+;; Variadic HKT rows (Layer 5): type-level row algebra. A query's component
+;; row is the UNION (deduplicated join) of two sub-rows --
+;; (row-union #row{int bool} #row{bool cstr}) == #row{int bool cstr}. The row
+;; is a phantom type argument (erased at codegen), so this fixture validates
+;; that the surface parses, dispatches, and produces a kind-[*] row that
+;; satisfies the ^& row-kinded parameter, and runs end-to-end. The exact row
+;; CONTENTS (dedup, order, concat/intersect) are validated by tur_typerow_unit.
+(defstruct Query [^&components] (world :int))
+
+(defn make-query [w : int] : (Query (row-union #row{int bool} #row{bool cstr}))
+  (:: (make-struct Query w) (Query #row{int bool cstr})))
+
+(defn query-world [q : (Query #row{int bool cstr})] : int
+  (.world q))
+
+(defn main [] : int
+  (println (query-world (make-query 7)))
+  0)

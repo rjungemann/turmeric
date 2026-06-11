@@ -98,6 +98,7 @@ static bool ct_form_equal(const Form *a, const Form *b) {
         case F_SET:
         case F_MAP_LITERAL:
         case F_SET_LITERAL:
+        case F_ROW_LITERAL:
             if (a->as.list.len != b->as.list.len) return false;
             for (uint32_t i = 0; i < a->as.list.len; i++) {
                 if (!ct_form_equal(a->as.list.items[i], b->as.list.items[i])) return false;
@@ -168,7 +169,8 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
         case F_MAP:
         case F_SET:
         case F_MAP_LITERAL:
-        case F_SET_LITERAL: {
+        case F_SET_LITERAL:
+        case F_ROW_LITERAL: {
             uint32_t n_in = f->as.list.len;
             Form **items = (Form **)arena_alloc(env->elab->arena, n_in * sizeof(Form *));
             for (uint32_t i = 0; i < n_in; i++) items[i] = ct_eval_quasiquote(env, f->as.list.items[i]);
@@ -176,6 +178,7 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
             if (f->tag == F_SET) return form_set(env->elab->arena, f->span, items, n_in);
             if (f->tag == F_MAP_LITERAL) return form_map_literal(env->elab->arena, f->span, items, n_in);
             if (f->tag == F_SET_LITERAL) return form_set_literal(env->elab->arena, f->span, items, n_in);
+            if (f->tag == F_ROW_LITERAL) return form_row_literal(env->elab->arena, f->span, items, n_in);
             return form_vec(env->elab->arena, f->span, items, n_in);
         }
         case F_QUASIQUOTE:
@@ -220,6 +223,7 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_SET:
         case F_MAP_LITERAL:
         case F_SET_LITERAL:
+        case F_ROW_LITERAL:
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 if (form_contains_ct_builtins(f->as.list.items[i])) return true;
             }
@@ -700,7 +704,8 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
         case F_MAP:
         case F_SET:
         case F_MAP_LITERAL:
-        case F_SET_LITERAL: {
+        case F_SET_LITERAL:
+        case F_ROW_LITERAL: {
             Form **items = (f->as.list.len == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 CtValue v = ct_eval_form(env, f->as.list.items[i]);
@@ -711,6 +716,7 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
             if (f->tag == F_SET) return ct_value_form(form_set(env->elab->arena, f->span, items, f->as.list.len));
             if (f->tag == F_MAP_LITERAL) return ct_value_form(form_map_literal(env->elab->arena, f->span, items, f->as.list.len));
             if (f->tag == F_SET_LITERAL) return ct_value_form(form_set_literal(env->elab->arena, f->span, items, f->as.list.len));
+            if (f->tag == F_ROW_LITERAL) return ct_value_form(form_row_literal(env->elab->arena, f->span, items, f->as.list.len));
             return ct_value_form(form_vec(env->elab->arena, f->span, items, f->as.list.len));
         }
     }
@@ -819,6 +825,7 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
         case F_SET:
         case F_MAP_LITERAL:
         case F_SET_LITERAL:
+        case F_ROW_LITERAL:
             /* Vectors/maps/sets inside quasiquote: process each element */
             {
                 Form **new_items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
@@ -838,6 +845,7 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
                 if (f->tag == F_SET) return form_set(e->arena, f->span, new_items, f->as.list.len);
                 if (f->tag == F_MAP_LITERAL) return form_map_literal(e->arena, f->span, new_items, f->as.list.len);
                 if (f->tag == F_SET_LITERAL) return form_set_literal(e->arena, f->span, new_items, f->as.list.len);
+                if (f->tag == F_ROW_LITERAL) return form_row_literal(e->arena, f->span, new_items, f->as.list.len);
                 return form_vec(e->arena, f->span, new_items, f->as.list.len);
             }
         case F_CBLOCK:
@@ -984,7 +992,8 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_MAP:
         case F_SET:
         case F_MAP_LITERAL:
-        case F_SET_LITERAL: {
+        case F_SET_LITERAL:
+        case F_ROW_LITERAL: {
             /* Recursively substitute in vector/map/set items */
             Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
@@ -994,6 +1003,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             if (f->tag == F_SET) return form_set(e->arena, f->span, items, f->as.list.len);
             if (f->tag == F_MAP_LITERAL) return form_map_literal(e->arena, f->span, items, f->as.list.len);
             if (f->tag == F_SET_LITERAL) return form_set_literal(e->arena, f->span, items, f->as.list.len);
+            if (f->tag == F_ROW_LITERAL) return form_row_literal(e->arena, f->span, items, f->as.list.len);
             return form_vec(e->arena, f->span, items, f->as.list.len);
         }
     }

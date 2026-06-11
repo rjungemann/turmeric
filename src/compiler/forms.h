@@ -77,6 +77,11 @@ typedef enum FormTag {
      * can lower them to hamt-of / set-of calls. Gated behind -Xdata-literals. */
     F_MAP_LITERAL,     /* #map{k1 v1 k2 v2 ...} -- same payload as F_LIST */
     F_SET_LITERAL,     /* #set{e1 e2 e3 ...}    -- same payload as F_LIST */
+    /* Variadic HKT rows: #row{T1 T2 ...} type-level row literal -- same payload
+     * as F_LIST. Distinct from F_VEC (which means a TupleN type) and from the
+     * value-level data literals above: a row is TYPE-ONLY and is lowered to a
+     * TY_TYPEROW in type position; in value position it is an error. */
+    F_ROW_LITERAL,
 } FormTag;
 
 struct Form;
@@ -117,6 +122,8 @@ Form *form_set    (Arena *a, Span span, Form **items, uint32_t len);
 /* DL0: data-literal constructors (payload identical to F_LIST) */
 Form *form_map_literal(Arena *a, Span span, Form **items, uint32_t len);
 Form *form_set_literal(Arena *a, Span span, Form **items, uint32_t len);
+/* Variadic HKT rows: #row{...} type-row literal (payload identical to F_LIST). */
+Form *form_row_literal(Arena *a, Span span, Form **items, uint32_t len);
 Form *form_cblock (Arena *a, Span span, StrSlice code);
 /* Phase 6 */
 Form *form_quote  (Arena *a, Span span, Form *quoted);

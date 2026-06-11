@@ -199,6 +199,22 @@ int type_eq(Type a, Type b) {
         }
         return 1;
     }
+    /* Variadic HKT rows: order-SENSITIVE structural equality. Two rows are
+     * equal iff they have the same length and equal element types at each
+     * position. (Permutation-insensitive equality is type_typerow_eq_perm.)
+     * Without this explicit case a row would fall through to `return 1` and
+     * any two rows would compare equal -- a silent miscompile. */
+    if (a.kind == TY_TYPEROW) {
+        if (a.as.typerow_.n_elements != b.as.typerow_.n_elements) return 0;
+        for (uint8_t i = 0; i < a.as.typerow_.n_elements; i++) {
+            if (!a.as.typerow_.elements[i] || !b.as.typerow_.elements[i]) {
+                if (a.as.typerow_.elements[i] != b.as.typerow_.elements[i]) return 0;
+                continue;
+            }
+            if (!type_eq(*a.as.typerow_.elements[i], *b.as.typerow_.elements[i])) return 0;
+        }
+        return 1;
+    }
     return 1;
 }
 
@@ -1323,6 +1339,23 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* Variadic HKT rows: short name "#row{T1 T2 ...}". */
+        case TY_TYPEROW: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "#row{");
+            for (uint8_t i = 0; i < t.as.typerow_.n_elements; i++) {
+                if (i > 0) buf_putc(&tmp, ' ');
+                if (t.as.typerow_.elements && t.as.typerow_.elements[i]) {
+                    buf_puts(&tmp, type_name(*t.as.typerow_.elements[i]));
+                } else {
+                    buf_putc(&tmp, '?');
+                }
+            }
+            buf_putc(&tmp, '}');
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
         /* ET3/FH4.1: Handler type — "handler<EffectSet, ValueType, ResultType>".
          * EffectSet is the handled row ("A | B" for multi-effect); falls back to
          * the single effect_name for legacy types. */
@@ -1740,6 +1773,20 @@ static void type_name_buf(Buf *b, Type t) {
             buf_putc(b, ')');
             break;
         }
+        /* Variadic HKT rows: print as the surface form `#row{T1 T2 ...}`. */
+        case TY_TYPEROW: {
+            buf_puts(b, "#row{");
+            for (uint8_t i = 0; i < t.as.typerow_.n_elements; i++) {
+                if (i > 0) buf_putc(b, ' ');
+                if (t.as.typerow_.elements && t.as.typerow_.elements[i]) {
+                    type_name_buf(b, *t.as.typerow_.elements[i]);
+                } else {
+                    buf_putc(b, '?');
+                }
+            }
+            buf_putc(b, '}');
+            break;
+        }
         /* ET3: Handler type */
         case TY_HANDLER: {
             buf_puts(b, "handler<");
@@ -2072,6 +2119,12 @@ const char *type_c_name(Type t) {
         /* GF1: Generator is a heap-allocated state-machine struct; passes as void* */
         case TY_GENERATOR:
             return "void *";
+        /* Variadic HKT rows: compile-time only -- a row should be eliminated
+         * before codegen (it only ever appears as a type argument). If one
+         * reaches here it has no runtime representation; erase to void with a
+         * marker, mirroring TY_GLOBAL / TY_DYNVAR. */
+        case TY_TYPEROW:
+            return "/*type-row*/ void";
     }
     return "void";
 }
@@ -2303,6 +2356,16 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         /* GF1: Generator -- heap pointer, leaf; no recursive members */
         case TY_GENERATOR:
             return true;
+        /* Variadic HKT rows -- the row is a constructor over its elements;
+         * guard recursion like a union and recurse into each element. */
+        case TY_TYPEROW: {
+            int new_depth = depth + 1;
+            for (uint8_t i = 0; i < t->as.typerow_.n_elements; i++) {
+                if (!type_is_guarded_recursive_helper(t->as.typerow_.elements[i], rec_name, new_depth))
+                    return false;
+            }
+            return true;
+        }
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -2793,6 +2856,126 @@ Type type_intersection_build(Arena *a, Type **members, uint8_t n_members) {
     t.as.intersection_.members = flat;
     t.as.intersection_.n_members = flat_count;
     return t;
+}
+
+/* Variadic HKT rows (Layer 2): row-of-types constructor.
+ * Unlike unions/intersections, a row is an ordered list: element order is
+ * significant, duplicates are preserved, and nested rows are NOT flattened. */
+Type type_typerow(Arena *a, Type **elements, uint8_t n_elements) {
+    Type **copy = NULL;
+    if (n_elements > 0) {
+        copy = (Type **)arena_alloc(a, n_elements * sizeof(Type *));
+        for (uint8_t i = 0; i < n_elements; i++) copy[i] = elements[i];
+    }
+    Type t;
+    memset(&t, 0, sizeof(t));
+    t.kind = TY_TYPEROW;
+    t.copy_kind = CK_COPY;          /* compile-time only -- copy/move is moot */
+    t.hkt_kind = KIND_TYPEROW;
+    t.as.typerow_.elements = copy;
+    t.as.typerow_.n_elements = n_elements;
+    return t;
+}
+
+/* Variadic HKT rows: order-insensitive (multiset) row equality.
+ * Greedy bipartite match: for each element of `a`, consume the first
+ * not-yet-consumed type_eq-equal element of `b`. Because type_eq is an
+ * equivalence relation, greedy matching is complete here -- if every `a`
+ * element finds a fresh partner, the multisets are equal. */
+bool type_typerow_eq_perm(Type a, Type b) {
+    if (a.kind != TY_TYPEROW || b.kind != TY_TYPEROW) return false;
+    uint8_t n = a.as.typerow_.n_elements;
+    if (n != b.as.typerow_.n_elements) return false;
+    if (n == 0) return true;
+    /* Track which b-elements have already been matched. n <= 255 (uint8_t). */
+    bool used[256];
+    for (uint8_t j = 0; j < n; j++) used[j] = false;
+    for (uint8_t i = 0; i < n; i++) {
+        Type *ai = a.as.typerow_.elements[i];
+        bool matched = false;
+        for (uint8_t j = 0; j < n; j++) {
+            if (used[j]) continue;
+            Type *bj = b.as.typerow_.elements[j];
+            bool eq = (!ai || !bj) ? (ai == bj) : type_eq(*ai, *bj);
+            if (eq) { used[j] = true; matched = true; break; }
+        }
+        if (!matched) return false;
+    }
+    return true;
+}
+
+/* Variadic HKT rows (Layer 5): row algebra.
+ *
+ * These are pure compile-time operations on TY_TYPEROW values -- the
+ * primitives the ECS query / relational layers build on (membership for
+ * `with`/`without` filters, union/concat for query joins, intersection for
+ * "entities matching both"). A non-row argument yields the empty row /
+ * `false`, so callers can pass through unchecked. */
+
+/* True if `row` contains an element type_eq to `elem`. */
+bool type_typerow_contains(Type row, Type elem) {
+    if (row.kind != TY_TYPEROW) return false;
+    for (uint8_t i = 0; i < row.as.typerow_.n_elements; i++) {
+        Type *e = row.as.typerow_.elements[i];
+        if (e && type_eq(*e, elem)) return true;
+    }
+    return false;
+}
+
+/* Concatenate two rows: x's elements then y's, order-preserving, duplicates
+ * kept (`++` / list semantics). The combined length is clamped to 255. */
+Type type_typerow_concat(Arena *a, Type x, Type y) {
+    uint32_t nx = (x.kind == TY_TYPEROW) ? x.as.typerow_.n_elements : 0;
+    uint32_t ny = (y.kind == TY_TYPEROW) ? y.as.typerow_.n_elements : 0;
+    uint32_t n = nx + ny;
+    if (n > 255) n = 255;
+    Type **elems = (n > 0) ? (Type **)arena_alloc(a, n * sizeof(Type *)) : NULL;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < nx && k < n; i++) elems[k++] = x.as.typerow_.elements[i];
+    for (uint32_t i = 0; i < ny && k < n; i++) elems[k++] = y.as.typerow_.elements[i];
+    return type_typerow(a, elems, (uint8_t)k);
+}
+
+/* Append `el` to `acc` (an array of n Type*) iff no existing entry is type_eq
+ * to it. Returns the new count. Used by union/intersect for dedup. */
+static uint32_t row_push_unique(Type **acc, uint32_t n, Type *el) {
+    if (!el) return n;
+    for (uint32_t i = 0; i < n; i++) {
+        if (acc[i] && type_eq(*acc[i], *el)) return n;
+    }
+    acc[n] = el;
+    return n + 1;
+}
+
+/* Set-union of two rows: x's elements (deduplicated) in order, then y's
+ * elements not already present (by type_eq). Order-preserving, no duplicates
+ * -- the join of two component rows. */
+Type type_typerow_union(Arena *a, Type x, Type y) {
+    uint32_t nx = (x.kind == TY_TYPEROW) ? x.as.typerow_.n_elements : 0;
+    uint32_t ny = (y.kind == TY_TYPEROW) ? y.as.typerow_.n_elements : 0;
+    uint32_t cap = nx + ny;
+    Type **elems = (cap > 0) ? (Type **)arena_alloc(a, cap * sizeof(Type *)) : NULL;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < nx; i++) n = row_push_unique(elems, n, x.as.typerow_.elements[i]);
+    for (uint32_t i = 0; i < ny; i++) n = row_push_unique(elems, n, y.as.typerow_.elements[i]);
+    if (n > 255) n = 255;
+    return type_typerow(a, elems, (uint8_t)n);
+}
+
+/* Intersection: x's elements that also appear in y (by type_eq), in x's order,
+ * deduplicated -- the components common to both queries. */
+Type type_typerow_intersect(Arena *a, Type x, Type y) {
+    if (x.kind != TY_TYPEROW || y.kind != TY_TYPEROW) {
+        return type_typerow(a, NULL, 0);
+    }
+    uint32_t nx = x.as.typerow_.n_elements;
+    Type **elems = (nx > 0) ? (Type **)arena_alloc(a, nx * sizeof(Type *)) : NULL;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < nx; i++) {
+        Type *e = x.as.typerow_.elements[i];
+        if (e && type_typerow_contains(y, *e)) n = row_push_unique(elems, n, e);
+    }
+    return type_typerow(a, elems, (uint8_t)n);
 }
 
 TypeKind typekind_from_name(const char *name) {

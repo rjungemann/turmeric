@@ -1,6 +1,30 @@
 /* elab_types.c -- type-expression forms: defkind/defrec/deftype/type-app, ascribe/pack/open. */
 #include "elab_internal.h"
 
+/* Variadic HKT rows: validate one type-application argument's kind against the
+ * constructor's positional parameter kind, for the row concern only. Returns
+ * false (and emits TUR-E0012) when a row-of-types argument (kind [*]) is given
+ * to a non-row-kinded parameter, or a row-kinded ('^&') parameter is given a
+ * non-row argument. Scoped to KIND_TYPEROW mismatches (xor) so existing,
+ * non-row applications are never perturbed. arg_index is 0-based.
+ * Shared by type_expr_from_form and fn_type_from_form's application paths. */
+bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
+                             Span arg_span) {
+    if (ctor_type.kind != TY_STRUCT || !ctor_type.as.struct_.def) return true;
+    const StructDef *cdef = ctor_type.as.struct_.def;
+    if (!cdef->type_param_kinds || arg_index >= cdef->n_type_params) return true;
+    Kind param_kind = cdef->type_param_kinds[arg_index];
+    bool param_row = (param_kind == KIND_TYPEROW);
+    bool arg_row   = (arg_type.hkt_kind == KIND_TYPEROW);
+    if (param_row == arg_row) return true;
+    diag_emit_with_code(DIAG_ERROR, arg_span, TUR_E0012_KIND_MISMATCH,
+        "kind mismatch (TUR-E0012): type constructor '%s' parameter %u expects "
+        "kind '%s', but the argument has kind '%s'",
+        cdef->name, (unsigned)(arg_index + 1),
+        kind_to_string(param_kind), kind_to_string(arg_type.hkt_kind));
+    return false;
+}
+
 /* MF4: separate struct / GADT namespaces. Resolve a type name by walking
  * the ADT registry first, then the struct registry. When the same name is
  * registered as both a defgadt and a defstruct, the GADT wins -- a name
@@ -466,6 +490,48 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
+        /* Variadic HKT rows (Layer 5): type-level row algebra.
+         *   (row-concat A B ...)    -- A ++ B ++ ...  (order-preserving, dup-keeping)
+         *   (row-union A B ...)     -- set-union (deduplicated query join)
+         *   (row-intersect A B ...) -- components common to all operands
+         * Each operand must resolve to a #row{...} (kind [*]); the result is a
+         * folded TY_TYPEROW usable wherever a row is (e.g. a row-kinded type
+         * argument). Zero operands yield the empty row; one operand passes
+         * through. */
+        if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
+            const char *h = form->as.list.items[0]->as.sym->name;
+            int rop = 0; /* 1=concat, 2=union, 3=intersect */
+            if      (strcmp(h, "row-concat")    == 0) rop = 1;
+            else if (strcmp(h, "row-union")     == 0) rop = 2;
+            else if (strcmp(h, "row-intersect") == 0) rop = 3;
+            if (rop != 0) {
+                uint32_t nargs = form->as.list.len - 1;
+                Type acc; /* accumulator row */
+                memset(&acc, 0, sizeof(acc));
+                bool have_acc = false;
+                for (uint32_t ai = 1; ai < form->as.list.len; ai++) {
+                    Type *operand = type_expr_from_form(e, form->as.list.items[ai],
+                        rec_name, type_params, type_param_kinds, n_type_params);
+                    if (!operand) return NULL;
+                    if (operand->kind != TY_TYPEROW) {
+                        diag_emit(DIAG_ERROR, form->as.list.items[ai]->span,
+                            "'%s' operand %u must be a #row{...} (kind [*]), "
+                            "got a non-row type", h, (unsigned)ai);
+                        return NULL;
+                    }
+                    if (!have_acc) { acc = *operand; have_acc = true; continue; }
+                    switch (rop) {
+                        case 1: acc = type_typerow_concat(e->arena, acc, *operand); break;
+                        case 2: acc = type_typerow_union(e->arena, acc, *operand); break;
+                        default: acc = type_typerow_intersect(e->arena, acc, *operand); break;
+                    }
+                }
+                if (nargs == 0) acc = type_typerow(e->arena, NULL, 0);
+                Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *out = acc;
+                return out;
+            }
+        }
         /* LS1: borrow *type* annotation -- &T / &mut T, optionally carrying a
          * Rust-style lifetime: &'a T / &mut 'a T.  The reader produces these as
          * a list whose head is the borrow operator (& or &mut):
@@ -1534,6 +1600,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                                   type_params, type_param_kinds, n_type_params);
             if (!arg_type) return NULL;
 
+            /* Variadic HKT rows: enforce that a row-of-types argument lands in
+             * a row-kinded parameter slot (and vice versa). ctor_type is the
+             * original head (carries the StructDef's positional param kinds). */
+            if (!check_row_type_arg_kind(*ctor_type, (uint8_t)(ai - 1), *arg_type,
+                                         form->as.list.items[ai]->span))
+                return NULL;
+
             /* Create TY_APP node */
             Type *app = (Type *)arena_alloc(e->arena, sizeof(Type));
             memset(app, 0, sizeof(Type));
@@ -1581,6 +1654,32 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         Form *app = form_list(e->arena, form->span, items, n + 1);
         return type_expr_from_form(e, app, rec_name, type_params,
                                    type_param_kinds, n_type_params);
+    } else if (form->tag == F_ROW_LITERAL) {
+        /* Variadic HKT rows: `#row{T1 T2 ...}` in type position lowers to a
+         * TY_TYPEROW whose elements are the (positional) element type forms.
+         * Distinct from the F_VEC tuple sugar above: a row has kind [*]
+         * (KIND_TYPEROW), is compile-time only, and is order-significant.
+         * An empty `#row{}` is the unit row. */
+        uint32_t n = form->as.list.len;
+        Type **elems = NULL;
+        if (n > 0) {
+            elems = (Type **)arena_alloc(e->arena, sizeof(Type *) * n);
+            for (uint32_t i = 0; i < n; i++) {
+                Type *et = type_expr_from_form(e, form->as.list.items[i], rec_name,
+                                               type_params, type_param_kinds,
+                                               n_type_params);
+                if (!et) return NULL;
+                elems[i] = et;
+            }
+        }
+        if (n > 255) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "#row{...} type-row has too many elements (%u); max 255", n);
+            return NULL;
+        }
+        Type *row = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *row = type_typerow(e->arena, elems, (uint8_t)n);
+        return row;
     } else if (form->tag == F_KEYWORD) {
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */
         const Symbol *sym = form->as.sym;

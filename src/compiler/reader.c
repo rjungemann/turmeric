@@ -894,6 +894,8 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
         seq = form_map_literal(r->arena, span, items, (uint32_t)n);
     } else if (tag == F_SET_LITERAL) {
         seq = form_set_literal(r->arena, span, items, (uint32_t)n);
+    } else if (tag == F_ROW_LITERAL) {
+        seq = form_row_literal(r->arena, span, items, (uint32_t)n);
     } else {
         seq = form_map(r->arena, span, items, (uint32_t)n);
     }
@@ -978,6 +980,21 @@ static Form *read_set_literal(Reader *r) {
                     "unterminated set literal (missing '}') (TUR-E0281)");
 }
 
+/* Variadic HKT rows: read a #row{...} type-row literal -> F_ROW_LITERAL.
+ * Elements are type forms (positional). The literal is only meaningful in
+ * type-annotation position, where the elaborator lowers it to a TY_TYPEROW;
+ * in value position the elaborator reports a type-only error.
+ *   TUR-E0281 -- unexpected EOF (delegated to read_seq's message) */
+static Form *read_row_literal(Reader *r) {
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'r' */
+    advance(r); /* consume 'o' */
+    advance(r); /* consume 'w' */
+    /* peek == '{' guaranteed by caller */
+    return read_seq(r, '{', '}', F_ROW_LITERAL,
+                    "unterminated row literal (missing '}') (TUR-E0281)");
+}
+
 /* TCE (typed-container-elements / test-suite-idioms Phase E): a `:`-prefixed
  * element type fused to the closer of a vec or set literal pins the
  * collection's element type.  `[]:int` lowers to `(:: [] (Vec int))` and
@@ -1042,6 +1059,10 @@ static Form *try_read_data_literal(Reader *r) {
         peek_at(r, 3) == 't' && peek_at(r, 4) == '{') {
         return maybe_container_type_suffix(r, read_set_literal(r), "Set");
     }
+    if (peek_at(r, 1) == 'r' && peek_at(r, 2) == 'o' &&
+        peek_at(r, 3) == 'w' && peek_at(r, 4) == '{') {
+        return read_row_literal(r);
+    }
     /* Detect a #<ident>{ shape with an unrecognized tag -> TUR-E0283.
      * Scan a run of identifier characters after '#'; if it is followed by
      * '{' and the run is non-empty, it looked like a data-literal dispatch. */
@@ -1055,7 +1076,7 @@ static Form *try_read_data_literal(Reader *r) {
         tag[tlen] = '\0';
         diag_emit(DIAG_ERROR, s,
                   "unknown data-literal dispatch tag '#%s{...}'; "
-                  "expected '#map{...}' or '#set{...}' (TUR-E0283)", tag);
+                  "expected '#map{...}', '#set{...}', or '#row{...}' (TUR-E0283)", tag);
         r->error = true;
         return NULL;
     }

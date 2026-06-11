@@ -1,0 +1,17 @@
+;; Variadic HKT rows (Layer 4): a struct parameterised by a *row of types*
+;; through the `^&components` row-kinded type parameter (kind [*]). The row is
+;; a phantom type argument -- it distinguishes Query instantiations at the type
+;; level and is erased at codegen -- so a row is used soundly as a type
+;; argument and the program runs end-to-end.
+;; See docs/reported/variadic-hkt-rows-missing.md (Layer 4).
+(defstruct Query [^&components] (world :int))
+
+(defn make-query [w : int] : (Query #row{int bool})
+  (:: (make-struct Query w) (Query #row{int bool})))
+
+(defn query-world [q : (Query #row{int bool})] : int
+  (.world q))
+
+(defn main [] : int
+  (println (query-world (make-query 42)))
+  0)
