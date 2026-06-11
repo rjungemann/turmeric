@@ -319,6 +319,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_cps_prompt_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# AI1 (application-image-dumps-plan): image header codec unit test
+add_test(
+  NAME tur_image_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_image_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # LSP docstring scanner unit test
 add_test(
   NAME tur_docscanner_unit

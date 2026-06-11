@@ -1,0 +1,350 @@
+;;; tur/image -- application image dumps via serializable continuations.
+;;;
+;;; A warm-start facility in the style of Lisp `save-lisp-and-die`, Smalltalk
+;;; image saves, and Emacs `pdumper`: capture a post-init continuation with
+;;; Phase 21's `serial-shift`, write it to disk framed by a self-validating
+;;; 72-byte header, and on a later run restore it instead of paying init again.
+;;;
+;;; The on-disk format is a `TurImageHeader` (see src/runtime/image.h --
+;;; magic/version/build-stamp/payload-len/crc) followed by the TSER payload
+;;; bytes produced by Phase 21's serial codegen. The build stamp (a SHA-256 of
+;;; the running executable) pins an image to the binary that wrote it: a
+;;; foreign or stale image is rejected cleanly (a 0 return), never resumed as
+;;; garbage.
+;;;
+;;; SECURITY: loading an image is equivalent to `eval` -- it resumes captured
+;;; code. Treat image files as trusted executables; never load one from an
+;;; untrusted source. See docs/guides/image-dumps-guide.md.
+;;;
+;;; Since: Phase AI (application-image-dumps-plan)
+;; stdlib/image.tur -- depends on the Phase 21 serial primitives
+;; (tur_serial_cont_serialize / _deserialize / _resume, emitted as a C prelude
+;; whenever a program uses serial-reset). Self-contained otherwise: the
+;; SHA-256 and the 72-byte header codec are inline-C so `(load
+;; "stdlib/image.tur")` needs no other stdlib file.
+;;
+;; The header layout mirrors src/runtime/image.h byte-for-byte; the C unit test
+;; (tests/image_unit.c) pins the canonical implementation and the two must stay
+;; in lockstep.
+
+;; ---------------------------------------------------------------------------
+;; Build stamp (AI4): SHA-256 of the running executable.
+;;
+;; This pins an image to the exact binary that wrote it. The plan's AI4.1
+;; describes a linker-section stamp computed via a two-pass build; hashing the
+;; running executable at load time delivers the same *safety* contract
+;; (same binary -> same stamp; a different binary -> a different file -> a
+;; different stamp -> clean rejection) without any platform-specific linker
+;; magic. It does not guarantee byte-for-byte reproducibility across two builds
+;; of the same source (a nicety, not a safety property). See the guide.
+;; ---------------------------------------------------------------------------
+
+;;; image/build-stamp -- SHA-256 (32 bytes) of the running executable.
+;;;
+;;; Returns:
+;;;   A malloc'd 32-byte buffer (caller frees with image/free-stamp) as an int
+;;;   pointer, or 0 if the executable image could not be read.
+;;;
+;;; Since: Phase AI
+(defn image/build-stamp [] : int
+  ```c #include <stdint.h>
+  /* Read the running executable. */
+  FILE *exe = fopen("/proc/self/exe", "rb");
+  if (!exe) return 0;
+  if (fseek(exe, 0, SEEK_END) != 0) { fclose(exe); return 0; }
+  long sz = ftell(exe);
+  if (sz <= 0) { fclose(exe); return 0; }
+  rewind(exe);
+  size_t n = (size_t)sz;
+  /* Build a pre-padded SHA-256 message so the compression loop -- inlined
+   * below to avoid a nested helper function -- runs uniformly over whole
+   * 64-byte blocks. */
+  size_t total = (((n + 8) / 64) + 1) * 64;
+  uint8_t *P = (uint8_t *)calloc(total, 1);
+  if (!P) { fclose(exe); return 0; }
+  size_t got = fread(P, 1, n, exe);
+  fclose(exe);
+  if (got != n) { free(P); return 0; }
+  P[n] = 0x80;
+  uint64_t bits = (uint64_t)n * 8;
+  for (int j = 0; j < 8; j++) P[total - 1 - j] = (uint8_t)(bits >> (8 * j));
+  static const uint32_t K[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+  };
+  uint32_t st[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+  for (size_t off = 0; off < total; off += 64) {
+    const uint8_t *blk = P + off;
+    uint32_t w[64];
+    for (int i=0;i<16;i++) w[i]=((uint32_t)blk[i*4]<<24)|((uint32_t)blk[i*4+1]<<16)|((uint32_t)blk[i*4+2]<<8)|(uint32_t)blk[i*4+3];
+    for (int i=16;i<64;i++) {
+      uint32_t s0=((w[i-15]>>7)|(w[i-15]<<25))^((w[i-15]>>18)|(w[i-15]<<14))^(w[i-15]>>3);
+      uint32_t s1=((w[i-2]>>17)|(w[i-2]<<15))^((w[i-2]>>19)|(w[i-2]<<13))^(w[i-2]>>10);
+      w[i]=w[i-16]+s0+w[i-7]+s1;
+    }
+    uint32_t a=st[0],b=st[1],c=st[2],d=st[3],e=st[4],f=st[5],g=st[6],h=st[7];
+    for (int i=0;i<64;i++) {
+      uint32_t S1=((e>>6)|(e<<26))^((e>>11)|(e<<21))^((e>>25)|(e<<7));
+      uint32_t ch=(e&f)^(~e&g);
+      uint32_t t1=h+S1+ch+K[i]+w[i];
+      uint32_t S0=((a>>2)|(a<<30))^((a>>13)|(a<<19))^((a>>22)|(a<<10));
+      uint32_t mj=(a&b)^(a&c)^(b&c);
+      uint32_t t2=S0+mj;
+      h=g;g=f;f=e;e=d+t1;d=c;c=b;b=a;a=t1+t2;
+    }
+    st[0]+=a;st[1]+=b;st[2]+=c;st[3]+=d;st[4]+=e;st[5]+=f;st[6]+=g;st[7]+=h;
+  }
+  free(P);
+  uint8_t *out = (uint8_t *)malloc(32);
+  if (!out) return 0;
+  for (int j=0;j<8;j++) { out[j*4]=(st[j]>>24)&0xff; out[j*4+1]=(st[j]>>16)&0xff; out[j*4+2]=(st[j]>>8)&0xff; out[j*4+3]=st[j]&0xff; }
+  return (int64_t)(intptr_t)out;
+  ```)
+
+;;; image/free-stamp -- free a build stamp returned by image/build-stamp.
+(defn image/free-stamp [p : int] : void
+  ```c
+  if (p) free((void *)(intptr_t)p);
+  ```)
+
+;;; image/exists? -- 1 if a readable file exists at path, else 0.
+(defn image/exists? [path : cstr] : int
+  ```c
+  FILE *f = fopen(path, "rb");
+  if (!f) return 0;
+  fclose(f);
+  return 1;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; File I/O at the continuation boundary. All pointer juggling lives in C so
+;; the Turmeric surface stays in plain ints/handles. The 4-line CRC-32 loop is
+;; inlined at each site (no nested helper function, which the compiled backend
+;; rejects as an invalid storage class).
+;; ---------------------------------------------------------------------------
+
+;;; image/save-cont-to-file! -- serialise continuation k and write it to path.
+;;;
+;;; Marshals k via the Phase 21 serial codec, frames the resulting payload with
+;;; a 72-byte header carrying `stamp`, and writes it to `path`.
+;;;
+;;; Parameters:
+;;;   path  -- destination path
+;;;   k     -- the serial-continuation handle from serial-shift
+;;;   stamp -- 32-byte build stamp pointer (image/build-stamp), or 0 to zero-fill
+;;;
+;;; Returns:
+;;;   1 on success, 0 on failure (nil k, unwritable path, short write).
+;;;
+;;; Since: Phase AI
+(defn image/save-cont-to-file! [path : cstr k : ptr<void> stamp : int] : int
+  ```c #include <stdint.h>
+  #include <time.h>
+  if (!k) return 0;
+  uint8_t *bb = (uint8_t *)(intptr_t)tur_serial_cont_serialize((int64_t)(intptr_t)k);
+  if (!bb) return 0;
+  int64_t plen; memcpy(&plen, bb, 8);
+  const uint8_t *payload = bb + 8;
+  if (plen < 0) { free(bb); return 0; }
+  FILE *f = fopen(path, "wb");
+  if (!f) { free(bb); return 0; }
+  uint8_t hdr[72]; memset(hdr, 0, 72);
+  uint32_t magic=0x54555249u, ver=1u;
+  memcpy(hdr+0,&magic,4); memcpy(hdr+4,&ver,4);
+  if (stamp) memcpy(hdr+8,(const void*)(intptr_t)stamp,32);
+  uint64_t pl=(uint64_t)plen; memcpy(hdr+40,&pl,8);
+  struct timespec ts; uint64_t cns=0;
+  if (clock_gettime(CLOCK_REALTIME,&ts)==0) cns=(uint64_t)ts.tv_sec*1000000000ull+(uint64_t)ts.tv_nsec;
+  memcpy(hdr+48,&cns,8);
+  { uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc; memcpy(hdr+68,&crc,4); }
+  int ok = (fwrite(hdr,1,72,f)==72);
+  if (ok && plen>0) ok = (fwrite(payload,1,(size_t)plen,f)==(size_t)plen);
+  fclose(f);
+  free(bb);
+  return ok ? 1 : 0;
+  ```)
+
+;;; image/loadable? -- 1 if path is a structurally valid image for `stamp`.
+;;;
+;;; Validates magic + version + CRC and then requires the header build-stamp to
+;;; equal `stamp` (the running binary's stamp). A missing/corrupt/foreign image
+;;; returns 0. This is a *pre-check*: callers use it to decide whether to resume
+;;; an image, so that a resumed value of 0 is never confused with a load
+;;; failure. Returns 0 on any failure.
+;;;
+;;; Since: Phase AI
+(defn image/loadable? [path : cstr stamp : int] : int
+  ```c #include <stdint.h>
+  if (!stamp) return 0;
+  FILE *f = fopen(path, "rb");
+  if (!f) return 0;
+  uint8_t hdr[72];
+  size_t g = fread(hdr,1,72,f);
+  fclose(f);
+  if (g != 72) return 0;
+  uint32_t magic; memcpy(&magic,hdr+0,4);
+  if (magic != 0x54555249u) return 0;
+  uint32_t ver; memcpy(&ver,hdr+4,4);
+  if (ver != 1u) return 0;
+  uint32_t stored_crc; memcpy(&stored_crc,hdr+68,4);
+  uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc;
+  if (stored_crc != crc) return 0;
+  return memcmp(hdr+8, (const void*)(intptr_t)stamp, 32) == 0 ? 1 : 0;
+  ```)
+
+;;; image/load-resume-file! -- read + validate an image and resume it on v.
+;;;
+;;; Validates magic / version / CRC. When `stamp` is non-zero, also requires
+;;; the header build-stamp to equal it (build-stamp safety, AI4); pass 0 to
+;;; skip the stamp check (the --unsafe-image-skip-build-check escape hatch).
+;;;
+;;; Parameters:
+;;;   path  -- source path
+;;;   stamp -- 32-byte build-stamp pointer to enforce, or 0 to skip the check
+;;;   v     -- the value to resume the captured continuation with
+;;;
+;;; Returns:
+;;;   The resumed continuation's value on success (control transfers into the
+;;;   captured tail), or 0 on any validation/I-O failure (no resume occurs).
+;;;
+;;; Since: Phase AI
+(defn image/load-resume-file! [path : cstr stamp : int v : int] : int
+  ```c #include <stdint.h>
+  FILE *f = fopen(path, "rb");
+  if (!f) return 0;
+  uint8_t hdr[72];
+  if (fread(hdr,1,72,f)!=72) { fclose(f); return 0; }
+  uint32_t magic; memcpy(&magic,hdr+0,4);
+  if (magic != 0x54555249u) { fclose(f); return 0; }
+  uint32_t stored_crc; memcpy(&stored_crc,hdr+68,4);
+  uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc;
+  if (stored_crc != crc) { fclose(f); return 0; }
+  uint32_t ver; memcpy(&ver,hdr+4,4);
+  if (ver != 1u) { fclose(f); return 0; }
+  if (stamp && memcmp(hdr+8,(const void*)(intptr_t)stamp,32)!=0) { fclose(f); return 0; }
+  int64_t plen; { uint64_t pl; memcpy(&pl,hdr+40,8); plen=(int64_t)pl; }
+  if (plen < 0) { fclose(f); return 0; }
+  uint8_t *buf = (uint8_t *)malloc((size_t)(8 + plen));
+  if (!buf) { fclose(f); return 0; }
+  memcpy(buf, &plen, 8);
+  if (plen>0 && fread(buf+8,1,(size_t)plen,f)!=(size_t)plen) { free(buf); fclose(f); return 0; }
+  fclose(f);
+  int64_t kk = tur_serial_cont_deserialize((int64_t)(intptr_t)buf);
+  int64_t r = tur_serial_cont_resume(kk, (int64_t)v);
+  free(buf);
+  return (int64_t)r;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; High-level API (AI2).
+;; ---------------------------------------------------------------------------
+
+;;; save-image! -- capture the current continuation and write it to path.
+;;;
+;;; Captures at the serial-shift site: the continuation is the rest of the
+;;; enclosing serial-reset after this call. Returns 1 on a successful write.
+;;; On its own the captured continuation is the empty (identity) tail; the
+;;; useful capture happens via with-image-cache-after-init, which places the
+;;; capture between an init phase and a long-running loop.
+;;;
+;;; Since: Phase AI
+(defn save-image! [path : cstr] : int
+  (serial-reset
+    (serial-shift
+      (fn [k : ptr<void>] : int
+        (let [stamp (image/build-stamp)
+              ok    (image/save-cont-to-file! path k stamp)]
+          (do
+            (image/free-stamp stamp)
+            ok)))
+      0)))
+
+;;; load-image! -- read an image and resume the continuation it holds.
+;;;
+;;; Validates magic/version/crc and the build stamp against the running
+;;; binary. On a clean image, control transfers into the resumed continuation.
+;;; On any validation failure returns 0 (no resume).
+;;;
+;;; Note: a return of 0 is ambiguous -- it is also what a resumed continuation
+;;; that evaluates to 0 returns. When the cold/warm decision matters, gate on
+;;; image/loadable? first (as with-image-cache-after-init does) rather than on
+;;; this value.
+;;;
+;;; Since: Phase AI
+(defn load-image! [path : cstr] : int
+  (let [stamp (image/build-stamp)
+        r     (image/load-resume-file! path stamp 0)]
+    (do
+      (image/free-stamp stamp)
+      r)))
+
+;;; with-image-cache-after-init -- the primary warm-start combinator (AIQ1).
+;;;
+;;; On a cold start (no valid image): runs init, captures the continuation
+;;; that runs loop, writes it to path, then runs loop. On a warm start (valid
+;;; image present): skips init, restores the captured continuation, and jumps
+;;; straight into loop.
+;;;
+;;; Parameters:
+;;;   path -- image cache path
+;;;   init -- a fn [] run only on cold start (expensive setup)
+;;;   loop -- a fn [] run on both paths (the steady-state work)
+;;;
+;;; This is a macro, not a function: `init` and `loop` are spliced as call
+;;; targets so the captured continuation tail `(loop)` is a call to a *named*
+;;; top-level function. The serial-shift collector reconstructs frames by
+;;; stable name, so the tail cannot be a heap closure -- it must be a named
+;;; (serializable) continuation. Pass top-level `defn` names for init and loop.
+;;;
+;;; For a *cross-process* warm start to resume correctly, loop must reduce to a
+;;; serializable continuation (named frames, int/cstr/Serializable envs) -- the
+;;; same constraint Serializable continuations impose on serial-shift.
+;;;
+;;; Since: Phase AI
+(defmacro with-image-cache-after-init [path init loop]
+  `(let [stamp (image/build-stamp)
+         ok    (image/loadable? ~path stamp)]
+     (if (= ok 1)
+       ;; warm: trust the pre-checked image and resume, whatever it returns.
+       (let [warm (image/load-resume-file! ~path stamp 0)]
+         (do (image/free-stamp stamp) warm))
+       (do
+         (image/free-stamp stamp)
+         (serial-reset
+           (do
+             (~init)
+             (serial-shift
+               (fn [k : ptr<void>] : int
+                 (let [s (image/build-stamp)]
+                   (do
+                     (image/save-cont-to-file! ~path k s)
+                     (image/free-stamp s)
+                     ;; cold-start: resume the captured tail once to run loop.
+                     (image/load-resume-file! ~path 0 0))))
+               0)
+             (~loop)))))))
+
+;;; with-image-cache -- single-body warm-start wrapper.
+;;;
+;;; If a valid image exists, restore it; otherwise run body, then capture an
+;;; image after body returns. Prefer with-image-cache-after-init unless body
+;;; ends in a long-running loop you want to dump between iterations.
+;;;
+;;; Since: Phase AI
+(defn with-image-cache [path : cstr ^fat body : (fn [] int)] : int
+  (let [stamp (image/build-stamp)
+        ok    (image/loadable? path stamp)]
+    (if (= ok 1)
+      (let [warm (image/load-resume-file! path stamp 0)]
+        (do (image/free-stamp stamp) warm))
+      (do
+        (image/free-stamp stamp)
+        (body)
+        (save-image! path)
+        0))))
