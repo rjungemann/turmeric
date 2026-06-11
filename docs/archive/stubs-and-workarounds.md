@@ -101,14 +101,30 @@ below (selective coloring keeps direct-style hot code trampoline-free).
 
 ---
 
-### 1.5 [ ] Phase 21: Serial-Shift / Serializable Continuations
+### 1.5 [x] Phase 21: Serial-Shift / Serializable Continuations
 
-- `src/compiler/emit_expr.c` ~1138-1140: `EX_SERIAL_SHIFT` emits `int64_t %s = 0; /* serial-shift placeholder */`.
-- `src/turi/eval.c` ~3622-3624: `EX_SERIAL_RESET` evaluates body and discards the shift entirely.
-- `stdlib/workflow.tur:32-59`: `save-cont!` returns NULL; `resume-cont!` returns 0.
+**RESOLVED** (compiler codegen shipped, PR #325). `serial-shift` now captures
+the delimited context as a marshalable DK chain on the multi-prompt machine;
+`save-cont!` / `resume-cont!` round-trip a continuation through bytes (see
+`tests/fixtures/workflow-roundtrip`, `serial-context-marshal`,
+`serial-primitive-roundtrip`). The opaque-pointer policy (§3.1) is settled:
+`STAG_PTR` values are rejected at the `serial-shift` site rather than
+serialized as zero bytes, so frames that would capture an opaque handle fail
+cleanly.
 
-**Impact:** Workflow persistence (save/restore execution state) is entirely
-non-functional.
+**Application-layer continuation:** the warm-start image facility built on
+these primitives lives in `stdlib/image.tur` + `src/runtime/image.{h,c}` (plan
+`docs/upcoming/application-image-dumps-plan.md`, phases AI1/AI2/AI4/AI6/AI7
+implemented; AI3 globals, AI5 reload hooks, AI6.1 `tur run --image` still
+open). See [image-dumps-guide.md](../guides/image-dumps-guide.md).
+
+Historical (pre-#325) state, for reference:
+
+- `src/compiler/emit_expr.c` ~1138-1140: `EX_SERIAL_SHIFT` emitted `int64_t %s = 0; /* serial-shift placeholder */`.
+- `src/turi/eval.c` ~3622-3624: `EX_SERIAL_RESET` evaluated body and discarded the shift.
+- `stdlib/workflow.tur:32-59`: `save-cont!` returned NULL; `resume-cont!` returned 0.
+
+**Impact (historical):** Workflow persistence was non-functional until #325.
 
 **Plan:** Implement serial-shift as a special `SERIAL_RESET` delimiter with
 stack-snapshot serialization. The serial.c opaque-pointer placeholder

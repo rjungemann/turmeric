@@ -27,6 +27,7 @@
  * sizeof(TurImageHeader) == TUR_IMAGE_HEADER_SIZE == 72.
  */
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -80,5 +81,11 @@ TurImageError tur_image_write(FILE *f,
  * the first payload byte. Validates magic, version, and header CRC; does NOT
  * validate the build stamp (that is the caller's job, AI4). */
 TurImageError tur_image_read_header(FILE *f, TurImageHeader *out);
+
+/* Compute the SHA-256 of an entire file (used by `tur image-verify` to hash a
+ * candidate loader binary and compare it against an image's build stamp).
+ * Writes 32 bytes into out. Returns true on success, false if the file could
+ * not be read. */
+bool tur_image_sha256_file(const char *path, uint8_t out[TUR_IMAGE_STAMP_LEN]);
 
 #endif /* TUR_IMAGE_H */

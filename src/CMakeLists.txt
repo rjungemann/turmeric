@@ -126,6 +126,7 @@ set(TUR_CORE_SOURCES
     runtime/gc.c
     runtime/globals.c
     runtime/hamt.c
+    runtime/image.c
     runtime/interp.c
     runtime/rc.c
     runtime/rc_free_queue.c
