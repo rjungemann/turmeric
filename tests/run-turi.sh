@@ -272,6 +272,18 @@ serial-reset-basic
 #   fh-compose-handlers -- compose-handlers over disjoint effects + with-handler
 with-handler-value
 fh-compose-handlers
+
+# TI5 (turi-parity-post-v1-plan, panic payloads): the interpreter now carries a
+# typed panic payload (TypeKind + value + file/line) across the catch boundary,
+# so catch-panic-of filters by payload type and re-raises on mismatch, and the
+# panic-payload-* accessors read the caught value.  Verified under
+# 'tur --interpret'.  The accessors are only reachable via the inline-C
+# `result-panic` extractor (a carve-out), so coverage is the catch-panic-of
+# type-filtering path.
+#   panic-catch-panic-of -- plain (cstr) panic: :cstr matches, :int re-raises
+#   panic-with-catch-of  -- typed panic-with payload: :int matches, :cstr re-raises
+panic-catch-panic-of
+panic-with-catch-of
 "
 
 # Build an associative-set from the default list for O(1) lookup.

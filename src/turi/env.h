@@ -153,6 +153,14 @@ typedef struct TuriEnv {
     /* Phase R2: catch-unwind support — setjmp boundary for interpreter panic handling */
     jmp_buf     *catch_jmp;           /* active catch-unwind jmp_buf, or NULL */
     char         catch_panic_msg[512]; /* copy of panic message when longjmp fires */
+    /* Phase TI5: typed panic payload carried across the catch boundary so that
+     * catch-panic-of can filter by type and the panic-payload-* accessors can
+     * read the panicked value/file/line.  type_tag is a TypeKind (stored as int
+     * to keep env.h free of the compiler type headers); 0 == TY_NIL/none. */
+    int          catch_panic_type;    /* TypeKind tag of the in-flight panic */
+    TuriValue    catch_panic_value;   /* the panicked value (cstr for plain panic) */
+    const char  *catch_panic_file;    /* source file (best-effort; may be NULL) */
+    int          catch_panic_line;    /* source line of the panic */
     /* SI4: TypeClassEnv* from latest turi_eval; used by turi_try_show for Show dispatch.
      * Points into an eval_arena (never freed). Cast to TypeClassEnv* in eval.c. */
     void        *last_tc_env;

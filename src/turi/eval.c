@@ -511,6 +511,12 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     if (env->catch_jmp && !env->in_no_unwind) {
         strncpy(env->catch_panic_msg, s, sizeof(env->catch_panic_msg) - 1);
         env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+        /* TI5: a plain panic carries a cstr payload (the message), so
+         * catch-panic-of :cstr matches it. */
+        env->catch_panic_type  = TY_CSTR;
+        env->catch_panic_value = turi_cstr(env->catch_panic_msg);
+        env->catch_panic_file  = NULL;
+        env->catch_panic_line  = 0;
         env->panicking = true;
         longjmp(*env->catch_jmp, 1);
     }
@@ -526,6 +532,52 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
         fire_defers_to_mark_reversed(env, NULL, NULL);
     fflush(stdout);
     exit(1);
+}
+
+/* -------------------------------------------------------------------------
+ * Phase TI5: typed panic payloads + catch-panic-of.
+ *
+ * The compiled runtime carries a `tur_panic_payload { type_tag; value; file;
+ * line }` across the catch boundary so catch-panic-of can filter by type and
+ * the panic-payload-* accessors can read the panicked value.  The interpreter
+ * mirrors this: a panic stashes its type/value/file/line in the TuriEnv
+ * (catch_panic_*), and a caught result boxes a heap TuriPanicPayload whose
+ * pointer is the err-val of the (err payload) Result.  The panic-payload-*
+ * accessors cast that pointer back and read the fields.
+ * ---------------------------------------------------------------------- */
+
+typedef struct TuriPanicPayload {
+    int         type_tag;   /* TypeKind of the panicked value */
+    TuriValue   value;      /* the panicked value (cstr for a plain panic) */
+    const char *file;       /* source file, or NULL */
+    int         line;       /* source line, or 0 */
+} TuriPanicPayload;
+
+/* Build the 3-int Result box { is_ok, ok_val, err_val } the native ok/err
+ * helpers also use, in its Ok shape. */
+static TuriValue turi_ok_result_box(int64_t ok_val) {
+    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!box) return turi_error("eval: catch: oom");
+    box[0] = 1; box[1] = ok_val; box[2] = 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
+    return v;
+}
+
+/* Build the Err shape of the Result box, with err_val pointing at a heap
+ * TuriPanicPayload snapshotted from the env's in-flight panic fields. */
+static TuriValue turi_err_result_box(TuriEnv *env) {
+    TuriPanicPayload *pp = (TuriPanicPayload *)malloc(sizeof(TuriPanicPayload));
+    if (!pp) return turi_error("eval: catch: oom");
+    pp->type_tag = env->catch_panic_type;
+    pp->value    = env->catch_panic_value;
+    pp->file     = env->catch_panic_file
+                   ? strdup(env->catch_panic_file) : NULL;
+    pp->line     = env->catch_panic_line;
+    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!box) { free(pp); return turi_error("eval: catch: oom"); }
+    box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)pp;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
+    return v;
 }
 
 /* -------------------------------------------------------------------------
@@ -4129,16 +4181,25 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     case EX_PANIC_WITH: {
-        /* Typed panic payload — just needs "panic at" in stderr and nonzero exit. */
+        /* TI5: typed panic payload.  Evaluate the value and stash its TypeKind,
+         * value, and source line so catch-panic-of can filter by type and the
+         * panic-payload-* accessors can read it. */
+        TuriValue pv = eval_expr(env, frame, e->as.panic_with_.payload);
+        if (turi_is_error(pv) || env->returning || env->throwing) return pv;
         if (env->panicking) {
             fprintf(stderr, "double panic: aborting\n");
             fflush(stderr);
             fflush(stdout);
             abort();
         }
-        /* If a catch-unwind boundary is active, longjmp to it. */
+        /* If a catch boundary is active, longjmp to it carrying the payload. */
         if (env->catch_jmp && !env->in_no_unwind) {
             strncpy(env->catch_panic_msg, "typed panic", sizeof(env->catch_panic_msg) - 1);
+            env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+            env->catch_panic_type  = e->as.panic_with_.payload->type.kind;
+            env->catch_panic_value = pv;
+            env->catch_panic_file  = NULL;
+            env->catch_panic_line  = (int)e->span.line;
             env->panicking = true;
             longjmp(*env->catch_jmp, 1);
         }
@@ -4179,14 +4240,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * Result-box layout { is_ok, ok_val, err_val } that the native
              * ok/err/ok?/err? helpers produce and read, so the value composes
              * with ok?/err?/ok-val just like any other Result (Phase R2). */
-            int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-            if (!box) return turi_error("eval: catch-unwind: oom");
-            box[0] = 1; box[1] = result.as_int; box[2] = 0;
-            { TuriValue v = {0}; v.tag = TURI_INT;
-              v.as_int = (int64_t)(intptr_t)box; return v; }
+            return turi_ok_result_box(result.as_int);
         } else {
-            /* A panic was caught — restore env and return (err msg), again in
-             * the Result-box layout so err?/err-val recover the caught message. */
+            /* A panic was caught — restore env and return (err payload).  TI5:
+             * the err slot carries a boxed TuriPanicPayload so panic-payload-*
+             * accessors recover the caught value/type/file/line (the message is
+             * the cstr value for a plain panic). */
             env->catch_jmp    = prev_jmp;
             env->panicking    = false;
             env->returning    = prev_returning;
@@ -4194,13 +4253,92 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->throw_value  = prev_throw;
             env->return_value = prev_ret;
             (void)prev_panicking;
-            char *msg = env->catch_panic_msg[0] ? strdup(env->catch_panic_msg) : NULL;
-            int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-            if (!box) return turi_error("eval: catch-unwind: oom");
-            box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)msg;
-            { TuriValue v = {0}; v.tag = TURI_INT;
-              v.as_int = (int64_t)(intptr_t)box; return v; }
+            return turi_err_result_box(env);
         }
+    }
+
+    /* --- Phase TI5: catch-panic-of — type-filtered panic catch ------------- */
+    case EX_CATCH_PANIC_OF: {
+        TuriValue thunk_val = eval_expr(env, frame, e->as.catch_panic_of_.thunk);
+        if (turi_is_error(thunk_val) || env->returning || env->throwing) return thunk_val;
+        if (thunk_val.tag != TURI_CLOSURE)
+            return turi_error("eval: catch-panic-of: thunk must be a closure");
+        int want_type = (int)e->as.catch_panic_of_.type_kind;
+
+        jmp_buf  jb;
+        jmp_buf *prev_jmp       = env->catch_jmp;
+        bool     prev_returning = env->returning;
+        bool     prev_throwing  = env->throwing;
+        TuriValue prev_throw    = env->throw_value;
+        TuriValue prev_ret      = env->return_value;
+        env->catch_jmp = &jb;
+
+        TuriValue result;
+        if (setjmp(jb) == 0) {
+            result = eval_apply(env, thunk_val.as_closure, NULL, 0);
+            env->catch_jmp = prev_jmp;
+            if (turi_is_error(result) || env->returning || env->throwing)
+                return result;
+            return turi_ok_result_box(result.as_int);
+        } else {
+            /* A panic reached this boundary.  Restore the saved control state
+             * (the payload fields in env still describe the in-flight panic). */
+            env->catch_jmp    = prev_jmp;
+            env->returning    = prev_returning;
+            env->throwing     = prev_throwing;
+            env->throw_value  = prev_throw;
+            env->return_value = prev_ret;
+
+            if (env->catch_panic_type == want_type) {
+                /* Matching type: consume the panic, return (err payload). */
+                env->panicking = false;
+                return turi_err_result_box(env);
+            }
+            /* Type mismatch: re-raise to the next outer boundary, or abort.
+             * env->panicking stays true and the payload fields are untouched so
+             * the outer boundary sees the original panic. */
+            if (prev_jmp && !env->in_no_unwind)
+                longjmp(*prev_jmp, 1);
+            fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
+            fflush(stderr);
+            fire_defers_to_mark_reversed(env, NULL, NULL);
+            fflush(stdout);
+            exit(1);
+        }
+    }
+
+    /* --- Phase TI5: panic-payload-* accessors ------------------------------ */
+    case EX_PANIC_PAYLOAD_TYPE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_type_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return turi_int(pp ? pp->type_tag : 0);
+    }
+    case EX_PANIC_PAYLOAD_VALUE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_value_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return pp ? pp->value : turi_nil();
+    }
+    case EX_PANIC_PAYLOAD_FILE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_file_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return turi_cstr(pp && pp->file ? pp->file : "");
+    }
+    case EX_PANIC_PAYLOAD_LINE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_line_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return turi_int(pp ? pp->line : 0);
+    }
+    case EX_PANIC_PAYLOAD_DOWNS: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_downs_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        if (pp && pp->type_tag == (int)e->as.panic_payload_downs_.target_type)
+            return pp->value;
+        return turi_nil();
     }
 
     /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */

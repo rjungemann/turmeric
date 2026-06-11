@@ -567,27 +567,59 @@ versioning."
 
 ---
 
-## Phase TI5 -- Panic payloads + `catch-panic-of`
+## Phase TI5 -- Panic payloads + `catch-panic-of` -- **LANDED (interpreter)**
 
 **Depends on:** `error-handling-deferred-plan.md` Phase R2 -- **landed**
 (commit `0de95bcc`, "Phase R2 + R6c: catch-unwind and panic handling on
-compiled path"). TI5 is no longer blocked; it can run in parallel with
+compiled path"). TI5 is no longer blocked; it ran in parallel with
 TI2-TI4.
 
-### Implementation
+`EX_CATCH_PANIC_OF` and the `EX_PANIC_PAYLOAD_{TYPE,VALUE,FILE,LINE,DOWNS}`
+family are now handled in `src/turi/eval.c`.
 
-The interpreter already has a `catch_jmp` setjmp boundary in
-`src/turi/env.h:154`. Extend it to carry a `tur_panic_payload`
-(matching the compiled-path struct at
-`src/runtime/runtime.h:261`). The accessors
-(`EX_PANIC_PAYLOAD_TYPE`, `_VALUE`, `_FILE`, `_LINE`, `_DOWNS`) read
-fields off that payload. `EX_CATCH_PANIC_OF` does the type-tag
-downcast before deciding whether to catch or re-raise.
+### Implementation (shipped)
+
+The interpreter's `catch_jmp` setjmp boundary now carries a typed panic
+payload. Four fields were added to `TuriEnv` (`src/turi/env.h`):
+`catch_panic_type` (a `TypeKind` stored as int), `catch_panic_value`
+(the panicked `TuriValue`), `catch_panic_file`, and `catch_panic_line`.
+
+- **Panic raise.** `turi_runtime_panic` (plain `(panic msg)` and native
+  `result-must`/`option-must`/...) stamps a `:cstr` payload whose value is
+  the message, so `catch-panic-of :cstr` matches a string panic.
+  `EX_PANIC_WITH` evaluates its operand and stamps the operand's
+  `type.kind` + value + source line.
+- **`EX_CATCH_PANIC_OF`.** Installs its own `setjmp` boundary. On a caught
+  panic it compares `catch_panic_type` against the requested `type_kind`:
+  on a match it consumes the panic and returns `(err payload)`; on a
+  mismatch it re-raises to the next outer boundary (`longjmp(prev_jmp)`),
+  or prints `panic at` + fires defers + exits if it is outermost -- mirroring
+  the compiled `tur_catch_panic_of` re-panic.
+- **Accessors.** A caught result's err slot boxes a heap `TuriPanicPayload`
+  (`{ type_tag; value; file; line }`); `EX_PANIC_PAYLOAD_*` cast that
+  pointer back and read the field. `_DOWNS` returns the value only when the
+  tag matches its `target_type`, else nil. `catch-unwind` was refactored to
+  share the same `turi_ok_result_box` / `turi_err_result_box` helpers, so
+  its err slot now carries the payload too.
 
 ### Tests
 
-Mirror the R2 fixtures from `error-handling-deferred-plan.md` under
-the turi harness.
+- `panic-catch-panic-of` -- plain (cstr) panic: `:cstr` matches, `:int`
+  re-raises to an outer `catch-unwind`. **Now passes under `tur --interpret`**
+  (previously hit the unhandled-kind default).
+- `panic-with-catch-of` (new) -- typed `panic-with` int payload: `:int`
+  matches, `:cstr` re-raises. Verified equal under `tur --interpret` and
+  `tur run`.
+
+Both added to the `run-turi.sh` allowlist (TI5 block).
+
+**Reachability note.** The `panic-payload-*` accessors are implemented and
+correct, but a *pure-turi* program cannot obtain the payload handle without
+the inline-C `result-panic` extractor (`stdlib/panic.tur`) -- `catch-panic-of`
+returns the `:int` Result box, and `err-val` does not typecheck against it.
+So the turi-testable surface is the `catch-panic-of` type-filtering path; the
+accessors mainly serve to close the `EX_*` parity gap and would work if reached
+via a native handle.
 
 ---
 
