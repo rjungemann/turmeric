@@ -220,17 +220,51 @@ level (no parser/codegen dependency yet). PRE-3 was executed alongside it.
 Purely additive: full fixture suite still green (no fixture constructs a row
 yet -- surface syntax is Layer 3).
 
+### Layer 3 -- `#row{...}` surface syntax [LANDED]
+
+The reader form and its lowering to `TY_TYPEROW` in type position.
+
+- **Reader.** New `F_ROW_LITERAL` Form tag (payload identical to `F_LIST`,
+  mirroring `F_SET_LITERAL`); `read_row_literal` + a `#row{` branch in
+  `try_read_data_literal` (`reader.c`), gated behind `-Xdata-literals` like the
+  other data literals. The unknown-dispatch error now lists `#row{...}` too.
+- **Elaboration.** `type_expr_from_form` (`elab_types.c`) lowers an
+  `F_ROW_LITERAL` in *type* position to a `TY_TYPEROW` (elements are the
+  positional element type forms; empty `#row{}` is the unit row). In *value*
+  position `elab_form` (`elab_toplevel.c`) emits a clean type-only error --
+  a row is a type, not a value.
+- **`-Werror=switch` blast radius.** A new Form tag forced handling in every
+  `FormTag`-exhaustive switch: the form printer (`forms.c`), the formatter
+  (`fmt.c`, two switches -- `#row{...}` round-trips through `tur fmt`), the
+  macro/quasiquote/ct-eval/substitute paths (`elab_macros.c`, 5 sites) and the
+  turi interpreter's equivalents (`interp.c`, 3 sites) -- all treat a row
+  literal structurally like a set literal (rebuild children). `main.c`'s
+  canonicalizer recurses into row elements. As with Layer 2, the `-Werror=switch`
+  build is the guard that no future `FormTag` switch forgets rows.
+- **Tests.** `tests/fixtures/errors/row-literal-value-position` (value-position
+  rejection, end-to-end through reader -> form -> elaborator). A *positive*
+  end-to-end fixture is deferred to Layer 4: a row is type-only, so until a
+  row-kinded constructor exists to apply it to, there is no *sound* runtime
+  program that uses one (see the finding below). The parse half is verified by
+  `tur fmt` round-tripping `#row{...}`; the Type half by `tur_typerow_unit`.
+
+**Finding filed during Layer 3:** using `#row{...}` as a *value*-type annotation
+(e.g. a parameter type) is currently accepted instead of being a kind error, and
+drops the row's elements (`TY_FN` stores only `TypeKind arg_kinds[]`). Not a live
+miscompile (such a parameter is uncallable), but a soundness/diagnostic hole to
+close in Layer 4. See
+[docs/reported/row-type-in-value-position-loses-elements.md](row-type-in-value-position-loses-elements.md).
+
 ### Remaining layers (revised order)
 
-3. **Surface syntax** per the PRE-1 decision (`#row{...}` reader form), with
-   `tests/fixtures/hkt-row-*`
-   fixtures. Must not perturb the existing tuple-sugar / binding-vector paths.
 4. **Row-kinded type parameter.** Let a constructor parameter carry kind `[*]`
-   so `Query` is functorial over a row. NOTE a second syntax sub-decision: the
-   HKT param markers are `^f` -> `KIND_ARROW` and `^^f` -> `KIND_ARROW2`
-   (`elab_types.c:1740-1772`; the fn-param path caps kind-vars at 8 and keys
-   off a lowercase initial in `elab_fns.c:973-987`). A row-kinded parameter
-   needs its own marker (e.g. `^[f]`), wired through both sites.
+   so `Query` is functorial over a row. This layer also **closes the Layer 3
+   finding**: reject rows in value-type position and validate type-application
+   argument kinds. NOTE a second syntax sub-decision: the HKT param markers are
+   `^f` -> `KIND_ARROW` and `^^f` -> `KIND_ARROW2` (`elab_types.c:1740-1772`;
+   the fn-param path caps kind-vars at 8 and keys off a lowercase initial in
+   `elab_fns.c:973-987`). A row-kinded parameter needs its own marker (e.g.
+   `^[f]`), wired through both sites.
 5. **Row operations** -- membership (`Pos in row`), union/`++` (query joins),
    propagation through partial application (`kind_of_type_app` already rejects
    applying a row; the *ops* are separate type-level functions).

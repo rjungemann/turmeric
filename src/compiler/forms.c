@@ -89,6 +89,10 @@ Form *form_set_literal(Arena *a, Span span, Form **items, uint32_t len) {
     return form_seq(a, F_SET_LITERAL, span, items, len);
 }
 
+Form *form_row_literal(Arena *a, Span span, Form **items, uint32_t len) {
+    return form_seq(a, F_ROW_LITERAL, span, items, len);
+}
+
 Form *form_cblock(Arena *a, Span span, StrSlice code) {
     Form *f = form_new(a, F_CBLOCK, span);
     /* The code slice points into the source file; we need to copy it */
@@ -196,6 +200,7 @@ const char *form_tag_name(FormTag tag) {
         case F_RANGE_VAR: return "range-var";
         case F_MAP_LITERAL: return "map-literal";
         case F_SET_LITERAL: return "set-literal";
+        case F_ROW_LITERAL: return "row-literal";
         default: return "unknown";
     }
 }
@@ -340,6 +345,14 @@ void form_print(Buf *b, const Form *f) {
             break;
         case F_SET_LITERAL:
             buf_puts(b, "#set{");
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (i) buf_putc(b, ' ');
+                form_print(b, f->as.list.items[i]);
+            }
+            buf_putc(b, '}');
+            break;
+        case F_ROW_LITERAL:
+            buf_puts(b, "#row{");
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 if (i) buf_putc(b, ' ');
                 form_print(b, f->as.list.items[i]);

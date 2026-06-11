@@ -149,6 +149,7 @@ Form *interp_eval(Env *e, Form *f) {
         case F_SET:
         case F_MAP_LITERAL:
         case F_SET_LITERAL:
+        case F_ROW_LITERAL:
         case F_CBLOCK:
         case F_TYPE_ANN:
         /* CT0: Contract type annotations evaluate to themselves */
@@ -209,6 +210,7 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
         case F_SET:
         case F_MAP_LITERAL:
         case F_SET_LITERAL:
+        case F_ROW_LITERAL:
             {
                 Form **new_items = (Form **)arena_alloc(macro_env->arena, f->as.list.len * sizeof(Form *));
                 for (uint32_t i = 0; i < f->as.list.len; i++) {
@@ -218,6 +220,7 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
                 if (f->tag == F_SET) return form_set(macro_env->arena, f->span, new_items, f->as.list.len);
                 if (f->tag == F_MAP_LITERAL) return form_map_literal(macro_env->arena, f->span, new_items, f->as.list.len);
                 if (f->tag == F_SET_LITERAL) return form_set_literal(macro_env->arena, f->span, new_items, f->as.list.len);
+                if (f->tag == F_ROW_LITERAL) return form_row_literal(macro_env->arena, f->span, new_items, f->as.list.len);
                 return form_vec(macro_env->arena, f->span, new_items, f->as.list.len);
             }
         case F_CBLOCK:
@@ -318,7 +321,8 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
         case F_MAP:
         case F_SET:
         case F_MAP_LITERAL:
-        case F_SET_LITERAL: {
+        case F_SET_LITERAL:
+        case F_ROW_LITERAL: {
             Form **items = (Form **)arena_alloc(macro_env->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 items[i] = macro_expand(macro_env, f->as.list.items[i], depth);
@@ -330,6 +334,7 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
             if (f->tag == F_SET) return form_set(macro_env->arena, f->span, items, f->as.list.len);
             if (f->tag == F_MAP_LITERAL) return form_map_literal(macro_env->arena, f->span, items, f->as.list.len);
             if (f->tag == F_SET_LITERAL) return form_set_literal(macro_env->arena, f->span, items, f->as.list.len);
+            if (f->tag == F_ROW_LITERAL) return form_row_literal(macro_env->arena, f->span, items, f->as.list.len);
             return form_vec(macro_env->arena, f->span, items, f->as.list.len);
         }
     }

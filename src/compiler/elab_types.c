@@ -1581,6 +1581,32 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         Form *app = form_list(e->arena, form->span, items, n + 1);
         return type_expr_from_form(e, app, rec_name, type_params,
                                    type_param_kinds, n_type_params);
+    } else if (form->tag == F_ROW_LITERAL) {
+        /* Variadic HKT rows: `#row{T1 T2 ...}` in type position lowers to a
+         * TY_TYPEROW whose elements are the (positional) element type forms.
+         * Distinct from the F_VEC tuple sugar above: a row has kind [*]
+         * (KIND_TYPEROW), is compile-time only, and is order-significant.
+         * An empty `#row{}` is the unit row. */
+        uint32_t n = form->as.list.len;
+        Type **elems = NULL;
+        if (n > 0) {
+            elems = (Type **)arena_alloc(e->arena, sizeof(Type *) * n);
+            for (uint32_t i = 0; i < n; i++) {
+                Type *et = type_expr_from_form(e, form->as.list.items[i], rec_name,
+                                               type_params, type_param_kinds,
+                                               n_type_params);
+                if (!et) return NULL;
+                elems[i] = et;
+            }
+        }
+        if (n > 255) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "#row{...} type-row has too many elements (%u); max 255", n);
+            return NULL;
+        }
+        Type *row = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *row = type_typerow(e->arena, elems, (uint8_t)n);
+        return row;
     } else if (form->tag == F_KEYWORD) {
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */
         const Symbol *sym = form->as.sym;

@@ -510,6 +510,15 @@ Expr *elab_form(Elab *e, Form *f) {
                                        f->as.list.items, f->as.list.len);
             return elab_form(e, call);
         }
+        /* Variadic HKT rows: a #row{...} type-row is a TYPE, not a value. It is
+         * only meaningful in type-annotation position (where type_expr_from_form
+         * lowers it to a TY_TYPEROW). Reaching the value elaborator means it was
+         * written where an expression is expected. */
+        case F_ROW_LITERAL:
+            diag_emit(DIAG_ERROR, f->span,
+                      "#row{...} is a type-level row and can only appear in a "
+                      "type annotation, not as a value expression");
+            return NULL;
         case F_SET: {
             /* Phase X3: Elaborate set literal #s(e1 e2 ...) -> EX_SET_LIT */
             uint32_t n = f->as.list.len;

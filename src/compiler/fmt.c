@@ -260,6 +260,14 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             }
             buf_putc(b, '}');
             break;
+        case F_ROW_LITERAL:
+            buf_puts(b, "#row{");
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (i) buf_putc(b, ' ');
+                fmt_form_flat(b, f->as.list.items[i]);
+            }
+            buf_putc(b, '}');
+            break;
     }
 }
 
@@ -964,9 +972,10 @@ static void fmt_form(FmtState *s, const Form *f) {
         case F_RANGE_VAR:
             if (f->as.list.len > 1) fmt_form(s, f->as.list.items[1]);
             break;
-        /* DL0: data literals -- emit inline (#map{...} / #set{...}) */
+        /* DL0: data literals -- emit inline (#map{...} / #set{...} / #row{...}) */
         case F_MAP_LITERAL:
         case F_SET_LITERAL:
+        case F_ROW_LITERAL:
             fmt_emit_inline(s, f);
             break;
     }
