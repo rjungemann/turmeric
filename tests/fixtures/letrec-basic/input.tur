@@ -1,0 +1,19 @@
+;; TI1.1 (turi-parity): letrec under the tree-walking interpreter.
+;;
+;; Exercises both self-recursion (fact) and mutual recursion (even?/odd?)
+;; bound in a single letrec group.  The interpreter pre-declares every name
+;; in a shared frame so recursive and mutually-recursive references resolve
+;; at call time.
+
+(defn main [] : int
+  (letrec [fact  (fn [n : int] : int
+                   (if (= n 0) 1 (* n (fact (- n 1)))))
+           even? (fn [n : int] : bool
+                   (if (= n 0) true  (odd?  (- n 1))))
+           odd?  (fn [n : int] : bool
+                   (if (= n 0) false (even? (- n 1))))]
+    (println (fact 5))
+    (println (even? 4))
+    (println (odd? 3))
+    (println (even? 7))
+    0))
