@@ -161,12 +161,38 @@ layout -- which regressed `coerce-carrier-to-struct` /
 comes from the loaded `option.tur`; `vec-get`/`vec-set!`/`vec-free` stubs are
 dropped (vec.tur owns them).
 
-### W1b -- Reconcile the native-shim layer (NOT a module-load task) -- **scoped 2026-06-11**
+### W1b -- Reconcile the native-shim layer (NOT a module-load task) -- **groundwork laid; 2 blockers pinned**
 
 > The naive plan was "fix the layouts, then add result/map/set/hamt to the
 > prelude." A spike on 2026-06-11 proved that is a **dead end as stated** -- the
 > real task is a representation-unification design problem. Findings below so
 > the next attempt is not mis-scoped.
+
+**Progress (Result, the suggested first target).** The dual-representation
+*reader* groundwork is landed: `turi_struct_field` (eval.c/eval.h) plus the
+`result_field`/`result_field_int` helpers make `native_ok_pred`/`err_pred`/
+`ok_val`/`err_val` accept **both** a make-struct `TuriStruct` (fields
+`[is_ok, ok_val, err_val]`) and the native `int64[3]` box.  Verified: with
+`result.tur` temporarily preloaded, `(ok-val (make-struct Result true 42 0))`
+correctly returned 42 (the reader unification works), and the panic fixtures
+still passed.  The helpers are behaviour-preserving while `result.tur` stays out
+(a Result is always the box, so the struct branch never fires).
+
+**The two remaining blockers to preloading `result.tur`** (so it is *not* yet in
+the prelude -- preloading it regressed an allowlisted fixture):
+
+1. **`(:: carrier (Result A B))` ascription.** With `result.tur` loaded,
+   `Result` is a concrete struct and the carrier->struct ascription in
+   `typed-slots/coerce-carrier-to-struct` errors under `--interpret` (silent
+   rc=1). The compiled path bridges the int64 carrier to the struct (KB-004);
+   the interpreter needs the equivalent at the ascription/conversion node.
+2. **`result-eq?` is a closure-calling inline-C native.** `result.tur`'s
+   `result-eq?` takes two `^fat` comparison closures; `try_exec_simple_inline_c`
+   cannot run it, so `typed/result-basic` still fails on it. It needs a real
+   `native_result_eq` that invokes the closures via `eval_apply`.
+
+Until both land, `result.tur` stays excluded; the dual-rep readers are the
+foundation that makes adding it a small change once they do.
 
 **Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
 prelude (with the `ok?`/`err?` stubs dropped) **regressed** `coerce-carrier-to-

@@ -380,6 +380,18 @@ static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fi
     return turi_struct_val(s);
 }
 
+/* W1b: see eval.h.  Read field idx of a struct value (TuriStruct is opaque to
+ * main.c, so the Result/Option native shims call this to accept a make-struct
+ * value as well as their native int64 box). */
+TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found) {
+    if (v.tag == TURI_STRUCT && v.as_struct && idx < v.as_struct->n_fields) {
+        if (found) *found = true;
+        return v.as_struct->fields[idx];
+    }
+    if (found) *found = false;
+    return turi_nil();
+}
+
 static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
     return make_struct_val_def(name, n, fields, NULL);
 }

@@ -4879,8 +4879,10 @@ static int cmd_eval(const char *path, bool use_color,
              * here because option.tur (preloaded below) defines it -- a stub
              * would collide.  ok?/err? keep their stubs because result.tur is
              * deliberately NOT preloaded (its native shims own the Result box;
-             * see the prelude comment).  none? has no module defn, so its stub
-             * stays too. */
+             * the W1b dual-rep readers below let make-struct Result coexist, but
+             * preloading result.tur regressed the carrier->struct ascription in
+             * coerce-carrier-to-struct, so it stays out -- see the gap plan).
+             * none? has no module defn, so its stub stays too. */
             "(defn ok? [r :int] :bool false)\n"
             "(defn err? [r :int] :bool false)\n"
             "(defn none? [r :int] :bool false)\n"
@@ -5527,29 +5529,46 @@ static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     r[0] = 0; r[1] = 0; r[2] = (n > 0) ? a[0].as_int : 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
+/* W1b: a Result reaches these shims either as a native int64[3] box
+ * {is_ok, ok_val, err_val} (from native_ok/err) or as a make-struct TuriStruct
+ * with the same field order (from `(make-struct Result ...)`).  These helpers
+ * read field `idx` from whichever representation so the two coexist -- the
+ * groundwork for preloading result.tur once the remaining blockers (the
+ * `:: carrier (Result A B)` ascription and a closure-calling result-eq? native)
+ * are handled.  Behaviour-preserving today: without result.tur a Result is
+ * always the int64 box, so the struct branch never fires. */
+static TuriValue result_field(TuriValue r, int idx) {
+    bool found = false;
+    TuriValue f = turi_struct_field(r, (uint32_t)idx, &found);
+    if (found) return f;
+    int64_t *p = (int64_t *)(intptr_t)r.as_int;
+    return turi_int(p ? p[idx] : 0);
+}
+static int64_t result_field_int(TuriValue r, int idx) {
+    TuriValue f = result_field(r, idx);
+    return (f.tag == TURI_BOOL) ? (f.as_bool ? 1 : 0) : f.as_int;
+}
 static TuriValue native_ok_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_bool(false);
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    return turi_bool(r != NULL && r[0] != 0);
+    if (a[0].tag != TURI_STRUCT && a[0].as_int == 0) return turi_bool(false);
+    return turi_bool(result_field_int(a[0], 0) != 0);
 }
 static TuriValue native_err_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_bool(true);
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    return turi_bool(!r || r[0] == 0);
+    if (a[0].tag != TURI_STRUCT && a[0].as_int == 0) return turi_bool(true);
+    return turi_bool(result_field_int(a[0], 0) == 0);
 }
 static TuriValue native_ok_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[1] : 0; return v;
+    return result_field(a[0], 1);
 }
 static TuriValue native_err_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[2] : 0; return v;
+    return result_field(a[0], 2);
 }
 static TuriValue native_result_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
