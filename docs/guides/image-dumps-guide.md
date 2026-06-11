@@ -93,13 +93,70 @@ if you expect whole-heap Lisp-image semantics.
 ## Resources: the reload-hook pattern
 
 OS-handle-backed values (files, sockets, GPU contexts) cannot be in the image.
-The application must re-acquire them after load.
+The application must re-acquire them after load. Two hook kinds bracket the
+image lifecycle:
 
-> **Status:** First-class `defimage-reload-hook` / `defimage-finalize-hook`
-> forms and the standard-hooks library (plan AI5) are **not yet implemented**.
-> For now, re-acquire resources explicitly at the top of your `loop` function
-> (it runs on both cold and warm starts), keyed off whether the handle is
-> already open. See `docs/upcoming/application-image-dumps-plan.md` AI5.
+- a **reload hook** runs on a warm start, after a valid image is selected and
+  *before* the captured continuation resumes user code -- the place to re-open
+  files, re-bind sockets, or re-establish GPU contexts;
+- a **finalize hook** runs on a cold start, immediately *before* the image
+  bytes are written -- the place to flush buffers or drop transient state that
+  should not be captured.
+
+Both are registered with `image/register-reload-hook!` /
+`image/register-finalize-hook!` and run in registration order. The
+`with-image-cache` combinators and `save-image!` / `load-image!` invoke them
+for you at the right point.
+
+```turmeric
+(defimage-reload-hook reopen-log
+  (do (reopen-the-log!) 0))            ; defines (defn reopen-log [] :int ...)
+
+(defimage-finalize-hook flush-log
+  (do (flush-the-log!) 0))
+
+(defn main [] :int
+  (image/register-reload-hook!   reopen-log)   ; install BOTH hooks at the top
+  (image/register-finalize-hook! flush-log)    ; of main -- see the note below
+  (with-image-cache-after-init "/var/cache/app.img" expensive-init main-loop))
+```
+
+> **Register at the top of `main`, not inside `init`.** A compiled Turmeric
+> program runs only `main` (top-level forms do not execute), so hooks cannot
+> self-register at load time -- `defimage-reload-hook` is sugar for a named
+> `defn`, not a registration. And a *warm* start skips `init` entirely, so a
+> hook registered there would be missing on exactly the run that needs the
+> reacquisition. Install hooks before the with-image-cache call so they are
+> present on both paths.
+
+### The standard-hooks library
+
+`stdlib/image_hooks.tur` packages the common cases so you do not hand-roll the
+reopen logic. The tracked-file table is the workhorse: declare files during
+init, install the reopen hook once, and read fresh handles back after a warm
+resume.
+
+```turmeric
+(load "stdlib/image.tur")
+(load "stdlib/image_hooks.tur")
+
+(defn do-init [] :int
+  (image-hooks/track-file! "/var/run/app.sock" "r+")   ; declare what to reopen
+  0)
+
+(defn do-loop [] :int
+  (let [h (image-hooks/slot-handle 0)]                 ; live FILE* after resume
+    (read-through h)))
+
+(defn main [] :int
+  (image-hooks/use-reopen-tracked!)   ; reload hook: reopen every tracked file
+  (image-hooks/use-flush-stdio!)      ; finalize hook: fflush stdout/stderr
+  (with-image-cache-after-init "/var/cache/app.img" do-init do-loop))
+```
+
+On a cold start the slot handle is `0` (the reload hook does not run); on a warm
+start the hook reopens each tracked path and `image-hooks/slot-handle` returns
+the fresh `FILE*` (as an int handle to cast in inline-C).
 
 ## Build-stamp safety
 

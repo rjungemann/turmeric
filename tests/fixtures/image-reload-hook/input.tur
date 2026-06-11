@@ -1,0 +1,74 @@
+;; application-image-dumps-plan (AI5 / AI7.3): reload + finalize hooks.
+;;
+;; A reload hook re-acquires an OS resource (a file, by path) that cannot ride
+;; in the image; a finalize hook flushes transient state just before the image
+;; is written. Hooks are *defined* with defimage-reload-hook / -finalize-hook
+;; and *installed* with image/register-*-hook! at the top of main, so they are
+;; present on both cold and warm starts (a warm start skips init).
+;;
+;; Single process, cold then warm:
+;;   cold  -- init writes 42 to the data file; the finalize hook flushes before
+;;            the image is saved; reload hooks do NOT run on the cold path.
+;;   warm  -- the reload hook reopens the data file by path and reads 42 back
+;;            (the handle was never in the image); finalize hooks do NOT run.
+;; Both files are removed at start (hermetic) and end.
+
+(load "stdlib/image.tur")
+
+(defn img-rm [path : cstr] : void
+  ```c remove(path); ```)
+
+;; Write an int to a path (open / write / close) -- the "expensive" resource set
+;; up during cold-start init.
+(defn file-write-int [path : cstr v : int] : int
+  ```c
+  FILE *f = fopen(path, "w");
+  if (!f) return 0;
+  fprintf(f, "%lld", (long long)v);
+  fclose(f);
+  return 1;
+  ```)
+
+;; Reopen a path, read the int back, and report it -- exactly the reacquisition
+;; a fresh process must perform, since the FILE* could not be serialised.
+(defn file-reopen-and-report [path : cstr] : int
+  ```c
+  FILE *f = fopen(path, "r");
+  if (!f) { printf("reload: reopened data = <none>\n"); return -1; }
+  long long v = -1;
+  if (fscanf(f, "%lld", &v) != 1) v = -1;
+  fclose(f);
+  printf("reload: reopened data = %lld\n", (long long)v);
+  return (int64_t)v;
+  ```)
+
+(defimage-reload-hook reopen-data
+  (do
+    (file-reopen-and-report "/tmp/tur-image-reload-data.txt")
+    0))
+
+(defimage-finalize-hook flush-data
+  (do (println "finalize: flushed before save") 0))
+
+(defn do-init [] : int
+  (do
+    (file-write-int "/tmp/tur-image-reload-data.txt" 42)
+    (println "init: wrote data = 42")
+    0))
+
+(defn do-loop [] : int
+  (do (println "loop ran") 0))
+
+(defn main [] : int
+  (do
+    (image/register-reload-hook! reopen-data)
+    (image/register-finalize-hook! flush-data)
+    (img-rm "/tmp/tur-image-reload-hook.img")
+    (img-rm "/tmp/tur-image-reload-data.txt")
+    (println "cold:")
+    (with-image-cache-after-init "/tmp/tur-image-reload-hook.img" do-init do-loop)
+    (println "warm:")
+    (with-image-cache-after-init "/tmp/tur-image-reload-hook.img" do-init do-loop)
+    (img-rm "/tmp/tur-image-reload-hook.img")
+    (img-rm "/tmp/tur-image-reload-data.txt")
+    0))

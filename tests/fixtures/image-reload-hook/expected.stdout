@@ -1,0 +1,7 @@
+cold:
+init: wrote data = 42
+finalize: flushed before save
+loop ran
+warm:
+reload: reopened data = 42
+loop ran
