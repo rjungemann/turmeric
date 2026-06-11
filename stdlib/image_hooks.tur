@@ -16,7 +16,6 @@
 ;;;
 ;;; Since: Phase AI (application-image-dumps-plan, AI5.4)
 ;; stdlib/image_hooks.tur -- depends on stdlib/image.tur
-
 ;; ---------------------------------------------------------------------------
 ;; Tracked-file table.
 ;;
@@ -27,15 +26,13 @@
 ;; op 2: handle -- arg = slot id; returns the cached FILE* (0 until reopened).
 ;; op 3: count  -- returns the number of tracked slots.
 ;; ---------------------------------------------------------------------------
-
 ;;; image-hooks/cstr->raw -- reinterpret a :cstr as its raw int64 pointer (internal).
 (defn image-hooks/cstr->raw [s : cstr] : int
   ```c return (int64_t)(intptr_t)s; ```)
-
 ;;; image-hooks/file-table -- backing store for tracked files (internal).
+
 (defn image-hooks/file-table [op : int arg : int aux : int] : int
-  ```c
-  #define TUR_IMG_HOOK_MAX 64
+  ```c #define TUR_IMG_HOOK_MAX 64
   static char  *paths[TUR_IMG_HOOK_MAX];
   static char  *modes[TUR_IMG_HOOK_MAX];
   static void  *handles[TUR_IMG_HOOK_MAX];
@@ -67,7 +64,6 @@
     default: return -1;
   }
   ```)
-
 ;;; image-hooks/track-file! -- register a file path to reopen on warm start.
 ;;;
 ;;; Call this during cold-start init for each OS file the image cannot carry.
@@ -82,20 +78,19 @@
 ;;;   The 0-based slot id, or -1 if the table is full.
 ;;;
 ;;; Since: Phase AI (AI5.4)
+
 (defn image-hooks/track-file! [path : cstr mode : cstr] : int
   (image-hooks/file-table 0
-                          (image-hooks/cstr->raw path)
-                          (image-hooks/cstr->raw mode)))
-
+    (image-hooks/cstr->raw path)
+    (image-hooks/cstr->raw mode)))
 ;;; image-hooks/reopen-tracked-files -- the reload hook: reopen all tracked files.
 ;;;
 ;;; Returns the number of files successfully reopened. Registered for you by
 ;;; image-hooks/use-reopen-tracked!; you rarely call it directly.
 ;;;
 ;;; Since: Phase AI (AI5.4)
-(defn image-hooks/reopen-tracked-files [] : int
-  (image-hooks/file-table 1 0 0))
 
+(defn image-hooks/reopen-tracked-files [] : int (image-hooks/file-table 1 0 0))
 ;;; image-hooks/slot-handle -- the current FILE* for a tracked slot.
 ;;;
 ;;; Returns 0 until the reopen hook has run; after a warm resume it is the fresh
@@ -109,13 +104,11 @@
 ;;;   if the slot has not been reopened yet.
 ;;;
 ;;; Since: Phase AI (AI5.4)
-(defn image-hooks/slot-handle [id : int] : int
-  (image-hooks/file-table 2 id 0))
 
+(defn image-hooks/slot-handle [id : int] : int (image-hooks/file-table 2 id 0))
 ;;; image-hooks/tracked-count -- number of tracked file slots.
-(defn image-hooks/tracked-count [] : int
-  (image-hooks/file-table 3 0 0))
 
+(defn image-hooks/tracked-count [] : int (image-hooks/file-table 3 0 0))
 ;;; image-hooks/use-reopen-tracked! -- install the tracked-file reopen reload hook.
 ;;;
 ;;; Call once at the top of main (before the with-image-cache call) so the hook
@@ -126,25 +119,26 @@
 ;;;   The number of reload hooks registered so far (from image.tur).
 ;;;
 ;;; Since: Phase AI (AI5.4)
+
 (defn image-hooks/use-reopen-tracked! [] : int
   (image/register-reload-hook! image-hooks/reopen-tracked-files))
-
 ;; ---------------------------------------------------------------------------
 ;; Stdio hooks.
 ;; ---------------------------------------------------------------------------
-
 ;;; image-hooks/flush-stdio -- the finalize hook: flush stdout and stderr.
 ;;;
 ;;; Ensures buffered output is on disk before the image is written. Returns 0.
 ;;;
 ;;; Since: Phase AI (AI5.4)
+
+
 (defn image-hooks/flush-stdio [] : int
   ```c fflush(stdout); fflush(stderr); return 0; ```)
-
 ;;; image-hooks/use-flush-stdio! -- install the stdout/stderr flush finalize hook.
 ;;;
 ;;; Call once at the top of main. Returns the number of finalize hooks registered.
 ;;;
 ;;; Since: Phase AI (AI5.4)
+
 (defn image-hooks/use-flush-stdio! [] : int
   (image/register-finalize-hook! image-hooks/flush-stdio))

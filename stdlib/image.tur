@@ -26,7 +26,6 @@
 ;; The header layout mirrors src/runtime/image.h byte-for-byte; the C unit test
 ;; (tests/image_unit.c) pins the canonical implementation and the two must stay
 ;; in lockstep.
-
 ;; ---------------------------------------------------------------------------
 ;; Build stamp (AI4): SHA-256 of the running executable.
 ;;
@@ -38,7 +37,6 @@
 ;; magic. It does not guarantee byte-for-byte reproducibility across two builds
 ;; of the same source (a nicety, not a safety property). See the guide.
 ;; ---------------------------------------------------------------------------
-
 ;;; image/build-stamp -- SHA-256 (32 bytes) of the running executable.
 ;;;
 ;;; Returns:
@@ -106,22 +104,19 @@
   for (int j=0;j<8;j++) { out[j*4]=(st[j]>>24)&0xff; out[j*4+1]=(st[j]>>16)&0xff; out[j*4+2]=(st[j]>>8)&0xff; out[j*4+3]=st[j]&0xff; }
   return (int64_t)(intptr_t)out;
   ```)
-
 ;;; image/free-stamp -- free a build stamp returned by image/build-stamp.
-(defn image/free-stamp [p : int] : void
-  ```c
-  if (p) free((void *)(intptr_t)p);
-  ```)
 
+(defn image/free-stamp [p : int] : void
+  ```c if (p) free((void *)(intptr_t)p);
+  ```)
 ;;; image/exists? -- 1 if a readable file exists at path, else 0.
+
 (defn image/exists? [path : cstr] : int
-  ```c
-  FILE *f = fopen(path, "rb");
+  ```c FILE *f = fopen(path, "rb");
   if (!f) return 0;
   fclose(f);
   return 1;
   ```)
-
 ;; ---------------------------------------------------------------------------
 ;; Resource-reacquisition hooks (AI5).
 ;;
@@ -144,16 +139,16 @@
 ;; `init`, so anything registered inside `init` would be missing on exactly the
 ;; run that needs the reacquisition. Register before the with-image-cache call.
 ;; ---------------------------------------------------------------------------
-
 ;;; image/hook-registry -- backing store for reload/finalize hooks (internal).
 ;;;
 ;;; op 0: register a reload hook (arg = fat handle); returns the new count.
 ;;; op 1: run all reload hooks in registration order; returns the last result.
 ;;; op 2: register a finalize hook (arg = fat handle); returns the new count.
 ;;; op 3: run all finalize hooks in registration order; returns the last result.
+
+
 (defn image/hook-registry [op : int arg : int] : int
-  ```c
-  static int64_t reloads[64]; static int rn = 0;
+  ```c static int64_t reloads[64]; static int rn = 0;
   static int64_t finals[64];  static int fn_ = 0;
   switch (op) {
     case 0: if (rn < 64) reloads[rn++] = arg; return rn;
@@ -163,7 +158,6 @@
     default: return -1;
   }
   ```)
-
 ;;; image/register-reload-hook! -- install a hook run on warm start before resume.
 ;;;
 ;;; The hook is invoked after a valid image is selected and before the captured
@@ -179,9 +173,9 @@
 ;;;   The number of reload hooks registered so far.
 ;;;
 ;;; Since: Phase AI (AI5.1)
+
 (defn image/register-reload-hook! [^fat f : (fn [] int)] : int
   (image/hook-registry 0 f))
-
 ;;; image/run-reload-hooks -- invoke every registered reload hook in order.
 ;;;
 ;;; Returns the last hook's result (0 if none are registered). Called for you by
@@ -189,9 +183,8 @@
 ;;; you drive load-image! yourself.
 ;;;
 ;;; Since: Phase AI (AI5.1)
-(defn image/run-reload-hooks [] : int
-  (image/hook-registry 1 0))
 
+(defn image/run-reload-hooks [] : int (image/hook-registry 1 0))
 ;;; image/register-finalize-hook! -- install a hook run just before a save.
 ;;;
 ;;; The hook is invoked immediately before the image bytes are written, in
@@ -206,18 +199,17 @@
 ;;;   The number of finalize hooks registered so far.
 ;;;
 ;;; Since: Phase AI (AI5.3)
+
 (defn image/register-finalize-hook! [^fat f : (fn [] int)] : int
   (image/hook-registry 2 f))
-
 ;;; image/run-finalize-hooks -- invoke every registered finalize hook in order.
 ;;;
 ;;; Returns the last hook's result (0 if none are registered). Called for you by
 ;;; the with-image-cache combinators and save-image! just before writing bytes.
 ;;;
 ;;; Since: Phase AI (AI5.3)
-(defn image/run-finalize-hooks [] : int
-  (image/hook-registry 3 0))
 
+(defn image/run-finalize-hooks [] : int (image/hook-registry 3 0))
 ;;; defimage-reload-hook -- define a named reload hook function.
 ;;;
 ;;; Sugar for `(defn name [] : int body)`: it pins the `[] : int` hook signature
@@ -232,25 +224,22 @@
 ;;;   (image/register-reload-hook! reopen-log)
 ;;;
 ;;; Since: Phase AI (AI5.1)
-(defmacro defimage-reload-hook [name body]
-  `(defn ~name [] : int ~body))
 
+(defmacro defimage-reload-hook [name body] `(defn ~name [] : int ~body))
 ;;; defimage-finalize-hook -- define a named finalize hook function.
 ;;;
 ;;; Sugar for `(defn name [] : int body)`, the save-side companion of
 ;;; defimage-reload-hook. Install with `(image/register-finalize-hook! name)`.
 ;;;
 ;;; Since: Phase AI (AI5.3)
-(defmacro defimage-finalize-hook [name body]
-  `(defn ~name [] : int ~body))
 
+(defmacro defimage-finalize-hook [name body] `(defn ~name [] : int ~body))
 ;; ---------------------------------------------------------------------------
 ;; File I/O at the continuation boundary. All pointer juggling lives in C so
 ;; the Turmeric surface stays in plain ints/handles. The 4-line CRC-32 loop is
 ;; inlined at each site (no nested helper function, which the compiled backend
 ;; rejects as an invalid storage class).
 ;; ---------------------------------------------------------------------------
-
 ;;; image/save-cont-to-file! -- serialise continuation k and write it to path.
 ;;;
 ;;; Marshals k via the Phase 21 serial codec, frames the resulting payload with
@@ -265,6 +254,8 @@
 ;;;   1 on success, 0 on failure (nil k, unwritable path, short write).
 ;;;
 ;;; Since: Phase AI
+
+
 (defn image/save-cont-to-file! [path : cstr k : ptr<void> stamp : int] : int
   ```c #include <stdint.h>
   #include <time.h>
@@ -291,7 +282,6 @@
   free(bb);
   return ok ? 1 : 0;
   ```)
-
 ;;; image/loadable? -- 1 if path is a structurally valid image for `stamp`.
 ;;;
 ;;; Validates magic + version + CRC and then requires the header build-stamp to
@@ -301,6 +291,7 @@
 ;;; failure. Returns 0 on any failure.
 ;;;
 ;;; Since: Phase AI
+
 (defn image/loadable? [path : cstr stamp : int] : int
   ```c #include <stdint.h>
   if (!stamp) return 0;
@@ -319,7 +310,6 @@
   if (stored_crc != crc) return 0;
   return memcmp(hdr+8, (const void*)(intptr_t)stamp, 32) == 0 ? 1 : 0;
   ```)
-
 ;;; image/load-resume-file! -- read + validate an image and resume it on v.
 ;;;
 ;;; Validates magic / version / CRC. When `stamp` is non-zero, also requires
@@ -336,6 +326,7 @@
 ;;;   captured tail), or 0 on any validation/I-O failure (no resume occurs).
 ;;;
 ;;; Since: Phase AI
+
 (defn image/load-resume-file! [path : cstr stamp : int v : int] : int
   ```c #include <stdint.h>
   FILE *f = fopen(path, "rb");
@@ -362,11 +353,9 @@
   free(buf);
   return (int64_t)r;
   ```)
-
 ;; ---------------------------------------------------------------------------
 ;; High-level API (AI2).
 ;; ---------------------------------------------------------------------------
-
 ;;; save-image! -- capture the current continuation and write it to path.
 ;;;
 ;;; Captures at the serial-shift site: the continuation is the rest of the
@@ -376,18 +365,17 @@
 ;;; capture between an init phase and a long-running loop.
 ;;;
 ;;; Since: Phase AI
-(defn save-image! [path : cstr] : int
-  (serial-reset
-    (serial-shift
-      (fn [k : ptr<void>] : int
-        (let [_     (image/run-finalize-hooks)
-              stamp (image/build-stamp)
-              ok    (image/save-cont-to-file! path k stamp)]
-          (do
-            (image/free-stamp stamp)
-            ok)))
-      0)))
 
+
+(defn save-image! [path : cstr] : int
+  (serial-reset (serial-shift (fn [k : ptr<void>] : int
+                                (let [_     (image/run-finalize-hooks)
+                                      stamp (image/build-stamp)
+                                      ok    (image/save-cont-to-file! path
+                                              k
+                                              stamp)]
+                                  (do (image/free-stamp stamp) ok)))
+                  0)))
 ;;; load-image! -- read an image and resume the continuation it holds.
 ;;;
 ;;; Validates magic/version/crc and the build stamp against the running
@@ -400,14 +388,12 @@
 ;;; this value.
 ;;;
 ;;; Since: Phase AI
+
 (defn load-image! [path : cstr] : int
   (let [stamp (image/build-stamp)
         _     (image/run-reload-hooks)
         r     (image/load-resume-file! path stamp 0)]
-    (do
-      (image/free-stamp stamp)
-      r)))
-
+    (do (image/free-stamp stamp) r)))
 ;;; with-image-cache-after-init -- the primary warm-start combinator (AIQ1).
 ;;;
 ;;; On a cold start (no valid image): runs init, captures the continuation
@@ -431,9 +417,9 @@
 ;;; same constraint Serializable continuations impose on serial-shift.
 ;;;
 ;;; Since: Phase AI
+
 (defmacro with-image-cache-after-init [path init loop]
-  `(let [stamp (image/build-stamp)
-         ok    (image/loadable? ~path stamp)]
+  `(let [stamp (image/build-stamp) ok (image/loadable? ~path stamp)]
      (if (= ok 1)
        ;; warm: re-acquire resources, then resume the pre-checked image.
        (let [_    (image/run-reload-hooks)
@@ -441,21 +427,20 @@
          (do (image/free-stamp stamp) warm))
        (do
          (image/free-stamp stamp)
-         (serial-reset
-           (do
-             (~init)
-             (serial-shift
-               (fn [k : ptr<void>] : int
-                 (let [_ (image/run-finalize-hooks)
-                       s (image/build-stamp)]
-                   (do
-                     (image/save-cont-to-file! ~path k s)
-                     (image/free-stamp s)
-                     ;; cold-start: resume the captured tail once to run loop.
-                     (image/load-resume-file! ~path 0 0))))
-               0)
-             (~loop)))))))
-
+         (serial-reset (do
+                         (~init)
+                         (serial-shift (fn [k : ptr<void>] : int
+                                         (let [_ (image/run-finalize-hooks)
+                                               s (image/build-stamp)]
+                                           (do
+                                             (image/save-cont-to-file! ~path
+                                               k
+                                               s)
+                                             (image/free-stamp s)
+                                             ;; cold-start: resume the captured tail once to run loop.
+                                             (image/load-resume-file! ~path 0 0))))
+                           0)
+                         (~loop)))))))
 ;;; with-image-cache -- single-body warm-start wrapper.
 ;;;
 ;;; If a valid image exists, restore it; otherwise run body, then capture an
@@ -463,15 +448,11 @@
 ;;; ends in a long-running loop you want to dump between iterations.
 ;;;
 ;;; Since: Phase AI
+
 (defn with-image-cache [path : cstr ^fat body : (fn [] int)] : int
-  (let [stamp (image/build-stamp)
-        ok    (image/loadable? path stamp)]
+  (let [stamp (image/build-stamp) ok (image/loadable? path stamp)]
     (if (= ok 1)
       (let [_    (image/run-reload-hooks)
             warm (image/load-resume-file! path stamp 0)]
         (do (image/free-stamp stamp) warm))
-      (do
-        (image/free-stamp stamp)
-        (body)
-        (save-image! path)
-        0))))
+      (do (image/free-stamp stamp) (body) (save-image! path) 0))))
