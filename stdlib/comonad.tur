@@ -61,6 +61,7 @@
 ;;; closure round-trip through the carrier, so `extend` no longer crashes on a
 ;;; capturing closure the way the old bare-thin-cast `int64_t(*)(int64_t,int64_t)`
 ;;; invocation did.
+
 (defn __identity_extend [wa f : fn] : int
   ;; extend f w = Identity (f w)
   (__identity_new (f wa)))
@@ -74,7 +75,8 @@
   ```)
 ;;; Comonad [identity] -- Comonad instance for the Identity comonad.
 
-(definstance Comonad [identity] (extract [wa] (__identity_extract wa))
+(definstance Comonad [identity]
+  (extract [wa] (__identity_extract wa))
   (extend [wa f] (__identity_extend wa f))
   (duplicate [wa] (__identity_duplicate wa)))
 ;; -- Pair (Product) comonad ──────────────────────────────────────────────────
@@ -113,6 +115,7 @@
 ;;;
 ;;; CRU Phase 1: extend takes its function as a `:fn` poly-closure carrier (see
 ;;; __identity_extend) so a capturing closure works.
+
 (defn __pair_extend [wa f : fn] : int
   ;; extend f (e, a) = (e, f (e, a))
   (__pair_new (__pair_env wa) (f wa)))
@@ -128,6 +131,7 @@
   ```)
 ;;; Comonad [pair] -- Comonad instance for the Pair (product) comonad.
 
-(definstance Comonad [pair] (extract [wa] (__pair_extract wa))
+(definstance Comonad [pair]
+  (extract [wa] (__pair_extract wa))
   (extend [wa f] (__pair_extend wa f))
   (duplicate [wa] (__pair_duplicate wa)))

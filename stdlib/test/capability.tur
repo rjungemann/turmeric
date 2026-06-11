@@ -11,15 +11,14 @@
 (extern-c strcpy [^cstr ^cstr] :cstr)
 
 (extern-c strlen [^cstr] :int)
-
 ;; file-scope-c-block: every capability here is a struct of function pointers
 ;; backed by shared mutable state. Both the vtable methods AND the standalone
 ;; accessor defns below (testfs-clear, testlog-count, ...) must see the same
 ;; file-scope structs/globals -- a returned vtable cannot point at functions
 ;; nested inside a constructor body, and the globals cannot be trapped there
 ;; either. So the structs, the singleton state, and every helper live here.
-```c
-/* ---- Test-FileSystem: an in-memory filesystem singleton ---- */
+
+```c /* ---- Test-FileSystem: an in-memory filesystem singleton ---- */
 typedef struct __tur_test_fs_vtable {
     int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
     int (*write_file)(const char* path, const unsigned char* data, int data_len);
@@ -174,11 +173,11 @@ static int __tur_test_time_value = 0;
 static int __tur_test_now(void) { return __tur_test_time_value; }
 static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ```
-
 ;; ============================================================================
 ;; Test-FileSystem implementation -- in-memory filesystem for testing
 ;; ============================================================================
 ;; Test-FileSystem implementation
+
 
 (defn Test-FileSystem [] : int
   ```c __tur_test_fs_vtable* fs = (__tur_test_fs_vtable*)malloc(sizeof(__tur_test_fs_vtable));

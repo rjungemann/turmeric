@@ -82,7 +82,8 @@
 ;;;
 ;;; Since: Phase B1
 
-(definstance Clone [Ref] (clone [x] : int ```c struct { int64_t value; } *dst = malloc(sizeof(Ref));
+(definstance Clone [Ref]
+  (clone [x] : int ```c struct { int64_t value; } *dst = malloc(sizeof(Ref));
     dst->value = x.value;
     return (int64_t)(intptr_t)dst;
     ```))

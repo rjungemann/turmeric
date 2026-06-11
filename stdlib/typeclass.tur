@@ -20,56 +20,65 @@
 ;; Instances for primitive types
 ;;; Ord [int] -- Ord instance for int.
 
-(definstance Ord [int] (lt? [x y] (< x y))
+(definstance Ord [int]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;; Phase N4: Ord instances for new numeric types
 ;;; Ord [int8] -- Ord instance for int8.
 
-(definstance Ord [int8] (lt? [x y] (< x y))
+(definstance Ord [int8]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;;; Ord [int16] -- Ord instance for int16.
 
-(definstance Ord [int16] (lt? [x y] (< x y))
+(definstance Ord [int16]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;;; Ord [int32] -- Ord instance for int32.
 
-(definstance Ord [int32] (lt? [x y] (< x y))
+(definstance Ord [int32]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;;; Ord [uint8] -- Ord instance for uint8.
 
-(definstance Ord [uint8] (lt? [x y] (< x y))
+(definstance Ord [uint8]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;;; Ord [uint16] -- Ord instance for uint16.
 
-(definstance Ord [uint16] (lt? [x y] (< x y))
+(definstance Ord [uint16]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;;; Ord [uint32] -- Ord instance for uint32.
 
-(definstance Ord [uint32] (lt? [x y] (< x y))
+(definstance Ord [uint32]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;;; Ord [uint64] -- Ord instance for uint64.
 
-(definstance Ord [uint64] (lt? [x y] (< x y))
+(definstance Ord [uint64]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;;; Ord [float32] -- Ord instance for float32.
 
-(definstance Ord [float32] (lt? [x y] (< x y))
+(definstance Ord [float32]
+  (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
@@ -88,7 +97,8 @@
 ;; Instances for primitive types
 ;;; Show [int] -- Show instance for int.
 
-(definstance Show [int] (show [x] : cstr ```c char *buf = (char *)malloc(24);
+(definstance Show [int]
+  (show [x] : cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
@@ -100,49 +110,57 @@
 (definstance Show [bool] (show [x] : cstr (if x "true" "false")))
 ;;; Show [int8] -- Show instance for int8.
 
-(definstance Show [int8] (show [x] : cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [int8]
+  (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int16] -- Show instance for int16.
 
-(definstance Show [int16] (show [x] : cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [int16]
+  (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int32] -- Show instance for int32.
 
-(definstance Show [int32] (show [x] : cstr ```c char *buf = (char *)malloc(16);
+(definstance Show [int32]
+  (show [x] : cstr ```c char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%d", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint8] -- Show instance for uint8.
 
-(definstance Show [uint8] (show [x] : cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [uint8]
+  (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint16] -- Show instance for uint16.
 
-(definstance Show [uint16] (show [x] : cstr ```c char *buf = (char *)malloc(8);
+(definstance Show [uint16]
+  (show [x] : cstr ```c char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint32] -- Show instance for uint32.
 
-(definstance Show [uint32] (show [x] : cstr ```c char *buf = (char *)malloc(16);
+(definstance Show [uint32]
+  (show [x] : cstr ```c char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%u", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint64] -- Show instance for uint64.
 
-(definstance Show [uint64] (show [x] : cstr ```c char *buf = (char *)malloc(24);
+(definstance Show [uint64]
+  (show [x] : cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%llu", (unsigned long long)x);
     return (const char *)buf;
     ```))
 ;;; Show [float32] -- Show instance for float32.
 
-(definstance Show [float32] (show [x] : cstr ```c char *buf = (char *)malloc(32);
+(definstance Show [float32]
+  (show [x] : cstr ```c char *buf = (char *)malloc(32);
     snprintf(buf, 32, "%g", (double)x);
     return (const char *)buf;
     ```))
@@ -167,7 +185,8 @@
 ;; Instance for int
 ;;; Num [int] -- Num instance for int.
 
-(definstance Num [int] (add [x y] (+ x y))
+(definstance Num [int]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
@@ -175,56 +194,64 @@
 ;; Phase N4: Num instances for new numeric types
 ;;; Num [int8] -- Num instance for int8.
 
-(definstance Num [int8] (add [x y] (+ x y))
+(definstance Num [int8]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0i8 x)))
 ;;; Num [int16] -- Num instance for int16.
 
-(definstance Num [int16] (add [x y] (+ x y))
+(definstance Num [int16]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0i16 x)))
 ;;; Num [int32] -- Num instance for int32.
 
-(definstance Num [int32] (add [x y] (+ x y))
+(definstance Num [int32]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0i32 x)))
 ;;; Num [uint8] -- Num instance for uint8.
 
-(definstance Num [uint8] (add [x y] (+ x y))
+(definstance Num [uint8]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0u8 x)))
 ;;; Num [uint16] -- Num instance for uint16.
 
-(definstance Num [uint16] (add [x y] (+ x y))
+(definstance Num [uint16]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0u16 x)))
 ;;; Num [uint32] -- Num instance for uint32.
 
-(definstance Num [uint32] (add [x y] (+ x y))
+(definstance Num [uint32]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0u32 x)))
 ;;; Num [uint64] -- Num instance for uint64.
 
-(definstance Num [uint64] (add [x y] (+ x y))
+(definstance Num [uint64]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0u64 x)))
 ;;; Num [float32] -- Num instance for float32.
 
-(definstance Num [float32] (add [x y] (+ x y))
+(definstance Num [float32]
+  (add [x y] (+ x y))
   (sub [x y] (- x y))
   (mul [x y] (* x y))
   (div [x y] (/ x y))
@@ -435,13 +462,15 @@
 ;; Instances for primitive types (Display/Debug)
 ;;; Display [int] -- Display instance for int.
 
-(definstance Display [int] (display [x] : cstr ```c char *buf = (char *)malloc(24);
+(definstance Display [int]
+  (display [x] : cstr ```c char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 ;;; Debug [int] -- Debug instance for int.
 
-(definstance Debug [int] (debug [x] : cstr ```c char *buf = (char *)malloc(32);
+(definstance Debug [int]
+  (debug [x] : cstr ```c char *buf = (char *)malloc(32);
     snprintf(buf, 32, "int(%lld)", (long long)x);
     return (const char *)buf;
     ```))
@@ -450,7 +479,8 @@
 ;; In v1, result is represented as ptr<void>
 
 
-(definstance Display [ptr<void>] (display [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Display [ptr<void>]
+  (display [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "err";
     char *buf = (char *)malloc(48);
     if (res->is_ok) {
@@ -462,7 +492,8 @@
     ```))
 ;;; Debug [ptr<void>] -- Debug instance for result<T,E> represented as ptr<void>.
 
-(definstance Debug [ptr<void>] (debug [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Debug [ptr<void>]
+  (debug [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "Result::err";
     char *buf = (char *)malloc(64);
     if (res->is_ok) {
@@ -474,7 +505,8 @@
     ```))
 ;;; Show [ptr<void>] -- Show instance for result<T,E> represented as ptr<void>.
 
-(definstance Show [ptr<void>] (show [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Show [ptr<void>]
+  (show [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "err";
     char *buf = (char *)malloc(48);
     if (res->is_ok) {
@@ -486,7 +518,8 @@
     ```))
 ;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
 
-(definstance Error [ptr<void>] (error-message [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+(definstance Error [ptr<void>]
+  (error-message [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL || res->is_ok) {
         return "not an error";
     } else {

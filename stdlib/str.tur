@@ -149,6 +149,7 @@
 ;;
 ;; Requires the Either sum type; str.tur is not auto-loaded, so pulling in
 ;; stdlib/either.tur here only affects programs that explicitly load str.tur.
+
 (load "stdlib/either.tur")
 ;;; str->int-checked -- parse a cstr to an int, reporting failure via Either.
 ;;;
@@ -171,9 +172,9 @@
 ;;;   (left? (str->int-checked ""))            ; => true  (empty)
 ;;;
 ;;; Since: Phase sum-types-either
+
 (defn str->int-checked [s : cstr] : int
-  ```c
-  const char *cs = (const char *)(intptr_t)s;
+  ```c const char *cs = (const char *)(intptr_t)s;
   if (!cs || *cs == '\0') return ctor_Left((int64_t)0);
   char *end = (char *)0;
   long long v = strtoll(cs, &end, 10);

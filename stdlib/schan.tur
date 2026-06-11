@@ -29,25 +29,27 @@
 ;;; Since: S1
 ;; stdlib/schan.tur -- session-typed channel wrappers.
 (defmodule schan
-  (export SChan SSend SRecv SClose
-    schan-new schan-send schan-recv schan-close
-    schan-cell-new schan-cell-get schan-cell-free)
-
+  (export SChan
+    SSend
+    SRecv
+    SClose
+    schan-new
+    schan-send
+    schan-recv
+    schan-close
+    schan-cell-new
+    schan-cell-get
+    schan-cell-free)
   ;; ---- Protocol phantom tags -----------------------------------------------
   ;; Pure type-level markers; never constructed as values.  The carrier is :int
   ;; only so the opaque has a base type -- the value is irrelevant.
-
   ;;; SSend -- protocol step: send a value of type T, then continue as R.
   (defopaque SSend [T R] :int)
-
   ;;; SRecv -- protocol step: receive a value of type T, then continue as R.
   (defopaque SRecv [T R] :int)
-
   ;;; SClose -- protocol terminus: the channel is closed.
   (defopaque SClose :int)
-
   ;; ---- The session-typed channel wrapper -----------------------------------
-
   ;;; SChan -- a linear channel handle carrying a protocol phantom P.
   ;;;
   ;;; Lowers to the underlying :ptr<void> channel in the C ABI; the phantom P is
@@ -56,7 +58,6 @@
   ;;;
   ;;; Since: S1
   (defopaque SChan [P] :ptr<void> :linear)
-
   ;;; schan-new -- open a session-typed channel running protocol P.
   ;;;
   ;;; Parameters:
@@ -70,8 +71,7 @@
   ;;;   (:: (schan-new 4) (SChan (SSend int SClose)))  ; => SChan<SSend int SClose>
   ;;;
   ;;; Since: S1
-  (defn schan-new [P] [cap : int] : (SChan P)
-    ```c typedef struct {
+  (defn schan-new [P] [cap : int] : (SChan P) ```c typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -85,7 +85,6 @@
     ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
     return (int64_t)(intptr_t)ch;
     ```)
-
   ;;; schan-send -- send a T over a channel whose protocol begins with SSend T R.
   ;;;
   ;;; Parameters:
@@ -99,8 +98,7 @@
   ;;;   (let [c2 (schan-send c 42)] ...)  ; c : SChan<SSend int R> => c2 : SChan<R>
   ;;;
   ;;; Since: S1
-  (defn schan-send [T R] [c : (SChan (SSend T R)) v : T] : (SChan R)
-    ```c typedef struct {
+  (defn schan-send [T R] [c : (SChan (SSend T R)) v : T] : (SChan R) ```c typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -115,7 +113,6 @@
     pthread_mutex_unlock(&ch->lock);
     return (int64_t)(intptr_t)ch;
     ```)
-
   ;;; schan-recv -- receive a T from a channel whose protocol begins with SRecv T R.
   ;;;
   ;;; Parameters:
@@ -145,8 +142,7 @@
   ;;;     ...)
   ;;;
   ;;; Since: S1
-  (defn schan-recv [T R] [c : (SChan (SRecv T R)) cell : ptr<void>] : (SChan R)
-    ```c typedef struct {
+  (defn schan-recv [T R] [c : (SChan (SRecv T R)) cell : ptr<void>] : (SChan R) ```c typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -162,7 +158,6 @@
     *(int64_t *)cell = v;
     return (int64_t)(intptr_t)ch;
     ```)
-
   ;;; schan-close -- close a channel whose protocol has reached SClose.
   ;;;
   ;;; Parameters:
@@ -175,8 +170,7 @@
   ;;;   (schan-close c)   ; c : SChan<SClose>
   ;;;
   ;;; Since: S1
-  (defn schan-close [c : (SChan SClose)] : nil
-    ```c typedef struct {
+  (defn schan-close [c : (SChan SClose)] : nil ```c typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -187,9 +181,7 @@
     free(ch->buf);
     free(ch);
     ```)
-
   ;; ---- Value cell (out-parameter for schan-recv) ---------------------------
-
   ;;; schan-cell-new -- allocate a one-slot cell for receiving a value.
   ;;;
   ;;; Returns:
@@ -200,12 +192,10 @@
   ;;;   (let [cell (schan-cell-new)] ...)
   ;;;
   ;;; Since: S1
-  (defn schan-cell-new [] : ptr<void>
-    ```c int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+  (defn schan-cell-new [] : ptr<void> ```c int64_t *c = (int64_t *)malloc(sizeof(int64_t));
     if (!c) { fprintf(stderr, "schan-cell-new: oom\n"); abort(); }
     *c = 0; return (void *)c;
     ```)
-
   ;;; schan-cell-get -- read the value most recently stored into a cell by recv.
   ;;;
   ;;; Parameters:
@@ -221,7 +211,6 @@
   ;;; Since: S1
   (defn schan-cell-get [cell : ptr<void>] : int
     ```c return *(int64_t *)cell; ```)
-
   ;;; schan-cell-free -- release a cell allocated by schan-cell-new.
   ;;;
   ;;; Parameters:
@@ -234,5 +223,4 @@
   ;;;   (schan-cell-free cell)
   ;;;
   ;;; Since: S1
-  (defn schan-cell-free [cell : ptr<void>] : nil
-    ```c free(cell); ```))
+  (defn schan-cell-free [cell : ptr<void>] : nil ```c free(cell); ```))

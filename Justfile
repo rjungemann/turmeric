@@ -68,8 +68,11 @@ regen-snapshots *ARGS:
         [ -f "$input" ] || continue
         COUNT=$((COUNT + 1))
         if [ "$CHECK_MODE" = "1" ]; then
-            actual=$("$TUR" emit-c "$input" 2>/dev/null || true)
-            if ! diff -q <(echo "$actual") "$dir/expected.c" >/dev/null 2>&1; then
+            # Compare emit-c output to the snapshot by piping straight into
+            # diff.  Do NOT round-trip through `$(...)` + `echo`: command
+            # substitution strips trailing newlines, which falsely reports
+            # drift on every snapshot even when the bytes are identical.
+            if ! "$TUR" emit-c "$input" 2>/dev/null | diff -q - "$dir/expected.c" >/dev/null 2>&1; then
                 echo "DRIFT: $name"
                 FAILED=$((FAILED + 1))
             fi

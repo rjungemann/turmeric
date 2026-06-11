@@ -65,8 +65,7 @@
 ;;; callable, so the algebra is applied with plain `(alg ...)` instead of the
 ;;; hand-rolled fat-pointer extraction in inline-C.
 
-(defn cata [alg : fn fix : int] : int
-  (alg (unroll fix)))
+(defn cata [alg : fn fix : int] : int (alg (unroll fix)))
 ;;; ana -- anamorphism: unfold a seed value into a Fix value using a co-algebra.
 ;;;
 ;;; Parameters:
@@ -84,5 +83,4 @@
 ;;; callable, so the co-algebra is applied with plain `(coalg ...)` instead of
 ;;; the hand-rolled fat-pointer extraction in inline-C.
 
-(defn ana [coalg : fn seed : int] : int
-  (roll (coalg seed)))
+(defn ana [coalg : fn seed : int] : int (roll (coalg seed)))

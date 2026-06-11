@@ -34,6 +34,7 @@
 ;;;   (csv/parse-row-with-delim "bad" 0)  ; => 0
 ;;;
 ;;; Since: Phase D2
+
 (defn csv/parse-row-with-delim [line : cstr delim : int] : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
@@ -411,7 +412,9 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/read-file-with-delim [path : cstr delim : int] #{FS} : int
+(defn csv/read-file-with-delim [path : cstr delim : int]
+  #{FS}
+  : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
@@ -474,7 +477,9 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/read-file [path : cstr] #{FS} : int
+(defn csv/read-file [path : cstr]
+  #{FS}
+  : int
   ```c return csv_slread_hyfile_hywith_hydelim(path, 44);
   ```)
 ;;; csv/write-file-with-delim -- serialize a cons list of row vecs to a delimiter-separated file.
@@ -494,7 +499,9 @@
 ;;;
 ;;; Since: Phase D2
 
-(defn csv/write-file-with-delim [path : cstr rows : int delim : int] #{FS} : int
+(defn csv/write-file-with-delim [path : cstr rows : int delim : int]
+  #{FS}
+  : int
   ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return -1;
   char sep = (char)delim;
@@ -540,6 +547,8 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn csv/write-file [path : cstr rows : int] #{FS} : int
+(defn csv/write-file [path : cstr rows : int]
+  #{FS}
+  : int
   ```c return csv_slwrite_hyfile_hywith_hydelim(path, rows, 44);
   ```)

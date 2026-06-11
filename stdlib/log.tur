@@ -14,6 +14,7 @@
 (extern-c malloc [^ptr size] :ptr)
 
 (extern-c free [^ptr p] :void)
+
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: the log-*-direct writers emit to stdout/stderr, so they
 ;; add the #{IO} capability tag alongside their existing #{Unsafe}.  The Logger
@@ -32,13 +33,12 @@
 ;;; Since: Phase 16
 ;; Real-Logger implementation
 ;; Writes to stderr with timestamps
-
 ;; file-scope-c-block: the Logger capability is a struct of function pointers,
 ;; so its implementations must be FILE-SCOPE C functions (a returned vtable
 ;; cannot point at functions nested inside the constructor body). The shared
 ;; struct, the timestamp helpers, and every logger's method set are hoisted here.
-```c
-#include <time.h>
+
+```c #include <time.h>
 
 typedef struct __tur_logger {
     void (*debug)(const char* msg);

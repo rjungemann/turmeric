@@ -171,7 +171,8 @@
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
 ;; Note: element comparison uses integer equality; correct for all primitive A.
 
-(definstance Eq [Option] [(Eq A)]
+(definstance Eq [Option]
+  [(Eq A)]
   (eq? [x y] (option-eq? x y (fn [a b] (= a b)))))
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
@@ -188,10 +189,9 @@
 ;;;   (fmap (some 21) (fn [x] (* x 2)))  ; => some(42)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T1
+
 (definstance Functor [Option]
-  (fmap [container fn]
-    ```c
-    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)container;
+  (fmap [container fn] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)container;
     if (!o || !o->is_some) return 0;
     return tur_some(fn.fn(fn.env, o->value));
     ```))
@@ -202,12 +202,10 @@
 ;;;   (ap (some f) (some 3))  ; => some(f 3)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T1
+
 (definstance Applicative [Option]
-  (pure [x]
-    ```c return tur_some(x); ```)
-  (ap [ff fa]
-    ```c
-    struct { bool is_some; int64_t value; } *f = (void*)(intptr_t)ff;
+  (pure [x] ```c return tur_some(x); ```)
+  (ap [ff fa] ```c struct { bool is_some; int64_t value; } *f = (void*)(intptr_t)ff;
     struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)fa;
     if (!f || !f->is_some || !a || !a->is_some) return 0;
     /* the wrapped function is a fat-closure box; dispatch through slot 0 */
@@ -220,10 +218,9 @@
 ;;;   (bind (some 20) (fn [x] (some (+ x 1))))  ; => some(21)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T1
+
 (definstance Monad [Option]
-  (bind [ma fn]
-    ```c
-    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)ma;
+  (bind [ma fn] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)ma;
     if (!o || !o->is_some) return 0;
     return fn.fn(fn.env, o->value);
     ```))
@@ -233,12 +230,10 @@
 ;;;   (alt-or (none) (some 7))  ; => some(7)
 ;;;
 ;;; Since: stdlib-hkt-consolidation T1
+
 (definstance Alternative [Option]
-  (empty [a]
-    ```c (void)a; return 0; ```)
-  (alt-or [a b]
-    ```c
-    struct { bool is_some; int64_t value; } *x = (void*)(intptr_t)a;
+  (empty [a] ```c (void)a; return 0; ```)
+  (alt-or [a b] ```c struct { bool is_some; int64_t value; } *x = (void*)(intptr_t)a;
     if (x && x->is_some) return a;
     return b;
     ```))

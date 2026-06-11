@@ -1165,6 +1165,57 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
 
     if (verbose) fprintf(stderr, "[tur run] running recipe: %s\n", r->name);
 
+    /* Shebang recipe: if the first body line starts with `#!`, the whole body
+     * is a single script run by the interpreter named on the shebang line
+     * (e.g. `#!/usr/bin/env bash`), not a sequence of independent `sh -c`
+     * lines.  This matches `just` semantics and is required for recipes that
+     * rely on bash features (`set -o pipefail`, process substitution) or that
+     * carry state across lines.  We materialize the interpolated body into a
+     * temp file, mark it executable, and exec it so the kernel honors the
+     * shebang. */
+    if (r->n_lines > 0 && r->lines[0].text &&
+        r->lines[0].text[0] == '#' && r->lines[0].text[1] == '!') {
+        char tmpl[] = "/tmp/tur-run-XXXXXX";
+        int fd = mkstemp(tmpl);
+        if (fd < 0) {
+            fprintf(stderr, "tur run: failed to create temp script for recipe '%s'\n",
+                    r->name);
+            jenv_free(&env);
+            return 2;
+        }
+        int write_err = 0;
+        for (int i = 0; i < r->n_lines; i++) {
+            char *cmd = interpolate(r->lines[i].text, &env, jf);
+            if (!cmd) { write_err = 1; break; }
+            size_t len = strlen(cmd);
+            if ((len && write(fd, cmd, len) != (ssize_t)len) ||
+                write(fd, "\n", 1) != 1) {
+                write_err = 1;
+            }
+            free(cmd);
+            if (write_err) break;
+        }
+        close(fd);
+        if (write_err) {
+            unlink(tmpl);
+            jenv_free(&env);
+            return 2;
+        }
+        if (chmod(tmpl, 0700) != 0) {
+            unlink(tmpl);
+            jenv_free(&env);
+            return 2;
+        }
+        int exit_code = 0;
+        if (!dry_run) {
+            int sys_rc = system(tmpl);
+            exit_code = WIFEXITED(sys_rc) ? WEXITSTATUS(sys_rc) : 1;
+        }
+        unlink(tmpl);
+        jenv_free(&env);
+        return exit_code;
+    }
+
     /* Execute body lines */
     for (int i = 0; i < r->n_lines; i++) {
         const JLine *jl = &r->lines[i];

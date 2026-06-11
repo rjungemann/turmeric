@@ -29,6 +29,7 @@
 ;; docs/reported/load-not-idempotent-typeclass.md. range.tur is on-demand (not
 ;; auto-loaded, not pulled by `for`/`#r{}`), so the extra instances reach only
 ;; programs that actually use ranges. (range-gadt-typeclass-migration-plan B2.)
+
 (load "stdlib/typeclass.tur")
 ;; -------------------------------------------------------------------
 ;; Bound GADT and accessors
@@ -41,6 +42,7 @@
 ;;; docs/reported/defgadt-copy-and-shared-bounds.md.
 ;;;
 ;;; Since: LZ4 (GADT form: range-gadt-typeclass-migration-plan B1)
+
 (defgadt Bound
   [A]
   :copy
@@ -69,10 +71,7 @@
 ;;; Since: range-gadt-typeclass-migration-plan B1
 
 (defn bound-unbounded? [b : Bound] : bool
-  (match b
-    (Inclusive _) false
-    (Exclusive _) false
-    (Unbounded)   true))
+  (match b (Inclusive _) false (Exclusive _) false (Unbounded) true))
 ;;; range-bound-inclusive? -- true if the bound is inclusive.
 ;;;
 ;;; Parameters:
@@ -81,10 +80,7 @@
 ;;; Since: LZ4
 
 (defn range-bound-inclusive? [b : Bound] : bool
-  (match b
-    (Inclusive _) true
-    (Exclusive _) false
-    (Unbounded)   false))
+  (match b (Inclusive _) true (Exclusive _) false (Unbounded) false))
 ;;; range-bound-value -- return the endpoint value of a bound.
 ;;;
 ;;; Parameters:
@@ -93,10 +89,7 @@
 ;;; Since: LZ4
 
 (defn range-bound-value [b : Bound] : int
-  (match b
-    (Inclusive v) v
-    (Exclusive v) v
-    (Unbounded)   0))
+  (match b (Inclusive v) v (Exclusive v) v (Unbounded) 0))
 ;;; range-bound-flip -- return a new bound with the same value but flipped inclusivity.
 ;;;
 ;;; Parameters:
@@ -106,9 +99,12 @@
 
 (defn range-bound-flip [b : Bound] : Bound
   (match b
-    (Inclusive v) (Exclusive v)
-    (Exclusive v) (Inclusive v)
-    (Unbounded)   (Unbounded)))
+    (Inclusive v)
+    (Exclusive v)
+    (Exclusive v)
+    (Inclusive v)
+    (Unbounded)
+    (Unbounded)))
 ;;; Eq [Bound] -- structural equality on range endpoints.
 ;;;
 ;;; Two bounds are equal when they share the same constructor and (for
@@ -125,11 +121,15 @@
 (definstance Eq [Bound]
   (eq? [x y]
     (match x
-      (Inclusive a) (match y (Inclusive b) (= a b) (Exclusive _) false (Unbounded) false)
-      (Exclusive a) (match y (Inclusive _) false (Exclusive b) (= a b) (Unbounded) false)
-      (Unbounded)   (match y (Inclusive _) false (Exclusive _) false (Unbounded) true))))
+      (Inclusive a)
+      (match y (Inclusive b) (= a b) (Exclusive _) false (Unbounded) false)
+      (Exclusive a)
+      (match y (Inclusive _) false (Exclusive b) (= a b) (Unbounded) false)
+      (Unbounded)
+      (match y (Inclusive _) false (Exclusive _) false (Unbounded) true))))
 ;; bound-show-fmt -- inline-C formatter for a single inclusive/exclusive
 ;; endpoint: "[v" (kind 1) or "(v" (kind 2).  Backs Show [Bound].
+
 (defn bound-show-fmt [kind : int v : int] : cstr
   ```c char *buf = (char *)malloc(32);
   if (kind == 1) snprintf(buf, 32, "[%lld", (long long)v);
@@ -152,9 +152,12 @@
 (definstance Show [Bound]
   (show [x]
     (match x
-      (Inclusive v) (bound-show-fmt 1 v)
-      (Exclusive v) (bound-show-fmt 2 v)
-      (Unbounded)   "unbounded")))
+      (Inclusive v)
+      (bound-show-fmt 1 v)
+      (Exclusive v)
+      (bound-show-fmt 2 v)
+      (Unbounded)
+      "unbounded")))
 ;;; bound-lt? -- strict total order on Bound endpoints, backing Ord [Bound].
 ;;;
 ;;; Orders endpoints by position on the number line: Unbounded is the least
@@ -182,26 +185,29 @@
 (defn bound-lt? [x : Bound y : Bound] : bool
   (match x
     (Unbounded)
-    (match y
-      (Unbounded)   false
-      (Inclusive _) true
-      (Exclusive _) true)
+    (match y (Unbounded) false (Inclusive _) true (Exclusive _) true)
     (Inclusive a)
     (match y
-      (Unbounded)   false
-      (Inclusive b) (< a b)
-      (Exclusive b) (if (= a b) true (< a b)))
+      (Unbounded)
+      false
+      (Inclusive b)
+      (< a b)
+      (Exclusive b)
+      (if (= a b) true (< a b)))
     (Exclusive a)
     (match y
-      (Unbounded)   false
-      (Inclusive b) (if (= a b) false (< a b))
-      (Exclusive b) (< a b))))
+      (Unbounded)
+      false
+      (Inclusive b)
+      (if (= a b) false (< a b))
+      (Exclusive b)
+      (< a b))))
 ;;; Ord [Bound] -- total ordering on endpoints (see bound-lt? for semantics).
 
 (definstance Ord [Bound]
-  (lt?  [x y] (bound-lt? x y))
+  (lt? [x y] (bound-lt? x y))
   (lte? [x y] (not (bound-lt? y x)))
-  (gt?  [x y] (bound-lt? y x))
+  (gt? [x y] (bound-lt? y x))
   (gte? [x y] (not (bound-lt? x y))))
 ;; -------------------------------------------------------------------
 ;; Range allocation and accessors (inline-C)
@@ -344,7 +350,8 @@
 ;;;
 ;;; Since: LZ4
 
-(defn at-least-range [lo : int] : int (range-new (range-bound-new 1 lo) (Unbounded)))
+(defn at-least-range [lo : int] : int
+  (range-new (range-bound-new 1 lo) (Unbounded)))
 ;;; greater-than-range -- (lo, +inf) exclusive lower, unbounded above.
 ;;;
 ;;; Parameters:
@@ -358,7 +365,8 @@
 ;;;
 ;;; Since: LZ4
 
-(defn greater-than-range [lo : int] : int (range-new (range-bound-new 0 lo) (Unbounded)))
+(defn greater-than-range [lo : int] : int
+  (range-new (range-bound-new 0 lo) (Unbounded)))
 ;;; at-most-range -- (-inf, hi] unbounded below, inclusive upper.
 ;;;
 ;;; Parameters:
@@ -372,7 +380,8 @@
 ;;;
 ;;; Since: LZ4
 
-(defn at-most-range [hi : int] : int (range-new (Unbounded) (range-bound-new 1 hi)))
+(defn at-most-range [hi : int] : int
+  (range-new (Unbounded) (range-bound-new 1 hi)))
 ;;; less-than-range -- (-inf, hi) unbounded below, exclusive upper.
 ;;;
 ;;; Parameters:
@@ -386,7 +395,8 @@
 ;;;
 ;;; Since: LZ4
 
-(defn less-than-range [hi : int] : int (range-new (Unbounded) (range-bound-new 0 hi)))
+(defn less-than-range [hi : int] : int
+  (range-new (Unbounded) (range-bound-new 0 hi)))
 ;;; singleton-range -- [v, v] a range containing exactly one value.
 ;;;
 ;;; Parameters:
@@ -580,7 +590,8 @@
 ;;; Since: LZ4
 
 (defn bounded-range? [r : int] : bool
-  (and (not (bound-unbounded? (range-lower r))) (not (bound-unbounded? (range-upper r)))))
+  (and (not (bound-unbounded? (range-lower r)))
+    (not (bound-unbounded? (range-upper r)))))
 ;;; bounded-above? -- true if r has an upper bound.
 ;;;
 ;;; Parameters:

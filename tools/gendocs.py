@@ -1529,7 +1529,7 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
         '(defmodule tur/docstrings',
         '  (export doc-lookup doc-verified?)',
         '',
-        '(defn doc-lookup [name :cstr] :cstr',
+        '(defn doc-lookup [name : cstr] : cstr',
         '  ```c',
         '  static const struct { const char *key; const char *val; } entries[] = {',
     ]
@@ -1557,7 +1557,7 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
     # Phase D5: emit doc-verified? backed by the verified names set
     vnames = sorted(verified_names) if verified_names else []
     lines += [
-        '(defn doc-verified? [name :cstr] :bool',
+        '(defn doc-verified? [name : cstr] : bool',
         '  ```c',
         '  static const char *verified[] = {',
     ]
