@@ -46,6 +46,12 @@ struct TypeClass {
     uint8_t n_type_params;
     TypeClassMethod *methods;    /* Methods in this typeclass */
     uint8_t n_methods;
+    /* Associated type members (assoc-types-plan): zero or more associated type
+     * projections declared with `(type Name : Type)` in the defclass body.
+     * Each instance binds them to a concrete Type (see assoc_types below).
+     * Parallel to length n_assoc_types; NULL when the class declares none. */
+    const Symbol **assoc_type_names;
+    uint8_t        n_assoc_types;
     /* Phase HKT-P4: file that defined this typeclass (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown/builtin. */
     uint16_t origin_file_id;
@@ -82,6 +88,13 @@ struct TypeClassInstance {
      * Stored as TypeConstraint array for better type info tracking. */
     TypeConstraint *type_param_constraints;
     uint8_t n_type_param_constraints;
+    /* Associated type bindings (assoc-types-plan): parallel to the class's
+     * assoc_type_names.  assoc_types[k] is the concrete Type this instance
+     * binds for the class's k-th associated type member, so a type-level
+     * projection `(Name <inst-type-arg>)` resolves to assoc_types[k].
+     * NULL/0 when the class declares no associated types. */
+    Type   *assoc_types;
+    uint8_t n_assoc_types;
     /* Phase HKT-P4: file that defined this instance (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown. */
     uint16_t origin_file_id;
@@ -107,6 +120,26 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
 
 /* Look up a typeclass by name */
 TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol *name);
+
+/* assoc-types-plan: find the typeclass that declares an associated type member
+ * named `assoc_name`, writing the member's index within that class to
+ * *out_index.  Returns NULL (leaving *out_index untouched) when no registered
+ * class declares an associated type with that name. */
+TypeClass *typeclass_env_find_assoc_type(const TypeClassEnv *env,
+                                         const Symbol *assoc_name,
+                                         uint8_t *out_index);
+
+/* assoc-types-plan: resolve the type-level projection `(assoc_name type_arg)`
+ * to the concrete Type the matching instance binds for that associated type.
+ * `type_arg` is the class's single type argument as written at the projection
+ * site (e.g. `(Vec int)` in `(Elem (Vec int))`).  Instances are matched by
+ * precise structural type equality, so `(Elem (Vec int))` and
+ * `(Elem (Vec cstr))` resolve to distinct bindings.  Returns NULL when no
+ * class declares `assoc_name`, no instance precisely matches `type_arg`, or
+ * the instance left the member unbound. */
+const Type *typeclass_env_resolve_assoc_type(const TypeClassEnv *env,
+                                             const Symbol *assoc_name,
+                                             const Type *type_arg);
 
 /* Look up instances for a typeclass and type arguments */
 TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,

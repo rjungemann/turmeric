@@ -28,6 +28,8 @@ TypeClass *typeclass_env_register_typeclass(TypeClassEnv *env, const Symbol *nam
     tc->n_type_params = 0;
     tc->methods = NULL;
     tc->n_methods = 0;
+    tc->assoc_type_names = NULL;
+    tc->n_assoc_types = 0;
     tc->from_stdlib = false;
     tc->next = env->typeclasses;
     env->typeclasses = tc;
@@ -51,6 +53,8 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
     /* Phase PTC1: Type parameter constraints */
     inst->type_param_constraints = NULL;
     inst->n_type_param_constraints = 0;
+    inst->assoc_types = NULL;
+    inst->n_assoc_types = 0;
     inst->next = env->instances;
     env->instances = inst;
     
@@ -63,6 +67,41 @@ TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol 
         if (tc->name == name) {
             return tc;
         }
+    }
+    return NULL;
+}
+
+/* assoc-types-plan: find the class declaring an associated type `assoc_name`. */
+TypeClass *typeclass_env_find_assoc_type(const TypeClassEnv *env,
+                                         const Symbol *assoc_name,
+                                         uint8_t *out_index) {
+    for (TypeClass *tc = env->typeclasses; tc != NULL; tc = tc->next) {
+        for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
+            if (tc->assoc_type_names && tc->assoc_type_names[k] == assoc_name) {
+                if (out_index) *out_index = k;
+                return tc;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* assoc-types-plan: resolve `(assoc_name type_arg)` to its bound concrete Type.
+ * Uses precise structural type equality (type_eq) on the single type argument
+ * so that distinct instances of the same constructor (Vec int vs Vec cstr) are
+ * disambiguated -- the kind-erased dispatch lookup cannot do this. */
+const Type *typeclass_env_resolve_assoc_type(const TypeClassEnv *env,
+                                             const Symbol *assoc_name,
+                                             const Type *type_arg) {
+    uint8_t assoc_idx = 0;
+    TypeClass *tc = typeclass_env_find_assoc_type(env, assoc_name, &assoc_idx);
+    if (!tc || !type_arg) return NULL;
+    for (TypeClassInstance *inst = env->instances; inst != NULL; inst = inst->next) {
+        if (inst->typeclass != tc) continue;
+        if (inst->n_type_args != 1 || !inst->type_args) continue;
+        if (!type_eq(inst->type_args[0], *type_arg)) continue;
+        if (assoc_idx >= inst->n_assoc_types || !inst->assoc_types) return NULL;
+        return &inst->assoc_types[assoc_idx];
     }
     return NULL;
 }

@@ -1483,6 +1483,36 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return t;
         }
 
+        /* assoc-types-plan: type-level associated-type projection.
+         * `(AssocName T)` where AssocName is an associated type member of some
+         * registered typeclass resolves to the concrete type the matching
+         * instance binds for that member (e.g. `(Elem (Vec int))` -> int).
+         * Resolution matches the instance by precise structural equality on T,
+         * so distinct instances of the same constructor (Vec int vs Vec cstr)
+         * project to distinct types.  This fires only when AssocName was
+         * actually declared as an associated type, so it never intercepts an
+         * ordinary type application. */
+        if (form->as.list.len == 2 && form->as.list.items[0]->tag == F_SYM) {
+            const Symbol *head_sym = form->as.list.items[0]->as.sym;
+            uint8_t assoc_idx;
+            if (typeclass_env_find_assoc_type(&e->typeclass_env, head_sym, &assoc_idx)) {
+                Type *arg_t = type_expr_from_form(e, form->as.list.items[1], rec_name,
+                                                  type_params, type_param_kinds, n_type_params);
+                if (!arg_t) return NULL;
+                const Type *bound = typeclass_env_resolve_assoc_type(
+                    &e->typeclass_env, head_sym, arg_t);
+                if (!bound) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "no instance binding for associated type '%s' at this type",
+                              head_sym->name);
+                    return NULL;
+                }
+                Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *out = *bound;
+                return out;
+            }
+        }
+
         /* Type application: (ctor arg1 arg2 ...) — left-associative currying.
          * (ctor a b) == ((ctor a) b), (ctor a b c) == (((ctor a) b) c), etc.
          * Requires at least 2 elements (ctor + 1 arg). */

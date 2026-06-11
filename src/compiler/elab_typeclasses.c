@@ -1079,31 +1079,55 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     /* Parse methods */
     TypeClassMethod *methods = NULL;
     uint8_t n_methods = 0;
-    
-    /* First pass: count methods */
+
+    /* assoc-types-plan: a defclass body interleaves method declarations with
+     * associated-type declarations `(type Name : Type)`.  Classify each body
+     * form before parsing: a `type` head whose second element is a bare symbol
+     * (not a [params] vector) is an associated-type member; everything else is
+     * a method.  (A method literally named `type` carries a `[params]` vector
+     * as its second element, so the discriminator never misfires.) */
+    uint32_t n_body_forms = call->as.list.len - methods_start;
+    uint32_t *method_form_idx = n_body_forms > 0
+        ? (uint32_t *)arena_alloc(e->arena, n_body_forms * sizeof(uint32_t)) : NULL;
+    const Symbol **assoc_type_names = n_body_forms > 0
+        ? (const Symbol **)arena_alloc(e->arena, n_body_forms * sizeof(const Symbol *))
+        : NULL;
+    uint8_t n_assoc_types = 0;
+    const Symbol *sym_type_kw = intern_cstr(e->st, "type");
+
     for (uint32_t i = methods_start; i < call->as.list.len; i++) {
-        n_methods++;
+        Form *bf = call->as.list.items[i];
+        if (bf->tag == F_LIST && bf->as.list.len >= 2 &&
+            bf->as.list.items[0]->tag == F_SYM &&
+            bf->as.list.items[0]->as.sym == sym_type_kw &&
+            bf->as.list.items[1]->tag == F_SYM) {
+            assoc_type_names[n_assoc_types++] = bf->as.list.items[1]->as.sym;
+            continue;
+        }
+        method_form_idx[n_methods++] = i;
     }
-    
-    if (n_methods == 0) {
+
+    if (n_methods == 0 && n_assoc_types == 0) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defclass requires at least one method");
+                  "defclass requires at least one method or associated type");
         return NULL;
     }
-    
+
     /* Allocate methods array */
-    methods = (TypeClassMethod *)arena_alloc(e->arena, n_methods * sizeof(TypeClassMethod));
+    methods = n_methods > 0
+        ? (TypeClassMethod *)arena_alloc(e->arena, n_methods * sizeof(TypeClassMethod))
+        : NULL;
     /* Per-method body_start so the default-body elaboration can run as a
      * second pass after the redefinition check. */
-    uint32_t *method_body_starts = (uint32_t *)arena_alloc(e->arena,
-        n_methods * sizeof(uint32_t));
+    uint32_t *method_body_starts = n_methods > 0
+        ? (uint32_t *)arena_alloc(e->arena, n_methods * sizeof(uint32_t)) : NULL;
 
     /* Second pass (signatures only): parse each method's signature.  Default
      * bodies are elaborated in a third pass below so that an idempotent
      * stdlib re-declare can short-circuit without registering orphan
      * __default_* file-level FnDefs. */
     for (uint32_t i = 0; i < n_methods; i++) {
-        Form *method_form = call->as.list.items[methods_start + i];
+        Form *method_form = call->as.list.items[method_form_idx[i]];
         uint32_t body_start = 0;
         TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start,
                                                          type_params, n_type_params);
@@ -1116,7 +1140,8 @@ Expr *elab_defclass(Elab *e, const Form *call) {
      * Identical = idempotent silent skip (stdlib pre-declaration case);
      * different = hard error. */
     if (existing) {
-        if (typeclass_signatures_match(existing, n_type_params,
+        if (existing->n_assoc_types == n_assoc_types &&
+            typeclass_signatures_match(existing, n_type_params,
                                        type_param_kinds, n_methods, methods)) {
             return e_nil(e, call->span);
         }
@@ -1128,7 +1153,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     /* Third pass: elaborate default method bodies (if any) now that the
      * defclass is committed. */
     for (uint32_t i = 0; i < n_methods; i++) {
-        Form *method_form = call->as.list.items[methods_start + i];
+        Form *method_form = call->as.list.items[method_form_idx[i]];
         uint32_t body_start = method_body_starts[i];
         TypeClassMethod *method = &methods[i];
 
@@ -1251,6 +1276,8 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     tc->n_type_params     = n_type_params;
     tc->methods           = methods;
     tc->n_methods         = n_methods;
+    tc->assoc_type_names  = n_assoc_types > 0 ? assoc_type_names : NULL;
+    tc->n_assoc_types     = n_assoc_types;
     /* Phase HKT-P4: record the file that defined this typeclass. */
     tc->origin_file_id    = call->span.file_id;
     /* method-vs-defn clash check: a class registered during stdlib auto-load is
@@ -1961,16 +1988,64 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         }
     }
 
+    /* assoc-types-plan: an instance body interleaves method implementations
+     * with associated-type bindings `(type Name = <type-expr>)`.  Classify the
+     * forms after impls_start: a `type` head whose second element is a bare
+     * symbol is an associated-type binding; everything else is a method impl.
+     * Bindings are resolved after the instance is registered (so the type
+     * expression may reference the instance's own type args). */
+    uint32_t n_inst_body = call->as.list.len - impls_start;
+    Form **method_impl_forms = n_inst_body > 0
+        ? (Form **)arena_alloc(e->arena, n_inst_body * sizeof(Form *)) : NULL;
+    uint32_t n_method_impl_forms = 0;
+    const Symbol **assoc_bind_names = n_inst_body > 0
+        ? (const Symbol **)arena_alloc(e->arena, n_inst_body * sizeof(const Symbol *))
+        : NULL;
+    Form **assoc_bind_forms = n_inst_body > 0
+        ? (Form **)arena_alloc(e->arena, n_inst_body * sizeof(Form *)) : NULL;
+    uint32_t n_assoc_binds = 0;
+    {
+        const Symbol *sym_type_kw = intern_cstr(e->st, "type");
+        for (uint32_t bi = impls_start; bi < call->as.list.len; bi++) {
+            Form *bf = call->as.list.items[bi];
+            if (bf->tag == F_LIST && bf->as.list.len >= 2 &&
+                bf->as.list.items[0]->tag == F_SYM &&
+                bf->as.list.items[0]->as.sym == sym_type_kw &&
+                bf->as.list.items[1]->tag == F_SYM) {
+                /* (type Name = <type-expr>)  -- an optional `=` token may sit
+                 * between the name and the type expression. */
+                const Symbol *sym_eq = intern_cstr(e->st, "=");
+                uint32_t te_idx = 2;
+                if (bf->as.list.len > te_idx &&
+                    bf->as.list.items[te_idx]->tag == F_SYM &&
+                    bf->as.list.items[te_idx]->as.sym == sym_eq) {
+                    te_idx++;
+                }
+                if (bf->as.list.len <= te_idx) {
+                    diag_emit(DIAG_ERROR, bf->span,
+                              "associated type binding requires a type: "
+                              "(type %s = <type>)", bf->as.list.items[1]->as.sym->name);
+                    return NULL;
+                }
+                assoc_bind_names[n_assoc_binds] = bf->as.list.items[1]->as.sym;
+                assoc_bind_forms[n_assoc_binds] = bf->as.list.items[te_idx];
+                n_assoc_binds++;
+                continue;
+            }
+            method_impl_forms[n_method_impl_forms++] = bf;
+        }
+    }
+
     /* Parse method implementations */
     /* Each method impl is a function definition without the 'defn' keyword */
     /* Syntax: (method-name [param1 param2 ...] body...)
      * The number of methods must match the typeclass definition.
      */
 
-    if (call->as.list.len - impls_start < tc->n_methods) {
+    if (n_method_impl_forms < tc->n_methods) {
         diag_emit(DIAG_ERROR, call->span,
                   "definstance: expected %d method implementations for '%s', got %d",
-                  tc->n_methods, tc_name->name, call->as.list.len - impls_start);
+                  tc->n_methods, tc_name->name, n_method_impl_forms);
         return NULL;
     }
     
@@ -2038,7 +2113,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     inst->origin_file_id = call->span.file_id;
 
     for (uint8_t i = 0; i < tc->n_methods; i++) {
-        Form *impl_form = call->as.list.items[impls_start + i];
+        Form *impl_form = method_impl_forms[i];
         if (impl_form->tag != F_LIST || impl_form->as.list.len < 3) {
             diag_emit(DIAG_ERROR, impl_form->span,
                       "method implementation requires (name [params...] body...)");
@@ -2645,6 +2720,52 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         }
     }
     
+    /* assoc-types-plan: resolve and store associated-type bindings.  Every
+     * member the class declares must be bound exactly once; an unknown member
+     * name or a missing binding is a hard error reported on the instance, so a
+     * wrong/forgotten projection surfaces here rather than at a downstream use
+     * site. */
+    if (tc->n_assoc_types > 0 || n_assoc_binds > 0) {
+        Type *resolved = tc->n_assoc_types > 0
+            ? (Type *)arena_alloc(e->arena, tc->n_assoc_types * sizeof(Type)) : NULL;
+        bool *bound = tc->n_assoc_types > 0
+            ? (bool *)arena_alloc(e->arena, tc->n_assoc_types * sizeof(bool)) : NULL;
+        for (uint8_t k = 0; k < tc->n_assoc_types; k++) bound[k] = false;
+        for (uint32_t bi = 0; bi < n_assoc_binds; bi++) {
+            uint8_t idx = 0; bool found = false;
+            for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
+                if (tc->assoc_type_names[k] == assoc_bind_names[bi]) {
+                    idx = k; found = true; break;
+                }
+            }
+            if (!found) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "definstance: '%s' is not an associated type of typeclass '%s'",
+                          assoc_bind_names[bi]->name, tc_name->name);
+                return NULL;
+            }
+            Type *rt = type_expr_from_form(e, assoc_bind_forms[bi], NULL, NULL, NULL, 0);
+            if (!rt) {
+                diag_emit(DIAG_ERROR, assoc_bind_forms[bi]->span,
+                          "definstance: unsupported type for associated type '%s'",
+                          assoc_bind_names[bi]->name);
+                return NULL;
+            }
+            resolved[idx] = *rt;
+            bound[idx] = true;
+        }
+        for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
+            if (!bound[k]) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "definstance: missing binding for associated type '%s' of '%s'",
+                          tc->assoc_type_names[k]->name, tc_name->name);
+                return NULL;
+            }
+        }
+        inst->assoc_types = resolved;
+        inst->n_assoc_types = tc->n_assoc_types;
+    }
+
     /* Create an INSTANCE_DEF expression for codegen */
     Expr *inst_expr = expr_new(e->arena, EX_INSTANCE_DEF, TYPE_NIL, call->span);
     inst_expr->as.instance_def_.instance = inst;
