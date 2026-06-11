@@ -3,9 +3,28 @@ title: Typeclass-constraint syntax `[W] [(HasX W)] [w : W]` on defn is rejected
 category: Reported
 severity: Blocks typeclass-bounded polymorphism (the Has<Component> system pattern)
 discovered: 2026-06-11, executing ECS prereq plan E2 (HasComponent classes)
+partial-resolution: 2026-06-11. Item 2 (typed-method-param SEGV in
+  `elab_method_call`) is fixed with a defensive null-def check at
+  `src/compiler/elab_typeclasses.c:3229`. The compiler no longer aborts on
+  the shape; it emits a clean "no typeclass method found" diagnostic
+  instead. Items 1 (constraint syntax) and 3 (carrier-int dispatch on
+  struct receivers) remain open and still gate the spec'd ECS plan
+  "typeclass-bounded systems" path. The monomorphic call-site path -- a
+  Has<Comp> class with untyped `[^borrow w]` methods, dispatching by
+  receiver type to a per-(world, component) instance -- works today and
+  is shipped in the ECS spice via `defcomponent-class` +
+  `defcomponent-class-instance`.
 ---
 
 # Typeclass-constraint syntax `[W] [(HasX W)] [w : W]` on defn is rejected
+
+> **Status update 2026-06-11**: item 2 fixed (defensive). Items 1
+> and 3 open. The ECS spice now ships HasComponent classes built
+> against the working subset of the typeclass machinery: untyped
+> `[^borrow w]` method params, monomorphic dispatch through a per-
+> world `definstance`. See `tests/has-component-class.tur` in the
+> spice. The polymorphic-wrapper surface (plan's "typeclass-bounded
+> systems") is still blocked on items 1 and 3.
 
 ## Summary
 

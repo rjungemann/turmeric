@@ -3226,6 +3226,20 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         if (base.kind == TY_STRUCT) {
             /* Object is a struct — try field lookup */
             StructDef *def = app_struct_def ? app_struct_def : base.as.struct_.def;
+            /* Gap H item 2: when a typeclass method is declared with a typed
+             * parameter `[w : W]`, the elaborator can produce a TY_STRUCT
+             * with a NULL def for the receiver inside the method body if
+             * the class type variable W never got concretely bound (or
+             * binding propagation hit a soft spot). Pre-fix this segfaulted
+             * dereferencing `def->n_fields`; now we skip the field-access
+             * fast path and fall through to the regular typeclass-dispatch
+             * lookup below, which emits a clean diagnostic if no instance
+             * matches. Filed under
+             * docs/reported/typeclass-constrained-defn-rejected.md. */
+            if (!def) {
+                /* Treat as "not a struct after all" -- bail to dispatch path. */
+                goto skip_struct_field_lookup;
+            }
             for (uint32_t i = 0; i < def->n_fields; i++) {
                 if (strcmp(def->fields[i].name, method_name) == 0) {
                     /* Found matching field — build EX_GET_FIELD */
@@ -3250,6 +3264,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             /* In Phase PTC4, this allows (.method obj) to dispatch to typeclass
              * methods even when obj is a struct that doesn't have that field. */
         }
+skip_struct_field_lookup:;
     }
 
     /* Phase 16 v2: capability field call — (.field-name cap arg1 arg2 ...)
