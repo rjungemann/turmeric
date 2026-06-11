@@ -9,6 +9,7 @@
 typedef struct TuriClosure    TuriClosure;
 typedef struct TuriEffectCont TuriEffectCont;  /* defined in eval.c */
 typedef struct TuriGen        TuriGen;         /* defined in eval.c (TI2) */
+typedef struct TuriHandlerVal TuriHandlerVal;  /* defined in eval.c (TI6) */
 typedef struct TuriStruct     TuriStruct;      /* defined in eval.c */
 typedef struct TuriThrow      TuriThrow;       /* defined in eval.c */
 typedef struct TuriFuture     TuriFuture;      /* defined in turi/fiber.h */
@@ -30,6 +31,7 @@ typedef enum TuriTag {
     TURI_REF,            /* mutable borrow reference: void* to EvalBinding */
     TURI_STRUCT_TYPE,    /* struct type descriptor: as_cstr holds the name */
     TURI_GEN,            /* generator instance: TuriGen* (Phase TI2) */
+    TURI_HANDLER,        /* first-class handler value: TuriHandlerVal* (TI6) */
 } TuriTag;
 
 typedef struct TuriValue {
@@ -47,6 +49,7 @@ typedef struct TuriValue {
         TuriThrow        *as_throw;   /* in-flight exception */
         TuriFuture       *as_future;  /* async future handle (Phase S7) */
         TuriGen          *as_gen;     /* generator instance (Phase TI2) */
+        TuriHandlerVal   *as_handler; /* first-class handler value (TI6) */
     };
 } TuriValue;
 
@@ -73,6 +76,9 @@ static inline TuriValue turi_struct_type_val(const char *name) {
 }
 static inline TuriValue turi_gen_val(TuriGen *g) {
     return (TuriValue){TURI_GEN, .as_gen = g};
+}
+static inline TuriValue turi_handler_val(TuriHandlerVal *h) {
+    return (TuriValue){TURI_HANDLER, .as_handler = h};
 }
 static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
 

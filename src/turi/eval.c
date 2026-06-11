@@ -731,6 +731,30 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
     return result;
 }
 
+/* -------------------------------------------------------------------------
+ * Phase TI6: First-class handler values (handler / with-handler /
+ * compose-handlers).
+ *
+ * A handler *value* is a detached dispatch table -- a list of HandleCase
+ * pointers without a body.  `with-handler` later pairs such a value with a
+ * body and runs it exactly like a (handle BODY cases...) form: we materialise
+ * a contiguous HandleCase array, synthesise a HandleExpr, and reuse the
+ * existing eval_handle machinery (fiber body + perform/resume dispatch).
+ *
+ * The HandleCase structs are arena-allocated by the elaborator and outlive any
+ * single evaluation, so the value only needs to borrow pointers to them.
+ * `compose-handlers` concatenates two tables (h1's cases first -- h1 is the
+ * outer handler per FH0.1; the elaborator already rejects overlapping effect
+ * sets, so first-match dispatch order is unobservable across the two).
+ * ---------------------------------------------------------------------- */
+
+#define TURI_MAX_HANDLER_CASES 32
+
+struct TuriHandlerVal {
+    uint8_t            n_cases;
+    const HandleCase  *cases[TURI_MAX_HANDLER_CASES];
+};
+
 /* Evaluate a (handle BODY cases...) expression. */
 static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
                               const HandleExpr *h) {
@@ -3654,6 +3678,70 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_HANDLE:
         return eval_handle(env, frame, e->as.handle_.handle);
 
+    /* (handler (E [params] k) body) — build a detached handler value (TI6). */
+    case EX_HANDLER_LIT: {
+        const HandleExpr *h = e->as.handler_lit_.handle;
+        TuriHandlerVal *hv = (TuriHandlerVal *)calloc(1, sizeof(TuriHandlerVal));
+        if (!hv) return turi_error("eval: out of memory (handler value)");
+        if (h->n_cases > TURI_MAX_HANDLER_CASES) {
+            free(hv);
+            return turi_errorf("eval: handler has too many cases (%u)", h->n_cases);
+        }
+        hv->n_cases = h->n_cases;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            hv->cases[i] = &h->cases[i];
+        return turi_handler_val(hv);
+    }
+
+    /* (compose-handlers h1 h2) — concat two handler tables (TI6). */
+    case EX_COMPOSE_HANDLERS: {
+        TuriValue v1 = eval_expr(env, frame, e->as.compose_handlers_.h1);
+        if (turi_is_error(v1) || env->returning || env->throwing) return v1;
+        TuriValue v2 = eval_expr(env, frame, e->as.compose_handlers_.h2);
+        if (turi_is_error(v2) || env->returning || env->throwing) return v2;
+        if (v1.tag != TURI_HANDLER || v2.tag != TURI_HANDLER)
+            return turi_error("eval: compose-handlers: operands must be handler values");
+        TuriHandlerVal *a = v1.as_handler, *b = v2.as_handler;
+        if ((uint32_t)a->n_cases + b->n_cases > TURI_MAX_HANDLER_CASES)
+            return turi_error("eval: composed handler has too many cases");
+        TuriHandlerVal *hv = (TuriHandlerVal *)calloc(1, sizeof(TuriHandlerVal));
+        if (!hv) return turi_error("eval: out of memory (composed handler)");
+        for (uint8_t i = 0; i < a->n_cases; i++) hv->cases[hv->n_cases++] = a->cases[i];
+        for (uint8_t i = 0; i < b->n_cases; i++) hv->cases[hv->n_cases++] = b->cases[i];
+        return turi_handler_val(hv);
+    }
+
+    /* (with-handler hv body) — apply a handler value to a body (TI6). */
+    case EX_WITH_HANDLER: {
+        TuriValue hvv = eval_expr(env, frame, e->as.with_handler_.handler);
+        if (turi_is_error(hvv) || env->returning || env->throwing) return hvv;
+        if (hvv.tag != TURI_HANDLER)
+            return turi_error("eval: with-handler: first argument must be a handler value");
+        TuriHandlerVal *hv = hvv.as_handler;
+
+        /* Materialise a contiguous HandleCase array + HandleExpr so we can
+         * reuse eval_handle.  Both live on this frame -- safe because
+         * eval_handle runs the body (and all resumes) to completion before
+         * returning, and continuations never escape it. */
+        HandleCase cases[TURI_MAX_HANDLER_CASES];
+        for (uint8_t i = 0; i < hv->n_cases; i++) cases[i] = *hv->cases[i];
+        HandleExpr h;
+        h.body    = e->as.with_handler_.body;
+        h.cases   = cases;
+        h.n_cases = hv->n_cases;
+        return eval_handle(env, frame, &h);
+    }
+
+    /* (select ...) — multi-channel select (TI6, carved out).
+     * Channels in Turmeric are inline-C structs (pthread mutex/condvar); the
+     * interpreter has no channel runtime, and every existing select fixture is
+     * inline-C-bound (a TI7 carve-out).  Fail cleanly rather than falling
+     * through to the generic "unhandled expression kind" default.  See
+     * docs/reported/turi-select-needs-channel-primitives.md. */
+    case EX_SELECT:
+        return turi_error("eval: select is not supported in interpreter mode "
+                          "(channels require native primitives; use the compiled path)");
+
     /* (resume k value) — resume a live continuation with a value. */
     case EX_RESUME: {
         ResumeExpr *re = e->as.resume_.resume;
@@ -4915,6 +5003,9 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
         break;
     case TURI_GEN:
         snprintf(buf, cap, "#<generator>");
+        break;
+    case TURI_HANDLER:
+        snprintf(buf, cap, "#<handler>");
         break;
     }
 }

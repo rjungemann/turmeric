@@ -260,6 +260,18 @@ continuation-substrate
 shift-result-typing
 shift0-result-typing
 serial-reset-basic
+
+# TI6 (turi-parity-post-v1-plan, first-class handlers): the interpreter now
+# handles EX_HANDLER_LIT, EX_WITH_HANDLER, and EX_COMPOSE_HANDLERS by reusing
+# the eval_handle fiber machinery (a handler value is a detached HandleCase
+# table; with-handler materialises a HandleExpr and runs it like (handle ...)).
+# Verified under 'tur --interpret'.  EX_SELECT stays a carve-out -- channels
+# need native primitives the interpreter lacks, and every select fixture is
+# inline-C-bound (docs/reported/turi-select-needs-channel-primitives.md).
+#   with-handler-value  -- single handler value applied via with-handler
+#   fh-compose-handlers -- compose-handlers over disjoint effects + with-handler
+with-handler-value
+fh-compose-handlers
 "
 
 # Build an associative-set from the default list for O(1) lookup.

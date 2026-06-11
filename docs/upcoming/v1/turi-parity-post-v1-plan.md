@@ -593,27 +593,49 @@ the turi harness.
 
 ## Phase TI6 -- `EX_WITH_HANDLER` and `EX_SELECT`
 
-### `EX_WITH_HANDLER`
+### `EX_WITH_HANDLER` (+ `EX_HANDLER_LIT` / `EX_COMPOSE_HANDLERS`) -- **LANDED**
 
-The interpreter handles `(handle ...)` via an older path; the
-compiler now emits `EX_WITH_HANDLER` for `with-handler` (the
-handler-record-driven form). Bridge the two by lowering
-`EX_WITH_HANDLER` to the same internal "push handler, run body, pop
-handler" routine `EX_HANDLE` already uses.
+First-class handler *values* are now interpreted. The three nodes the
+elaborator emits for the FH (first-class handler) surface are all handled in
+`src/turi/eval.c`:
 
-### `EX_SELECT`
+- `EX_HANDLER_LIT` -- `(handler (E [params] k) body)` builds a detached
+  dispatch table. A new `TURI_HANDLER` value (`TuriHandlerVal` in `eval.c`,
+  tag in `src/turi/value.h`) borrows pointers to the arena-allocated
+  `HandleCase`s; no body is attached.
+- `EX_COMPOSE_HANDLERS` -- `(compose-handlers h1 h2)` concatenates the two
+  tables (h1's cases first -- h1 outer per FH0.1). The elaborator already
+  rejects overlapping effect sets (`TUR-E0251`), so first-match dispatch
+  order across the two is unobservable.
+- `EX_WITH_HANDLER` -- `(with-handler hv body)` materialises a contiguous
+  `HandleCase` array + a synthesised `HandleExpr` and reuses the existing
+  `eval_handle` fiber machinery. Stack allocation is safe because
+  `eval_handle` runs the body (and every resume) to completion before
+  returning, and continuations never escape it.
 
-Channel `select` over multiple receive/send ops. Today the
-interpreter only handles single-channel `recv`/`send`. Add a
-`turi_select` helper that polls each branch in declaration order
-(non-blocking under the single-threaded model; if no branch is ready
-and a `:default` arm exists, run it; otherwise park the fiber until
-any channel becomes ready -- reuse the fiber scheduler from
-`src/turi/fiber.c`).
+Note `(with-handler body cases...)` with any arity != 3 is the T25
+inline-handle *sugar* (`elab_call.c:1112-1114`) and lowers to `EX_HANDLE`,
+which the interpreter already handled.
 
-### Tests
+**Fixtures:** `tests/fixtures/with-handler-value/` (single handler value),
+`tests/fixtures/fh-compose-handlers/` (compose over disjoint effects). Both
+verified equal under `tur --interpret` and `tur run`; both added to the
+`run-turi.sh` allowlist (TI6 block).
 
-`tests/fixtures/channel-select-default/`, `channel-select-park/`.
+### `EX_SELECT` -- **carved out (follow-up)**
+
+Channel `select` over multiple receive/send ops stays unimplemented in the
+interpreter. Turmeric channels have no native representation in `turi`
+(they are inline-C `pthread` ring buffers), and **every** existing `select-*`
+fixture defines its channel ops as user inline-C -- a permanent TI7
+carve-out -- so a `turi_select` case arm would have nothing to select over.
+A dedicated `case EX_SELECT` now returns a clean
+"not supported in interpreter mode" error instead of the generic
+unhandled-kind default. Implementing it for real means adding a native
+channel layer (opaque `TURI_CHANNEL` + `chan-new`/`send`/`recv` natives +
+a fiber-parking `turi_select`), plus native (non-inline-C) channel fixtures
+to test against. Full write-up:
+[docs/reported/turi-select-needs-channel-primitives.md](../../reported/turi-select-needs-channel-primitives.md).
 
 ---
 

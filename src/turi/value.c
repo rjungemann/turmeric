@@ -66,5 +66,8 @@ void turi_print_value(FILE *out, TuriValue v) {
     case TURI_GEN:
         fprintf(out, "#<generator>");
         break;
+    case TURI_HANDLER:
+        fprintf(out, "#<handler>");
+        break;
     }
 }
