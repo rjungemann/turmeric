@@ -304,6 +304,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_kind_row_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Variadic HKT rows (Layer 2): TY_TYPEROW type-variant unit test
+add_test(
+  NAME tur_typerow_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_typerow_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # TY4: lifetime elision + outlives-cycle unit test
 add_test(
   NAME tur_lifetime_unit

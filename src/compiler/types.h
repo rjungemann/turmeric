@@ -164,6 +164,13 @@ typedef enum TypeKind {
      * Two keywords with the same name are pointer-identical; eq is `==` and
      * hashing reads a precomputed field. */
     TY_SYM,          /* :Sym -- interned runtime symbol (const struct __tur_sym *) */
+    /* Variadic HKT rows (docs/reported/variadic-hkt-rows-missing.md, Layer 2):
+     * a compile-time-only *row of types* -- an ordered list of element types,
+     * surface-spelled `#row{T1 T2 ...}`.  hkt_kind == KIND_TYPEROW.  Used as a
+     * type argument to a row-parameterised constructor (e.g. an ECS Query over
+     * `#row{Pos Vel}`); never the type of a runtime value, so it erases at
+     * codegen like TY_TYPECLASS / TY_GLOBAL. */
+    TY_TYPEROW,
 } TypeKind;
 
 /* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
@@ -400,6 +407,10 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* SYM0: a symbol is an interned pointer into .rodata — freely copyable */
         case TY_SYM:
             return CK_COPY;
+        /* Variadic HKT rows: a type-level row is compile-time only -- it never
+         * names a runtime value, so the copy/move discipline is moot; COPY. */
+        case TY_TYPEROW:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -600,6 +611,14 @@ typedef struct Type {
             struct Type **members;  /* arena-allocated array of member type pointers */
             uint8_t       n_members; /* number of intersection members (>= 2) */
         } intersection_;
+        /* Variadic HKT rows (Layer 2): a row of element types `#row{T1 T2 ...}`.
+         * Mirrors the union_/intersection_ representation: an arena-allocated
+         * array of element Type pointers plus a count.  An empty row (n == 0)
+         * is legal (the unit row). */
+        struct {
+            struct Type **elements;   /* arena-allocated array of element type pointers */
+            uint8_t       n_elements; /* number of element types (>= 0) */
+        } typerow_;
         /* Phase HRT/G2: Named type variable -- parameter typed with a GADT type var */
         struct {
             const char *name;  /* interned type var name (e.g. "a"), or NULL for anonymous escaped skolem */
@@ -1132,6 +1151,22 @@ Type type_union_build(Arena *a, Type **members, uint8_t n_members);
  * members[] is copied from the provided arena-allocated pointers.
  * Nested TY_INTERSECTION members are flattened automatically. */
 Type type_intersection_build(Arena *a, Type **members, uint8_t n_members);
+
+/* Variadic HKT rows (Layer 2): row-of-types constructor.
+ * Create a TY_TYPEROW from `n_elements` element type pointers; the element
+ * array is copied onto the arena (the caller's `elements` array need not
+ * outlive the call, though the pointed-to Types must).  hkt_kind is set to
+ * KIND_TYPEROW.  Unlike unions, element order is significant and duplicates
+ * are preserved -- a row is a list, not a set.  n_elements == 0 is the unit
+ * row.  Rows do NOT nest-flatten (a row containing a row stays nested). */
+Type type_typerow(Arena *a, Type **elements, uint8_t n_elements);
+
+/* Variadic HKT rows: order-insensitive (permutation) row equality.
+ * Returns true iff `a` and `b` are both TY_TYPEROW with the same multiset of
+ * element types (same length, and each element of `a` pairs with a distinct,
+ * type_eq-equal element of `b`).  This backs the data-frame "column-permutation
+ * is a no-op" case; ordinary `type_eq` on rows stays order-SENSITIVE. */
+bool type_typerow_eq_perm(Type a, Type b);
 
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */

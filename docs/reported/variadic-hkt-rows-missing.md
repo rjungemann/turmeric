@@ -121,30 +121,52 @@ A detailed read of the type/parser/codegen subsystems turned up three
 prerequisites that were *not* in the original layer list and that change the
 sequencing. Tackle them before the type-variant work.
 
-- **PRE-1 (decision, blocking Layer 3): the `[...]` row syntax in the report's
-  examples is already taken.** Since KB-029, a bracketed type list `[T1 T2 ...
-  Tn]` in *type-annotation position* lowers to the stdlib `TupleN` struct
-  (arity 2..8) -- see `elab_types.c:1519-1553` (`F_VEC` branch of
-  `type_expr_from_form`). So `Query [Pos Vel] [Pos]` as written would silently
-  become `Query (Tuple2 Pos Vel) (Tuple1 Pos)`, i.e. two `KIND_STAR` tuples,
-  not rows. The validation examples in this report are therefore not
-  implementable as literally written. Options:
-    1. **Distinct row syntax** -- e.g. a `(row Pos Vel)` form or a `Row[...]`
-       reader dispatch, kept separate from tuple sugar. Lowest risk; no change
-       to the tuple path. *Recommended for the first cut.*
-    2. **Context-driven `[...]`** -- make a bracket lower to a row iff the
-       surrounding context expects kind `[*]`, else a tuple. This needs
-       PRE-2.
-    3. **Unify tuple and row** -- treat `TupleN` as the `KIND_STAR`
-       fully-applied view of a row. Elegant but couples two features; defer.
-  This is a real design choice and should be decided before any parser work.
+- **PRE-1 [RESOLVED -> `#row{...}` reader form]: the bare-`[...]` row syntax in
+  the report's original examples is already taken.** Since KB-029, a bracketed
+  type list `[T1 T2 ... Tn]` in *type-annotation position* lowers to the stdlib
+  `TupleN` struct (arity 2..8) -- see `elab_types.c:1519-1553` (`F_VEC` branch
+  of `type_expr_from_form`). So `Query [Pos Vel] [Pos]` as written would
+  silently become `Query (Tuple2 Pos Vel) (Tuple1 Pos)`, i.e. two `KIND_STAR`
+  tuples, not rows. Bare brackets are therefore unusable for rows.
 
-- **PRE-2 (enabler, only if PRE-1 picks option 2): thread an expected kind into
-  type elaboration.** `type_expr_from_form` (`elab_types.c:271`) is essentially
-  context-free today (it takes the in-scope type params but no expected kind).
-  Context-driven bracket disambiguation requires passing an "expected kind"
-  down so `[...]` can choose row vs tuple. Independently testable; skip
-  entirely if PRE-1 picks option 1 or 3.
+  **Decision: spell rows with a `#row{...}` reader-dispatch form**, alongside
+  the existing `#map{...}` / `#set{...}` data literals (`reader.c:1035`,
+  `try_read_data_literal`). Rationale:
+    - It is a *distinct* form, so it never perturbs the `[...]`->`TupleN`
+      tuple-sugar path and needs no context-driven disambiguation (PRE-2 is
+      consequently **dropped** -- `type_expr_from_form` stays context-free).
+    - It reuses an existing, tested reader-dispatch mechanism (~10 lines added
+      to the `try_read_data_literal` table for `#row{`).
+    - It scales to *labeled* rows for the data-frame case for free, by mirroring
+      `#map{...}`'s keyword-key/value reader: `#row{Pos Vel}` is positional
+      (ECS), `#row{:name :str :age :int}` is labeled (frames).
+    - Spiritually identical to Rust `frunk`'s `hlist![A, B]` macro and Haskell
+      DataKinds' promoted list `'[A, B]`, in Turmeric's house style.
+
+  Surface examples (revised; supersede the bracket forms in the validation
+  section):
+
+  ```turmeric
+  (defn run [q : (Query #row{Pos Vel} #row{Pos})] : int ...)  ; positional, ECS
+  (def schema : #row{:name :str :age :int})                    ; labeled, frame
+  ```
+
+  **Rejected alternatives:**
+    - *Haskell-style tick* `'[Pos Vel]` -- `'` is already the reader macro for
+      `(quote x)` *and* for lifetime symbols `'a` (`reader.c:162,511`), so a
+      leading tick on a bracket reads as `(quote [...])`. Unavailable.
+    - *Context-driven bare `[...]`* (old option 2) -- would require threading an
+      expected kind through `type_expr_from_form` (PRE-2) and risks perturbing
+      the tuple-sugar path. Heavier and riskier than a distinct reader form.
+    - *Unify tuple and row* (old option 3) -- treat `TupleN` as the `KIND_STAR`
+      view of a row. Elegant but couples two features; deferred, not blocking.
+
+- **PRE-2 [DROPPED by the PRE-1 resolution]: thread an expected kind into type
+  elaboration.** This was only needed for the context-driven bare-`[...]`
+  option. With the `#row{...}` reader form, `type_expr_from_form`
+  (`elab_types.c:271`) stays context-free -- a `#row{...}` literal carries its
+  own dispatch tag, so no expected-kind threading is required. Recorded here
+  for history; not on the critical path.
 
 - **PRE-3 (safety, blocking Layer 2): audit the `TypeKind` switches before
   adding a variant.** A new `TY_TYPEROW` is a miscompile trap until every
@@ -167,16 +189,41 @@ sequencing. Tackle them before the type-variant work.
   with an arena-allocated `Type*` array (`type_union_build` at `types.c:2712`
   is the constructor to copy).
 
+### Layer 2 -- `TY_TYPEROW` type variant [LANDED]
+
+The compile-time row-of-types value, built and validated entirely at the C
+level (no parser/codegen dependency yet). PRE-3 was executed alongside it.
+
+- `TY_TYPEROW` added to the `TypeKind` enum (`types.h`); union member
+  `typerow_ { Type **elements; uint8_t n_elements; }`, mirroring `union_` /
+  `intersection_`. `type_typerow(arena, elements, n)` constructor copies the
+  element-pointer array onto the arena, sets `hkt_kind = KIND_TYPEROW` and
+  `copy_kind = CK_COPY`. Element order is significant, duplicates are
+  preserved, and nested rows are *not* flattened (a row is a list, not a set).
+- **Equality.** `type_eq` gains an explicit order-SENSITIVE structural case
+  (the PRE-3 landmine: without it, two rows fell through `default: return 1`
+  and compared equal). `type_typerow_eq_perm` is a separate order-INSENSITIVE
+  (multiset) comparator backing the data-frame column-permutation case.
+- **PRE-3 switch audit, enforced by `-Werror=switch`.** Handled in `type_eq`,
+  `type_name`, `type_name_buf` (prints `#row{...}`), `type_c_name` (erases to
+  `/*type-row*/ void`), `typekind_default_copy_kind` (`CK_COPY`),
+  `type_is_guarded_recursive_helper` (guards like a union), and
+  `type_effective_kind` in `kind_check.c` (`KIND_TYPEROW`). A full
+  `-Werror=switch` build is now the regression guard for any *future*
+  `TypeKind`-exhaustive switch that forgets rows.
+- Unit target `tur_typerow_unit` (`tests/compiler/test_typerow.c`, registered
+  in both CMake files): 25 assertions covering construction, order-sensitive
+  vs permutation equality, duplicate/nesting semantics, the empty row, and the
+  printed `#row{...}` form. LSan-clean (uses `type_print` into an owned `Buf`,
+  not the leaky composite-name path of `type_name`).
+
+Purely additive: full fixture suite still green (no fixture constructs a row
+yet -- surface syntax is Layer 3).
+
 ### Remaining layers (revised order)
 
-2. **`TY_TYPEROW` type variant (no surface syntax yet).** Add the variant +
-   union member + a `type_typerow(arena, elements, n)` constructor, and handle
-   it in every switch from PRE-3. Equality is structural; add a separate
-   *permutation-aware* comparator for the data-frame zip case (validation
-   bullet 3). Build it programmatically and unit-test it at the C level exactly
-   like Layer 1 (`tur_kind_row_unit`) -- **no parser or codegen dependency**,
-   so it lands and validates in isolation. This is the natural next session.
-3. **Surface syntax** per the PRE-1 decision, with `tests/fixtures/hkt-row-*`
+3. **Surface syntax** per the PRE-1 decision (`#row{...}` reader form), with
+   `tests/fixtures/hkt-row-*`
    fixtures. Must not perturb the existing tuple-sugar / binding-vector paths.
 4. **Row-kinded type parameter.** Let a constructor parameter carry kind `[*]`
    so `Query` is functorial over a row. NOTE a second syntax sub-decision: the

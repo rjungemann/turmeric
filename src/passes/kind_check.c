@@ -160,6 +160,9 @@ static Kind type_effective_kind(Type t) {
         case TY_FLOAT:
         case TY_PTR_VOID:
             return KIND_STAR;
+        /* Variadic HKT rows: a row-of-types has the kind-level List Type kind. */
+        case TY_TYPEROW:
+            return KIND_TYPEROW;
         default:
             return KIND_STAR;
     }
