@@ -1,0 +1,48 @@
+;; Regression for gap D: a macro expansion of the shape
+;; `(```c ... ```)` -- a list whose head is an inline-C block -- was
+;; failing at elaboration with "expression in call head has type
+;; `nil`, which is not callable" because the elaborator interpreted
+;; the list as a call with the CBLOCK in callee position.
+;;
+;; The fix in src/compiler/elab_macros.c::ct_eval_quasiquote auto-
+;; wraps any backquoted list whose head is an F_CBLOCK with `do`, so
+;; the CBLOCK sits in a body position and elaborates as a statement.
+;; Matches Clojure's "leaves self-evaluate in quasiquote" model.
+;; See docs/reported/macro-cannot-emit-inline-c-block.md.
+;;
+;; This fixture exercises the three known shapes:
+;;   A: bare CBLOCK as the macro body (was already working)
+;;   B: CBLOCK inside a backquoted do (was already working)
+;;   C: bare backquoted (```c ... ```) -- the gap-D shape, now fixed
+;; All three should compile, return the same function pointer, and
+;; print 1 four times.
+
+(defn my-func [x : int] : int (+ x 100))
+
+(defmacro fnptr-A []
+  ```c
+  return (void *)&my_hyfunc;
+  ```)
+
+(defmacro fnptr-B []
+  `(do
+     ```c
+     return (void *)&my_hyfunc;
+     ```))
+
+(defmacro fnptr-C []
+  `(```c
+    return (void *)&my_hyfunc;
+   ```))
+
+(defn get-A [] : ptr<void> (fnptr-A))
+(defn get-B [] : ptr<void> (fnptr-B))
+(defn get-C [] : ptr<void> (fnptr-C))
+
+(defn main [] : int
+  (println (if (= 0 (:: (get-A) :int)) 0 1))
+  (println (if (= 0 (:: (get-B) :int)) 0 1))
+  (println (if (= 0 (:: (get-C) :int)) 0 1))
+  (println (if (and (= (:: (get-A) :int) (:: (get-B) :int))
+                    (= (:: (get-B) :int) (:: (get-C) :int))) 1 0))
+  0)

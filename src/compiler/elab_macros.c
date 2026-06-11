@@ -163,6 +163,22 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
                     items[out_idx++] = tmp[i];
                 }
             }
+            /* Gap D: if the constructed list has an inline-C block at its
+             * head, the elaborator would otherwise try to elaborate it as
+             * a call (with the CBLOCK in callee position, which has type
+             * `nil` -- producing the misleading "expression in call head
+             * has type `nil`, which is not callable" diagnostic). Auto-
+             * wrap with `do` so the CBLOCK sits in a body position and
+             * elaborates as a statement, matching Clojure's "leaves self-
+             * evaluate in quasiquote" model. Filed and resolved under
+             * docs/reported/macro-cannot-emit-inline-c-block.md. */
+            if (n_out > 0 && items[0]->tag == F_CBLOCK) {
+                Form **wrapped = (Form **)arena_alloc(env->elab->arena,
+                                                      (n_out + 1) * sizeof(Form *));
+                wrapped[0] = form_sym(env->elab->arena, f->span, env->elab->sym_do);
+                for (uint32_t i = 0; i < n_out; i++) wrapped[i + 1] = items[i];
+                return form_list(env->elab->arena, f->span, wrapped, n_out + 1);
+            }
             return form_list(env->elab->arena, f->span, items, n_out);
         }
         case F_VEC:

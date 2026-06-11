@@ -4,9 +4,22 @@ category: Reported
 severity: Surface-syntax pothole (workaround is one extra wrapping form; not a real blocker for any plan)
 discovered: 2026-06-11, planning ECS spice E2 (docs/upcoming/ecs-prereq-plan.md, gap D)
 researched: 2026-06-11, narrowed from "macros can't emit inline-C" to "list-with-CBLOCK-head"
+resolved: 2026-06-11. Fix in `src/compiler/elab_macros.c::ct_eval_quasiquote` --
+  when the constructed list has `items[0]->tag == F_CBLOCK`, the list is
+  auto-wrapped with `do` so the CBLOCK sits in a body position. Matches the
+  Clojure model the research surfaced. The misleading "expression in call
+  head has type `nil`, which is not callable" diagnostic no longer fires
+  on this shape. Regression covered by
+  `tests/fixtures/macro-emits-list-with-cblock-head/`.
 ---
 
 # Backquoting a list whose head is an inline-C (` ```c ... ``` `) block fails expansion
+
+> **Status: fixed 2026-06-11.** All three macro shapes -- bare CBLOCK,
+> backquoted `(do CBLOCK)`, and the previously-failing bare backquoted
+> `(CBLOCK)` -- now compile and produce identical function pointers. The
+> auto-wrap is local to the quasi-quote walker; no elaborator changes;
+> the full fixture suite gained one PASS with no regressions.
 
 > **Triage update 2026-06-11:** Research narrowed this from "macros
 > can't emit inline-C at all" (overstated) to a much smaller bug.
