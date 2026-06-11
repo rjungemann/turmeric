@@ -737,6 +737,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
     for (uint8_t i = 0; i < 8; i++) fn_type_param_kinds[i] = KIND_STAR;
 
     uint32_t params_idx = name_idx + 1;
+    /* Gap H item 1: collect class-constraint forms from an optional middle
+     * vector when the user spells the function as the plan-canonical
+     *   (defn name [TypeVars] [(Class1 V) (Class2 V) ...] [params] :ret body)
+     * shape. Each constraint form is `(ClassName TypeVar1 TypeVar2 ...)`;
+     * we stash them here and register them once the typeclass-resolution
+     * machinery is reached below. */
+    const Form *constraint_forms[8];
+    uint8_t n_constraint_forms = 0;
     if (call->as.list.len > name_idx + 2 &&
         call->as.list.items[name_idx + 1]->tag == F_VEC &&
         call->as.list.items[name_idx + 2]->tag == F_VEC) {
@@ -758,6 +766,37 @@ Expr *elab_defn(Elab *e, const Form *call) {
             fn_type_param_kinds[i] = KIND_STAR;
         }
         params_idx = name_idx + 2;
+
+        /* Gap H item 1: detect the three-vec form
+         *   (defn name [TypeVars] [(Class V) ...] [params] :ret body)
+         * by looking for a third F_VEC at name_idx + 3 whose payload looks
+         * like a parameter list. If we see one, treat name_idx + 2 as the
+         * constraint vector and bump params_idx to name_idx + 3.
+         * Each constraint must be an F_LIST `(ClassName TyVar1 TyVar2 ...)`. */
+        if (call->as.list.len > name_idx + 3 &&
+            call->as.list.items[name_idx + 3]->tag == F_VEC) {
+            Form *maybe_constraints = call->as.list.items[name_idx + 2];
+            bool looks_like_constraints = (maybe_constraints->as.list.len > 0);
+            for (uint32_t ci = 0; looks_like_constraints && ci < maybe_constraints->as.list.len; ci++) {
+                Form *cf = maybe_constraints->as.list.items[ci];
+                if (cf->tag != F_LIST || cf->as.list.len < 1 ||
+                    cf->as.list.items[0]->tag != F_SYM) {
+                    looks_like_constraints = false;
+                }
+            }
+            if (looks_like_constraints) {
+                if (maybe_constraints->as.list.len > 8) {
+                    diag_emit(DIAG_ERROR, maybe_constraints->span,
+                              "defn: too many class constraints (max 8)");
+                    return NULL;
+                }
+                for (uint32_t ci = 0; ci < maybe_constraints->as.list.len; ci++) {
+                    constraint_forms[n_constraint_forms++] =
+                        maybe_constraints->as.list.items[ci];
+                }
+                params_idx = name_idx + 3;
+            }
+        }
     }
 
     /* Parse param vector */
@@ -835,6 +874,38 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Constraint set for this function - allocated on arena */
     TypeConstraint *constraint_list = NULL;
     uint8_t n_constraints = 0;
+
+    /* Gap H item 1: register the (Class TyVar) forms collected from the
+     * optional middle vector now that constraint_list is allocated. Each
+     * form looks like `(HasPos W)`; we look up the class and stash a
+     * TypeConstraint pointing at it. param_idx stays -1 until the param
+     * loop binds W; type_arg stays TYPE_UNKNOWN. */
+    if (n_constraint_forms > 0) {
+        TypeConstraint *new_list = (TypeConstraint *)arena_alloc(e->arena,
+            n_constraint_forms * sizeof(TypeConstraint));
+        for (uint8_t ci = 0; ci < n_constraint_forms; ci++) {
+            const Form *cf = constraint_forms[ci];
+            const Symbol *class_sym = cf->as.list.items[0]->as.sym;
+            TypeClass *tc = typeclass_env_lookup_typeclass(&e->typeclass_env, class_sym);
+            if (!tc) {
+                diag_emit(DIAG_ERROR, cf->span,
+                          "defn: typeclass '%s' in constraint is not defined",
+                          class_sym->name);
+                return NULL;
+            }
+            const Symbol *tyvar_sym = NULL;
+            if (cf->as.list.len >= 2 && cf->as.list.items[1]->tag == F_SYM) {
+                tyvar_sym = cf->as.list.items[1]->as.sym;
+            }
+            new_list[ci].typeclass = tc;
+            new_list[ci].type_arg = TYPE_UNKNOWN;
+            new_list[ci].param_idx = -1;
+            new_list[ci].tyvar = tyvar_sym;
+            new_list[ci].return_resolved = false;
+        }
+        constraint_list = new_list;
+        n_constraints = n_constraint_forms;
+    }
 
     /* Phase G3: Equality constraint env built from (: a T) param items */
     SkolemEnv param_constraint_env;

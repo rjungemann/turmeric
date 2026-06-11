@@ -1,0 +1,46 @@
+;; Regression for gap H item 1: the Haskell-style class-constraint
+;; defn syntax `(defn name [TyVars] [(Class1 V) (Class2 V) ...]
+;; [params] :ret body)` now parses and elaborates. Before the fix,
+;; the parser was treating the middle vector as the parameter list
+;; and aborting with "defn: type annotation without preceding
+;; parameter" when it tripped on a list-form item.
+;;
+;; This fixture exercises both single- and multi-constraint
+;; declarations against int-carried opaque receivers (sidestepping
+;; gap H item 3, which is still open for struct-receivers).
+;;
+;; See docs/reported/typeclass-constrained-defn-rejected.md.
+;;
+;; Expected output:
+;;   42        -- single-constraint use returns the bound int
+;;   300       -- multi-constraint use sums two methods' returns
+;;   ok
+
+(defclass HasFlag [W] (flag-of [^borrow w] : int))
+(defclass HasA    [W] (a-of    [^borrow w] : int))
+(defclass HasB    [W] (b-of    [^borrow w] : int))
+
+(defopaque HandleSimple :int)
+(defopaque HandleAB     :int)
+
+(definstance HasFlag [HandleSimple] (flag-of [w] (:: w :int)))
+(definstance HasA    [HandleAB]     (a-of    [w] 100))
+(definstance HasB    [HandleAB]     (b-of    [w] 200))
+
+;; Single constraint, three-vec form.
+(defn use-flag [W] [(HasFlag W)] [^borrow w : W] : int
+  (flag-of w))
+
+;; Multiple constraints, three-vec form.
+(defn sum-ab [W] [(HasA W) (HasB W)] [^borrow w : W] : int
+  (+ (a-of w) (b-of w)))
+
+(defn main [] : int
+  (let [hs (:: 42 :HandleSimple)
+        ab (:: 0  :HandleAB)]
+    (println (use-flag hs))        ;; 42
+    (println (sum-ab ab))           ;; 300
+    (if (and (= (use-flag hs) 42)
+             (= (sum-ab ab) 300))
+      (do (println "ok") 0)
+      (do (println "FAIL") 1))))

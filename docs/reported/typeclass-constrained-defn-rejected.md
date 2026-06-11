@@ -7,24 +7,39 @@ partial-resolution: 2026-06-11. Item 2 (typed-method-param SEGV in
   `elab_method_call`) is fixed with a defensive null-def check at
   `src/compiler/elab_typeclasses.c:3229`. The compiler no longer aborts on
   the shape; it emits a clean "no typeclass method found" diagnostic
-  instead. Items 1 (constraint syntax) and 3 (carrier-int dispatch on
-  struct receivers) remain open and still gate the spec'd ECS plan
-  "typeclass-bounded systems" path. The monomorphic call-site path -- a
-  Has<Comp> class with untyped `[^borrow w]` methods, dispatching by
-  receiver type to a per-(world, component) instance -- works today and
-  is shipped in the ECS spice via `defcomponent-class` +
-  `defcomponent-class-instance`.
+  instead. Item 1 (constraint-list syntax) is fixed: the Haskell-style
+  `(defn name [TyVars] [(Class1 V) (Class2 V) ...] [params] :ret body)`
+  shape now parses and elaborates, registers constraints, and dispatches
+  correctly through method calls -- end-to-end working when the carrier
+  doesn't trip item 3. Item 3 (carrier-int dispatch on struct receivers)
+  is still open and still blocks polymorphic wrappers over by-value struct
+  worlds. The monomorphic call-site path is shipped via
+  `defcomponent-class` + `defcomponent-class-instance`.
 ---
 
 # Typeclass-constraint syntax `[W] [(HasX W)] [w : W]` on defn is rejected
 
-> **Status update 2026-06-11**: item 2 fixed (defensive). Items 1
-> and 3 open. The ECS spice now ships HasComponent classes built
-> against the working subset of the typeclass machinery: untyped
-> `[^borrow w]` method params, monomorphic dispatch through a per-
-> world `definstance`. See `tests/has-component-class.tur` in the
-> spice. The polymorphic-wrapper surface (plan's "typeclass-bounded
-> systems") is still blocked on items 1 and 3.
+> **Status update 2026-06-11**: items 1 and 2 fixed. Only item 3
+> (carrier-int dispatch on by-value struct receivers) remains open.
+>
+> Item 1 closure: the parser now accepts the optional
+> constraint-list slot when the user spells
+> `(defn name [TypeVars] [(Class1 V) ...] [params] :ret body)`.
+> Each `(Class V)` form is looked up, registered as a `TypeConstraint`,
+> and threaded through to the dispatcher. Verified end-to-end with int-
+> carried opaque receivers (`tests/fixtures/defn-class-constraint-list-syntax/`):
+> single-constraint and multi-constraint defns both parse, elaborate,
+> dispatch, and return correct results.
+>
+> Item 2 closure (earlier this session): defensive null-def check in
+> `elab_method_call` stops the SEGV when a typed method param
+> `[w : W]` produces a `TY_STRUCT` receiver with a NULL def.
+>
+> Item 3 open: a polymorphic wrapper that calls a method on a by-value
+> struct receiver still fails at C compile with
+> "passing int64_t to parameter of incompatible type GameWorld" --
+> the carrier-int dispatcher doesn't honour the per-instantiation
+> struct ABI fix.
 
 ## Summary
 
