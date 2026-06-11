@@ -1,0 +1,20 @@
+;; Variadic HKT rows -- Layer 6: an arrow-style Query parameterised by TWO
+;; component rows, an input row and an output row (the report's
+;; `Query [Pos Vel] [Pos]`). Both rows are tracked at the type level and erased
+;; at runtime; a system's signature pins exactly which components it reads and
+;; writes.
+(defopaque Pos :int)
+(defopaque Vel :int)
+
+(defstruct Query [^&inputs ^&outputs] (world :int))
+
+;; A movement system: reads {Pos Vel}, writes {Pos}.
+(defn movement [w : int] : (Query #row{Pos Vel} #row{Pos})
+  (:: (make-struct Query w) (Query #row{Pos Vel} #row{Pos})))
+
+(defn run [q : (Query #row{Pos Vel} #row{Pos})] : int
+  (.world q))
+
+(defn main [] : int
+  (println (run (movement 11)))
+  0)

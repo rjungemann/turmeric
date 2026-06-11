@@ -1,0 +1,32 @@
+;; Variadic HKT rows -- Layer 6 capstone (the ECS query the whole feature was
+;; built for; see docs/upcoming/v1/ecs-spice-plan.md E1 and
+;; docs/reported/variadic-hkt-rows-missing.md).
+;;
+;; A Query is parameterised by its component ROW (a #row{...} of component
+;; types). The row lives entirely at the TYPE level -- it records which
+;; components a system touches -- and is ERASED at runtime (the compiled C
+;; carries only the int `world` handle; the row never appears in a field or
+;; signature). Queries compose by `row-union`: a join of two component sets,
+;; deduplicated.
+;;
+;; movement needs {Position Velocity}; damage needs {Velocity Health}; the
+;; combined query's component row is their union {Position Velocity Health}.
+(defopaque Position :int)
+(defopaque Velocity :int)
+(defopaque Health   :int)
+
+(defstruct Query [^&components] (world :int))
+
+(defn make-world [n : int] : int n)
+
+;; The combined query type is computed by row-union and must equal the
+;; explicit #row{Position Velocity Health} the system below requires.
+(defn query [w : int] : (Query (row-union #row{Position Velocity} #row{Velocity Health}))
+  (:: (make-struct Query w) (Query #row{Position Velocity Health})))
+
+(defn run-system [q : (Query #row{Position Velocity Health})] : int
+  (.world q))
+
+(defn main [] : int
+  (println (run-system (query (make-world 3))))
+  0)

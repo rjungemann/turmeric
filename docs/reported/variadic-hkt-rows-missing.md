@@ -1,11 +1,17 @@
 ---
 title: Variadic HKT rows (kind-level type lists) are missing from the elaborator
 category: Expressiveness hole
+status: IMPLEMENTED -- all six layers landed (see "Status: all six layers landed" below). A constructor can be parameterised by a `#row{...}` row of types via the `^&` row-kinded parameter; rows are kind-checked at every application, support a membership/concat/union/intersect algebra, and erase fully at codegen.
 severity: Forces an arity-N macro-family workaround for any "typed heterogeneous row" feature (ECS queries, relational rows, data-frame schemas). Not blocking for v1 work that accepts the cap.
 description: The HKT machinery supports fixed-arity type constructors but has no kind-level list-of-types, so a `Query in out` parameterised by a row of components, a relation parameterised by a tuple of columns, or any other variadic-row abstraction has to be macro-generated as `Query1`..`QueryN` -- the same retreat Bevy/Specs/aztecs took. The downstream plans (ECS v1) have absorbed this by capping at arity 5 with a documented migration path.
 ---
 
 # Variadic HKT rows are missing
+
+> **UPDATE: implemented.** This document began as a report of a missing
+> capability and now also serves as the implementation record. The feature
+> exists end-to-end; see the per-layer "[LANDED]" sections and the
+> "Status: all six layers landed" summary near the end.
 
 ## Summary
 
@@ -323,14 +329,61 @@ row that satisfies the `^&` parameter, and runs; the *exact* row contents
 row arguments so distinct rows are distinguished at value boundaries needs
 witnesses and is a Layer 6+ concern.
 
-### Remaining layers (revised order)
+### Layer 6 -- codegen erasure + ECS capstone [LANDED]
 
-6. **Codegen erasure + ECS fixture.** Rows are compile-time only and should be
-   eliminated by `PASS_KIND_CHECK` (runs immediately after `PASS_ELABORATE`,
-   before any codegen pass; see `src/runtime/pass.h`). Decide the runtime
-   representation (erased to the element tuple / iterator), add the explicit
-   `type_c_name` erase case, and add an ECS query fixture plus the `hkt-row-*`
-   fixtures named in the validation section.
+- **Runtime representation: full erasure.** A row is a *phantom* type argument
+  -- it constrains types at compile time and carries no runtime data. At
+  monomorphization the row never appears in a struct field or signature, so the
+  emitted C is row-free; component data flows through the ordinary (int / world)
+  handle. This is the "compile-time only" representation, not a reified
+  element-tuple/iterator. The defensive `type_c_name` erase case
+  (`/*type-row*/ void`, added in Layer 2) is a backstop that, in practice, never
+  fires: `tur emit-c` on a row program contains **zero** `type-row` markers.
+- **Erasure is pinned by compiled fixtures.** The fixture harness defaults to
+  the *compiled* path (`needs_compiled=1`: `emit-c` -> `cc` -> run), so every
+  `hkt-row-*` run-fixture exercises real codegen and would fail if a row ever
+  leaked into C. No separate `expected.c` snapshot is needed.
+- **ECS capstone fixtures** (the query the feature was built for):
+  `hkt-row-ecs-query` -- opaque `Position`/`Velocity`/`Health` components, a
+  `Query` parameterised by its component row, the combined row computed by
+  `row-union` (a movement+damage join), run end-to-end. `hkt-row-ecs-query-in-out`
+  -- the report's arrow-style `Query [Pos Vel] [Pos]` with separate input and
+  output component rows. Both compile and run.
+
+**Known gaps from the aspirational validation section** (documented, not on the
+core path; each needs its own extension):
+
+- *Unregistered element types in a row do not error* (`#row{int Foo}` with `Foo`
+  undefined elaborates `Foo` to an opaque placeholder). This is Turmeric's
+  general lenient type-name resolution, not row-specific; making row elements
+  strict is a separable type-resolution change.
+- *Row-polymorphic `defn`* (`(defn id-row [r] (fn [x : Row r] x))`) is not wired:
+  `^&` is recognised on `defstruct` params but not yet on `defn`/`fn` type
+  params, and a `Row r` value-wrapper type does not exist.
+- *Permutation no-op as a type-checker behavior* (the data-frame
+  `Frame [Name :str Age :int]` ~ `Frame [Age :int Name :str]`): `type_eq` on
+  rows is order-*sensitive*; the order-insensitive `type_typerow_eq_perm` exists
+  and is unit-tested but is not consulted during type-checking.
+
+---
+
+## Status: all six layers landed
+
+The variadic-HKT-rows feature is implemented end-to-end and the kind system is
+sound: a constructor can be parameterised by a `#row{...}` row of types, rows
+are kind-checked at every application, the row algebra (membership, `++`, union,
+intersection) is available as primitives and a type-level surface, and rows are
+fully erased at codegen. `ecs-spice-plan.md` E1's hard prerequisite (D1) is
+satisfied for the phantom-row query use; the variadic `query` macro can now be
+built on `#row{...}` + `row-union` instead of the arity-N `queryN` family.
+
+Layer-by-layer: L1 kind-level `List Type` (`KIND_TYPEROW`); L2 `TY_TYPEROW`
+variant + structural/permutation equality; L3 `#row{...}` reader syntax; L4
+`^&` row-kinded parameters + kind soundness (closing the value-position
+finding); L5 row algebra; L6 codegen erasure + ECS capstone. The follow-ups
+above (strict row elements, row-polymorphic `defn`, permutation-aware
+type-checking, `^&` on `defgadt`/`deftype`) are optional extensions, not
+blockers.
 
 **Revised critical path:** PRE-3 + Layer 2 are the high-value, low-risk next
 step (pure type-layer C work, unit-testable in isolation, no syntax decision
