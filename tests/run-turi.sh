@@ -361,6 +361,17 @@ fixture_in_turi_set() {
     eval "[ \"\${TURI_INCL_${key}:-0}\" = \"1\" ]"
 }
 
+# TI8.b/W2: true if the fixture body contains a user inline-C (```c) block -- a
+# permanent TI7 carve-out the interpreter does not run.
+fixture_has_inline_c() {
+    local dir="$1"
+    local f
+    if   [ -f "$dir/input.tur" ]; then f="$dir/input.tur"
+    elif [ -f "$dir/$(basename "$dir").tur" ]; then f="$dir/$(basename "$dir").tur"
+    else return 1; fi
+    grep -q '```c' "$f" 2>/dev/null
+}
+
 # ---------------------------------------------------------------------------
 # TI8.b/W3 (turi-interpreter-gap-closure-plan): error-fixture coverage under the
 # interpreter.  tests/fixtures/errors/* are negative fixtures that must elaborate
@@ -451,9 +462,26 @@ run_turi_fixture() {
 
     # Skip if not in the turi include set.  Emit a visible SKIP so allowlist
     # gaps don't go unnoticed -- see KB-001 in docs/archive/history/known-bugs.md.
+    #
+    # TI8.b/W2 (turi-interpreter-gap-closure-plan): distinguish the *permanent*
+    # inline-C carve-outs (user inline-C is a TI7 carve-out the tree-walking
+    # interpreter never runs) from genuine allowlist candidates.  A non-allowlisted
+    # fixture whose body has a ```c block is a carve-out, not a coverage gap, so it
+    # is counted separately -- this is the mechanism the W5 allowlist->denylist
+    # flip uses to skip the ~350 inline-C fixtures without 350 marker files.  The
+    # ~15 inline-C fixtures that DO work under turi (via try_exec_simple_inline_c
+    # or native overrides, e.g. inline-c-binop / gen-*) are on the allowlist and
+    # so are checked before this branch.  Note: 25 of these inline-C fixtures
+    # silently miscompile under the simple inline-C evaluator -- a real bug the
+    # carve hides; see docs/reported/turi-inline-c-silent-miscompiles.md.
     if ! fixture_in_turi_set "$name"; then
-        printf 'SKIP %s (not in turi allowlist)\n' "$name"
-        echo "SKIP_ALLOWLIST" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+        if fixture_has_inline_c "$dir"; then
+            printf 'SKIP %s (inline-c carve-out)\n' "$name"
+            echo "SKIP_INLINEC" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+        else
+            printf 'SKIP %s (not in turi allowlist)\n' "$name"
+            echo "SKIP_ALLOWLIST" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+        fi
         return
     fi
 
@@ -556,7 +584,7 @@ run_turi_fixture() {
 }
 
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE
-export -f run_turi_fixture fixture_in_turi_set stamp_check stamp_write stamp_key
+export -f run_turi_fixture fixture_in_turi_set fixture_has_inline_c stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
 export -f run_turi_error_fixture err_in_denyset
 
@@ -604,6 +632,7 @@ fi
 
 # Tally results.
 ALLOWLIST_GAP=0
+INLINEC_CARVE=0
 for rf in "$RESULTS_DIR"/*.result; do
     [ -f "$rf" ] || continue
     kind="$(cat "$rf")"
@@ -616,6 +645,9 @@ for rf in "$RESULTS_DIR"/*.result; do
     elif [ "$kind" = "SKIP_ALLOWLIST" ]; then
         SKIP=$((SKIP + 1))
         ALLOWLIST_GAP=$((ALLOWLIST_GAP + 1))
+    elif [ "$kind" = "SKIP_INLINEC" ]; then
+        SKIP=$((SKIP + 1))
+        INLINEC_CARVE=$((INLINEC_CARVE + 1))
     fi
 done
 
@@ -635,8 +667,13 @@ done
 
 echo
 echo "turi fixture summary: $PASS passed, $FAIL failed, $SKIP skipped"
+if [ "$INLINEC_CARVE" -gt 0 ]; then
+    echo "  (of which $INLINEC_CARVE inline-c carve-outs -- TI7, never run under turi)"
+fi
 if [ "$ALLOWLIST_GAP" -gt 0 ]; then
-    echo "  (of which $ALLOWLIST_GAP not in turi allowlist; see KB-001)"
+    echo "  (of which $ALLOWLIST_GAP non-inline-C, not yet on the allowlist -- the W5"
+    echo "   triage surface: many already pass and just need adding; the rest need a"
+    echo "   fix or a marker before the allowlist->denylist flip)"
 fi
 if [ $FAIL -ne 0 ]; then
     echo "failed:"

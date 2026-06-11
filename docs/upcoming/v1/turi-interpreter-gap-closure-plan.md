@@ -242,22 +242,38 @@ set via `turi_eval_file` -- reuse its dependency ordering, but switch it to
 `clone-list` pass under `--interpret`; the 145-fixture allowlist stays green;
 re-run the probe and confirm the recovered count.
 
-### W2 -- Carve the inline-C set (mechanical, bulk)
+### W2 -- Carve the inline-C set -- **LANDED (via auto-detection, not markers)**
 
-**Problem.** 377 failing fixtures contain user inline-C, a permanent TI7
-carve-out. They cannot run under the interpreter by design.
+**Problem.** User inline-C is a permanent TI7 carve-out the interpreter does not
+run. Post-W1/W3 re-measure (non-`errors/`, under `--interpret`): **325 inline-C
+clean-fail**, **25 inline-C silent-miscompile**, 244 pure-turi fail, 678 pass.
 
-**Approach.** Script a sweep: for each failing fixture whose body has a ` ```c `
-block, drop a `requires.tur-only` marker containing the single word `inline-c`.
-Do this **after W1** (W1 may turn some inline-C fixtures green via native
-overrides -- e.g. the gen/stdlib shapes -- so re-measure first and only carve
-the ones that still fail). Spot-check that no carved fixture is *also* a silent
-miscompile that we are hiding (rc=0 wrong-output inline-C fixtures get the W4
-treatment instead).
+**Decision -- auto-detect, do not drop ~350 marker files.** The plan's original
+"drop a `requires.tur-only` marker per fixture" would mean ~350 noisy files needing
+maintenance. Instead `run-turi.sh` gained `fixture_has_inline_c`: a non-allowlisted
+fixture whose body has a ` ```c ` block is classified an **inline-c carve-out**
+(`SKIP_INLINEC`) rather than an allowlist gap. This is self-maintaining (new
+inline-C fixtures auto-carve) and is the exact mechanism the W5 flip will use to
+skip the inline-C set. The ~15 inline-C fixtures that *do* work under turi
+(`inline-c-binop`, `gen-*`, ...) are on the allowlist and are checked first, so
+they still run. `run.sh` ignores `requires.tur-only`/`SKIP_INLINEC` entirely, so
+compiled coverage is untouched.
 
-**Validation.** `check_turi_parity.py` unaffected; `run-turi.sh` skip count
-rises by ~the carved count; no fixture both compiles-clean and is carved without
-reason.
+**Shipped.** The harness summary now reports the carve-outs separately:
+`463 passed, 0 failed, 1206 skipped -- of which 427 inline-c carve-outs ... 779
+non-inline-C not yet on the allowlist`. That **427** is the W2 carve; the **779**
+is the honest W5 triage surface (many already pass and just need adding; ~244 are
+pure-turi failures needing a fix or marker).
+
+**The 25 silent-miscompile inline-C fixtures are NOT hidden silently.** They are
+filed in
+[docs/reported/turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md):
+`try_exec_simple_inline_c` claims their body and returns wrong output (rc=0).
+They carve as inline-C for the flip, but the evaluator bug is W4 work (make the
+`ic_exec_*` matchers refuse shapes they cannot evaluate, then they error cleanly).
+
+**Validation.** `check_turi_parity.py` unaffected; harness green at 463/0; full
+compiled suite unchanged at 1573/0.
 
 ### W3 -- `errors/` diag coverage + semantic divergences -- **MOSTLY DONE**
 
