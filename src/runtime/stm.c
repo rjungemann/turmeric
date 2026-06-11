@@ -167,9 +167,9 @@ void *tur_tvar_modify(STM_Transaction *tx, TVar *tv, void *(*fn)(void *, void *)
     if (!tx || !tv || !fn) return NULL;
 
     void *old_value = tur_tvar_read(tx, tv);
-    /* For v1, we just apply the function to the current value directly */
-    fn(old_value, fn_env);
-    tur_tvar_write(tx, tv, old_value);
+    /* Apply the function and write its result back (read-modify-write). */
+    void *new_value = fn(old_value, fn_env);
+    tur_tvar_write(tx, tv, new_value);
     return old_value;
 }
 

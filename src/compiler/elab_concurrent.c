@@ -764,15 +764,47 @@ Expr *elab_tvar_modify(Elab *e, const Form *call) {
         return NULL;
     }
 
-    Expr *tvar = elab_form(e, call->as.list.items[1]);
-    Expr *fn = elab_form(e, call->as.list.items[2]);
-    if (!tvar || !fn) return NULL;
+    /* Lower (tvar/modify tv f) to
+     *   (let [g tv] (tvar/swap g (f (tvar/read g))))
+     * so the function application reuses the ordinary call-dispatch path
+     * (fat/thin closures, fn-to-fat shims, typed thunks) instead of a bespoke
+     * indirect call.  This makes modify work identically on the compiled and
+     * interpreted backends -- a previous direct EX_TVAR_MODIFY emission was a
+     * no-op stub on the compiled path (docs/reported/
+     * stm-tvar-cas-swap-modify-compiled-path-broken.md).  Binding g evaluates
+     * the TVar expression exactly once.  swap(g, f(read(g))) writes f(old) and
+     * returns the old value, matching modify's semantics. */
+    Span sp = call->span;
+    Form *tvar_form = call->as.list.items[1];
+    Form *fn_form   = call->as.list.items[2];
 
-    /* TVar/modify returns the old value, which is a ptr<void> */
-    Expr *result = expr_new(e->arena, EX_TVAR_MODIFY, TYPE_PTR_VOID, call->span);
-    result->as.tvar_modify_.tvar = tvar;
-    result->as.tvar_modify_.fn = fn;
-    return result;
+    static unsigned modify_gensym_ctr = 0;
+    char gbuf[32];
+    snprintf(gbuf, sizeof(gbuf), "__tur_modtv_%u", modify_gensym_ctr++);
+    const Symbol *g = intern_cstr(e->st, gbuf);
+    Form *g_ref = form_sym(e->arena, sp, g);
+
+    /* (tvar/read g) */
+    Form *read_items[2] = { form_sym(e->arena, sp, e->sym_tvar_read), g_ref };
+    Form *read_form = form_list(e->arena, sp, read_items, 2);
+
+    /* (f (tvar/read g)) */
+    Form *call_items[2] = { fn_form, read_form };
+    Form *fn_call_form = form_list(e->arena, sp, call_items, 2);
+
+    /* (tvar/swap g (f (tvar/read g))) */
+    Form *swap_items[3] = { form_sym(e->arena, sp, e->sym_tvar_swap), g_ref, fn_call_form };
+    Form *swap_form = form_list(e->arena, sp, swap_items, 3);
+
+    /* [g tv] */
+    Form *bind_items[2] = { g_ref, tvar_form };
+    Form *bind_vec = form_vec(e->arena, sp, bind_items, 2);
+
+    /* (let [g tv] (tvar/swap ...)) */
+    Form *let_items[3] = { form_sym(e->arena, sp, e->sym_let), bind_vec, swap_form };
+    Form *let_form = form_list(e->arena, sp, let_items, 3);
+
+    return elab_form(e, let_form);
 }
 
 Expr *elab_tvar_swap(Elab *e, const Form *call) {

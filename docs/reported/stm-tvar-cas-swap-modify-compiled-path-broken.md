@@ -1,5 +1,17 @@
 # Compiled path: `tvar/cas` and `tvar/swap` fail to link; `tvar/modify` is a no-op
 
+> **Status: FIXED.** `tur_tvar_cas`/`tur_tvar_swap` are now emitted in the
+> runtime preamble (`src/compiler/emit_module.c`); `tvar/modify` is lowered in
+> the elaborator (`elab_tvar_modify`) to `(let [g tv] (tvar/swap g (f (tvar/read
+> g))))`, reusing the normal call-dispatch path on both backends; and the
+> runtime `tur_tvar_modify` in `src/runtime/stm.c` now writes `fn(old)` rather
+> than `old`. Verified: `tur run` and `tur --interpret` agree on cas/swap, and
+> `tests/fixtures/stm-cas/` guards the compiled path. All 73 `expected.c`
+> codegen snapshots were regenerated for the two added runtime functions
+> (`bash tests/run.sh`: 1569 passed, 0 failed). A *separate* bug surfaced while
+> validating this -- compiled `or-else` branches are no-op stubs -- filed at
+> [stm-or-else-compiled-branches-are-noop-stubs.md](stm-or-else-compiled-branches-are-noop-stubs.md).
+
 **Summary:** Three of the six STM TVar primitives are non-functional on the
 **compiled** path (`tur build` / `tur run`):
 

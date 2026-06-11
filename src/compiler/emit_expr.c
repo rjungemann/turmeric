@@ -3436,13 +3436,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return atom_nil();
         }
         case EX_TVAR_MODIFY: {
-            /* (TVar::modify tvar fn) - modify a TVar */
+            /* Dead arm: elab_tvar_modify lowers (tvar/modify tv f) to
+             * (let [g tv] (tvar/swap g (f (tvar/read g)))) so the function
+             * application goes through the normal call-dispatch path.  This is
+             * kept defensive in case a raw EX_TVAR_MODIFY ever reaches codegen. */
             char *tvar_val = emit_value(ctx, body, e->as.tvar_modify_.tvar);
             char *fn_val = emit_value(ctx, body, e->as.tvar_modify_.fn);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            /* Simplified: emit as read-modify-write */
-            buf_printf(body, "/* TVar::modify %s %s */ void *%s = NULL;\n", tvar_val, fn_val, tmp);
+            buf_printf(body, "/* TVar::modify %s %s (lowered in elab) */ void *%s = NULL;\n", tvar_val, fn_val, tmp);
             free(tvar_val);
             free(fn_val);
             return tmp;

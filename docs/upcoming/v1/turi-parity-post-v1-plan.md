@@ -531,15 +531,23 @@ ctest target (`tests/turi/eval-stm.sh` + `eval-stm.tur`): tvar new/
 write/read/swap/cas, atomically/stm, check, and or-else (both the
 retry-fallback and the success-no-fallback paths).
 
-### Discovered: the compiled path is broken for cas/swap/modify
+### Discovered + fixed: compiled-path cas/swap/modify
 
-Authoring the fixture surfaced a compiled-side bug:
-`tvar/cas` and `tvar/swap` **fail to link** (`tur build`/`tur run`
-emit calls to `tur_tvar_cas`/`tur_tvar_swap` that the emitted runtime
-never defines), and `tvar/modify` codegen is a **no-op stub**. So the
-interpreter is currently *more complete* than the compiled path for
-these three ops. Filed:
+Authoring the fixture surfaced a compiled-side bug: `tvar/cas` and
+`tvar/swap` **failed to link** (codegen emitted calls the runtime never
+defined) and `tvar/modify` codegen was a **no-op stub**. **Now fixed**
+(report executed): `tur_tvar_cas`/`tur_tvar_swap` are emitted in the
+runtime preamble, `tvar/modify` is lowered in the elaborator to
+`(let [g tv] (tvar/swap g (f (tvar/read g))))` so it reuses the normal
+call dispatch on both backends, and the runtime `tur_tvar_modify` writes
+`fn(old)`. `tests/fixtures/stm-cas/` guards the compiled path; all 73
+`expected.c` snapshots were regenerated for the two new runtime
+functions. See
 [docs/reported/stm-tvar-cas-swap-modify-compiled-path-broken.md](../../reported/stm-tvar-cas-swap-modify-compiled-path-broken.md).
+A separate compiled-`or-else` bug (branches emit as no-op stubs) was
+found while validating and filed at
+[docs/reported/stm-or-else-compiled-branches-are-noop-stubs.md](../../reported/stm-or-else-compiled-branches-are-noop-stubs.md);
+it is **not** fixed here.
 
 ### Tests / harness note
 
