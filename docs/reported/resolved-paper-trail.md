@@ -361,6 +361,38 @@ flag suppressing the trailing-extension strip so directory names like
 `my.project` survive intact. The companion manifest-`:name` preference
 landed alongside the build-output-directory plan.
 
+### Generic inline-C struct arg monomorphises to `int64` (FIXED)
+
+[`../archive/history/generic-inline-c-struct-arg-monomorphises-to-int64.md`](../archive/history/generic-inline-c-struct-arg-monomorphises-to-int64.md)
+
+A `defn` taking a generic struct value through an inline-C body was
+monomorphising the argument slot to `int64_t` instead of the concrete
+struct type at the call site. **Fix (2026-06-10):** per-instantiation
+inline-C emission in `src/compiler/emit_module.c` now propagates the
+monomorphised arg type into the emitted C signature, so the struct
+arrives by value with its real layout.
+
+### ECS macro symbol synthesis missing (`str->sym`) (FIXED)
+
+[`../archive/history/ecs-macro-symbol-synthesis-missing.md`](../archive/history/ecs-macro-symbol-synthesis-missing.md)
+
+ECS-style macros that need to fabricate fresh symbols from string parts
+had no `str->sym` builtin to call -- the expansion tree could be built
+manually with `dot-sym` but not parameterised by macro-arg substrings.
+**Fix (2026-06-11):** `str->sym` builtin landed at
+`src/compiler/elab_macros.c:321-326`, available inside macro bodies for
+symbol synthesis.
+
+### ECS sparse-set backward shift lost wrapping entries (FIXED)
+
+[`../archive/history/ecs-sparse-backward-shift-loses-wrapping-entries.md`](../archive/history/ecs-sparse-backward-shift-loses-wrapping-entries.md)
+
+The linear-probing sparse-set in `ecs/sparse.tur` lost entries whose
+probe sequence wrapped past the table end when a backward shift was
+triggered by deletion. **Fix (2026-06-11):** ported `ecs/sparse.tur` to a
+full Robin Hood implementation; wrapping is handled correctly across
+deletions and resizes.
+
 ## Spice-side cleanups (paper trail)
 
 ### `__dsp_pair_*_float` bit-cast helpers removed

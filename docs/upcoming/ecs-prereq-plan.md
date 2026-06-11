@@ -48,7 +48,7 @@ by leverage: smallest changes that unblock the most plan, first.
 
 | ID | Report | Status | Affects |
 |---|---|---|---|
-| **A** | [ecs-macro-symbol-synthesis-missing.md](../reported/ecs-macro-symbol-synthesis-missing.md) | **Fixed** | Per-component accessors (name synthesis is in; emission is gap E), `defsystem` name-keyed metadata (same), `HasComponent` classes (same) |
+| **A** | [ecs-macro-symbol-synthesis-missing.md](../archive/history/ecs-macro-symbol-synthesis-missing.md) | **Fixed** | Per-component accessors (name synthesis is in; emission is gap E), `defsystem` name-keyed metadata (same), `HasComponent` classes (same) |
 | **B** | *(report never persisted; minimal repro now passes)* | **Fixed** | `dense-get` / `sparse-get` for struct components without witness arg |
 | **C** | *(report never persisted; minimal repro now passes)* | **Fixed** | All macro authors using backquote + `dot-sym` |
 | **D** | [macro-cannot-emit-inline-c-block.md](../reported/macro-cannot-emit-inline-c-block.md) | **Open -- but no longer blocks the plan** (research 2026-06-11 narrowed it: workaround is one extra `do`-wrap; ECS doesn't need inline-C macros at all -- top-level defn names auto-coerce to `ptr<void>`) | One specific failing macro shape; cosmetic diagnostic |
@@ -370,7 +370,7 @@ continuing the plan.
 
 - [`ecs-spice-plan.md`](ecs-spice-plan.md) -- the plan being
   unblocked.
-- [`../reported/ecs-macro-symbol-synthesis-missing.md`](../reported/ecs-macro-symbol-synthesis-missing.md)
+- [`../archive/history/ecs-macro-symbol-synthesis-missing.md`](../archive/history/ecs-macro-symbol-synthesis-missing.md)
   -- gap A.
 - [`../reported/generic-return-type-not-inferred-from-context.md`](../reported/generic-return-type-not-inferred-from-context.md)
   -- gap B.

@@ -1,0 +1,15 @@
+#lang sweet-exp
+
+;; Probe: can a sweet-exp indented `defn` carry an inline-C body that
+;; closes via dedent rather than the traditional same-line ```) trick?
+;; If this works, we have a real sweet-exp inline-C form. If it doesn't,
+;; file a docs/reported/ entry.
+
+defn answer [] : int
+  ```c
+  return 42;
+  ```
+
+defn main [] : int
+  println(answer())
+  0

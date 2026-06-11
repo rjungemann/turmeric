@@ -220,9 +220,9 @@ the actual edits.
    `(void *)&physics_hyimpl` at expansion. Larger scope but
    substantially more useful.
 
-3. **Compose with str->sym.** If the str->sym gap
-   ([docs/reported/ecs-macro-symbol-synthesis-missing.md](ecs-macro-symbol-synthesis-missing.md))
-   also lands, macros can compute the C-mangled name as a string
+3. **Compose with str->sym.** With the str->sym gap landed
+   ([../archive/history/ecs-macro-symbol-synthesis-missing.md](../archive/history/ecs-macro-symbol-synthesis-missing.md)),
+   macros can compute the C-mangled name as a string
    via `str-append` + identity-mangling, then splice it as a
    symbol into the unquoted position. With (1) + str->sym, (2)
    becomes optional.

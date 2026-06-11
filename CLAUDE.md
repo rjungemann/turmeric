@@ -506,8 +506,17 @@ A few forms are cleaner in traditional syntax:
 - **`import` / `export`** -- short enough that indentation adds no value
 - **`cons` lists** -- `(cons x (cons y 0))` reads clearly; neoteric
   `cons(x cons(y 0))` is harder to scan
-- **Inline C blocks** -- the ` ```c ... ``` ` fence is already special syntax;
-  the enclosing `defn` still uses the sweet-exp form but the body stays as-is
+- **Inline C blocks** -- the ` ```c ... ``` ` fence body always stays as-is.
+  The enclosing `defn` can be either form: indented sweet-exp (body closes by
+  dedent, no trailing paren) **or** traditional `(defn ...)` with the
+  same-line ` ```) ` close. Prefer the indented form in new sweet-exp code:
+
+  ```turmeric
+  defn answer [] : int
+    ```c
+    return 42;
+    ```
+  ```
 - **Single-form expressions** that fit on one line and are already minimal:
   `(nil-value)`, `(ok-val r)`, etc.
 

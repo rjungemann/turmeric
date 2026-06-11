@@ -328,6 +328,17 @@ Post-v0.19.1 sweep:
 - **[project-mode-rc-runtime-preamble-missing.md](history/project-mode-rc-runtime-preamble-missing.md)** -- Project-mode RC/frame runtime preamble + struct drop/walk glue missing; FIXED (T1--T11 landed); per-module fixed-runtime emission is now idempotent
 - **[tur-signal-rebuild-plan.md](history/tur-signal-rebuild-plan.md)** -- `tur-signal` spice rebuild on modern typed + fat-closure infra; functionally complete; source-side rebuild landed in `../turmeric-spices/spices/signal/` (2026-06-06)
 
+Post-v0.19.1 followup sweep (2026-06-11):
+
+- **[application-image-dumps-plan.md](history/application-image-dumps-plan.md)** -- Serializable continuations + application image dumps; AI1--AI8 shipped; see [image-dumps-guide.md](../guides/image-dumps-guide.md)
+- **[build-tur-sweet-manifest-plan.md](history/build-tur-sweet-manifest-plan.md)** -- `build.tur.sweet` manifest support (SW0--SW8); shipped; documented in CLAUDE.md
+- **[fn-type-colons-sweet-exp-plan.md](history/fn-type-colons-sweet-exp-plan.md)** -- `fn`-type colon codemod sweet-exp coverage (S1--S5); LANDED in PR #322
+- **[row-type-in-value-position-loses-elements.md](history/row-type-in-value-position-loses-elements.md)** -- `#row{...}` in value-type position now rejected with TUR-E0012 in Layer 4; RESOLVED
+- **[sized-types-phantom-index.md](history/sized-types-phantom-index.md)** -- SizedVec size index now real (SZ6--SZ8 + cross-parameter unification); RESOLVED 2026-06-10; see [sized-types-guide.md](../guides/sized-types-guide.md)
+- **[spices-v0.18-typing-migration-plan.md](history/spices-v0.18-typing-migration-plan.md)** -- Spices migration to post-v0.17 advanced typing + mangling; substantially complete (P1/P2 classes resolved across the spice tree)
+- **[typeclass-associated-types-missing.md](history/typeclass-associated-types-missing.md)** -- Associated type members on typeclasses; minimal milestone landed (single associated type, dictionary-free type-level projection); RESOLVED
+- **[variadic-hkt-rows-missing.md](history/variadic-hkt-rows-missing.md)** -- Variadic HKT rows via `^&` row-kinded parameters; IMPLEMENTED (all six layers landed)
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

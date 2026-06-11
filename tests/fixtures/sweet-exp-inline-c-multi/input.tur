@@ -1,0 +1,17 @@
+#lang sweet-exp
+
+;; Probe: sweet-exp `defn` with multiple body forms, one of which is an
+;; inline-C block (and not the last form). This stresses the dedent
+;; bracketer more than the single-body case.
+
+defn raw-add [a : int b : int] : int
+  ```c
+  return a + b;
+  ```
+
+defn main [] : int
+  let [x raw-add(10 5)
+       y raw-add(x 100)]
+    println(x)
+    println(y)
+    0
