@@ -226,7 +226,10 @@ So map/set/hamt is its own focused sub-project, not a "land it now" change:
 unify the value representation (route `#set{}`/`#map{}` through the HAMT path),
 write the ~18 natives over `tur_hamt_*`, and resolve the C-callback eq/hash
 (turi-closure-aware HAMT). hamt.tur itself (over the existing `native_tur_hamt_*`)
-is the most tractable starting point. Tracked here + in
+is the most tractable starting point. Full umbrella report (three gaps, repro,
+fix directions):
+[turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md),
+plus the narrower
 [turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md).
 
 **Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
