@@ -356,11 +356,15 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
   same refuse-rather-than-guess tightening per matcher. Inline-C carve-outs, so
   they do not block W5 -- but they ship a wrong-answer hazard for real programs.
 - **11 pure-turi interpreter bugs** (the W5 blockers), catalogued in
-  [turi-pure-turi-silent-miscompiles.md](../../reported/turi-pure-turi-silent-miscompiles.md):
-  return-type dispatch showing `:bool` as `1` (`rt-return-dispatch-*`), Any-type
-  boxing tag/cast (`any-box-*`, `any-cast-mismatch-panic`), typed `eq?`
-  (`result-of-typed-eq`), and others. Each is its own root cause; start with
-  `rt-return-dispatch-*` (likely one fix, two fixtures). `reader-cond` is a legit
+  [turi-pure-turi-silent-miscompiles.md](../../reported/turi-pure-turi-silent-miscompiles.md).
+  **6 fixed** (added to the allowlist, harness 912 -> 918): `EX_ASCRIBE`
+  primitive coercion (`rt-return-dispatch-*`), `EX_ANY_TYPE_OF` coarse tags +
+  `EX_ANY_CAST` checked downcast (`any-box-*`, `any-cast-mismatch-panic`), and
+  `catch-unwind` firing unwound defers (`panic-catch-unwind-defer`). **5 remain**
+  -- each its own root cause: `result-of-typed-eq` (typed `eq?` over Result),
+  `range-bound-show-ord` (Show bracket), `codegen-private-defn-collision`
+  (module-private name resolution), `extern-c-spaced-typeann` (extern-c no
+  output), `rc-unique-violation` (violation undetected). `reader-cond` is a legit
   path-divergence -> carve `requires.compiled`.
 
 ### W5 -- The flip itself

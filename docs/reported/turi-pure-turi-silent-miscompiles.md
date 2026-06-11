@@ -1,5 +1,29 @@
 # Pure-turi silent miscompiles (11 real interpreter bugs + 1 legit carve)
 
+> **Update (TI8.b/W4, 2026-06-11): 6 of the 11 fixed.** Four root causes in
+> `src/turi/eval.c`:
+> - **`EX_ASCRIBE` primitive coercion** -- `(:: x bool/float/int)` now reconciles
+>   the runtime tag with the ascribed primitive (an int ascribed to `:bool`
+>   becomes `TURI_BOOL`, so it prints `true` not `1`). Fixed
+>   `rt-return-dispatch-basic` and `rt-return-dispatch-param`.
+> - **`EX_ANY_TYPE_OF` coarse tags** -- returns `"struct"`/`"adt"` (matching the
+>   compiled `__tur_any_type_name`) instead of the specific type name. Fixed
+>   `any-box-struct`, `any-box-adt`.
+> - **`EX_ANY_CAST` checked downcast** -- panics on a clear primitive/struct/ADT
+>   tag mismatch instead of silently passing through. Fixed
+>   `any-cast-mismatch-panic`.
+> - **`catch-unwind` defer firing** -- fires the unwound frames' defers (LIFO)
+>   before returning, so `(defer ...)` in a panicking thunk runs during the
+>   unwind. Fixed `panic-catch-unwind-defer`.
+>
+> All six added to the `run-turi.sh` allowlist (harness 912 -> 918, 0 failed;
+> compiled 1573/0, zero regressions). **5 remain:** `result-of-typed-eq` (typed
+> `eq?` over a Result), `range-bound-show-ord` (range bracket `[`/`(` in Show),
+> `codegen-private-defn-collision` (module-private name resolution: prints
+> `200/200` not `100/200`), `extern-c-spaced-typeann` (extern-c emits no output),
+> `rc-unique-violation` (rc-unique violation not detected). Plus `reader-cond`,
+> the legit `#?(:tur/:turi ...)` carve.
+
 **Summary:** Of the ~244 pure-turi (no inline-C) fixtures that fail under
 `--interpret` after W1-W3, only **12** are *silent* (rc matches the expected exit
 but the output is wrong); the other 232 are clean errors. These 12 matter most

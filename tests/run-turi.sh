@@ -794,6 +794,17 @@ unsafe-reinterpret
 use-after-move-float-let-vs-captured
 vec-basic
 with-resource-basic
+
+# TI8.b/W4 (turi-interpreter-gap-closure-plan): pure-turi silent miscompiles
+# fixed in src/turi/eval.c -- EX_ASCRIBE primitive coercion (bool/float/int),
+# EX_ANY_TYPE_OF coarse struct/adt tags, EX_ANY_CAST checked downcast, and
+# catch-unwind firing the unwound frames defers before returning.
+any-box-adt
+any-box-struct
+any-cast-mismatch-panic
+panic-catch-unwind-defer
+rt-return-dispatch-basic
+rt-return-dispatch-param
 "
 
 # Build an associative-set from the default list for O(1) lookup.

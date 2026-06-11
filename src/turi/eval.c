@@ -4141,9 +4141,31 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * later phase needs runtime reinterpret semantics too. */
         return eval_expr(env, frame, e->as.reinterpret_.expr);
 
-    /* --- Phase 2: type ascription is transparent at runtime ---------------- */
-    case EX_ASCRIBE:
-        return eval_expr(env, frame, e->as.ascribe_.inner);
+    /* --- Phase 2: type ascription is transparent at runtime, except that it
+     * must reconcile the runtime value tag with the ascribed primitive type.
+     * The interpreter dispatches println/show on the runtime tag, so an int
+     * literal ascribed to :bool (e.g. a return-type-directed Default[bool]
+     * instance that returns `1`, then `(:: (default-of) bool)`) must become a
+     * TURI_BOOL or it prints as `1` instead of `true`.  Mirror EX_CAST's
+     * primitive coercions, but only when the tag actually mismatches so struct/
+     * closure/ADT ascriptions stay transparent. */
+    case EX_ASCRIBE: {
+        TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        switch (e->type.kind) {
+        case TY_BOOL:
+            if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
+            return v;
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
+            return v;
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            return v;
+        default:
+            return v;
+        }
+    }
 
     /* --- Phase N: poly wrap is transparent in the interpreter -------------- */
     case EX_POLY_WRAP:
@@ -4249,6 +4271,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue prev_throw    = env->throw_value;
         TuriValue prev_ret      = env->return_value;
         bool     prev_panicking = env->panicking;
+        /* W4: remember the defer stack so a caught panic fires the unwound
+         * frames' defers *before* catch-unwind returns (the compiled path runs
+         * defers during unwinding).  The longjmp out of a panic skips the normal
+         * scope-exit defer firing, leaving them on the stack. */
+        DeferItem *defer_mark = (DeferItem *)env->defer_stack;
         env->catch_jmp = &jb;
 
         TuriValue result;
@@ -4275,6 +4302,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->throw_value  = prev_throw;
             env->return_value = prev_ret;
             (void)prev_panicking;
+            /* W4: fire the unwound frames' defers (LIFO) before returning, so
+             * `(defer ...)` in the panicking thunk runs during the unwind. */
+            fire_defers_to_mark_reversed(env, defer_mark, frame);
             return turi_err_result_box(env);
         }
     }
@@ -4487,10 +4517,43 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_expr(env, frame, e->as.union_inject_.value);
 
     /* --- IT4: any-typed cast and type-of --------------------------------- */
-    case EX_ANY_CAST:
-        /* In the interpreter, 'any' values are untagged (union injection is
-         * transparent), so (cast x T) just returns the inner value. */
-        return eval_expr(env, frame, e->as.any_cast_.value);
+    case EX_ANY_CAST: {
+        /* (cast x T) is a *checked* downcast: the compiled path panics when the
+         * any box does not hold a T (__tur_any_cast_check).  W4: do the same
+         * here -- 'any' is untagged in the interpreter, but the runtime
+         * TuriValue tag still records the held kind, so verify it matches the
+         * target and panic on mismatch.  Conservative: only panic on a clear
+         * primitive/struct/ADT mismatch; pass through ambiguous targets
+         * (type vars, unknown) so a valid cast never spuriously panics. */
+        TuriValue v = eval_expr(env, frame, e->as.any_cast_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        bool ok = true;
+        switch (e->as.any_cast_.target_kind) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            ok = (v.tag == TURI_INT); break;
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+            ok = (v.tag == TURI_FLOAT); break;
+        case TY_BOOL: ok = (v.tag == TURI_BOOL); break;
+        case TY_CSTR: ok = (v.tag == TURI_CSTR); break;
+        case TY_STRUCT:
+            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def != NULL);
+            if (ok && e->as.any_cast_.target_struct &&
+                v.as_struct->name && e->as.any_cast_.target_struct->name)
+                ok = (strcmp(v.as_struct->name,
+                             e->as.any_cast_.target_struct->name) == 0);
+            break;
+        case TY_ADT:
+            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def == NULL);
+            break;
+        default: ok = true; break;
+        }
+        if (!ok) {
+            turi_runtime_panic(env, "cast: any holds a value of a different type");
+            return turi_nil(); /* unreachable: turi_runtime_panic never returns */
+        }
+        return v;
+    }
 
     case EX_ANY_TYPE_OF: {
         TuriValue v = eval_expr(env, frame, e->as.any_type_of_.value);
@@ -4504,7 +4567,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TURI_NIL:     tname = "nil";     break;
         case TURI_CLOSURE: tname = "fn";      break;
         case TURI_STRUCT:
-            tname = (v.as_struct && v.as_struct->name) ? v.as_struct->name : "struct";
+            /* W4: match the compiled __tur_any_type_name, which carries only
+             * kind granularity -- every struct is "struct" and every ADT is
+             * "adt" (emit_module.c), NOT the specific type name.  A plain
+             * (make-struct T ...) carries its StructDef (def != NULL); an ADT
+             * constructor builds via make_struct_val with def == NULL. */
+            tname = (v.as_struct && v.as_struct->def) ? "struct" : "adt";
             break;
         default: break;
         }
