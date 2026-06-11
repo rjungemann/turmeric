@@ -2156,6 +2156,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R6: Track current function name for linting */
     e->current_fn_name = name_f->as.sym;
     if (fn_declared_unsafe) e->unsafe_depth++;
+    /* generic-return-type-not-inferred-from-context: push the declared
+     * return type onto the expected-type channel for the body's tail.
+     * elab_call clears it before sub-arg elaboration, so this only binds
+     * the body's outermost tail call -- exactly mirroring how (:: e T)
+     * propagates to the call directly under the ascription.  We skip the
+     * TY_TYVAR case because a bare type-variable return cannot bind a
+     * callee's tyvar (no concrete witness to substitute). */
+    Type *prev_body_expected = e->expected_type;
+    Type *body_expected = NULL;
+    if (return_struct_def) {
+        body_expected = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(body_expected, 0, sizeof(Type));
+        body_expected->kind = TY_STRUCT;
+        body_expected->copy_kind = return_struct_def->is_linear ? CK_LINEAR
+                                : (return_struct_def->is_copy ? CK_COPY : CK_MOVE);
+        body_expected->hkt_kind = KIND_STAR;
+        body_expected->as.struct_.def = return_struct_def;
+    } else if (return_adt_def) {
+        body_expected = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *body_expected = type_adt(return_adt_def);
+    } else if (return_app_type) {
+        body_expected = return_app_type;
+    } else if (return_fn_type) {
+        body_expected = return_fn_type;
+    } else if (return_exists_type) {
+        body_expected = return_exists_type;
+    }
+    if (body_expected) e->expected_type = body_expected;
     {
         /* Internal defines: splice (define name init) into nested let forms. */
         Form *spliced = splice_internal_defines(e,
@@ -2168,6 +2196,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->expected_type = prev_body_expected;
                 e->current_fn_name = NULL;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
@@ -2183,6 +2212,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->expected_type = prev_body_expected;
                 /* Phase R6: Reset current function name */
                 e->current_fn_name = NULL;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
@@ -2200,6 +2230,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
+                    e->expected_type = prev_body_expected;
                     /* Phase R6: Reset current function name */
                     e->current_fn_name = NULL;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
@@ -2226,6 +2257,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    e->expected_type = prev_body_expected;
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
     e->n_sig_tyvars = saved_n_sig_tyvars;

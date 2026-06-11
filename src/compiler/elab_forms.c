@@ -533,7 +533,19 @@ Expr *elab_let(Elab *e, const Form *call) {
         /* Phase P3: flag ^persistent RHS so map-new can lower to hamt/new */
         bool prev_in_persistent_let = e->in_persistent_let;
         if (is_persistent) e->in_persistent_let = true;
+        /* generic-return-type-not-inferred-from-context: when the binding
+         * carries a type annotation, push it onto the expected-type channel
+         * so a generic `(call ...)` whose `[A]` lives only on the result
+         * can bind A to the annotation.  Skip ^fat (it re-types the binding
+         * after the fact and the annotation is not a return-position type). */
+        Type *prev_expected = e->expected_type;
+        Type *let_init_expected = NULL;
+        if (type_ann_form && !is_fat_ann) {
+            let_init_expected = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
+            if (let_init_expected) e->expected_type = let_init_expected;
+        }
         Expr *init = elab_form(e, init_form);
+        e->expected_type = prev_expected;
         e->in_persistent_let = prev_in_persistent_let;
 
         /* Task 2 (Prereq 1): Capture which preceding bindings were newly moved during this init elaboration. */

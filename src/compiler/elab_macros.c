@@ -232,8 +232,12 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
             return form_contains_ct_builtins(f->as.list.items[0]);
-        case F_QUOTE:
         case F_QUASIQUOTE:
+            /* substitute_params now preserves the quasiquote wrapper to
+             * shield runtime do/let/if heads from CT special-form
+             * dispatch.  We must still run ct_eval to unwrap it. */
+            return true;
+        case F_QUOTE:
         case F_SYM:
         case F_NIL:
         case F_BOOL:
@@ -893,10 +897,41 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             /* Literals, quote forms, and type annotations are returned as-is */
             return f;
         case F_QUASIQUOTE:
-        case F_UNQUOTE:
+            /* Preserve the quasiquote wrapper so ct_eval_quasiquote can
+             * later treat the inner form as data -- otherwise stripping
+             * the wrapper here exposes runtime `do`/`let`/`if` heads to
+             * the CT special-form dispatch in ct_eval_call, which would
+             * (e.g.) reduce a (do ...) body to just its tail expression
+             * and silently drop sibling forms. */
+            return form_quasiquote(e->arena, f->span,
+                                   substitute_params(e, f->as.list.items[0], macro, args));
+        case F_UNQUOTE: {
+            /* If the unquote's inner is a bare macro-parameter symbol,
+             * inline the arg form directly (dropping the unquote wrapper).
+             * This preserves the legacy semantics that `~param` splices
+             * the caller-supplied form verbatim -- without it, ct_eval
+             * would re-interpret arg forms whose head is `fn`/`do`/`let`
+             * as compile-time special forms.  Computed unquotes like
+             * `~(dot-sym A)` keep their wrapper so ct_eval_quasiquote
+             * can evaluate them. */
+            Form *inner = f->as.list.items[0];
+            if (inner->tag == F_SYM) {
+                for (uint32_t i = 0; i < macro->n_params; i++) {
+                    Form *param = macro->params[i];
+                    if (param->tag == F_SYM && param->as.sym == inner->as.sym) {
+                        return args[i];
+                    }
+                }
+                if (macro->rest_param && macro->rest_param == inner->as.sym) {
+                    return args[macro->n_params];
+                }
+            }
+            return form_unquote(e->arena, f->span,
+                                substitute_params(e, inner, macro, args));
+        }
         case F_UNQUOTE_SPLICING:
-            /* Expand quasiquote forms first, then continue substitution */
-            return substitute_params(e, quasiquote_expand_form(e, f), macro, args);
+            return form_unquote_splicing(e->arena, f->span,
+                                         substitute_params(e, f->as.list.items[0], macro, args));
         case F_LIST: {
             /* Check for gensym call: (gensym) or (gensym prefix) */
             if (f->as.list.len >= 1 && f->as.list.items[0]->tag == F_SYM) {

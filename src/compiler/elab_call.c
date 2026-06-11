@@ -2580,6 +2580,12 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     CallTypeBinding type_bindings[16];
     uint8_t n_type_bindings = 0;
     for (uint8_t bi = 0; bi < 16; bi++) type_bindings[bi].name = NULL;
+    /* generic-return-type-not-inferred-from-context: capture the enclosing
+     * expected-type channel (pushed by (:: e T), typed-let, or the defn
+     * return slot) before clearing it for sub-arg elaboration -- so the
+     * result-type collection below sees the outer context exactly once. */
+    Type *saved_expected_return = e->expected_type;
+    e->expected_type = NULL;
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!args[i]) return NULL;
@@ -3369,6 +3375,31 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 }
             }
         }
+    }
+
+    /* generic-return-type-not-inferred-from-context: restore the outer
+     * expected-type channel for any subsequent elab (e.g. nested let/do
+     * propagation by the caller).  Then, if an outer context constrained
+     * this call's result type, bind any still-free tyvars in the
+     * function's result_full_type against that expected type -- this is
+     * how a (defn [A] [] :A ...) gets specialized when only the return
+     * position carries A. */
+    e->expected_type = saved_expected_return;
+    /* Only bind from the expected return type when it is ground -- i.e.
+     * contains no named tyvars itself.  Inside a generic body, the enclosing
+     * defn's return-position push carries that body's own tyvars (e.g. `(Map
+     * K V)`); registering K->K, V->V bindings here would mark the inner call
+     * as "specialized" without any concrete substitution, suppressing the
+     * carrier emission that other carrier callers still need.  A ground
+     * expected return (`Pos`, `int`, `(Map cstr int)`) is the only safe
+     * case to bind from. */
+    if (saved_expected_return && fn_type.kind == TY_FN &&
+        fn_type.as.fn.result_full_type &&
+        call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+        !call_type_has_named_tyvar(saved_expected_return)) {
+        (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                         *saved_expected_return,
+                                         type_bindings, &n_type_bindings);
     }
 
     /* Result type is the function's return type */
