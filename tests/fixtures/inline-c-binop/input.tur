@@ -1,0 +1,44 @@
+; Regression fixture: the turi interpreter's simple inline-C evaluator must
+; honour trailing binary operators in `return <expr>;`, not drop them.
+; Previously `return p != 0;` evaluated to `p` -- a silent miscompile.
+; See docs/reported/turi-inline-c-ignores-comparison-operator.md.
+;
+; Every helper below uses only operand + binary-operator shapes the evaluator
+; supports (no grouping parens, no pointer deref), so the result must match the
+; compiled path under `tur --interpret`.
+
+(defn neq0   [p]   : int ```c
+  return p != 0;
+  ```)
+(defn eq5    [p]   : int ```c
+  return p == 5;
+  ```)
+(defn gt3    [p]   : int ```c
+  return p > 3;
+  ```)
+(defn add-mul [a b] : int ```c
+  return a + b * 2;
+  ```)
+(defn modulo [a]   : int ```c
+  return a % 3;
+  ```)
+(defn lsh  [a b] : int ```c
+  return a << b;
+  ```)
+(defn both   [a]   : int ```c
+  return a == 5 && a > 0;
+  ```)
+(defn notp   [a]   : int ```c
+  return !a;
+  ```)
+
+(defn main [] : void
+  (println (neq0 7))      ; 1
+  (println (neq0 0))      ; 0
+  (println (eq5 5))       ; 1
+  (println (gt3 2))       ; 0
+  (println (add-mul 3 4)) ; 11
+  (println (modulo 7))    ; 1
+  (println (lsh 1 4))   ; 16
+  (println (both 5))      ; 1
+  (println (notp 0)))     ; 1

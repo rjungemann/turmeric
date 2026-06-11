@@ -1330,33 +1330,110 @@ static int ic_field_index(const char *fname, size_t flen,
                            const char *names[], size_t lens[], int n);
 static int ic_common_field_idx(const char *fname, size_t flen);
 
-/* Parse a simple field assignment expression: param name, bool/null/int literal, or cast.
+/* Precedence-climbing evaluator forward decl (mutually recursive with the
+ * operand reader for unary operators and parenthesised sub-expressions). */
+static bool ic_eval_binexpr(const char **pp, int min_prec,
+                            FnDef *fn, uint32_t param_offset,
+                            TuriValue *args, uint32_t n_args,
+                            int64_t *out_val, const char *ic_body);
+
+/* Classify a binary operator at p.  Returns its C-like precedence (higher
+ * binds tighter) and sets *oplen to the token length; 0 means "not a binary
+ * operator we evaluate."  Two-character operators are matched before their
+ * one-character prefixes so `<=`/`<<` are not mistaken for `<`. */
+static int ic_binop_prec(const char *p, int *oplen) {
+    switch (p[0]) {
+    case '|': if (p[1] == '|') { *oplen = 2; return 1; } *oplen = 1; return 3;
+    case '&': if (p[1] == '&') { *oplen = 2; return 2; } *oplen = 1; return 5;
+    case '^': *oplen = 1; return 4;
+    case '=': if (p[1] == '=') { *oplen = 2; return 6; } return 0;
+    case '!': if (p[1] == '=') { *oplen = 2; return 6; } return 0;
+    case '<': if (p[1] == '=') { *oplen = 2; return 7; }
+              if (p[1] == '<') { *oplen = 2; return 8; }
+              *oplen = 1; return 7;
+    case '>': if (p[1] == '=') { *oplen = 2; return 7; }
+              if (p[1] == '>') { *oplen = 2; return 8; }
+              *oplen = 1; return 7;
+    case '+': *oplen = 1; return 9;
+    case '-': *oplen = 1; return 9;
+    case '*': case '/': case '%': *oplen = 1; return 10;
+    default: return 0;
+    }
+}
+
+/* Apply a binary operator (integer semantics). */
+static int64_t ic_apply_binop(const char *op, int oplen, int64_t a, int64_t b) {
+    if (oplen == 2) {
+        if (op[0] == '=' && op[1] == '=') return a == b;
+        if (op[0] == '!' && op[1] == '=') return a != b;
+        if (op[0] == '<' && op[1] == '=') return a <= b;
+        if (op[0] == '>' && op[1] == '=') return a >= b;
+        if (op[0] == '<' && op[1] == '<') return a << b;
+        if (op[0] == '>' && op[1] == '>') return a >> b;
+        if (op[0] == '&' && op[1] == '&') return a && b;
+        if (op[0] == '|' && op[1] == '|') return a || b;
+        return 0;
+    }
+    switch (op[0]) {
+    case '+': return a + b;  case '-': return a - b;
+    case '*': return a * b;  case '/': return b ? a / b : 0;
+    case '%': return b ? a % b : 0;
+    case '<': return a < b;  case '>': return a > b;
+    case '&': return a & b;  case '|': return a | b;  case '^': return a ^ b;
+    default:  return 0;
+    }
+}
+
+/* Evaluate a single primary operand at *pp, advancing *pp past it.  Handles
+ * unary !/~/-, casts like (T)/(int64_t)(intptr_t), true/false/NULL/int
+ * literals, and a parameter reference with optional .field / ->field access.
  * ic_body is the full inline-C body (for struct field extraction); may be NULL. */
-static bool ic_eval_assign_expr(const char *expr,
-                                 FnDef *fn, uint32_t param_offset,
-                                 TuriValue *args, uint32_t n_args,
-                                 int64_t *out_val,
-                                 const char *ic_body) {
-    const char *p = ic_skip_ws(expr);
-    /* Strip any number of casts like (T), (T*), (int64_t)(intptr_t), etc. */
+static bool ic_eval_operand(const char **pp,
+                            FnDef *fn, uint32_t param_offset,
+                            TuriValue *args, uint32_t n_args,
+                            int64_t *out_val, const char *ic_body) {
+    const char *p = ic_skip_ws(*pp);
+
+    /* Unary operators. */
+    if (*p == '!' && p[1] != '=') {
+        const char *np = p + 1; int64_t v;
+        if (!ic_eval_operand(&np, fn, param_offset, args, n_args, &v, ic_body)) return false;
+        *out_val = !v; *pp = np; return true;
+    }
+    if (*p == '~') {
+        const char *np = p + 1; int64_t v;
+        if (!ic_eval_operand(&np, fn, param_offset, args, n_args, &v, ic_body)) return false;
+        *out_val = ~v; *pp = np; return true;
+    }
+    if (*p == '-' && !isdigit((unsigned char)ic_skip_ws(p + 1)[0])) {
+        const char *np = p + 1; int64_t v;
+        if (!ic_eval_operand(&np, fn, param_offset, args, n_args, &v, ic_body)) return false;
+        *out_val = -v; *pp = np; return true;
+    }
+
+    /* Strip any number of casts like (T), (T*), (int64_t)(intptr_t), etc.  A
+     * leading '(' followed by an identifier is treated as a cast; genuine
+     * grouping parens are not common in these inline-C bodies. */
     while (*p == '(') {
         const char *q = p + 1; q = ic_skip_ws(q);
         if (isalpha((unsigned char)*q) || *q == '_') {
-            /* consume type tokens and * until ) */
             const char *q2 = q;
             while (*q2 && *q2 != ')') q2++;
             if (*q2 == ')') { p = ic_skip_ws(q2 + 1); continue; }
         }
         break;
     }
-    if (ic_word_eq(p, "true"))  { *out_val = 1; return true; }
-    if (ic_word_eq(p, "false")) { *out_val = 0; return true; }
-    if (ic_word_eq(p, "NULL"))  { *out_val = 0; return true; }
-    if (*p == '0' && !isdigit((unsigned char)p[1])) { *out_val = 0; return true; }
+
+    /* Literals. */
+    if (ic_word_eq(p, "true"))  { *out_val = 1; *pp = p + 4; return true; }
+    if (ic_word_eq(p, "false")) { *out_val = 0; *pp = p + 5; return true; }
+    if (ic_word_eq(p, "NULL"))  { *out_val = 0; *pp = p + 4; return true; }
     if (isdigit((unsigned char)*p) || (*p == '-' && isdigit((unsigned char)p[1]))) {
-        char *end; *out_val = strtoll(p, &end, 0);
-        if (end > p) return true;
+        char *end; int64_t v = strtoll(p, &end, 0);
+        if (end > p) { *out_val = v; *pp = end; return true; }
     }
+
+    /* Parameter reference, optionally followed by .field / ->field access. */
     char ident[64];
     const char *q = p;
     if (ic_read_ident(&q, ident, sizeof(ident)) > 0) {
@@ -1393,7 +1470,7 @@ static bool ic_eval_assign_expr(const char *expr,
                         if (fidx < 0) fidx = ic_common_field_idx(field_name, flen);
                         if (fidx >= 0 && (uint32_t)fidx < arg->as_struct->n_fields) {
                             *out_val = arg->as_struct->fields[fidx].as_int;
-                            return true;
+                            *pp = r2; return true;
                         }
                     } else if (arg->tag == TURI_INT && arg->as_int != 0) {
                         /* Pointer to struct, access via common field index */
@@ -1401,7 +1478,7 @@ static bool ic_eval_assign_expr(const char *expr,
                         if (fidx >= 0) {
                             int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
                             *out_val = ptr[fidx];
-                            return true;
+                            *pp = r2; return true;
                         }
                     }
                 }
@@ -1422,16 +1499,66 @@ static bool ic_eval_assign_expr(const char *expr,
                         if (fidx >= 0) {
                             int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
                             *out_val = ptr[fidx];
-                            return true;
+                            *pp = r2; return true;
                         }
                     }
                 }
             }
             *out_val = arg->as_int;
-            return true;
+            *pp = q; return true;
         }
     }
     return false;
+}
+
+/* Precedence-climbing evaluator: parse `operand (op operand)*` honouring C
+ * operator precedence, left-associatively.  Returns false (no partial result)
+ * the moment any sub-operand fails to parse. */
+static bool ic_eval_binexpr(const char **pp, int min_prec,
+                            FnDef *fn, uint32_t param_offset,
+                            TuriValue *args, uint32_t n_args,
+                            int64_t *out_val, const char *ic_body) {
+    int64_t lhs;
+    if (!ic_eval_operand(pp, fn, param_offset, args, n_args, &lhs, ic_body))
+        return false;
+    for (;;) {
+        const char *p = ic_skip_ws(*pp);
+        int oplen = 0;
+        int prec  = ic_binop_prec(p, &oplen);
+        if (prec == 0 || prec < min_prec) break;
+        *pp = p + oplen;
+        int64_t rhs;
+        if (!ic_eval_binexpr(pp, prec + 1, fn, param_offset, args, n_args, &rhs, ic_body))
+            return false;
+        lhs = ic_apply_binop(p, oplen, lhs, rhs);
+    }
+    *out_val = lhs;
+    return true;
+}
+
+/* Parse and evaluate a simple inline-C value expression: a parameter, a
+ * literal, a field access, or a binary-operator expression over those.
+ * ic_body is the full inline-C body (for struct field extraction); may be NULL.
+ *
+ * Fail-closed: if anything other than trailing whitespace / a single ';'
+ * remains after the expression, return false so the caller falls back to the
+ * honest "inline-C not supported" path rather than silently returning a wrong
+ * value.  (Previously this dropped any trailing binary operator -- e.g.
+ * `return p != 0;` evaluated to `p` -- a silent miscompile; see
+ * docs/reported/turi-inline-c-ignores-comparison-operator.md.) */
+static bool ic_eval_assign_expr(const char *expr,
+                                 FnDef *fn, uint32_t param_offset,
+                                 TuriValue *args, uint32_t n_args,
+                                 int64_t *out_val,
+                                 const char *ic_body) {
+    const char *p = expr;
+    int64_t v;
+    if (!ic_eval_binexpr(&p, 0, fn, param_offset, args, n_args, &v, ic_body))
+        return false;
+    p = ic_skip_ws(p);
+    if (*p != '\0' && *p != ';') return false;
+    *out_val = v;
+    return true;
 }
 
 /* Extract struct field names from a "struct { ... }" definition in body. */

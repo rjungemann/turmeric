@@ -1,6 +1,13 @@
 # turi inline-C pattern executor silently drops trailing comparison operators
 
-**Summary:** The interpreter's "simple inline-C" pattern executor evaluates
+**Status:** FIXED. `ic_eval_assign_expr` now parses a full binary-operator
+expression (precedence-climbing over the existing operand reader) and
+fail-closes on any unrecognised trailing token. Regression coverage:
+`tests/fixtures/inline-c-binop/` (asserts `!=`, `==`, `>`, `+`, `*`, `%`,
+`<<`, `&&`, `!` match the compiled path; on the turi allowlist). Fix directions
+1 and 2 below were both taken.
+
+**Summary:** The interpreter's "simple inline-C" pattern executor evaluated
 `return p != 0;` (and `p > 3`, `p == k`, etc.) as just `p` -- it reads the
 first operand and ignores the binary operator entirely. This is a **silent
 miscompile**: the function returns the wrong value, not an error.
@@ -43,21 +50,39 @@ The compiled path is correct; only the interpreter's inline-C shortcut is wrong.
 
 ## Root cause
 
-`ic_eval_assign_expr` in `src/turi/eval.c`. After it skips casts and reads a
-leading identifier that resolves to a parameter, it handles `.field` and
-`->field` accessors, then unconditionally returns the bare operand:
+`ic_eval_assign_expr` in `src/turi/eval.c`. After it skipped casts and read a
+leading identifier that resolved to a parameter, it handled `.field` and
+`->field` accessors, then unconditionally returned the bare operand
+(`*out_val = arg->as_int; return true;`). There was no check for a trailing
+binary operator (`!=`, `==`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `+`, `-`, ...)
+following the operand, so the RHS of the comparison was discarded. The same
+omission applied to the integer-literal and `true`/`false`/`NULL` fast paths: a
+literal LHS in a comparison would also drop the operator.
 
-- `src/turi/eval.c:1430` -- `*out_val = arg->as_int; return true;`
+This is reached from Pattern 7 in `try_exec_simple_inline_c` (the
+`!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch` arm).
 
-There is no check for a trailing binary operator (`!=`, `==`, `<`, `>`, `<=`,
-`>=`, `&&`, `||`, `+`, `-`, ...) following the operand, so the RHS of the
-comparison is discarded. The same omission applies to the integer-literal and
-`true`/`false`/`NULL` fast paths above it (lines 1352-1359): a literal LHS in a
-comparison would also drop the operator.
+## Fix
 
-This is reached from Pattern 7 in `try_exec_simple_inline_c`
-(`src/turi/eval.c:2150`, the `!has_malloc && !has_arrow && has_return &&
-!has_fptr && !has_switch` arm).
+`ic_eval_assign_expr` was split into:
+
+- `ic_eval_operand` -- the original operand logic (casts, literals, param +
+  `.field`/`->field`), now advancing a `const char **` cursor and also handling
+  leading unary `!` / `~` / `-`.
+- `ic_binop_prec` / `ic_apply_binop` -- a small operator table with C-like
+  precedence (two-character operators matched before their one-character
+  prefixes so `<=`/`<<` are not read as `<`).
+- `ic_eval_binexpr` -- a precedence-climbing, left-associative evaluator over
+  operands, returning false (no partial value) the moment any sub-operand fails.
+- `ic_eval_assign_expr` -- now a thin wrapper that evaluates one binary
+  expression and **fail-closes**: if anything other than trailing whitespace or
+  a single `;` remains, it returns false so the caller falls back to the honest
+  "inline-C not supported" error instead of a wrong value.
+
+Grouping parens (`(a + b) > 3`) remain unsupported -- the cast-stripper treats a
+`(` followed by an identifier as a cast -- but they now fail closed (error)
+rather than silently miscompiling. Pointer deref (`*(int64_t *)p`) is likewise
+still unsupported (user inline-C, TI7 carve-out).
 
 ## Why it was not caught
 

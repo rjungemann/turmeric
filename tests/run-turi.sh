@@ -239,6 +239,12 @@ gen-nested-turi
 gen-for-each
 gen-nth
 gen-yield-star
+
+# Bugfix (docs/reported/turi-inline-c-ignores-comparison-operator.md): the
+# interpreter's simple inline-C evaluator now honours trailing binary operators
+# in `return <expr>;` instead of silently dropping them.
+#   inline-c-binop -- != / == / > / + / * / % / << / && / ! shapes match tur
+inline-c-binop
 "
 
 # Build an associative-set from the default list for O(1) lookup.
