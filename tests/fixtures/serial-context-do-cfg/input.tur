@@ -1,0 +1,34 @@
+;; Phase 21 (capture-grammar generalization): do-tail calls that take a captured
+;; scalar/Serializable argument -- the loop can take config.
+;;
+;;   (serial-reset (do (init) (serial-shift k v) (loop cfg)))
+;;
+;; A 1-arg tail call whose argument does not reach the shift is an ignore-value
+;; frame: the argument is a pure value captured at the reset site (cold start),
+;; marshaled by kind (int inline, cstr length-prefixed, Serializable via its
+;; instance), and applied to the target on resume. The resume value is ignored.
+;; This is what lets a real loop receive its configuration through the saved
+;; continuation rather than being limited to a 0-arg loop.
+
+(load "stdlib/workflow.tur")
+
+(defn init     [] : int (println "init") 0)
+(defn loop-cfg [n : int]    : int (println "loop") (* n 10))
+(defn greet    [name : cstr] : int (println name) 0)
+
+(defn rt [k : ptr<void>] : int
+  (resume-cont! (save-cont! k) 0))
+
+(defn twice [k : ptr<void>] : int
+  (let [b (save-cont! k)]
+    (+ (resume-cont! b 0) (resume-cont! b 0))))
+
+(defn main [] : int
+  ;; int config, literal.
+  (println (serial-reset (do (init) (serial-shift rt 0) (loop-cfg 5))))        ; 50
+  ;; int config from a free variable, captured + marshaled, resumed twice.
+  (let [cfg 7]
+    (println (serial-reset (do (init) (serial-shift twice 0) (loop-cfg cfg))))) ; 140
+  ;; cstr config, marshaled, resumed twice.
+  (println (serial-reset (do (println "boot") (serial-shift twice 0) (greet "world")))) ; 0
+  0)

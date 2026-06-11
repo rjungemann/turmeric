@@ -480,6 +480,10 @@ typedef struct {
     const char    *c_op;     /* builtin frame: "+","-","*","/"; NULL for a call frame */
     const Binding *call_fn;  /* call frame: target top-level fn binding; else NULL */
     bool           hole_left;/* true iff the hole is the left operand/arg */
+    /* ignore_value: a continuation frame that does not consume the resume value
+     * (a do-sequence tail). A 0-arg such frame calls target(); a 1-arg one calls
+     * target(env) with the captured argument. Hole-carrying frames are false. */
+    bool           ignore_value;
     const Expr    *other;    /* the non-hole operand (captured into the frame env) */
     TypeKind       env_kind; /* type kind of `other` -- for typed serial marshaling */
     /* cps-transform-plan (a): when the env is a nominal type with a Serializable
@@ -663,6 +667,97 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             cur = body;
             continue;
         }
+        if (cur && cur->kind == EX_DO) {
+            /* do-sequence with a statement-position shift:
+             *   (do PRELUDE... (shift k v) TAIL)
+             * The items before the shift are side-effecting prelude, evaluated
+             * once at capture time (recorded as binding-less prelude entries).
+             * The single optional tail item is the captured continuation: an
+             * ignore-value frame that, on resume, runs regardless of the resume
+             * value. This is the "skip expensive-init, resume into the loop"
+             * shape the application-image-dumps plan targets. */
+            if (!lets || !n_lets_out) return NULL;
+            uint32_t N = cur->as.do_.n;
+            int32_t m = -1;
+            for (uint32_t i = 0; i < N; i++) {
+                if (reaches_shift_kind(cur->as.do_.items[i], target)) {
+                    if (m >= 0) return NULL;   /* at most one hole */
+                    m = (int32_t)i;
+                }
+            }
+            if (m < 0) return NULL;
+            /* The shift must sit in statement position (be the do item itself).
+             * The tail items (m, N) are the captured continuation. */
+            if (cur->as.do_.items[m]->kind != target) return NULL;
+            /* Prelude items [0, m): emitted for side effect at the reset site. */
+            for (int32_t i = 0; i < m; i++) {
+                if (nl >= CL_MAX_CTX_LETS) return NULL;
+                if (expr_contains_return_or_throw(cur->as.do_.items[i])) return NULL;
+                lets[nl].binding = NULL;                 /* side-effect prelude */
+                lets[nl].init    = cur->as.do_.items[i];
+                nl++;
+            }
+            /* Tail items (m, N): each a 0-arg top-level call -> an ignore-value
+             * frame. They run in source order on resume, so record them in
+             * reverse: the first tail item is innermost (adjacent to the shift,
+             * runs first), the last is outermost (runs last, its value is the
+             * reset's value). */
+            for (int32_t i = (int32_t)N - 1; i > m; i--) {
+                const Expr *tail = cur->as.do_.items[i];
+                if (tail->kind != EX_CALL ||
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                const Binding *fb = tail->as.call_.fn_binding;
+                if (fb->type.kind != TY_FN) return NULL;
+                if (fb->closure_fn_binding) return NULL;
+                /* The outermost tail item yields the reset's value (scalar);
+                 * inner ones are run for effect and their value discarded. */
+                if (i == (int32_t)N - 1 && !env_kind_ok(tail->type.kind)) return NULL;
+                if (n >= CL_MAX_CTX_FRAMES) return NULL;
+                if (tail->as.call_.n_args == 0 && fb->type.as.fn.arity == 0) {
+                    /* 0-arg tail call -> ignore-value frame, no env. */
+                    frames[n].c_op = NULL;
+                    frames[n].call_fn = fb;
+                    frames[n].hole_left = true;   /* unused for a 0-arg frame */
+                    frames[n].ignore_value = true;
+                    frames[n].other = NULL;       /* no env */
+                    frames[n].env_kind = TY_INT;  /* inline zero env */
+                    frames[n].env_ser = NULL;
+                    frames[n].env_deser = NULL;
+                    n++;
+                } else if (tail->as.call_.n_args == 1 && fb->type.as.fn.arity == 1) {
+                    /* 1-arg tail call (f env) -> ignore-value frame whose single
+                     * argument is a pure captured value (no hole). The arg is
+                     * marshaled by kind, so the loop can take scalar config. */
+                    const Expr *arg = tail->as.call_.args[0];
+                    if (reaches_shift_kind(arg, target)) return NULL;  /* must be pure env */
+                    if (expr_contains_return_or_throw(arg)) return NULL;
+                    const char *eser = NULL, *edeser = NULL;
+                    if (env_kind_ok(arg->type.kind)) {
+                        /* int/cstr env -- inline codec */
+                    } else if (program &&
+                               sk_find_serializable(program, arg->type,
+                                                    want_names ? &eser : NULL,
+                                                    want_names ? &edeser : NULL)) {
+                        /* nominal env with a Serializable instance */
+                    } else {
+                        return NULL;
+                    }
+                    frames[n].c_op = NULL;
+                    frames[n].call_fn = fb;
+                    frames[n].hole_left = true;   /* env occupies the sole arg slot */
+                    frames[n].ignore_value = true;
+                    frames[n].other = arg;
+                    frames[n].env_kind = arg->type.kind;
+                    frames[n].env_ser = eser;
+                    frames[n].env_deser = edeser;
+                    n++;
+                } else {
+                    return NULL;   /* richer tail calls need continuation lifting */
+                }
+            }
+            cur = cur->as.do_.items[m];   /* the shift; loop exits below */
+            continue;
+        }
         if (cur && cur->kind == EX_BUILTIN) {
             /* Arithmetic frame: a single-hole int binop (+, -, *, /). */
             const BuiltinSpec *spec = cur->as.builtin.spec;
@@ -681,6 +776,7 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             frames[n].c_op = spec->c_op;
             frames[n].call_fn = NULL;
             frames[n].hole_left = h0;
+            frames[n].ignore_value = false;
             frames[n].other = other;
             frames[n].env_kind = TY_INT;
             frames[n].env_ser = NULL;
@@ -723,12 +819,35 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             frames[n].c_op = NULL;
             frames[n].call_fn = fb;
             frames[n].hole_left = h0;
+            frames[n].ignore_value = false;
             frames[n].other = other;
             frames[n].env_kind = other->type.kind;
             frames[n].env_ser = eser;
             frames[n].env_deser = edeser;
             n++;
             cur = h0 ? a0 : a1;
+        } else if (cur && cur->kind == EX_CALL && cur->as.call_.n_args == 1 &&
+                   cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            /* 1-arg call frame: (f HOLE) -- the sole argument is the hole, so
+             * there is no captured env. The frame applies f to the resume
+             * value; it marshals as the target name with a zero (unused) env. */
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
+            if (fb->closure_fn_binding) return NULL;   /* needs hidden env arg */
+            if (!env_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
+            const Expr *a0 = cur->as.call_.args[0];
+            if (!reaches_shift_kind(a0, target)) return NULL;
+            if (!env_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;
+            frames[n].c_op = NULL;
+            frames[n].call_fn = fb;
+            frames[n].hole_left = true;   /* sole arg carries the hole */
+            frames[n].ignore_value = false;
+            frames[n].other = NULL;       /* no env */
+            frames[n].env_kind = TY_INT;  /* marshaled as an inline zero env */
+            frames[n].env_ser = NULL;
+            frames[n].env_deser = NULL;
+            n++;
+            cur = a0;
         } else {
             break;
         }
@@ -928,6 +1047,32 @@ static void cl_emit_frame_body(Buf *hb, const char *name, const ClFrame *f) {
     /* Call frame: invoke target(arg0, arg1), casting env/value to the param
      * types. The hole flows in as `value`; `env` is the captured other arg. */
     char *rn = raw_name_for_binding(f->call_fn);
+    if (f->call_fn->type.as.fn.arity == 0) {
+        /* 0-arg call: ignore-value continuation frame -- run target() on resume
+         * regardless of the resume value (a do-sequence tail). */
+        buf_printf(hb,
+            "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+            name, rn);
+        free(rn);
+        return;
+    }
+    if (f->call_fn->type.as.fn.arity == 1) {
+        TypeKind k0 = f->call_fn->type.as.fn.arg_kinds[0];
+        if (f->ignore_value) {
+            /* 1-arg ignore-value frame (do-tail (f env)): apply target to the
+             * captured env, discarding the resume value. */
+            buf_printf(hb,
+                "static intptr_t %s(intptr_t env, intptr_t value) { (void)value; return (intptr_t)%s(%senv); }\n",
+                name, rn, c_cast_for_kind(k0));
+        } else {
+            /* 1-arg hole frame: no env -- apply target to the resume value. */
+            buf_printf(hb,
+                "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                name, rn, c_cast_for_kind(k0));
+        }
+        free(rn);
+        return;
+    }
     TypeKind k0 = f->call_fn->type.as.fn.arg_kinds[0];
     TypeKind k1 = f->call_fn->type.as.fn.arg_kinds[1];
     const char *a0 = f->hole_left ? "value" : "env";   /* arg0 */
@@ -999,8 +1144,14 @@ static char *emit_cloneable_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
      *    the non-hole operands (once, in source order) and the receiver's env,
      *    build the DK chain, and run it. */
     for (uint32_t i = 0; i < nl; i++) {
-        char *bn = name_for_binding(ctx, lets[i].binding);
         char *iv = emit_value(ctx, body, lets[i].init);
+        if (!lets[i].binding) {           /* side-effect prelude (do prefix) */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(void)(%s);\n", iv);
+            free(iv);
+            continue;
+        }
+        char *bn = name_for_binding(ctx, lets[i].binding);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s = %s;\n",
                    emit_type_c_name(ctx, lets[i].binding->type), bn, iv);
@@ -1011,7 +1162,8 @@ static char *emit_cloneable_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
     }
     char *op_vals[CL_MAX_CTX_FRAMES];
     for (uint32_t i = 0; i < nf; i++)
-        op_vals[i] = emit_value(ctx, body, frames[i].other);
+        op_vals[i] = frames[i].other ? emit_value(ctx, body, frames[i].other)
+                                     : strdup("0");  /* no-env (0/1-arg) frame */
     char *k_fn_val = emit_value(ctx, body, k_fn);
 
     char *chain = fresh_tmp(ctx);
@@ -1291,10 +1443,17 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
      * the frame to a stable name and back. frame_fn[i] is the C expression naming
      * the DKFrame to install. */
     /* Emit any pure prelude `let` bindings as C locals first, so captured
-     * operands that reference them resolve (mirrors the cloneable path). */
+     * operands that reference them resolve (mirrors the cloneable path). A
+     * binding-less entry is a do-prefix statement, emitted for side effect. */
     for (uint32_t i = 0; i < nl; i++) {
-        char *bn = name_for_binding(ctx, lets[i].binding);
         char *iv = emit_value(ctx, body, lets[i].init);
+        if (!lets[i].binding) {           /* side-effect prelude (do prefix) */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(void)(%s);\n", iv);
+            free(iv);
+            continue;
+        }
+        char *bn = name_for_binding(ctx, lets[i].binding);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s = %s;\n",
                    emit_type_c_name(ctx, lets[i].binding->type), bn, iv);
@@ -1306,7 +1465,8 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
     char *op_vals[CL_MAX_CTX_FRAMES];
     char  frame_fn[CL_MAX_CTX_FRAMES][48];
     for (uint32_t i = 0; i < nf; i++) {
-        op_vals[i] = emit_value(ctx, body, frames[i].other);
+        op_vals[i] = frames[i].other ? emit_value(ctx, body, frames[i].other)
+                                     : strdup("0");  /* no-env (1-arg) frame */
         if (!frames[i].call_fn) {
             snprintf(frame_fn[i], sizeof frame_fn[i],
                      "__sk_frame_for_tag(%d)", sk_tag_for_frame(&frames[i]));
@@ -1319,13 +1479,19 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
             int ekc = frames[i].env_ser ? 2                       /* SK_ENV_SER  */
                     : (frames[i].env_kind == TY_CSTR) ? 1         /* SK_ENV_CSTR */
                     : 0;                                          /* SK_ENV_INT  */
+            /* Name-key side marker. Hole frames use $L/$R (hole side); a do-tail
+             * ignore-value frame uses $0 (0-arg) or $E (1-arg env) so it never
+             * aliases a hole frame of the same target. */
+            const char *side = frames[i].ignore_value
+                ? (frames[i].other ? "$E" : "$0")
+                : (frames[i].hole_left ? "$L" : "$R");
             if (frames[i].env_ser) {
                 buf_printf(hb,
                     "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d,"
                     " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
                     "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
                     "{ __sk_register(&__sk_reg_%d_%u); }\n",
-                    id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i], ekc,
+                    id, i, rn, side, frame_fn[i], ekc,
                     frames[i].env_ser, frames[i].env_deser,
                     id, i, id, i);
             } else {
@@ -1333,7 +1499,7 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
                     "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d, 0, 0, 0 };\n"
                     "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
                     "{ __sk_register(&__sk_reg_%d_%u); }\n",
-                    id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i], ekc,
+                    id, i, rn, side, frame_fn[i], ekc,
                     id, i, id, i);
             }
             free(rn);
@@ -1420,10 +1586,20 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
 /* Program scan: does any serial-reset lower onto the DK machine? Gates the DK
  * runtime prelude + the serial marshaling runtime. Mirrors sk_can_lower. */
 static const Expr *g_sk_scan_root = NULL;  /* whole program, for the instance scan */
+/* When true, the walk reports mere *presence* of serial syntax (any
+ * serial-shift), not just lowerable resets. The serial runtime prelude
+ * (tur_serial_cont_*) must be emitted whenever stdlib save-cont!/resume-cont!
+ * could reference it -- i.e. whenever a serial-shift exists -- so an
+ * unsupported context degrades cleanly instead of emitting an implicit
+ * declaration that miscompiles. See
+ * docs/reported/serial-shift-unsupported-context-miscompile.md. */
+static bool g_sk_any_serial = false;
 
 static bool uses_serial_dk(const Expr *e) {
     if (!e) return false;
-    if (e->kind == EX_SERIAL_RESET && sk_can_lower(e, g_sk_scan_root)) return true;
+    if (e->kind == EX_SERIAL_SHIFT && g_sk_any_serial) return true;
+    if (e->kind == EX_SERIAL_RESET &&
+        (g_sk_any_serial || sk_can_lower(e, g_sk_scan_root))) return true;
     switch (e->kind) {
         case EX_PROGRAM:
             for (uint32_t i = 0; i < e->as.program.n; i++)
@@ -1478,6 +1654,18 @@ static bool uses_serial_dk(const Expr *e) {
 bool emit_cps_program_uses_serial_dk(const Expr *program) {
     g_sk_scan_root = program;   /* so sk_can_lower can scan for Serializable instances */
     bool r = uses_serial_dk(program);
+    g_sk_scan_root = NULL;
+    return r;
+}
+
+/* True if the program contains any serial-shift/serial-reset, lowerable or not.
+ * Gates emission of the DK machine + serial marshaling runtime so the stdlib
+ * save-cont!/resume-cont! references never dangle. */
+bool emit_cps_program_contains_serial(const Expr *program) {
+    g_sk_scan_root = program;
+    g_sk_any_serial = true;
+    bool r = uses_serial_dk(program);
+    g_sk_any_serial = false;
     g_sk_scan_root = NULL;
     return r;
 }

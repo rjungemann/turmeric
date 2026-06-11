@@ -514,6 +514,27 @@ defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
 
 ### `stdlib/workflow.tur`
 
+**Stable API surface (Phase 21).** Downstream code -- including the
+application-image-dumps plan (`docs/upcoming/application-image-dumps-plan.md`,
+AI2) -- builds on exactly these four entry points; treat their signatures as
+the SemVer contract:
+
+| Function | Signature | Role |
+|---|---|---|
+| `save-cont!` | `[k : ptr<void>] : ptr<void>` | marshal a captured continuation `k` to a `bytes` buffer (caller-owned) |
+| `resume-cont!` | `[b : ptr<void> v : int] : int` | rebuild the chain from `b` and resume it on `v` |
+| `workflow-suspend` | `[k : ptr<void>] : ptr<void>` | alias of `save-cont!` |
+| `workflow-resume` | `[b : ptr<void> v : int] : int` | alias of `resume-cont!` |
+
+`k` is the opaque handle the `serial-shift` receiver is passed (a DK chain
+carried as `ptr<void>`). These are thin shims over the
+`tur_serial_cont_serialize`/`_deserialize`/`_resume` runtime, which is emitted
+whenever a program contains serial syntax. **Capture scope:** the continuation
+must be a *supported delimited context* (a single-scalar-hole chain of `let`
+prelude + `+ - * /` + 2-arg calls + one `if`); contexts outside that grammar do
+not capture (see
+`docs/reported/serial-shift-unsupported-context-miscompile.md`).
+
 A higher-level API for persistent workflows:
 
 ```turmeric

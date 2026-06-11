@@ -2915,7 +2915,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (shared || emit_cps_program_uses_delimited(program) ||
         emit_cps_program_uses_cloneable_dk(program) ||
-        emit_cps_program_uses_serial_dk(program)) {
+        emit_cps_program_contains_serial(program)) {
         emit_cps_runtime_prelude(out);
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
@@ -2923,8 +2923,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (shared || emit_cps_program_uses_cloneable_dk(program)) {
         emit_cps_cloneable_bridge_prelude(out);
     }
-    /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. */
-    if (shared || emit_cps_program_uses_serial_dk(program)) {
+    /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. Gate
+     * on *presence* of serial syntax (not just lowerable resets) so stdlib
+     * save-cont!/resume-cont! never reference an unemitted builtin -- an
+     * unsupported context then degrades cleanly instead of miscompiling. */
+    if (shared || emit_cps_program_contains_serial(program)) {
         emit_cps_serial_runtime_prelude(out);
     }
 
