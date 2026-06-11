@@ -547,6 +547,7 @@
 (defn hamt/autolink-hint []
   #{Unsafe}
   : int
-  ```c /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
+  ```c
+  /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
   return 0;
   ```)

@@ -49,7 +49,8 @@
 (defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>]
   #{Unsafe}
   : ThreadHandle
-  ```c TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
+  ```c
+  TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
   if (!state) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
   pthread_mutex_init(&state->cancel_mutex, NULL);
   pthread_cond_init(&state->cancel_cond, NULL);
@@ -83,7 +84,8 @@
 (defn thread-join [t : ThreadHandle]
   #{Unsafe}
   : nil
-  ```c TurThreadHandle *h = (TurThreadHandle *)t;
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_join(h->tid, NULL);
   pthread_mutex_destroy(&h->state->cancel_mutex);
   pthread_cond_destroy(&h->state->cancel_cond);
@@ -103,7 +105,8 @@
 (defn thread-detach [t : ThreadHandle]
   #{Unsafe}
   : nil
-  ```c TurThreadHandle *h = (TurThreadHandle *)t;
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_detach(h->tid);
   /* state ownership: the thread still holds tur_current_thread_state pointing to
    * state; free only the handle struct. state is freed when the thread exits or
@@ -123,7 +126,8 @@
 (defn thread-id []
   #{Unsafe}
   : int
-  ```c return (int64_t)(uintptr_t)pthread_self();
+  ```c
+  return (int64_t)(uintptr_t)pthread_self();
   ```)
 ;; ---- TC0-TC2: Cooperative thread cancellation ----
 ;;; cancel-thread -- request cooperative cancellation of a thread handle.
@@ -145,7 +149,8 @@
 (defn cancel-thread [t : ThreadHandle]
   #{Unsafe}
   : void
-  ```c TurThreadHandle *h = (TurThreadHandle *)t;
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
   __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
   pthread_mutex_lock(&h->state->cancel_mutex);
   pthread_cond_broadcast(&h->state->cancel_cond);
@@ -164,7 +169,8 @@
 (defn cancelled? []
   #{Unsafe}
   : bool
-  ```c return tur_thread_cancel_requested() != 0;
+  ```c
+  return tur_thread_cancel_requested() != 0;
   ```)
 ;;; with-cancel-guard -- run a body closure; on cancellation, run cleanup and return nil.
 ;;;
@@ -191,7 +197,8 @@
 (defn with-cancel-guard [cleanup : ptr<void> body : ptr<void>]
   #{Unsafe}
   : nil
-  ```c /* Save previous cancel jmpbuf state (supports nested guards) */
+  ```c
+  /* Save previous cancel jmpbuf state (supports nested guards) */
   int prev_valid = tur_cancel_jmpbuf_valid;
   jmp_buf prev_buf;
   if (prev_valid) memcpy(&prev_buf, &tur_cancel_jmpbuf, sizeof(jmp_buf));
@@ -218,7 +225,8 @@
 (defn __yield-point-impl []
   #{Unsafe}
   : void
-  ```c if (tur_thread_cancel_requested()) {
+  ```c
+  if (tur_thread_cancel_requested()) {
       tur_thread_do_cancel();
   }
   ```)

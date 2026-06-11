@@ -26,7 +26,8 @@
 ;;; Since: Phase B2
 
 (defn re/compile [pattern : cstr] : int
-  ```c #include <regex.h>
+  ```c
+  #include <regex.h>
   regex_t *re = malloc(sizeof(regex_t));
   if (regcomp(re, pattern, REG_EXTENDED) != 0) { free(re); return 0; }
   return (int64_t)(intptr_t)re;
@@ -42,7 +43,8 @@
 ;;; Since: Phase B2
 
 (defn re/free [re : int] : void
-  ```c #include <regex.h>
+  ```c
+  #include <regex.h>
   if (!re) return;
   regex_t *r = (regex_t*)(intptr_t)re;
   regfree(r);
@@ -63,7 +65,8 @@
 ;;; Since: Phase B2
 
 (defn re/match? [re : int input : cstr] : bool
-  ```c #include <regex.h>
+  ```c
+  #include <regex.h>
   if (!re) return false;
   regex_t *r = (regex_t*)(intptr_t)re;
   return regexec(r, input, 0, NULL, 0) == 0;
@@ -87,7 +90,8 @@
 ;;; Since: Phase B2
 
 (defn re/match [re : int input : cstr] : int
-  ```c #include <regex.h>
+  ```c
+  #include <regex.h>
   if (!re) return 0;
   regex_t *r = (regex_t*)(intptr_t)re;
   size_t nmatch = r->re_nsub + 1;
@@ -122,7 +126,8 @@
 ;;; Since: Phase B2
 
 (defn re/match-free [v : int] : void
-  ```c if (!v) return;
+  ```c
+  if (!v) return;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   for (size_t i = 0; i < vec->len; i++) free((void*)(intptr_t)vec->data[i]);
   free(vec->data);
@@ -145,7 +150,8 @@
 ;;; Since: Phase B2
 
 (defn re/find-all [re : int input : cstr] : int
-  ```c #include <regex.h>
+  ```c
+  #include <regex.h>
   if (!re) return 0;
   regex_t *r = (regex_t*)(intptr_t)re;
   size_t nmatch = r->re_nsub + 1;
@@ -188,7 +194,8 @@
 ;;; Since: Phase B2
 
 (defn re/find-all-free [lst : int] : void
-  ```c int64_t cur = lst;
+  ```c
+  int64_t cur = lst;
   while (cur) {
     int64_t *cell = (int64_t*)(intptr_t)cur;
     int64_t vptr  = cell[0];
@@ -220,7 +227,8 @@
 ;;; Since: Phase B2
 
 (defn re/replace [re : int input : cstr replacement : cstr] : cstr
-  ```c #include <regex.h>
+  ```c
+  #include <regex.h>
   if (!re) return strdup(input);
   regex_t *r = (regex_t*)(intptr_t)re;
   regmatch_t m[1];
@@ -322,7 +330,8 @@
 ;;; Since: Phase B2
 
 (defn re/replace-all [re : int input : cstr replacement : cstr] : cstr
-  ```c #include <regex.h>
+  ```c
+  #include <regex.h>
   if (!re) return strdup(input);
   regex_t *r = (regex_t*)(intptr_t)re;
   regmatch_t m[1];

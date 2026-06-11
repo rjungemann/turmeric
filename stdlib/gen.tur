@@ -21,7 +21,8 @@
 ;;;
 ;;; Since: GF2
 (defn gen-some? [p : ptr<void>] : bool
-  ```c return p != NULL;
+  ```c
+  return p != NULL;
   ```)
 ;;; gen-unwrap -- extract the int64_t value from a gen-next pointer.
 ;;;
@@ -37,7 +38,8 @@
 ;;; Since: GF2
 
 (defn gen-unwrap [p : ptr<void>] : int
-  ```c return *(int64_t *)p;
+  ```c
+  return *(int64_t *)p;
   ```)
 ;;; gen-none -- return a null generator result representing no value.
 ;;;
@@ -50,7 +52,8 @@
 ;;; Since: GF2
 
 (defn gen-none [] : ptr<void>
-  ```c return NULL;
+  ```c
+  return NULL;
   ```)
 ;; --- Growable array helpers used by gen-collect ---
 ;; Internal layout: int64_t[3] = { len, cap, data_ptr }
@@ -67,7 +70,8 @@
 
 
 (defn gen-arr-new [] : int
-  ```c int64_t *h = (int64_t *)malloc(3 * sizeof(int64_t));
+  ```c
+  int64_t *h = (int64_t *)malloc(3 * sizeof(int64_t));
   h[0] = 0; h[1] = 0; h[2] = 0;
   return (int64_t)(intptr_t)h;
   ```)
@@ -83,7 +87,8 @@
 ;;; Since: GF2
 
 (defn gen-arr-push! [a val] : nil
-  ```c int64_t *h = (int64_t *)(intptr_t)a;
+  ```c
+  int64_t *h = (int64_t *)(intptr_t)a;
   if (h[0] >= h[1]) {
     int64_t nc = h[1] ? h[1] * 2 : 4;
     int64_t *nd = (int64_t *)malloc((size_t)nc * sizeof(int64_t));
@@ -111,7 +116,8 @@
 ;;; Since: GF2
 
 (defn gen-arr-len [a] : int
-  ```c int64_t *h = (int64_t *)(intptr_t)a;
+  ```c
+  int64_t *h = (int64_t *)(intptr_t)a;
   return h[0];
   ```)
 ;;; gen-arr-get -- return the element at index i in a gen-arr array.
@@ -129,7 +135,8 @@
 ;;; Since: GF2
 
 (defn gen-arr-get [a i] : int
-  ```c int64_t *h = (int64_t *)(intptr_t)a;
+  ```c
+  int64_t *h = (int64_t *)(intptr_t)a;
   int64_t *data = (int64_t *)(intptr_t)h[2];
   return data[i];
   ```)

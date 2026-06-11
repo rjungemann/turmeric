@@ -18,14 +18,16 @@
 
 
 (defn seq-make-some [v : int] : int
-  ```c struct { bool is_some; int64_t value; } *opt =
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
     (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
   opt->is_some = true; opt->value = v;
   return (int64_t)(intptr_t)opt;
   ```)
 
 (defn seq-make-none [] : int
-  ```c struct { bool is_some; int64_t value; } *opt =
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
     (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
   opt->is_some = false; opt->value = 0;
   return (int64_t)(intptr_t)opt;
@@ -37,7 +39,8 @@
 
 
 (defn seq-out-vec-new [] : int
-  ```c struct { int64_t *data; size_t len; size_t cap; } *v =
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
     (struct { int64_t *data; size_t len; size_t cap; } *)malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   return (int64_t)(intptr_t)v;
@@ -45,7 +48,8 @@
 ;;; seq-out-vec-push! -- append val to the vec at v.
 
 (defn seq-out-vec-push! [v : int val : int] : void
-  ```c struct { int64_t *data; size_t len; size_t cap; } *vec =
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
     (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
   if (vec->len == vec->cap) {
     vec->cap = vec->cap ? vec->cap * 2 : 8;
@@ -57,7 +61,8 @@
 ;;; seq-make-cons -- allocate a cons cell { value, next }.
 
 (defn seq-make-cons [val : int nxt : int] : int
-  ```c struct { int64_t value; int64_t next; } *cell =
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
     (struct { int64_t value; int64_t next; } *)malloc(sizeof(*cell));
   cell->value = val; cell->next = nxt;
   return (int64_t)(intptr_t)cell;
@@ -75,7 +80,8 @@
 
 
 (defn seq-call-void-fn1 [f : int x : int] : void
-  ```c int64_t *fat = (int64_t *)(intptr_t)f;
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)f;
   int64_t fn_ptr = fat[0];
   ((void (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
   ```)

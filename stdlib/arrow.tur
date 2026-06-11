@@ -81,7 +81,8 @@
 ;;; return a new heap pair.  Used by arrow-first.
 
 (defn __arrow_pair_first [fv p] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *src = (P *)(intptr_t)p;
   P *r   = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, src->e1);
@@ -92,7 +93,8 @@
 ;;; return a new heap pair.  Used by arrow-second.
 
 (defn __arrow_pair_second [fv p] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *src = (P *)(intptr_t)p;
   P *r   = (P *)malloc(sizeof(P));
   r->e1 = src->e1;
@@ -102,7 +104,8 @@
 ;;; __arrow_pair_par -- inline-C: apply fv to e1 and gv to e2 of *p.
 
 (defn __arrow_pair_par [fv gv p] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *src = (P *)(intptr_t)p;
   P *r   = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, src->e1);
@@ -112,7 +115,8 @@
 ;;; __arrow_pair_split -- inline-C: produce a heap pair from (fv x, gv x).
 
 (defn __arrow_pair_split [fv gv x] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *r = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, x);
   r->e2 = TUR_APPLY1(gv, x);
@@ -121,7 +125,8 @@
 ;;; __arrow_pair_dup -- inline-C: produce a heap pair with both fields = x.
 
 (defn __arrow_pair_dup [x] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *r = (P *)malloc(sizeof(P));
   r->e1 = x;
   r->e2 = x;
@@ -237,7 +242,8 @@
 ;;; __ac_pair_first -- inline-C: apply fv to slot 0 of a heap pair, copy slot 1.
 
 (defn __ac_pair_first [fv p] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *s = (P *)(intptr_t)p;
   P *r = (P *)malloc(sizeof(P));
   r->e1 = TUR_APPLY1(fv, s->e1);
@@ -246,7 +252,8 @@
 ;;; __ac_pair_second -- inline-C: copy slot 0 of a heap pair, apply fv to slot 1.
 
 (defn __ac_pair_second [fv p] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *s = (P *)(intptr_t)p;
   P *r = (P *)malloc(sizeof(P));
   r->e1 = s->e1;
@@ -258,7 +265,8 @@
 ;;; subset only (fv must not read it).  See arrow-loop.
 
 (defn __ac_loop_step [fv b] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *in = (P *)malloc(sizeof(P));
   in->e1 = b;
   in->e2 = 0;
@@ -269,7 +277,8 @@
 ;;; in slot 0 and its argument in slot 1; apply the arrow to the argument.
 
 (defn __ac_app [p] : int
-  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
   P *s = (P *)(intptr_t)p;
   return TUR_APPLY1(s->e1, s->e2); ```)
 ;;; Category [arr] -- the base of the arrow hierarchy: an identity arrow and

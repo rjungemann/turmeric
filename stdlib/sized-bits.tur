@@ -29,7 +29,8 @@
 (defn sized-bitvec-new [n]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
+  ```c
+  struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
   bv->len  = n;
   int64_t nbytes = (n + 7) / 8;
   bv->bits = nbytes > 0 ? (uint8_t *)calloc((size_t)nbytes, 1) : NULL;
@@ -51,7 +52,8 @@
 (defn sized-bitvec-free [bv]
   #{Unsafe}
   : nil
-  ```c struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (b->bits) free(b->bits);
   free(b);
   ```)
@@ -73,7 +75,8 @@
 (defn sized-bitvec-len [bv]
   #{Unsafe}
   : int
-  ```c return ((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len;
+  ```c
+  return ((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len;
   ```)
 ;;; sized-bitvec-size -- return the bit count as a Size expression.
 ;;;
@@ -91,7 +94,8 @@
 (defn sized-bitvec-size [bv]
   #{Unsafe}
   : Size
-  ```c return ctor_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
+  ```c
+  return ctor_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
   ```)
 ;;; sized-bitvec-get -- read bit i; aborts if out of range.
 ;;;
@@ -110,7 +114,8 @@
 (defn sized-bitvec-get [bv i]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
     fprintf(stderr, "sized-bitvec-get: index %lld out of bounds\n", (long long)i);
     exit(1);
@@ -134,7 +139,8 @@
 (defn sized-bitvec-set! [bv i]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
     fprintf(stderr, "sized-bitvec-set!: index %lld out of bounds\n", (long long)i);
     exit(1);
@@ -159,7 +165,8 @@
 (defn sized-bitvec-clear! [bv i]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
     fprintf(stderr, "sized-bitvec-clear!: index %lld out of bounds\n", (long long)i);
     exit(1);
@@ -184,7 +191,8 @@
 (defn sized-bitvec-toggle! [bv i]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
     fprintf(stderr, "sized-bitvec-toggle!: index %lld out of bounds\n", (long long)i);
     exit(1);
@@ -210,7 +218,8 @@
 (defn sized-bitvec-count [bv]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   int64_t nbytes = (b->len + 7) / 8;
   int64_t count = 0;
   for (int64_t i = 0; i < nbytes; i++) {
@@ -237,7 +246,8 @@
 (defn sized-bitvec-fill! [bv v]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   int64_t nbytes = (b->len + 7) / 8;
   memset(b->bits, v ? 0xFF : 0x00, (size_t)nbytes);
   return bv;

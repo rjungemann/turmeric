@@ -46,7 +46,8 @@
 ;; ---- Autolink hint ----
 ;;; reactor/autolink-hint -- ensure programs importing reactor link against libturi.
 (defn reactor/autolink-hint [] : int
-  ```c /* __tur_autolink__: -lturi */
+  ```c
+  /* __tur_autolink__: -lturi */
   return 0;
   ```)
 ;; ---- Source-id handle newtype ----

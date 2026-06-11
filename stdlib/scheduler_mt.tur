@@ -37,7 +37,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-new [n_threads : int] : ptr<void>
-  ```c TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
+  ```c
+  TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
   if (!s) { fprintf(stderr, "scheduler-mt-new: oom\n"); abort(); }
   return (void *)s;
   ```)
@@ -53,7 +54,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-free [sched : ptr<void>] : nil
-  ```c tur_scheduler_mt_free((TurSchedulerMT *)sched);
+  ```c
+  tur_scheduler_mt_free((TurSchedulerMT *)sched);
   ```)
 ;; Spawn a fiber on the scheduler
 ;;; scheduler-mt-spawn -- add a fiber to the multi-threaded scheduler's work queue.
@@ -68,7 +70,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-spawn [sched : ptr<void> fiber : FiberHandle] : nil
-  ```c tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
+  ```c
+  tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
   ```)
 ;; Run the scheduler on the current thread
 ;;; scheduler-mt-run -- run the multi-threaded scheduler on the calling thread.
@@ -82,7 +85,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-run [sched : ptr<void>] : nil
-  ```c tur_scheduler_mt_run((TurSchedulerMT *)sched);
+  ```c
+  tur_scheduler_mt_run((TurSchedulerMT *)sched);
   ```)
 ;; Get the current thread's ID (unique per OS thread)
 ;;; scheduler-mt-thread-id -- return the unique integer ID of the current OS thread.
@@ -96,7 +100,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-thread-id [] : int
-  ```c return (int64_t)tur_scheduler_mt_thread_id();
+  ```c
+  return (int64_t)tur_scheduler_mt_thread_id();
   ```)
 ;; Set the current scheduler for this thread (for testing)
 ;;; scheduler-mt-set-current -- set the active scheduler for the current thread.
@@ -110,7 +115,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-set-current [sched : ptr<void>] : nil
-  ```c tur_scheduler_mt_set_current((TurSchedulerMT *)sched);
+  ```c
+  tur_scheduler_mt_set_current((TurSchedulerMT *)sched);
   ```)
 ;; Get the current scheduler for this thread
 ;;; scheduler-mt-current -- return the scheduler currently associated with this thread.
@@ -124,7 +130,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-current [] : ptr<void>
-  ```c return (void *)tur_scheduler_mt_current();
+  ```c
+  return (void *)tur_scheduler_mt_current();
   ```)
 ;; Yield the current fiber to allow other fibers to run
 ;;; scheduler-mt-yield -- yield the current fiber so other fibers may be scheduled.
@@ -135,7 +142,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-yield [] : nil
-  ```c tur_scheduler_mt_yield();
+  ```c
+  tur_scheduler_mt_yield();
   ```)
 ;; Park the current fiber until explicitly unparked
 ;;; scheduler-mt-park -- park the current fiber until another fiber calls scheduler-mt-unpark.
@@ -146,7 +154,8 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-park [] : nil
-  ```c tur_scheduler_mt_park();
+  ```c
+  tur_scheduler_mt_park();
   ```)
 ;; Unpark a specific fiber
 ;;; scheduler-mt-unpark -- unpark a previously parked fiber, making it eligible to run.
@@ -160,5 +169,6 @@
 ;;; Since: Phase T23
 
 (defn scheduler-mt-unpark [fiber : FiberHandle] : nil
-  ```c tur_scheduler_mt_unpark((FiberBlock *)fiber);
+  ```c
+  tur_scheduler_mt_unpark((FiberBlock *)fiber);
   ```)

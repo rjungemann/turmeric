@@ -33,58 +33,88 @@
     eval-as-bool
     eval-as-cstr
     eval-tag)
-  (defn turi-eval-autolink-hint [] : int ```c /* __tur_autolink__: -lturi -Isrc -Isrc/compiler -Isrc/runtime */
+  (defn turi-eval-autolink-hint [] : int
+    ```c
+    /* __tur_autolink__: -lturi -Isrc -Isrc/compiler -Isrc/runtime */
     /* __tur_include__: #include "turi/eval.h" */
     /* __tur_include__: #include "turi/env.h" */
     return 0;
     ```)
-  (defn Env/new [] : ptr<void> ```c return (void *)turi_env_new();
+  (defn Env/new [] : ptr<void>
+    ```c
+    return (void *)turi_env_new();
     ```)
-  (defn Env/new-sandboxed [] : ptr<void> ```c return (void *)turi_env_new_sandboxed();
+  (defn Env/new-sandboxed [] : ptr<void>
+    ```c
+    return (void *)turi_env_new_sandboxed();
     ```)
-  (defn Env/free [env : ptr<void>] : void ```c turi_env_free((TuriEnv *)env);
+  (defn Env/free [env : ptr<void>] : void
+    ```c
+    turi_env_free((TuriEnv *)env);
     ```)
-  (defn eval [env : ptr<void> src : cstr] : ptr<void> ```c TuriValue v = turi_eval((TuriEnv *)env, src);
+  (defn eval [env : ptr<void> src : cstr] : ptr<void>
+    ```c
+    TuriValue v = turi_eval((TuriEnv *)env, src);
     TuriValue *p = malloc(sizeof(TuriValue));
     *p = v;
     return (void *)p;
     ```)
-  (defn eval-file [env : ptr<void> path : cstr] : ptr<void> ```c TuriValue v = turi_eval_file((TuriEnv *)env, path);
+  (defn eval-file [env : ptr<void> path : cstr] : ptr<void>
+    ```c
+    TuriValue v = turi_eval_file((TuriEnv *)env, path);
     TuriValue *p = malloc(sizeof(TuriValue));
     *p = v;
     return (void *)p;
     ```)
-  (defn eval! [env : ptr<void> src : cstr] : ptr<void> ```c TuriValue v = turi_eval((TuriEnv *)env, src);
+  (defn eval! [env : ptr<void> src : cstr] : ptr<void>
+    ```c
+    TuriValue v = turi_eval((TuriEnv *)env, src);
     if (v.tag == TURI_ERROR) { tur_panic_abort(v.as_error ? v.as_error : "eval error"); }
     TuriValue *p = malloc(sizeof(TuriValue));
     *p = v;
     return (void *)p;
     ```)
-  (defn eval-free [result : ptr<void>] : void ```c free(result);
+  (defn eval-free [result : ptr<void>] : void
+    ```c
+    free(result);
     ```)
-  (defn eval-ok? [result : ptr<void>] : bool ```c TuriValue *p = (TuriValue *)result;
+  (defn eval-ok? [result : ptr<void>] : bool
+    ```c
+    TuriValue *p = (TuriValue *)result;
     return p != NULL && p->tag != TURI_ERROR;
     ```)
-  (defn eval-err? [result : ptr<void>] : bool ```c TuriValue *p = (TuriValue *)result;
+  (defn eval-err? [result : ptr<void>] : bool
+    ```c
+    TuriValue *p = (TuriValue *)result;
     return p == NULL || p->tag == TURI_ERROR;
     ```)
-  (defn eval-err-msg [result : ptr<void>] : cstr ```c TuriValue *p = (TuriValue *)result;
+  (defn eval-err-msg [result : ptr<void>] : cstr
+    ```c
+    TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_ERROR) return "<not-an-error>";
     return p->as_error ? p->as_error : "<unknown error>";
     ```)
-  (defn eval-as-int [result : ptr<void>] : int ```c TuriValue *p = (TuriValue *)result;
+  (defn eval-as-int [result : ptr<void>] : int
+    ```c
+    TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_INT) return 0;
     return p->as_int;
     ```)
-  (defn eval-as-bool [result : ptr<void>] : bool ```c TuriValue *p = (TuriValue *)result;
+  (defn eval-as-bool [result : ptr<void>] : bool
+    ```c
+    TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_BOOL) return false;
     return p->as_bool;
     ```)
-  (defn eval-as-cstr [result : ptr<void>] : cstr ```c TuriValue *p = (TuriValue *)result;
+  (defn eval-as-cstr [result : ptr<void>] : cstr
+    ```c
+    TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_CSTR) return "";
     return p->as_cstr ? p->as_cstr : "";
     ```)
-  (defn eval-tag [result : ptr<void>] : int ```c TuriValue *p = (TuriValue *)result;
+  (defn eval-tag [result : ptr<void>] : int
+    ```c
+    TuriValue *p = (TuriValue *)result;
     if (p == NULL) return 0;
     return (int64_t)p->tag;
     ```))

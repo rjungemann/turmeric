@@ -54,20 +54,24 @@
 
 
 (defn seq-gen-to-int [g : ptr<void>] : int
-  ```c return (int64_t)(intptr_t)g;
+  ```c
+  return (int64_t)(intptr_t)g;
   ```)
 
 (defn seq-gen-from-int [i : int] : ptr<void>
-  ```c return (void *)(intptr_t)i;
+  ```c
+  return (void *)(intptr_t)i;
   ```)
 
 (defn seq-gen-done-int [i : int] : bool
-  ```c typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
+  ```c
+  typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
   return ((__seq_gen_hdr_t *)(intptr_t)i)->__state == -1;
   ```)
 
 (defn seq-gen-next-int [i : int] : ptr<void>
-  ```c typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
+  ```c
+  typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
   __seq_gen_hdr_t *g = (__seq_gen_hdr_t *)(intptr_t)i;
   return g->__next_fn((void *)g);
   ```)

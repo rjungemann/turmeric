@@ -98,7 +98,10 @@
 ;;; Show [int] -- Show instance for int.
 
 (definstance Show [int]
-  (show [x] : cstr ```c char *buf = (char *)malloc(24);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
@@ -111,56 +114,80 @@
 ;;; Show [int8] -- Show instance for int8.
 
 (definstance Show [int8]
-  (show [x] : cstr ```c char *buf = (char *)malloc(8);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int16] -- Show instance for int16.
 
 (definstance Show [int16]
-  (show [x] : cstr ```c char *buf = (char *)malloc(8);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%d", (int)x);
     return (const char *)buf;
     ```))
 ;;; Show [int32] -- Show instance for int32.
 
 (definstance Show [int32]
-  (show [x] : cstr ```c char *buf = (char *)malloc(16);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%d", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint8] -- Show instance for uint8.
 
 (definstance Show [uint8]
-  (show [x] : cstr ```c char *buf = (char *)malloc(8);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint16] -- Show instance for uint16.
 
 (definstance Show [uint16]
-  (show [x] : cstr ```c char *buf = (char *)malloc(8);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
     snprintf(buf, 8, "%u", (unsigned)x);
     return (const char *)buf;
     ```))
 ;;; Show [uint32] -- Show instance for uint32.
 
 (definstance Show [uint32]
-  (show [x] : cstr ```c char *buf = (char *)malloc(16);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
     snprintf(buf, 16, "%u", x);
     return (const char *)buf;
     ```))
 ;;; Show [uint64] -- Show instance for uint64.
 
 (definstance Show [uint64]
-  (show [x] : cstr ```c char *buf = (char *)malloc(24);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%llu", (unsigned long long)x);
     return (const char *)buf;
     ```))
 ;;; Show [float32] -- Show instance for float32.
 
 (definstance Show [float32]
-  (show [x] : cstr ```c char *buf = (char *)malloc(32);
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
     snprintf(buf, 32, "%g", (double)x);
     return (const char *)buf;
     ```))
@@ -463,14 +490,20 @@
 ;;; Display [int] -- Display instance for int.
 
 (definstance Display [int]
-  (display [x] : cstr ```c char *buf = (char *)malloc(24);
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
     snprintf(buf, 24, "%lld", (long long)x);
     return (const char *)buf;
     ```))
 ;;; Debug [int] -- Debug instance for int.
 
 (definstance Debug [int]
-  (debug [x] : cstr ```c char *buf = (char *)malloc(32);
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
     snprintf(buf, 32, "int(%lld)", (long long)x);
     return (const char *)buf;
     ```))
@@ -480,7 +513,10 @@
 
 
 (definstance Display [ptr<void>]
-  (display [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+  (display [x]
+    : cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "err";
     char *buf = (char *)malloc(48);
     if (res->is_ok) {
@@ -493,7 +529,10 @@
 ;;; Debug [ptr<void>] -- Debug instance for result<T,E> represented as ptr<void>.
 
 (definstance Debug [ptr<void>]
-  (debug [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+  (debug [x]
+    : cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "Result::err";
     char *buf = (char *)malloc(64);
     if (res->is_ok) {
@@ -506,7 +545,10 @@
 ;;; Show [ptr<void>] -- Show instance for result<T,E> represented as ptr<void>.
 
 (definstance Show [ptr<void>]
-  (show [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+  (show [x]
+    : cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "err";
     char *buf = (char *)malloc(48);
     if (res->is_ok) {
@@ -519,7 +561,10 @@
 ;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
 
 (definstance Error [ptr<void>]
-  (error-message [x] : cstr ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+  (error-message [x]
+    : cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL || res->is_ok) {
         return "not an error";
     } else {
@@ -528,7 +573,10 @@
         return "error";
     }
     ```)
-  (error-cause [x] : ptr<void> ```c /* In v1, result doesn't carry cause information */
+  (error-cause [x]
+    : ptr<void>
+    ```c
+    /* In v1, result doesn't carry cause information */
     return NULL;
     ```))
 ;;; From -- typeclass for value conversion from type A to type B.

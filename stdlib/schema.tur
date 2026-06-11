@@ -98,7 +98,8 @@
 
 
 (defn schema/str [] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -113,7 +114,8 @@
 ;;; Since: Phase SC0
 
 (defn schema/int [] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 1; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -125,7 +127,8 @@
 ;;; Since: Phase SC0
 
 (defn schema/float [] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 2; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -137,7 +140,8 @@
 ;;; Since: Phase SC0
 
 (defn schema/bool [] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 3; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -149,7 +153,8 @@
 ;;; Since: Phase SC0
 
 (defn schema/nil [] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 4; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -167,7 +172,8 @@
 ;;; Since: Phase SC0
 
 (defn schema/literal-int [v : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 5; s[1] = 2; s[2] = v; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -185,7 +191,8 @@
 ;;; Since: Phase SC0
 
 (defn schema/literal-str [v : cstr] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 5; s[1] = 4;
   s[2] = (int64_t)(intptr_t)strdup(v);
   s[3] = 0;
@@ -208,7 +215,8 @@
 
 
 (defn schema/object-new [] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 6; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -229,7 +237,8 @@
 ;;; Since: Phase SC1
 
 (defn schema/field [obj : int key : cstr inner : int] : int
-  ```c int64_t *s = (int64_t*)(intptr_t)obj;
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)obj;
   int64_t count = s[1];
   int64_t cap   = s[2];
   int64_t *data = (int64_t*)(intptr_t)s[3];
@@ -258,7 +267,8 @@
 ;;; Since: Phase SC2
 
 (defn schema/array [elem : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 7; s[1] = elem; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -277,7 +287,8 @@
 ;;; Since: Phase SC2
 
 (defn schema/optional [inner : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 8; s[1] = inner; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -296,7 +307,8 @@
 ;;; Since: Phase SC2
 
 (defn schema/union [arms : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 9; s[1] = arms; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -317,7 +329,8 @@
 ;;; Since: Phase SC2
 
 (defn schema/transform [inner : int ^fat f] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   /* SC7/obstacle-3: f is a fat closure (the standard { thunk, env } layout, a
    * single int64 handle).  Storing the fat handle -- rather than a bare fn
    * pointer -- lets the decoder invoke a *capturing* closure via TUR_APPLY1,
@@ -349,7 +362,8 @@
 ;;; Since: Phase SC4
 
 (defn schema/rec [f] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 11;
   s[1] = (int64_t)(intptr_t)f;
   s[2] = 0;  /* memoized body, lazily forced */
@@ -367,7 +381,8 @@
 ;;; Since: Phase SC0
 
 (defn schema/kind [s : int] : int
-  ```c int64_t *p = (int64_t*)(intptr_t)s;
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)s;
   return p ? p[0] : -1;
   ```)
 ;; ---------------------------------------------------------------------------
@@ -399,7 +414,8 @@
 
 
 (defn schema/always [value : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 12; s[1] = value; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -417,7 +433,8 @@
 ;;; Since: Phase SC7
 
 (defn schema/never [message : cstr] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 13;
   s[1] = (int64_t)(intptr_t)strdup(message);
   s[2] = 0; s[3] = 0;
@@ -447,7 +464,8 @@
 ;;; Since: Phase SC7
 
 (defn schema/ap [sf : int sa : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 14; s[1] = sf; s[2] = sa; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -470,7 +488,8 @@
 ;;; Since: Phase SC7
 
 (defn schema/field-of [key : cstr inner : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 15;
   s[1] = (int64_t)(intptr_t)strdup(key);
   s[2] = inner; s[3] = 0;
@@ -492,7 +511,8 @@
 ;;; Since: Phase SC7
 
 (defn schema/fmap [inner : int ^fat f] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   /* SC7: the Functor map -- identical node to schema/transform (kind 10).
    * Built inline rather than delegating because an already-fat handle cannot
    * be re-passed through a second ^fat parameter. */
@@ -536,7 +556,8 @@
 ;;; Since: Phase SC7
 
 (defn schema/ap-fat [sf : int sa : int] : int
-  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  ```c
+  int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 16; s[1] = sf; s[2] = sa; s[3] = 0;
   return (int64_t)(intptr_t)s;
   ```)
@@ -607,7 +628,8 @@
 
 
 (defn schema-error-path [e : int] : cstr
-  ```c int64_t *p = (int64_t*)(intptr_t)e;
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)e;
   return (char*)(intptr_t)p[0];
   ```)
 ;;; schema-error-text -- the human-readable message of a SchemaError.
@@ -621,7 +643,8 @@
 ;;; Since: Phase SC3
 
 (defn schema-error-text [e : int] : cstr
-  ```c int64_t *p = (int64_t*)(intptr_t)e;
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)e;
   return (char*)(intptr_t)p[1];
   ```)
 ;;; schema-error-count -- number of errors in an error Vec.
@@ -635,7 +658,8 @@
 ;;; Since: Phase SC3
 
 (defn schema-error-count [errs : int] : int
-  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   return v ? (int)v->len : 0;
   ```)
 ;;; schema-error-at -- the i-th SchemaError in an error Vec.
@@ -650,7 +674,8 @@
 ;;; Since: Phase SC3
 
 (defn schema-error-at [errs : int i : int] : int
-  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   if (!v || i < 0 || (size_t)i >= v->len) return 0;
   return v->data[i];
   ```)
@@ -669,7 +694,8 @@
 ;;; Since: Phase SC3
 
 (defn schema-error-message [errs : int] : cstr
-  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   if (!v || v->len == 0) {
     char *empty = malloc(1); empty[0] = 0; return empty;
   }
@@ -720,7 +746,8 @@
 
 
 (defn sch-vpush- [v : ptr x : int] : void
-  ```c typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+  ```c
+  typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
   tur_sch_vec_t *vp = (tur_sch_vec_t *)v;
   if (vp->len == vp->cap) {
     vp->cap = vp->cap ? vp->cap * 2 : 4;
@@ -730,7 +757,8 @@
   ```)
 
 (defn sch-push-err- [errs : ptr path : cstr msg : cstr val : int] : void
-  ```c int64_t *e = malloc(3 * sizeof(int64_t));
+  ```c
+  int64_t *e = malloc(3 * sizeof(int64_t));
   e[0] = (int64_t)(intptr_t)strdup(path ? path : "");
   e[1] = (int64_t)(intptr_t)strdup(msg);
   e[2] = val;
@@ -738,21 +766,24 @@
   ```)
 
 (defn sch-mkpath- [base : cstr key : cstr] : ptr
-  ```c if (!base || !base[0]) return strdup(key);
+  ```c
+  if (!base || !base[0]) return strdup(key);
   char *out = malloc(strlen(base) + strlen(key) + 2);
   sprintf(out, "%s.%s", base, key);
   return out;
   ```)
 
 (defn sch-mkidx- [base : cstr idx : int] : ptr
-  ```c const char *b = base ? base : "";
+  ```c
+  const char *b = base ? base : "";
   char *out = malloc(strlen(b) + 24);
   sprintf(out, "%s[%lld]", b, (long long)idx);
   return out;
   ```)
 
 (defn sch-tyname- [jtype : int] : cstr
-  ```c switch (jtype) {
+  ```c
+  switch (jtype) {
     case 0: return ":nil";   case 1: return ":bool";
     case 2: return ":int";   case 3: return ":float";
     case 4: return ":cstr";  case 5: return ":array";
@@ -761,7 +792,8 @@
   ```)
 
 (defn sch-want-name- [kind : int] : cstr
-  ```c switch (kind) {
+  ```c
+  switch (kind) {
     case 0: return ":cstr";  case 1: return ":int";
     case 2: return ":float"; case 3: return ":bool";
     case 4: return ":nil";   case 6: return ":object";
@@ -770,16 +802,19 @@
   ```)
 
 (defn sch-jtype- [n : int] : int
-  ```c if (!n) return -1;
+  ```c
+  if (!n) return -1;
   int64_t *p = (int64_t*)(intptr_t)n; return (int64_t)(int)p[0];
   ```)
 
 (defn sch-jpayload- [n : int] : int
-  ```c int64_t *p = (int64_t*)(intptr_t)n; return p[1];
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)n; return p[1];
   ```)
 
 (defn sch-decode-rec- [schema : int node : int path : cstr errs : ptr] : int
-  ```c typedef struct { int64_t kind; int64_t a; int64_t b; int64_t c; } tur_sch_t;
+  ```c
+  typedef struct { int64_t kind; int64_t a; int64_t b; int64_t c; } tur_sch_t;
   typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
   tur_sch_t *s = (tur_sch_t*)(intptr_t)schema;
   tur_sch_vec_t *ep = (tur_sch_vec_t *)errs;
@@ -953,7 +988,8 @@
   ```)
 
 (defn schema-decode [schema : int node : int] : int
-  ```c typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
+  ```c
+  typedef struct { int64_t *data; size_t len; size_t cap; } tur_sch_vec_t;
   tur_sch_vec_t *errs = malloc(sizeof(*errs));
   errs->data = NULL; errs->len = 0; errs->cap = 0;
 
@@ -980,7 +1016,8 @@
 ;;; Since: Phase SC1
 
 (defn schema-decode-ok? [r : int] : bool
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res && res->is_ok;
   ```)
 ;;; schema-decode-value -- the decoded value of a successful Result.
@@ -994,7 +1031,8 @@
 ;;; Since: Phase SC1
 
 (defn schema-decode-value [r : int] : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res ? res->ok_val : 0;
   ```)
 ;;; schema-decode-errors -- the error Vec of a failed Result.
@@ -1008,13 +1046,15 @@
 ;;; Since: Phase SC1
 
 (defn schema-decode-errors [r : int] : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res ? res->err_val : 0;
   ```)
 ;;; schema-decode-abort -- internal: print an error Vec to stderr and abort.
 
 (defn schema-decode-abort [errs : int] : int
-  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   fprintf(stderr, "schema-decode!: validation failed\n");
   if (v) for (size_t i = 0; i < v->len; i++) {
     int64_t *e = (int64_t*)(intptr_t)v->data[i];

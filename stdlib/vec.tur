@@ -23,7 +23,8 @@
 (defn vec-new []
   #{}
   : int
-  ```c struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
   v->cap = 0;
@@ -45,7 +46,8 @@
 (defn vec-len [v : int]
   #{}
   : int
-  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   ```)
 ;;; vec-get -- return the element at index i (bounds-checked).
@@ -66,7 +68,8 @@
   [v :int i :int]
   #{}
   :A
-  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
   fprintf(stderr, "tvec index out of bounds\n");
   exit(1);
@@ -87,7 +90,8 @@
   [v :int val :A]
   #{}
   :nil
-  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len >= vec->cap) {
     size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
     int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
@@ -115,7 +119,8 @@
   [v :int]
   #{}
   :A
-  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
   ```)
@@ -135,7 +140,8 @@
   [v :int i :int val :A]
   #{}
   :void
-  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
   fprintf(stderr, "vec-set! index out of bounds\n");
   exit(1);
@@ -153,7 +159,8 @@
 (defn vec-free [v : int]
   #{}
   : void
-  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->data) free(vec->data);
   free(vec);
   ```)
@@ -241,7 +248,8 @@
 (defn vec-eq? [v1 : int v2 : int ^fat cmp-fn]
   #{}
   : bool
-  ```c struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
   /* CRU B-3: cmp-fn is a fat closure box; fat-dispatch via slot 0 (a capturing

@@ -23,7 +23,8 @@
 
 
 (defn seq-make-pair [a : int b : int] : int
-  ```c Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c
+  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
   p->e1 = a; p->e2 = b;
   return (int64_t)(intptr_t)p;
   ```)

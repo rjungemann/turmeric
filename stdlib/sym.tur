@@ -31,7 +31,8 @@
 ;;;
 ;;; Since: Phase SYM4
 (defn sym->str [s : Sym] : cstr
-  ```c return (const char *)((const struct __tur_sym *)s)->name;
+  ```c
+  return (const char *)((const struct __tur_sym *)s)->name;
   ```)
 ;;; sym=? -- pointer-identity equality of two symbols.
 ;;;
@@ -54,7 +55,8 @@
 ;;; Since: Phase SYM4
 
 (defn sym=? [a : Sym b : Sym] : bool
-  ```c return (int64_t)(a == b);
+  ```c
+  return (int64_t)(a == b);
   ```)
 ;;; Eq [Sym] -- equality on interned symbols: pointer identity.
 ;;;
@@ -62,13 +64,19 @@
 
 
 (definstance Eq [Sym]
-  (eq? [x y] : bool ```c return (int64_t)(x == y);
+  (eq? [x y]
+    : bool
+    ```c
+    return (int64_t)(x == y);
     ```))
 ;;; Hash [Sym] -- hash a symbol via its precomputed hash field (a single load).
 
 
 (definstance Hash [Sym]
-  (hash [x] : int ```c return (int64_t)((const struct __tur_sym *)x)->hash;
+  (hash [x]
+    : int
+    ```c
+    return (int64_t)((const struct __tur_sym *)x)->hash;
     ```))
 ;;; MapKey [Sym] -- interned-symbol pointer carrier.  Symbols are deduplicated,
 ;;; so pointer identity is content equality; the carrier is the pointer-as-int

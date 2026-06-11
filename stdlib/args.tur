@@ -33,7 +33,8 @@
 ;;;
 ;;; Since: Phase A1
 (defn args/spec-new [] : int
-  ```c int64_t *s = calloc(4, sizeof(int64_t));
+  ```c
+  int64_t *s = calloc(4, sizeof(int64_t));
   return (int64_t)(intptr_t)s;
   ```)
 ;;; args/spec-prog -- set the program name displayed in help text.
@@ -51,7 +52,8 @@
 ;;; Since: Phase A1
 
 (defn args/spec-prog [spec : int name : cstr] : int
-  ```c int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
   s[3] = (int64_t)(intptr_t)name;
   return spec;
   ```)
@@ -70,7 +72,8 @@
 ;;; Since: Phase A1
 
 (defn args/spec-flag [spec : int name : cstr] : int
-  ```c int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(2 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = s[0];
@@ -95,7 +98,8 @@
 ;;; Since: Phase A1
 
 (defn args/spec-option [spec : int name : cstr type : cstr dflt : int] : int
-  ```c int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(4 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = (int64_t)(intptr_t)type;
@@ -122,7 +126,8 @@
 ;;; Since: Phase A1
 
 (defn args/spec-subcommand [spec : int name : cstr sub-spec : int] : int
-  ```c int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(3 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = (int64_t)sub_spec;
@@ -152,7 +157,8 @@
 ;;; Since: Phase A1
 
 (defn args/parse [spec : int argv : int] : int
-  ```c /* --- linearise the *args* cons list into a char* array --- */
+  ```c
+  /* --- linearise the *args* cons list into a char* array --- */
   int argc_l = 0;
   int64_t tmp = argv;
   while (tmp) { argc_l++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -371,7 +377,8 @@
 ;;; Since: Phase A1
 
 (defn args/has? [result : int key : cstr] : bool
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
@@ -395,7 +402,8 @@
 ;;; Since: Phase A1
 
 (defn args/get-str [result : int key : cstr] : cstr
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
@@ -419,7 +427,8 @@
 ;;; Since: Phase A1
 
 (defn args/get-int [result : int key : cstr] : int
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
@@ -443,7 +452,8 @@
 ;;; Since: Phase A1
 
 (defn args/get-bool [result : int key : cstr] : bool
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0) {
@@ -469,7 +479,8 @@
 ;;; Since: Phase A1
 
 (defn args/subcommand [result : int] : cstr
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[2];
   ```)
 ;;; args/sub-result -- return the result from subcommand parsing, or 0 if none.
@@ -486,7 +497,8 @@
 ;;; Since: Phase A1
 
 (defn args/sub-result [result : int] : int
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   return res[3];
   ```)
 ;;; args/positional -- return the positional arg cons list from the result.
@@ -505,7 +517,8 @@
 ;;; Since: Phase A1
 
 (defn args/positional [result : int] : int
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   return res[1];
   ```)
 ;;; args/error? -- check whether parsing produced an error.
@@ -522,7 +535,8 @@
 ;;; Since: Phase A1
 
 (defn args/error? [result : int] : bool
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   return res[4] != 0;
   ```)
 ;;; args/error-msg -- return the parse error message, or 0 if no error.
@@ -539,7 +553,8 @@
 ;;; Since: Phase A1
 
 (defn args/error-msg [result : int] : cstr
-  ```c int64_t *res = (int64_t*)(intptr_t)result;
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[5];
   ```)
 ;;; args/print-help -- print usage information to stdout.
@@ -553,7 +568,8 @@
 ;;; Since: Phase A1
 
 (defn args/print-help [spec : int] : void
-  ```c int64_t *sp = (int64_t*)(intptr_t)spec;
+  ```c
+  int64_t *sp = (int64_t*)(intptr_t)spec;
   const char *prog = sp[3] ? (const char*)(intptr_t)sp[3] : "program";
   printf("Usage: %s [options]", prog);
   if (sp[2]) printf(" <subcommand>");
@@ -600,7 +616,8 @@
 ;;; Since: Phase A1
 
 (defn args/spec-free [spec : int] : void
-  ```c int64_t *sp = (int64_t*)(intptr_t)spec;
+  ```c
+  int64_t *sp = (int64_t*)(intptr_t)spec;
   int64_t *fl = (int64_t*)(intptr_t)sp[0];
   while (fl) { int64_t *nx = (int64_t*)(intptr_t)fl[1]; free(fl); fl = nx; }
   int64_t *opt = (int64_t*)(intptr_t)sp[1];
@@ -620,7 +637,8 @@
 ;;; Since: Phase A1
 
 (defn args/result-free [result : int] : void
-  ```c int64_t cur = result;
+  ```c
+  int64_t cur = result;
   while (cur) {
     int64_t *res = (int64_t*)(intptr_t)cur;
     int64_t sub  = res[3];

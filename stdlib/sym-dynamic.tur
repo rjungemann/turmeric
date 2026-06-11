@@ -35,7 +35,8 @@
 ;;;
 ;;; Since: Phase SYM5
 (defn str->sym [s : cstr] : Sym
-  ```c /* __tur_autolink__: src/runtime/symbols.c -Isrc/runtime */
+  ```c
+  /* __tur_autolink__: src/runtime/symbols.c -Isrc/runtime */
   extern const struct __tur_sym *tur_sym_intern(const char *, uint32_t);
   return (const struct __tur_sym *)tur_sym_intern(s, (uint32_t)strlen(s));
   ```)

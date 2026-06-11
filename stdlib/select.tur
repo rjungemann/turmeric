@@ -41,7 +41,8 @@
 
 
 (defn __select_clauses_alloc [n : int] : ptr<void>
-  ```c typedef struct { void *chan; int op; int64_t val; } SelectClause;
+  ```c
+  typedef struct { void *chan; int op; int64_t val; } SelectClause;
   SelectClause *arr = (SelectClause *)malloc((size_t)n * sizeof(SelectClause));
   if (!arr) { fprintf(stderr, "select: out of memory\n"); abort(); }
   memset(arr, 0, (size_t)n * sizeof(SelectClause));
@@ -53,7 +54,8 @@
 ;;; Since: Phase T19-D
 
 (defn __select_clauses_free [arr : ptr<void>] : nil
-  ```c free(arr);
+  ```c
+  free(arr);
   ```)
 ;; Execute select on clauses array
 ;; Returns: index of fired clause (0..n-1), or -1 for default
@@ -72,7 +74,8 @@
 ;;; Since: Phase SEL1
 
 (defn __select_exec [clauses : ptr<void> n : int has_default : int] : int
-  ```c /* Delegate to the waiter-based fair blocking select in the emitted preamble.
+  ```c
+  /* Delegate to the waiter-based fair blocking select in the emitted preamble.
    * TurSelectClause and SelectClause share the same layout:
    *   { void *chan; int op; int64_t val; }
    * so a direct cast is safe. */

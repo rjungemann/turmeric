@@ -35,12 +35,18 @@
 ;;; Hash [cstr] -- Hash instance for cstr (content hash via tur_hamt_hash_str).
 
 (definstance Hash [cstr]
-  (hash [x] : int ```c return (int64_t)tur_hamt_hash_str(x);
+  (hash [x]
+    : int
+    ```c
+    return (int64_t)tur_hamt_hash_str(x);
     ```))
 ;;; Hash [float32] -- Hash instance for float32 (bit-cast and hash).
 
 (definstance Hash [float32]
-  (hash [x] : int ```c union { float f; int32_t i; } u;
+  (hash [x]
+    : int
+    ```c
+    union { float f; int32_t i; } u;
     u.f = (float)x;
     return (int64_t)u.i;
     ```))
@@ -51,7 +57,10 @@
 ;;; Bit-casting the double to its int64 pattern hashes by value instead.
 
 (definstance Hash [float]
-  (hash [x] : int ```c union { double f; int64_t i; } u;
+  (hash [x]
+    : int
+    ```c
+    union { double f; int64_t i; } u;
     u.f = (double)x;
     return u.i;
     ```))

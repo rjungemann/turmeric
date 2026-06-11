@@ -218,7 +218,8 @@
 (defn read-int-console []
   #{Unsafe}
   : int
-  ```c int _v = 0;
+  ```c
+  int _v = 0;
   scanf("%d", &_v);
   return (int64_t)_v;
   ```)

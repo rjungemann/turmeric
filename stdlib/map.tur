@@ -43,7 +43,8 @@
   []
   #{}
   : (Map K V)
-  ```c struct { void *hamt; } *m = malloc(sizeof(*m));
+  ```c
+  struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)m;
   ```)
@@ -62,7 +63,8 @@
   [m (Map K V)]
   #{}
   :ptr<void>
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
   return map->hamt;
   ```)
 ;;; map-wrap -- internal constructor from a HAMT pointer.
@@ -71,7 +73,8 @@
   [h :ptr<void>]
   #{}
   : (Map K V)
-  ```c struct { void *hamt; } *m = malloc(sizeof(*m));
+  ```c
+  struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = (void*)(intptr_t)h;
   return (int64_t)(intptr_t)m;
   ```)
@@ -91,7 +94,8 @@
 (defn map-assoc-eq-o [K V]
   [m (Map K V) h :int key :int val :V keyeq owned :int]
   : (Map K V)
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                      (void *)(intptr_t)val, (void *)(intptr_t)keyeq,
                                      (int64_t)owned);
@@ -104,7 +108,8 @@
 (defn map-get-eq-o [K V]
   [m (Map K V) h :int key :int keyeq owned :int]
   :V
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
                                               (void *)(intptr_t)key,
                                               (void *)(intptr_t)keyeq, (int64_t)owned);
@@ -114,7 +119,8 @@
 (defn map-has-eq-o? [K V]
   [m (Map K V) h :int key :int keyeq owned :int]
   :bool
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                            (void *)(intptr_t)keyeq, (int64_t)owned);
   ```)
@@ -123,7 +129,8 @@
 (defn map-dissoc-eq-o [K V]
   [m (Map K V) h :int key :int keyeq owned :int]
   : (Map K V)
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                      (void *)(intptr_t)keyeq, (int64_t)owned);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -161,7 +168,8 @@
 (defn map-assoc-eq [K V]
   [m (Map K V) h :int key :K val :V keyeq]
   : (Map K V)
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                    (void *)(intptr_t)val,
                                    (void *)(intptr_t)keyeq);
@@ -188,7 +196,8 @@
 (defn map-get-eq [K V]
   [m (Map K V) h :int key :K keyeq]
   :V
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get_eq(map->hamt, (uint64_t)h,
                                             (void *)(intptr_t)key,
                                             (void *)(intptr_t)keyeq);
@@ -212,7 +221,8 @@
 (defn map-has-eq? [K V]
   [m (Map K V) h :int key :K keyeq]
   :bool
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   return tur_hamt_has_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                          (void *)(intptr_t)keyeq);
   ```)
@@ -235,7 +245,8 @@
 (defn map-dissoc-eq [K V]
   [m (Map K V) h :int key :K keyeq]
   : (Map K V)
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                    (void *)(intptr_t)keyeq);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -261,7 +272,8 @@
 ;;; tur-cstr-key-eq? -- internal: content equality of two string keys.
 
 (defn tur-cstr-key-eq? [a : cstr b : cstr] : bool
-  ```c const char *p = (const char *)(intptr_t)a;
+  ```c
+  const char *p = (const char *)(intptr_t)a;
   const char *q = (const char *)(intptr_t)b;
   while (*p && (*p == *q)) { p++; q++; }
   return *(const unsigned char *)p == *(const unsigned char *)q;
@@ -311,7 +323,8 @@
 ;;; compares by value (NaN never matches, as with =).
 
 (defn tur-f32-carrier-eq? [a : int b : int] : bool
-  ```c union { float f; int64_t i; } ua, ub;
+  ```c
+  union { float f; int64_t i; } ua, ub;
   ua.i = a; ub.i = b;
   return ua.f == ub.f;
   ```)
@@ -320,7 +333,8 @@
 ;;; Reinterprets each int64 carrier word back to a double and compares by value.
 
 (defn tur-f64-carrier-eq? [a : int b : int] : bool
-  ```c union { double f; int64_t i; } ua, ub;
+  ```c
+  union { double f; int64_t i; } ua, ub;
   ua.i = a; ub.i = b;
   return ua.f == ub.f;
   ```)
@@ -526,7 +540,8 @@
   [m (Map K V)]
   #{}
   :int
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
   return tur_hamt_count(map->hamt);
   ```)
 ;;; map-merge -- merge two maps; values from b win on key collision.
@@ -547,7 +562,8 @@
   [a (Map K V) b (Map K V)]
   #{}
   : (Map K V)
-  ```c struct { void *hamt; } *ma = (void*)(intptr_t)a;
+  ```c
+  struct { void *hamt; } *ma = (void*)(intptr_t)a;
   struct { void *hamt; } *mb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -568,7 +584,8 @@
   [m (Map K V)]
   #{}
   :void
-  ```c free((void*)(intptr_t)m);
+  ```c
+  free((void*)(intptr_t)m);
   ```)
 ;;; map-eq? -- compare two maps for structural equality using a value comparator.
 ;;;
@@ -588,7 +605,8 @@
 (defn map-eq-raw? [m1 : int m2 : int ^fat val-cmp]
   #{}
   : bool
-  ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
+  ```c
+  struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
   uint64_t iter_buf[32];
@@ -631,7 +649,8 @@
 (defn map-eq-raw-k? [m1 : int m2 : int keyeq ^fat val-cmp]
   #{}
   : bool
-  ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
+  ```c
+  struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
   uint64_t iter_buf[32];

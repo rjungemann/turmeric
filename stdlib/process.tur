@@ -52,7 +52,8 @@
 (defn process/pid []
   #{Proc}
   : Pid
-  ```c #include <unistd.h>
+  ```c
+  #include <unistd.h>
   return (int64_t)getpid();
   ```)
 ;;; process/ppid -- return the parent process ID.
@@ -68,7 +69,8 @@
 (defn process/ppid []
   #{Proc}
   : Pid
-  ```c #include <unistd.h>
+  ```c
+  #include <unistd.h>
   return (int64_t)getppid();
   ```)
 ;;; process/exit -- terminate the process with the given exit code.
@@ -84,7 +86,8 @@
 (defn process/exit [code : int]
   #{Proc}
   : void
-  ```c exit((int)code);
+  ```c
+  exit((int)code);
   ```)
 ;;; process/exec -- replace the current process image with a new program.
 ;;;
@@ -106,7 +109,8 @@
 (defn process/exec [path : cstr argv : int]
   #{Proc}
   : int
-  ```c #include <unistd.h>
+  ```c
+  #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -142,7 +146,8 @@
 (defn process/spawn [path : cstr argv : int]
   #{Proc}
   : ChildHandle
-  ```c #include <unistd.h>
+  ```c
+  #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -176,7 +181,8 @@
 (defn process/wait [child : ChildHandle]
   #{Proc}
   : int
-  ```c #include <sys/wait.h>
+  ```c
+  #include <sys/wait.h>
   int status = 0;
   if (waitpid((pid_t)child, &status, 0) < 0) return -1;
   if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
@@ -201,7 +207,8 @@
 (defn process/run [path : cstr argv : int]
   #{Proc}
   : int
-  ```c #include <unistd.h>
+  ```c
+  #include <unistd.h>
   #include <sys/wait.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -252,7 +259,8 @@
 (defn process/capture [path : cstr argv : int]
   #{Proc}
   : int
-  ```c int argc = 0;
+  ```c
+  int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
   char **args = (char**)malloc((argc + 1) * sizeof(char*));
@@ -313,7 +321,8 @@
 (defn process/cwd []
   #{Proc}
   : cstr
-  ```c #include <unistd.h>
+  ```c
+  #include <unistd.h>
   char *buf = malloc(4096);
   if (!getcwd(buf, 4096)) { free(buf); return NULL; }
   return buf;
@@ -334,6 +343,7 @@
 (defn process/chdir [path : cstr]
   #{Proc}
   : int
-  ```c #include <unistd.h>
+  ```c
+  #include <unistd.h>
   return (int64_t)chdir(path);
   ```)

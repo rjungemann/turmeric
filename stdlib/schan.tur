@@ -71,7 +71,11 @@
   ;;;   (:: (schan-new 4) (SChan (SSend int SClose)))  ; => SChan<SSend int SClose>
   ;;;
   ;;; Since: S1
-  (defn schan-new [P] [cap : int] : (SChan P) ```c typedef struct {
+  (defn schan-new [P]
+    [cap : int]
+    : (SChan P)
+    ```c
+    typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -98,7 +102,11 @@
   ;;;   (let [c2 (schan-send c 42)] ...)  ; c : SChan<SSend int R> => c2 : SChan<R>
   ;;;
   ;;; Since: S1
-  (defn schan-send [T R] [c : (SChan (SSend T R)) v : T] : (SChan R) ```c typedef struct {
+  (defn schan-send [T R]
+    [c : (SChan (SSend T R)) v : T]
+    : (SChan R)
+    ```c
+    typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -142,7 +150,11 @@
   ;;;     ...)
   ;;;
   ;;; Since: S1
-  (defn schan-recv [T R] [c : (SChan (SRecv T R)) cell : ptr<void>] : (SChan R) ```c typedef struct {
+  (defn schan-recv [T R]
+    [c : (SChan (SRecv T R)) cell : ptr<void>]
+    : (SChan R)
+    ```c
+    typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -170,7 +182,9 @@
   ;;;   (schan-close c)   ; c : SChan<SClose>
   ;;;
   ;;; Since: S1
-  (defn schan-close [c : (SChan SClose)] : nil ```c typedef struct {
+  (defn schan-close [c : (SChan SClose)] : nil
+    ```c
+    typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
     } SChanBlock;
@@ -192,7 +206,9 @@
   ;;;   (let [cell (schan-cell-new)] ...)
   ;;;
   ;;; Since: S1
-  (defn schan-cell-new [] : ptr<void> ```c int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+  (defn schan-cell-new [] : ptr<void>
+    ```c
+    int64_t *c = (int64_t *)malloc(sizeof(int64_t));
     if (!c) { fprintf(stderr, "schan-cell-new: oom\n"); abort(); }
     *c = 0; return (void *)c;
     ```)

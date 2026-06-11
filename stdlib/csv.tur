@@ -36,7 +36,8 @@
 ;;; Since: Phase D2
 
 (defn csv/parse-row-with-delim [line : cstr delim : int] : int
-  ```c /* Validate delimiter */
+  ```c
+  /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -105,7 +106,8 @@
 ;;; Since: Phase B2
 
 (defn csv/parse-row [line : cstr] : int
-  ```c return csv_slparse_hyrow_hywith_hydelim(line, 44);
+  ```c
+  return csv_slparse_hyrow_hywith_hydelim(line, 44);
   ```)
 ;;; csv/row-free -- free a row vec and all its field strings.
 ;;;
@@ -118,7 +120,8 @@
 ;;; Since: Phase B2
 
 (defn csv/row-free [v : int] : void
-  ```c if (!v) return;
+  ```c
+  if (!v) return;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   for (size_t i = 0; i < vec->len; i++) free((void*)(intptr_t)vec->data[i]);
   free(vec->data);
@@ -143,7 +146,8 @@
 ;;; Since: Phase D2
 
 (defn csv/parse-with-delim [s : cstr delim : int] : int
-  ```c /* Validate delimiter */
+  ```c
+  /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   const char *p = s;
@@ -213,7 +217,8 @@
 ;;; Since: Phase B2
 
 (defn csv/parse [s : cstr] : int
-  ```c return csv_slparse_hywith_hydelim(s, 44);
+  ```c
+  return csv_slparse_hywith_hydelim(s, 44);
   ```)
 ;;; csv/free -- free a cons list of rows returned by csv/parse.
 ;;;
@@ -226,7 +231,8 @@
 ;;; Since: Phase B2
 
 (defn csv/free [lst : int] : void
-  ```c int64_t cur = lst;
+  ```c
+  int64_t cur = lst;
   while (cur) {
     int64_t *cell = (int64_t*)(intptr_t)cur;
     int64_t vptr  = cell[0];
@@ -263,7 +269,8 @@
 ;;; Since: Phase D2
 
 (defn csv/emit-row-with-delim [v : int delim : int] : cstr
-  ```c /* Validate delimiter */
+  ```c
+  /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -317,7 +324,8 @@
 ;;; Since: Phase B2
 
 (defn csv/emit-row [v : int] : cstr
-  ```c return csv_slemit_hyrow_hywith_hydelim(v, 44);
+  ```c
+  return csv_slemit_hyrow_hywith_hydelim(v, 44);
   ```)
 ;;; csv/emit-with-delim -- serialize a cons list of row vecs to a full delimiter-separated string.
 ;;;
@@ -338,7 +346,8 @@
 ;;; Since: Phase D2
 
 (defn csv/emit-with-delim [rows : int delim : int] : cstr
-  ```c /* Validate delimiter */
+  ```c
+  /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   size_t out_cap = 256, pos = 0;
@@ -393,7 +402,8 @@
 ;;; Since: Phase B2
 
 (defn csv/emit [rows : int] : cstr
-  ```c return csv_slemit_hywith_hydelim(rows, 44);
+  ```c
+  return csv_slemit_hywith_hydelim(rows, 44);
   ```)
 ;;; csv/read-file-with-delim -- read a delimiter-separated file and parse it into a cons list of row vecs.
 ;;;
@@ -415,7 +425,8 @@
 (defn csv/read-file-with-delim [path : cstr delim : int]
   #{FS}
   : int
-  ```c /* Validate delimiter */
+  ```c
+  /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   FILE *f = fopen(path, "rb");
@@ -480,7 +491,8 @@
 (defn csv/read-file [path : cstr]
   #{FS}
   : int
-  ```c return csv_slread_hyfile_hywith_hydelim(path, 44);
+  ```c
+  return csv_slread_hyfile_hywith_hydelim(path, 44);
   ```)
 ;;; csv/write-file-with-delim -- serialize a cons list of row vecs to a delimiter-separated file.
 ;;;
@@ -502,7 +514,8 @@
 (defn csv/write-file-with-delim [path : cstr rows : int delim : int]
   #{FS}
   : int
-  ```c /* Validate delimiter */
+  ```c
+  /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return -1;
   char sep = (char)delim;
   FILE *f = fopen(path, "wb");
@@ -550,5 +563,6 @@
 (defn csv/write-file [path : cstr rows : int]
   #{FS}
   : int
-  ```c return csv_slwrite_hyfile_hywith_hydelim(path, rows, 44);
+  ```c
+  return csv_slwrite_hyfile_hywith_hydelim(path, rows, 44);
   ```)

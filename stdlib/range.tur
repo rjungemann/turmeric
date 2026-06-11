@@ -131,7 +131,8 @@
 ;; endpoint: "[v" (kind 1) or "(v" (kind 2).  Backs Show [Bound].
 
 (defn bound-show-fmt [kind : int v : int] : cstr
-  ```c char *buf = (char *)malloc(32);
+  ```c
+  char *buf = (char *)malloc(32);
   if (kind == 1) snprintf(buf, 32, "[%lld", (long long)v);
   else           snprintf(buf, 32, "(%lld", (long long)v);
   return (const char *)buf;
@@ -225,7 +226,8 @@
 
 
 (defn range-new [lower : Bound upper : Bound] : int
-  ```c struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
+  ```c
+  struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
   r->lower = lower;
   r->upper = upper;
   return (int64_t)(intptr_t)r;
@@ -238,7 +240,8 @@
 ;;; Since: LZ4
 
 (defn range-lower [r : int] : Bound
-  ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
+  ```c
+  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
   ```)
 ;;; range-upper -- return the upper Bound endpoint.
 ;;;
@@ -248,24 +251,28 @@
 ;;; Since: LZ4
 
 (defn range-upper [r : int] : Bound
-  ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
+  ```c
+  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
   ```)
 ;; Typed abort helpers -- each returns :int so they can be used in if-branches.
 
 (defn range-abort-not-connected [] : int
-  ```c fprintf(stderr, "range-intersection: ranges are not connected\n");
+  ```c
+  fprintf(stderr, "range-intersection: ranges are not connected\n");
   abort();
   return 0;
   ```)
 
 (defn range-abort-connected [] : int
-  ```c fprintf(stderr, "range-gap: ranges are connected (no gap exists)\n");
+  ```c
+  fprintf(stderr, "range-gap: ranges are connected (no gap exists)\n");
   abort();
   return 0;
   ```)
 
 (defn range-abort-unbounded-lower [] : int
-  ```c fprintf(stderr, "seq/from-range: lower bound must be present\n");
+  ```c
+  fprintf(stderr, "seq/from-range: lower bound must be present\n");
   abort();
   return 0;
   ```)

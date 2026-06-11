@@ -42,7 +42,8 @@
 (defn async-socket-listen [port : int backlog : int]
   #{Unsafe Net}
   : Fd
-  ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
+  ```c
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int opt = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -83,7 +84,8 @@
 (defn async-socket-accept [listen-fd : Fd]
   #{Unsafe Net}
   : Fd
-  ```c while (1) {
+  ```c
+  while (1) {
     int cfd = accept((int)listen_fd, NULL, NULL);
     if (cfd >= 0) {
       /* Set client socket non-blocking */
@@ -124,7 +126,8 @@
 (defn async-socket-connect [host : cstr port : int]
   #{Unsafe Net}
   : Fd
-  ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
+  ```c
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int flags = fcntl(fd, F_GETFL, 0);
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
@@ -172,7 +175,8 @@
 (defn async-socket-send [fd : Fd data : cstr len : int]
   #{Unsafe Net}
   : int
-  ```c int64_t total = 0;
+  ```c
+  int64_t total = 0;
   while (total < len) {
     ssize_t n = send((int)fd, data + total, (size_t)(len - total), 0);
     if (n >= 0) {
@@ -214,7 +218,8 @@
 (defn async-socket-recv [fd : Fd buf-size : int]
   #{Unsafe Net}
   : int
-  ```c char *buf = (char *)malloc((size_t)buf_size);
+  ```c
+  char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
   while (1) {
     ssize_t n = recv((int)fd, buf, (size_t)buf_size, 0);
@@ -252,7 +257,8 @@
 (defn async-socket-recv-buf []
   #{Unsafe}
   : ptr<void>
-  ```c if (!tur_current_fiber) return NULL;
+  ```c
+  if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51C50C0);
   ```)
 ;; Retrieve the number of bytes from the last async-socket-recv.
@@ -269,7 +275,8 @@
 (defn async-socket-recv-len []
   #{Unsafe}
   : int
-  ```c if (!tur_current_fiber) return 0;
+  ```c
+  if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51C50C1);
   ```)
 ;; Close a socket and unregister it from IO polling.
@@ -286,6 +293,7 @@
 (defn async-socket-close [fd : Fd]
   #{Unsafe Net}
   : nil
-  ```c tur_io_unregister((int)fd);
+  ```c
+  tur_io_unregister((int)fd);
   close((int)fd);
   ```)

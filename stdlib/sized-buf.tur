@@ -37,7 +37,8 @@
 (defn sized-buf-new [n]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
+  ```c
+  struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
   b->len  = n;
   b->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
   return (int64_t)(intptr_t)b;
@@ -58,7 +59,8 @@
 (defn sized-buf-new-zeroed [n]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
+  ```c
+  struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
   b->len  = n;
   b->data = n > 0 ? (int64_t *)calloc((size_t)n, sizeof(int64_t)) : NULL;
   return (int64_t)(intptr_t)b;
@@ -82,7 +84,8 @@
 (defn sized-buf-free [b]
   #{Unsafe}
   : nil
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (buf->data) free(buf->data);
   free(buf);
   ```)
@@ -104,7 +107,8 @@
 (defn sized-buf-len [b]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   return (int)buf->len;
   ```)
 ;;; sized-buf-get -- bounds-checked element read; aborts on out-of-range index.
@@ -124,7 +128,8 @@
 (defn sized-buf-get [b i]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (i >= 0 && i < buf->len) return buf->data[i];
   fprintf(stderr, "sized-buf-get: index out of bounds\n");
   exit(1);
@@ -151,7 +156,8 @@
 (defn sized-buf-set! [b i v]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (i >= 0 && i < buf->len) { buf->data[i] = v; return b; }
   fprintf(stderr, "sized-buf-set!: index out of bounds\n");
   exit(1);
@@ -176,7 +182,8 @@
 (defn sized-buf-fill! [b v]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   for (int64_t i = 0; i < buf->len; i++) buf->data[i] = v;
   return b;
   ```)
@@ -199,7 +206,8 @@
 (defn sized-buf-copy! [dst src]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *d = (void*)(intptr_t)dst;
+  ```c
+  struct { int64_t len; int64_t *data; } *d = (void*)(intptr_t)dst;
   struct { int64_t len; int64_t *data; } *s = (void*)(intptr_t)src;
   if (d->len != s->len) {
     fprintf(stderr, "sized-buf-copy!: length mismatch (%lld vs %lld)\n",
@@ -225,7 +233,8 @@
 (defn sized-buf-sum [b]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   int64_t s = 0;
   for (int64_t i = 0; i < buf->len; i++) s += buf->data[i];
   return s;
@@ -246,7 +255,8 @@
 (defn sized-buf-min [b]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (buf->len == 0) { fprintf(stderr, "sized-buf-min: empty buffer\n"); exit(1); }
   int64_t m = buf->data[0];
   for (int64_t i = 1; i < buf->len; i++) if (buf->data[i] < m) m = buf->data[i];
@@ -268,7 +278,8 @@
 (defn sized-buf-max [b]
   #{Unsafe}
   : int
-  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+  ```c
+  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (buf->len == 0) { fprintf(stderr, "sized-buf-max: empty buffer\n"); exit(1); }
   int64_t m = buf->data[0];
   for (int64_t i = 1; i < buf->len; i++) if (buf->data[i] > m) m = buf->data[i];
@@ -323,7 +334,8 @@
 (defn sized-buf-with-stack [n f]
   #{Unsafe}
   : int
-  ```c /* alloca: data lives on THIS function's stack frame.
+  ```c
+  /* alloca: data lives on THIS function's stack frame.
      The buffer is only valid while this function is executing.
      f must not store the buffer pointer beyond its own return. */
   int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
@@ -360,7 +372,8 @@
 (defn sized-buf-compute [n]
   #{Unsafe}
   : int
-  ```c int64_t threshold = 64;
+  ```c
+  int64_t threshold = 64;
   int64_t result = 0;
   if (n <= threshold) {
     /* Stack allocation: no malloc/free overhead */
@@ -398,7 +411,8 @@
 (defn sized-buf-from-sized-vec [v]
   #{Unsafe}
   : int
-  ```c /* SizedVec GADT node layout (from generated C):
+  ```c
+  /* SizedVec GADT node layout (from generated C):
        struct { int tag; union {
          struct {} SVNil;
          struct { int64_t _0; int64_t _1; } SVCons;

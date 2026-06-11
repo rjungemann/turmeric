@@ -40,7 +40,8 @@
 ;;; Since: Phase T19-C
 
 (defn mutex-new [] : Mutex
-  ```c pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  ```c
+  pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   if (!m) { fprintf(stderr, "mutex-new: out of memory\n"); abort(); }
   pthread_mutex_init(m, NULL);
   return (void *)m;
@@ -56,7 +57,8 @@
 ;;; Since: Phase T19-C
 
 (defn mutex-lock [^borrow m : Mutex] : nil
-  ```c pthread_mutex_lock((pthread_mutex_t *)m);
+  ```c
+  pthread_mutex_lock((pthread_mutex_t *)m);
   ```)
 ;;; mutex-unlock -- release the mutex.
 ;;;
@@ -69,7 +71,8 @@
 ;;; Since: Phase T19-C
 
 (defn mutex-unlock [^borrow m : Mutex] : nil
-  ```c pthread_mutex_unlock((pthread_mutex_t *)m);
+  ```c
+  pthread_mutex_unlock((pthread_mutex_t *)m);
   ```)
 ;;; mutex-try-lock -- attempt to acquire the mutex without blocking.
 ;;;
@@ -85,7 +88,8 @@
 ;;; Since: Phase T19-C
 
 (defn mutex-try-lock [^borrow m : Mutex] : bool
-  ```c return pthread_mutex_trylock((pthread_mutex_t *)m) == 0;
+  ```c
+  return pthread_mutex_trylock((pthread_mutex_t *)m) == 0;
   ```)
 ;;; mutex-free -- destroy the mutex and release its memory.
 ;;;
@@ -98,6 +102,7 @@
 ;;; Since: Phase T19-C
 
 (defn mutex-free [m : Mutex] : nil
-  ```c pthread_mutex_destroy((pthread_mutex_t *)m);
+  ```c
+  pthread_mutex_destroy((pthread_mutex_t *)m);
   free(m);
   ```)

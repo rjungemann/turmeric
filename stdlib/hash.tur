@@ -22,7 +22,8 @@
 ;;;
 ;;; Since: Phase C
 (defn hash-int [n : int] : int
-  ```c uint64_t h = (uint64_t)n;
+  ```c
+  uint64_t h = (uint64_t)n;
   h ^= h >> 30;
   h *= 0xbf58476d1ce4e5b9ULL;
   h ^= h >> 27;

@@ -81,7 +81,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-cell-new [] : Promise
-  ```c typedef struct {
+  ```c
+  typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t  ready;
       int64_t value;
@@ -109,7 +110,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-cell-free [cell : Promise] : nil
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)cell;
   if (__atomic_sub_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
     pthread_mutex_destroy(&fc->lock);
@@ -181,7 +183,8 @@
 ;;; Since: stdlib-linearity-affinity (Future aliasing fix)
 
 (defn future-handle [^borrow p : Promise] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)p;
   __atomic_add_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL);
   return (void *)fc;
@@ -208,7 +211,8 @@
 ;;; Since: Phase T20-C
 
 (defn promise-fulfill [p : Promise v : int] : nil
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)p;
   pthread_mutex_lock(&fc->lock);
   if (fc->is_set) {
@@ -239,7 +243,8 @@
 ;;; Since: Phase T20-C
 
 (defn promise-fail [p : Promise e : int] : nil
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)p;
   pthread_mutex_lock(&fc->lock);
   if (fc->is_set) {
@@ -282,7 +287,8 @@
 
 
 (defn future-done? [^borrow f : Future] : bool
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
   bool done = fc->is_set;
@@ -305,7 +311,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-get [^borrow f : Future] : ptr<void>
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
   while (!fc->is_set)
@@ -335,7 +342,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-free [f : Future] : nil
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   if (__atomic_sub_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
     pthread_mutex_destroy(&fc->lock);
@@ -360,7 +368,8 @@
 
 
 (defn future-of [v : int] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
   if (!cell) { fprintf(stderr, "future-of: oom\n"); abort(); }
   pthread_mutex_init(&cell->lock, NULL);
@@ -384,7 +393,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-error-of [e : int] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
   if (!cell) { fprintf(stderr, "future-error-of: oom\n"); abort(); }
   pthread_mutex_init(&cell->lock, NULL);
@@ -406,7 +416,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-cancel [^borrow f : Future] : nil
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
   if (!fc->is_set) {
@@ -429,7 +440,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-cancelled? [^borrow f : Future] : bool
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
   bool cancelled = fc->is_set && !fc->is_ok && fc->exn == (int64_t)-2;
@@ -454,7 +466,8 @@
 
 
 (defn future-map [^borrow f : Future ^fat fn : ptr<void>] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
   while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
@@ -495,7 +508,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-then [^borrow f : Future ^fat fn : ptr<void>] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   pthread_mutex_lock(&fc->lock);
   while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
@@ -533,7 +547,8 @@
 
 
 (defn future-race [^borrow fa : Future ^borrow fb : Future] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
   /* Poll in a spin loop until one settles; lock ordering to avoid deadlock */
@@ -582,7 +597,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-all2 [^borrow fa : Future ^borrow fb : Future] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
   pthread_mutex_lock(&a->lock);
@@ -619,7 +635,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-any2 [^borrow fa : Future ^borrow fb : Future] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
   pthread_mutex_lock(&a->lock);
@@ -665,7 +682,8 @@
 
 
 (defn future-join [^borrow fa : Future ^borrow fb : Future] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
   pthread_mutex_lock(&a->lock);
@@ -703,7 +721,8 @@
 ;;; Since: Phase T20-C
 
 (defn tuple-first [tup : ptr<void>] : int
-  ```c return ((Tuple2 *)tup)->e1;
+  ```c
+  return ((Tuple2 *)tup)->e1;
   ```)
 ;;; tuple-second -- read the second element of a Tuple2 returned by future-join.
 ;;;
@@ -716,7 +735,8 @@
 ;;; Since: Phase T20-C
 
 (defn tuple-second [tup : ptr<void>] : int
-  ```c return ((Tuple2 *)tup)->e2;
+  ```c
+  return ((Tuple2 *)tup)->e2;
   ```)
 ;; Free a tuple allocated by future-join
 ;;; tuple-free -- free a Tuple2 allocated by future-join.
@@ -727,7 +747,8 @@
 ;;; Since: Phase T20-C
 
 (defn tuple-free [tup : ptr<void>] : nil
-  ```c free(tup);
+  ```c
+  free(tup);
   ```)
 ;; ---- Convenience: Create and return a (Promise, Future) pair in one step ----
 ;;; promise-new-pair -- allocate a new unsettled Promise/Future shared cell (alias for promise-new).
@@ -752,7 +773,8 @@
 
 
 (defn future-race-n [futures : ptr<void> n : int] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell **arr = (FutureCell **)futures;
   for (int i = 0; i < (int)n; i++) {
       pthread_mutex_lock(&arr[i]->lock);
@@ -803,7 +825,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-all-n [futures : ptr<void> n : int] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell **arr = (FutureCell **)futures;
   bool all_ok = true;
   int64_t first_exn = 0;
@@ -837,7 +860,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-any-n [futures : ptr<void> n : int] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell **arr = (FutureCell **)futures;
   for (int i = 0; i < (int)n; i++) {
       pthread_mutex_lock(&arr[i]->lock);
@@ -879,7 +903,8 @@
 
 
 (defn future-timeout [ms : int] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)malloc(sizeof(FutureCell));
   if (!fc) { fprintf(stderr, "future-timeout: oom\n"); abort(); }
   pthread_mutex_init(&fc->lock, NULL);
@@ -924,7 +949,8 @@
 ;;; Since: Phase T20-C
 
 (defn future-with-timeout [^borrow f : Future ms : int] : Future
-  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
   FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
   if (!out) { fprintf(stderr, "future-with-timeout: oom\n"); abort(); }

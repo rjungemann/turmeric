@@ -68,7 +68,8 @@
   [p : (Pair A B)]
   #{}
   :void
-  ```c (void)p;
+  ```c
+  (void)p;
   ```)
 ;;; pair-eq? -- compare two Pair[A B] values element-wise.
 ;;;
@@ -93,7 +94,8 @@
 (defn pair-eq-carrier? [p1 : int p2 : int ^fat fst-cmp ^fat snd-cmp]
   #{}
   : bool
-  ```c struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
+  ```c
+  struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
   struct { int64_t fst; int64_t snd; } *b = (void*)(intptr_t)p2;
   if (!a && !b) return true;
   if (!a || !b) return false;

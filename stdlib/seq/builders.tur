@@ -33,12 +33,14 @@
 
 
 (defn seq-opt-some? [o : int] : bool
-  ```c struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
   return opt != NULL && opt->is_some;
   ```)
 
 (defn seq-opt-unwrap [o : int] : int
-  ```c struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
   return opt->value;
   ```)
 ;; Pair helpers for seq/unfold -- backed by stdlib/tuple.tur's Tuple2 layout.
@@ -46,12 +48,14 @@
 ;;; seq-pair-second -- return the second element of a Tuple2 (legacy name).
 
 (defn seq-pair-first [p : int] : int
-  ```c Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+  ```c
+  Tuple2 *pair = (Tuple2 *)(intptr_t)p;
   return pair->e1;
   ```)
 
 (defn seq-pair-second [p : int] : int
-  ```c Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+  ```c
+  Tuple2 *pair = (Tuple2 *)(intptr_t)p;
   return pair->e2;
   ```)
 ;; -------------------------------------------------------------------

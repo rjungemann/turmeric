@@ -32,7 +32,8 @@
 ;;;
 ;;; Since: Phase 21
 (defn save-cont! [k : ptr<void>] : ptr<void>
-  ```c /* Phase 21: marshal the captured DK continuation chain to bytes.
+  ```c
+  /* Phase 21: marshal the captured DK continuation chain to bytes.
    * tur_serial_cont_serialize (emitted by the serial DK runtime prelude
    * whenever the program uses serial-reset) walks the chain k and writes
    * each frame's stable tag + env -- no code addresses -- to a length-prefixed
@@ -58,7 +59,8 @@
 ;;; Since: Phase 21
 
 (defn resume-cont! [b : ptr<void> v : int] : int
-  ```c /* Phase 21: rebuild the DK continuation chain from the marshaled bytes b
+  ```c
+  /* Phase 21: rebuild the DK continuation chain from the marshaled bytes b
    * (mapping each frame's tag/name back to its frame fn via the self-registered
    * SkReg table) and resume it on v. */
   if (!b) return 0;

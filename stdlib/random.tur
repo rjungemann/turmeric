@@ -37,7 +37,8 @@
 ;; Uses libc rand() function
 
 (defn Real-Random []
-  ```c /* Define the Random struct */
+  ```c
+  /* Define the Random struct */
   typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
@@ -87,7 +88,8 @@
 ;; Free a Real-Random
 
 (defn Real-Random-free [rng]
-  ```c free(rng);
+  ```c
+  free(rng);
   ```)
 ;; ============================================================================
 ;; Seeded Random implementation
@@ -111,7 +113,8 @@
 
 
 (defn Seeded-Random [seed]
-  ```c typedef struct Random Random;
+  ```c
+  typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
       int (*next_float)(void);
@@ -147,7 +150,8 @@
 ;; Free a Seeded-Random
 
 (defn Seeded-Random-free [rng]
-  ```c free(rng);
+  ```c
+  free(rng);
   ```)
 ;; ============================================================================
 ;; Helper functions for direct random number generation
@@ -172,7 +176,8 @@
 (defn rand-int [min max]
   #{Rand}
   : int
-  ```c static int seeded = 0;
+  ```c
+  static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;
@@ -197,7 +202,8 @@
 (defn rand-float []
   #{Rand}
   : int
-  ```c static int seeded = 0;
+  ```c
+  static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;
@@ -221,7 +227,8 @@
 (defn rand-die [sides]
   #{Rand}
   : int
-  ```c static int seeded = 0;
+  ```c
+  static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;
@@ -242,7 +249,8 @@
 (defn rand-bool []
   #{Rand}
   : int
-  ```c static int seeded = 0;
+  ```c
+  static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;

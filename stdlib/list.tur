@@ -30,7 +30,8 @@
 (defn tcons [h : int t : int]
   #{}
   : int
-  ```c struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
+  ```c
+  struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
   cell->head = h;
   cell->tail = t;
   return (int64_t)(intptr_t)cell;
@@ -124,7 +125,8 @@
 (defn list-length [l : int]
   #{}
   : int
-  ```c struct __tur_cell_t { int64_t head; int64_t tail; };
+  ```c
+  struct __tur_cell_t { int64_t head; int64_t tail; };
   struct __tur_cell_t *cell = (void*)(intptr_t)l;
   int64_t count = 0;
   while (cell) {
@@ -238,13 +240,15 @@
 ;;; list-head -- head element of a non-empty carrier-level list.
 
 (defn list-head [l : int] : int
-  ```c struct __tur_cell_t { int64_t head; int64_t tail; };
+  ```c
+  struct __tur_cell_t { int64_t head; int64_t tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->head;
   ```)
 ;;; list-tail -- tail pointer of a non-empty carrier-level list.
 
 (defn list-tail [l : int] : int
-  ```c struct __tur_cell_t { int64_t head; int64_t tail; };
+  ```c
+  struct __tur_cell_t { int64_t head; int64_t tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->tail;
   ```)
 ;;; list-concat -- concatenate two lists.

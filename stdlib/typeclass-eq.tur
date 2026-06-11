@@ -33,7 +33,10 @@
 ;;; the runtime's string comparator rather than pointer equality.
 
 (definstance Eq [cstr]
-  (eq? [x y] : bool ```c if (x == NULL && y == NULL) return true;
+  (eq? [x y]
+    : bool
+    ```c
+    if (x == NULL && y == NULL) return true;
     if (x == NULL || y == NULL) return false;
     return strcmp((const char *)x, (const char *)y) == 0;
     ```))

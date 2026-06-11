@@ -18,7 +18,8 @@
 ;; nested inside a constructor body, and the globals cannot be trapped there
 ;; either. So the structs, the singleton state, and every helper live here.
 
-```c /* ---- Test-FileSystem: an in-memory filesystem singleton ---- */
+```c
+/* ---- Test-FileSystem: an in-memory filesystem singleton ---- */
 typedef struct __tur_test_fs_vtable {
     int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
     int (*write_file)(const char* path, const unsigned char* data, int data_len);
@@ -180,7 +181,8 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 
 
 (defn Test-FileSystem [] : int
-  ```c __tur_test_fs_vtable* fs = (__tur_test_fs_vtable*)malloc(sizeof(__tur_test_fs_vtable));
+  ```c
+  __tur_test_fs_vtable* fs = (__tur_test_fs_vtable*)malloc(sizeof(__tur_test_fs_vtable));
   fs->read_file  = __tur_testfs_read_file;
   fs->write_file = __tur_testfs_write_file;
   fs->delete     = __tur_testfs_delete;
@@ -190,12 +192,14 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Free a Test-FileSystem
 
 (defn Test-FileSystem-free [fs] : nil
-  ```c free((void*)(intptr_t)fs);
+  ```c
+  free((void*)(intptr_t)fs);
   ```)
 ;; Clear all files from the test filesystem
 
 (defn testfs-clear [] : nil
-  ```c __tur_inmem_file* f = __tur_global_fs.files;
+  ```c
+  __tur_inmem_file* f = __tur_global_fs.files;
   while (f) {
       __tur_inmem_file* next = f->next;
       free(f->name); free(f->data); free(f);
@@ -206,12 +210,14 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Check if a file exists in the test filesystem
 
 (defn testfs-exists? [path : cstr] : int
-  ```c return __tur_testfs_find(path) != NULL ? 1 : 0;
+  ```c
+  return __tur_testfs_find(path) != NULL ? 1 : 0;
   ```)
 ;; Get file contents from test filesystem (malloc'd, NUL-terminated; caller frees)
 
 (defn testfs-get-contents [path : cstr] : ptr<void>
-  ```c __tur_inmem_file* f = __tur_testfs_find(path);
+  ```c
+  __tur_inmem_file* f = __tur_testfs_find(path);
   if (!f) return NULL;
   unsigned char* buf = (unsigned char*)malloc(f->data_len + 1);
   memcpy(buf, f->data, f->data_len);
@@ -224,7 +230,8 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Test-Logger implementation
 
 (defn Test-Logger [] : int
-  ```c __tur_test_logger_vtable* logger = (__tur_test_logger_vtable*)malloc(sizeof(__tur_test_logger_vtable));
+  ```c
+  __tur_test_logger_vtable* logger = (__tur_test_logger_vtable*)malloc(sizeof(__tur_test_logger_vtable));
   logger->debug = __tur_test_logger_debug;
   logger->info  = __tur_test_logger_info;
   logger->warn  = __tur_test_logger_warn;
@@ -234,12 +241,14 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Free a Test-Logger
 
 (defn Test-Logger-free [log] : nil
-  ```c free((void*)(intptr_t)log);
+  ```c
+  free((void*)(intptr_t)log);
   ```)
 ;; Clear all captured logs
 
 (defn testlog-clear [] : nil
-  ```c __tur_captured_log* log = __tur_global_logger.logs;
+  ```c
+  __tur_captured_log* log = __tur_global_logger.logs;
   while (log) {
       __tur_captured_log* next = log->next;
       free(log->level); free(log->message); free(log);
@@ -251,7 +260,8 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Get the number of captured logs
 
 (defn testlog-count [] : int
-  ```c __tur_captured_log* log = __tur_global_logger.logs;
+  ```c
+  __tur_captured_log* log = __tur_global_logger.logs;
   int count = 0;
   while (log) { count++; log = log->next; }
   return count;
@@ -259,7 +269,8 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Check if a log message was captured (by level and message)
 
 (defn testlog-has? [level : cstr msg : cstr] : int
-  ```c __tur_captured_log* log = __tur_global_logger.logs;
+  ```c
+  __tur_captured_log* log = __tur_global_logger.logs;
   while (log) {
       if (strcmp(log->level, level) == 0 && strcmp(log->message, msg) == 0) return 1;
       log = log->next;
@@ -272,7 +283,8 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Test-Random implementation - deterministic for testing
 
 (defn Test-Random [] : int
-  ```c __tur_test_random_vtable* rng = (__tur_test_random_vtable*)malloc(sizeof(__tur_test_random_vtable));
+  ```c
+  __tur_test_random_vtable* rng = (__tur_test_random_vtable*)malloc(sizeof(__tur_test_random_vtable));
   rng->next_int   = __tur_test_rng_next_int;
   rng->next_float = __tur_test_rng_next_float;
   return (int64_t)(intptr_t)rng;
@@ -280,12 +292,14 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Free a Test-Random
 
 (defn Test-Random-free [rng] : nil
-  ```c free((void*)(intptr_t)rng);
+  ```c
+  free((void*)(intptr_t)rng);
   ```)
 ;; Reset the test RNG to initial state
 
 (defn testrng-reset [] : nil
-  ```c __tur_test_rng_state = 42u;
+  ```c
+  __tur_test_rng_state = 42u;
   ```)
 ;; ============================================================================
 ;; Test-Time implementation -- mock clock that can be controlled manually
@@ -293,7 +307,8 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Test-Time implementation - manually controlled clock
 
 (defn Test-Time [] : int
-  ```c __tur_test_time_vtable* t = (__tur_test_time_vtable*)malloc(sizeof(__tur_test_time_vtable));
+  ```c
+  __tur_test_time_vtable* t = (__tur_test_time_vtable*)malloc(sizeof(__tur_test_time_vtable));
   t->now   = __tur_test_now;
   t->sleep = __tur_test_sleep;
   return (int64_t)(intptr_t)t;
@@ -301,20 +316,24 @@ static void __tur_test_sleep(int ms) { __tur_test_time_value += ms; }
 ;; Free a Test-Time
 
 (defn Test-Time-free [t] : nil
-  ```c free((void*)(intptr_t)t);
+  ```c
+  free((void*)(intptr_t)t);
   ```)
 ;; Set the mock time value
 
 (defn testtime-set [t new_time : int] : nil
-  ```c __tur_test_time_value = (int)new_time;
+  ```c
+  __tur_test_time_value = (int)new_time;
   ```)
 ;; Get the current mock time value
 
 (defn testtime-get [t] : int
-  ```c return __tur_test_time_value;
+  ```c
+  return __tur_test_time_value;
   ```)
 ;; Reset mock time to 0
 
 (defn testtime-reset [] : nil
-  ```c __tur_test_time_value = 0;
+  ```c
+  __tur_test_time_value = 0;
   ```)

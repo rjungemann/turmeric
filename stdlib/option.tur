@@ -27,7 +27,8 @@
 (defn some [x : int]
   #{}
   : int
-  ```c return tur_some(x);
+  ```c
+  return tur_some(x);
   ```)
 ;;; none -- return the none Option[A] (NULL).
 ;;;
@@ -42,7 +43,8 @@
 (defn none []
   #{}
   : int
-  ```c return TUR_NONE;
+  ```c
+  return TUR_NONE;
   ```)
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
@@ -61,7 +63,8 @@
 (defn some? [o : int]
   #{}
   : bool
-  ```c return tur_is_some(o);
+  ```c
+  return tur_is_some(o);
   ```)
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
@@ -96,7 +99,8 @@
 (defn unwrap-or [o : int dflt : int]
   #{}
   : int
-  ```c return tur_is_some(o) ? tur_opt_value(o) : dflt;
+  ```c
+  return tur_is_some(o) ? tur_opt_value(o) : dflt;
   ```)
 ;;; option-free -- free a heap-allocated Option[A].
 ;;;
@@ -111,7 +115,8 @@
 (defn option-free [o : int]
   #{}
   : void
-  ```c if (o) free((void*)(intptr_t)o);
+  ```c
+  if (o) free((void*)(intptr_t)o);
   ```)
 ;;; option-map -- apply a function to the contained value if some.
 ;;;
@@ -130,7 +135,8 @@
 (defn option-map [o : int ^fat f]
   #{}
   : int
-  ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -155,7 +161,8 @@
 (defn option-eq? [o1 : int o2 : int ^fat cmp-fn]
   #{}
   : bool
-  ```c struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
+  ```c
+  struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
   struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
   bool a_some = a && a->is_some;
   bool b_some = b && b->is_some;
@@ -191,7 +198,9 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Functor [Option]
-  (fmap [container fn] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)container;
+  (fmap [container fn]
+    ```c
+    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)container;
     if (!o || !o->is_some) return 0;
     return tur_some(fn.fn(fn.env, o->value));
     ```))
@@ -205,7 +214,9 @@
 
 (definstance Applicative [Option]
   (pure [x] ```c return tur_some(x); ```)
-  (ap [ff fa] ```c struct { bool is_some; int64_t value; } *f = (void*)(intptr_t)ff;
+  (ap [ff fa]
+    ```c
+    struct { bool is_some; int64_t value; } *f = (void*)(intptr_t)ff;
     struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)fa;
     if (!f || !f->is_some || !a || !a->is_some) return 0;
     /* the wrapped function is a fat-closure box; dispatch through slot 0 */
@@ -220,7 +231,9 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Monad [Option]
-  (bind [ma fn] ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)ma;
+  (bind [ma fn]
+    ```c
+    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)ma;
     if (!o || !o->is_some) return 0;
     return fn.fn(fn.env, o->value);
     ```))
@@ -233,7 +246,9 @@
 
 (definstance Alternative [Option]
   (empty [a] ```c (void)a; return 0; ```)
-  (alt-or [a b] ```c struct { bool is_some; int64_t value; } *x = (void*)(intptr_t)a;
+  (alt-or [a b]
+    ```c
+    struct { bool is_some; int64_t value; } *x = (void*)(intptr_t)a;
     if (x && x->is_some) return a;
     return b;
     ```))
