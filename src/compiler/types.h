@@ -47,10 +47,15 @@ typedef enum SubstructKind {
  *   0       -- KIND_STAR (* -- a concrete, fully-applied type)
  *   1..N    -- arity-N arrow kind; value equals arity
  *              (KIND_ARROW=1 means * -> *, KIND_ARROW2=2 means * -> * -> *, ...)
+ *   0xFFFE  -- KIND_TYPEROW (kind-level `List Type`; a row of types, e.g.
+ *              the `[Pos Vel]` component row of an ECS Query -- see
+ *              docs/reported/variadic-hkt-rows-missing.md). A sentinel, not
+ *              an arrow kind: a row is a first-class kind, not a constructor
+ *              you apply, so kind_apply_one is the identity on it.
  *   0xFFFF  -- KIND_ROW (effect row variable; sentinel, not an arrow kind)
  *
  * kind_for_arity(n) == (Kind)n for all n.
- * kind_apply_one(k) == k-1 for k in 1..0xFFFE, identity for STAR and ROW.
+ * kind_apply_one(k) == k-1 for k in 1..0xFFFD, identity for STAR, TYPEROW, ROW.
  * The hkt_kind field on Type uses this encoding; sizeof(Kind)==2 verified below. */
 typedef uint16_t Kind;
 static_assert(sizeof(Kind) == 2, "Kind must be exactly 2 bytes");
@@ -60,6 +65,7 @@ static_assert(sizeof(Kind) == 2, "Kind must be exactly 2 bytes");
 #define KIND_ARROW3 ((Kind)3)       /* * -> * -> * -> * -- ternary, e.g. Tuple3 */
 #define KIND_ARROW4 ((Kind)4)       /* 4-ary, e.g. Tuple4 */
 #define KIND_ARROW5 ((Kind)5)       /* 5-ary, e.g. Tuple5 */
+#define KIND_TYPEROW ((Kind)0xFFFE) /* [*] -- kind-level list of types (Row :: List Type) */
 #define KIND_ROW    ((Kind)0xFFFF)  /* Row -- effect row variable */
 /* Phase 13: Lifetime annotations */
 /* Lifetimes are purely an elaborator construct - no runtime representation */

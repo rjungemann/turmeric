@@ -429,6 +429,31 @@ set_target_properties(tur_kind_arity_unit PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# Variadic HKT rows (Direction 1): kind-level `List Type` (KIND_TYPEROW) unit test
+# ---------------------------------------------------------------------------
+add_executable(tur_kind_row_unit
+    ${CMAKE_SOURCE_DIR}/tests/compiler/test_kind_row.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_kind_row_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_kind_row_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_kind_row_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+target_link_libraries(tur_kind_row_unit PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_kind_row_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_kind_row_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_kind_row_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # TS2: compiler-side EX_REINTERPRET codegen test
 # ---------------------------------------------------------------------------
 add_executable(tur_codegen_reinterpret
