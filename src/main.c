@@ -4836,11 +4836,11 @@ static int cmd_eval(const char *path, bool use_color,
             "(defn cons [v :int n :int] :int 0)\n"
             "(defn head [lst :int] :int 0)\n"
             "(defn tail [lst :int] :int 0)\n"
-            /* vec operations */
+            /* vec operations.  TI8.b/W1: vec-get/vec-set!/vec-free are dropped
+             * here -- the real vec.tur (preloaded below) defines them, and a
+             * stub would collide with "already defined by an auto-loaded stdlib
+             * module".  vec-new-filled is benchmark-only (no module defn). */
             "(defn vec-new-filled [n :int v :int] :int 0)\n"
-            "(defn vec-get [v :int i :int] :int 0)\n"
-            "(defn vec-set! [v :int i :int x :int] :nil nil)\n"
-            "(defn vec-free [v :int] :nil nil)\n"
             /* numeric helpers */
             "(defn cstr->parse-int [s :int] :int 0)\n"
             "(defn bit-shr [x :int n :int] :int 0)\n"
@@ -4872,19 +4872,87 @@ static int cmd_eval(const char *path, bool use_color,
             "(defn run-ring [n :int m :int] :nil nil)\n"
             "(defn run-nbody [n :int steps :int] :nil nil)\n"
             "(defn run-raytracer [w :int h :int] :int 0)\n"
-            /* Result / Option predicate signatures.  The --interpret path does
-             * not preload result.tur/option.tur, so without these stubs the
-             * elaborator has no declared type for the ok?/err?/some?/none?
-             * natives and defaults their result to :int -- which then fails the
-             * strict "if condition must be bool" check.  The native shims
-             * (registered below) provide the real runtime behaviour; these
-             * stubs exist only so the elaborator sees the :bool return type. */
+            /* Result/Option predicate signatures the elaborator needs so the
+             * ok?/err?/some?/none? natives type as :bool (not :int, which then
+             * trips the strict "if condition must be bool" check).  The native
+             * shims provide the runtime behaviour.  TI8.b/W1: some? is dropped
+             * here because option.tur (preloaded below) defines it -- a stub
+             * would collide.  ok?/err? keep their stubs because result.tur is
+             * deliberately NOT preloaded (its native shims own the Result box;
+             * see the prelude comment).  none? has no module defn, so its stub
+             * stays too. */
             "(defn ok? [r :int] :bool false)\n"
             "(defn err? [r :int] :bool false)\n"
-            "(defn some? [r :int] :bool false)\n"
             "(defn none? [r :int] :bool false)\n"
         );
         (void)sv;
+    }
+    /* TI8.b/W1 (turi-interpreter-gap-closure-plan): preload the typeclass-stub
+     * + typed-collection stdlib set that the compiled path auto-loads in
+     * compile_to_c().  Without it the interpreter cannot resolve Cons/Option/
+     * Result struct types, the Eq/Clone/Hash/HKT typeclasses, or the
+     * map-new/vec-eq?/tcons/... collection functions -- so every fixture that
+     * touches the typed stdlib errored under --interpret while passing when
+     * compiled.
+     *
+     * Loaded via (load ...) (not turi_eval_file): several of these modules carry
+     * their own (defmodule ...), and only the (load ...) preprocessing assigns
+     * each file a distinct file_id so the per-file one-defmodule reset fires
+     * (same root cause as the macros.tur fix above).  Loaded AFTER the benchmark
+     * stub block (with the 6 overlapping stubs dropped) so the real module defns
+     * own those names, and BEFORE wk_register_stdlib_natives so the native shims,
+     * registered last, override any inline-C module body the interpreter cannot
+     * execute.  Reader-backed modules (json/schema/sym) follow the same -X gates
+     * as the compiled path. */
+    {
+        /* W1 conflict-free subset.  Excluded on purpose:
+         *   contract.tur  -- its tur-contract-check inline-C conflicts with the
+         *                    :pre/:post contract lowering (wk_eval_fixture skips
+         *                    it for the same reason); loading it silently broke
+         *                    contract-pre/post/type.
+         *   hamt/map/mutmap/set/result -- their interpreter native shims
+         *                    (native_set_count, native_ok/ok-val/result-map, the
+         *                    hamt invalidation guard, ...) implement a different
+         *                    in-memory layout than the real modules.  Loading the
+         *                    module makes the elaborator bind to the module defn
+         *                    while the runtime native reads the other layout,
+         *                    which regressed coerce-carrier-to-struct /
+         *                    hamt-transient-invalidated and heap-overflowed
+         *                    native_set_count.  Reconciling the native shim layer
+         *                    with these modules is its own follow-up (see the
+         *                    gap-closure plan); until then the native-only path
+         *                    for Result/Map/Set/Hamt stays. */
+        static const char *prelude[] = {
+            "safe.tur",
+            "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
+            "typeclass-hash.tur", "typeclass-applicative.tur",
+            "typeclass-alternative.tur", "typeclass-monad.tur",
+            "typeclass-monaderror.tur", "typeclass-bifunctor.tur",
+            "vec.tur", "slice.tur", "option.tur",
+            "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
+            NULL
+        };
+        /* Build one (load A)(load B)... form so the whole prelude elaborates in
+         * a single turi_eval call -- distinct file_ids, deps resolved in order. */
+        Buf src; buf_init(&src);
+        for (int i = 0; prelude[i] != NULL; i++) {
+            char pb[4096];
+            tur_stdlib_path(prelude[i], pb, sizeof(pb));
+            buf_write(&src, "(load \"", 7);
+            buf_write(&src, pb, strlen(pb));
+            buf_write(&src, "\")\n", 3);
+        }
+        if (g_symbols_enabled) {
+            char pb[4096];
+            tur_stdlib_path("sym.tur", pb, sizeof(pb));
+            buf_write(&src, "(load \"", 7);
+            buf_write(&src, pb, strlen(pb));
+            buf_write(&src, "\")\n", 3);
+        }
+        buf_putc(&src, '\0');  /* turi_eval calls strlen; NUL-terminate */
+        TuriValue sv = turi_eval(env, src.data);
+        (void)sv;
+        buf_free(&src);
     }
     /* Register native overrides for stdlib inline-C functions. */
     wk_register_stdlib_natives(env);

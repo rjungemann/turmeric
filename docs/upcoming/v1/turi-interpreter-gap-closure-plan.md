@@ -30,14 +30,21 @@ mechanical, not improvised.
 
 ---
 
-## Current state (measured 2026-06-11, post-defmodule-fix)
+## Current state (measured 2026-06-11)
 
 Full probe: run every `tests/fixtures/*` under `tur --interpret`, minus those
 already carrying `requires.{compiled,tur-only,dedicated-runner,spices,tsan}`:
 
 ```
-pass = 660   fail = 910   skip = 92
+post-defmodule-fix:  pass = 660   fail = 910   skip = 92
+post-W1 (current):   pass = 695   fail = 875   skip = 92   (+35)
 ```
+
+> The bucket tables below describe the **pre-W1 (910-failure)** snapshot, which
+> is still the right map for the remaining work: W1's +35 came out of the
+> typed-stdlib-prelude bucket, but that bucket is only partly closed (the
+> native-shim-conflicted modules -- result/map/set/hamt -- are still pending in
+> W1b). The harness allowlist now stands at **181 passed, 0 failed**.
 
 EX_* expression-kind parity (the `check_turi_parity.py` ratchet):
 **109 / 115 handled, 6 carved out, 0 gaps.** So the remaining failures are
@@ -116,7 +123,43 @@ docs/reported/<slug>.md`. A short reason string keeps later audits cheap.
 
 ## Workstreams
 
-### W1 -- Typed-stdlib prelude under `--interpret` (highest leverage)
+### W1 -- Typed-stdlib prelude under `--interpret` -- **LANDED (conflict-free subset)**
+
+**Shipped 2026-06-11.** `cmd_eval` now preloads a conflict-free typed-stdlib
+subset via the `(load ...)` mechanism: `safe`, the `typeclass-*` stubs, and
+`vec`/`slice`/`option`/`pair`/`tuple`/`list`/`grid`/`zipper`. Result:
+`Cons`/`Option`/`Pair`/`Tuple` struct types and the `Eq`/`Clone`/`Functor`
+classes resolve under `--interpret`. **+35 net fixtures** recovered (probe
+660->695 pass), **zero regressions**, harness green at **181 passed**; full
+compiled suite unchanged at 1573.
+
+**Excluded on purpose -- the native-shim conflict.** `result`, `map`, `set`,
+`hamt`, `mutmap`, and `contract` are **not** preloaded. The interpreter's
+`native_*` shims (`native_ok`/`ok-val`/`result-map`, `native_set_count`, the
+hamt invalidation guard, `tur-contract-check`) implement a **different
+in-memory layout** than the real modules. Loading the module makes the
+elaborator bind to the module defn while the runtime native reads the other
+layout -- which regressed `coerce-carrier-to-struct` /
+`hamt-transient-invalidated` / the `contract-*` fixtures and **heap-overflowed
+`native_set_count`** (`src/main.c:5884`, a latent native bug W1 exposed).
+`wk_eval_fixture` already skips `contract.tur` for the same reason. The
+`ok?`/`err?`/`none?` elaborator stubs are kept (result.tur not loaded); `some?`
+comes from the loaded `option.tur`; `vec-get`/`vec-set!`/`vec-free` stubs are
+dropped (vec.tur owns them).
+
+**Follow-up -- reconcile the native-shim layer (was the rest of this
+workstream).** To recover `typed/list-basic` / `typed/option-basic` /
+`typed/map-basic` / `typed/set-basic` / `result-basic` and friends, the
+`native_*` Result/Option/Map/Set/Hamt shims must agree on memory layout with the
+real modules (then those modules can join the prelude). That is its own task:
+audit each `native_*` against its module's struct layout, or register native
+overrides for the modules' inline-C functions so the interpreter never executes
+the inline-C body. `native_set_count`'s heap overflow should get its own
+`docs/reported/` entry. Track as **W1b**.
+
+---
+
+#### Original W1 design (for reference)
 
 **Problem.** `cmd_eval` preloads only `macros.tur` + benchmark stubs; the
 compiled path (`compile_to_c`, `src/main.c:646`) auto-loads the full
@@ -226,18 +269,23 @@ Once W1-W4 leave only carved fixtures failing:
 ## Sequencing
 
 ```
-W1 (prelude) ──► re-measure ──► W2 (carve inline-C) ──► W5 (flip)
-      │                              ▲        ▲
-      └──► W3 (semantic fixes) ──────┘        │
-      └──► W4 (silent miscompiles) ───────────┘
+W1 (prelude, DONE) ──► W1b (native-shim reconcile) ──► W2 (carve inline-C) ──► W5 (flip)
+      │                       ▲                              ▲        ▲
+      └──► W3 (semantic fixes) ┘                             │        │
+      └──► W4 (silent miscompiles) ──────────────────────────┘        │
+                                                                       │
+                          (re-measure after each before carving) ──────┘
 ```
 
-W1 first: it is the highest-leverage single change and it shrinks every other
-bucket (many empty-stderr / if-bool / unknown-function failures are downstream
-of a missing prelude symbol). **Re-measure after W1** before carving anything --
-the inline-C count and the semantic-bug counts will both drop. W2 is the
-mechanical bulk that makes the flip reachable. W3/W4 run in parallel with W2 and
-gate the flip. W5 is last and is itself the acceptance test.
+W1 landed (the conflict-free subset). **W1b** -- reconcile the `native_*`
+Result/Map/Set/Hamt shims with their real modules so those modules can join the
+prelude -- is the natural next step and unblocks the largest remaining cluster
+(`typed/list`/`option`/`result`/`map`/`set`, `result-basic`). It also closes the
+`native_set_count` overflow
+([docs/reported/turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md)).
+W2 is the mechanical bulk that makes the flip reachable. W3/W4 run in parallel
+and gate the flip. **Re-measure after each step** before carving anything. W5 is
+last and is itself the acceptance test.
 
 Suggested PR slicing (each independently green):
 1. W1 prelude (+ allowlist additions for newly-passing typed fixtures).

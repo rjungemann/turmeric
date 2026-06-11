@@ -740,12 +740,15 @@ plan sequences both.
 by **concatenating** its source into the single `<eval>` blob (`file_id 0`), so
 any user fixture with its own defmodule collided. Fixed by preloading
 `macros.tur` via a `(load ...)` form (which assigns it a distinct `file_id`, so
-the per-file `has_defmodule` reset fires). 23 module/defmodule fixtures now pass
-and were added to the allowlist (harness: **145 passed, 0 failed**); post-fix
-probe **660 / 910 / 92**. See the reconciliation report for the de-risked
-roadmap on the next-largest bucket (the typed-stdlib preload, which needs the
-`(load ...)` mechanism + dropping benchmark-stub conflicts + a perf
-consideration).
+the per-file `has_defmodule` reset fires). 23 module/defmodule fixtures
+recovered. **W1 (typed-stdlib prelude, conflict-free subset)** then preloaded
+the typeclass stubs + `vec/slice/option/pair/tuple/list/grid/zipper` via the
+`(load ...)` mechanism, recovering **+35 more** (probe 660 -> 695 pass, zero
+regressions). The harness allowlist now stands at **181 passed, 0 failed**;
+post-W1 probe **695 / 875 / 92**. The native-shim-conflicted modules
+(`result/map/set/hamt/contract`) stay excluded pending W1b -- see the
+[gap-closure plan](turi-interpreter-gap-closure-plan.md) for the per-workstream
+detail.
 
 Remaining buckets in the 910: typed-stdlib preload (missing natives/struct
 types), typeclass-registration gaps during stdlib load, move/linearity-checker

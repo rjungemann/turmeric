@@ -296,6 +296,50 @@ module-private-in-module
 module-refer
 module-self-qualified
 recursion-ptr-void-return-in-defmodule
+
+# TI8.b/W1 (turi-interpreter-gap-closure-plan): the interpreter now preloads the
+# conflict-free typed-stdlib subset (typeclass stubs + vec/slice/option/pair/
+# tuple/list/grid/zipper) via the load mechanism, so Cons/Option/Pair/Tuple
+# struct types and the Eq/Clone/Functor typeclasses resolve under tur
+# --interpret.  result/map/set/hamt/contract are deliberately excluded (their
+# interpreter native shims own a different memory layout; see the plan).  The
+# fixtures below now evaluate correctly under the interpreter.
+assoc-type-projection
+clone-list
+clone-option
+clone-pair
+clone-primitives
+cons-builtin-list
+defopaque-phantom-param
+fat-box-ascribed-aggregate-return
+generic-relay-aggregate-result
+pair-signals-typed
+poly-nested-tuple-accessor
+poly-to-fat-bare-fat-sink
+poly-to-fat-float-named-fn
+poly-to-fat-float-roundtrip
+poly-to-fat-multiarg-roundtrip
+safe-c-string
+safe-vec-ops
+tuple-345-basic
+tuple-arity-6
+tuple-type-bracket-sugar
+tuple2-eq-macro
+tuplen-struct-param-passing
+typeclass-instance-float-return
+typed-slots/cons-double-twice
+typed-slots/cons-float
+typed-slots/cons-float-layout
+typed-slots/cs3-nested-specialization
+typed-slots/let-vec-new
+typed-slots/option-float
+typed-slots/pair-macros
+typed-slots/polymorphic-cons-boundary
+typed-slots/tcons-of
+typed/pair-basic
+typed/pair-opaque-element
+typed/slice-basic
+typed/tuple-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.
