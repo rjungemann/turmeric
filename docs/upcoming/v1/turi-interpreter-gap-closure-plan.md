@@ -259,18 +259,34 @@ treatment instead).
 rises by ~the carved count; no fixture both compiles-clean and is carved without
 reason.
 
-### W3 -- Pure-turi semantic divergences
+### W3 -- `errors/` diag coverage + semantic divergences -- **MOSTLY DONE**
 
-These are real interpreter bugs where the tree-walker disagrees with codegen on
-a *hard error*. Tackle by sub-bucket; fix where tractable, else carve +
-`docs/reported/`:
+**The "move/linearity divergence" bucket did not exist as bugs.** Investigation
+(2026-06-11) found that all ~33 move/linearity "failures" were a **probe
+artifact**: they are `tests/fixtures/errors/*` *negative* fixtures that assert a
+diagnostic via `expected.diag` (not stdout/exit), so the probe -- which compared
+stdout/exit -- mis-scored them, and `run-turi.sh` skipped the `errors/` tree
+wholesale (the TI0-noted gap). The interpreter shares the elaborator, so the
+affine/linear/move checks run identically: `errors/linear-dropped` emits the
+exact `TUR-E0100 linear value 'x' dropped...` under `-Xlinear --interpret`.
 
-- **Move / linearity checker (~33).** The interpreter evidently re-runs (or
-  diverges on) the affine/linear analysis that the elaborator already performed.
-  Investigate whether the interpreter should trust the elaboration (as it does
-  for typeclass dispatch -- see TI0) rather than re-deciding. Likely a single
-  root cause covering `linear dropped` / `use-after-move` / `linear used after
-  consume` / `linear parameter dropped`.
+**Shipped:** `run-turi.sh` now runs every `errors/*` fixture under
+`--interpret` and does run.sh's substring diag comparison (new
+`run_turi_error_fixture` + `TURI_ERRORS_DENY`). **282 of 298 pass** (the whole
+move/linearity/affine/type-error surface is now CI-validated under turi);
+harness went 181 -> **463 passed, 0 failed**. The `.gitignore` was extended to
+cover nested `tests/fixtures/*/*/turi.{stdout,stderr}` scratch.
+
+**Remaining: 9 genuine divergences** (denylisted, tracked in
+[docs/reported/turi-error-fixture-diag-divergences.md](../../reported/turi-error-fixture-diag-divergences.md)):
+3 reporting-stage (unbound-call / heterogeneous-map error at runtime, empty
+stderr, no elab diag), 4 missing-check (`lifetime-cyclic` TUR-E0106, reader-macro
+strict-collision, `#lang` unknown/not-implemented run clean), 2 TI3.2 carve-outs
+(`serial-context-*` TUR-E0706). Fix or leave carved per that report.
+
+**Other small semantic buckets** (from the non-errors probe; verify they did not
+shrink after W1 before acting):
+
 - **Kind mismatch (~6-8)** and **existential escape (~4).** HKT / existential
   elaboration state not threaded into the interpreter the same way. Pair with
   whoever owns `elab` HKT.

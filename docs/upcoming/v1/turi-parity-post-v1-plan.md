@@ -744,15 +744,19 @@ the per-file `has_defmodule` reset fires). 23 module/defmodule fixtures
 recovered. **W1 (typed-stdlib prelude, conflict-free subset)** then preloaded
 the typeclass stubs + `vec/slice/option/pair/tuple/list/grid/zipper` via the
 `(load ...)` mechanism, recovering **+35 more** (probe 660 -> 695 pass, zero
-regressions). The harness allowlist now stands at **181 passed, 0 failed**;
-post-W1 probe **695 / 875 / 92**. The native-shim-conflicted modules
+regressions). **W3** then found the "move/linearity divergence" bucket was a
+probe artifact -- those are `errors/*` negative fixtures the interpreter handles
+correctly -- and wired `errors/*` into the harness with diag comparison: **282
+of 298 pass** (the whole move/linearity/affine/type-error surface is now
+CI-validated under turi; 9 genuine divergences denylisted). The harness now
+stands at **463 passed, 0 failed**. The native-shim-conflicted modules
 (`result/map/set/hamt/contract`) stay excluded pending W1b -- see the
 [gap-closure plan](turi-interpreter-gap-closure-plan.md) for the per-workstream
 detail.
 
-Remaining buckets in the 910: typed-stdlib preload (missing natives/struct
-types), typeclass-registration gaps during stdlib load, move/linearity-checker
-divergence, inline-C carve-outs, and silent wrong-value miscompiles. Each must
+Remaining buckets: typed-stdlib native-shim reconciliation (W1b), inline-C
+carve-outs (W2), silent wrong-value miscompiles (W4), and a handful of HKT /
+existential / continuation semantic divergences. Each must
 be fixed in `src/turi/eval.c` or tagged `requires.tur-only`/`requires.compiled`
 before the flip lands green.
 

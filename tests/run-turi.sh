@@ -361,6 +361,89 @@ fixture_in_turi_set() {
     eval "[ \"\${TURI_INCL_${key}:-0}\" = \"1\" ]"
 }
 
+# ---------------------------------------------------------------------------
+# TI8.b/W3 (turi-interpreter-gap-closure-plan): error-fixture coverage under the
+# interpreter.  tests/fixtures/errors/* are negative fixtures that must elaborate
+# to a specific diagnostic (expected.diag).  run.sh validates them on the
+# compiled path; this harness now runs them under `tur --interpret` too and does
+# the same substring diag comparison.  282 of 298 already emit the identical
+# diagnostic (the interpreter shares the elaborator, so move/linearity/affine
+# checks etc. match by construction); the few below genuinely diverge under the
+# interpreter and are denylisted with a one-line reason until fixed.  This closes
+# the TI0-noted gap that errors/ was skipped wholesale.
+# ---------------------------------------------------------------------------
+TURI_ERRORS_DENY="
+lang-not-implemented            # #lang directive: interp does not raise the not-yet-implemented diag
+lang-unknown                    # unknown #lang: interp runs the program instead of erroring
+lifetime-cyclic                 # TUR-E0106 lifetime-cycle check not run under interpret
+reader-macros-strict-collision  # reader-macro strict-collision diag not raised under interpret
+serial-context-do-not-capturable # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
+serial-context-not-capturable    # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
+tce3-map-heterogeneous-val      # TUR-E0001 emitted at runtime (empty stderr) not as elab diag
+unbound-call-head               # unbound call head errors at runtime, not as the elab diag
+unknown-helper-load-hint        # unknown-helper load hint diag not emitted under interpret
+"
+while IFS= read -r _ef; do
+    _ef="${_ef%%#*}"                                   # strip trailing comment
+    _ef="${_ef#"${_ef%%[![:space:]]*}"}"; _ef="${_ef%"${_ef##*[![:space:]]}"}"
+    [ -z "$_ef" ] && continue
+    _ek="$(printf '%s' "$_ef" | tr '-' '_')"
+    eval "export TURI_ERRDENY_${_ek}=1"
+done <<< "$TURI_ERRORS_DENY"
+
+err_in_denyset() {
+    local key; key="$(printf '%s' "$1" | tr '-' '_')"
+    eval "[ \"\${TURI_ERRDENY_${key}:-0}\" = \"1\" ]"
+}
+
+# Run a single tests/fixtures/errors/<name> fixture under --interpret and verify
+# every expected.diag line appears (substring) in the interpreter's stderr.
+run_turi_error_fixture() {
+    local dir="$1"
+    local name="${dir#tests/fixtures/}"           # e.g. errors/linear-dropped
+    local base="${name#errors/}"
+    local rkey; rkey="$(printf '%s' "$name" | tr '/ ' '__')"
+
+    [ -f "$dir/input.tur" ] || return
+    # Only diag-style negative fixtures (must have a non-empty expected.diag).
+    [ -s "$dir/expected.diag" ] || return
+    if [ -f "$dir/requires.compiled" ] || [ -f "$dir/requires.tur-only" ] \
+       || [ -f "$dir/requires.spices" ]; then return; fi
+    if err_in_denyset "$base"; then
+        printf 'SKIP %s (errors denylist: interp diag diverges)\n' "$name"
+        return
+    fi
+
+    if stamp_check "$name" "$dir/input.tur"; then
+        printf 'PASS %s\n' "$name"
+        echo "PASS" > "$RESULTS_DIR/$rkey.result"
+        return
+    fi
+
+    local flags=""; [ -f "$dir/flags" ] && flags=$(cat "$dir/flags")
+    local err="$dir/turi.stderr"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 15 "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+    else
+        "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+    fi
+
+    local missing=0 needle
+    while IFS= read -r needle; do
+        [ -z "$needle" ] && continue
+        grep -F -q "$needle" "$err" || missing=1
+    done < "$dir/expected.diag"
+
+    if [ "$missing" -eq 0 ]; then
+        stamp_write "$name" "$dir/input.tur"
+        printf 'PASS %s\n' "$name"
+        echo "PASS" > "$RESULTS_DIR/$rkey.result"
+    else
+        echo "FAIL $name -- interpreter diagnostic mismatch"
+        echo "FAIL" > "$RESULTS_DIR/$rkey.result"
+    fi
+}
+
 run_turi_fixture() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
@@ -475,6 +558,7 @@ run_turi_fixture() {
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE
 export -f run_turi_fixture fixture_in_turi_set stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
+export -f run_turi_error_fixture err_in_denyset
 
 # Build list of all fixture dirs (top-level and one subdirectory deep).
 shopt -s nullglob
@@ -501,6 +585,21 @@ done
 if [ ${#FILTERED_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${FILTERED_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_turi_fixture "$@"' _ {} 2>/dev/null
+fi
+
+# TI8.b/W3: error-fixture diag pass (tests/fixtures/errors/*).  Honors the same
+# TURI_FILTER so `TURI_FILTER=errors/ ...` narrows to just this pass.
+ERROR_DIRS=()
+for d in tests/fixtures/errors/*/; do
+    d="${d%/}"; [ -d "$d" ] || continue
+    name="${d#tests/fixtures/}"
+    if [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; then
+        ERROR_DIRS+=("$d")
+    fi
+done
+if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
+    printf '%s\n' "${ERROR_DIRS[@]}" | \
+        xargs -P "$JOBS" -I{} bash -c 'run_turi_error_fixture "$@"' _ {} 2>/dev/null
 fi
 
 # Tally results.
