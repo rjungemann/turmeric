@@ -819,6 +819,10 @@ result-typed-basic
 typed-slots/cs4-stdlib-helpers
 typed-slots/stdlib-container-layout
 typed/result-basic
+
+# TI8.b/W1b (hamt): cmd_eval now registers the raw tur_hamt_* runtime
+# wrappers, so hamt.tur is preloaded and its thin-wrapper ops work.
+hamt-lowering-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.

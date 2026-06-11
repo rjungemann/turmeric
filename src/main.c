@@ -4793,6 +4793,7 @@ static int cmd_fmt(int argc, char **argv) {
 }
 
 static void wk_register_stdlib_natives(TuriEnv *env);
+static void wk_register_hamt_natives(TuriEnv *env);
 
 /* Phase S0: tur repl — interactive read-eval-print loop. */
 /* Phase INT-1: run a .tur file through the tree-walking interpreter.
@@ -4905,23 +4906,27 @@ static int cmd_eval(const char *path, bool use_color,
          * (native_ok_val/...), native_result_eq (closure-caller), and the
          * EX_GET_FIELD carrier-box path in eval.c (so result.tur's field-access
          * accessors work on a Result that flowed as the :int carrier, e.g.
-         * `(:: carrier (Result A B))`).  Still excluded on purpose:
+         * `(:: carrier (Result A B))`).  hamt.tur joined once cmd_eval started
+         * registering the raw tur_hamt_* runtime wrappers (wk_register_hamt_-
+         * natives, above) -- its ops are thin wrappers over those.  Still
+         * excluded on purpose:
          *   contract.tur  -- its tur-contract-check inline-C conflicts with the
          *                    :pre/:post contract lowering (wk_eval_fixture skips
          *                    it for the same reason); loading it silently broke
          *                    contract-pre/post/type.
-         *   hamt/map/mutmap/set -- their interpreter native shims
-         *                    (native_set_count, the hamt invalidation guard, ...)
-         *                    implement a different in-memory layout than the real
-         *                    modules, regressing hamt-transient-invalidated and
-         *                    heap-overflowing native_set_count.  Same per-type
-         *                    reconciliation as result.tur is needed (gap plan). */
+         *   map/mutmap/set -- their typed-collection ops still need native
+         *                    overrides over tur_hamt_*, the #set{}/#map{} literal
+         *                    vs {void* hamt} representations must be unified, and
+         *                    content-keyed eq/hash needs a turi-closure-aware
+         *                    HAMT path.  See docs/reported/
+         *                    turi-map-set-hamt-interpreter-gap.md. */
         static const char *prelude[] = {
             "safe.tur",
             "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
             "typeclass-hash.tur", "typeclass-applicative.tur",
             "typeclass-alternative.tur", "typeclass-monad.tur",
             "typeclass-monaderror.tur", "typeclass-bifunctor.tur",
+            "hamt.tur",
             "vec.tur", "slice.tur", "option.tur", "result.tur",
             "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
             NULL
@@ -4950,6 +4955,11 @@ static int cmd_eval(const char *path, bool use_color,
     }
     /* Register native overrides for stdlib inline-C functions. */
     wk_register_stdlib_natives(env);
+    /* W1b/Gap1: register the raw tur_hamt_* runtime wrappers so hamt.tur (and
+     * the map/set layers built on it) work under --interpret.  Previously only
+     * wk_eval_fixture did this, so `tur --interpret` on any hamt-using program
+     * silently got the no-op stubs (tur_hamt_new -> 0). */
+    wk_register_hamt_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers. */
     {
         typedef struct { int64_t value; int64_t next; } TurCons;
