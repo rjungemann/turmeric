@@ -82,9 +82,10 @@ void kind_env_bind(KindEnv *env, const Symbol *sym, Kind k, Span span) {
  * Phase HKT H2: kind_unify
  * ------------------------------------------------------------------------- */
 
-/* True if k is any arrow kind (arity >= 1, excluding KIND_STAR and KIND_ROW). */
+/* True if k is any arrow kind (arity >= 1, excluding KIND_STAR and the
+ * KIND_TYPEROW / KIND_ROW sentinels, which are non-applicable kinds). */
 static bool kind_is_arrow_ladder(Kind k) {
-    return k >= KIND_ARROW && k != KIND_ROW;
+    return k >= KIND_ARROW && k != KIND_TYPEROW && k != KIND_ROW;
 }
 
 static Kind kind_unify_internal(Kind k1, Kind k2, Span span, bool emit_diag) {

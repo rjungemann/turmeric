@@ -87,6 +87,59 @@ patch.
   `Frame [Age :int Name :str]` is a row-permutation no-op, not a type
   error.
 
+## Progress (Direction 1 -- funding the elaborator work)
+
+Direction 1 is the chosen path. It is a multi-layer elaborator project; the
+layers are being landed incrementally, each validated on its own before the
+next builds on it, so no half-finished layer can silently miscompile.
+
+### Layer 1 -- kind-level `List Type` in the kind language [LANDED]
+
+The kind language was fixed at `KIND_STAR` and the `KIND_ARROW{N}` ladder
+(plus the `KIND_ROW` *effect*-row sentinel, an unrelated concept). The first
+layer adds a distinct kind-level list-of-types sentinel so the rest of the
+machinery has a kind to attach a row to:
+
+- `KIND_TYPEROW ((Kind)0xFFFE)` in `src/compiler/types.h` -- the kind of a
+  *row of types* (`[Pos Vel]`). Disjoint from `KIND_ROW` (0xFFFF, effect rows)
+  and from every arrow arity.
+- `kind_to_string` / `kind_parse` round-trip it as `"[*]"`
+  (`src/compiler/types.c`).
+- `kind_apply_one` treats it as inert (identity), like `KIND_ROW`: a row is a
+  first-class kind, not a constructor you apply.
+- `kind_is_arrow_ladder` (`src/passes/kind_check.c`) excludes it, so
+  `kind_unify` rejects `[*]` vs `*` / `* -> *` / `Row` with `TUR-E0012`, and
+  `kind_of_type_app` rejects applying a row as a constructor.
+- Unit target `tur_kind_row_unit` (`tests/compiler/test_kind_row.c`, registered
+  in `src/CMakeLists.txt` + root `CMakeLists.txt`) pins the parse/print
+  round-trip, sentinel disjointness, the apply/unify algebra, and the
+  diagnostic counts for the mismatch cases.
+
+### Remaining layers (not yet started)
+
+2. **`TY_TYPEROW` type variant** -- a `Type` carrying an arena array of element
+   `Type`s, with `hkt_kind == KIND_TYPEROW`. Type equality compares rows
+   structurally (and a permutation-aware variant for the data-frame use case in
+   the validation section).
+3. **Surface syntax** -- read `[Pos Vel]` in *type-annotation* position into a
+   `TY_TYPEROW`. The parser already special-cases `[...]` in binding position;
+   this must only fire where a type is expected, and must not perturb the
+   existing `[...]`-as-binding / `vec-of` lowering (regression risk -- gate
+   behind the row contexts only).
+4. **Row HKT + `Row r` parameter** -- let a constructor parameter carry kind
+   `[*]`, so `Query` is functorial over a row and `(defn id-row [r] (fn [x : Row r] x))`
+   type-checks at distinct instantiations.
+5. **Row operations** -- membership (`Pos in row`), union/`++` (query joins),
+   propagation through partial application. These are what the ECS query and
+   relational layers actually call.
+6. **Codegen erasure** -- rows are compile-time only; decide the runtime
+   representation (erased to the element tuple / iterator) and add an ECS query
+   fixture plus the `hkt-row-*` fixtures named in the validation section.
+
+When all layers land, `ecs-spice-plan.md` E1 (the variadic `query` form) is
+unblocked and the `queryN` macro family becomes a deprecation alias per that
+plan's D1.
+
 ## Related
 
 - `docs/upcoming/v1/ecs-spice-plan.md` D1

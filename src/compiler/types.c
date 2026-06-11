@@ -2316,6 +2316,7 @@ bool type_is_guarded_recursive(Type t, const char *rec_name) {
 
 const char *kind_to_string(Kind k) {
     if (k == KIND_ROW) return "Row";
+    if (k == KIND_TYPEROW) return "[*]";   /* kind-level List Type */
     /* Zero-alloc table for arities 0..15 (covers all practical usage). */
     static const char * const tbl[16] = {
         "*",
@@ -2344,6 +2345,8 @@ const char *kind_to_string(Kind k) {
 
 Kind kind_parse(const char *s) {
     if (!s) return KIND_STAR;
+    /* Kind-level List Type: "[*]" (round-trips kind_to_string(KIND_TYPEROW)). */
+    if (s[0] == '[' && s[1] == '*' && s[2] == ']' && s[3] == '\0') return KIND_TYPEROW;
     /* Count " -> *" suffixes after the leading "*". An arity-N constructor
      * has N occurrences of " -> *". */
     if (s[0] != '*') return KIND_STAR;
@@ -2362,7 +2365,9 @@ Kind kind_for_arity(uint32_t n) {
 }
 
 Kind kind_apply_one(Kind k) {
-    if (k == KIND_STAR || k == KIND_ROW) return k;
+    /* STAR/TYPEROW/ROW are not arrow kinds -- applying an argument to them is
+     * ill-kinded; return them unchanged so the caller can validate/diagnose. */
+    if (k == KIND_STAR || k == KIND_TYPEROW || k == KIND_ROW) return k;
     return (Kind)(k - 1);
 }
 
