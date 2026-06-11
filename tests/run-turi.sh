@@ -222,6 +222,23 @@ poly-closure-result-tyvar-float
 #   struct-set-field -- EX_SET_FIELD: in-place struct field write (TI1.4)
 letrec-basic
 struct-set-field
+
+# TI2 (turi-parity-post-v1-plan, generators): EX_GEN / EX_YIELD / EX_GEN_NEXT /
+# EX_GEN_DONE handled via fiber-backed coroutines, plus gen-some?/gen-unwrap/
+# gen-none native overrides for stdlib/gen.tur's inline-C helpers.  Fixtures
+# below drive generators through the stdlib helper path (no user inline-C).
+#   gen-basic       -- finite generator summed via a manual gen-next loop
+#   gen-done        -- gen-done? flips only after the body runs off its end
+#   gen-nested-turi -- an outer generator driving an inner one (two live coros)
+#   gen-for-each    -- gen-for-each macro over a finite generator
+#   gen-nth         -- gen-nth macro: nth yielded value
+#   gen-yield-star  -- yield* macro: re-yield an inner generator
+gen-basic
+gen-done
+gen-nested-turi
+gen-for-each
+gen-nth
+gen-yield-star
 "
 
 # Build an associative-set from the default list for O(1) lookup.

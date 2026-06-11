@@ -179,6 +179,26 @@ The compiler emits a struct per `gen` body and a `_next` function with a
 - Zero function-pointer indirection
 - Inlineable by the C compiler in performance-critical paths
 
+### Interpreter (turi) support
+
+The tree-walking interpreter (`tur --interpret`, `tur repl`, sandbox eval)
+runs generators too. Instead of the compiled state machine it executes each
+`gen` body on its own coroutine stack (the same fiber primitives that back
+effect handlers): `yield` suspends the body back to the caller, and
+`gen-next` resumes it until the next `yield` or until the body runs off its
+end. `gen-done?` reports exhaustion exactly as the compiled path does -- it
+flips to true only after a `gen-next` drives the body past its last `yield`,
+so the idiomatic `(while (not (gen-done? g)) ...)` loop terminates
+identically under both backends.
+
+Consume generators through the `stdlib/gen.tur` helpers (`gen-some?`,
+`gen-unwrap`, `gen-none`, and the `gen-for-each` / `gen-nth` / `yield*`
+macros): the interpreter provides native implementations of these.
+Hand-rolled inline-C pointer helpers that dereference the `gen-next` result
+directly are *user inline-C* and remain a compiled-path-only feature (see the
+[eval-api guide](eval-api.md)); use the stdlib helpers instead when you need
+a program to run under `turi`.
+
 ---
 
 ## Lazy Sequences (`Seq`)

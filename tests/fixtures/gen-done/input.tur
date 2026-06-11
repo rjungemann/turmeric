@@ -1,0 +1,13 @@
+; TI2 fixture: gen-done? flips to true only after gen-next drives the body off
+; its end.  A fresh generator and one suspended at a yield both report "not
+; done"; only the post-exhaustion check reports "done".
+
+(load "stdlib/gen.tur")
+
+(defn main [] : void
+  (let [g (gen [] (yield 42))]
+    (println (if (gen-done? g) 1 0))   ; fresh        -> 0
+    (gen-next g)                       ; yields 42    -> suspended
+    (println (if (gen-done? g) 1 0))   ; suspended    -> 0
+    (gen-next g)                       ; runs to end  -> done
+    (println (if (gen-done? g) 1 0)))) ; exhausted    -> 1
