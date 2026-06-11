@@ -133,10 +133,33 @@ void turi_env_register_native(TuriEnv *env, const char *name,
     turi_env_set(env, name, turi_closure(cl));
 }
 
+/* Phase TI2: native overrides for stdlib/gen.tur's inline-C helpers, which
+ * cannot be interpreted directly.  They operate on the ptr<void> ABI produced
+ * by EX_GEN_NEXT: a TURI_INT boxing either NULL (0) or a pointer to an int64_t
+ * holding the yielded value. */
+static TuriValue native_gen_some(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_bool(false);
+    return turi_bool(args[0].as_int != 0);
+}
+static TuriValue native_gen_unwrap(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || args[0].as_int == 0) return turi_int(0);
+    return turi_int(*(int64_t *)(intptr_t)args[0].as_int);
+}
+static TuriValue native_gen_none(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_int(0);
+}
+
 /* Register eval-layer native builtins (struct-aware predicates, etc.).
  * Called from turi_env_new after async builtins are registered. */
 void turi_eval_register_builtins(TuriEnv *env) {
     turi_env_register_native(env, "panic?", native_panic_pred, NULL);
+    /* TI2: generator ptr<void> helpers (override gen.tur inline-C). */
+    turi_env_register_native(env, "gen-some?",  native_gen_some,   NULL);
+    turi_env_register_native(env, "gen-unwrap", native_gen_unwrap, NULL);
+    turi_env_register_native(env, "gen-none",   native_gen_none,   NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -796,6 +819,154 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
 }
 
 /* -------------------------------------------------------------------------
+ * Phase TI2: Generators (gen / yield / gen-next / gen-done?)
+ *
+ * A generator is a resumable coroutine.  The compiled path lowers each
+ * (gen ...) body to a C state machine; the interpreter instead runs the
+ * body on its own ucontext stack (the same fiber primitives that back
+ * effect continuations) and swaps control on each `yield`.
+ *
+ * Lifecycle (matching the compiled __state ABI):
+ *   - fresh:     started = false, done = false
+ *   - suspended: started = true,  done = false  (parked at a yield)
+ *   - exhausted: done = true                     (body ran to completion)
+ *
+ * `gen-next` resumes the body until the next yield (returning a non-NULL
+ * pointer to the yielded value) or until completion (returning NULL and
+ * marking the generator done).  `gen-done?` reports the `done` flag, which
+ * only flips after a `gen-next` drives the body off its end -- so the
+ * idiomatic `(while (not (gen-done? g)) ...)` loop terminates exactly as
+ * it does on the compiled path.
+ * ---------------------------------------------------------------------- */
+
+#define GEN_STACK_SIZE (256 * 1024)  /* 256 KB per generator coroutine */
+
+struct TuriGen {
+    ucontext_t   gen_ctx;     /* coroutine context for the gen body */
+    ucontext_t   caller_ctx;  /* where to swap back on yield / completion */
+    char        *stack;       /* mmap'd / malloc'd coroutine stack */
+    bool         started;     /* has the body begun executing? */
+    bool         done;        /* has the body run to completion? */
+    int64_t      box;         /* storage for the yielded value; gen-next
+                               * returns &box as the ptr<void> ABI result */
+    /* eval context (valid for the generator's whole lifetime) */
+    TuriEnv     *env;
+    EvalFrame   *frame;       /* body scope (child of the creating frame) */
+    const Expr  *body;        /* gen body expression */
+    /* error / throw propagation out of the body */
+    bool         had_error;
+    TuriValue    error_val;
+};
+
+/* The generator currently being resumed (read once by gen_body_thunk on first
+ * entry).  makecontext cannot portably pass a pointer argument, so we use the
+ * same thread-local side-channel pattern as the effect-continuation thunk. */
+#ifndef __EMSCRIPTEN__
+static _Thread_local TuriGen *g_pending_gen;
+#endif
+
+/* The generator the active `yield` should suspend.  Pushed/popped around each
+ * resume so a nested generator's yield finds its own coroutine. */
+static _Thread_local TuriGen *g_current_gen;
+
+/* Body thunk: runs the generator body to completion, then swaps back to the
+ * caller with done = true.  Each `yield` swaps back mid-body. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+static void gen_body_thunk(void *arg) {
+    TuriGen *g = (TuriGen *)arg;
+#else
+#  if defined(__APPLE__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+static void gen_body_thunk(void) {
+    TuriGen *g = g_pending_gen;
+#endif
+    TuriValue r = eval_expr(g->env, g->frame, g->body);
+    if (turi_is_error(r)) { g->had_error = true; g->error_val = r; }
+    else if (g->env->throwing) {
+        g->had_error = true; g->error_val = g->env->throw_value;
+        g->env->throwing = false;
+    }
+    g->done = true;
+    swapcontext(&g->gen_ctx, &g->caller_ctx);
+    abort(); /* unreachable */
+#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+}
+
+/* Resume the generator body until the next yield or completion.  Returns the
+ * ptr<void> ABI value (boxed in a TURI_INT): non-NULL when a value was
+ * yielded, 0 (NULL) when exhausted.  Propagates a body error/throw. */
+static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
+    if (g->done) return turi_int(0);
+
+    if (!g->started) {
+        /* Lazily set up the coroutine context on first advance. */
+#ifndef __EMSCRIPTEN__
+        g->stack = (char *)mmap(NULL, GEN_STACK_SIZE, PROT_READ | PROT_WRITE,
+                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (g->stack == MAP_FAILED) {
+            g->done = true;
+            return turi_error("eval: mmap failed for generator stack");
+        }
+#  if defined(__APPLE__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+        getcontext(&g->gen_ctx);
+        g->gen_ctx.uc_stack.ss_sp   = g->stack;
+        g->gen_ctx.uc_stack.ss_size = GEN_STACK_SIZE;
+        g->gen_ctx.uc_link          = NULL;
+        g_pending_gen = g;
+        makecontext(&g->gen_ctx, gen_body_thunk, 0);
+#  if defined(__APPLE__)
+#    pragma clang diagnostic pop
+#  endif
+#else
+        g->stack = (char *)malloc(GEN_STACK_SIZE);
+        if (!g->stack) { g->done = true; return turi_error("eval: malloc failed for generator stack"); }
+        getcontext(&g->caller_ctx);
+        emscripten_fiber_init(&g->gen_ctx.fiber, gen_body_thunk, g,
+                              g->stack, GEN_STACK_SIZE,
+                              g->gen_ctx.asyncify_stack, TURI_ASYNCIFY_STACK_SIZE);
+#endif
+        g->started = true;
+    }
+
+    /* Swap into the body; the previously-current generator (if any) is
+     * restored when control returns here. */
+    TuriGen *prev_gen = g_current_gen;
+    g_current_gen = g;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    swapcontext(&g->caller_ctx, &g->gen_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+    g_current_gen = prev_gen;
+
+    if (g->done) {
+        /* Body finished while we were swapped in. */
+        if (g->had_error) {
+            g->had_error = false;
+            if (g->error_val.tag == TURI_THROW) {
+                env->throwing    = true;
+                env->throw_value = g->error_val;
+            }
+            return g->error_val;
+        }
+        return turi_int(0); /* NULL: exhausted */
+    }
+    /* Body yielded; g->box already holds the value. */
+    return turi_int((int64_t)(intptr_t)&g->box);
+}
+
+/* -------------------------------------------------------------------------
  * Builtin dispatch
  * ---------------------------------------------------------------------- */
 
@@ -1159,33 +1330,110 @@ static int ic_field_index(const char *fname, size_t flen,
                            const char *names[], size_t lens[], int n);
 static int ic_common_field_idx(const char *fname, size_t flen);
 
-/* Parse a simple field assignment expression: param name, bool/null/int literal, or cast.
+/* Precedence-climbing evaluator forward decl (mutually recursive with the
+ * operand reader for unary operators and parenthesised sub-expressions). */
+static bool ic_eval_binexpr(const char **pp, int min_prec,
+                            FnDef *fn, uint32_t param_offset,
+                            TuriValue *args, uint32_t n_args,
+                            int64_t *out_val, const char *ic_body);
+
+/* Classify a binary operator at p.  Returns its C-like precedence (higher
+ * binds tighter) and sets *oplen to the token length; 0 means "not a binary
+ * operator we evaluate."  Two-character operators are matched before their
+ * one-character prefixes so `<=`/`<<` are not mistaken for `<`. */
+static int ic_binop_prec(const char *p, int *oplen) {
+    switch (p[0]) {
+    case '|': if (p[1] == '|') { *oplen = 2; return 1; } *oplen = 1; return 3;
+    case '&': if (p[1] == '&') { *oplen = 2; return 2; } *oplen = 1; return 5;
+    case '^': *oplen = 1; return 4;
+    case '=': if (p[1] == '=') { *oplen = 2; return 6; } return 0;
+    case '!': if (p[1] == '=') { *oplen = 2; return 6; } return 0;
+    case '<': if (p[1] == '=') { *oplen = 2; return 7; }
+              if (p[1] == '<') { *oplen = 2; return 8; }
+              *oplen = 1; return 7;
+    case '>': if (p[1] == '=') { *oplen = 2; return 7; }
+              if (p[1] == '>') { *oplen = 2; return 8; }
+              *oplen = 1; return 7;
+    case '+': *oplen = 1; return 9;
+    case '-': *oplen = 1; return 9;
+    case '*': case '/': case '%': *oplen = 1; return 10;
+    default: return 0;
+    }
+}
+
+/* Apply a binary operator (integer semantics). */
+static int64_t ic_apply_binop(const char *op, int oplen, int64_t a, int64_t b) {
+    if (oplen == 2) {
+        if (op[0] == '=' && op[1] == '=') return a == b;
+        if (op[0] == '!' && op[1] == '=') return a != b;
+        if (op[0] == '<' && op[1] == '=') return a <= b;
+        if (op[0] == '>' && op[1] == '=') return a >= b;
+        if (op[0] == '<' && op[1] == '<') return a << b;
+        if (op[0] == '>' && op[1] == '>') return a >> b;
+        if (op[0] == '&' && op[1] == '&') return a && b;
+        if (op[0] == '|' && op[1] == '|') return a || b;
+        return 0;
+    }
+    switch (op[0]) {
+    case '+': return a + b;  case '-': return a - b;
+    case '*': return a * b;  case '/': return b ? a / b : 0;
+    case '%': return b ? a % b : 0;
+    case '<': return a < b;  case '>': return a > b;
+    case '&': return a & b;  case '|': return a | b;  case '^': return a ^ b;
+    default:  return 0;
+    }
+}
+
+/* Evaluate a single primary operand at *pp, advancing *pp past it.  Handles
+ * unary !/~/-, casts like (T)/(int64_t)(intptr_t), true/false/NULL/int
+ * literals, and a parameter reference with optional .field / ->field access.
  * ic_body is the full inline-C body (for struct field extraction); may be NULL. */
-static bool ic_eval_assign_expr(const char *expr,
-                                 FnDef *fn, uint32_t param_offset,
-                                 TuriValue *args, uint32_t n_args,
-                                 int64_t *out_val,
-                                 const char *ic_body) {
-    const char *p = ic_skip_ws(expr);
-    /* Strip any number of casts like (T), (T*), (int64_t)(intptr_t), etc. */
+static bool ic_eval_operand(const char **pp,
+                            FnDef *fn, uint32_t param_offset,
+                            TuriValue *args, uint32_t n_args,
+                            int64_t *out_val, const char *ic_body) {
+    const char *p = ic_skip_ws(*pp);
+
+    /* Unary operators. */
+    if (*p == '!' && p[1] != '=') {
+        const char *np = p + 1; int64_t v;
+        if (!ic_eval_operand(&np, fn, param_offset, args, n_args, &v, ic_body)) return false;
+        *out_val = !v; *pp = np; return true;
+    }
+    if (*p == '~') {
+        const char *np = p + 1; int64_t v;
+        if (!ic_eval_operand(&np, fn, param_offset, args, n_args, &v, ic_body)) return false;
+        *out_val = ~v; *pp = np; return true;
+    }
+    if (*p == '-' && !isdigit((unsigned char)ic_skip_ws(p + 1)[0])) {
+        const char *np = p + 1; int64_t v;
+        if (!ic_eval_operand(&np, fn, param_offset, args, n_args, &v, ic_body)) return false;
+        *out_val = -v; *pp = np; return true;
+    }
+
+    /* Strip any number of casts like (T), (T*), (int64_t)(intptr_t), etc.  A
+     * leading '(' followed by an identifier is treated as a cast; genuine
+     * grouping parens are not common in these inline-C bodies. */
     while (*p == '(') {
         const char *q = p + 1; q = ic_skip_ws(q);
         if (isalpha((unsigned char)*q) || *q == '_') {
-            /* consume type tokens and * until ) */
             const char *q2 = q;
             while (*q2 && *q2 != ')') q2++;
             if (*q2 == ')') { p = ic_skip_ws(q2 + 1); continue; }
         }
         break;
     }
-    if (ic_word_eq(p, "true"))  { *out_val = 1; return true; }
-    if (ic_word_eq(p, "false")) { *out_val = 0; return true; }
-    if (ic_word_eq(p, "NULL"))  { *out_val = 0; return true; }
-    if (*p == '0' && !isdigit((unsigned char)p[1])) { *out_val = 0; return true; }
+
+    /* Literals. */
+    if (ic_word_eq(p, "true"))  { *out_val = 1; *pp = p + 4; return true; }
+    if (ic_word_eq(p, "false")) { *out_val = 0; *pp = p + 5; return true; }
+    if (ic_word_eq(p, "NULL"))  { *out_val = 0; *pp = p + 4; return true; }
     if (isdigit((unsigned char)*p) || (*p == '-' && isdigit((unsigned char)p[1]))) {
-        char *end; *out_val = strtoll(p, &end, 0);
-        if (end > p) return true;
+        char *end; int64_t v = strtoll(p, &end, 0);
+        if (end > p) { *out_val = v; *pp = end; return true; }
     }
+
+    /* Parameter reference, optionally followed by .field / ->field access. */
     char ident[64];
     const char *q = p;
     if (ic_read_ident(&q, ident, sizeof(ident)) > 0) {
@@ -1222,7 +1470,7 @@ static bool ic_eval_assign_expr(const char *expr,
                         if (fidx < 0) fidx = ic_common_field_idx(field_name, flen);
                         if (fidx >= 0 && (uint32_t)fidx < arg->as_struct->n_fields) {
                             *out_val = arg->as_struct->fields[fidx].as_int;
-                            return true;
+                            *pp = r2; return true;
                         }
                     } else if (arg->tag == TURI_INT && arg->as_int != 0) {
                         /* Pointer to struct, access via common field index */
@@ -1230,7 +1478,7 @@ static bool ic_eval_assign_expr(const char *expr,
                         if (fidx >= 0) {
                             int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
                             *out_val = ptr[fidx];
-                            return true;
+                            *pp = r2; return true;
                         }
                     }
                 }
@@ -1251,16 +1499,66 @@ static bool ic_eval_assign_expr(const char *expr,
                         if (fidx >= 0) {
                             int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
                             *out_val = ptr[fidx];
-                            return true;
+                            *pp = r2; return true;
                         }
                     }
                 }
             }
             *out_val = arg->as_int;
-            return true;
+            *pp = q; return true;
         }
     }
     return false;
+}
+
+/* Precedence-climbing evaluator: parse `operand (op operand)*` honouring C
+ * operator precedence, left-associatively.  Returns false (no partial result)
+ * the moment any sub-operand fails to parse. */
+static bool ic_eval_binexpr(const char **pp, int min_prec,
+                            FnDef *fn, uint32_t param_offset,
+                            TuriValue *args, uint32_t n_args,
+                            int64_t *out_val, const char *ic_body) {
+    int64_t lhs;
+    if (!ic_eval_operand(pp, fn, param_offset, args, n_args, &lhs, ic_body))
+        return false;
+    for (;;) {
+        const char *p = ic_skip_ws(*pp);
+        int oplen = 0;
+        int prec  = ic_binop_prec(p, &oplen);
+        if (prec == 0 || prec < min_prec) break;
+        *pp = p + oplen;
+        int64_t rhs;
+        if (!ic_eval_binexpr(pp, prec + 1, fn, param_offset, args, n_args, &rhs, ic_body))
+            return false;
+        lhs = ic_apply_binop(p, oplen, lhs, rhs);
+    }
+    *out_val = lhs;
+    return true;
+}
+
+/* Parse and evaluate a simple inline-C value expression: a parameter, a
+ * literal, a field access, or a binary-operator expression over those.
+ * ic_body is the full inline-C body (for struct field extraction); may be NULL.
+ *
+ * Fail-closed: if anything other than trailing whitespace / a single ';'
+ * remains after the expression, return false so the caller falls back to the
+ * honest "inline-C not supported" path rather than silently returning a wrong
+ * value.  (Previously this dropped any trailing binary operator -- e.g.
+ * `return p != 0;` evaluated to `p` -- a silent miscompile; see
+ * docs/reported/turi-inline-c-ignores-comparison-operator.md.) */
+static bool ic_eval_assign_expr(const char *expr,
+                                 FnDef *fn, uint32_t param_offset,
+                                 TuriValue *args, uint32_t n_args,
+                                 int64_t *out_val,
+                                 const char *ic_body) {
+    const char *p = expr;
+    int64_t v;
+    if (!ic_eval_binexpr(&p, 0, fn, param_offset, args, n_args, &v, ic_body))
+        return false;
+    p = ic_skip_ws(p);
+    if (*p != '\0' && *p != ';') return false;
+    *out_val = v;
+    return true;
 }
 
 /* Extract struct field names from a "struct { ... }" definition in body. */
@@ -3787,6 +4085,62 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_bool((int64_t)vk == e->as.any_is_.test_tag);
     }
 
+    /* --- Phase TI2: generators ------------------------------------------- */
+
+    /* (gen [] body) -- construct a lazy generator coroutine. */
+    case EX_GEN: {
+        const GenDef *def = e->as.gen_.def;
+        TuriGen *g = (TuriGen *)calloc(1, sizeof(TuriGen));
+        if (!g) return turi_error("eval: out of memory (generator)");
+        g->env     = env;
+        g->body    = def->body;
+        /* The body resolves its captures through a fresh child of the creating
+         * frame; like a closure, this frame is intentionally not freed (the
+         * generator may outlive the creating scope). */
+        g->frame   = eval_frame_new(frame);
+        g->started = false;
+        g->done    = false;
+        return turi_gen_val(g);
+    }
+
+    /* (yield v) -- suspend the active generator, handing v back to gen-next. */
+    case EX_YIELD: {
+        TuriGen *g = g_current_gen;
+        if (!g)
+            return turi_error("eval: yield outside of a generator body");
+        TuriValue v = eval_expr(env, frame, e->as.yield_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        g->box = v.as_int;
+        /* Swap back to the caller (gen-next); resumes here on the next advance. */
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        swapcontext(&g->gen_ctx, &g->caller_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+        return turi_nil();
+    }
+
+    /* (gen-next g) -- advance a generator; returns ptr<void> (NULL = exhausted). */
+    case EX_GEN_NEXT: {
+        TuriValue gv = eval_expr(env, frame, e->as.gen_next_.gen_expr);
+        if (turi_is_error(gv) || env->returning || env->throwing) return gv;
+        if (gv.tag != TURI_GEN)
+            return turi_errorf("eval: gen-next: expected a generator, got tag %d", gv.tag);
+        return gen_advance(env, gv.as_gen);
+    }
+
+    /* (gen-done? g) -- has the generator been driven off its end? */
+    case EX_GEN_DONE: {
+        TuriValue gv = eval_expr(env, frame, e->as.gen_done_.gen_expr);
+        if (turi_is_error(gv) || env->returning || env->throwing) return gv;
+        if (gv.tag != TURI_GEN)
+            return turi_errorf("eval: gen-done?: expected a generator, got tag %d", gv.tag);
+        return turi_bool(gv.as_gen->done);
+    }
+
     /* serial-reset: Phase 21 not yet implemented in interpreter. */
     case EX_SERIAL_RESET:
         return turi_errorf("eval: EX_SERIAL_RESET (Phase 21 serial-shift/reset) is not yet "
@@ -4215,6 +4569,9 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
         break;
     case TURI_STRUCT_TYPE:
         snprintf(buf, cap, "#<struct-type %s>", v.as_cstr ? v.as_cstr : "?");
+        break;
+    case TURI_GEN:
+        snprintf(buf, cap, "#<generator>");
         break;
     }
 }

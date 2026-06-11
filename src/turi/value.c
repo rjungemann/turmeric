@@ -63,5 +63,8 @@ void turi_print_value(FILE *out, TuriValue v) {
     case TURI_STRUCT_TYPE:
         fprintf(out, "#<struct-type %s>", v.as_cstr ? v.as_cstr : "?");
         break;
+    case TURI_GEN:
+        fprintf(out, "#<generator>");
+        break;
     }
 }

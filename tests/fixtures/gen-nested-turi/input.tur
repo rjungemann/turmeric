@@ -1,0 +1,17 @@
+; TI2 fixture: an outer generator that drives an inner generator and re-yields
+; transformed values.  Two live generator coroutines are suspended at once;
+; each (yield ...) must resume the correct one.
+
+(load "stdlib/gen.tur")
+
+(defn main [] : void
+  (let [inner (gen []
+                (yield 1)
+                (yield 2)
+                (yield 3))
+        outer (gen []
+                (while (not (gen-done? inner))
+                  (let [v (gen-next inner)]
+                    (when (gen-some? v)
+                      (yield (* (gen-unwrap v) 2))))))]
+    (gen-for-each println outer)))

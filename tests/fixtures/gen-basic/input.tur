@@ -1,0 +1,17 @@
+; TI2 fixture: drive a finite generator with the stdlib gen.tur helpers and
+; sum the yielded values.  Exercises EX_GEN / EX_YIELD / EX_GEN_NEXT /
+; EX_GEN_DONE plus the gen-some?/gen-unwrap native overrides under turi.
+
+(load "stdlib/gen.tur")
+
+(defn main [] : void
+  (let [g        (gen []
+                   (yield 1)
+                   (yield 2)
+                   (yield 3))
+        ^mut sum 0]
+    (while (not (gen-done? g))
+      (let [v (gen-next g)]
+        (when (gen-some? v)
+          (set! sum (+ sum (gen-unwrap v))))))
+    (println sum)))
