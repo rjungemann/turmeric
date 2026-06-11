@@ -720,10 +720,19 @@ The foundational correctness fix and the CI ratchet shipped:
 
 ### TI8.b -- Full allowlist → denylist flip -- **IN PROGRESS (defmodule defect fixed)**
 
+> **Execution detail:** the full per-bucket plan for closing the remaining
+> failures lives in
+> [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
+> (workstreams W1-W5, the fix-vs-carve decision rule, sequencing, and metrics).
+> This section is the summary; that doc is the working plan.
+
 The flip itself (delete the allowlist; default to run-everything-minus-markers)
 is **not** done -- the blast radius is large and includes silent miscompiles
 that must be fixed or carved first. Measured on 2026-06-11: under `--interpret`,
-**637 pass / 933 fail / 92 skip** across all fixtures.
+**637 pass / 933 fail / 92 skip** across all fixtures (660/910/92 after the
+defmodule fix below). Of the 910, **377 are inline-C-bound** (carve-out
+candidates) and **533 are pure-turi** (genuinely fixable) -- the gap-closure
+plan sequences both.
 
 **Landed in TI8.b so far -- the `defmodule` concatenation defect:** the 46
 `only one defmodule is allowed per file` failures were a real interpreter bug.
