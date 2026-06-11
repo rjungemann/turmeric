@@ -683,6 +683,108 @@ static bool sz8_ctor_is_sized(Elab *e, const CtorDef *ctor) {
     return false;
 }
 
+/* sized-types-cross-param-unification: a function signature that names the
+ * same size variable in two or more parameters (e.g. both `xs : (SizedVec n)`
+ * and `ys : (SizedVec n)`) shares scope on `n`; the elaborator must reject
+ * callers whose corresponding arguments carry statically-known and unequal
+ * size indices.  Walks the callee's retained per-parameter type-annotation
+ * Forms paired with each elaborated argument's inferred `size_index`,
+ * maintains a per-call substitution table for bare-symbol size variables,
+ * and emits TUR-E0260 on any disagreement.  A parameter whose template is
+ * closed (e.g. `(SizedVec (Static 3))`) is compared by folded value; a
+ * parameter whose template is a complex open expression containing vars,
+ * or whose arg has no inferred index, is skipped (stays polymorphic).
+ * Returns true on a static mismatch (the caller should treat the call as
+ * already diagnosed and bail). */
+static bool sz_cross_param_unify(Elab *e, const Form *call,
+                                 const Type *fn_type, Binding *fn_binding,
+                                 Expr **args, uint32_t n_args) {
+    if (!g_sized_types_enabled) return false;
+    if (!fn_type || fn_type->kind != TY_FN) return false;
+    if (!fn_type->as.fn.param_type_forms) return false;
+    /* Skip closure-thunk hidden-env shift; the param_type_forms array was
+     * built from the source signature without the env slot. */
+    if (fn_binding && fn_binding->closure_fn_binding) return false;
+    /* Per-call substitution table: bare-symbol size variable -> bound term. */
+    struct { const char *name; const SizeTerm *bound; uint32_t arg_idx; } subst[8];
+    uint8_t n_subst = 0;
+    uint8_t arity = fn_type->as.fn.arity;
+    for (uint32_t i = 0; i < n_args && i < arity; i++) {
+        const Form *pf = fn_type->as.fn.param_type_forms[i];
+        if (!pf || pf->tag != F_LIST || pf->as.list.len < 2) continue;
+        /* Find a size-index form in the annotation's argument list (e.g. the
+         * `n` in `(SizedVec n)` or `(Add (Static 1) n)`). */
+        const Form *tmpl_form = NULL;
+        for (uint32_t k = 1; k < pf->as.list.len; k++) {
+            SizeTerm *probe = size_term_from_form(e->arena, pf->as.list.items[k],
+                                                  NULL, NULL);
+            if (probe) { tmpl_form = pf->as.list.items[k]; break; }
+        }
+        if (!tmpl_form) continue;
+        /* Arg's inferred size index (set by sz8_infer_ctor_size_index). */
+        Expr *a = args[i];
+        const SizeTerm *arg_idx = (a && a->kind == EX_CALL)
+                                  ? a->as.call_.size_index : NULL;
+        if (!arg_idx) continue;  /* un-inferable -> stays polymorphic */
+        /* Case 1: template is a bare size variable -- bind it in subst, or
+         * require equality with the prior binding. */
+        if (tmpl_form->tag == F_SYM) {
+            const char *vname = tmpl_form->as.sym->name;
+            bool found = false;
+            for (uint8_t s = 0; s < n_subst; s++) {
+                if (strcmp(subst[s].name, vname) != 0) continue;
+                found = true;
+                int64_t va, vb;
+                bool ca = size_term_eval(subst[s].bound, &va);
+                bool cb = size_term_eval(arg_idx, &vb);
+                if (ca && cb && va != vb) {
+                    diag_emit_with_code(DIAG_ERROR,
+                        call->as.list.items[1 + i]->span,
+                        TUR_E0260_SIZED_TYPE_MISMATCH,
+                        "sized type mismatch (TUR-E0260): function '%s' "
+                        "shares size variable '%s' across parameters, "
+                        "but argument %u has size %lld while argument %u "
+                        "has size %lld",
+                        (fn_binding && fn_binding->name)
+                            ? fn_binding->name->name : "?",
+                        vname,
+                        (unsigned)(subst[s].arg_idx + 1), (long long)va,
+                        (unsigned)(i + 1), (long long)vb);
+                    return true;
+                }
+                break;
+            }
+            if (!found && n_subst < 8) {
+                subst[n_subst].name    = vname;
+                subst[n_subst].bound   = arg_idx;
+                subst[n_subst].arg_idx = i;
+                n_subst++;
+            }
+            continue;
+        }
+        /* Case 2: template is a closed size expression (no free vars) --
+         * compare by folded value against the arg's inferred index. */
+        SizeTerm *tmpl = size_term_from_form(e->arena, tmpl_form, NULL, NULL);
+        int64_t tv, av;
+        if (tmpl && size_term_eval(tmpl, &tv) && size_term_eval(arg_idx, &av) &&
+            tv != av) {
+            diag_emit_with_code(DIAG_ERROR,
+                call->as.list.items[1 + i]->span,
+                TUR_E0260_SIZED_TYPE_MISMATCH,
+                "sized type mismatch (TUR-E0260): argument %u of '%s' has "
+                "size %lld but parameter declares size %lld",
+                (unsigned)(i + 1),
+                (fn_binding && fn_binding->name)
+                    ? fn_binding->name->name : "?",
+                (long long)av, (long long)tv);
+            return true;
+        }
+        /* Open templates with internal vars: deferred (matches the SZ8
+         * single-parameter polymorphism baseline). */
+    }
+    return false;
+}
+
 /* SZ8: --dump-sizes -- emit one line per size-indexed constructor application.
  * A folded constant prints as the number; an open term prints symbolically;
  * an un-inferable index (an operand whose size is unknown) prints as `?`. */
@@ -3406,6 +3508,14 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             return NULL;
         }
     }
+
+    /* sized-types-cross-param-unification: reject statically-known size
+     * disagreements between args that share a size variable in the callee's
+     * signature (e.g. two `(SizedVec n)` parameters passed lengths 2 and 3).
+     * Runs after arg elaboration so each arg carries its inferred SZ8 size
+     * index.  No effect on calls to non-sized signatures. */
+    if (sz_cross_param_unify(e, call, &fn_type, fn_binding, args, n_args))
+        return NULL;
 
     Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
     out->as.call_.fn_binding = bound_fn;

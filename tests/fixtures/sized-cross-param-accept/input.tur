@@ -1,0 +1,27 @@
+; sized-types-cross-param-unification: a function signature that names the
+; same size variable in two parameters (here both `xs` and `ys` declared as
+; `(SizedVec n)`) elaborates and runs when both arguments have matching
+; inferred sizes. Companion to errors/sized-cross-param-reject.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n]
+  (SVNil  : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+(defn pairwise-sum [xs : (SizedVec n) ys : (SizedVec n)] : int
+  (match xs
+    (SVNil)            0
+    (SVCons x xs-rest) (match ys
+                         (SVNil)            0
+                         (SVCons y ys-rest) (+ (+ x y)
+                                                (pairwise-sum xs-rest ys-rest)))))
+
+(defn main [] : int
+  ; both args are SizedVec of length 2 -- size variable `n` unifies cleanly
+  (println (pairwise-sum (SVCons 1 (SVCons 2 (SVNil)))
+                         (SVCons 10 (SVCons 20 (SVNil)))))
+  0)

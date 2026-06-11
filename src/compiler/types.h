@@ -491,6 +491,14 @@ typedef struct Type {
              * docs/upcoming/closure-first-class-type-plan.md.  B-0 only plumbs
              * the bit; nothing sets it true yet. */
             bool boxed;
+            /* sized-types-cross-param-unification: per-parameter raw type
+             * annotation Form*, retained so call-site elaboration can
+             * re-extract the size-index template (e.g. `(SizedVec n)`)
+             * and unify shared size variables across multiple parameters.
+             * NULL when no per-param Forms were recorded (e.g. extern-c,
+             * thunks, or non-defn fn values).  Arena-allocated array of
+             * length `arity`; individual entries may be NULL. */
+            const struct Form **param_type_forms;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -1030,6 +1038,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     t.as.fn.result_borrow_arg = -1; /* LS4: no lifetime-tied borrow return by default */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
     t.as.fn.rest_full_type = NULL; /* typed-variadic: NULL = primitive rest */
+    t.as.fn.param_type_forms = NULL; /* sized-types-cross-param-unification: filled by defn elab */
     return t;
 }
 

@@ -733,6 +733,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase HRT1: full type annotations for rank-2 poly params (NULL if not poly) */
     Type *param_poly_types[MAX_FN_ARITY];
     for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_poly_types[_i] = NULL;
+    /* sized-types-cross-param-unification: retain each parameter's raw type
+     * annotation Form so call-site unification can re-extract size-index
+     * templates (e.g. `(SizedVec n)`).  NULL when a param has no list-form
+     * annotation. */
+    const Form *param_type_forms_buf[MAX_FN_ARITY];
+    for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_type_forms_buf[_i] = NULL;
 
     /* CT0: Contract type predicates from param annotations { v : T | p }.
      * Collected during param parsing; injected as pre-checks before the body. */
@@ -1064,6 +1070,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             /* For F_TYPE_ANN, unwrap to the inner type form first */
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
+            /* sized-types-cross-param-unification: record the raw type form so
+             * call sites can re-extract the size-index template. */
+            if (n_params > 0 && n_params <= MAX_FN_ARITY)
+                param_type_forms_buf[n_params - 1] = type_form;
             /* Phase CCL (fn-first-class-application): a spaced `: fn` annotation
              * (the bare `fn` keyword/symbol) is the first-class poly-closure
              * carrier -- mirror the fused `:fn` keyword handling above. */
@@ -2682,6 +2692,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* A#1 (return position): propagate the ^fat result marker into fn_type so
      * the emitter shims a returned non-capturing fn into a fat closure. */
     fn_type.as.fn.result_fat = result_fat;
+
+    /* sized-types-cross-param-unification: copy the per-parameter raw type
+     * annotation Forms into an arena-allocated array on fn_type so call-site
+     * elaboration can re-extract size-index templates without walking back
+     * through FnDef.  NULL entries (params with no list-form annotation) are
+     * fine -- the call-site walk just skips them. */
+    if (g_sized_types_enabled && n_params > 0) {
+        const Form **ptf = (const Form **)arena_alloc(
+            e->arena, n_params * sizeof(const Form *));
+        bool any = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            ptf[i] = param_type_forms_buf[i];
+            if (ptf[i]) any = true;
+        }
+        fn_type.as.fn.param_type_forms = any ? ptf : NULL;
+    }
 
     /* Create/update binding for the function.
      * Reuse pass-1 forward bindings in place so subsequent lookups observe

@@ -1,0 +1,31 @@
+; sized-types-cross-param-unification: a function signature names the same
+; size variable in two parameters; the elaborator must reject a caller whose
+; arguments have statically-known and unequal inferred sizes (TUR-E0260).
+;
+; pairwise-sum declares both xs and ys as (SizedVec n) -- the size variable
+; `n` shares scope across parameters, so passing a length-2 vector for xs
+; and a length-3 vector for ys is a static contradiction (`n := 2` vs
+; `n := 3`).
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n]
+  (SVNil  : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+(defn pairwise-sum [xs : (SizedVec n) ys : (SizedVec n)] : int
+  (match xs
+    (SVNil)            0
+    (SVCons x xs-rest) (match ys
+                         (SVNil)            0
+                         (SVCons y ys-rest) (+ (+ x y)
+                                                (pairwise-sum xs-rest ys-rest)))))
+
+(defn main [] : int
+  ; ERROR: 2 != 3 -- `n` cannot unify across xs and ys
+  (println (pairwise-sum (SVCons 1 (SVCons 2 (SVNil)))
+                         (SVCons 10 (SVCons 20 (SVCons 30 (SVNil))))))
+  0)

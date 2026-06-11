@@ -3,9 +3,10 @@ title: SizedVec size index is phantom; size equality is runtime-only
 category: Expressiveness hole / partial implementation
 severity: Limits static-rectangularity claims (ECS dense-storage zip, matrix shape checks, sized-iterator joins). v1 plans accept a runtime length check and lift to compile time once SZ6 lands.
 description: `docs/guides/sized-types-guide.md` documents `SizedVec<n, T>` and `SizedMatrix<r, c, T>` with kind-level naturals, but in the current implementation the size index is a phantom -- every constructor returns the same underlying type regardless of `n`, and shape equality is enforced at runtime, not by the elaborator. The ECS v1 plan has been revised to use a runtime check; lifting to compile time when SZ6 ships is a transparent surface-API improvement, not a plan-level rewrite.
+status: RESOLVED (2026-06-10). SZ6 (indexed constructors), SZ6 erasure, SZ7 (static size-eq/le rejection at `size-assert-eq!` / `size-assert-le!` call sites), SZ8 (constructor-chain size inference + length-polymorphic single-parameter functions), and cross-parameter size-variable unification (e.g., `(defn dot [xs : (SizedVec n) ys : (SizedVec n)])` rejecting differently-sized callers) have all landed. Fixtures: `tests/fixtures/sized-cross-param-accept` (matching `n` compiles) and `tests/fixtures/errors/sized-cross-param-reject` (TUR-E0260 on disagreement).
 ---
 
-# SizedVec size index is phantom
+# SizedVec size index is phantom (RESOLVED)
 
 ## Summary
 
