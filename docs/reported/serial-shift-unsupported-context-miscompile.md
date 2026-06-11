@@ -71,15 +71,18 @@ returns false -> `emit_cps_serial_reset` returns NULL ->
   continuation frame (`collect_ctx` EX_DO branch). It composes with arithmetic
   frames and round-trips through `save-cont!`/`resume-cont!`
   (`tests/fixtures/serial-context-do`).
-- **Remaining gap:** do-tails that are *not* a single 0-arg top-level call
-  (multi-statement tails, tails with arguments, or tails closing over locals)
-  still fall outside the grammar. A multi-statement / value-using tail in
-  statement position falls back and a `serial-shift` whose *value is discarded
-  outside a supported do* still lowers to `__builtin_trap()`
-  (`src/compiler/emit_stmt.c:360-363`, mirroring the `cloneable` trap). General
-  tails need lifting the continuation into a registered function with a
-  marshaled (Serializable) env -- the next increment toward full
-  `application-image-dumps` support.
+- **Now supported:** do-tails of N statements where each is a 0-arg top-level
+  call, or a 1-arg top-level call whose argument is a pure value (int/cstr
+  inline, or a Serializable struct via its instance) -- so the loop can take
+  captured scalar/Serializable config. Tail statements run in source order on
+  resume and round-trip through `save-cont!`/`resume-cont!`
+  (`tests/fixtures/serial-context-do`, `serial-context-do-cfg`).
+- **Remaining gap:** tails whose calls take a hole-bearing or non-marshalable
+  argument, take >1 argument, or *close over local variables that are not passed
+  explicitly*, and `serial-shift` whose value is discarded *outside* a supported
+  do (still `__builtin_trap()`, `src/compiler/emit_stmt.c`). General tails need
+  lifting the whole continuation into a registered function with a marshaled
+  multi-field env -- the final increment toward arbitrary continuation capture.
 
 ---
 

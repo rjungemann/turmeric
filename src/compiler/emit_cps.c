@@ -480,6 +480,10 @@ typedef struct {
     const char    *c_op;     /* builtin frame: "+","-","*","/"; NULL for a call frame */
     const Binding *call_fn;  /* call frame: target top-level fn binding; else NULL */
     bool           hole_left;/* true iff the hole is the left operand/arg */
+    /* ignore_value: a continuation frame that does not consume the resume value
+     * (a do-sequence tail). A 0-arg such frame calls target(); a 1-arg one calls
+     * target(env) with the captured argument. Hole-carrying frames are false. */
+    bool           ignore_value;
     const Expr    *other;    /* the non-hole operand (captured into the frame env) */
     TypeKind       env_kind; /* type kind of `other` -- for typed serial marshaling */
     /* cps-transform-plan (a): when the env is a nominal type with a Serializable
@@ -700,23 +704,56 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
              * reset's value). */
             for (int32_t i = (int32_t)N - 1; i > m; i--) {
                 const Expr *tail = cur->as.do_.items[i];
-                if (tail->kind != EX_CALL || tail->as.call_.n_args != 0 ||
+                if (tail->kind != EX_CALL ||
                     !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
                 const Binding *fb = tail->as.call_.fn_binding;
-                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
+                if (fb->type.kind != TY_FN) return NULL;
                 if (fb->closure_fn_binding) return NULL;
                 /* The outermost tail item yields the reset's value (scalar);
                  * inner ones are run for effect and their value discarded. */
                 if (i == (int32_t)N - 1 && !env_kind_ok(tail->type.kind)) return NULL;
                 if (n >= CL_MAX_CTX_FRAMES) return NULL;
-                frames[n].c_op = NULL;
-                frames[n].call_fn = fb;
-                frames[n].hole_left = true;   /* unused for a 0-arg frame */
-                frames[n].other = NULL;       /* no env */
-                frames[n].env_kind = TY_INT;  /* inline zero env */
-                frames[n].env_ser = NULL;
-                frames[n].env_deser = NULL;
-                n++;
+                if (tail->as.call_.n_args == 0 && fb->type.as.fn.arity == 0) {
+                    /* 0-arg tail call -> ignore-value frame, no env. */
+                    frames[n].c_op = NULL;
+                    frames[n].call_fn = fb;
+                    frames[n].hole_left = true;   /* unused for a 0-arg frame */
+                    frames[n].ignore_value = true;
+                    frames[n].other = NULL;       /* no env */
+                    frames[n].env_kind = TY_INT;  /* inline zero env */
+                    frames[n].env_ser = NULL;
+                    frames[n].env_deser = NULL;
+                    n++;
+                } else if (tail->as.call_.n_args == 1 && fb->type.as.fn.arity == 1) {
+                    /* 1-arg tail call (f env) -> ignore-value frame whose single
+                     * argument is a pure captured value (no hole). The arg is
+                     * marshaled by kind, so the loop can take scalar config. */
+                    const Expr *arg = tail->as.call_.args[0];
+                    if (reaches_shift_kind(arg, target)) return NULL;  /* must be pure env */
+                    if (expr_contains_return_or_throw(arg)) return NULL;
+                    const char *eser = NULL, *edeser = NULL;
+                    if (env_kind_ok(arg->type.kind)) {
+                        /* int/cstr env -- inline codec */
+                    } else if (program &&
+                               sk_find_serializable(program, arg->type,
+                                                    want_names ? &eser : NULL,
+                                                    want_names ? &edeser : NULL)) {
+                        /* nominal env with a Serializable instance */
+                    } else {
+                        return NULL;
+                    }
+                    frames[n].c_op = NULL;
+                    frames[n].call_fn = fb;
+                    frames[n].hole_left = true;   /* env occupies the sole arg slot */
+                    frames[n].ignore_value = true;
+                    frames[n].other = arg;
+                    frames[n].env_kind = arg->type.kind;
+                    frames[n].env_ser = eser;
+                    frames[n].env_deser = edeser;
+                    n++;
+                } else {
+                    return NULL;   /* richer tail calls need continuation lifting */
+                }
             }
             cur = cur->as.do_.items[m];   /* the shift; loop exits below */
             continue;
@@ -739,6 +776,7 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             frames[n].c_op = spec->c_op;
             frames[n].call_fn = NULL;
             frames[n].hole_left = h0;
+            frames[n].ignore_value = false;
             frames[n].other = other;
             frames[n].env_kind = TY_INT;
             frames[n].env_ser = NULL;
@@ -781,6 +819,7 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             frames[n].c_op = NULL;
             frames[n].call_fn = fb;
             frames[n].hole_left = h0;
+            frames[n].ignore_value = false;
             frames[n].other = other;
             frames[n].env_kind = other->type.kind;
             frames[n].env_ser = eser;
@@ -802,6 +841,7 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
             frames[n].c_op = NULL;
             frames[n].call_fn = fb;
             frames[n].hole_left = true;   /* sole arg carries the hole */
+            frames[n].ignore_value = false;
             frames[n].other = NULL;       /* no env */
             frames[n].env_kind = TY_INT;  /* marshaled as an inline zero env */
             frames[n].env_ser = NULL;
@@ -1017,11 +1057,19 @@ static void cl_emit_frame_body(Buf *hb, const char *name, const ClFrame *f) {
         return;
     }
     if (f->call_fn->type.as.fn.arity == 1) {
-        /* 1-arg call: no env -- apply target to the resume value alone. */
         TypeKind k0 = f->call_fn->type.as.fn.arg_kinds[0];
-        buf_printf(hb,
-            "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
-            name, rn, c_cast_for_kind(k0));
+        if (f->ignore_value) {
+            /* 1-arg ignore-value frame (do-tail (f env)): apply target to the
+             * captured env, discarding the resume value. */
+            buf_printf(hb,
+                "static intptr_t %s(intptr_t env, intptr_t value) { (void)value; return (intptr_t)%s(%senv); }\n",
+                name, rn, c_cast_for_kind(k0));
+        } else {
+            /* 1-arg hole frame: no env -- apply target to the resume value. */
+            buf_printf(hb,
+                "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                name, rn, c_cast_for_kind(k0));
+        }
         free(rn);
         return;
     }
@@ -1431,13 +1479,19 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
             int ekc = frames[i].env_ser ? 2                       /* SK_ENV_SER  */
                     : (frames[i].env_kind == TY_CSTR) ? 1         /* SK_ENV_CSTR */
                     : 0;                                          /* SK_ENV_INT  */
+            /* Name-key side marker. Hole frames use $L/$R (hole side); a do-tail
+             * ignore-value frame uses $0 (0-arg) or $E (1-arg env) so it never
+             * aliases a hole frame of the same target. */
+            const char *side = frames[i].ignore_value
+                ? (frames[i].other ? "$E" : "$0")
+                : (frames[i].hole_left ? "$L" : "$R");
             if (frames[i].env_ser) {
                 buf_printf(hb,
                     "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d,"
                     " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
                     "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
                     "{ __sk_register(&__sk_reg_%d_%u); }\n",
-                    id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i], ekc,
+                    id, i, rn, side, frame_fn[i], ekc,
                     frames[i].env_ser, frames[i].env_deser,
                     id, i, id, i);
             } else {
@@ -1445,7 +1499,7 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
                     "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, %d, 0, 0, 0 };\n"
                     "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
                     "{ __sk_register(&__sk_reg_%d_%u); }\n",
-                    id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i], ekc,
+                    id, i, rn, side, frame_fn[i], ekc,
                     id, i, id, i);
             }
             free(rn);
