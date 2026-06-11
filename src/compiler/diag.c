@@ -186,6 +186,7 @@ const char *diag_code_to_string(DiagCode code) {
         /* CF3: gated first-class handler composition */
         case TUR_E0704_HANDLER_COMPOSE_UNIMPL:           return "TUR-E0704";
         case TUR_E0705_POLY_CLOSURE_RESULT_TYVAR:        return "TUR-E0705";
+        case TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE:    return "TUR-E0706";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -287,6 +288,7 @@ DiagCode diag_code_from_string(const char *s) {
     /* CF3: gated first-class handler composition */
     if (strcmp(s, "TUR-E0704") == 0) return TUR_E0704_HANDLER_COMPOSE_UNIMPL;
     if (strcmp(s, "TUR-E0705") == 0) return TUR_E0705_POLY_CLOSURE_RESULT_TYVAR;
+    if (strcmp(s, "TUR-E0706") == 0) return TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -1511,6 +1513,29 @@ static const DiagExplanation diag_explanations_[] = {
       "only the *inner* types inside (fn ...) lose theirs.  Run\n"
       "tools/rewrite_fn_type_colons.py to migrate a tree automatically.\n"
       "Promoted to an error under --Werror=deprecated.\n",
+    },
+    /* serial-shift-unsupported-context-miscompile */
+    { TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,
+      "TUR-E0706: serial-shift context is not capturable\n"
+      "\n"
+      "A serial-shift can only be lowered when its delimited context (the part\n"
+      "of the enclosing serial-reset between the reset and the shift) fits the\n"
+      "DK-lowering grammar: a single-scalar-hole chain of scalar `let` preludes,\n"
+      "`+ - * /` binops, 2-arg top-level calls, one `if`, and the supported\n"
+      "statement-position `do` tail shape.  Outside that subset the continuation\n"
+      "cannot be reified into a marshalable DK chain.\n"
+      "\n"
+      "Previously such contexts silently miscompiled -- the shift lowered to a\n"
+      "`0` placeholder (wrong result, no error) or a `__builtin_trap()` (runtime\n"
+      "crash).  They are now rejected at codegen instead.\n"
+      "\n"
+      "Example triggering this error (1-arg call context):\n"
+      "  (serial-reset (dbl (serial-shift rt 0)))   ; dbl is 1-arg: not capturable\n"
+      "\n"
+      "Fix: restructure the context into a supported shape -- e.g. pack loop\n"
+      "state into a single Serializable struct passed as a tail call's argument\n"
+      "  (do (init) (serial-shift k v) (run-loop state))\n"
+      "-- or move the non-capturable work outside the serial-reset boundary.\n",
     },
 };
 

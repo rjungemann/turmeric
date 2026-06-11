@@ -1526,15 +1526,27 @@ char *emit_effects_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 char *emit_effects_serial_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* serial-shift: emit k_fn call with a NULL continuation placeholder.
-     * This will be replaced by proper frame-serialization codegen once
-     * the CPS pass handles EX_SERIAL_SHIFT nodes. */
-    (void)e;
+    /* serial-shift-unsupported-context-miscompile: reaching this fallback means
+     * the enclosing serial-reset could not lower its delimited context onto the
+     * DK machine (sk_can_lower / collect_ctx rejected the shape), so the shift
+     * is being emitted as a bare value.  There is no legacy lowering for serial
+     * continuations, so the historical behaviour here was to emit `0` -- a
+     * silent miscompile (the receiver k was never invoked, the shift evaluated
+     * to 0).  Reject it instead with a real diagnostic. */
+    diag_emit_with_code(DIAG_ERROR, e->span,
+                        TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,
+                        "serial-shift context is not capturable\n"
+                        "  = note: the delimited context falls outside the DK "
+                        "lowering grammar, so the continuation cannot be reified\n"
+                        "  = help: restructure into a supported shape (scalar let "
+                        "prelude / arithmetic / 2-arg call / if / do-tail), e.g. "
+                        "pack loop state into one Serializable struct passed as a "
+                        "tail call's argument; run `tur explain TUR-E0706` for details");
+    /* Emit a typed placeholder so downstream codegen does not crash; the C
+     * output is discarded because diag_had_error() now fails the build. */
     char *tmp = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
-    buf_printf(body, "/* serial-shift: full codegen not yet implemented */\n");
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "int64_t %s = 0; /* serial-shift placeholder */\n", tmp);
+    buf_printf(body, "int64_t %s = 0; /* serial-shift: rejected (TUR-E0706) */\n", tmp);
     return tmp;
 }
 

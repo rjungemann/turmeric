@@ -355,11 +355,31 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* For now, emit a placeholder - full impl deferred */
             buf_puts(body, "__builtin_trap();");
             return;
-        /* Phase 21: Serializable continuations — lower to plain reset/shift for now;
-         * frame registration stubs are emitted separately by the CPS pass. */
-        case EX_SERIAL_RESET:
+        /* Phase 21: Serializable continuations. A serial-reset in statement
+         * position is routed through emit_value so a lowerable (or shift-free)
+         * reset still works; its value is discarded. */
+        case EX_SERIAL_RESET: {
+            char *v = emit_value(ctx, body, e);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(void)(%s);\n", v);
+            free(v);
+            return;
+        }
+        /* serial-shift-unsupported-context-miscompile: reaching a serial-shift
+         * in statement position means an enclosing serial-reset could not lower
+         * its delimited context (e.g. an unsupported `do` shape).  This used to
+         * emit __builtin_trap() -- a silent compile, runtime crash.  Reject it
+         * with a real diagnostic instead. */
         case EX_SERIAL_SHIFT:
-            buf_puts(body, "__builtin_trap();");
+            diag_emit_with_code(DIAG_ERROR, e->span,
+                                TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,
+                                "serial-shift context is not capturable\n"
+                                "  = note: the delimited context falls outside "
+                                "the DK lowering grammar, so the continuation "
+                                "cannot be reified\n"
+                                "  = help: restructure into a supported shape; "
+                                "run `tur explain TUR-E0706` for details");
+            buf_puts(body, "__builtin_trap(); /* serial-shift: rejected (TUR-E0706) */");
             return;
         case EX_INSTANCE_DEF: {
             /* Phase 15: Emit dictionary struct and global singleton */

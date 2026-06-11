@@ -1,0 +1,14 @@
+;; serial-shift-unsupported-context-miscompile: negative fixture for TUR-E0706
+;; (statement-position do-tail variant).
+;;
+;; The do-tail call takes 2 arguments; the do-tail grammar only accepts 0- or
+;; 1-arg top-level calls.  Reaching the serial-shift in statement position must
+;; produce a hard error rather than a silent __builtin_trap() (runtime crash).
+
+(defn work2 [a : int b : int] : int (println "loop") (+ a b))
+
+(defn rt [k : ptr<void>] : int 0)
+
+(defn main [] : int
+  (println (serial-reset (do (serial-shift rt 0) (work2 1 2))))
+  0)

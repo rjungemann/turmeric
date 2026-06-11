@@ -5550,7 +5550,10 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
     arena_free(&type_arena);
-    return 0;
+    /* serial-shift-unsupported-context-miscompile: codegen may emit a hard
+     * diagnostic (e.g. TUR-E0706) for a shape that type-checked but cannot be
+     * lowered.  Surface it as a compile failure so the partial C is discarded. */
+    return diag_had_error() ? 1 : 0;
 }
 
 /* ------------ Phase 2: Multi-file support ------------ */
@@ -6602,5 +6605,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
     arena_free(&type_arena2);
-    return 0;
+    /* serial-shift-unsupported-context-miscompile: mirror emit_program -- a hard
+     * codegen diagnostic fails the separate-compilation path too. */
+    return diag_had_error() ? 1 : 0;
 }
