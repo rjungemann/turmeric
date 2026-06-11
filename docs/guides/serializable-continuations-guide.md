@@ -656,6 +656,10 @@ Deserializing from an untrusted source is analogous to Java deserialization vuln
 | **Hand-Written State Machines** | Full control, no overhead | Tedious, error-prone, manual updates |
 | **Green-Thread Snapshots** | Captures full thread state | Not portable, captures OS resources, complex |
 | **Persistent Processes** | Live state, hot reloading | Requires VM support, not suitable for C target |
+| **Application Image Dumps** | Warm-start (skip init) like Lisp/pdumper; build-stamp safe | Cross-binary pinned; only serializable continuations cross. See [image-dumps-guide.md](image-dumps-guide.md) |
+
+The `save-cont!` / `resume-cont!` surface above is the SemVer-pinned API that
+`stdlib/image.tur` (application image dumps) builds on (plan AI0.4).
 
 ## Residual Liveness Imprecision (1.0 limitation)
 

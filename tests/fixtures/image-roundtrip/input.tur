@@ -1,0 +1,30 @@
+;; application-image-dumps-plan (AI7.1): cold-then-warm round trip.
+;;
+;; with-image-cache-after-init captures the post-init continuation, writes it
+;; to a 72-byte-header image file, and on a later invocation resumes it instead
+;; of re-running init. Here both invocations happen in one process: the first
+;; (cold) writes the image and runs init + loop; the second (warm) restores the
+;; captured tail and runs loop only -- init is skipped. The image is removed at
+;; start (so a stale file from a prior run does not make the cold call warm)
+;; and at the end (hermetic).
+
+(load "stdlib/image.tur")
+
+(defn img-rm [path : cstr] : void
+  ```c remove(path); ```)
+
+(defn do-init [] : int
+  (do (println "init ran") 0))
+
+(defn do-loop [] : int
+  (do (println "loop ran") 7))
+
+(defn main [] : int
+  (do
+    (img-rm "/tmp/tur-image-roundtrip.img")
+    (println "cold:")
+    (with-image-cache-after-init "/tmp/tur-image-roundtrip.img" do-init do-loop)
+    (println "warm:")
+    (with-image-cache-after-init "/tmp/tur-image-roundtrip.img" do-init do-loop)
+    (img-rm "/tmp/tur-image-roundtrip.img")
+    0))

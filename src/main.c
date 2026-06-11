@@ -5074,6 +5074,71 @@ static void wk_drain_pipes(int fd_out, int fd_err, Buf *out_buf, Buf *err_buf) {
  * operations actually work during interpreter evaluation.
  * ---------------------------------------------------------------------- */
 #include "runtime/hamt.h"
+#include "runtime/image.h"
+
+/* ---------------------------------------------------------------------------
+ * AI6 (application-image-dumps-plan): `tur image-info` / `tur image-verify`.
+ *
+ * These inspect/validate an application image file (see src/runtime/image.h)
+ * without resuming it. Images are loaded by the *application* binary, not by
+ * `tur`, so build-stamp validation here is against a binary the user names
+ * explicitly as the second argument; with no binary, verify checks only the
+ * structural header (magic/version/CRC) and prints the embedded stamp.
+ * --------------------------------------------------------------------------- */
+static void tur_image_print_stamp(const uint8_t stamp[32]) {
+    for (int i = 0; i < 32; i++) printf("%02x", stamp[i]);
+}
+
+static int cmd_image_info(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "tur image-info: cannot open '%s'\n", path); return 1; }
+    TurImageHeader h;
+    TurImageError e = tur_image_read_header(f, &h);
+    fclose(f);
+    if (e != IMAGE_OK) {
+        fprintf(stderr, "tur image-info: %s: %s\n", path, tur_image_strerror(e));
+        return 1;
+    }
+    printf("image:        %s\n", path);
+    printf("magic:        TURI (0x%08x)\n", h.magic);
+    printf("version:      %u\n", h.version);
+    printf("build-stamp:  "); tur_image_print_stamp(h.build_stamp); printf("\n");
+    printf("payload-len:  %llu bytes\n", (unsigned long long)h.payload_len);
+    printf("created:      %llu ns since epoch\n", (unsigned long long)h.created_unix_ns);
+    printf("globals-off:  %llu\n", (unsigned long long)h.globals_offset);
+    printf("flags:        0x%08x\n", h.flags);
+    printf("header-crc32: 0x%08x\n", h.header_crc32);
+    return 0;
+}
+
+static int cmd_image_verify(const char *path, const char *binary) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "tur image-verify: cannot open '%s'\n", path); return 2; }
+    TurImageHeader h;
+    TurImageError e = tur_image_read_header(f, &h);
+    fclose(f);
+    if (e != IMAGE_OK) {
+        fprintf(stderr, "FAIL: %s: %s\n", path, tur_image_strerror(e));
+        return 2;
+    }
+    if (binary) {
+        uint8_t want[32];
+        if (!tur_image_sha256_file(binary, want)) {
+            fprintf(stderr, "tur image-verify: cannot read binary '%s'\n", binary);
+            return 2;
+        }
+        if (memcmp(want, h.build_stamp, 32) != 0) {
+            fprintf(stderr, "FAIL: build-stamp mismatch (image not produced by '%s')\n", binary);
+            return 1;
+        }
+        printf("OK: header valid and build-stamp matches '%s'\n", binary);
+        return 0;
+    }
+    printf("OK: header valid (magic/version/CRC). build-stamp: ");
+    tur_image_print_stamp(h.build_stamp); printf("\n");
+    printf("note: pass a loader binary as the 2nd arg to verify the build-stamp.\n");
+    return 0;
+}
 
 static TuriValue native_tur_hamt_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)a; (void)n; (void)ud;
@@ -8540,6 +8605,22 @@ int main(int argc, char **argv) {
             return usage_doc();
         if (argc != 3) return usage_doc();
         return cmd_doc_cli(argv[2]);
+    }
+    /* AI6: tur image-info <image> -- print header without resuming. */
+    if (strcmp(cmd, "image-info") == 0) {
+        if (argc != 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
+            fprintf(stderr, "usage:\n  tur image-info <image>\n");
+            return argc == 3 ? 0 : 1;
+        }
+        return cmd_image_info(argv[2]);
+    }
+    /* AI6: tur image-verify <image> [binary] -- validate header (+ stamp). */
+    if (strcmp(cmd, "image-verify") == 0) {
+        if (argc < 3 || argc > 4 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
+            fprintf(stderr, "usage:\n  tur image-verify <image> [loader-binary]\n");
+            return (argc >= 3 && strcmp(argv[2], "--help") != 0) ? 2 : 0;
+        }
+        return cmd_image_verify(argv[2], argc == 4 ? argv[3] : NULL);
     }
     /* E13: tur explain — first-class subcommand wrapping --explain */
     if (strcmp(cmd, "explain") == 0) {

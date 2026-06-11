@@ -1,10 +1,26 @@
 # Application Image Dumps via Serializable Continuations -- Plan (AI0--AI8)
 
-> **Status:** Not started. **Hard prerequisite: Phase 21
+> **Status:** Core shipped. Phase 21 prerequisite is complete (PR #325;
+> AI0 gate verified via `tests/fixtures/workflow-roundtrip`). Implemented:
+> **AI1** (`src/runtime/image.{h,c}` + `tests/image_unit.c`), **AI2**
+> (`stdlib/image.tur`: `save-image!` / `load-image!` / `with-image-cache` /
+> `with-image-cache-after-init`), **AI4** (build stamp via SHA-256 of the
+> running executable -- the safety contract of AI4.1 without the linker
+> section), **AI6.3/AI6.4** (`tur image-info` / `tur image-verify`),
+> **AI7.1** (`tests/fixtures/image-roundtrip`), **AI8.1-AI8.3**
+> (`docs/guides/image-dumps-guide.md` + cross-links). **Still open:** AI3
+> (`defimage-global` + `TUR-W0706` lint), AI5 (reload/finalize hooks +
+> `stdlib/image_hooks.tur`), AI6.1/AI6.2 (`tur run --image` +
+> `--unsafe-image-skip-build-check`), AI4.1 linker-section stamp,
+> AI7.2-AI7.5 (globals/hook/error fixtures + perf benchmark). See the guide
+> for the design deltas (build-stamp method; named-continuation constraint on
+> the resumed tail).
+>
+> Original plan text follows.
+
+> **Original prerequisite note:** **Phase 21
 > (`serial-shift` / `serial-reset` / `save-cont!` / `resume-cont!`) must
-> ship first.** Today the runtime stubs return `NULL` / `0` (see
-> `stdlib/workflow.tur:33`, `src/runtime/serial.h` STAG_PTR placeholder,
-> `docs/archive/stubs-and-workarounds.md` §1.5). This plan describes the
+> ship first.** (Now complete.) This plan describes the
 > *application-level* layer that turns the Phase 21 primitives into a
 > Lisp/Smalltalk-style `save-image!` / `load-image!` workflow for warm
 > startup.

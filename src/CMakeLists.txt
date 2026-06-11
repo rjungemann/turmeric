@@ -126,6 +126,7 @@ set(TUR_CORE_SOURCES
     runtime/gc.c
     runtime/globals.c
     runtime/hamt.c
+    runtime/image.c
     runtime/interp.c
     runtime/rc.c
     runtime/rc_free_queue.c
@@ -522,6 +523,29 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur_cps_prompt_unit PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 set_target_properties(tur_cps_prompt_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# AI1 (application-image-dumps-plan): image header codec unit test.
+add_executable(tur_image_unit
+    ${CMAKE_SOURCE_DIR}/tests/image_unit.c
+    ${CMAKE_SOURCE_DIR}/src/runtime/image.c
+)
+target_include_directories(tur_image_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_image_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_image_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+target_link_libraries(tur_image_unit PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_image_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_image_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_image_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
