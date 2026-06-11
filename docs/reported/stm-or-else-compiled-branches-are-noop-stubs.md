@@ -1,5 +1,16 @@
 # Compiled path: STM `or-else` branches are no-op stubs (nested `stm` not emitted)
 
+> **Status: FIXED.** The `EX_STM` codegen arm (`src/compiler/emit_expr.c`) now
+> emits its body for real instead of a no-op stub: statements in order, the last
+> as the block's value, with a `__tur_stm_should_retry` short-circuit after a
+> `check`/`retry` (so a speculative write following an aborted guard is not
+> buffered) -- mirroring the interpreter's `EX_STM`. `EX_ATOMICALLY` still
+> inlines its direct `stm` body unchanged (snapshot-neutral); the standalone arm
+> is reached only for nested `stm` blocks such as `or-else` branches. Verified
+> `tur run` and `tur --interpret` agree, including the short-circuit and the
+> stm1-succeeds-so-stm2-skipped cases. Guarded by `tests/fixtures/stm-or-else/`.
+> No `expected.c` snapshot changed (none nested an `stm` block).
+
 **Summary:** On the compiled path, `(or-else stm1 stm2)` does nothing useful:
 both `stm1` and `stm2` are emitted as no-op stubs, so their `tvar/read`/
 `tvar/write`/`tvar/cas`/`check` operations never run and the `or-else`
