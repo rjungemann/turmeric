@@ -16,13 +16,32 @@
 >   before returning, so `(defer ...)` in a panicking thunk runs during the
 >   unwind. Fixed `panic-catch-unwind-defer`.
 >
-> All six added to the `run-turi.sh` allowlist (harness 912 -> 918, 0 failed;
-> compiled 1573/0, zero regressions). **5 remain:** `result-of-typed-eq` (typed
-> `eq?` over a Result), `range-bound-show-ord` (range bracket `[`/`(` in Show),
-> `codegen-private-defn-collision` (module-private name resolution: prints
-> `200/200` not `100/200`), `extern-c-spaced-typeann` (extern-c emits no output),
-> `rc-unique-violation` (rc-unique violation not detected). Plus `reader-cond`,
-> the legit `#?(:tur/:turi ...)` carve.
+> **Update 2 (cont.): 7 of 11 fixed; `reader-cond` carved.**
+> - **`extern-c puts`** -- added `native_extern_puts` to the known-libc shim
+>   list (alongside `printf`/`strlen`/...), so `(extern-c puts ...)` prints under
+>   `--interpret` instead of hitting the nil stub. Fixed `extern-c-spaced-typeann`.
+> - **`reader-cond`** is carved `requires.compiled`: `#?(:tur ... :turi ...)`
+>   renders per the active reader, so its compiled-branch `expected.stdout` can
+>   never match under `--interpret` -- not a bug.
+>
+> All fixed fixtures are on the `run-turi.sh` allowlist (harness 912 -> 919, 0
+> failed; compiled 1573/0, zero regressions).
+>
+> **4 remain, each deep and overlapping another workstream:**
+> - `result-of-typed-eq` -- recursive `.eq?` over `Result[Vec[int] cstr]`; needs
+>   the Vec/Result native-shim reconciliation (**W1b**), not an isolated fix.
+> - `range-bound-show-ord` -- `bound-fmt` (stdlib inline-C) is
+>   `if (kind==1) snprintf("[...") else snprintf("(...")`; `ic_exec_snprintf_fmt`
+>   takes the *first* snprintf always, so Exclusive renders `[7` not `(7`. This
+>   is the **inline-C-evaluator** conditional-snprintf gap (the 22-matcher
+>   bucket), not pure-turi.
+> - `codegen-private-defn-collision` -- two modules' private `__h` both register
+>   under the bare name in the interpreter env (last wins -> `200/200`). Needs
+>   per-module mangling in `EX_FN_DEF` registration *and* call resolution -- a
+>   core module-system change.
+> - `rc-unique-violation` -- `(ref/from-rc rc)` with a live `weak` must panic
+>   (unique-rc violation); the interpreter's `ref/from-rc` does no strong/weak
+>   count check.
 
 **Summary:** Of the ~244 pure-turi (no inline-C) fixtures that fail under
 `--interpret` after W1-W3, only **12** are *silent* (rc matches the expected exit

@@ -357,15 +357,17 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
   they do not block W5 -- but they ship a wrong-answer hazard for real programs.
 - **11 pure-turi interpreter bugs** (the W5 blockers), catalogued in
   [turi-pure-turi-silent-miscompiles.md](../../reported/turi-pure-turi-silent-miscompiles.md).
-  **6 fixed** (added to the allowlist, harness 912 -> 918): `EX_ASCRIBE`
+  **7 fixed** (added to the allowlist, harness 912 -> 919): `EX_ASCRIBE`
   primitive coercion (`rt-return-dispatch-*`), `EX_ANY_TYPE_OF` coarse tags +
-  `EX_ANY_CAST` checked downcast (`any-box-*`, `any-cast-mismatch-panic`), and
-  `catch-unwind` firing unwound defers (`panic-catch-unwind-defer`). **5 remain**
-  -- each its own root cause: `result-of-typed-eq` (typed `eq?` over Result),
-  `range-bound-show-ord` (Show bracket), `codegen-private-defn-collision`
-  (module-private name resolution), `extern-c-spaced-typeann` (extern-c no
-  output), `rc-unique-violation` (violation undetected). `reader-cond` is a legit
-  path-divergence -> carve `requires.compiled`.
+  `EX_ANY_CAST` checked downcast (`any-box-*`, `any-cast-mismatch-panic`),
+  `catch-unwind` firing unwound defers (`panic-catch-unwind-defer`), and
+  `native_extern_puts` (`extern-c-spaced-typeann`). `reader-cond` carved
+  `requires.compiled` (legit `#?(:tur/:turi ...)` path-divergence). **4 remain**,
+  each deep and overlapping another workstream: `result-of-typed-eq` (W1b --
+  Vec/Result recursive eq), `range-bound-show-ord` (inline-C conditional-snprintf
+  matcher gap), `codegen-private-defn-collision` (module-private name mangling --
+  core module-system change), `rc-unique-violation` (rc strong/weak-count check
+  in `ref/from-rc`).
 
 ### W5 -- The flip itself
 

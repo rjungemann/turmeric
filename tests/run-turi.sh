@@ -805,6 +805,10 @@ any-cast-mismatch-panic
 panic-catch-unwind-defer
 rt-return-dispatch-basic
 rt-return-dispatch-param
+
+# TI8.b/W4 (cont.): native_extern_puts added so (extern-c puts ...) prints
+# under --interpret like the other known libc shims (printf/strlen/...).
+extern-c-spaced-typeann
 "
 
 # Build an associative-set from the default list for O(1) lookup.

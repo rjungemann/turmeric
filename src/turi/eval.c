@@ -267,6 +267,14 @@ static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_int((int64_t)ret);
 }
 
+/* puts: write the cstr followed by a newline (libc semantics). */
+static TuriValue native_extern_puts(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && args[0].tag == TURI_CSTR && args[0].as_cstr)
+        return turi_int((int64_t)puts(args[0].as_cstr));
+    return turi_int(0);
+}
+
 static void register_extern_c_known(TuriEnv *env, const char *fname) {
     struct { const char *name; TuriNativeFn fn; } known[] = {
         { "exit",     native_extern_exit     },
@@ -275,6 +283,7 @@ static void register_extern_c_known(TuriEnv *env, const char *fname) {
         { "getenv",   native_extern_getenv   },
         { "printf",   native_extern_printf   },
         { "printf_s", native_extern_printf   },
+        { "puts",     native_extern_puts     },
         { NULL, NULL }
     };
     for (int i = 0; known[i].name; i++) {
