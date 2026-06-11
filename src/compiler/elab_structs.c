@@ -515,9 +515,24 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             field_type_param_kinds = (Kind *)arena_alloc(e->arena,
                 n_type_params_v * sizeof(Kind));
             for (uint8_t pi = 0; pi < n_type_params_v; pi++) {
-                type_params_arr[pi] = maybe_tp->as.list.items[pi]->as.sym->name;
-                field_type_params[pi] = maybe_tp->as.list.items[pi]->as.sym;
-                field_type_param_kinds[pi] = KIND_STAR;
+                const Symbol *psym = maybe_tp->as.list.items[pi]->as.sym;
+                /* Variadic HKT rows: a `^&name` prefix marks a row-kinded type
+                 * parameter (kind [*], KIND_TYPEROW) -- it ranges over a row of
+                 * types (`#row{...}`), e.g. an ECS Query's component row. The
+                 * `^&` is stripped so field types and call-site ascriptions
+                 * reference the bare name. Other kinds are still inferred from
+                 * field usage by infer_struct_type_param_kinds below. */
+                if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
+                    const Symbol *bare = symtab_intern(e->st,
+                        strslice(psym->name + 2, psym->len - 2));
+                    type_params_arr[pi]      = bare->name;
+                    field_type_params[pi]    = bare;
+                    field_type_param_kinds[pi] = KIND_TYPEROW;
+                } else {
+                    type_params_arr[pi]      = psym->name;
+                    field_type_params[pi]    = psym;
+                    field_type_param_kinds[pi] = KIND_STAR;
+                }
             }
             fields_start_idx++;
             new_field_syntax = true;

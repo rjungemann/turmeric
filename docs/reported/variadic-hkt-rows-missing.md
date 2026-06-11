@@ -255,16 +255,46 @@ miscompile (such a parameter is uncallable), but a soundness/diagnostic hole to
 close in Layer 4. See
 [docs/reported/row-type-in-value-position-loses-elements.md](row-type-in-value-position-loses-elements.md).
 
+### Layer 4 -- row-kinded type parameter + kind soundness [LANDED]
+
+A constructor can now declare a parameter of kind `[*]` (a row), a row is
+kind-checked at every application, and a bare row is rejected in value
+position. The runtime/codegen path for a row *type argument* already worked
+(a row is a phantom type argument, erased at monomorphization), so this layer
+is the kind-soundness layer on top of it, with a positive end-to-end fixture.
+
+- **Marker `^&name`.** A `^&`-prefixed `defstruct` type parameter is row-kinded
+  (`KIND_TYPEROW`); the `^&` is stripped so field types / call-site ascriptions
+  use the bare name (`elab_structs.c`). The report's original `^[f]` idea does
+  not tokenize (brackets are not symbol chars); `^&` is a single symbol token,
+  distinct from `^`/`^^`, and the kind inference pass preserves it (it only
+  upgrades `KIND_STAR` params). The struct's own `hkt_kind` stays arity-based
+  (`kind_for_arity(n_params)`), so `(Query #row{...})` correctly yields kind `*`.
+- **Argument-kind validation.** `check_row_type_arg_kind` (`elab_types.c`,
+  shared by `type_expr_from_form` and `fn_type_from_form`'s application paths)
+  rejects a row argument in a non-row slot and a non-row argument in a `^&` slot.
+  Scoped to `KIND_TYPEROW` mismatches (xor), so it never perturbs existing
+  non-row applications.
+- **Value-position guard (closes the Layer 3 finding).** `fn_type_from_form` is
+  split into a guarded public wrapper + an unguarded `_impl`. The wrapper
+  rejects any value-type annotation that resolves to kind `[*]` (a bare row);
+  internal sub-resolutions (application arguments, arrow components) use `_impl`
+  so a row *argument* is still allowed. This fixes
+  `docs/reported/row-type-in-value-position-loses-elements.md` (now RESOLVED):
+  a bare row never reaches the lossy `TY_FN` parameter storage.
+- **Tests.** Positive runtime fixture `hkt-row-query-phantom` (a `Query` over
+  `#row{int bool}`, runs and prints `42`). Negatives:
+  `errors/row-in-value-type-position` (the finding), `errors/row-arg-kind-row-param`
+  (non-row -> `^&` slot), `errors/row-arg-kind-star-param` (row -> `*` slot), plus
+  the Layer 3 `errors/row-literal-value-position` (row in value-expr position).
+
+Not yet wired: `^&` on `defgadt`/ADTs and `deftype` (the latter's result-kind
+heuristic mishandles the sentinel); a row that is *used in a field* (not just a
+phantom) is unvalidated. Both are follow-ups, noted here, not on the critical
+path for the ECS query use (phantom row argument).
+
 ### Remaining layers (revised order)
 
-4. **Row-kinded type parameter.** Let a constructor parameter carry kind `[*]`
-   so `Query` is functorial over a row. This layer also **closes the Layer 3
-   finding**: reject rows in value-type position and validate type-application
-   argument kinds. NOTE a second syntax sub-decision: the HKT param markers are
-   `^f` -> `KIND_ARROW` and `^^f` -> `KIND_ARROW2` (`elab_types.c:1740-1772`;
-   the fn-param path caps kind-vars at 8 and keys off a lowercase initial in
-   `elab_fns.c:973-987`). A row-kinded parameter needs its own marker (e.g.
-   `^[f]`), wired through both sites.
 5. **Row operations** -- membership (`Pos in row`), union/`++` (query joins),
    propagation through partial application (`kind_of_type_app` already rejects
    applying a row; the *ops* are separate type-level functions).

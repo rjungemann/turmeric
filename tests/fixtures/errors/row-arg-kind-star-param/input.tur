@@ -1,0 +1,4 @@
+;; Box's type parameter is ordinary (kind *), so a #row{...} argument
+;; (kind [*]) is a kind error -- a row only fits a row-kinded (^&) parameter.
+(defstruct Box [a] (v :int))
+(defn rd [b : (Box #row{int bool})] : int (.v b))

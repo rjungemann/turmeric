@@ -5,9 +5,19 @@ severity: Misleading diagnostic (prints `#row{}` for any row) plus a soundness
   gap (a kind-`[*]` row is accepted where a kind-`*` value type is required).
   Not a miscompile today because such a parameter can never be called, but it
   is a "works by luck" hole that should be closed in Layer 4.
+status: RESOLVED in Layer 4 -- a bare row in value-type position is now a
+  TUR-E0012 kind error (`fn_type_from_form` guard), so it never reaches the
+  lossy `TY_FN` parameter storage. Regression fixture:
+  tests/fixtures/errors/row-in-value-type-position.
 ---
 
 # `#row{...}` in value-type position loses its elements
+
+> **RESOLVED (Layer 4).** The repro below now emits the expected kind error
+> instead of being accepted. `fn_type_from_form` rejects any value-type
+> annotation whose resolved type has kind `[*]` (`KIND_TYPEROW`); the row
+> arg-kind check (`check_row_type_arg_kind`) enforces that rows only flow into
+> `^&`-marked row-kinded parameter slots. Kept for history.
 
 ## Summary
 

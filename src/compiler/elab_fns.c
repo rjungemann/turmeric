@@ -16,14 +16,45 @@ static bool fn_type_param_index(const Symbol **type_params, uint8_t n_type_param
     return false;
 }
 
+static Type *fn_type_from_form_impl(Elab *e, const Form *form,
+                                    const Symbol **type_params,
+                                    Kind *type_param_kinds,
+                                    uint8_t n_type_params);
+
+/* Public entry for value-type annotations (defn/fn params + returns, defstruct
+ * fields, let-bindings). A bare type-level row (`#row{...}`, kind [*]) is
+ * rejected here: a value cannot have row type. A row nested inside a
+ * constructor application -- `(Query #row{...})` -- is resolved by
+ * type_expr_from_form and surfaces as the application's result kind `*`, so it
+ * passes. Internal self-calls below go through this wrapper too, so a row is
+ * rejected in every value-type sub-position (e.g. an arrow argument). The
+ * innermost offender emits once and returns NULL, which propagates without a
+ * second diagnostic. See docs/reported/row-type-in-value-position-loses-elements.md. */
 Type *fn_type_from_form(Elab *e, const Form *form,
                         const Symbol **type_params,
                         Kind *type_param_kinds,
                         uint8_t n_type_params) {
+    Type *t = fn_type_from_form_impl(e, form, type_params, type_param_kinds,
+                                     n_type_params);
+    if (t && t->hkt_kind == KIND_TYPEROW) {
+        diag_emit_with_code(DIAG_ERROR, form ? form->span : (Span){0},
+            TUR_E0012_KIND_MISMATCH,
+            "kind mismatch (TUR-E0012): `#row{...}` is a type-level row "
+            "(kind [*]); a value cannot have row type. A row may only appear "
+            "as a type argument to a row-kinded ('^&') constructor parameter");
+        return NULL;
+    }
+    return t;
+}
+
+static Type *fn_type_from_form_impl(Elab *e, const Form *form,
+                                    const Symbol **type_params,
+                                    Kind *type_param_kinds,
+                                    uint8_t n_type_params) {
     if (!form) return NULL;
     if (form->tag == F_TYPE_ANN && form->as.list.len > 0) {
-        return fn_type_from_form(e, form->as.list.items[0],
-                                 type_params, type_param_kinds, n_type_params);
+        return fn_type_from_form_impl(e, form->as.list.items[0],
+                                      type_params, type_param_kinds, n_type_params);
     }
     if (form->tag == F_SYM || form->tag == F_KEYWORD) {
         const Symbol *sym = form->as.sym;
@@ -98,7 +129,7 @@ Type *fn_type_from_form(Elab *e, const Form *form,
         {
             int cflav = cont_flavor_from_name(head->name);
             if (cflav >= 0 && form->as.list.len == 2) {
-                Type *arg = fn_type_from_form(e, form->as.list.items[1],
+                Type *arg = fn_type_from_form_impl(e, form->as.list.items[1],
                                               type_params, type_param_kinds, n_type_params);
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_flavored(arg ? arg->kind : TY_INT, (ContFlavor)cflav);
@@ -130,13 +161,20 @@ Type *fn_type_from_form(Elab *e, const Form *form,
                 return out;
             }
         }
-        Type *cur = fn_type_from_form(e, form->as.list.items[0],
+        Type *cur = fn_type_from_form_impl(e, form->as.list.items[0],
                                       type_params, type_param_kinds, n_type_params);
         if (!cur) return NULL;
+        /* Original constructor head -- carries the positional parameter kinds
+         * used for row-kind validation below (cur becomes a TY_APP after the
+         * first argument, losing the StructDef). */
+        Type head_type = *cur;
         for (uint32_t i = 1; i < form->as.list.len; i++) {
-            Type *arg = fn_type_from_form(e, form->as.list.items[i],
+            Type *arg = fn_type_from_form_impl(e, form->as.list.items[i],
                                           type_params, type_param_kinds, n_type_params);
             if (!arg) return NULL;
+            if (!check_row_type_arg_kind(head_type, (uint8_t)(i - 1), *arg,
+                                         form->as.list.items[i]->span))
+                return NULL;
             Type *next = (Type *)arena_alloc(e->arena, sizeof(Type));
             *next = type_app(e->arena, *cur, *arg, form->span);
             cur = next;

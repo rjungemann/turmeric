@@ -986,6 +986,11 @@ Type *fn_type_from_form(Elab *e, const Form *form,
  * arena-allocated Type* (TY_ADT or TY_STRUCT) when found, else NULL.
  * Prefers GADTs over structs when both share a name, per the MF4 design. */
 Type *elab_lookup_type_by_name(Elab *e, const Symbol *name);
+/* Variadic HKT rows: validate a type-application argument's kind against the
+ * constructor's positional parameter kind (row concern only). arg_index is
+ * 0-based. Returns false and emits TUR-E0012 on a row/non-row mismatch. */
+bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
+                             Span arg_span);
 Expr *elab_deftype(Elab *e, const Form *call);
 Expr *elab_type_app(Elab *e, const Form *call);
 Expr *elab_ascribe(Elab *e, const Form *call);

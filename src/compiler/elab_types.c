@@ -1,6 +1,30 @@
 /* elab_types.c -- type-expression forms: defkind/defrec/deftype/type-app, ascribe/pack/open. */
 #include "elab_internal.h"
 
+/* Variadic HKT rows: validate one type-application argument's kind against the
+ * constructor's positional parameter kind, for the row concern only. Returns
+ * false (and emits TUR-E0012) when a row-of-types argument (kind [*]) is given
+ * to a non-row-kinded parameter, or a row-kinded ('^&') parameter is given a
+ * non-row argument. Scoped to KIND_TYPEROW mismatches (xor) so existing,
+ * non-row applications are never perturbed. arg_index is 0-based.
+ * Shared by type_expr_from_form and fn_type_from_form's application paths. */
+bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
+                             Span arg_span) {
+    if (ctor_type.kind != TY_STRUCT || !ctor_type.as.struct_.def) return true;
+    const StructDef *cdef = ctor_type.as.struct_.def;
+    if (!cdef->type_param_kinds || arg_index >= cdef->n_type_params) return true;
+    Kind param_kind = cdef->type_param_kinds[arg_index];
+    bool param_row = (param_kind == KIND_TYPEROW);
+    bool arg_row   = (arg_type.hkt_kind == KIND_TYPEROW);
+    if (param_row == arg_row) return true;
+    diag_emit_with_code(DIAG_ERROR, arg_span, TUR_E0012_KIND_MISMATCH,
+        "kind mismatch (TUR-E0012): type constructor '%s' parameter %u expects "
+        "kind '%s', but the argument has kind '%s'",
+        cdef->name, (unsigned)(arg_index + 1),
+        kind_to_string(param_kind), kind_to_string(arg_type.hkt_kind));
+    return false;
+}
+
 /* MF4: separate struct / GADT namespaces. Resolve a type name by walking
  * the ADT registry first, then the struct registry. When the same name is
  * registered as both a defgadt and a defstruct, the GADT wins -- a name
@@ -1533,6 +1557,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Type *arg_type = type_expr_from_form(e, form->as.list.items[ai], rec_name,
                                                   type_params, type_param_kinds, n_type_params);
             if (!arg_type) return NULL;
+
+            /* Variadic HKT rows: enforce that a row-of-types argument lands in
+             * a row-kinded parameter slot (and vice versa). ctor_type is the
+             * original head (carries the StructDef's positional param kinds). */
+            if (!check_row_type_arg_kind(*ctor_type, (uint8_t)(ai - 1), *arg_type,
+                                         form->as.list.items[ai]->span))
+                return NULL;
 
             /* Create TY_APP node */
             Type *app = (Type *)arena_alloc(e->arena, sizeof(Type));
