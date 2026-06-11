@@ -967,6 +967,202 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
 }
 
 /* -------------------------------------------------------------------------
+ * Phase TI3: delimited control -- reset / shift / shift0 (abortive)
+ *
+ * Turmeric's shift/reset are ABORTIVE.  The compiled path lowers (shift f body)
+ * to: evaluate body to v, compute f(v), then abort the computation up to the
+ * nearest enclosing reset, which yields f(v) as its value (see the runtime
+ * `__dk_abort_body` in emitted C and src/runtime/cps_prompt.c -- the captured
+ * sub-continuation is never resumed).  Because the continuation is discarded, a
+ * plain setjmp/longjmp prompt boundary models the semantics exactly, with no
+ * fiber capture needed.  shift0 differs from shift only in prompt
+ * re-installation when the continuation is *resumed*; since it is never
+ * resumed here, shift0 behaves identically to shift.
+ *
+ * The context-capturing variants (serial-shift / cloneable-shift), which DO
+ * hand a resumable continuation to f, are a separate, larger piece of work and
+ * remain a documented interpreter carve-out -- see
+ * docs/reported/turi-capturing-shift-unimplemented.md.  serial-reset and
+ * cloneable-reset establish a prompt boundary so the no-shift passthrough case
+ * (e.g. (serial-reset 42)) evaluates correctly; a *-shift inside them still
+ * errors cleanly until the capturing work lands.
+ * ---------------------------------------------------------------------- */
+typedef enum { PROMPT_PLAIN, PROMPT_SERIAL, PROMPT_CLONEABLE } TuriPromptKind;
+
+typedef struct TuriResetBoundary {
+    jmp_buf                   jmp;
+    TuriPromptKind            kind;
+    TuriValue                 result;       /* value an abortive shift delivers */
+    /* env state to restore after a longjmp unwinds the intervening C frames */
+    uint32_t                  saved_depth;
+    void                     *saved_handler_stack;
+    void                     *saved_defer_stack;
+    struct TuriResetBoundary *prev;
+} TuriResetBoundary;
+
+static _Thread_local TuriResetBoundary *g_reset_stack;
+
+/* Nearest enclosing boundary of the given kind, or NULL. */
+static TuriResetBoundary *reset_find(TuriPromptKind kind) {
+    for (TuriResetBoundary *b = g_reset_stack; b; b = b->prev)
+        if (b->kind == kind) return b;
+    return NULL;
+}
+
+/* Establish a delimited-control prompt and evaluate body within it.  Returns
+ * body's value normally, or the value delivered by an abortive shift that
+ * targeted this boundary. */
+static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
+                                     const Expr *body, TuriPromptKind kind) {
+    TuriResetBoundary b;
+    b.kind                = kind;
+    b.result              = turi_nil();
+    b.saved_depth         = env->eval_depth;
+    b.saved_handler_stack = env->handler_stack;
+    b.saved_defer_stack   = env->defer_stack;
+    b.prev                = g_reset_stack;
+    g_reset_stack = &b;
+
+    if (setjmp(b.jmp) == 0) {
+        TuriValue v = eval_expr(env, frame, body);
+        g_reset_stack = b.prev;
+        return v;
+    }
+    /* An abortive shift longjmp'd here.  Restore the env state that the
+     * unwound eval_expr frames would otherwise have decremented/popped. */
+    g_reset_stack      = b.prev;
+    env->eval_depth    = b.saved_depth;
+    env->handler_stack = b.saved_handler_stack;
+    env->defer_stack   = b.saved_defer_stack;
+    return b.result;
+}
+
+/* Evaluate an abortive (shift f body) / (shift0 f body): r = f(body), then
+ * abort to the nearest plain reset boundary, which returns r. */
+static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
+                                     const Expr *k_fn, const Expr *body,
+                                     const char *form) {
+    TuriValue v = eval_expr(env, frame, body);
+    if (turi_is_error(v) || env->returning || env->throwing) return v;
+    TuriValue fn = eval_expr(env, frame, k_fn);
+    if (turi_is_error(fn) || env->returning || env->throwing) return fn;
+    TuriValue r = turi_call(env, fn, &v, 1);
+    if (turi_is_error(r) || env->returning || env->throwing) return r;
+
+    TuriResetBoundary *b = reset_find(PROMPT_PLAIN);
+    if (!b)
+        return turi_errorf("eval: %s used outside of any reset boundary", form);
+    b->result = r;
+    longjmp(b->jmp, 1);
+    /* unreachable */
+}
+
+/* -------------------------------------------------------------------------
+ * Phase TI4: Software Transactional Memory (single-threaded model)
+ *
+ * The interpreter is single-threaded, so STM collapses to a transaction-log
+ * model with no real concurrency (matching the plan's TI4 design and the
+ * compiled runtime in src/runtime/stm.c):
+ *
+ *  - A TVar is a heap cell { value; version }.  Values are int64 boxed as
+ *    ptr<void> (the compiled ABI stores `(void*)(intptr_t)init`), which is a
+ *    TURI_INT here.
+ *  - `atomically` runs the stm body against a write-log transaction.  Reads see
+ *    buffered writes (read-your-writes); on normal completion the log is
+ *    committed (writes applied, versions bumped).  With no concurrent writers,
+ *    read-set validation always succeeds, so commit never fails.
+ *  - `check`/`retry` request a retry.  Re-running a serial transaction can never
+ *    make progress (nothing else mutates the TVars), so an unguarded retry that
+ *    reaches `atomically` is a logical deadlock -- the compiled path blocks on a
+ *    condvar forever; the interpreter errors out instead of hanging.
+ *  - `or-else` clears a retry from stm1 and runs stm2 in the same transaction,
+ *    so well-formed or-else never reaches the atomically retry check.
+ * ---------------------------------------------------------------------- */
+typedef struct TuriTVar { int64_t value; uint64_t version; } TuriTVar;
+
+typedef struct TuriStmTx {
+    TuriTVar **w_tv;     /* write-set TVars */
+    int64_t   *w_val;    /* parallel buffered values */
+    int        w_count;
+    int        w_cap;
+    bool       retry_requested;
+    bool       aborted;
+    struct TuriStmTx *prev;   /* nesting (atomically within atomically) */
+} TuriStmTx;
+
+static _Thread_local TuriStmTx *g_stm_tx;
+
+static int stm_write_find(TuriStmTx *tx, TuriTVar *tv) {
+    for (int i = 0; i < tx->w_count; i++)
+        if (tx->w_tv[i] == tv) return i;
+    return -1;
+}
+
+static void stm_log_write(TuriStmTx *tx, TuriTVar *tv, int64_t val) {
+    int i = stm_write_find(tx, tv);
+    if (i >= 0) { tx->w_val[i] = val; return; }
+    if (tx->w_count == tx->w_cap) {
+        int nc = tx->w_cap ? tx->w_cap * 2 : 8;
+        tx->w_tv  = (TuriTVar **)realloc(tx->w_tv,  (size_t)nc * sizeof(*tx->w_tv));
+        tx->w_val = (int64_t  *)realloc(tx->w_val, (size_t)nc * sizeof(*tx->w_val));
+        tx->w_cap = nc;
+    }
+    tx->w_tv[tx->w_count]  = tv;
+    tx->w_val[tx->w_count] = val;
+    tx->w_count++;
+}
+
+/* Log-aware read: buffered writes win, else the committed value. */
+static int64_t stm_read(TuriStmTx *tx, TuriTVar *tv) {
+    int i = stm_write_find(tx, tv);
+    return i >= 0 ? tx->w_val[i] : tv->value;
+}
+
+/* Resolve a (tvar ...) sub-expression to a live TVar cell, or NULL on error. */
+static TuriTVar *stm_eval_tvar(TuriEnv *env, EvalFrame *frame,
+                               const Expr *tvar_expr, TuriValue *err_out) {
+    TuriValue v = eval_expr(env, frame, tvar_expr);
+    if (turi_is_error(v) || env->returning || env->throwing) {
+        *err_out = v;
+        return NULL;
+    }
+    return (TuriTVar *)(intptr_t)v.as_int;
+}
+
+/* (atomically stm-expr): run the EX_STM body against a fresh transaction and
+ * commit on success.  Returns the stm block's last value. */
+static TuriValue eval_atomically(TuriEnv *env, EvalFrame *frame,
+                                 const Expr *stm_expr) {
+    TuriStmTx tx;
+    memset(&tx, 0, sizeof(tx));
+    tx.prev = g_stm_tx;
+    g_stm_tx = &tx;
+
+    TuriValue v = eval_expr(env, frame, stm_expr);
+
+    if (turi_is_error(v) || env->returning || env->throwing) {
+        g_stm_tx = tx.prev;
+        free(tx.w_tv); free(tx.w_val);
+        return v;
+    }
+    if (tx.retry_requested || tx.aborted) {
+        g_stm_tx = tx.prev;
+        free(tx.w_tv); free(tx.w_val);
+        return turi_error("eval: atomically: transaction requested retry with no "
+                          "way to make progress (single-threaded interpreter "
+                          "cannot block on another writer)");
+    }
+    /* Commit: single-threaded validation always succeeds. */
+    for (int i = 0; i < tx.w_count; i++) {
+        tx.w_tv[i]->value = tx.w_val[i];
+        tx.w_tv[i]->version++;
+    }
+    g_stm_tx = tx.prev;
+    free(tx.w_tv); free(tx.w_val);
+    return v;
+}
+
+/* -------------------------------------------------------------------------
  * Builtin dispatch
  * ---------------------------------------------------------------------- */
 
@@ -4141,10 +4337,157 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_bool(gv.as_gen->done);
     }
 
-    /* serial-reset: Phase 21 not yet implemented in interpreter. */
+    /* Phase TI3: delimited control. */
+    case EX_RESET:
+        return eval_reset_boundary(env, frame, e->as.reset_.body, PROMPT_PLAIN);
+
+    case EX_SHIFT:
+        return eval_abortive_shift(env, frame, e->as.shift_.k_fn,
+                                   e->as.shift_.body, "shift");
+
+    case EX_SHIFT0:
+        return eval_abortive_shift(env, frame, e->as.shift0_.k_fn,
+                                   e->as.shift0_.body, "shift0");
+
+    /* serial-reset / cloneable-reset: establish a prompt boundary so the
+     * no-shift passthrough case evaluates.  The capturing serial-shift /
+     * cloneable-shift remain a documented carve-out (see eval.c TI3 notes). */
     case EX_SERIAL_RESET:
-        return turi_errorf("eval: EX_SERIAL_RESET (Phase 21 serial-shift/reset) is not yet "
-                           "implemented in the interpreter");
+        return eval_reset_boundary(env, frame, e->as.serial_reset_.body,
+                                   PROMPT_SERIAL);
+
+    case EX_CLONEABLE_RESET:
+        return eval_reset_boundary(env, frame, e->as.cloneable_reset_.body,
+                                   PROMPT_CLONEABLE);
+
+    /* Phase TI4: Software Transactional Memory. */
+    case EX_STM: {
+        /* Evaluate the body sequence; the value is the last expression. */
+        TuriValue v = turi_nil();
+        for (uint32_t i = 0; i < e->as.stm_.n_body; i++) {
+            v = eval_expr(env, frame, e->as.stm_.body[i]);
+            if (turi_is_error(v) || env->returning || env->throwing) return v;
+            /* A retry/abort request short-circuits the rest of the block. */
+            if (g_stm_tx && (g_stm_tx->retry_requested || g_stm_tx->aborted))
+                return v;
+        }
+        return v;
+    }
+
+    case EX_ATOMICALLY:
+        return eval_atomically(env, frame, e->as.atomically_.stm_expr);
+
+    case EX_RETRY:
+        if (!g_stm_tx)
+            return turi_error("eval: retry used outside of an atomically block");
+        g_stm_tx->retry_requested = true;
+        return turi_nil();
+
+    case EX_CHECK: {
+        if (!g_stm_tx)
+            return turi_error("eval: check used outside of an atomically block");
+        TuriValue c = eval_expr(env, frame, e->as.check_.cond);
+        if (turi_is_error(c) || env->returning || env->throwing) return c;
+        /* Matches the compiled runtime: a failed check requests a retry. */
+        if (!c.as_bool) g_stm_tx->retry_requested = true;
+        return turi_nil();
+    }
+
+    case EX_OR_ELSE: {
+        if (!g_stm_tx)
+            return turi_error("eval: or-else used outside of an atomically block");
+        bool retry_before = g_stm_tx->retry_requested;
+        TuriValue v = eval_expr(env, frame, e->as.or_else_.stm1);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        /* If stm1 (and not a prior op) requested a retry, fall back to stm2. */
+        if (!retry_before && g_stm_tx->retry_requested) {
+            g_stm_tx->retry_requested = false;
+            v = eval_expr(env, frame, e->as.or_else_.stm2);
+        }
+        return v;
+    }
+
+    case EX_TVAR_NEW: {
+        TuriValue init = eval_expr(env, frame, e->as.tvar_new_.init);
+        if (turi_is_error(init) || env->returning || env->throwing) return init;
+        TuriTVar *tv = (TuriTVar *)calloc(1, sizeof(TuriTVar));
+        if (!tv) return turi_error("eval: tvar/new: out of memory");
+        tv->value   = init.as_int;
+        tv->version = 1;
+        return turi_int((int64_t)(intptr_t)tv);
+    }
+
+    case EX_TVAR_READ: {
+        if (!g_stm_tx)
+            return turi_error("eval: tvar/read used outside of an atomically block");
+        TuriValue err = turi_nil();
+        TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_read_.tvar, &err);
+        if (!tv) return err;
+        return turi_int(stm_read(g_stm_tx, tv));
+    }
+
+    case EX_TVAR_WRITE: {
+        if (!g_stm_tx)
+            return turi_error("eval: tvar/write used outside of an atomically block");
+        TuriValue err = turi_nil();
+        TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_write_.tvar, &err);
+        if (!tv) return err;
+        TuriValue val = eval_expr(env, frame, e->as.tvar_write_.value);
+        if (turi_is_error(val) || env->returning || env->throwing) return val;
+        stm_log_write(g_stm_tx, tv, val.as_int);
+        return turi_nil();
+    }
+
+    case EX_TVAR_SWAP: {
+        if (!g_stm_tx)
+            return turi_error("eval: tvar/swap used outside of an atomically block");
+        TuriValue err = turi_nil();
+        TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_swap_.tvar, &err);
+        if (!tv) return err;
+        TuriValue nv = eval_expr(env, frame, e->as.tvar_swap_.new_val);
+        if (turi_is_error(nv) || env->returning || env->throwing) return nv;
+        int64_t old = stm_read(g_stm_tx, tv);
+        stm_log_write(g_stm_tx, tv, nv.as_int);
+        return turi_int(old);
+    }
+
+    case EX_TVAR_CAS: {
+        if (!g_stm_tx)
+            return turi_error("eval: tvar/cas used outside of an atomically block");
+        TuriValue err = turi_nil();
+        TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_cas_.tvar, &err);
+        if (!tv) return err;
+        TuriValue ov = eval_expr(env, frame, e->as.tvar_cas_.old_val);
+        if (turi_is_error(ov) || env->returning || env->throwing) return ov;
+        TuriValue nv = eval_expr(env, frame, e->as.tvar_cas_.new_val);
+        if (turi_is_error(nv) || env->returning || env->throwing) return nv;
+        if (stm_read(g_stm_tx, tv) == ov.as_int) {
+            stm_log_write(g_stm_tx, tv, nv.as_int);
+            return turi_bool(true);
+        }
+        return turi_bool(false);
+    }
+
+    case EX_TVAR_MODIFY: {
+        /* Read-modify-write: r = fn(old); write r; return old.  NOTE: the
+         * compiled path (emit_expr.c EX_TVAR_MODIFY) currently emits a no-op
+         * stub returning NULL -- a latent bug filed in
+         * docs/reported/stm-tvar-modify-codegen-stub.md.  The interpreter
+         * implements the intended semantics. */
+        if (!g_stm_tx)
+            return turi_error("eval: tvar/modify used outside of an atomically block");
+        TuriValue err = turi_nil();
+        TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_modify_.tvar, &err);
+        if (!tv) return err;
+        TuriValue fn = eval_expr(env, frame, e->as.tvar_modify_.fn);
+        if (turi_is_error(fn) || env->returning || env->throwing) return fn;
+        int64_t old = stm_read(g_stm_tx, tv);
+        TuriValue arg = turi_int(old);
+        TuriValue r = turi_call(env, fn, &arg, 1);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        stm_log_write(g_stm_tx, tv, r.as_int);
+        return turi_int(old);
+    }
 
     /* --- Everything else — unimplemented expression kind ------------------ */
     default:

@@ -1,0 +1,32 @@
+;; Phase TI4 (turi-parity-post-v1-plan): Software Transactional Memory under the
+;; tree-walking interpreter.  Exercises tvar/new, tvar/write, tvar/read (via the
+;; read-your-writes path used by cas), tvar/swap, tvar/cas, atomically/stm,
+;; check, and or-else.
+;;
+;; Values stored in a TVar are int64 boxed as ptr<void>, which the compiler will
+;; not let `println`, so observable assertions are made through tvar/cas (a
+;; bool): cas succeeds iff the current transactional value equals the expected
+;; one.  This both probes the stored value and exercises the write log.
+;;
+;; NOTE: this fixture is interpreter-only.  tvar/cas and tvar/swap fail to LINK
+;; on the compiled path (the emitted runtime never defines tur_tvar_cas /
+;; tur_tvar_swap -- see docs/reported/stm-tvar-cas-swap-modify-compiled-path-
+;; broken.md), so it cannot run through `tur build` / `tur run`.
+
+(defn main [] : int
+  (let [tv (tvar/new 5)]
+    ;; read-your-writes: the cas sees the buffered 7, not the committed 5.
+    (println (atomically (stm (tvar/write tv 7) (tvar/cas tv 7 8))))   ; true  -> 8
+    ;; committed value is 8, so cas against 7 fails.
+    (println (atomically (stm (tvar/cas tv 7 0))))                     ; false
+    (println (atomically (stm (tvar/cas tv 8 9))))                     ; true  -> 9
+    ;; swap as a non-final statement; verify the new value via cas.
+    (println (atomically (stm (tvar/swap tv 20) (tvar/cas tv 20 20)))) ; true  -> 20
+    ;; or-else: stm1 requests retry (check false), so stm2 runs in the same tx.
+    (println (atomically (stm (or-else (stm (check false) (tvar/cas tv 0 0))
+                                       (stm (tvar/cas tv 20 23))))))    ; true  -> 23
+    ;; or-else: stm1 succeeds, so stm2 is not run.
+    (println (atomically (stm (or-else (stm (tvar/cas tv 23 24))
+                                       (stm (tvar/cas tv 99 99))))))    ; true  -> 24
+    (println (atomically (stm (tvar/cas tv 24 24)))))                  ; true
+  0)

@@ -1,0 +1,23 @@
+;; Compiled-path regression guard for the STM TVar primitives that previously
+;; failed to link (tvar/cas, tvar/swap) or were a no-op stub (tvar/modify):
+;; docs/reported/stm-tvar-cas-swap-modify-compiled-path-broken.md.
+;;
+;; Values are int64 boxed as ptr<void> (unprintable), so each step is observed
+;; through tvar/cas, which returns a printable bool.
+
+(defn add5 [x : ptr] : ptr
+  ```c
+  return (void*)(intptr_t)((int64_t)(intptr_t)x + 5);
+  ```)
+
+(defn main [] : int
+  (let [tv (tvar/new 5)]
+    ;; write 7 then cas 7->8 within the same tx (read-your-writes)
+    (println (atomically (stm (tvar/write tv 7) (tvar/cas tv 7 8))))      ; true  -> 8
+    (println (atomically (stm (tvar/cas tv 7 0))))                        ; false
+    ;; swap (non-final), verify via cas
+    (println (atomically (stm (tvar/swap tv 20) (tvar/cas tv 20 20))))    ; true  -> 20
+    ;; modify: add5(20)=25, then cas confirms 25
+    (println (atomically (stm (tvar/modify tv add5) (tvar/cas tv 25 25)))) ; true  -> 25
+    (println (atomically (stm (tvar/cas tv 99 99)))))                    ; false (tv is 25)
+  0)

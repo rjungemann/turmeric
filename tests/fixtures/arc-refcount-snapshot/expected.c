@@ -345,6 +345,18 @@ void tur_tvar_write(STM_Transaction *tx, TVar *tv, void *value) {
         tx->new_values[tx->write_count++] = value;
     }
 }
+void *tur_tvar_swap(STM_Transaction *tx, TVar *tv, void *new_value) {
+    void *old_value = tur_tvar_read(tx, tv);
+    tur_tvar_write(tx, tv, new_value);
+    return old_value;
+}
+bool tur_tvar_cas(STM_Transaction *tx, TVar *tv, void *old_value, void *new_value) {
+    if (tur_tvar_read(tx, tv) == old_value) {
+        tur_tvar_write(tx, tv, new_value);
+        return true;
+    }
+    return false;
+}
 static bool __tur_stm_validate(STM_Transaction *tx) {
     for (int i = 0; i < tx->read_count; i++) {
         if (tx->read_set[i]->version != tx->read_versions[i]) return false;

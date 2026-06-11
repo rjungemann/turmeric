@@ -1,0 +1,21 @@
+;; Compiled-path regression guard for STM or-else, whose branches previously
+;; emitted as no-op stubs: docs/reported/
+;; stm-or-else-compiled-branches-are-noop-stubs.md.
+;;
+;; Observed through tvar/cas (a printable bool), since TVar values are
+;; ptr<void> (unprintable).
+
+(defn main [] : int
+  (let [tv (tvar/new 10)]
+    ;; stm1 requests retry (check false); a speculative write after the failed
+    ;; check must be short-circuited.  or-else falls back to stm2 (cas 10->23).
+    (atomically (stm (or-else (stm (check false) (tvar/write tv 99) (tvar/cas tv 0 0))
+                              (stm (tvar/cas tv 10 23)))))
+    (println (atomically (stm (tvar/cas tv 23 23))))     ; true  (stm2 ran, tv=23)
+    (println (atomically (stm (tvar/cas tv 99 99))))     ; false (write 99 short-circuited)
+    ;; stm1 succeeds -> stm2 must NOT run.
+    (println (atomically (stm (or-else (stm (tvar/cas tv 23 5))
+                                       (stm (tvar/cas tv 23 999))))))  ; true (tv 23->5)
+    (println (atomically (stm (tvar/cas tv 5 5))))       ; true  (stm2 skipped, tv=5)
+    (println (atomically (stm (tvar/cas tv 999 999)))))  ; false
+  0)

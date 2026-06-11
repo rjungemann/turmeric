@@ -3225,13 +3225,49 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase 20: Software Transactional Memory */
         case EX_STM: {
-            /* (stm expr1 expr2 ...) - STM blocks are only valid inside atomically */
-            /* The EX_ATOMICALLY case handles the emission, so we should not reach here */
-            /* For now, emit as a no-op */
-            char *tmp = fresh_tmp(ctx);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "/* STM block (should be inside atomically) */ void *%s = NULL;\n", tmp);
-            return tmp;
+            /* (stm expr1 expr2 ...) -- a transactional block.  When directly
+             * under `atomically`, the EX_ATOMICALLY case inlines stm_.body and
+             * this arm is not reached.  It IS reached for nested stm blocks --
+             * notably the two branches of `or-else` -- which previously emitted
+             * a no-op stub (docs/reported/
+             * stm-or-else-compiled-branches-are-noop-stubs.md).  Emit the body
+             * for real: statements in order, the last as the block's value.
+             * After a `check`/`retry` requests a retry, short-circuit the rest
+             * of the block (mirroring the interpreter's EX_STM), so a
+             * speculative write that follows an aborted guard is not buffered. */
+            uint32_t n = e->as.stm_.n_body;
+            Type rt = e->type;
+            bool has_val = (rt.kind != TY_NIL && rt.kind != TY_NEVER);
+            char *res = NULL;
+            if (has_val) {
+                res = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = 0;\n", type_c_name(rt), res);
+            }
+            int opened = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                const Expr *be = e->as.stm_.body[i];
+                if (i > 0) {
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "if (!__tur_stm_should_retry(tur_stm_current_tx())) {\n");
+                    ctx->indent += 4;
+                    opened++;
+                }
+                if (i == n - 1 && has_val) {
+                    char *v = emit_value(ctx, body, be);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s = %s;\n", res, v);
+                    free(v);
+                } else {
+                    emit_stmt(ctx, body, be);
+                }
+            }
+            while (opened-- > 0) {
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+            }
+            return has_val ? res : atom_nil();
         }
         case EX_ATOMICALLY: {
             /* (atomically stm-expr) - execute the stm block atomically */
@@ -3436,13 +3472,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return atom_nil();
         }
         case EX_TVAR_MODIFY: {
-            /* (TVar::modify tvar fn) - modify a TVar */
+            /* Dead arm: elab_tvar_modify lowers (tvar/modify tv f) to
+             * (let [g tv] (tvar/swap g (f (tvar/read g)))) so the function
+             * application goes through the normal call-dispatch path.  This is
+             * kept defensive in case a raw EX_TVAR_MODIFY ever reaches codegen. */
             char *tvar_val = emit_value(ctx, body, e->as.tvar_modify_.tvar);
             char *fn_val = emit_value(ctx, body, e->as.tvar_modify_.fn);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            /* Simplified: emit as read-modify-write */
-            buf_printf(body, "/* TVar::modify %s %s */ void *%s = NULL;\n", tvar_val, fn_val, tmp);
+            buf_printf(body, "/* TVar::modify %s %s (lowered in elab) */ void *%s = NULL;\n", tvar_val, fn_val, tmp);
             free(tvar_val);
             free(fn_val);
             return tmp;

@@ -2446,6 +2446,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tx->new_values[tx->write_count++] = value;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
+    /* swap: read current (log-aware), write new, return old. */
+    buf_printf(out, "%svoid *tur_tvar_swap(STM_Transaction *tx, TVar *tv, void *new_value) {\n", rt_fn);
+    buf_puts(out, "    void *old_value = tur_tvar_read(tx, tv);\n");
+    buf_puts(out, "    tur_tvar_write(tx, tv, new_value);\n");
+    buf_puts(out, "    return old_value;\n");
+    buf_puts(out, "}\n");
+    /* cas: if current (log-aware) == expected, write new and return true. */
+    buf_printf(out, "%sbool tur_tvar_cas(STM_Transaction *tx, TVar *tv, void *old_value, void *new_value) {\n", rt_fn);
+    buf_puts(out, "    if (tur_tvar_read(tx, tv) == old_value) {\n");
+    buf_puts(out, "        tur_tvar_write(tx, tv, new_value);\n");
+    buf_puts(out, "        return true;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return false;\n");
+    buf_puts(out, "}\n");
     /* Validation */
     buf_puts(out, "static bool __tur_stm_validate(STM_Transaction *tx) {\n");
     buf_puts(out, "    for (int i = 0; i < tx->read_count; i++) {\n");

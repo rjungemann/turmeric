@@ -404,6 +404,13 @@ add_test(
   COMMAND bash tests/turi/eval-async-io.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Phase TI4: Software Transactional Memory (tvar/atomically/stm/or-else) under
+# the interpreter.  Runs via `tur --interpret` (not `tur run`, which compiles).
+add_test(
+  NAME tur_eval_stm
+  COMMAND bash tests/turi/eval-stm.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
@@ -415,6 +422,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
+                     tur_eval_stm
   PROPERTIES DEPENDS tur
 )
 
@@ -442,6 +450,7 @@ set_tests_properties(tur_flags_tests
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
+                     tur_eval_stm
   PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 
