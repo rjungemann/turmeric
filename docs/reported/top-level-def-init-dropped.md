@@ -3,10 +3,32 @@ title: Top-level `(def name init)` declares the binding but never emits the init
 category: Reported
 severity: Silent miscompile -- every top-level def reads as 0 at runtime
 discovered: 2026-06-11, while writing tests for ECS spice E2 stage scheduler
+resolved: 2026-06-11. Fix in `src/compiler/emit_module.c` -- adds a dedicated
+  `def_init_body` buffer that EX_DEF / EX_DEFDYNAMIC initializers write into,
+  and wires it into a `__attribute__((constructor))`-tagged
+  `__tur_module_def_init` function when `user_has_main` is true so the runtime
+  invokes it before main(). When the user has no main, def inits run first
+  in the synthesized main, before any other top-level statements.
 location: `src/compiler/emit_module.c` -- def-initialization emit path
 ---
 
 # Top-level `(def name init)` declares the binding but never emits the initializer
+
+> **Status: fixed 2026-06-11.** The minimal repro `(def y 7) ... (println y)`
+> now prints `7`. `stdlib/math.tur::PI` reads as `3.14159...` from any caller.
+> The ECS spice's `stage-pair.tur` uses real `(def pos-cid 0) (def hp-cid 2)`
+> declarations and the conflict-check predicate reports `conflict-check-ok`
+> as expected. Regression covered by
+> `tests/fixtures/top-level-def-init-runs-before-main/`.
+>
+> The fix splits the file-scope emit's `body` buffer into two: `body` (top-
+> level statements other than def inits) and `def_init_body` (just the def
+> inits). Under `user_has_main`, only `def_init_body` flows into the
+> constructor; `body` is dropped as before, preserving the long-standing
+> "top-level non-def statements after a user main are silently dropped"
+> behaviour. The single-file emit path is fixed; the separate-compilation
+> emit path at line 6520 has the same bug but is not fixed in this pass
+> (most fixtures use single-file mode; flagged as a follow-up).
 
 ## Summary
 

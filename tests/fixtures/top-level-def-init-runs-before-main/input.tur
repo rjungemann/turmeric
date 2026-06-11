@@ -1,0 +1,19 @@
+;; Regression: top-level (def name init) initializers must run before the
+;; user-defined main(). Pre-fix, the body buffer that holds the init code
+;; was silently discarded whenever user_has_main was true (see
+;; src/compiler/emit_module.c -- the `if (!user_has_main)` arm). The fix
+;; wires the body into a __attribute__((constructor)) function that the
+;; C runtime invokes before main(). Filed and resolved under
+;; docs/reported/top-level-def-init-dropped.md.
+
+(def x 7)
+(def y 42)
+(def pi 3.5)
+(def msg "hello")
+
+(defn main [] : int
+  (println x)        ;; 7
+  (println y)        ;; 42
+  (println pi)       ;; 3.5
+  (println msg)      ;; hello
+  0)

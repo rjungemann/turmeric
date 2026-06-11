@@ -4854,6 +4854,12 @@ int emit_program(Buf *out, const Expr *program) {
     /* Two buffers: file scope (statics) and main body. We assemble at the end. */
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);
+    /* Gap F: top-level (def name init) initializers land here so they
+     * survive into a __constructor__ when the user defines their own
+     * main(). Pre-fix these landed in `body`, which is silently dropped
+     * under user_has_main. Filed under
+     * docs/reported/top-level-def-init-dropped.md. */
+    Buf def_init_body; buf_init(&def_init_body);
     /* Phase 19: separate buffers for ordered final assembly:
      *   early_file   - pass 0: struct typedefs + drop glue
      *   fwd_decls    - pass 1: function forward declarations
@@ -5371,9 +5377,11 @@ int emit_program(Buf *out, const Expr *program) {
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
             if (e->as.def_.init) {
-                char *iv = emit_value(&ctx, &body, e->as.def_.init);
-                indent_buf(&body, ctx.indent);
-                buf_printf(&body, "%s = %s;\n", bn, iv);
+                /* Gap F: route to def_init_body so user-has-main programs
+                 * still execute the initializer via __constructor__. */
+                char *iv = emit_value(&ctx, &def_init_body, e->as.def_.init);
+                indent_buf(&def_init_body, ctx.indent);
+                buf_printf(&def_init_body, "%s = %s;\n", bn, iv);
                 free(iv);
             }
             free(bn);
@@ -5435,12 +5443,14 @@ int emit_program(Buf *out, const Expr *program) {
             buf_puts(&extern_decls, ");\n");
             }
         } else if (e->kind == EX_DEFDYNAMIC) {
-            /* DV2: initialize the root value in main() body. */
+            /* DV2: initialize the root value in main() body.
+             * Gap F: route to def_init_body so user-has-main programs
+             * still execute the initializer via __constructor__. */
             DynVarEntry *entry = e->as.defdynamic_.entry;
             char *mname = mangle_dynvar_name(entry->name->name);
-            char *rv = emit_value(&ctx, &body, e->as.defdynamic_.root_expr);
-            indent_buf(&body, ctx.indent);
-            buf_printf(&body, "_dynvar_root_%s = %s;\n", mname, rv);
+            char *rv = emit_value(&ctx, &def_init_body, e->as.defdynamic_.root_expr);
+            indent_buf(&def_init_body, ctx.indent);
+            buf_printf(&def_init_body, "_dynvar_root_%s = %s;\n", mname, rv);
             free(rv);
             free(mname);
         } else if (e->kind == EX_INLINE_C) {
@@ -5596,13 +5606,31 @@ int emit_program(Buf *out, const Expr *program) {
         buf_puts(out, "        _c->next = g_tur_args;\n");
         buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
         buf_puts(out, "    }\n");
+        /* Gap F: def initializers run before any other top-level
+         * statements so by the time `(println x)` runs `x` is set. */
+        if (def_init_body.len) buf_write(out, def_init_body.data, def_init_body.len);
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
+    } else if (def_init_body.len) {
+        /* Gap F: when the user has their own main(), `body` is silently
+         * dropped (pre-existing behaviour for top-level non-def
+         * statements after a user main). The def initializers in
+         * `def_init_body` are wired into a __constructor__ function so
+         * the runtime invokes them before main() runs. Supported by
+         * gcc + clang + ICC; the runtime preamble already assumes
+         * constructor priority works.
+         *
+         * Filed under docs/reported/top-level-def-init-dropped.md. */
+        buf_puts(out, "static void __tur_module_def_init(void) __attribute__((constructor));\n");
+        buf_puts(out, "static void __tur_module_def_init(void) {\n");
+        buf_write(out, def_init_body.data, def_init_body.len);
+        buf_puts(out, "}\n\n");
     }
 
     buf_free(&file);
     buf_free(&body);
+    buf_free(&def_init_body);
     free(items);
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
