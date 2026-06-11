@@ -3,9 +3,22 @@ title: Compile-time macros cannot synthesize identifier symbols
 category: Reported
 severity: Ergonomics gap (blocks `defworld` from emitting per-component named accessors)
 discovered: 2026-06-10, during ECS spice E0 execution (docs/upcoming/ecs-spice-plan.md)
+resolved: 2026-06-11, `str->sym` builtin landed in `src/compiler/elab_macros.c:321-326`
+  (`ct_eval_builtin` switch arm). Implementation mirrors `dot-sym`: takes a
+  string literal at expansion time, interns it via `symtab_intern`, returns a
+  fresh F_SYM form. Verified end-to-end: `(defmacro mint-get [T] ...
+  (str->sym (str-append "get-" (symbol-name T))) ...)` mints `get-Pos`,
+  `get-Vel` etc. as top-level defns.
 ---
 
 # Compile-time macros cannot synthesize identifier symbols
+
+> **Status: fixed.** `str->sym` is shipped in
+> `src/compiler/elab_macros.c:321-326`. The minimal repro from this
+> report works as written. The ECS prerequisite plan
+> ([`../upcoming/ecs-prereq-plan.md`](../upcoming/ecs-prereq-plan.md))
+> Tier 1 is closed; the next blocker is gap D
+> ([`macro-cannot-emit-inline-c-block.md`](macro-cannot-emit-inline-c-block.md)).
 
 ## Summary
 
