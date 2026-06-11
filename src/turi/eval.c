@@ -967,6 +967,97 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
 }
 
 /* -------------------------------------------------------------------------
+ * Phase TI3: delimited control -- reset / shift / shift0 (abortive)
+ *
+ * Turmeric's shift/reset are ABORTIVE.  The compiled path lowers (shift f body)
+ * to: evaluate body to v, compute f(v), then abort the computation up to the
+ * nearest enclosing reset, which yields f(v) as its value (see the runtime
+ * `__dk_abort_body` in emitted C and src/runtime/cps_prompt.c -- the captured
+ * sub-continuation is never resumed).  Because the continuation is discarded, a
+ * plain setjmp/longjmp prompt boundary models the semantics exactly, with no
+ * fiber capture needed.  shift0 differs from shift only in prompt
+ * re-installation when the continuation is *resumed*; since it is never
+ * resumed here, shift0 behaves identically to shift.
+ *
+ * The context-capturing variants (serial-shift / cloneable-shift), which DO
+ * hand a resumable continuation to f, are a separate, larger piece of work and
+ * remain a documented interpreter carve-out -- see
+ * docs/reported/turi-capturing-shift-unimplemented.md.  serial-reset and
+ * cloneable-reset establish a prompt boundary so the no-shift passthrough case
+ * (e.g. (serial-reset 42)) evaluates correctly; a *-shift inside them still
+ * errors cleanly until the capturing work lands.
+ * ---------------------------------------------------------------------- */
+typedef enum { PROMPT_PLAIN, PROMPT_SERIAL, PROMPT_CLONEABLE } TuriPromptKind;
+
+typedef struct TuriResetBoundary {
+    jmp_buf                   jmp;
+    TuriPromptKind            kind;
+    TuriValue                 result;       /* value an abortive shift delivers */
+    /* env state to restore after a longjmp unwinds the intervening C frames */
+    uint32_t                  saved_depth;
+    void                     *saved_handler_stack;
+    void                     *saved_defer_stack;
+    struct TuriResetBoundary *prev;
+} TuriResetBoundary;
+
+static _Thread_local TuriResetBoundary *g_reset_stack;
+
+/* Nearest enclosing boundary of the given kind, or NULL. */
+static TuriResetBoundary *reset_find(TuriPromptKind kind) {
+    for (TuriResetBoundary *b = g_reset_stack; b; b = b->prev)
+        if (b->kind == kind) return b;
+    return NULL;
+}
+
+/* Establish a delimited-control prompt and evaluate body within it.  Returns
+ * body's value normally, or the value delivered by an abortive shift that
+ * targeted this boundary. */
+static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
+                                     const Expr *body, TuriPromptKind kind) {
+    TuriResetBoundary b;
+    b.kind                = kind;
+    b.result              = turi_nil();
+    b.saved_depth         = env->eval_depth;
+    b.saved_handler_stack = env->handler_stack;
+    b.saved_defer_stack   = env->defer_stack;
+    b.prev                = g_reset_stack;
+    g_reset_stack = &b;
+
+    if (setjmp(b.jmp) == 0) {
+        TuriValue v = eval_expr(env, frame, body);
+        g_reset_stack = b.prev;
+        return v;
+    }
+    /* An abortive shift longjmp'd here.  Restore the env state that the
+     * unwound eval_expr frames would otherwise have decremented/popped. */
+    g_reset_stack      = b.prev;
+    env->eval_depth    = b.saved_depth;
+    env->handler_stack = b.saved_handler_stack;
+    env->defer_stack   = b.saved_defer_stack;
+    return b.result;
+}
+
+/* Evaluate an abortive (shift f body) / (shift0 f body): r = f(body), then
+ * abort to the nearest plain reset boundary, which returns r. */
+static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
+                                     const Expr *k_fn, const Expr *body,
+                                     const char *form) {
+    TuriValue v = eval_expr(env, frame, body);
+    if (turi_is_error(v) || env->returning || env->throwing) return v;
+    TuriValue fn = eval_expr(env, frame, k_fn);
+    if (turi_is_error(fn) || env->returning || env->throwing) return fn;
+    TuriValue r = turi_call(env, fn, &v, 1);
+    if (turi_is_error(r) || env->returning || env->throwing) return r;
+
+    TuriResetBoundary *b = reset_find(PROMPT_PLAIN);
+    if (!b)
+        return turi_errorf("eval: %s used outside of any reset boundary", form);
+    b->result = r;
+    longjmp(b->jmp, 1);
+    /* unreachable */
+}
+
+/* -------------------------------------------------------------------------
  * Builtin dispatch
  * ---------------------------------------------------------------------- */
 
@@ -4141,10 +4232,28 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_bool(gv.as_gen->done);
     }
 
-    /* serial-reset: Phase 21 not yet implemented in interpreter. */
+    /* Phase TI3: delimited control. */
+    case EX_RESET:
+        return eval_reset_boundary(env, frame, e->as.reset_.body, PROMPT_PLAIN);
+
+    case EX_SHIFT:
+        return eval_abortive_shift(env, frame, e->as.shift_.k_fn,
+                                   e->as.shift_.body, "shift");
+
+    case EX_SHIFT0:
+        return eval_abortive_shift(env, frame, e->as.shift0_.k_fn,
+                                   e->as.shift0_.body, "shift0");
+
+    /* serial-reset / cloneable-reset: establish a prompt boundary so the
+     * no-shift passthrough case evaluates.  The capturing serial-shift /
+     * cloneable-shift remain a documented carve-out (see eval.c TI3 notes). */
     case EX_SERIAL_RESET:
-        return turi_errorf("eval: EX_SERIAL_RESET (Phase 21 serial-shift/reset) is not yet "
-                           "implemented in the interpreter");
+        return eval_reset_boundary(env, frame, e->as.serial_reset_.body,
+                                   PROMPT_SERIAL);
+
+    case EX_CLONEABLE_RESET:
+        return eval_reset_boundary(env, frame, e->as.cloneable_reset_.body,
+                                   PROMPT_CLONEABLE);
 
     /* --- Everything else — unimplemented expression kind ------------------ */
     default:

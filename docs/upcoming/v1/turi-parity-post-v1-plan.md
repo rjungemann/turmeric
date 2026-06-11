@@ -438,28 +438,59 @@ variants. The interpreter today only supports the **basic effect**
 form via `EX_PERFORM` (already handled) and chokes on the raw
 delimited-control nodes.
 
-### Implementation
+### Key finding: Turmeric `shift`/`shift0` are ABORTIVE
 
-The interpreter has `ucontext` swaps already; the delimited-control
-ops can be expressed in terms of `swapcontext` plus a per-`reset`
-boundary record. Reuse `TuriEffectCont` for captured continuations:
+The plan's original design (capture body-up-to-reset as a
+`TuriEffectCont`, swap to the reset handler) assumed full
+continuation-passing semantics for `shift`. The audit of the compiled
+path corrected this: `EX_SHIFT` / `EX_SHIFT0` are **abortive**.
+`(shift f body)` lowers to "evaluate `body` to `v`, compute `f(v)`,
+abort to the nearest enclosing `reset` whose value becomes `f(v)`" --
+the captured sub-continuation is *never resumed* (the emitted runtime
+body is `__dk_abort_body`, which ignores the captured slice; see
+`src/runtime/cps_prompt.c`). `shift0` differs only in prompt
+re-installation on resume, which is unobservable when the continuation
+is discarded. `tests/fixtures/continuation-substrate/` asserts exactly
+this (`t-nested-reset=11` proves the `(+ 10 ...)` frame is discarded).
 
-- `EX_RESET`: push a new reset boundary record, run body, pop on
-  return.
-- `EX_SHIFT`: walk to nearest reset, capture body-up-to-reset as a
-  `TuriEffectCont`, swap to the reset handler with the captured
-  continuation as its argument.
-- `EX_SHIFT0`: same but pop the boundary before invoking.
-- **Cloneable**: wrap the captured stack in a refcounted copy that can
-  be invoked more than once. Cost is duplicating the saved
-  `ucontext_t` + register state.
-- **Serial**: a single-shot variant; capture but mark "consumed" once
-  invoked.
+Because the continuation is discarded, the abortive operators need a
+plain `setjmp`/`longjmp` prompt boundary -- **no fiber capture**. Only
+the context-*capturing* variants (`serial-shift` / `cloneable-shift`,
+which hand a resumable `k` to `f`) need `TuriEffectCont`-style capture.
 
-### Tests
+### TI3.1 -- abortive base + prompt boundaries -- **LANDED**
 
-Reuse the existing compiled-side fixtures (`delimited-control-*`) and
-add them to the turi allowlist.
+`src/turi/eval.c` now handles:
+
+- `EX_RESET`, `EX_SHIFT`, `EX_SHIFT0` -- abortive, via a thread-local
+  `TuriResetBoundary` `setjmp`/`longjmp` stack (`eval_reset_boundary` /
+  `eval_abortive_shift`). The boundary snapshots `eval_depth`,
+  `handler_stack`, and `defer_stack` and restores them after a
+  `longjmp` unwinds the intervening eval frames.
+- `EX_SERIAL_RESET`, `EX_CLONEABLE_RESET` -- establish a prompt
+  boundary so the no-shift passthrough case evaluates (e.g.
+  `(serial-reset 42) => 42`). (The previous `EX_SERIAL_RESET` "Phase 21
+  not yet implemented" error arm is removed.)
+
+Verified under `tur --interpret` (the harness still compiles -- see the
+TI1 blocker): `continuation-substrate` (43/107/11/6/42/123/16),
+`shift-result-typing` (1/0/42), `shift0-result-typing` (1/0),
+`serial-reset-basic` (`result: 42`). All four added to the
+`tests/run-turi.sh` allowlist (TI3 block).
+
+### TI3.2 -- context-capturing shift -- **carved out (follow-up)**
+
+`serial-shift` and `cloneable-shift` (and multi-shot cloneable resume)
+remain unimplemented in the interpreter and error cleanly under
+`tur --interpret`. They need genuine continuation capture (reuse
+`TuriEffectCont` for one-shot serial; multi-shot cloneable needs either
+fiber-stack cloning or a heap-reified `DK` chain). Full write-up, repro,
+and recommended fix directions:
+[docs/reported/turi-capturing-shift-unimplemented.md](../../reported/turi-capturing-shift-unimplemented.md).
+
+`call/cc` / `escape` (`EX_CALLCC`) used by `cont-flavors`, `callcc-*`,
+and `escape-*` are tracked separately under the CPS-transform category
+(Risks #5 / Sequencing) and are out of TI3 scope.
 
 ### Doc
 

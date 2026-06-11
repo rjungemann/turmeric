@@ -245,6 +245,21 @@ gen-yield-star
 # in `return <expr>;` instead of silently dropping them.
 #   inline-c-binop -- != / == / > / + / * / % / << / && / ! shapes match tur
 inline-c-binop
+
+# TI3 (turi-parity-post-v1-plan, delimited control): abortive reset/shift/shift0
+# plus serial-reset/cloneable-reset prompt boundaries handled by the interpreter
+# (EX_RESET/EX_SHIFT/EX_SHIFT0/EX_SERIAL_RESET/EX_CLONEABLE_RESET).  Verified
+# under 'tur --interpret'.  The context-capturing serial-shift/cloneable-shift
+# remain a documented carve-out
+# (docs/reported/turi-capturing-shift-unimplemented.md).
+#   continuation-substrate -- abortive reset/shift/shift0 incl. nested resets
+#   shift-result-typing    -- (shift f body) yields f's codomain
+#   shift0-result-typing   -- shift0 mirrors shift's local typing/abort
+#   serial-reset-basic     -- serial-reset with no shift returns its body
+continuation-substrate
+shift-result-typing
+shift0-result-typing
+serial-reset-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.
