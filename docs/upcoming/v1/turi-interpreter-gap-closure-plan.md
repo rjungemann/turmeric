@@ -147,15 +147,61 @@ layout -- which regressed `coerce-carrier-to-struct` /
 comes from the loaded `option.tur`; `vec-get`/`vec-set!`/`vec-free` stubs are
 dropped (vec.tur owns them).
 
-**Follow-up -- reconcile the native-shim layer (was the rest of this
-workstream).** To recover `typed/list-basic` / `typed/option-basic` /
-`typed/map-basic` / `typed/set-basic` / `result-basic` and friends, the
-`native_*` Result/Option/Map/Set/Hamt shims must agree on memory layout with the
-real modules (then those modules can join the prelude). That is its own task:
-audit each `native_*` against its module's struct layout, or register native
-overrides for the modules' inline-C functions so the interpreter never executes
-the inline-C body. `native_set_count`'s heap overflow should get its own
-`docs/reported/` entry. Track as **W1b**.
+### W1b -- Reconcile the native-shim layer (NOT a module-load task) -- **scoped 2026-06-11**
+
+> The naive plan was "fix the layouts, then add result/map/set/hamt to the
+> prelude." A spike on 2026-06-11 proved that is a **dead end as stated** -- the
+> real task is a representation-unification design problem. Findings below so
+> the next attempt is not mis-scoped.
+
+**Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
+prelude (with the `ok?`/`err?` stubs dropped) **regressed** `coerce-carrier-to-
+struct` and recovered **zero** fixtures: `typed/result-basic` still fails with
+`inline-C not supported`, because its operations (`ok`/`err`/`result-map`/...)
+are inline-C bodies the interpreter cannot execute, and the `native_*` overrides
+do not cover all of them (and where they do, they use a different layout). So
+"load the module for its struct type" does not help; the *operations* must be
+interpretable, which means **complete, layout-consistent native coverage per
+type**, not module loading.
+
+**Finding 2 -- four incompatible representations of the "same" value.** A
+Result/Set/Map value can exist in the interpreter as any of:
+
+1. a `native_*` int64-box (e.g. `native_ok` -> `int64[3] {is_ok, ok, err}`),
+2. a `make-struct`/`defstruct` `TuriStruct` (heap object with metadata),
+3. a `#set{}` / literal layout (`EX_SET_LIT` -> `int64[2] {ptr, count}`),
+4. the real module's struct (e.g. `set.tur`'s `{void* hamt}`).
+
+The `native_*` shims silently assume one shape; feeding them another silently
+miscompiles or heap-overflows (`native_set_count`, see
+[docs/reported/turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md)).
+Crucially the **same `set-count` native serves both `#set{}` literals (correct)
+and `set.tur` sets (overflow)** -- with no runtime tag to tell them apart -- so
+the shims cannot simply be repointed.
+
+**What W1b actually requires (per type: Result, Option, Map, Set, Hamt).** Pick
+**one** in-memory representation and make every producer and consumer agree:
+`make-struct`/`#lit`/native-constructor all build it, and every accessor
+(native or module) reads it. Concretely, for each type either:
+
+- (a) give the interpreter a **complete native override set** (constructor +
+  every operation) over one chosen layout, and make `make-struct <T>` /
+  `EX_*_LIT` produce that same layout; **or**
+- (b) make the module operations **interpretable without inline-C** (so loading
+  the module is sufficient and no native is needed) -- only viable for modules
+  whose ops are pure-turi or reducible to existing natives.
+
+This is a multi-session, per-type effort and should be sequenced **after** W2
+(carve) and W3 (semantic fixes), which are independently tractable and move the
+flip closer. Suggested first target: **Result** (highest fixture count, and its
+struct layout `{bool is_ok; int64 ok; int64 err}` already matches the native
+int64-box -- the gap is only that `make-struct Result` builds a `TuriStruct`
+instead of that box).
+
+**Adjacent bug surfaced during the spike (W4, independent):**
+`ic_exec_accessor` silently miscompiles `return p == NULL || !p->field;` (drops
+the `!`/`||`), inverting predicates like `result-basic`'s `u-err?` -- filed at
+[docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md).
 
 ---
 
@@ -269,30 +315,31 @@ Once W1-W4 leave only carved fixtures failing:
 ## Sequencing
 
 ```
-W1 (prelude, DONE) ──► W1b (native-shim reconcile) ──► W2 (carve inline-C) ──► W5 (flip)
-      │                       ▲                              ▲        ▲
-      └──► W3 (semantic fixes) ┘                             │        │
-      └──► W4 (silent miscompiles) ──────────────────────────┘        │
-                                                                       │
-                          (re-measure after each before carving) ──────┘
+W1 (prelude, DONE)
+      ├──► W3 (semantic fixes) ──┐
+      ├──► W4 (silent miscompiles)┤──► W2 (carve inline-C) ──► W5 (flip)
+      └──► W1b (per-type repr.) ──┘         ▲
+                 (large, multi-session;     │
+                  re-measure after each before carving)
 ```
 
-W1 landed (the conflict-free subset). **W1b** -- reconcile the `native_*`
-Result/Map/Set/Hamt shims with their real modules so those modules can join the
-prelude -- is the natural next step and unblocks the largest remaining cluster
-(`typed/list`/`option`/`result`/`map`/`set`, `result-basic`). It also closes the
-`native_set_count` overflow
-([docs/reported/turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md)).
-W2 is the mechanical bulk that makes the flip reachable. W3/W4 run in parallel
-and gate the flip. **Re-measure after each step** before carving anything. W5 is
-last and is itself the acceptance test.
+W1 landed (the conflict-free subset). **W1b was rescoped** (see its section): it
+is *not* a module-load step but a per-type representation-unification effort, so
+it moves **after** the independently-tractable W3 (semantic fixes) and W4
+(silent miscompiles) and is sequenced alongside W2 rather than gating it. W2 is
+the mechanical bulk that makes the flip reachable. **Re-measure after each step**
+before carving anything. W5 is last and is itself the acceptance test.
 
 Suggested PR slicing (each independently green):
-1. W1 prelude (+ allowlist additions for newly-passing typed fixtures).
-2. W3 move/linearity root-cause fix (likely one fix, ~33 fixtures).
-3. W4 batch 1: `weak-dangling` + `result-basic` root cause (may cascade).
+1. W1 prelude (+ allowlist additions for newly-passing typed fixtures). **DONE.**
+2. W3 move/linearity root-cause fix (likely one fix, ~33 fixtures). **Recommended
+   next -- most bounded high-leverage piece.**
+3. W4 batch 1: `weak-dangling` root cause; `ic_exec_accessor` boolean-return
+   miscompile (`result-basic`).
 4. W2 carve sweep + remaining W4 carves-with-reports.
-5. W5 flip + run-flags wiring.
+5. W1b per-type representation unification (start with Result), as capacity
+   allows -- recovers the typed-collection cluster but is the heaviest piece.
+6. W5 flip + run-flags wiring.
 
 ---
 

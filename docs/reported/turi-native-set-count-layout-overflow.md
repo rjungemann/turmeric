@@ -61,11 +61,26 @@ that does not exist, and `native_set_member` then indexes
   `native_set_member`.
 - **Expected:** `set-count` returns the cardinality of the HAMT-backed set.
 
+## Complication: the natives also serve `#set{}` literals (dual representation)
+
+The same `set-count`/`set-member?` natives back the `#set{...}` literal, which
+`EX_SET_LIT` lowers to the **int64[2] sorted-array** layout the natives expect.
+So the natives are *correct* for `#set{}` literals and *wrong* for `set.tur`
+HAMT-backed sets -- two incompatible runtime representations routed through one
+native, with **no runtime tag to distinguish them**. A naive "repoint
+`native_set_count` at the hamt" therefore breaks `#set{}` literals. This is the
+crux of why W1b is a representation-unification problem and not a one-line fix:
+`#set{}` literals, `set.tur` structs, the native int64-box, and `make-struct`
+TuriStructs are four different in-memory shapes for the "same" value, and the
+`native_*` shims silently assume one of them.
+
 ## Fix directions
 
-1. **Make the natives match `set.tur`'s HAMT layout.** Read the `hamt` field and
-   call the hamt count/member natives. This unifies the two and lets `set.tur`
-   join the W1 prelude.
+1. **Unify the Set representation first**, then make the natives match it. Either
+   route `#set{}` literals through the HAMT path too (so one layout exists), or
+   tag set values so the natives can branch. Only then can `set.tur` join the W1
+   prelude. Read the `hamt` field and call `tur_hamt_count`/`tur_hamt_get`
+   (both exist: `src/runtime/hamt.c:852,914`).
 2. **Or drop the `set-*` natives and let `set.tur` run** (its ops are
    HAMT-backed; if the hamt path is interpretable, no native is needed).
 3. **Or register an override for `set-new` that produces the `int64_t[2]`
