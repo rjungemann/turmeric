@@ -1,6 +1,0 @@
-; The fixture deliberately leaks the SizedBuf to keep its scope inside
-; the open body (sized-buf-free can't be called from the open's body
-; tail without surfacing the binder type; a separate codegen gap also
-; prevents the monomorphizer from emitting free for the abstract n
-; reached from inside an open).  The compiler/codegen path is still
-; leak-checked; only the spawned program opts out.

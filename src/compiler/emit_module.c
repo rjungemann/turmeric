@@ -1405,6 +1405,22 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
         case EX_CAST:
             emit_abi_scan_expr(ctx, e->as.cast_.expr, items, n_items);
             break;
+        case EX_EXISTS_PACK:
+            /* Calls inside the packed value still need worklist seeding so
+             * any polymorphic helper used to construct the existential is
+             * monomorphized.  See
+             * docs/reported/open-monomorphizes-polymorphic-fn-only-partially.md. */
+            emit_abi_scan_expr(ctx, e->as.exists_pack_.value, items, n_items);
+            break;
+        case EX_EXISTS_OPEN:
+            /* Recurse into both the packed expression and the open body --
+             * without this, calls to polymorphic helpers reached only
+             * through the open body (e.g. `sized-buf-free buf` where buf
+             * is bound at `(SizedBuf <skolem>)`) fall off the worklist and
+             * the C linker reports them undeclared. */
+            emit_abi_scan_expr(ctx, e->as.exists_open_.packed, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.exists_open_.body,   items, n_items);
+            break;
         case EX_REINTERPRET:
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
                 const Expr *rc = e->as.reinterpret_.expr;

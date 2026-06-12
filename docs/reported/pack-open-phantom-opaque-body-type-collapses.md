@@ -28,12 +28,13 @@ status: RESOLVED 2026-06-12. `elab_open` (`src/compiler/elab_types.c`) now prese
 > and are filed separately rather than expanding this fix:
 >
 > 1. **Codegen monomorphization of polymorphic stdlib helpers reached
->    from inside `open`.** A call like `(sized-buf-free buf)` inside
->    an open body type-checks but the monomorphizer does not emit
->    `sized_hybuf_hyfree`, leaving the C link step undefined. The
->    accept fixture works around this by carrying
->    `requires.no-leak-check` and leaving the free out of the body.
->    See the new gap report
+>    from inside `open`.** RESOLVED 2026-06-12 in the same session --
+>    `emit_abi_scan_expr` was missing cases for `EX_EXISTS_PACK` and
+>    `EX_EXISTS_OPEN`, so calls inside the open body never seeded the
+>    worklist. Two added cases in `src/compiler/emit_module.c` close
+>    the gap; the accept fixture now exercises
+>    `pack -> open -> sized-buf-len -> sized-buf-free` end-to-end with
+>    no `requires.no-leak-check`. Trail:
 >    [open-monomorphizes-polymorphic-fn-only-partially.md](open-monomorphizes-polymorphic-fn-only-partially.md).
 > 2. **Skolem-distinctness for nested `open` binders.** Two `(open ...
 >    [n_i x_i] ...)` bind two `n_i` that are both `TY_STRUCT` /

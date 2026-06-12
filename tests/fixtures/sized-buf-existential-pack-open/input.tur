@@ -17,5 +17,6 @@
 (defn main [] : int
   (let [packed (pack (mk5) (exists [n] (SizedBuf n)))]
     (open packed [n buf]
-      (println (sized-buf-len buf))))
+      (println (sized-buf-len buf))
+      (sized-buf-free buf)))
   0)

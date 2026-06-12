@@ -44,19 +44,134 @@ first place.
   diagnostic that fires for concrete `(SizedBuf (Static 2))` vs
   `(SizedBuf (Static 3))` in `errors/sized-buf-cross-param-reject`.
 
-## Root-cause hypothesis
+## Root cause (diagnosed 2026-06-12)
 
-`call_collect_type_bindings` (`src/compiler/elab_call.c:129`) walks
-arg-by-arg, binding each named tyvar's first occurrence to the actual
-type and checking later occurrences via `type_eq`. When the actual
-type is `TY_STRUCT def=NULL` (a tyvar / skolem), every fresh skolem
-compares equal to every other, so the late-occurrence check passes.
+The binder identity is lost at parse time, well before `elab_open`
+sees it. In `type_expr_from_form`
+(`src/compiler/elab_types.c:390--403`), when a bare symbol matches a
+type-parameter name in scope (which includes the existential's bound
+binders via the `ext_params` array passed in at
+`elab_types.c:949--950`), the resolver produces an **anonymous**
+`TY_STRUCT` with `def=NULL` and `as.struct_.def = NULL`. No name is
+attached:
 
-`elab_open` (`src/compiler/elab_types.c`) does not currently mint a
-*distinct* tyvar identity for each open's abstract binder; the v_type
-just inherits the body type, in which the bound tyvar from
-`(exists [n] ...)` is the same anonymous form across every open in
-the program.
+```c
+if (n_type_params > 0) {
+    for (uint8_t i = 0; i < n_type_params; i++) {
+        if (type_params[i] && type_params[i] == sym) {
+            Type *t = ...;
+            t->kind = TY_STRUCT;
+            t->as.struct_.def = NULL;        // <-- nameless
+            return t;
+        }
+    }
+}
+```
+
+So the body of `(exists [n] (SizedBuf n))` lowers to
+`TY_APP(SizedBuf, TY_STRUCT{def=NULL})` -- the binder name `"n"`
+is preserved on the existential node
+(`as.forall_.var_names[0] == "n"`) but **dropped** on the reference
+inside the body. Every open in the program then projects a body
+containing the same `TY_STRUCT{def=NULL}` shape, and `type_eq`
+correctly reports them equal because there is no name to compare.
+
+`call_collect_type_bindings` (`src/compiler/elab_call.c:129`) is the
+*amplifier*, not the cause: it walks arg-by-arg, binds the first
+occurrence of each typeclass-method tyvar to the actual, and checks
+later occurrences via `type_eq`. With every skolem represented
+identically, late occurrences trivially pass.
+
+`elab_open` (`src/compiler/elab_types.c:2565`) already mints a
+unique `my_skolem_id = e->open_skolem_next++` per open and the
+infrastructure for distinct identity exists -- but the id is
+discarded (`(void)my_skolem_id;` at line 2615) and never threaded
+into the v_type's body. The plumbing is half-built.
+
+## Fix sketch (initial triage)
+
+Two reasonable directions; (A) is the cleanest single-pass fix.
+
+### (A) Name the tyvar at parse time, substitute a fresh name at open
+
+1. In `type_expr_from_form` (`elab_types.c:390--403`), when a symbol
+   matches a `type_params[i]`, return a **named** `TY_TYVAR` instead
+   of an anonymous `TY_STRUCT{def=NULL}`:
+
+   ```c
+   Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+   *t = type_tyvar_named(sym->name);
+   t->hkt_kind = type_param_kinds[i];
+   return t;
+   ```
+
+   Blast radius: every type-param reference in every type expression
+   becomes a named `TY_TYVAR`. The codebase already has a partial
+   precedent in `elab_types.c:1126` (and Direction 3 comments at
+   `:1148`) that lifts the nameless form to a named one for function
+   returns; this just generalises that lift. Risk: downstream code
+   that pattern-matches on `TY_STRUCT{def=NULL}` would miss the
+   tyvar -- run the suite to enumerate. A targeted shim that accepts
+   both shapes during the migration would smooth this.
+
+2. In `elab_open` (`elab_types.c` around line 2565), mint a fresh
+   skolem name from `my_skolem_id` and substitute the existential's
+   bound binders inside `v_type`:
+
+   ```c
+   char buf[32];
+   snprintf(buf, sizeof(buf), "__open_skolem_%u", my_skolem_id);
+   const char *fresh = arena_strdup(e->arena, buf);
+   /* For each binder var_names[i], walk v_type and rename
+    * TY_TYVAR{name==var_names[i]} to TY_TYVAR{name==fresh_i}. */
+   v_type = subst_tyvar(e->arena, &v_type,
+                        packed->type.as.forall_.var_names[0], fresh);
+   ```
+
+   `subst_tyvar` follows the existing
+   `struct_field_instantiate_type` pattern at
+   `elab_structs.c:321` -- shallow walk substituting at each `TY_TYVAR`
+   match, recursing through `TY_APP` / `TY_UNION` /
+   `TY_INTERSECTION`. Multi-binder existentials want one fresh name
+   per `var_names[i]`.
+
+### (B) Side-table for skolem identity, no parse-time change
+
+Keep the body type structure as-is, but at open time wrap `v_type`
+with an outer skolem id (stored in a new `Type` field or in a side
+table keyed by binding pointer). The call-unifier consults the side
+table when comparing two anonymous skolems for equality.
+
+Lower blast radius but harder to maintain; (A) is preferred.
+
+## Validation
+
+- New error fixture
+  `tests/fixtures/errors/sized-buf-existential-cross-open-reject/`
+  using the minimal repro above; `expected.diag` matches TUR-E0260.
+- Existing `tests/fixtures/sized-buf-existential-pack-open` (single
+  open) stays green.
+- Run the full suite after option (A): expect any regressions to
+  cluster around code paths that pattern-matched on
+  `TY_STRUCT{def=NULL}` (the candidate shim above is the planned
+  workaround).
+
+## File pointers
+
+- `src/compiler/elab_types.c:390--403` -- the parse-time anonymous
+  `TY_STRUCT` construction (the root cause).
+- `src/compiler/elab_types.c:949--951` -- where the existential body
+  is parsed with `ext_params` in scope.
+- `src/compiler/elab_types.c:2565` -- where `my_skolem_id` is minted
+  and currently discarded.
+- `src/compiler/elab_types.c:1077`, `1126` -- existing precedents
+  for promoting an anonymous to a named tyvar.
+- `src/compiler/types.h:1290` -- `type_tyvar_named` constructor.
+- `src/compiler/elab_structs.c:321` --
+  `struct_field_instantiate_type`, the substitution pattern to mirror
+  in `subst_tyvar`.
+- `src/compiler/elab_call.c:129--163` -- the call-side unifier
+  (`call_collect_type_bindings`) that consumes the result.
 
 ## Proposed fix directions
 
