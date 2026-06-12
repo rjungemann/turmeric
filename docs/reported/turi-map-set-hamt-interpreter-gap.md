@@ -1,5 +1,21 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
+> **Progress (MutableMap + option-eq, 2026-06-12):** **`mutmap-*` and `option-eq?`
+> now work under `--interpret`.** `mutmap.tur` is a self-contained open-addressing
+> table (no runtime HAMT dependency), so its 8 ops are re-implemented as
+> `native_mutmap_*` over the exact `{cap,len,tomb,slots[]}` layout (only
+> `mutmap-eq?` needs the interpreter -- it calls the value comparator via
+> `turi_call`); `mutmap.tur` joined the prelude (removed from
+> `docs/turi-preload-carve-out.txt`). `native_option_eq` does the same for
+> `option-eq?` over the `int64[2] {is_some,value}` box. Unblocked `mutmap-basic`,
+> `mutmap-delete`, `mutmap-eq`, `mutmap-resize`, `option-of-tvec-eq`, and
+> `eq-carrier-capturing-comparator` (a genuine capturing comparator across
+> option/vec/mutmap eq) -- harness 992 -> 998. **Still open:** `option-basic` /
+> `typed/option-basic` build an Option via `make-struct Option ...` (a
+> `TuriStruct`, the dual representation), which `unwrap`/`option-eq?` do not yet
+> read -- the Option dual-rep follow-up (mirrors the landed Result dual-rep
+> readers); they error cleanly today, not miscompile.
+>
 > **Progress (W1b map-equality, 2026-06-12):** **`map-eq?` / `map-eq-k?` now work
 > under `--interpret`.** `map.tur`'s `map-eq-raw?` / `map-eq-raw-k?` iterate the
 > HAMT and fat-dispatch the value comparator through a C function pointer, which

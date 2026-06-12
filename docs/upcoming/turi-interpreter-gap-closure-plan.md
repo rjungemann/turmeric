@@ -40,21 +40,22 @@ post-defmodule-fix:  pass = 660   fail = 910   skip = 92
 post-W1:             pass = 695   fail = 875   skip = 92   (+35)
 ```
 
-**Harness state (the live metric): 992 passed, 0 failed.** Progression:
+**Harness state (the live metric): 998 passed, 0 failed.** Progression:
 181 (post-defmodule) -> 463 (W3 wired `errors/*`, +282) -> 912 (the bulk-add of
 every auto-verified-passing non-inline-C fixture, +449) -> 985 (post #341
 /#342/#343: pure-turi silent-miscompile fixes, inline-C tightening, HAMT ctx ABI,
 preload parity, +73) -> 987 (W1b `map-eq?` natives + free-matcher fix, +2) ->
-**992** (recursive container value-eq: `vec-eq?` / `set-eq-cmp?` natives, +5).
+992 (recursive container value-eq: `vec-eq?` / `set-eq-cmp?` natives, +5) ->
+**998** (MutableMap natives + `option-eq?`, mutmap.tur preloaded, +6).
 The harness summary now separates the work cleanly:
 
 ```
-992 passed, 0 failed, 612 skipped
+998 passed, 0 failed, 606 skipped
   407 inline-c carve-outs   (TI7, permanent -- W2)
-  205 non-inline-C not yet on the allowlist  (the W5 triage surface)
+  199 non-inline-C not yet on the allowlist  (the W5 triage surface)
 ```
 
-The **205** is the real remaining gap (down from 260): the W1b native-shim
+The **199** is the real remaining gap (down from 260): the W1b native-shim
 cluster (map, blocked on the C-callback eq/hash gap) + the remaining inline-C
 evaluator miscompiles + an HKT/existential/continuation tail, plus a few
 container/edge dirs. Everything that passes under `--interpret` is now on the

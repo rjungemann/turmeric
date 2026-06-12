@@ -924,6 +924,18 @@ set-of-tvec-eq
 vec-of-tvec-eq
 vec-of-tvec-eq-manual
 typed/vec-basic
+option-of-tvec-eq
+# MutableMap (open-addressing hash table): mutmap.tur's inline-C ops loop and
+# fat-dispatch the value comparator (un-runnable in the simple executor).  The
+# native_mutmap_* overrides re-implement them over mutmap's self-contained
+# {cap,len,tomb,slots[]} layout; mutmap-eq? / option-eq? invoke the comparator
+# (a turi closure) via turi_call.  eq-carrier-capturing-comparator exercises a
+# genuine capturing comparator across option-eq?/vec-eq?/mutmap-eq?.
+mutmap-basic
+mutmap-delete
+mutmap-eq
+mutmap-resize
+eq-carrier-capturing-comparator
 "
 
 # Build an associative-set from the default list for O(1) lookup.

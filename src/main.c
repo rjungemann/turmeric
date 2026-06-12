@@ -4934,11 +4934,10 @@ static int cmd_eval(const char *path, bool use_color,
          *                    :pre/:post contract lowering (wk_eval_fixture skips
          *                    it for the same reason); loading it silently broke
          *                    contract-pre/post/type.
-         *   mutmap -- the mutable-map module still needs native overrides over
-         *                    tur_hamt_*.  (set + map scalar keys are now
-         *                    supported; map content-keyed user comparators await
-         *                    TI10 Tier B's turi-closure-aware HAMT path.)  See
-         *                    docs/reported/turi-map-set-hamt-interpreter-gap.md. */
+         * mutmap.tur is now preloaded (below): its inline-C ops are re-implemented
+         * as native_mutmap_* overrides over its self-contained open-addressing
+         * layout (no tur_hamt_* dependency).  See
+         * docs/reported/turi-map-set-hamt-interpreter-gap.md. */
         static const char *prelude[] = {
             "safe.tur",
             "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
@@ -4948,6 +4947,9 @@ static int cmd_eval(const char *path, bool use_color,
             "hamt.tur", "set.tur", "map.tur",
             "vec.tur", "slice.tur", "option.tur", "result.tur",
             "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
+            /* MutableMap: self-contained open-addressing table; its inline-C ops
+             * are re-implemented as native overrides (native_mutmap_*). */
+            "mutmap.tur",
             NULL
         };
         /* Build one (load A)(load B)... form so the whole prelude elaborates in
@@ -5532,6 +5534,25 @@ static TuriValue native_some(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
 static TuriValue native_none(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
     return turi_int(0); /* NULL pointer */
+}
+/* option-eq? -- structural Option equality.  option.tur's body fat-dispatches
+ * the value comparator through a C function pointer; this native re-implements
+ * it over the native box (int64[2] = {is_some, value}, see native_some) and
+ * invokes the comparator (a turi closure) via turi_call. */
+static TuriValue native_option_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 3) return turi_bool(false);
+    int64_t *o1 = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t *o2 = (int64_t *)(intptr_t)a[1].as_int;
+    bool a_some = o1 && o1[0];
+    bool b_some = o2 && o2[0];
+    if (!a_some && !b_some) return turi_bool(true);
+    if (a_some != b_some)   return turi_bool(false);
+    TuriValue cargs[2];
+    cargs[0].tag = TURI_INT; cargs[0].as_int = o1[1];
+    cargs[1].tag = TURI_INT; cargs[1].as_int = o2[1];
+    TuriValue rv = turi_call(env, a[2], cargs, 2);
+    return turi_bool(rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0);
 }
 static TuriValue native_some_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -6619,6 +6640,177 @@ static TuriValue native_vec_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)
     return turi_bool(true);
 }
 
+/* -------------------------------------------------------------------------
+ * MutableMap (stdlib/mutmap.tur) -- open-addressing hash table.  The module's
+ * inline-C ops loop and fat-dispatch the value comparator, which the simple
+ * inline-C executor cannot run, so these natives re-implement them over the
+ * exact same self-contained layout (no runtime HAMT dependency): the wrapper is
+ * { void *storage } and storage is { cap, len, tomb, slots[] } with each slot
+ * { tag, hash, key, value }.  Only mutmap-eq? needs the interpreter (it invokes
+ * the value comparator -- a turi closure -- via turi_call).
+ * ---------------------------------------------------------------------- */
+enum { TUR_MM_EMPTY = 0, TUR_MM_OCCUPIED = 1, TUR_MM_DELETED = 2 };
+typedef struct { uint8_t tag; int64_t hash; int64_t key; int64_t value; } TurMmSlot;
+typedef struct { uint64_t cap; uint64_t len; uint64_t tomb; TurMmSlot slots[]; } TurMmStorage;
+typedef struct { void *storage; } TurMmWrap;
+
+static TurMmStorage *mm_storage(TuriValue v) {
+    TurMmWrap *m = (TurMmWrap *)(intptr_t)v.as_int;
+    return m ? (TurMmStorage *)m->storage : NULL;
+}
+static TurMmStorage *mm_alloc(uint64_t cap) {
+    TurMmStorage *s = (TurMmStorage *)malloc(sizeof(*s) + cap * sizeof(TurMmSlot));
+    if (!s) return NULL;
+    s->cap = cap; s->len = 0; s->tomb = 0;
+    for (uint64_t i = 0; i < cap; i++) {
+        s->slots[i].tag = TUR_MM_EMPTY;
+        s->slots[i].hash = 0; s->slots[i].key = 0; s->slots[i].value = 0;
+    }
+    return s;
+}
+static TuriValue native_mutmap_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    TurMmStorage *s = mm_alloc(16);
+    if (!s) return turi_nil();
+    TurMmWrap *m = (TurMmWrap *)malloc(sizeof(*m));
+    if (!m) { free(s); return turi_nil(); }
+    m->storage = s;
+    return turi_int((int64_t)(intptr_t)m);
+}
+static TuriValue native_mutmap_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TurMmStorage *s = mm_storage(a[0]);
+    return turi_int(s ? (int64_t)s->len : 0);
+}
+static TuriValue native_mutmap_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 4) return turi_nil();
+    TurMmWrap *m = (TurMmWrap *)(intptr_t)a[0].as_int;
+    if (!m) return turi_nil();
+    TurMmStorage *s = (TurMmStorage *)m->storage;
+    int64_t h = a[1].as_int, key = a[2].as_int, val = a[3].as_int;
+    /* Resize when load factor (len + tomb) / cap >= 0.75. */
+    if ((s->len + s->tomb) * 4 >= s->cap * 3) {
+        TurMmStorage *ns = mm_alloc(s->cap * 2);
+        if (!ns) return turi_nil();
+        uint64_t mask = ns->cap - 1;
+        for (uint64_t i = 0; i < s->cap; i++) {
+            if (s->slots[i].tag != TUR_MM_OCCUPIED) continue;
+            uint64_t idx = ((uint64_t)s->slots[i].hash) & mask;
+            while (ns->slots[idx].tag == TUR_MM_OCCUPIED) idx = (idx + 1) & mask;
+            ns->slots[idx] = s->slots[i];
+            ns->len++;
+        }
+        free(s);
+        m->storage = ns;
+        s = ns;
+    }
+    uint64_t mask = s->cap - 1;
+    uint64_t idx = ((uint64_t)h) & mask;
+    int64_t first_tomb = -1;
+    for (;;) {
+        TurMmSlot *slot = &s->slots[idx];
+        if (slot->tag == TUR_MM_EMPTY) {
+            TurMmSlot *dst = (first_tomb >= 0) ? &s->slots[first_tomb] : slot;
+            dst->tag = TUR_MM_OCCUPIED; dst->hash = h; dst->key = key; dst->value = val;
+            if (first_tomb >= 0) s->tomb--;
+            s->len++;
+            return turi_nil();
+        }
+        if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+            slot->value = val;
+            return turi_nil();
+        }
+        if (slot->tag == TUR_MM_DELETED && first_tomb < 0) first_tomb = (int64_t)idx;
+        idx = (idx + 1) & mask;
+    }
+}
+static TuriValue native_mutmap_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_int(0);
+    TurMmStorage *s = mm_storage(a[0]);
+    if (!s) return turi_int(0);
+    int64_t h = a[1].as_int, key = a[2].as_int;
+    uint64_t mask = s->cap - 1, idx = ((uint64_t)h) & mask;
+    for (;;) {
+        TurMmSlot *slot = &s->slots[idx];
+        if (slot->tag == TUR_MM_EMPTY) return turi_int(0);
+        if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key)
+            return turi_int(slot->value);
+        idx = (idx + 1) & mask;
+    }
+}
+static TuriValue native_mutmap_has(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_bool(false);
+    TurMmStorage *s = mm_storage(a[0]);
+    if (!s) return turi_bool(false);
+    int64_t h = a[1].as_int, key = a[2].as_int;
+    uint64_t mask = s->cap - 1, idx = ((uint64_t)h) & mask;
+    for (;;) {
+        TurMmSlot *slot = &s->slots[idx];
+        if (slot->tag == TUR_MM_EMPTY) return turi_bool(false);
+        if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key)
+            return turi_bool(true);
+        idx = (idx + 1) & mask;
+    }
+}
+static TuriValue native_mutmap_delete(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_bool(false);
+    TurMmStorage *s = mm_storage(a[0]);
+    if (!s) return turi_bool(false);
+    int64_t h = a[1].as_int, key = a[2].as_int;
+    uint64_t mask = s->cap - 1, idx = ((uint64_t)h) & mask;
+    for (;;) {
+        TurMmSlot *slot = &s->slots[idx];
+        if (slot->tag == TUR_MM_EMPTY) return turi_bool(false);
+        if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+            slot->tag = TUR_MM_DELETED; slot->hash = 0; slot->key = 0; slot->value = 0;
+            s->len--; s->tomb++;
+            return turi_bool(true);
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+static TuriValue native_mutmap_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 3) return turi_bool(false);
+    TurMmStorage *sa = mm_storage(a[0]), *sb = mm_storage(a[1]);
+    TuriValue cmp = a[2];
+    if (!sa || !sb || sa->len != sb->len) return turi_bool(false);
+    for (uint64_t i = 0; i < sa->cap; i++) {
+        if (sa->slots[i].tag != TUR_MM_OCCUPIED) continue;
+        int64_t h = sa->slots[i].hash, k = sa->slots[i].key, v_a = sa->slots[i].value;
+        uint64_t mask = sb->cap - 1, idx = ((uint64_t)h) & mask;
+        bool found = false; int64_t v_b = 0;
+        for (;;) {
+            TurMmSlot *slot = &sb->slots[idx];
+            if (slot->tag == TUR_MM_EMPTY) break;
+            if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == k) {
+                v_b = slot->value; found = true; break;
+            }
+            idx = (idx + 1) & mask;
+        }
+        if (!found) return turi_bool(false);
+        TuriValue cargs[2];
+        cargs[0].tag = TURI_INT; cargs[0].as_int = v_a;
+        cargs[1].tag = TURI_INT; cargs[1].as_int = v_b;
+        TuriValue rv = turi_call(env, cmp, cargs, 2);
+        if (!(rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0)) return turi_bool(false);
+    }
+    return turi_bool(true);
+}
+static TuriValue native_mutmap_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_nil();
+    TurMmWrap *m = (TurMmWrap *)(intptr_t)a[0].as_int;
+    if (m->storage) free(m->storage);
+    free(m);
+    return turi_nil();
+}
+
 /* nil-value: return 0 (empty list sentinel) */
 static TuriValue native_nil_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
@@ -7029,6 +7221,7 @@ static TuriValue native_run_raytracer(TuriEnv *e, TuriValue *a, uint32_t n, void
 static void wk_register_stdlib_natives(TuriEnv *env) {
     /* Option/some/none */
     turi_env_register_native(env, "some",            native_some,            NULL);
+    turi_env_register_native(env, "option-eq?",      native_option_eq,       NULL);
     turi_env_register_native(env, "none",            native_none,            NULL);
     turi_env_register_native(env, "some?",           native_some_pred,       NULL);
     turi_env_register_native(env, "option-unwrap",   native_option_unwrap,   NULL);
@@ -7107,6 +7300,14 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-set!",        native_vec_set,         NULL);
     turi_env_register_native(env, "vec-free",        native_vec_free,        NULL);
     turi_env_register_native(env, "vec-eq?",         native_vec_eq,          NULL);
+    turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
+    turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
+    turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);
+    turi_env_register_native(env, "mutmap-get",      native_mutmap_get,      NULL);
+    turi_env_register_native(env, "mutmap-has?",     native_mutmap_has,      NULL);
+    turi_env_register_native(env, "mutmap-delete!",  native_mutmap_delete,   NULL);
+    turi_env_register_native(env, "mutmap-eq?",      native_mutmap_eq,       NULL);
+    turi_env_register_native(env, "mutmap-free",     native_mutmap_free,     NULL);
     turi_env_register_native(env, "result-collect",  native_result_collect,  NULL);
     turi_env_register_native(env, "result-partition",native_result_partition, NULL);
     turi_env_register_native(env, "result-partition-ok", native_result_partition_ok, NULL);
