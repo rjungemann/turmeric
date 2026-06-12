@@ -390,7 +390,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Mirrors the type_suffix logic in elab_definstance so that
              * the struct name matches the method impl names already emitted. */
             char dict_name[128];
-            char type_suffix[64] = "";
+            char type_suffix[320] = "";  /* wide enough for the longest mangled component (<=259) */
             for (uint8_t i = 0; i < inst->n_type_args; i++) {
                 if (i == 0) strcat(type_suffix, "_");
                 const char *component = "T";

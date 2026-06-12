@@ -100,3 +100,29 @@ Filed 2026-06-12 while babysitting PR #336. The PR's own changes
 locally (compiled 1573/0, interpreter 939/0) and do not touch the compiler
 macro/codegen path. This report tracks the pre-existing compiler issue so the
 red CI is not mistaken for a regression in that PR.
+
+**Resolved 2026-06-12.** Reproduced the CI failures with a local *Release*
+(`-O2`, newer gcc) build, which is what surfaces the `-Werror`-gated
+optimizer warnings the Debug build never sees. Three root causes, all fixed:
+
+1. **Leaked `macro_expansion_stack`** (the 64-byte `elab_expand_macro` leak).
+   The realloc'd stack (`elab_macros.c:1095`, also grown in `elab_call.c:1361`)
+   was freed only on the early `rc != 0` error path in `elab_program`
+   (`elab_toplevel.c:1162`) -- the normal success teardown (around 1329) freed
+   `e.macros` and siblings but **not** `e.macro_expansion_stack`. Any
+   elaboration that expanded a macro (growing the stack to its initial cap of 8
+   `Symbol*` = 64 bytes) leaked it. Fixed by adding the missing
+   `free(e.macro_expansion_stack);` to the success path.
+2. **`-Werror=maybe-uninitialized` on `*arg_strs`** (`emit_core.c`). gcc at
+   `-O2` could not prove `n >= 1`, so `arg_strs[0]` was flagged. Switched the
+   `malloc` to `calloc(n ? n : 1, ...)` so every slot is well-defined NULL.
+3. **`-Werror=stringop-truncation`** on the `strncat`s into `type_suffix[64]`
+   (`emit_stmt.c:441,448`, `emit_core.c:1790,1798`,
+   `elab_typeclasses.c:2829`). The mangled-component sources can be up to 259
+   bytes; widened all three `type_suffix` buffers to `[320]` so truncation is
+   provably impossible. No codegen change for realistic names (snapshots
+   unchanged).
+
+Validation: local Release build now compiles clean (`tur` links);
+`tur run regen-snapshots --check` => 73 up to date; stdlib checks 32/0 with
+`detect_leaks=1`; full suite `1595 passed, 0 failed`.

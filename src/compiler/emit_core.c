@@ -1537,8 +1537,11 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
         return atom_nil();
     }
 
-    /* For everything else, evaluate args and build a C expression. */
-    char **arg_strs = (char **)malloc(n * sizeof(char *));
+    /* For everything else, evaluate args and build a C expression.
+     * calloc so every slot starts NULL: this makes any unreached arg slot
+     * well-defined (silences -Werror=maybe-uninitialized on '*arg_strs',
+     * which gcc cannot prove is written when it cannot bound n>=1). */
+    char **arg_strs = (char **)calloc(n ? n : 1, sizeof(char *));
     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
     for (uint32_t i = 0; i < n; i++) arg_strs[i] = emit_value(ctx, body, args[i]);
 
@@ -1738,7 +1741,7 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
  * Writes "dict_<TypeClass>_<typeargs>" into buf (size buflen). */
 void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
     const TypeClass *tc = inst->typeclass;
-    char type_suffix[64] = "";
+    char type_suffix[320] = "";  /* wide enough for the longest mangled component (<=259) */
     for (uint8_t i = 0; i < inst->n_type_args; i++) {
         if (i == 0) strncat(type_suffix, "_", sizeof(type_suffix) - strlen(type_suffix) - 1);
         const char *component = "T";

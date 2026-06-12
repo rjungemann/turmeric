@@ -5,6 +5,7 @@ build2/
 build-debug/
 build-norel/
 build-rel/
+build-release/
 build-tsan/
 build-wasm/
 build_nosub/

@@ -1327,6 +1327,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     free(e.forward_type_syms);
     free(e.handled_effect_names);
     free(e.macros);
+    free(e.macro_expansion_stack);
     free(e.loaded_modules); /* Phase M2 */
     free(e.dynvar_entries);
     free(e.active_dynvar_bindings);
