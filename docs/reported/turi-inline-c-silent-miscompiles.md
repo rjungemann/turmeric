@@ -1,5 +1,19 @@
 # 25 inline-C fixtures silently miscompile under `--interpret`
 
+> **Update (2026-06-12, claim-trace + recount):** `TUR_IC_TRACE=1` now logs
+> which `ic_exec_*` matcher claims each body (`ic_claim`, `src/turi/eval.c`) --
+> diagnostic groundwork for the tightening. Re-measured against it, **the true
+> remaining silent-miscompile set is 20, not 22**: `instance-head-hole-pair`,
+> `stdlib-test-runner-registry`, `weak-dangling`, and `weak-upgrade-option` now
+> produce a **clean error (rc=1)**, not a silent wrong answer -- the matcher
+> already declines them. The 20 funnel through just two matchers:
+> **`constructor` (12: the `backtrack-*` cluster + `arrow-instance-*` +
+> `workstealing-*`)** and **`snprintf` (4: `show-float/-list/-pair`,
+> `exg5-rc-in-exists`)**, plus `accessor`/`simple-return`/mixed (4). Tightening
+> `ic_exec_constructor` first is the highest-leverage slice. Full matcher->fixture
+> map and the prereq decomposition:
+> [docs/upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md).
+>
 > **Update (2026-06-12, conditional-snprintf):** the `ic_exec_snprintf_fmt`
 > matcher no longer blindly takes the *first* `snprintf` when two are guarded by
 > an `if (COND) snprintf(...); else snprintf(...);`. It now evaluates `COND` and

@@ -3313,6 +3313,27 @@ static TuriValue ic_exec_linked_list_print(const char *body,
 }
 
 /* Top-level dispatcher */
+/* Diagnostic groundwork for the inline-C silent-miscompile tightening (W4, see
+ * docs/reported/turi-inline-c-silent-miscompiles.md): when TUR_IC_TRACE is set,
+ * log which ic_exec_* matcher claimed a body and what it returned. This makes
+ * the per-cluster "refuse-rather-than-guess" work tractable -- you can see at a
+ * glance which matcher mis-claims each fixture, and confirm a tightening flips a
+ * mis-claim to "unclaimed" (clean error) without disturbing a correct claim.
+ * Off the trace path it is a single cached-flag branch -- zero normal overhead. */
+static bool ic_claim(const char *pattern, FnDef *fn, const TuriValue *out) {
+    static int on = -1;
+    if (on < 0) on = getenv("TUR_IC_TRACE") ? 1 : 0;
+    if (on) {
+        const char *nm = (fn && fn->binding) ? fn->binding->name->name : "<fn>";
+        if (out)
+            fprintf(stderr, "[ic-trace] %-24s claimed by %-18s -> tag=%d int=%lld\n",
+                    nm, pattern, (int)out->tag, (long long)out->as_int);
+        else
+            fprintf(stderr, "[ic-trace] %-24s claimed by %s\n", nm, pattern);
+    }
+    return true;
+}
+
 static bool try_exec_simple_inline_c(TuriEnv *env,
                                       const char *body, size_t blen,
                                       TuriValue *args, uint32_t n_args,
@@ -3331,13 +3352,13 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     /* Pattern 1: Free */
     if (has_free && !has_malloc) {
         *out = ic_exec_free(args, n_args);
-        return true;
+        return ic_claim("free", fn, out);
     }
 
     /* Pattern 2: Switch-case string */
     if (has_switch && strstr(body,"return \"") && !has_fptr) {
         *out = ic_exec_switch_string(body, args, n_args);
-        return true;
+        return ic_claim("switch-string", fn, out);
     }
 
     /* Pattern 3: String fat-pointer comparison (->len && ->p[i]) */
@@ -3345,25 +3366,25 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
         strstr(body,"->len") && strstr(body,"->p") &&
         (strstr(body,"return true")||strstr(body,"return false"))) {
         *out = ic_exec_str_cmp(args, n_args);
-        return true;
+        return ic_claim("str-cmp", fn, out);
     }
 
     /* Pattern 4a: snprintf formatter (malloc + snprintf + return cstr, no arrow in return) */
     if (has_malloc && !has_fptr && strstr(body,"snprintf(")) {
         TuriValue r = ic_exec_snprintf_fmt(body, args, n_args, fn, param_offset);
-        if (r.tag != TURI_NIL) { *out = r; return true; }
+        if (r.tag != TURI_NIL) { *out = r; return ic_claim("snprintf", fn, out); }
     }
 
     /* Pattern 4: Constructor (malloc + arrow or index assignments, no fptr cast) */
     if (has_malloc && !has_fptr) {
         TuriValue r = ic_exec_constructor(body, args, n_args, fn, param_offset);
-        if (r.tag != TURI_NIL) { *out = r; return true; }
+        if (r.tag != TURI_NIL) { *out = r; return ic_claim("constructor", fn, out); }
     }
 
     /* Pattern 5: Accessor (no malloc, has arrow, has return) */
     if (!has_malloc && has_return && !has_fptr) {
         TuriValue r = ic_exec_accessor(body, args, n_args, fn);
-        if (r.tag != TURI_NIL) { *out = r; return true; }
+        if (r.tag != TURI_NIL) { *out = r; return ic_claim("accessor", fn, out); }
     }
 
     /* Pattern 6: Linked list traversal with printf (while loop + printf + ->next) */
@@ -3372,7 +3393,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     if (!has_malloc && has_arrow && has_while && has_printf && !has_fptr) {
         TuriValue r = ic_exec_linked_list_print(body, args, n_args, fn, param_offset);
         /* Always claim handled if we have a while+printf pattern (even if nil) */
-        if (has_while && has_printf) { *out = r; return true; }
+        if (has_while && has_printf) { *out = r; return ic_claim("linked-list-print", fn, out); }
     }
 
     /* Pattern 7: Simple return of constant or single param (no malloc, no arrow) */
@@ -3381,7 +3402,8 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
             r += 7; r = ic_skip_ws(r);
             int64_t val = 0;
             if (ic_eval_assign_expr(r, fn, param_offset, args, n_args, &val, body)) {
-                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=val; *out=rv; return true;
+                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=val; *out=rv;
+                return ic_claim("simple-return", fn, out);
             }
         }
     }
