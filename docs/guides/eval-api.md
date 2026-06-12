@@ -313,6 +313,62 @@ from `turi_eval`; check with `turi_is_throw(v)`.
 
 ---
 
+## Interpreter value semantics: `::` is value-preserving, not bit-preserving
+
+The tree-walking interpreter (`turi`, behind `tur --interpret`, `tur repl`,
+sandbox `turi_eval`, and the WASM REPL) holds values as **tagged** `TuriValue`s
+(`TURI_INT` carries a 64-bit word, `TURI_FLOAT` carries a `double`), whereas the
+compiled path carries every scalar as a raw `int64_t`.  This difference is
+invisible except in one spot: a `::` ascription that crosses the **float/int
+representation boundary**.
+
+`(:: expr T)` between two **same-size but distinct** scalar kinds lowers to a
+bit-level reinterpret (`EX_REINTERPRET`).  Whether that reinterpret is
+observable depends on the pair:
+
+| `::` between kinds                                          | Bits change meaning? | turi vs compiled |
+| ---------------------------------------------------------- | -------------------- | ---------------- |
+| `int`<->`cstr`, `int`<->`ptr<void>`, `int`<->opaque newtype, `int8`<->`uint8`, `sym`<->`ptr` | no                   | **identical**    |
+| `float`<->`int` (8-byte), `float32`<->`int32` (4-byte)         | **yes**              | **diverges**     |
+
+For the first group -- which is the overwhelming majority of real `::` use
+(unwrapping `defopaque`/refined newtypes like `Fd`, `Pid`, `EventSourceId`,
+`NonEmpty`; pointer and `cstr` carriers) -- the underlying bits are identical,
+so the interpreter's tag-preserving passthrough produces exactly the compiled
+result.
+
+Only the float/int pair differs, and only when you use `::` to **observe the
+reinterpreted bit pattern as a result**:
+
+```turmeric
+(:: 7 :float)     ; compiled: 3.45846e-323 (the int's bits as a double)
+                  ; turi:     7
+(:: 7.1 :int)     ; compiled: 4619679907765970534 (the IEEE-754 bits)
+                  ; turi:     7.1
+```
+
+A float carried **through** the int64 carrier and back -- the common case, e.g.
+an ADT/cons/tyvar payload or `(:: f int)` then `(:: thru float)` -- round-trips
+correctly under turi, because the float keeps its tag the whole way.  The
+divergence is strictly "type-pun a float to read or synthesize its IEEE bits."
+
+**Why it is this way.** A `TURI_INT` cannot be distinguished as "a genuine
+integer" from "a carrier holding float bits", so any partial bit-reinterpret
+breaks the round-trips that rely on tag preservation (it would corrupt a
+`Cons[float]`'s `.head` to its integer bit pattern).  Fully value-preserving is
+the only self-consistent choice for the tagged model; closing the gap would
+require a typed-carrier value representation.  See
+[docs/reported/turi-map-nonint-value-carrier-ascription.md](../reported/turi-map-nonint-value-carrier-ascription.md).
+
+**Practical guidance.** Code that uses `::` for its bit pattern (bit-level float
+hashing, representation-exact serialization, manual IEEE/NaN-boxing) must run on
+the compiled path (`tur build` / `tur run`).  Note the stdlib's own float
+`Hash`/`MapKey` reinterprets go through inline-C `union`s that the interpreter
+overrides with **natives**, not through `::`, so float-keyed maps and sets hash
+correctly under the interpreter.
+
+---
+
 ## Full example -- sandboxed calculator
 
 ```c

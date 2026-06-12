@@ -1,0 +1,16 @@
+;;; TI5: panic-with raises a typed payload; catch-panic-of filters by type.
+;;; An :int payload is caught by catch-panic-of :int (match), but a
+;;; catch-panic-of :cstr around the same panic does NOT match and re-raises
+;;; to the enclosing catch-unwind.
+(defn main [] : int
+  ;; match: :int payload caught by catch-panic-of :int
+  (let [r (catch-panic-of :int (fn [] : int (panic-with 99)))]
+    (if (err? r) (println "int caught") (println "int ok")))
+  ;; mismatch: :int payload NOT caught by catch-panic-of :cstr -> re-raises
+  ;; to the outer catch-unwind, which catches any panic.
+  (let [outer (catch-unwind (fn [] : int
+                (let [r (catch-panic-of :cstr (fn [] : int (panic-with 7)))]
+                  (println "should-not-reach")
+                  0)))]
+    (if (err? outer) (println "outer caught reraise") (println "outer ok")))
+  0)

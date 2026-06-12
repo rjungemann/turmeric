@@ -93,6 +93,9 @@ performance-comparison/inputs/large/
 # The harness diffs against expected.stdout, not these files.
 tests/fixtures/*/turi.stdout
 tests/fixtures/*/turi.stderr
+# Nested fixtures (errors/<name>, typed/<name>, typed-slots/<name>, ...).
+tests/fixtures/*/*/turi.stdout
+tests/fixtures/*/*/turi.stderr
 
 # REPL-compiled spice shared libraries and their symbol manifests.
 *.so

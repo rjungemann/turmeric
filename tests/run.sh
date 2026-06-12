@@ -19,6 +19,18 @@ cd "$(dirname "$0")/.."
 TUR="./build/tur"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
+# TI8 (turi-parity-post-v1-plan): CI ratchet -- fail fast if any EX_* expression
+# kind the compiler emits has no `case` arm in src/turi/eval.c and is not a
+# documented carve-out (docs/turi-carve-out.txt).  Cheap, deterministic, and
+# keeps the interpreter parity gap from silently growing.  Opt out with
+# TUR_SKIP_PARITY_CHECK=1 (e.g. when hacking on eval.c mid-change).
+if [ "${TUR_SKIP_PARITY_CHECK:-0}" != "1" ] && command -v python3 >/dev/null 2>&1; then
+    if ! python3 tools/check_turi_parity.py; then
+        echo "tests: turi parity check failed (see above); aborting." >&2
+        exit 1
+    fi
+fi
+
 PASS=0
 FAIL=0
 FAILED=()

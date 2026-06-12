@@ -1,0 +1,1 @@
+reader-cond renders #?(:tur ... :turi ...) per the active reader; its expected.stdout is the compiled (:tur) branch, so it cannot match under --interpret. Not a bug.

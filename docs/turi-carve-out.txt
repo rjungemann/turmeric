@@ -1,0 +1,37 @@
+# turi carve-out list -- EX_* expression kinds the tree-walking interpreter
+# (src/turi/eval.c) intentionally does NOT implement.
+#
+# Format: one `EX_NAME -- one-line rationale` per line.  Blank lines and lines
+# beginning with `#` are ignored.  tools/check_turi_parity.py reads this file:
+# any EX_* kind that has no `case` arm in eval.c MUST appear here, and any entry
+# here that is actually handled (or names a nonexistent kind) is flagged as
+# stale.  Keep the rationale short and point at the tracking doc/report.
+#
+# See docs/upcoming/v1/turi-parity-post-v1-plan.md (Phases TI3.2, TI7) and
+# docs/guides/turi-parity-guide.md for the full discussion.
+
+# --- CPS transform (Risks #5 / Sequencing) -------------------------------
+# call/cc and the CPS continuation-application node originate in the CPS
+# pipeline (docs/upcoming/cps-transform-plan.md).  The interpreter strategy for
+# them should fall out of however that plan lands; adding case arms ahead of it
+# risks rework, so they stay carved out until CPS-transform settles.
+EX_CALLCC -- call/cc; deferred to the CPS-transform plan (Risks #5)
+EX_CPS_CONT_APP -- CPS continuation application; deferred to the CPS-transform plan
+
+# --- Context-capturing delimited control (TI3.2) -------------------------
+# Abortive shift/reset/shift0 are implemented (TI3.1).  The context-CAPTURING
+# variants hand a resumable k to f and need genuine continuation capture
+# (one-shot serial via TuriEffectCont; multi-shot cloneable via fiber-stack
+# cloning or a heap-reified DK chain).  Tracked in
+# docs/reported/turi-capturing-shift-unimplemented.md.
+EX_SERIAL_SHIFT -- context-capturing serial-shift; needs continuation capture (TI3.2)
+EX_CLONEABLE_SHIFT -- multi-shot cloneable-shift; needs fiber-stack cloning (TI3.2)
+
+# --- Inline-C-bound literal sugar (TI1 / TI7) ----------------------------
+# The sym/cons-list literals only appear paired with user inline-C in the
+# existing fixtures (__tur_sym field reads, __tur_cons_cell walks), which is a
+# permanent interpreter carve-out (TI7).  Landing them usefully requires native
+# sym=?/sym->str and cons-head/cons-tail overrides, not just the literal case
+# arm; deferred until those natives exist.
+EX_SYM_LIT -- interned symbol literal; inline-C-bound, needs native sym ops (TI1/TI7)
+EX_CONS_LIST -- cons-list literal; inline-C-bound, needs native cons ops (TI1/TI7)

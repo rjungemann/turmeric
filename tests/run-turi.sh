@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
 # tests/run-turi.sh -- interpreter (turi) fixture runner.
 #
-# Runs a curated subset of tests/fixtures/ through `tur run` (the tree-walk
-# interpreter) instead of compiling each to a native binary.  Fixtures that
-# require compilation (requires.compiled), or whose features are not yet
-# complete in the interpreter, are skipped.
+# Runs a curated allowlist of tests/fixtures/ through `tur --interpret` (the
+# tree-walking turi interpreter, src/turi/eval.c) instead of compiling each to
+# a native binary.  Fixtures that require compilation (requires.compiled), or
+# whose features the interpreter deliberately does not implement
+# (requires.tur-only), are skipped.
+#
+# TI8 note (turi-parity-post-v1-plan): this harness used to invoke `tur run`,
+# which COMPILES and runs a native binary -- so the allowlist never actually
+# exercised src/turi/eval.c (see the now-resolved blocker report
+# docs/reported/turi-harness-compiles-instead-of-interpreting.md).  It now uses
+# `--interpret`.  Reconciling the allowlist to true interpretation removed 31
+# entries that only "passed" via codegen -- some are permanent carve-outs
+# (call/cc, inline-C), but several surfaced genuine interpreter gaps or silent
+# miscompiles, catalogued in
+# docs/reported/turi-harness-flip-reconciliation.md.  The full allowlist ->
+# denylist flip (run every fixture minus markers) is still future work: under
+# `--interpret` ~933 of ~1500 fixtures currently fail, spanning many distinct
+# interpreter bugs and missing-native gaps (see that report for the buckets).
 #
 # Usage:
 #   bash tests/run-turi.sh                  # run the default turi fixture set
@@ -101,19 +115,11 @@ borrow-mut-assign
 borrow-reborrow
 borrow-struct-field
 borrow-sugar
-call-cc-star
-clone-primitives
 closure-call
-clone-list
-clone-option
-clone-pair
 closure-multi-capture
 closure-multi-capture-ref
 continuation-advanced
 continuation-basic
-continuation-callcc
-continuation-escape
-continuation-escape-fn
 defer-conditional
 defer-early-return
 defer-in-loop
@@ -123,8 +129,6 @@ defer-order
 defstruct-copy-valid
 defstruct-move-annotation
 dynvar-binding
-dynvar-convey
-dynvar-convey-isolation
 dynvar-inject
 dynvar-log-level
 dynvar-multi
@@ -132,7 +136,6 @@ dynvar-nested
 dynvar-read
 dynvar-set
 effect-abort
-effect-capture-k
 effect-console
 effect-cont-abort
 effect-cont-linear
@@ -173,30 +176,14 @@ panic-downcast
 panic-ref
 panic-trace
 panic-with-typed
-ptc4-basic
 rc-basic
 rc-ref-conversion
 ref-basic
-result-basic
-typed/grid-basic
-typed/list-basic
-typed/list-macro
-typed/map-basic
-typed/map-collision
-typed/map-eq
-typed/option-basic
-typed/pair-basic
-typed/result-basic
-typed/set-basic
-typed/slice-basic
-typed/vec-basic
-typed/zipper-basic
 union-types-basic
 union-types-cast
 union-types-match
 union-types-threeway
 unique-basic
-weak-dangling
 weak-upgrade
 
 # TI0 (typeclass-correctness audit, 2026-06-10): fixtures verified to pass under
@@ -205,14 +192,10 @@ weak-upgrade
 # is shared via the elaborated Expr tree, so these were healthy from day one
 # but were not on the allowlist.
 arrow-compose-float
-arrow-instance-apply
 arrow-instance-arr-identity
 arrow-instance-basic
 arrow-instance-choice
-arrow-instance-stdlib-basic
 fat-shim-void-ptr-arrow-compose
-hkt-stdlib-result-ok-biased
-instance-head-hole-pair
 poly-closure-compose-float
 poly-closure-result-tyvar-float
 
@@ -260,6 +243,615 @@ continuation-substrate
 shift-result-typing
 shift0-result-typing
 serial-reset-basic
+
+# TI6 (turi-parity-post-v1-plan, first-class handlers): the interpreter now
+# handles EX_HANDLER_LIT, EX_WITH_HANDLER, and EX_COMPOSE_HANDLERS by reusing
+# the eval_handle fiber machinery (a handler value is a detached HandleCase
+# table; with-handler materialises a HandleExpr and runs it like (handle ...)).
+# Verified under 'tur --interpret'.  EX_SELECT stays a carve-out -- channels
+# need native primitives the interpreter lacks, and every select fixture is
+# inline-C-bound (docs/reported/turi-select-needs-channel-primitives.md).
+#   with-handler-value  -- single handler value applied via with-handler
+#   fh-compose-handlers -- compose-handlers over disjoint effects + with-handler
+with-handler-value
+fh-compose-handlers
+
+# TI5 (turi-parity-post-v1-plan, panic payloads): the interpreter now carries a
+# typed panic payload (TypeKind + value + file/line) across the catch boundary,
+# so catch-panic-of filters by payload type and re-raises on mismatch, and the
+# panic-payload-* accessors read the caught value.  Verified under
+# 'tur --interpret'.  The accessors are only reachable via the inline-C
+# `result-panic` extractor (a carve-out), so coverage is the catch-panic-of
+# type-filtering path.
+#   panic-catch-panic-of -- plain (cstr) panic: :cstr matches, :int re-raises
+#   panic-with-catch-of  -- typed panic-with payload: :int matches, :cstr re-raises
+panic-catch-panic-of
+panic-with-catch-of
+
+# TI8.b (turi-parity-post-v1-plan): the interpreter now preloads macros.tur via
+# the load mechanism instead of source concatenation, so the macros module
+# defmodule gets its own file_id and no longer collides with a user fixtures
+# defmodule under the one-defmodule-per-file check.  The module/defmodule
+# fixtures below now evaluate correctly under tur --interpret.
+defmodule-fat-fn-param-export
+defmodule-pap-forward-ref-fat-fn
+effect-export-explicit
+effect-row-cross-private
+load-inside-defmodule-injects-names
+module-basic
+module-cross-module-call
+module-cross-module-effect
+module-cross-module-fullname
+module-cross-module-struct
+module-defer-basic
+module-defer-order
+module-effect-private
+module-export-as
+module-facade
+module-import
+module-macro-private
+module-macro-refer
+module-nested-path
+module-private-in-module
+module-refer
+module-self-qualified
+recursion-ptr-void-return-in-defmodule
+
+# TI8.b/W1 (turi-interpreter-gap-closure-plan): the interpreter now preloads the
+# conflict-free typed-stdlib subset (typeclass stubs + vec/slice/option/pair/
+# tuple/list/grid/zipper) via the load mechanism, so Cons/Option/Pair/Tuple
+# struct types and the Eq/Clone/Functor typeclasses resolve under tur
+# --interpret.  result/map/set/hamt/contract are deliberately excluded (their
+# interpreter native shims own a different memory layout; see the plan).  The
+# fixtures below now evaluate correctly under the interpreter.
+assoc-type-projection
+clone-list
+clone-option
+clone-pair
+clone-primitives
+cons-builtin-list
+defopaque-phantom-param
+fat-box-ascribed-aggregate-return
+generic-relay-aggregate-result
+pair-signals-typed
+poly-nested-tuple-accessor
+poly-to-fat-bare-fat-sink
+poly-to-fat-float-named-fn
+poly-to-fat-float-roundtrip
+poly-to-fat-multiarg-roundtrip
+safe-c-string
+safe-vec-ops
+tuple-345-basic
+tuple-arity-6
+tuple-type-bracket-sugar
+tuple2-eq-macro
+tuplen-struct-param-passing
+typeclass-instance-float-return
+typed-slots/cons-double-twice
+typed-slots/cons-float
+typed-slots/cons-float-layout
+typed-slots/cs3-nested-specialization
+typed-slots/let-vec-new
+typed-slots/option-float
+typed-slots/pair-macros
+typed-slots/polymorphic-cons-boundary
+typed-slots/tcons-of
+typed/pair-basic
+typed/pair-opaque-element
+typed/slice-basic
+typed/tuple-basic
+
+# TI8.b/(b) bulk-add (turi-interpreter-gap-closure-plan): every non-inline-C
+# fixture below was auto-verified to pass under tur --interpret (stdout + exit
+# match) and added in one sweep, shrinking the allowlist gap to the genuine
+# W1b/W4 failure surface.  Regenerate by re-running the pass-probe if needed.
+adt-param-match-type-pair
+annotated-fat-lambda-param
+any-box-cstr
+any-cast-checked
+any-is-predicate
+arrow-instance-nullary
+async-effect-spawn
+bare-fat-float-result
+bare-fat-float-result-dedup
+bare-fat-int-and-float-combinator
+bare-fat-lambda-closure-returning
+bare-fat-lambda-param
+bare-fat-let-float-binding
+bare-fat-nontail-float-noannot
+borrow-no-escape
+borrow-ptr
+borrow-ref
+borrow-through-deref
+borrow-unsafe
+boxed-fn-typed-closure-return
+capability-default
+capability-effect-poly
+capability-fs
+capability-logger
+capability-macro
+capability-test
+capability-thread
+category-instance-basic
+codegen-paren-precedence
+contract-assert-fail
+contract-ensure-fail
+contract-invariant-fail
+contract-post
+contract-pre
+contract-require-fail
+contract-type
+contracts-not-stripped
+copy-traits-basic
+cps-coloring
+cps-mixed-coloring
+curly-infix
+curried-call-pap-cast
+curried-fn-typed-param-application
+currying-curry-macro
+currying-effect-partial
+currying-over-apply
+currying-partial-basic
+currying-partial-chain
+currying-partial-struct-capture
+currying-point-free
+currying-rank2-partial
+data-literal-vec-in-defn
+datum-comment-basic
+datum-comment-inline
+datum-comment-multiline
+datum-comment-nested
+datum-comment-top-level
+defalias-basic
+defalias-float-literal
+defgadt-spaced-typeann
+define-annot
+define-basic
+define-in-ct-do
+define-in-defn
+define-in-fn
+define-in-let
+define-in-macro-body
+define-sees-prior
+definstance-spaced
+defn-basic
+defn-spaced-compound
+defn-spaced-multi-param
+defn-spaced-typeann
+defstruct-spaced-typeann
+deprecated-warning
+dump-kinds-basic
+dynvar-thread-locale
+effect-abort-panic
+effect-cont-unique
+effect-do-union
+effect-error-codes
+effect-flag-off
+effect-fn-type-annot
+effect-handle-reduce
+effect-handle-unreachable
+effect-handler-capture-loop
+effect-handler-capture-struct
+effect-handler-subtype
+effect-handler-type
+effect-let-subsumption
+effect-main-pure
+effect-over-annotated
+effect-poly-bracket
+effect-poly-infer
+effect-poly-map
+effect-poly-typeclass
+effect-rc
+effect-ref
+effect-reopen
+effect-row-compose
+effect-row-defn
+effect-row-ho
+effect-row-poly
+effect-row-var-concrete
+effect-row-var-unused
+effect-stdlib-io
+effect-stdlib-pure
+effect-strict-mode
+effect-struct-field-row
+effect-subtype-assign
+effect-subtype-capability
+effect-subtype-ho
+effect-type-alias
+effect-with-getenv
+effects-async
+error-from-into
+ex1d-open-nested
+ex1f-stdlib-show-it-bool
+ex2-1-phantom-substitution
+ex2-2-phantom-open
+ex2-3-phantom-escape-ok
+ex2-4-vec-existential
+ex2-5-vec-passthrough
+ex2-5-vec-roundtrip
+extern-printf
+fat-captureless-closure-ptr-void
+fat-closure-float-compose
+fat-param-capturing-closure
+fh-discharge-row
+fh-handler-value
+fh-multi-effect-type
+fix
+fizzbuzz
+float-fat-closure
+float-negative-exponent
+float-ops
+fn-field-unboxed
+fn-first-class-application
+fn-first-class-application-deferred
+fn-first-class-application-typed
+fn-spaced-typeann
+fn-type-bare-identifier
+fn-type-constraint
+fn-type-curried
+fn-type-neoteric
+fn-type-shorthand
+fn-type-spaced
+fn-typed-params
+fn-typed-return-thin-closure
+gadt-asan
+gadt-copy
+gadt-default-no-flag
+gadt-equal-coerce
+gadt-equal-cong
+gadt-equal-constraint
+gadt-equal-refl
+gadt-equal-sym
+gadt-equal-trans
+gadt-integration
+gadt-refine-nat
+gadt-refine-witness
+gadt-stdlib-nat
+gadt-stdlib-vec
+gadt-stdlib-vec-stdlib
+gadt-struct-namespace-prefer
+gadt-tilde
+generic-compose-int
+hkt-defrec-fix
+hkt-defrec-fix-with-body
+hkt-deftype-fix
+hkt-dispatch-basic
+hkt-dispatch-mixed
+hkt-dispatch-nested
+hkt-instances
+hkt-kind-alias
+hkt-multi-instance-typed
+hkt-row-ecs-query
+hkt-row-ecs-query-in-out
+hkt-row-ops-union
+hkt-row-query-phantom
+hkt-type-app-kind
+hkt-typeclass-declare
+hkt-typeclass-instance
+hkt-user-parametric-struct
+hrt-exists-adt
+hrt-exists-module
+hrt-exists-open
+hrt-exists-pack
+hrt-impred-closure
+hrt-impred-let
+hrt-impred-reuse
+hrt-integration
+hrt-rank2-annotation
+hrt-rank2-apply
+hrt-rank2-identity
+hrt-rankn-hkt
+hrt-rankn-propagation
+hrt-rankn-rank3
+hrt-rankn-typeclass
+hrt-stdlib-church
+hrt-stdlib-cont
+hrt-syntax-exists
+hrt-syntax-forall
+hrt-syntax-multi
+if-cond
+if-narrow-chained
+if-narrow-isq
+if-narrow-typeof-eq
+instance-intra-method-forward-ref
+intersection-types-basic
+kebab-case-capture
+kinds-basic
+lambda-call-head/basic
+lambda-call-head/capturing
+lambda-call-head/if-head
+lang-dispatch/default
+lang-dispatch/explicit-turmeric
+let-shadow
+let-typed-binding-complex-spaced
+let-typed-binding-fused
+let-typed-binding-spaced
+let-typed-binding-with-mut
+letrec-mutual
+letrec-non-fn-no-self-ref
+letrec-self-recursive
+letrec-shadows-outer
+letstar-typed-binding-spaced
+linear-basic
+linear-effect-handler
+linear-fn-param
+linear-fn-type
+linear-if-consume-after
+linear-if-consume-both
+linear-lref-param-kw
+linear-lref-propagation
+linear-lref-struct-field
+linear-lref-type-ann
+linear-stm
+lint-panic-file-allow
+lint-panic-off
+lint-panic-warn
+lint-unsafe-doc
+lint-unsafe-nested
+lint-unsafe-size
+load-typeclass-idempotent
+macro-body-if
+macro-body-let
+macro-defmacro
+macro-multi-arg
+macro-nested
+macro-quasiquote
+macro-quasiquote-special-form
+macro-quasiquote-unquote
+macro-quote
+macro-recursive
+macro-threading
+macro-threading-last
+macro-variadic
+mangle-arrow-name-vs-module
+mangle-kebab-snake-coexist
+module-defer-bare
+must-use-basic
+must-use-dup
+mutual-recursion
+named-let-loop
+named-let-loop-spaced-types
+named-let-shadowing
+neoteric
+nested-fn-basic
+numeric-types
+numeric-types-arith
+numeric-types-cast
+numeric-types-ffi
+numeric-types-literals
+numeric-types-struct
+opaque-ascription-copy-reuse
+operator-mangle-pair
+panic-catch-of-type
+panic-catch-unwind
+panic-catch-unwind-basic
+panic-catch-unwind-double
+panic-catch-unwind-nested
+panic-ffi-boundary
+panic-in-handler
+panic-no-unwind
+panic-no-unwind-abort
+panic-reset-clears
+phase-d-pass-by-ptr
+phase-f-poly-concrete
+phase-f-poly-concrete-unsigned
+phase11-snapshot-call-arg-copy-move
+phase11-snapshot-let-copy-move
+phase11-snapshot-return-transfer
+phase11-snapshot-set-copy-move
+positional-adt-poly-ok
+promise-linear
+ptc2-test
+ptc3-test
+range-reader-float
+rc-auto-drop-closure-capture
+rc-auto-drop-consumed-by-explicit-drop
+rc-auto-drop-consumed-by-ref-from-rc
+rc-auto-drop-early-return
+rc-auto-drop-explicit-drop
+rc-auto-drop-injection
+rc-auto-drop-multiple
+rc-auto-drop-negative-consumed
+rc-auto-drop-nested-scope
+rc-auto-drop-positive
+rc-auto-drop-test
+rc-cycle-leak
+rc-drop-hook-inner-rc
+rc-elision-barrier-call
+rc-elision-drop-pair-negative-barrier
+rc-elision-drop-pair-positive
+rc-elision-negative-closure-capture
+rc-elision-negative-conditional-drop
+rc-elision-negative-escape
+rc-elision-positive
+rc-elision-ref-from-rc-safety
+rc-elision-with-auto-drop
+rc-nested-free-queue
+rc-shared
+rc-struct-auto-drop
+rc-struct-nested-rc-fields
+rc-struct-simple-payload
+reactor-linear
+reader-macros-bare
+reader-macros-datum
+reader-macros-load-transitive
+reader-macros-raw
+reader-macros-string-body
+recursive-types/fix-type
+recursive-types/hkt-recursive
+recursive-types/mutual-recursion
+recursive-types/self-referential-struct
+recursive-types/simple-tree
+ref-auto-drop-moved-binding
+ref-deref
+ref-explicit-drop
+ref-if-branch-move-suppression
+ref-in-closure
+ref-move
+ref-nested
+ref-return
+ref-return-early-branch
+ref-return-nested-transfer
+relevant-basic
+result-from-into
+safe-arena
+schema-phantom-infer
+session-global-basic
+session-project-loop
+sf-apply-fat-arg-bridge
+sf-compose-typed
+sf-let-bind-with-inner-call
+shebang-sweet-lang
+show-bool
+show-cstr
+sized-cross-param-accept
+sized-size-arith
+sized-static-int
+sized-sz1-predicates
+sized-sz4-flag
+sized-sz6-erasure
+sized-sz6-indexed
+sized-sz8-inference
+sized-sz8-polymorphic
+sized-vec-basic
+stats-unsafe
+stdlib-arrow-load
+stdlib-case
+stdlib-effects-annotated
+stdlib-macros
+stdlib-option
+stdlib-result
+stdlib-slice
+stdlib-str
+stdlib-test-runner-callback
+stdlib-vec
+stm-or-else
+substructural-all-three
+substructural-ref-infer-let
+substructural-ref-infer-param
+substructural-relevant-param
+sum-either-basic
+sum-either-match
+sum-either-nested
+sum-either-nonexhaustive-opt-out
+sweet-exp-continuation
+sweet-exp-group
+sweet-exp-spaced-typeann
+t-expression-sweet-exp
+tco-non-tail-unchanged
+tmpfile-linear
+try-catch-compiled
+try-with-basic
+try-with-nested
+type-app
+typeclass-basic
+typeclass-closure
+typeclass-constraint
+typeclass-derived
+typeclass-effect-row
+typeclass-effect-row-caller
+typeclass-effect-row-default
+typeclass-macro
+typeclass-method-defn-clash
+typeclass-method-defn-coexist
+typeclass-multiple
+typeclass-operator
+typeclass-orphan-instance
+typeclass-primitives
+typed-signal-smoke
+typed-slots/adt-float-payload
+typed-slots/adt-float-payload-poly
+typed-slots/adt-poly-boundary
+typed-slots/ascribe-reinterpret
+typed-slots/coerce-carrier-to-struct
+typed-slots/float-closure
+typed-slots/generic-fn-binders
+typed-slots/generic-struct-fields
+typed-slots/generic-struct-layout
+typed-slots/gpair-instance
+typed-slots/sized-numeric-struct-app
+union-types-any
+union-types-type-of
+union-types-typeclass-dispatch
+unique-chain
+unique-drop
+unique-fn-param
+unique-mut-param
+unsafe-array
+unsafe-array-unchecked
+unsafe-basic
+unsafe-cast
+unsafe-defer
+unsafe-effect-row
+unsafe-empty
+unsafe-malloc
+unsafe-memcpy
+unsafe-nested
+unsafe-oversized
+unsafe-ptr-arith
+unsafe-ptr-deref
+unsafe-reinterpret
+use-after-move-float-let-vs-captured
+vec-basic
+with-resource-basic
+
+# TI8.b/W4 (turi-interpreter-gap-closure-plan): pure-turi silent miscompiles
+# fixed in src/turi/eval.c -- EX_ASCRIBE primitive coercion (bool/float/int),
+# EX_ANY_TYPE_OF coarse struct/adt tags, EX_ANY_CAST checked downcast, and
+# catch-unwind firing the unwound frames defers before returning.
+any-box-adt
+any-box-struct
+any-cast-mismatch-panic
+panic-catch-unwind-defer
+rt-return-dispatch-basic
+rt-return-dispatch-param
+
+# TI8.b/W4 (cont.): native_extern_puts added so (extern-c puts ...) prints
+# under --interpret like the other known libc shims (printf/strlen/...).
+extern-c-spaced-typeann
+
+# TI8.b/W1b: result.tur joined the prelude (dual-rep Result readers +
+# native_result_eq + EX_GET_FIELD carrier-box path).  These Result/typed
+# fixtures now evaluate under tur --interpret; result-of-typed-eq was also a
+# W4 pure-turi silent miscompile, now fixed by the same work.
+result-of-typed-eq
+result-typed-basic
+typed-slots/cs4-stdlib-helpers
+typed-slots/stdlib-container-layout
+typed/result-basic
+
+# TI8.b/W1b (hamt): cmd_eval now registers the raw tur_hamt_* runtime
+# wrappers, so hamt.tur is preloaded and its thin-wrapper ops work.
+hamt-lowering-basic
+
+# TI8.b/W1b (set): hamt-backed set natives over tur_hamt_* (set-new/add/
+# count/member?/remove/free/union/intersect/diff/eq?) + set.tur preloaded.
+# Fixes the documented native_set_count heap-overflow.  #set{} literals lower
+# through the set ops, so they recover too.
+data-literal-set-basic
+data-literal-set-computed
+data-literal-set-dedupe
+data-literal-set-eq
+set-basic
+set-typed-basic
+typed/set-basic
+
+# TI10 Tier A (map): typed Map[K V] scalar-key natives -- MapKey/Hash instance
+# comparators (mk-cmp returns the carrier-ABI C comparator address) + the raw
+# map-*-eq-o / map-*-eq bridges over tur_hamt_*_eq_o, with map.tur preloaded.
+# Int/cstr/float scalar keys; content-keyed user comparators await Tier B.
+# map-collision-forced drives a real hash-0 collision chain so the comparator
+# is genuinely exercised (not works-by-luck).
+data-literal-map-basic
+map-basic
+typed/map-basic
+typed/map-collision
+typed/map-collision-forced
+wkc-wide-map-key
+# Non-int map *values* (Map int cstr / Map int float): EX_ASCRIBE now
+# bit-reinterprets the int64 carrier to :cstr / :float (matching the compiled
+# `::` representation assertion) instead of numeric-converting.
+tce3-map-cstr-val
 "
 
 # Build an associative-set from the default list for O(1) lookup.
@@ -281,40 +873,155 @@ fixture_in_turi_set() {
     eval "[ \"\${TURI_INCL_${key}:-0}\" = \"1\" ]"
 }
 
+# TI8.b/W2: true if the fixture body contains a user inline-C (```c) block -- a
+# permanent TI7 carve-out the interpreter does not run.
+fixture_has_inline_c() {
+    local dir="$1"
+    local f
+    if   [ -f "$dir/input.tur" ]; then f="$dir/input.tur"
+    elif [ -f "$dir/$(basename "$dir").tur" ]; then f="$dir/$(basename "$dir").tur"
+    else return 1; fi
+    grep -q '```c' "$f" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# TI8.b/W3 (turi-interpreter-gap-closure-plan): error-fixture coverage under the
+# interpreter.  tests/fixtures/errors/* are negative fixtures that must elaborate
+# to a specific diagnostic (expected.diag).  run.sh validates them on the
+# compiled path; this harness now runs them under `tur --interpret` too and does
+# the same substring diag comparison.  282 of 298 already emit the identical
+# diagnostic (the interpreter shares the elaborator, so move/linearity/affine
+# checks etc. match by construction); the few below genuinely diverge under the
+# interpreter and are denylisted with a one-line reason until fixed.  This closes
+# the TI0-noted gap that errors/ was skipped wholesale.
+# ---------------------------------------------------------------------------
+TURI_ERRORS_DENY="
+lang-not-implemented            # #lang directive: interp does not raise the not-yet-implemented diag
+lang-unknown                    # unknown #lang: interp runs the program instead of erroring
+lifetime-cyclic                 # TUR-E0106 lifetime-cycle check not run under interpret
+reader-macros-strict-collision  # reader-macro strict-collision diag not raised under interpret
+serial-context-do-not-capturable # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
+serial-context-not-capturable    # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
+tce3-map-heterogeneous-val      # TUR-E0001 emitted at runtime (empty stderr) not as elab diag
+unbound-call-head               # unbound call head errors at runtime, not as the elab diag
+unknown-helper-load-hint        # unknown-helper load hint diag not emitted under interpret
+"
+while IFS= read -r _ef; do
+    _ef="${_ef%%#*}"                                   # strip trailing comment
+    _ef="${_ef#"${_ef%%[![:space:]]*}"}"; _ef="${_ef%"${_ef##*[![:space:]]}"}"
+    [ -z "$_ef" ] && continue
+    _ek="$(printf '%s' "$_ef" | tr '-' '_')"
+    eval "export TURI_ERRDENY_${_ek}=1"
+done <<< "$TURI_ERRORS_DENY"
+
+err_in_denyset() {
+    local key; key="$(printf '%s' "$1" | tr '-' '_')"
+    eval "[ \"\${TURI_ERRDENY_${key}:-0}\" = \"1\" ]"
+}
+
+# Run a single tests/fixtures/errors/<name> fixture under --interpret and verify
+# every expected.diag line appears (substring) in the interpreter's stderr.
+run_turi_error_fixture() {
+    local dir="$1"
+    local name="${dir#tests/fixtures/}"           # e.g. errors/linear-dropped
+    local base="${name#errors/}"
+    local rkey; rkey="$(printf '%s' "$name" | tr '/ ' '__')"
+
+    [ -f "$dir/input.tur" ] || return
+    # Only diag-style negative fixtures (must have a non-empty expected.diag).
+    [ -s "$dir/expected.diag" ] || return
+    if [ -f "$dir/requires.compiled" ] || [ -f "$dir/requires.tur-only" ] \
+       || [ -f "$dir/requires.spices" ]; then return; fi
+    if err_in_denyset "$base"; then
+        printf 'SKIP %s (errors denylist: interp diag diverges)\n' "$name"
+        return
+    fi
+
+    if stamp_check "$name" "$dir/input.tur"; then
+        printf 'PASS %s\n' "$name"
+        echo "PASS" > "$RESULTS_DIR/$rkey.result"
+        return
+    fi
+
+    local flags=""; [ -f "$dir/flags" ] && flags=$(cat "$dir/flags")
+    local err="$dir/turi.stderr"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 15 "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+    else
+        "$TUR" $flags --interpret "$dir/input.tur" >/dev/null 2>"$err" || true
+    fi
+
+    local missing=0 needle
+    while IFS= read -r needle; do
+        [ -z "$needle" ] && continue
+        grep -F -q "$needle" "$err" || missing=1
+    done < "$dir/expected.diag"
+
+    if [ "$missing" -eq 0 ]; then
+        stamp_write "$name" "$dir/input.tur"
+        printf 'PASS %s\n' "$name"
+        echo "PASS" > "$RESULTS_DIR/$rkey.result"
+    else
+        echo "FAIL $name -- interpreter diagnostic mismatch"
+        echo "FAIL" > "$RESULTS_DIR/$rkey.result"
+    fi
+}
+
 run_turi_fixture() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
     local input
 
-    # Skip if not in the turi include set.  Emit a visible SKIP so allowlist
-    # gaps don't go unnoticed -- see KB-001 in docs/archive/history/known-bugs.md.
-    if ! fixture_in_turi_set "$name"; then
-        printf 'SKIP %s (not in turi allowlist)\n' "$name"
-        echo "SKIP_ALLOWLIST" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
-        return
-    fi
-
-    # Skip fixtures that explicitly require compiled execution.
-    if [ -f "$dir/requires.compiled" ]; then
-        printf 'SKIP %s (requires.compiled)\n' "$name"
-        return
-    fi
-
-    # Skip fixtures explicitly marked as not interpretable under turi
-    # (TI1 turi-parity-post-v1-plan): a feature the tree-walking interpreter
-    # deliberately does not implement (mirror of requires.compiled, but keyed
-    # on interpreter capability rather than codegen need).  When the harness
-    # flips from allowlist to denylist (TI8) this marker is what keeps such a
-    # fixture out of the turi run.
-    if [ -f "$dir/requires.tur-only" ]; then
-        printf 'SKIP %s (requires.tur-only)\n' "$name"
-        return
-    fi
-
-    # Locate input file.
+    # Locate input first.  A directory with no input.tur / <name>.tur is a
+    # container (e.g. tests/fixtures/typed/), not a fixture -- skip it silently
+    # so it does not inflate the SKIP_ALLOWLIST (coverage-gap) tally.
     if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
-    else printf 'SKIP %s (no input)\n' "$name"; return; fi
+    else return; fi
+
+    # Marker skips come FIRST so the SKIP_ALLOWLIST tally reflects the *true*
+    # remaining coverage gap (the W5 triage surface) rather than being inflated
+    # by marker-bearing fixtures.  Mirror of run.sh's skip set:
+    #   requires.compiled       -- needs the compiled path
+    #   requires.tur-only       -- a feature the interpreter deliberately omits
+    #   requires.dedicated-runner -- owned by its own ctest target
+    #   requires.spices         -- needs the sibling ../turmeric-spices checkout
+    #   requires.tsan           -- TSan-only fixture
+    if [ -f "$dir/requires.compiled" ]; then
+        printf 'SKIP %s (requires.compiled)\n' "$name"; return; fi
+    if [ -f "$dir/requires.tur-only" ]; then
+        printf 'SKIP %s (requires.tur-only)\n' "$name"; return; fi
+    if [ -f "$dir/requires.dedicated-runner" ]; then
+        printf 'SKIP %s (requires.dedicated-runner)\n' "$name"; return; fi
+    if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
+        printf 'SKIP %s (requires.spices; sibling checkout absent)\n' "$name"; return; fi
+    if [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then
+        printf 'SKIP %s (requires.tsan)\n' "$name"; return; fi
+
+    # Skip if not in the turi include set.  Emit a visible SKIP so allowlist
+    # gaps don't go unnoticed -- see KB-001 in docs/archive/history/known-bugs.md.
+    #
+    # TI8.b/W2 (turi-interpreter-gap-closure-plan): distinguish the *permanent*
+    # inline-C carve-outs (user inline-C is a TI7 carve-out the tree-walking
+    # interpreter never runs) from genuine allowlist candidates.  A non-allowlisted
+    # fixture whose body has a ```c block is a carve-out, not a coverage gap, so it
+    # is counted separately -- this is the mechanism the W5 allowlist->denylist
+    # flip uses to skip the ~350 inline-C fixtures without 350 marker files.  The
+    # ~15 inline-C fixtures that DO work under turi (via try_exec_simple_inline_c
+    # or native overrides, e.g. inline-c-binop / gen-*) are on the allowlist and
+    # so are checked before this branch.  Note: 25 of these inline-C fixtures
+    # silently miscompile under the simple inline-C evaluator -- a real bug the
+    # carve hides; see docs/reported/turi-inline-c-silent-miscompiles.md.
+    if ! fixture_in_turi_set "$name"; then
+        if fixture_has_inline_c "$dir"; then
+            printf 'SKIP %s (inline-c carve-out)\n' "$name"
+            echo "SKIP_INLINEC" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+        else
+            printf 'SKIP %s (not in turi allowlist)\n' "$name"
+            echo "SKIP_ALLOWLIST" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+        fi
+        return
+    fi
 
     # Stamp fast-path.
     if stamp_check "$name" "$input"; then
@@ -341,18 +1048,18 @@ run_turi_fixture() {
     local rc=0
     if [ -f "$dir/input.stdin" ]; then
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags run "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags run "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     else
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags run "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags run "$input" \
+            "$TUR" $fixture_flags --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     fi
@@ -393,8 +1100,9 @@ run_turi_fixture() {
 }
 
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE
-export -f run_turi_fixture fixture_in_turi_set stamp_check stamp_write stamp_key
+export -f run_turi_fixture fixture_in_turi_set fixture_has_inline_c stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
+export -f run_turi_error_fixture err_in_denyset
 
 # Build list of all fixture dirs (top-level and one subdirectory deep).
 shopt -s nullglob
@@ -423,8 +1131,24 @@ if [ ${#FILTERED_DIRS[@]} -gt 0 ]; then
         xargs -P "$JOBS" -I{} bash -c 'run_turi_fixture "$@"' _ {} 2>/dev/null
 fi
 
+# TI8.b/W3: error-fixture diag pass (tests/fixtures/errors/*).  Honors the same
+# TURI_FILTER so `TURI_FILTER=errors/ ...` narrows to just this pass.
+ERROR_DIRS=()
+for d in tests/fixtures/errors/*/; do
+    d="${d%/}"; [ -d "$d" ] || continue
+    name="${d#tests/fixtures/}"
+    if [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; then
+        ERROR_DIRS+=("$d")
+    fi
+done
+if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
+    printf '%s\n' "${ERROR_DIRS[@]}" | \
+        xargs -P "$JOBS" -I{} bash -c 'run_turi_error_fixture "$@"' _ {} 2>/dev/null
+fi
+
 # Tally results.
 ALLOWLIST_GAP=0
+INLINEC_CARVE=0
 for rf in "$RESULTS_DIR"/*.result; do
     [ -f "$rf" ] || continue
     kind="$(cat "$rf")"
@@ -437,6 +1161,9 @@ for rf in "$RESULTS_DIR"/*.result; do
     elif [ "$kind" = "SKIP_ALLOWLIST" ]; then
         SKIP=$((SKIP + 1))
         ALLOWLIST_GAP=$((ALLOWLIST_GAP + 1))
+    elif [ "$kind" = "SKIP_INLINEC" ]; then
+        SKIP=$((SKIP + 1))
+        INLINEC_CARVE=$((INLINEC_CARVE + 1))
     fi
 done
 
@@ -456,8 +1183,13 @@ done
 
 echo
 echo "turi fixture summary: $PASS passed, $FAIL failed, $SKIP skipped"
+if [ "$INLINEC_CARVE" -gt 0 ]; then
+    echo "  (of which $INLINEC_CARVE inline-c carve-outs -- TI7, never run under turi)"
+fi
 if [ "$ALLOWLIST_GAP" -gt 0 ]; then
-    echo "  (of which $ALLOWLIST_GAP not in turi allowlist; see KB-001)"
+    echo "  (of which $ALLOWLIST_GAP non-inline-C, not yet on the allowlist -- the W5"
+    echo "   triage surface: many already pass and just need adding; the rest need a"
+    echo "   fix or a marker before the allowlist->denylist flip)"
 fi
 if [ $FAIL -ne 0 ]; then
     echo "failed:"

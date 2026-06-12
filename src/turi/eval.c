@@ -267,6 +267,14 @@ static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_int((int64_t)ret);
 }
 
+/* puts: write the cstr followed by a newline (libc semantics). */
+static TuriValue native_extern_puts(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && args[0].tag == TURI_CSTR && args[0].as_cstr)
+        return turi_int((int64_t)puts(args[0].as_cstr));
+    return turi_int(0);
+}
+
 static void register_extern_c_known(TuriEnv *env, const char *fname) {
     struct { const char *name; TuriNativeFn fn; } known[] = {
         { "exit",     native_extern_exit     },
@@ -275,6 +283,7 @@ static void register_extern_c_known(TuriEnv *env, const char *fname) {
         { "getenv",   native_extern_getenv   },
         { "printf",   native_extern_printf   },
         { "printf_s", native_extern_printf   },
+        { "puts",     native_extern_puts     },
         { NULL, NULL }
     };
     for (int i = 0; known[i].name; i++) {
@@ -369,6 +378,18 @@ static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fi
     s->fields   = (TuriValue *)malloc(n * sizeof(TuriValue));
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
+}
+
+/* W1b: see eval.h.  Read field idx of a struct value (TuriStruct is opaque to
+ * main.c, so the Result/Option native shims call this to accept a make-struct
+ * value as well as their native int64 box). */
+TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found) {
+    if (v.tag == TURI_STRUCT && v.as_struct && idx < v.as_struct->n_fields) {
+        if (found) *found = true;
+        return v.as_struct->fields[idx];
+    }
+    if (found) *found = false;
+    return turi_nil();
 }
 
 static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
@@ -511,6 +532,12 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     if (env->catch_jmp && !env->in_no_unwind) {
         strncpy(env->catch_panic_msg, s, sizeof(env->catch_panic_msg) - 1);
         env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+        /* TI5: a plain panic carries a cstr payload (the message), so
+         * catch-panic-of :cstr matches it. */
+        env->catch_panic_type  = TY_CSTR;
+        env->catch_panic_value = turi_cstr(env->catch_panic_msg);
+        env->catch_panic_file  = NULL;
+        env->catch_panic_line  = 0;
         env->panicking = true;
         longjmp(*env->catch_jmp, 1);
     }
@@ -526,6 +553,52 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
         fire_defers_to_mark_reversed(env, NULL, NULL);
     fflush(stdout);
     exit(1);
+}
+
+/* -------------------------------------------------------------------------
+ * Phase TI5: typed panic payloads + catch-panic-of.
+ *
+ * The compiled runtime carries a `tur_panic_payload { type_tag; value; file;
+ * line }` across the catch boundary so catch-panic-of can filter by type and
+ * the panic-payload-* accessors can read the panicked value.  The interpreter
+ * mirrors this: a panic stashes its type/value/file/line in the TuriEnv
+ * (catch_panic_*), and a caught result boxes a heap TuriPanicPayload whose
+ * pointer is the err-val of the (err payload) Result.  The panic-payload-*
+ * accessors cast that pointer back and read the fields.
+ * ---------------------------------------------------------------------- */
+
+typedef struct TuriPanicPayload {
+    int         type_tag;   /* TypeKind of the panicked value */
+    TuriValue   value;      /* the panicked value (cstr for a plain panic) */
+    const char *file;       /* source file, or NULL */
+    int         line;       /* source line, or 0 */
+} TuriPanicPayload;
+
+/* Build the 3-int Result box { is_ok, ok_val, err_val } the native ok/err
+ * helpers also use, in its Ok shape. */
+static TuriValue turi_ok_result_box(int64_t ok_val) {
+    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!box) return turi_error("eval: catch: oom");
+    box[0] = 1; box[1] = ok_val; box[2] = 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
+    return v;
+}
+
+/* Build the Err shape of the Result box, with err_val pointing at a heap
+ * TuriPanicPayload snapshotted from the env's in-flight panic fields. */
+static TuriValue turi_err_result_box(TuriEnv *env) {
+    TuriPanicPayload *pp = (TuriPanicPayload *)malloc(sizeof(TuriPanicPayload));
+    if (!pp) return turi_error("eval: catch: oom");
+    pp->type_tag = env->catch_panic_type;
+    pp->value    = env->catch_panic_value;
+    pp->file     = env->catch_panic_file
+                   ? strdup(env->catch_panic_file) : NULL;
+    pp->line     = env->catch_panic_line;
+    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!box) { free(pp); return turi_error("eval: catch: oom"); }
+    box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)pp;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
+    return v;
 }
 
 /* -------------------------------------------------------------------------
@@ -730,6 +803,30 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
     eval_frame_free(hframe);
     return result;
 }
+
+/* -------------------------------------------------------------------------
+ * Phase TI6: First-class handler values (handler / with-handler /
+ * compose-handlers).
+ *
+ * A handler *value* is a detached dispatch table -- a list of HandleCase
+ * pointers without a body.  `with-handler` later pairs such a value with a
+ * body and runs it exactly like a (handle BODY cases...) form: we materialise
+ * a contiguous HandleCase array, synthesise a HandleExpr, and reuse the
+ * existing eval_handle machinery (fiber body + perform/resume dispatch).
+ *
+ * The HandleCase structs are arena-allocated by the elaborator and outlive any
+ * single evaluation, so the value only needs to borrow pointers to them.
+ * `compose-handlers` concatenates two tables (h1's cases first -- h1 is the
+ * outer handler per FH0.1; the elaborator already rejects overlapping effect
+ * sets, so first-match dispatch order is unobservable across the two).
+ * ---------------------------------------------------------------------- */
+
+#define TURI_MAX_HANDLER_CASES 32
+
+struct TuriHandlerVal {
+    uint8_t            n_cases;
+    const HandleCase  *cases[TURI_MAX_HANDLER_CASES];
+};
 
 /* Evaluate a (handle BODY cases...) expression. */
 static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
@@ -2111,6 +2208,28 @@ static TuriValue ic_exec_accessor(const char *body,
         }
     }
 
+    /* W4 (turi-interpreter-gap-closure-plan): refuse-rather-than-miscompile.
+     * The field-access paths below extract a single `ptr->field` value.  If the
+     * return expression is actually a boolean/relational combination over that
+     * field -- e.g. `return p == NULL || !p->is_ok;` -- reading the bare field
+     * silently drops the `== NULL`, `||`, and `!` and returns the WRONG answer
+     * (rc=0).  We cannot faithfully evaluate such expressions here, so decline:
+     * returning turi_nil makes try_exec_simple_inline_c fall through to the
+     * clean "inline-C not supported" error instead of a silent miscompile.
+     * (The `var ? var->field : fallback` and `field ? field : "def"` shapes are
+     * already handled above / below and contain none of these operators.)
+     * See docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md. */
+    for (const char *p = ret; *p && *p != ';'; p++) {
+        if (p[0] == '-' && p[1] == '>') { p++; continue; }   /* skip the arrow */
+        if ((p[0] == '|' && p[1] == '|') ||                  /* || */
+            (p[0] == '&' && p[1] == '&') ||                  /* && */
+            (p[0] == '=' && p[1] == '=') ||                  /* == */
+            p[0] == '!' ||                                   /* != or unary ! */
+            p[0] == '<' || p[0] == '>') {                    /* < > (arrow skipped) */
+            return turi_nil();
+        }
+    }
+
     /* Skip variable name and look for -> or . */
     const char *varstart = ret;
     while (isalnum((unsigned char)*ret)||*ret=='_') ret++;
@@ -3394,9 +3513,30 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_GET_FIELD: {
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
         if (turi_is_error(sv) || env->returning || env->throwing) return sv;
+        uint32_t idx = e->as.get_field_.field_idx;
+        /* W1b: a struct can reach a field access via the int64 carrier ABI
+         * rather than as a TuriStruct -- e.g. a Result that flowed as :int and
+         * was ascribed back to (Result A B) with `(:: carrier ...)`.  The
+         * carrier is a pointer to an int64[n] box laid out one word per field
+         * (this is how native ok/err/result-map build a Result), so read word
+         * idx and tag it by the field's static type.  This is what lets
+         * result.tur's field-access accessors (ok-val/err-val/...) work on the
+         * native box, not just on make-struct TuriStructs. */
+        if (sv.tag == TURI_INT) {
+            if (sv.as_int == 0)
+                return turi_error("eval: field access on null carrier");
+            int64_t w = ((int64_t *)(intptr_t)sv.as_int)[idx];
+            switch (e->type.kind) {
+            case TY_BOOL:  return turi_bool(w != 0);
+            case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: {
+                /* carrier stores the raw bits of the field */
+                double d; memcpy(&d, &w, sizeof(d)); return turi_float(d);
+            }
+            default: return turi_int(w);
+            }
+        }
         if (sv.tag != TURI_STRUCT)
             return turi_errorf("eval: field access on non-struct (tag %d)", sv.tag);
-        uint32_t idx = e->as.get_field_.field_idx;
         if (idx >= sv.as_struct->n_fields)
             return turi_errorf("eval: field index %u out of bounds (%u fields)",
                                idx, sv.as_struct->n_fields);
@@ -3653,6 +3793,70 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (handle BODY cases...) — install handler, run BODY in a fiber. */
     case EX_HANDLE:
         return eval_handle(env, frame, e->as.handle_.handle);
+
+    /* (handler (E [params] k) body) — build a detached handler value (TI6). */
+    case EX_HANDLER_LIT: {
+        const HandleExpr *h = e->as.handler_lit_.handle;
+        TuriHandlerVal *hv = (TuriHandlerVal *)calloc(1, sizeof(TuriHandlerVal));
+        if (!hv) return turi_error("eval: out of memory (handler value)");
+        if (h->n_cases > TURI_MAX_HANDLER_CASES) {
+            free(hv);
+            return turi_errorf("eval: handler has too many cases (%u)", h->n_cases);
+        }
+        hv->n_cases = h->n_cases;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            hv->cases[i] = &h->cases[i];
+        return turi_handler_val(hv);
+    }
+
+    /* (compose-handlers h1 h2) — concat two handler tables (TI6). */
+    case EX_COMPOSE_HANDLERS: {
+        TuriValue v1 = eval_expr(env, frame, e->as.compose_handlers_.h1);
+        if (turi_is_error(v1) || env->returning || env->throwing) return v1;
+        TuriValue v2 = eval_expr(env, frame, e->as.compose_handlers_.h2);
+        if (turi_is_error(v2) || env->returning || env->throwing) return v2;
+        if (v1.tag != TURI_HANDLER || v2.tag != TURI_HANDLER)
+            return turi_error("eval: compose-handlers: operands must be handler values");
+        TuriHandlerVal *a = v1.as_handler, *b = v2.as_handler;
+        if ((uint32_t)a->n_cases + b->n_cases > TURI_MAX_HANDLER_CASES)
+            return turi_error("eval: composed handler has too many cases");
+        TuriHandlerVal *hv = (TuriHandlerVal *)calloc(1, sizeof(TuriHandlerVal));
+        if (!hv) return turi_error("eval: out of memory (composed handler)");
+        for (uint8_t i = 0; i < a->n_cases; i++) hv->cases[hv->n_cases++] = a->cases[i];
+        for (uint8_t i = 0; i < b->n_cases; i++) hv->cases[hv->n_cases++] = b->cases[i];
+        return turi_handler_val(hv);
+    }
+
+    /* (with-handler hv body) — apply a handler value to a body (TI6). */
+    case EX_WITH_HANDLER: {
+        TuriValue hvv = eval_expr(env, frame, e->as.with_handler_.handler);
+        if (turi_is_error(hvv) || env->returning || env->throwing) return hvv;
+        if (hvv.tag != TURI_HANDLER)
+            return turi_error("eval: with-handler: first argument must be a handler value");
+        TuriHandlerVal *hv = hvv.as_handler;
+
+        /* Materialise a contiguous HandleCase array + HandleExpr so we can
+         * reuse eval_handle.  Both live on this frame -- safe because
+         * eval_handle runs the body (and all resumes) to completion before
+         * returning, and continuations never escape it. */
+        HandleCase cases[TURI_MAX_HANDLER_CASES];
+        for (uint8_t i = 0; i < hv->n_cases; i++) cases[i] = *hv->cases[i];
+        HandleExpr h;
+        h.body    = e->as.with_handler_.body;
+        h.cases   = cases;
+        h.n_cases = hv->n_cases;
+        return eval_handle(env, frame, &h);
+    }
+
+    /* (select ...) — multi-channel select (TI6, carved out).
+     * Channels in Turmeric are inline-C structs (pthread mutex/condvar); the
+     * interpreter has no channel runtime, and every existing select fixture is
+     * inline-C-bound (a TI7 carve-out).  Fail cleanly rather than falling
+     * through to the generic "unhandled expression kind" default.  See
+     * docs/reported/turi-select-needs-channel-primitives.md. */
+    case EX_SELECT:
+        return turi_error("eval: select is not supported in interpreter mode "
+                          "(channels require native primitives; use the compiled path)");
 
     /* (resume k value) — resume a live continuation with a value. */
     case EX_RESUME: {
@@ -3975,13 +4179,76 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
     }
     case EX_REINTERPRET:
-        /* Compiler-only in TS2. Keep interpreter traversal exhaustive until a
-         * later phase needs runtime reinterpret semantics too. */
+        /* A same-size scalar bit-reinterpret on the compiled path (raw int64
+         * carrier).  It stays TRANSPARENT here -- and must.  The interpreter is
+         * tag-preserving: a float boxed into an int64 carrier (ADT/cons/tyvar
+         * slot, or `(:: f int)`) stays a TURI_FLOAT and is read back directly,
+         * with no unbox reinterpret.  Any attempt to actually reinterpret one
+         * direction breaks the round-trips that rely on tag preservation
+         * (typed-slots/cons-float reads `.head` of a Cons[float] with no
+         * reinterpret; typed-slots/ascribe-reinterpret round-trips i32<->f32 and
+         * float<->carrier).  Because a `TURI_INT` cannot be distinguished as
+         * "a genuine integer" vs "a carrier holding float bits", there is no
+         * self-consistent partial reinterpret -- fully transparent is the only
+         * correct choice.  Consequence: a literal `(:: 7 :float)` prints `7`
+         * here but the bit pattern `3.45846e-323` compiled.  That divergence is
+         * inherent to the tagged value model (same class as `(:: 7.1 :int)`
+         * giving `7.1`), not a bug -- see
+         * docs/reported/turi-map-nonint-value-carrier-ascription.md. */
         return eval_expr(env, frame, e->as.reinterpret_.expr);
 
-    /* --- Phase 2: type ascription is transparent at runtime ---------------- */
-    case EX_ASCRIBE:
-        return eval_expr(env, frame, e->as.ascribe_.inner);
+    /* --- Phase 2: type ascription is transparent at runtime, except that it
+     * must reconcile the runtime value tag with the ascribed primitive type.
+     * The interpreter dispatches println/show on the runtime tag, so an int
+     * literal ascribed to :bool (e.g. a return-type-directed Default[bool]
+     * instance that returns `1`, then `(:: (default-of) bool)`) must become a
+     * TURI_BOOL or it prints as `1` instead of `true`.  Mirror EX_CAST's
+     * primitive coercions, but only when the tag actually mismatches so struct/
+     * closure/ADT ascriptions stay transparent. */
+    case EX_ASCRIBE: {
+        TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        /* `::` is a representation assertion, NOT a numeric conversion (that is
+         * EX_CAST / explicit int->float).  On the compiled path the carrier word
+         * is reinterpreted bit-for-bit to the ascribed type -- so an int64 that
+         * carries a double's bits (e.g. a type-erased Map[int float] value read
+         * back as :float, or a char* read back as :cstr) must REINTERPRET, not
+         * convert.  The previous numeric coercion here diverged from the
+         * compiled path ((:: 7 :float) gave 7 under --interpret but 3.45e-323
+         * compiled).  Act only on a tag mismatch so struct/closure/ADT
+         * ascriptions stay transparent. */
+        switch (e->type.kind) {
+        case TY_BOOL:
+            if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
+            return v;
+        case TY_FLOAT: case TY_FLOAT64:
+            if (v.tag == TURI_INT) {
+                union { int64_t i; double d; } u; u.i = v.as_int;
+                return turi_float(u.d);
+            }
+            return v;
+        case TY_FLOAT32:
+            /* The compiled float32 ascription numeric-converts the carrier
+             * (unlike float64); keep parity with it. */
+            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
+            return v;
+        case TY_INT: case TY_INT64:
+            if (v.tag == TURI_FLOAT) {
+                union { int64_t i; double d; } u; u.d = v.as_float;
+                return turi_int(u.i);
+            }
+            return v;
+        case TY_INT8: case TY_INT16: case TY_INT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            return v;
+        case TY_CSTR:
+            /* int64 carrier holds a char*; reinterpret so println shows text. */
+            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
+            return v;
+        default:
+            return v;
+        }
+    }
 
     /* --- Phase N: poly wrap is transparent in the interpreter -------------- */
     case EX_POLY_WRAP:
@@ -4041,16 +4308,25 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     case EX_PANIC_WITH: {
-        /* Typed panic payload — just needs "panic at" in stderr and nonzero exit. */
+        /* TI5: typed panic payload.  Evaluate the value and stash its TypeKind,
+         * value, and source line so catch-panic-of can filter by type and the
+         * panic-payload-* accessors can read it. */
+        TuriValue pv = eval_expr(env, frame, e->as.panic_with_.payload);
+        if (turi_is_error(pv) || env->returning || env->throwing) return pv;
         if (env->panicking) {
             fprintf(stderr, "double panic: aborting\n");
             fflush(stderr);
             fflush(stdout);
             abort();
         }
-        /* If a catch-unwind boundary is active, longjmp to it. */
+        /* If a catch boundary is active, longjmp to it carrying the payload. */
         if (env->catch_jmp && !env->in_no_unwind) {
             strncpy(env->catch_panic_msg, "typed panic", sizeof(env->catch_panic_msg) - 1);
+            env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+            env->catch_panic_type  = e->as.panic_with_.payload->type.kind;
+            env->catch_panic_value = pv;
+            env->catch_panic_file  = NULL;
+            env->catch_panic_line  = (int)e->span.line;
             env->panicking = true;
             longjmp(*env->catch_jmp, 1);
         }
@@ -4078,6 +4354,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue prev_throw    = env->throw_value;
         TuriValue prev_ret      = env->return_value;
         bool     prev_panicking = env->panicking;
+        /* W4: remember the defer stack so a caught panic fires the unwound
+         * frames' defers *before* catch-unwind returns (the compiled path runs
+         * defers during unwinding).  The longjmp out of a panic skips the normal
+         * scope-exit defer firing, leaving them on the stack. */
+        DeferItem *defer_mark = (DeferItem *)env->defer_stack;
         env->catch_jmp = &jb;
 
         TuriValue result;
@@ -4091,14 +4372,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * Result-box layout { is_ok, ok_val, err_val } that the native
              * ok/err/ok?/err? helpers produce and read, so the value composes
              * with ok?/err?/ok-val just like any other Result (Phase R2). */
-            int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-            if (!box) return turi_error("eval: catch-unwind: oom");
-            box[0] = 1; box[1] = result.as_int; box[2] = 0;
-            { TuriValue v = {0}; v.tag = TURI_INT;
-              v.as_int = (int64_t)(intptr_t)box; return v; }
+            return turi_ok_result_box(result.as_int);
         } else {
-            /* A panic was caught — restore env and return (err msg), again in
-             * the Result-box layout so err?/err-val recover the caught message. */
+            /* A panic was caught — restore env and return (err payload).  TI5:
+             * the err slot carries a boxed TuriPanicPayload so panic-payload-*
+             * accessors recover the caught value/type/file/line (the message is
+             * the cstr value for a plain panic). */
             env->catch_jmp    = prev_jmp;
             env->panicking    = false;
             env->returning    = prev_returning;
@@ -4106,13 +4385,95 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->throw_value  = prev_throw;
             env->return_value = prev_ret;
             (void)prev_panicking;
-            char *msg = env->catch_panic_msg[0] ? strdup(env->catch_panic_msg) : NULL;
-            int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-            if (!box) return turi_error("eval: catch-unwind: oom");
-            box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)msg;
-            { TuriValue v = {0}; v.tag = TURI_INT;
-              v.as_int = (int64_t)(intptr_t)box; return v; }
+            /* W4: fire the unwound frames' defers (LIFO) before returning, so
+             * `(defer ...)` in the panicking thunk runs during the unwind. */
+            fire_defers_to_mark_reversed(env, defer_mark, frame);
+            return turi_err_result_box(env);
         }
+    }
+
+    /* --- Phase TI5: catch-panic-of — type-filtered panic catch ------------- */
+    case EX_CATCH_PANIC_OF: {
+        TuriValue thunk_val = eval_expr(env, frame, e->as.catch_panic_of_.thunk);
+        if (turi_is_error(thunk_val) || env->returning || env->throwing) return thunk_val;
+        if (thunk_val.tag != TURI_CLOSURE)
+            return turi_error("eval: catch-panic-of: thunk must be a closure");
+        int want_type = (int)e->as.catch_panic_of_.type_kind;
+
+        jmp_buf  jb;
+        jmp_buf *prev_jmp       = env->catch_jmp;
+        bool     prev_returning = env->returning;
+        bool     prev_throwing  = env->throwing;
+        TuriValue prev_throw    = env->throw_value;
+        TuriValue prev_ret      = env->return_value;
+        env->catch_jmp = &jb;
+
+        TuriValue result;
+        if (setjmp(jb) == 0) {
+            result = eval_apply(env, thunk_val.as_closure, NULL, 0);
+            env->catch_jmp = prev_jmp;
+            if (turi_is_error(result) || env->returning || env->throwing)
+                return result;
+            return turi_ok_result_box(result.as_int);
+        } else {
+            /* A panic reached this boundary.  Restore the saved control state
+             * (the payload fields in env still describe the in-flight panic). */
+            env->catch_jmp    = prev_jmp;
+            env->returning    = prev_returning;
+            env->throwing     = prev_throwing;
+            env->throw_value  = prev_throw;
+            env->return_value = prev_ret;
+
+            if (env->catch_panic_type == want_type) {
+                /* Matching type: consume the panic, return (err payload). */
+                env->panicking = false;
+                return turi_err_result_box(env);
+            }
+            /* Type mismatch: re-raise to the next outer boundary, or abort.
+             * env->panicking stays true and the payload fields are untouched so
+             * the outer boundary sees the original panic. */
+            if (prev_jmp && !env->in_no_unwind)
+                longjmp(*prev_jmp, 1);
+            fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
+            fflush(stderr);
+            fire_defers_to_mark_reversed(env, NULL, NULL);
+            fflush(stdout);
+            exit(1);
+        }
+    }
+
+    /* --- Phase TI5: panic-payload-* accessors ------------------------------ */
+    case EX_PANIC_PAYLOAD_TYPE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_type_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return turi_int(pp ? pp->type_tag : 0);
+    }
+    case EX_PANIC_PAYLOAD_VALUE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_value_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return pp ? pp->value : turi_nil();
+    }
+    case EX_PANIC_PAYLOAD_FILE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_file_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return turi_cstr(pp && pp->file ? pp->file : "");
+    }
+    case EX_PANIC_PAYLOAD_LINE: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_line_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        return turi_int(pp ? pp->line : 0);
+    }
+    case EX_PANIC_PAYLOAD_DOWNS: {
+        TuriValue p = eval_expr(env, frame, e->as.panic_payload_downs_.payload);
+        if (turi_is_error(p) || env->returning || env->throwing) return p;
+        TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
+        if (pp && pp->type_tag == (int)e->as.panic_payload_downs_.target_type)
+            return pp->value;
+        return turi_nil();
     }
 
     /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
@@ -4239,10 +4600,43 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_expr(env, frame, e->as.union_inject_.value);
 
     /* --- IT4: any-typed cast and type-of --------------------------------- */
-    case EX_ANY_CAST:
-        /* In the interpreter, 'any' values are untagged (union injection is
-         * transparent), so (cast x T) just returns the inner value. */
-        return eval_expr(env, frame, e->as.any_cast_.value);
+    case EX_ANY_CAST: {
+        /* (cast x T) is a *checked* downcast: the compiled path panics when the
+         * any box does not hold a T (__tur_any_cast_check).  W4: do the same
+         * here -- 'any' is untagged in the interpreter, but the runtime
+         * TuriValue tag still records the held kind, so verify it matches the
+         * target and panic on mismatch.  Conservative: only panic on a clear
+         * primitive/struct/ADT mismatch; pass through ambiguous targets
+         * (type vars, unknown) so a valid cast never spuriously panics. */
+        TuriValue v = eval_expr(env, frame, e->as.any_cast_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        bool ok = true;
+        switch (e->as.any_cast_.target_kind) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            ok = (v.tag == TURI_INT); break;
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+            ok = (v.tag == TURI_FLOAT); break;
+        case TY_BOOL: ok = (v.tag == TURI_BOOL); break;
+        case TY_CSTR: ok = (v.tag == TURI_CSTR); break;
+        case TY_STRUCT:
+            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def != NULL);
+            if (ok && e->as.any_cast_.target_struct &&
+                v.as_struct->name && e->as.any_cast_.target_struct->name)
+                ok = (strcmp(v.as_struct->name,
+                             e->as.any_cast_.target_struct->name) == 0);
+            break;
+        case TY_ADT:
+            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def == NULL);
+            break;
+        default: ok = true; break;
+        }
+        if (!ok) {
+            turi_runtime_panic(env, "cast: any holds a value of a different type");
+            return turi_nil(); /* unreachable: turi_runtime_panic never returns */
+        }
+        return v;
+    }
 
     case EX_ANY_TYPE_OF: {
         TuriValue v = eval_expr(env, frame, e->as.any_type_of_.value);
@@ -4256,7 +4650,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TURI_NIL:     tname = "nil";     break;
         case TURI_CLOSURE: tname = "fn";      break;
         case TURI_STRUCT:
-            tname = (v.as_struct && v.as_struct->name) ? v.as_struct->name : "struct";
+            /* W4: match the compiled __tur_any_type_name, which carries only
+             * kind granularity -- every struct is "struct" and every ADT is
+             * "adt" (emit_module.c), NOT the specific type name.  A plain
+             * (make-struct T ...) carries its StructDef (def != NULL); an ADT
+             * constructor builds via make_struct_val with def == NULL. */
+            tname = (v.as_struct && v.as_struct->def) ? "struct" : "adt";
             break;
         default: break;
         }
@@ -4915,6 +5314,9 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
         break;
     case TURI_GEN:
         snprintf(buf, cap, "#<generator>");
+        break;
+    case TURI_HANDLER:
+        snprintf(buf, cap, "#<handler>");
         break;
     }
 }

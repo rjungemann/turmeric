@@ -130,4 +130,11 @@ void turi_native_throw(TuriEnv *env, const char *msg);
  * Call after turi_call(main) to honour module-level (defer ...) forms. */
 void turi_run_pending_defers(TuriEnv *env);
 
+/* W1b: read field `idx` of a struct VALUE as a TuriValue.  Lets the
+ * Result/Option native shims (in main.c, where TuriStruct is incomplete) accept
+ * a make-struct TuriStruct in addition to their native int64 box.  Sets *found
+ * to true and returns the field when v is a TURI_STRUCT with idx in range; sets
+ * *found to false and returns nil otherwise. */
+TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found);
+
 #endif /* TURI_EVAL_H */

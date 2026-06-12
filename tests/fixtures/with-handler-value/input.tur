@@ -1,0 +1,9 @@
+;; TI6: a single first-class handler value applied with with-handler.
+;; (handler ...) builds a detached dispatch table; with-handler pairs it
+;; with a body and runs it exactly like (handle BODY cases...).
+(defeffect Ask [] :int)
+(defn main [] : int
+  (with-handler
+    (handler (Ask [] k) (resume k 42))
+    (do (println (perform (Ask)))
+        0)))

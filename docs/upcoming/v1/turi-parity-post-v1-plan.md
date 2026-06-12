@@ -567,53 +567,107 @@ versioning."
 
 ---
 
-## Phase TI5 -- Panic payloads + `catch-panic-of`
+## Phase TI5 -- Panic payloads + `catch-panic-of` -- **LANDED (interpreter)**
 
 **Depends on:** `error-handling-deferred-plan.md` Phase R2 -- **landed**
 (commit `0de95bcc`, "Phase R2 + R6c: catch-unwind and panic handling on
-compiled path"). TI5 is no longer blocked; it can run in parallel with
+compiled path"). TI5 is no longer blocked; it ran in parallel with
 TI2-TI4.
 
-### Implementation
+`EX_CATCH_PANIC_OF` and the `EX_PANIC_PAYLOAD_{TYPE,VALUE,FILE,LINE,DOWNS}`
+family are now handled in `src/turi/eval.c`.
 
-The interpreter already has a `catch_jmp` setjmp boundary in
-`src/turi/env.h:154`. Extend it to carry a `tur_panic_payload`
-(matching the compiled-path struct at
-`src/runtime/runtime.h:261`). The accessors
-(`EX_PANIC_PAYLOAD_TYPE`, `_VALUE`, `_FILE`, `_LINE`, `_DOWNS`) read
-fields off that payload. `EX_CATCH_PANIC_OF` does the type-tag
-downcast before deciding whether to catch or re-raise.
+### Implementation (shipped)
+
+The interpreter's `catch_jmp` setjmp boundary now carries a typed panic
+payload. Four fields were added to `TuriEnv` (`src/turi/env.h`):
+`catch_panic_type` (a `TypeKind` stored as int), `catch_panic_value`
+(the panicked `TuriValue`), `catch_panic_file`, and `catch_panic_line`.
+
+- **Panic raise.** `turi_runtime_panic` (plain `(panic msg)` and native
+  `result-must`/`option-must`/...) stamps a `:cstr` payload whose value is
+  the message, so `catch-panic-of :cstr` matches a string panic.
+  `EX_PANIC_WITH` evaluates its operand and stamps the operand's
+  `type.kind` + value + source line.
+- **`EX_CATCH_PANIC_OF`.** Installs its own `setjmp` boundary. On a caught
+  panic it compares `catch_panic_type` against the requested `type_kind`:
+  on a match it consumes the panic and returns `(err payload)`; on a
+  mismatch it re-raises to the next outer boundary (`longjmp(prev_jmp)`),
+  or prints `panic at` + fires defers + exits if it is outermost -- mirroring
+  the compiled `tur_catch_panic_of` re-panic.
+- **Accessors.** A caught result's err slot boxes a heap `TuriPanicPayload`
+  (`{ type_tag; value; file; line }`); `EX_PANIC_PAYLOAD_*` cast that
+  pointer back and read the field. `_DOWNS` returns the value only when the
+  tag matches its `target_type`, else nil. `catch-unwind` was refactored to
+  share the same `turi_ok_result_box` / `turi_err_result_box` helpers, so
+  its err slot now carries the payload too.
 
 ### Tests
 
-Mirror the R2 fixtures from `error-handling-deferred-plan.md` under
-the turi harness.
+- `panic-catch-panic-of` -- plain (cstr) panic: `:cstr` matches, `:int`
+  re-raises to an outer `catch-unwind`. **Now passes under `tur --interpret`**
+  (previously hit the unhandled-kind default).
+- `panic-with-catch-of` (new) -- typed `panic-with` int payload: `:int`
+  matches, `:cstr` re-raises. Verified equal under `tur --interpret` and
+  `tur run`.
+
+Both added to the `run-turi.sh` allowlist (TI5 block).
+
+**Reachability note.** The `panic-payload-*` accessors are implemented and
+correct, but a *pure-turi* program cannot obtain the payload handle without
+the inline-C `result-panic` extractor (`stdlib/panic.tur`) -- `catch-panic-of`
+returns the `:int` Result box, and `err-val` does not typecheck against it.
+So the turi-testable surface is the `catch-panic-of` type-filtering path; the
+accessors mainly serve to close the `EX_*` parity gap and would work if reached
+via a native handle.
 
 ---
 
 ## Phase TI6 -- `EX_WITH_HANDLER` and `EX_SELECT`
 
-### `EX_WITH_HANDLER`
+### `EX_WITH_HANDLER` (+ `EX_HANDLER_LIT` / `EX_COMPOSE_HANDLERS`) -- **LANDED**
 
-The interpreter handles `(handle ...)` via an older path; the
-compiler now emits `EX_WITH_HANDLER` for `with-handler` (the
-handler-record-driven form). Bridge the two by lowering
-`EX_WITH_HANDLER` to the same internal "push handler, run body, pop
-handler" routine `EX_HANDLE` already uses.
+First-class handler *values* are now interpreted. The three nodes the
+elaborator emits for the FH (first-class handler) surface are all handled in
+`src/turi/eval.c`:
 
-### `EX_SELECT`
+- `EX_HANDLER_LIT` -- `(handler (E [params] k) body)` builds a detached
+  dispatch table. A new `TURI_HANDLER` value (`TuriHandlerVal` in `eval.c`,
+  tag in `src/turi/value.h`) borrows pointers to the arena-allocated
+  `HandleCase`s; no body is attached.
+- `EX_COMPOSE_HANDLERS` -- `(compose-handlers h1 h2)` concatenates the two
+  tables (h1's cases first -- h1 outer per FH0.1). The elaborator already
+  rejects overlapping effect sets (`TUR-E0251`), so first-match dispatch
+  order across the two is unobservable.
+- `EX_WITH_HANDLER` -- `(with-handler hv body)` materialises a contiguous
+  `HandleCase` array + a synthesised `HandleExpr` and reuses the existing
+  `eval_handle` fiber machinery. Stack allocation is safe because
+  `eval_handle` runs the body (and every resume) to completion before
+  returning, and continuations never escape it.
 
-Channel `select` over multiple receive/send ops. Today the
-interpreter only handles single-channel `recv`/`send`. Add a
-`turi_select` helper that polls each branch in declaration order
-(non-blocking under the single-threaded model; if no branch is ready
-and a `:default` arm exists, run it; otherwise park the fiber until
-any channel becomes ready -- reuse the fiber scheduler from
-`src/turi/fiber.c`).
+Note `(with-handler body cases...)` with any arity != 3 is the T25
+inline-handle *sugar* (`elab_call.c:1112-1114`) and lowers to `EX_HANDLE`,
+which the interpreter already handled.
 
-### Tests
+**Fixtures:** `tests/fixtures/with-handler-value/` (single handler value),
+`tests/fixtures/fh-compose-handlers/` (compose over disjoint effects). Both
+verified equal under `tur --interpret` and `tur run`; both added to the
+`run-turi.sh` allowlist (TI6 block).
 
-`tests/fixtures/channel-select-default/`, `channel-select-park/`.
+### `EX_SELECT` -- **carved out (follow-up)**
+
+Channel `select` over multiple receive/send ops stays unimplemented in the
+interpreter. Turmeric channels have no native representation in `turi`
+(they are inline-C `pthread` ring buffers), and **every** existing `select-*`
+fixture defines its channel ops as user inline-C -- a permanent TI7
+carve-out -- so a `turi_select` case arm would have nothing to select over.
+A dedicated `case EX_SELECT` now returns a clean
+"not supported in interpreter mode" error instead of the generic
+unhandled-kind default. Implementing it for real means adding a native
+channel layer (opaque `TURI_CHANNEL` + `chan-new`/`send`/`recv` natives +
+a fiber-parking `turi_select`), plus native (non-inline-C) channel fixtures
+to test against. Full write-up:
+[docs/reported/turi-select-needs-channel-primitives.md](../../reported/turi-select-needs-channel-primitives.md).
 
 ---
 
@@ -641,35 +695,302 @@ Permanent carve-out per `src/turi/fiber.c:172-288`. Document in
 
 ---
 
-## Phase TI8 -- Harness flip: allowlist → denylist
+## Phase TI8 -- Harness flip: allowlist → denylist -- **PARTIAL (ratchet + harness now interprets)**
 
-Once TI1-TI6 land, almost every fixture should run under turi.
+### TI8.a -- CI ratchet + harness genuinely interprets -- **LANDED**
 
-### Implementation
+The foundational correctness fix and the CI ratchet shipped:
 
-1. Delete the `TURI_FIXTURES_DEFAULT` allowlist from
-   `tests/run-turi.sh` (lines 82-211 as of 2026-06-10).
-2. Default to "run every fixture under tests/fixtures/" minus those
-   carrying:
-   - `requires.compiled`
-   - `requires.tur-only` (new marker from TI1)
-   - `requires.dedicated-runner`
-   - `requires.spices` (when `../turmeric-spices` is absent)
-3. The `KB-001` known-bug ("allowlist gaps go unnoticed") becomes
-   moot; remove the workaround comment.
-4. Add a flagging script `tools/check_turi_parity.py` that:
-   - Greps `src/compiler/expr.h` for `EX_*` enumerators.
-   - Greps `src/turi/eval.c` for `case EX_*` arms.
-   - Fails the build if any `EX_*` in (1) but not (2) is **not** in a
-     known carve-out allowlist (`docs/turi-carve-out.txt` -- a short
-     plain-text file).
-5. Wire the script into `tests/run.sh` (or the CMake build) as a
-   pre-test check.
+- **`tools/check_turi_parity.py`** (new) diffs the `EX_*` enumerators in
+  `src/compiler/expr.h` against the `case EX_*:` arms in `src/turi/eval.c`.
+  Any unhandled kind that is not listed in **`docs/turi-carve-out.txt`** (new,
+  6 entries with rationale) fails the check; a stale carve-out (a kind that is
+  actually handled, or a nonexistent kind) also fails, keeping the list honest.
+  Wired into `tests/run.sh` as a pre-test gate (opt out with
+  `TUR_SKIP_PARITY_CHECK=1`). Current state: **109/115 handled, 6 carved out,
+  0 gaps.**
+- **`tests/run-turi.sh` now runs `tur --interpret`**, not `tur run`. This
+  resolves the blocker
+  ([turi-harness-compiles-instead-of-interpreting.md](../../reported/turi-harness-compiles-instead-of-interpreting.md)):
+  the allowlist finally exercises `src/turi/eval.c`. Reconciling to true
+  interpretation removed **31 false-green entries** (catalogued in
+  [turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md));
+  the harness is green at **122 passed, 0 failed**. The `requires.tur-only`
+  marker (from TI1) is honored as the symmetric skip to `requires.compiled`.
 
-### Tests
+### TI8.b -- Full allowlist → denylist flip -- **IN PROGRESS (defmodule defect fixed)**
 
-The harness flip itself is the test. CI run of `tests/run-turi.sh`
-should land near-zero `SKIP` lines that aren't `requires.compiled`.
+> **Execution detail:** the full per-bucket plan for closing the remaining
+> failures lives in
+> [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
+> (workstreams W1-W5, the fix-vs-carve decision rule, sequencing, and metrics).
+> This section is the summary; that doc is the working plan.
+
+The flip itself (delete the allowlist; default to run-everything-minus-markers)
+is **not** done -- the blast radius is large and includes silent miscompiles
+that must be fixed or carved first. Measured on 2026-06-11: under `--interpret`,
+**637 pass / 933 fail / 92 skip** across all fixtures (660/910/92 after the
+defmodule fix below). Of the 910, **377 are inline-C-bound** (carve-out
+candidates) and **533 are pure-turi** (genuinely fixable) -- the gap-closure
+plan sequences both.
+
+**Landed in TI8.b so far -- the `defmodule` concatenation defect:** the 46
+`only one defmodule is allowed per file` failures were a real interpreter bug.
+`cmd_eval` preloaded `macros.tur` (which carries `(defmodule tur/macros ...)`)
+by **concatenating** its source into the single `<eval>` blob (`file_id 0`), so
+any user fixture with its own defmodule collided. Fixed by preloading
+`macros.tur` via a `(load ...)` form (which assigns it a distinct `file_id`, so
+the per-file `has_defmodule` reset fires). 23 module/defmodule fixtures
+recovered. **W1 (typed-stdlib prelude, conflict-free subset)** then preloaded
+the typeclass stubs + `vec/slice/option/pair/tuple/list/grid/zipper` via the
+`(load ...)` mechanism, recovering **+35 more** (probe 660 -> 695 pass, zero
+regressions). **W3** then found the "move/linearity divergence" bucket was a
+probe artifact -- those are `errors/*` negative fixtures the interpreter handles
+correctly -- and wired `errors/*` into the harness with diag comparison: **282
+of 298 pass** (the whole move/linearity/affine/type-error surface is now
+CI-validated under turi; 9 genuine divergences denylisted). **W2** then carved
+the inline-C set via harness auto-detection, **W4** fixed the `ic_exec_accessor`
+boolean-return silent-miscompile class, and a **bulk-add** put every
+auto-verified-passing non-inline-C fixture on the allowlist. The harness now
+stands at **912 passed, 0 failed** (181 -> 463 -> 912), with the remaining gap
+down to **260** (~244 genuine failures: the W1b native-shim cluster + W4 silent
+miscompiles + a small semantic tail). The native-shim-conflicted modules
+(`result/map/set/hamt/contract`) stay excluded pending W1b -- see the
+[gap-closure plan](turi-interpreter-gap-closure-plan.md) for the per-workstream
+detail.
+
+Remaining buckets: typed-stdlib native-shim reconciliation (W1b), inline-C
+carve-outs (W2), silent wrong-value miscompiles (W4), and a handful of HKT /
+existential / continuation semantic divergences. Each must
+be fixed in `src/turi/eval.c` or tagged `requires.tur-only`/`requires.compiled`
+before the flip lands green.
+
+Remaining steps when the flip is tackled:
+
+1. Delete `TURI_FIXTURES_DEFAULT` from `tests/run-turi.sh`.
+2. Default to "run every fixture" minus `requires.{compiled,tur-only,
+   dedicated-runner,spices}`.
+3. Retire the `KB-001` allowlist-gap workaround comment.
+4. Also flip `tests/run-flags.sh`'s three `tur run` assertions (`:345`,
+   `:355`, `:408`) to `--interpret`.
+
+---
+
+## Phase TI10 -- Turi-closure-aware HAMT (map content keys)
+
+> **Status:** Draft Plan (2026-06-12)
+> **Unblocks:** `typed/map-basic`, `data-literal-map-*`, and the whole `map-*`
+> surface under `--interpret`; lets `map.tur` join the `cmd_eval` prelude.
+> **Tracking report:**
+> [docs/reported/turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md)
+> (umbrella; `hamt` and `set` already fixed in W1b -- this phase closes `map`).
+
+### Why map is still blocked (the corrected diagnosis)
+
+`hamt` and `set` landed in W1b because their key is used **directly** as the
+int-keyed HAMT key -- no comparator argument. `map` is different. The public
+accessors are macros; `(map-assoc m k v)` expands (map.tur:454) to:
+
+```turmeric
+(map-assoc-eq-o (tur-map-kcheck m (& k))
+  (hash k) (mk-box k) v (mk-cmp k) (mk-owned? k))
+```
+
+The `map-assoc-eq-o` native itself resolves fine (a global native overrides the
+inline-C defn by name -- the earlier "monomorphized poly defn bypasses its
+native" theory was **wrong** and is retracted). The blocker is the **`mk-cmp`
+argument**, the `MapKey[K]` comparator. Its instance body for `int` is
+(map.tur:356):
+
+```turmeric
+(mk-cmp [x] : int
+  ```c return (int64_t)(intptr_t)__TUR_CNAME_tur-int-carrier-eq?__; ```)
+```
+
+-- inline-C returning the **C address of the key-equality function**. The
+interpreter has no C function pointers and `try_exec_simple_inline_c` does not
+resolve the `__TUR_CNAME_*` / `__TUR_CAP_*` placeholder, so `mk-cmp` errors
+*before* `map-assoc-eq-o` is ever called. The comparator argument must evaluate
+to *something* the assoc native can hand to the runtime HAMT, and today it
+cannot. That is squarely **Gap 2** from the tracking report (C-callback eq vs.
+interpreter value model).
+
+The runtime contract is fixed (`src/runtime/hamt.h:144,196`): the content-keyed
+ops take `tur_hamt_keyeq_fn = bool(*)(int64_t,int64_t)` and call it **only on a
+64-bit hash collision**. For `int`/`bool`/`cstr`/`float` keys with few entries
+there are usually no collisions -- so a comparator-ignoring shim "works by
+luck" until one occurs. Per CLAUDE.md that is a bug, not a shortcut: the
+comparator must be genuinely wired, and the fix must be **collision-tested**.
+
+### Design: two tiers
+
+The work splits into a pragmatic tier that unblocks every stdlib map fixture
+with zero runtime change, and the general "turi-closure-aware HAMT" tier the
+umbrella report calls for. Land **Tier A first**; it closes the fixtures. Tier B
+is the general mechanism for comparators that are genuine turi closures.
+
+#### Tier A -- native MapKey instances return the real C comparator (no runtime change) -- **LANDED**
+
+> **Shipped (2026-06-12).** `src/main.c` gained `wk_register_map_natives`: the
+> four carrier comparators (`turi_{int,cstr,f32,f64}_carrier_eq_c`), the
+> `MapKey` `mk-cmp`/`mk-box` and `Hash` instance natives for the inline-C cases
+> (`__inst_MapKey_mk_hycmp_{int,cstr,float,float32}`,
+> `__inst_MapKey_mk_hybox_{cstr,float,float32}`,
+> `__inst_Hash_hash_{cstr,float,float32}` -- int/bool box+hash are plain bodies),
+> the raw `map-*-eq-o` and explicit-hash `map-*-eq` bridges over
+> `tur_hamt_*_eq[_o]`, plus `map-count`/`map-merge`/`map-free`/`tur-map-homog__`.
+> `map.tur` joined the `cmd_eval` and `wk_eval_fixture` preludes. Mangled
+> instance-method names were confirmed empirically (the override hook keys on
+> `fn->binding->name->name`). Allowlist: `typed/map-basic`, `map-basic`,
+> `data-literal-map-basic`, `typed/map-collision`, **`typed/map-collision-forced`**
+> (new -- a hash-0 collision chain so the comparator genuinely fires; passes
+> identically under `--interpret` and `tur run`), `wkc-wide-map-key`. Harness
+> 932 -> 938, 0 failed; compiled suite unchanged. Non-int map *values* remain a
+> follow-up (see report). The original design follows:
+
+
+Key realisation: a turi **native** runs in C, so it can return the *actual
+address* of a C comparator -- exactly what the compiled path does. The only
+reason the interpreter failed is that the comparator was wrapped in inline-C the
+tree-walker can't read. Override the three `MapKey` instance methods (per
+built-in scalar key type) and the four raw `map-*-eq-o` ops with natives:
+
+1. **Add four pure-C carrier comparators in `src/main.c`** (mirrors map.tur):
+   - `static bool turi_int_carrier_eq(int64_t a, int64_t b) { return a == b; }`
+     (serves `int` and `bool`)
+   - `turi_cstr_key_eq` -- `strcmp(...)==0` over the two pointer words
+   - `turi_f32_carrier_eq` / `turi_f64_carrier_eq` -- `union { float/double; int64_t }`
+     bit-reinterpret then compare by value (lead the test probe with `7.1`, not
+     `7.0`, per the float STRICT RULE -- an integral key cannot reveal a
+     bit-vs-numeric carrier bug).
+
+2. **Register `mk-box` / `mk-cmp` / `mk-owned?` instance natives** keyed by the
+   concrete key type. Dispatch is by *static* type (the carrier word is erased
+   at runtime), so each instance needs its own native -- one cannot runtime-tag
+   a single `mk-cmp`. The names are the elaborator's mangled instance-method
+   symbols (the W1b spike observed `__inst_MapKey_mk_hycmp_int` /
+   `..._mk_hbox_int`); **first implementation step is to dump the exact mangled
+   names** (`tur --interpret` with the dispatch trace, or grep the elaborated
+   tree) and register against them. Bodies:
+   - `mk-box[int|bool]` -> identity (`bool` normalises to 0/1);
+     `mk-box[cstr]` -> identity (the pointer); `mk-box[float32|float]` ->
+     bit-reinterpret into the carrier word.
+   - `mk-cmp[K]` -> `return (int64_t)(intptr_t)&turi_<K>_carrier_eq;`
+   - `mk-owned?[K]` -> `0` for every scalar key (boxed/owned keys are Tier-B+).
+
+3. **Register the four raw bridges** `map-assoc-eq-o`, `map-get-eq-o`,
+   `map-has-eq-o?`, `map-dissoc-eq-o` as natives over the existing
+   `tur_hamt_{set,get,has,del}_eq_o` (`src/main.c`, alongside the `set_*`
+   natives). They take `(m h key keyeq owned)`; `m` is the `{void* hamt}`
+   carrier (reuse the `set_hamt`/`set_wrap` pattern -- map's carrier has the
+   identical one-pointer layout), `keyeq` is the int64 the `mk-cmp` native
+   returned (a real `bool(*)(int64_t,int64_t)`), `owned` is 0. Plus the
+   representation-flowing ops already in map.tur as plain inline-C that the
+   interpreter can't run: `map-new`, `map-count`, `map-merge`, `map-free`,
+   `map-hamt`, `map-wrap`, `map-empty-for`, `map-eq-raw?`/`map-eq-dynamic`
+   (the last two iterate the HAMT + fat-dispatch a value comparator -- see Tier
+   B note on `^fat` callbacks).
+
+4. **`map.tur` joins the `cmd_eval` prelude** (after `hamt.tur`/`set.tur`,
+   mirroring `result.tur`). `hash` is already native; `mk-*` and `map-*-eq-o`
+   now resolve, so the macro expansion evaluates end to end.
+
+Tier A alone makes `typed/map-basic`, the `data-literal-map-*` fixtures, and any
+scalar-keyed `map-*` program pass under `--interpret` with **no change to
+`src/runtime/hamt.c`**.
+
+#### Tier B -- the general turi-closure-aware HAMT (user comparators)
+
+Tier A covers every comparator that *is* a C function (all built-in `MapKey`
+instances). A comparator that is a genuine **turi closure** -- a user-defined
+`MapKey` instance written in Turmeric, or `map-eq?`'s `^fat val-cmp` when that
+value comparator is interpreted -- still cannot flow through
+`bool(*)(int64_t,int64_t)`. This is the mechanism the umbrella report names.
+
+Two implementation options; recommend **B1** (no `hamt.c` surgery, single-thread
+safe):
+
+- **B1 -- thread-local trampoline over the existing `_eq` path.** Add a fixed C
+  comparator `static bool turi_keyeq_trampoline(int64_t a, int64_t b)` that
+  reads a thread-local `{ TuriEnv*; TuriValue cmp; }` and invokes the closure
+  via `turi_call(env, cmp, {box(a), box(b)}, 2)`, returning its bool. The map
+  natives, when `keyeq` is a `TURI_CLOSURE` (not a raw C pointer), push the
+  env+closure onto the thread-local, pass `turi_keyeq_trampoline` as the `eq` to
+  the **existing** `tur_hamt_*_eq_o`, and pop on return. Because turi is
+  single-threaded and the HAMT calls `eq` synchronously within the op, the
+  thread-local is safe; nested maps need a small save/restore stack (the
+  comparator could itself touch another map). No runtime API change.
+
+- **B2 -- a real `_eq_ctx` runtime family.** Add
+  `typedef bool (*tur_hamt_keyeq_ctx_fn)(void*, int64_t, int64_t);` and
+  `tur_hamt_{set,get,has,del}_eq_ctx(..., eq_ctx, void *ctx, int64_t owned)` in
+  `src/runtime/hamt.c`, threading `ctx` to the comparator. Cleaner and
+  reentrant, but it is new runtime surface (and the compiled path doesn't need
+  it), so it carries fixture-snapshot risk for any extern-c prototype churn.
+  Defer unless B1's thread-local proves too fragile.
+
+The map natives detect which path to take by the `keyeq` value's tag: a
+`TURI_INT` carrying a code pointer (Tier A) goes straight to `_eq_o`; a
+`TURI_CLOSURE` (Tier B) goes through the trampoline. `mk-cmp` for a user MapKey
+instance would, under the interpreter, return the closure rather than a code
+pointer -- no extra dispatch needed at the call site.
+
+`map-eq-raw?`/`map-eq-dynamic` take a `^fat` value comparator and currently
+fat-dispatch it through inline-C (map.tur:621,704). Their interpreter natives
+must invoke the value comparator via `turi_call` (it is a `TURI_CLOSURE` under
+turi), iterating with `tur_hamt_iter_*`. This is the same trampoline idea
+applied to the value side; fold it into Tier B.
+
+### Out of scope
+
+- **Boxed / owned multi-word keys** (`owned != 0`, `tur_hamt_box_key`): struct
+  /ADT keys whose bytes live behind a refcounted box. The typed surface only
+  exposes scalar keys today (map.tur:309-311 calls multi-word keys a separate
+  follow-up); keep `mk-owned?` at 0 and error cleanly if an owned key reaches
+  the interpreter natives.
+- **Performance.** The trampoline calls back into the tree-walker on every
+  collision; that is fine (non-goal: speed).
+
+### Collision testing -- mandatory (no "works by luck")
+
+A passing `typed/map-basic` does **not** prove the comparator is wired -- small
+maps rarely collide. Add a fixture that **forces** a 64-bit hash collision so
+the comparator actually fires, using the raw `map-assoc-eq` / `map-get-eq` API
+that takes an explicit hash (map.tur:168,196): insert two distinct keys both
+under hash `0`, then assert each retrieves its own value (the comparator must
+distinguish them) and a third absent key misses. Run it under `--interpret`
+**and** `tur run` and diff. Without this fixture the fix is unvalidated per the
+CLAUDE.md "works by luck is a bug" rule.
+
+### Steps
+
+1. Confirm the mangled `MapKey` instance-method names under `--interpret`
+   (dump dispatch; one-shot investigation).
+2. Tier A: add the four C carrier comparators + `mk-box`/`mk-cmp`/`mk-owned?`
+   instance natives + the four `map-*-eq-o` raw bridges + `map-new`/`-count`/
+   `-merge`/`-free`/`-hamt`/`-wrap`/`-empty-for` natives in `src/main.c`;
+   register them in the same block as the `set-*` natives.
+3. Add `map.tur` to the `cmd_eval` prelude array (after `set.tur`).
+4. Build Debug; run `typed/map-basic`, `data-literal-map-*` under `--interpret`
+   with `ASAN_OPTIONS=detect_leaks=0`; diff against `expected.stdout`.
+5. Add the **forced-collision** fixture; verify equal on both paths.
+6. Tier B: add `turi_keyeq_trampoline` + thread-local save/restore stack; route
+   `TURI_CLOSURE` comparators (and `map-eq-*` `^fat` value comparators) through
+   it; add a user-defined-`MapKey` (turi closure comparator) collision fixture.
+7. Move the recovered map fixtures onto the `run-turi.sh` allowlist (or, post
+   TI8 flip, drop their `requires.*` exclusion); confirm harness count rises
+   with **0 failed** and the compiled suite stays at its current pass count.
+8. Update the umbrella report's status to RESOLVED and close the
+   set-count-overflow lineage note; refresh the W1b section of
+   `turi-interpreter-gap-closure-plan.md`.
+
+### Validation
+
+`ASAN_OPTIONS=detect_leaks=0 ./build/tur --interpret
+tests/fixtures/typed/map-basic/input.tur` matches `expected.stdout`, ASan clean;
+the forced-collision fixture passes on both backends; `bash tests/run.sh` stays
+green (parity gate + fixtures); `map.tur` rides the prelude without regressing
+the harness.
 
 ---
 
