@@ -11,12 +11,12 @@
 # docs/guides/turi-parity-guide.md for the full discussion.
 
 # --- CPS transform (Risks #5 / Sequencing) -------------------------------
-# call/cc and the CPS continuation-application node originate in the CPS
-# pipeline (docs/upcoming/cps-transform-plan.md).  The interpreter strategy for
-# them should fall out of however that plan lands; adding case arms ahead of it
-# risks rework, so they stay carved out until CPS-transform settles.
-EX_CALLCC -- call/cc; deferred to the CPS-transform plan (Risks #5)
-EX_CPS_CONT_APP -- CPS continuation application; deferred to the CPS-transform plan
+# (call/cc f) / (escape f) (EX_CALLCC) are now implemented in the interpreter
+# (eval_callcc_escape in eval.c): an undelimited one-shot upward escape modeled
+# with a setjmp/longjmp landing pad, with the (k v) sugar lowered (in elab) to
+# tur_escape_resume.  EX_CPS_CONT_APP is a CPS-pipeline node the elaborator
+# never emits (the interpreter stops at elaboration), so it stays carved.
+EX_CPS_CONT_APP -- CPS continuation application; never produced by the elaborator (CPS-pipeline only)
 
 # --- Context-capturing delimited control (TI3.2) -------------------------
 # Abortive shift/reset/shift0 (TI3.1) and the context-CAPTURING serial-shift /

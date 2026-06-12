@@ -1229,6 +1229,21 @@ typedef struct TuriCont {
     bool      serial;      /* serial vs cloneable (behaviourally identical here) */
 } TuriCont;
 
+/* call/cc / escape (EX_CALLCC): an undelimited, one-shot, upward escape
+ * continuation.  The handle f receives is a pointer to this stack-allocated
+ * landing pad; invoking it (tur_escape_resume, the lowering of the (k v)
+ * application sugar in elab_call.c) longjmps back to the call/cc site with the
+ * value, abandoning f's pending computation.  One-shot upward only: k is valid
+ * just while its call/cc frame is live, which is exactly when an escape can
+ * fire -- so a setjmp/longjmp pad models it precisely, no fiber capture. */
+typedef struct TuriEscapeBoundary {
+    jmp_buf   jmp;
+    TuriValue result;       /* value delivered by (k v) */
+    uint32_t  saved_depth;
+    void     *saved_handler_stack;
+    void     *saved_defer_stack;
+} TuriEscapeBoundary;
+
 /* Does e contain a shift of `target` in evaluation position?  Mirrors the
  * compiler's reaches_shift_kind (emit_cps.c): nested resets / shifts / fns
  * self-delimit, so they do not count once the outer target has been matched. */
@@ -1238,7 +1253,7 @@ static bool ts_reaches_shift(const Expr *e, ExprKind target) {
     /* Nested resets / shifts / fns self-delimit (the compiler's
      * reaches_shift_kind names them explicitly; here they fall to `default` and
      * return false -- listing them as explicit arms would make the turi-parity
-     * ratchet read e.g. call/cc as interpreter-handled). */
+     * ratchet read e.g. EX_CPS_CONT_APP as interpreter-handled). */
     switch (e->kind) {
         case EX_BUILTIN:
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
@@ -1355,6 +1370,14 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
         return true;
     }
     if (strcmp(name, "tur_cloneable_cont_drop") == 0) { *out = turi_nil(); return true; }
+    if (strcmp(name, "tur_escape_resume") == 0) {
+        /* (k v) on an escape continuation: longjmp back to the call/cc landing
+         * pad with v.  Does not return. */
+        if (n < 2 || args[0].as_int == 0) { *out = turi_int(0); return true; }
+        TuriEscapeBoundary *b = (TuriEscapeBoundary *)(intptr_t)args[0].as_int;
+        b->result = args[1];
+        longjmp(b->jmp, 1);
+    }
     return false;
 }
 
@@ -1606,6 +1629,37 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
 
     for (int32_t i = (int32_t)n_let - 1; i >= 0; i--) eval_frame_free(let_frames[i]);
     return result;
+}
+
+/* Evaluate (call/cc f) / (escape f): establish an escape landing pad, hand f a
+ * continuation handle, and run f.  If f returns normally, that is the call/cc
+ * value; if f invokes (k v) -- lowered to tur_escape_resume -- control longjmps
+ * back here and v is the call/cc value.  call/cc and escape are both one-shot
+ * upward escapes in Turmeric (is_escape only distinguishes prompt re-install on
+ * *resume*, which never happens for these), so they share this path. */
+static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
+                                    const Expr *fn_expr) {
+    TuriValue fn = eval_expr(env, frame, fn_expr);
+    if (turi_is_error(fn) || env->returning || env->throwing) return fn;
+    if (fn.tag != TURI_CLOSURE)
+        return turi_errorf("eval: call/cc expects a function, got tag %d", fn.tag);
+
+    TuriEscapeBoundary b;
+    b.result              = turi_nil();
+    b.saved_depth         = env->eval_depth;
+    b.saved_handler_stack = env->handler_stack;
+    b.saved_defer_stack   = env->defer_stack;
+
+    if (setjmp(b.jmp) == 0) {
+        TuriValue kval = turi_int((int64_t)(intptr_t)&b);
+        return turi_call(env, fn, &kval, 1);   /* f returned without escaping */
+    }
+    /* (k v) longjmp'd here.  Restore the env state the unwound frames would
+     * otherwise have left dangling (mirrors eval_reset_boundary). */
+    env->eval_depth    = b.saved_depth;
+    env->handler_stack = b.saved_handler_stack;
+    env->defer_stack   = b.saved_defer_stack;
+    return b.result;
 }
 
 /* stdlib/workflow.tur save-cont! -- serialise a serial continuation to "bytes".
@@ -5253,6 +5307,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_error("eval: serial-shift used outside of any serial-reset");
     case EX_CLONEABLE_SHIFT:
         return turi_error("eval: cloneable-shift used outside of any cloneable-reset");
+
+    /* call/cc / escape: undelimited one-shot upward escape continuation. */
+    case EX_CALLCC:
+        return eval_callcc_escape(env, frame, e->as.callcc_.fn);
 
     /* Phase TI4: Software Transactional Memory. */
     case EX_STM: {

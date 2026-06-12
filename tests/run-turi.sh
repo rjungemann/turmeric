@@ -268,6 +268,26 @@ cloneable-context-let
 cloneable-context-if
 cloneable-context-if-outer-frames
 
+# call/cc completion (turi-capturing-shift follow-up): (call/cc f) / (escape f)
+# (EX_CALLCC) are undelimited one-shot upward escapes, modeled in the
+# interpreter with a setjmp/longjmp landing pad (eval_callcc_escape); the (k v)
+# sugar lowers (in elab) to tur_escape_resume, which longjmps back.  call/cc*
+# produces a cloneable multi-shot continuation (lowered to cloneable-shift).
+# escape-deep-capture stays requires.compiled: it captures from 5000 non-tail
+# recursive frames, whose build-up overflows the tree-walker's C stack before
+# the escape fires (an interpreter recursion-depth limit, not an escape gap).
+continuation-callcc
+continuation-escape
+continuation-escape-fn
+callcc-real-capture
+callcc-kv-sugar
+callcc-linear-k
+escape-real
+escape-nested-reset
+cont-flavors
+call-cc-star
+callcc-star-context
+
 # TI6 (turi-parity-post-v1-plan, first-class handlers): the interpreter now
 # handles EX_HANDLER_LIT, EX_WITH_HANDLER, and EX_COMPOSE_HANDLERS by reusing
 # the eval_handle fiber machinery (a handler value is a detached HandleCase
