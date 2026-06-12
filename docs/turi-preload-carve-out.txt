@@ -8,6 +8,10 @@
 # asserts the gap is deliberate; check_turi_native_parity.py fails the build if
 # a gap module is missing here, or if an entry here is no longer a gap (stale).
 #
+# Setting TUR_TURI_FULL_PRELUDE=1 (prereq 3c) opts the interpreter into loading
+# exactly these carved modules on top of the default prelude, for iterating /
+# measuring the bucket under --interpret without changing the default path.
+#
 # Format:  <module>.tur -- <one-line rationale>
 # See docs/reported/turi-harness-flip-reconciliation.md and
 #     docs/upcoming/v1/turi-open-reports-prereqs.md (prereqs 2c, 3a, 3b).

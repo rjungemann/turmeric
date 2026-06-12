@@ -4796,6 +4796,14 @@ static void wk_register_stdlib_natives(TuriEnv *env);
 static void wk_register_hamt_natives(TuriEnv *env);
 static void wk_register_map_natives(TuriEnv *env);
 
+/* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
+ * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
+ * Off by default; matches the `=1` convention used by TUR_TSAN. */
+static bool turi_full_prelude_enabled(void) {
+    const char *e = getenv("TUR_TURI_FULL_PRELUDE");
+    return e && strcmp(e, "1") == 0;
+}
+
 /* Phase S0: tur repl — interactive read-eval-print loop. */
 /* Phase INT-1: run a .tur file through the tree-walking interpreter.
  * extra_argv/extra_argc are the arguments after the file path, exposed
@@ -4963,6 +4971,34 @@ static int cmd_eval(const char *path, bool use_color,
         TuriValue sv = turi_eval(env, src.data);
         (void)sv;
         buf_free(&src);
+    }
+    /* 3c (turi-open-reports-prereqs.md): opt-in full prelude.  The default
+     * prelude above covers the typed-stdlib core; when TUR_TURI_FULL_PRELUDE=1
+     * the interpreter ADDITIONALLY loads the modules the compiled path
+     * auto-loads but the interpreter carves out
+     * (docs/turi-preload-carve-out.txt): contract, mutmap, json, schema.  This
+     * makes the interpreter prelude match the compiled auto-load set so the
+     * carved bucket can be iterated/measured fixture-by-fixture under
+     * --interpret, without committing the extra parse/elab cost -- or contract's
+     * :pre/:post behavior change -- to every run.  Off by default; loaded BEFORE
+     * the native overrides so those still win, and each module is loaded in its
+     * own turi_eval so one failing module does not block the rest. */
+    if (turi_full_prelude_enabled()) {
+        static const char *full_extra[] = {
+            "contract.tur", "mutmap.tur", "json.tur", "schema.tur", NULL
+        };
+        for (int i = 0; full_extra[i] != NULL; i++) {
+            char pb[4096];
+            tur_stdlib_path(full_extra[i], pb, sizeof(pb));
+            Buf src; buf_init(&src);
+            buf_write(&src, "(load \"", 7);
+            buf_write(&src, pb, strlen(pb));
+            buf_write(&src, "\")\n", 3);
+            buf_putc(&src, '\0');
+            TuriValue sv = turi_eval(env, src.data);
+            (void)sv;
+            buf_free(&src);
+        }
     }
     /* Register native overrides for stdlib inline-C functions. */
     wk_register_stdlib_natives(env);

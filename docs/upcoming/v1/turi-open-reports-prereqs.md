@@ -243,15 +243,27 @@ benchmark-stub name (e.g. a hypothetical `io.tur` colliding with the `io-*`
 stubs), `check_turi_native_parity.py`'s gap shrink plus the
 `already defined` error will surface it; drop the matching stub at that point.
 
-### Prereq 3c -- opt-in full-prelude flag
+### Prereq 3c -- opt-in full-prelude flag (LANDED 2026-06-12)
 
-Wire the typed-stdlib `(load ...)` prelude behind `TUR_TURI_FULL_PRELUDE=1`
-(off by default, given the ~300ms/invocation cost noted in the report). This
-lets the prelude be iterated and measured fixture-by-fixture without committing
-the cost to every interpreter run, and turns "recover the typed-stdlib bucket"
-from a flag-day into an incremental, reversible rollout. Use `(load ...)` (not
-`turi_eval_file`) so per-file `file_id`s keep multiple defmodule-carrying
-modules from colliding (same root cause as the landed TI8.b defmodule fix).
+**Landed.** Since the doc was written, the typed-stdlib core became the *default*
+interpreter prelude (the `prelude[]` block in `cmd_eval`, loaded unconditionally),
+so the original "recover the typed-stdlib bucket" rollout is already done. The
+residual lever -- the carved bucket (`contract`/`mutmap`/`json`/`schema`, exactly
+the 3a preload gap) -- is now behind `TUR_TURI_FULL_PRELUDE=1`
+(`turi_full_prelude_enabled()` / the full-prelude block in `cmd_eval`,
+`src/main.c`). When set, the interpreter additionally `(load ...)`s those four
+modules (each in its own `turi_eval`, so one failing module does not block the
+rest), loaded BEFORE the native overrides so those still win. This makes the
+interpreter prelude match the compiled auto-load set, so the carved bucket can be
+iterated/measured fixture-by-fixture under `--interpret` without committing the
+extra cost -- or `contract`'s `:pre/:post` behavior change -- to every run.
+
+Off by default (strict `=1`, matching `TUR_TSAN`); the default path is byte-for-
+byte unchanged. Gate `tests/run-turi-full-prelude.sh` (ctest `turi_full_prelude`)
+asserts the toggle: flag-off leaves `mutmap-new` unbound (`rc=1`), flag-on loads
+`mutmap.tur` so it resolves and runs (`rc=0`), and a non-`1` value does not
+enable it. Uses `(load ...)` (not `turi_eval_file`) so each carved module gets a
+distinct `file_id` (defmodule-per-file boundary).
 
 ### Prereq 3d -- carve markers for the genuine-divergence buckets
 
@@ -297,5 +309,5 @@ decision and keeping the denylist honest.
 | 2c | **guarantee met** | clean rc=1 already holds; map.tur preloaded; error message now actionable |
 | 3a | **landed** | `tools/check_turi_native_parity.py` + carve-out + run.sh gate |
 | 3b | **audited** | overlap already burned down; no deletions pending |
-| 3c | open | `TUR_TURI_FULL_PRELUDE` flag |
+| 3c | **landed** | `TUR_TURI_FULL_PRELUDE=1` + `tests/run-turi-full-prelude.sh` |
 | 3d | deferred | needs the flip harness to consume the markers |
