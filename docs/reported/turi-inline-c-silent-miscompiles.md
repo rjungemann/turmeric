@@ -1,5 +1,36 @@
 # 25 filed inline-C fixtures (20 still silently miscompile) under `--interpret`
 
+> **RESOLVED (W4, 2026-06-12).** All 20 remaining silent miscompiles now flip to
+> a clean `rc=1` "inline-C not supported" error -- no more rc=0 wrong answers.
+> The `ic_exec_*` matchers (`src/turi/eval.c`) were tightened to
+> refuse-rather-than-guess on any shape they cannot evaluate faithfully:
+>
+> - **`ic_exec_constructor`** (11: the `backtrack-*` cluster, `arrow-instance-
+>   loop-nonrecursive`, `workstealing-*`) -- declines a body with a loop
+>   (`while`/`for`), a second allocation, `__atomic`/`TUR_APPLY`, or that chases a
+>   pointer other than the alloc target (`r->e1 = s->e1 + 100`). A single early
+>   `return 0;` OOM guard is still allowed, so flat stdlib constructors
+>   (`future-cell-new`, `fs.tur` mkstemp) keep working.
+> - **`ic_exec_snprintf_fmt`** (4: `show-float/-list/-pair`, `exg5-rc-in-exists`)
+>   -- declines float conversions (`%g`/`%f`/... -- the formatter passes every arg
+>   as `(long long)`), loops, pointer-chasing args (`->`), and concatenation
+>   (`snprintf(buf + off, ...)`). The guarded if/else `snprintf` pair
+>   (`range-bound-show-ord`) is still resolved by `ic_snprintf_cond_branch`.
+> - **`ic_exec_accessor`** (2: `arrow-instance-apply` via `TUR_APPLY`,
+>   `panic-catch-unwind-caught` + the `ls-get` half of `stdlib-slice-runtime`)
+>   -- declines function application (`TUR_APPLY`), `fprintf`, and `if (...)
+>   return ...;` early-return branching (`>1` return).
+> - **`ic_exec` simple-return** (2: `closure-capture-byptr-struct-param`,
+>   `inline-c-cname-splice`) -- declines `printf` side effects, `__TUR_CNAME_`
+>   sibling-call splices, and function-pointer calls (`)(`).
+>
+> Validated: each of the 20 flips to a clean error; the correctly-claimed
+> regression sets (20 constructor / 2 snprintf / 5 accessor / 4 simple-return
+> allowlisted fixtures) all still pass; full interpreter harness 983/0, compiled
+> suite 1599/0. The fixtures now carve cleanly as ordinary inline-C under the
+> flip. The clean error itself was also made actionable (prereq 2c): it points
+> the user at `tur build`/`tur run`.
+
 > **Update (2026-06-12, claim-trace + recount):** `TUR_IC_TRACE=1` now logs
 > which `ic_exec_*` matcher claims each body (`ic_claim`, `src/turi/eval.c`) --
 > diagnostic groundwork for the tightening. Re-measured against it, **the true

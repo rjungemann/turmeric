@@ -59,13 +59,16 @@ Running the trace + an rc/stdout classification over the 24 listed fixtures:
 secondary claim on a printf helper -- but the wrong *answer* comes from the
 `constructor` claims.)
 
-### Prereq 1c -- prioritize by matcher, not by fixture
+### Prereq 1c -- prioritize by matcher, not by fixture (W4 LANDED 2026-06-12)
 
-The map shows **two matchers cover 16 of 20**: tightening `ic_exec_constructor`
-(12) and `ic_exec_snprintf_fmt` (4) is the highest-leverage first slice.
-`ic_exec_constructor` mis-claims the `backtrack-*` monad bodies (multi-statement
-control flow it cannot model) -- the cleanest single win is to reject a body
-with >1 meaningful statement or control flow it does not interpret.
+The map showed **two matchers cover 16 of 20**: `ic_exec_constructor` (12) and
+`ic_exec_snprintf_fmt` (4). **The full W4 tightening landed** -- all 20 now flip
+to a clean `rc=1` error, via refuse-rather-than-guess guards on each matcher
+(constructor / snprintf / accessor / simple-return). Each matcher was validated
+against its correctly-claimed regression set; full interpreter harness 983/0,
+compiled suite 1599/0, zero regressions. Details + per-matcher guard list:
+[../../reported/turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md)
+(the report's "RESOLVED (W4)" banner).
 
 ### Prereq 1d -- a "known-good inline-C" regression set
 
@@ -302,7 +305,8 @@ decision and keeping the denylist honest.
 | Prereq | State | Artifact |
 | --- | --- | --- |
 | 1a | landed (prior) | `TUR_IC_TRACE` / `ic_claim` |
-| 1b/1c | **landed** | recount + matcher map folded into the inline-C report |
+| 1b/1c | **landed** | recount + matcher map folded into the report |
+| W4 tightening | **landed** | all 20 inline-C silent miscompiles flip to clean errors |
 | 2a | **landed** | `tur_hamt_*_eq_ctx` + `tests/test_hamt_eq_ctx.c` |
 | Tier B | **landed** | `map_turi_eq_tramp` trampoline + `tib-map-turi-comparator` fixture |
 | 2b | **resolved (#341)** | `EX_ASCRIBE` bit-reinterpret; `tce3-map-cstr-val` on allowlist |
