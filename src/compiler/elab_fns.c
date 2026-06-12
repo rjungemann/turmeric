@@ -94,7 +94,14 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
          * generic type applications. */
         if (head->name && (strcmp(head->name, "row-concat") == 0 ||
                            strcmp(head->name, "row-union") == 0 ||
-                           strcmp(head->name, "row-intersect") == 0)) {
+                           strcmp(head->name, "row-intersect") == 0 ||
+                           /* L6 follow-up D: row-canon, the permutation
+                            * canonicaliser, is a row-level form like the
+                            * other algebra ops -- route it through
+                            * type_expr_from_form so signature annotations
+                            * see (row-canon #row{...}) as a row, not as a
+                            * generic type application. */
+                           strcmp(head->name, "row-canon") == 0)) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         /* KB-008/KB-020/KB-018/KB-019: (-> T1 T2), (fn [...] :ret),
@@ -762,8 +769,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type parameter must be a symbol");
                 return NULL;
             }
-            fn_type_params[i] = tp->as.sym;
-            fn_type_param_kinds[i] = KIND_STAR;
+            const Symbol *psym = tp->as.sym;
+            /* L6 follow-up B: `^&name` in the explicit defn type-param
+             * vector marks a row-kinded ([*]) type variable, the defn analog
+             * of defstruct/deftype/defgadt/defdata's `^&`. The `^&` is
+             * stripped so parameter and return type annotations reference
+             * the bare name, and the kind is stashed so call-site row-arg
+             * validation (check_row_type_arg_kind) and uses in `#row{...}`
+             * elements both see kind [*]. */
+            if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
+                const Symbol *bare = symtab_intern(e->st,
+                    strslice(psym->name + 2, psym->len - 2));
+                fn_type_params[i] = bare;
+                fn_type_param_kinds[i] = KIND_TYPEROW;
+            } else {
+                fn_type_params[i] = psym;
+                fn_type_param_kinds[i] = KIND_STAR;
+            }
         }
         params_idx = name_idx + 2;
 
@@ -3117,8 +3139,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
                           "fn: type parameter must be a symbol");
                 return NULL;
             }
-            fn_type_params[i] = tp->as.sym;
-            fn_type_param_kinds[i] = KIND_STAR;
+            const Symbol *psym = tp->as.sym;
+            /* L6 follow-up B: `^&name` marks a row-kinded ([*]) type
+             * variable on a `fn` form, mirroring the defn change. */
+            if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
+                const Symbol *bare = symtab_intern(e->st,
+                    strslice(psym->name + 2, psym->len - 2));
+                fn_type_params[i] = bare;
+                fn_type_param_kinds[i] = KIND_TYPEROW;
+            } else {
+                fn_type_params[i] = psym;
+                fn_type_param_kinds[i] = KIND_STAR;
+            }
         }
         params_idx = 2;
     }

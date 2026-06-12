@@ -1178,6 +1178,11 @@ Type type_typerow_concat(Arena *a, Type x, Type y);
 Type type_typerow_union(Arena *a, Type x, Type y);
 /* Intersection: x's elements also in y, x's order, deduplicated. */
 Type type_typerow_intersect(Arena *a, Type x, Type y);
+/* L6 follow-up D: canonical (sorted-by-type_name) copy of a row -- the opt-in
+ * surface for permutation-aware equality. (row-canon #row{a b}) and
+ * (row-canon #row{b a}) reduce to the same TY_TYPEROW, so ordinary type_eq
+ * agrees. Compile-time only. */
+Type type_typerow_canonical(Arena *a, Type x);
 
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */

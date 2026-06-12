@@ -1,0 +1,4 @@
+;; L6 follow-up D: (row-canon X) requires X to be a row. A non-row operand
+;; is rejected at elaboration, mirroring row-concat/row-union/row-intersect.
+(defstruct Frame [^&cols] (n :int))
+(defn bad [x : (Frame (row-canon :int))] : int 0)

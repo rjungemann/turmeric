@@ -1,0 +1,13 @@
+;; L6 follow-up C: defdata accepts `^&name` row-kinded type parameters,
+;; mirroring defstruct/defgadt. The Frame ADT carries a phantom row of
+;; columns; constructor field types are unchanged. The application
+;; (Frame #row{int bool}) is kind-checked via check_row_type_arg_kind,
+;; which now consults TY_ADT defs in addition to TY_STRUCT.
+(defdata Frame [^&cols] (Frame :int))
+
+(defn make-frame [n : int] : (Frame #row{int bool})
+  (Frame n))
+
+(defn main [] : int
+  (println 7)
+  0)

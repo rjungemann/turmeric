@@ -1601,13 +1601,22 @@ MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
          * - is_referred: injected via :refer — always visible.
          * - defining_module_name == NULL: stdlib/pre-module — always visible.
          * - defining_module_name == current module: visible within the defining module.
-         * - defining_module_name == macro_expansion_module: private helper called from
-         *   an exported macro of the same module that is currently being expanded. */
+         * - defining_module_name appears anywhere on the macro-expansion stack:
+         *   private helper called transitively from an exported macro of that
+         *   module. Cross-module wrapper-macro bug fix: previously only the
+         *   innermost expansion module was checked, so an outer macro M in
+         *   module A whose expansion went through a stdlib wrapper W lost
+         *   visibility of A's private helpers (e.g. recursive `fold-len`
+         *   companion) during W's body re-elaboration -- the helper fell back
+         *   to being elaborated as a regular function call, and any vec
+         *   argument hit the data-literals lowering with unbound symbols.
+         *   See docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
         if (m->is_referred) return m;
         if (m->defining_module_name == NULL) return m;
         if (m->defining_module_name == e->current_module_name) return m;
-        if (e->macro_expansion_module != NULL &&
-            m->defining_module_name == e->macro_expansion_module) return m;
+        for (uint32_t k = 0; k < e->n_macro_expansion_stack; k++) {
+            if (m->defining_module_name == e->macro_expansion_stack[k]) return m;
+        }
     }
     return NULL;
 }

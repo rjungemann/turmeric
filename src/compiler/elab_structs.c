@@ -1154,6 +1154,9 @@ Expr *elab_defdata(Elab *e, const Form *call) {
      * they do not affect C codegen (all values are int64_t pointers). */
     const char **type_params = NULL;
     uint8_t n_type_params = 0;
+    /* L6 follow-up C: parallel kind array so `^&name` in a defdata type-param
+     * list (e.g. (defdata Frame [^&cols] (Frame :int))) carries KIND_TYPEROW. */
+    Kind *parsed_type_param_kinds = NULL;
     if (ctors_start_idx < call->as.list.len &&
         call->as.list.items[ctors_start_idx]->tag == F_VEC) {
         Form *tp_form = call->as.list.items[ctors_start_idx];
@@ -1161,6 +1164,8 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         if (n_type_params > 0) {
             type_params = (const char **)arena_alloc(e->arena,
                               n_type_params * sizeof(char *));
+            parsed_type_param_kinds = (Kind *)arena_alloc(e->arena,
+                              n_type_params * sizeof(Kind));
             for (uint8_t pi = 0; pi < n_type_params; pi++) {
                 Form *pf = tp_form->as.list.items[pi];
                 if (pf->tag != F_SYM) {
@@ -1168,7 +1173,17 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                               "defdata: type parameter must be a symbol, e.g. a, ^f");
                     return NULL;
                 }
-                type_params[pi] = pf->as.sym->name;
+                const Symbol *psym = pf->as.sym;
+                /* L6 follow-up C: '^&name' marks a row-kinded ([*]) parameter. */
+                if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
+                    const Symbol *bare = symtab_intern(e->st,
+                        strslice(psym->name + 2, psym->len - 2));
+                    type_params[pi] = bare->name;
+                    parsed_type_param_kinds[pi] = KIND_TYPEROW;
+                } else {
+                    type_params[pi] = psym->name;
+                    parsed_type_param_kinds[pi] = KIND_STAR;
+                }
             }
         }
         ctors_start_idx++;
@@ -1211,10 +1226,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->is_gadt = false;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
-        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines).
+         * L6 follow-up C: seed from parsed_type_param_kinds so `^&` is preserved. */
         if (n_type_params > 0) {
             Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            for (uint8_t pi = 0; pi < n_type_params; pi++) {
+                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
+                                                  : KIND_STAR;
+            }
             def->type_param_kinds = tpk;
         } else {
             def->type_param_kinds = NULL;
@@ -1238,10 +1257,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Phase RF1: store type parameters */
         def->type_params = type_params;
         def->n_type_params = n_type_params;
-        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines).
+         * L6 follow-up C: seed from parsed_type_param_kinds so `^&` is preserved. */
         if (n_type_params > 0) {
             Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            for (uint8_t pi = 0; pi < n_type_params; pi++) {
+                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
+                                                  : KIND_STAR;
+            }
             def->type_param_kinds = tpk;
         } else {
             def->type_param_kinds = NULL;
@@ -1777,12 +1800,19 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
     uint32_t ctors_start_idx = 2;
     uint8_t n_type_params = 0;
     const char **type_params = NULL;
+    /* L6 follow-up C: parallel kind array, so a `^&name` row-kinded parameter
+     * carries KIND_TYPEROW through to def->type_param_kinds. Without it, the
+     * caller-side kind check at (MyGADT #row{...}) sees KIND_STAR and rejects
+     * the row as a non-row argument. */
+    Kind *parsed_type_param_kinds = NULL;
     if (call->as.list.len >= 3 && call->as.list.items[2]->tag == F_VEC) {
         Form *params_form = call->as.list.items[2];
         n_type_params = (uint8_t)params_form->as.list.len;
         if (n_type_params > 0) {
             type_params = (const char **)arena_alloc(e->arena,
                                                       n_type_params * sizeof(const char *));
+            parsed_type_param_kinds = (Kind *)arena_alloc(e->arena,
+                                                      n_type_params * sizeof(Kind));
             for (uint8_t i = 0; i < n_type_params; i++) {
                 Form *pf = params_form->as.list.items[i];
                 if (pf->tag != F_SYM) {
@@ -1790,7 +1820,19 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                               "defgadt: type parameter must be a symbol");
                     return NULL;
                 }
-                type_params[i] = pf->as.sym->name;
+                const Symbol *psym = pf->as.sym;
+                /* L6 follow-up C: '^&name' marks a row-kinded ([*]) parameter.
+                 * Strip the `^&` so body and call-site usages reference the
+                 * bare name; stash the row kind in parsed_type_param_kinds. */
+                if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
+                    const Symbol *bare = symtab_intern(e->st,
+                        strslice(psym->name + 2, psym->len - 2));
+                    type_params[i] = bare->name;
+                    parsed_type_param_kinds[i] = KIND_TYPEROW;
+                } else {
+                    type_params[i] = psym->name;
+                    parsed_type_param_kinds[i] = KIND_STAR;
+                }
             }
         }
         ctors_start_idx = 3;
@@ -1866,10 +1908,15 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->is_gadt = true;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
-        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines).
+         * L6 follow-up C: seed from parsed_type_param_kinds so a `^&name`
+         * row-kinded parameter is preserved as KIND_TYPEROW. */
         if (n_type_params > 0) {
             Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            for (uint8_t pi = 0; pi < n_type_params; pi++) {
+                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
+                                                  : KIND_STAR;
+            }
             def->type_param_kinds = tpk;
         } else {
             def->type_param_kinds = NULL;
@@ -1890,10 +1937,15 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->is_gadt = true;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
-        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines).
+         * L6 follow-up C: seed from parsed_type_param_kinds so a `^&name`
+         * row-kinded parameter is preserved as KIND_TYPEROW. */
         if (n_type_params > 0) {
             Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
-            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            for (uint8_t pi = 0; pi < n_type_params; pi++) {
+                tpk[pi] = parsed_type_param_kinds ? parsed_type_param_kinds[pi]
+                                                  : KIND_STAR;
+            }
             def->type_param_kinds = tpk;
         } else {
             def->type_param_kinds = NULL;

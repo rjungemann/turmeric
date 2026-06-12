@@ -1,0 +1,6 @@
+;; L6 follow-up B: when a defn declares `^&r`, the check_row_type_arg_kind
+;; pass at parameter-type-application sites still fires: passing `:int`
+;; (kind *) to Frame's row slot is rejected even when the defn itself has
+;; a row-kinded type parameter in scope.
+(defstruct Frame [^&cols] (n :int))
+(defn frame-bad [^&r] [f : (Frame :int)] : int (.n f))

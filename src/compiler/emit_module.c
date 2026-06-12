@@ -505,6 +505,39 @@ static bool emit_abi_type_has_named_tyvar(const Type *t) {
     }
 }
 
+/* Row-poly call from row-poly context: same shape as
+ * emit_abi_type_has_named_tyvar, but ignores named tyvars whose kind is
+ * KIND_TYPEROW (phantom row variables introduced by `^&` parameters --
+ * docs/archive/history/variadic-hkt-rows-missing.md). A row variable
+ * never changes the C ABI (rows erase to nothing at codegen), so a call
+ * whose only abstract bindings are row variables does not require
+ * specialization to resolve -- the carrier definition is sufficient.
+ * Filed at
+ * docs/reported/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
+ * before the fix. */
+static bool emit_abi_type_has_concrete_named_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name != NULL && t->hkt_kind != KIND_TYPEROW;
+        case TY_APP:
+            return emit_abi_type_has_concrete_named_tyvar(t->as.app.fn) ||
+                   emit_abi_type_has_concrete_named_tyvar(t->as.app.arg);
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
+                if (emit_abi_type_has_concrete_named_tyvar(t->as.union_.members[i])) return true;
+            }
+            return false;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
+                if (emit_abi_type_has_concrete_named_tyvar(t->as.intersection_.members[i])) return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
 /* GS5/CS3: emit_abi_collect_type_bindings / emit_abi_find_type_binding used to
  * live here as a duplicate of elab_call.c's substitution machinery. They have
  * been removed -- elab now attaches the substitution to EX_CALL via
@@ -736,7 +769,14 @@ static bool emit_abi_call_is_generic_relay(const EmitCtx *ctx, const Expr *call,
     if (!b || n == 0) return false;
     bool abstract = false;
     for (uint8_t i = 0; i < n; i++) {
-        if (emit_abi_type_has_named_tyvar(&b[i].type)) { abstract = true; break; }
+        /* Row-poly call from row-poly context fix: only count *non-row*
+         * named tyvars as ABI-changing abstraction. A binding whose only
+         * type variables are row-kinded (KIND_TYPEROW, the phantom rows
+         * introduced by `^&` parameters) does not change the C ABI, so
+         * the call should be noted as a carrier call and the callee's
+         * carrier definition emitted -- the relay-vs-carrier suppression
+         * was the missing-codegen root cause. */
+        if (emit_abi_type_has_concrete_named_tyvar(&b[i].type)) { abstract = true; break; }
     }
     if (!abstract) return false;
     Binding *fb = call->as.call_.fn_binding;

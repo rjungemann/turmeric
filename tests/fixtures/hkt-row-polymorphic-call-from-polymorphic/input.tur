@@ -1,0 +1,23 @@
+;; Regression fixture for
+;; docs/reported/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
+;;
+;; A row-polymorphic defn called from another row-polymorphic defn used
+;; to be dropped from C emission because emit_abi_call_is_generic_relay
+;; classified the call as a relay (its abi bindings contained named
+;; tyvars) and suppressed the carrier-call note that drives emission of
+;; the callee. Rows are phantom -- they do not change the C ABI -- so
+;; the classifier now ignores row-kinded tyvars when deciding relay vs
+;; carrier. The fix lives in src/compiler/emit_module.c.
+(defstruct Query [^&in ^&out] (world :int))
+
+(defn query-world [^&in ^&out] [q : (Query in out)] : int
+  (.world q))
+
+;; The row-polymorphic caller -- previously the broken case.
+(defn extract [^&in ^&out] [q : (Query in out)] : int
+  (query-world q))
+
+(defn main [] : int
+  (let [q (:: (make-struct Query 7) (Query #row{int} #row{int}))]
+    (println (extract q))
+    0))

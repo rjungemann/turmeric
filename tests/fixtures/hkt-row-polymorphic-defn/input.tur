@@ -1,0 +1,19 @@
+;; L6 follow-up B: `^&name` is now accepted as a row-kinded ([*]) type
+;; parameter on `defn`, mirroring its meaning on defstruct/defgadt/defdata/
+;; deftype. The `^&` is stripped so subsequent parameter and return type
+;; annotations reference the bare name, and the kind is plumbed through
+;; fn_type_param_kinds so check_row_type_arg_kind validates row arguments
+;; at call sites. End-to-end use is phantom (rows erase at codegen), so
+;; the program runs the polymorphic frame-id through a concrete instantiation.
+(defstruct Frame [^&cols] (n :int))
+
+(defn frame-id [^&r] [f : (Frame r)] : (Frame r) f)
+
+(defn make-int-frame [n : int] : (Frame #row{int})
+  (:: (make-struct Frame n) (Frame #row{int})))
+
+(defn main [] : int
+  (let [f (make-int-frame 11)
+        g (frame-id f)]
+    (println (.n g))
+    0))

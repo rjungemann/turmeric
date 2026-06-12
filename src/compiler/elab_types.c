@@ -10,17 +10,38 @@
  * Shared by type_expr_from_form and fn_type_from_form's application paths. */
 bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
                              Span arg_span) {
-    if (ctor_type.kind != TY_STRUCT || !ctor_type.as.struct_.def) return true;
-    const StructDef *cdef = ctor_type.as.struct_.def;
-    if (!cdef->type_param_kinds || arg_index >= cdef->n_type_params) return true;
-    Kind param_kind = cdef->type_param_kinds[arg_index];
+    /* Pull the parameter kinds out of whichever def shape ctor_type carries.
+     * L6 follow-up C extends this from TY_STRUCT to TY_ADT so a defgadt or
+     * defdata with a `^&name` row-kinded parameter gets the same xor-scoped
+     * row/non-row kind check at its application sites. TY_REC (deftype) does
+     * not yet carry a per-param kind array; its apply-site validation falls
+     * back to the arrow-arity check in kind_apply_one (a follow-up that
+     * needs a kinds array on TY_REC, not in this layer). */
+    const Kind *param_kinds = NULL;
+    uint8_t     n_params    = 0;
+    const char *ctor_name   = NULL;
+    if (ctor_type.kind == TY_STRUCT && ctor_type.as.struct_.def) {
+        const StructDef *cdef = ctor_type.as.struct_.def;
+        param_kinds = cdef->type_param_kinds;
+        n_params    = cdef->n_type_params;
+        ctor_name   = cdef->name;
+    } else if (ctor_type.kind == TY_ADT && ctor_type.as.adt_.def) {
+        const AdtDef *adef = ctor_type.as.adt_.def;
+        param_kinds = adef->type_param_kinds;
+        n_params    = adef->n_type_params;
+        ctor_name   = adef->name;
+    } else {
+        return true;
+    }
+    if (!param_kinds || arg_index >= n_params) return true;
+    Kind param_kind = param_kinds[arg_index];
     bool param_row = (param_kind == KIND_TYPEROW);
     bool arg_row   = (arg_type.hkt_kind == KIND_TYPEROW);
     if (param_row == arg_row) return true;
     diag_emit_with_code(DIAG_ERROR, arg_span, TUR_E0012_KIND_MISMATCH,
         "kind mismatch (TUR-E0012): type constructor '%s' parameter %u expects "
         "kind '%s', but the argument has kind '%s'",
-        cdef->name, (unsigned)(arg_index + 1),
+        ctor_name, (unsigned)(arg_index + 1),
         kind_to_string(param_kind), kind_to_string(arg_type.hkt_kind));
     return false;
 }
@@ -482,6 +503,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         }
 
         /* Unknown - return as opaque struct */
+        if (e->strict_unknown_types) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "unknown type name '%.*s' in #row{...} element position",
+                      (int)sym->len, sym->name);
+            return NULL;
+        }
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
         t->kind = TY_STRUCT;
@@ -500,6 +527,33 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
          * through. */
         if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
             const char *h = form->as.list.items[0]->as.sym->name;
+            /* L6 follow-up D: (row-canon R) elaborates R, requires it to be a
+             * row, and returns a sorted-by-type_name copy. Two callers writing
+             * (row-canon #row{a b}) and (row-canon #row{b a}) get identical
+             * TY_TYPEROW values, so ordinary order-sensitive type_eq returns
+             * true -- the opt-in surface for permutation equivalence at type
+             * boundaries (signature unification, parameter passing).
+             * Unary, so it's handled separately from the binary fold below. */
+            if (strcmp(h, "row-canon") == 0) {
+                if (form->as.list.len != 2) {
+                    diag_emit(DIAG_ERROR, form->span,
+                        "'row-canon' takes exactly one row argument: "
+                        "(row-canon #row{...})");
+                    return NULL;
+                }
+                Type *operand = type_expr_from_form(e, form->as.list.items[1],
+                    rec_name, type_params, type_param_kinds, n_type_params);
+                if (!operand) return NULL;
+                if (operand->kind != TY_TYPEROW) {
+                    diag_emit(DIAG_ERROR, form->as.list.items[1]->span,
+                        "'row-canon' operand must be a #row{...} (kind [*]), "
+                        "got a non-row type");
+                    return NULL;
+                }
+                Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *out = type_typerow_canonical(e->arena, *operand);
+                return out;
+            }
             int rop = 0; /* 1=concat, 2=union, 3=intersect */
             if      (strcmp(h, "row-concat")    == 0) rop = 1;
             else if (strcmp(h, "row-union")     == 0) rop = 2;
@@ -1664,13 +1718,24 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         Type **elems = NULL;
         if (n > 0) {
             elems = (Type **)arena_alloc(e->arena, sizeof(Type *) * n);
+            /* L6 follow-up A (strict-row-elements): switch the elaborator
+             * into strict-unknown-name mode while resolving row elements,
+             * so a typo'd component name fails to compile instead of
+             * silently elaborating to a NULL-def opaque placeholder.
+             * Counter-based so a nested #row{...} inside an element type
+             * (e.g. #row{(Query #row{Pos Vel})}) restores correctly. */
+            e->strict_unknown_types++;
             for (uint32_t i = 0; i < n; i++) {
                 Type *et = type_expr_from_form(e, form->as.list.items[i], rec_name,
                                                type_params, type_param_kinds,
                                                n_type_params);
-                if (!et) return NULL;
+                if (!et) {
+                    e->strict_unknown_types--;
+                    return NULL;
+                }
                 elems[i] = et;
             }
+            e->strict_unknown_types--;
         }
         if (n > 255) {
             diag_emit(DIAG_ERROR, form->span,
@@ -1754,6 +1819,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         }
 
         /* Unknown keyword type — return opaque struct placeholder */
+        if (e->strict_unknown_types) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "unknown type name ':%.*s' in #row{...} element position",
+                      (int)sym->len, sym->name);
+            return NULL;
+        }
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
         t->kind = TY_STRUCT;
@@ -1868,7 +1939,23 @@ Expr *elab_deftype(Elab *e, const Form *call) {
                     }
                     /* Phase HKT H1: '^name' prefix marks a kind * -> * (type constructor) */
                     /* Phase HKT H1: '^^name' prefix marks a kind * -> * -> * (binary type constructor) */
-                    if (p->as.sym->len > 2 && p->as.sym->name[0] == '^' && p->as.sym->name[1] == '^') {
+                    /* L6 follow-up C: '^&name' prefix marks a row-kinded type parameter
+                     * (kind [*], KIND_TYPEROW), the deftype analog of defstruct's `^&`.
+                     * The `^&` is stripped so the body references the bare name. */
+                    if (p->as.sym->len > 2 && p->as.sym->name[0] == '^' && p->as.sym->name[1] == '&') {
+                        const char  *bare     = p->as.sym->name + 2;
+                        uint32_t     bare_len = p->as.sym->len  - 2;
+                        if (bare_len > 0 && bare[0] >= 'a' && bare[0] <= 'z') {
+                            type_params[i]      = symtab_intern(e->st, strslice(bare, bare_len));
+                            type_param_kinds[i] = KIND_TYPEROW;
+                        } else {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "'%s' is not a valid type parameter; "
+                                      "use lowercase '^&name' for a row-kinded ('[*]') parameter",
+                                      p->as.sym->name);
+                            return NULL;
+                        }
+                    } else if (p->as.sym->len > 2 && p->as.sym->name[0] == '^' && p->as.sym->name[1] == '^') {
                         const char  *bare     = p->as.sym->name + 2;
                         uint32_t     bare_len = p->as.sym->len  - 2;
                         if (bare_len > 0 && bare[0] >= 'a' && bare[0] <= 'z') {
@@ -1931,13 +2018,20 @@ Expr *elab_deftype(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Determine the kind of this deftype: pick the highest-arity arrow
-     * kind that appears among the type parameters (v1 heuristic — proper
-     * tracking of param-kinds in the result kind is future work). */
-    Kind result_kind = KIND_STAR;
+    /* Determine the kind of this deftype: prefer kind_for_arity(n_type_params)
+     * so a deftype with N params has kind '* -> ... -> *' (arity = N),
+     * matching defgadt/defdata. The legacy "pick the highest param kind"
+     * heuristic remains as a floor in case a higher-kinded parameter is
+     * present, but for the common case (and for the L6 follow-up C `^&`
+     * row-kinded case) arity is the right answer. KIND_TYPEROW
+     * (0xFFFE, an unrelated sentinel) is skipped in the floor scan so it
+     * cannot dominate. */
+    Kind result_kind = kind_for_arity(n_type_params);
     for (uint8_t i = 0; i < n_type_params; i++) {
-        if (type_param_kinds[i] > result_kind) {
-            result_kind = type_param_kinds[i];
+        Kind k = type_param_kinds[i];
+        if (k == KIND_TYPEROW) continue;
+        if (k > result_kind) {
+            result_kind = k;
         }
     }
 

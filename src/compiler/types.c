@@ -2962,6 +2962,42 @@ Type type_typerow_union(Arena *a, Type x, Type y) {
     return type_typerow(a, elems, (uint8_t)n);
 }
 
+/* L6 follow-up D: canonical (sorted) copy of a row, the opt-in surface for
+ * permutation-aware row equality. Two rows that differ only by element order
+ * canonicalise to identical TY_TYPEROW values, so ordinary order-sensitive
+ * type_eq returns true. Sort key is type_name (compile-time only -- rows
+ * erase at codegen, so the cost is paid once during elaboration).
+ *
+ * The L5 helper type_typerow_eq_perm remains the direct way to ask
+ * "are these rows equal up to permutation?" without rebuilding either side;
+ * row-canon is the opt-in users reach for at the type-annotation boundary
+ * when they want the equality to flow through ordinary type_eq (signature
+ * unification, function-argument compatibility, etc.). Both routes are
+ * order-insensitive and consistent with each other. */
+Type type_typerow_canonical(Arena *a, Type x) {
+    if (x.kind != TY_TYPEROW) return type_typerow(a, NULL, 0);
+    uint32_t n = x.as.typerow_.n_elements;
+    if (n == 0) return type_typerow(a, NULL, 0);
+    Type **elems = (Type **)arena_alloc(a, n * sizeof(Type *));
+    for (uint32_t i = 0; i < n; i++) elems[i] = x.as.typerow_.elements[i];
+    /* Insertion sort by type_name -- stable, fine for the row sizes in
+     * practice (<= 255, almost always single digits). */
+    for (uint32_t i = 1; i < n; i++) {
+        Type *cur = elems[i];
+        const char *cur_name = cur ? type_name(*cur) : "";
+        uint32_t j = i;
+        while (j > 0) {
+            Type *prev = elems[j - 1];
+            const char *prev_name = prev ? type_name(*prev) : "";
+            if (strcmp(prev_name, cur_name) <= 0) break;
+            elems[j] = prev;
+            j--;
+        }
+        elems[j] = cur;
+    }
+    return type_typerow(a, elems, (uint8_t)n);
+}
+
 /* Intersection: x's elements that also appear in y (by type_eq), in x's order,
  * deduplicated -- the components common to both queries. */
 Type type_typerow_intersect(Arena *a, Type x, Type y) {

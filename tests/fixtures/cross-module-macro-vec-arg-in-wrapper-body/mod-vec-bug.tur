@@ -1,0 +1,22 @@
+;; Auxiliary module for the cross-module-macro-vec-arg-in-wrapper-body
+;; regression fixture. See input.tur for context and the report at
+;; docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md.
+
+(defmodule mod-vec-bug
+  (export m)
+
+  ;; Recursive helper macro defined here, NOT exported.  When `m` (also
+  ;; defined here) is invoked from a different module and expands to
+  ;; `(when true (fold-len ~comps))`, the inner `(fold-len ~comps)`
+  ;; must remain visible during `when`'s body re-elaboration -- pre-fix
+  ;; it was hidden because the expansion-module visibility stack lost
+  ;; the outer entry.
+  (defmacro fold-len [comps]
+    (let [c (first comps)
+          s (str->sym (str-append "__s_" (symbol-name c)))]
+      (if (empty? (rest comps))
+        `(dense-len ~s)
+        `(+ (dense-len ~s) (fold-len ~(rest comps))))))
+
+  (defmacro m [comps]
+    `(when true (println (fold-len ~comps)))))

@@ -1,0 +1,8 @@
+;; L6 follow-up A: an undefined type name in a #row{...} element must error,
+;; not silently elaborate to a NULL-def opaque placeholder. Foo is never
+;; declared; the row resolution should reject it instead of pretending it
+;; exists. This guards the ECS use case where a typo'd component name in
+;; (query [Pos Velocityy]) used to compile and run as if Velocityy were a
+;; real (but completely empty) component type.
+(defstruct Q [^&c] (w :int))
+(defn f [x : (Q #row{int Foo})] : int 5)

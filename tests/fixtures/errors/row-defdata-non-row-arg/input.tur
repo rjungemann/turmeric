@@ -1,0 +1,6 @@
+;; L6 follow-up C: a defdata with a `^&` row-kinded parameter rejects a
+;; non-row argument at type-application sites via check_row_type_arg_kind.
+;; Mirrors the existing struct test errors/row-arg-kind-row-param but for
+;; the TY_ADT case wired in this layer.
+(defdata Frame [^&cols] (Frame :int))
+(defn bad [x : (Frame :int)] : int 0)

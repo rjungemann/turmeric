@@ -1,0 +1,15 @@
+;; L6 follow-up C: deftype now recognises `^&name` as a row-kinded type
+;; parameter (kind [*], KIND_TYPEROW), mirroring defstruct's L4 behavior.
+;; The deftype's own kind is derived from kind_for_arity(n_type_params), so
+;; the type-constructor application (Frame #row{int bool}) succeeds and is
+;; kind-checked. Runtime use of the deftype is phantom (rows erase), so the
+;; program runs end-to-end.
+(deftype Frame [^&cols] (Frame :int))
+
+(defn print-frame [n : int] : int
+  (println n)
+  n)
+
+(defn main [] : int
+  (print-frame 42)
+  0)

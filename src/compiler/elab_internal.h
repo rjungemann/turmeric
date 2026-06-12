@@ -559,8 +559,21 @@ typedef struct Elab {
      * of broken C output. */
     bool             in_stdlib_load;
     /* Phase M4: During macro expansion, the defining module of the currently
-     * expanding macro (so private helper macros from that module are visible). */
+     * expanding macro (so private helper macros from that module are visible).
+     * Cross-module wrapper-macro bug fix: when an outer macro M (defined in
+     * module A) emits a form referencing a stdlib wrapper W and an inner
+     * helper H (also in A), and the form expands like
+     * `(W (H ...))`, the inner W expansion overwrites macro_expansion_module
+     * with W's defining module (NULL for stdlib), hiding H from the inner
+     * lookup. We track the *stack* of in-progress expansion modules instead;
+     * elab_lookup_macro walks the stack so any module in the active expansion
+     * chain contributes its visibility. macro_expansion_module remains the
+     * innermost entry for back-compat with sites that read it directly. See
+     * docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
     const Symbol    *macro_expansion_module;
+    const Symbol   **macro_expansion_stack;
+    uint32_t         n_macro_expansion_stack;
+    uint32_t         cap_macro_expansion_stack;
     /* Phase B2 CPS-CL7: tracks nesting depth of cloneable-reset for
      * detecting cloneable-shift outside any reset boundary. */
     int              cloneable_reset_depth;
@@ -678,6 +691,15 @@ typedef struct Elab {
     Binding         **bare_fat_lazy_bindings;
     uint32_t          n_bare_fat_lazy_bindings;
     uint32_t          cap_bare_fat_lazy_bindings;
+    /* L6 follow-up (strict-row-elements): when non-zero, the unknown-name
+     * fallthrough in type_expr_from_form (F_SYM line ~484 and F_KEYWORD
+     * line ~1756) emits a hard error instead of returning a NULL-def
+     * opaque placeholder. Used inside the #row{...} element resolution
+     * loop so a typo'd component name in `#row{Pos Velocityy}` becomes a
+     * compile error rather than silently elaborating to opaque. Counter
+     * (not bool) so nested rows can save/inc/dec/restore around their
+     * element recursion. */
+    uint8_t           strict_unknown_types;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */

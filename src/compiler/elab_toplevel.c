@@ -1159,6 +1159,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         free(e.forward_type_syms);
         free(e.handled_effect_names);
         free(e.macros);
+        free(e.macro_expansion_stack);
         free((void *)e.load_expanded_paths);
         return NULL;
     }

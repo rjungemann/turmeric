@@ -1,0 +1,37 @@
+;; Regression fixture for
+;; docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md
+;;
+;; The bug: a macro M defined in module A emits a form that wraps a
+;; helper macro (also in A) in a stdlib wrapper like `when`. When M is
+;; called from another module U, the inner wrapper's expansion reset
+;; the macro_expansion_module visibility to stdlib (NULL), so A's
+;; recursive helper macro fell out of scope and was treated as an
+;; ordinary function call. Its vec arg then landed in expression
+;; position and the data-literals reader lowered `[A B]` to
+;; `(vec-of A B)`, demanding A and B be bound values -- they were not.
+;;
+;; Fix: elaborator tracks a STACK of in-progress macro expansion
+;; modules; the visibility check (elab_lookup_macro in elab_core.c)
+;; walks the stack so any module on the active expansion chain
+;; contributes its visibility. Files modified: elab_internal.h,
+;; elab_core.c, elab_macros.c, elab_call.c, elab_toplevel.c.
+
+(defmodule use-vec-bug
+  (export)
+  (import mod-vec-bug :refer [m])
+
+  (defn dense-len [v : int] : int v)
+
+  (defn main [] : int
+    ;; Pre-fix, this defn failed to elaborate: m's expansion produced
+    ;; `(when true (println (fold-len [A B])))`, but when's body
+    ;; re-elaboration lost visibility of fold-len, so
+    ;; `(fold-len [A B])` was treated as a function call; `[A B]`
+    ;; lowered to `(vec-of A B)`; `A` was unbound. Post-fix: fold-len
+    ;; expands recursively, the call site sees
+    ;; `(when true (println (+ (dense-len __s_A) (dense-len __s_B))))`,
+    ;; and the integer 8 is printed.
+    (let [__s_A 3
+          __s_B 5]
+      (m [A B]))
+    0))

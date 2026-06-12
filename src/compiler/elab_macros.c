@@ -1085,11 +1085,24 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
 /* Phase 6: Expand a macro call with arguments */
 Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) {
     /* Phase M4: set expansion-origin module so private helper macros of the
-     * same module are accessible during this expansion. Restore on every exit. */
+     * same module are accessible during this expansion. Restore on every exit.
+     * Cross-module wrapper-macro bug fix: push on a stack so nested expansions
+     * preserve the outer module's visibility too. */
     const Symbol *saved_expansion_mod = e->macro_expansion_module;
     e->macro_expansion_module = macro->defining_module_name;
+    if (e->n_macro_expansion_stack >= e->cap_macro_expansion_stack) {
+        uint32_t nc = e->cap_macro_expansion_stack ? e->cap_macro_expansion_stack * 2 : 8;
+        e->macro_expansion_stack = (const Symbol **)realloc(
+            e->macro_expansion_stack, nc * sizeof(const Symbol *));
+        e->cap_macro_expansion_stack = nc;
+    }
+    e->macro_expansion_stack[e->n_macro_expansion_stack++] =
+        macro->defining_module_name;
 
-#define EXPAND_RESTORE() (e->macro_expansion_module = saved_expansion_mod)
+#define EXPAND_RESTORE() do { \
+        e->macro_expansion_module = saved_expansion_mod; \
+        if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--; \
+    } while (0)
 
     /* Check arity */
     if (macro->is_variadic) {

@@ -1,0 +1,19 @@
+;; L6 follow-up D: permutation-aware row equality, opt-in via (row-canon R).
+;; (row-canon #row{int bool}) and (row-canon #row{bool int}) reduce to the
+;; same TY_TYPEROW because the canonicaliser sorts elements by type_name.
+;; Ordinary type_eq is unchanged (still order-sensitive); the opt-in lives
+;; entirely at the user's annotation boundary -- type_eq is not weakened.
+(defstruct Frame [^&cols] (n :int))
+
+(defn make-ab [n : int] : (Frame (row-canon #row{int bool}))
+  (:: (make-struct Frame n) (Frame (row-canon #row{int bool}))))
+
+(defn make-ba [n : int] : (Frame (row-canon #row{bool int}))
+  (:: (make-struct Frame n) (Frame (row-canon #row{bool int}))))
+
+(defn use-canon [f : (Frame (row-canon #row{int bool}))] : int (.n f))
+
+(defn main [] : int
+  (println (use-canon (make-ab 1)))
+  (println (use-canon (make-ba 2)))
+  0)

@@ -1351,11 +1351,22 @@ Expr *elab_call(Elab *e, Form *call) {
 
         /* Phase M4: Keep the expansion-module context active while elaborating
          * the expanded form so private helper macros from the same module are
-         * visible when the expansion calls them (e.g. triple → helper-double). */
+         * visible when the expansion calls them (e.g. triple → helper-double).
+         * Cross-module wrapper-macro bug fix: also push on the stack so the
+         * visibility extends across nested wrapper-macro expansions. */
         const Symbol *saved_expansion = e->macro_expansion_module;
         e->macro_expansion_module = macro->defining_module_name;
+        if (e->n_macro_expansion_stack >= e->cap_macro_expansion_stack) {
+            uint32_t nc = e->cap_macro_expansion_stack ? e->cap_macro_expansion_stack * 2 : 8;
+            e->macro_expansion_stack = (const Symbol **)realloc(
+                e->macro_expansion_stack, nc * sizeof(const Symbol *));
+            e->cap_macro_expansion_stack = nc;
+        }
+        e->macro_expansion_stack[e->n_macro_expansion_stack++] =
+            macro->defining_module_name;
         Expr *out = elab_form(e, expanded);
         e->macro_expansion_module = saved_expansion;
+        if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--;
         e->macro_expand_depth--;
         return out;
     }
