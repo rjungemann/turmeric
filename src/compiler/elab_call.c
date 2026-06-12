@@ -30,7 +30,7 @@ typedef AbiTypeBinding CallTypeBinding;
  * hint never points at a nonexistent symbol or file. Helpers a user might
  * *expect* but that do not exist (println-int, float->cstr) are deliberately
  * absent -- those stay a plain "unknown". */
-static const char *stdlib_load_hint_file(const Symbol *name) {
+const char *tur_stdlib_load_hint(const char *name) {
     static const struct { const char *name; const char *file; } table[] = {
         { "float->int",   "stdlib/math.tur" },
         { "int->float",   "stdlib/math.tur" },
@@ -38,9 +38,13 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
         { "println-float", "stdlib/bits.tur" },
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
-        if (strcmp(name->name, table[i].name) == 0) return table[i].file;
+        if (strcmp(name, table[i].name) == 0) return table[i].file;
     }
     return NULL;
+}
+
+static const char *stdlib_load_hint_file(const Symbol *name) {
+    return tur_stdlib_load_hint(name->name);
 }
 
 /* TY2.2: Coerce a value expression to the `any` top type by wrapping it in an

@@ -889,11 +889,16 @@ fixture_has_inline_c() {
 # interpreter.  tests/fixtures/errors/* are negative fixtures that must elaborate
 # to a specific diagnostic (expected.diag).  run.sh validates them on the
 # compiled path; this harness now runs them under `tur --interpret` too and does
-# the same substring diag comparison.  282 of 298 already emit the identical
-# diagnostic (the interpreter shares the elaborator, so move/linearity/affine
-# checks etc. match by construction); the few below genuinely diverge under the
-# interpreter and are denylisted with a one-line reason until fixed.  This closes
-# the TI0-noted gap that errors/ was skipped wholesale.
+# the same substring diag comparison.  All but the few below already emit the
+# identical diagnostic (the interpreter shares the elaborator, so move/linearity/
+# affine checks etc. match by construction).  The 3 "reporting-stage" divergences
+# (unbound-call-head, unknown-helper-load-hint, tce3-map-heterogeneous-val) were
+# fixed: an unbound runtime-dispatch call head now reports the compiler's
+# "unknown function or operator" diagnostic (+ load-hint), and cmd_eval prints a
+# runtime error from main instead of swallowing it.  The remaining entries below
+# genuinely diverge under the interpreter (missing elaborator checks + the TI3.2
+# serial-shift carve-out) and are denylisted with a one-line reason until fixed.
+# This closes the TI0-noted gap that errors/ was skipped wholesale.
 # ---------------------------------------------------------------------------
 TURI_ERRORS_DENY="
 lang-not-implemented            # #lang directive: interp does not raise the not-yet-implemented diag
@@ -902,9 +907,6 @@ lifetime-cyclic                 # TUR-E0106 lifetime-cycle check not run under i
 reader-macros-strict-collision  # reader-macro strict-collision diag not raised under interpret
 serial-context-do-not-capturable # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
 serial-context-not-capturable    # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
-tce3-map-heterogeneous-val      # TUR-E0001 emitted at runtime (empty stderr) not as elab diag
-unbound-call-head               # unbound call head errors at runtime, not as the elab diag
-unknown-helper-load-hint        # unknown-helper load hint diag not emitted under interpret
 "
 while IFS= read -r _ef; do
     _ef="${_ef%%#*}"                                   # strip trailing comment
