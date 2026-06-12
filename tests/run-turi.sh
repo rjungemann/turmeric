@@ -914,6 +914,16 @@ tib-map-turi-comparator
 # still await the recursive value-eq gap; see turi-map-set-hamt-interpreter-gap.md.)
 map-eq
 typed/map-eq
+# Recursive container values: a Map[K (Vec V)] / Set[(Vec V)] whose value/element
+# comparator bottoms out in vec-eq? / set-eq-cmp?.  native_vec_eq and
+# native_set_eq_cmp re-walk the Vec ({data,len,cap}) / double-iterate the set
+# HAMT and invoke the comparator via turi_call -- so structural eq recurses into
+# container elements (the Vec/Map recursive value-eq gap).
+map-of-tvec-eq
+set-of-tvec-eq
+vec-of-tvec-eq
+vec-of-tvec-eq-manual
+typed/vec-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.

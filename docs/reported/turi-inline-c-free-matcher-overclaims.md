@@ -82,12 +82,17 @@ HAMT and invoke the value comparator (a turi closure under `--interpret`) via
 - Full compiled suite unchanged; `check_turi_parity.py` clean (112/115, 0 gaps).
 - The inline-C `free`-pattern fixtures (plain destructors) still pass.
 
-## Still open (separate gap)
+## Follow-up (recursive container values) -- RESOLVED 2026-06-12
 
-`map-of-tvec-eq` / `set-of-tvec-eq` (maps/sets whose *values* are themselves
-containers) still mis-render, because the recursive **value** comparator bottoms
-out in `vec-eq?`, whose inline-C body is not interpretable (`vec-eq?` returns a
-raw `ptr<void>` under `--interpret`). That is the Vec/Map recursive-value-eq
-item tracked in
-[turi-map-set-hamt-interpreter-gap.md](turi-map-set-hamt-interpreter-gap.md),
-not this matcher bug.
+`map-of-tvec-eq` / `set-of-tvec-eq` (maps/sets whose *values*/elements are
+themselves containers) were initially still mis-rendering, because the recursive
+comparator bottoms out in `vec-eq?` / `set-eq-cmp?`, whose inline-C bodies
+fat-dispatch the comparator through a C function pointer the simple executor
+cannot run. Closed by registering `native_vec_eq` (`vec-eq?`) and
+`native_set_eq_cmp` (`set-eq-cmp?`) -- same `turi_call`-the-comparator pattern as
+`native_map_eq_raw`. Unblocked `map-of-tvec-eq`, `set-of-tvec-eq`,
+`vec-of-tvec-eq`, `vec-of-tvec-eq-manual`, `typed/vec-basic` (harness 987 ->
+992). Tracked in
+[turi-map-set-hamt-interpreter-gap.md](turi-map-set-hamt-interpreter-gap.md).
+`eq-carrier-capturing-comparator` remains a gap -- it additionally needs the
+`mutmap-*` collection natives (a separate surface).

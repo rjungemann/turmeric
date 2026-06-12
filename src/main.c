@@ -6039,6 +6039,39 @@ static TuriValue native_set_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     free((void *)(intptr_t)a[0].as_int);
     return turi_nil();
 }
+/* set-eq-cmp? -- O(n*m) structural set equality with a user element comparator.
+ * set.tur's body double-iterates the HAMTs and fat-dispatches cmp-fn through a C
+ * function pointer (un-runnable in the simple inline-C executor); this native
+ * re-implements it, invoking the comparator (a turi closure under --interpret)
+ * via turi_call.  Elements are stored as the HAMT key (set-add s h x). */
+static TuriValue native_set_eq_cmp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 3) return turi_bool(false);
+    Hamt *sa = set_hamt(a[0]), *sb = set_hamt(a[1]);
+    TuriValue cmp = a[2];
+    if (tur_hamt_count(sa) != tur_hamt_count(sb)) return turi_bool(false);
+    uint64_t iter_a[32]; for (int i = 0; i < 32; i++) iter_a[i] = 0;
+    tur_hamt_iter_init((HamtIter *)iter_a, sa);
+    uint64_t ha; void *ka = NULL, *vap = NULL;
+    bool ok = true;
+    while (ok && tur_hamt_iter_next((HamtIter *)iter_a, &ha, &ka, &vap)) {
+        bool found = false;
+        uint64_t iter_b[32]; for (int i = 0; i < 32; i++) iter_b[i] = 0;
+        tur_hamt_iter_init((HamtIter *)iter_b, sb);
+        uint64_t hb; void *kb = NULL, *vbp = NULL;
+        while (tur_hamt_iter_next((HamtIter *)iter_b, &hb, &kb, &vbp)) {
+            TuriValue cargs[2];
+            cargs[0].tag = TURI_INT; cargs[0].as_int = (int64_t)(intptr_t)ka;
+            cargs[1].tag = TURI_INT; cargs[1].as_int = (int64_t)(intptr_t)kb;
+            TuriValue rv = turi_call(env, cmp, cargs, 2);
+            if (rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0) { found = true; break; }
+        }
+        tur_hamt_iter_free((HamtIter *)iter_b);
+        if (!found) ok = false;
+    }
+    tur_hamt_iter_free((HamtIter *)iter_a);
+    return turi_bool(ok);
+}
 static TuriValue native_set_union(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return n >= 1 ? a[0] : turi_nil();
@@ -6557,6 +6590,35 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
+ * cap} struct and fat-dispatches the element comparator through a C function
+ * pointer, which the simple inline-C executor cannot run; this native re-walks
+ * the Vec (int64_t[3] = {data,len,cap}) and invokes the comparator (a turi
+ * closure under --interpret) via turi_call, mirroring native_map_eq_raw.  This
+ * is what makes recursive container values work -- e.g. a Map[K (Vec V)] whose
+ * value comparator bottoms out in vec-eq?. */
+static TuriValue native_vec_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 3) return turi_bool(false);
+    int64_t *v1 = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t *v2 = (int64_t *)(intptr_t)a[1].as_int;
+    TuriValue cmp = a[2];
+    int64_t len1 = v1 ? v1[1] : 0;
+    int64_t len2 = v2 ? v2[1] : 0;
+    if (len1 != len2) return turi_bool(false);
+    int64_t *d1 = v1 ? (int64_t *)(intptr_t)v1[0] : NULL;
+    int64_t *d2 = v2 ? (int64_t *)(intptr_t)v2[0] : NULL;
+    for (int64_t i = 0; i < len1; i++) {
+        TuriValue cargs[2];
+        cargs[0].tag = TURI_INT; cargs[0].as_int = d1[i];
+        cargs[1].tag = TURI_INT; cargs[1].as_int = d2[i];
+        TuriValue rv = turi_call(env, cmp, cargs, 2);
+        bool eq = rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0;
+        if (!eq) return turi_bool(false);
+    }
+    return turi_bool(true);
+}
+
 /* nil-value: return 0 (empty list sentinel) */
 static TuriValue native_nil_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
@@ -7021,6 +7083,7 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "set-intersect",   native_set_intersect,   NULL);
     turi_env_register_native(env, "set-diff",        native_set_diff,        NULL);
     turi_env_register_native(env, "set-eq?",         native_set_eq,          NULL);
+    turi_env_register_native(env, "set-eq-cmp?",     native_set_eq_cmp,      NULL);
     /* Slice operations */
     turi_env_register_native(env, "slice-new",       native_slice_new,       NULL);
     turi_env_register_native(env, "slice-len",       native_slice_len,       NULL);
@@ -7043,6 +7106,7 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-pop!",        native_vec_pop,         NULL);
     turi_env_register_native(env, "vec-set!",        native_vec_set,         NULL);
     turi_env_register_native(env, "vec-free",        native_vec_free,        NULL);
+    turi_env_register_native(env, "vec-eq?",         native_vec_eq,          NULL);
     turi_env_register_native(env, "result-collect",  native_result_collect,  NULL);
     turi_env_register_native(env, "result-partition",native_result_partition, NULL);
     turi_env_register_native(env, "result-partition-ok", native_result_partition_ok, NULL);

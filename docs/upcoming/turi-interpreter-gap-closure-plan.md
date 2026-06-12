@@ -40,20 +40,21 @@ post-defmodule-fix:  pass = 660   fail = 910   skip = 92
 post-W1:             pass = 695   fail = 875   skip = 92   (+35)
 ```
 
-**Harness state (the live metric): 987 passed, 0 failed.** Progression:
+**Harness state (the live metric): 992 passed, 0 failed.** Progression:
 181 (post-defmodule) -> 463 (W3 wired `errors/*`, +282) -> 912 (the bulk-add of
 every auto-verified-passing non-inline-C fixture, +449) -> 985 (post #341
 /#342/#343: pure-turi silent-miscompile fixes, inline-C tightening, HAMT ctx ABI,
-preload parity, +73) -> **987** (W1b `map-eq?` natives + free-matcher fix, +2).
+preload parity, +73) -> 987 (W1b `map-eq?` natives + free-matcher fix, +2) ->
+**992** (recursive container value-eq: `vec-eq?` / `set-eq-cmp?` natives, +5).
 The harness summary now separates the work cleanly:
 
 ```
-987 passed, 0 failed, 617 skipped
+992 passed, 0 failed, 612 skipped
   407 inline-c carve-outs   (TI7, permanent -- W2)
-  210 non-inline-C not yet on the allowlist  (the W5 triage surface)
+  205 non-inline-C not yet on the allowlist  (the W5 triage surface)
 ```
 
-The **210** is the real remaining gap (down from 260): the W1b native-shim
+The **205** is the real remaining gap (down from 260): the W1b native-shim
 cluster (map, blocked on the C-callback eq/hash gap) + the remaining inline-C
 evaluator miscompiles + an HKT/existential/continuation tail, plus a few
 container/edge dirs. Everything that passes under `--interpret` is now on the
@@ -210,12 +211,14 @@ mirroring `native_result_eq`), and a latent silent-miscompile+UAF in the inline-
 `free` matcher -- which mis-claimed `map-eq-raw?`'s body (it contains
 `tur_hamt_iter_free(`) and freed the map box -- was fixed
 ([turi-inline-c-free-matcher-overclaims.md](../reported/turi-inline-c-free-matcher-overclaims.md)).
-`map-eq`/`typed/map-eq` are on the allowlist. **Remaining map gap:** recursive
-**container values** (`Map[K (Vec V)]`, `Map[K (Map ...)]`) whose value
-comparator bottoms out in `vec-eq?`/`map-eq?` -- blocked by the Vec/Map
-recursive value-eq gap (`vec-eq?` returns a raw `ptr<void>` under `--interpret`;
-`map-of-tvec-eq`, `set-of-tvec-eq`), the same family as `result-of-typed-eq`.
-Full analysis:
+`map-eq`/`typed/map-eq` are on the allowlist. Recursive **container values**
+(`Map[K (Vec V)]`, `Set[(Vec V)]`) are now handled too: `native_vec_eq`
+(`vec-eq?`) and `native_set_eq_cmp` (`set-eq-cmp?`) re-walk the element store and
+invoke the comparator via `turi_call`, so structural eq recurses into container
+elements (`map-of-tvec-eq`, `set-of-tvec-eq`, `vec-of-tvec-eq`,
+`vec-of-tvec-eq-manual`, `typed/vec-basic` on the allowlist). The remaining
+sliver (`eq-carrier-capturing-comparator`) additionally needs the `mutmap-*`
+collection natives -- a separate surface. Full analysis:
 [turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md).
 The original spike notes (historical; map's key side is now resolved) follow.
 

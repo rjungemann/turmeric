@@ -10,12 +10,18 @@
 > Fixed by (a) tightening the free matcher and (b) registering
 > `native_map_eq_raw[_k]` (`src/main.c`), which re-implement the iteration and
 > call the comparator via `turi_call`, mirroring `native_result_eq`. `map-eq`
-> and `typed/map-eq` are on the allowlist (harness 985 -> 987). **Still open --
-> recursive container values:** a `Map[K (Vec V)]` / `Map[K (Map ...)]` whose
-> *value* comparator bottoms out in `vec-eq?`/`map-eq?` mis-renders, because
-> `vec-eq?`'s inline-C body returns a raw `ptr<void>` under `--interpret`
-> (`map-of-tvec-eq`, `set-of-tvec-eq` -- the Vec/Map recursive value-eq gap, the
-> same family as `result-of-typed-eq`).
+> and `typed/map-eq` are on the allowlist (harness 985 -> 987).
+>
+> **Recursive container values -- DONE (2026-06-12).** A `Map[K (Vec V)]` /
+> `Set[(Vec V)]` whose value/element comparator bottoms out in `vec-eq?` /
+> `set-eq-cmp?` now compares structurally: `native_vec_eq` re-walks the Vec
+> (`int64_t[3] = {data,len,cap}`) and `native_set_eq_cmp` double-iterates the set
+> HAMT, each invoking the comparator (a turi closure) via `turi_call` -- the same
+> pattern as `native_map_eq_raw`. Unblocked `map-of-tvec-eq`, `set-of-tvec-eq`,
+> `vec-of-tvec-eq`, `vec-of-tvec-eq-manual`, `typed/vec-basic` (harness 987 ->
+> 992, all on the allowlist). Still a gap: `eq-carrier-capturing-comparator`,
+> which additionally needs the `mutmap-*` collection natives (a separate
+> surface).
 >
 > **Progress (TI10 Tier B, 2026-06-12):** **content-keyed maps with a pure-turi
 > closure comparator now work under `--interpret`.** The 2a `void *ctx` HAMT ABI
