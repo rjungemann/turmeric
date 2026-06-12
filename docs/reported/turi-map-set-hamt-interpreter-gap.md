@@ -1,5 +1,23 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
+> **Progress (TI8.b/W1b):** **hamt and set are FIXED.** `cmd_eval` now registers
+> the raw `tur_hamt_*` wrappers (hamt.tur preloaded); the `set-*` natives were
+> rewritten over the real HAMT (`{void* hamt}`), fixing the `native_set_count`
+> overflow, and set.tur preloaded -- `typed/set-basic` + `data-literal-set-*`
+> pass. **map remains blocked** by a newly-pinned issue on top of Gap 2: map's
+> ops are polymorphic `[K V]` defns (`map-assoc-eq-o`/`map-get-eq-o`/...), and a
+> **monomorphized polymorphic defn bypasses its global native override** -- the
+> interpreter runs the module's inline-C body (a `tur_hamt_*_eq_o` C call with a
+> C-callback comparator) instead of the registered `native_map_*`. (Set avoided
+> this because its ops are *monomorphic* `:int` defns, so the native overrides
+> win; and its keys use the int-keyed HAMT API with no callback.) So map needs
+> EITHER native overrides that take effect for monomorphized polymorphic defns,
+> OR a turi-closure-aware HAMT path so the module's own inline-C/closure body can
+> run. The same `[K V]`-monomorphization-bypass affected Result's `ok-val` and
+> was only worked around there because the body was an interpretable field
+> access (the EX_GET_FIELD carrier path); map's body is a C call, so that
+> workaround does not apply.
+
 **Summary:** The typed collections `map`/`set` (and to a lesser extent the raw
 `hamt`) do not work under the tree-walking interpreter. `tur build`/`tur run`
 compile them fine, but `tur --interpret` (and `tur repl`, the WASM REPL) cannot

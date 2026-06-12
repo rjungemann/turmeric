@@ -194,7 +194,19 @@ miscompile, fixed by this), `typed-slots/cs4-stdlib-helpers`,
 **924**, 0 failed; compiled 1573/0; zero regressions, incl. the allowlisted
 `coerce-carrier-to-struct` which now passes via the carrier path).
 
-**Next: map/set/hamt -- the Result pattern does NOT directly transfer (spike 2026-06-11).**
+**map/set/hamt -- hamt + set DONE; map blocked.** hamt.tur (raw `tur_hamt_*`
+wrappers now registered in `cmd_eval`) and set (hamt-backed `set-*` natives over
+`{void* hamt}`, fixing the `native_set_count` overflow; `#set{}` lowers through
+the set ops) are landed and on the allowlist. **map** is blocked: its ops are
+polymorphic `[K V]` defns, and a monomorphized polymorphic defn bypasses its
+global native override, so the interpreter runs the module's inline-C body (a
+`tur_hamt_*_eq_o` C call with a C-callback comparator) instead of the registered
+`native_map_*`. Needs either native-override-of-monomorphized-poly-defns or a
+turi-closure-aware HAMT. Full analysis:
+[turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md).
+The original spike notes (still accurate for map) follow.
+
+**Original spike (2026-06-11): the Result pattern does NOT directly transfer.**
 Loading `hamt.tur`/`map.tur`/`set.tur` into the prelude does **not** regress the
 allowlist (924/0), and the EX_GET_FIELD carrier path + `native_tur_hamt_*`
 (which wrap the real runtime HAMT) are in place -- but the target fixtures still
