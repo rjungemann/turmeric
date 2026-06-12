@@ -835,6 +835,19 @@ data-literal-set-eq
 set-basic
 set-typed-basic
 typed/set-basic
+
+# TI10 Tier A (map): typed Map[K V] scalar-key natives -- MapKey/Hash instance
+# comparators (mk-cmp returns the carrier-ABI C comparator address) + the raw
+# map-*-eq-o / map-*-eq bridges over tur_hamt_*_eq_o, with map.tur preloaded.
+# Int/cstr/float scalar keys; content-keyed user comparators await Tier B.
+# map-collision-forced drives a real hash-0 collision chain so the comparator
+# is genuinely exercised (not works-by-luck).
+data-literal-map-basic
+map-basic
+typed/map-basic
+typed/map-collision
+typed/map-collision-forced
+wkc-wide-map-key
 "
 
 # Build an associative-set from the default list for O(1) lookup.

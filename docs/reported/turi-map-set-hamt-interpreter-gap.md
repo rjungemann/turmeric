@@ -1,6 +1,25 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
-> **Progress (TI8.b/W1b):** **hamt and set are FIXED.** `cmd_eval` now registers
+> **Progress (TI10 Tier A, 2026-06-12):** **hamt, set, and scalar-keyed map are
+> now FIXED.** The map blocker below was resolved not by representing the C
+> function pointer as a turi value, but by registering the `MapKey`/`Hash`
+> instance methods as natives that return the **real C carrier comparator
+> address** (exactly what the compiled path emits) -- `mk-cmp` no longer routes
+> through the un-runnable inline-C body. With `map.tur` preloaded and the
+> `map-*-eq[-o]` raw bridges registered over `tur_hamt_*_eq_o`, `typed/map-basic`,
+> `map-basic`, `data-literal-map-basic`, `typed/map-collision`,
+> `typed/map-collision-forced` (a real hash-0 collision chain that genuinely
+> exercises the comparator -- not works-by-luck), and `wkc-wide-map-key` pass
+> under `--interpret` on the allowlist. **Still open:** (a) **content-keyed user
+> comparators** -- a `MapKey` instance written in Turmeric (not inline-C) returns
+> a turi *closure*, which still cannot flow through `bool(*)(int64,int64)`; that
+> is TI10 Tier B (the turi-closure-aware HAMT / trampoline). (b) **non-int map
+> *values*** (`Map int cstr`, `Map int float`) mis-render because `map-get`'s
+> generic int64 carrier is not reinterpreted by `(:: ... :V)` -- filed as
+> [turi-map-nonint-value-carrier-ascription.md](turi-map-nonint-value-carrier-ascription.md).
+> The original (correct) diagnosis is kept below for history.
+>
+> **Earlier progress (TI8.b/W1b):** **hamt and set are FIXED.** `cmd_eval` now registers
 > the raw `tur_hamt_*` wrappers (hamt.tur preloaded); the `set-*` natives were
 > rewritten over the real HAMT (`{void* hamt}`), fixing the `native_set_count`
 > overflow, and set.tur preloaded -- `typed/set-basic` + `data-literal-set-*`

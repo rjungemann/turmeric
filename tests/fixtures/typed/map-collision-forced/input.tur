@@ -1,0 +1,29 @@
+;; TI10 Tier A: forced-collision test for the interpreter map natives.
+;;
+;; typed/map-collision uses keys 1 and 2, whose int hashes (1 and 2) differ,
+;; so the MapKey comparator is never invoked -- it cannot prove the comparator
+;; is wired.  This fixture drives the explicit-hash content API with BOTH keys
+;; pinned to hash 0, forcing a HAMT collision chain.  The comparator
+;; (mk-cmp, the carrier-ABI int comparator) is what keeps the two distinct keys
+;; distinct and matches a key for update inside the chain.  If the comparator
+;; were dropped (the "works by luck" shim), distinct keys at the same hash would
+;; alias and the counts/values below would be wrong.
+
+(defn run [] : int
+  (let [cmp (mk-cmp 0)
+        ;; two distinct int keys, both hashed to 0 -> collision chain of 2
+        m  (map-assoc-eq (:: (map-new) (Map int int)) 0 7 70 cmp)
+        m2 (map-assoc-eq m 0 8 80 cmp)
+        ;; update key 7 in the chain (same hash, matched by comparator)
+        m3 (map-assoc-eq m2 0 7 71 cmp)]
+    (println (map-count m2))                    ; 2 -- distinct keys kept apart
+    (println (:: (map-get-eq m2 0 7 cmp) :int)) ; 70
+    (println (:: (map-get-eq m2 0 8 cmp) :int)) ; 80
+    (println (map-count m3))                    ; 2 -- update, not insert
+    (println (:: (map-get-eq m3 0 7 cmp) :int)) ; 71
+    (println (if (map-has-eq? m3 0 8 cmp) 1 0)) ; 1
+    (println (if (map-has-eq? (map-dissoc-eq m3 0 7 cmp) 0 7 cmp) 1 0)) ; 0 -- 8 stays
+    (println (map-count (map-dissoc-eq m3 0 7 cmp))) ; 1
+    0))
+
+(run)

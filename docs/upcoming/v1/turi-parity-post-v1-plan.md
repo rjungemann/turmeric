@@ -829,7 +829,25 @@ with zero runtime change, and the general "turi-closure-aware HAMT" tier the
 umbrella report calls for. Land **Tier A first**; it closes the fixtures. Tier B
 is the general mechanism for comparators that are genuine turi closures.
 
-#### Tier A -- native MapKey instances return the real C comparator (no runtime change)
+#### Tier A -- native MapKey instances return the real C comparator (no runtime change) -- **LANDED**
+
+> **Shipped (2026-06-12).** `src/main.c` gained `wk_register_map_natives`: the
+> four carrier comparators (`turi_{int,cstr,f32,f64}_carrier_eq_c`), the
+> `MapKey` `mk-cmp`/`mk-box` and `Hash` instance natives for the inline-C cases
+> (`__inst_MapKey_mk_hycmp_{int,cstr,float,float32}`,
+> `__inst_MapKey_mk_hybox_{cstr,float,float32}`,
+> `__inst_Hash_hash_{cstr,float,float32}` -- int/bool box+hash are plain bodies),
+> the raw `map-*-eq-o` and explicit-hash `map-*-eq` bridges over
+> `tur_hamt_*_eq[_o]`, plus `map-count`/`map-merge`/`map-free`/`tur-map-homog__`.
+> `map.tur` joined the `cmd_eval` and `wk_eval_fixture` preludes. Mangled
+> instance-method names were confirmed empirically (the override hook keys on
+> `fn->binding->name->name`). Allowlist: `typed/map-basic`, `map-basic`,
+> `data-literal-map-basic`, `typed/map-collision`, **`typed/map-collision-forced`**
+> (new -- a hash-0 collision chain so the comparator genuinely fires; passes
+> identically under `--interpret` and `tur run`), `wkc-wide-map-key`. Harness
+> 932 -> 938, 0 failed; compiled suite unchanged. Non-int map *values* remain a
+> follow-up (see report). The original design follows:
+
 
 Key realisation: a turi **native** runs in C, so it can return the *actual
 address* of a C comparator -- exactly what the compiled path does. The only

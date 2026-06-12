@@ -4794,6 +4794,7 @@ static int cmd_fmt(int argc, char **argv) {
 
 static void wk_register_stdlib_natives(TuriEnv *env);
 static void wk_register_hamt_natives(TuriEnv *env);
+static void wk_register_map_natives(TuriEnv *env);
 
 /* Phase S0: tur repl — interactive read-eval-print loop. */
 /* Phase INT-1: run a .tur file through the tree-walking interpreter.
@@ -4914,19 +4915,18 @@ static int cmd_eval(const char *path, bool use_color,
          *                    :pre/:post contract lowering (wk_eval_fixture skips
          *                    it for the same reason); loading it silently broke
          *                    contract-pre/post/type.
-         *   map/mutmap/set -- their typed-collection ops still need native
-         *                    overrides over tur_hamt_*, the #set{}/#map{} literal
-         *                    vs {void* hamt} representations must be unified, and
-         *                    content-keyed eq/hash needs a turi-closure-aware
-         *                    HAMT path.  See docs/reported/
-         *                    turi-map-set-hamt-interpreter-gap.md. */
+         *   mutmap -- the mutable-map module still needs native overrides over
+         *                    tur_hamt_*.  (set + map scalar keys are now
+         *                    supported; map content-keyed user comparators await
+         *                    TI10 Tier B's turi-closure-aware HAMT path.)  See
+         *                    docs/reported/turi-map-set-hamt-interpreter-gap.md. */
         static const char *prelude[] = {
             "safe.tur",
             "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
             "typeclass-hash.tur", "typeclass-applicative.tur",
             "typeclass-alternative.tur", "typeclass-monad.tur",
             "typeclass-monaderror.tur", "typeclass-bifunctor.tur",
-            "hamt.tur", "set.tur",
+            "hamt.tur", "set.tur", "map.tur",
             "vec.tur", "slice.tur", "option.tur", "result.tur",
             "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
             NULL
@@ -4960,6 +4960,9 @@ static int cmd_eval(const char *path, bool use_color,
      * wk_eval_fixture did this, so `tur --interpret` on any hamt-using program
      * silently got the no-op stubs (tur_hamt_new -> 0). */
     wk_register_hamt_natives(env);
+    /* TI10 Tier A: typed Map[K V] scalar-key natives (MapKey/Hash instance
+     * comparators + the raw map-*-eq-o bridges over tur_hamt_*_eq_o). */
+    wk_register_map_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers. */
     {
         typedef struct { int64_t value; int64_t next; } TurCons;
@@ -6014,6 +6017,230 @@ static TuriValue native_set_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)
 }
 
 /* -------------------------------------------------------------------------
+ * Typed Map[K V] natives (TI10 Tier A -- scalar key types).
+ *
+ * A Map[K V] is the same {void* hamt} carrier as a Set, so set_hamt/set_wrap
+ * are reused.  The public map-* accessors are macros that expand to:
+ *   (map-assoc-eq-o (kcheck m) (hash k) (mk-box k) v (mk-cmp k) (mk-owned? k))
+ * so unblocking map under --interpret needs natives for (a) the MapKey/Hash
+ * instance methods whose inline-C bodies the tree-walker can't run, and (b) the
+ * raw map-*-eq-o bridges + map-count/merge/free over the runtime HAMT.
+ *
+ * mk-cmp returns the *address of a C carrier comparator* -- exactly what the
+ * compiled path does -- and the runtime calls it through bool(*)(int64,int64)
+ * only on a 64-bit hash collision.  mk-box / mk-cmp / hash for int (and bool,
+ * which boxes to int) are plain (non-inline-C) bodies the interpreter already
+ * evaluates, so only the cstr / float / float32 instances need natives here.
+ * Owned (boxed multi-word) keys are out of scope (owned == 0 for all scalars).
+ * ---------------------------------------------------------------------- */
+
+/* Carrier comparators -- passed by address to tur_hamt_*_eq_o; mirror map.tur. */
+static bool turi_int_carrier_eq_c(int64_t a, int64_t b) { return a == b; }
+static bool turi_cstr_key_eq_c(int64_t a, int64_t b) {
+    const char *p = (const char *)(intptr_t)a;
+    const char *q = (const char *)(intptr_t)b;
+    if (p == q) return true;
+    if (!p || !q) return false;
+    return strcmp(p, q) == 0;
+}
+static bool turi_f32_carrier_eq_c(int64_t a, int64_t b) {
+    union { float f; int64_t i; } ua, ub; ua.i = a; ub.i = b; return ua.f == ub.f;
+}
+static bool turi_f64_carrier_eq_c(int64_t a, int64_t b) {
+    union { double f; int64_t i; } ua, ub; ua.i = a; ub.i = b; return ua.f == ub.f;
+}
+
+/* mk-cmp [K] -- return the carrier comparator address as the int64 carrier. */
+static TuriValue native_mk_cmp_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)&turi_int_carrier_eq_c);
+}
+static TuriValue native_mk_cmp_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)&turi_cstr_key_eq_c);
+}
+static TuriValue native_mk_cmp_f32(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)&turi_f32_carrier_eq_c);
+}
+static TuriValue native_mk_cmp_f64(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)&turi_f64_carrier_eq_c);
+}
+
+/* mk-box [K] -- box the key into the int64 carrier word. */
+static TuriValue native_mk_box_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t carrier = a[0].tag == TURI_CSTR
+                          ? (int64_t)(intptr_t)a[0].as_cstr : a[0].as_int;
+    return turi_int(carrier);
+}
+static TuriValue native_mk_box_f32(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    union { float f; int64_t i; } u; u.i = 0; u.f = (float)a[0].as_float;
+    return turi_int(u.i);
+}
+static TuriValue native_mk_box_f64(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    union { double f; int64_t i; } u; u.f = a[0].as_float; return turi_int(u.i);
+}
+
+/* hash [K] -- content hash matching stdlib/typeclass-hash.tur. */
+static TuriValue native_hash_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    const char *s = a[0].tag == TURI_CSTR ? a[0].as_cstr
+                                          : (const char *)(intptr_t)a[0].as_int;
+    return turi_int((int64_t)tur_hamt_hash_str(s ? s : ""));
+}
+static TuriValue native_hash_f32(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    union { float f; int32_t i; } u; u.f = (float)a[0].as_float;
+    return turi_int((int64_t)u.i);
+}
+static TuriValue native_hash_f64(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    union { double f; int64_t i; } u; u.f = a[0].as_float; return turi_int(u.i);
+}
+
+/* Raw map bridges over the content-keyed HAMT.  The carrier shares Set's layout
+ * so set_hamt/set_wrap apply.  keyeq is the comparator address mk-cmp returned;
+ * owned is 0 for scalar keys. */
+static TuriValue native_map_assoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    /* (m h key val keyeq owned) */
+    if (n < 6) return n >= 1 ? a[0] : turi_nil();
+    Hamt *r = tur_hamt_set_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                (void *)(intptr_t)a[2].as_int,
+                                (void *)(intptr_t)a[3].as_int,
+                                (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int,
+                                (int64_t)a[5].as_int);
+    return set_wrap(r);
+}
+static TuriValue native_map_get_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    /* (m h key keyeq owned) */
+    if (n < 5) return turi_int(0);
+    void *v = tur_hamt_get_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                (void *)(intptr_t)a[2].as_int,
+                                (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
+                                (int64_t)a[4].as_int);
+    return turi_int((int64_t)(intptr_t)v);
+}
+static TuriValue native_map_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 5) return turi_bool(false);
+    return turi_bool(tur_hamt_has_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                       (void *)(intptr_t)a[2].as_int,
+                                       (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
+                                       (int64_t)a[4].as_int));
+}
+static TuriValue native_map_dissoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 5) return n >= 1 ? a[0] : turi_nil();
+    Hamt *r = tur_hamt_del_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                (void *)(intptr_t)a[2].as_int,
+                                (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
+                                (int64_t)a[4].as_int);
+    return set_wrap(r);
+}
+/* Explicit-hash content API (map-*-eq, no ownership flag) over tur_hamt_*_eq.
+ * The comparator is mk-cmp's C address; the key is raw (:K, == carrier for
+ * scalars).  A forced-collision test drives these with a controlled hash. */
+static TuriValue native_map_assoc_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    /* (m h key val keyeq) */
+    if (n < 5) return n >= 1 ? a[0] : turi_nil();
+    Hamt *r = tur_hamt_set_eq(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                              (void *)(intptr_t)a[2].as_int,
+                              (void *)(intptr_t)a[3].as_int,
+                              (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int);
+    return set_wrap(r);
+}
+static TuriValue native_map_get_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    /* (m h key keyeq) */
+    if (n < 4) return turi_int(0);
+    void *v = tur_hamt_get_eq(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                              (void *)(intptr_t)a[2].as_int,
+                              (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int);
+    return turi_int((int64_t)(intptr_t)v);
+}
+static TuriValue native_map_has_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return turi_bool(false);
+    return turi_bool(tur_hamt_has_eq(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                     (void *)(intptr_t)a[2].as_int,
+                                     (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int));
+}
+static TuriValue native_map_dissoc_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return n >= 1 ? a[0] : turi_nil();
+    Hamt *r = tur_hamt_del_eq(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                              (void *)(intptr_t)a[2].as_int,
+                              (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int);
+    return set_wrap(r);
+}
+static TuriValue native_map_count(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    return turi_int((int64_t)tur_hamt_count(set_hamt(a[0])));
+}
+static TuriValue native_map_merge(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return n >= 1 ? a[0] : turi_nil();
+    return set_wrap(tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
+}
+static TuriValue native_map_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_nil();
+    tur_hamt_free(set_hamt(a[0]));
+    free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+/* tur-map-homog__ -- compile-time homogeneity check; a :nil no-op at runtime
+ * (the #map{...}/hamt-of lowering emits it).  Its inline-C body is `(void)a;
+ * (void)b;` with no return, which the simple inline-C executor doesn't cover. */
+static TuriValue native_map_homog(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud; return turi_nil();
+}
+
+static void wk_register_map_natives(TuriEnv *env) {
+    /* MapKey[K].mk-cmp -- bool(*)(int64,int64) carrier comparator address. */
+    turi_env_register_native(env, "__inst_MapKey_mk_hycmp_int",     native_mk_cmp_int,  NULL);
+    turi_env_register_native(env, "__inst_MapKey_mk_hycmp_cstr",    native_mk_cmp_cstr, NULL);
+    turi_env_register_native(env, "__inst_MapKey_mk_hycmp_float",   native_mk_cmp_f64,  NULL);
+    turi_env_register_native(env, "__inst_MapKey_mk_hycmp_float32", native_mk_cmp_f32,  NULL);
+    /* MapKey[K].mk-box -- int/bool are plain bodies; only cstr/float need a native. */
+    turi_env_register_native(env, "__inst_MapKey_mk_hybox_cstr",    native_mk_box_cstr, NULL);
+    turi_env_register_native(env, "__inst_MapKey_mk_hybox_float",   native_mk_box_f64,  NULL);
+    turi_env_register_native(env, "__inst_MapKey_mk_hybox_float32", native_mk_box_f32,  NULL);
+    /* Hash[K] -- int/bool plain; cstr/float hash by content/bits. */
+    turi_env_register_native(env, "__inst_Hash_hash_cstr",    native_hash_cstr, NULL);
+    turi_env_register_native(env, "__inst_Hash_hash_float",   native_hash_f64,  NULL);
+    turi_env_register_native(env, "__inst_Hash_hash_float32", native_hash_f32,  NULL);
+    /* Raw runtime bridges + count/merge/free. */
+    turi_env_register_native(env, "map-assoc-eq-o",  native_map_assoc_eq_o,  NULL);
+    turi_env_register_native(env, "map-get-eq-o",    native_map_get_eq_o,    NULL);
+    turi_env_register_native(env, "map-has-eq-o?",   native_map_has_eq_o,    NULL);
+    turi_env_register_native(env, "map-dissoc-eq-o", native_map_dissoc_eq_o, NULL);
+    turi_env_register_native(env, "map-assoc-eq",    native_map_assoc_eq,    NULL);
+    turi_env_register_native(env, "map-get-eq",      native_map_get_eq,      NULL);
+    turi_env_register_native(env, "map-has-eq?",     native_map_has_eq,      NULL);
+    turi_env_register_native(env, "map-dissoc-eq",   native_map_dissoc_eq,   NULL);
+    turi_env_register_native(env, "map-count",       native_map_count,       NULL);
+    turi_env_register_native(env, "map-merge",       native_map_merge,       NULL);
+    turi_env_register_native(env, "map-free",        native_map_free,        NULL);
+    turi_env_register_native(env, "tur-map-homog__", native_map_homog,       NULL);
+}
+
+/* -------------------------------------------------------------------------
  * Slice operations
  * Slice represented as int64_t[2]: [0]=data ptr, [1]=len
  * ---------------------------------------------------------------------- */
@@ -6950,6 +7177,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
         /* Register native HAMT implementations so persistent map operations
          * work correctly in interpreter mode. */
         wk_register_hamt_natives(env);
+        wk_register_map_natives(env);
         /* Register native safe.tur stdlib implementations. */
         wk_register_safe_natives(env);
         /* Register native overrides for typeclass instance methods with inline-C bodies. */
