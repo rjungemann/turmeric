@@ -15,14 +15,35 @@
 > now passes under `--interpret` and is on the `run-turi.sh` allowlist;
 > interpreter harness 938 -> 939, 0 failed; compiled 1573/0, parity gate clean.
 >
-> **Separate, still-open observation (not this report):** a *type-changing*
-> ascription on a literal, e.g. `(let [x :int 7] (:: x :float))`, still differs
-> (compiled `3.45846e-323` vs interpret `7`). That is not a Map value carrier --
-> it is an int-typed value ascribed to a different primitive, which lowers
-> through a different (numeric) path in the interpreter than the compiled `::`.
-> Filed mentally as a distinct follow-up; it does not affect map values, whose
-> ascription is same-type (`map-get` already returns `:V`) over a type-erased
-> carrier.
+> **Separate observation -- investigated, found INHERENT (not fixed):** a
+> *type-changing* ascription on a literal, e.g. `(let [x :int 7] (:: x :float))`,
+> also diverges (compiled `3.45846e-323` vs interpret `7`). It is a *different*
+> node: the elaborator lowers a kind-changing `::` to **`EX_REINTERPRET`** (a
+> same-size scalar bit-reinterpret), which the interpreter evaluates as a
+> transparent no-op. A spike to make it actually reinterpret was attempted and
+> **reverted** after proving it cannot be done consistently:
+> - The interpreter is **tag-preserving** where the compiled carrier is raw
+>   int64. A float boxed into an int64 carrier (an ADT/cons/tyvar slot, or
+>   `(:: f int)`) stays a `TURI_FLOAT` and is read back directly with **no unbox
+>   reinterpret** (`typed-slots/cons-float` reads `.head` of a `Cons[float]`
+>   straight). So **float->int must stay transparent**, else clean floats turn
+>   into their int bits (`.head` printed `4609434218613702656` instead of `1.5`;
+>   broke `cons-float`, `tcons-of`, `adt-float-payload-poly`, `adt-poly-boundary`,
+>   `poly-closure-result-tyvar-float`).
+> - With float->int transparent, **int->float must also stay transparent**, else
+>   a carrier round-trip like `(:: (:: 42 i32) f32)` then back to `i32`
+>   (`typed-slots/ascribe-reinterpret`) reinterprets `42` to a denormal on the
+>   way out but cannot reverse it, yielding `5.88545e-44` instead of `42`.
+> - A `TURI_INT` cannot be distinguished as "a genuine integer" vs "a carrier
+>   holding float bits", so there is no self-consistent partial reinterpret.
+>
+> Fully transparent is therefore the only correct choice, and `(:: 7 :float)`
+> printing `7` (not the denormal) is **inherent to the tagged value model** --
+> the same accepted class as `(:: 7.1 :int)` giving `7.1`. Left as-is with an
+> explanatory comment on `case EX_REINTERPRET`. (Genuinely closing it would
+> require the interpreter to carry a separate "this int is a float carrier" bit,
+> i.e. a typed-carrier value model -- a much larger change with no fixture
+> demanding it.)
 
 > **Found while executing TI10 Tier A** (map scalar-key natives). Tier A wired
 > the key side (`mk-cmp`/`mk-box`/`hash` + the `map-*-eq[-o]` bridges), which

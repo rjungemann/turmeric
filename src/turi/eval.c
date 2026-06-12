@@ -4179,8 +4179,22 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
     }
     case EX_REINTERPRET:
-        /* Compiler-only in TS2. Keep interpreter traversal exhaustive until a
-         * later phase needs runtime reinterpret semantics too. */
+        /* A same-size scalar bit-reinterpret on the compiled path (raw int64
+         * carrier).  It stays TRANSPARENT here -- and must.  The interpreter is
+         * tag-preserving: a float boxed into an int64 carrier (ADT/cons/tyvar
+         * slot, or `(:: f int)`) stays a TURI_FLOAT and is read back directly,
+         * with no unbox reinterpret.  Any attempt to actually reinterpret one
+         * direction breaks the round-trips that rely on tag preservation
+         * (typed-slots/cons-float reads `.head` of a Cons[float] with no
+         * reinterpret; typed-slots/ascribe-reinterpret round-trips i32<->f32 and
+         * float<->carrier).  Because a `TURI_INT` cannot be distinguished as
+         * "a genuine integer" vs "a carrier holding float bits", there is no
+         * self-consistent partial reinterpret -- fully transparent is the only
+         * correct choice.  Consequence: a literal `(:: 7 :float)` prints `7`
+         * here but the bit pattern `3.45846e-323` compiled.  That divergence is
+         * inherent to the tagged value model (same class as `(:: 7.1 :int)`
+         * giving `7.1`), not a bug -- see
+         * docs/reported/turi-map-nonint-value-carrier-ascription.md. */
         return eval_expr(env, frame, e->as.reinterpret_.expr);
 
     /* --- Phase 2: type ascription is transparent at runtime, except that it
