@@ -61,7 +61,7 @@ let-binding `>>>` segfault seen while validating is the orthogonal
 
 ### `^fat` let-binding of a runtime `ptr<void>` fat closure re-shimmed as a bare fn (FIXED)
 
-[`../archive/fat-shim-void-ptr-calls-bare-not-fat.md`](../archive/fat-shim-void-ptr-calls-bare-not-fat.md)
+[`../archive/history/fat-shim-void-ptr-calls-bare-not-fat.md`](../archive/history/fat-shim-void-ptr-calls-bare-not-fat.md)
 
 A `^fat` let-binding carrying a runtime `ptr<void>` fat closure but annotated
 with a concrete `(fn ...)` type (e.g. `^fat sf : (fn [ptr<void>] #{} ptr<void>)
@@ -182,7 +182,7 @@ tracked in [`cascade-struct-redef-non-identical-blocks.md`](cascade-struct-redef
 
 ### File-scope inline-C struct redefinitions across non-identical blocks (FIXED)
 
-[`../archive/cascade-struct-redef-non-identical-blocks.md`](../archive/cascade-struct-redef-non-identical-blocks.md)
+[`../archive/history/cascade-struct-redef-non-identical-blocks.md`](../archive/history/cascade-struct-redef-non-identical-blocks.md)
 
 The previous file-scope inline-C dedup keyed on whole-block normalized text,
 which only collapsed byte-identical blocks across modules. The tourist
@@ -207,7 +207,7 @@ the existing byte-identical case in
 
 ### `cons` builtin rejected `:cstr` head (FIXED)
 
-[`../archive/cons-builtin-rejects-cstr-head.md`](../archive/cons-builtin-rejects-cstr-head.md)
+[`../archive/history/cons-builtin-rejects-cstr-head.md`](../archive/history/cons-builtin-rejects-cstr-head.md)
 
 The user-callable `cons` builtin (added in `bc2074ad` to make project-mode
 `defmodule` reach the runtime list constructor without stdlib auto-load)
@@ -223,7 +223,7 @@ opaque handle, pointer, int) round-trips. Regression-covered by
 
 ### "unterminated list" caret ribbon spans opener-to-EOF (FIXED)
 
-[`../archive/unterminated-list-caret-anchors-outermost.md`](../archive/unterminated-list-caret-anchors-outermost.md)
+[`../archive/history/unterminated-list-caret-anchors-outermost.md`](../archive/history/unterminated-list-caret-anchors-outermost.md)
 
 `read_seq` in `src/compiler/reader.c` emitted its "unterminated list
 (missing ')')" diagnostic with a `Span` running from the opener to the
@@ -240,7 +240,7 @@ rediagnosis-as-source-bug.
 
 ### `tur run` aborts on Justfile `alias`, silently disabling snapshot-drift guard (FIXED)
 
-[`../archive/tur-run-alias-breaks-snapshot-ci-guard.md`](../archive/tur-run-alias-breaks-snapshot-ci-guard.md)
+[`../archive/history/tur-run-alias-breaks-snapshot-ci-guard.md`](../archive/history/tur-run-alias-breaks-snapshot-ci-guard.md)
 
 `tur run`'s embedded Justfile parser treated `alias NAME := TARGET` as an
 unsupported feature and aborted the whole-file parse, so every recipe

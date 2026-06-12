@@ -339,6 +339,28 @@ Post-v0.19.1 followup sweep (2026-06-11):
 - **[typeclass-associated-types-missing.md](history/typeclass-associated-types-missing.md)** -- Associated type members on typeclasses; minimal milestone landed (single associated type, dictionary-free type-level projection); RESOLVED
 - **[variadic-hkt-rows-missing.md](history/variadic-hkt-rows-missing.md)** -- Variadic HKT rows via `^&` row-kinded parameters; IMPLEMENTED (all six layers landed)
 
+Post-v0.19.1 churn sweep (2026-06-11):
+
+- **[bare-fat-result-monomorphization-plan.md](history/bare-fat-result-monomorphization-plan.md)** -- Intra-module non-recursive float register class via per-call-site monomorphization; landed 2026-06-10
+- **[fn-type-colons-sweet-exp-instances-plan.md](history/fn-type-colons-sweet-exp-instances-plan.md)** -- `fn`-type colon codemod sweet-exp coverage extended to `definstance`/`defclass`/`defprotocol`; landed in `f8c12dba`
+- **[minikanren-2-core-operators-plan.md](history/minikanren-2-core-operators-plan.md)** -- miniKanren-style example project and tutorial guide; shipped in `07380d06`
+- **[cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md](history/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md)** -- Cross-module wrapper macro vec-arg elaborated as expression; RESOLVED via macro-expansion stack fix (`0564e578`)
+- **[macro-cannot-emit-inline-c-block.md](history/macro-cannot-emit-inline-c-block.md)** -- Macro emitting CBLOCK-headed list now auto-wrapped with `do`; RESOLVED in `0564e578`
+- **[macro-cannot-emit-multiple-top-level-forms.md](history/macro-cannot-emit-multiple-top-level-forms.md)** -- Top-level `(do ...)` splices into program-items; RESOLVED in `5d512dfe`
+- **[macro-unquote-in-type-position-rejected.md](history/macro-unquote-in-type-position-rejected.md)** -- `substitute_params` recurses into `F_TYPE_ANN` payload; RESOLVED in `3166316d`
+- **[row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md](history/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md)** -- Row-polymorphic defn call codegen; RESOLVED via `emit_abi_call_is_generic_relay` ignoring rows
+- **[serial-shift-unsupported-context-miscompile.md](history/serial-shift-unsupported-context-miscompile.md)** -- TUR-E0706 hard error + prelude-gate broadened; RESOLVED in `0b141834`
+- **[stm-or-else-compiled-branches-are-noop-stubs.md](history/stm-or-else-compiled-branches-are-noop-stubs.md)** -- `EX_STM` now emits body inline (TI3+TI4); RESOLVED in `7b8fd8e9`
+- **[stm-tvar-cas-swap-modify-compiled-path-broken.md](history/stm-tvar-cas-swap-modify-compiled-path-broken.md)** -- STM functions emitted in `emit_module.c` + `modify` lowered in elaborator; RESOLVED in `7b8fd8e9`
+- **[top-level-def-init-dropped.md](history/top-level-def-init-dropped.md)** -- Top-level `def` inits emitted to `__tur_module_def_init` constructor; RESOLVED in `0a904851`
+- **[turi-inline-c-ignores-comparison-operator.md](history/turi-inline-c-ignores-comparison-operator.md)** -- `ic_eval_binexpr` precedence climbing for trailing binops; RESOLVED in `7b8fd8e9`
+- **[typeclass-constrained-defn-rejected.md](history/typeclass-constrained-defn-rejected.md)** -- Constraint-syntax parsing + null-def check + struct-receiver carrier skip; RESOLVED in `4188ff27`/`1f2101f6`/`a7659144`
+- **[cascade-struct-redef-non-identical-blocks.md](history/cascade-struct-redef-non-identical-blocks.md)** -- Per-declaration dedup for cascade struct redefs; RESOLVED in `2cff84ac`
+- **[cons-builtin-rejects-cstr-head.md](history/cons-builtin-rejects-cstr-head.md)** -- `cons_wildcard` in `elab_call.c` accepts `:cstr` heads; RESOLVED in `900f9481`
+- **[fat-shim-void-ptr-calls-bare-not-fat.md](history/fat-shim-void-ptr-calls-bare-not-fat.md)** -- Fat-shim `:ptr<void>` call dispatch; RESOLVED in `599706b1` (PR #311)
+- **[tur-run-alias-breaks-snapshot-ci-guard.md](history/tur-run-alias-breaks-snapshot-ci-guard.md)** -- `tur run` alias support in `justrun.c`; RESOLVED in `54c14891`
+- **[unterminated-list-caret-anchors-outermost.md](history/unterminated-list-caret-anchors-outermost.md)** -- Unterminated-list caret anchored at single char; RESOLVED in `fa960cd2`
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

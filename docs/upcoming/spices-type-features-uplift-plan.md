@@ -96,28 +96,96 @@ and it exercises the same substructural machinery U1 leans on for
 across more code paths than ECS alone, and the bugs it surfaces are
 cheaper to fix before five spices depend on the same paths.
 
-### P2 -- `derive` for typeclass instances (`derive-Encode`, `derive-Decode`, ...)
+### P2a -- `derive-json` macro (narrow, ships first)
 
-**Blocks:** U2 scaling, U5's "json fixture corpus" validation.
+**Blocks:** U2 json work in its planned form. **Hard prereq for U2.**
 
-Today every typeclass instance is a hand-written `definstance`. For four
-or five in-tree types this is fine -- the json spice has maybe a dozen
-encodable types in its test corpus. For *external* users of U2, hand-
-writing `definstance Encode <MyAppStruct>` for every domain struct is a
-non-starter.
+Before generalizing to a `derive` framework (P2b), ship the concrete
+`derive-json` macro for json's `Encode`/`Decode` classes specifically.
+Rationale: a typeclass-based serde surface where every consumer
+hand-writes `(definstance Encode MyStruct ...)` is *worse* than the
+status quo `to-json-mystruct` per-type function -- you've added
+dispatch overhead without removing the boilerplate. The derive macro
+is what makes the typeclass collapse pay off.
 
-Concrete proposal: a `derive` macro that walks a `defstruct`/`defdata`
-declaration at elaboration time and emits the matching `definstance` for
-a named class (`Encode`, `Decode`, `Eq`, `Show`). The class itself
-declares a `derive-template` hook (an inline-quoted body keyed by the
-shape of the type) so each class controls its own derivation -- coherent
-dispatch stays coherent because the elaborator still owns instance
-resolution.
+Doing the narrow version first also de-risks the general `derive`
+design. Json forces every interesting case onto the table:
 
-The hard part is `defdata` -- sum-of-products derivation needs the
-constructor list at macro-expansion time. `str->sym` (shipped) plus the
-existing constructor introspection in `elab_macros.c` covers it; the
-remaining work is the surface.
+- `defstruct` (product) -- field name -> json key, field type -> recursive encode.
+- `defdata` (sum-of-products) -- needs a discriminator key convention
+  (`":tag"` field, externally-tagged vs internally-tagged), and the
+  constructor list must be available at macro-expansion time. `str->sym`
+  (shipped) + the constructor introspection already in `elab_macros.c`
+  is sufficient.
+- `defopaque` -- by default, refuse: an opaque type's wire representation
+  is *not* its carrier. Require the user to write a hand instance, or
+  to opt in with `(derive-json MyOpaque :as :carrier)` for the explicit
+  "yes, encode as the underlying int/string" case.
+- Generic types (`Vec`, `Option`, `Result`, `Map`) -- ship hand-written
+  instances in the json spice itself; `derive-json` does not try to
+  derive over type constructors in v1.
+- Recursive types (`Fix F`) -- defers to the underlying functor's
+  instance; lands with U5's `Fix`-based json AST work.
+
+Surface:
+
+```turmeric
+(defstruct User [id : Int32  name : Str  email : Str])
+(derive-json User)
+;; emits both (definstance Encode User ...) and (definstance Decode User ...)
+
+;; opt out of one direction:
+(derive-json User :only [:encode])
+
+;; sum types with externally-tagged discriminator (default):
+(defdata Event
+  (Click  [x : Int32  y : Int32])
+  (Scroll [dy : Int32]))
+(derive-json Event)
+;; encodes as {"Click": {"x": ..., "y": ...}}
+```
+
+Open questions to decide *during* P2a (not before):
+- Field-name policy: identity, camelCase, snake_case? Default identity,
+  override with `:rename-fields :camel`.
+- Missing-field policy on decode: error, or use `defstruct` default
+  values when present? Default error; opt in with `:optional`.
+- Whether to honor a `#[json :skip]` per-field annotation in v1.
+
+These are surface decisions; the elaboration machinery is the same
+either way.
+
+Deliverables for P2a:
+1. The `derive-json` macro in the json spice (not stdlib -- it depends
+   on json's classes).
+2. A fixture corpus covering all four cases above (product, sum, opaque
+   opt-in, generic via hand-written instance).
+3. A "what would generalize" memo at the end -- the bits of P2a that
+   should become reusable infrastructure feed directly into P2b.
+
+### P2b -- General `derive` framework
+
+**Blocks:** U2 scaling beyond json (`Eq`, `Show`, future spices).
+
+After P2a ships and its rough edges show, generalize: a `derive` macro
+keyed by class name, where each class declares a `derive-template` hook
+(an inline-quoted body keyed by the shape of the type). The elaborator
+still owns instance resolution -- coherent dispatch stays coherent.
+
+```turmeric
+(derive Encode User)
+(derive Decode User)
+(derive Eq Event)
+(derive Show Event)
+```
+
+`derive-json` from P2a becomes a thin shim:
+`(derive-json T) == (do (derive Encode T) (derive Decode T))`.
+
+The hard part is keeping each class's template ergonomic to *write*.
+P2a's experience with json determines whether the template hook is an
+inline-quoted body, a callback into the macro, or a per-class
+`(definstance Derivable ...)` blob. Don't pick until P2a ships.
 
 ### P3 -- Sized-types index made load-bearing (SZ6)
 
@@ -192,7 +260,8 @@ marker on the closer. Keeps the U1 PRs small and uniform.
 |---|---|---|
 | P0 typed-field rows | U3, parts of U2/U5 | U3 ships in its planned form |
 | P1 `:writes` enforcement | none directly | Stress-tests substructural for U1 |
-| P2 `derive` macro | U2 scaling | U2 ships as a public-facing surface |
+| P2a `derive-json` | U2 json (hard prereq) | U2 json collapses to a usable surface |
+| P2b general `derive` | U2 beyond json | U2 generalizes to `Eq`/`Show`/future classes |
 | P3 SZ6 sized index | U4 guarantees | U4 errors actually bite |
 | P4 `match-fix` sugar | none (sugar only) | U5 readability |
 | P5 negative-fixture harness | U1/U3/U4 validation | "negative fixture" deliverables become real |
@@ -202,10 +271,13 @@ marker on the closer. Keeps the U1 PRs small and uniform.
 
 P1 (`:writes`), P3 (SZ6), and P5 (negative fixtures) can land any time
 relative to the phases without forcing a phase rewrite -- they upgrade
-guarantees rather than change signatures. P0 (typed rows), P2 (derive),
-P4 (match-fix), and P6 (FFI shim) all change *surfaces* and should
-land before their dependent phase to avoid double-touching the same
-spice files.
+guarantees rather than change signatures. P0 (typed rows), P2a
+(`derive-json`), P4 (match-fix), and P6 (FFI shim) all change
+*surfaces* and should land before their dependent phase to avoid
+double-touching the same spice files. P2b (general `derive`) can land
+after U2 ships -- the hand-written `definstance` fallback covers the
+gap for the other U2 typeclasses (`Renderer`, `Handler`, `Color`)
+which only need a handful of instances each.
 
 ## Phasing
 
@@ -232,9 +304,26 @@ Targets (in priority order; each is one small PR per spice):
    conn.
 5. **`valkey`** -- `Client` opaque; pipelined replies are `^&out` so
    you can't read them twice or drop them on the floor.
-6. **`raylib`** -- `Texture`, `Sound`, `Image`, `Model` opaques (these
-   already have C structs but the Turmeric surface stores them as
-   `:int`); `^&` on the draw-call path.
+6. **`raylib`** + **`sdf-raylib` downstream surface** --
+   `Texture`, `Sound`, `Image`, `Model` opaques on the base raylib
+   spice (these already have C structs but the Turmeric surface
+   stores them as `:int`); `^&` on the draw-call path. The
+   `sdf-raylib` spice
+   ([archived plan](../archive/history/solid-modeling-sdf-raylib-plan.md),
+   Phases 1-5 complete 2026-05-28) shipped its own raylib touch
+   points -- `Shader`, `RenderTexture`, GLSL-emitted fragment shaders
+   exposed through `raylib/integration.tur` -- and those need the
+   same `defopaque` + linear/`^&` treatment in this PR, not deferred.
+   File-by-file scope:
+   - Base raylib: `Texture`, `Sound`, `Image`, `Model`, `Font`,
+     `Camera`, `Color`.
+   - sdf-raylib's `raylib/integration.tur` and `glsl/codegen.tur`:
+     `Shader` (linear -- `UnloadShader` consumes), `RenderTexture`
+     (linear -- `UnloadRenderTexture` consumes), `Mesh`/`Material`
+     if they're exposed (currently inline C; check before annotating).
+   - sdf-raylib's `ColoredSDF` handle: leave alone -- it's already an
+     opaque-flavored AST and not a raylib resource; reshape that under
+     U5 (Fix-based AST) instead.
 
 Rule of thumb: if the C side has a `*_close`/`*_unload`/`*_finalize`,
 the Turmeric side gets a linear opaque.
@@ -300,6 +389,59 @@ Targets:
 Validation: a fixture per target that *fails to compile* with a
 known-wrong row -- the row check is the deliverable, not the runtime
 behavior.
+
+#### U3 decoder model -- borrow from `stdlib/schema.tur`
+
+The static row in `Result<#row{...}>` describes *what the caller
+asked for*; the wire actually delivers tagged bytes. Somewhere the
+two have to meet, and that's the decoder. `stdlib/schema.tur` is a
+near-fit for the shape U3 wants and is worth copying in spirit rather
+than reimplementing from scratch:
+
+- **Primitive vocabulary already settled.** Schema commits to
+  `:cstr`/`:int`/`:float`/`:bool`/`:null` as its scalar set
+  (`SCHEMA_STR`/`_INT`/`_FLOAT`/`_BOOL`/`_NIL` discriminants in
+  `stdlib/schema.tur:36-49`). U3 should pick the same primitives so
+  json, postgres, sqlite, and http all share one decode model rather
+  than each spice inventing its own scalar enum.
+- **Validation-applicative error accumulation.** `SCHEMA_AP`
+  (`stdlib/schema.tur:78`) accumulates *all* per-field failures with
+  dot-separated paths instead of failing fast. This is exactly the
+  behavior a "decode this whole pg row" pass wants: a row with two
+  wrong-typed columns should report both, not just the first.
+- **Boundary anchored on a tagged representation.** Schema decodes
+  off the tagged JSON node (kind = 0..6), because raw Turmeric int64s
+  carry no runtime type tag. U3's postgres/sqlite decoders need the
+  same anchor -- the wire protocol's OID tags for postgres, the
+  column-type byte for sqlite -- so the per-row decoder is a function
+  `Row -> Result<#row{...}, Vec<DecodeError>>` shaped the same way
+  `schema-decode` is.
+
+What U3 adds on top of `tur/schema`:
+
+- **The static row drives schema construction.** Today `tur/schema`
+  schemas are built imperatively with `schema/object-new` +
+  `schema/field`. Under U3, the row literal `#row{id:Int32 name:Str}`
+  is *both* the static type carried in the `Result` phantom and the
+  blueprint for a derived runtime decoder. A `derive-decoder` macro
+  (sibling of P2a `derive-json`) walks the row at elaboration time
+  and emits the equivalent `schema/object-new` + `schema/field` calls
+  -- so the runtime decoder is generated from the static row, and the
+  two cannot disagree.
+- **One decoder model across U3 backends.** json's `Decode` typeclass
+  from P2a, postgres's row decoder, sqlite's row decoder, and http's
+  header decoder should all return `Result<T, Vec<DecodeError>>` with
+  the same `DecodeError` shape (path + expected-type + got-tag). A
+  caller that needs to switch postgres for sqlite shouldn't have to
+  rewrite its error-handling layer.
+
+Open mechanical question (decide in U3, not before): does U3 reuse
+`stdlib/schema.tur` directly, or factor out a smaller
+`stdlib/decode.tur` core (just the validation-applicative + error
+type) and have `tur/schema` rebuild on top of it? The first is faster
+to ship; the second is cleaner long-term because `tur/schema`'s
+runtime-built schemas and U3's row-derived schemas are genuinely
+different use cases sharing a kernel.
 
 ### Phase U4 -- Sized types where dimensions are known
 
@@ -424,14 +566,24 @@ Per phase:
 
 ## Open questions
 
-- Do we land U2's json typeclasses before or after a `derive-json`
-  macro? Manual `definstance` is fine for the four or five types the
-  in-tree spices care about; external users would want the derive.
-- For U3 row types on `postgres`/`sqlite`, do we carry the column
+- ~~For U3 row types on `postgres`/`sqlite`, do we carry the column
   types as Turmeric primitives (`Int32`/`Float64`/`Str`) or as opaque
-  `PgInt4`/`PgFloat8` newtypes? The former is more ergonomic; the
-  latter catches client/server type-coercion mistakes.
-- The opaque-handle pass in U1 will touch `raylib` -- coordinate with
-  the `sdf-raylib` Phase 2 colored-SDF work
-  (`memory: project_sdf_raylib_phase`) so we don't double-regen the
-  fixture set.
+  `PgInt4`/`PgFloat8` newtypes?~~ **Resolved: Turmeric primitives.**
+  Ergonomics win; opaque per-vendor scalar types would force every
+  domain-level helper through a `pg-int->int32` shim and lose the
+  cross-backend uniformity that lets the same row schema describe a
+  `Result` from postgres or sqlite (or a json object, or an http
+  body). The client/server coercion-mismatch case the opaques would
+  have caught is better handled at the *decode* boundary by an
+  accumulating validator that reports per-column failures with
+  field-path context -- which is what `stdlib/schema.tur` already does
+  for json bodies. See "U3 decoder model" below.
+- ~~The opaque-handle pass in U1 will touch `raylib` -- coordinate
+  with the `sdf-raylib` Phase 2 colored-SDF work.~~ **Resolved:**
+  sdf-raylib Phases 1-5 are complete (archived plan:
+  [docs/archive/history/solid-modeling-sdf-raylib-plan.md](../archive/history/solid-modeling-sdf-raylib-plan.md)),
+  so there is no concurrent work to time against. U1 target 6 now
+  enumerates the raylib handles sdf-raylib introduced (`Shader`,
+  `RenderTexture`) so they get the same `defopaque` + linear
+  treatment in the same PR rather than being left as `:int` islands
+  in an otherwise-typed surface.
