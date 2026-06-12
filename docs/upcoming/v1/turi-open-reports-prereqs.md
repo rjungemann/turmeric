@@ -268,13 +268,39 @@ asserts the toggle: flag-off leaves `mutmap-new` unbound (`rc=1`), flag-on loads
 enable it. Uses `(load ...)` (not `turi_eval_file`) so each carved module gets a
 distinct `file_id` (defmodule-per-file boundary).
 
-### Prereq 3d -- carve markers for the genuine-divergence buckets
+### Prereq 3d -- carve markers for the genuine-divergence buckets (LANDED 2026-06-12)
 
 The move/linearity-checker divergence (~20) and `if condition must be bool, got
-int` (13) are interpreter/type-check divergences, not quick fixes. Add
-`requires.tur-only` markers to those fixtures now so the flip can land green with
-them explicitly excluded, separating the "carve" decision from the "fix"
+int` (13) were interpreter/type-check divergences, not quick fixes. The plan was
+to add `requires.tur-only` markers to those fixtures so the flip can land green
+with them explicitly excluded, separating the "carve" decision from the "fix"
 decision and keeping the denylist honest.
+
+**Landed**, but the buckets shrank dramatically since the report was measured --
+the prelude/interpreter work (3a/3c and the typed-stdlib preload) resolved almost
+all of them. Re-measured 2026-06-12 by sweeping every positive (non-`errors/`)
+fixture under `--interpret` (`./build/tur`, marker-bearing dirs excluded):
+
+- **move/linearity divergence: 0 remain.** No positive fixture now fails with
+  `TUR-E0100`/`E0101`, "linear value ... dropped/used after being consumed", or
+  "was moved and cannot be used again" under `--interpret`. The interpreter no
+  longer diverges from the compiled substructural checker on these. Nothing to
+  carve; the `errors/*` negative fixtures (e.g. `errors/linear-dropped`) still
+  legitimately assert these diagnostics and are untouched.
+- **`if condition must be bool, got int`: 2 remain**, both carved with
+  `requires.tur-only`:
+  - `contract-release` -- the tree-walker's type checker does not see
+    `contract-enabled?` as returning bool, so `(if (contract-enabled?) ...)` is
+    rejected. Compiled prints `contracts-enabled`.
+  - `result-question-op-sweet` -- the `?` operator desugars to an `if` on the
+    Result ok-ness carrier, type-checked as int under `--interpret` (also
+    inline-C-bound via its `u-ok`/`u-ok-val` helpers). Compiled prints `42/22`.
+
+Both pass on the compiled suite (`run.sh` ignores `requires.tur-only`, so they
+still run compiled and green); the marker only PASS-skips them under
+`run-turi.sh`'s denylist path (`tests/run-turi.sh:1042`). Each marker carries a
+one-line divergence reason. No other genuine-divergence bucket surfaced in the
+sweep, so the carve set is exactly these two.
 
 ---
 
@@ -294,11 +320,14 @@ decision and keeping the denylist honest.
 4. **2a (landed 2026-06-12)** -- HAMT `ctx` ABI: the `tur_hamt_*_eq_ctx` family
    plus `tests/test_hamt_eq_ctx.c` (ctest `tur_hamt_eq_ctx`). Mechanical
    runtime-C, no codegen/fixture churn; unblocks Tier B.
-5. **3b (audited 2026-06-12)** + **3c/3d** -- prelude unification groundwork.
-   3b's audit found the stub/module overlap already burned down (no deletions
-   pending). **3c** (opt-in `TUR_TURI_FULL_PRELUDE`) and **3d** (carve markers)
-   remain open; 3d is deferred until the denylist flip harness that would
-   consume `requires.tur-only` markers exists (adding them now is dead weight).
+5. **3b (audited 2026-06-12)** + **3c/3d (landed 2026-06-12)** -- prelude
+   unification groundwork. 3b's audit found the stub/module overlap already
+   burned down (no deletions pending). **3c** (opt-in `TUR_TURI_FULL_PRELUDE`)
+   landed; **3d** landed too -- the move/linearity bucket re-measured to 0 (the
+   interpreter no longer diverges there) and only 2 `if`-bool fixtures remain,
+   now carved `requires.tur-only` (`contract-release`,
+   `result-question-op-sweet`). `run-turi.sh` already consumes the marker
+   (`:1042`), so the carve is live, not dead weight.
 
 ### Status summary (2026-06-12)
 
@@ -314,4 +343,4 @@ decision and keeping the denylist honest.
 | 3a | **landed** | `tools/check_turi_native_parity.py` + carve-out + run.sh gate |
 | 3b | **audited** | overlap already burned down; no deletions pending |
 | 3c | **landed** | `TUR_TURI_FULL_PRELUDE=1` + `tests/run-turi-full-prelude.sh` |
-| 3d | deferred | needs the flip harness to consume the markers |
+| 3d | **landed** | move/linearity bucket re-measured to 0; 2 `if`-bool fixtures carved `requires.tur-only` |
