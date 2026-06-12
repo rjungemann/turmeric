@@ -1650,8 +1650,36 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         /* Left-associatively apply each argument: (ctor a b c) → (((ctor a) b) c) */
         Type *t = ctor_type;
         for (uint32_t ai = 1; ai < form->as.list.len; ai++) {
-            Type *arg_type = type_expr_from_form(e, form->as.list.items[ai], rec_name,
+            Form *arg_form = form->as.list.items[ai];
+            Type *arg_type = NULL;
+            /* SZ8 non-GADT: a Size GADT literal (Static N), (Add s s), or
+             * (Mul s s) appearing in any type-app argument slot lowers to a
+             * placeholder TY_INT type.  The actual size information lives in
+             * the retained Form (param_type_forms / ctor result_type_form),
+             * where size_term_from_form recovers it for SZ8 unification.
+             * Mirrors how GADT constructor return-type signatures (e.g.
+             * `(SizedVec (Static 0))`) are stored as raw Forms and consulted
+             * separately -- this extends the same treatment to defopaque /
+             * defstruct phantom indices and to function return-type slots. */
+            if (g_sized_types_enabled &&
+                    arg_form->tag == F_LIST &&
+                    arg_form->as.list.len >= 1 &&
+                    arg_form->as.list.items[0]->tag == F_SYM) {
+                const char *op = arg_form->as.list.items[0]->as.sym->name;
+                bool is_size_op = (strcmp(op, "Static") == 0 ||
+                                   strcmp(op, "Add")    == 0 ||
+                                   strcmp(op, "Mul")    == 0);
+                if (is_size_op &&
+                        size_term_from_form(e->arena, arg_form, NULL, NULL) != NULL) {
+                    Type *ph = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *ph = type_from_kind(TY_INT);
+                    arg_type = ph;
+                }
+            }
+            if (!arg_type) {
+                arg_type = type_expr_from_form(e, arg_form, rec_name,
                                                   type_params, type_param_kinds, n_type_params);
+            }
             if (!arg_type) return NULL;
 
             /* Variadic HKT rows: enforce that a row-of-types argument lands in
@@ -2505,11 +2533,26 @@ Expr *elab_open(Elab *e, const Form *call) {
             if (T->kind == TY_STRUCT && T->as.struct_.def == NULL) {
                 v_type = TYPE_INT;  /* type variable → int64_t */
             } else if (T->kind == TY_APP) {
-                v_type = ex2_peel_phantom_app(T);
-                /* If the peeled head is itself a free type variable, fall
-                 * back to int64_t (consistent with the bare-tyvar case). */
-                if (v_type.kind == TY_STRUCT && v_type.as.struct_.def == NULL) {
-                    v_type = TYPE_INT;
+                /* Peel iff the head is an ADT (SizedVec / defgadt path): call
+                 * sites accept bare nominal there, and 14+ stdlib entry
+                 * points are declared with bare param types.  For a
+                 * defopaque head (TY_STRUCT with a real def), keep the
+                 * applied form so signatures declared as `(Op n)` can
+                 * unify their `n` against the open's bound binder -- this
+                 * is the SizedBuf path and the eventual sized-world `(World n)`
+                 * path.  See docs/reported/pack-open-phantom-opaque-body-type-collapses.md. */
+                Type head = ex2_peel_phantom_app(T);
+                bool head_is_real_struct =
+                    head.kind == TY_STRUCT && head.as.struct_.def != NULL;
+                if (head_is_real_struct) {
+                    v_type = *T;
+                } else {
+                    v_type = head;
+                    /* If the peeled head is itself a free type variable, fall
+                     * back to int64_t (consistent with the bare-tyvar case). */
+                    if (v_type.kind == TY_STRUCT && v_type.as.struct_.def == NULL) {
+                        v_type = TYPE_INT;
+                    }
                 }
             } else {
                 v_type = *T;  /* use body type directly (by value) */

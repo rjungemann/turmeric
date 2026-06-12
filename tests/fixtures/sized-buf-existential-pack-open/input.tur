@@ -1,0 +1,21 @@
+; Closes the T5 fix in
+; docs/reported/pack-open-phantom-opaque-body-type-collapses.md:
+; (pack v (exists [n] (SizedBuf n))) then (open ... [n buf] ...) now
+; binds buf at (SizedBuf n) (the applied form), so call sites whose
+; param type mentions (SizedBuf n) -- e.g. sized-buf-len -- unify n
+; against the open's bound binder and type-check cleanly.
+;
+; Before the fix the open projected bare `SizedBuf`, which failed
+; TUR-E0001 with "expected (type-app SizedBuf tyvar), got SizedBuf".
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defn mk5 [] : (SizedBuf int)
+  (:: (sized-buf-new-zeroed 5) :SizedBuf))
+
+(defn main [] : int
+  (let [packed (pack (mk5) (exists [n] (SizedBuf n)))]
+    (open packed [n buf]
+      (println (sized-buf-len buf))))
+  0)

@@ -1,8 +1,15 @@
 ;;; tur/sized-buf -- SizedBuf: flat contiguous memory layout for sized types.
 ;;;
-;;; Wraps a single flat int64_t array with a runtime length.
+;;; Wraps a single flat int64_t array with a runtime length.  The handle
+;;; is :int at the C level; the public Turmeric type is
+;;; `(SizedBuf n)` -- a phantom-indexed defopaque whose `n` parameter
+;;; lets call sites pin and unify buffer lengths statically.  Two
+;;; `(SizedBuf n)` values appearing in the same signature must share
+;;; their `n`, so the SZ8 cross-parameter unifier rejects mismatched
+;;; literal sizes at compile time (e.g. `(sized-buf-copy! (.. : (SizedBuf
+;;; (Static 2))) (.. : (SizedBuf (Static 3))))`).
 ;;;
-;;; Since: Phase SZ2
+;;; Since: Phase SZ2; phantom `n` lift Phase SZ8/P3.
 ;; Phase SZ2: SizedBuf -- flat contiguous memory layout for sized types.
 ;;
 ;; SizedBuf wraps a single flat int64_t array with a runtime length.
@@ -21,20 +28,21 @@
 ;; (or on the caller's stack when used via sized-buf-with-stack).
 ;;
 ;; This file requires stdlib/sized.tur (for the Size type) to be loaded first.
-;; ===== Heap-allocated SizedBuf =====
-;;; sized-buf-new -- allocate a heap SizedBuf of n elements (uninitialized).
-;;;
-;;; Parameters:
-;;;   n -- number of elements to allocate
-;;;
-;;; Returns:
-;;;   Opaque pointer to the new SizedBuf.
-;;;
-;;; Example:
-;;;   (let [b (sized-buf-new 4)] ...)
-;;;
-;;; Since: Phase SZ2
-(defn sized-buf-new [n]
+
+;; ===== Phantom-indexed handle (P3 of ecs-e2c-sized-dense-needs-bounded-world) =====
+;;
+;; (SizedBuf n) is a defopaque whose carrier is :int (the raw C handle).
+;; All public accessors take and return (SizedBuf n); n is threaded as a
+;; phantom type parameter so two buffers that share `n` in a signature
+;; are guaranteed by the elaborator to have matching lengths.  Internal
+;; helpers prefixed `__sized-buf-*-raw` keep the original int-carried
+;; inline-C bodies; the public surface wraps them with ascription.
+
+(defopaque SizedBuf [n] :int)
+
+;; ===== Raw int-carried implementation (private) =====
+
+(defn __sized-buf-new-raw [n]
   #{Unsafe}
   : int
   ```c
@@ -43,20 +51,8 @@
   b->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
   return (int64_t)(intptr_t)b;
   ```)
-;;; sized-buf-new-zeroed -- allocate a heap SizedBuf of n elements, all zero.
-;;;
-;;; Parameters:
-;;;   n -- number of elements to allocate
-;;;
-;;; Returns:
-;;;   Opaque pointer to the new SizedBuf with all elements set to 0.
-;;;
-;;; Example:
-;;;   (let [b (sized-buf-new-zeroed 4)] ...)
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-new-zeroed [n]
+(defn __sized-buf-new-zeroed-raw [n]
   #{Unsafe}
   : int
   ```c
@@ -65,23 +61,8 @@
   b->data = n > 0 ? (int64_t *)calloc((size_t)n, sizeof(int64_t)) : NULL;
   return (int64_t)(intptr_t)b;
   ```)
-;;; sized-buf-free -- free a heap-allocated SizedBuf and its data.
-;;;
-;;; Do NOT call on a stack SizedBuf (from sized-buf-with-stack); those are
-;;; freed automatically when the scoped function returns.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer from sized-buf-new or sized-buf-new-zeroed
-;;;
-;;; Returns:
-;;;   nil
-;;;
-;;; Example:
-;;;   (sized-buf-free b)
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-free [b]
+(defn __sized-buf-free-raw [b]
   #{Unsafe}
   : nil
   ```c
@@ -89,43 +70,16 @@
   if (buf->data) free(buf->data);
   free(buf);
   ```)
-;; ===== Accessors =====
-;;; sized-buf-len -- return the number of elements in a SizedBuf.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer
-;;;
-;;; Returns:
-;;;   Element count as :int.
-;;;
-;;; Example:
-;;;   (sized-buf-len (sized-buf-new 8))  ; => 8
-;;;
-;;; Since: Phase SZ2
 
-
-(defn sized-buf-len [b]
+(defn __sized-buf-len-raw [b]
   #{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   return (int)buf->len;
   ```)
-;;; sized-buf-get -- bounds-checked element read; aborts on out-of-range index.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer
-;;;   i -- zero-based index (0 <= i < sized-buf-len b)
-;;;
-;;; Returns:
-;;;   The int64 value at position i.
-;;;
-;;; Example:
-;;;   (sized-buf-get b 0)  ; => first element
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-get [b i]
+(defn __sized-buf-get-raw [b i]
   #{Unsafe}
   : int
   ```c
@@ -135,25 +89,8 @@
   exit(1);
   return 0;
   ```)
-;;; sized-buf-set! -- bounds-checked element write; aborts on out-of-range index.
-;;;
-;;; Modifies the element in place and returns the same buffer pointer so
-;;; operations can be chained.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer
-;;;   i -- zero-based index
-;;;   v -- value to store
-;;;
-;;; Returns:
-;;;   The same buffer pointer b (for chaining).
-;;;
-;;; Example:
-;;;   (sized-buf-set! b 0 42)
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-set! [b i v]
+(defn __sized-buf-set!-raw [b i v]
   #{Unsafe}
   : int
   ```c
@@ -163,23 +100,8 @@
   exit(1);
   return b;
   ```)
-;; ===== Bulk operations =====
-;;; sized-buf-fill! -- set every element to v; returns the same buffer.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer
-;;;   v -- value to store in every slot
-;;;
-;;; Returns:
-;;;   The same buffer pointer b.
-;;;
-;;; Example:
-;;;   (sized-buf-fill! b 0)  ; zero-fill
-;;;
-;;; Since: Phase SZ2
 
-
-(defn sized-buf-fill! [b v]
+(defn __sized-buf-fill!-raw [b v]
   #{Unsafe}
   : int
   ```c
@@ -187,23 +109,8 @@
   for (int64_t i = 0; i < buf->len; i++) buf->data[i] = v;
   return b;
   ```)
-;;; sized-buf-copy! -- copy all elements from src into dst via memcpy.
-;;;
-;;; Both buffers must have the same length; aborts if they differ.
-;;;
-;;; Parameters:
-;;;   dst -- destination SizedBuf
-;;;   src -- source SizedBuf (same length as dst)
-;;;
-;;; Returns:
-;;;   The destination buffer pointer dst.
-;;;
-;;; Example:
-;;;   (sized-buf-copy! dst src)
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-copy! [dst src]
+(defn __sized-buf-copy!-raw [dst src]
   #{Unsafe}
   : int
   ```c
@@ -217,20 +124,8 @@
   memcpy(d->data, s->data, (size_t)d->len * sizeof(int64_t));
   return dst;
   ```)
-;;; sized-buf-sum -- sum all elements of a SizedBuf.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer
-;;;
-;;; Returns:
-;;;   Integer sum of all elements; 0 for an empty buffer.
-;;;
-;;; Example:
-;;;   (sized-buf-sum b)  ; => sum of elements
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-sum [b]
+(defn __sized-buf-sum-raw [b]
   #{Unsafe}
   : int
   ```c
@@ -239,20 +134,8 @@
   for (int64_t i = 0; i < buf->len; i++) s += buf->data[i];
   return s;
   ```)
-;;; sized-buf-min -- minimum element of a non-empty SizedBuf; aborts if empty.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer (must have at least one element)
-;;;
-;;; Returns:
-;;;   Minimum int64 element value.
-;;;
-;;; Example:
-;;;   (sized-buf-min b)  ; => smallest element
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-min [b]
+(defn __sized-buf-min-raw [b]
   #{Unsafe}
   : int
   ```c
@@ -262,20 +145,8 @@
   for (int64_t i = 1; i < buf->len; i++) if (buf->data[i] < m) m = buf->data[i];
   return m;
   ```)
-;;; sized-buf-max -- maximum element of a non-empty SizedBuf; aborts if empty.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer (must have at least one element)
-;;;
-;;; Returns:
-;;;   Maximum int64 element value.
-;;;
-;;; Example:
-;;;   (sized-buf-max b)  ; => largest element
-;;;
-;;; Since: Phase SZ2
 
-(defn sized-buf-max [b]
+(defn __sized-buf-max-raw [b]
   #{Unsafe}
   : int
   ```c
@@ -285,130 +156,8 @@
   for (int64_t i = 1; i < buf->len; i++) if (buf->data[i] > m) m = buf->data[i];
   return m;
   ```)
-;; ===== Size integration =====
-;;; sized-buf-size -- return the length of a SizedBuf as a Size expression.
-;;;
-;;; Parameters:
-;;;   b -- SizedBuf pointer
-;;;
-;;; Returns:
-;;;   A (Static n) where n is the buffer length.
-;;;
-;;; Example:
-;;;   (size-eval (sized-buf-size b))  ; => length of b
-;;;
-;;; Since: Phase SZ2
 
-
-(defn sized-buf-size [b] #{Unsafe} : Size (Static (sized-buf-len b)))
-;; ===== Stack allocation =====
-;;; sized-buf-with-stack -- scoped computation over a stack-allocated buffer.
-;;;
-;;; Allocates n int64_t elements on the current stack frame via alloca,
-;;; zero-fills them, wraps them in a transient SizedBuf header, and calls f
-;;; with that buffer. f receives the buffer as an opaque int pointer and
-;;; must return an int. The buffer is automatically reclaimed when this
-;;; function returns -- f must not let the buffer pointer escape.
-;;;
-;;; Use this when n is a compile-time constant (StaticInt) to avoid heap
-;;; allocation overhead. For dynamic or large n, prefer sized-buf-new.
-;;;
-;;; Parameters:
-;;;   n -- number of elements (should be a static/small constant)
-;;;   f -- a non-capturing function (int -> int) that receives the buffer
-;;;
-;;; Returns:
-;;;   The integer value returned by f.
-;;;
-;;; Example:
-;;;   (defn sum-init-buf [b] :int
-;;;     (sized-buf-set! b 0 10)
-;;;     (sized-buf-set! b 1 20)
-;;;     (sized-buf-set! b 2 30)
-;;;     (sized-buf-sum b))
-;;;   (sized-buf-with-stack 3 sum-init-buf)  ; => 60
-;;;
-;;; Since: Phase SZ2
-
-
-(defn sized-buf-with-stack [n f]
-  #{Unsafe}
-  : int
-  ```c
-  /* alloca: data lives on THIS function's stack frame.
-     The buffer is only valid while this function is executing.
-     f must not store the buffer pointer beyond its own return. */
-  int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
-  memset(stack_data, 0, (size_t)n * sizeof(int64_t));
-  struct { int64_t len; int64_t *data; } stack_buf = { n, stack_data };
-  int64_t buf_ptr = (int64_t)(intptr_t)&stack_buf;
-  return ((int64_t(*)(int64_t))(intptr_t)f)(buf_ptr);
-  ```)
-;; ===== Allocation dispatch =====
-;; Buffers with n <= SIZED_BUF_STACK_THRESHOLD elements use stack allocation
-;; inside sized-buf-compute; larger buffers fall back to heap.
-;; This threshold mirrors a typical L1 cache line budget.
-
-
-(defn __sized-buf-stack-threshold [] : int ```c return 64; ```)
-;;; sized-buf-compute -- compute a result from a buffer, choosing stack or heap.
-;;;
-;;; When n <= 64 (SIZED_BUF_STACK_THRESHOLD) a stack buffer is used;
-;;; larger n falls back to heap. The buffer is filled with values 0..n-1
-;;; (the index of each element) and then the sum is returned. This function
-;;; demonstrates the allocation dispatch strategy.
-;;;
-;;; Parameters:
-;;;   n -- number of elements
-;;;
-;;; Returns:
-;;;   Sum of 0 + 1 + ... + (n-1).
-;;;
-;;; Example:
-;;;   (sized-buf-compute 5)  ; => 10  (0+1+2+3+4)
-;;;
-;;; Since: Phase SZ2
-
-(defn sized-buf-compute [n]
-  #{Unsafe}
-  : int
-  ```c
-  int64_t threshold = 64;
-  int64_t result = 0;
-  if (n <= threshold) {
-    /* Stack allocation: no malloc/free overhead */
-    int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
-    for (int64_t i = 0; i < n; i++) stack_data[i] = i;
-    for (int64_t i = 0; i < n; i++) result += stack_data[i];
-  } else {
-    /* Heap allocation fallback for large n */
-    int64_t *heap_data = (int64_t *)malloc((size_t)n * sizeof(int64_t));
-    for (int64_t i = 0; i < n; i++) heap_data[i] = i;
-    for (int64_t i = 0; i < n; i++) result += heap_data[i];
-    free(heap_data);
-  }
-  return result;
-  ```)
-;; ===== Conversion from SizedVec =====
-;;; sized-buf-from-sized-vec -- convert a SizedVec (linked list) to a SizedBuf (flat array).
-;;;
-;;; Traverses the linked list once to count elements, allocates a flat buffer,
-;;; then fills it. The resulting buffer uses tight contiguous layout.
-;;;
-;;; Parameters:
-;;;   v -- a (SizedVec Size int) value
-;;;
-;;; Returns:
-;;;   A heap-allocated SizedBuf with the same elements in the same order.
-;;;
-;;; Example:
-;;;   (let [b (unsafe (sized-buf-from-sized-vec (sized-vec-of-3 10 20 30)))]
-;;;     (println (sized-buf-sum b)))  ; => 60
-;;;
-;;; Since: Phase SZ2
-
-
-(defn sized-buf-from-sized-vec [v]
+(defn __sized-buf-from-sized-vec-raw [v]
   #{Unsafe}
   : int
   ```c
@@ -450,3 +199,321 @@
   }
   return (int64_t)(intptr_t)b;
   ```)
+
+;; ===== Public surface: phantom-indexed (SizedBuf n) =====
+;; ===== Heap-allocated SizedBuf =====
+
+;;; sized-buf-new -- allocate a heap (SizedBuf n) of n elements (uninitialized).
+;;;
+;;; Parameters:
+;;;   k -- number of elements to allocate
+;;;
+;;; Returns:
+;;;   A fresh (SizedBuf n) where `n` is polymorphic; pin it via
+;;;   ascription, e.g. `(:: (sized-buf-new 4) (SizedBuf (Static 4)))`.
+;;;
+;;; Example:
+;;;   (let [b (sized-buf-new 4)] ...)
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-new [n] [k : int] : (SizedBuf n)
+  (:: (unsafe (__sized-buf-new-raw k)) :SizedBuf))
+
+;;; sized-buf-new-zeroed -- allocate a heap (SizedBuf n), all elements zero.
+;;;
+;;; Parameters:
+;;;   k -- number of elements to allocate
+;;;
+;;; Returns:
+;;;   A fresh (SizedBuf n) initialised to all zeros.
+;;;
+;;; Example:
+;;;   (let [b (sized-buf-new-zeroed 4)] ...)
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-new-zeroed [n] [k : int] : (SizedBuf n)
+  (:: (unsafe (__sized-buf-new-zeroed-raw k)) :SizedBuf))
+
+;;; sized-buf-free -- free a heap-allocated (SizedBuf n) and its data.
+;;;
+;;; Do NOT call on a stack SizedBuf (from sized-buf-with-stack); those
+;;; are freed automatically when the scoped function returns.
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n) from sized-buf-new or sized-buf-new-zeroed
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (sized-buf-free b)
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-free [n] [b : (SizedBuf n)] : nil
+  (unsafe (__sized-buf-free-raw (:: b :int))))
+
+;; ===== Accessors =====
+
+;;; sized-buf-len -- return the element count of a (SizedBuf n).
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n)
+;;;
+;;; Returns:
+;;;   Runtime element count as :int.  The static `n` index pins the
+;;;   length at compile time when the call site supplies a literal Size.
+;;;
+;;; Example:
+;;;   (sized-buf-len (sized-buf-new 8))  ; => 8
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-len [n] [b : (SizedBuf n)] : int
+  (unsafe (__sized-buf-len-raw (:: b :int))))
+
+;;; sized-buf-get -- bounds-checked element read; aborts on out-of-range index.
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n)
+;;;   i -- zero-based index (0 <= i < sized-buf-len b)
+;;;
+;;; Returns:
+;;;   The int64 value at position i.
+;;;
+;;; Example:
+;;;   (sized-buf-get b 0)  ; => first element
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-get [n] [b : (SizedBuf n) i : int] : int
+  (unsafe (__sized-buf-get-raw (:: b :int) i)))
+
+;;; sized-buf-set! -- bounds-checked element write; aborts on out-of-range index.
+;;;
+;;; Modifies the element in place and returns the same buffer pointer
+;;; so operations can be chained.
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n)
+;;;   i -- zero-based index
+;;;   v -- value to store
+;;;
+;;; Returns:
+;;;   The same buffer (SizedBuf n) (for chaining).
+;;;
+;;; Example:
+;;;   (sized-buf-set! b 0 42)
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-set! [n] [b : (SizedBuf n) i : int v : int] : (SizedBuf n)
+  (:: (unsafe (__sized-buf-set!-raw (:: b :int) i v)) :SizedBuf))
+
+;; ===== Bulk operations =====
+
+;;; sized-buf-fill! -- set every element to v; returns the same buffer.
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n)
+;;;   v -- value to store in every slot
+;;;
+;;; Returns:
+;;;   The same buffer (SizedBuf n).
+;;;
+;;; Example:
+;;;   (sized-buf-fill! b 0)  ; zero-fill
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-fill! [n] [b : (SizedBuf n) v : int] : (SizedBuf n)
+  (:: (unsafe (__sized-buf-fill!-raw (:: b :int) v)) :SizedBuf))
+
+;;; sized-buf-copy! -- copy all elements from src into dst via memcpy.
+;;;
+;;; Both buffers share the size parameter `n`, so the elaborator
+;;; rejects mismatched literal lengths at compile time via the SZ8
+;;; cross-parameter unifier.  The runtime length-check is still
+;;; performed as a defence-in-depth fallback for unsized callers.
+;;;
+;;; Parameters:
+;;;   dst -- destination (SizedBuf n)
+;;;   src -- source (SizedBuf n) (same n)
+;;;
+;;; Returns:
+;;;   The destination (SizedBuf n).
+;;;
+;;; Example:
+;;;   (sized-buf-copy! dst src)
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-copy! [n] [dst : (SizedBuf n) src : (SizedBuf n)] : (SizedBuf n)
+  (:: (unsafe (__sized-buf-copy!-raw (:: dst :int) (:: src :int))) :SizedBuf))
+
+;;; sized-buf-sum -- sum all elements of a (SizedBuf n).
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n)
+;;;
+;;; Returns:
+;;;   Integer sum of all elements; 0 for an empty buffer.
+;;;
+;;; Example:
+;;;   (sized-buf-sum b)  ; => sum of elements
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-sum [n] [b : (SizedBuf n)] : int
+  (unsafe (__sized-buf-sum-raw (:: b :int))))
+
+;;; sized-buf-min -- minimum element of a non-empty (SizedBuf n); aborts if empty.
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n) (must have at least one element)
+;;;
+;;; Returns:
+;;;   Minimum int64 element value.
+;;;
+;;; Example:
+;;;   (sized-buf-min b)  ; => smallest element
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-min [n] [b : (SizedBuf n)] : int
+  (unsafe (__sized-buf-min-raw (:: b :int))))
+
+;;; sized-buf-max -- maximum element of a non-empty (SizedBuf n); aborts if empty.
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n) (must have at least one element)
+;;;
+;;; Returns:
+;;;   Maximum int64 element value.
+;;;
+;;; Example:
+;;;   (sized-buf-max b)  ; => largest element
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-max [n] [b : (SizedBuf n)] : int
+  (unsafe (__sized-buf-max-raw (:: b :int))))
+
+;; ===== Size integration =====
+
+;;; sized-buf-size -- return the runtime length of a (SizedBuf n) as a Size expression.
+;;;
+;;; Parameters:
+;;;   b -- (SizedBuf n)
+;;;
+;;; Returns:
+;;;   A (Static k) where k is the runtime buffer length.
+;;;
+;;; Example:
+;;;   (size-eval (sized-buf-size b))  ; => length of b
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-size [n] [b : (SizedBuf n)] : (Size)
+  (Static (sized-buf-len b)))
+
+;; ===== Stack allocation =====
+;;; sized-buf-with-stack -- scoped computation over a stack-allocated buffer.
+;;;
+;;; Allocates n int64_t elements on the current stack frame via alloca,
+;;; zero-fills them, wraps them in a transient SizedBuf header, and
+;;; calls f with that buffer.  The callback receives a raw int handle
+;;; (NOT a typed (SizedBuf n)) because the inline-C body needs a fixed
+;;; ABI; cast into the typed view inside the callback via
+;;; `(:: raw :SizedBuf)` if you need projection-typed access.
+;;;
+;;; The buffer is automatically reclaimed when this function returns;
+;;; f must not let the buffer pointer escape.
+;;;
+;;; Parameters:
+;;;   n -- number of elements (should be a static/small constant)
+;;;   f -- a non-capturing function (int -> int) that receives the raw
+;;;        buffer handle
+;;;
+;;; Returns:
+;;;   The integer value returned by f.
+;;;
+;;; Example:
+;;;   (defn sum-init-buf [b] :int
+;;;     (sized-buf-set! (:: b :SizedBuf) 0 10)
+;;;     (sized-buf-sum  (:: b :SizedBuf)))
+;;;   (sized-buf-with-stack 3 sum-init-buf)
+;;;
+;;; Since: Phase SZ2
+(defn sized-buf-with-stack [n f]
+  #{Unsafe}
+  : int
+  ```c
+  /* alloca: data lives on THIS function's stack frame.
+     The buffer is only valid while this function is executing.
+     f must not store the buffer pointer beyond its own return. */
+  int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
+  memset(stack_data, 0, (size_t)n * sizeof(int64_t));
+  struct { int64_t len; int64_t *data; } stack_buf = { n, stack_data };
+  int64_t buf_ptr = (int64_t)(intptr_t)&stack_buf;
+  return ((int64_t(*)(int64_t))(intptr_t)f)(buf_ptr);
+  ```)
+
+;; ===== Allocation dispatch =====
+;; Buffers with n <= SIZED_BUF_STACK_THRESHOLD elements use stack allocation
+;; inside sized-buf-compute; larger buffers fall back to heap.
+;; This threshold mirrors a typical L1 cache line budget.
+
+(defn __sized-buf-stack-threshold [] : int ```c return 64; ```)
+
+;;; sized-buf-compute -- compute a result from a buffer, choosing stack or heap.
+;;;
+;;; When n <= 64 (SIZED_BUF_STACK_THRESHOLD) a stack buffer is used;
+;;; larger n falls back to heap.  The buffer is filled with values
+;;; 0..n-1 (the index of each element) and then the sum is returned.
+;;; This function demonstrates the allocation dispatch strategy.
+;;;
+;;; Parameters:
+;;;   n -- number of elements
+;;;
+;;; Returns:
+;;;   Sum of 0 + 1 + ... + (n-1).
+;;;
+;;; Example:
+;;;   (sized-buf-compute 5)  ; => 10  (0+1+2+3+4)
+;;;
+;;; Since: Phase SZ2
+(defn sized-buf-compute [n]
+  #{Unsafe}
+  : int
+  ```c
+  int64_t threshold = 64;
+  int64_t result = 0;
+  if (n <= threshold) {
+    /* Stack allocation: no malloc/free overhead */
+    int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
+    for (int64_t i = 0; i < n; i++) stack_data[i] = i;
+    for (int64_t i = 0; i < n; i++) result += stack_data[i];
+  } else {
+    /* Heap allocation fallback for large n */
+    int64_t *heap_data = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+    for (int64_t i = 0; i < n; i++) heap_data[i] = i;
+    for (int64_t i = 0; i < n; i++) result += heap_data[i];
+    free(heap_data);
+  }
+  return result;
+  ```)
+
+;; ===== Conversion from SizedVec =====
+
+;;; sized-buf-from-sized-vec -- convert a SizedVec (linked list) to a (SizedBuf n) (flat array).
+;;;
+;;; Traverses the linked list once to count elements, allocates a flat
+;;; buffer, then fills it.  The resulting buffer uses tight contiguous
+;;; layout.
+;;;
+;;; Parameters:
+;;;   v -- a SizedVec value (the int64-carried GADT root handle)
+;;;
+;;; Returns:
+;;;   A heap-allocated (SizedBuf n) with the same elements in the same
+;;;   order.  Pin `n` via ascription on the result when a static length
+;;;   is known statically.
+;;;
+;;; Example:
+;;;   (let [b (sized-buf-from-sized-vec v)]
+;;;     (println (sized-buf-sum b)))
+;;;
+;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
+(defn sized-buf-from-sized-vec [n] [v : int] : (SizedBuf n)
+  (:: (unsafe (__sized-buf-from-sized-vec-raw v)) :SizedBuf))

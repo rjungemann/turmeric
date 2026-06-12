@@ -3,10 +3,30 @@ title: SZ8 cross-parameter size unification does not cover non-GADT phantom indi
 category: Expressiveness hole / elaborator gap
 severity: Central elaborator gap blocking ECS E2c's "bounded-capacity world API" design path. Without it, no opaque/struct-carried phantom size index can witness static rectangularity, so the planned `Dense<n, T>` substrate cannot be built.
 description: P1 of `docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md` asked whether the SZ8 cross-parameter size-variable unification that landed on 2026-06-10 fires on a `defopaque` (or `defstruct`) carrier where the size index is a phantom rather than a GADT-constructor-witnessed index. The answer is no, on two independent counts. (1) Vacuous-accept: `(zip (mk-dense) (mk-dense))` against `zip [xs : (Dense n A) ys : (Dense n B)]` compiles trivially because both calls produce fresh `?n` unification vars; nothing rectangular is witnessed. (2) Reject-unreachable: pinning `n` to a Size literal in a function's return-type position -- e.g. `(defn mk-dense-2 [A] [] : (Dense (Static 2) A) ...)` -- is rejected at PARSE time with "unsupported type expression form (expected symbol, keyword, or list)". The Size GADT's `Static` literal is only accepted inside GADT-constructor return-type signatures, not inside arbitrary type-app slots. Until that parser/elaborator gap is closed, no opaque- or struct-carried phantom size index can carry a load-bearing size, and the bounded-capacity world API described in the parent report's Option 2 cannot be built.
-status: OPEN. Recommended next step: lift Size GADT literals (`(Static n)`, `(Add s s)`, `(Mul s s)`) to first-class type-expression elements wherever a sized type-app is parsed, then extend SZ8's cross-parameter unification machinery to fire on non-GADT phantom indices.
+status: CLOSED 2026-06-12. Both halves were fixed in one pass: (1) `type_expr_from_form` and `fn_type_from_form_impl` now accept `(Static N)`, `(Add s s)`, and `(Mul s s)` as first-class arguments in any type-application slot (lowered to a TY_INT placeholder; the actual size info rides on the retained Form). (2) `Type.as.fn.result_type_form` now stores the raw return-type annotation Form on TY_FN, and `sz_cross_param_unify` recovers a call expression's size index from the callee's declared return form when no GADT-constructor witness is available. Companion fixtures: `tests/fixtures/sized-cross-param-opaque-accept/` (literal-vs-literal unification) and `tests/fixtures/errors/sized-cross-param-opaque-reject/` (TUR-E0260 on `(Dense (Static 2) ...)` vs `(Dense (Static 3) ...)`).
 ---
 
 # SZ8 cross-parameter unification does not cover non-GADT phantom size indices
+
+> **Resolution (2026-06-12).** Both the parser gap (Probe 2) and the
+> elaborator gap (Probe 1) were closed in one pass. The remainder of
+> this document is preserved as the original P1 investigation; the
+> sections below describe the situation *before* the fix.
+>
+> - Parser: `type_expr_from_form` (`src/compiler/elab_types.c`) and
+>   `fn_type_from_form_impl` (`src/compiler/elab_fns.c`) now accept
+>   `(Static N)` / `(Add s s)` / `(Mul s s)` as first-class type-app
+>   arguments, lowered to a TY_INT placeholder; the real size info
+>   rides on the retained Form.
+> - Inference: a new `result_type_form` field on TY_FN
+>   (`src/compiler/types.h`) retains the callee's declared return
+>   annotation; `sz_cross_param_unify` (`src/compiler/elab_call.c`)
+>   recovers the call expression's size index from that form when no
+>   GADT-constructor witness is available.
+> - Witnesses: `tests/fixtures/sized-cross-param-opaque-accept`
+>   (literal-vs-literal accept) and
+>   `tests/fixtures/errors/sized-cross-param-opaque-reject`
+>   (TUR-E0260 on `(Static 2)` vs `(Static 3)`).
 
 ## Summary
 

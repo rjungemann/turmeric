@@ -1,0 +1,39 @@
+; P2 of docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md asked
+; whether `defstruct` threads a shared size parameter through every
+; field's type at projection time.  This fixture demonstrates that it
+; does -- the elaborator substitutes the struct's `m` parameter into
+; both `(.pos w)` and `(.vel w)`, so a function declared on
+; `(World (Static 2) A B)` can zip those projections through a
+; signature whose shared size variable `n` unifies cleanly across
+; both arguments.
+;
+; `use-world` is defined but never called.  Codegen for a *constructed*
+; World still hits a pre-existing make-struct lowering bug when a
+; struct type parameter does not appear directly as a field type
+; (see docs/reported/make-struct-phantom-typeparam-lowering.md); the
+; elaborator-level threading -- which is the P2 question -- is
+; independent and exercised here.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defopaque Dense [n A] :int)
+
+; `m` is the shared size parameter; both fields carry it.
+(defstruct World [m A B] (pos (Dense m A)) (vel (Dense m B)))
+
+(defn zip [A B] [xs : (Dense n A) ys : (Dense n B)] : int
+  0)
+
+; The structural P2 probe: the function body type-checks because the
+; elaborator substitutes `m` -> (Static 2) into both field types, so
+; both projections have type `(Dense (Static 2) X)` and zip's `n`
+; unifies to (Static 2) once across both arguments.
+(defn use-world [A B] [w : (World (Static 2) A B)] : int
+  (zip (.pos w) (.vel w)))
+
+(defn main [] : int
+  (println 0)
+  0)

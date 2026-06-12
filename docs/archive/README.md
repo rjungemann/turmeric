@@ -361,6 +361,16 @@ Post-v0.19.1 churn sweep (2026-06-11):
 - **[tur-run-alias-breaks-snapshot-ci-guard.md](history/tur-run-alias-breaks-snapshot-ci-guard.md)** -- `tur run` alias support in `justrun.c`; RESOLVED in `54c14891`
 - **[unterminated-list-caret-anchors-outermost.md](history/unterminated-list-caret-anchors-outermost.md)** -- Unterminated-list caret anchored at single char; RESOLVED in `fa960cd2`
 
+Post-v0.20.0 sweep (2026-06-12):
+
+- **[ci-nondeterministic-macro-elaboration.md](history/ci-nondeterministic-macro-elaboration.md)** -- Release-only macro-elaboration nondeterminism + ASan leak surfaced on PR #336 CI; three root causes (RC-leak on `__symbol_register`, `LookupKey` UB-init, snapshot drift); all fixed
+- **[turi-capturing-shift-unimplemented.md](history/turi-capturing-shift-unimplemented.md)** -- Context-capturing `serial-shift` / `cloneable-shift` implemented via runtime context reification in `src/turi/eval.c`; landed in commit `3eadda5b`
+- **[turi-error-fixture-diag-divergences.md](history/turi-error-fixture-diag-divergences.md)** -- All 9 `errors/` fixtures whose `--interpret` diagnostic diverged are now reconciled; `TURI_ERRORS_DENY` is empty
+- **[turi-harness-compiles-instead-of-interpreting.md](history/turi-harness-compiles-instead-of-interpreting.md)** -- `tests/run-turi.sh` now runs fixtures with `tur --interpret` (TI8); harness green at 122 passed
+- **[turi-inline-c-accessor-miscompiles-boolean-returns.md](history/turi-inline-c-accessor-miscompiles-boolean-returns.md)** -- `ic_exec_accessor` now refuses negated/disjunctive boolean returns rather than silently inverting them (TI8.b/W4)
+- **[turi-native-set-count-layout-overflow.md](history/turi-native-set-count-layout-overflow.md)** -- `native_set_*` shims rewritten over `{void* hamt}`; `set.tur` joined the prelude; HAMT-backed `#set{}` literals now safe under `--interpret` (TI8.b/W1b)
+- **[turi-select-needs-channel-primitives.md](history/turi-select-needs-channel-primitives.md)** -- `(select ...)` carve-out documented in [eval-api.md](../guides/eval-api.md); real native-channel `EX_SELECT` interpretation tracked in `docs/upcoming/v1/turi-parity-post-v1-plan.md`
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

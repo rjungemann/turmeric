@@ -1,22 +1,12 @@
-; P1 probe (ECS E2c prereq): on a non-GADT phantom size index, does SZ8's
-; cross-parameter unification fire?  Companion: errors/sized-cross-param-
-; opaque-reject (currently UNREACHABLE -- see docs/reported/sz8-opaque-
-; phantom-size-not-load-bearing.md).
+; SZ8 non-GADT extension: cross-parameter size unification on a defopaque
+; carrier whose phantom size index is pinned to a Size literal at both
+; call sites.  Companion to errors/sized-cross-param-opaque-reject.
+; Closes docs/reported/sz8-opaque-phantom-size-not-load-bearing.md.
 ;
-; This file demonstrates the *vacuous* accept: both `mk-dense` calls
-; return (Dense ?n A) with a fresh unification variable for `n`, so the
-; `n`-shared `zip` signature trivially unifies.  Nothing rectangular is
-; being witnessed -- the loop bound is still runtime cap territory.
-;
-; The reject companion would need callers that pin `n` to distinct
-; literals, e.g. `(mk-dense-2)` returning `(Dense (Static 2) int)` and
-; `(mk-dense-3)` returning `(Dense (Static 3) int)`.  Today that hits
-; "unsupported type expression form" at parse time: the elaborator does
-; not accept a Size GADT literal inside a defopaque's type-app slot,
-; only inside GADT constructor return-type signatures.  Until that is
-; fixed, opaque-carried phantom size indices cannot witness static
-; rectangularity, and ECS E2c's "transparent spice-side update" claim
-; is unbacked.
+; Both `(mk-dense-2)` calls return (Dense (Static 2) int); the call-site
+; inference (sz_cross_param_unify's non-GADT path) recovers SZT_CONST 2
+; from each callee's declared return form, binds the shared variable `n`
+; in zip's signature to 2 once, and accepts the second arg trivially.
 
 (defgadt Size []
   (Static (int) : (Size))
@@ -25,8 +15,8 @@
 
 (defopaque Dense [n A] :int)
 
-; Parametric over [n A]: returns (Dense n A) with `n` a fresh tyvar.
-(defn mk-dense [n A] [] : (Dense n A)
+; Literal-pinned: every call yields (Dense (Static 2) int).
+(defn mk-dense-2 [A] [] : (Dense (Static 2) A)
   (:: 0 :Dense))
 
 ; Cross-parameter `n` -- the analogue of pairwise-sum in
@@ -35,5 +25,5 @@
   0)
 
 (defn main [] : int
-  (println (zip (mk-dense) (mk-dense)))   ; trivially unifies (?n1 = ?n2 = ?n)
+  (println (zip (mk-dense-2) (mk-dense-2)))   ; 2 = 2: unifies cleanly
   0)

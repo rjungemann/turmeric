@@ -516,6 +516,16 @@ typedef struct Type {
              * thunks, or non-defn fn values).  Arena-allocated array of
              * length `arity`; individual entries may be NULL. */
             const struct Form **param_type_forms;
+            /* sized-types-cross-param-unification (non-GADT extension):
+             * raw declared-return-type Form, retained so a call expression
+             * can infer its `size_index` from a phantom size literal in the
+             * callee's return type (e.g. `(Dense (Static 2) A)`).  Mirrors
+             * how CtorDef.result_type_form lets sz8_infer_ctor_size_index
+             * seed a sized-GADT constructor's index; this extends the same
+             * treatment to plain defn-shaped non-GADT carriers (defopaque,
+             * defstruct phantom indices).  NULL when no return annotation
+             * was recorded. */
+            const struct Form *result_type_form;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -1064,6 +1074,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
     t.as.fn.rest_full_type = NULL; /* typed-variadic: NULL = primitive rest */
     t.as.fn.param_type_forms = NULL; /* sized-types-cross-param-unification: filled by defn elab */
+    t.as.fn.result_type_form = NULL; /* SZ8 non-GADT: filled by defn elab when a return ann was recorded */
     return t;
 }
 

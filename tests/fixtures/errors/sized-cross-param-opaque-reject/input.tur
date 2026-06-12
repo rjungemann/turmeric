@@ -1,0 +1,33 @@
+; SZ8 non-GADT extension (companion to sized-cross-param-opaque-accept):
+; cross-parameter size unification fires on a defopaque carrier whose
+; phantom size index is pinned to distinct Size literals at the two call
+; sites.  Closes the gap reported in
+; docs/reported/sz8-opaque-phantom-size-not-load-bearing.md.
+;
+; `zip` declares both xs and ys as (Dense n A) -- the size variable `n`
+; shares scope across parameters, so passing a (Dense (Static 2) ...) for
+; xs and a (Dense (Static 3) ...) for ys is a static contradiction
+; (`n := 2` vs `n := 3`).  Without the non-GADT inference extension this
+; would silently compile, since each `(mk-dense-k)` call would carry no
+; inferred size_index.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defopaque Dense [n A] :int)
+
+(defn mk-dense-2 [A] [] : (Dense (Static 2) A)
+  (:: 0 :Dense))
+
+(defn mk-dense-3 [A] [] : (Dense (Static 3) A)
+  (:: 0 :Dense))
+
+(defn zip [A B] [xs : (Dense n A) ys : (Dense n B)] : int
+  0)
+
+(defn main [] : int
+  ; ERROR: 2 != 3 -- `n` cannot unify across xs and ys
+  (println (zip (mk-dense-2) (mk-dense-3)))
+  0)

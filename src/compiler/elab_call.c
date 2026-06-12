@@ -729,6 +729,30 @@ static bool sz_cross_param_unify(Elab *e, const Form *call,
         Expr *a = args[i];
         const SizeTerm *arg_idx = (a && a->kind == EX_CALL)
                                   ? a->as.call_.size_index : NULL;
+        /* SZ8 non-GADT: when the arg is a call to a function whose declared
+         * return type carries a Size form (e.g. `mk-dense-2 : (Dense (Static 2)
+         * A)`), derive the call's size_index from that return form on the fly.
+         * Mirrors sz8_infer_ctor_size_index for plain defn-shaped callers --
+         * the source of the index is the callee's return annotation, not a
+         * GADT constructor chain.  For now this only handles closed Size
+         * expressions; an open template like `(Dense n A)` returns SZT_VAR,
+         * which the substitution table below still handles correctly. */
+        if (!arg_idx && a && a->kind == EX_CALL && a->as.call_.fn_binding) {
+            const Binding *callee = a->as.call_.fn_binding;
+            const Type *cft = &callee->type;
+            if (callee->closure_fn_binding) cft = &callee->closure_fn_binding->type;
+            if (cft && cft->kind == TY_FN && cft->as.fn.result_type_form) {
+                const Form *rt = cft->as.fn.result_type_form;
+                if (rt->tag == F_LIST && rt->as.list.len >= 2) {
+                    for (uint32_t k = 1; k < rt->as.list.len; k++) {
+                        SizeTerm *st = size_term_from_form(e->arena,
+                                                           rt->as.list.items[k],
+                                                           NULL, NULL);
+                        if (st) { arg_idx = st; break; }
+                    }
+                }
+            }
+        }
         if (!arg_idx) continue;  /* un-inferable -> stays polymorphic */
         /* Case 1: template is a bare size variable -- bind it in subst, or
          * require equality with the prior binding. */

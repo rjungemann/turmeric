@@ -244,7 +244,7 @@ is the most tractable starting point. Full umbrella report (three gaps, repro,
 fix directions):
 [turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md),
 plus the narrower
-[turi-native-set-count-layout-overflow.md](../reported/turi-native-set-count-layout-overflow.md).
+[turi-native-set-count-layout-overflow.md](../archive/history/turi-native-set-count-layout-overflow.md).
 
 **Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
 prelude (with the `ok?`/`err?` stubs dropped) **regressed** `coerce-carrier-to-
@@ -266,7 +266,7 @@ Result/Set/Map value can exist in the interpreter as any of:
 
 The `native_*` shims silently assume one shape; feeding them another silently
 miscompiles or heap-overflows (`native_set_count`, see
-[docs/reported/turi-native-set-count-layout-overflow.md](../reported/turi-native-set-count-layout-overflow.md)).
+[docs/archive/history/turi-native-set-count-layout-overflow.md](../archive/history/turi-native-set-count-layout-overflow.md)).
 Crucially the **same `set-count` native serves both `#set{}` literals (correct)
 and `set.tur` sets (overflow)** -- with no runtime tag to tell them apart -- so
 the shims cannot simply be repointed.
@@ -293,7 +293,7 @@ instead of that box).
 **Adjacent bug surfaced during the spike (W4, independent):**
 `ic_exec_accessor` silently miscompiles `return p == NULL || !p->field;` (drops
 the `!`/`||`), inverting predicates like `result-basic`'s `u-err?` -- filed at
-[docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md](../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md).
+[docs/archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md](../archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md).
 
 ---
 
@@ -386,7 +386,7 @@ harness went 181 -> **463 passed, 0 failed**. The `.gitignore` was extended to
 cover nested `tests/fixtures/*/*/turi.{stdout,stderr}` scratch.
 
 **Remaining: 9 genuine divergences** (denylisted, tracked in
-[docs/archive/turi-error-fixture-diag-divergences.md](../archive/turi-error-fixture-diag-divergences.md)):
+[docs/archive/history/turi-error-fixture-diag-divergences.md](../archive/history/turi-error-fixture-diag-divergences.md)):
 3 reporting-stage (unbound-call / heterogeneous-map error at runtime, empty
 stderr, no elab diag), 4 missing-check (`lifetime-cyclic` TUR-E0106, reader-macro
 strict-collision, `#lang` unknown/not-implemented run clean), 2 TI3.2 carve-outs
@@ -421,7 +421,7 @@ the bare field -- turning silent-wrong into a clean "inline-C not supported"
 error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 (incl. `result-basic`) with **zero regressions** (allowlisted `inline-c-binop` /
 `gen-*` still pass; harness 463/0; compiled 1573/0). Reports:
-[turi-inline-c-accessor-miscompiles-boolean-returns.md](../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md)
+[turi-inline-c-accessor-miscompiles-boolean-returns.md](../archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md)
 (FIXED) and
 [turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md)
 (3 fixed, 22 remain via other `ic_exec_*` matchers).
@@ -546,7 +546,7 @@ Definition of done = W5 merged with `run-turi.sh` green at denylist default.
   (TI8.b lives there; this is its execution detail).
 - [docs/reported/turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md)
   -- the 31 allowlist reconciliation + the probe + the defmodule fix writeup.
-- [docs/reported/turi-harness-compiles-instead-of-interpreting.md](../reported/turi-harness-compiles-instead-of-interpreting.md)
+- [docs/archive/history/turi-harness-compiles-instead-of-interpreting.md](../archive/history/turi-harness-compiles-instead-of-interpreting.md)
   -- the resolved root blocker.
 - [docs/turi-carve-out.txt](../turi-carve-out.txt) -- EX_* carve-out list the
   ratchet enforces.

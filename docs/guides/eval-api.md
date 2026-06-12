@@ -380,7 +380,7 @@ expression kind" default.  Check for them with `turi_is_error` as usual.
 | Feature | Interpreter behaviour | Why |
 | --- | --- | --- |
 | **User inline-C** (` ```c ... ``` ` bodies) | `inline-C not supported in interpreter mode` | The interpreter has no C compiler.  Stdlib inline-C is covered by registered **natives** (see `turi_env_register_native`) and the simple-shape evaluator; arbitrary user inline-C is not. |
-| **Channels / `select`** | `select is not supported in interpreter mode (channels require native primitives; use the compiled path)` | Turmeric channels are inline-C `pthread` mutex/condvar ring buffers with no native representation in `turi`, so `select` has nothing to select over.  Tracked in [docs/archive/turi-select-needs-channel-primitives.md](../archive/turi-select-needs-channel-primitives.md). |
+| **Channels / `select`** | `select is not supported in interpreter mode (channels require native primitives; use the compiled path)` | Turmeric channels are inline-C `pthread` mutex/condvar ring buffers with no native representation in `turi`, so `select` has nothing to select over.  Tracked in [docs/archive/history/turi-select-needs-channel-primitives.md](../archive/history/turi-select-needs-channel-primitives.md). |
 | **WASM async** | scheduler-dependent error | The WASM build drives async through the host event loop; the standalone interpreter's cooperative scheduler does not cover the WASM async path.  See `src/turi/fiber.c`. |
 | **`call/cc`, context-capturing `serial-shift` / `cloneable-shift`** | clean error | Need genuine continuation capture; deferred to the CPS-transform work.  See `docs/turi-carve-out.txt`. |
 

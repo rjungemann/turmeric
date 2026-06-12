@@ -113,67 +113,99 @@ be green; others are real gaps. Either way, getting them resolved
 ahead of time keeps the spice-side work tightly scoped.
 
 **P1 -- Does SZ8 cross-parameter unification fire on non-GADT
-phantom indices?** The shipped reference fixture
-([`tests/fixtures/sized-cross-param-accept`](../../tests/fixtures/sized-cross-param-accept/input.tur))
-unifies `n` across parameters because `SizedVec` is a GADT whose
-constructors index `n`. The dense-handle wrapper would be a
-`defopaque` (or a regular `defstruct`) with `n` as a phantom
-parameter -- no constructor chain to witness it. A new pair of
-fixtures:
-
-```turmeric
-(defopaque Dense [n A] :int)
-(defn zip [xs : (Dense n A) ys : (Dense n B)] : nil ...)
-```
-
-with one caller passing matching `n` and one passing mismatched
-literals would tell us whether SZ8 already covers the opaque case.
-If yes, P3+P4 are mostly stdlib work; if no, this is the central
-elaborator gap to file before any spice work.
+phantom indices?** RESOLVED 2026-06-12 (yes, after the fix landed in
+[docs/reported/sz8-opaque-phantom-size-not-load-bearing.md](sz8-opaque-phantom-size-not-load-bearing.md)).
+The original probe found two blockers: the parser rejected Size GADT
+literals (`(Static N)`) in non-GADT type-app slots, and even with the
+parse fix the cross-parameter unifier walked only GADT-constructor
+witnesses. Both were closed in one pass: `type_expr_from_form` /
+`fn_type_from_form_impl` now accept Size literals as first-class
+type-app arguments, and `sz_cross_param_unify` recovers a call's size
+index from the callee's declared return form when no GADT witness is
+available. Witnesses:
+[`tests/fixtures/sized-cross-param-opaque-accept`](../../tests/fixtures/sized-cross-param-opaque-accept/input.tur)
+(literal-vs-literal accept) and
+[`tests/fixtures/errors/sized-cross-param-opaque-reject`](../../tests/fixtures/errors/sized-cross-param-opaque-reject/input.tur)
+(TUR-E0260 on mismatched literals). P2 is now unblocked.
 
 **P2 -- Does `defstruct` unify size variables across fields?**
-The world struct would declare:
+RESOLVED 2026-06-12 at the structural-threading level. The world
+struct declared as
+`(defstruct World [m A B] (pos (Dense m A)) (vel (Dense m B)))`
+threads `m` into both field types: a function declared on
+`(World (Static 2) A B)` projects `.pos` and `.vel` to types whose
+shared size variable unifies cleanly across `zip`'s two parameters.
+Witness:
+[`tests/fixtures/sized-struct-field-share-accept`](../../tests/fixtures/sized-struct-field-share-accept/input.tur).
 
-```turmeric
-(defstruct World n
-  [pos : (Dense n Pos)
-   vel : (Dense n Vel)])
-```
+Two follow-up gaps surfaced while answering P2:
 
-The load-bearing question is whether `(.pos w)` and `(.vel w)`
-recover the same `n` through field access -- i.e. whether the
-elaborator threads the struct's size parameter into each field's
-type at projection time. A fixture that constructs a `World n`,
-extracts both fields, and feeds them into a `zip` from P1 would
-answer this directly. This is the *real* compiler prereq for the
-"bounded-capacity world" design; without it, the world type can
-have a size parameter but no two fields can be proven to share it.
+- [sz8-projection-size-recovery-gap.md](sz8-projection-size-recovery-gap.md)
+  -- SZ8 cross-param unification does not yet *statically reject*
+  size mismatches across struct projections (the Size form is lost
+  at the `TY_INT` placeholder step). The structural threading is
+  enough to make the matched case type-check; closing this gap
+  promotes the unmatched case from a runtime-only error to a
+  compile-time TUR-E0260.
+- [make-struct-phantom-typeparam-lowering.md](make-struct-phantom-typeparam-lowering.md)
+  -- a pre-existing make-struct codegen bug mis-lowers a struct
+  whose type parameter is used only through a type application
+  (`(Dense m A)`) rather than as a bare field type. Closing this
+  unblocks runtime construction of `World`-shaped carriers.
+
+Neither follow-up blocks E2c's "design plan" gate -- they belong in
+the spice-side phase. The structural P2 answer (the load-bearing
+question of this section) is YES.
 
 **P3 -- Generalise `SizedBuf` with a phantom `n` parameter.**
-`stdlib/sized-buf.tur` already provides a flat heap-allocated
-int64_t array with a runtime length -- structurally identical to
-dense storage's control block. Its public type is just `:int`
-today, with no phantom size index. Lifting it to
-`(SizedBuf n)` (handle still `:int` at the C level, but the type
-carries `n`) gives the spice a natural substrate to build dense
-storage on, instead of inventing a parallel abstraction. This is a
-stdlib-only change, gated on P1.
+RESOLVED 2026-06-12. `stdlib/sized-buf.tur` was lifted to a
+phantom-indexed `(SizedBuf n)` defopaque whose C carrier is still
+`:int`. The public surface (`sized-buf-new`, `sized-buf-len`,
+`sized-buf-get`, `sized-buf-set!`, `sized-buf-fill!`,
+`sized-buf-copy!`, `sized-buf-sum`, `sized-buf-min`, `sized-buf-max`,
+`sized-buf-size`, `sized-buf-free`, `sized-buf-from-sized-vec`) now
+takes and returns `(SizedBuf n)`; the original inline-C bodies live
+on as private `__sized-buf-*-raw` helpers wrapped by ascription. The
+load-bearing case `sized-buf-copy!` shares `n` across `dst` and
+`src`, so the SZ8 cross-parameter unifier (P1) rejects mismatched
+literal lengths at compile time. Witnesses:
+[`tests/fixtures/sized-buf-cross-param-accept`](../../tests/fixtures/sized-buf-cross-param-accept/input.tur)
+and
+[`tests/fixtures/errors/sized-buf-cross-param-reject`](../../tests/fixtures/errors/sized-buf-cross-param-reject/input.tur)
+(TUR-E0260 on `(Static 2)` vs `(Static 3)`).
+
+The reject fixture passes call expressions directly
+(`(sized-buf-copy! (mk-2) (mk-3))`); a `let`-bound version of the
+same mismatch silently compiles and aborts at runtime. That is the
+EX_VAR sibling of the EX_GET_FIELD gap tracked under
+[sz8-projection-size-recovery-gap.md](sz8-projection-size-recovery-gap.md);
+closing that report would promote the let-bound path to a static
+rejection too.
 
 **P4 -- An existential lift for runtime-cap worlds.**
-Worlds are constructed with a runtime cap (e.g. `(world-new 1024)`),
-but the for-each macros need to unify against a static `n`. The
-`pack`/`open` mechanism in
-[`stdlib/vec-existential.tur`](../../stdlib/vec-existential.tur)
-already solves the analogous problem for `SizedVec` -- generalising
-it to:
+RESOLVED 2026-06-12 at the stdlib-pattern level. The
+`vec-existential.tur` pattern was generalised into
+[`stdlib/sized-handle-existential.tur`](../../stdlib/sized-handle-existential.tur)
+with two type-agnostic macros, `pack-sized` and `open-sized`, that
+thin-wrap native `pack` (EX1c) and `open` (EX1d / EX2-3) for any
+phantom-indexed sized handle. Callers supply the binder vector and
+body type, so the same pair lifts `(SizedVec n int)`,
+`(SizedBuf n)`, or a hypothetical bounded-capacity `(World n)`
+without per-type duplication. Witness:
+[`tests/fixtures/sized-handle-existential-pack-open`](../../tests/fixtures/sized-handle-existential-pack-open/input.tur)
+(SizedVec round-trip; prints `3`).
 
-```turmeric
-(world-new 1024) : (exists n. (World n))
-```
+The phantom-defopaque elaborator gap surfaced and closed during the
+same session: `elab_open` (`src/compiler/elab_types.c`) now preserves
+the applied form when the existential body's head is a defopaque, so
+`(SizedBuf n)` round-trips correctly through pack/open. Witness:
+[`tests/fixtures/sized-buf-existential-pack-open`](../../tests/fixtures/sized-buf-existential-pack-open/input.tur).
+Full resolution trail in
+[pack-open-phantom-opaque-body-type-collapses.md](pack-open-phantom-opaque-body-type-collapses.md).
 
-would let callers `open-world` once and then run all systems under
-the fresh abstract `n`. Once P1+P2 hold, this is a stdlib-pattern
-duplication, not new elaborator work.
+P4 is fully landed for both SizedVec and SizedBuf shapes; the macros
+will lift a hypothetical bounded-capacity `(World n)` defopaque
+unchanged once the world-API redesign produces one.
 
 **P5 (stretch, refinement-types-gated) -- `Fin n` for in-bounds
 indices.** For the full payoff (static OOB rejection on

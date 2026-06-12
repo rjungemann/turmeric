@@ -369,7 +369,7 @@ failures (including four fixtures the TI0 audit "verified" via
 verified directly with `tur --interpret`, not through the harness.
 
 Full write-up, repro, and the recommended (cascading) fix:
-[docs/reported/turi-harness-compiles-instead-of-interpreting.md](../reported/turi-harness-compiles-instead-of-interpreting.md).
+[docs/archive/history/turi-harness-compiles-instead-of-interpreting.md](../archive/history/turi-harness-compiles-instead-of-interpreting.md).
 The wiring flip belongs with the TI8 triage (it turns CI red until the
 ~31 fixtures are fixed or carved out) and is intentionally **not**
 bundled into TI1.
@@ -458,7 +458,7 @@ plain `setjmp`/`longjmp` prompt boundary -- **no continuation capture**.
 Only the context-*capturing* variants (`serial-shift` / `cloneable-shift`,
 which hand a resumable `k` to `f`) need genuine capture -- and, per the
 corrected analysis in
-[docs/archive/turi-capturing-shift-unimplemented.md](../archive/turi-capturing-shift-unimplemented.md),
+[docs/archive/history/turi-capturing-shift-unimplemented.md](../archive/history/turi-capturing-shift-unimplemented.md),
 that capture is a heap-reified DK chain (not a `TuriEffectCont` fiber).
 
 ### TI3.1 -- abortive base + prompt boundaries -- **LANDED**
@@ -496,7 +496,7 @@ separable slice is to move the `TUR-E0706` capturability check out of
 codegen (`emit_effects.c` / `emit_stmt.c`) so the interpreter raises it,
 clearing the 2 not-capturable error fixtures independently. Corrected
 write-up, repro, and fix directions:
-[docs/archive/turi-capturing-shift-unimplemented.md](../archive/turi-capturing-shift-unimplemented.md).
+[docs/archive/history/turi-capturing-shift-unimplemented.md](../archive/history/turi-capturing-shift-unimplemented.md).
 
 `call/cc` / `escape` (`EX_CALLCC`) used by `cont-flavors`, `callcc-*`,
 and `escape-*` are tracked separately under the CPS-transform category
@@ -679,7 +679,7 @@ a fiber-parking `turi_select`), plus native (non-inline-C) channel fixtures
 to test against. The recommended carve-out is now documented in
 `docs/guides/eval-api.md` ("Not interpreted: carve-outs"); the tracking report
 was archived to
-[docs/archive/turi-select-needs-channel-primitives.md](../archive/turi-select-needs-channel-primitives.md).
+[docs/archive/history/turi-select-needs-channel-primitives.md](../archive/history/turi-select-needs-channel-primitives.md).
 
 ---
 
@@ -723,7 +723,7 @@ The foundational correctness fix and the CI ratchet shipped:
   0 gaps.**
 - **`tests/run-turi.sh` now runs `tur --interpret`**, not `tur run`. This
   resolves the blocker
-  ([turi-harness-compiles-instead-of-interpreting.md](../reported/turi-harness-compiles-instead-of-interpreting.md)):
+  ([turi-harness-compiles-instead-of-interpreting.md](../archive/history/turi-harness-compiles-instead-of-interpreting.md)):
   the allowlist finally exercises `src/turi/eval.c`. Reconciling to true
   interpretation removed **31 false-green entries** (catalogued in
   [turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md));

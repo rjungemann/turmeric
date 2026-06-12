@@ -9,7 +9,7 @@
 **Summary:** `tests/run-turi.sh` was flipped from `tur run` (which compiles and
 runs a native binary) to `tur --interpret` (the actual tree-walking
 interpreter), resolving the blocker in
-[turi-harness-compiles-instead-of-interpreting.md](turi-harness-compiles-instead-of-interpreting.md).
+[turi-harness-compiles-instead-of-interpreting.md](../archive/history/turi-harness-compiles-instead-of-interpreting.md).
 True interpretation turned **31 of the 146 allowlisted fixtures red**; those 31
 were removed from the allowlist (they were never real interpreter coverage).
 This report catalogues the 31 by root cause and records the measured blast

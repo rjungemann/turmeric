@@ -1,0 +1,83 @@
+;;; tur/sized-handle-existential -- generic existential lift for phantom-indexed handles.
+;;;
+;;; Generalises stdlib/vec-existential.tur (which hard-wires SizedVec)
+;;; to any phantom-indexed sized handle declared as
+;;;
+;;;     (defopaque SizedThing [n] :int)
+;;;
+;;; or as a sized defgadt/defstruct of the same shape. Validated against
+;;; both `(SizedVec n int)` (defgadt head, bare-nominal call sites) and
+;;; `(SizedBuf n)` (defopaque head, applied-form call sites) so the same
+;;; macros lift both shapes uniformly. The macros below
+;;; sit directly on top of native `pack` (EX1c) and `open` (EX1d /
+;;; EX2-3 phantom-binder support) -- callers supply the binder vector
+;;; and body type so the same pair can lift `(SizedBuf n)`, a
+;;; hypothetical `(World n)` from a bounded-capacity ECS, or any other
+;;; size-indexed handle without per-type duplication.
+;;;
+;;; This file is NOT auto-loaded; load it explicitly after the handle
+;;; type's own stdlib module:
+;;;
+;;;     (load "stdlib/sized.tur")
+;;;     (load "stdlib/sized-buf.tur")
+;;;     (load "stdlib/sized-handle-existential.tur")
+;;;
+;;; See `docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md` P4
+;;; for the motivating use case (lifting `(world-new 1024)` into
+;;; `(exists [n] (World n))` so `for-each` can unify against a fresh
+;;; abstract `n`).
+;;;
+;;; Since: Phase SZ8/P4
+
+;;; pack-sized -- wrap a phantom-indexed value into a size-hiding existential.
+;;;
+;;; Expands to a native `pack` whose witness type is
+;;; `(exists ~binder ~type-expr)`. The handle's runtime payload is
+;;; passed through unchanged; the binder is purely a type-checker
+;;; abstraction so the caller can recover a fresh `n` via `open-sized`.
+;;;
+;;; Parameters:
+;;;   value-expr -- a sized-handle value to seal
+;;;   binder     -- the existential binder vector, e.g. [n]
+;;;   type-expr  -- the body type mentioning the binder, e.g. (SizedBuf n)
+;;;
+;;; Returns:
+;;;   A packed value of type (exists ~binder ~type-expr).
+;;;
+;;; Example:
+;;;   (pack-sized (sized-buf-new-zeroed 5) [n] (SizedBuf n))
+;;;     ; => packed SizedBuf; opening it recovers a fresh abstract n.
+;;;
+;;; Since: Phase SZ8/P4
+(defmacro pack-sized [value-expr binder type-expr]
+  (list pack value-expr (list exists binder type-expr)))
+
+;;; open-sized -- bind the hidden size index and the underlying handle.
+;;;
+;;; Expands to a native `open` whose binder vector is
+;;; `[n-name handle-name]`. The first symbol becomes the phantom binder
+;;; for the size index (used only by the type-checker -- no runtime
+;;; presence); the second binds the underlying handle value for use in
+;;; the body.
+;;;
+;;; The EX1d / EX2-3 escape checks still apply: the body's tail must
+;;; not return `handle-name` (or an alias) and must not surface a type
+;;; carrying the phantom binder.
+;;;
+;;; Parameters:
+;;;   packed-expr -- a packed value (typically produced by pack-sized)
+;;;   n-name      -- symbol that names the fresh abstract size index
+;;;   handle-name -- symbol that names the underlying sized handle
+;;;   body        -- one or more body forms evaluated in the binders' scope
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (open-sized packed n buf
+;;;     (println (sized-buf-len buf))
+;;;     (sized-buf-free buf))
+;;;
+;;; Since: Phase SZ8/P4
+(defmacro open-sized [packed-expr n-name handle-name & body]
+  (cons open (cons packed-expr (cons (vec n-name handle-name) body))))

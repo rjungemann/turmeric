@@ -58,7 +58,7 @@
 > (e.g. `%s`/string args, multi-statement bodies) and remain open.
 >
 > **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
-> [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md))
+> [turi-inline-c-accessor-miscompiles-boolean-returns.md](../archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md))
 > converted **3** of these (the accessor-path cases incl. `result-basic`) from
 > silent-wrong to clean-error. ~~**22 remain**~~ -- *superseded: the claim-trace
 > recount above lands the true figure at **20** (the `22` predates the four
@@ -127,7 +127,7 @@ Examples (rc=0, wrong stdout):
   (`88235808160464 ...`) instead of `42 / 42 / 1007`.
 - `backtrack-bind` -> prints `0` instead of `2 / 4 / 6`.
 - `result-basic` -> predicate inverted (see
-  [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md)).
+  [turi-inline-c-accessor-miscompiles-boolean-returns.md](../archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md)).
 - `weak-dangling`, `instance-head-hole-pair` -> the silent miscompiles first
   found during the TI8 allowlist reconciliation.
 

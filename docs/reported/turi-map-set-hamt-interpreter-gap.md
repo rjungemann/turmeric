@@ -82,7 +82,7 @@ expressiveness hole, not just missing code.
 **Severity:** Medium-High. (1) An ergonomics/coverage gap: a whole stdlib family
 is interpreter-only-broken while passing when compiled. (2) A latent
 memory-safety bug already filed separately
-([turi-native-set-count-layout-overflow.md](turi-native-set-count-layout-overflow.md)).
+([turi-native-set-count-layout-overflow.md](../archive/history/turi-native-set-count-layout-overflow.md)).
 (3) A "works by luck" hazard if the obvious native shim is written naively.
 
 This report is the umbrella tracking entry for the family; the set-count

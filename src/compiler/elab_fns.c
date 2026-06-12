@@ -184,8 +184,33 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
          * first argument, losing the StructDef). */
         Type head_type = *cur;
         for (uint32_t i = 1; i < form->as.list.len; i++) {
-            Type *arg = fn_type_from_form_impl(e, form->as.list.items[i],
+            Form *arg_form = form->as.list.items[i];
+            Type *arg = NULL;
+            /* SZ8 non-GADT: accept Size GADT literals (Static N) / (Add s s) /
+             * (Mul s s) as a type-app argument; lower to a TY_INT placeholder.
+             * The real size info lives in the retained Form (param/return
+             * annotation), where size_term_from_form recovers it for SZ8
+             * cross-parameter unification.  Mirrors the same lifting added to
+             * type_expr_from_form's type-app loop. */
+            if (g_sized_types_enabled &&
+                    arg_form->tag == F_LIST &&
+                    arg_form->as.list.len >= 1 &&
+                    arg_form->as.list.items[0]->tag == F_SYM) {
+                const char *op = arg_form->as.list.items[0]->as.sym->name;
+                bool is_size_op = (strcmp(op, "Static") == 0 ||
+                                   strcmp(op, "Add")    == 0 ||
+                                   strcmp(op, "Mul")    == 0);
+                if (is_size_op &&
+                        size_term_from_form(e->arena, arg_form, NULL, NULL) != NULL) {
+                    Type *ph = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *ph = type_from_kind(TY_INT);
+                    arg = ph;
+                }
+            }
+            if (!arg) {
+                arg = fn_type_from_form_impl(e, arg_form,
                                           type_params, type_param_kinds, n_type_params);
+            }
             if (!arg) return NULL;
             if (!check_row_type_arg_kind(head_type, (uint8_t)(i - 1), *arg,
                                          form->as.list.items[i]->span))
@@ -1676,6 +1701,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Type *return_fn_type = NULL; /* Issue 1b: full TY_FN return type so callers see the complete function signature (arity, result_kind) rather than a zeroed TY_FN shell */
     Type *return_tyvar_type = NULL; /* GS4: full TY_TYVAR return type for call-site substitution */
     Type *return_borrow_type = NULL; /* LS2: full borrow return type (&'a T) so lifetime IDs survive */
+    const Form *return_type_form_kept = NULL; /* SZ8 non-GADT: retain raw return-type Form for size-index inference at call sites */
     uint32_t body_start = params_idx + 1;  /* params_idx = params vector */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -1874,6 +1900,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         } else if (ret_f->tag == F_TYPE_ANN) {
             /* Compound return type via `: type-expr` syntax: `: (-> a b)`, `: (vec int)`, etc. */
             if (ret_f->as.list.len > 0) {
+                /* SZ8 non-GADT: retain the raw inner form so call sites can
+                 * recover a phantom Size index (e.g. `(Dense (Static 2) A)`). */
+                return_type_form_kept = ret_f->as.list.items[0];
                 Type *ann = fn_type_from_form(e, ret_f->as.list.items[0],
                                               fn_type_params, fn_type_param_kinds, n_fn_type_params);
                 if (ann) {
@@ -2903,6 +2932,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (ptf[i]) any = true;
         }
         fn_type.as.fn.param_type_forms = any ? ptf : NULL;
+    }
+    /* SZ8 non-GADT: stash the retained return-type annotation form so call
+     * sites can extract a phantom Size index from the declared return type
+     * (e.g. `(Dense (Static 2) A)` -> SZT_CONST 2).  Independent of n_params
+     * because nullary callers (zero-arg `mk-dense-2 [] : (Dense (Static 2) A)`)
+     * are the canonical case for opaque-carrier size literals.  NULL when no
+     * compound return annotation was captured -- the call site then falls
+     * back to the existing CtorDef-based path for sized GADT constructors. */
+    if (g_sized_types_enabled) {
+        fn_type.as.fn.result_type_form = return_type_form_kept;
     }
 
     /* Create/update binding for the function.

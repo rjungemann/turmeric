@@ -424,7 +424,7 @@ entirely (Direction D) is planned in
 
 ### Context-capturing serial-shift / cloneable-shift implemented in the interpreter (FIXED)
 
-[`../archive/turi-capturing-shift-unimplemented.md`](../archive/turi-capturing-shift-unimplemented.md)
+[`../archive/history/turi-capturing-shift-unimplemented.md`](../archive/history/turi-capturing-shift-unimplemented.md)
 
 The tree-walking interpreter handled only the *abortive* shift/reset; the
 context-capturing `serial-shift` / `cloneable-shift` (which hand a resumable
@@ -451,7 +451,7 @@ instance the tree-walker cannot run -- the inline-C-evaluator gap, see
 
 ### `errors/` diagnostic divergences under `--interpret` -- all 9 closed (FIXED)
 
-[`../archive/turi-error-fixture-diag-divergences.md`](../archive/turi-error-fixture-diag-divergences.md)
+[`../archive/history/turi-error-fixture-diag-divergences.md`](../archive/history/turi-error-fixture-diag-divergences.md)
 
 With `tests/fixtures/errors/*` wired into `run-turi.sh`, 9 negative fixtures
 emitted a different (or no) diagnostic under `tur --interpret` than on the

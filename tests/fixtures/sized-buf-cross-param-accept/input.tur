@@ -1,0 +1,23 @@
+; P3 of docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md:
+; stdlib/sized-buf.tur was lifted from a raw :int handle to a phantom-
+; indexed (SizedBuf n) defopaque.  This fixture exercises the load-
+; bearing case: sized-buf-copy!'s two parameters share `n`, and when
+; both arguments are (SizedBuf (Static 2)) the elaborator unifies `n`
+; to 2 once across both arguments and accepts the call.  Companion:
+; errors/sized-buf-cross-param-reject.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defn mk-2 [] : (SizedBuf (Static 2))
+  (:: (sized-buf-new-zeroed 2) :SizedBuf))
+
+(defn main [] : int
+  (let [a (mk-2)
+        b (mk-2)]
+    ; both buffers carry (Static 2); cross-parameter `n` unifies to 2.
+    (sized-buf-copy! a b)
+    (println 0)
+    (sized-buf-free a)
+    (sized-buf-free b))
+  0)

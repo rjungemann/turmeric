@@ -1,0 +1,24 @@
+; P3 of docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md:
+; sized-buf-copy! shares its size variable `n` across the dst and src
+; parameters.  When the callers pin `n` to distinct literal sizes
+; ((Static 2) vs (Static 3)), the SZ8 cross-parameter unifier rejects
+; the call at compile time with TUR-E0260 -- replacing the prior
+; runtime-only length-mismatch abort with a static guarantee.  The
+; arguments are passed as direct call expressions so the SZ8 non-GADT
+; inference path (which reads the callee's declared return form) can
+; recover each operand's size index.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defn mk-2 [] : (SizedBuf (Static 2))
+  (:: (sized-buf-new-zeroed 2) :SizedBuf))
+
+(defn mk-3 [] : (SizedBuf (Static 3))
+  (:: (sized-buf-new-zeroed 3) :SizedBuf))
+
+(defn main [] : int
+  ; ERROR: TUR-E0260 -- (Static 2) cannot unify with (Static 3) for the
+  ; shared `n` of sized-buf-copy!'s dst and src parameters.
+  (sized-buf-copy! (mk-2) (mk-3))
+  0)
