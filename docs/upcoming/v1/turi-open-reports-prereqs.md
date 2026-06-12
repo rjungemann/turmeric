@@ -83,6 +83,16 @@ the trace makes "still correctly claimed" easy to assert.
 closure* (not a C function pointer) must work, because the runtime HAMT takes
 equality as a raw `bool(*)(int64_t,int64_t)` (`src/runtime/hamt.h:25`).
 
+> **LANDED 2026-06-12.** Tier B is closed for the runnable case (pure-turi
+> closure comparators). The 2a `ctx` ABI + a trampoline in the map natives
+> (`map_turi_eq_tramp`, `src/main.c`) detect a `TURI_CLOSURE` comparator and
+> route through `tur_hamt_*_eq_ctx`, calling the closure via `turi_call` on every
+> collision. New allowlisted fixture `tib-map-turi-comparator` (custom
+> equality-by-x under a forced hash-0 chain) passes under `--interpret`; harness
+> 982 -> 983, 0 failed; compiled 1599/0. The only residual is *inline-C*
+> comparators (struct-key fixtures that deref a boxed pointer) -- inherently
+> interpreter-bound, failing cleanly per 2c, not a Tier B gap.
+
 Tier A (scalar-keyed map/set/hamt) already landed. The remaining prereqs:
 
 ### Prereq 2a -- thread a `void* ctx` through the HAMT eq callback (ABI groundwork) (LANDED 2026-06-12)
@@ -282,6 +292,7 @@ decision and keeping the denylist honest.
 | 1a | landed (prior) | `TUR_IC_TRACE` / `ic_claim` |
 | 1b/1c | **landed** | recount + matcher map folded into the inline-C report |
 | 2a | **landed** | `tur_hamt_*_eq_ctx` + `tests/test_hamt_eq_ctx.c` |
+| Tier B | **landed** | `map_turi_eq_tramp` trampoline + `tib-map-turi-comparator` fixture |
 | 2b | **resolved (#341)** | `EX_ASCRIBE` bit-reinterpret; `tce3-map-cstr-val` on allowlist |
 | 2c | **guarantee met** | clean rc=1 already holds; map.tur preloaded; error message now actionable |
 | 3a | **landed** | `tools/check_turi_native_parity.py` + carve-out + run.sh gate |

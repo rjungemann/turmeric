@@ -1,0 +1,38 @@
+;; TI10 Tier B: a content-keyed Map whose MapKey comparator is a PURE-TURI
+;; closure (not an inline-C carrier address). Under --interpret the comparator
+;; flows to the map natives as a turi closure and is invoked through the
+;; ctx-carrying HAMT path (tur_hamt_*_eq_ctx) via a turi_call trampoline.
+;;
+;; To make the closure's CUSTOM logic unmistakable (not works-by-luck on carrier
+;; identity), equality is by x ONLY: the carrier packs x*1000 + y, but two keys
+;; are "equal" iff they share x. So (3 4) and (3 9) collapse to one entry even
+;; though their carriers (3004 vs 3009) differ -- only the closure can decide
+;; that. Hash is forced to 0 so every key lands in one collision chain and the
+;; comparator runs on every probe.
+
+(defstruct Pt [x : int y : int])
+
+(definstance Hash [Pt]
+  (hash [p] : int 0))
+
+;; Pure-turi comparator: equal iff same x (the carrier's high part).
+(defn pt-x-eq? [a : int b : int] : bool (= (/ a 1000) (/ b 1000)))
+
+(definstance MapKey [Pt]
+  (mk-box [p] : int (+ (* (.x p) 1000) (.y p)))
+  (mk-cmp [p] : int pt-x-eq?)
+  (mk-owned? [p] 0))
+
+(defn main [] : int
+  (let [m  (map-assoc (map-assoc (:: (map-new) (Map Pt int))
+                                 (make-struct Pt 3 4) 100)
+                      (make-struct Pt 5 6) 200)
+        ;; (3 9): same x as (3 4) -> equal by closure -> UPDATES that entry
+        m2 (map-assoc m (make-struct Pt 3 9) 999)]
+    (println (map-count m))                                  ; 2
+    (println (:: (map-get m2 (make-struct Pt 3 0)) :int))   ; 999 (any x=3 key)
+    (println (:: (map-get m2 (make-struct Pt 5 0)) :int))   ; 200 (any x=5 key)
+    (println (if (map-has? m2 (make-struct Pt 3 100)) 1 0)) ; 1 (x=3 present)
+    (println (if (map-has? m2 (make-struct Pt 9 0)) 1 0))   ; 0 (no x=9)
+    (println (map-count m2)))                                ; 2
+  0)
