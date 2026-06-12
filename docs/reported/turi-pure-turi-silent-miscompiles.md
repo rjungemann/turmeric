@@ -31,12 +31,18 @@
 > joined the prelude (dual-rep Result readers + `native_result_eq` +
 > `EX_GET_FIELD` carrier-box path). Now on the allowlist.
 >
-> **3 remain, each deep and overlapping another workstream:**
-> - `range-bound-show-ord` -- `bound-fmt` (stdlib inline-C) is
->   `if (kind==1) snprintf("[...") else snprintf("(...")`; `ic_exec_snprintf_fmt`
->   takes the *first* snprintf always, so Exclusive renders `[7` not `(7`. This
->   is the **inline-C-evaluator** conditional-snprintf gap (the 22-matcher
->   bucket), not pure-turi.
+> **Update 4 (2026-06-12): `range-bound-show-ord` FIXED** -- the
+> inline-C-evaluator conditional-snprintf gap is closed. `ic_exec_snprintf_fmt`
+> now resolves a guarding `if (COND) snprintf(...); else snprintf(...);` by
+> evaluating `COND` (via the existing `ic_eval_binexpr` precedence climber) and
+> formatting only the live branch, instead of always taking the first snprintf.
+> `bound-fmt`'s Exclusive endpoint renders `(7` again. The snprintf-formatting
+> body was factored into `ic_format_snprintf_call`, and branch selection into
+> `ic_snprintf_cond_branch` (`src/turi/eval.c`). Fixture added to the
+> `run-turi.sh` allowlist (harness green). Resolution paper-trail archived at
+> [../archive/turi-inline-c-conditional-snprintf-branch.md](../archive/turi-inline-c-conditional-snprintf-branch.md).
+>
+> **2 remain, each deep and overlapping another workstream:**
 > - `codegen-private-defn-collision` -- two modules' private `__h` both register
 >   under the bare name in the interpreter env (last wins -> `200/200`). Needs
 >   per-module mangling in `EX_FN_DEF` registration *and* call resolution -- a

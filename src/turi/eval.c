@@ -2911,6 +2911,119 @@ static TuriValue ic_exec_accessor(const char *body,
 
 /* Execute snprintf-based formatter: handles bodies that do conditional early returns and
  * then snprintf(buf, size, "format", args...) + return buf. Useful for Show instances. */
+/* Format a single snprintf(bufvar, size, "format", args...) call whose 's' is
+ * at fp ("snprintf(" expected). Returns the formatted cstr TuriValue, or
+ * turi_nil() if the call does not target bufvar or cannot be parsed. */
+static TuriValue ic_format_snprintf_call(const char *fp,
+                                         const char *bufvar, int bvlen,
+                                         TuriValue *args, uint32_t n_args,
+                                         FnDef *fn, uint32_t param_offset,
+                                         const char *body) {
+    const char *fq = fp + 9;
+    fq = ic_skip_ws(fq);
+    const char *bvs = fq;
+    while (isalnum((unsigned char)*fq)||*fq=='_') fq++;
+    if ((int)(fq-bvs)!=bvlen || strncmp(bvs,bufvar,(size_t)bvlen)!=0) return turi_nil();
+    /* skip comma + size arg */
+    fq=ic_skip_ws(fq); if(*fq==',') fq++;
+    fq=ic_skip_ws(fq); int d=0;
+    while(*fq&&(*fq!=','||d>0)){if(*fq=='(')d++;else if(*fq==')')d--;fq++;}
+    if(*fq==',') fq++;
+    fq=ic_skip_ws(fq);
+    if(*fq!='"') return turi_nil();
+    /* extract format string */
+    const char *fmts=fq+1, *fmte=fmts;
+    while(*fmte&&*fmte!='"'){if(*fmte=='\\')fmte++;fmte++;}
+    char fmt_str[512]; size_t fmt_len=(size_t)(fmte-fmts);
+    if(fmt_len>=sizeof(fmt_str)) return turi_nil();
+    memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
+    ic_unescape_str(fmt_str);
+    fq=fmte+1;
+    /* parse snprintf arguments */
+    int64_t sn_args[8]; int sn_argc=0;
+    while(*fq&&*fq!=')'&&sn_argc<8) {
+        if(*fq==',') fq++;
+        fq=ic_skip_ws(fq); if(*fq==')') break;
+        const char *as=fq; int d2=0;
+        while(*fq&&((*fq!=','&&*fq!=')')||d2>0)) {
+            if(*fq=='(')d2++;else if(*fq==')')d2--;
+            else if(*fq=='"'){fq++;while(*fq&&*fq!='"'){if(*fq=='\\')fq++;fq++;}}
+            if(*fq)fq++;
+        }
+        int alen=(int)(fq-as);
+        while(alen>0&&(as[alen-1]==' '||as[alen-1]=='\t'))alen--;
+        if(alen>0&&alen<256){
+            char abuf[256]; memcpy(abuf,as,(size_t)alen); abuf[alen]='\0';
+            int64_t val=0;
+            ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body);
+            sn_args[sn_argc++]=val;
+        }
+    }
+    /* format the result */
+    char result_buf[1024]; int rlen=0;
+    switch(sn_argc){
+        case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
+        case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
+        case 2: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1]); break;
+        case 3: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2]); break;
+        case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
+        default: return turi_nil();
+    }
+    if(rlen<0) return turi_nil();
+    char *out=(char*)malloc((size_t)rlen+1);
+    if(!out) return turi_nil();
+    memcpy(out,result_buf,(size_t)rlen+1);
+    TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
+}
+
+/* Resolve  if (COND) snprintf(bufvar ...); else snprintf(bufvar ...);  by
+ * evaluating COND and formatting only the live branch's snprintf. Returns the
+ * formatted cstr, or turi_nil() if no such guarded snprintf pair is found (the
+ * caller then falls back to the linear first-match scan). */
+static TuriValue ic_snprintf_cond_branch(const char *body,
+                                         const char *bufvar, int bvlen,
+                                         TuriValue *args, uint32_t n_args,
+                                         FnDef *fn, uint32_t param_offset) {
+    const char *p = body;
+    while ((p = strstr(p, "if")) != NULL) {
+        /* word-boundary check around "if" */
+        bool lb = (p==body) || (!isalnum((unsigned char)p[-1]) && p[-1]!='_');
+        bool rb = (!isalnum((unsigned char)p[2]) && p[2]!='_');
+        if (!lb || !rb) { p += 2; continue; }
+        const char *q = ic_skip_ws(p+2);
+        if (*q != '(') { p += 2; continue; }
+        /* extract the condition between the matched parens */
+        q++;
+        const char *cstart = q; int depth = 1;
+        while (*q && depth) { if (*q=='(') depth++; else if (*q==')') depth--; if (depth) q++; }
+        if (*q != ')') { p += 2; continue; }
+        int clen = (int)(q - cstart);
+        if (clen <= 0 || clen >= 256) { p += 2; continue; }
+        char condbuf[256]; memcpy(condbuf, cstart, (size_t)clen); condbuf[clen] = '\0';
+        int64_t cv = 0; const char *cp = condbuf;
+        if (!ic_eval_binexpr(&cp, 0, fn, param_offset, args, n_args, &cv, body)) { p += 2; continue; }
+        cp = ic_skip_ws(cp);
+        if (*cp != '\0') { p += 2; continue; }  /* condition not fully understood */
+        const char *cons = ic_skip_ws(q + 1);   /* consequent */
+        const char *cons_sf = strstr(cons, "snprintf(");
+        if (!cons_sf) { p += 2; continue; }
+        const char *chosen_sf;
+        if (cv) {
+            chosen_sf = cons_sf;
+        } else {
+            /* take the snprintf after the matching else */
+            const char *e = strstr(cons, "else");
+            if (!e) { p += 2; continue; }
+            chosen_sf = strstr(e + 4, "snprintf(");
+            if (!chosen_sf) { p += 2; continue; }
+        }
+        TuriValue rv = ic_format_snprintf_call(chosen_sf, bufvar, bvlen, args, n_args, fn, param_offset, body);
+        if (rv.tag == TURI_CSTR) return rv;
+        p += 2;
+    }
+    return turi_nil();
+}
+
 static TuriValue ic_exec_snprintf_fmt(const char *body,
                                        TuriValue *args, uint32_t n_args,
                                        FnDef *fn, uint32_t param_offset) {
@@ -3007,67 +3120,25 @@ static TuriValue ic_exec_snprintf_fmt(const char *body,
         p += 2;
     }
 
-    /* Step 3: Find snprintf(bufvar, size, "format", args...) */
+    /* Step 3: Find the snprintf(bufvar, size, "format", args...) that actually
+     * runs.  A bare scan-for-first-snprintf is wrong when the body guards two
+     * snprintf calls behind an if/else (e.g. range-bound's
+     *   if (kind == 1) snprintf(buf, 32, "[%lld", v);
+     *   else           snprintf(buf, 32, "(%lld", v);
+     * ) -- always taking the first emits "[7" where the Exclusive branch wants
+     * "(7" (see docs/reported/turi-pure-turi-silent-miscompiles.md). So first
+     * try to resolve a guarding if/else and format only the live branch; fall
+     * back to the linear "first matching snprintf" scan otherwise. */
+    {
+        TuriValue cond = ic_snprintf_cond_branch(body, bufvar, bvlen, args, n_args, fn, param_offset);
+        if (cond.tag == TURI_CSTR) return cond;
+    }
     const char *sp = body;
     while (*sp) {
         const char *fp = strstr(sp, "snprintf(");
         if (!fp) break;
-        const char *fq = fp + 9;
-        fq = ic_skip_ws(fq);
-        const char *bvs = fq;
-        while (isalnum((unsigned char)*fq)||*fq=='_') fq++;
-        if ((int)(fq-bvs)==bvlen && strncmp(bvs,bufvar,bvlen)==0) {
-            /* skip comma + size arg */
-            fq=ic_skip_ws(fq); if(*fq==',') fq++;
-            fq=ic_skip_ws(fq); int d=0;
-            while(*fq&&(*fq!=','||d>0)){if(*fq=='(')d++;else if(*fq==')')d--;fq++;}
-            if(*fq==',') fq++;
-            fq=ic_skip_ws(fq);
-            if(*fq!='"') { sp=fp+1; continue; }
-            /* extract format string */
-            const char *fmts=fq+1, *fmte=fmts;
-            while(*fmte&&*fmte!='"'){if(*fmte=='\\')fmte++;fmte++;}
-            char fmt_str[512]; size_t fmt_len=(size_t)(fmte-fmts);
-            if(fmt_len>=sizeof(fmt_str)){sp=fp+1;continue;}
-            memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
-            ic_unescape_str(fmt_str);
-            fq=fmte+1;
-            /* parse snprintf arguments */
-            int64_t sn_args[8]; int sn_argc=0;
-            while(*fq&&*fq!=')'&&sn_argc<8) {
-                if(*fq==',') fq++;
-                fq=ic_skip_ws(fq); if(*fq==')') break;
-                const char *as=fq; int d2=0;
-                while(*fq&&((*fq!=','&&*fq!=')')||d2>0)) {
-                    if(*fq=='(')d2++;else if(*fq==')')d2--;
-                    else if(*fq=='"'){fq++;while(*fq&&*fq!='"'){if(*fq=='\\')fq++;fq++;}}
-                    if(*fq)fq++;
-                }
-                int alen=(int)(fq-as);
-                while(alen>0&&(as[alen-1]==' '||as[alen-1]=='\t'))alen--;
-                if(alen>0&&alen<256){
-                    char abuf[256]; memcpy(abuf,as,(size_t)alen); abuf[alen]='\0';
-                    int64_t val=0;
-                    ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body);
-                    sn_args[sn_argc++]=val;
-                }
-            }
-            /* format the result */
-            char result_buf[1024]; int rlen=0;
-            switch(sn_argc){
-                case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
-                case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
-                case 2: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1]); break;
-                case 3: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2]); break;
-                case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
-                default: return turi_nil();
-            }
-            if(rlen<0) return turi_nil();
-            char *out=(char*)malloc((size_t)rlen+1);
-            if(!out) return turi_nil();
-            memcpy(out,result_buf,(size_t)rlen+1);
-            TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
-        }
+        TuriValue rv = ic_format_snprintf_call(fp, bufvar, bvlen, args, n_args, fn, param_offset, body);
+        if (rv.tag == TURI_CSTR) return rv;
         sp=fp+1;
     }
     return turi_nil();

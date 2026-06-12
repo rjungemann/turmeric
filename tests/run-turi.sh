@@ -687,6 +687,7 @@ positional-adt-poly-ok
 promise-linear
 ptc2-test
 ptc3-test
+range-bound-show-ord
 range-reader-float
 rc-auto-drop-closure-capture
 rc-auto-drop-consumed-by-explicit-drop

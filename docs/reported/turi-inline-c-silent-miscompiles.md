@@ -1,5 +1,17 @@
 # 25 inline-C fixtures silently miscompile under `--interpret`
 
+> **Update (2026-06-12, conditional-snprintf):** the `ic_exec_snprintf_fmt`
+> matcher no longer blindly takes the *first* `snprintf` when two are guarded by
+> an `if (COND) snprintf(...); else snprintf(...);`. It now evaluates `COND` and
+> formats only the live branch (`ic_snprintf_cond_branch` /
+> `ic_format_snprintf_call`, `src/turi/eval.c`). This closed the stdlib
+> `bound-fmt` divergence behind `range-bound-show-ord` (tracked in
+> [turi-pure-turi-silent-miscompiles.md](turi-pure-turi-silent-miscompiles.md));
+> resolution archived at
+> [../archive/turi-inline-c-conditional-snprintf-branch.md](../archive/turi-inline-c-conditional-snprintf-branch.md).
+> The other snprintf-bucket cases below still miscompile via *different* paths
+> (e.g. `%s`/string args, multi-statement bodies) and remain open.
+>
 > **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
 > [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md))
 > converted **3** of these (the accessor-path cases incl. `result-basic`) from
