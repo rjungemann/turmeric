@@ -6358,6 +6358,48 @@ static TuriValue native_map_homog(TuriEnv *e, TuriValue *a, uint32_t n, void *ud
     (void)e; (void)a; (void)n; (void)ud; return turi_nil();
 }
 
+/* map-eq-raw? / map-eq-raw-k? -- structural Map equality.  map.tur's bodies
+ * iterate the HAMT and fat-dispatch the value comparator through a C function
+ * pointer (`((bool(*)(...))val_cmp[0])(...)`), which the simple inline-C executor
+ * cannot run -- so these natives re-implement the iteration and invoke the
+ * comparator (a turi closure under --interpret) via turi_call, mirroring
+ * native_result_eq.  map-eq-raw-k? additionally threads a MapKey carrier
+ * comparator (a real C fn-ptr address from mk-cmp) into the key lookup. */
+static bool map_eq_iter(TuriEnv *env, Hamt *h1, Hamt *h2,
+                        tur_hamt_keyeq_fn keyeq, TuriValue val_cmp) {
+    if (tur_hamt_count(h1) != tur_hamt_count(h2)) return false;
+    HamtIter *iter = (HamtIter *)calloc(1, sizeof(HamtIter));
+    if (!iter) return false;
+    tur_hamt_iter_init(iter, h1);
+    uint64_t h; void *k; void *v;
+    bool eq = true;
+    while (tur_hamt_iter_next(iter, &h, &k, &v)) {
+        void *vb = keyeq ? tur_hamt_get_eq(h2, h, k, keyeq)
+                         : tur_hamt_get(h2, h, k);
+        if (!vb) { eq = false; break; }
+        TuriValue cargs[2];
+        cargs[0].tag = TURI_INT; cargs[0].as_int = (int64_t)(intptr_t)v;
+        cargs[1].tag = TURI_INT; cargs[1].as_int = (int64_t)(intptr_t)vb;
+        TuriValue rv = turi_call(env, val_cmp, cargs, 2);
+        bool veq = rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0;
+        if (!veq) { eq = false; break; }
+    }
+    tur_hamt_iter_free(iter);
+    free(iter);
+    return eq;
+}
+static TuriValue native_map_eq_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 3) return turi_bool(false);
+    return turi_bool(map_eq_iter(env, set_hamt(a[0]), set_hamt(a[1]), NULL, a[2]));
+}
+static TuriValue native_map_eq_raw_k(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_bool(false);
+    return turi_bool(map_eq_iter(env, set_hamt(a[0]), set_hamt(a[1]),
+                                 (tur_hamt_keyeq_fn)(intptr_t)a[2].as_int, a[3]));
+}
+
 static void wk_register_map_natives(TuriEnv *env) {
     /* MapKey[K].mk-cmp -- bool(*)(int64,int64) carrier comparator address. */
     turi_env_register_native(env, "__inst_MapKey_mk_hycmp_int",     native_mk_cmp_int,  NULL);
@@ -6384,6 +6426,8 @@ static void wk_register_map_natives(TuriEnv *env) {
     turi_env_register_native(env, "map-count",       native_map_count,       NULL);
     turi_env_register_native(env, "map-merge",       native_map_merge,       NULL);
     turi_env_register_native(env, "map-free",        native_map_free,        NULL);
+    turi_env_register_native(env, "map-eq-raw?",     native_map_eq_raw,      NULL);
+    turi_env_register_native(env, "map-eq-raw-k?",   native_map_eq_raw_k,    NULL);
     turi_env_register_native(env, "tur-map-homog__", native_map_homog,       NULL);
 }
 

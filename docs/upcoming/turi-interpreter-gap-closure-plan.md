@@ -40,19 +40,20 @@ post-defmodule-fix:  pass = 660   fail = 910   skip = 92
 post-W1:             pass = 695   fail = 875   skip = 92   (+35)
 ```
 
-**Harness state (the live metric): 985 passed, 0 failed.** Progression:
+**Harness state (the live metric): 987 passed, 0 failed.** Progression:
 181 (post-defmodule) -> 463 (W3 wired `errors/*`, +282) -> 912 (the bulk-add of
-every auto-verified-passing non-inline-C fixture, +449) -> **985** (post #341
+every auto-verified-passing non-inline-C fixture, +449) -> 985 (post #341
 /#342/#343: pure-turi silent-miscompile fixes, inline-C tightening, HAMT ctx ABI,
-preload parity, +73). The harness summary now separates the work cleanly:
+preload parity, +73) -> **987** (W1b `map-eq?` natives + free-matcher fix, +2).
+The harness summary now separates the work cleanly:
 
 ```
-985 passed, 0 failed, 619 skipped
+987 passed, 0 failed, 617 skipped
   407 inline-c carve-outs   (TI7, permanent -- W2)
-  212 non-inline-C not yet on the allowlist  (the W5 triage surface)
+  210 non-inline-C not yet on the allowlist  (the W5 triage surface)
 ```
 
-The **212** is the real remaining gap (down from 260): the W1b native-shim
+The **210** is the real remaining gap (down from 260): the W1b native-shim
 cluster (map, blocked on the C-callback eq/hash gap) + the remaining inline-C
 evaluator miscompiles + an HKT/existential/continuation tail, plus a few
 container/edge dirs. Everything that passes under `--interpret` is now on the
@@ -196,19 +197,27 @@ miscompile, fixed by this), `typed-slots/cs4-stdlib-helpers`,
 **924**, 0 failed; compiled 1573/0; zero regressions, incl. the allowlisted
 `coerce-carrier-to-struct` which now passes via the carrier path).
 
-**map/set/hamt -- hamt + set DONE; map blocked.** hamt.tur (raw `tur_hamt_*`
-wrappers now registered in `cmd_eval`) and set (hamt-backed `set-*` natives over
-`{void* hamt}`, fixing the `native_set_count` overflow; `#set{}` lowers through
-the set ops) are landed and on the allowlist. **map** is blocked by **Gap 2**
-(the C-callback eq/hash). A 2026-06-12 spike corrected the earlier
-"monomorphization-bypass" guess: `map-assoc-eq-o` resolves to its native fine;
-the blocker is the `MapKey` `mk-cmp` key comparator, evaluated as an *argument*
-to the assoc call, which the elaborator synthesizes as a closure returning a
-captured C function pointer (`return ...__TUR_CAP_0__;`) the interpreter cannot
-represent. Map needs a turi-closure-aware HAMT path (or natives that re-implement
-key storage/lookup without a C eq callback). Full analysis:
+**map/set/hamt -- hamt + set + scalar/closure-keyed map + map-eq DONE.** hamt.tur
+(raw `tur_hamt_*` wrappers in `cmd_eval`) and set (hamt-backed `set-*` natives
+over `{void* hamt}`, fixing the `native_set_count` overflow) landed first.
+**Gap 2** (the C-callback eq/hash) was then resolved two ways: scalar keys via
+`mk-cmp` natives that return the real C carrier-comparator address (TI10 Tier A),
+and pure-turi-closure key comparators via the `void* ctx` HAMT ABI +
+`turi_call` trampoline (TI10 Tier B). The **W1b map-equality** slice (2026-06-12)
+finished the operation surface: `map-eq?`/`map-eq-k?` now evaluate under
+`--interpret` via `native_map_eq_raw[_k]` (HAMT iteration + comparator-by-`turi_call`,
+mirroring `native_result_eq`), and a latent silent-miscompile+UAF in the inline-C
+`free` matcher -- which mis-claimed `map-eq-raw?`'s body (it contains
+`tur_hamt_iter_free(`) and freed the map box -- was fixed
+([turi-inline-c-free-matcher-overclaims.md](../reported/turi-inline-c-free-matcher-overclaims.md)).
+`map-eq`/`typed/map-eq` are on the allowlist. **Remaining map gap:** recursive
+**container values** (`Map[K (Vec V)]`, `Map[K (Map ...)]`) whose value
+comparator bottoms out in `vec-eq?`/`map-eq?` -- blocked by the Vec/Map
+recursive value-eq gap (`vec-eq?` returns a raw `ptr<void>` under `--interpret`;
+`map-of-tvec-eq`, `set-of-tvec-eq`), the same family as `result-of-typed-eq`.
+Full analysis:
 [turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md).
-The original spike notes (still accurate for map's general shape) follow.
+The original spike notes (historical; map's key side is now resolved) follow.
 
 **Original spike (2026-06-11): the Result pattern does NOT directly transfer.**
 Loading `hamt.tur`/`map.tur`/`set.tur` into the prelude does **not** regress the

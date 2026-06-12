@@ -905,6 +905,15 @@ tce3-map-cstr-val
 # via a turi_call trampoline.  Hash is forced to 0 so the comparator runs on
 # every probe (genuinely exercised, not works-by-luck).
 tib-map-turi-comparator
+# Map structural equality (map-eq? / map-eq-k?): map.tur's map-eq-raw? /
+# map-eq-raw-k? iterate the HAMT and fat-dispatch the value comparator through a
+# C function pointer, which the simple inline-C executor cannot run.  The
+# native_map_eq_raw[_k] overrides re-implement the iteration and invoke the
+# comparator (a turi closure under --interpret) via turi_call, mirroring
+# native_result_eq.  (Map values that are themselves containers -- Vec/Map --
+# still await the recursive value-eq gap; see turi-map-set-hamt-interpreter-gap.md.)
+map-eq
+typed/map-eq
 "
 
 # Build an associative-set from the default list for O(1) lookup.

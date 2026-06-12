@@ -1,5 +1,22 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
+> **Progress (W1b map-equality, 2026-06-12):** **`map-eq?` / `map-eq-k?` now work
+> under `--interpret`.** `map.tur`'s `map-eq-raw?` / `map-eq-raw-k?` iterate the
+> HAMT and fat-dispatch the value comparator through a C function pointer, which
+> the simple inline-C executor cannot run -- and (worse) the loose `free(`
+> substring matcher mis-claimed their body, freeing the map box and silently
+> returning false (a UAF; see
+> [turi-inline-c-free-matcher-overclaims.md](turi-inline-c-free-matcher-overclaims.md)).
+> Fixed by (a) tightening the free matcher and (b) registering
+> `native_map_eq_raw[_k]` (`src/main.c`), which re-implement the iteration and
+> call the comparator via `turi_call`, mirroring `native_result_eq`. `map-eq`
+> and `typed/map-eq` are on the allowlist (harness 985 -> 987). **Still open --
+> recursive container values:** a `Map[K (Vec V)]` / `Map[K (Map ...)]` whose
+> *value* comparator bottoms out in `vec-eq?`/`map-eq?` mis-renders, because
+> `vec-eq?`'s inline-C body returns a raw `ptr<void>` under `--interpret`
+> (`map-of-tvec-eq`, `set-of-tvec-eq` -- the Vec/Map recursive value-eq gap, the
+> same family as `result-of-typed-eq`).
+>
 > **Progress (TI10 Tier B, 2026-06-12):** **content-keyed maps with a pure-turi
 > closure comparator now work under `--interpret`.** The 2a `void *ctx` HAMT ABI
 > (`tur_hamt_*_eq_ctx`) plus a trampoline in the map natives (`map_turi_eq_tramp`,
