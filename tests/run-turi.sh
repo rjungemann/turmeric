@@ -943,6 +943,41 @@ eq-carrier-capturing-comparator
 option-basic
 typed/option-basic
 option-map-capturing-closure
+# W5 bulk-add (verified 2026-06-12): non-inline-C fixtures that already pass
+# under --interpret with their flags but were not yet on the allowlist.  Each
+# matches expected.stdout + exit under genuine interpretation (no works-by-luck
+# carrier accident -- all produce non-trivial output), shrinking the W5 triage
+# surface ahead of the allowlist->denylist flip.
+cloneable-basic
+cloneable-capture-precision
+cloneable-defer-replay
+cloneable-defer-suspend
+cloneable-drop-rc
+cloneable-multi-resume
+cloneable-rc
+cloneable-ref
+cross-module-macro-vec-arg-in-wrapper-body
+data-literal-computed-values
+data-literal-empty
+data-literal-typed-empty
+defn-class-constraint-list-syntax
+hkt-row-canon-permutation
+hkt-row-defdata-param
+hkt-row-deftype-param
+hkt-row-polymorphic-call-from-polymorphic
+hkt-row-polymorphic-defn
+macro-emits-multiple-top-level-forms
+macro-str-to-sym
+macro-unquote-in-type-position
+refined-nonempty
+sized-cross-param-opaque-accept
+sized-handle-existential-pack-open
+sized-struct-field-share-accept
+top-level-def-init-runs-before-main
+typeclass-poly-wrapper-struct-receiver
+vec-eq-ascribed
+vec-eq-ascribed-multi
+workflow-roundtrip
 "
 
 # Build an associative-set from the default list for O(1) lookup.

@@ -1,5 +1,21 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (W5 bulk-add, 2026-06-12):** **30 verified-passing non-inline-C
+> fixtures joined the `run-turi.sh` allowlist** (harness 1002 -> 1032 passed, 0
+> failed). A sweep of the `SKIP_ALLOWLIST` coverage gap (the genuine W5 triage
+> surface) ran every positive (non-`errors/`) gap fixture under `--interpret`
+> *with its `flags`* and pinned the ones whose stdout + exit already match the
+> compiled expectation under true interpretation -- no works-by-luck carrier
+> accident, all produce non-trivial output. The added families: `cloneable-*`
+> (8), `hkt-row-*` (5), `data-literal-*` / `vec-eq-ascribed*` (5), `sized-*`
+> accept-side (3), `macro-*` (3), plus `refined-nonempty`,
+> `typeclass-poly-wrapper-struct-receiver`, `top-level-def-init-runs-before-main`,
+> `defn-class-constraint-list-syntax`, `cross-module-macro-vec-arg-in-wrapper-body`,
+> `workflow-roundtrip`. This shrinks the allowlist->denylist gap by 30 with zero
+> source/codegen change (allowlist-only); the residual positive gap is fixtures
+> that genuinely fail under `--interpret` (need a fix or a `requires.tur-only`
+> carve before the flip).
+>
 > **Prereq decomposition (2026-06-12):** the "de-risked roadmap" below is broken
 > into independently-landable groundwork (native-registry parity diff,
 > benchmark-stub overlap audit, opt-in `TUR_TURI_FULL_PRELUDE` flag, carve
