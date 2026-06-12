@@ -201,7 +201,7 @@ the applied form when the existential body's head is a defopaque, so
 `(SizedBuf n)` round-trips correctly through pack/open. Witness:
 [`tests/fixtures/sized-buf-existential-pack-open`](../../tests/fixtures/sized-buf-existential-pack-open/input.tur).
 Full resolution trail in
-[pack-open-phantom-opaque-body-type-collapses.md](pack-open-phantom-opaque-body-type-collapses.md).
+[pack-open-phantom-opaque-body-type-collapses.md](../archive/history/pack-open-phantom-opaque-body-type-collapses.md).
 
 P4 is fully landed for both SizedVec and SizedBuf shapes; the macros
 will lift a hypothetical bounded-capacity `(World n)` defopaque

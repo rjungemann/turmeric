@@ -30,7 +30,7 @@
 > the simple inline-C executor cannot run -- and (worse) the loose `free(`
 > substring matcher mis-claimed their body, freeing the map box and silently
 > returning false (a UAF; see
-> [turi-inline-c-free-matcher-overclaims.md](turi-inline-c-free-matcher-overclaims.md)).
+> [turi-inline-c-free-matcher-overclaims.md](../archive/history/turi-inline-c-free-matcher-overclaims.md)).
 > Fixed by (a) tightening the free matcher and (b) registering
 > `native_map_eq_raw[_k]` (`src/main.c`), which re-implement the iteration and
 > call the comparator via `turi_call`, mirroring `native_result_eq`. `map-eq`

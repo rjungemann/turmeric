@@ -7,7 +7,7 @@ measurements taken 2026-06-12 against `./build/tur`.
 
 Open reports surveyed:
 
-- [docs/reported/turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md)
+- [docs/reported/turi-inline-c-silent-miscompiles.md](../../archive/history/turi-inline-c-silent-miscompiles.md)
 - [docs/reported/turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md)
 - [docs/reported/turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md)
 
@@ -31,7 +31,7 @@ mis-claim to *unclaimed*, never disturb a correct claim).
 ### Prereq 1b -- the report's "22 remain" is stale; it is **20** (data below) (FOLDED 2026-06-12)
 
 The corrected count and the matcher->fixture map below have been folded into
-[the report](../../reported/turi-inline-c-silent-miscompiles.md) (the stale
+[the report](../../archive/history/turi-inline-c-silent-miscompiles.md) (the stale
 "22 remain" is marked superseded; the table now lives in the report body).
 Re-verified against `./build/tur`: 5 of 25 are clean errors (rc=1), 20 still
 silently miscompile (rc=0).
@@ -67,7 +67,7 @@ to a clean `rc=1` error, via refuse-rather-than-guess guards on each matcher
 (constructor / snprintf / accessor / simple-return). Each matcher was validated
 against its correctly-claimed regression set; full interpreter harness 983/0,
 compiled suite 1599/0, zero regressions. Details + per-matcher guard list:
-[../../reported/turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md)
+[../../archive/history/turi-inline-c-silent-miscompiles.md](../../archive/history/turi-inline-c-silent-miscompiles.md)
 (the report's "RESOLVED (W4)" banner).
 
 ### Prereq 1d -- a "known-good inline-C" regression set

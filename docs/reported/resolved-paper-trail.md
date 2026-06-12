@@ -393,6 +393,52 @@ triggered by deletion. **Fix (2026-06-11):** ported `ecs/sparse.tur` to a
 full Robin Hood implementation; wrapping is handled correctly across
 deletions and resizes.
 
+### pack/open phantom-opaque body type collapses (FIXED -- 2026-06-12)
+
+[`../archive/history/pack-open-phantom-opaque-body-type-collapses.md`](../archive/history/pack-open-phantom-opaque-body-type-collapses.md)
+
+`(pack v (exists [n] (SizedBuf n)))` followed by `(open ... [n buf] ...)`
+bound `buf` at bare `SizedBuf` instead of `(SizedBuf n)`, so any downstream
+call expecting `(type-app SizedBuf tyvar)` rejected with TUR-E0001. The
+SizedVec/GADT path carried the index through the constructor chain; the
+defopaque path went through a different lowering that dropped the applied
+form on projection. **Fix:** `elab_open` (`src/compiler/elab_types.c`)
+now preserves the applied form when the existential body's head is a
+defopaque, so `(SizedBuf n)` projects to `(SizedBuf n)`. SizedVec path
+unchanged. Witness: `tests/fixtures/sized-buf-existential-pack-open`.
+
+### Two nested `open` binders produced indistinguishable skolems (FIXED -- 2026-06-12)
+
+[`../archive/history/open-binder-skolems-not-distinguishable.md`](../archive/history/open-binder-skolems-not-distinguishable.md)
+
+After the pack/open fix above, nested opens produced `(SizedBuf <skolem_a>)`
+and `(SizedBuf <skolem_b>)` represented identically as `TY_STRUCT def=NULL`.
+`type_eq` treated them as equal, so a cross-skolem call
+`(sized-buf-copy! a b)` from separate opens accepted instead of rejecting
+under TUR-E0260. **Fix (Direction A):** step 1 (type_eq TY_TYVAR by name),
+prereq shims at 7 of 11 def==NULL sites, step 2a (named TY_TYVAR at parse
+time), step 2b (per-open skolem substitution via `subst_tyvar_name` in
+`elab_open`), plus a printer improvement so cross-skolem diagnostics show
+distinct tyvar names. Cross-open calls now reject with TUR-E0001 showing
+both skolem names. Witness:
+`tests/fixtures/errors/sized-buf-existential-cross-open-reject/`.
+
+### `open` body sees polymorphic helpers but codegen drops them (FIXED -- 2026-06-12)
+
+[`../archive/history/open-monomorphizes-polymorphic-fn-only-partially.md`](../archive/history/open-monomorphizes-polymorphic-fn-only-partially.md)
+
+Type-checking of `(sized-buf-free buf)` inside `(open packed [n buf] ...)`
+succeeded, but the C-codegen monomorphizer did not emit the
+`sized_hybuf_hyfree` instantiation, producing a C file that referenced an
+undeclared function. Helpers reachable only through an open were skipped
+because the open's abstract skolem did not seed the worklist. **Fix:** two
+new cases (`EX_EXISTS_PACK`, `EX_EXISTS_OPEN`) added to
+`emit_abi_scan_expr` in `src/compiler/emit_module.c` -- the scanner now
+recurses into the packed value and the open body. The fixture
+`tests/fixtures/sized-buf-existential-pack-open` was updated to call
+`sized-buf-free buf` inside the open body and the `requires.no-leak-check`
+marker dropped.
+
 ## Interpreter (turi) parity (landed)
 
 ### Deep non-tail recursion overflowed the C stack before the depth guard fired (FIXED -- Direction A)
@@ -446,7 +492,7 @@ natives over it; an uncapturable context raises the compiled path's `TUR-E0706`.
 **Remaining carve-out (tracked elsewhere):** `serial-context-do-struct`
 (`requires.compiled`) needs inline-C struct-accessor execution + a `Serializable`
 instance the tree-walker cannot run -- the inline-C-evaluator gap, see
-[`turi-inline-c-silent-miscompiles.md`](turi-inline-c-silent-miscompiles.md);
+[`turi-inline-c-silent-miscompiles.md`](../archive/history/turi-inline-c-silent-miscompiles.md);
 `call/cc*` (`EX_CALLCC`) stays a separate CPS-transform carve-out.
 
 ### `errors/` diagnostic divergences under `--interpret` -- all 9 closed (FIXED)
@@ -464,6 +510,36 @@ to `turi_eval_impl`; the reader-macro registry was made strict for file-eval
 emit `TUR-E0706` once `ts_capture_and_run` landed. `TURI_ERRORS_DENY` is now
 empty -- every `errors/` negative fixture's diagnostic matches under the
 interpreter.
+
+### inline-C `free` matcher over-claimed `*_free(` bodies (FIXED -- 2026-06-12)
+
+[`../archive/history/turi-inline-c-free-matcher-overclaims.md`](../archive/history/turi-inline-c-free-matcher-overclaims.md)
+
+`try_exec_simple_inline_c`'s Pattern 1 (`free`) used a loose substring
+match on `free(`, mis-claiming any body that called `tur_hamt_iter_free(`,
+`tur_hamt_free(`, `xfree(`, etc. -- silently reducing them to
+`free(arg0)`, a UAF on map/HAMT iteration state and a silent miscompile of
+the surrounding logic. **Fix:** Pattern 1 now requires a *standalone*
+`free(` token (`ic_has_standalone_free`) and refuses bodies that also
+return a value or fat-dispatch a closure (`!has_return && !has_fptr`).
+Shipped alongside the `native_map_eq_raw[_k]` natives that make `map-eq?`
+actually evaluate under `--interpret`.
+
+### 25 inline-C fixtures silently miscompiled under `--interpret` -- all 20 remaining now refuse-rather-than-guess (FIXED -- W4, 2026-06-12)
+
+[`../archive/history/turi-inline-c-silent-miscompiles.md`](../archive/history/turi-inline-c-silent-miscompiles.md)
+
+The `ic_exec_*` matchers in `src/turi/eval.c` were tightened to refuse on
+any shape they cannot evaluate faithfully. All 20 previously-silent
+miscompiles now flip to a clean `rc=1` "inline-C not supported" error --
+no more rc=0 wrong answers. Tightenings: **`ic_exec_constructor`** (11
+fixtures incl. the `backtrack-*` cluster, `arrow-instance-loop-nonrecursive`,
+`workstealing-*`) declines bodies with loops, a second allocation,
+`__atomic`/`TUR_APPLY`, or chasing a stale matcher; plus matchers for
+struct-accessor, conditional snprintf, and others. The
+serial-context-do-struct carve-out
+([`turi-capturing-shift-unimplemented.md`](../archive/history/turi-capturing-shift-unimplemented.md))
+still needs inline-C struct-accessor execution and is tracked separately.
 
 ## Spice-side cleanups (paper trail)
 

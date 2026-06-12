@@ -5,7 +5,7 @@ resolution paper-trail for the conditional-snprintf gap that surfaced as the
 `range-bound-show-ord` divergence in
 [turi-pure-turi-silent-miscompiles.md](turi-pure-turi-silent-miscompiles.md)
 and was cross-referenced from
-[../reported/turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md).
+[./history/turi-inline-c-silent-miscompiles.md](./history/turi-inline-c-silent-miscompiles.md).
 
 ## Summary
 
@@ -74,7 +74,7 @@ it would not have evaluated `kind == 1` correctly either.
 ## Still open (not this fix)
 
 Other `snprintf`-bucket inline-C fixtures in
-[../reported/turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md)
+[./history/turi-inline-c-silent-miscompiles.md](./history/turi-inline-c-silent-miscompiles.md)
 miscompile through *different* paths (`%s`/string arguments, multi-statement
 bodies) and remain carve-outs. The two non-snprintf pure-turi holdouts
 (`codegen-private-defn-collision`, `rc-unique-violation`) are independent

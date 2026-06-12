@@ -213,7 +213,7 @@ finished the operation surface: `map-eq?`/`map-eq-k?` now evaluate under
 mirroring `native_result_eq`), and a latent silent-miscompile+UAF in the inline-C
 `free` matcher -- which mis-claimed `map-eq-raw?`'s body (it contains
 `tur_hamt_iter_free(`) and freed the map box -- was fixed
-([turi-inline-c-free-matcher-overclaims.md](../reported/turi-inline-c-free-matcher-overclaims.md)).
+([turi-inline-c-free-matcher-overclaims.md](../archive/history/turi-inline-c-free-matcher-overclaims.md)).
 `map-eq`/`typed/map-eq` are on the allowlist. Recursive **container values**
 (`Map[K (Vec V)]`, `Set[(Vec V)]`) are now handled too: `native_vec_eq`
 (`vec-eq?`) and `native_set_eq_cmp` (`set-eq-cmp?`) re-walk the element store and
@@ -376,7 +376,7 @@ pure-turi failures needing a fix or marker).
 
 **The 25 silent-miscompile inline-C fixtures are NOT hidden silently.** They are
 filed in
-[docs/reported/turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md):
+[docs/reported/turi-inline-c-silent-miscompiles.md](../archive/history/turi-inline-c-silent-miscompiles.md):
 `try_exec_simple_inline_c` claims their body and returns wrong output (rc=0).
 They carve as inline-C for the flip, but the evaluator bug is W4 work (make the
 `ic_exec_*` matchers refuse shapes they cannot evaluate, then they error cleanly).
@@ -440,7 +440,7 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 `gen-*` still pass; harness 463/0; compiled 1573/0). Reports:
 [turi-inline-c-accessor-miscompiles-boolean-returns.md](../archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md)
 (FIXED) and
-[turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md)
+[turi-inline-c-silent-miscompiles.md](../archive/history/turi-inline-c-silent-miscompiles.md)
 (3 fixed, 22 remain via other `ic_exec_*` matchers).
 
 **Remaining W4:**
