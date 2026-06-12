@@ -823,6 +823,18 @@ typed/result-basic
 # TI8.b/W1b (hamt): cmd_eval now registers the raw tur_hamt_* runtime
 # wrappers, so hamt.tur is preloaded and its thin-wrapper ops work.
 hamt-lowering-basic
+
+# TI8.b/W1b (set): hamt-backed set natives over tur_hamt_* (set-new/add/
+# count/member?/remove/free/union/intersect/diff/eq?) + set.tur preloaded.
+# Fixes the documented native_set_count heap-overflow.  #set{} literals lower
+# through the set ops, so they recover too.
+data-literal-set-basic
+data-literal-set-computed
+data-literal-set-dedupe
+data-literal-set-eq
+set-basic
+set-typed-basic
+typed/set-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.

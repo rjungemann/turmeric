@@ -4926,7 +4926,7 @@ static int cmd_eval(const char *path, bool use_color,
             "typeclass-hash.tur", "typeclass-applicative.tur",
             "typeclass-alternative.tur", "typeclass-monad.tur",
             "typeclass-monaderror.tur", "typeclass-bifunctor.tur",
-            "hamt.tur",
+            "hamt.tur", "set.tur",
             "vec.tur", "slice.tur", "option.tur", "result.tur",
             "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
             NULL
@@ -5915,31 +5915,102 @@ static TuriValue native_flat_set(TuriEnv *env, TuriValue *a, uint32_t n, void *u
 }
 
 /* -------------------------------------------------------------------------
- * Set operations
- * Set represented as int64_t[2]: [0]=ptr to sorted int64_t array, [1]=count
- * (matches EX_SET_LIT interpreter layout in eval.c)
+ * Set operations -- W1b: a Set is set.tur's `struct { void *hamt; }` (one
+ * pointer = the persistent HAMT), matching the compiled representation.  These
+ * native overrides invoke the real runtime HAMT (the same `tur_hamt_*` the
+ * compiled set ops call), so `set-new`/`add`/`count`/... work under --interpret.
+ * Element keys use the int-keyed HAMT API (value == key == hash for the caller-
+ * supplied `h`); content-keyed sets (needing a C eq callback) remain a gap.
  * ---------------------------------------------------------------------- */
+static Hamt *set_hamt(TuriValue v) {
+    if (v.tag != TURI_INT || v.as_int == 0) return NULL;
+    return (Hamt *)((void **)(intptr_t)v.as_int)[0];
+}
+static TuriValue set_wrap(Hamt *h) {
+    void **s = (void **)malloc(sizeof(void *));
+    if (!s) return turi_nil();
+    s[0] = (void *)h;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)s; return v;
+}
+static TuriValue native_set_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return set_wrap(tur_hamt_new());
+}
+/* (set-add s h x) -- persistent insert; returns a new set. */
+static TuriValue native_set_add(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return n >= 1 ? a[0] : turi_nil();
+    Hamt *r = tur_hamt_set(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                           (void *)(intptr_t)a[2].as_int, (void *)1);
+    return set_wrap(r);
+}
+/* (set-remove s h x) -- persistent delete; returns a new set. */
+static TuriValue native_set_remove(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return n >= 1 ? a[0] : turi_nil();
+    Hamt *r = tur_hamt_del(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                           (void *)(intptr_t)a[2].as_int);
+    return set_wrap(r);
+}
+/* (set-member? s h x) -- membership test. */
 static TuriValue native_set_member(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n < 2) return turi_bool(false);
-    int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
-    if (!s) return turi_bool(false);
-    int64_t *items = (int64_t *)(intptr_t)s[0];
-    int64_t cnt = s[1];
-    int64_t x = a[1].as_int;
-    int64_t lo = 0, hi = cnt - 1;
-    while (lo <= hi) {
-        int64_t mid = lo + (hi - lo) / 2;
-        if (items[mid] == x) return turi_bool(true);
-        if (items[mid] < x) lo = mid + 1; else hi = mid - 1;
-    }
-    return turi_bool(false);
+    if (n < 3) return turi_bool(false);
+    return turi_bool(tur_hamt_has(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                 (void *)(intptr_t)a[2].as_int));
 }
 static TuriValue native_set_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
-    int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
-    return turi_int(s ? s[1] : 0);
+    return turi_int((int64_t)tur_hamt_count(set_hamt(a[0])));
+}
+static TuriValue native_set_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_nil();
+    tur_hamt_free(set_hamt(a[0]));
+    free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_set_union(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return n >= 1 ? a[0] : turi_nil();
+    return set_wrap(tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
+}
+/* set-intersect / set-diff iterate `a` and keep keys (present | absent) in `b`. */
+static TuriValue set_iter_filter(TuriValue *a, bool keep_if_in_b) {
+    Hamt *ha = set_hamt(a[0]), *hb = set_hamt(a[1]);
+    Hamt *result = tur_hamt_new();
+    uint64_t iter_buf[32]; for (int i = 0; i < 32; i++) iter_buf[i] = 0;
+    tur_hamt_iter_init((HamtIter *)iter_buf, ha);
+    uint64_t h; void *key = NULL, *val = NULL;
+    while (tur_hamt_iter_next((HamtIter *)iter_buf, &h, &key, &val)) {
+        if (tur_hamt_has(hb, h, key) == keep_if_in_b)
+            result = tur_hamt_set(result, h, key, (void *)1);
+    }
+    tur_hamt_iter_free((HamtIter *)iter_buf);
+    return set_wrap(result);
+}
+static TuriValue native_set_intersect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; if (n < 2) return turi_nil();
+    return set_iter_filter(a, true);
+}
+static TuriValue native_set_diff(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; if (n < 2) return turi_nil();
+    return set_iter_filter(a, false);
+}
+static TuriValue native_set_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    Hamt *ha = set_hamt(a[0]), *hb = set_hamt(a[1]);
+    if (tur_hamt_count(ha) != tur_hamt_count(hb)) return turi_bool(false);
+    uint64_t iter_buf[32]; for (int i = 0; i < 32; i++) iter_buf[i] = 0;
+    tur_hamt_iter_init((HamtIter *)iter_buf, ha);
+    uint64_t h; void *key = NULL, *val = NULL; bool eq = true;
+    while (tur_hamt_iter_next((HamtIter *)iter_buf, &h, &key, &val)) {
+        if (!tur_hamt_has(hb, h, key)) { eq = false; break; }
+    }
+    tur_hamt_iter_free((HamtIter *)iter_buf);
+    return turi_bool(eq);
 }
 
 /* -------------------------------------------------------------------------
@@ -6522,8 +6593,16 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "flat-get",        native_flat_get,        NULL);
     turi_env_register_native(env, "flat-set",        native_flat_set,        NULL);
     /* Set operations */
+    turi_env_register_native(env, "set-new",         native_set_new,         NULL);
+    turi_env_register_native(env, "set-add",         native_set_add,         NULL);
+    turi_env_register_native(env, "set-remove",      native_set_remove,      NULL);
     turi_env_register_native(env, "set-member?",     native_set_member,      NULL);
     turi_env_register_native(env, "set-count",       native_set_count,       NULL);
+    turi_env_register_native(env, "set-free",        native_set_free,        NULL);
+    turi_env_register_native(env, "set-union",       native_set_union,       NULL);
+    turi_env_register_native(env, "set-intersect",   native_set_intersect,   NULL);
+    turi_env_register_native(env, "set-diff",        native_set_diff,        NULL);
+    turi_env_register_native(env, "set-eq?",         native_set_eq,          NULL);
     /* Slice operations */
     turi_env_register_native(env, "slice-new",       native_slice_new,       NULL);
     turi_env_register_native(env, "slice-len",       native_slice_len,       NULL);

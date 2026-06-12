@@ -1,5 +1,15 @@
 # `native_set_count`/`native_set_member` heap-overflow on a HAMT-backed Set
 
+> **RESOLVED (TI8.b/W1b):** the `set-*` natives were rewritten to operate on the
+> `{void* hamt}` representation directly (over the real `tur_hamt_*` runtime),
+> and `set.tur` joined the prelude. `native_set_count`/`member`/`new`/`add`/
+> `remove`/`free`/`union`/`intersect`/`diff`/`eq?` now all read the HAMT; the
+> int64[2] `#set{}` literal layout is no longer assumed (with `set.tur` loaded,
+> `#set{}` lowers through the set ops too). `typed/set-basic` and the
+> `data-literal-set-*` fixtures pass under `--interpret` with ASan clean. The
+> dual-representation complication below is moot now that there is one
+> representation. Kept for history.
+
 **Summary:** The interpreter's `set-*` native shims
 (`native_set_count`/`native_set_member`/..., `src/main.c:5886+`) assume a Set is
 laid out as `int64_t[2] = { ptr-to-sorted-array, count }` (the `EX_SET_LIT`
