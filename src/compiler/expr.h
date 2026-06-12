@@ -918,4 +918,11 @@ Expr *expr_new(Arena *a, ExprKind k, Type t, Span span);
 
 void  expr_print(Buf *b, const Expr *e);   /* debug only */
 
+/* Map a well-known stdlib helper name (e.g. "float->int") to the stdlib file
+ * that defines it (e.g. "stdlib/math.tur"), or NULL when there is no hint.
+ * The compiled path uses this to suggest the exact `(load ...)` line on an
+ * unknown call head (elab_call.c UCH1); the interpreter reuses it to emit the
+ * same hint when a deferred runtime-dispatch head turns out to be unbound. */
+const char *tur_stdlib_load_hint(const char *name);
+
 #endif

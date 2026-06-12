@@ -5003,7 +5003,25 @@ static int cmd_eval(const char *path, bool use_color,
         TuriValue main_fn = turi_env_get(env, "main");
         if (main_fn.tag == TURI_CLOSURE) {
             TuriValue r = turi_call(env, main_fn, NULL, 0);
-            if (r.tag == TURI_ERROR) rc = 1;
+            /* A runtime error (or uncaught throw) raised while running main was
+             * previously swallowed -- main exited non-zero with no message.
+             * Print it to stderr, mirroring the top-level error path above, so
+             * `tur --interpret` surfaces the diagnostic (e.g. an unknown call
+             * head) instead of failing silently. */
+            if (r.tag == TURI_ERROR) {
+                const char *msg = turi_error_message(r);
+                if (msg && strcmp(msg, "parse error") != 0 &&
+                           strcmp(msg, "elaboration error") != 0) {
+                    fprintf(stderr, "tur: %s\n", msg);
+                }
+                rc = 1;
+            }
+            else if (r.tag == TURI_THROW) {
+                /* TuriThrow is opaque here; print a generic notice (the inner
+                 * message lives in eval.c) and fail non-zero. */
+                fprintf(stderr, "tur: uncaught exception\n");
+                rc = 1;
+            }
             else if (r.tag == TURI_INT) rc = (int)r.as_int;
         }
         turi_run_pending_defers(env);

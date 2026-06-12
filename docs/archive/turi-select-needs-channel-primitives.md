@@ -1,5 +1,16 @@
 # `select` (EX_SELECT) is unimplementable in turi without channel primitives
 
+> **Resolved (carve-out, 2026-06-12):** executed the recommended direction
+> (option 1). The clean `case EX_SELECT` error arm had already landed (TI6);
+> the carve-out is now documented for embedders in
+> [docs/guides/eval-api.md](../guides/eval-api.md) under "Not interpreted:
+> carve-outs", alongside user inline-C and WASM async. The parity ratchet
+> (`tools/check_turi_parity.py`) already guards the arm from regressing to the
+> generic default. Implementing real native channels (option 2) remains a
+> future sub-project, tracked in the TI6/TI9 sections of
+> `docs/upcoming/v1/turi-parity-post-v1-plan.md`. Archived from
+> `docs/reported/` as the documentation deliverable is complete.
+
 **Summary:** The tree-walking interpreter cannot evaluate `(select ...)`
 (`EX_SELECT`) because Turmeric channels have no native representation in
 `turi`. Channels are built entirely from inline-C (`pthread_mutex_t` /

@@ -1,5 +1,27 @@
 # 9 `errors/` fixtures whose diagnostic diverges under `--interpret`
 
+> **Update (2026-06-12): the 3 reporting-stage divergences are FIXED; 6 remain.**
+> The interpreter now emits the compiled path's diagnostic for an unbound call
+> head:
+> - `src/turi/eval.c` -- a deferred runtime-dispatch call head (elab_call.c UCH1)
+>   that resolves to an unbound variable is reworded from `unbound variable: NAME`
+>   to `unknown function or operator 'NAME'`, with the stdlib load-hint appended
+>   for known helpers (`tur_stdlib_load_hint`, now shared via `expr.h` so the
+>   compiler and interpreter use one curated table).
+> - `src/main.c` (`cmd_eval`) -- a runtime error raised while running `main` is
+>   now printed to stderr (and an uncaught throw reported) instead of being
+>   swallowed (non-zero exit, empty stderr).
+>
+> `unbound-call-head`, `unknown-helper-load-hint`, and `tce3-map-heterogeneous-val`
+> (the last already recovered once `map.tur` joined the elaborator's view) now
+> emit their `expected.diag` under `--interpret` and were removed from
+> `TURI_ERRORS_DENY`. The **6 remaining** divergences are the 4 missing-check
+> cases (`lifetime-cyclic`, `reader-macros-strict-collision`, `lang-unknown`,
+> `lang-not-implemented` -- each needs the corresponding elaborator pass enabled
+> under `--interpret`) and the 2 TI3.2 serial-shift carve-outs (blocked on
+> [turi-capturing-shift-unimplemented.md](turi-capturing-shift-unimplemented.md)).
+> This report stays open until those land.
+
 **Summary:** With `tests/fixtures/errors/*` now wired into `run-turi.sh` (W3),
 **282 of 298** negative fixtures emit the exact same diagnostic under
 `tur --interpret` as on the compiled path -- the interpreter shares the
@@ -17,9 +39,9 @@ diagnostic" or "wrong-stage diagnostic," not wrong answers.
 
 | Fixture | Expected diag | Interpreter behaviour | Class |
 | --- | --- | --- | --- |
-| `unbound-call-head` | `unknown function or operator 'foo'` | exits 1, **empty stderr** (errors at runtime, not as an elab diag) | reporting-stage |
-| `unknown-helper-load-hint` | `unknown function or operator 'float->int'` | same -- no elab diag / load hint | reporting-stage |
-| `tce3-map-heterogeneous-val` | `TUR-E0001` | exits 1, empty stderr (runtime, not elab) | reporting-stage |
+| `unbound-call-head` | `unknown function or operator 'foo'` | ~~exits 1, **empty stderr**~~ **FIXED** -- now reports the diag at runtime | reporting-stage |
+| `unknown-helper-load-hint` | `unknown function or operator 'float->int'` | ~~no elab diag / load hint~~ **FIXED** -- diag + load-hint emitted | reporting-stage |
+| `tce3-map-heterogeneous-val` | `TUR-E0001` | ~~exits 1, empty stderr~~ **FIXED** -- emits `TUR-E0001` | reporting-stage |
 | `lifetime-cyclic` | `TUR-E0106` | **exits 0** -- lifetime-cycle check not run | missing-check |
 | `reader-macros-strict-collision` | `already registered` | exits 0 -- strict-collision not raised | missing-check |
 | `lang-unknown` | `not yet implemented` | **runs the program** (prints output) | missing-check |

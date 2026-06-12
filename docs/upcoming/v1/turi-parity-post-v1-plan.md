@@ -454,9 +454,12 @@ is discarded. `tests/fixtures/continuation-substrate/` asserts exactly
 this (`t-nested-reset=11` proves the `(+ 10 ...)` frame is discarded).
 
 Because the continuation is discarded, the abortive operators need a
-plain `setjmp`/`longjmp` prompt boundary -- **no fiber capture**. Only
-the context-*capturing* variants (`serial-shift` / `cloneable-shift`,
-which hand a resumable `k` to `f`) need `TuriEffectCont`-style capture.
+plain `setjmp`/`longjmp` prompt boundary -- **no continuation capture**.
+Only the context-*capturing* variants (`serial-shift` / `cloneable-shift`,
+which hand a resumable `k` to `f`) need genuine capture -- and, per the
+corrected analysis in
+[docs/reported/turi-capturing-shift-unimplemented.md](../../reported/turi-capturing-shift-unimplemented.md),
+that capture is a heap-reified DK chain (not a `TuriEffectCont` fiber).
 
 ### TI3.1 -- abortive base + prompt boundaries -- **LANDED**
 
@@ -480,12 +483,19 @@ TI1 blocker): `continuation-substrate` (43/107/11/6/42/123/16),
 
 ### TI3.2 -- context-capturing shift -- **carved out (follow-up)**
 
-`serial-shift` and `cloneable-shift` (and multi-shot cloneable resume)
-remain unimplemented in the interpreter and error cleanly under
-`tur --interpret`. They need genuine continuation capture (reuse
-`TuriEffectCont` for one-shot serial; multi-shot cloneable needs either
-fiber-stack cloning or a heap-reified `DK` chain). Full write-up, repro,
-and recommended fix directions:
+`serial-shift` and `cloneable-shift` remain unimplemented in the
+interpreter and error cleanly under `tur --interpret`. Both flavors reify
+the delimited context as a heap **DK chain** built by a *compile-time*
+grammar walk (`collect_ctx` in `src/compiler/emit_cps.c`) and resumed/
+marshaled by `tur_serial_cont_*` over `src/runtime/cps_prompt.c`. The
+interpreter never runs codegen, so making them work means reifying the
+context at runtime plus turi-aware DK run/copy/marshal natives -- **not**
+a `TuriEffectCont` fiber (serial is already multi-shot and serializable;
+a fiber passes none of the `serial-context-*` fixtures). A smaller,
+separable slice is to move the `TUR-E0706` capturability check out of
+codegen (`emit_effects.c` / `emit_stmt.c`) so the interpreter raises it,
+clearing the 2 not-capturable error fixtures independently. Corrected
+write-up, repro, and fix directions:
 [docs/reported/turi-capturing-shift-unimplemented.md](../../reported/turi-capturing-shift-unimplemented.md).
 
 `call/cc` / `escape` (`EX_CALLCC`) used by `cont-flavors`, `callcc-*`,
@@ -666,8 +676,10 @@ A dedicated `case EX_SELECT` now returns a clean
 unhandled-kind default. Implementing it for real means adding a native
 channel layer (opaque `TURI_CHANNEL` + `chan-new`/`send`/`recv` natives +
 a fiber-parking `turi_select`), plus native (non-inline-C) channel fixtures
-to test against. Full write-up:
-[docs/reported/turi-select-needs-channel-primitives.md](../../reported/turi-select-needs-channel-primitives.md).
+to test against. The recommended carve-out is now documented in
+`docs/guides/eval-api.md` ("Not interpreted: carve-outs"); the tracking report
+was archived to
+[docs/archive/turi-select-needs-channel-primitives.md](../../archive/turi-select-needs-channel-primitives.md).
 
 ---
 

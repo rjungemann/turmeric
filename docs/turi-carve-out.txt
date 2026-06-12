@@ -20,12 +20,13 @@ EX_CPS_CONT_APP -- CPS continuation application; deferred to the CPS-transform p
 
 # --- Context-capturing delimited control (TI3.2) -------------------------
 # Abortive shift/reset/shift0 are implemented (TI3.1).  The context-CAPTURING
-# variants hand a resumable k to f and need genuine continuation capture
-# (one-shot serial via TuriEffectCont; multi-shot cloneable via fiber-stack
-# cloning or a heap-reified DK chain).  Tracked in
+# variants hand a resumable k to f.  Both flavors reify the delimited context as
+# a heap DK chain built by a COMPILE-TIME grammar walk (collect_ctx in
+# emit_cps.c); the interpreter (which never runs codegen) would need to reify the
+# context itself plus turi-aware DK run/copy/marshal natives -- not a fiber.  See
 # docs/reported/turi-capturing-shift-unimplemented.md.
-EX_SERIAL_SHIFT -- context-capturing serial-shift; needs continuation capture (TI3.2)
-EX_CLONEABLE_SHIFT -- multi-shot cloneable-shift; needs fiber-stack cloning (TI3.2)
+EX_SERIAL_SHIFT -- context-capturing serial-shift; needs runtime DK-chain reify + marshal natives (TI3.2)
+EX_CLONEABLE_SHIFT -- multi-shot cloneable-shift; needs runtime DK-chain reify (TI3.2)
 
 # --- Inline-C-bound literal sugar (TI1 / TI7) ----------------------------
 # The sym/cons-list literals only appear paired with user inline-C in the

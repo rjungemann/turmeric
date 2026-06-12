@@ -354,6 +354,28 @@ static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
     return turi_env_get(env, name);
 }
 
+/* Reword an unbound call-head error into the compiler's "unknown function or
+ * operator" diagnostic (plus the stdlib load-hint).  In interpret mode the
+ * elaborator defers an unknown call head to runtime dispatch (elab_call.c
+ * UCH1) so runtime-registered natives can resolve it; when the head is
+ * genuinely unbound, the generic EX_VAR lookup yields a bare "unbound
+ * variable: NAME".  This rewrites that to match the compiled path's wording so
+ * `tur --interpret` reports the same diagnostic.  Only an EX_VAR head can be an
+ * unresolved call head, and its sole error path is the unbound case, so the
+ * rewrite never masks an unrelated failure. */
+static TuriValue reword_unbound_call_head(TuriValue fn_val, const Expr *fn_expr) {
+    if (!turi_is_error(fn_val) || !fn_expr || fn_expr->kind != EX_VAR)
+        return fn_val;
+    const char *nm   = fn_expr->as.var.binding->name->name;
+    const char *hint = tur_stdlib_load_hint(nm);
+    if (hint)
+        return turi_errorf(
+            "unknown function or operator '%s'\n"
+            "'%s' lives in %s and is not auto-loaded\n"
+            "(load \"%s\")", nm, nm, hint, hint);
+    return turi_errorf("unknown function or operator '%s'", nm);
+}
+
 /* Early forward declaration (needed by fire_defers_to_mark below) */
 static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
 
@@ -2969,6 +2991,7 @@ restart:
             fn_val = eval_lookup(env, frame, e->as.call_.fn_binding->name->name);
         } else if (e->as.call_.fn_expr) {
             fn_val = eval_expr(env, frame, e->as.call_.fn_expr);
+            fn_val = reword_unbound_call_head(fn_val, e->as.call_.fn_expr);
         } else {
             return turi_error("eval: call with no function");
         }
@@ -3408,6 +3431,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                                  e->as.call_.fn_binding->name->name);
         } else if (e->as.call_.fn_expr) {
             fn_val = eval_expr(env, frame, e->as.call_.fn_expr);
+            fn_val = reword_unbound_call_head(fn_val, e->as.call_.fn_expr);
         } else {
             return turi_error("eval: call with no function");
         }
@@ -3853,7 +3877,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
      * interpreter has no channel runtime, and every existing select fixture is
      * inline-C-bound (a TI7 carve-out).  Fail cleanly rather than falling
      * through to the generic "unhandled expression kind" default.  See
-     * docs/reported/turi-select-needs-channel-primitives.md. */
+     * docs/archive/turi-select-needs-channel-primitives.md and the
+     * "Not interpreted: carve-outs" section of docs/guides/eval-api.md. */
     case EX_SELECT:
         return turi_error("eval: select is not supported in interpreter mode "
                           "(channels require native primitives; use the compiled path)");
