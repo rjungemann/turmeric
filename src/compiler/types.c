@@ -139,6 +139,18 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_STRUCT) {
         return a.as.struct_.def == b.as.struct_.def;
     }
+    /* Named type variables -- compare by name pointer (interned strings, so
+     * pointer equality is name equality).  Two unnamed tyvars are still equal
+     * (the historical default); but two distinctly-named tyvars are NOT.  This
+     * is load-bearing for Direction A of
+     * docs/reported/open-binder-skolems-not-distinguishable.md, where each
+     * `open` mints a fresh skolem-named tyvar and the call-side unifier must
+     * reject mismatches across nested opens. */
+    if (a.kind == TY_TYVAR) {
+        if (!a.as.tyvar_.name || !b.as.tyvar_.name) return 1;
+        return a.as.tyvar_.name == b.as.tyvar_.name
+            || (strcmp(a.as.tyvar_.name, b.as.tyvar_.name) == 0);
+    }
     /* Phase G0: ADT types - identity by AdtDef pointer */
     if (a.kind == TY_ADT) {
         return a.as.adt_.def == b.as.adt_.def;
@@ -1585,7 +1597,19 @@ static void type_name_buf(Buf *b, Type t) {
             }
             break;
         case TY_NEVER:   buf_puts(b, "!"); break;
-        case TY_TYVAR:   buf_puts(b, "tyvar"); break;
+        case TY_TYVAR:
+            /* Include the binder name in the printed form so cross-skolem
+             * mismatches (Direction A of
+             * docs/reported/open-binder-skolems-not-distinguishable.md) show
+             * which tyvar is which: "tyvar 'n'" vs "tyvar '__open_skolem_3_0'". */
+            if (t.as.tyvar_.name) {
+                buf_puts(b, "tyvar '");
+                buf_puts(b, t.as.tyvar_.name);
+                buf_putc(b, '\'');
+            } else {
+                buf_puts(b, "tyvar");
+            }
+            break;
         /* IT4: Top type */
         case TY_ANY:     buf_puts(b, "any"); break;
         case TY_FN: {

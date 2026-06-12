@@ -1,0 +1,23 @@
+; Closes docs/reported/open-binder-skolems-not-distinguishable.md:
+; two nested `open` blocks bind two SizedBufs at distinct fresh
+; skolems.  Calling sized-buf-copy! [n] [dst : (SizedBuf n) src : (SizedBuf n)]
+; across them used to silently type-check (both skolems were indistinguishable
+; anonymous TY_STRUCT{def=NULL}) and trip a runtime length check; under
+; Direction A each open mints `__open_skolem_<id>_<bi>` as a NAMED tyvar
+; so the call-side unifier rejects the cross-skolem mismatch at compile time.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defn mk2 [] : (SizedBuf int) (:: (sized-buf-new-zeroed 2) :SizedBuf))
+(defn mk3 [] : (SizedBuf int) (:: (sized-buf-new-zeroed 3) :SizedBuf))
+
+(defn main [] : int
+  (let [pa (pack (mk2) (exists [n] (SizedBuf n)))
+        pb (pack (mk3) (exists [n] (SizedBuf n)))]
+    (open pa [na a]
+      (open pb [nb b]
+        (do
+          (sized-buf-copy! a b)
+          (println 0)))))
+  0)

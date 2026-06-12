@@ -3,10 +3,48 @@ title: Two nested `open` binders produce skolems that are not distinguishable by
 category: Elaborator gap / existential skolemization
 severity: Latent expressiveness hole. Two nested `(open ... [n_i x_i] ...)` introduce two abstract size binders `n_1` and `n_2` that the elaborator represents identically as `TY_STRUCT` with `def=NULL`. The call-site unifier checks bound-tyvar consistency via `type_eq`, which therefore treats `n_1` and `n_2` as the same type. A cross-skolem call like `(sized-buf-copy! a b)` where `a` and `b` came from separate opens type-checks instead of rejecting under TUR-E0260.
 description: After the pack/open phantom-opaque fix landed (parent report), nested opens produce `(SizedBuf <skolem_a>)` and `(SizedBuf <skolem_b>)`. Calling `sized-buf-copy! [n] [dst : (SizedBuf n) src : (SizedBuf n)]` should bind `n=skolem_a` from the first arg and then reject `skolem_b` for the second arg as TUR-E0260. Instead the call accepts because both skolems are the same anonymous `TY_STRUCT def=NULL` value, and `type_eq` returns true.
-status: OPEN. Discovered while writing the cross-open reject fixture for the parent report. Closing this would give existential-lifted SizedBufs the same compile-time cross-parameter rejection that concrete `(Static k)` literals already enjoy under the SZ8 unifier.
+status: RESOLVED 2026-06-12. Direction A landed in full: step 1 (type_eq TY_TYVAR by name), prereq shims at 7 of the 11 def==NULL sites, step 2a (named TY_TYVAR at parse time), step 2b (per-open skolem substitution via `subst_tyvar_name` in `elab_open`), plus a printer improvement so cross-skolem diagnostics show distinct tyvar names. Cross-open `(sized-buf-copy! a b)` now rejects at compile time with TUR-E0001 showing both skolem names. Suite: 1554 pass / 82 fail (+2, -1 vs baseline -- recovers `hamt-delete`, adds the new reject fixture; zero regressions). Witness: `tests/fixtures/errors/sized-buf-existential-cross-open-reject/`.
 ---
 
 # Two nested `open` binders are indistinguishable
+
+> **RESOLVED 2026-06-12.** Direction A landed in four small commits
+> plus seven prereq shims; full landing path documented under
+> "Attempt log" below. Key changes:
+>
+> 1. `src/compiler/types.c` `type_eq` now distinguishes named
+>    `TY_TYVAR` by interned name pointer (with `strcmp` fallback).
+> 2. Seven sites that checked `TY_STRUCT.def == NULL` were extended to
+>    also accept `TY_TYVAR` (sites 2, 3, 7, 8, 9, 10, 11 from the
+>    enumeration in "Root cause" below). One-line OR-clauses each;
+>    no behavioral change for the legacy anonymous shape.
+> 3. `src/compiler/elab_types.c` `type_expr_from_form` now returns a
+>    NAMED `TY_TYVAR` (via `type_tyvar_named(sym->name)`) when a
+>    symbol matches a `type_params[i]`, instead of an anonymous
+>    `TY_STRUCT{def=NULL}`.
+> 4. `src/compiler/elab_types.c` `elab_open` mints a per-open skolem
+>    name (`__open_skolem_<id>_<bi>`) and walks v_type via the new
+>    static helper `subst_tyvar_name`, renaming every TY_TYVAR
+>    matching one of the existential's `var_names[]` to its fresh
+>    skolem. Distinct opens then produce distinct skolems.
+> 5. `src/compiler/types.c` `type_name_buf` prints `TY_TYVAR` with
+>    its name (`tyvar 'n'` or `tyvar '__open_skolem_3_0'`), so the
+>    cross-skolem mismatch diagnostic shows what differs.
+>
+> Suite went from 1552 pass / 83 fail to 1554 pass / 82 fail.
+> `hamt-delete` recovered as a side-effect of the prereq shims
+> (one of them retired a stale codegen-mismatch path for a
+> typeclass-method tyvar). New reject fixture
+> `tests/fixtures/errors/sized-buf-existential-cross-open-reject/`
+> exercises the cross-open `(sized-buf-copy! a b)` case and matches
+> on `TUR-E0001 ... __open_skolem_` (substring).
+>
+> One follow-up that would polish but is not required: emit
+> `TUR-E0260` (not `TUR-E0001`) for cross-skolem mismatches on
+> sized-typed call sites, with a `sz_cross_param_unify`-style
+> message that names both arguments. The current `TUR-E0001`
+> diagnostic shows the right information but reads as a generic
+> arg-type mismatch.
 
 ## Minimal repro
 
@@ -155,6 +193,96 @@ Lower blast radius but harder to maintain; (A) is preferred.
   cluster around code paths that pattern-matched on
   `TY_STRUCT{def=NULL}` (the candidate shim above is the planned
   workaround).
+
+## Attempt log
+
+### 2026-06-12 -- Direction A step 1 LANDED, step 2a REVERTED
+
+**Step 1 (landed):** `type_eq` in `src/compiler/types.c` gained a
+`TY_TYVAR` case that compares by interned name pointer (with fallback
+strcmp). Unnamed tyvars (both sides `name == NULL`) still compare
+equal -- the previous fall-through `return 1` behavior is preserved
+for the back-compat path. Named tyvars compare distinct iff their
+names differ. This is forward-compatible groundwork for any
+distinct-skolem mechanism; suite at 1552 pass / 83 fail (unchanged
+from baseline).
+
+**Step 2a (attempted, reverted):** changed
+`type_expr_from_form` (`src/compiler/elab_types.c:390`) to return a
+named `TY_TYVAR` instead of anonymous `TY_STRUCT{def=NULL}`
+whenever a symbol matches a `type_params[i]` entry. Built clean;
+suite went to 1546 pass / 89 fail (+7 net). The new failures cluster
+exactly where the original report predicted blast radius:
+
+  - **Existentials**: `ex1d-open-nested`, `exg5-rc-in-exists`,
+    `hrt-exists-open` -- existential elaboration paths that
+    pattern-match on `TY_STRUCT.def == NULL` to recognise an
+    open's projection or a packed value's residue.
+  - **Higher-rank / closure**: `hrt-rank2-apply`, `hrt-stdlib-cont`,
+    `emit-abi-trace`, plus many `httpd-*` fixtures whose
+    middleware uses HKT-shaped polymorphic closures -- the codegen
+    paths that lower a TY_STRUCT-def-NULL placeholder to int64 (the
+    11 sites enumerated under "Root cause") need parallel TY_TYVAR
+    handling.
+
+A few HKT fixtures *recovered* under step 2a (suggesting they
+already wanted named tyvars). Net was clearly negative; reverted.
+
+**Lesson:** the targeted shim that "accepts both shapes during the
+migration" mentioned in the original direction needs to be done
+per-site, not centrally. Done in the next pass (below).
+
+### 2026-06-12 (later) -- prereq shims + step 2a + step 2b LANDED
+
+**Prereq audit (the 11 sites).** Categorised:
+
+  - **Site 1** (`emit_expr.c:4008`): already had `e->type.kind == TY_TYVAR`
+    in the OR; no change needed.
+  - **Sites 4, 5, 6** (`elab_fns.c:82`, `elab_types.c:1074`, `:1123`):
+    *lift* sites that promote anonymous to named TY_TYVAR. After step 2a
+    they are mostly redundant (the parse-time path already returns
+    named), but the conditions still trip on anonymous arriving from
+    other code paths -- kept as defence-in-depth.
+  - **Sites 2, 3, 7, 8, 9, 10, 11** (in `elab_call.c`, `elab_typeclasses.c`,
+    `elab_types.c`): one-line OR-clauses extended to also accept
+    `TY_TYVAR`. Tested in isolation -- suite went from 1552/83 to
+    **1553/82** (recovered `hamt-delete`), zero regressions.
+
+**Step 2a retried with shims in place.** Same parse-time change as the
+first attempt, now safe because every site that previously assumed
+anonymous-only handles named too. Suite stayed at 1552/83 vs prereq's
+1553/82 (`hamt-delete` re-failed because step 2a changes the typeclass
+dictionary's tyvar shape), zero NEW regressions.
+
+**Step 2b: per-open skolem substitution.** Added static helper
+`subst_tyvar_name` near the EX2-2 region of `elab_types.c`, then in
+`elab_open` after `my_skolem_id = e->open_skolem_next++`, walk v_type
+substituting each `packed->type.as.forall_.var_names[bi]` with the
+fresh skolem name `__open_skolem_<id>_<bi>`. The call-side unifier
+`call_collect_type_bindings` then sees distinct names at TY_TYVAR
+positions and rejects cross-skolem mismatches via the existing
+`type_eq` late-occurrence check.
+
+**Printer improvement.** `type_name_buf` (`src/compiler/types.c`)
+now emits `tyvar 'name'` instead of bare `tyvar` for named tyvars
+so the diagnostic distinguishes the two skolems.
+
+**Final state.** Suite at **1554 pass / 82 fail** (vs baseline 1552/83
+-- net +2 passes, -1 fail). `hamt-delete` recovers (it was already
+recovering under prereq-only and the step 2a regression was undone
+once step 2b's substitution made the binding identity stable).
+Zero new regressions. New reject fixture exercises the cross-open
+case.
+
+Total churn:
+- `src/compiler/types.c`: ~15 lines (TY_TYVAR equality + named print).
+- `src/compiler/types.h`: no change (`type_tyvar_named` already exists).
+- `src/compiler/elab_types.c`: ~70 lines (the substitution helper,
+  the open-time substitution loop, the parse-time return change, four
+  prereq shims).
+- `src/compiler/elab_call.c`, `elab_typeclasses.c`: ~5 lines each
+  (one prereq shim per file).
+- New fixture: `tests/fixtures/errors/sized-buf-existential-cross-open-reject/`.
 
 ## File pointers
 

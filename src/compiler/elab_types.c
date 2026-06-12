@@ -390,13 +390,17 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         if (n_type_params > 0) {
             for (uint8_t i = 0; i < n_type_params; i++) {
                 if (type_params[i] && type_params[i] == sym) {
-                    /* Return a type variable */
+                    /* Direction A step 2a of
+                     * docs/reported/open-binder-skolems-not-distinguishable.md:
+                     * return a NAMED TY_TYVAR so binder identity survives down
+                     * to the call-site unifier.  Previously this returned an
+                     * anonymous TY_STRUCT{def=NULL}, which made every type-param
+                     * reference indistinguishable -- nested `open` skolems
+                     * collapsed under `type_eq`.  Prereq shims at sites 2/3/7
+                     * /8/9/10/11 accept both shapes during the transition. */
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    memset(t, 0, sizeof(Type));
-                    t->kind = TY_STRUCT;
-                    t->copy_kind = CK_MOVE;
+                    *t = type_tyvar_named(sym->name);
                     t->hkt_kind = type_param_kinds[i];
-                    t->as.struct_.def = NULL;
                     return t;
                 }
             }
@@ -1252,9 +1256,11 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 next_mut      = false;
                 next_affine   = false;   /* ST0 */
                 next_relevant = false;   /* ST0 */
-                /* Type variables (TY_STRUCT with def=NULL) and quantified types
-                 * are represented as TY_INT (int64_t) at the C level. */
-                if (at->kind == TY_STRUCT && at->as.struct_.def == NULL) {
+                /* Type variables (anonymous TY_STRUCT{def=NULL} or named
+                 * TY_TYVAR) and quantified types are represented as TY_INT
+                 * (int64_t) at the C level. */
+                if ((at->kind == TY_STRUCT && at->as.struct_.def == NULL)
+                    || at->kind == TY_TYVAR) {
                     arg_kinds[arg_idx] = TY_INT; /* type variable -> universal int64_t */
                     any_poly_arg = true;
                 } else if (at->kind == TY_FORALL || at->kind == TY_EXISTS) {
@@ -1280,7 +1286,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
              * the full type so the call site (and the typed-thunk dispatch) emit
              * the real C return type instead of int64_t. */
             bool aggregate_result = false;
-            if (result_type->kind == TY_STRUCT && result_type->as.struct_.def == NULL) {
+            if ((result_type->kind == TY_STRUCT && result_type->as.struct_.def == NULL)
+                || result_type->kind == TY_TYVAR) {
                 result_kind = TY_INT;
                 poly_result = true;
             } else {
@@ -2428,6 +2435,58 @@ static bool ex1d_tail_leaks(ExistsEscapeCtx *ctx, const Expr *e) {
     }
 }
 
+/* Direction A step 2b of
+ * docs/reported/open-binder-skolems-not-distinguishable.md: walk a Type and
+ * rename every TY_TYVAR whose name matches `from` (interned-pointer compare,
+ * with strcmp fallback) to `to`.  Allocates new Type nodes for the renamed
+ * branches; leaves the rest of the tree intact.  Used by elab_open to mint
+ * per-open skolem identities so two nested opens produce distinguishable
+ * binders and a cross-skolem call (e.g. `(sized-buf-copy! a b)` where a/b
+ * came from different opens) rejects at the call-side unifier. */
+static Type subst_tyvar_name(Elab *e, const Type *t,
+                             const char *from, const char *to) {
+    if (!t) return TYPE_UNKNOWN;
+    if (t->kind == TY_TYVAR && t->as.tyvar_.name &&
+        (t->as.tyvar_.name == from || strcmp(t->as.tyvar_.name, from) == 0)) {
+        Type out = *t;
+        out.as.tyvar_.name = to;
+        return out;
+    }
+    if (t->kind == TY_APP) {
+        Type out = *t;
+        Type *new_fn  = (Type *)arena_alloc(e->arena, sizeof(Type));
+        Type *new_arg = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *new_fn  = subst_tyvar_name(e, t->as.app.fn,  from, to);
+        *new_arg = subst_tyvar_name(e, t->as.app.arg, from, to);
+        out.as.app.fn  = new_fn;
+        out.as.app.arg = new_arg;
+        return out;
+    }
+    if (t->kind == TY_UNION) {
+        Type out = *t;
+        uint8_t n = t->as.union_.n_members;
+        Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
+        for (uint8_t i = 0; i < n; i++) {
+            members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *members[i] = subst_tyvar_name(e, t->as.union_.members[i], from, to);
+        }
+        out.as.union_.members = members;
+        return out;
+    }
+    if (t->kind == TY_INTERSECTION) {
+        Type out = *t;
+        uint8_t n = t->as.intersection_.n_members;
+        Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
+        for (uint8_t i = 0; i < n; i++) {
+            members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *members[i] = subst_tyvar_name(e, t->as.intersection_.members[i], from, to);
+        }
+        out.as.intersection_.members = members;
+        return out;
+    }
+    return *t;
+}
+
 /* EX2-2: Peel a TY_APP chain to expose the underlying concrete carrier.
  * When the existential body has the shape (Ctor i1 i2 ... in), the indices
  * i1..in are phantom at runtime; the value carries only the Ctor itself.
@@ -2460,10 +2519,13 @@ static bool ex2_3_type_has_phantom_residue(const Type *t, int depth) {
     switch (t->kind) {
         case TY_APP:
             /* A TY_APP whose argument is a raw tyvar means an index slot
-             * survived elaboration -- treat as phantom-skolem escape. */
+             * survived elaboration -- treat as phantom-skolem escape.
+             * Accepts the anonymous TY_STRUCT{def=NULL} shape and the
+             * named TY_TYVAR shape introduced by Direction A step 2a. */
             if (t->as.app.arg
-                    && t->as.app.arg->kind == TY_STRUCT
-                    && t->as.app.arg->as.struct_.def == NULL) {
+                    && ((t->as.app.arg->kind == TY_STRUCT
+                         && t->as.app.arg->as.struct_.def == NULL)
+                        || t->as.app.arg->kind == TY_TYVAR)) {
                 return true;
             }
             if (ex2_3_type_has_phantom_residue(t->as.app.fn,  depth + 1)) return true;
@@ -2530,7 +2592,8 @@ Expr *elab_open(Elab *e, const Form *call) {
     if (packed->type.kind == TY_EXISTS) {
         const Type *T = packed->type.as.forall_.body;
         if (T) {
-            if (T->kind == TY_STRUCT && T->as.struct_.def == NULL) {
+            if ((T->kind == TY_STRUCT && T->as.struct_.def == NULL)
+                || T->kind == TY_TYVAR) {
                 v_type = TYPE_INT;  /* type variable → int64_t */
             } else if (T->kind == TY_APP) {
                 /* Peel iff the head is an ADT (SizedVec / defgadt path): call
@@ -2549,8 +2612,10 @@ Expr *elab_open(Elab *e, const Form *call) {
                 } else {
                     v_type = head;
                     /* If the peeled head is itself a free type variable, fall
-                     * back to int64_t (consistent with the bare-tyvar case). */
-                    if (v_type.kind == TY_STRUCT && v_type.as.struct_.def == NULL) {
+                     * back to int64_t (consistent with the bare-tyvar case).
+                     * Accepts anonymous TY_STRUCT{def=NULL} and named TY_TYVAR. */
+                    if ((v_type.kind == TY_STRUCT && v_type.as.struct_.def == NULL)
+                        || v_type.kind == TY_TYVAR) {
                         v_type = TYPE_INT;
                     }
                 }
@@ -2564,6 +2629,29 @@ Expr *elab_open(Elab *e, const Form *call) {
      * `open` forms cannot confuse each other's escape checks. */
     uint32_t my_skolem_id = e->open_skolem_next++;
     e->open_skolem_depth++;
+
+    /* Direction A step 2b: substitute each existential binder name in v_type
+     * with a fresh skolem name unique to this open.  Without this, two nested
+     * opens of the same `(exists [n] (Op n))` would both project bodies
+     * carrying TY_TYVAR(name="n"), and the call-side unifier would treat
+     * them as identical (TUR-E0260 cross-skolem mismatches would silently
+     * type-check). */
+    if (packed->type.kind == TY_EXISTS
+            && packed->type.as.forall_.var_names
+            && packed->type.as.forall_.n_vars > 0) {
+        char namebuf[40];
+        for (uint8_t bi = 0; bi < packed->type.as.forall_.n_vars; bi++) {
+            const char *src = packed->type.as.forall_.var_names[bi];
+            if (!src) continue;
+            int n_chars = snprintf(namebuf, sizeof(namebuf),
+                                   "__open_skolem_%u_%u", my_skolem_id, bi);
+            if (n_chars < 0 || (size_t)n_chars >= sizeof(namebuf)) continue;
+            size_t len = (size_t)n_chars;
+            char *fresh = (char *)arena_alloc(e->arena, len + 1);
+            memcpy(fresh, namebuf, len + 1);
+            v_type = subst_tyvar_name(e, &v_type, src, fresh);
+        }
+    }
 
     /* Create binding for v in the open body */
     Binding *v_binding = binding_new(e, val_sym, v_type, false, false, val_name_form->span);

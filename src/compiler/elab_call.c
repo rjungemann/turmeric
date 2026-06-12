@@ -3834,8 +3834,12 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
         const Type *body = poly->as.forall_.body;
         if (body && body->kind == TY_FN) {
             const Type *rfull = body->as.fn.result_full_type;
-            if (rfull && rfull->kind == TY_STRUCT && rfull->as.struct_.def == NULL) {
-                /* Result is a type variable — instantiate from first arg's type */
+            if (rfull && ((rfull->kind == TY_STRUCT && rfull->as.struct_.def == NULL)
+                          || rfull->kind == TY_TYVAR)) {
+                /* Result is a type variable — instantiate from first arg's type.
+                 * Accepts both the legacy anonymous TY_STRUCT{def=NULL}
+                 * placeholder and the named TY_TYVAR introduced by Direction A
+                 * step 2a (see docs/reported/open-binder-skolems-not-distinguishable.md). */
                 result_kind = (n_args > 0 && args[0]) ? args[0]->type.kind : TY_INT;
             } else if (rfull) {
                 result_kind = rfull->kind;

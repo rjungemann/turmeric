@@ -1628,8 +1628,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             if (n_type_args > 0) {
                 for (uint8_t i = 0; i < n_type_args; ) {
                     if (i + 1 < n_type_args) {
-                        /* Check if current is TY_STRUCT (potential constructor) and next is a type */
-                        if (type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def == NULL) {
+                        /* Check if current is a tyvar placeholder (potential
+                         * higher-kinded constructor head when applied to a next
+                         * arg) and next is a type.  Accepts the legacy anonymous
+                         * TY_STRUCT{def=NULL} shape and the named TY_TYVAR
+                         * introduced by Direction A step 2a. */
+                        if ((type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def == NULL)
+                            || type_args[i].kind == TY_TYVAR) {
                             Type *next_type = &type_args[i + 1];
                             /* Next can be any concrete type (primitive, TY_STRUCT, or TY_APP) */
                             if (next_type->kind != TY_UNKNOWN) {
