@@ -180,5 +180,5 @@ defn family" shape. With A and E in, multi-defn emission with
 falls into place too.
 
 The ECS prerequisite plan
-([`../upcoming/ecs-prereq-plan.md`](../upcoming/ecs-prereq-plan.md))
+([`ecs-prereq-plan.md`](ecs-prereq-plan.md))
 should add this as a sixth open gap (gap G after F).

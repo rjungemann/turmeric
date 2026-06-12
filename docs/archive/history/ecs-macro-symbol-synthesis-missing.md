@@ -16,7 +16,7 @@ resolved: 2026-06-11, `str->sym` builtin landed in `src/compiler/elab_macros.c:3
 > **Status: fixed.** `str->sym` is shipped in
 > `src/compiler/elab_macros.c:321-326`. The minimal repro from this
 > report works as written. The ECS prerequisite plan
-> ([`../upcoming/ecs-prereq-plan.md`](../upcoming/ecs-prereq-plan.md))
+> ([`ecs-prereq-plan.md`](ecs-prereq-plan.md))
 > Tier 1 is closed; the next blocker is gap D
 > ([`macro-cannot-emit-inline-c-block.md`](macro-cannot-emit-inline-c-block.md)).
 

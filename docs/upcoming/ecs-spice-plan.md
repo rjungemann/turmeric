@@ -6,6 +6,24 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 
 # `tur-ecs` -- Plan
 
+> **Status 2026-06-11.** Phases E0, E1', E1 (variadic), E2 (incl.
+> compile-time write-cap enforcement via I1-I6), E3 (raylib
+> companion), and E4 (comparison writeup --
+> [`docs/guides/ecs-guide.md`](../guides/ecs-guide.md) and
+> [`docs/guides/ecs-vs-haskell-ecs.md`](../guides/ecs-vs-haskell-ecs.md))
+> all shipped. E2d (associated-type storage projection) has its
+> compiler prereq landed and still needs the spice-side wiring. E2c
+> (sized-rectangular iteration) is **no longer "just wiring"** -- the
+> shipped SZ6-SZ8 cross-parameter unification only kicks in for size
+> indices derived from a GADT constructor chain, which mutating
+> dense storage cannot supply; E2c is now gated on a bounded-capacity
+> world API redesign (see
+> [`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md)).
+> E2b (refinement-typed APIs) remains gated on refinement types,
+> which are still in plan.
+> The original prerequisite-tracking plan has been archived at
+> [`docs/archive/history/ecs-prereq-plan.md`](../archive/history/ecs-prereq-plan.md).
+
 ## Goal
 
 Build an ECS (Entity-Component-System) spice that lives at
@@ -54,7 +72,7 @@ expose only `entity=?`, `entity-alive?`, and constructors via the
 surface in v1** -- a "strict-aliveness" surface that turns
 use-after-despawn into a *type* error would require refinement types,
 which are not shipping (see
-[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md)).
+[docs/upcoming/v1/refinement-types-plan.md](v1/refinement-types-plan.md)).
 The `option`-returning forgiving surface is what every shipping ECS in
 every language exposes anyway; we are not giving anything up in
 practice.
@@ -137,7 +155,7 @@ the runtime cost is one indirection per call.
 
 Refinement-typed world bounds (`/has Pos /has Vel` as a predicate on
 the world type) remain a v2 ambition; see
-[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md).
+[docs/upcoming/v1/refinement-types-plan.md](v1/refinement-types-plan.md).
 
 ### Queries
 
@@ -193,18 +211,20 @@ on the world.
 
 ### Systems and scheduling
 
-A `defsystem` is a `defn` plus declared read/write sets:
+A `defsystem` is a `defn` plus declared read/write sets, expressed
+as component-name vectors (the actually-shipped I3 surface; the
+original plan-time bitmask-int form was a transitional shape):
 
 ```turmeric
-defsystem physics [w :GameWorld dt :float] :void
-  :reads  [Pos Vel]
-  :writes [Pos]
-  ...
+(defsystem physics
+  [Pos Vel]     ;; :reads
+  [Pos]         ;; :writes
+  body)
 
-defsystem render [w :GameWorld] :void
-  :reads  [Pos Sprite]
-  :writes []
-  ...
+(defsystem render
+  [Pos Sprite]  ;; :reads
+  []            ;; :writes
+  body)
 ```
 
 The scheduler (`stage`) takes a list of systems and a world and runs
@@ -216,8 +236,15 @@ list) is a compile-time error because the elaborator only exposes
 `set-X!` capabilities for `X` in `:writes`.
 
 This is the substructural-types angle: `:reads` and `:writes` define
-linear capabilities the system body is allowed to use. See
-`docs/guides/substructural-types-guide.md`.
+linear capabilities the system body is allowed to use. `defsystem`
+binds `<Comp>-read-cap : (ReadCap Comp)` and `<Comp>-write-cap :
+(WriteCap Comp)` in body scope for each entry in the vectors;
+`defcomponent-accessors` emits `set-<Comp>!` / `get-<Comp>` that
+require the corresponding cap as their first argument. A body that
+calls `set-Vel!` without `Vel` in `:writes` has no `Vel-write-cap`
+in scope and fails to elaborate. Shipped 2026-06-11 via Phases I1-I6
+(see [`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](../archive/history/ecs-defsystem-write-caps-not-enforced.md)).
+For the underlying machinery see `docs/guides/substructural-types-guide.md`.
 
 ### Raylib integration
 
@@ -285,21 +312,36 @@ guarantees. We get the latter via struct-field membership (which is
 arguably stronger -- it's structural, not predicate-based) and accept
 the former as runtime-checked.
 
-### Deferred to v2 (gated on refinement types)
+### Deferred (refinement-typed surfaces)
 
-These were originally pitched as v1 advantages but require type-system
-features that are not shipping. See
-[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md).
+Still gated on refinement types
+([`docs/upcoming/v1/refinement-types-plan.md`](v1/refinement-types-plan.md)),
+which have not yet shipped:
 
 - **Refinement-typed entities** (`entity-alive!` strict API). The
   forgiving `option`-returning API is the only v1 surface.
 - **Refinement-typed world bounds** (`/has Pos` as a predicate on `W`).
   Use the typeclass encoding in v1.
-- **Statically-rectangular sized iteration.** `SizedVec<n, T>` is
-  shipping but the size index is currently phantom (see
-  [docs/reported/sized-types-phantom-index.md](../../reported/sized-types-phantom-index.md));
-  dense-storage zip checks length at runtime in v1. Lifts to compile
-  time when SZ6 lands -- no plan-level rewrite needed at that point.
+
+### Prereq shipped, spice-side wiring pending
+
+- **Statically-rectangular sized iteration.** Sized-types SZ6-SZ8
+  landed 2026-06-10 -- size indices participate in type equality and
+  cross-parameter unification (see
+  [`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md)).
+  Dense-storage zip still checks length at runtime, and lifting it
+  is **not** the transparent spice-side update originally claimed
+  here: cross-parameter unification only fires when the size index
+  rides on a GADT constructor chain, which mutation-based dense
+  storage cannot supply. Lifting to a compile-time check now
+  requires a bounded-capacity world API redesign -- see
+  [`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md).
+- **Associated-type storage projection.** Associated type members on
+  typeclasses landed in turmeric 0.20.0 (see
+  [`docs/archive/history/typeclass-associated-types-missing.md`](../archive/history/typeclass-associated-types-missing.md));
+  the spice's `defcomponent` still emits a no-op marker. Wiring the
+  `Storage` associated type into `defcomponent` and `defworld` is a
+  follow-up.
 
 ## Out of scope (v1)
 
@@ -315,92 +357,202 @@ features that are not shipping. See
 
 ## Phasing
 
-The phasing below is split into a **v1 track** (everything that lands
-against the type system as it ships today) and a **v2 track** (gated on
-elaborator prerequisites). The split lets the v1 track ship the raylib
-demo and the comparison writeup *without* waiting on variadic HKT rows
-or refinement types.
+The original phasing was split into a **v1 track** (everything that
+landed against the type system as it shipped at the time) and a **v2
+track** (gated on elaborator prerequisites). Most v1 phases and the
+larger of the two v2 prereqs (variadic HKT rows, associated types)
+landed in the 2026-06-11 ship window; the residual work is one
+deferred surface (refinement types) and two spice-side wiring
+follow-ups whose prereqs are already in.
 
-### v1 track -- ships against today's type system
+### Shipped (2026-06-11)
 
-**E0 -- skeleton (1-2 days):** `defcomponent`, `defworld`, dense
-storage only, manual `spawn`/`get`/`set`, no queries yet. Smoke test:
-spawn 1000 entities, mutate `Pos` in a `for`. Goal: prove the
-elaborator integration and the macro-driven world-registry pattern.
+**E0 -- skeleton.** `defcomponent`, `defworld`, dense storage,
+manual `spawn`/`get`/`set`. Verified by `tests/spawn1k.tur` in the
+spice.
 
-**E1' -- fixed-arity queries (3-4 days):** `(query1 [...])` ...
-`(query5 [...])` macro family (arity capped at 5), both imperative
-`for-each` and functional `run-query!`. Sparse + tag storages.
-`with`/`without` filters. **No kind-level row type required** -- each
-arity is a separately-generated macro that elaborates to tuple-typed
-iterators. Documented as the v1 surface; the variadic HKT replacement
-is a drop-in API change later (see E1).
+**E1' -- fixed-arity queries.** Originally scoped as a `(query1
+[...])` ... `(query5 [...])` macro family. Subsumed by E1 (below):
+when the variadic-HKT-rows prereq landed, the spice rewrote queries
+as a single truly-variadic `for-each` macro driven by recursive
+helpers, with no arity cap. The originally-planned `queryN` shims
+were never built; `for-each1` / `for-each2` / `for-each3` remain
+exported as ergonomic shorthands but reduce to the variadic
+`for-each` internally.
 
-**E2 -- systems and scheduler (3-4 days):** `defsystem` with
-`:reads`/`:writes`, sequential scheduler first, then a parallel
-scheduler that proves non-conflict and runs disjoint systems on the
-fiber pool (`stdlib/fiber.tur`). Substructural capabilities back the
-write access -- this is the load-bearing v1 win and it works today.
+**E1 -- variadic queries.** Originally scoped as v2-track, gated on
+variadic HKT rows. The HKT-rows prereq shipped in turmeric 0.20.0
+(six layers landed; see
+[`docs/archive/history/variadic-hkt-rows-missing.md`](../archive/history/variadic-hkt-rows-missing.md)),
+and the spice's `for-each` macro consumes that surface directly.
+`Query #row{...} #row{...}` carries the kind-`[*]` row type the plan
+called for. Sparse + tag storages, `with`/`without` filters,
+`defquery` and `run-query!` all ship against this.
+
+**E2 -- systems and scheduler.** `defsystem` with `:reads`/`:writes`,
+sequential scheduler, parallel scheduler proving non-conflict and
+running disjoint systems on the fiber pool. Substructural
+capabilities back the write access -- the load-bearing v1 win.
 Auto-generated `HasComponent` classes (the typeclass-bounded
-polymorphism path) land here.
+polymorphism path) ship via `defcomponent-class` /
+`defcomponent-class-instance`.
 
-**E3 -- raylib companion (2-3 days):** `tur-ecs-raylib` with standard
-components, `integrate-2d`, `render-sprites`, `with-game-loop`. Ship a
-small demo (`asteroids.tur` or similar) and a `docs/guides/ecs-guide.md`.
-Aliveness is `option`-returning throughout; demo uses
-typeclass-bounded systems where it makes sense and monomorphic systems
-where it doesn't.
+Compile-time write-cap enforcement landed via Phases I1-I6 (see
+[`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](../archive/history/ecs-defsystem-write-caps-not-enforced.md)
+for the original gap report and the full implementation log).
+`defsystem`'s `:reads`/`:writes` are component-name vectors (breaking
+change from the prior bitmask-int form); `defcomponent-accessors`
+emits `set-<Comp>!` / `get-<Comp>` that require a `WriteCap<Comp>` /
+`ReadCap<Comp>` first arg; the macro binds those caps in body scope
+iff the comp is in `:reads` / `:writes`. A body that writes a
+component it did not declare fails to elaborate with `unbound symbol
+'<Comp>-write-cap'`. Regression-tested by
+`tests/fixtures/errors/ecs-defsystem-writes-unauthorized/`.
 
-**E4 -- comparison writeup:** a guide,
-`docs/guides/ecs-vs-haskell-ecs.md`, that walks a small game in
-apecs/aztecs/tur-ecs side by side and tabulates what moved from
-runtime to compile time. The v1 column is honest about what's still
-runtime-checked (aliveness, query joins past arity 5, dense-storage
-length matching pre-SZ6) and what is *not* (component membership,
-read/write conflict detection, storage choice).
+**E3 -- raylib companion.** `tur-ecs-raylib` ships at
+`../turmeric-spices/spices/ecs-raylib/` with standard 2D components,
+integration / rendering systems, and a `with-game-loop` macro.
+Aliveness is `option`-returning throughout; the demos use
+typeclass-bounded systems where useful and monomorphic systems
+otherwise.
 
-### v2 track -- gated on elaborator prerequisites
+### Shipped (continued)
 
-**E1 -- variadic queries (gated by D1).** Replace the arity-N macro
-family with a single `(query [...])` macro elaborating to row-typed
-iterators. **Hard prereq: variadic HKT rows** (see
-[docs/reported/variadic-hkt-rows-missing.md](../../reported/variadic-hkt-rows-missing.md)).
-The v1 `queryN` API is a deprecation alias once E1 lands.
+**E4 -- comparison writeup.** Both deliverables shipped:
+`docs/guides/ecs-guide.md` (the in-tree introduction) and
+[`docs/guides/ecs-vs-haskell-ecs.md`](../guides/ecs-vs-haskell-ecs.md)
+(the apecs / aztecs / tur-ecs side-by-side walking through a small
+bouncing-balls simulation in all three frameworks and tabulating
+what moved from runtime to compile time). The headline-table row is
+write-set enforcement -- the cap-gating that shipped in Phase I lets
+the tur-ecs column claim compile-time `:writes` enforcement honestly
+against apecs's and aztecs's trust-the-programmer baseline.
 
-**E2b -- refinement-typed APIs (gated by RT0+).** Add the `entity-alive!`
-strict-aliveness surface (lifts the runtime check out of the inner loop
-when the elaborator can prove it) and the `/has Pos` refinement on
-world bounds (lets a polymorphic system state its world requirements
-without the `HasPos` class dictionary). Both are pure surface
-additions over the v1 substrate; nothing in v1 has to change to
-accommodate them. See
-[docs/reported/refinement-types-not-implemented.md](../../reported/refinement-types-not-implemented.md).
+### Spice-side wiring pending (prereq landed)
 
-**E2c -- sized-rectangular dense iteration (gated by SZ6).** Dense-vs-dense
-zip becomes statically rectangular. Until SZ6 the runtime length check
-stays. See
-[docs/reported/sized-types-phantom-index.md](../../reported/sized-types-phantom-index.md).
+**E2d -- associated-type storage projection.** Associated type
+members on typeclasses shipped in turmeric 0.20.0 (see
+[`docs/archive/history/typeclass-associated-types-missing.md`](../archive/history/typeclass-associated-types-missing.md)).
+The spice's `defcomponent` is still the E0 documentation marker;
+wiring a real `type Storage : Type` associated member on
+`Component` -- and letting `defworld` project through it instead of
+consulting the macro-time storage registry -- is queued.
 
-**E2d -- associated-type storage projection (gated by associated types).**
-Replace the parallel macro-registry for storage selection with a real
-`type Storage : Type` member on `Component`. See
-[docs/reported/typeclass-associated-types-missing.md](../../reported/typeclass-associated-types-missing.md).
-v1's macro-registry stays callable; v2 swaps the elaboration path.
+The shipped milestone is "single-parameter classes, single
+output type, no value-level projection" -- which lines up with
+ECS's needs but constrains the design. Prereqs that should land in
+this order to keep the wiring small:
 
-## Validation
+**E2d-P1 -- Typed storage opaques per backend.** Today
+`dense-new`, `sparse-new`, and `tag-new` all return bare `:int`.
+Lift each to a phantom-parameterized opaque: `(defopaque Dense
+[A] :int)`, `(defopaque Sparse [A] :int)`, `(defopaque Tag :int)`.
+Underlying representation unchanged; this is a typing surface
+change in `ecs/storage`, `ecs/sparse`, `ecs/tag`. Without it, an
+associated `(Storage T)` projection has nothing distinct to point
+at.
 
-- Fixture tests under `tests/fixtures/ecs-*/` covering:
-  - declaring world with components, spawn/despawn, generational
-    safety,
-  - queries (presence, intersection, with/without filters),
-  - system scheduling order and parallel non-conflict,
-  - rejection cases: query over non-registered component, system
-    writing outside its `:writes` set, double-despawn.
-- A `tur-ecs-raylib` demo that does something visible at 60 FPS with a
-  few thousand entities, runnable via `tur run` from the spice
-  directory.
-- Bench: dense `Pos`/`Vel` integration loop, 100k entities, compared
-  against a hand-rolled equivalent. Target: within 2x of hand-rolled.
+**E2d-P2 -- `Component` class with associated `Storage`.**
+`(defclass Component [T] (type Storage : Type))`. Per the archive,
+this is exactly the shape the milestone resolves. Instances:
+`(definstance Component [Pos] (type Storage = (Dense Pos)))`.
+Stdlib/spice-only work, gated on E2d-P1.
+
+**E2d-P3 -- `defstruct` accepts `(Storage T)` in field position.**
+Verification fixture: a struct with a field typed `(Storage Pos)`
+that reduces to `(Dense Pos)` at projection time. The archive
+notes resolution happens in both `type_expr_from_form` *and*
+`fn_type_from_form`, so this *should* be green -- but it's the
+load-bearing assumption for `defworld` and worth one fixture
+before any macro rewrite.
+
+**E2d-P4 -- `defcomponent` macro emits the instance.** Once P2
+holds, `(defcomponent Pos :storage :dense)` lowers to the
+`Component`/`Storage` instance plus the existing registration
+hook. Macro work, no elaborator changes.
+
+**E2d-P5 -- `defworld` projects field types through `(Storage
+T)`.** Replace the hard-coded `~Pos : int` field emission with
+`~Pos : (Storage ~Pos)`. Gated on P3 + P4. Removes `defworld`'s
+dependency on the macro-time storage registry; storage choice
+becomes a property of the component, visible to every consumer
+that reads the world's type.
+
+**E2d-P6 (stretch) -- Polymorphic storage ops via a
+single-param class.** A `(defclass StorageOps [S] (type Elem :
+Type) (insert ...) (get ...) (has? ...))` with instances per
+backend lets `defcomponent-accessors` dispatch via class methods
+instead of bare `dense-*` / `sparse-*` / `tag-*` calls. Lifts the
+"swap storage with one line" claim from documentation to type
+system. Sits inside the shipped single-param-class milestone by
+threading the element type through an associated `Elem` instead
+of a second class parameter -- the workaround the archive hints
+at for the missing multi-param class machinery.
+
+**Out of scope (still gated on compiler work):** anything that
+needs the value-level projection caveat called out in the
+archive -- methods whose *C* signature depends on `(Storage T)`.
+Today every storage handle rides the `int64` carrier so this is
+fine; if a backend ever wants non-int handles, that compiler work
+has to land first.
+
+The critical path is **E2d-P1 -> E2d-P3 (verify) -> E2d-P2 ->
+E2d-P4 -> E2d-P5**, with P6 as a follow-up. Each step is
+self-contained and re-uses shipped machinery; the whole sequence
+should be a single multi-PR landing, not a multi-release effort.
+
+### Design pending (prereq alone is not enough)
+
+**E2c -- sized-rectangular dense iteration.** Originally listed as
+"spice-side wiring pending." Reclassified 2026-06-12 after a
+scoping pass: SZ6-SZ8 cross-parameter unification only fires when
+the size index rides on a GADT constructor chain
+([`tests/fixtures/sized-cross-param-accept`](../../tests/fixtures/sized-cross-param-accept/input.tur)
+is the reference case). Dense storage's handle is a mutating
+`int`-pointer with no constructor chain, so any size index attached
+to it is a true phantom -- never load-bearing. The only honest
+landing is a **bounded-capacity world API** that commits to a
+single size `n` at world construction and threads it through every
+storage field, `spawn`, `despawn`, and the accessors. That is a
+world-API redesign, not transparent wiring. Full analysis and the
+open design questions are in
+[`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md).
+A follow-up `ecs-sized-world-plan.md` is the next deliverable;
+no spice code lands before that design plan is resolved.
+
+### Still deferred (refinement types not shipping)
+
+**E2b -- refinement-typed APIs.** The `entity-alive!` strict-aliveness
+surface and `/has Pos` refinement on world bounds both require
+refinement types, which are still in plan
+([`docs/upcoming/v1/refinement-types-plan.md`](v1/refinement-types-plan.md)).
+Both are pure surface additions over the shipped substrate; nothing
+in the current spice has to change to accommodate them when they
+do land.
+
+## Validation -- what shipped
+
+- **Spice-side regression tests** under
+  `../turmeric-spices/spices/ecs/tests/` covering: world declaration
+  + spawn/despawn + generational safety
+  (`spawn1k.tur`, `spawn1k-pos.tur`); variadic queries up to arity 12
+  with intersection and tag filters (`for-each-arity-*.tur`,
+  `defquery-integrate.tur`, `query-typed.tur`); system scheduling
+  order and parallel non-conflict (`stage-pair.tur`, `stage-wave.tur`);
+  Phase I cap surface (`cap-linear-single-use.tur`,
+  `cap-mint-per-instance.tur`, `defsystem-caps-bound.tur`,
+  `defcomponent-accessors.tur`); negative cases under
+  `tests/errors/` rejecting double-use caps, wrong-component cap
+  shapes, and `:writes`-undeclared writes.
+- **Main-repo regression fixture**
+  `tests/fixtures/errors/ecs-defsystem-writes-unauthorized/` --
+  declaring `:writes [Pos]` and trying to write `Vel` via the typed
+  accessor fails to elaborate.
+- **`tur-ecs-raylib` demo** runnable via `tur run` from
+  `../turmeric-spices/spices/ecs-raylib/`.
+- **Bench** -- still TODO; the original 100k-entity dense
+  `Pos`/`Vel` integration vs. hand-rolled comparison has not been
+  written. Within-2x-of-hand-rolled is the target.
 
 ## Resolved design decisions
 

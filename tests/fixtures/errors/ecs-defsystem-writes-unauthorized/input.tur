@@ -1,0 +1,34 @@
+;; ECS Phase I regression: a defsystem declaring :writes [Pos] that
+;; tries to write Vel via the cap-gated set-Vel! accessor fails to
+;; elaborate. Vel-write-cap is not bound in the body's scope because
+;; Vel was not declared in :writes -- the load-bearing v1 promise from
+;; docs/archive/history/ecs-defsystem-write-caps-not-enforced.md, now
+;; shipped.
+
+(defmodule ecs_defsystem_writes_unauthorized
+  (export)
+
+(import ecs/entity  :refer [entity-index])
+(import ecs/storage :refer [dense-new])
+(import ecs/world   :refer [defworld defcomponent-accessors world-alloc-entity!])
+(import ecs/system  :refer [System make-system system-run! defsystem])
+(import ecs/cap     :refer [WriteCap ReadCap make-write-cap make-read-cap use-cap!])
+
+(defstruct Pos [x : int y : int])
+(defstruct Vel [x : int y : int])
+
+(defworld GameWorld [Pos Vel])
+(defcomponent-accessors GameWorld Pos)
+(defcomponent-accessors GameWorld Vel)
+
+(def Pos-cid 0)
+(def Vel-cid 1)
+
+(defsystem rogue
+  []
+  [Pos]
+  (let [gw : GameWorld (:: w GameWorld)
+        e               (world-alloc-entity! (.gens gw))]
+    (set-Vel! Vel-write-cap gw (entity-index e) (make-struct Vel 0 0))))
+
+) ;; end defmodule

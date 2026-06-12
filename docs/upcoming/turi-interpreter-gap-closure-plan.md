@@ -7,7 +7,7 @@
 > curated allowlist to a denylist (every fixture runs under `tur --interpret`
 > minus documented carve-outs).
 > **Parent:** [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) Phase TI8.b
-> **Companion report:** [docs/reported/turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md)
+> **Companion report:** [docs/reported/turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md)
 
 ---
 
@@ -205,7 +205,7 @@ to the assoc call, which the elaborator synthesizes as a closure returning a
 captured C function pointer (`return ...__TUR_CAP_0__;`) the interpreter cannot
 represent. Map needs a turi-closure-aware HAMT path (or natives that re-implement
 key storage/lookup without a C eq callback). Full analysis:
-[turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md).
+[turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md).
 The original spike notes (still accurate for map's general shape) follow.
 
 **Original spike (2026-06-11): the Result pattern does NOT directly transfer.**
@@ -242,9 +242,9 @@ write the ~18 natives over `tur_hamt_*`, and resolve the C-callback eq/hash
 (turi-closure-aware HAMT). hamt.tur itself (over the existing `native_tur_hamt_*`)
 is the most tractable starting point. Full umbrella report (three gaps, repro,
 fix directions):
-[turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md),
+[turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md),
 plus the narrower
-[turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md).
+[turi-native-set-count-layout-overflow.md](../reported/turi-native-set-count-layout-overflow.md).
 
 **Finding 1 -- adding the modules recovers nothing.** Adding `result.tur` to the
 prelude (with the `ok?`/`err?` stubs dropped) **regressed** `coerce-carrier-to-
@@ -266,7 +266,7 @@ Result/Set/Map value can exist in the interpreter as any of:
 
 The `native_*` shims silently assume one shape; feeding them another silently
 miscompiles or heap-overflows (`native_set_count`, see
-[docs/reported/turi-native-set-count-layout-overflow.md](../../reported/turi-native-set-count-layout-overflow.md)).
+[docs/reported/turi-native-set-count-layout-overflow.md](../reported/turi-native-set-count-layout-overflow.md)).
 Crucially the **same `set-count` native serves both `#set{}` literals (correct)
 and `set.tur` sets (overflow)** -- with no runtime tag to tell them apart -- so
 the shims cannot simply be repointed.
@@ -293,7 +293,7 @@ instead of that box).
 **Adjacent bug surfaced during the spike (W4, independent):**
 `ic_exec_accessor` silently miscompiles `return p == NULL || !p->field;` (drops
 the `!`/`||`), inverting predicates like `result-basic`'s `u-err?` -- filed at
-[docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md).
+[docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md](../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md).
 
 ---
 
@@ -359,7 +359,7 @@ pure-turi failures needing a fix or marker).
 
 **The 25 silent-miscompile inline-C fixtures are NOT hidden silently.** They are
 filed in
-[docs/reported/turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md):
+[docs/reported/turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md):
 `try_exec_simple_inline_c` claims their body and returns wrong output (rc=0).
 They carve as inline-C for the flip, but the evaluator bug is W4 work (make the
 `ic_exec_*` matchers refuse shapes they cannot evaluate, then they error cleanly).
@@ -386,7 +386,7 @@ harness went 181 -> **463 passed, 0 failed**. The `.gitignore` was extended to
 cover nested `tests/fixtures/*/*/turi.{stdout,stderr}` scratch.
 
 **Remaining: 9 genuine divergences** (denylisted, tracked in
-[docs/archive/turi-error-fixture-diag-divergences.md](../../archive/turi-error-fixture-diag-divergences.md)):
+[docs/archive/turi-error-fixture-diag-divergences.md](../archive/turi-error-fixture-diag-divergences.md)):
 3 reporting-stage (unbound-call / heterogeneous-map error at runtime, empty
 stderr, no elab diag), 4 missing-check (`lifetime-cyclic` TUR-E0106, reader-macro
 strict-collision, `#lang` unknown/not-implemented run clean), 2 TI3.2 carve-outs
@@ -421,9 +421,9 @@ the bare field -- turning silent-wrong into a clean "inline-C not supported"
 error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 (incl. `result-basic`) with **zero regressions** (allowlisted `inline-c-binop` /
 `gen-*` still pass; harness 463/0; compiled 1573/0). Reports:
-[turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md)
+[turi-inline-c-accessor-miscompiles-boolean-returns.md](../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md)
 (FIXED) and
-[turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md)
+[turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md)
 (3 fixed, 22 remain via other `ic_exec_*` matchers).
 
 **Remaining W4:**
@@ -434,7 +434,7 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
   same refuse-rather-than-guess tightening per matcher. Inline-C carve-outs, so
   they do not block W5 -- but they ship a wrong-answer hazard for real programs.
 - **11 pure-turi interpreter bugs** (the W5 blockers), catalogued in
-  [turi-pure-turi-silent-miscompiles.md](../../archive/turi-pure-turi-silent-miscompiles.md)
+  [turi-pure-turi-silent-miscompiles.md](../archive/turi-pure-turi-silent-miscompiles.md)
   (RESOLVED 2026-06-12 -- all 11 fixed, report archived).
   **7 fixed** (added to the allowlist, harness 912 -> 919): `EX_ASCRIBE`
   primitive coercion (`rt-return-dispatch-*`), `EX_ANY_TYPE_OF` coarse tags +
@@ -544,11 +544,11 @@ Definition of done = W5 merged with `run-turi.sh` green at denylist default.
 
 - [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) -- parent plan
   (TI8.b lives there; this is its execution detail).
-- [docs/reported/turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md)
+- [docs/reported/turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md)
   -- the 31 allowlist reconciliation + the probe + the defmodule fix writeup.
-- [docs/reported/turi-harness-compiles-instead-of-interpreting.md](../../reported/turi-harness-compiles-instead-of-interpreting.md)
+- [docs/reported/turi-harness-compiles-instead-of-interpreting.md](../reported/turi-harness-compiles-instead-of-interpreting.md)
   -- the resolved root blocker.
-- [docs/turi-carve-out.txt](../../turi-carve-out.txt) -- EX_* carve-out list the
+- [docs/turi-carve-out.txt](../turi-carve-out.txt) -- EX_* carve-out list the
   ratchet enforces.
 - `src/main.c` `cmd_eval` (`:4801`), `compile_to_c` prelude (`:646`),
   `wk_eval_fixture` (`:6671`) -- the three prelude sites to unify in W1.

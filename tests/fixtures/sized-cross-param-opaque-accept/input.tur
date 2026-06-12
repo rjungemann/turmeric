@@ -1,0 +1,39 @@
+; P1 probe (ECS E2c prereq): on a non-GADT phantom size index, does SZ8's
+; cross-parameter unification fire?  Companion: errors/sized-cross-param-
+; opaque-reject (currently UNREACHABLE -- see docs/reported/sz8-opaque-
+; phantom-size-not-load-bearing.md).
+;
+; This file demonstrates the *vacuous* accept: both `mk-dense` calls
+; return (Dense ?n A) with a fresh unification variable for `n`, so the
+; `n`-shared `zip` signature trivially unifies.  Nothing rectangular is
+; being witnessed -- the loop bound is still runtime cap territory.
+;
+; The reject companion would need callers that pin `n` to distinct
+; literals, e.g. `(mk-dense-2)` returning `(Dense (Static 2) int)` and
+; `(mk-dense-3)` returning `(Dense (Static 3) int)`.  Today that hits
+; "unsupported type expression form" at parse time: the elaborator does
+; not accept a Size GADT literal inside a defopaque's type-app slot,
+; only inside GADT constructor return-type signatures.  Until that is
+; fixed, opaque-carried phantom size indices cannot witness static
+; rectangularity, and ECS E2c's "transparent spice-side update" claim
+; is unbacked.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defopaque Dense [n A] :int)
+
+; Parametric over [n A]: returns (Dense n A) with `n` a fresh tyvar.
+(defn mk-dense [n A] [] : (Dense n A)
+  (:: 0 :Dense))
+
+; Cross-parameter `n` -- the analogue of pairwise-sum in
+; tests/fixtures/sized-cross-param-accept, but over an opaque carrier.
+(defn zip [A B] [xs : (Dense n A) ys : (Dense n B)] : int
+  0)
+
+(defn main [] : int
+  (println (zip (mk-dense) (mk-dense)))   ; trivially unifies (?n1 = ?n2 = ?n)
+  0)

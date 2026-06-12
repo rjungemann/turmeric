@@ -1,9 +1,10 @@
 ---
 title: defsystem `:writes` list is collected but not enforced -- writes outside the set still compile
-category: Reported
+category: Archived (shipped 2026-06-11)
 severity: Missing the load-bearing v1 win the ECS plan promises (the spec'd "single biggest delta vs. Haskell ECSes")
 discovered: 2026-06-11, while auditing what's actually shipped against `docs/upcoming/ecs-spice-plan.md` after closing gaps A-H
-location: `../turmeric-spices/spices/ecs/src/ecs/system.tur` -- the `defsystem` macro
+location: `../turmeric-spices/spices/ecs/src/ecs/system.tur` -- the `defsystem` macro; `../turmeric-spices/spices/ecs/src/ecs/world.tur` -- `defcomponent-accessors`; `../turmeric-spices/spices/ecs/src/ecs/cap.tur` (new); `src/compiler/types.c` (`type_app` / `propagate_app_discipline`).
+resolution: Shipped 2026-06-11 across Phases I1-I6 (Path A from the report). Prereq compiler fix landed first as `docs/archive/history/parametric-linear-opaque-not-enforced.md`. I1 added `ecs/cap` with `WriteCap<T>` / `ReadCap<T>` and `use-cap!`. I2 extended `defcomponent-class-instance` with per-(World, Comp) cap-mint helpers. I3 flipped `defsystem`'s `:reads`/`:writes` from bitmask ints to component-name vectors (breaking) and bound `<Comp>-write-cap` / `<Comp>-read-cap` in body scope with auto-consume at body end. I4 cap-gated `set-<Comp>!` / `get-<Comp>` (`^borrow` discipline -- deviation from the report's `^linear`, justified in the I4 deliverable note). I5 added the main-repo regression fixture `tests/fixtures/errors/ecs-defsystem-writes-unauthorized/`. I6 archived this report, updated `docs/upcoming/ecs-spice-plan.md` and `docs/upcoming/ecs-prereq-plan.md` (gap I), and added the spice CHANGELOG migration note. Eight positive and six negative tests under `../turmeric-spices/spices/ecs/tests/` exercise the new surface; main repo full suite is 1545 passed / 82 failed (same 82-baseline as pre-change, +1 from the new fixture).
 ---
 
 # `defsystem` `:writes` list is collected but not enforced -- writes outside the set still compile
@@ -486,5 +487,5 @@ None at the compile-time level. The user can:
   `-Xsubstructural`/`^linear` machinery the fix would build on.
 - `../../../turmeric-spices/spices/ecs/src/ecs/system.tur` -- the
   current `defsystem` macro, where the fix lands.
-- `../upcoming/ecs-prereq-plan.md` -- add this as gap I once
+- `ecs-prereq-plan.md` -- add this as gap I once
   filed, alongside A-H.

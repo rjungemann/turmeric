@@ -187,7 +187,7 @@ reports). Each must be fixed in `src/turi/eval.c` or carved with
 ## Status
 
 Filed while executing TI8 of
-`docs/upcoming/v1/turi-parity-post-v1-plan.md`. TI8.a (parity ratchet +
+`docs/upcoming/turi-parity-post-v1-plan.md`. TI8.a (parity ratchet +
 harness-now-interprets + honest allowlist) and the TI8.b defmodule fix have
 landed; the full allowlist->denylist flip remains, with the de-risked roadmap
 above and the measured per-bucket scope.

@@ -137,4 +137,4 @@ divergences and carving them hides wrong-answer bugs.
 Filed while executing TI8.b/W4. The `ic_exec_accessor` boolean-return class was
 fixed in the same pass; these pure-turi cases are the remaining W4 surface (each
 its own root-cause investigation). See
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md).
+[docs/upcoming/turi-interpreter-gap-closure-plan.md](../upcoming/turi-interpreter-gap-closure-plan.md).

@@ -232,7 +232,7 @@ production and have escaped notice because the failure mode is
 ## Interaction with the prereq plan
 
 The ECS prerequisite plan
-([`../upcoming/ecs-prereq-plan.md`](../upcoming/ecs-prereq-plan.md))
+([`ecs-prereq-plan.md`](ecs-prereq-plan.md))
 adds this as a sixth gap (F). It blocks no plan item directly --
 the defn-as-constant workaround is fine -- but it makes constant
 declarations meaningfully less ergonomic until fixed, and it's a
