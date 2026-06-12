@@ -4,8 +4,58 @@
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/resource.h>  /* getrlimit(RLIMIT_STACK) */
+#endif
+
+/* -------------------------------------------------------------------------
+ * Recursion-depth guard sizing
+ *
+ * The depth guard in eval.c (eval_depth >= max_eval_depth) only protects
+ * against a SIGSEGV if it fires *before* the native C stack overflows.
+ * `eval_depth` increments once per `eval_expr` call, which is exactly the
+ * count of nested eval frames on the C stack -- a faithful proxy for stack
+ * nesting. Each such frame is large (`eval_expr_impl` reserves several
+ * `TuriValue[MAX_EVAL_ARGS]` scratch arrays); measured at ~10 KB/frame under
+ * Debug/ASan, so a ~12.5 MB stack overflows at peak `eval_depth` ~1250 --
+ * far below a hardcoded 4096, which is why that guard was dead code. Derive
+ * the limit from the real stack size instead, with a wide safety margin, so
+ * the guard fires as a clean "recursion limit exceeded" rather than a raw
+ * crash. (Release builds have smaller frames and sustain more, so sizing for
+ * the Debug/ASan frame keeps both safe.)
+ * ---------------------------------------------------------------------- */
+
+/* Conservative upper bound on C-stack bytes per `eval_expr` frame. Set above
+ * the ~10 KB measured average to cover frame-type variance within a level. */
+#define TURI_EVAL_FRAME_BYTES   12288u   /* ~12 KB */
+/* Fraction of the stack we let interpreter recursion consume (the rest is
+ * headroom for the base call chain and any non-eval frames within a level). */
+#define TURI_EVAL_STACK_FRACTION_NUM  3u
+#define TURI_EVAL_STACK_FRACTION_DEN  5u  /* 3/5 == 60% */
+#define TURI_EVAL_DEPTH_MIN     256u
+#define TURI_EVAL_DEPTH_FALLBACK 4096u   /* used when the stack size is unknown */
+
+/* Compute a recursion-depth limit the native C stack can provably sustain. */
+static int turi_default_max_eval_depth(void) {
+#if defined(__unix__) || defined(__APPLE__)
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) == 0 &&
+        rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur > 0) {
+        unsigned long long usable =
+            (unsigned long long)rl.rlim_cur *
+            TURI_EVAL_STACK_FRACTION_NUM / TURI_EVAL_STACK_FRACTION_DEN;
+        unsigned long long depth = usable / TURI_EVAL_FRAME_BYTES;
+        if (depth < TURI_EVAL_DEPTH_MIN) depth = TURI_EVAL_DEPTH_MIN;
+        if (depth > (unsigned long long)INT_MAX) depth = (unsigned long long)INT_MAX;
+        return (int)depth;
+    }
+#endif
+    return (int)TURI_EVAL_DEPTH_FALLBACK;
+}
 
 /* -------------------------------------------------------------------------
  * Global-binding hash table (open addressing, linear probing)
@@ -80,7 +130,7 @@ TuriEnv *turi_env_new(void) {
     arena_init(&env->sym_arena, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
-    env->max_eval_depth = 4096;
+    env->max_eval_depth = (uint32_t)turi_default_max_eval_depth();
     env->caps = TURI_CAP_ALL;
     ht_init(&env->globals_ht);
     /* Phase S7: initialise async scheduler state */
