@@ -325,6 +325,6 @@ above, the original motivating use case (ECS `defsystem` emitting a
 function pointer per system) is unblocked *without* this gap being
 fixed. This gap is now optional polish: it removes a trap diagnostic
 and shrinks one form of expansion by one token. The ECS prerequisite
-plan ([`../upcoming/ecs-prereq-plan.md`](../upcoming/ecs-prereq-plan.md))
+plan ([`ecs-prereq-plan.md`](ecs-prereq-plan.md))
 should reclassify D from "blocks E2 parallel-on-threadpool" to
 "ergonomic polish, low priority."

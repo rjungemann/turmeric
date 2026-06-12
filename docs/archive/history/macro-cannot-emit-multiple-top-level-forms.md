@@ -214,7 +214,7 @@ visible. Without multi-emit, `str->sym` gives us computed *single*
 names but no good way to emit several at once.
 
 The ECS prerequisite plan
-([`../upcoming/ecs-prereq-plan.md`](../upcoming/ecs-prereq-plan.md))
+([`ecs-prereq-plan.md`](ecs-prereq-plan.md))
 should add this as gap E and resequence: per-component accessor
 generation in `defworld` and the natural `defsystem` shape both
 depend on E. Sequential `stage` does not -- the user can write

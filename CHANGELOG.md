@@ -4,6 +4,20 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Parametric `:linear` opaques now enforce single-use.** A
+  `(defopaque Name [T] :int :linear)` previously compiled a double-use
+  cleanly under `-Xsubstructural` because the four TY_APP construction
+  sites hardcoded `copy_kind = CK_COPY`, dropping the head's substructural
+  qualifier. `src/compiler/types.c::propagate_app_discipline` now lifts
+  `:linear` / `:affine` from the head onto every application node;
+  invoked from `type_app`, both `substitute_*_app_type`, and
+  `elab_types.c::type_expr_from_form`. Regression:
+  `tests/fixtures/errors/parametric-linear-double-use/`. Unblocked the
+  ECS `WriteCap<T>` capability surface (Phase I of the ECS prereq
+  plan).
+
 ## [0.20.0] -- 2026-06-11
 
 ### Added

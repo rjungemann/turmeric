@@ -1,0 +1,7 @@
+(defpackage ecs-defsystem-writes-unauthorized
+  :name        "ecs-defsystem-writes-unauthorized"
+  :version     "0.1.0"
+  :description "Fixture: ECS Phase I -- writing a component not in :writes is a compile-time error."
+  :spices #{
+    "tur-ecs" #{:path "../../../../../turmeric-spices/spices/ecs"}
+  })

@@ -8,15 +8,21 @@ description: Extend `tur-ecs` `defsystem` with per-world `:reads-from` / `:write
 
 ## Status and scope
 
-Follow-up to [docs/upcoming/ecs-spice-plan.md](../ecs-spice-plan.md). That
-plan resolved D4 as **single-world v1** and deferred cross-world
+Follow-up to [`docs/upcoming/ecs-spice-plan.md`](../ecs-spice-plan.md).
+That plan resolved D4 as **single-world v1** and deferred cross-world
 systems. This plan picks D4 back up for the post-v1 release. It does
 *not* re-litigate D1-D3 -- they are taken as given.
 
-Prerequisite: the v1 spice (`tur-ecs` E0-E4) must be shipped and
-exercised by at least one real game (the raylib demo) before this
-plan starts. We want concrete pain points from real use, not
-speculative ergonomics.
+> **Status 2026-06-11.** v1 prereqs E0-E3 shipped, including the
+> Phase I cap-gated `defsystem` surface
+> ([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](../../archive/history/ecs-defsystem-write-caps-not-enforced.md)).
+> E4 (the apecs/aztecs comparison writeup) is partial. The raylib
+> demo runs at `../turmeric-spices/spices/ecs-raylib/`. The "wait
+> for a real game's pain points before designing" gating condition
+> is therefore *partially* satisfied -- the raylib demo exists but
+> hasn't been pushed against render-extract patterns yet. Treat
+> this plan as ready-to-design once X0 has at least one real
+> cross-world use case to anchor the surface to.
 
 ## Goal
 
@@ -72,31 +78,63 @@ typed worlds, with a transformation in the middle**.
 `defsystem` gains repeatable per-world `:reads-from W [...]` and
 `:writes-to W [...]` clauses. Each named world parameter must appear in
 exactly one read set and exactly one write set (either may be empty
-`[]`). The existing single-world shorthand:
+`[]`). The existing single-world shorthand shipped in I3:
 
 ```turmeric
-defsystem physics [w :GameWorld dt :float] :void
-  :reads  [Pos Vel]
-  :writes [Pos]
-  ...
+(defsystem physics
+  [Pos Vel]                 ;; :reads (over the implicit world `w`)
+  [Pos]                     ;; :writes
+  body)
 ```
 
-remains valid as sugar for `:reads-from w [Pos Vel] :writes-to w [Pos]`.
-No existing v1 system needs to change.
+continues to lower to `:reads-from w [Pos Vel] :writes-to w [Pos]`
+where `w` is the body-bound int handle the single-world `defsystem`
+already exposes. No existing v1 system needs to change. The
+multi-world form takes named world bindings instead of the implicit
+`w`:
+
+```turmeric
+(defsystem extract-renderables
+  [sim ren]                              ;; world bindings
+  :reads-from  sim [Pos Sprite]
+  :writes-to   ren [RenderPos RenderSprite]
+  :reads-from  ren []
+  :writes-to   sim []
+  body)
+```
 
 ### Capability typing
 
-Read and write capabilities are already substructural in v1 (per the
-ECS plan's D2 + the substructural types guide). The extension is that
-each capability is now keyed by `(World, Component)` instead of just
-`Component`:
+The v1 cap surface that shipped via Phase I (`ecs/cap`) is keyed only
+on the component: `WriteCap<T>` and `ReadCap<T>` (parametric `:linear`
+opaques). For cross-world, capabilities lift to `(World, Component)`
+keys. The most direct encoding is a second type parameter on the
+existing opaques: `WriteCap<W, T>` and `ReadCap<W, T>`, where `W` is
+the world type and `T` the component. Conflict checks then compare
+the full `(W, T)` pair.
 
-- `(Read sim Pos)` and `(Read ren Pos)` are distinct capabilities even
-  though `Pos` is the same type. Conflict checks compare the full key.
-- The elaborator exposes `get-Pos`/`for-each` on `sim` only if `Pos` is
-  in `sim`'s read set; exposes `set-Pos!`/`spawn`/`despawn` on `ren`
-  only if `Pos` is in `ren`'s write set. Same rule as v1, parameterised
-  by world.
+Concretely:
+
+- The cap-mint helpers shipped in I2 (`mint-<World>-<Comp>-write-cap`,
+  `mint-<World>-<Comp>-read-cap`) already key on the (World, Comp)
+  pair at the binding-name level; the type-level lift to
+  `WriteCap<W, T>` makes this an actual type-system distinction
+  rather than a naming convention.
+- `defsystem` binds `<world>-<Comp>-write-cap : WriteCap<<World>, Comp>`
+  in body scope for each entry in `:writes-to <world> [...]`,
+  mirroring the I3 binding scheme but namespaced by the world
+  binding.
+- `defcomponent-accessors` keeps its `set-<Comp>!` shape; the cap
+  parameter's type carries the world, so a body holding only a
+  `WriteCap<RenderWorld, Pos>` cannot pass it to `set-Pos!` against
+  a `SimWorld` handle. The nominal check already in the type system
+  catches the mismatch.
+- `(Read sim Pos)` and `(Read ren Pos)` are distinct capabilities
+  even though `Pos` is the same type; the parametric-linear
+  propagation fix that landed alongside Phase I
+  ([`docs/archive/history/parametric-linear-opaque-not-enforced.md`](../../archive/history/parametric-linear-opaque-not-enforced.md))
+  is the compiler-side piece that makes the two-parameter version
+  actually fire its linearity check.
 
 ### Static non-conflict
 
@@ -161,10 +199,15 @@ v1 users -- the raylib demo and one of: render-extract for a scene
 graph, or a client-prediction prototype. Adjust before writing any
 elaborator code.
 
-**X1 -- per-world capability keying (3-4 days).** Extend the
-substructural capability tracker so capabilities are keyed by `(world
-binding, component)`. The single-world shorthand keeps working
-because it desugars to one-world capability keys.
+**X1 -- per-world capability keying (3-4 days).** Lift `ecs/cap`'s
+`WriteCap<T>` / `ReadCap<T>` to two-parameter `WriteCap<W, T>` /
+`ReadCap<W, T>`. Extend `defcomponent-class-instance` to emit
+`mint-<World>-<Comp>-{write,read}-cap` returning the world-keyed
+form (the per-(World, Comp) naming already shipped in I2 -- this is
+the type-level lift). The single-world shorthand keeps working
+because it desugars to one-world capability keys; the I1-I4
+single-world tests carry through unchanged once `WriteCap<W, T>`
+collapses to `WriteCap<DefaultWorld, T>` for the implicit-`w` case.
 
 **X2 -- defsystem grammar (1-2 days).** Parser support for repeated
 `:reads-from`/`:writes-to`. Validation that every world parameter
@@ -191,8 +234,25 @@ harder transforms.
 
 **X5 -- demo + guide (2 days).** Extend the v1 raylib demo with a
 separate render world; ship `docs/guides/ecs-cross-world-guide.md`.
-Add a side-by-side comparison to Bevy's Extract phase in the
-existing `ecs-vs-haskell-ecs.md` guide.
+
+Also update
+[`docs/guides/ecs-vs-haskell-ecs.md`](../../guides/ecs-vs-haskell-ecs.md)
+to reflect what shipped:
+
+- Flip the "Cross-world systems" row in the bottom-line property
+  table -- currently a "Planned" link to this plan with "single-world
+  is v1" qualifier -- to "Shipped -- statically non-conflicting
+  per-(World, Component) cap keying; see `ecs-cross-world-guide.md`."
+- Add a side-by-side comparison to Bevy's Extract phase and Unity
+  DOTS Worlds (matching the precedent table in this plan) -- new
+  section under "What moved to compile time" or its own top-level
+  section, depending on length.
+- Update the "Honest scorecard" section to include cross-world
+  static non-conflict as a row where tur-ecs is unambiguously ahead
+  of apecs and aztecs (which keep cross-world out of scope).
+- Update the spice-plan status callout (now describing the
+  cross-world plan as ready-to-design) and the spice CHANGELOG with
+  the X1-X4 user-facing changes.
 
 ## Validation
 
@@ -234,8 +294,13 @@ written by hand.
 
 ## References
 
-- Parent plan: [docs/upcoming/ecs-spice-plan.md](../ecs-spice-plan.md)
+- Parent plan: [`docs/upcoming/ecs-spice-plan.md`](../ecs-spice-plan.md)
   (decision D4)
+- Phase I (cap-gated single-world `defsystem`) -- shipped:
+  [`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](../../archive/history/ecs-defsystem-write-caps-not-enforced.md)
+- Parametric `:linear` propagation fix (compiler enabler for the
+  proposed `WriteCap<W, T>` shape):
+  [`docs/archive/history/parametric-linear-opaque-not-enforced.md`](../../archive/history/parametric-linear-opaque-not-enforced.md)
 - Bevy SubApp / Extract phase:
   <https://bevyengine.org/learn/migration-guides/0.10-0.11/#sub-app-labels>
 - Unity DOTS Worlds:
