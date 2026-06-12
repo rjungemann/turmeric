@@ -2,7 +2,7 @@
 
 **Status:** Fixed 2026-06-12 (`src/turi/eval.c`, `src/turi/env.h`). Archived
 resolution paper-trail for the `codegen-private-defn-collision` holdout tracked
-in [../reported/turi-pure-turi-silent-miscompiles.md](../reported/turi-pure-turi-silent-miscompiles.md).
+in [turi-pure-turi-silent-miscompiles.md](turi-pure-turi-silent-miscompiles.md).
 
 ## Summary
 

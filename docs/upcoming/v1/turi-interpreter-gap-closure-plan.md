@@ -434,7 +434,8 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
   same refuse-rather-than-guess tightening per matcher. Inline-C carve-outs, so
   they do not block W5 -- but they ship a wrong-answer hazard for real programs.
 - **11 pure-turi interpreter bugs** (the W5 blockers), catalogued in
-  [turi-pure-turi-silent-miscompiles.md](../../reported/turi-pure-turi-silent-miscompiles.md).
+  [turi-pure-turi-silent-miscompiles.md](../../archive/turi-pure-turi-silent-miscompiles.md)
+  (RESOLVED 2026-06-12 -- all 11 fixed, report archived).
   **7 fixed** (added to the allowlist, harness 912 -> 919): `EX_ASCRIBE`
   primitive coercion (`rt-return-dispatch-*`), `EX_ANY_TYPE_OF` coarse tags +
   `EX_ANY_CAST` checked downcast (`any-box-*`, `any-cast-mismatch-panic`),

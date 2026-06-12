@@ -3,7 +3,7 @@
 **Status:** Fixed 2026-06-12 (`src/turi/eval.c`). This is the archived
 resolution paper-trail for the conditional-snprintf gap that surfaced as the
 `range-bound-show-ord` divergence in
-[../reported/turi-pure-turi-silent-miscompiles.md](../reported/turi-pure-turi-silent-miscompiles.md)
+[turi-pure-turi-silent-miscompiles.md](turi-pure-turi-silent-miscompiles.md)
 and was cross-referenced from
 [../reported/turi-inline-c-silent-miscompiles.md](../reported/turi-inline-c-silent-miscompiles.md).
 

@@ -5162,10 +5162,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
     case EX_RC_OF: {
-        /* Allocate shared counter, wrap value in __rc struct. */
+        /* Allocate the shared control block and wrap the value in an __rc struct.
+         * The control block is a 2-slot counter: cnt[0] = strong count,
+         * cnt[1] = weak count.  field[0] points at cnt[0], so the existing
+         * `*cnt` strong-count readers stay correct; cnt[1] backs the weak count
+         * that ref/from-rc's uniqueness check consults (see EX_REF_FROM_RC). */
         TuriValue v = eval_expr(env, frame, e->as.rc_of_.expr);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        int64_t *cnt = (int64_t *)malloc(sizeof(int64_t)); *cnt = 1;
+        int64_t *cnt = (int64_t *)malloc(2 * sizeof(int64_t));
+        cnt[0] = 1; /* strong */
+        cnt[1] = 0; /* weak */
         TuriValue fields[2];
         fields[0] = turi_int((int64_t)(intptr_t)cnt); /* pointer-as-int */
         fields[1] = v;
@@ -5234,13 +5240,28 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_RC_FROM_REF:
         return eval_expr(env, frame, e->as.rc_from_ref_.expr);
     case EX_REF_FROM_RC: {
-        /* Convert rc<T> to ref<T>: extract the inner value from the __rc struct. */
+        /* Convert rc<T> to ref<T>: the compiled tur_ref_from_rc requires the rc
+         * to be *unique* -- strong_count==1 and weak_count==0 -- and aborts
+         * otherwise (a live alias would leave a dangling ref). Mirror that check
+         * here instead of silently extracting the value (rc-unique-violation). */
         TuriValue rv = eval_expr(env, frame, e->as.ref_from_rc_.expr);
         if (turi_is_error(rv) || env->returning || env->throwing) return rv;
         if (rv.tag == TURI_STRUCT && rv.as_struct
             && rv.as_struct->name && strcmp(rv.as_struct->name, "__rc") == 0
-            && rv.as_struct->n_fields >= 2)
+            && rv.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)rv.as_struct->fields[0].as_int;
+            int64_t strong = cnt ? cnt[0] : 1;
+            int64_t weak   = cnt ? cnt[1] : 0;
+            if (strong != 1 || weak != 0) {
+                char msg[160];
+                snprintf(msg, sizeof msg,
+                    "ref/from-rc requires unique rc (strong_count==1 and weak_count==0), got strong=%lld weak=%lld",
+                    (long long)strong, (long long)weak);
+                turi_runtime_panic(env, msg); /* does not return */
+                return turi_nil();
+            }
             return rv.as_struct->fields[1];
+        }
         return rv;
     }
 
@@ -5254,8 +5275,20 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Phase 9: weak<T> — simplified in interpreter --------------------- */
-    case EX_WEAK:
-        return eval_expr(env, frame, e->as.weak_.expr);
+    case EX_WEAK: {
+        /* weak is transparent (returns the underlying rc value), but it must
+         * bump the control block's weak count so ref/from-rc's uniqueness check
+         * can see the live weak alias (rc-unique-violation). */
+        TuriValue wv = eval_expr(env, frame, e->as.weak_.expr);
+        if (turi_is_error(wv) || env->returning || env->throwing) return wv;
+        if (wv.tag == TURI_STRUCT && wv.as_struct
+            && wv.as_struct->name && strcmp(wv.as_struct->name, "__rc") == 0
+            && wv.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)wv.as_struct->fields[0].as_int;
+            if (cnt) cnt[1]++; /* weak count */
+        }
+        return wv;
+    }
     case EX_WEAK_UPGRADE: {
         TuriValue _wuv = eval_expr(env, frame, e->as.weak_upgrade_.expr);
         if (turi_is_error(_wuv) || env->returning || env->throwing) return _wuv;

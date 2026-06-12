@@ -6,7 +6,7 @@
 > formats only the live branch (`ic_snprintf_cond_branch` /
 > `ic_format_snprintf_call`, `src/turi/eval.c`). This closed the stdlib
 > `bound-fmt` divergence behind `range-bound-show-ord` (tracked in
-> [turi-pure-turi-silent-miscompiles.md](turi-pure-turi-silent-miscompiles.md));
+> [turi-pure-turi-silent-miscompiles.md](../archive/turi-pure-turi-silent-miscompiles.md));
 > resolution archived at
 > [../archive/turi-inline-c-conditional-snprintf-branch.md](../archive/turi-inline-c-conditional-snprintf-branch.md).
 > The other snprintf-bucket cases below still miscompile via *different* paths

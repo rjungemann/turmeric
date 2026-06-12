@@ -717,6 +717,7 @@ rc-shared
 rc-struct-auto-drop
 rc-struct-nested-rc-fields
 rc-struct-simple-payload
+rc-unique-violation
 reactor-linear
 reader-macros-bare
 reader-macros-datum

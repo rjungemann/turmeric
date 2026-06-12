@@ -1,5 +1,18 @@
 # Pure-turi silent miscompiles (11 real interpreter bugs + 1 legit carve)
 
+> **RESOLVED (2026-06-12): all 11 bugs fixed; `reader-cond` carved.** The final
+> holdout `rc-unique-violation` is fixed -- the interpreter's `__rc` control
+> block now carries a weak count (`cnt[1]`) alongside the strong count
+> (`cnt[0]`); `EX_WEAK` bumps it, and `EX_REF_FROM_RC` enforces the same
+> uniqueness invariant as the compiled `tur_ref_from_rc` (strong==1 && weak==0),
+> panicking with the matching message otherwise (`src/turi/eval.c`). Fixture on
+> the `run-turi.sh` allowlist; harness 982/0, full suite 1596/0 (with run.sh
+> validating the stderr substring). With the three 2026-06-12 fixes
+> (`range-bound-show-ord`, `codegen-private-defn-collision`,
+> `rc-unique-violation`) the silent-miscompile surface for pure-turi is empty.
+> This report is archived; the per-fix paper-trails live alongside it in
+> `docs/archive/`.
+>
 > **Update (TI8.b/W4, 2026-06-11): 6 of the 11 fixed.** Four root causes in
 > `src/turi/eval.c`:
 > - **`EX_ASCRIBE` primitive coercion** -- `(:: x bool/float/int)` now reconciles
@@ -40,7 +53,7 @@
 > body was factored into `ic_format_snprintf_call`, and branch selection into
 > `ic_snprintf_cond_branch` (`src/turi/eval.c`). Fixture added to the
 > `run-turi.sh` allowlist (harness green). Resolution paper-trail archived at
-> [../archive/turi-inline-c-conditional-snprintf-branch.md](../archive/turi-inline-c-conditional-snprintf-branch.md).
+> [turi-inline-c-conditional-snprintf-branch.md](turi-inline-c-conditional-snprintf-branch.md).
 >
 > **Update 5 (2026-06-12): `codegen-private-defn-collision` FIXED.** The
 > interpreter now mirrors the compiled per-module private mangling. A `defn`
@@ -53,12 +66,20 @@
 > `alpha/__h` (100) and `beta/__h` (200) no longer collide on the bare `__h`
 > slot. Fixture added to the `run-turi.sh` allowlist; harness green (980/0),
 > full suite 1596/0, `tur_eval_import` ctest green. Resolution archived at
-> [../archive/turi-interpreter-module-private-defn-collision.md](../archive/turi-interpreter-module-private-defn-collision.md).
+> [turi-interpreter-module-private-defn-collision.md](turi-interpreter-module-private-defn-collision.md).
 >
-> **1 remains, deep and overlapping another workstream:**
-> - `rc-unique-violation` -- `(ref/from-rc rc)` with a live `weak` must panic
->   (unique-rc violation); the interpreter's `ref/from-rc` does no strong/weak
->   count check.
+> **Update 6 (2026-06-12): `rc-unique-violation` FIXED -- 0 remain.** The
+> interpreter's `__rc` control block became a 2-slot counter (`cnt[0]` strong,
+> `cnt[1]` weak); `EX_RC_OF` allocates both, `EX_WEAK` bumps the weak count
+> (while staying value-transparent), and `EX_REF_FROM_RC` now enforces
+> strong==1 && weak==0 -- panicking via `turi_runtime_panic` with the same
+> `"ref/from-rc requires unique rc ..."` message the compiled `tur_ref_from_rc`
+> aborts with. Legit unique `ref/from-rc` (no live weak) is unaffected. Fixture
+> on the `run-turi.sh` allowlist; harness 982/0, full suite 1596/0 (run.sh
+> validates the stderr substring). Resolution archived at
+> [turi-interpreter-rc-from-rc-unique-check.md](turi-interpreter-rc-from-rc-unique-check.md).
+>
+> **0 remain -- this report is fully resolved (see the RESOLVED banner at top).**
 
 **Summary:** Of the ~244 pure-turi (no inline-C) fixtures that fail under
 `--interpret` after W1-W3, only **12** are *silent* (rc matches the expected exit
