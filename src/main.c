@@ -4809,6 +4809,17 @@ static int cmd_eval(const char *path, bool use_color,
         fprintf(stderr, "tur: failed to create interpreter environment\n");
         return 1;
     }
+    /* File-eval (`tur --interpret <file>`) is a batch compile of a single
+     * file, not an interactive session: a reader macro registered twice with
+     * a differing template is the same "two modules both register #json"
+     * footgun the compiled entry points reject (TURI_FIXTURES errors/
+     * reader-macros-strict-collision).  Make this env's reader-macro registry
+     * strict so the collision is a hard error, matching the compiled path.
+     * The REPL (turi/repl.c) leaves the default strict=false so its src_acc
+     * replay and iterative redefinition stay smooth.  Safe here because the
+     * preloaded stdlib registers no reader macros and the user file is parsed
+     * in a single pass (no self-replay of its own `reader-macros/define`). */
+    env->reader_macros->strict = true;
     /* Preload macros.tur so that and/or/when/cond/for etc. are available.
      * This is the minimum stdlib needed for any real Turmeric program to work.
      *

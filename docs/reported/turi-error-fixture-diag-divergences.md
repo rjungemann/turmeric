@@ -1,5 +1,30 @@
 # 9 `errors/` fixtures whose diagnostic diverges under `--interpret`
 
+> **Update (2026-06-12, pass 3): `reader-macros-strict-collision` FIXED; only
+> the 2 TI3.2 serial-shift carve-outs remain (blocked elsewhere).**
+> The interpreter's `TuriEnv` reader-macro registry defaults to `strict=false`
+> *by design* so the REPL's `src_acc` replay and iterative redefinition stay
+> smooth (re-parsing the accumulated history re-runs every prior
+> `reader-macros/define`, and the REPL wants last-wins, not a collision). But
+> `tur --interpret <file>` is a **batch compile of a single file**, not an
+> interactive session -- the user file is parsed in one pass and the preloaded
+> stdlib registers no reader macros, so there is no legitimate self-replay to
+> protect. The fix sets `env->reader_macros->strict = true` in `cmd_eval`
+> (`src/main.c`) only; the REPL (`turi/repl.c`) keeps the default. A reader
+> macro registered twice with a differing template now hard-errors under
+> `--interpret`, matching the compiled path, while REPL iterative redefinition
+> still updates silently (verified: `#sum` redefined then `#sum[3 4]` => 12, no
+> error). `reader-macros-strict-collision` removed from `TURI_ERRORS_DENY`.
+>
+> The reporting-stage and missing-check cases are now ALL closed. **Only 2
+> items remain** -- `serial-context-not-capturable` and
+> `serial-context-do-not-capturable` -- and both are TI3.2 carve-outs blocked on
+> [turi-capturing-shift-unimplemented.md](turi-capturing-shift-unimplemented.md),
+> which tracks the underlying `serial-shift`/`cloneable-shift` interpreter
+> feature. This report has no remaining *independent* work; it stays open only
+> as a tracking pointer until that feature lands and the two carve-outs can be
+> un-denylisted. Full turi harness after this pass: 952 passed, 0 failed.
+>
 > **Update (2026-06-12, pass 2): 3 of the 6 missing-check cases FIXED; 3 remain.**
 > Two narrow, parity-only additions to the interpreter's pre-eval pipeline in
 > `src/turi/eval.c` (`turi_eval_impl`):
@@ -68,7 +93,7 @@ diagnostic" or "wrong-stage diagnostic," not wrong answers.
 | `unknown-helper-load-hint` | `unknown function or operator 'float->int'` | ~~no elab diag / load hint~~ **FIXED** -- diag + load-hint emitted | reporting-stage |
 | `tce3-map-heterogeneous-val` | `TUR-E0001` | ~~exits 1, empty stderr~~ **FIXED** -- emits `TUR-E0001` | reporting-stage |
 | `lifetime-cyclic` | `TUR-E0106` | ~~exits 0 -- lifetime-cycle check not run~~ **FIXED** -- `lifetime_check_program` now run under interpret | missing-check |
-| `reader-macros-strict-collision` | `already registered` | exits 0 -- strict-collision not raised | missing-check |
+| `reader-macros-strict-collision` | `already registered` | ~~exits 0 -- strict-collision not raised~~ **FIXED** -- file-eval registry now strict (REPL stays non-strict) | missing-check |
 | `lang-unknown` | `not yet implemented` | ~~runs the program (prints output)~~ **FIXED** -- rejects unimplemented reader | missing-check |
 | `lang-not-implemented` | `not yet implemented` | ~~no diag~~ **FIXED** -- rejects unimplemented reader | missing-check |
 | `serial-context-not-capturable` | `TUR-E0706` | exits 1, empty stderr | TI3.2 carve-out |
@@ -85,11 +110,13 @@ diagnostic" or "wrong-stage diagnostic," not wrong answers.
   checks through the same diagnostic emission the compiled path uses, or have
   `cmd_eval` print the `turi_error` message to stderr when no diagnostic was
   emitted.
-- **missing-check (4).** `lifetime-cyclic` (`TUR-E0106`), the reader-macro
-  strict-collision, and the `#lang` unknown/not-implemented checks are not run
-  on the interpret path at all -- the program elaborates/runs clean. These are
-  genuine interpreter coverage gaps in specific elaborator passes; each needs the
-  corresponding check enabled under `--interpret`.
+- **missing-check (4) -- ALL FIXED.** `lifetime-cyclic` (`TUR-E0106`), the
+  reader-macro strict-collision, and the `#lang` unknown/not-implemented checks
+  previously did not run on the interpret path -- the program elaborated/ran
+  clean. Now closed: the `#lang` reject and `lifetime_check_program` run in
+  `turi_eval_impl` (`src/turi/eval.c`), and the reader-macro registry is strict
+  for file-eval (`cmd_eval`, `src/main.c`) while the REPL stays non-strict. See
+  the pass-2 and pass-3 update blocks at the top.
 - **TI3.2 carve-out (2).** `serial-context-{,do-not-}capturable` exercise the
   `TUR-E0706` serial-shift capturability diagnostic, part of the
   context-capturing-shift carve-out

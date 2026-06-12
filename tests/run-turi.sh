@@ -901,7 +901,6 @@ fixture_has_inline_c() {
 # This closes the TI0-noted gap that errors/ was skipped wholesale.
 # ---------------------------------------------------------------------------
 TURI_ERRORS_DENY="
-reader-macros-strict-collision  # reader-macro strict-collision diag not raised under interpret (REPL registry is strict=false by design)
 serial-context-do-not-capturable # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
 serial-context-not-capturable    # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
 "
