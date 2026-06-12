@@ -29,6 +29,14 @@ if [ "${TUR_SKIP_PARITY_CHECK:-0}" != "1" ] && command -v python3 >/dev/null 2>&
         echo "tests: turi parity check failed (see above); aborting." >&2
         exit 1
     fi
+    # Prereq 3a (turi-open-reports-prereqs.md): module-preload parity -- every
+    # module the compiled path auto-loads is either in the --interpret prelude
+    # or carved out with a rationale in docs/turi-preload-carve-out.txt.  Keeps
+    # the harness-flip "missing native" bucket from silently growing.
+    if ! python3 tools/check_turi_native_parity.py; then
+        echo "tests: turi native-parity check failed (see above); aborting." >&2
+        exit 1
+    fi
 fi
 
 PASS=0

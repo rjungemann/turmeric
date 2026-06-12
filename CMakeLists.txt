@@ -139,6 +139,16 @@ add_test(
   COMMAND bash tests/run-hamt-owned-keys.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Prereq 2a (turi-open-reports-prereqs.md / turi-map-set-hamt-interpreter-gap.md):
+# the context-carrying key comparator family (tur_hamt_*_eq_ctx) that lets a
+# stateful/turi-closure comparator ride along via a `void *ctx` word.  Compiles
+# tests/test_hamt_eq_ctx.c with ASan/UBSan (+LSan on Linux) and asserts ctx is
+# threaded to every compare, content-keyed ops work, and plain/ctx ops nest.
+add_test(
+  NAME tur_hamt_eq_ctx
+  COMMAND bash tests/run-hamt-eq-ctx.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP0: `tur build --shared <dir>` produces a dlopen-able shared library.
 # The script builds tests/fixtures/build-shared-smoke as a .so and runs a
 # hand-written C harness that dlsyms the exported defn and calls it.

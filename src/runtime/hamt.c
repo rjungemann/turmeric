@@ -248,11 +248,50 @@ static uint32_t hash_chunk(uint64_t hash, uint32_t level) {
 
 static _Thread_local bool (*g_hamt_key_eq)(int64_t, int64_t) = NULL;
 
+/* Context-carrying comparator (turi-map-set-hamt-interpreter-gap.md, prereq 2a).
+ * The plain g_hamt_key_eq cannot carry state, so a Turmeric *closure* comparator
+ * (which needs its captured environment + a TuriEnv* to run) has no way to ride
+ * along to the collision-time compare.  g_hamt_key_eq_ctx_fn adds the missing
+ * `void *ctx` word.  It is installed by the tur_hamt_*_eq_ctx family and, when
+ * set, takes precedence over the no-ctx hook in keys_equal.  The two families
+ * are mutually exclusive per dynamic scope: every entry point clears the other
+ * family's hook for its duration (see hamt_save_eq_hooks), so a plain op nested
+ * inside a ctx op -- or vice versa -- composes correctly. */
+static _Thread_local bool (*g_hamt_key_eq_ctx_fn)(int64_t, int64_t, void *) = NULL;
+static _Thread_local void *g_hamt_key_eq_ctx = NULL;
+
 static inline bool keys_equal(void *a, void *b) {
+    if (g_hamt_key_eq_ctx_fn) {
+        return g_hamt_key_eq_ctx_fn((int64_t)(intptr_t)a, (int64_t)(intptr_t)b,
+                                    g_hamt_key_eq_ctx);
+    }
     if (g_hamt_key_eq) {
         return g_hamt_key_eq((int64_t)(intptr_t)a, (int64_t)(intptr_t)b);
     }
     return a == b;
+}
+
+/* Save/restore of BOTH comparator hooks (plain + ctx).  A plain _eq op and a
+ * ctx _eq op each install their own hook and clear the other's, so exactly one
+ * is active during keys_equal; on restore the caller's hooks resume.  Clearing
+ * a NULL hook is a no-op, so threading this through the existing plain _eq
+ * entry points is behavior-preserving for every current caller (none of which
+ * installs a ctx hook). */
+typedef struct {
+    bool (*eq)(int64_t, int64_t);
+    bool (*eq_ctx_fn)(int64_t, int64_t, void *);
+    void *eq_ctx;
+} hamt_eq_hook_save;
+
+static inline hamt_eq_hook_save hamt_save_eq_hooks(void) {
+    hamt_eq_hook_save s = { g_hamt_key_eq, g_hamt_key_eq_ctx_fn, g_hamt_key_eq_ctx };
+    return s;
+}
+
+static inline void hamt_restore_eq_hooks(hamt_eq_hook_save s) {
+    g_hamt_key_eq        = s.eq;
+    g_hamt_key_eq_ctx_fn = s.eq_ctx_fn;
+    g_hamt_key_eq_ctx    = s.eq_ctx;
 }
 
 /* ============================================================================
@@ -926,38 +965,87 @@ void *tur_hamt_get(Hamt *m, uint64_t hash, void *key) {
  * --------------------------------------------------------------------------*/
 
 Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq) {
-    tur_hamt_keyeq_fn save = g_hamt_key_eq;
-    g_hamt_key_eq = eq;
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
     Hamt *r = tur_hamt_set(m, hash, key, val);
-    g_hamt_key_eq = save;
+    hamt_restore_eq_hooks(save);
     /* GDE3: stamp the key comparator so tur_hamt_eq_dynamic can read it. */
     if (r && r != m) r->key_ops.eq = eq;
     return r;
 }
 
 Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
-    tur_hamt_keyeq_fn save = g_hamt_key_eq;
-    g_hamt_key_eq = eq;
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
     Hamt *r = tur_hamt_del(m, hash, key);
-    g_hamt_key_eq = save;
+    hamt_restore_eq_hooks(save);
     /* GDE3: propagate stamped comparator to the new map if one was created. */
     if (r && r != m) r->key_ops.eq = eq;
     return r;
 }
 
 bool tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
-    tur_hamt_keyeq_fn save = g_hamt_key_eq;
-    g_hamt_key_eq = eq;
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
     bool r = tur_hamt_has(m, hash, key);
-    g_hamt_key_eq = save;
+    hamt_restore_eq_hooks(save);
     return r;
 }
 
 void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
-    tur_hamt_keyeq_fn save = g_hamt_key_eq;
-    g_hamt_key_eq = eq;
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = eq; g_hamt_key_eq_ctx_fn = NULL; g_hamt_key_eq_ctx = NULL;
     void *r = tur_hamt_get(m, hash, key);
-    g_hamt_key_eq = save;
+    hamt_restore_eq_hooks(save);
+    return r;
+}
+
+/* ----------------------------------------------------------------------------
+ * Context-carrying key-equality variants (prereq 2a)
+ *
+ * Identical to the _eq family, but `eq` takes a third `void *ctx` argument that
+ * is threaded to every collision-time compare.  This is the ABI groundwork that
+ * lets the interpreter pass a turi closure + TuriEnv* (packed into ctx) and a
+ * trampoline `eq` that calls turi_call -- content-keyed maps whose comparator is
+ * a Turmeric closure rather than a C function pointer.  The compiled path keeps
+ * calling the no-ctx family; passing ctx == NULL here is exactly the no-ctx
+ * path with one extra ignored argument, so no codegen change and no fixture
+ * regen.  Each entry clears the no-ctx hook for its scope (see hamt_save_eq_hooks).
+ * --------------------------------------------------------------------------*/
+
+Hamt *tur_hamt_set_eq_ctx(Hamt *m, uint64_t hash, void *key, void *val,
+                          tur_hamt_keyeq_ctx_fn eq, void *ctx) {
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
+    Hamt *r = tur_hamt_set(m, hash, key, val);
+    hamt_restore_eq_hooks(save);
+    return r;
+}
+
+Hamt *tur_hamt_del_eq_ctx(Hamt *m, uint64_t hash, void *key,
+                          tur_hamt_keyeq_ctx_fn eq, void *ctx) {
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
+    Hamt *r = tur_hamt_del(m, hash, key);
+    hamt_restore_eq_hooks(save);
+    return r;
+}
+
+bool tur_hamt_has_eq_ctx(Hamt *m, uint64_t hash, void *key,
+                         tur_hamt_keyeq_ctx_fn eq, void *ctx) {
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
+    bool r = tur_hamt_has(m, hash, key);
+    hamt_restore_eq_hooks(save);
+    return r;
+}
+
+void *tur_hamt_get_eq_ctx(Hamt *m, uint64_t hash, void *key,
+                          tur_hamt_keyeq_ctx_fn eq, void *ctx) {
+    hamt_eq_hook_save save = hamt_save_eq_hooks();
+    g_hamt_key_eq = NULL; g_hamt_key_eq_ctx_fn = eq; g_hamt_key_eq_ctx = ctx;
+    void *r = tur_hamt_get(m, hash, key);
+    hamt_restore_eq_hooks(save);
     return r;
 }
 
@@ -970,25 +1058,34 @@ void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
  * releases its keys.  Each call consumes one reference to `key` (see header).
  * --------------------------------------------------------------------------*/
 
-/* RAII-ish save/restore of all three thread-local key hooks. */
+/* RAII-ish save/restore of all key hooks (plain eq + ctx eq + retain/release).
+ * Installing a plain owned-eq op also clears the ctx comparator for its scope,
+ * so an owned op nested inside a ctx op uses its own plain eq (prereq 2a). */
 typedef struct {
     tur_hamt_keyeq_fn  eq;
+    bool (*eq_ctx_fn)(int64_t, int64_t, void *);
+    void *eq_ctx;
     void (*retain)(void *);
     void (*release)(void *);
 } hamt_key_hook_save;
 
 static hamt_key_hook_save hamt_install_key_hooks(tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
-    hamt_key_hook_save s = { g_hamt_key_eq, g_hamt_key_retain, g_hamt_key_release };
-    g_hamt_key_eq      = eq;
-    g_hamt_key_retain  = ops.retain;
-    g_hamt_key_release = ops.release;
+    hamt_key_hook_save s = { g_hamt_key_eq, g_hamt_key_eq_ctx_fn, g_hamt_key_eq_ctx,
+                             g_hamt_key_retain, g_hamt_key_release };
+    g_hamt_key_eq        = eq;
+    g_hamt_key_eq_ctx_fn = NULL;
+    g_hamt_key_eq_ctx    = NULL;
+    g_hamt_key_retain    = ops.retain;
+    g_hamt_key_release   = ops.release;
     return s;
 }
 
 static void hamt_restore_key_hooks(hamt_key_hook_save s) {
-    g_hamt_key_eq      = s.eq;
-    g_hamt_key_retain  = s.retain;
-    g_hamt_key_release = s.release;
+    g_hamt_key_eq        = s.eq;
+    g_hamt_key_eq_ctx_fn = s.eq_ctx_fn;
+    g_hamt_key_eq_ctx    = s.eq_ctx;
+    g_hamt_key_retain    = s.retain;
+    g_hamt_key_release   = s.release;
 }
 
 Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, void *key, void *val,

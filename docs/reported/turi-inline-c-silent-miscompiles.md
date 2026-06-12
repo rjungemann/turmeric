@@ -1,4 +1,4 @@
-# 25 inline-C fixtures silently miscompile under `--interpret`
+# 25 filed inline-C fixtures (20 still silently miscompile) under `--interpret`
 
 > **Update (2026-06-12, claim-trace + recount):** `TUR_IC_TRACE=1` now logs
 > which `ic_exec_*` matcher claims each body (`ic_claim`, `src/turi/eval.c`) --
@@ -29,12 +29,13 @@
 > **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
 > [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md))
 > converted **3** of these (the accessor-path cases incl. `result-basic`) from
-> silent-wrong to clean-error. **22 remain**, miscompiling via the *other*
-> `ic_exec_*` matchers (constructor / snprintf / switch-string / linked-list /
-> simple-return) -- e.g. the `backtrack-*` (7), `show-*` (3), `arrow-instance-*`
-> (2), `workstealing-*` (2), `stdlib-*` (2) clusters. Each needs the same
-> refuse-rather-than-guess tightening applied to its matcher. They are inline-C
-> carve-outs for the flip, so they do not block W5.
+> silent-wrong to clean-error. ~~**22 remain**~~ -- *superseded: the claim-trace
+> recount above lands the true figure at **20** (the `22` predates the four
+> additional matcher-declines listed in the recount update).* The 20 miscompile
+> via the *other* `ic_exec_*` matchers (constructor / snprintf / accessor /
+> simple-return / mixed); the per-matcher map is tabulated below. Each needs the
+> same refuse-rather-than-guess tightening applied to its matcher. They are
+> inline-C carve-outs for the flip, so they do not block W5.
 
 **Summary:** The interpreter's best-effort inline-C evaluator
 (`try_exec_simple_inline_c` and its `ic_exec_*` pattern matchers,
@@ -64,6 +65,30 @@ stdlib-test-runner-registry       weak-dangling
 weak-upgrade-option               workstealing-metrics
 workstealing-steal
 ```
+
+### Matcher -> fixture map for the 20 still-silent miscompiles
+
+Re-measured 2026-06-12 via `TUR_IC_TRACE=1 ./build/tur --interpret <fixture>`
+(rc + stdout-vs-`expected.stdout` classification). Five of the 25 now produce a
+**clean error (rc=1)** -- `instance-head-hole-pair`, `result-basic`,
+`stdlib-test-runner-registry`, `weak-dangling`, `weak-upgrade-option` -- the
+matcher already declines them, so they are no longer silent miscompiles. The
+remaining **20** (rc=0, wrong stdout) funnel through these matchers:
+
+| Matcher (`ic_exec_*`) | Count | Fixtures |
+| --- | --- | --- |
+| `constructor` | 12 | `backtrack-{bind,depth,depth-exceeded,do-macro,guard,interleave,nested,once}` (8), `arrow-instance-apply`, `arrow-instance-loop-nonrecursive`, `workstealing-metrics`, `workstealing-steal` |
+| `snprintf` | 4 | `show-float`, `show-list`, `show-pair`, `exg5-rc-in-exists` |
+| `accessor` | 2 | `panic-catch-unwind-caught`; `arrow-instance-apply` also hits accessor |
+| `simple-return` | 2 | `closure-capture-byptr-struct-param`, `inline-c-cname-splice` |
+| mixed (free+constructor+accessor) | 1 | `stdlib-slice-runtime` |
+
+(The `backtrack-*` cluster also fires `linked-list-print` once each -- a
+secondary claim on a printf helper -- but the wrong *answer* comes from the
+`constructor` claims.) **Two matchers cover 16 of 20**: tightening
+`ic_exec_constructor` (12) then `ic_exec_snprintf_fmt` (4) is the
+highest-leverage first slice. Full prereq decomposition:
+[../upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md).
 
 Examples (rc=0, wrong stdout):
 

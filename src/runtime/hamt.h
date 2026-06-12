@@ -146,6 +146,25 @@ Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 bool  tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 
+/* Context-carrying key-equality comparator (prereq 2a -- turi-map-set-hamt-
+ * interpreter-gap.md).  Same as tur_hamt_keyeq_fn but with a trailing `void *ctx`
+ * threaded through to every collision-time compare.  This is what lets a key
+ * comparator that is a Turmeric *closure* (needing its captured environment +
+ * the interpreter's TuriEnv*) ride along: the interpreter packs {env, closure}
+ * into ctx and passes a trampoline `eq` that unpacks ctx and calls turi_call.
+ * The compiled path is unaffected -- it keeps calling the no-ctx _eq family. */
+typedef bool (*tur_hamt_keyeq_ctx_fn)(int64_t, int64_t, void *ctx);
+
+/* ctx-carrying variants of the _eq family.  Passing ctx == NULL behaves exactly
+ * like the no-ctx _eq entry point with one extra ignored argument, so these
+ * require no codegen change and no fixture regen.  While a ctx op is in flight
+ * the no-ctx comparator hook is cleared (and vice versa), so plain and ctx
+ * operations nest correctly (e.g. a content-keyed map of int-keyed maps). */
+Hamt *tur_hamt_set_eq_ctx(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+Hamt *tur_hamt_del_eq_ctx(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+bool  tur_hamt_has_eq_ctx(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+void *tur_hamt_get_eq_ctx(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_ctx_fn eq, void *ctx);
+
 /* Boxed-key ownership (WKC2 -- wide map-key carrier).
  *
  * A boxed key is a heap allocation holding a refcount header followed by `n`
