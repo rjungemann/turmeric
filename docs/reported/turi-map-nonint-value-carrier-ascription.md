@@ -1,5 +1,29 @@
 # Non-int Map[K V] *values* mis-render under `--interpret` (carrier ascription gap)
 
+> **RESOLVED (2026-06-12).** Fixed via **direction 2** (the `EX_ASCRIBE` node),
+> which the investigation upgraded from "ambiguous" to "root-correct": the
+> compiled path's `::` is a *representation assertion* that **bit-reinterprets**
+> the carrier word (`(:: 7 :float)` compiles to `3.45846e-323`, `(:: 7.1 :int)`
+> to the IEEE bits `4619679907765970534`), while numeric int<->float conversion
+> is the *separate* `EX_CAST` node. The interpreter's `EX_ASCRIBE` was wrongly
+> mirroring `EX_CAST`'s numeric coercion -- a genuine interpreter/compiled
+> divergence, not just a map gap. `src/turi/eval.c` `case EX_ASCRIBE` now
+> bit-reinterprets the int64 carrier for `:float`/`:float64` (int64->double via a
+> union), for `:int`/`:int64` (double->int64), and adds a `:cstr` arm
+> (int64->`char*`); `:float32` keeps the numeric form to match the compiled
+> float32 ascription (which, unlike float64, numeric-converts). `tce3-map-cstr-val`
+> now passes under `--interpret` and is on the `run-turi.sh` allowlist;
+> interpreter harness 938 -> 939, 0 failed; compiled 1573/0, parity gate clean.
+>
+> **Separate, still-open observation (not this report):** a *type-changing*
+> ascription on a literal, e.g. `(let [x :int 7] (:: x :float))`, still differs
+> (compiled `3.45846e-323` vs interpret `7`). That is not a Map value carrier --
+> it is an int-typed value ascribed to a different primitive, which lowers
+> through a different (numeric) path in the interpreter than the compiled `::`.
+> Filed mentally as a distinct follow-up; it does not affect map values, whose
+> ascription is same-type (`map-get` already returns `:V`) over a type-erased
+> carrier.
+
 > **Found while executing TI10 Tier A** (map scalar-key natives). Tier A wired
 > the key side (`mk-cmp`/`mk-box`/`hash` + the `map-*-eq[-o]` bridges), which
 > closes int/cstr/float-**keyed** maps with int values. This report tracks the

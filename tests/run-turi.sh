@@ -848,6 +848,10 @@ typed/map-basic
 typed/map-collision
 typed/map-collision-forced
 wkc-wide-map-key
+# Non-int map *values* (Map int cstr / Map int float): EX_ASCRIBE now
+# bit-reinterprets the int64 carrier to :cstr / :float (matching the compiled
+# `::` representation assertion) instead of numeric-converting.
+tce3-map-cstr-val
 "
 
 # Build an associative-set from the default list for O(1) lookup.

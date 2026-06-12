@@ -4194,15 +4194,42 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_ASCRIBE: {
         TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
+        /* `::` is a representation assertion, NOT a numeric conversion (that is
+         * EX_CAST / explicit int->float).  On the compiled path the carrier word
+         * is reinterpreted bit-for-bit to the ascribed type -- so an int64 that
+         * carries a double's bits (e.g. a type-erased Map[int float] value read
+         * back as :float, or a char* read back as :cstr) must REINTERPRET, not
+         * convert.  The previous numeric coercion here diverged from the
+         * compiled path ((:: 7 :float) gave 7 under --interpret but 3.45e-323
+         * compiled).  Act only on a tag mismatch so struct/closure/ADT
+         * ascriptions stay transparent. */
         switch (e->type.kind) {
         case TY_BOOL:
             if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
             return v;
-        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+        case TY_FLOAT: case TY_FLOAT64:
+            if (v.tag == TURI_INT) {
+                union { int64_t i; double d; } u; u.i = v.as_int;
+                return turi_float(u.d);
+            }
+            return v;
+        case TY_FLOAT32:
+            /* The compiled float32 ascription numeric-converts the carrier
+             * (unlike float64); keep parity with it. */
             if (v.tag == TURI_INT) return turi_float((double)v.as_int);
             return v;
-        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_INT: case TY_INT64:
+            if (v.tag == TURI_FLOAT) {
+                union { int64_t i; double d; } u; u.d = v.as_float;
+                return turi_int(u.i);
+            }
+            return v;
+        case TY_INT8: case TY_INT16: case TY_INT32:
             if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            return v;
+        case TY_CSTR:
+            /* int64 carrier holds a char*; reinterpret so println shows text. */
+            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
             return v;
         default:
             return v;
