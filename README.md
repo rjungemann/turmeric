@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.19.1` -- editor color themes (Emacs/Vim/VS Code), reversible name mangling, fat-closure codegen fixes for project-mode spice builds, and a fixture-codegen decoupling that strips ~200 KLOC of snapshot churn.
+**Latest release:** `v0.20.0` -- variadic HKT rows, associated type members on typeclasses, application image dumps via serializable continuations, sized types for GADTs, and turi interpreter parity across generators, delimited control, and STM.
 
 ## What
 

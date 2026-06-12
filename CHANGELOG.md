@@ -4,6 +4,58 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.20.0] -- 2026-06-11
+
+### Added
+
+- **Variadic HKT rows (#330)** -- `^&` row-kinded parameters land all six
+  layers; backs the ECS variadic for-each surface.
+- **Associated type members on typeclasses (#327)** -- single associated
+  type with dictionary-free type-level projection.
+- **Application image dumps** -- serializable continuations + image
+  dump/restore via the AI1/AI2/AI4/AI5/AI6 plan; resource-reacquisition
+  hooks for replay; see [image-dumps-guide.md](docs/guides/image-dumps-guide.md).
+- **Sized types for GADTs** -- SZ6-SZ8 type-level index with
+  cross-parameter unification; see
+  [sized-types-guide.md](docs/guides/sized-types-guide.md).
+- **Turi interpreter parity (TI1-TI4)** -- `EX_LETREC` + `EX_SET_FIELD`;
+  generators (`gen`/`yield`/`gen-next`/`gen-done?`); abortive delimited
+  control + STM.
+- **Sweet-exp manifests + codemod (#322)** -- `build.tur.sweet` manifest
+  support (SW0-SW8); `fn`-type-colons codemod extended to
+  `definstance`/`defclass`/`defprotocol`.
+- **`build/` output directory** -- `tur build` routes artifacts under
+  `<root>/build/{obj,bin,lib}/`; configurable via `--build-dir` /
+  `TUR_BUILD_DIR` / `:build-dir`.
+- **Deep transitive `:cmake-deps`** -- recursive walk + fetch-site
+  cycle/conflict detection.
+- **bare-fat-result-monomorphization (Phase B)** -- non-tail float
+  register-class via per-call-site monomorphization.
+- **ECS prereq compiler fixes** -- typeclass-constrained `defn` parsing,
+  `F_TYPE_ANN` unquote in `substitute_params`, top-level `(def name init)`
+  emission into `__tur_module_def_init` constructor, CBLOCK quasiquote
+  auto-wrap, top-level `(do ...)` splicing.
+
+### Changed
+
+- **Phase 21: serial-shift capture grammar generalized** to do-sequences
+  and beyond.
+- **TUR-E0706: hard error for non-capturable serial-shift contexts
+  (#331)** -- replaces the silent-0 miscompile.
+- **`fn`-type leading colons rejected (Phase 4)** -- inside `(fn ...)`
+  type expressions.
+- **Per-declaration dedup for file-scope inline-C blocks.**
+- **Stdlib consolidations** -- type-erasure-cleanup and hkt-consolidation
+  tracks closed.
+
+### Fixed
+
+- **Multi-line inline-C formatting + stdlib layout (#324).**
+- **Project-mode spice builds** -- fat-closure codegen + `defstruct`
+  typedef emission + RC runtime preamble (T1-T11) all landed.
+- **Archive churn sweep** -- 19 resolved plans/reports moved to
+  `docs/archive/history/`.
+
 ## [0.19.1] -- 2026-06-06
 
 ### Added
