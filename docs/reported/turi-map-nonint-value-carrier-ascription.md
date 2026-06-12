@@ -144,3 +144,9 @@ other int-valued map fixtures stay green.
 
 Filed during TI10 Tier A. Tier A intentionally scopes to scalar **keys** with int
 values; this value-side carrier gap is tracked here for a Tier A+ follow-up.
+
+The user-facing consequence of the inherent `EX_REINTERPRET` limitation (the
+"separate observation" above) -- that `::` is value-preserving, not
+bit-preserving, under the interpreter -- is documented for end users in
+[docs/guides/eval-api.md](../guides/eval-api.md) under "Interpreter value
+semantics: `::` is value-preserving, not bit-preserving".
