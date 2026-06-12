@@ -1,5 +1,30 @@
 # 9 `errors/` fixtures whose diagnostic diverges under `--interpret`
 
+> **Update (2026-06-12, pass 2): 3 of the 6 missing-check cases FIXED; 3 remain.**
+> Two narrow, parity-only additions to the interpreter's pre-eval pipeline in
+> `src/turi/eval.c` (`turi_eval_impl`):
+> - **`#lang` not-yet-implemented** (`lang-unknown`, `lang-not-implemented`) --
+>   after `detect_lang` finds a directive, the interpreter now rejects an
+>   unimplemented reader via `reader_type_is_implemented` (mirroring
+>   `detect_and_adjust_lang` in `src/main.c`) instead of silently stripping the
+>   directive and running the program under the default reader. It now prints
+>   `tur: error: #lang <name> is not yet implemented`.
+> - **`TUR-E0106` lifetime-cycle check** (`lifetime-cyclic`) -- the always-on
+>   `lifetime_check_program` pass (compiled path: `PASS_BORROW_CHECK`) is now run
+>   on the elaborated program after the effect-row pass. It only emits on a
+>   genuine outlives cycle (`&'a &'b` / `&'b &'a`), a shape no well-formed
+>   program contains, so no positive program is affected. The full move/borrow
+>   checker stays with the elaborator (already shared).
+>
+> All three removed from `TURI_ERRORS_DENY`; `TURI_FILTER=errors/ bash
+> tests/run-turi.sh` is green (301 passed, 0 failed) and the full harness is 951
+> passed, 0 failed. **3 remain:** `reader-macros-strict-collision` (the
+> interpreter's `TuriEnv` reader-macro registry is `strict=false` *by design*
+> for REPL `src_acc` replay -- making file-eval strict needs the strict-vs-replay
+> reconciliation, not just "enable a pass") and the 2 TI3.2 serial-shift
+> carve-outs (blocked on
+> [turi-capturing-shift-unimplemented.md](turi-capturing-shift-unimplemented.md)).
+>
 > **Update (2026-06-12): the 3 reporting-stage divergences are FIXED; 6 remain.**
 > The interpreter now emits the compiled path's diagnostic for an unbound call
 > head:
@@ -42,10 +67,10 @@ diagnostic" or "wrong-stage diagnostic," not wrong answers.
 | `unbound-call-head` | `unknown function or operator 'foo'` | ~~exits 1, **empty stderr**~~ **FIXED** -- now reports the diag at runtime | reporting-stage |
 | `unknown-helper-load-hint` | `unknown function or operator 'float->int'` | ~~no elab diag / load hint~~ **FIXED** -- diag + load-hint emitted | reporting-stage |
 | `tce3-map-heterogeneous-val` | `TUR-E0001` | ~~exits 1, empty stderr~~ **FIXED** -- emits `TUR-E0001` | reporting-stage |
-| `lifetime-cyclic` | `TUR-E0106` | **exits 0** -- lifetime-cycle check not run | missing-check |
+| `lifetime-cyclic` | `TUR-E0106` | ~~exits 0 -- lifetime-cycle check not run~~ **FIXED** -- `lifetime_check_program` now run under interpret | missing-check |
 | `reader-macros-strict-collision` | `already registered` | exits 0 -- strict-collision not raised | missing-check |
-| `lang-unknown` | `not yet implemented` | **runs the program** (prints output) | missing-check |
-| `lang-not-implemented` | `not yet implemented` | no diag | missing-check |
+| `lang-unknown` | `not yet implemented` | ~~runs the program (prints output)~~ **FIXED** -- rejects unimplemented reader | missing-check |
+| `lang-not-implemented` | `not yet implemented` | ~~no diag~~ **FIXED** -- rejects unimplemented reader | missing-check |
 | `serial-context-not-capturable` | `TUR-E0706` | exits 1, empty stderr | TI3.2 carve-out |
 | `serial-context-do-not-capturable` | `TUR-E0706` | exits 1, empty stderr | TI3.2 carve-out |
 

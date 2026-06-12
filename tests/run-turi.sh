@@ -901,10 +901,7 @@ fixture_has_inline_c() {
 # This closes the TI0-noted gap that errors/ was skipped wholesale.
 # ---------------------------------------------------------------------------
 TURI_ERRORS_DENY="
-lang-not-implemented            # #lang directive: interp does not raise the not-yet-implemented diag
-lang-unknown                    # unknown #lang: interp runs the program instead of erroring
-lifetime-cyclic                 # TUR-E0106 lifetime-cycle check not run under interpret
-reader-macros-strict-collision  # reader-macro strict-collision diag not raised under interpret
+reader-macros-strict-collision  # reader-macro strict-collision diag not raised under interpret (REPL registry is strict=false by design)
 serial-context-do-not-capturable # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
 serial-context-not-capturable    # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
 "

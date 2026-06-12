@@ -72,6 +72,7 @@
 #include "symbols.h"
 #include "types.h"
 #include "../passes/effect_check.h"
+#include "../passes/borrow_check.h"
 
 /* -------------------------------------------------------------------------
  * Tail-call trampoline types (eval.c-internal only; never exposed in headers)
@@ -4980,7 +4981,16 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
         size_t      rest_len = body_len;
         ReaderType  detected = detect_lang(src, body_len, &rest, &rest_len);
         if (rest != src) {
-            /* A #lang directive was found — strip it from the source body. */
+            /* A #lang directive was found.  Reject an unknown / not-yet-
+             * implemented reader the same way the compiled entry points do
+             * (src/main.c detect_and_adjust_lang) instead of silently running
+             * the program under the default reader -- otherwise `#lang foo`
+             * would just execute as plain Turmeric under --interpret. */
+            if (!reader_type_is_implemented(detected)) {
+                return turi_errorf("error: #lang %s is not yet implemented",
+                                   reader_type_name(detected));
+            }
+            /* Strip the directive from the source body. */
             if (detected != env->reader_type) {
                 /* Reader type is changing: discard accumulated source so that
                  * prior input isn't re-parsed under an incompatible reader. */
@@ -5125,6 +5135,19 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
         effect_check_pass(eval_arena, prog, &eff_env);
         /* Warnings are emitted as a side-effect; ignore hard errors in
          * interpreter mode (they would already be caught as elaboration errors). */
+    }
+
+    /* 6c. Run the always-on lifetime pass (elision + outlives-cycle check).
+     * The compiled pipeline runs this in PASS_BORROW_CHECK (src/main.c); the
+     * interpreter shares the elaborator but not the later passes, so a cyclic
+     * explicit signature (&'a &'b / &'b &'a) was previously accepted under
+     * --interpret.  lifetime_check_program only emits TUR-E0106 on a genuine
+     * outlives cycle -- a shape no positive program contains -- so running it
+     * here closes the parity gap without affecting any well-formed program.
+     * The full move/borrow checker is intentionally left to the elaborator
+     * (which the interpreter already shares). */
+    if (!lifetime_check_program(prog)) {
+        return turi_error("elaboration error");
     }
 
     /* 7. Evaluate the new top-level expressions.
