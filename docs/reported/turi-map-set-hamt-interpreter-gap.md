@@ -1,5 +1,52 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
+> **Progress (MutableMap + option-eq, 2026-06-12):** **`mutmap-*` and `option-eq?`
+> now work under `--interpret`.** `mutmap.tur` is a self-contained open-addressing
+> table (no runtime HAMT dependency), so its 8 ops are re-implemented as
+> `native_mutmap_*` over the exact `{cap,len,tomb,slots[]}` layout (only
+> `mutmap-eq?` needs the interpreter -- it calls the value comparator via
+> `turi_call`); `mutmap.tur` joined the prelude (removed from
+> `docs/turi-preload-carve-out.txt`). `native_option_eq` does the same for
+> `option-eq?` over the `int64[2] {is_some,value}` box. Unblocked `mutmap-basic`,
+> `mutmap-delete`, `mutmap-eq`, `mutmap-resize`, `option-of-tvec-eq`, and
+> `eq-carrier-capturing-comparator` (a genuine capturing comparator across
+> option/vec/mutmap eq) -- harness 992 -> 998.
+>
+> **Option dual-rep -- DONE (2026-06-12).** An Option built via
+> `make-struct Option ...` (a `TuriStruct`) vs the native `int64[2]
+> {is_some,value}` box are now read uniformly through `option_field` /
+> `option_is_some` (mirroring `result_field`), so `some?` / `unwrap` /
+> `unwrap-or` / `option-must` / `option-expect` / `option-eq?` / `option-map`
+> handle both. Two real defects fixed: `unwrap-or` was registered only under the
+> dead name `option-unwrap-or` (its real name is `unwrap-or`, so the override
+> never fired -> "inline-C not supported"), and the previous `option-eq?` native
+> read the box layout off a `TuriStruct` (a silent miscompile on `make-struct`
+> Options). `option-map` gained a native too. Unblocked `option-basic`,
+> `typed/option-basic`, `option-map-capturing-closure` (harness 998 -> 1001).
+>
+> **Progress (W1b map-equality, 2026-06-12):** **`map-eq?` / `map-eq-k?` now work
+> under `--interpret`.** `map.tur`'s `map-eq-raw?` / `map-eq-raw-k?` iterate the
+> HAMT and fat-dispatch the value comparator through a C function pointer, which
+> the simple inline-C executor cannot run -- and (worse) the loose `free(`
+> substring matcher mis-claimed their body, freeing the map box and silently
+> returning false (a UAF; see
+> [turi-inline-c-free-matcher-overclaims.md](turi-inline-c-free-matcher-overclaims.md)).
+> Fixed by (a) tightening the free matcher and (b) registering
+> `native_map_eq_raw[_k]` (`src/main.c`), which re-implement the iteration and
+> call the comparator via `turi_call`, mirroring `native_result_eq`. `map-eq`
+> and `typed/map-eq` are on the allowlist (harness 985 -> 987).
+>
+> **Recursive container values -- DONE (2026-06-12).** A `Map[K (Vec V)]` /
+> `Set[(Vec V)]` whose value/element comparator bottoms out in `vec-eq?` /
+> `set-eq-cmp?` now compares structurally: `native_vec_eq` re-walks the Vec
+> (`int64_t[3] = {data,len,cap}`) and `native_set_eq_cmp` double-iterates the set
+> HAMT, each invoking the comparator (a turi closure) via `turi_call` -- the same
+> pattern as `native_map_eq_raw`. Unblocked `map-of-tvec-eq`, `set-of-tvec-eq`,
+> `vec-of-tvec-eq`, `vec-of-tvec-eq-manual`, `typed/vec-basic` (harness 987 ->
+> 992, all on the allowlist). Still a gap: `eq-carrier-capturing-comparator`,
+> which additionally needs the `mutmap-*` collection natives (a separate
+> surface).
+>
 > **Progress (TI10 Tier B, 2026-06-12):** **content-keyed maps with a pure-turi
 > closure comparator now work under `--interpret`.** The 2a `void *ctx` HAMT ABI
 > (`tur_hamt_*_eq_ctx`) plus a trampoline in the map natives (`map_turi_eq_tramp`,

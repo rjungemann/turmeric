@@ -1,7 +1,7 @@
 # turi Interpreter Gap-Closure Plan (TI8.b execution detail)
 
 > **Status:** Draft Plan
-> **Last Updated:** 2026-06-11
+> **Last Updated:** 2026-06-12
 > **Type:** Interpreter / Test Infra
 > **Scope:** post-v1 -- the remaining work to flip `tests/run-turi.sh` from a
 > curated allowlist to a denylist (every fixture runs under `tur --interpret`
@@ -30,7 +30,7 @@ mechanical, not improvised.
 
 ---
 
-## Current state (measured 2026-06-11)
+## Current state (re-measured 2026-06-12)
 
 Full probe: run every `tests/fixtures/*` under `tur --interpret`, minus those
 already carrying `requires.{compiled,tur-only,dedicated-runner,spices,tsan}`:
@@ -40,28 +40,35 @@ post-defmodule-fix:  pass = 660   fail = 910   skip = 92
 post-W1:             pass = 695   fail = 875   skip = 92   (+35)
 ```
 
-**Harness state (the live metric): 912 passed, 0 failed.** Progression:
-181 (post-defmodule) -> 463 (W3 wired `errors/*`, +282) -> **912** (the
-bulk-add of every auto-verified-passing non-inline-C fixture, +449). The harness
-summary now separates the work cleanly:
+**Harness state (the live metric): 998 passed, 0 failed.** Progression:
+181 (post-defmodule) -> 463 (W3 wired `errors/*`, +282) -> 912 (the bulk-add of
+every auto-verified-passing non-inline-C fixture, +449) -> 985 (post #341
+/#342/#343: pure-turi silent-miscompile fixes, inline-C tightening, HAMT ctx ABI,
+preload parity, +73) -> 987 (W1b `map-eq?` natives + free-matcher fix, +2) ->
+992 (recursive container value-eq: `vec-eq?` / `set-eq-cmp?` natives, +5) ->
+998 (MutableMap natives + `option-eq?`, mutmap.tur preloaded, +6) ->
+**1001** (Option dual-rep: `option_field` readers + `option-map` / `unwrap-or`
+natives, +3).
+The harness summary now separates the work cleanly:
 
 ```
-912 passed, 0 failed, 665 skipped
-  405 inline-c carve-outs   (TI7, permanent -- W2)
-  260 non-inline-C not yet on the allowlist  (the W5 triage surface)
+1001 passed, 0 failed, 603 skipped
+  407 inline-c carve-outs   (TI7, permanent -- W2)
+  196 non-inline-C not yet on the allowlist  (the W5 triage surface)
 ```
 
-The **260** is the real remaining gap: ~244 genuine pure-turi failures (W1b
-native-shim cluster + W4 silent miscompiles + an HKT/existential/continuation
-tail) plus a few container/edge dirs. Everything that passes under `--interpret`
-is now on the allowlist, so the allowlist == "everything that works," and a W5
-flip to denylist only needs the 260 fixed-or-carved.
+The **196** is the real remaining gap (down from 260): the W1b native-shim
+cluster (map, blocked on the C-callback eq/hash gap) + the remaining inline-C
+evaluator miscompiles + an HKT/existential/continuation tail, plus a few
+container/edge dirs. Everything that passes under `--interpret` is now on the
+allowlist, so the allowlist == "everything that works," and a W5 flip to
+denylist only needs the 212 fixed-or-carved.
 
 > The bucket tables below describe the **pre-W1 (910-failure)** snapshot, which
 > is still the right map for the remaining failure work.
 
 EX_* expression-kind parity (the `check_turi_parity.py` ratchet):
-**109 / 115 handled, 6 carved out, 0 gaps.** So the remaining failures are
+**112 / 115 handled, 3 carved out, 0 gaps.** So the remaining failures are
 *not* about unhandled expression kinds -- they are stdlib/native/semantic gaps.
 
 The 910 failures split cleanly along the single most important axis:
@@ -194,19 +201,29 @@ miscompile, fixed by this), `typed-slots/cs4-stdlib-helpers`,
 **924**, 0 failed; compiled 1573/0; zero regressions, incl. the allowlisted
 `coerce-carrier-to-struct` which now passes via the carrier path).
 
-**map/set/hamt -- hamt + set DONE; map blocked.** hamt.tur (raw `tur_hamt_*`
-wrappers now registered in `cmd_eval`) and set (hamt-backed `set-*` natives over
-`{void* hamt}`, fixing the `native_set_count` overflow; `#set{}` lowers through
-the set ops) are landed and on the allowlist. **map** is blocked by **Gap 2**
-(the C-callback eq/hash). A 2026-06-12 spike corrected the earlier
-"monomorphization-bypass" guess: `map-assoc-eq-o` resolves to its native fine;
-the blocker is the `MapKey` `mk-cmp` key comparator, evaluated as an *argument*
-to the assoc call, which the elaborator synthesizes as a closure returning a
-captured C function pointer (`return ...__TUR_CAP_0__;`) the interpreter cannot
-represent. Map needs a turi-closure-aware HAMT path (or natives that re-implement
-key storage/lookup without a C eq callback). Full analysis:
+**map/set/hamt -- hamt + set + scalar/closure-keyed map + map-eq DONE.** hamt.tur
+(raw `tur_hamt_*` wrappers in `cmd_eval`) and set (hamt-backed `set-*` natives
+over `{void* hamt}`, fixing the `native_set_count` overflow) landed first.
+**Gap 2** (the C-callback eq/hash) was then resolved two ways: scalar keys via
+`mk-cmp` natives that return the real C carrier-comparator address (TI10 Tier A),
+and pure-turi-closure key comparators via the `void* ctx` HAMT ABI +
+`turi_call` trampoline (TI10 Tier B). The **W1b map-equality** slice (2026-06-12)
+finished the operation surface: `map-eq?`/`map-eq-k?` now evaluate under
+`--interpret` via `native_map_eq_raw[_k]` (HAMT iteration + comparator-by-`turi_call`,
+mirroring `native_result_eq`), and a latent silent-miscompile+UAF in the inline-C
+`free` matcher -- which mis-claimed `map-eq-raw?`'s body (it contains
+`tur_hamt_iter_free(`) and freed the map box -- was fixed
+([turi-inline-c-free-matcher-overclaims.md](../reported/turi-inline-c-free-matcher-overclaims.md)).
+`map-eq`/`typed/map-eq` are on the allowlist. Recursive **container values**
+(`Map[K (Vec V)]`, `Set[(Vec V)]`) are now handled too: `native_vec_eq`
+(`vec-eq?`) and `native_set_eq_cmp` (`set-eq-cmp?`) re-walk the element store and
+invoke the comparator via `turi_call`, so structural eq recurses into container
+elements (`map-of-tvec-eq`, `set-of-tvec-eq`, `vec-of-tvec-eq`,
+`vec-of-tvec-eq-manual`, `typed/vec-basic` on the allowlist). The remaining
+sliver (`eq-carrier-capturing-comparator`) additionally needs the `mutmap-*`
+collection natives -- a separate surface. Full analysis:
 [turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md).
-The original spike notes (still accurate for map's general shape) follow.
+The original spike notes (historical; map's key side is now resolved) follow.
 
 **Original spike (2026-06-11): the Result pattern does NOT directly transfer.**
 Loading `hamt.tur`/`map.tur`/`set.tur` into the prelude does **not** regress the
@@ -404,7 +421,7 @@ shrink after W1 before acting):
   type defaults to `:int` when its module is not loaded; mostly subsumed by W1,
   re-measure after W1.
 
-### W4 -- Silent miscompiles (highest severity) -- **IN PROGRESS (accessor class fixed)**
+### W4 -- Silent miscompiles (highest severity) -- **pure-turi bucket CLEARED; inline-C tail remains**
 
 The silent-miscompile surface was measured precisely (post-W1/W3, `rc` matches
 expected but output is wrong):
@@ -433,20 +450,19 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
   `backtrack-*` (7), `show-*` (3), `arrow-instance-*` (2) clusters. Apply the
   same refuse-rather-than-guess tightening per matcher. Inline-C carve-outs, so
   they do not block W5 -- but they ship a wrong-answer hazard for real programs.
-- **11 pure-turi interpreter bugs** (the W5 blockers), catalogued in
+- **11 pure-turi interpreter bugs** (the former W5 blockers), catalogued in
   [turi-pure-turi-silent-miscompiles.md](../archive/turi-pure-turi-silent-miscompiles.md)
-  (RESOLVED 2026-06-12 -- all 11 fixed, report archived).
-  **7 fixed** (added to the allowlist, harness 912 -> 919): `EX_ASCRIBE`
-  primitive coercion (`rt-return-dispatch-*`), `EX_ANY_TYPE_OF` coarse tags +
-  `EX_ANY_CAST` checked downcast (`any-box-*`, `any-cast-mismatch-panic`),
-  `catch-unwind` firing unwound defers (`panic-catch-unwind-defer`), and
-  `native_extern_puts` (`extern-c-spaced-typeann`). `reader-cond` carved
-  `requires.compiled` (legit `#?(:tur/:turi ...)` path-divergence). **4 remain**,
-  each deep and overlapping another workstream: `result-of-typed-eq` (W1b --
-  Vec/Result recursive eq), `range-bound-show-ord` (inline-C conditional-snprintf
-  matcher gap), `codegen-private-defn-collision` (module-private name mangling --
-  core module-system change), `rc-unique-violation` (rc strong/weak-count check
-  in `ref/from-rc`).
+  (RESOLVED 2026-06-12 -- all 11 fixed, report archived). The original **7**
+  (harness 912 -> 919): `EX_ASCRIBE` primitive coercion (`rt-return-dispatch-*`),
+  `EX_ANY_TYPE_OF` coarse tags + `EX_ANY_CAST` checked downcast (`any-box-*`,
+  `any-cast-mismatch-panic`), `catch-unwind` firing unwound defers
+  (`panic-catch-unwind-defer`), and `native_extern_puts`
+  (`extern-c-spaced-typeann`). `reader-cond` carved `requires.compiled` (legit
+  `#?(:tur/:turi ...)` path-divergence). The **4 that remained are now also
+  resolved** by #341/#342 and pass under the harness: `result-of-typed-eq`,
+  `range-bound-show-ord` (the inline-C conditional-snprintf matcher),
+  `codegen-private-defn-collision`, and `rc-unique-violation`. The pure-turi
+  silent-miscompile bucket is empty.
 
 ### W5 -- The flip itself
 
@@ -455,9 +471,11 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 with diag comparison (W3), and (d) has every passing non-inline-C fixture on the
 allowlist (the bulk-add). So the allowlist now == "everything that works," and
 the flip is mechanically: replace "in allowlist?" with "not failing." The only
-thing standing between here and a green denylist is the **260** remaining
-allowlist-gap fixtures (~244 genuine failures) -- each must be fixed (W1b/W4) or
-carved with a marker.
+thing standing between here and a green denylist is the **212** remaining
+allowlist-gap fixtures (down from 260) -- each must be fixed (mainly W1b map) or
+carved with a marker. The pure-turi silent-miscompile blockers (W4) are all
+cleared; the residue is the W1b native-shim cluster plus the inline-C evaluator
+tail and a small HKT/existential/continuation set.
 
 Once W1-W4 leave only carved fixtures failing:
 
@@ -529,12 +547,14 @@ Suggested PR slicing (each independently green):
 
 Track three numbers per PR (all from the probe + harness):
 
-- **probe pass/fail/skip** -- the headline (660/910/92 today; target fail -> 0
+- **probe pass/fail/skip** -- the headline (660/910/92 at W1; target fail -> 0
   non-carved).
-- **`run-turi.sh` summary** -- must stay green every step (145 passed today).
-- **`check_turi_parity.py`** -- must stay `0 gaps`.
-- **`tests/run.sh`** -- must stay `1573 passed, 0 failed` (count drifts with
-  fixture churn).
+- **`run-turi.sh` summary** -- must stay green every step (985 passed, 0 failed,
+  619 skipped as of 2026-06-12; 407 inline-c carve-outs + 212 triage surface).
+- **`check_turi_parity.py`** -- must stay `0 gaps` (112/115 handled, 3 carved
+  as of 2026-06-12).
+- **`tests/run.sh`** -- must stay green (`1605 passed, 0 failed` as of
+  2026-06-12; count drifts with fixture churn).
 
 Definition of done = W5 merged with `run-turi.sh` green at denylist default.
 

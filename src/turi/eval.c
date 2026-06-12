@@ -2468,6 +2468,22 @@ static TuriValue ic_exec_free(TuriValue *args, uint32_t n_args) {
     return turi_nil();
 }
 
+/* True iff `body` contains a standalone `free(` call (the destructor shape this
+ * matcher can evaluate) -- i.e. a `free(` token whose preceding character is not
+ * part of a longer identifier.  Without the word-boundary check a plain substring
+ * match also claims bodies that merely call `tur_hamt_iter_free(`, `xfree(`, etc.
+ * -- which `ic_exec_free` would then mis-handle by free()ing arg0 and returning
+ * nil, a silent miscompile and (for HAMT iterators) a heap-use-after-free. */
+static bool ic_has_standalone_free(const char *body) {
+    const char *p = body;
+    while ((p = strstr(p, "free(")) != NULL) {
+        unsigned char prev = (p == body) ? '\0' : (unsigned char)p[-1];
+        if (!(isalnum(prev) || prev == '_')) return true;
+        p += 5;
+    }
+    return false;
+}
+
 /* Execute switch-case string: switch(arg0) { case V: return "str"; ... } */
 static TuriValue ic_exec_switch_string(const char *body,
                                         TuriValue *args, uint32_t n_args) {
@@ -3480,14 +3496,16 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     if (!body || !*body) return false;
 
     bool has_malloc = strstr(body,"malloc(") || strstr(body,"calloc(");
-    bool has_free   = strstr(body,"free(");
+    bool has_free   = ic_has_standalone_free(body);
     bool has_arrow  = strstr(body,"->");
     bool has_fptr   = strstr(body,"(*)(");
     bool has_switch = strstr(body,"switch") && strstr(body,"case ");
     bool has_return = strstr(body,"return ");
 
-    /* Pattern 1: Free */
-    if (has_free && !has_malloc) {
+    /* Pattern 1: Free -- only a bare destructor (`free(p);`), not a body that
+     * also computes/returns a value or fat-dispatches a closure (those merely
+     * happen to contain a `*_free(` token and must not be reduced to free(arg0)). */
+    if (has_free && !has_malloc && !has_return && !has_fptr) {
         *out = ic_exec_free(args, n_args);
         return ic_claim("free", fn, out);
     }

@@ -905,6 +905,44 @@ tce3-map-cstr-val
 # via a turi_call trampoline.  Hash is forced to 0 so the comparator runs on
 # every probe (genuinely exercised, not works-by-luck).
 tib-map-turi-comparator
+# Map structural equality (map-eq? / map-eq-k?): map.tur's map-eq-raw? /
+# map-eq-raw-k? iterate the HAMT and fat-dispatch the value comparator through a
+# C function pointer, which the simple inline-C executor cannot run.  The
+# native_map_eq_raw[_k] overrides re-implement the iteration and invoke the
+# comparator (a turi closure under --interpret) via turi_call, mirroring
+# native_result_eq.  (Map values that are themselves containers -- Vec/Map --
+# still await the recursive value-eq gap; see turi-map-set-hamt-interpreter-gap.md.)
+map-eq
+typed/map-eq
+# Recursive container values: a Map[K (Vec V)] / Set[(Vec V)] whose value/element
+# comparator bottoms out in vec-eq? / set-eq-cmp?.  native_vec_eq and
+# native_set_eq_cmp re-walk the Vec ({data,len,cap}) / double-iterate the set
+# HAMT and invoke the comparator via turi_call -- so structural eq recurses into
+# container elements (the Vec/Map recursive value-eq gap).
+map-of-tvec-eq
+set-of-tvec-eq
+vec-of-tvec-eq
+vec-of-tvec-eq-manual
+typed/vec-basic
+option-of-tvec-eq
+# MutableMap (open-addressing hash table): mutmap.tur's inline-C ops loop and
+# fat-dispatch the value comparator (un-runnable in the simple executor).  The
+# native_mutmap_* overrides re-implement them over mutmap's self-contained
+# {cap,len,tomb,slots[]} layout; mutmap-eq? / option-eq? invoke the comparator
+# (a turi closure) via turi_call.  eq-carrier-capturing-comparator exercises a
+# genuine capturing comparator across option-eq?/vec-eq?/mutmap-eq?.
+mutmap-basic
+mutmap-delete
+mutmap-eq
+mutmap-resize
+eq-carrier-capturing-comparator
+# Option dual-rep: an Option built via make-struct Option (a TuriStruct) vs the
+# native int64[2] {is_some,value} box now read uniformly via option_field
+# (mirrors result_field).  unwrap-or registered under its real name; option-map
+# / option-eq? invoke their closure via turi_call.
+option-basic
+typed/option-basic
+option-map-capturing-closure
 "
 
 # Build an associative-set from the default list for O(1) lookup.
