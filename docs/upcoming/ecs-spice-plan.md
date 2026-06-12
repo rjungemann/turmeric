@@ -11,10 +11,16 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 > companion), and E4 (comparison writeup --
 > [`docs/guides/ecs-guide.md`](../guides/ecs-guide.md) and
 > [`docs/guides/ecs-vs-haskell-ecs.md`](../guides/ecs-vs-haskell-ecs.md))
-> all shipped. E2c (sized-rectangular iteration) and E2d
-> (associated-type storage projection) have their compiler prereqs
-> landed but still need the spice-side wiring. E2b (refinement-typed
-> APIs) remains gated on refinement types, which are still in plan.
+> all shipped. E2d (associated-type storage projection) has its
+> compiler prereq landed and still needs the spice-side wiring. E2c
+> (sized-rectangular iteration) is **no longer "just wiring"** -- the
+> shipped SZ6-SZ8 cross-parameter unification only kicks in for size
+> indices derived from a GADT constructor chain, which mutating
+> dense storage cannot supply; E2c is now gated on a bounded-capacity
+> world API redesign (see
+> [`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md)).
+> E2b (refinement-typed APIs) remains gated on refinement types,
+> which are still in plan.
 > The original prerequisite-tracking plan has been archived at
 > [`docs/archive/history/ecs-prereq-plan.md`](../archive/history/ecs-prereq-plan.md).
 
@@ -323,8 +329,13 @@ which have not yet shipped:
   landed 2026-06-10 -- size indices participate in type equality and
   cross-parameter unification (see
   [`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md)).
-  Dense-storage zip still checks length at runtime; lifting to a
-  compile-time check is now a transparent spice-side update.
+  Dense-storage zip still checks length at runtime, and lifting it
+  is **not** the transparent spice-side update originally claimed
+  here: cross-parameter unification only fires when the size index
+  rides on a GADT constructor chain, which mutation-based dense
+  storage cannot supply. Lifting to a compile-time check now
+  requires a bounded-capacity world API redesign -- see
+  [`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md).
 - **Associated-type storage projection.** Associated type members on
   typeclasses landed in turmeric 0.20.0 (see
   [`docs/archive/history/typeclass-associated-types-missing.md`](../archive/history/typeclass-associated-types-missing.md));
@@ -419,13 +430,6 @@ against apecs's and aztecs's trust-the-programmer baseline.
 
 ### Spice-side wiring pending (prereq landed)
 
-**E2c -- sized-rectangular dense iteration.** Sized types SZ6-SZ8
-shipped 2026-06-10 (see
-[`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md)).
-Dense-vs-dense zip in the spice still does a runtime length check;
-lifting it to a `SizedVec<n, T>` static-rectangularity check is now
-a transparent spice-side update.
-
 **E2d -- associated-type storage projection.** Associated type
 members on typeclasses shipped in turmeric 0.20.0 (see
 [`docs/archive/history/typeclass-associated-types-missing.md`](../archive/history/typeclass-associated-types-missing.md)).
@@ -433,6 +437,88 @@ The spice's `defcomponent` is still the E0 documentation marker;
 wiring a real `type Storage : Type` associated member on
 `Component` -- and letting `defworld` project through it instead of
 consulting the macro-time storage registry -- is queued.
+
+The shipped milestone is "single-parameter classes, single
+output type, no value-level projection" -- which lines up with
+ECS's needs but constrains the design. Prereqs that should land in
+this order to keep the wiring small:
+
+**E2d-P1 -- Typed storage opaques per backend.** Today
+`dense-new`, `sparse-new`, and `tag-new` all return bare `:int`.
+Lift each to a phantom-parameterized opaque: `(defopaque Dense
+[A] :int)`, `(defopaque Sparse [A] :int)`, `(defopaque Tag :int)`.
+Underlying representation unchanged; this is a typing surface
+change in `ecs/storage`, `ecs/sparse`, `ecs/tag`. Without it, an
+associated `(Storage T)` projection has nothing distinct to point
+at.
+
+**E2d-P2 -- `Component` class with associated `Storage`.**
+`(defclass Component [T] (type Storage : Type))`. Per the archive,
+this is exactly the shape the milestone resolves. Instances:
+`(definstance Component [Pos] (type Storage = (Dense Pos)))`.
+Stdlib/spice-only work, gated on E2d-P1.
+
+**E2d-P3 -- `defstruct` accepts `(Storage T)` in field position.**
+Verification fixture: a struct with a field typed `(Storage Pos)`
+that reduces to `(Dense Pos)` at projection time. The archive
+notes resolution happens in both `type_expr_from_form` *and*
+`fn_type_from_form`, so this *should* be green -- but it's the
+load-bearing assumption for `defworld` and worth one fixture
+before any macro rewrite.
+
+**E2d-P4 -- `defcomponent` macro emits the instance.** Once P2
+holds, `(defcomponent Pos :storage :dense)` lowers to the
+`Component`/`Storage` instance plus the existing registration
+hook. Macro work, no elaborator changes.
+
+**E2d-P5 -- `defworld` projects field types through `(Storage
+T)`.** Replace the hard-coded `~Pos : int` field emission with
+`~Pos : (Storage ~Pos)`. Gated on P3 + P4. Removes `defworld`'s
+dependency on the macro-time storage registry; storage choice
+becomes a property of the component, visible to every consumer
+that reads the world's type.
+
+**E2d-P6 (stretch) -- Polymorphic storage ops via a
+single-param class.** A `(defclass StorageOps [S] (type Elem :
+Type) (insert ...) (get ...) (has? ...))` with instances per
+backend lets `defcomponent-accessors` dispatch via class methods
+instead of bare `dense-*` / `sparse-*` / `tag-*` calls. Lifts the
+"swap storage with one line" claim from documentation to type
+system. Sits inside the shipped single-param-class milestone by
+threading the element type through an associated `Elem` instead
+of a second class parameter -- the workaround the archive hints
+at for the missing multi-param class machinery.
+
+**Out of scope (still gated on compiler work):** anything that
+needs the value-level projection caveat called out in the
+archive -- methods whose *C* signature depends on `(Storage T)`.
+Today every storage handle rides the `int64` carrier so this is
+fine; if a backend ever wants non-int handles, that compiler work
+has to land first.
+
+The critical path is **E2d-P1 -> E2d-P3 (verify) -> E2d-P2 ->
+E2d-P4 -> E2d-P5**, with P6 as a follow-up. Each step is
+self-contained and re-uses shipped machinery; the whole sequence
+should be a single multi-PR landing, not a multi-release effort.
+
+### Design pending (prereq alone is not enough)
+
+**E2c -- sized-rectangular dense iteration.** Originally listed as
+"spice-side wiring pending." Reclassified 2026-06-12 after a
+scoping pass: SZ6-SZ8 cross-parameter unification only fires when
+the size index rides on a GADT constructor chain
+([`tests/fixtures/sized-cross-param-accept`](../../tests/fixtures/sized-cross-param-accept/input.tur)
+is the reference case). Dense storage's handle is a mutating
+`int`-pointer with no constructor chain, so any size index attached
+to it is a true phantom -- never load-bearing. The only honest
+landing is a **bounded-capacity world API** that commits to a
+single size `n` at world construction and threads it through every
+storage field, `spawn`, `despawn`, and the accessors. That is a
+world-API redesign, not transparent wiring. Full analysis and the
+open design questions are in
+[`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md).
+A follow-up `ecs-sized-world-plan.md` is the next deliverable;
+no spice code lands before that design plan is resolved.
 
 ### Still deferred (refinement types not shipping)
 
