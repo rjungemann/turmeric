@@ -1,5 +1,11 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Prereq decomposition (2026-06-12):** the "de-risked roadmap" below is broken
+> into independently-landable groundwork (native-registry parity diff,
+> benchmark-stub overlap audit, opt-in `TUR_TURI_FULL_PRELUDE` flag, carve
+> markers for the move/linearity + `if-bool` divergences) in
+> [docs/upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md).
+
 **Summary:** `tests/run-turi.sh` was flipped from `tur run` (which compiles and
 runs a native binary) to `tur --interpret` (the actual tree-walking
 interpreter), resolving the blocker in
@@ -181,7 +187,7 @@ reports). Each must be fixed in `src/turi/eval.c` or carved with
 ## Status
 
 Filed while executing TI8 of
-`docs/upcoming/v1/turi-parity-post-v1-plan.md`. TI8.a (parity ratchet +
+`docs/upcoming/turi-parity-post-v1-plan.md`. TI8.a (parity ratchet +
 harness-now-interprets + honest allowlist) and the TI8.b defmodule fix have
 landed; the full allowlist->denylist flip remains, with the de-risked roadmap
 above and the measured per-bucket scope.

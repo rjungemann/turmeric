@@ -1,5 +1,31 @@
 # 25 inline-C fixtures silently miscompile under `--interpret`
 
+> **Update (2026-06-12, claim-trace + recount):** `TUR_IC_TRACE=1` now logs
+> which `ic_exec_*` matcher claims each body (`ic_claim`, `src/turi/eval.c`) --
+> diagnostic groundwork for the tightening. Re-measured against it, **the true
+> remaining silent-miscompile set is 20, not 22**: `instance-head-hole-pair`,
+> `stdlib-test-runner-registry`, `weak-dangling`, and `weak-upgrade-option` now
+> produce a **clean error (rc=1)**, not a silent wrong answer -- the matcher
+> already declines them. The 20 funnel through just two matchers:
+> **`constructor` (12: the `backtrack-*` cluster + `arrow-instance-*` +
+> `workstealing-*`)** and **`snprintf` (4: `show-float/-list/-pair`,
+> `exg5-rc-in-exists`)**, plus `accessor`/`simple-return`/mixed (4). Tightening
+> `ic_exec_constructor` first is the highest-leverage slice. Full matcher->fixture
+> map and the prereq decomposition:
+> [docs/upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md).
+>
+> **Update (2026-06-12, conditional-snprintf):** the `ic_exec_snprintf_fmt`
+> matcher no longer blindly takes the *first* `snprintf` when two are guarded by
+> an `if (COND) snprintf(...); else snprintf(...);`. It now evaluates `COND` and
+> formats only the live branch (`ic_snprintf_cond_branch` /
+> `ic_format_snprintf_call`, `src/turi/eval.c`). This closed the stdlib
+> `bound-fmt` divergence behind `range-bound-show-ord` (tracked in
+> [turi-pure-turi-silent-miscompiles.md](../archive/turi-pure-turi-silent-miscompiles.md));
+> resolution archived at
+> [../archive/turi-inline-c-conditional-snprintf-branch.md](../archive/turi-inline-c-conditional-snprintf-branch.md).
+> The other snprintf-bucket cases below still miscompile via *different* paths
+> (e.g. `%s`/string args, multi-statement bodies) and remain open.
+>
 > **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
 > [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md))
 > converted **3** of these (the accessor-path cases incl. `result-basic`) from
@@ -89,4 +115,4 @@ does.
 
 Filed while executing TI8.b/W2. The carve mechanism skips these under turi; this
 report keeps the silent-miscompile evaluator bug visible for W4. See
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md).
+[docs/upcoming/turi-interpreter-gap-closure-plan.md](../upcoming/turi-interpreter-gap-closure-plan.md).

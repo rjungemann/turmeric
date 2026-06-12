@@ -418,6 +418,7 @@ capability-test
 capability-thread
 category-instance-basic
 codegen-paren-precedence
+codegen-private-defn-collision
 contract-assert-fail
 contract-ensure-fail
 contract-invariant-fail
@@ -687,6 +688,7 @@ positional-adt-poly-ok
 promise-linear
 ptc2-test
 ptc3-test
+range-bound-show-ord
 range-reader-float
 rc-auto-drop-closure-capture
 rc-auto-drop-consumed-by-explicit-drop
@@ -715,6 +717,7 @@ rc-shared
 rc-struct-auto-drop
 rc-struct-nested-rc-fields
 rc-struct-simple-payload
+rc-unique-violation
 reactor-linear
 reader-macros-bare
 reader-macros-datum

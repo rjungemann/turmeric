@@ -542,6 +542,16 @@ run_negative() {
     local input="$dir/input.tur"
     [ -f "$input" ] || { echo "SKIP $name (no input)"; write_result "PASS" "$name" "(no input -- skipped)" "" ; return; }
 
+    # Skip negative fixtures that load from the optional sibling turmeric-spices
+    # repo when that directory isn't present (mirrors the happy-path guard above).
+    # Without this, a spices-dependent error fixture fails for any contributor
+    # who has not cloned the sibling repo -- the diagnostic differs because the
+    # spice import never resolves. See CLAUDE.md "Optional dependencies".
+    if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
+        write_result "PASS" "$name" "(spices-skipped)" ""
+        return
+    fi
+
     # Per-fixture timeout (default 10s) -- negative fixtures only emit-c, but an
     # untimed front-end hang stalled the suite just like the happy path did.
     local fixture_timeout=10

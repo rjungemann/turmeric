@@ -1,5 +1,18 @@
 # Pure-turi silent miscompiles (11 real interpreter bugs + 1 legit carve)
 
+> **RESOLVED (2026-06-12): all 11 bugs fixed; `reader-cond` carved.** The final
+> holdout `rc-unique-violation` is fixed -- the interpreter's `__rc` control
+> block now carries a weak count (`cnt[1]`) alongside the strong count
+> (`cnt[0]`); `EX_WEAK` bumps it, and `EX_REF_FROM_RC` enforces the same
+> uniqueness invariant as the compiled `tur_ref_from_rc` (strong==1 && weak==0),
+> panicking with the matching message otherwise (`src/turi/eval.c`). Fixture on
+> the `run-turi.sh` allowlist; harness 982/0, full suite 1596/0 (with run.sh
+> validating the stderr substring). With the three 2026-06-12 fixes
+> (`range-bound-show-ord`, `codegen-private-defn-collision`,
+> `rc-unique-violation`) the silent-miscompile surface for pure-turi is empty.
+> This report is archived; the per-fix paper-trails live alongside it in
+> `docs/archive/`.
+>
 > **Update (TI8.b/W4, 2026-06-11): 6 of the 11 fixed.** Four root causes in
 > `src/turi/eval.c`:
 > - **`EX_ASCRIBE` primitive coercion** -- `(:: x bool/float/int)` now reconciles
@@ -31,19 +44,42 @@
 > joined the prelude (dual-rep Result readers + `native_result_eq` +
 > `EX_GET_FIELD` carrier-box path). Now on the allowlist.
 >
-> **3 remain, each deep and overlapping another workstream:**
-> - `range-bound-show-ord` -- `bound-fmt` (stdlib inline-C) is
->   `if (kind==1) snprintf("[...") else snprintf("(...")`; `ic_exec_snprintf_fmt`
->   takes the *first* snprintf always, so Exclusive renders `[7` not `(7`. This
->   is the **inline-C-evaluator** conditional-snprintf gap (the 22-matcher
->   bucket), not pure-turi.
-> - `codegen-private-defn-collision` -- two modules' private `__h` both register
->   under the bare name in the interpreter env (last wins -> `200/200`). Needs
->   per-module mangling in `EX_FN_DEF` registration *and* call resolution -- a
->   core module-system change.
-> - `rc-unique-violation` -- `(ref/from-rc rc)` with a live `weak` must panic
->   (unique-rc violation); the interpreter's `ref/from-rc` does no strong/weak
->   count check.
+> **Update 4 (2026-06-12): `range-bound-show-ord` FIXED** -- the
+> inline-C-evaluator conditional-snprintf gap is closed. `ic_exec_snprintf_fmt`
+> now resolves a guarding `if (COND) snprintf(...); else snprintf(...);` by
+> evaluating `COND` (via the existing `ic_eval_binexpr` precedence climber) and
+> formatting only the live branch, instead of always taking the first snprintf.
+> `bound-fmt`'s Exclusive endpoint renders `(7` again. The snprintf-formatting
+> body was factored into `ic_format_snprintf_call`, and branch selection into
+> `ic_snprintf_cond_branch` (`src/turi/eval.c`). Fixture added to the
+> `run-turi.sh` allowlist (harness green). Resolution paper-trail archived at
+> [turi-inline-c-conditional-snprintf-branch.md](turi-inline-c-conditional-snprintf-branch.md).
+>
+> **Update 5 (2026-06-12): `codegen-private-defn-collision` FIXED.** The
+> interpreter now mirrors the compiled per-module private mangling. A `defn`
+> inside a `defmodule` that is not in the module's export list is registered
+> under the qualified key `"<module>/<name>"` (plus a bare alias only when the
+> bare slot is still free, so the entry-point `main` and legacy cross-module
+> bare references stay reachable). Each closure is tagged with its owning module;
+> `eval_apply` publishes that as `env->current_module` while the body runs, and
+> `eval_lookup` probes `"<module>/<name>"` before the flat global name. So
+> `alpha/__h` (100) and `beta/__h` (200) no longer collide on the bare `__h`
+> slot. Fixture added to the `run-turi.sh` allowlist; harness green (980/0),
+> full suite 1596/0, `tur_eval_import` ctest green. Resolution archived at
+> [turi-interpreter-module-private-defn-collision.md](turi-interpreter-module-private-defn-collision.md).
+>
+> **Update 6 (2026-06-12): `rc-unique-violation` FIXED -- 0 remain.** The
+> interpreter's `__rc` control block became a 2-slot counter (`cnt[0]` strong,
+> `cnt[1]` weak); `EX_RC_OF` allocates both, `EX_WEAK` bumps the weak count
+> (while staying value-transparent), and `EX_REF_FROM_RC` now enforces
+> strong==1 && weak==0 -- panicking via `turi_runtime_panic` with the same
+> `"ref/from-rc requires unique rc ..."` message the compiled `tur_ref_from_rc`
+> aborts with. Legit unique `ref/from-rc` (no live weak) is unaffected. Fixture
+> on the `run-turi.sh` allowlist; harness 982/0, full suite 1596/0 (run.sh
+> validates the stderr substring). Resolution archived at
+> [turi-interpreter-rc-from-rc-unique-check.md](turi-interpreter-rc-from-rc-unique-check.md).
+>
+> **0 remain -- this report is fully resolved (see the RESOLVED banner at top).**
 
 **Summary:** Of the ~244 pure-turi (no inline-C) fixtures that fail under
 `--interpret` after W1-W3, only **12** are *silent* (rc matches the expected exit
@@ -101,4 +137,4 @@ divergences and carving them hides wrong-answer bugs.
 Filed while executing TI8.b/W4. The `ic_exec_accessor` boolean-return class was
 fixed in the same pass; these pure-turi cases are the remaining W4 surface (each
 its own root-cause investigation). See
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md).
+[docs/upcoming/turi-interpreter-gap-closure-plan.md](../upcoming/turi-interpreter-gap-closure-plan.md).

@@ -117,6 +117,10 @@ struct TuriClosure {
     /* EX_CLOSURE closures have a synthetic __env_p first param for codegen;
      * the interpreter skips it and uses the captured frame instead. */
     bool            skip_env_param;
+    /* Owning module name (for a top-level defn inside a defmodule), or NULL.
+     * eval_apply publishes this as env->current_module while the body runs so
+     * intra-module calls can resolve module-private "<module>/<name>" bindings. */
+    const char     *module;
 };
 
 /* Forward declaration — defined after TuriStruct is fully defined below. */
@@ -362,6 +366,18 @@ static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
     for (EvalFrame *f = frame; f; f = f->parent) {
         for (EvalBinding *b = f->bindings; b; b = b->next) {
             if (strcmp(b->name, name) == 0) return b->value;
+        }
+    }
+    /* Module-private resolution: a defn whose body is running inside module M
+     * can see M's private (non-exported) helpers, which are registered under the
+     * qualified key "M/name". Probe that before the flat global name so two
+     * modules' same-named privates do not collide. */
+    if (env->current_module && env->current_module[0]) {
+        char keybuf[256];
+        int kn = snprintf(keybuf, sizeof keybuf, "%s/%s", env->current_module, name);
+        if (kn > 0 && kn < (int)sizeof keybuf) {
+            TuriValue qv = turi_env_get(env, keybuf);
+            if (qv.tag != TURI_ERROR) return qv;
         }
     }
     return turi_env_get(env, name);
@@ -2911,6 +2927,119 @@ static TuriValue ic_exec_accessor(const char *body,
 
 /* Execute snprintf-based formatter: handles bodies that do conditional early returns and
  * then snprintf(buf, size, "format", args...) + return buf. Useful for Show instances. */
+/* Format a single snprintf(bufvar, size, "format", args...) call whose 's' is
+ * at fp ("snprintf(" expected). Returns the formatted cstr TuriValue, or
+ * turi_nil() if the call does not target bufvar or cannot be parsed. */
+static TuriValue ic_format_snprintf_call(const char *fp,
+                                         const char *bufvar, int bvlen,
+                                         TuriValue *args, uint32_t n_args,
+                                         FnDef *fn, uint32_t param_offset,
+                                         const char *body) {
+    const char *fq = fp + 9;
+    fq = ic_skip_ws(fq);
+    const char *bvs = fq;
+    while (isalnum((unsigned char)*fq)||*fq=='_') fq++;
+    if ((int)(fq-bvs)!=bvlen || strncmp(bvs,bufvar,(size_t)bvlen)!=0) return turi_nil();
+    /* skip comma + size arg */
+    fq=ic_skip_ws(fq); if(*fq==',') fq++;
+    fq=ic_skip_ws(fq); int d=0;
+    while(*fq&&(*fq!=','||d>0)){if(*fq=='(')d++;else if(*fq==')')d--;fq++;}
+    if(*fq==',') fq++;
+    fq=ic_skip_ws(fq);
+    if(*fq!='"') return turi_nil();
+    /* extract format string */
+    const char *fmts=fq+1, *fmte=fmts;
+    while(*fmte&&*fmte!='"'){if(*fmte=='\\')fmte++;fmte++;}
+    char fmt_str[512]; size_t fmt_len=(size_t)(fmte-fmts);
+    if(fmt_len>=sizeof(fmt_str)) return turi_nil();
+    memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
+    ic_unescape_str(fmt_str);
+    fq=fmte+1;
+    /* parse snprintf arguments */
+    int64_t sn_args[8]; int sn_argc=0;
+    while(*fq&&*fq!=')'&&sn_argc<8) {
+        if(*fq==',') fq++;
+        fq=ic_skip_ws(fq); if(*fq==')') break;
+        const char *as=fq; int d2=0;
+        while(*fq&&((*fq!=','&&*fq!=')')||d2>0)) {
+            if(*fq=='(')d2++;else if(*fq==')')d2--;
+            else if(*fq=='"'){fq++;while(*fq&&*fq!='"'){if(*fq=='\\')fq++;fq++;}}
+            if(*fq)fq++;
+        }
+        int alen=(int)(fq-as);
+        while(alen>0&&(as[alen-1]==' '||as[alen-1]=='\t'))alen--;
+        if(alen>0&&alen<256){
+            char abuf[256]; memcpy(abuf,as,(size_t)alen); abuf[alen]='\0';
+            int64_t val=0;
+            ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body);
+            sn_args[sn_argc++]=val;
+        }
+    }
+    /* format the result */
+    char result_buf[1024]; int rlen=0;
+    switch(sn_argc){
+        case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
+        case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
+        case 2: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1]); break;
+        case 3: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2]); break;
+        case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
+        default: return turi_nil();
+    }
+    if(rlen<0) return turi_nil();
+    char *out=(char*)malloc((size_t)rlen+1);
+    if(!out) return turi_nil();
+    memcpy(out,result_buf,(size_t)rlen+1);
+    TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
+}
+
+/* Resolve  if (COND) snprintf(bufvar ...); else snprintf(bufvar ...);  by
+ * evaluating COND and formatting only the live branch's snprintf. Returns the
+ * formatted cstr, or turi_nil() if no such guarded snprintf pair is found (the
+ * caller then falls back to the linear first-match scan). */
+static TuriValue ic_snprintf_cond_branch(const char *body,
+                                         const char *bufvar, int bvlen,
+                                         TuriValue *args, uint32_t n_args,
+                                         FnDef *fn, uint32_t param_offset) {
+    const char *p = body;
+    while ((p = strstr(p, "if")) != NULL) {
+        /* word-boundary check around "if" */
+        bool lb = (p==body) || (!isalnum((unsigned char)p[-1]) && p[-1]!='_');
+        bool rb = (!isalnum((unsigned char)p[2]) && p[2]!='_');
+        if (!lb || !rb) { p += 2; continue; }
+        const char *q = ic_skip_ws(p+2);
+        if (*q != '(') { p += 2; continue; }
+        /* extract the condition between the matched parens */
+        q++;
+        const char *cstart = q; int depth = 1;
+        while (*q && depth) { if (*q=='(') depth++; else if (*q==')') depth--; if (depth) q++; }
+        if (*q != ')') { p += 2; continue; }
+        int clen = (int)(q - cstart);
+        if (clen <= 0 || clen >= 256) { p += 2; continue; }
+        char condbuf[256]; memcpy(condbuf, cstart, (size_t)clen); condbuf[clen] = '\0';
+        int64_t cv = 0; const char *cp = condbuf;
+        if (!ic_eval_binexpr(&cp, 0, fn, param_offset, args, n_args, &cv, body)) { p += 2; continue; }
+        cp = ic_skip_ws(cp);
+        if (*cp != '\0') { p += 2; continue; }  /* condition not fully understood */
+        const char *cons = ic_skip_ws(q + 1);   /* consequent */
+        const char *cons_sf = strstr(cons, "snprintf(");
+        if (!cons_sf) { p += 2; continue; }
+        const char *chosen_sf;
+        if (cv) {
+            chosen_sf = cons_sf;
+        } else {
+            /* take the snprintf after the matching else */
+            const char *e = strstr(cons, "else");
+            if (!e) { p += 2; continue; }
+            chosen_sf = strstr(e + 4, "snprintf(");
+            if (!chosen_sf) { p += 2; continue; }
+        }
+        TuriValue rv = ic_format_snprintf_call(chosen_sf, bufvar, bvlen, args, n_args, fn, param_offset, body);
+        if (rv.tag == TURI_CSTR) return rv;
+        p += 2;
+    }
+    return turi_nil();
+}
+
 static TuriValue ic_exec_snprintf_fmt(const char *body,
                                        TuriValue *args, uint32_t n_args,
                                        FnDef *fn, uint32_t param_offset) {
@@ -3007,67 +3136,25 @@ static TuriValue ic_exec_snprintf_fmt(const char *body,
         p += 2;
     }
 
-    /* Step 3: Find snprintf(bufvar, size, "format", args...) */
+    /* Step 3: Find the snprintf(bufvar, size, "format", args...) that actually
+     * runs.  A bare scan-for-first-snprintf is wrong when the body guards two
+     * snprintf calls behind an if/else (e.g. range-bound's
+     *   if (kind == 1) snprintf(buf, 32, "[%lld", v);
+     *   else           snprintf(buf, 32, "(%lld", v);
+     * ) -- always taking the first emits "[7" where the Exclusive branch wants
+     * "(7" (see docs/reported/turi-pure-turi-silent-miscompiles.md). So first
+     * try to resolve a guarding if/else and format only the live branch; fall
+     * back to the linear "first matching snprintf" scan otherwise. */
+    {
+        TuriValue cond = ic_snprintf_cond_branch(body, bufvar, bvlen, args, n_args, fn, param_offset);
+        if (cond.tag == TURI_CSTR) return cond;
+    }
     const char *sp = body;
     while (*sp) {
         const char *fp = strstr(sp, "snprintf(");
         if (!fp) break;
-        const char *fq = fp + 9;
-        fq = ic_skip_ws(fq);
-        const char *bvs = fq;
-        while (isalnum((unsigned char)*fq)||*fq=='_') fq++;
-        if ((int)(fq-bvs)==bvlen && strncmp(bvs,bufvar,bvlen)==0) {
-            /* skip comma + size arg */
-            fq=ic_skip_ws(fq); if(*fq==',') fq++;
-            fq=ic_skip_ws(fq); int d=0;
-            while(*fq&&(*fq!=','||d>0)){if(*fq=='(')d++;else if(*fq==')')d--;fq++;}
-            if(*fq==',') fq++;
-            fq=ic_skip_ws(fq);
-            if(*fq!='"') { sp=fp+1; continue; }
-            /* extract format string */
-            const char *fmts=fq+1, *fmte=fmts;
-            while(*fmte&&*fmte!='"'){if(*fmte=='\\')fmte++;fmte++;}
-            char fmt_str[512]; size_t fmt_len=(size_t)(fmte-fmts);
-            if(fmt_len>=sizeof(fmt_str)){sp=fp+1;continue;}
-            memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
-            ic_unescape_str(fmt_str);
-            fq=fmte+1;
-            /* parse snprintf arguments */
-            int64_t sn_args[8]; int sn_argc=0;
-            while(*fq&&*fq!=')'&&sn_argc<8) {
-                if(*fq==',') fq++;
-                fq=ic_skip_ws(fq); if(*fq==')') break;
-                const char *as=fq; int d2=0;
-                while(*fq&&((*fq!=','&&*fq!=')')||d2>0)) {
-                    if(*fq=='(')d2++;else if(*fq==')')d2--;
-                    else if(*fq=='"'){fq++;while(*fq&&*fq!='"'){if(*fq=='\\')fq++;fq++;}}
-                    if(*fq)fq++;
-                }
-                int alen=(int)(fq-as);
-                while(alen>0&&(as[alen-1]==' '||as[alen-1]=='\t'))alen--;
-                if(alen>0&&alen<256){
-                    char abuf[256]; memcpy(abuf,as,(size_t)alen); abuf[alen]='\0';
-                    int64_t val=0;
-                    ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body);
-                    sn_args[sn_argc++]=val;
-                }
-            }
-            /* format the result */
-            char result_buf[1024]; int rlen=0;
-            switch(sn_argc){
-                case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
-                case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
-                case 2: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1]); break;
-                case 3: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2]); break;
-                case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
-                default: return turi_nil();
-            }
-            if(rlen<0) return turi_nil();
-            char *out=(char*)malloc((size_t)rlen+1);
-            if(!out) return turi_nil();
-            memcpy(out,result_buf,(size_t)rlen+1);
-            TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
-        }
+        TuriValue rv = ic_format_snprintf_call(fp, bufvar, bvlen, args, n_args, fn, param_offset, body);
+        if (rv.tag == TURI_CSTR) return rv;
         sp=fp+1;
     }
     return turi_nil();
@@ -3226,6 +3313,27 @@ static TuriValue ic_exec_linked_list_print(const char *body,
 }
 
 /* Top-level dispatcher */
+/* Diagnostic groundwork for the inline-C silent-miscompile tightening (W4, see
+ * docs/reported/turi-inline-c-silent-miscompiles.md): when TUR_IC_TRACE is set,
+ * log which ic_exec_* matcher claimed a body and what it returned. This makes
+ * the per-cluster "refuse-rather-than-guess" work tractable -- you can see at a
+ * glance which matcher mis-claims each fixture, and confirm a tightening flips a
+ * mis-claim to "unclaimed" (clean error) without disturbing a correct claim.
+ * Off the trace path it is a single cached-flag branch -- zero normal overhead. */
+static bool ic_claim(const char *pattern, FnDef *fn, const TuriValue *out) {
+    static int on = -1;
+    if (on < 0) on = getenv("TUR_IC_TRACE") ? 1 : 0;
+    if (on) {
+        const char *nm = (fn && fn->binding) ? fn->binding->name->name : "<fn>";
+        if (out)
+            fprintf(stderr, "[ic-trace] %-24s claimed by %-18s -> tag=%d int=%lld\n",
+                    nm, pattern, (int)out->tag, (long long)out->as_int);
+        else
+            fprintf(stderr, "[ic-trace] %-24s claimed by %s\n", nm, pattern);
+    }
+    return true;
+}
+
 static bool try_exec_simple_inline_c(TuriEnv *env,
                                       const char *body, size_t blen,
                                       TuriValue *args, uint32_t n_args,
@@ -3244,13 +3352,13 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     /* Pattern 1: Free */
     if (has_free && !has_malloc) {
         *out = ic_exec_free(args, n_args);
-        return true;
+        return ic_claim("free", fn, out);
     }
 
     /* Pattern 2: Switch-case string */
     if (has_switch && strstr(body,"return \"") && !has_fptr) {
         *out = ic_exec_switch_string(body, args, n_args);
-        return true;
+        return ic_claim("switch-string", fn, out);
     }
 
     /* Pattern 3: String fat-pointer comparison (->len && ->p[i]) */
@@ -3258,25 +3366,25 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
         strstr(body,"->len") && strstr(body,"->p") &&
         (strstr(body,"return true")||strstr(body,"return false"))) {
         *out = ic_exec_str_cmp(args, n_args);
-        return true;
+        return ic_claim("str-cmp", fn, out);
     }
 
     /* Pattern 4a: snprintf formatter (malloc + snprintf + return cstr, no arrow in return) */
     if (has_malloc && !has_fptr && strstr(body,"snprintf(")) {
         TuriValue r = ic_exec_snprintf_fmt(body, args, n_args, fn, param_offset);
-        if (r.tag != TURI_NIL) { *out = r; return true; }
+        if (r.tag != TURI_NIL) { *out = r; return ic_claim("snprintf", fn, out); }
     }
 
     /* Pattern 4: Constructor (malloc + arrow or index assignments, no fptr cast) */
     if (has_malloc && !has_fptr) {
         TuriValue r = ic_exec_constructor(body, args, n_args, fn, param_offset);
-        if (r.tag != TURI_NIL) { *out = r; return true; }
+        if (r.tag != TURI_NIL) { *out = r; return ic_claim("constructor", fn, out); }
     }
 
     /* Pattern 5: Accessor (no malloc, has arrow, has return) */
     if (!has_malloc && has_return && !has_fptr) {
         TuriValue r = ic_exec_accessor(body, args, n_args, fn);
-        if (r.tag != TURI_NIL) { *out = r; return true; }
+        if (r.tag != TURI_NIL) { *out = r; return ic_claim("accessor", fn, out); }
     }
 
     /* Pattern 6: Linked list traversal with printf (while loop + printf + ->next) */
@@ -3285,7 +3393,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     if (!has_malloc && has_arrow && has_while && has_printf && !has_fptr) {
         TuriValue r = ic_exec_linked_list_print(body, args, n_args, fn, param_offset);
         /* Always claim handled if we have a while+printf pattern (even if nil) */
-        if (has_while && has_printf) { *out = r; return true; }
+        if (has_while && has_printf) { *out = r; return ic_claim("linked-list-print", fn, out); }
     }
 
     /* Pattern 7: Simple return of constant or single param (no malloc, no arrow) */
@@ -3294,7 +3402,8 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
             r += 7; r = ic_skip_ws(r);
             int64_t val = 0;
             if (ic_eval_assign_expr(r, fn, param_offset, args, n_args, &val, body)) {
-                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=val; *out=rv; return true;
+                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=val; *out=rv;
+                return ic_claim("simple-return", fn, out);
             }
         }
     }
@@ -3535,7 +3644,7 @@ restart:
  * Function application
  * ---------------------------------------------------------------------- */
 
-static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
+static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
     /* TCO trampoline: loops instead of growing the C call stack for tail calls.
      * Work area for args copied across iterations. */
@@ -3545,6 +3654,11 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
     args = args_buf;
 
     for (;;) {
+        /* Publish the owning module so the body's calls can resolve this
+         * module's private helpers. NULL for non-module / native closures.
+         * eval_apply (the wrapper) restores the caller's module on return. */
+        env->current_module = cl->module;
+
         /* SB3: step-fuel check for TCO iterations (tail calls bypass eval_expr). */
         if (env->step_fuel_limit > 0) {
             if (env->step_fuel == 0)
@@ -3653,6 +3767,17 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
         (void)call_frame;
         return ret;
     }
+}
+
+/* Wrapper around the TCO trampoline that saves and restores env->current_module
+ * across the whole call (including any tail-call chain inside the trampoline),
+ * so a callee's module context never leaks back to its caller. */
+static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
+                             TuriValue *args, uint32_t n_args) {
+    const char *saved_module = env->current_module;
+    TuriValue r = eval_apply_inner(env, cl, args, n_args);
+    env->current_module = saved_module;
+    return r;
 }
 
 /* -------------------------------------------------------------------------
@@ -3879,11 +4004,39 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Named function definition (defn) -------------------------------- */
     case EX_FN_DEF: {
         FnDef *fndef = e->as.fn_def_.fn;
-        /* If the body is inline-C and a native override is already registered,
-         * keep the native rather than overwriting it with the inline-C closure. */
+        const char *fname = fndef->binding->name->name;
+
+        /* Module-private mangling: a defn inside a defmodule that is NOT in the
+         * module's export list is registered under "<module>/<name>" so two
+         * modules' same-named privates do not clobber one another in the flat
+         * global namespace (codegen mangles these per-module too). Exported and
+         * non-module defns keep the bare name. The closure is tagged with its
+         * owning module either way, so its body can resolve sibling privates. */
+        const DefModule *dm = (const DefModule *)env->defining_mod;
+        const char *modname = (dm && dm->name) ? dm->name->name : NULL;
+        bool exported = false;
+        if (dm) {
+            for (uint32_t i = 0; i < dm->n_exports; i++) {
+                if (dm->exports[i] && strcmp(dm->exports[i]->name, fname) == 0) {
+                    exported = true; break;
+                }
+            }
+        }
+        const char *qkey = NULL;
+        bool is_private = (modname && !exported);
+        if (is_private) {
+            size_t need = strlen(modname) + 1 + strlen(fname) + 1;
+            char *qk = (char *)malloc(need);  /* env keeps the pointer; leak ok */
+            if (qk) { snprintf(qk, need, "%s/%s", modname, fname); qkey = qk; }
+        }
+        /* The key whose existing native (if any) must not be clobbered. For a
+         * private defn that is the qualified key; otherwise the bare name. */
+        const char *primary_key = qkey ? qkey : fname;
+
+        /* If the body is inline-C and a native override is already registered
+         * under the primary key, keep the native rather than overwriting it. */
         if (fndef->body && fndef->body->kind == EX_INLINE_C) {
-            const char *fname = fndef->binding->name->name;
-            TuriValue existing = turi_env_get(env, fname);
+            TuriValue existing = turi_env_get(env, primary_key);
             if (existing.tag == TURI_CLOSURE && existing.as_closure &&
                 existing.as_closure->native) {
                 return existing; /* keep native override */
@@ -3893,8 +4046,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         memset(cl, 0, sizeof(*cl)); /* zero native/skip_env_param/native_ud */
         cl->fn       = fndef;
         cl->captured = NULL; /* top-level defn has no captured environment */
+        cl->module   = modname; /* publish owning module while the body runs */
         TuriValue v  = turi_closure(cl);
-        turi_env_set(env, fndef->binding->name->name, v);
+        if (qkey) {
+            /* Private: the qualified key is authoritative for intra-module
+             * resolution. Also publish under the bare name as a flat-namespace
+             * fallback, but only when it is still free -- so a second module's
+             * same-named private (or a real native) is never clobbered. The
+             * bare alias keeps the entry-point `main` and legacy cross-module
+             * bare references reachable. */
+            turi_env_set(env, qkey, v);
+            if (turi_env_get(env, fname).tag == TURI_ERROR)
+                turi_env_set(env, fname, v);
+        } else {
+            turi_env_set(env, fname, v);
+        }
         return v;
     }
 
@@ -3979,10 +4145,18 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DEFMODULE: {
         DefModule *mod = e->as.defmodule_.mod;
         TuriValue  last = turi_nil();
+        /* Publish the module being defined so EX_FN_DEF can register private
+         * (non-exported) helpers under a per-module qualified key. */
+        const void *saved_defining = env->defining_mod;
+        env->defining_mod = mod;
         for (uint32_t i = 0; i < mod->n_body; i++) {
             last = eval_expr(env, frame, mod->body[i]);
-            if (turi_is_error(last) || env->returning || env->throwing) return last;
+            if (turi_is_error(last) || env->returning || env->throwing) {
+                env->defining_mod = saved_defining;
+                return last;
+            }
         }
+        env->defining_mod = saved_defining;
         return last;
     }
 
@@ -5010,10 +5184,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
     case EX_RC_OF: {
-        /* Allocate shared counter, wrap value in __rc struct. */
+        /* Allocate the shared control block and wrap the value in an __rc struct.
+         * The control block is a 2-slot counter: cnt[0] = strong count,
+         * cnt[1] = weak count.  field[0] points at cnt[0], so the existing
+         * `*cnt` strong-count readers stay correct; cnt[1] backs the weak count
+         * that ref/from-rc's uniqueness check consults (see EX_REF_FROM_RC). */
         TuriValue v = eval_expr(env, frame, e->as.rc_of_.expr);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        int64_t *cnt = (int64_t *)malloc(sizeof(int64_t)); *cnt = 1;
+        int64_t *cnt = (int64_t *)malloc(2 * sizeof(int64_t));
+        cnt[0] = 1; /* strong */
+        cnt[1] = 0; /* weak */
         TuriValue fields[2];
         fields[0] = turi_int((int64_t)(intptr_t)cnt); /* pointer-as-int */
         fields[1] = v;
@@ -5082,13 +5262,28 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_RC_FROM_REF:
         return eval_expr(env, frame, e->as.rc_from_ref_.expr);
     case EX_REF_FROM_RC: {
-        /* Convert rc<T> to ref<T>: extract the inner value from the __rc struct. */
+        /* Convert rc<T> to ref<T>: the compiled tur_ref_from_rc requires the rc
+         * to be *unique* -- strong_count==1 and weak_count==0 -- and aborts
+         * otherwise (a live alias would leave a dangling ref). Mirror that check
+         * here instead of silently extracting the value (rc-unique-violation). */
         TuriValue rv = eval_expr(env, frame, e->as.ref_from_rc_.expr);
         if (turi_is_error(rv) || env->returning || env->throwing) return rv;
         if (rv.tag == TURI_STRUCT && rv.as_struct
             && rv.as_struct->name && strcmp(rv.as_struct->name, "__rc") == 0
-            && rv.as_struct->n_fields >= 2)
+            && rv.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)rv.as_struct->fields[0].as_int;
+            int64_t strong = cnt ? cnt[0] : 1;
+            int64_t weak   = cnt ? cnt[1] : 0;
+            if (strong != 1 || weak != 0) {
+                char msg[160];
+                snprintf(msg, sizeof msg,
+                    "ref/from-rc requires unique rc (strong_count==1 and weak_count==0), got strong=%lld weak=%lld",
+                    (long long)strong, (long long)weak);
+                turi_runtime_panic(env, msg); /* does not return */
+                return turi_nil();
+            }
             return rv.as_struct->fields[1];
+        }
         return rv;
     }
 
@@ -5102,8 +5297,20 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Phase 9: weak<T> — simplified in interpreter --------------------- */
-    case EX_WEAK:
-        return eval_expr(env, frame, e->as.weak_.expr);
+    case EX_WEAK: {
+        /* weak is transparent (returns the underlying rc value), but it must
+         * bump the control block's weak count so ref/from-rc's uniqueness check
+         * can see the live weak alias (rc-unique-violation). */
+        TuriValue wv = eval_expr(env, frame, e->as.weak_.expr);
+        if (turi_is_error(wv) || env->returning || env->throwing) return wv;
+        if (wv.tag == TURI_STRUCT && wv.as_struct
+            && wv.as_struct->name && strcmp(wv.as_struct->name, "__rc") == 0
+            && wv.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)wv.as_struct->fields[0].as_int;
+            if (cnt) cnt[1]++; /* weak count */
+        }
+        return wv;
+    }
     case EX_WEAK_UPGRADE: {
         TuriValue _wuv = eval_expr(env, frame, e->as.weak_upgrade_.expr);
         if (turi_is_error(_wuv) || env->returning || env->throwing) return _wuv;
