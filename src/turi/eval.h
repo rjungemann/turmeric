@@ -76,7 +76,9 @@ const char *turi_show_result(TuriEnv *env, TuriValue val, const char *type_tag);
 void turi_env_set_fuel(TuriEnv *env, uint64_t steps);
 
 /* Override the maximum recursion depth.
- * Default: 4096 for unrestricted envs, TURI_DEFAULT_SANDBOX_DEPTH for sandboxed. */
+ * Default: derived from the C stack limit (getrlimit(RLIMIT_STACK)) for
+ * unrestricted envs so the guard fires before the native stack overflows;
+ * TURI_DEFAULT_SANDBOX_DEPTH for sandboxed. */
 void turi_env_set_max_depth(TuriEnv *env, uint32_t depth);
 
 /* Grant a capability to an environment (no-op if already granted). */

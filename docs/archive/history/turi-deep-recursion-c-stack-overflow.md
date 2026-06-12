@@ -1,5 +1,20 @@
 # turi: deep non-tail recursion overflows the C stack (SIGSEGV) before the recursion-depth guard fires
 
+> **RESOLVED (2026-06-12, Direction A).** `turi_env_new` now derives
+> `max_eval_depth` from `getrlimit(RLIMIT_STACK)` divided by a conservative
+> per-`eval_expr`-frame cost (`turi_default_max_eval_depth`, `src/turi/env.c`),
+> targeting ~50% of the measured crash depth. Deep non-tail recursion now
+> emits a clean `eval: recursion limit exceeded` (rc nonzero) in both
+> Debug/ASan and Release -- never a SIGSEGV. This is the report's "smallest
+> fix": it makes the guard reachable but caps achievable depth *below* the
+> C-stack ceiling, so the parity gap is narrowed, not closed, and
+> `escape-deep-capture` stays `requires.compiled`. The explicit-stack
+> trampoline that removes the native-stack dependency (Direction D below) is
+> planned in
+> [`../../upcoming/v1/turi-eval-trampoline-plan.md`](../../upcoming/v1/turi-eval-trampoline-plan.md).
+> Indexed in
+> [`../../reported/resolved-paper-trail.md`](../../reported/resolved-paper-trail.md).
+
 **Summary:** The tree-walking interpreter has a recursion-depth guard
 (`eval_depth >= max_eval_depth -> "eval: recursion limit exceeded"`,
 `src/turi/eval.c:3676`) whose default limit is **4096**

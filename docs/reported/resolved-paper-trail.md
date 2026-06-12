@@ -395,6 +395,33 @@ deletions and resizes.
 
 ## Interpreter (turi) parity (landed)
 
+### Deep non-tail recursion overflowed the C stack before the depth guard fired (FIXED -- Direction A)
+
+[`../archive/history/turi-deep-recursion-c-stack-overflow.md`](../archive/history/turi-deep-recursion-c-stack-overflow.md)
+
+The interpreter's recursion-depth guard (`eval_depth >= max_eval_depth`) was
+dead code: `max_eval_depth` was a hardcoded **4096**, but each `eval_expr`
+frame burns ~10 KB of C stack (Debug/ASan), so a ~12.5 MB stack overflowed at
+peak `eval_depth` ~1250 -- the native stack always blew first, killing deep
+non-tail recursion with a raw SIGSEGV (rc 139, no diagnostic) instead of the
+intended clean error. **Fix (2026-06-12, Direction A -- the report's "smallest
+fix"):** `turi_env_new` now derives `max_eval_depth` from
+`getrlimit(RLIMIT_STACK)` divided by a conservative per-frame cost
+(`turi_default_max_eval_depth`, `src/turi/env.c`), targeting ~50% of the
+measured crash depth (a 2x margin). Deep non-tail recursion now prints
+`eval: recursion limit exceeded` (rc nonzero) in **both** Debug/ASan and
+Release -- never a SIGSEGV. Measured threshold on a 12.5 MB stack: ~300 logical
+levels succeed, deeper errors cleanly. Sandbox depth (`TURI_DEFAULT_SANDBOX_DEPTH
+= 256`) is unchanged. Validation: the report's `sum-to 5000` repro now errors
+cleanly; `run-turi.sh` 979/0, eval/sandbox ctests 14/14, compiled suite 1596/0.
+**Trade-off / follow-up:** Direction A caps achievable depth *below* the C-stack
+ceiling rather than lifting it, so the parity gap (a few-hundred-deep recursion
+runs compiled but not interpreted) is narrowed, not closed, and
+`tests/fixtures/escape-deep-capture` stays `requires.compiled`. The
+explicit-stack/trampoline rework that removes the native-stack dependency
+entirely (Direction D) is planned in
+[`../../upcoming/v1/turi-eval-trampoline-plan.md`](../../upcoming/v1/turi-eval-trampoline-plan.md).
+
 ### Context-capturing serial-shift / cloneable-shift implemented in the interpreter (FIXED)
 
 [`../archive/turi-capturing-shift-unimplemented.md`](../archive/turi-capturing-shift-unimplemented.md)
