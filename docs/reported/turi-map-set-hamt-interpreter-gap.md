@@ -10,11 +10,19 @@
 > `option-eq?` over the `int64[2] {is_some,value}` box. Unblocked `mutmap-basic`,
 > `mutmap-delete`, `mutmap-eq`, `mutmap-resize`, `option-of-tvec-eq`, and
 > `eq-carrier-capturing-comparator` (a genuine capturing comparator across
-> option/vec/mutmap eq) -- harness 992 -> 998. **Still open:** `option-basic` /
-> `typed/option-basic` build an Option via `make-struct Option ...` (a
-> `TuriStruct`, the dual representation), which `unwrap`/`option-eq?` do not yet
-> read -- the Option dual-rep follow-up (mirrors the landed Result dual-rep
-> readers); they error cleanly today, not miscompile.
+> option/vec/mutmap eq) -- harness 992 -> 998.
+>
+> **Option dual-rep -- DONE (2026-06-12).** An Option built via
+> `make-struct Option ...` (a `TuriStruct`) vs the native `int64[2]
+> {is_some,value}` box are now read uniformly through `option_field` /
+> `option_is_some` (mirroring `result_field`), so `some?` / `unwrap` /
+> `unwrap-or` / `option-must` / `option-expect` / `option-eq?` / `option-map`
+> handle both. Two real defects fixed: `unwrap-or` was registered only under the
+> dead name `option-unwrap-or` (its real name is `unwrap-or`, so the override
+> never fired -> "inline-C not supported"), and the previous `option-eq?` native
+> read the box layout off a `TuriStruct` (a silent miscompile on `make-struct`
+> Options). `option-map` gained a native too. Unblocked `option-basic`,
+> `typed/option-basic`, `option-map-capturing-closure` (harness 998 -> 1001).
 >
 > **Progress (W1b map-equality, 2026-06-12):** **`map-eq?` / `map-eq-k?` now work
 > under `--interpret`.** `map.tur`'s `map-eq-raw?` / `map-eq-raw-k?` iterate the

@@ -5535,37 +5535,53 @@ static TuriValue native_none(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
     return turi_int(0); /* NULL pointer */
 }
+/* W1b: an Option reaches these shims either as a native int64[2] box
+ * {is_some, value} (from native_some / tur_some) or as a make-struct TuriStruct
+ * with the same field order (from `(make-struct Option ...)`).  option_field
+ * reads field `idx` from whichever representation so the two coexist -- the same
+ * dual-rep pattern as result_field.  none is the 0/NULL box (every field 0). */
+static TuriValue option_field(TuriValue o, int idx) {
+    bool found = false;
+    TuriValue f = turi_struct_field(o, (uint32_t)idx, &found);
+    if (found) return f;
+    int64_t *p = (int64_t *)(intptr_t)o.as_int;
+    return turi_int(p ? p[idx] : 0);
+}
+static int64_t option_field_int(TuriValue o, int idx) {
+    TuriValue f = option_field(o, idx);
+    return (f.tag == TURI_BOOL) ? (f.as_bool ? 1 : 0) : f.as_int;
+}
+static bool option_is_some(TuriValue o) {
+    if (o.tag != TURI_STRUCT && o.as_int == 0) return false;  /* none */
+    return option_field_int(o, 0) != 0;
+}
 /* option-eq? -- structural Option equality.  option.tur's body fat-dispatches
  * the value comparator through a C function pointer; this native re-implements
- * it over the native box (int64[2] = {is_some, value}, see native_some) and
- * invokes the comparator (a turi closure) via turi_call. */
+ * it over either Option representation (option_field) and invokes the comparator
+ * (a turi closure) via turi_call. */
 static TuriValue native_option_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 3) return turi_bool(false);
-    int64_t *o1 = (int64_t *)(intptr_t)a[0].as_int;
-    int64_t *o2 = (int64_t *)(intptr_t)a[1].as_int;
-    bool a_some = o1 && o1[0];
-    bool b_some = o2 && o2[0];
+    bool a_some = option_is_some(a[0]);
+    bool b_some = option_is_some(a[1]);
     if (!a_some && !b_some) return turi_bool(true);
     if (a_some != b_some)   return turi_bool(false);
     TuriValue cargs[2];
-    cargs[0].tag = TURI_INT; cargs[0].as_int = o1[1];
-    cargs[1].tag = TURI_INT; cargs[1].as_int = o2[1];
+    cargs[0].tag = TURI_INT; cargs[0].as_int = option_field_int(a[0], 1);
+    cargs[1].tag = TURI_INT; cargs[1].as_int = option_field_int(a[1], 1);
     TuriValue rv = turi_call(env, a[2], cargs, 2);
     return turi_bool(rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0);
 }
 static TuriValue native_some_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_bool(false);
-    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
-    return turi_bool(opt != NULL && opt[0] != 0);
+    return turi_bool(option_is_some(a[0]));
 }
 static TuriValue native_option_unwrap(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
-    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
-    if (!opt || opt[0] == 0) { fprintf(stderr, "unwrap called on none\n"); return turi_int(0); }
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
+    if (!option_is_some(a[0])) { fprintf(stderr, "unwrap called on none\n"); return turi_int(0); }
+    return turi_int(option_field_int(a[0], 1));
 }
 static TuriValue native_option_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     return native_option_unwrap(env, a, n, ud);
@@ -5577,31 +5593,41 @@ static TuriValue native_option_free(TuriEnv *env, TuriValue *a, uint32_t n, void
 }
 static TuriValue native_option_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    if (n < 1) goto panic_none;
-    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
-    if (!opt || opt[0] == 0) goto panic_none;
-    { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v; }
-panic_none:
-    /* Catchable panic (recoverable by catch-unwind) instead of _exit(1). */
-    turi_runtime_panic(env, "option-must: called on none");
-    return turi_nil(); /* unreachable */
+    if (n < 1 || !option_is_some(a[0])) {
+        /* Catchable panic (recoverable by catch-unwind) instead of _exit(1). */
+        turi_runtime_panic(env, "option-must: called on none");
+        return turi_nil(); /* unreachable */
+    }
+    return turi_int(option_field_int(a[0], 1));
 }
 static TuriValue native_option_expect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    int64_t *opt = (n > 0) ? (int64_t *)(intptr_t)a[0].as_int : NULL;
     const char *msg = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "option-expect: called on none";
-    if (!opt || opt[0] == 0) {
+    if (n < 1 || !option_is_some(a[0])) {
         turi_runtime_panic(env, msg);
         return turi_nil(); /* unreachable */
     }
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
+    return turi_int(option_field_int(a[0], 1));
 }
 static TuriValue native_option_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_int(0);
-    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
-    if (!opt || opt[0] == 0) { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = a[1].as_int; return v; }
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
+    if (!option_is_some(a[0])) return turi_int(a[1].as_int);
+    return turi_int(option_field_int(a[0], 1));
+}
+/* option-map -- apply f to the some value, returning a new Option.  option.tur's
+ * body fat-dispatches f via TUR_APPLY1; this native invokes f (a turi closure)
+ * via turi_call and returns a fresh native int64[2] {is_some, value} box. */
+static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    if (!option_is_some(a[0])) return turi_int(0);
+    TuriValue arg; arg.tag = TURI_INT; arg.as_int = option_field_int(a[0], 1);
+    TuriValue rv = turi_call(env, a[1], &arg, 1);
+    int64_t *r = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!r) return turi_int(0);
+    r[0] = 1; r[1] = rv.as_int;
+    return turi_int((int64_t)(intptr_t)r);
 }
 
 /* Result functions: { bool is_ok (offset 0); int64_t ok_val (offset 8); int64_t err_val (offset 16) }
@@ -7228,8 +7254,12 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "option-value",    native_option_value,    NULL);
     turi_env_register_native(env, "option-free",     native_option_free,     NULL);
     turi_env_register_native(env, "option-unwrap-or",native_option_unwrap_or,NULL);
+    /* option.tur names this inline-C op `unwrap-or` (not `option-unwrap-or`); the
+     * override only fires when registered under the real function name. */
+    turi_env_register_native(env, "unwrap-or",       native_option_unwrap_or,NULL);
     turi_env_register_native(env, "option-must",     native_option_must,     NULL);
     turi_env_register_native(env, "option-expect",   native_option_expect,   NULL);
+    turi_env_register_native(env, "option-map",      native_option_map,      NULL);
     /* Result/ok/err */
     turi_env_register_native(env, "ok",              native_ok,              NULL);
     turi_env_register_native(env, "err",             native_err,             NULL);

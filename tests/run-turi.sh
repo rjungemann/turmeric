@@ -936,6 +936,13 @@ mutmap-delete
 mutmap-eq
 mutmap-resize
 eq-carrier-capturing-comparator
+# Option dual-rep: an Option built via make-struct Option (a TuriStruct) vs the
+# native int64[2] {is_some,value} box now read uniformly via option_field
+# (mirrors result_field).  unwrap-or registered under its real name; option-map
+# / option-eq? invoke their closure via turi_call.
+option-basic
+typed/option-basic
+option-map-capturing-closure
 "
 
 # Build an associative-set from the default list for O(1) lookup.

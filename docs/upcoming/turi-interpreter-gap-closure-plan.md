@@ -46,16 +46,18 @@ every auto-verified-passing non-inline-C fixture, +449) -> 985 (post #341
 /#342/#343: pure-turi silent-miscompile fixes, inline-C tightening, HAMT ctx ABI,
 preload parity, +73) -> 987 (W1b `map-eq?` natives + free-matcher fix, +2) ->
 992 (recursive container value-eq: `vec-eq?` / `set-eq-cmp?` natives, +5) ->
-**998** (MutableMap natives + `option-eq?`, mutmap.tur preloaded, +6).
+998 (MutableMap natives + `option-eq?`, mutmap.tur preloaded, +6) ->
+**1001** (Option dual-rep: `option_field` readers + `option-map` / `unwrap-or`
+natives, +3).
 The harness summary now separates the work cleanly:
 
 ```
-998 passed, 0 failed, 606 skipped
+1001 passed, 0 failed, 603 skipped
   407 inline-c carve-outs   (TI7, permanent -- W2)
-  199 non-inline-C not yet on the allowlist  (the W5 triage surface)
+  196 non-inline-C not yet on the allowlist  (the W5 triage surface)
 ```
 
-The **199** is the real remaining gap (down from 260): the W1b native-shim
+The **196** is the real remaining gap (down from 260): the W1b native-shim
 cluster (map, blocked on the C-callback eq/hash gap) + the remaining inline-C
 evaluator miscompiles + an HKT/existential/continuation tail, plus a few
 container/edge dirs. Everything that passes under `--interpret` is now on the
