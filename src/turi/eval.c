@@ -3853,7 +3853,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
      * interpreter has no channel runtime, and every existing select fixture is
      * inline-C-bound (a TI7 carve-out).  Fail cleanly rather than falling
      * through to the generic "unhandled expression kind" default.  See
-     * docs/reported/turi-select-needs-channel-primitives.md. */
+     * docs/archive/turi-select-needs-channel-primitives.md and the
+     * "Not interpreted: carve-outs" section of docs/guides/eval-api.md. */
     case EX_SELECT:
         return turi_error("eval: select is not supported in interpreter mode "
                           "(channels require native primitives; use the compiled path)");

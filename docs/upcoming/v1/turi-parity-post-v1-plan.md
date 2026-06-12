@@ -666,8 +666,10 @@ A dedicated `case EX_SELECT` now returns a clean
 unhandled-kind default. Implementing it for real means adding a native
 channel layer (opaque `TURI_CHANNEL` + `chan-new`/`send`/`recv` natives +
 a fiber-parking `turi_select`), plus native (non-inline-C) channel fixtures
-to test against. Full write-up:
-[docs/reported/turi-select-needs-channel-primitives.md](../../reported/turi-select-needs-channel-primitives.md).
+to test against. The recommended carve-out is now documented in
+`docs/guides/eval-api.md` ("Not interpreted: carve-outs"); the tracking report
+was archived to
+[docs/archive/turi-select-needs-channel-primitives.md](../../archive/turi-select-needs-channel-primitives.md).
 
 ---
 
