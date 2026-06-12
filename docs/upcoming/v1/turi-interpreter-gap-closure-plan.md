@@ -197,14 +197,16 @@ miscompile, fixed by this), `typed-slots/cs4-stdlib-helpers`,
 **map/set/hamt -- hamt + set DONE; map blocked.** hamt.tur (raw `tur_hamt_*`
 wrappers now registered in `cmd_eval`) and set (hamt-backed `set-*` natives over
 `{void* hamt}`, fixing the `native_set_count` overflow; `#set{}` lowers through
-the set ops) are landed and on the allowlist. **map** is blocked: its ops are
-polymorphic `[K V]` defns, and a monomorphized polymorphic defn bypasses its
-global native override, so the interpreter runs the module's inline-C body (a
-`tur_hamt_*_eq_o` C call with a C-callback comparator) instead of the registered
-`native_map_*`. Needs either native-override-of-monomorphized-poly-defns or a
-turi-closure-aware HAMT. Full analysis:
+the set ops) are landed and on the allowlist. **map** is blocked by **Gap 2**
+(the C-callback eq/hash). A 2026-06-12 spike corrected the earlier
+"monomorphization-bypass" guess: `map-assoc-eq-o` resolves to its native fine;
+the blocker is the `MapKey` `mk-cmp` key comparator, evaluated as an *argument*
+to the assoc call, which the elaborator synthesizes as a closure returning a
+captured C function pointer (`return ...__TUR_CAP_0__;`) the interpreter cannot
+represent. Map needs a turi-closure-aware HAMT path (or natives that re-implement
+key storage/lookup without a C eq callback). Full analysis:
 [turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md).
-The original spike notes (still accurate for map) follow.
+The original spike notes (still accurate for map's general shape) follow.
 
 **Original spike (2026-06-11): the Result pattern does NOT directly transfer.**
 Loading `hamt.tur`/`map.tur`/`set.tur` into the prelude does **not** regress the

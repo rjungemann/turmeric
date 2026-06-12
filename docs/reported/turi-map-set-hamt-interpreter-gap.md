@@ -4,19 +4,28 @@
 > the raw `tur_hamt_*` wrappers (hamt.tur preloaded); the `set-*` natives were
 > rewritten over the real HAMT (`{void* hamt}`), fixing the `native_set_count`
 > overflow, and set.tur preloaded -- `typed/set-basic` + `data-literal-set-*`
-> pass. **map remains blocked** by a newly-pinned issue on top of Gap 2: map's
-> ops are polymorphic `[K V]` defns (`map-assoc-eq-o`/`map-get-eq-o`/...), and a
-> **monomorphized polymorphic defn bypasses its global native override** -- the
-> interpreter runs the module's inline-C body (a `tur_hamt_*_eq_o` C call with a
-> C-callback comparator) instead of the registered `native_map_*`. (Set avoided
-> this because its ops are *monomorphic* `:int` defns, so the native overrides
-> win; and its keys use the int-keyed HAMT API with no callback.) So map needs
-> EITHER native overrides that take effect for monomorphized polymorphic defns,
-> OR a turi-closure-aware HAMT path so the module's own inline-C/closure body can
-> run. The same `[K V]`-monomorphization-bypass affected Result's `ok-val` and
-> was only worked around there because the body was an interpretable field
-> access (the EX_GET_FIELD carrier path); map's body is a C call, so that
-> workaround does not apply.
+> pass. **map remains blocked -- and the blocker is NOT the monomorphization-
+> bypass first suspected.** A 2026-06-12 spike (writing the map natives, then
+> reverted) traced it precisely: `map-assoc-eq-o` itself resolves to its native
+> fine (a global native overwrites the inline-C defn by name; no `__bf_`
+> specialization is involved -- the earlier "monomorphized poly defn bypasses
+> its native" diagnosis was wrong). The failing op is **`mk-cmp`**, the
+> `MapKey[K]` key comparator, which the macro `(map-assoc m k v)` evaluates as an
+> *argument* to `map-assoc-eq-o`. The elaborator synthesizes `mk-cmp` for int as
+> a closure whose inline-C body is `return (int64_t)(intptr_t)__TUR_CAP_0__;` --
+> it captures and returns the C address of the key-equality function
+> (`tur-int-carrier-eq?`). The interpreter has no C function pointers and the
+> simple inline-C evaluator does not resolve `__TUR_CAP_N__` (a captured value),
+> so `mk-cmp` errors "inline-C not supported" *before* `map-assoc-eq-o` is ever
+> called. Even a native that ignores the comparator does not help, because the
+> comparator argument must still evaluate. So map's blocker is squarely **Gap 2**
+> (the C-callback eq/hash), surfacing through the synthesized capture-returning
+> comparator closure -- not a native-override-dispatch issue. A real fix needs a
+> turi-closure-aware HAMT path (so the comparator can be a turi closure the
+> runtime invokes via `turi_call`), or interpreter natives that re-implement key
+> storage/lookup without delegating equality to a C callback. (`set` avoided all
+> of this: `set-add x` uses the element directly as the int-keyed HAMT key with
+> no comparator argument.)
 
 **Summary:** The typed collections `map`/`set` (and to a lesser extent the raw
 `hamt`) do not work under the tree-walking interpreter. `tur build`/`tur run`
