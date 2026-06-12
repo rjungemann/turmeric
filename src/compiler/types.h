@@ -1140,6 +1140,14 @@ static inline Type type_typeclass_inst(TypeClassInstance *inst) {
  * The result kind is computed from fn's kind using kind_of_type_app. */
 Type type_app(Arena *a, Type fn, Type arg, Span span);
 
+/* Lift the substructural discipline (:linear / :affine) from a TY_APP's head
+ * StructDef onto the application node.  Call after constructing a TY_APP whose
+ * `fn` carries an opaque/struct head -- without this, the application inherits
+ * the default CK_COPY and the linear-discipline checker silently treats a
+ * value of type `(WriteCap T)` as plain copyable.  See
+ * docs/reported/parametric-linear-opaque-not-enforced.md. */
+void propagate_app_discipline(Type *app, const Type *fn);
+
 /* IT0: Union type constructor.
  * Create a TY_UNION type with the given array of member types.
  * members[] is copied from the provided arena-allocated pointers.

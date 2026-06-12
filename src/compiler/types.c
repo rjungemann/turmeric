@@ -542,6 +542,28 @@ static void free_struct_app_type(Type t) {
 /* Phase D: forward declaration — substitute_struct_app_type is defined below. */
 static Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args);
 
+/* Propagate a parametric opaque's substructural discipline into a TY_APP node.
+ * A `(defopaque Name [T] :int :linear)` applied as `(Name X)` should yield a
+ * TY_APP whose copy_kind / substruct reflect the head's :linear (or :affine)
+ * qualifier; otherwise the linear-discipline checker silently treats the
+ * applied value as a plain copyable handle.  See
+ * docs/reported/parametric-linear-opaque-not-enforced.md.
+ * Walks the `fn` spine down to its head; if the head is a :linear / :affine
+ * opaque/struct, lifts the discipline onto the TY_APP node in place. */
+void propagate_app_discipline(Type *app, const Type *fn) {
+    const Type *head = fn;
+    while (head && head->kind == TY_APP) head = head->as.app.fn;
+    if (head && head->kind == TY_STRUCT && head->as.struct_.def) {
+        const StructDef *hd = head->as.struct_.def;
+        if (hd->is_linear) {
+            app->copy_kind = CK_LINEAR;
+        } else if (hd->is_affine) {
+            app->copy_kind = CK_UNIQUE;
+            app->substruct = SK_AFFINE;
+        }
+    }
+}
+
 /* Phase D: approximate field size (bytes) from a TypeKind for pass-by-ptr threshold. */
 static size_t phase_d_field_size(TypeKind k) {
     switch (k) {
@@ -625,6 +647,7 @@ static Type substitute_struct_app_type(const Type *t, const StructDef *def, cons
             out.kind = TY_APP;
             out.copy_kind = CK_COPY;
             out.hkt_kind = KIND_STAR;
+            propagate_app_discipline(&out, &fn);
             out.as.app.fn = (Type *)malloc(sizeof(Type));
             out.as.app.arg = (Type *)malloc(sizeof(Type));
             if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -794,6 +817,7 @@ static Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type
             out.kind = TY_APP;
             out.copy_kind = CK_COPY;
             out.hkt_kind = KIND_STAR;
+            propagate_app_discipline(&out, &fn);
             out.as.app.fn  = (Type *)malloc(sizeof(Type));
             out.as.app.arg = (Type *)malloc(sizeof(Type));
             if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -2152,16 +2176,18 @@ Type type_app(Arena *a, Type fn, Type arg, Span span) {
     t.n_lifetimes = 0;
     t.typeclass_instances = NULL;
     t.n_typeclass_instances = 0;
-    
+
+    propagate_app_discipline(&t, &fn);
+
     /* Allocate memory for fn and arg on the arena */
     t.as.app.fn = (Type *)arena_alloc(a, sizeof(Type));
     memcpy(t.as.app.fn, &fn, sizeof(Type));
     t.as.app.arg = (Type *)arena_alloc(a, sizeof(Type));
     memcpy(t.as.app.arg, &arg, sizeof(Type));
-    
+
     /* Compute the result kind */
     t.hkt_kind = kind_of_type_app(fn, arg, span);
-    
+
     return t;
 }
 

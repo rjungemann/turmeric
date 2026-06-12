@@ -1666,6 +1666,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             memset(app, 0, sizeof(Type));
             app->kind = TY_APP;
             app->copy_kind = CK_COPY;
+            propagate_app_discipline(app, t);
             /* Derive kind: step one rung down the arrow ladder. */
             app->hkt_kind = kind_apply_one(t->hkt_kind);
             app->as.app.fn  = t;

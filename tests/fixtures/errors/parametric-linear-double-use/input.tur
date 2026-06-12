@@ -1,0 +1,28 @@
+;; Regression: a `defopaque [T] :int :linear` -- a parametric linear opaque
+;; -- must enforce single-use just like its non-parametric sibling.  The
+;; phantom T parameter previously caused the :linear qualifier to be
+;; silently dropped at the TY_APP node, so a double-consume compiled
+;; cleanly.  See docs/reported/parametric-linear-opaque-not-enforced.md.
+(defopaque Token [T] :int :linear)
+
+(defn make-token [T]
+  [n : int]
+  : (Token T)
+  ```c
+  return (int64_t)n;
+  ```)
+
+(defn use-token [T]
+  [^linear t : (Token T)]
+  : nil
+  ```c
+  (void)t;
+  ```)
+
+(defstruct Pos [x : int])
+
+(defn main [] : int
+  (let [t (:: (make-token 0) (Token Pos))]
+    (use-token t)
+    (use-token t))   ;; ERROR: linear value 't' used after being consumed
+  0)
