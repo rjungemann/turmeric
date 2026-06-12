@@ -1,5 +1,23 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
+> **Progress (TI10 Tier B, 2026-06-12):** **content-keyed maps with a pure-turi
+> closure comparator now work under `--interpret`.** The 2a `void *ctx` HAMT ABI
+> (`tur_hamt_*_eq_ctx`) plus a trampoline in the map natives (`map_turi_eq_tramp`,
+> `src/main.c`) close Gap 2 for the runnable case: when `mk-cmp` returns a turi
+> *closure* (a `MapKey` instance written in Turmeric, e.g. `(mk-cmp [p] my-eq?)`),
+> the `map-*-eq[-o]` natives detect the `TURI_CLOSURE` comparator and route
+> through `tur_hamt_*_eq_ctx`, invoking the closure via `turi_call` on every
+> collision compare -- the map analogue of `native_result_eq`. New allowlisted
+> fixture `tib-map-turi-comparator` proves it with a custom equality-by-x
+> comparator under a forced hash-0 collision chain (genuinely exercised, not
+> works-by-luck). **Still inherently interpreter-bound:** a comparator whose body
+> is *inline-C* (e.g. the struct-key fixtures `wkc3-struct-map-key`,
+> `eqmap-struct-content`, which cast the boxed carrier back to a struct pointer)
+> cannot run in the tree-walker regardless -- they fail cleanly at the inline-C
+> `mk-box`/comparator, not via a crash (prereq 2c). Owned/boxed multi-word keys
+> with a turi-closure comparator are not co-representable (the closure would need
+> to deref the box) and remain out of scope.
+>
 > **Progress (TI10 Tier A, 2026-06-12):** **hamt, set, and scalar-keyed map are
 > now FIXED.** The map blocker below was resolved not by representing the C
 > function pointer as a turi value, but by registering the `MapKey`/`Hash`

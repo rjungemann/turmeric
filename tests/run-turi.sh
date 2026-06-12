@@ -899,6 +899,12 @@ wkc-wide-map-key
 # bit-reinterprets the int64 carrier to :cstr / :float (matching the compiled
 # `::` representation assertion) instead of numeric-converting.
 tce3-map-cstr-val
+# TI10 Tier B (map): a content-keyed Map whose MapKey comparator is a PURE-TURI
+# closure (not an inline-C carrier address) -- mk-cmp returns the closure, which
+# the map natives invoke through the ctx-carrying HAMT path (tur_hamt_*_eq_ctx)
+# via a turi_call trampoline.  Hash is forced to 0 so the comparator runs on
+# every probe (genuinely exercised, not works-by-luck).
+tib-map-turi-comparator
 "
 
 # Build an associative-set from the default list for O(1) lookup.

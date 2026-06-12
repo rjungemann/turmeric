@@ -2527,6 +2527,72 @@ static TuriValue ic_exec_switch_string(const char *body,
 }
 
 /* Execute constructor pattern: malloc + field assignments + return ptr. */
+/* W4 (turi-inline-c-silent-miscompiles.md): helpers for the constructor
+ * matcher's refuse-rather-than-guess guards. */
+
+/* Whole-word presence of `kw` in `body`. */
+static bool ic_body_has_word(const char *body, const char *kw) {
+    size_t n = strlen(kw);
+    for (const char *p = body; (p = strstr(p, kw)) != NULL; p += n) {
+        bool l = (p == body) || (!isalnum((unsigned char)p[-1]) && p[-1] != '_');
+        bool r = (!isalnum((unsigned char)p[n]) && p[n] != '_');
+        if (l && r) return true;
+    }
+    return false;
+}
+
+/* Count of substring occurrences of `sub` in `body`. */
+static int ic_body_count_sub(const char *body, const char *sub) {
+    int c = 0; size_t n = strlen(sub);
+    for (const char *p = body; (p = strstr(p, sub)) != NULL; p += n) c++;
+    return c;
+}
+
+/* W4: true if a malloc/calloc-based body contains control flow or multi-step
+ * constructs a *flat* constructor never has.  The constructor matcher models
+ * only "alloc one struct, assign its fields, return it"; a body with a loop,
+ * branch (multiple returns), a second allocation, atomics/I-O, or a
+ * function-pointer apply means the real semantics exceed that, and silently
+ * building a single struct from the first alloc would miscompile (rc=0, wrong
+ * answer).  Declining lets try_exec_simple_inline_c fall through to the clean
+ * "inline-C not supported" error instead. */
+static bool ic_constructor_unmodelable(const char *body) {
+    if (ic_body_has_word(body, "while") || ic_body_has_word(body, "for")  ||
+        ic_body_has_word(body, "do")    || ic_body_has_word(body, "switch")||
+        ic_body_has_word(body, "goto"))
+        return true;
+    if (strstr(body, "__atomic") || strstr(body, "TUR_APPLY"))
+        return true;
+    /* >1 allocation => a loop/branch builds many cells, not one flat struct.
+     * (A single early `return 0;` OOM guard before one malloc is fine -- it is a
+     * dead path when the allocation succeeds -- so we do NOT reject on return
+     * count; the loop/foreign-pointer guards already catch the real multi-cell
+     * builders.) */
+    if (ic_body_count_sub(body, "malloc(") + ic_body_count_sub(body, "calloc(") > 1)
+        return true;
+    return false;
+}
+
+/* W4: true if the body dereferences (via `->`) any pointer OTHER than the
+ * allocated target `varname`.  A flat constructor only writes `varname->field`;
+ * reading another pointer's fields (e.g. `r->e1 = s->e1 + 100;`) is
+ * pointer-chasing the matcher cannot faithfully evaluate -- it would read the
+ * wrong value -- so decline. */
+static bool ic_constructor_chases_foreign_ptr(const char *body, const char *varname) {
+    size_t vlen = strlen(varname);
+    for (const char *p = strstr(body, "->"); p; p = strstr(p + 2, "->")) {
+        const char *e = p;
+        while (e > body && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\n'||e[-1]=='\r')) e--;
+        const char *s = e;
+        while (s > body && (isalnum((unsigned char)s[-1]) || s[-1]=='_')) s--;
+        size_t len = (size_t)(e - s);
+        if (len == 0) continue;  /* e.g. `)->` from a cast; conservatively skip */
+        if (len != vlen || strncmp(s, varname, len) != 0)
+            return true;
+    }
+    return false;
+}
+
 static TuriValue ic_exec_constructor(const char *body,
                                       TuriValue *args, uint32_t n_args,
                                       FnDef *fn, uint32_t param_offset) {
@@ -2546,6 +2612,8 @@ static TuriValue ic_exec_constructor(const char *body,
     const char *malloc_p = strstr(body, "malloc(");
     if (!malloc_p) malloc_p = strstr(body, "calloc(");
     if (!malloc_p) return turi_nil();
+    /* W4: decline bodies whose semantics exceed a flat constructor. */
+    if (ic_constructor_unmodelable(body)) return turi_nil();
     /* Scan backwards for variable name.
      * Pattern: "TYPE *varname = (optional_cast)malloc("
      * Start from the char before 'm' in malloc. */
@@ -2567,6 +2635,9 @@ static TuriValue ic_exec_constructor(const char *body,
     char varname[64];
     if (vname_len<=0||vname_len>=64) return turi_nil();
     memcpy(varname, q, (size_t)vname_len); varname[vname_len]='\0';
+
+    /* W4: decline if the body chases a pointer other than the alloc target. */
+    if (ic_constructor_chases_foreign_ptr(body, varname)) return turi_nil();
 
     /* Scan past malloc line */
     const char *p = malloc_p;
@@ -2681,6 +2752,33 @@ static TuriValue ic_exec_accessor(const char *body,
                                    TuriValue *args, uint32_t n_args,
                                    FnDef *fn) {
     if (n_args < 1) return turi_nil();
+
+    /* W4 (turi-inline-c-silent-miscompiles.md): refuse-rather-than-guess.
+     * A body that *applies* a function pointer (TUR_APPLY*) is not a field
+     * accessor -- e.g. ArrowApply's `return TUR_APPLY1(s->e1, s->e2);` applies
+     * the arrow in slot e1 to the arg in slot e2.  The accessor matcher would
+     * mis-read it as a bare `s->e1` field and return the raw function pointer
+     * (rc=0, wrong: arrow-instance-apply printed pointer addresses instead of
+     * 42/42/1007).  We cannot perform the application here, so decline and let
+     * the clean "inline-C not supported" error fire. */
+    if (strstr(body, "TUR_APPLY")) return turi_nil();
+
+    /* W4: decline accessors with statement-level branching / side effects the
+     * single-field-read model cannot follow: a side-effecting error path
+     * (`fprintf`, e.g. ls-get's bounds check) or an `if (...) return ...;` EARLY
+     * return (panic-msg, ls-get) -- the matcher models only one field read or a
+     * `?:` ternary (a single return), so with >1 return it silently picks the
+     * wrong branch (rc=0, wrong answer).  The kept ternary/`field ? field : def`
+     * shapes have exactly one return. */
+    {
+        int nret = 0;
+        for (const char *p = body; (p = strstr(p, "return")) != NULL; p += 6) {
+            bool l = (p == body) || (!isalnum((unsigned char)p[-1]) && p[-1] != '_');
+            bool rr = (!isalnum((unsigned char)p[6]) && p[6] != '_');
+            if (l && rr) nret++;
+        }
+        if (strstr(body, "fprintf") || nret > 1) return turi_nil();
+    }
 
     /* Extract struct field names and types from body */
     const char *fnames[IC_MAX_FIELDS]; size_t flens[IC_MAX_FIELDS];
@@ -2930,6 +3028,22 @@ static TuriValue ic_exec_accessor(const char *body,
 /* Format a single snprintf(bufvar, size, "format", args...) call whose 's' is
  * at fp ("snprintf(" expected). Returns the formatted cstr TuriValue, or
  * turi_nil() if the call does not target bufvar or cannot be parsed. */
+/* W4: true if a printf-style format string contains a FLOAT conversion
+ * (e/E/f/F/g/G/a/A).  ic_format_snprintf_call passes every arg as (long long),
+ * so a float conversion would read integer bits as a double (garbage, e.g.
+ * show-float printed 2.122e-314 for 3.14).  The matcher cannot format floats,
+ * so such a body is declined. */
+static bool ic_fmt_has_float_conv(const char *fmt) {
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%') continue;
+        p++;
+        if (*p == '%') continue;
+        while (*p && strchr("-+ #0123456789.*lhLqjzt", *p)) p++;
+        if (*p && strchr("eEfFgGaA", *p)) return true;
+    }
+    return false;
+}
+
 static TuriValue ic_format_snprintf_call(const char *fp,
                                          const char *bufvar, int bvlen,
                                          TuriValue *args, uint32_t n_args,
@@ -2954,6 +3068,8 @@ static TuriValue ic_format_snprintf_call(const char *fp,
     if(fmt_len>=sizeof(fmt_str)) return turi_nil();
     memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
     ic_unescape_str(fmt_str);
+    /* W4: decline float conversions -- args are passed as (long long). */
+    if (ic_fmt_has_float_conv(fmt_str)) return turi_nil();
     fq=fmte+1;
     /* parse snprintf arguments */
     int64_t sn_args[8]; int sn_argc=0;
@@ -3073,6 +3189,27 @@ static TuriValue ic_exec_snprintf_fmt(const char *body,
         }
     }
     if (bvlen == 0) return turi_nil();
+
+    /* W4 (turi-inline-c-silent-miscompiles.md): refuse-rather-than-guess for
+     * shapes this single-write formatter cannot model faithfully:
+     *   - a loop formats many elements (show-list: "[1" instead of "[1]");
+     *   - a pointer-chasing arg the arg-evaluator cannot resolve (exg5: "0"
+     *     instead of "99", from `*(int64_t*)((Rc*)x)->value`);
+     *   - concatenation via `snprintf(bufvar + off, ...)` where only the first
+     *     write is modeled (show-pair: "(0" instead of "(1, 2)").
+     * A guarded if/else snprintf PAIR (range-bound) writes to `bufvar` (no
+     * offset) and is resolved by ic_snprintf_cond_branch below, so it is kept. */
+    if (ic_body_has_word(body, "while") || ic_body_has_word(body, "for"))
+        return turi_nil();
+    if (strstr(body, "->"))
+        return turi_nil();
+    for (const char *sc = strstr(body, "snprintf("); sc; sc = strstr(sc + 9, "snprintf(")) {
+        const char *a = ic_skip_ws(sc + 9);
+        if (strncmp(a, bufvar, (size_t)bvlen) == 0) {
+            const char *aa = ic_skip_ws(a + bvlen);
+            if (*aa == '+') return turi_nil();  /* offset write => concatenation */
+        }
+    }
 
     /* Step 2: Handle conditional early returns: if (COND) return "str"; */
     const char *p = body;
@@ -3396,8 +3533,24 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
         if (has_while && has_printf) { *out = r; return ic_claim("linked-list-print", fn, out); }
     }
 
-    /* Pattern 7: Simple return of constant or single param (no malloc, no arrow) */
-    if (!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch) {
+    /* Pattern 7: Simple return of constant or single param (no malloc, no arrow)
+     *
+     * W4 (turi-inline-c-silent-miscompiles.md): refuse-rather-than-guess.  This
+     * pattern only models `return <simple-expr>;`.  Decline bodies that:
+     *   - have side effects the matcher silently drops (`printf`) -- e.g.
+     *     inline-c-cname-splice `return 0;` after two printfs whose output IS
+     *     the program's result ("1\n42");
+     *   - splice sibling-defn calls (`__TUR_CNAME_...__(...)`) the matcher cannot
+     *     invoke;
+     *   - return a function-pointer CALL (`)(` -- a parenthesized callee applied
+     *     to args) -- e.g. closure-capture-byptr-struct-param's
+     *     `return ((fn1_t)fat[0])((void*)fat);`, which evaluated to 0.
+     * Each previously produced rc=0 with the wrong answer; declining flips them
+     * to the clean "inline-C not supported" error. */
+    bool sr_has_call = strstr(body, "printf") || strstr(body, "__TUR_CNAME_") ||
+                       strstr(body, ")(");
+    if (!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch &&
+        !sr_has_call) {
         const char *r = strstr(body, "return "); if (r) {
             r += 7; r = ic_skip_ws(r);
             int64_t val = 0;
@@ -4617,8 +4770,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_INLINE_C:
         if (!turi_env_has_cap(env, TURI_CAP_INLINE_C))
             return turi_error("eval: inline-C not allowed in sandboxed environment");
+        /* This is the documented clean carve for any inline-C-backed function
+         * the tree-walker cannot run -- e.g. a content-keyed map's synthesized
+         * MapKey comparator, whose body returns a captured C function-pointer
+         * address (turi-map-set-hamt-interpreter-gap.md, Tier B / prereq 2c).
+         * It is a clean rc=1 error, never a crash or silent miscompile; point
+         * the user at the compiled path, which implements these natively. */
         return turi_error("eval: inline-C not supported in interpreter mode "
-                          "(function uses native C implementation)");
+                          "(function uses a native C implementation; run it with "
+                          "`tur build`/`tur run` instead of `--interpret`)");
 
     /* --- Phase S7: async / await ----------------------------------------- */
 

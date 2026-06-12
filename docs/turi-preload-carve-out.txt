@@ -1,0 +1,22 @@
+# turi interpreter preload carve-outs
+#
+# Modules the COMPILED path auto-loads (stdlib_files[], src/main.c) but the
+# --interpret/tur eval prelude (prelude[] in cmd_eval, src/main.c) intentionally
+# does NOT preload.  Each is a known preload gap: its public names are "unknown
+# function / unbound variable" under --interpret until the module joins the
+# prelude (the harness-flip "missing native" bucket).  Listing a module here
+# asserts the gap is deliberate; check_turi_native_parity.py fails the build if
+# a gap module is missing here, or if an entry here is no longer a gap (stale).
+#
+# Setting TUR_TURI_FULL_PRELUDE=1 (prereq 3c) opts the interpreter into loading
+# exactly these carved modules on top of the default prelude, for iterating /
+# measuring the bucket under --interpret without changing the default path.
+#
+# Format:  <module>.tur -- <one-line rationale>
+# See docs/reported/turi-harness-flip-reconciliation.md and
+#     docs/upcoming/v1/turi-open-reports-prereqs.md (prereqs 2c, 3a, 3b).
+
+contract.tur -- its tur-contract-check inline-C conflicts with the :pre/:post contract lowering (wk_eval_fixture skips it for the same reason); preloading it silently broke contract-pre/post/type.
+mutmap.tur  -- the mutable-map module still needs native overrides over tur_hamt_*; its content-keyed comparator path awaits TI10 Tier B (turi-map-set-hamt-interpreter-gap.md, prereq 2a/2c).
+json.tur    -- reader-backed (-Xdata-literals/-Xjson gated); preloaded only behind the same -X flag as the compiled path, not unconditionally.
+schema.tur  -- reader-backed (-X gated) and depends on json.tur; same conditional-preload story as json.tur.
