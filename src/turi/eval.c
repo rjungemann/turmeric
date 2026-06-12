@@ -122,6 +122,13 @@ struct TuriClosure {
 /* Forward declaration — defined after TuriStruct is fully defined below. */
 static TuriValue native_panic_pred(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
 
+/* workflow.tur save-cont!/resume-cont! native overrides (defined after the
+ * context-capturing continuation machinery below).  Registered in
+ * turi_eval_register_builtins so they shadow the inline-C defns the moment
+ * stdlib/workflow.tur is loaded. */
+static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+
 /* Register a native C function as a global binding in env.
  * Declared in eval.h; implemented here because TuriClosure is internal. */
 void turi_env_register_native(TuriEnv *env, const char *name,
@@ -157,6 +164,11 @@ static TuriValue native_gen_none(TuriEnv *env, TuriValue *args, uint32_t n, void
  * Called from turi_env_new after async builtins are registered. */
 void turi_eval_register_builtins(TuriEnv *env) {
     turi_env_register_native(env, "panic?", native_panic_pred, NULL);
+    /* workflow.tur serial-continuation wrappers (inline-C in stdlib; the
+     * interpreter cannot run the inline-C body, so override with natives over
+     * the cont machinery). */
+    turi_env_register_native(env, "save-cont!",   native_save_cont,   NULL);
+    turi_env_register_native(env, "resume-cont!", native_resume_cont, NULL);
     /* TI2: generator ptr<void> helpers (override gen.tur inline-C). */
     turi_env_register_native(env, "gen-some?",  native_gen_some,   NULL);
     turi_env_register_native(env, "gen-unwrap", native_gen_unwrap, NULL);
@@ -1178,6 +1190,440 @@ static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
 }
 
 /* -------------------------------------------------------------------------
+ * Context-capturing delimited control: serial-shift / cloneable-shift
+ *
+ * Unlike the abortive shift above, these hand a *resumable* continuation k to
+ * their receiver f.  The compiled path reifies the delimited context (the
+ * frames between the shift and its enclosing reset) at compile time into a DK
+ * chain (src/compiler/emit_cps.c collect_ctx; src/runtime/cps_prompt.c).  The
+ * interpreter has no compile phase, so it reifies the same context at *runtime*:
+ * when evaluating (serial-reset BODY) / (cloneable-reset BODY) it walks BODY --
+ * following the unique shift-reaching child through the supported grammar
+ * (single-hole int +,-,*,/ binops; 1- and 2-arg top-level call frames; pure
+ * `let` bindings; an `if` with one shift-bearing arm) -- evaluating each
+ * non-hole operand once at capture time and recording it as a frame.  The
+ * captured continuation is that frame array; resuming with w folds the frames
+ * innermost-first (frames[0] is outermost), so k is replayable / multi-shot for
+ * cloneable and marshalable (in-process) for serial.  This mirrors collect_ctx;
+ * shapes it does not model (do-sequence prelude, struct envs, call/cc*) fall
+ * through to a clean error, matching the compiled grammar's own NULL returns.
+ * See docs/reported/turi-capturing-shift-unimplemented.md.
+ * ---------------------------------------------------------------------- */
+#define TS_MAX_CTX_FRAMES 64
+
+typedef struct TsFrame {
+    uint8_t   kind;        /* 0 = arith binop, 1 = call frame */
+    char      op;          /* arith operator: '+','-','*','/' */
+    uint8_t   hole_index;  /* hole slot: arith 0=left 1=right; call arg index */
+    uint8_t   n_args;      /* call arity (0, 1, or 2) */
+    bool      ignore_value;/* call: run for side effect, ignore the resume value
+                            * (a `do`-sequence tail item) */
+    int64_t   env;         /* arith other operand (int) */
+    TuriValue env_val;     /* call non-hole / sole env operand (any TuriValue) */
+    TuriValue fn;          /* call-frame function closure */
+} TsFrame;
+
+typedef struct TuriCont {
+    TsFrame  *frames;      /* frames[0] = outermost */
+    uint32_t  n;
+    bool      serial;      /* serial vs cloneable (behaviourally identical here) */
+} TuriCont;
+
+/* Does e contain a shift of `target` in evaluation position?  Mirrors the
+ * compiler's reaches_shift_kind (emit_cps.c): nested resets / shifts / fns
+ * self-delimit, so they do not count once the outer target has been matched. */
+static bool ts_reaches_shift(const Expr *e, ExprKind target) {
+    if (!e) return false;
+    if ((int)e->kind == (int)target) return true;
+    /* Nested resets / shifts / fns self-delimit (the compiler's
+     * reaches_shift_kind names them explicitly; here they fall to `default` and
+     * return false -- listing them as explicit arms would make the turi-parity
+     * ratchet read e.g. call/cc as interpreter-handled). */
+    switch (e->kind) {
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (ts_reaches_shift(e->as.builtin.args[i], target)) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (ts_reaches_shift(e->as.call_.args[i], target)) return true;
+            return false;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (ts_reaches_shift(e->as.let_.bindings[i].init, target)) return true;
+            return ts_reaches_shift(e->as.let_.body, target);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (ts_reaches_shift(e->as.do_.items[i], target)) return true;
+            return false;
+        case EX_IF:
+            return ts_reaches_shift(e->as.if_.cond, target) ||
+                   ts_reaches_shift(e->as.if_.then_, target) ||
+                   ts_reaches_shift(e->as.if_.else_or_null, target);
+        case EX_RETURN: return ts_reaches_shift(e->as.return_.value, target);
+        case EX_SET:    return ts_reaches_shift(e->as.set_.value, target);
+        default:        return false;
+    }
+}
+
+/* A single-char arithmetic operator the context grammar supports. */
+static bool ts_arith_op(const char *op) {
+    return op && op[0] && op[1] == '\0' &&
+           (op[0] == '+' || op[0] == '-' || op[0] == '*' || op[0] == '/');
+}
+
+static TuriCont *ts_cont_copy(const TuriCont *c) {
+    TuriCont *d = (TuriCont *)malloc(sizeof(TuriCont));
+    d->n = c->n;
+    d->serial = c->serial;
+    d->frames = (TsFrame *)malloc(sizeof(TsFrame) * (c->n ? c->n : 1));
+    if (c->n) memcpy(d->frames, c->frames, sizeof(TsFrame) * c->n);
+    return d;
+}
+
+/* Resume continuation c with value w: fold the frames innermost-first.  Each
+ * frame's captured env was evaluated once at capture time, so this is pure with
+ * respect to the context (re-runnable for multi-shot). */
+static TuriValue ts_cont_resume(TuriEnv *env, TuriCont *c, int64_t w) {
+    int64_t v = w;
+    for (int32_t i = (int32_t)c->n - 1; i >= 0; i--) {
+        TsFrame *fr = &c->frames[i];
+        if (fr->kind == 0) {
+            int64_t e0 = fr->env;
+            switch (fr->op) {
+            case '+': v = e0 + v; break;
+            case '*': v = e0 * v; break;
+            case '-': v = (fr->hole_index == 0) ? (v - e0) : (e0 - v); break;
+            case '/':
+                if (fr->hole_index == 0) {
+                    if (e0 == 0) return turi_error("eval: cont resume: division by zero");
+                    v = v / e0;
+                } else {
+                    if (v == 0) return turi_error("eval: cont resume: division by zero");
+                    v = e0 / v;
+                }
+                break;
+            default: return turi_errorf("eval: cont resume: bad op '%c'", fr->op);
+            }
+        } else {
+            TuriValue args[2];
+            uint32_t  na = fr->n_args;
+            if (fr->ignore_value) {
+                /* do-sequence tail item: run for effect, ignore the resume
+                 * value; its sole argument (if any) is the captured env. */
+                if (na >= 1) { args[0] = fr->env_val; na = 1; }
+            } else if (na == 1) {
+                args[0] = turi_int(v);
+            } else if (fr->hole_index == 0) {
+                args[0] = turi_int(v); args[1] = fr->env_val;
+            } else {
+                args[0] = fr->env_val; args[1] = turi_int(v);
+            }
+            TuriValue r = turi_call(env, fr->fn, args, na);
+            if (turi_is_error(r) || env->returning || env->throwing) return r;
+            if (r.tag != TURI_INT)
+                return turi_errorf("eval: cont call frame returned non-int (tag %d)", r.tag);
+            v = r.as_int;
+        }
+    }
+    return turi_int(v);
+}
+
+/* Dispatch the continuation-resume / clone / marshal builtins (BS_FUNC_CALL
+ * with a tur_*_cont_* c_op).  Returns true and sets *out when handled.  The
+ * handle is an int64 boxing a TuriCont*; serialize/deserialize round-trip
+ * in-process (the "bytes" is a deep copy of the chain -- a native stack
+ * snapshot would not be serializable, which is the point of the serial flavor,
+ * and a real byte codec cannot encode the call-frame closures, so an in-process
+ * deep copy faithfully reproduces a direct resume). */
+static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
+                                TuriValue *args, uint32_t n, TuriValue *out) {
+    const char *name = spec->c_op ? spec->c_op : "";
+    if (strcmp(name, "tur_cloneable_cont_resume") == 0 ||
+        strcmp(name, "tur_serial_cont_resume") == 0) {
+        if (n < 2 || args[0].as_int == 0) { *out = turi_int(0); return true; }
+        TuriCont *c = (TuriCont *)(intptr_t)args[0].as_int;
+        *out = ts_cont_resume(env, c, args[1].as_int);
+        return true;
+    }
+    if (strcmp(name, "tur_cloneable_cont_clone") == 0 ||
+        strcmp(name, "tur_serial_cont_serialize") == 0 ||
+        strcmp(name, "tur_serial_cont_deserialize") == 0) {
+        if (n < 1 || args[0].as_int == 0) { *out = turi_int(0); return true; }
+        TuriCont *c = (TuriCont *)(intptr_t)args[0].as_int;
+        *out = turi_int((int64_t)(intptr_t)ts_cont_copy(c));
+        return true;
+    }
+    if (strcmp(name, "tur_cloneable_cont_drop") == 0) { *out = turi_nil(); return true; }
+    return false;
+}
+
+/* The body reaches the shift but its delimited context falls outside the
+ * supported grammar, so the continuation cannot be reified.  For serial this is
+ * exactly the compiled path's TUR-E0706 (emit_effects.c / emit_stmt.c); emit the
+ * same diagnostic here so the interpreter rejects it rather than silently
+ * miscompiling -- recovering the not-capturable negative fixtures on the
+ * interpret path (the "decouple the TUR-E0706 negative path" slice of
+ * docs/reported/turi-capturing-shift-unimplemented.md).  Returns an
+ * "elaboration error" sentinel so cmd_eval does not re-print the message. */
+static TuriValue ts_not_capturable(bool serial, Span span) {
+    if (serial) {
+        diag_emit_with_code(DIAG_ERROR, span,
+            TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,
+            "serial-shift context is not capturable\n"
+            "  = note: the delimited context falls outside the supported "
+            "lowering grammar, so the continuation cannot be reified\n"
+            "  = help: restructure into a supported shape (scalar let prelude / "
+            "arithmetic / 1- or 2-arg call / if / do-tail)");
+        return turi_error("elaboration error");
+    }
+    return turi_error("eval: cloneable-shift context is not capturable "
+                      "(unsupported delimited-context shape)");
+}
+
+/* Evaluate (serial-reset BODY) / (cloneable-reset BODY) when BODY performs the
+ * matching capturing shift: reify the delimited context, hand the receiver a
+ * resumable continuation, and return the receiver's value as the reset value. */
+static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
+                                    const Expr *body, ExprKind shift_kind,
+                                    bool serial) {
+    TsFrame     frames[TS_MAX_CTX_FRAMES];
+    uint32_t    n = 0;
+    EvalFrame  *let_frames[TS_MAX_CTX_FRAMES];
+    uint32_t    n_let = 0;
+    EvalFrame  *cur_frame = frame;
+    const Expr *cur = body;
+    const Expr *shift = NULL;
+    TuriValue   result = turi_nil();
+    bool        done = false;         /* result is set */
+    bool        is_pure = false;
+    TuriValue   pure_val = turi_nil();
+
+    for (;;) {
+        if (n >= TS_MAX_CTX_FRAMES) {
+            result = turi_error("eval: capturing context too deep"); done = true; break;
+        }
+        if ((int)cur->kind == (int)shift_kind) { shift = cur; break; }
+        if (!ts_reaches_shift(cur, shift_kind)) {
+            /* Pure terminal (e.g. the non-shift arm of an `if`): the reset value
+             * is the surrounding context applied to this value. */
+            pure_val = eval_expr(env, cur_frame, cur);
+            if (turi_is_error(pure_val) || env->returning || env->throwing) {
+                result = pure_val; done = true;
+            } else {
+                is_pure = true;
+            }
+            break;
+        }
+        if (cur->kind == EX_LET) {
+            EvalFrame *nf = eval_frame_new(cur_frame);
+            let_frames[n_let++] = nf;
+            bool err = false;
+            for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                TuriValue v = eval_expr(env, nf, cur->as.let_.bindings[i].init);
+                if (turi_is_error(v) || env->returning || env->throwing) {
+                    result = v; done = true; err = true; break;
+                }
+                frame_bind(nf, cur->as.let_.bindings[i].binding->name->name, v);
+            }
+            if (err) break;
+            cur_frame = nf;
+            cur = cur->as.let_.body;
+            continue;
+        }
+        if (cur->kind == EX_IF) {
+            /* The condition is pure (grammar); the shift lives in one arm. */
+            TuriValue cv = eval_expr(env, cur_frame, cur->as.if_.cond);
+            if (turi_is_error(cv) || env->returning || env->throwing) {
+                result = cv; done = true; break;
+            }
+            cur = turi_is_truthy(cv) ? cur->as.if_.then_ : cur->as.if_.else_or_null;
+            if (!cur) {
+                result = turi_error("eval: capturing if: missing arm"); done = true; break;
+            }
+            continue;
+        }
+        if (cur->kind == EX_BUILTIN && cur->as.builtin.n == 2 &&
+            cur->as.builtin.spec && ts_arith_op(cur->as.builtin.spec->c_op)) {
+            const Expr *a0 = cur->as.builtin.args[0];
+            const Expr *a1 = cur->as.builtin.args[1];
+            bool h0 = ts_reaches_shift(a0, shift_kind);
+            bool h1 = ts_reaches_shift(a1, shift_kind);
+            if (h0 == h1) {
+                result = ts_not_capturable(serial, cur->span);   /* arith: not exactly one hole */
+                done = true; break;
+            }
+            const Expr *other = h0 ? a1 : a0;
+            TuriValue ov = eval_expr(env, cur_frame, other);
+            if (turi_is_error(ov) || env->returning || env->throwing) {
+                result = ov; done = true; break;
+            }
+            memset(&frames[n], 0, sizeof(TsFrame));
+            frames[n].kind = 0;
+            frames[n].op = cur->as.builtin.spec->c_op[0];
+            frames[n].hole_index = h0 ? 0 : 1;
+            frames[n].env = ov.as_int;
+            n++;
+            cur = h0 ? a0 : a1;
+            continue;
+        }
+        if (cur->kind == EX_DO) {
+            /* (do PRELUDE... (shift k v) TAIL...): the prelude runs once at
+             * capture; each tail item is an ignore-value call frame run on
+             * resume in source order (the last tail item yields the reset's
+             * value).  Mirrors collect_ctx's do branch (emit_cps.c). */
+            uint32_t N = cur->as.do_.n;
+            int32_t  m = -1;
+            for (uint32_t i = 0; i < N; i++) {
+                if (ts_reaches_shift(cur->as.do_.items[i], shift_kind))
+                    m = (m == -1) ? (int32_t)i : -2;
+            }
+            if (m < 0 || (int)cur->as.do_.items[m]->kind != (int)shift_kind) {
+                result = ts_not_capturable(serial, cur->span);   /* do: shift not in statement position */
+                done = true; break;
+            }
+            bool bad = false;
+            for (int32_t i = 0; i < m; i++) {   /* prelude: side effects, once */
+                TuriValue pv = eval_expr(env, cur_frame, cur->as.do_.items[i]);
+                if (turi_is_error(pv) || env->returning || env->throwing) {
+                    result = pv; done = true; bad = true; break;
+                }
+            }
+            if (bad) break;
+            for (int32_t i = (int32_t)N - 1; i > m; i--) {   /* tail: outermost first */
+                const Expr *tail = cur->as.do_.items[i];
+                if (tail->kind != EX_CALL || !tail->as.call_.fn_binding ||
+                    tail->as.call_.fn_expr || tail->as.call_.n_args > 1) {
+                    result = ts_not_capturable(serial, tail->span);   /* unsupported do-tail item */
+                    done = true; bad = true; break;
+                }
+                if (n >= TS_MAX_CTX_FRAMES) {
+                    result = turi_error("eval: capturing context too deep");
+                    done = true; bad = true; break;
+                }
+                TuriValue fn = eval_lookup(env, cur_frame,
+                                           tail->as.call_.fn_binding->name->name);
+                if (turi_is_error(fn) || fn.tag != TURI_CLOSURE) {
+                    result = turi_errorf("eval: capturing do tail: '%s' is not a function",
+                                         tail->as.call_.fn_binding->name->name);
+                    done = true; bad = true; break;
+                }
+                TuriValue ev = turi_nil();
+                if (tail->as.call_.n_args == 1) {
+                    const Expr *arg = tail->as.call_.args[0];
+                    if (ts_reaches_shift(arg, shift_kind)) {
+                        result = ts_not_capturable(serial, tail->span);   /* do-tail arg reaches the shift */
+                        done = true; bad = true; break;
+                    }
+                    ev = eval_expr(env, cur_frame, arg);
+                    if (turi_is_error(ev) || env->returning || env->throwing) {
+                        result = ev; done = true; bad = true; break;
+                    }
+                }
+                memset(&frames[n], 0, sizeof(TsFrame));
+                frames[n].kind = 1;
+                frames[n].ignore_value = true;
+                frames[n].n_args = (uint8_t)tail->as.call_.n_args;
+                frames[n].env_val = ev;
+                frames[n].fn = fn;
+                n++;
+            }
+            if (bad) break;
+            cur = cur->as.do_.items[m];   /* descend into the shift */
+            continue;
+        }
+        if (cur->kind == EX_CALL && cur->as.call_.fn_binding && !cur->as.call_.fn_expr &&
+            (cur->as.call_.n_args == 1 || cur->as.call_.n_args == 2)) {
+            uint32_t na = cur->as.call_.n_args;
+            int hole = -1;
+            for (uint32_t i = 0; i < na; i++) {
+                if (ts_reaches_shift(cur->as.call_.args[i], shift_kind)) {
+                    hole = (hole == -1) ? (int)i : -2;
+                }
+            }
+            if (hole < 0) {
+                result = ts_not_capturable(serial, cur->span);   /* call: not exactly one hole */
+                done = true; break;
+            }
+            TuriValue fn = eval_lookup(env, cur_frame, cur->as.call_.fn_binding->name->name);
+            if (turi_is_error(fn) || fn.tag != TURI_CLOSURE) {
+                result = turi_is_error(fn) ? fn
+                       : turi_errorf("eval: capturing call frame: '%s' is not a function",
+                                     cur->as.call_.fn_binding->name->name);
+                done = true; break;
+            }
+            TuriValue envv = turi_nil();
+            if (na == 2) {
+                const Expr *other = cur->as.call_.args[hole == 0 ? 1 : 0];
+                envv = eval_expr(env, cur_frame, other);
+                if (turi_is_error(envv) || env->returning || env->throwing) {
+                    result = envv; done = true; break;
+                }
+            }
+            memset(&frames[n], 0, sizeof(TsFrame));
+            frames[n].kind = 1;
+            frames[n].n_args = (uint8_t)na;
+            frames[n].hole_index = (uint8_t)hole;
+            frames[n].env_val = envv;
+            frames[n].fn = fn;
+            n++;
+            cur = cur->as.call_.args[hole];
+            continue;
+        }
+        result = ts_not_capturable(serial, cur->span);   /* unsupported context shape */
+        done = true;
+        break;
+    }
+
+    if (!done) {
+        if (is_pure) {
+            if (n == 0 || pure_val.tag != TURI_INT) {
+                result = pure_val;   /* empty context, or non-int passthrough */
+            } else {
+                TuriCont c = { frames, n, serial };
+                result = ts_cont_resume(env, &c, pure_val.as_int);
+            }
+        } else {
+            /* shift found: build a heap cont, call the receiver with it. */
+            TuriCont *cont = (TuriCont *)malloc(sizeof(TuriCont));
+            cont->n = n;
+            cont->serial = serial;
+            cont->frames = (TsFrame *)malloc(sizeof(TsFrame) * (n ? n : 1));
+            if (n) memcpy(cont->frames, frames, sizeof(TsFrame) * n);
+            const Expr *kfn = (shift_kind == EX_SERIAL_SHIFT)
+                ? shift->as.serial_shift_.k_fn
+                : shift->as.cloneable_shift_.k_fn;
+            TuriValue fn = eval_expr(env, cur_frame, kfn);
+            if (turi_is_error(fn) || fn.tag != TURI_CLOSURE) {
+                result = turi_is_error(fn) ? fn
+                       : turi_error("eval: shift receiver is not a function");
+            } else {
+                TuriValue kval = turi_int((int64_t)(intptr_t)cont);
+                result = turi_call(env, fn, &kval, 1);
+            }
+        }
+    }
+
+    for (int32_t i = (int32_t)n_let - 1; i >= 0; i--) eval_frame_free(let_frames[i]);
+    return result;
+}
+
+/* stdlib/workflow.tur save-cont! -- serialise a serial continuation to "bytes".
+ * In-process the bytes is a deep copy of the chain (see ts_try_cont_builtin). */
+static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || args[0].as_int == 0) return turi_int(0);
+    return turi_int((int64_t)(intptr_t)ts_cont_copy((TuriCont *)(intptr_t)args[0].as_int));
+}
+
+/* stdlib/workflow.tur resume-cont! -- rebuild the chain from bytes and resume. */
+static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2 || args[0].as_int == 0) return turi_int(0);
+    return ts_cont_resume(env, (TuriCont *)(intptr_t)args[0].as_int, args[1].as_int);
+}
+
+/* -------------------------------------------------------------------------
  * Phase TI4: Software Transactional Memory (single-threaded model)
  *
  * The interpreter is single-threaded, so STM collapses to a transaction-log
@@ -1560,9 +2006,15 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         return turi_nil();
     }
 
-    default:
+    default: {
+        /* Context-capturing continuation resume / clone / marshal builtins
+         * (tur_*_cont_*) arrive here as BS_FUNC_CALL; handle them before the
+         * generic nil fallback. */
+        TuriValue cont_out;
+        if (ts_try_cont_builtin(env, spec, args, n, &cont_out)) return cont_out;
         /* Silently return nil for unsupported builtins (unsafe ops, STM, etc.) */
         return turi_nil();
+    }
     }
 }
 
@@ -4774,16 +5226,33 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_abortive_shift(env, frame, e->as.shift0_.k_fn,
                                    e->as.shift0_.body, "shift0");
 
-    /* serial-reset / cloneable-reset: establish a prompt boundary so the
-     * no-shift passthrough case evaluates.  The capturing serial-shift /
-     * cloneable-shift remain a documented carve-out (see eval.c TI3 notes). */
+    /* serial-reset / cloneable-reset.  When the body performs the matching
+     * capturing shift, reify the delimited context and hand the receiver a
+     * resumable continuation (ts_capture_and_run).  Otherwise fall back to the
+     * plain prompt boundary, which handles the no-shift passthrough and any
+     * abortive shift inside. */
     case EX_SERIAL_RESET:
+        if (ts_reaches_shift(e->as.serial_reset_.body, EX_SERIAL_SHIFT))
+            return ts_capture_and_run(env, frame, e->as.serial_reset_.body,
+                                      EX_SERIAL_SHIFT, /*serial=*/true);
         return eval_reset_boundary(env, frame, e->as.serial_reset_.body,
                                    PROMPT_SERIAL);
 
     case EX_CLONEABLE_RESET:
+        if (ts_reaches_shift(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT))
+            return ts_capture_and_run(env, frame, e->as.cloneable_reset_.body,
+                                      EX_CLONEABLE_SHIFT, /*serial=*/false);
         return eval_reset_boundary(env, frame, e->as.cloneable_reset_.body,
                                    PROMPT_CLONEABLE);
+
+    /* A capturing shift reached here is standalone: the enclosing reset's
+     * descent (ts_capture_and_run) consumes the shift in place and never calls
+     * eval_expr on it, so hitting these arms means the shift is outside any
+     * matching reset. */
+    case EX_SERIAL_SHIFT:
+        return turi_error("eval: serial-shift used outside of any serial-reset");
+    case EX_CLONEABLE_SHIFT:
+        return turi_error("eval: cloneable-shift used outside of any cloneable-reset");
 
     /* Phase TI4: Software Transactional Memory. */
     case EX_STM: {

@@ -232,9 +232,7 @@ inline-c-binop
 # TI3 (turi-parity-post-v1-plan, delimited control): abortive reset/shift/shift0
 # plus serial-reset/cloneable-reset prompt boundaries handled by the interpreter
 # (EX_RESET/EX_SHIFT/EX_SHIFT0/EX_SERIAL_RESET/EX_CLONEABLE_RESET).  Verified
-# under 'tur --interpret'.  The context-capturing serial-shift/cloneable-shift
-# remain a documented carve-out
-# (docs/reported/turi-capturing-shift-unimplemented.md).
+# under 'tur --interpret'.
 #   continuation-substrate -- abortive reset/shift/shift0 incl. nested resets
 #   shift-result-typing    -- (shift f body) yields f's codomain
 #   shift0-result-typing   -- shift0 mirrors shift's local typing/abort
@@ -243,6 +241,32 @@ continuation-substrate
 shift-result-typing
 shift0-result-typing
 serial-reset-basic
+
+# TI3.2 (turi-capturing-shift-unimplemented): the context-capturing
+# serial-shift / cloneable-shift now reify the delimited context at runtime
+# (src/turi/eval.c ts_capture_and_run) and hand the receiver a resumable
+# continuation -- multi-shot for cloneable, in-process marshalable for serial.
+# The supported grammar mirrors the compiled collect_ctx: single-hole int
+# +,-,*,/ binops, 1- and 2-arg call frames, pure `let`, an `if` with one
+# shift-bearing arm, and a `do`-sequence prelude + ignore-value tail.
+# serial-context-do-struct stays a carve-out (requires.compiled): its struct
+# env routes through a Serializable instance over inline-C struct accessors the
+# interpreter cannot execute.  The 2 *-not-capturable negative fixtures need the
+# TUR-E0706 capturability check on the interpret path and remain denylisted
+# below.
+context-call-frame
+context-division
+serial-context-marshal
+serial-context-let
+serial-context-if
+serial-context-if-outer-frames
+serial-context-call1
+serial-context-do
+serial-context-do-cfg
+cloneable-context-multishot
+cloneable-context-let
+cloneable-context-if
+cloneable-context-if-outer-frames
 
 # TI6 (turi-parity-post-v1-plan, first-class handlers): the interpreter now
 # handles EX_HANDLER_LIT, EX_WITH_HANDLER, and EX_COMPOSE_HANDLERS by reusing
@@ -895,15 +919,14 @@ fixture_has_inline_c() {
 # (unbound-call-head, unknown-helper-load-hint, tce3-map-heterogeneous-val) were
 # fixed: an unbound runtime-dispatch call head now reports the compiler's
 # "unknown function or operator" diagnostic (+ load-hint), and cmd_eval prints a
-# runtime error from main instead of swallowing it.  The remaining entries below
-# genuinely diverge under the interpreter (missing elaborator checks + the TI3.2
-# serial-shift carve-out) and are denylisted with a one-line reason until fixed.
+# runtime error from main instead of swallowing it.  The serial-shift
+# capturability cases (serial-context-{,do-}not-capturable) now emit TUR-E0706
+# under --interpret too: ts_capture_and_run rejects an uncapturable context with
+# the same diagnostic the compiled path raises.  The errors/ denylist is now
+# empty -- every negative fixture's diagnostic matches under the interpreter.
 # This closes the TI0-noted gap that errors/ was skipped wholesale.
 # ---------------------------------------------------------------------------
-TURI_ERRORS_DENY="
-serial-context-do-not-capturable # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
-serial-context-not-capturable    # TUR-E0706 serial-shift capturability (TI3.2 carve-out)
-"
+TURI_ERRORS_DENY=""
 while IFS= read -r _ef; do
     _ef="${_ef%%#*}"                                   # strip trailing comment
     _ef="${_ef#"${_ef%%[![:space:]]*}"}"; _ef="${_ef%"${_ef##*[![:space:]]}"}"

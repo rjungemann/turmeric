@@ -1,5 +1,40 @@
 # turi: serial-shift / cloneable-shift (context-capturing delimited control) unimplemented
 
+> **RESOLVED (2026-06-12): implemented via runtime context reification.** The
+> interpreter now evaluates the context-capturing `serial-shift` /
+> `cloneable-shift`.  Rather than a fiber or a compile-time DK walk, `EX_SERIAL_RESET`
+> / `EX_CLONEABLE_RESET` reify the delimited context **at runtime**
+> (`ts_capture_and_run`, `src/turi/eval.c`): they walk the reset body down the
+> unique shift-reaching child through the same grammar `collect_ctx` accepts --
+> single-hole int `+ - * /` binops, 1- and 2-arg top-level call frames, a pure
+> `let`, an `if` with one shift-bearing arm, and a `do`-sequence prelude +
+> ignore-value tail -- evaluating each non-hole operand once at capture time and
+> recording it as a frame.  The captured continuation is that frame array, boxed
+> as an int64 handle; resuming folds the frames innermost-first, so it is
+> multi-shot for cloneable and (in-process) marshalable for serial.  The resume /
+> clone / serialize / deserialize builtins (`tur_{cloneable,serial}_cont_*`) and
+> `stdlib/workflow.tur`'s `save-cont!` / `resume-cont!` are wired as interpreter
+> natives over this machinery.  An uncapturable context (a shape outside the
+> grammar) now raises the compiled path's `TUR-E0706` under `--interpret` instead
+> of the old silent / empty-stderr failure -- closing the negative path too.
+>
+> **13 of 14 context-capturing fixtures pass under `--interpret`** and are on the
+> `run-turi.sh` TI3 allowlist: `serial-context-{marshal,let,if,if-outer-frames,call1,do,do-cfg}`,
+> `cloneable-context-{multishot,let,if,if-outer-frames}`, `context-call-frame`,
+> `context-division`; plus the 2 `errors/serial-context-{,do-}not-capturable`
+> negative fixtures (TUR-E0706), which were removed from `TURI_ERRORS_DENY`
+> (that denylist is now empty).  `EX_SERIAL_SHIFT` / `EX_CLONEABLE_SHIFT` were
+> removed from `docs/turi-carve-out.txt`; the parity ratchet passes (111/115
+> handled, 4 carved).  Full turi harness 967 passed / 0 failed.
+>
+> **One carve-out remains:** `serial-context-do-struct` (marked
+> `requires.compiled`) -- its struct env routes through a `Serializable` instance
+> over inline-C struct accessors (`malloc`+field stores, `p[0]+p[1]`) the
+> tree-walking interpreter cannot execute.  That is the inline-C-evaluator gap
+> ([turi-inline-c-silent-miscompiles.md](turi-inline-c-silent-miscompiles.md)),
+> not the capturing-shift substrate.  `call/cc*` (`EX_CALLCC`) stays a separate
+> carve-out per the CPS-transform plan.  The original analysis is kept below.
+
 **Summary:** The tree-walking interpreter (`turi`) implements the *abortive*
 delimited-control operators -- `reset`, `shift`, `shift0`, and the
 no-shift case of `serial-reset` / `cloneable-reset` (Phase TI3) -- but does

@@ -1,5 +1,17 @@
 # 9 `errors/` fixtures whose diagnostic diverges under `--interpret`
 
+> **RESOLVED (2026-06-12, pass 4): all 9 closed; `TURI_ERRORS_DENY` is now
+> empty.** The last 2 -- `serial-context-not-capturable` and
+> `serial-context-do-not-capturable` -- were recovered when the context-capturing
+> shift landed in the interpreter: `ts_capture_and_run` (`src/turi/eval.c`) now
+> rejects an uncapturable delimited context with the compiled path's `TUR-E0706`
+> ("serial-shift context is not capturable") under `--interpret`, so both emit
+> their `expected.diag`. Both removed from `TURI_ERRORS_DENY` (the denylist is
+> now empty -- every `errors/` negative fixture's diagnostic matches under the
+> interpreter). See
+> [turi-capturing-shift-unimplemented.md](turi-capturing-shift-unimplemented.md).
+> This report is fully resolved.
+
 > **Update (2026-06-12, pass 3): `reader-macros-strict-collision` FIXED; only
 > the 2 TI3.2 serial-shift carve-outs remain (blocked elsewhere).**
 > The interpreter's `TuriEnv` reader-macro registry defaults to `strict=false`
