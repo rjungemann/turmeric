@@ -4617,8 +4617,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_INLINE_C:
         if (!turi_env_has_cap(env, TURI_CAP_INLINE_C))
             return turi_error("eval: inline-C not allowed in sandboxed environment");
+        /* This is the documented clean carve for any inline-C-backed function
+         * the tree-walker cannot run -- e.g. a content-keyed map's synthesized
+         * MapKey comparator, whose body returns a captured C function-pointer
+         * address (turi-map-set-hamt-interpreter-gap.md, Tier B / prereq 2c).
+         * It is a clean rc=1 error, never a crash or silent miscompile; point
+         * the user at the compiled path, which implements these natively. */
         return turi_error("eval: inline-C not supported in interpreter mode "
-                          "(function uses native C implementation)");
+                          "(function uses a native C implementation; run it with "
+                          "`tur build`/`tur run` instead of `--interpret`)");
 
     /* --- Phase S7: async / await ----------------------------------------- */
 

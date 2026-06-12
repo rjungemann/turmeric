@@ -119,25 +119,57 @@ downstream:
   the interpreter's `tur_hamt_set_eq_turi` can pass `ctx = {env, closure}` and a
   trampoline `eq` that calls `turi_call`.
 
-### Prereq 2b -- close the non-int map *values* item (independent of Gap 2)
+### Prereq 2b -- close the non-int map *values* item (independent of Gap 2) (ALREADY RESOLVED -- #341)
 
-`Map int cstr` / `Map int float` mis-render because `map-get`'s generic int64
-carrier is not reinterpreted by `(:: ... :V)`. This is filed at
-[../../archive/history/turi-map-nonint-value-carrier-ascription.md](../../archive/history/turi-map-nonint-value-carrier-ascription.md)
-and is **orthogonal to the comparator problem** -- it is a value-carrier
-ascription fix in `EX_GET_FIELD`/the map-get native, not a HAMT-callback change.
-Landing it widens scalar-key map coverage (non-int values) without touching
-Gap 2, and shrinks the Tier B surface to purely the comparator.
+**Already resolved** -- landed in commit #341 via *direction 2* (the
+`EX_ASCRIBE` node), ahead of this doc's writing. The fix was upgraded from
+"ambiguous" to root-correct: the compiled `::` is a *representation assertion*
+that bit-reinterprets the carrier word, while numeric int<->float conversion is
+the separate `EX_CAST` node. `src/turi/eval.c` `case EX_ASCRIBE` now
+bit-reinterprets the int64 carrier for `:float`/`:float64` (int64->double via a
+union) and adds a `:cstr` arm (int64->`char*`); `:float32` keeps the numeric
+form to match the compiled float32 ascription. Verified 2026-06-12:
+`tce3-map-cstr-val` passes under `--interpret` (output `alpha/gamma/3/0.5/delta/4`)
+and is on the `run-turi.sh` allowlist (line 901); the interpreter harness is
+**982 passed, 0 failed**. Full write-up + the *inherent* `EX_REINTERPRET`
+limitation (`::` is value-preserving, not bit-preserving, under the interpreter):
+[../../archive/history/turi-map-nonint-value-carrier-ascription.md](../../archive/history/turi-map-nonint-value-carrier-ascription.md).
 
-### Prereq 2c -- an explicit, guaranteed clean error for content-keyed maps
+Original framing: `Map int cstr` / `Map int float` mis-rendered because
+`map-get`'s generic int64 carrier was not reinterpreted by `(:: ... :V)` -- a
+value-carrier ascription fix, orthogonal to the comparator problem (Gap 2). With
+it resolved, the Tier B surface is purely the comparator.
+
+### Prereq 2c -- an explicit, guaranteed clean error for content-keyed maps (GUARANTEE ALREADY MET; message clarified 2026-06-12)
 
 Per CLAUDE.md, the "works by luck until a hash collision" native must not ship.
-A safe interim: have the interpreter's map natives detect a *non-native*
-(turi-closure) comparator and raise a clean, explicit "content-keyed map keys
-are not yet supported under --interpret" error -- a documented carve, not a
-crash. This lets `map.tur`/`set.tur` join the `cmd_eval` prelude **now** (closing
-the harness-flip "missing native" bucket for scalar keys) while Tier B is still
-open behind an honest guard.
+Investigated 2026-06-12 -- **the clean-error guarantee already holds, and the
+enabling goal is already done:**
+
+- **`map.tur`/`set.tur` are already in the `cmd_eval` prelude** (verified by
+  prereq 3a; only `contract`/`mutmap`/`json`/`schema` remain carved). The
+  scalar-key "missing native" bucket is closed.
+- **A content-keyed *user* comparator already produces a clean `rc=1` error, not
+  a crash or silent miscompile.** Verified against `wkc3-struct-map-key`,
+  `eqmap-struct-content`, `eqmap-struct-float-fields` under `--interpret`.
+- **The literal mechanism in 2c (a guard inside the map natives) is moot.** As
+  the umbrella report diagnoses, the failure surfaces *earlier*, at `mk-cmp`:
+  its synthesized closure body returns a captured C function-pointer address via
+  inline-C, which the tree-walker declines (`EX_INLINE_C`) **before**
+  `map-assoc-eq-o` and friends are ever called. So a guard in the map natives
+  would never run for this case.
+
+What landed: the generic interpreter inline-C error
+(`src/turi/eval.c` `case EX_INLINE_C`) is now **actionable** -- it points the
+user at `tur build`/`tur run`, which implement these natively. No fixture
+asserts on the message, so no regen. A map-*specific* wording ("content-keyed
+map keys are not yet supported") was considered and **declined**: the only site
+with function context is `try_exec_simple_inline_c`, and gating a map-specific
+message there requires fragile name/body matching on synthesized comparator
+closures that could misfire on unrelated capture-returning inline-C -- low value
+(the error is already clean and now actionable) for real risk. The genuine
+remaining work is **Tier B itself** (the turi-closure-aware HAMT path, now
+unblocked by the 2a `ctx` ABI), not an interim guard.
 
 ---
 
@@ -231,9 +263,9 @@ decision and keeping the denylist honest.
    `tools/check_turi_native_parity.py` + `docs/turi-preload-carve-out.txt`,
    gated from `tests/run.sh`. Quantifies the recoverable harness-flip bucket (4
    carved gap modules) and ratchets against drift.
-3. **2b** -- non-int map values: orthogonal, self-contained, widens map coverage.
-   **Still open** -- a genuine carrier-ascription semantic fix in `EX_GET_FIELD`/
-   the map-get native; deserves its own focused change.
+3. **2b (already resolved -- #341)** -- non-int map values: closed by the
+   `EX_ASCRIBE` bit-reinterpret fix (direction 2) ahead of this doc.
+   `tce3-map-cstr-val` is on the `--interpret` allowlist; harness 982/0.
 4. **2a (landed 2026-06-12)** -- HAMT `ctx` ABI: the `tur_hamt_*_eq_ctx` family
    plus `tests/test_hamt_eq_ctx.c` (ctest `tur_hamt_eq_ctx`). Mechanical
    runtime-C, no codegen/fixture churn; unblocks Tier B.
@@ -250,8 +282,8 @@ decision and keeping the denylist honest.
 | 1a | landed (prior) | `TUR_IC_TRACE` / `ic_claim` |
 | 1b/1c | **landed** | recount + matcher map folded into the inline-C report |
 | 2a | **landed** | `tur_hamt_*_eq_ctx` + `tests/test_hamt_eq_ctx.c` |
-| 2b | open | carrier-ascription fix (own change) |
-| 2c | open | content-keyed clean-error guard in map natives |
+| 2b | **resolved (#341)** | `EX_ASCRIBE` bit-reinterpret; `tce3-map-cstr-val` on allowlist |
+| 2c | **guarantee met** | clean rc=1 already holds; map.tur preloaded; error message now actionable |
 | 3a | **landed** | `tools/check_turi_native_parity.py` + carve-out + run.sh gate |
 | 3b | **audited** | overlap already burned down; no deletions pending |
 | 3c | open | `TUR_TURI_FULL_PRELUDE` flag |
