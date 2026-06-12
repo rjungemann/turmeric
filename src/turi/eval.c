@@ -117,6 +117,10 @@ struct TuriClosure {
     /* EX_CLOSURE closures have a synthetic __env_p first param for codegen;
      * the interpreter skips it and uses the captured frame instead. */
     bool            skip_env_param;
+    /* Owning module name (for a top-level defn inside a defmodule), or NULL.
+     * eval_apply publishes this as env->current_module while the body runs so
+     * intra-module calls can resolve module-private "<module>/<name>" bindings. */
+    const char     *module;
 };
 
 /* Forward declaration — defined after TuriStruct is fully defined below. */
@@ -362,6 +366,18 @@ static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
     for (EvalFrame *f = frame; f; f = f->parent) {
         for (EvalBinding *b = f->bindings; b; b = b->next) {
             if (strcmp(b->name, name) == 0) return b->value;
+        }
+    }
+    /* Module-private resolution: a defn whose body is running inside module M
+     * can see M's private (non-exported) helpers, which are registered under the
+     * qualified key "M/name". Probe that before the flat global name so two
+     * modules' same-named privates do not collide. */
+    if (env->current_module && env->current_module[0]) {
+        char keybuf[256];
+        int kn = snprintf(keybuf, sizeof keybuf, "%s/%s", env->current_module, name);
+        if (kn > 0 && kn < (int)sizeof keybuf) {
+            TuriValue qv = turi_env_get(env, keybuf);
+            if (qv.tag != TURI_ERROR) return qv;
         }
     }
     return turi_env_get(env, name);
@@ -3606,7 +3622,7 @@ restart:
  * Function application
  * ---------------------------------------------------------------------- */
 
-static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
+static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
     /* TCO trampoline: loops instead of growing the C call stack for tail calls.
      * Work area for args copied across iterations. */
@@ -3616,6 +3632,11 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
     args = args_buf;
 
     for (;;) {
+        /* Publish the owning module so the body's calls can resolve this
+         * module's private helpers. NULL for non-module / native closures.
+         * eval_apply (the wrapper) restores the caller's module on return. */
+        env->current_module = cl->module;
+
         /* SB3: step-fuel check for TCO iterations (tail calls bypass eval_expr). */
         if (env->step_fuel_limit > 0) {
             if (env->step_fuel == 0)
@@ -3724,6 +3745,17 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
         (void)call_frame;
         return ret;
     }
+}
+
+/* Wrapper around the TCO trampoline that saves and restores env->current_module
+ * across the whole call (including any tail-call chain inside the trampoline),
+ * so a callee's module context never leaks back to its caller. */
+static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
+                             TuriValue *args, uint32_t n_args) {
+    const char *saved_module = env->current_module;
+    TuriValue r = eval_apply_inner(env, cl, args, n_args);
+    env->current_module = saved_module;
+    return r;
 }
 
 /* -------------------------------------------------------------------------
@@ -3950,11 +3982,39 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Named function definition (defn) -------------------------------- */
     case EX_FN_DEF: {
         FnDef *fndef = e->as.fn_def_.fn;
-        /* If the body is inline-C and a native override is already registered,
-         * keep the native rather than overwriting it with the inline-C closure. */
+        const char *fname = fndef->binding->name->name;
+
+        /* Module-private mangling: a defn inside a defmodule that is NOT in the
+         * module's export list is registered under "<module>/<name>" so two
+         * modules' same-named privates do not clobber one another in the flat
+         * global namespace (codegen mangles these per-module too). Exported and
+         * non-module defns keep the bare name. The closure is tagged with its
+         * owning module either way, so its body can resolve sibling privates. */
+        const DefModule *dm = (const DefModule *)env->defining_mod;
+        const char *modname = (dm && dm->name) ? dm->name->name : NULL;
+        bool exported = false;
+        if (dm) {
+            for (uint32_t i = 0; i < dm->n_exports; i++) {
+                if (dm->exports[i] && strcmp(dm->exports[i]->name, fname) == 0) {
+                    exported = true; break;
+                }
+            }
+        }
+        const char *qkey = NULL;
+        bool is_private = (modname && !exported);
+        if (is_private) {
+            size_t need = strlen(modname) + 1 + strlen(fname) + 1;
+            char *qk = (char *)malloc(need);  /* env keeps the pointer; leak ok */
+            if (qk) { snprintf(qk, need, "%s/%s", modname, fname); qkey = qk; }
+        }
+        /* The key whose existing native (if any) must not be clobbered. For a
+         * private defn that is the qualified key; otherwise the bare name. */
+        const char *primary_key = qkey ? qkey : fname;
+
+        /* If the body is inline-C and a native override is already registered
+         * under the primary key, keep the native rather than overwriting it. */
         if (fndef->body && fndef->body->kind == EX_INLINE_C) {
-            const char *fname = fndef->binding->name->name;
-            TuriValue existing = turi_env_get(env, fname);
+            TuriValue existing = turi_env_get(env, primary_key);
             if (existing.tag == TURI_CLOSURE && existing.as_closure &&
                 existing.as_closure->native) {
                 return existing; /* keep native override */
@@ -3964,8 +4024,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         memset(cl, 0, sizeof(*cl)); /* zero native/skip_env_param/native_ud */
         cl->fn       = fndef;
         cl->captured = NULL; /* top-level defn has no captured environment */
+        cl->module   = modname; /* publish owning module while the body runs */
         TuriValue v  = turi_closure(cl);
-        turi_env_set(env, fndef->binding->name->name, v);
+        if (qkey) {
+            /* Private: the qualified key is authoritative for intra-module
+             * resolution. Also publish under the bare name as a flat-namespace
+             * fallback, but only when it is still free -- so a second module's
+             * same-named private (or a real native) is never clobbered. The
+             * bare alias keeps the entry-point `main` and legacy cross-module
+             * bare references reachable. */
+            turi_env_set(env, qkey, v);
+            if (turi_env_get(env, fname).tag == TURI_ERROR)
+                turi_env_set(env, fname, v);
+        } else {
+            turi_env_set(env, fname, v);
+        }
         return v;
     }
 
@@ -4050,10 +4123,18 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DEFMODULE: {
         DefModule *mod = e->as.defmodule_.mod;
         TuriValue  last = turi_nil();
+        /* Publish the module being defined so EX_FN_DEF can register private
+         * (non-exported) helpers under a per-module qualified key. */
+        const void *saved_defining = env->defining_mod;
+        env->defining_mod = mod;
         for (uint32_t i = 0; i < mod->n_body; i++) {
             last = eval_expr(env, frame, mod->body[i]);
-            if (turi_is_error(last) || env->returning || env->throwing) return last;
+            if (turi_is_error(last) || env->returning || env->throwing) {
+                env->defining_mod = saved_defining;
+                return last;
+            }
         }
+        env->defining_mod = saved_defining;
         return last;
     }
 

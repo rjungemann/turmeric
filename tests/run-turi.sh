@@ -418,6 +418,7 @@ capability-test
 capability-thread
 category-instance-basic
 codegen-paren-precedence
+codegen-private-defn-collision
 contract-assert-fail
 contract-ensure-fail
 contract-invariant-fail

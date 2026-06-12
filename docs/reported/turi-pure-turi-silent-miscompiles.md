@@ -42,11 +42,20 @@
 > `run-turi.sh` allowlist (harness green). Resolution paper-trail archived at
 > [../archive/turi-inline-c-conditional-snprintf-branch.md](../archive/turi-inline-c-conditional-snprintf-branch.md).
 >
-> **2 remain, each deep and overlapping another workstream:**
-> - `codegen-private-defn-collision` -- two modules' private `__h` both register
->   under the bare name in the interpreter env (last wins -> `200/200`). Needs
->   per-module mangling in `EX_FN_DEF` registration *and* call resolution -- a
->   core module-system change.
+> **Update 5 (2026-06-12): `codegen-private-defn-collision` FIXED.** The
+> interpreter now mirrors the compiled per-module private mangling. A `defn`
+> inside a `defmodule` that is not in the module's export list is registered
+> under the qualified key `"<module>/<name>"` (plus a bare alias only when the
+> bare slot is still free, so the entry-point `main` and legacy cross-module
+> bare references stay reachable). Each closure is tagged with its owning module;
+> `eval_apply` publishes that as `env->current_module` while the body runs, and
+> `eval_lookup` probes `"<module>/<name>"` before the flat global name. So
+> `alpha/__h` (100) and `beta/__h` (200) no longer collide on the bare `__h`
+> slot. Fixture added to the `run-turi.sh` allowlist; harness green (980/0),
+> full suite 1596/0, `tur_eval_import` ctest green. Resolution archived at
+> [../archive/turi-interpreter-module-private-defn-collision.md](../archive/turi-interpreter-module-private-defn-collision.md).
+>
+> **1 remains, deep and overlapping another workstream:**
 > - `rc-unique-violation` -- `(ref/from-rc rc)` with a live `weak` must panic
 >   (unique-rc violation); the interpreter's `ref/from-rc` does no strong/weak
 >   count check.

@@ -182,6 +182,15 @@ typedef struct TuriEnv {
      * strdup'd module/defn name strings via the globals hash table.
      * Freed in turi_env_free in reverse order. Opaque list node. */
     struct TurSpiceImageNode *retired_spice_images;
+    /* Module-private name resolution (interpreter parity with the compiled
+     * per-module mangling). `defining_mod` is the DefModule* whose body is
+     * currently being evaluated (set by EX_DEFMODULE), so EX_FN_DEF can tell
+     * exported from private defns. `current_module` is the module that owns the
+     * closure currently executing (set by eval_apply), so a call to a private
+     * name resolves to "<module>/<name>" before falling back to the bare name.
+     * Both are borrowed Symbol/strdup'd strings with env (or longer) lifetime. */
+    const void *defining_mod;     /* const DefModule* — opaque to avoid expr.h dep */
+    const char *current_module;   /* owning module of the running closure, or NULL */
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
