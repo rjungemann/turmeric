@@ -2804,7 +2804,7 @@ static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
     const TypeClass *tc = inst->typeclass;
     char *dst = d->as.dict_.dict_name;
     size_t dstlen = sizeof(d->as.dict_.dict_name);
-    char type_suffix[64] = "";
+    char type_suffix[320] = "";  /* wide enough for the longest mangled component (<=259) */
     for (uint8_t i = 0; i < inst->n_type_args; i++) {
         if (i == 0) strncat(type_suffix, "_", sizeof(type_suffix) - strlen(type_suffix) - 1);
         const char *component = "T";
