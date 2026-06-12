@@ -458,7 +458,7 @@ plain `setjmp`/`longjmp` prompt boundary -- **no continuation capture**.
 Only the context-*capturing* variants (`serial-shift` / `cloneable-shift`,
 which hand a resumable `k` to `f`) need genuine capture -- and, per the
 corrected analysis in
-[docs/reported/turi-capturing-shift-unimplemented.md](../../reported/turi-capturing-shift-unimplemented.md),
+[docs/archive/turi-capturing-shift-unimplemented.md](../../archive/turi-capturing-shift-unimplemented.md),
 that capture is a heap-reified DK chain (not a `TuriEffectCont` fiber).
 
 ### TI3.1 -- abortive base + prompt boundaries -- **LANDED**
@@ -496,7 +496,7 @@ separable slice is to move the `TUR-E0706` capturability check out of
 codegen (`emit_effects.c` / `emit_stmt.c`) so the interpreter raises it,
 clearing the 2 not-capturable error fixtures independently. Corrected
 write-up, repro, and fix directions:
-[docs/reported/turi-capturing-shift-unimplemented.md](../../reported/turi-capturing-shift-unimplemented.md).
+[docs/archive/turi-capturing-shift-unimplemented.md](../../archive/turi-capturing-shift-unimplemented.md).
 
 `call/cc` / `escape` (`EX_CALLCC`) used by `cont-flavors`, `callcc-*`,
 and `escape-*` are tracked separately under the CPS-transform category

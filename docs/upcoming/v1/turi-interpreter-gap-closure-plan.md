@@ -386,7 +386,7 @@ harness went 181 -> **463 passed, 0 failed**. The `.gitignore` was extended to
 cover nested `tests/fixtures/*/*/turi.{stdout,stderr}` scratch.
 
 **Remaining: 9 genuine divergences** (denylisted, tracked in
-[docs/reported/turi-error-fixture-diag-divergences.md](../../reported/turi-error-fixture-diag-divergences.md)):
+[docs/archive/turi-error-fixture-diag-divergences.md](../../archive/turi-error-fixture-diag-divergences.md)):
 3 reporting-stage (unbound-call / heterogeneous-map error at runtime, empty
 stderr, no elab diag), 4 missing-check (`lifetime-cyclic` TUR-E0106, reader-macro
 strict-collision, `#lang` unknown/not-implemented run clean), 2 TI3.2 carve-outs

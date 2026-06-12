@@ -1114,7 +1114,7 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
  * The context-capturing variants (serial-shift / cloneable-shift), which DO
  * hand a resumable continuation to f, are a separate, larger piece of work and
  * remain a documented interpreter carve-out -- see
- * docs/reported/turi-capturing-shift-unimplemented.md.  serial-reset and
+ * docs/archive/turi-capturing-shift-unimplemented.md.  serial-reset and
  * cloneable-reset establish a prompt boundary so the no-shift passthrough case
  * (e.g. (serial-reset 42)) evaluates correctly; a *-shift inside them still
  * errors cleanly until the capturing work lands.
@@ -1207,7 +1207,7 @@ static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
  * cloneable and marshalable (in-process) for serial.  This mirrors collect_ctx;
  * shapes it does not model (do-sequence prelude, struct envs, call/cc*) fall
  * through to a clean error, matching the compiled grammar's own NULL returns.
- * See docs/reported/turi-capturing-shift-unimplemented.md.
+ * See docs/archive/turi-capturing-shift-unimplemented.md.
  * ---------------------------------------------------------------------- */
 #define TS_MAX_CTX_FRAMES 64
 
@@ -1364,7 +1364,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
  * same diagnostic here so the interpreter rejects it rather than silently
  * miscompiling -- recovering the not-capturable negative fixtures on the
  * interpret path (the "decouple the TUR-E0706 negative path" slice of
- * docs/reported/turi-capturing-shift-unimplemented.md).  Returns an
+ * docs/archive/turi-capturing-shift-unimplemented.md).  Returns an
  * "elaboration error" sentinel so cmd_eval does not re-print the message. */
 static TuriValue ts_not_capturable(bool serial, Span span) {
     if (serial) {

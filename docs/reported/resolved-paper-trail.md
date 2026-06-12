@@ -393,6 +393,51 @@ triggered by deletion. **Fix (2026-06-11):** ported `ecs/sparse.tur` to a
 full Robin Hood implementation; wrapping is handled correctly across
 deletions and resizes.
 
+## Interpreter (turi) parity (landed)
+
+### Context-capturing serial-shift / cloneable-shift implemented in the interpreter (FIXED)
+
+[`../archive/turi-capturing-shift-unimplemented.md`](../archive/turi-capturing-shift-unimplemented.md)
+
+The tree-walking interpreter handled only the *abortive* shift/reset; the
+context-capturing `serial-shift` / `cloneable-shift` (which hand a resumable
+continuation to their receiver) fell through to an "unhandled expression kind"
+error, so such programs ran only on the compiled path. **Fix (2026-06-12):**
+`EX_SERIAL_RESET` / `EX_CLONEABLE_RESET` now reify the delimited context **at
+runtime** (`ts_capture_and_run`, `src/turi/eval.c`) -- walking the reset body
+down the unique shift-reaching child through the same grammar the compiled
+`collect_ctx` accepts (single-hole int `+ - * /` binops, 1-/2-arg call frames,
+pure `let`, an `if` with one shift-bearing arm, a `do`-prelude + ignore-value
+tail), evaluating each non-hole operand once at capture time and recording it as
+a frame. The continuation is that frame array boxed as an int64 handle; resume
+folds the frames innermost-first, so it is multi-shot for cloneable and
+in-process marshalable for serial. The `tur_{cloneable,serial}_cont_*` builtins
+and `stdlib/workflow.tur`'s `save-cont!`/`resume-cont!` are wired as interpreter
+natives over it; an uncapturable context raises the compiled path's `TUR-E0706`.
+13 of 14 context fixtures + the 2 `*-not-capturable` negatives pass under
+`--interpret`; `EX_SERIAL_SHIFT`/`EX_CLONEABLE_SHIFT` left `turi-carve-out.txt`.
+**Remaining carve-out (tracked elsewhere):** `serial-context-do-struct`
+(`requires.compiled`) needs inline-C struct-accessor execution + a `Serializable`
+instance the tree-walker cannot run -- the inline-C-evaluator gap, see
+[`turi-inline-c-silent-miscompiles.md`](turi-inline-c-silent-miscompiles.md);
+`call/cc*` (`EX_CALLCC`) stays a separate CPS-transform carve-out.
+
+### `errors/` diagnostic divergences under `--interpret` -- all 9 closed (FIXED)
+
+[`../archive/turi-error-fixture-diag-divergences.md`](../archive/turi-error-fixture-diag-divergences.md)
+
+With `tests/fixtures/errors/*` wired into `run-turi.sh`, 9 negative fixtures
+emitted a different (or no) diagnostic under `tur --interpret` than on the
+compiled path. **Fix (2026-06-12, across four passes):** the 3 reporting-stage
+cases (unbound call head + load hint, heterogeneous-map, runtime error from
+`main`) were routed through the shared diagnostic / `cmd_eval` stderr path; the
+`#lang` not-implemented reject and the `TUR-E0106` lifetime-cycle pass were added
+to `turi_eval_impl`; the reader-macro registry was made strict for file-eval
+(REPL stays lenient); and the 2 `serial-context-{,do-}not-capturable` cases now
+emit `TUR-E0706` once `ts_capture_and_run` landed. `TURI_ERRORS_DENY` is now
+empty -- every `errors/` negative fixture's diagnostic matches under the
+interpreter.
+
 ## Spice-side cleanups (paper trail)
 
 ### `__dsp_pair_*_float` bit-cast helpers removed
