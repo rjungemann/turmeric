@@ -190,10 +190,20 @@ Deliverables for P2a:
 
 **Open follow-ups carried forward to a P2a-followup or P2b session**:
 
-- `Decode` typeclass + `derive-json` Decode side.
+- `Decode` typeclass + `derive-json` Decode side. (A scanner + plain-
+  defn primitive decoders shipped 2026-06-12 in `json/decode.tur` --
+  see below. The typed-typeclass surface is gated on
+  [docs/reported/typeclass-method-parameterized-result-carrier-mismatch.md](../reported/typeclass-method-parameterized-result-carrier-mismatch.md).)
 - `defdata` sum-type encoding with tag discriminator.
 - `defopaque :as :carrier` opt-in.
 - `:rename-fields` / `:only` / `:skip` codec options.
+
+**Decode minimal slice (shipped 2026-06-12)**: scanner + plain-defn
+primitive decoders for flat JSON objects. Round-trip fixture in
+`../turmeric-spices/spices/json/tests/round-trip.tur` decodes
+`{"id":42,"name":"alice"}` into a `User` defstruct then re-encodes it
+through the Encode side. The typed-typeclass surface is deferred to a
+follow-up; the report above lays out the three issues to address.
 
 (The earlier 3+ field cap from
 [docs/archive/history/typeclass-method-struct-arg-closure-codegen.md](../archive/history/typeclass-method-struct-arg-closure-codegen.md)
