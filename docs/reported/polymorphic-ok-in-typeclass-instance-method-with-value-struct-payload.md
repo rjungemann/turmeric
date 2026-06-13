@@ -84,27 +84,82 @@ dispatch shim use. The mismatch is real but doesn't surface as a
 compile error -- the code links, runs, and reads garbage at the field
 access.
 
-## Proposed fix directions
+## Proposed fix: Result__T__B layout uniformity (direction 1)
 
-Two plausible shapes, both more invasive than Prereq 6 was:
+**Chosen direction**: make `Result__T__B`'s `ok_val` slot always
+8 bytes -- a heap pointer to T when T is a value-struct, the T value
+inline when T is already scalar/pointer-shaped. Same rule for `err_val`
+relative to B. Result__T__B then has a fixed 24-byte layout
+(`bool is_ok` padded to 8 + `void *ok_val` + `void *err_val`) that
+matches `tur_result_box_t` byte-for-byte, so the existing tur_ok / tur_err
+carrier helpers work without further plumbing.
 
-1. **Make `Result__T__B`'s ok_val a HEAP POINTER to T** (and similarly
-   for err_val) when T is a value-struct. The struct layout becomes
-   uniform 8-byte slots, the carrier box layout matches it byte-for-byte,
-   and existing tur_ok / tur_err just work. Cost: a per-type-arg
-   layout decision that ripples through every consumer of Result__T__B.
+**Sketch of the codegen change**:
 
-2. **Per-method ABI: typeclass instance methods returning a
-   parameterized struct return the by-value struct, not int64.**
-   The dispatch dict's function pointer becomes per-type, not
-   uniform; the dispatch shim doesn't need to bridge. Cost: dict
-   layout becomes per-method-signature, which complicates HKT
-   typeclasses (`Functor [f]`, `Monad [m]`) where the dispatched
-   tyvar appears in many positions.
+```c
+/* before, for value-struct T */
+typedef struct Result__User__cstr {
+    bool        is_ok;
+    User        ok_val;   /* multi-byte inline value */
+    const char *err_val;
+} Result__User__cstr;
 
-(1) is the smaller blast radius for `Result` specifically; (2) is the
-right "general" fix if more parameterized-struct returns from
-instance methods come up.
+/* after */
+typedef struct Result__User__cstr {
+    bool        is_ok;
+    User       *ok_val;   /* heap pointer, 8 bytes */
+    const char *err_val;
+} Result__User__cstr;
+```
+
+The pointer rule fires whenever the type-arg's value representation is
+multi-byte (`!type_is_inline_scalar(T)` for an existing predicate;
+practically: non-parametric `defstruct` instances larger than 8 bytes, or
+any defstruct under Phase D's pass-by-ptr threshold). For scalar/pointer
+T (`int`, `cstr`, opaque ints, parameterized struct in carrier form),
+the slot stays inline -- no change.
+
+**Consumer-side changes**:
+
+- `(.ok-val r)` / `(.err-val r)`: when the slot is the pointer form,
+  the accessor dereferences. Codegen patches one site (the field-access
+  emit for parameterized Result) to consult the same predicate.
+- `make-struct Result`: when the field's slot is pointer form, malloc
+  and store the pointer instead of an inline copy. One site in
+  `make-struct` emit.
+- Hand-written `Decode [T]` instances using inline-C `r->ok_val`:
+  inspect the slot type and deref if needed. Documented in the
+  `derive-json` docstring and in the json spice README.
+- `result-free` / `result-eq?` / `result-map` in `stdlib/result.tur`:
+  these are inline-C bodies that read `ok_val` / `err_val` as int64
+  today. They need to consult the slot type at monomorphization. Two
+  options: either teach them about the pointer form (extra inline-C
+  branch), or rewrite them in pure Turmeric so the codegen handles the
+  layout decision uniformly.
+
+**Why this over the per-method dispatch ABI alternative (which is now
+the long-term plan, see below)**: keeps the uniform `int64_t (*)(...)`
+dict layout that HKT typeclasses (`Functor`, `Monad`, `Bifunctor`,
+`Applicative`) all assume. Per-method ABI is principled but unwinds
+that uniformity across the entire typeclass dispatch infrastructure --
+roughly a season of work for a property that's better delivered as a
+single coherent ABI commit.
+
+## Long-term plan: end-to-end monomorphization
+
+The cumulative cost of prereqs 1-6 plus this report's open gap is a
+strong signal that the hybrid int64-carrier / by-value ABI is the
+underlying tech debt -- each new type feature exposes another seam.
+The project's long-term direction is to commit to Rust-style
+monomorphization: every value uses its natural C layout, polymorphism
+is monomorphized per call site, carrier ABI gets retired. That's
+tracked separately at
+[`docs/upcoming/end-to-end-monomorphization-plan.md`](../upcoming/end-to-end-monomorphization-plan.md).
+
+Direction (1) above is explicitly a short-term unblocker that will get
+thrown away when the monomorphization rework lands. Tagging it that
+way (rather than as an architectural commitment) keeps the local
+choice from accumulating into long-term contract.
 
 ## Validation when fixed
 
@@ -119,5 +174,6 @@ instance methods come up.
   hand-written instance.
 - Confirm the main-repo fixture
   `tests/fixtures/polymorphic-ok-err-value-struct-payload/` still
-  passes (the standalone path should keep working under either fix
-  direction).
+  passes (the standalone path should keep working under the new
+  layout because heap-pointer ok_val still round-trips through
+  ok-val accessor without any caller code change).
