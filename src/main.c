@@ -8076,6 +8076,59 @@ static TuriValue native_str_to_int_checked(TuriEnv *env, TuriValue *a, uint32_t 
     return turi_make_struct("Right", f, 1);
 }
 
+/* Grid (stdlib/grid.tur) natives.  grid.tur's ops are inline-C over a
+ * { int64_t *data; int width; int height; int cx; int cy; } header (the grid
+ * handle is the int64 carrier of that pointer; cells are row-major int64).
+ * Re-implemented over the identical layout so the tree-walker can run them. */
+typedef struct { int64_t *data; int width; int height; int cx; int cy; } TuriGridRep;
+static TuriValue native_grid_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t w = (n >= 1) ? a[0].as_int : 0;
+    int64_t h = (n >= 2) ? a[1].as_int : 0;
+    TuriGridRep *g = (TuriGridRep *)malloc(sizeof(*g));
+    if (!g) return turi_int(0);
+    g->width = (int)w; g->height = (int)h; g->cx = 0; g->cy = 0;
+    int64_t cells = w * h; if (cells < 0) cells = 0;
+    g->data = (int64_t *)calloc((size_t)cells, sizeof(int64_t));
+    return turi_int((int64_t)(intptr_t)g);
+}
+static TuriValue native_grid_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_int(0);
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    if (!g || !g->data) return turi_int(0);
+    int64_t x = a[1].as_int, y = a[2].as_int;
+    return turi_int(g->data[(size_t)(y * g->width + x)]);
+}
+static TuriValue native_grid_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 4) return turi_nil();
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    if (!g || !g->data) return turi_nil();
+    int64_t x = a[1].as_int, y = a[2].as_int, v = a[3].as_int;
+    g->data[(size_t)(y * g->width + x)] = v;
+    return turi_nil();
+}
+static TuriValue native_grid_width(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    return turi_int(g ? g->width : 0);
+}
+static TuriValue native_grid_height(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    return turi_int(g ? g->height : 0);
+}
+static TuriValue native_grid_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    if (g) { if (g->data) free(g->data); free(g); }
+    return turi_nil();
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -8806,6 +8859,14 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "free-bind",       native_free_bind,       NULL);
     turi_env_register_native(env, "free-run",        native_free_run,        NULL);
     turi_env_register_native(env, "str->int-checked", native_str_to_int_checked, NULL);
+    /* Grid (grid.tur): raw-buffer inline-C re-implemented over the matching
+     * { data, width, height, cx, cy } header. */
+    turi_env_register_native(env, "grid-new",        native_grid_new,        NULL);
+    turi_env_register_native(env, "grid-get",        native_grid_get,        NULL);
+    turi_env_register_native(env, "grid-set!",       native_grid_set,        NULL);
+    turi_env_register_native(env, "grid-width",      native_grid_width,      NULL);
+    turi_env_register_native(env, "grid-height",     native_grid_height,     NULL);
+    turi_env_register_native(env, "grid-free",       native_grid_free,       NULL);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
     turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);

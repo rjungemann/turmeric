@@ -1178,6 +1178,11 @@ free-interpreter
 # (identical semantics, now interpretable).
 sum-either-str-parse
 sum-either-functor-instance
+# Grid (verified 2026-06-13): grid.tur's raw-buffer inline-C ops (grid-new /
+# grid-get / grid-set! / grid-width / grid-height / grid-free) re-implemented as
+# natives over the matching { data, width, height, cx, cy } header.
+grid-typed-basic
+typed/grid-basic
 "
 
 # Build an associative-set from the default list for O(1) lookup.

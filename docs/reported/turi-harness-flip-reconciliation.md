@@ -1,5 +1,14 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (Grid under --interpret, 2026-06-13):** unblocked `grid-typed-basic`
+> and `typed/grid-basic`. `grid.tur`'s six ops (`grid-new`/`grid-get`/`grid-set!`/
+> `grid-width`/`grid-height`/`grid-free`) are inline-C over a
+> `{ int64_t *data; int width; int height; int cx; int cy; }` header re-implemented
+> as natives over the identical layout (same self-contained raw-buffer pattern as
+> the vec natives). Purely additive interpreter natives -- no stdlib touched, no
+> snapshot churn. **Harness 1149 -> 1151 passed, 0 failed; gap 51 -> 49.** Parity
+> 113/115 0-gaps.
+>
 > **Progress (Either cluster under --interpret, 2026-06-13):** unblocked
 > `sum-either-str-parse` and `sum-either-functor-instance`. Two pieces: (1) a new
 > public `turi_make_struct(name, fields, n)` API lets natives return an ADT value

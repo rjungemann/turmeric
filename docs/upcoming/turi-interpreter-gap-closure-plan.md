@@ -566,8 +566,8 @@ Track three numbers per PR (all from the probe + harness):
 
 - **probe pass/fail/skip** -- the headline (660/910/92 at W1; target fail -> 0
   non-carved).
-- **`run-turi.sh` summary** -- must stay green every step (1149 passed, 0 failed,
-  455 skipped as of 2026-06-13; 404 inline-c carve-outs + 51 triage surface).
+- **`run-turi.sh` summary** -- must stay green every step (1151 passed, 0 failed,
+  453 skipped as of 2026-06-13; 404 inline-c carve-outs + 49 triage surface).
 - **`check_turi_parity.py`** -- must stay `0 gaps` (113/115 handled, 2 carved
   as of 2026-06-13).
 - **`tests/run.sh`** -- must stay green (`1605 passed, 0 failed` as of
