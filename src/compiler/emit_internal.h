@@ -104,6 +104,20 @@ typedef struct EmitAbiSpecialization {
      * its outer (so the suffixed env struct lands at file scope) without
      * double-emitting it. */
     bool emitted;
+    /* M4a (docs/upcoming/m4-typeclass-per-method-abi-plan.md): when this spec
+     * is for a *typeclass instance method* (not an ordinary defn), the M4b/M4c
+     * emit paths route it through the per-instantiation dict singleton path
+     * instead of the uniform-carrier dict.  Set by emit_abi_intern_spec when
+     * `fn->binding` resolves to an `__inst_*` method.
+     *
+     * Carries the `TypeClassInstance *` so the dict-emit loop can mangle the
+     * dict struct name with this spec's type-arg tuple, and so the dispatch
+     * site in emit_expr.c knows which singleton variant to reference.
+     *
+     * NULL for ordinary defn specs and for HKT-class instance methods (which
+     * keep the uniform carrier ABI per Plan M6/M7 — see the plan doc's HKT
+     * carve-out). */
+    struct TypeClassInstance *typeclass_inst;
 } EmitAbiSpecialization;
 
 typedef struct EmitCtx {
