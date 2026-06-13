@@ -103,9 +103,14 @@ and it exercises the same substructural machinery U1 leans on for
 across more code paths than ECS alone, and the bugs it surfaces are
 cheaper to fix before five spices depend on the same paths.
 
-### P2a -- `derive-json` macro (narrow, ships first)
+### P2a -- `derive-json` macro (narrow, ships first) -- MINIMAL SLICE 2026-06-12
 
-**Blocks:** U2 json work in its planned form. **Hard prereq for U2.**
+**Status:** minimal slice landed in `../turmeric-spices` (`spices/json/`),
+exercising the encode direction for `defstruct` only. Decode, defdata,
+opaque opt-in, and the codec options (`:rename-fields`, `:optional`,
+`:skip`) are deferred to follow-up commits in the spices repo.
+
+**Was blocking:** U2 json work in its planned form. **Hard prereq for U2.**
 
 Before generalizing to a `derive` framework (P2b), ship the concrete
 `derive-json` macro for json's `Encode`/`Decode` classes specifically.
@@ -169,6 +174,46 @@ Deliverables for P2a:
    opt-in, generic via hand-written instance).
 3. A "what would generalize" memo at the end -- the bits of P2a that
    should become reusable infrastructure feed directly into P2b.
+
+**Minimal-slice deliverables that DID land 2026-06-12** (in
+`../turmeric-spices/spices/json/`):
+
+- `Encode` typeclass in `json/encode.tur` with method `encode : a -> cstr`
+  returning malloc'd JSON fragments.
+- Hand-written instances for `int`, `bool`, `cstr` (with full JSON
+  string escape including control chars and `\uXXXX`).
+- `derive-json` macro for `defstruct` product types -- explicit
+  `(field-name field-type)` pairs (macros can't introspect struct
+  shape at expansion time).
+- Smoke fixtures: `tests/encode-primitives.tur` and
+  `tests/derive-encode-struct.tur`.
+
+**Open follow-ups carried forward to a P2a-followup or P2b session**:
+
+- `Decode` typeclass + `derive-json` Decode side.
+- `defdata` sum-type encoding with tag discriminator.
+- `defopaque :as :carrier` opt-in.
+- `:rename-fields` / `:only` / `:skip` codec options.
+- 3+ field defstructs (currently blocked by
+  [docs/reported/typeclass-method-struct-arg-closure-codegen.md](../reported/typeclass-method-struct-arg-closure-codegen.md);
+  a hand-written instance fails the same way, so this is a compiler
+  limitation, not a macro design issue).
+
+**What would generalize for P2b** (the "memo" deliverable):
+
+- The `__json-chain` recursive macro pattern -- turn a list of
+  field forms into a chained `cons` expression -- is exactly what
+  `derive Eq` / `derive Show` / `derive Decode` will all need. Lift
+  it into a class-agnostic helper (`__derive-fold-fields` or similar)
+  whose callback emits the per-field expression.
+- The "consolidate class + derive macro into one module to dodge the
+  orphan-instance check" workaround is a P2b smell. The general
+  framework should either let derive macros emit instances in the
+  caller's module without tripping orphan, or factor the orphan check
+  to ignore quasiquote splice templates inside `defmacro` bodies.
+- The variadic `(& fields)` + explicit `(field-name field-type)` pair
+  shape generalizes; the field-type slot becomes load-bearing once
+  per-field options (`:rename`, `:skip`, `:as`) land.
 
 ### P2b -- General `derive` framework
 
