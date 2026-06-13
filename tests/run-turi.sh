@@ -978,6 +978,25 @@ typeclass-poly-wrapper-struct-receiver
 vec-eq-ascribed
 vec-eq-ascribed-multi
 workflow-roundtrip
+# range-* (verified 2026-06-13): unblocked by the inline-C ADT-carrier re-tag fix
+# in src/turi/eval.c.  range.tur packs Bound GADT endpoints into a heap struct via
+# inline-C (range-new / range-lower / range-upper); the round-tripped TuriStruct
+# pointer now keeps its TURI_STRUCT tag on readback, so a match over Bound finds
+# its arm instead of the no-arm-matched error.  range-show and range-from-range
+# stay off: they are genuine inline-C carve-outs (snprintf percent-s formatting
+# and a seq/from-range body the simple executor declines).
+range-bound-gadt
+range-connected-overlaps
+range-constructors
+range-encloses
+range-gap
+range-intersection
+range-predicates
+range-reader-expr-bounds
+range-reader-one-sided
+range-reader-shadow-warn
+range-reader-two-sided
+range-span
 "
 
 # Build an associative-set from the default list for O(1) lookup.

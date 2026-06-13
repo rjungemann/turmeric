@@ -3884,7 +3884,30 @@ static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
                                                          args, n_args, fn,
                                                          param_offset, &inline_result);
                 free(body_copy);
-                if (handled) return inline_result;
+                if (handled) {
+                    /* ADT/struct carrier re-tag (range-* "match: no arm matched"
+                     * bug): user ADT/GADT values are TURI_STRUCT in the
+                     * interpreter (adt_ctor_native -> make_struct_val).  An
+                     * inline-C function declared to return such a type (e.g.
+                     * `range-lower : Bound`, which reads back a Bound packed into
+                     * a heap struct by `range-new`) round-trips the TuriStruct*
+                     * through an int64_t field, so the simple executor hands it
+                     * back as a bare TURI_INT -- and a downstream `match` (which
+                     * checks `tag == TURI_STRUCT`) finds no arm.  When the
+                     * declared return type is a user ADT/struct and we got an int
+                     * carrier, the int64 IS the original TuriStruct pointer (it
+                     * came in as args[i].as_int via the union, was stored, and
+                     * returned verbatim); reinterpret it so the struct tag
+                     * survives.  Guard on a non-null pointer so a genuine 0/nil
+                     * carrier is left alone rather than producing a NULL-deref. */
+                    if (inline_result.tag == TURI_INT && inline_result.as_int != 0 &&
+                        (fn->return_type.kind == TY_ADT ||
+                         fn->return_type.kind == TY_STRUCT)) {
+                        inline_result = turi_struct_val(
+                            (TuriStruct *)(intptr_t)inline_result.as_int);
+                    }
+                    return inline_result;
+                }
             }
         }
 

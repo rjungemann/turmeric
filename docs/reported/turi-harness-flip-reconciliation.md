@@ -1,5 +1,26 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (inline-C ADT-carrier re-tag, 2026-06-13):** **fixed a silent
+> interpreter bug that broke the entire `range-*` family** (14 fixtures all
+> failing `match: no arm matched`) and added the 12 fixable ones to the
+> allowlist (harness 1032 -> 1044). **Root cause:** user ADT/GADT values are
+> `TURI_STRUCT` in the tree-walker (`adt_ctor_native` -> `make_struct_val`), but
+> an inline-C function declared to *return* such a type round-trips the
+> `TuriStruct*` through an `int64_t`. `range.tur` packs two `Bound` endpoints
+> into a heap struct via inline-C (`range-new`), then reads them back with
+> `range-lower`/`range-upper` (`: Bound`); the simple inline-C executor handed
+> the field back as a bare `TURI_INT`, so the struct tag was lost and every
+> downstream `match` over `Bound` (which checks `tag == TURI_STRUCT`) found no
+> arm. **Fix** (`src/turi/eval.c`, the unified inline-C return point): when the
+> function's declared `return_type.kind` is `TY_ADT`/`TY_STRUCT` and the executor
+> produced a non-null `TURI_INT`, reinterpret the carrier as the original
+> `TuriStruct*` (`turi_struct_val`). The int64 *is* the original pointer (it came
+> in as `args[i].as_int` via the union, was stored verbatim, and returned), and
+> every interpreter ADT is struct-backed, so the reinterpretation is sound; the
+> non-null guard avoids a NULL-deref on a genuine nil carrier. `range-show` and
+> `range-from-range*` stay carved (genuine inline-C: snprintf %s formatting / a
+> `seq/from-range` body the simple executor declines). No codegen change.
+>
 > **Progress (W5 bulk-add, 2026-06-12):** **30 verified-passing non-inline-C
 > fixtures joined the `run-turi.sh` allowlist** (harness 1002 -> 1032 passed, 0
 > failed). A sweep of the `SKIP_ALLOWLIST` coverage gap (the genuine W5 triage
