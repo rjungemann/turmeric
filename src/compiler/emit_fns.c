@@ -81,7 +81,14 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
     if (!call || call->kind != EX_CALL) return false;
     if (!call->as.call_.fn_binding) return false;     /* must be a direct call */
     if (call->as.call_.fn_expr) return false;          /* indirect field call */
-    if (call->as.call_.dict_arg) return false;         /* typeclass dispatch */
+    /* M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+     * Path A's elab resolves typeclass dispatch directly to the instance
+     * method's binding (`fn_binding = method->binding; fn_expr = NULL`).
+     * `dict_arg` is still set as an annotation, but the actual call IS a
+     * direct call — the fn_binding identity check below already handles
+     * recursive Path A specs correctly.  The original `dict_arg` reject
+     * existed for pre-Path-A indirect dispatch through the dict slot
+     * cast, which `fn_expr != NULL` already filters out. */
     if (call->as.call_.is_poly_call) return false;     /* rank-2 poly call */
     if (call->as.call_.n_args != fd->n_params) return false;
     if (call->as.call_.fn_binding == fd->binding) return true;  /* fast path */

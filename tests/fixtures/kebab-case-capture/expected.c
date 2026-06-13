@@ -2650,10 +2650,10 @@ static bool mutmap_hyeq_qu(int64_t, int64_t, int64_t);
 static void mutmap_hyfree(int64_t);
 static void * make_hyadder(int64_t);
 
-struct __defer_env_26 {int64_t my_x; };
+struct __defer_env_24 {int64_t my_x; };
 
-static void __defer_27(void *__env) {
-    struct __defer_env_26 *__e = (struct __defer_env_26 *)__env;
+static void __defer_25(void *__env) {
+    struct __defer_env_24 *__e = (struct __defer_env_24 *)__env;
     printf("%lld\n", (long long)(__e->my_x));
 }
 
@@ -3294,33 +3294,30 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
 };
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        bool __t12;
+        __tur_tailcall:;
         if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
-            bool __t13;
             {
                 int64_t t1_778 = ((Cons *)(intptr_t)(x))->tail;
                 (void)t1_778;
                 int64_t t2_779 = ((Cons *)(intptr_t)(y))->tail;
                 (void)t2_779;
-                bool __t14;
                 if ((t1_778) == (INT64_C(0))) {
-                    __t14 = (t2_779) == (INT64_C(0));
+                    return (t2_779) == (INT64_C(0));
                 } else {
-                    bool __t15;
                     if ((t2_779) == (INT64_C(0))) {
-                        __t15 = false;
+                        return false;
                     } else {
-                        __t15 = __inst_Eq_eq_qu_Cons(t1_778, t2_779);
+                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_778));
+                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_779));
+                        x = __t12;
+                        y = __t13;
+                        goto __tur_tailcall;
                     }
-                    __t14 = __t15;
                 }
-                __t13 = __t14;
             }
-            __t12 = __t13;
         } else {
-            __t12 = false;
+            return false;
         }
-        return __t12;
 }
 
 typedef struct dict_Eq_Cons {
@@ -3348,11 +3345,11 @@ static bool __fn_857(int64_t a, int64_t b) {
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
-        int64_t *__t16 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t16[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t16[1] = (int64_t)(intptr_t)__fn_857;
-        void *__t17 = __t16;
-        return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t17));
+        int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t14[1] = (int64_t)(intptr_t)__fn_857;
+        void *__t15 = __t14;
+        return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t15));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3930,35 +3927,35 @@ static int64_t list_hylength(int64_t l) {
 }
 
 static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        bool __t18;
+        bool __t16;
         if (tnil_qu(l1)) {
-            __t18 = tnil_qu(l2);
+            __t16 = tnil_qu(l2);
         } else {
-            bool __t19;
+            bool __t17;
             if (tnil_qu(l2)) {
-                __t19 = false;
+                __t17 = false;
             } else {
-                bool __t20;
+                bool __t18;
                 if ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), list_hyhead(l1), list_hyhead(l2))) {
-                    __t20 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
+                    __t18 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
                 } else {
-                    __t20 = false;
+                    __t18 = false;
                 }
-                __t19 = __t20;
+                __t17 = __t18;
             }
-            __t18 = __t19;
+            __t16 = __t17;
         }
-        return __t18;
+        return __t16;
 }
 
 static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
-        int64_t __t21;
+        int64_t __t19;
         if (tnil_qu(cell)) {
-            __t21 = INT64_C(0);
+            __t19 = INT64_C(0);
         } else {
-            __t21 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
+            __t19 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
         }
-        return __t21;
+        return __t19;
 }
 
 static int64_t list_hyhead(int64_t l) {
@@ -3974,13 +3971,13 @@ static int64_t list_hytail(int64_t l) {
 }
 
 static int64_t list_hyconcat(int64_t l1, int64_t l2) {
-        int64_t __t22;
+        int64_t __t20;
         if (tnil_qu(l1)) {
-            __t22 = l2;
+            __t20 = l2;
         } else {
-            __t22 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
+            __t20 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
         }
-        return __t22;
+        return __t20;
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
@@ -4451,11 +4448,11 @@ static void mutmap_hyfree(int64_t m) {
 }
 
 static void * make_hyadder(int64_t base_val) {
-        struct __env_863 *__t23 = (struct __env_863 *)malloc(sizeof(struct __env_863));
-        __t23->__fn = (tur_thunk_int64_t_int64_t_t)__fn_861;
-        __t23->base_val = base_val;
-        void *__t24 = __t23;
-        return __t24;
+        struct __env_863 *__t21 = (struct __env_863 *)malloc(sizeof(struct __env_863));
+        __t21->__fn = (tur_thunk_int64_t_int64_t_t)__fn_861;
+        __t21->base_val = base_val;
+        void *__t22 = __t21;
+        return __t22;
 }
 
 int main(int argc, char **argv) {
@@ -4471,23 +4468,23 @@ int main(int argc, char **argv) {
         {
             int64_t my_hyx_866 = INT64_C(10);
             (void)my_hyx_866;
-            tur_frame __frame_25;
-            tur_frame_init(&__frame_25, NULL);
-            struct __defer_env_26 __t28 = {.my_x = my_hyx_866};
-            tur_frame_push_defer(&__frame_25, __defer_27, &__t28);
+            tur_frame __frame_23;
+            tur_frame_init(&__frame_23, NULL);
+            struct __defer_env_24 __t26 = {.my_x = my_hyx_866};
+            tur_frame_push_defer(&__frame_23, __defer_25, &__t26);
             my_hyx_866 = INT64_C(20);
-            tur_frame_fire_lifo(&__frame_25);
+            tur_frame_fire_lifo(&__frame_23);
         }
-        int64_t __t29;
+        int64_t __t27;
         {
             void * _un_unoar867_868 = make_hyadder(INT64_C(100));
             (void)_un_unoar867_868;
-            __t29 = (*( tur_thunk_int64_t_int64_t_t *)(_un_unoar867_868))(_un_unoar867_868, INT64_C(5));
+            __t27 = (*( tur_thunk_int64_t_int64_t_t *)(_un_unoar867_868))(_un_unoar867_868, INT64_C(5));
         }
-        printf("%lld\n", (long long)(__t29));
-        int64_t __t30;
-        __t30 = INT64_C(0);
-        return (int)__t30;
+        printf("%lld\n", (long long)(__t27));
+        int64_t __t28;
+        __t28 = INT64_C(0);
+        return (int)__t28;
 }
 
 

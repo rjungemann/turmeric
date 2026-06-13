@@ -3289,33 +3289,30 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
 };
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        bool __t12;
+        __tur_tailcall:;
         if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
-            bool __t13;
             {
                 int64_t t1_780 = ((Cons *)(intptr_t)(x))->tail;
                 (void)t1_780;
                 int64_t t2_781 = ((Cons *)(intptr_t)(y))->tail;
                 (void)t2_781;
-                bool __t14;
                 if ((t1_780) == (INT64_C(0))) {
-                    __t14 = (t2_781) == (INT64_C(0));
+                    return (t2_781) == (INT64_C(0));
                 } else {
-                    bool __t15;
                     if ((t2_781) == (INT64_C(0))) {
-                        __t15 = false;
+                        return false;
                     } else {
-                        __t15 = __inst_Eq_eq_qu_Cons(t1_780, t2_781);
+                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_780));
+                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_781));
+                        x = __t12;
+                        y = __t13;
+                        goto __tur_tailcall;
                     }
-                    __t14 = __t15;
                 }
-                __t13 = __t14;
             }
-            __t12 = __t13;
         } else {
-            __t12 = false;
+            return false;
         }
-        return __t12;
 }
 
 typedef struct dict_Eq_Cons {
@@ -3343,11 +3340,11 @@ static bool __fn_859(int64_t a, int64_t b) {
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
-        int64_t *__t16 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t16[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t16[1] = (int64_t)(intptr_t)__fn_859;
-        void *__t17 = __t16;
-        return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t17));
+        int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t14[1] = (int64_t)(intptr_t)__fn_859;
+        void *__t15 = __t14;
+        return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t15));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3365,13 +3362,13 @@ static double __fn_867(void * __env_p_870, double x) {
 }
 
 static double run_hywith_un_unbf_unfloat(void * g, double x) {
-        double __t18;
+        double __t16;
         {
             double y_874 = (*( tur_thunk_double_double_t *)(g))(g, x);
             (void)y_874;
-            __t18 = use_hyfloat(y_874);
+            __t16 = use_hyfloat(y_874);
         }
-        return __t18;
+        return __t16;
 }
 
 static void * array_hyget(void * arr, int64_t idx) {
@@ -3935,35 +3932,35 @@ static int64_t list_hylength(int64_t l) {
 }
 
 static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        bool __t19;
+        bool __t17;
         if (tnil_qu(l1)) {
-            __t19 = tnil_qu(l2);
+            __t17 = tnil_qu(l2);
         } else {
-            bool __t20;
+            bool __t18;
             if (tnil_qu(l2)) {
-                __t20 = false;
+                __t18 = false;
             } else {
-                bool __t21;
+                bool __t19;
                 if ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), list_hyhead(l1), list_hyhead(l2))) {
-                    __t21 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
+                    __t19 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
                 } else {
-                    __t21 = false;
+                    __t19 = false;
                 }
-                __t20 = __t21;
+                __t18 = __t19;
             }
-            __t19 = __t20;
+            __t17 = __t18;
         }
-        return __t19;
+        return __t17;
 }
 
 static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
-        int64_t __t22;
+        int64_t __t20;
         if (tnil_qu(cell)) {
-            __t22 = INT64_C(0);
+            __t20 = INT64_C(0);
         } else {
-            __t22 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
+            __t20 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
         }
-        return __t22;
+        return __t20;
 }
 
 static int64_t list_hyhead(int64_t l) {
@@ -3979,13 +3976,13 @@ static int64_t list_hytail(int64_t l) {
 }
 
 static int64_t list_hyconcat(int64_t l1, int64_t l2) {
-        int64_t __t23;
+        int64_t __t21;
         if (tnil_qu(l1)) {
-            __t23 = l2;
+            __t21 = l2;
         } else {
-            __t23 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
+            __t21 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
         }
-        return __t23;
+        return __t21;
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
@@ -4460,11 +4457,11 @@ static double use_hyfloat(double y) {
 }
 
 static void * make_hyscale(double k) {
-        struct __env_869 *__t24 = (struct __env_869 *)malloc(sizeof(struct __env_869));
-        __t24->__fn = (tur_thunk_double_double_t)__fn_867;
-        __t24->k = k;
-        void *__t25 = __t24;
-        return __t25;
+        struct __env_869 *__t22 = (struct __env_869 *)malloc(sizeof(struct __env_869));
+        __t22->__fn = (tur_thunk_double_double_t)__fn_867;
+        __t22->k = k;
+        void *__t23 = __t22;
+        return __t23;
 }
 
 int main(int argc, char **argv) {
@@ -4478,9 +4475,9 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         printf("%g\n", (double)(run_hywith_un_unbf_unfloat((void *)(intptr_t)(make_hyscale(2.0)), 3.5)));
-        int64_t __t26;
-        __t26 = INT64_C(0);
-        return (int)__t26;
+        int64_t __t24;
+        __t24 = INT64_C(0);
+        return (int)__t24;
 }
 
 
