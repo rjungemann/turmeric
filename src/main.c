@@ -8055,6 +8055,27 @@ static TuriValue native_free_run(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return free_call_fat(env, a[0], inner);
 }
 
+/* str->int-checked (str.tur): inline-C strtoll that returns an Either -- a
+ * (Left code) on failure, (Right n) on a clean parse.  Re-implemented as a
+ * native that builds the Either ADT via turi_make_struct (a cstr arrives as an
+ * int64 carrier holding the char*, same as native_cstr_parse_int reads). */
+static TuriValue native_str_to_int_checked(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *cs = (n >= 1) ? (const char *)(intptr_t)a[0].as_int : NULL;
+    if (!cs || *cs == '\0') {
+        TuriValue f[1] = { turi_int(0) };           /* empty -> Left 0 */
+        return turi_make_struct("Left", f, 1);
+    }
+    char *end = NULL;
+    long long v = strtoll(cs, &end, 10);
+    if (end == cs || *end != '\0') {
+        TuriValue f[1] = { turi_int(1) };           /* garbage -> Left 1 */
+        return turi_make_struct("Left", f, 1);
+    }
+    TuriValue f[1] = { turi_int((int64_t)v) };
+    return turi_make_struct("Right", f, 1);
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -8784,6 +8805,7 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
      * PureFree/Suspend TuriStruct + turi_call continuation. */
     turi_env_register_native(env, "free-bind",       native_free_bind,       NULL);
     turi_env_register_native(env, "free-run",        native_free_run,        NULL);
+    turi_env_register_native(env, "str->int-checked", native_str_to_int_checked, NULL);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
     turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);

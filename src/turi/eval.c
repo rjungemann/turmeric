@@ -470,6 +470,10 @@ const char *turi_struct_name(TuriValue v) {
     return NULL;
 }
 
+TuriValue turi_make_struct(const char *name, TuriValue *fields, uint32_t n) {
+    return make_struct_val_def(name, n, fields, NULL);
+}
+
 static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
     return make_struct_val_def(name, n, fields, NULL);
 }

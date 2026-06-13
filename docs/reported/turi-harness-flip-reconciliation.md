@@ -1,5 +1,20 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (Either cluster under --interpret, 2026-06-13):** unblocked
+> `sum-either-str-parse` and `sum-either-functor-instance`. Two pieces: (1) a new
+> public `turi_make_struct(name, fields, n)` API lets natives return an ADT value
+> (e.g. a `Left`/`Right`) without the opaque TuriStruct layout, used by a native
+> `str->int-checked` (str.tur's inline-C strtoll-into-Either); (2) `either.tur`'s
+> Functor `fmap` was a *redundant* inline-C body duplicating the pure-turi
+> `either-map` right above it -- rewritten to `(either-map fn container)`, which
+> is interpretable and semantics-identical. The rewrite shifted the Either-`fmap`
+> codegen, so 4 transitively-Either-compiling fixture snapshots
+> (`arrow-compose-float`, `fat-shim-void-ptr-arrow-compose`,
+> `load-inside-defmodule-injects-names`, `sf-compose-typed`) were regenerated in
+> the same commit (verified the change is just `fmap` delegating to
+> `either_hymap`). **Harness 1147 -> 1149 passed, 0 failed; gap 53 -> 51.**
+> Compiled suite 1606/0 after regen; parity 113/115 0-gaps.
+>
 > **Progress (Free monad under --interpret, 2026-06-13):** unblocked the `free-*`
 > cluster -- `free-pure`, `free-lift-bind`, `free-interpreter`. `free.tur`'s
 > `free-bind` / `free-run` have `#{Unsafe}` inline-C bodies that cast the Free ADT

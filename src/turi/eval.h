@@ -144,6 +144,12 @@ TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found);
  * constructor without the opaque TuriStruct layout. */
 const char *turi_struct_name(TuriValue v);
 
+/* Builds a TURI_STRUCT carrying constructor `name` and `n` fields (copied).
+ * `name` must be a stable string (a literal or interned symbol); the value
+ * matches a `(name ...)` pattern by name, so natives can return an ADT value
+ * (e.g. a Left/Right) without the opaque TuriStruct layout. */
+TuriValue turi_make_struct(const char *name, TuriValue *fields, uint32_t n);
+
 /* SEQ: advance a generator VALUE (carrier holds the TuriGen*) one step; returns
  * the yielded value and sets *done to 1 when the generator just exhausted.
  * Lets the seq inline-C natives (main.c) drive a TURI_GEN. */

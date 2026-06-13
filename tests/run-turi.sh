@@ -1172,6 +1172,12 @@ data-literal-sweet-exp
 free-pure
 free-lift-bind
 free-interpreter
+# Either (verified 2026-06-13): str->int-checked re-implemented as a native that
+# builds the Either ADT via the new turi_make_struct API; either.tur's Functor
+# fmap rewritten from a redundant inline-C body to call the pure-turi either-map
+# (identical semantics, now interpretable).
+sum-either-str-parse
+sum-either-functor-instance
 "
 
 # Build an associative-set from the default list for O(1) lookup.
