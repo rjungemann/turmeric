@@ -1059,7 +1059,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 && (bindings[0].type.kind == TY_APP
                     || (bindings[0].type.kind == TY_STRUCT
                         && bindings[0].type.as.struct_.def
-                        && bindings[0].type.as.struct_.def->n_type_params > 0))) {
+                        && bindings[0].type.as.struct_.def->n_type_params > 0))
+                /* M4 follow-up: only substitute when the binding's type is
+                 * fully concrete.  If unresolved TYVARs remain (e.g. the
+                 * recursive Eq Cons dispatch composes the outer spec's
+                 * typeclass-var "a" → (Cons int) with the recursive call's
+                 * (Cons A) where A is the Cons struct's distinct tyvar —
+                 * different name, no substitution happens), don't override
+                 * arg_types[i].  Otherwise the clone_name uses the
+                 * unresolved type's TYVAR-int64 fallback and we mint a
+                 * spec whose signature contradicts its body. */
+                && !emit_abi_type_has_concrete_named_tyvar(&bindings[0].type)) {
                 arg_types[i] = bindings[0].type;
             }
             if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
@@ -1133,6 +1143,32 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     bool inner_float = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
         emit_inner_closure_needs_float_spec(inner_closure, bindings, n_bindings);
     if (inner_float) abi_changes = true;
+    /* M4 follow-up: an instance-method spec whose substituted arg_types
+     * still carry unresolved TYVARs is a phantom — type_c_name downgrades
+     * the unresolved TY_APP to int64_t, making `abi_changes` appear true
+     * (bare Cons vs apparent int64_t) but the actual minted spec's clone
+     * name will be `_int64_t_…` while its body uses by-value access,
+     * producing inconsistent C.  Skip spec generation for instance methods
+     * when bindings/arg_types still carry unresolved TYVARs, falling
+     * through to the bare carrier method instead. */
+    if (abi_changes && fd && fd->owner_instance) {
+        /* M4 follow-up: for an instance-method spec, if any TY_APP arg
+         * type_c_name's to "int64_t", that signals an unresolved tyvar
+         * (or TY_STRUCT-NULL-def "opaque HKT type-constructor argument")
+         * in the type spine — emit_abi_clone_name and the spec body emit
+         * will use the same fallback name, but the spec body's field
+         * accesses are gated separately and may end up using by-value
+         * access, producing inconsistent C.  Skip spec interning in this
+         * case so the call falls back to the bare carrier method. */
+        bool ambiguous = false;
+        for (uint8_t i = 0; i < n_spec_args && !ambiguous; i++) {
+            if (arg_types[i].kind == TY_APP
+                && strcmp(type_c_name(arg_types[i]), "int64_t") == 0) {
+                ambiguous = true;
+            }
+        }
+        if (ambiguous) abi_changes = false;
+    }
     if (!abi_changes && !instance_changes) {
         if (!borrow_path &&
             !emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {

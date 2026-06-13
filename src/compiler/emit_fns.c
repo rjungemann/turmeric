@@ -1015,9 +1015,18 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* CF1: detect self-tail-calls so a value-returning, simple-parameter
      * function can be emitted as an iterative loop instead of self-recursion.
-     * Excludes main and ABI-specialization clones (distinct parameter ABI). */
+     * Excludes main (different signature handling).
+     *
+     * M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+     * lifted the `!use_abi_spec` restriction.  TCO inside an ABI spec is
+     * safe: the `__tur_tailcall:` label and the param-reassign loop are
+     * pure C-level constructs, and `tco_params_simple` reads the spec's
+     * resolved param types (post-substitution) so the backedge declarations
+     * match the spec's signature.  Carrier-ABI params still reject in
+     * `tco_params_simple` so a backedge's reassignment never crosses an
+     * int64→struct boundary unintentionally. */
     bool tco_eligible = !body_diverges && fd->body->kind != EX_INLINE_C &&
-        !(result_kind == TY_NIL && !is_main) && !is_main && !use_abi_spec &&
+        !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
     if (prereq6_synthesized_body) {
