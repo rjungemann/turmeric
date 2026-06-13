@@ -9,7 +9,7 @@
 > was also needed so the `vec-of` macro works under `--interpret`. The
 > captured inventory + approach below is retained for reference.
 > **Tracking report:**
-> [docs/reported/turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md)
+> [turi-harness-flip-reconciliation.md](turi-harness-flip-reconciliation.md)
 > (the W5 allowlist->denylist surface).
 > **Sibling plan:**
 > [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)

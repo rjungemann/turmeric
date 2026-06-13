@@ -8,8 +8,8 @@ measurements taken 2026-06-12 against `./build/tur`.
 Open reports surveyed:
 
 - [docs/reported/turi-inline-c-silent-miscompiles.md](../../archive/history/turi-inline-c-silent-miscompiles.md)
-- [docs/reported/turi-map-set-hamt-interpreter-gap.md](../../reported/turi-map-set-hamt-interpreter-gap.md)
-- [docs/reported/turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md)
+- [docs/archive/history/turi-map-set-hamt-interpreter-gap.md](../../archive/history/turi-map-set-hamt-interpreter-gap.md)
+- [docs/archive/history/turi-harness-flip-reconciliation.md](../../archive/history/turi-harness-flip-reconciliation.md)
 
 ---
 
