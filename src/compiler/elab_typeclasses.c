@@ -626,12 +626,22 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * param_is_fn[i] = true when the i-th param is declared with [name :fn] syntax,
      * marking it as a single-argument callable that should receive tur_poly_fn_t. */
     bool *param_is_fn = NULL;
+    /* Prereq 4: per-param flag tracking whether the user wrote an explicit type
+     * annotation. Without this, the elaborator can't tell `[v : int]` (explicit)
+     * from `[v]` (default to int) -- both become TY_INT in param_types. The
+     * substitution site at elab_definstance consults this flag to leave
+     * explicit-`:int` params alone instead of rewriting them to the class tyvar. */
+    bool *param_explicit_type = NULL;
 
     if (n_params > 0) {
         param_names = (const Symbol **)arena_alloc(e->arena, n_params * sizeof(const Symbol *));
         param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
         param_is_fn = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
-        for (uint8_t i = 0; i < n_params; i++) param_is_fn[i] = false;
+        param_explicit_type = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
+        for (uint8_t i = 0; i < n_params; i++) {
+            param_is_fn[i] = false;
+            param_explicit_type[i] = false;
+        }
 
         /* actual_p: number of real parameters encountered (keywords don't count). */
         uint8_t actual_p = 0;
@@ -652,6 +662,10 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     return NULL;
                 }
                 uint8_t prev = actual_p - 1;
+                /* Prereq 4: any explicit annotation -- :int, :bool, :cstr,
+                 * :ptr<void>, :fn, or a class tyvar -- pins the param type
+                 * and the elaborator must not rewrite it later. */
+                param_explicit_type[prev] = true;
                 const Symbol *kw = p->as.sym;
                 if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                     param_types[prev] = TYPE_INT;
@@ -686,6 +700,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                               "type annotation without preceding parameter");
                     return NULL;
                 }
+                /* Prereq 4: same as the F_KEYWORD branch -- an explicit
+                 * spaced `: type` pins the param type. */
+                param_explicit_type[actual_p - 1] = true;
                 /* Phase CCL: `: fn` (F_TYPE_ANN wrapping F_SYM("fn")) is the
                  * spaced form of `:fn` -- the poly-closure carrier marker. */
                 Form *inner_f = (p->as.list.len > 0) ? p->as.list.items[0] : NULL;
@@ -896,6 +913,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->param_names = param_names;
     method->param_types = param_types;
     method->param_is_fn = param_is_fn;
+    method->param_explicit_type = param_explicit_type;
     method->n_params = n_params;
     method->return_type = return_type;
     method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
@@ -2373,9 +2391,23 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     }
                     /* Phase RT: for a return-only-dispatch method, parameters
                      * are genuine (concrete) inputs, not the dispatch receiver,
-                     * so do not rewrite an int parameter to the instance type. */
+                     * so do not rewrite an int parameter to the instance type.
+                     *
+                     * Prereq 4: the `param_type.kind == TY_INT` test is broad --
+                     * untyped params default to TY_INT, but an explicit `:int`
+                     * annotation lands on the same kind. Skip the rewrite when
+                     * the user explicitly annotated the param (tracked via
+                     * `param_explicit_type[]`, populated by parse_typeclass_method).
+                     * Without this, a class like
+                     * `(defclass Decode [a] (decode [v : int] : (Result a cstr)))`
+                     * would emit `__inst_Decode_decode_cstr(const char *)` for
+                     * the cstr instance -- silently substituting cstr in where
+                     * the user pinned int, and segfaulting at runtime. */
                     else if (param_type.kind == TY_INT && n_type_args > 0 &&
-                        !method_is_return_dispatch(tc, &tc->methods[i])) {
+                        !method_is_return_dispatch(tc, &tc->methods[i]) &&
+                        !(tc->methods[i].param_explicit_type &&
+                          n_method_params < tc->methods[i].n_params &&
+                          tc->methods[i].param_explicit_type[n_method_params])) {
                         elab_param_type = type_args[0];
                         /* PTC4: KIND_ARROW struct type-constructors (have type params) are
                          * applied as TY_APP at call sites, which lowers to int64_t in C.

@@ -1,0 +1,18 @@
+;; Prereq 4 regression: explicit `:int` annotation on a return-dispatch class
+;; method param must survive the elab-time instance substitution. Pre-fix the
+;; elaborator unconditionally rewrote any TY_INT param to the instance type
+;; (since untyped params default to TY_INT, the substitution couldn't tell
+;; defaulted from explicit), silently mistyping the `:int` annotation -- the
+;; cstr instance below got `__inst_Dec_dec_cstr(const char *)` instead of
+;; `__inst_Dec_dec_cstr(int64_t)` and segfaulted at runtime on a real call.
+
+(defclass Dec [a] (dec [v : int] : a))
+
+(definstance Dec [int]  (dec [v] v))
+(definstance Dec [cstr] (dec [v]
+  ```c char *b = (char*)malloc(24); snprintf(b, 24, "STR%lld", (long long)v); return b; ```))
+
+(defn main [] : int
+  (println (:: (dec 42) :int))
+  (println (:: (dec 42) :cstr))
+  0)

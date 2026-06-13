@@ -25,6 +25,17 @@ struct TypeClassMethod {
      * Set by parse_typeclass_method when the defclass uses [param :fn] syntax.
      * NULL means no parameters are callable (backwards-compatible default). */
     bool *param_is_fn;
+    /* Prereq 4: per-parameter flag tracking whether the user wrote an explicit
+     * type annotation on the j-th parameter (e.g. `[v : int]`). When the user
+     * did NOT annotate, `param_types[j]` defaults to TYPE_INT, which is
+     * indistinguishable from a literal `:int` annotation. Without this flag,
+     * the elaborator's instance-side rewrite at elab_definstance (line ~2377)
+     * blindly substitutes the class tyvar into both shapes, silently
+     * mistyping explicit-`:int` params (the symptom that blocked the typed
+     * Decode surface for the json spice). Set by parse_typeclass_method when
+     * an explicit type annotation is present; NULL means no params had
+     * explicit annotations (backwards-compatible default). */
+    bool *param_explicit_type;
     uint8_t n_params;
     Type return_type;             /* Return type */
     /* ER3: Effect-row annotation from the defclass method signature.
