@@ -166,9 +166,33 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
             Binding *b = all_caps[ci];
             char *raw = raw_name_for_binding(b);
             /* ET2: poly fn params (TY_FORALL) must be stored as tur_poly_fn_t */
-            const char *field_ctype = b->is_poly_fn ? "tur_poly_fn_t"
-                                                    : type_c_name(b->type);
-            buf_printf(hbuf, "    %s %s;\n", field_ctype, raw);
+            if (b->is_poly_fn) {
+                buf_printf(hbuf, "    tur_poly_fn_t %s;\n", raw);
+            } else {
+                /* When the captured binding is a function parameter whose
+                 * type is a pass-by-pointer struct (Phase D: size > 16
+                 * bytes), the param arrives at the function as `const T *`;
+                 * the env field must match that shape so the fill
+                 * `env->b = b;` and writeback `b = env->b;` compile, and so
+                 * that captured-binding field accesses (which emit `->`
+                 * for pass-by-ptr struct receivers) remain valid through
+                 * the env. Let-bound captures still store the struct value
+                 * by value -- the local was declared by value, not as a
+                 * pointer. */
+                bool is_param = false;
+                if (ctx->fn_params) {
+                    for (uint8_t pi = 0; pi < ctx->n_fn_params; pi++) {
+                        if (ctx->fn_params[pi] == b) { is_param = true; break; }
+                    }
+                }
+                if (is_param && type_struct_pass_by_ptr(b->type)) {
+                    buf_printf(hbuf, "    const %s *%s;\n",
+                               type_c_name(b->type), raw);
+                } else {
+                    buf_printf(hbuf, "    %s %s;\n",
+                               type_c_name(b->type), raw);
+                }
+            }
             free(raw);
         }
         buf_printf(hbuf, "};\n\n");

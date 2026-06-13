@@ -194,10 +194,10 @@ Deliverables for P2a:
 - `defdata` sum-type encoding with tag discriminator.
 - `defopaque :as :carrier` opt-in.
 - `:rename-fields` / `:only` / `:skip` codec options.
-- 3+ field defstructs (currently blocked by
-  [docs/reported/typeclass-method-struct-arg-closure-codegen.md](../reported/typeclass-method-struct-arg-closure-codegen.md);
-  a hand-written instance fails the same way, so this is a compiler
-  limitation, not a macro design issue).
+
+(The earlier 3+ field cap from
+[docs/archive/history/typeclass-method-struct-arg-closure-codegen.md](../archive/history/typeclass-method-struct-arg-closure-codegen.md)
+was lifted 2026-06-12; `derive-json` works for any arity now.)
 
 **What would generalize for P2b** (the "memo" deliverable):
 

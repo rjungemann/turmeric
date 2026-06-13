@@ -1,0 +1,42 @@
+;; Regression for docs/archive/history/typeclass-method-struct-arg-closure-codegen.md:
+;; a typeclass instance method whose body is wrapped in `(unsafe ...)` and which
+;; uses 3+ accesses on a struct argument (so the struct is pass-by-pointer by
+;; the Phase D >16-byte rule) used to mis-emit the closure env field as the
+;; struct value type while the instance shim passed the param by pointer --
+;; the env fill `__henv_NN->x = x;` then refused to compile.
+;;
+;; Fix (2026-06-12): emit_effects.c env-struct emit now matches the param's
+;; pass-by-pointer shape for parameter-captured bindings, so the env field is
+;; `const T *` when the param is. Hand-written instances and macro-emitted
+;; instances both compile + run cleanly.
+
+(defclass Show [a] (show [x] : cstr))
+
+(defn __build [lst : int] #{Unsafe} : cstr
+  ```c
+  typedef struct __c { int64_t head; int64_t tail; } cons_t;
+  cons_t *p = (cons_t *)(intptr_t)lst;
+  char *o = (char*)malloc(64); size_t w = 0;
+  for (cons_t *q = p; q; q = (cons_t*)(intptr_t)q->tail) {
+    const char *s = (const char*)(intptr_t)q->head;
+    if (s) { size_t n = strlen(s); memcpy(o+w, s, n); w += n; o[w++] = '/'; free((void*)s); }
+  }
+  if (w) w--;
+  o[w] = '\0';
+  return o;
+  ```)
+
+(defstruct T3 [a : int  b : int  c : int])
+
+(definstance Show [int] (show [x] : cstr
+  ```c char *b = (char*)malloc(24); snprintf(b, 24, "%lld", (long long)x); return b; ```))
+
+(definstance Show [T3]
+  (show [x] (unsafe (__build (cons (show (.a x))
+                              (cons (show (.b x))
+                              (cons (show (.c x))
+                              0)))))))
+
+(defn main [] : int
+  (println (show (make-struct T3 7 9 11)))
+  0)

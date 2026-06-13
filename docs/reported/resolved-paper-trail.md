@@ -439,6 +439,25 @@ recurses into the packed value and the open body. The fixture
 `sized-buf-free buf` inside the open body and the `requires.no-leak-check`
 marker dropped.
 
+### typeclass instance method captures pass-by-ptr struct param as value in `unsafe`-body env (FIXED -- 2026-06-12)
+
+[`../archive/history/typeclass-method-struct-arg-closure-codegen.md`](../archive/history/typeclass-method-struct-arg-closure-codegen.md)
+
+A `definstance Encode [User]` (or any typeclass instance) whose method
+body was wrapped in `(unsafe ...)` and accessed 3+ fields of a struct
+parameter miscompiled: the typeclass dispatch shim passed the struct
+as `const User *` (Phase D's pass-by-ptr rule for >16-byte structs),
+but the `unsafe`-body's closure env declared its capture slot as
+`User` (struct value). The env fill `__henv->x = x;` and writeback
+`x = __henv->x;` then refused to compile. Surfaced while landing the
+P2a `derive-json` minimal slice (`derive-json User (id int) (name cstr)
+(active bool)` -- the 3-field case). **Fix:** `src/compiler/emit_effects.c`
+env-struct emit now checks `type_struct_pass_by_ptr(b->type)` AND
+whether `b` is one of `ctx->fn_params`; when both hold, the env field
+is emitted as `const T *` rather than `T`, matching the param shim.
+Let-bound captures still store struct values by value. Regression
+fixture: `tests/fixtures/typeclass-unsafe-passbyptr-struct-arg/`.
+
 ## Interpreter (turi) parity (landed)
 
 ### Deep non-tail recursion overflowed the C stack before the depth guard fired (FIXED -- Direction A)
