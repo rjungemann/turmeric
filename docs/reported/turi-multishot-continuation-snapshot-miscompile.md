@@ -1,5 +1,9 @@
 # Cloneable continuation snapshot resumes to `0` under `--interpret`
 
+> **RESOLVED 2026-06-13** (R5 of turi-interpret-flip-residual-plan). Fixed and
+> on the run-turi.sh allowlist; verified under the harness + compiled suite.
+>
+
 **One-line summary:** Under `tur --interpret`, resuming a *snapshot* of a
 cloneable continuation (`tur_continuation_snapshot` +
 `tur_cloneable_cont_resume`) yields `0` instead of the value passed to resume --

@@ -5793,19 +5793,42 @@ static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void 
 }
 
 /* Result functions: { bool is_ok (offset 0); int64_t ok_val (offset 8); int64_t err_val (offset 16) }
- * Stored as int64_t[3]: [0]=is_ok, [1]=ok_val, [2]=err_val */
+ * Stored as int64_t[3]: [0]=is_ok, [1]=ok_val, [2]=err_val
+ *
+ * R5 (turi-interpret-flip-residual-plan): the int64 box flattens the payload to
+ * a bare int64, which loses the tag of a *heap* payload (a make-struct User, a
+ * cstr, a closure) -- ok-val then hands back a TURI_INT and a downstream field
+ * access / println reads garbage (the value-struct-payload silent miscompile).
+ * So when the payload is a heap value, build a make-struct Result instead, whose
+ * fields hold the full TuriValue (tag preserved); int/bool payloads keep the box
+ * (no change to the carrier-ABI fixtures that depend on it). result_field reads
+ * both reps, so ok?/err?/ok-val/err-val/result-eq stay uniform. */
+static bool wk_result_payload_is_heap(TuriValue v) {
+    return v.tag == TURI_STRUCT || v.tag == TURI_CSTR ||
+           v.tag == TURI_CLOSURE || v.tag == TURI_FLOAT;
+}
 static TuriValue native_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
+    TuriValue payload = (n > 0) ? a[0] : turi_int(0);
+    if (wk_result_payload_is_heap(payload)) {
+        TuriValue fields[3] = { turi_bool(true), payload, turi_int(0) };
+        return turi_make_struct("Result", fields, 3);
+    }
     int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!r) return turi_nil();
-    r[0] = 1; r[1] = (n > 0) ? a[0].as_int : 0; r[2] = 0;
+    r[0] = 1; r[1] = payload.as_int; r[2] = 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
+    TuriValue payload = (n > 0) ? a[0] : turi_int(0);
+    if (wk_result_payload_is_heap(payload)) {
+        TuriValue fields[3] = { turi_bool(false), turi_int(0), payload };
+        return turi_make_struct("Result", fields, 3);
+    }
     int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!r) return turi_nil();
-    r[0] = 0; r[1] = 0; r[2] = (n > 0) ? a[0].as_int : 0;
+    r[0] = 0; r[1] = 0; r[2] = payload.as_int;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 /* W1b: a Result reaches these shims either as a native int64[3] box

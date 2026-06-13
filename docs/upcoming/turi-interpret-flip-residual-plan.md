@@ -171,21 +171,31 @@ Investigated; split 2 fix / 5 carve:
 
 Harness 1177 -> **1179**, compiled 1615/0, parity 0-gaps.
 
-## Bucket R5 -- silent miscompiles (3, *fix; reports filed*)
+## Bucket R5 -- silent miscompiles (3) -- **DONE 2026-06-13 (all fixed)**
 
-Highest severity (rc=0, wrong stdout). **Never carve silently** -- each has a
-report under `docs/reported/`:
+Highest severity (rc=0, wrong stdout) -- all three **fixed** (not carved), so no
+wrong-answer is hidden behind a marker:
 
-| Fixture | Wrong output | Report |
-| --- | --- | --- |
-| `polymorphic-ok-err-value-struct-payload` | cstr payload printed as raw int64 (`alice`->garbage) | [turi-value-struct-payload-interpreter-miscompile.md](../reported/turi-value-struct-payload-interpreter-miscompile.md) |
-| `typeclass-return-dispatch-result-wrapped` | wrapped-Result cstr payload printed as int64 (`hello`->garbage) | (same report -- shared root cause) |
-| `multishot-snapshot` | prints `10/0`, expected `10/20` (continuation snapshot lost) | [turi-multishot-continuation-snapshot-miscompile.md](../reported/turi-multishot-continuation-snapshot-miscompile.md) |
+- **`polymorphic-ok-err-value-struct-payload` + `typeclass-return-dispatch-
+  result-wrapped`** -- `native_ok`/`native_err` (`src/main.c`) flattened the
+  payload to a bare int64, losing the tag of a *heap* payload (a make-struct
+  struct, a cstr), so `ok-val`/`.field`/`println` read garbage. Fix: `ok`/`err`
+  now build a make-struct `Result` (tag-preserving) when the payload is a heap
+  value; int/bool payloads keep the int64 box, so the carrier-ABI fixtures are
+  unaffected. `result_field` reads both reps.
+  [turi-value-struct-payload-interpreter-miscompile.md](../reported/turi-value-struct-payload-interpreter-miscompile.md)
+  (RESOLVED).
+- **`multishot-snapshot`** -- `tur_continuation_snapshot` was unhandled in
+  `ts_try_cont_builtin` (`src/turi/eval.c`) so it returned 0 and the snapshot
+  resumed to 0. It is an alias for `tur_cloneable_cont_clone` (a deep
+  continuation copy) -- exactly as the compiled path `#define`s it
+  (`emit_module.c:3083`). One-line fix: match the alias in the clone branch.
+  [turi-multishot-continuation-snapshot-miscompile.md](../reported/turi-multishot-continuation-snapshot-miscompile.md)
+  (RESOLVED). (Note: this was a *cloneable*-continuation alias gap, not the deep
+  one-shot-fiber multishot work the R4 family needs.)
 
-**Disposition: fix.** R5's first two are the interpreter side of the recent
-value-struct-payload Result work (`7858984`, `c4bb0c9`); the cstr field rides the
-int64 carrier and is printed without re-tagging to `:cstr`. `multishot-snapshot`
-anchors R4. These block the flip outright (a carve would hide a wrong-answer).
+Harness 1179 -> **1182**, compiled 1615/0 (no Result-rep regression), parity
+0-gaps. All three on the allowlist.
 
 ## Bucket R6 -- known carve-outs (~2, *carve*)
 

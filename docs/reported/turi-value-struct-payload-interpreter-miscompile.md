@@ -1,5 +1,15 @@
 # `ok`/`err` with a value-struct payload silently miscompiles under `--interpret`
 
+> **RESOLVED 2026-06-13** (R5 of turi-interpret-flip-residual-plan). Fixed and
+> on the run-turi.sh allowlist; verified under the harness + compiled suite.
+> **Actual fix** (a third option, cleaner than the two proposed below): rather
+> than re-tag in `ok-val`, `native_ok`/`native_err` (`src/main.c`) now build a
+> *make-struct* `Result` when the payload is a heap value (struct/cstr/closure/
+> float) so the field stores the full tagged `TuriValue`; int/bool payloads keep
+> the int64 box, so the carrier-ABI fixtures are unaffected. `result_field` reads
+> both reps, so every accessor stays uniform.
+>
+
 **One-line summary:** Under `tur --interpret`, a `Result` carrying a *value
 struct* payload (`(ok (make-struct User ...))`) loses the struct tag when read
 back via `ok-val`/`err-val`, so a subsequent field access reads the recovered

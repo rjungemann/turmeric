@@ -1257,6 +1257,18 @@ hkt-stdlib-backtrack-instances
 #  deep one-shot-continuation gaps -- see turi-interpreter-delimited-control-gaps.md.)
 async-with-handler
 safe-array-bounds
+# R5 silent miscompiles FIXED (verified 2026-06-13; turi-interpret-flip-residual-plan):
+#  - polymorphic-ok-err-value-struct-payload / typeclass-return-dispatch-result-
+#    wrapped: native ok/err flattened a heap payload (a make-struct struct, a
+#    cstr) to a bare int64, losing the tag, so ok-val/.field/println read garbage.
+#    ok/err now build a make-struct Result (tag-preserving) for heap payloads;
+#    int/bool payloads keep the int64 box (no carrier-ABI regression).
+#  - multishot-snapshot: tur_continuation_snapshot was unhandled in the
+#    interpreter (returned 0); it is an alias for tur_cloneable_cont_clone (a deep
+#    continuation copy), exactly as the compiled path #defines it.
+polymorphic-ok-err-value-struct-payload
+typeclass-return-dispatch-result-wrapped
+multishot-snapshot
 # R1 slice 5 (verified 2026-06-13): serial.tur Serializable [int]/[bool]
 # instances -- serialize packs a length-prefixed LE byte buffer, deserialize
 # reads it back (registered under the __inst_Serializable_* binding names so

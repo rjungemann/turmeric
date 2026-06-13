@@ -1416,6 +1416,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
         return true;
     }
     if (strcmp(name, "tur_cloneable_cont_clone") == 0 ||
+        strcmp(name, "tur_continuation_snapshot") == 0 ||
         strcmp(name, "tur_serial_cont_serialize") == 0 ||
         strcmp(name, "tur_serial_cont_deserialize") == 0) {
         if (n < 1 || args[0].as_int == 0) { *out = turi_int(0); return true; }
