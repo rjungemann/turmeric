@@ -1,0 +1,20 @@
+;; Prereq 5 regression: return-dispatch typeclass method whose return type is
+;; `(Result a B)` (parameterized struct wrapping the dispatch tyvar). The
+;; ascription `(:: (call ...) (Result T cstr))` must pick the instance with
+;; `a := T` and the call's elab type must be the full `(Result T cstr)` (not
+;; just the bare `a`-binding) so the downstream carrier-to-by-value bridge
+;; at consumers like `ok-val` fires correctly.
+;;
+;; Pre-fix the second ascription below dispatched to `__inst_Dec_dec_int` and
+;; the resulting carrier int64 segfaulted when the bridge tried to deref it
+;; as a `Result__cstr__cstr`.
+
+(defclass Dec [a] (dec [v : int] : (Result a cstr)))
+
+(definstance Dec [int]  (dec [v] (ok v)))
+(definstance Dec [cstr] (dec [v] (ok "hello")))
+
+(defn main [] : int
+  (println (ok-val (:: (dec 42) (Result int  cstr))))
+  (println (ok-val (:: (dec 99) (Result cstr cstr))))
+  0)

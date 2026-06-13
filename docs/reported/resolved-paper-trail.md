@@ -484,6 +484,28 @@ passing to a by-value struct param. Zero codegen regens for this one
 (only fires on previously-broken expressions). Regression fixture:
 `tests/fixtures/typeclass-method-parameterized-result-decode/`.
 
+### return-dispatch typeclass ascription not honored when return is `(Result a B)` (FIXED -- 2026-06-13 as Prereq 5)
+
+[`../archive/history/return-dispatch-ascription-result-wrapped-not-honored.md`](../archive/history/return-dispatch-ascription-result-wrapped-not-honored.md)
+
+After Prereqs 1-4 landed, the typed `Decode` follow-up surfaced a
+deeper elaborator gap: bare-`a` return-dispatch correctly picks
+instances by ascription (`(:: (show 42) :cstr)` -> `Show [cstr]`),
+but wrapping the return in `(Result a cstr)` made both ascriptions
+silently resolve to the same (first) instance. Root cause was two
+issues compounding: (a) `parse_typeclass_method` resolved return-type
+forms without passing the class's type parameters, so a class tyvar
+nested in `(Result a cstr)` parsed as an undefined opaque rather than
+TY_TYVAR; (b) `elab_try_return_dispatch` then set the call's elab
+type to the bare unified `bound` instead of substituting `a := bound`
+into the method's full return type. **Fix:** thread `class_type_params`
+through the two `type_expr_from_form` calls in
+`parse_typeclass_method` (with a NULL-tolerant `type_param_kinds`
+fallback at `elab_types.c:403`), and at `elab_typeclasses.c:3085`
+use `*e->expected_type` (the ascribed type, which already substitutes
+`a := bound`) when an ascription is present. Regression fixture:
+`tests/fixtures/typeclass-return-dispatch-result-wrapped/`.
+
 ## Interpreter (turi) parity (landed)
 
 ### Deep non-tail recursion overflowed the C stack before the depth guard fired (FIXED -- Direction A)

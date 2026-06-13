@@ -400,7 +400,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                      * /8/9/10/11 accept both shapes during the transition. */
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                     *t = type_tyvar_named(sym->name);
-                    t->hkt_kind = type_param_kinds[i];
+                    /* Prereq 5: tolerate NULL kinds. parse_typeclass_method
+                     * passes class type params for return-type resolution
+                     * but doesn't have the kinds array assembled yet (those
+                     * are computed in elab_defclass). Default to KIND_STAR
+                     * for type-param refs whose kind isn't supplied; the
+                     * kind only matters for HKT-checking, which all uses
+                     * of class type params route through KIND_STAR anyway. */
+                    t->hkt_kind = type_param_kinds ? type_param_kinds[i] : KIND_STAR;
                     return t;
                 }
             }

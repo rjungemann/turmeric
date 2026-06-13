@@ -877,8 +877,20 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
             }
         } else if (ret_form->tag == F_TYPE_ANN) {
             /* `: type-expr` compound return type annotation */
+            /* Prereq 5: pass the class's type parameters through so the return
+             * type's `a` inside a parameterized form like `(Result a cstr)`
+             * resolves to TY_TYVAR rather than an undefined opaque struct.
+             * Without this, return-dispatch detection works (rt_type_mentions_tyvar
+             * recurses through TY_APP) but the call-site unification can't extract
+             * the `a`-position binding, so ascriptions like
+             * `(:: (decode ...) (Result cstr cstr))` silently fall back to the
+             * first instance. (Bare-`a` return type happens to work because the
+             * raw `a` symbol resolves via the class_type_param_match path used
+             * elsewhere in this function, not via type_expr_from_form.) */
             Type *ft = (ret_form->as.list.len > 0)
-                ? type_expr_from_form(e, ret_form->as.list.items[0], NULL, NULL, NULL, 0)
+                ? type_expr_from_form(e, ret_form->as.list.items[0], NULL,
+                                      class_type_params, NULL,
+                                      n_class_type_params)
                 : NULL;
             if (!ft) {
                 diag_emit(DIAG_ERROR, ret_form->span,
@@ -887,8 +899,12 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
             }
             return_type = *ft;
         } else if (ret_form->tag == F_LIST || ret_form->tag == F_VEC) {
-            /* Phase HRT3: allow forall/exists type forms as return types */
-            Type *ft = type_expr_from_form(e, ret_form, NULL, NULL, NULL, 0);
+            /* Phase HRT3: allow forall/exists type forms as return types.
+             * Prereq 5: same as above -- pass class type params so a
+             * nested `a` resolves to TY_TYVAR. */
+            Type *ft = type_expr_from_form(e, ret_form, NULL,
+                                           class_type_params, NULL,
+                                           n_class_type_params);
             if (!ft) {
                 diag_emit(DIAG_ERROR, ret_form->span,
                           "unsupported return type form in typeclass method");
@@ -3065,8 +3081,19 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
      * boxed fat closure applied through the thunk protocol.  Use it whichever
      * way it is boxed so the result carries the real arity; non-arrow
      * return-dispatch methods (default-of, schema-of, ...) have no fn-typed
-     * result_full_type and fall back to the unified/ascribed `bound`. */
-    Type result_type = bound;
+     * result_full_type and fall back to the unified/ascribed return type.
+     *
+     * Prereq 5: when an ascription pins the call's return type (the common
+     * case for return-dispatch methods), use `*e->expected_type` rather than
+     * the bare `bound` dispatch-tyvar value. Otherwise a method declared
+     * `(decode [v : int] : (Result a cstr))` ascribed to `(Result cstr cstr)`
+     * would set the call's elab type to `cstr` (just the `a`-binding) instead
+     * of `(Result cstr cstr)` -- the carrier-to-by-value bridge at the
+     * `ok-val` consumer's call site then misses because the elab type kind is
+     * TY_CSTR rather than TY_APP, and the compile fails to compile when
+     * passing the int64 carrier into a parameter expecting the by-value
+     * struct. */
+    Type result_type = e->expected_type ? *e->expected_type : bound;
     if (impl->binding && impl->binding->type.kind == TY_FN) {
         const Type *rft = impl->binding->type.as.fn.result_full_type;
         if (rft && rft->kind == TY_FN) {
