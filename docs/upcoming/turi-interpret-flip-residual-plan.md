@@ -123,12 +123,25 @@ the `EX_INLINE_C` eval case (`src/turi/eval.c`) and calls the linked runtime
 iterations) and finish well under the 10s run timeout -- **no carve needed**.
 Harness 1172 -> **1176**, compiled 1615/0, parity 0-gaps; all 4 on the allowlist.
 
-## Bucket R3 -- HKT stdlib instance resolution (2, *fix or carve*)
+## Bucket R3 -- HKT stdlib instance resolution (2) -- **DONE 2026-06-13**
 
-`hkt-stdlib-backtrack-instances`, `hkt-stdlib-logic-instances` -- `inline-C not
-supported` from the backtrack/logic stdlib instances. Smaller than R1; if the
-instances reduce to existing natives, fix; otherwise carve `requires.tur-only`
-with an `inline-c` reason. Decide after a single repro.
+Split fix-vs-carve after the repro:
+
+- **`hkt-stdlib-backtrack-instances` -- FIXED.** backtrack.tur's `Backtrack` is a
+  cons-stream (linked list of results, `{value,next}` cells), and every
+  Functor/Applicative/Monad/Alternative instance + the `*-raw` workers are
+  pure-turi wrappers over a handful of inline-C primitives. `wk_register_backtrack_natives`
+  (`src/main.c`) shims those primitives (`bt-cons`/`mreturn`/`mzero`/`mplus`/
+  `mbind`/`bt-length`/`bt-print`/`bt-apply-fat`); `mbind`/`bt-apply-fat` invoke
+  the continuation via `turi_call`. On the allowlist.
+- **`hkt-stdlib-logic-instances` -- CARVED `requires.tur-only`.** logic.tur is a
+  full miniKanren: ~22 inline-C primitives (tagged term constructors/accessors,
+  unification, the substitution store, walk, reify-walk, run-logic threading
+  state through the Backtrack stream). Re-implementing that engine as interpreter
+  natives is disproportionate for one fixture and is library internals, not a
+  language-level gap. The fixture still runs (and PASSes) on the compiled path.
+
+Harness 1176 -> **1177**, compiled 1615/0, parity 0-gaps.
 
 ## Bucket R4 -- effect / multishot continuation divergence (7, *investigate*)
 

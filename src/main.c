@@ -4807,6 +4807,7 @@ static void wk_register_future_natives(TuriEnv *env);
 static void wk_register_bytes_natives(TuriEnv *env);
 static void wk_register_taskgroup_natives(TuriEnv *env);
 static void wk_register_chan_natives(TuriEnv *env);
+static void wk_register_backtrack_natives(TuriEnv *env);
 static void wk_register_proc_fs_natives(TuriEnv *env);
 static void wk_register_serial_natives(TuriEnv *env);
 
@@ -5153,6 +5154,8 @@ static int cmd_eval(const char *path, bool use_color,
     wk_register_taskgroup_natives(env);
     /* R1: chan.tur bounded sync/async channel ops (loaded on demand). */
     wk_register_chan_natives(env);
+    /* R3: backtrack.tur cons-stream monad primitives (loaded on demand). */
+    wk_register_backtrack_natives(env);
     /* R1: process.tur spawn/wait + fs.tur tmpfile OS-handle ops (loaded on demand). */
     wk_register_proc_fs_natives(env);
     /* R1: serial.tur Serializable int/bool instances (loaded on demand). */
@@ -9582,6 +9585,113 @@ static TuriValue native_fs_tmpfile_free(TuriEnv *env, TuriValue *a, uint32_t n, 
     free((void *)(intptr_t)pair[0]);
     free(pair);
     return turi_nil();
+}
+
+/* -------------------------------------------------------------------------
+ * R3 (turi-interpret-flip-residual-plan): backtrack.tur cons-stream monad.
+ *
+ * A Backtrack value is a linked list of results -- malloc'd { int64 value;
+ * int64 next; } cells (next=0 is nil), the exact compiled layout.  All the
+ * typeclass instances (Functor/Applicative/Monad/Alternative) and the *-raw
+ * workers are pure-turi wrappers over these inline-C primitives, so shimming
+ * the primitives makes the whole surface interpretable.  mbind/bt-apply-fat
+ * invoke the continuation via turi_call (the interpreter hands it a closure
+ * where the compiled path used a fat-closure thunk).
+ * ---------------------------------------------------------------------- */
+typedef struct { int64_t value; int64_t next; } WkBtCell;
+
+static int64_t wk_bt_cell(int64_t value, int64_t next) {
+    WkBtCell *c = (WkBtCell *)malloc(sizeof(WkBtCell));
+    if (!c) return 0;
+    c->value = value; c->next = next;
+    return (int64_t)(intptr_t)c;
+}
+static TuriValue native_bt_nil(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud; return turi_int(0);
+}
+static TuriValue native_bt_cons(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = (n > 0) ? a[0].as_int : 0;
+    int64_t nx = (n > 1) ? a[1].as_int : 0;
+    return turi_int(wk_bt_cell(v, nx));
+}
+static TuriValue native_bt_mreturn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(wk_bt_cell((n > 0) ? a[0].as_int : 0, 0));
+}
+/* mplus: copy xs's spine, then point its tail at ys (ys shared). */
+static TuriValue native_bt_mplus(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t xs = (n > 0) ? a[0].as_int : 0;
+    int64_t ys = (n > 1) ? a[1].as_int : 0;
+    WkBtCell *xc = (WkBtCell *)(intptr_t)xs;
+    if (!xc) return turi_int(ys);
+    int64_t head = 0; WkBtCell *tail = NULL;
+    while (xc) {
+        int64_t nc = wk_bt_cell(xc->value, 0);
+        if (tail) tail->next = nc; else head = nc;
+        tail = (WkBtCell *)(intptr_t)nc;
+        xc = (WkBtCell *)(intptr_t)xc->next;
+    }
+    if (tail) tail->next = ys;
+    return turi_int(head);
+}
+/* mbind: concatMap -- for each value, turi_call fn to get a sub-stream, flatten
+ * in order (build reversed, then reverse, matching the compiled body). */
+static TuriValue native_bt_mbind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    WkBtCell *cell = (WkBtCell *)(intptr_t)a[0].as_int;
+    int64_t rev = 0;
+    while (cell) {
+        TuriValue arg = turi_int(cell->value);
+        TuriValue sub = turi_call(env, a[1], &arg, 1);
+        WkBtCell *sc = (WkBtCell *)(intptr_t)sub.as_int;
+        while (sc) {
+            rev = wk_bt_cell(sc->value, rev);
+            sc = (WkBtCell *)(intptr_t)sc->next;
+        }
+        cell = (WkBtCell *)(intptr_t)cell->next;
+    }
+    int64_t result = 0;
+    WkBtCell *r = (WkBtCell *)(intptr_t)rev;
+    while (r) {
+        WkBtCell *tmp = (WkBtCell *)(intptr_t)r->next;
+        r->next = result;
+        result = (int64_t)(intptr_t)r;
+        r = tmp;
+    }
+    return turi_int(result);
+}
+static TuriValue native_bt_length(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t cnt = 0;
+    WkBtCell *c = (n > 0) ? (WkBtCell *)(intptr_t)a[0].as_int : NULL;
+    while (c) { cnt++; c = (WkBtCell *)(intptr_t)c->next; }
+    return turi_int(cnt);
+}
+static TuriValue native_bt_print(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    WkBtCell *c = (n > 0) ? (WkBtCell *)(intptr_t)a[0].as_int : NULL;
+    while (c) { printf("%lld\n", (long long)c->value); c = (WkBtCell *)(intptr_t)c->next; }
+    return turi_nil();
+}
+static TuriValue native_bt_apply_fat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_call(env, a[0], &a[1], 1);
+}
+
+static void wk_register_backtrack_natives(TuriEnv *env) {
+    turi_env_register_native(env, "bt-nil",        native_bt_nil,       NULL);
+    turi_env_register_native(env, "bt-cons",       native_bt_cons,      NULL);
+    turi_env_register_native(env, "mzero",         native_bt_nil,       NULL);
+    turi_env_register_native(env, "mreturn",       native_bt_mreturn,   NULL);
+    turi_env_register_native(env, "mplus",         native_bt_mplus,     NULL);
+    turi_env_register_native(env, "mbind",         native_bt_mbind,     NULL);
+    turi_env_register_native(env, "bt-length",     native_bt_length,    NULL);
+    turi_env_register_native(env, "bt-print",      native_bt_print,     NULL);
+    turi_env_register_native(env, "bt-apply-fat",  native_bt_apply_fat, NULL);
 }
 
 static void wk_register_proc_fs_natives(TuriEnv *env) {

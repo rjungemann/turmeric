@@ -1237,6 +1237,15 @@ gc-dag
 gc-no-false-positives
 gc-perf
 gc-stress
+# R3 HKT instances (verified 2026-06-13; turi-interpret-flip-residual-plan):
+# backtrack.tur's cons-stream monad (Backtrack = linked list of results) reduces
+# to a handful of natives (bt-cons/mreturn/mplus/mbind/bt-length/bt-print/
+# bt-apply-fat over { value, next } cells; mbind/apply via turi_call) -- every
+# Functor/Applicative/Monad/Alternative instance is a pure-turi wrapper over
+# them.  (hkt-stdlib-logic-instances is carved requires.tur-only: logic.tur is a
+# full miniKanren whose ~22 inline-C unification primitives are disproportionate
+# to shim for one fixture.)
+hkt-stdlib-backtrack-instances
 # R1 slice 5 (verified 2026-06-13): serial.tur Serializable [int]/[bool]
 # instances -- serialize packs a length-prefixed LE byte buffer, deserialize
 # reads it back (registered under the __inst_Serializable_* binding names so
