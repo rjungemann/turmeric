@@ -404,6 +404,17 @@ struct FnDef {
     /* CT0: Contract pre/post-conditions — NULL if not specified */
     const struct Form *pre_cond;   /* :pre predicate form, or NULL */
     const struct Form *post_cond;  /* :post predicate form, or NULL */
+    /* M4a (docs/upcoming/m4-typeclass-per-method-abi-plan.md): when this
+     * FnDef is a typeclass-instance method (i.e. the implementation behind
+     * `__inst_<Class>_<method>__…`), `owner_instance` points back at the
+     * `TypeClassInstance` that owns it.  NULL for ordinary defns and for
+     * standalone lifted lambdas.
+     *
+     * Populated by elab_definstance immediately after the FnDef is constructed
+     * for each method.  Used by emit_module.c to route the spec through the
+     * M4b/M4c per-instantiation emit path on non-HKT classes (HKT-class
+     * instance methods keep the uniform carrier ABI per Plan M6/M7). */
+    struct TypeClassInstance *owner_instance;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */

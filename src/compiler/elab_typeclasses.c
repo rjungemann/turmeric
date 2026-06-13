@@ -2608,6 +2608,11 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * method body) would then land textually inside the method, out of
          * scope for the later thunk -- an "undefined struct __env_N" miscompile. */
         method_impls[i] = method_fd;
+        /* M4a: backlink the method FnDef to its owning instance so emit_module
+         * can identify instance methods in O(1) and (when the class is non-HKT)
+         * route them through the per-instantiation emit path.  See
+         * docs/upcoming/m4-typeclass-per-method-abi-plan.md. */
+        method_fd->owner_instance = inst;
 
         /* Stash what pass 2 needs to elaborate this method's body. */
         passes[i].impl_form       = impl_form;

@@ -695,6 +695,28 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
     for (uint8_t i = 0; i < n_spec_args; i++) spec->arg_types[i] = arg_types[i];
     spec->result_type = result_type;
     spec->clone_name = emit_abi_clone_name(fn_binding, result_type, spec->arg_types, n_spec_args);
+    /* M4a: route typeclass-instance-method specs on NON-HKT classes through
+     * the per-instantiation emit path (M4c rewrites the dispatch site to read
+     * the per-instantiation dict singleton with typed slots).  HKT-class
+     * instance methods keep the uniform carrier ABI per Plan M6/M7 — leave
+     * typeclass_inst NULL so the legacy dispatch path stays unchanged for
+     * them.
+     *
+     * Detect HKT-ness via TypeClass.type_param_kinds[i] != KIND_STAR for any
+     * i.  When type_param_kinds is NULL (legacy default), treat as all-STAR
+     * (the comment on the field in typeclass.h documents this convention). */
+    if (fd && fd->owner_instance && fd->owner_instance->typeclass) {
+        TypeClass *tc = fd->owner_instance->typeclass;
+        bool is_hkt = false;
+        if (tc->type_param_kinds) {
+            for (uint8_t i = 0; i < tc->n_type_params; i++) {
+                if (tc->type_param_kinds[i] != KIND_STAR) {
+                    is_hkt = true; break;
+                }
+            }
+        }
+        if (!is_hkt) spec->typeclass_inst = fd->owner_instance;
+    }
     /* external_linkage is set later by the caller (emit_implementation) for
      * separate-compilation builds; left false here so whole-program builds
      * continue to emit static clones. */
