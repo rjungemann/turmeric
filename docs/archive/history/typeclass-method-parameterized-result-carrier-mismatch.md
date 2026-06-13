@@ -3,7 +3,7 @@ title: typeclass instance methods returning a parameterized struct (e.g. `(Resul
 category: Codegen / dispatch / stdlib gap
 severity: Medium. Blocks the typeclass surface for any `decode`-shaped class (Decode, Validate, Parse, …) -- anything whose method's natural return type is `Result a B` for some `a` chosen by the call-site instance. Surfaced while landing the P2a `derive-json` Decode side; the workaround (plain-defn decoders with sentinel error values) ships but loses type-level error context.
 description: Implementing `(defclass Decode [a] (decode [doc val] : (Result a cstr)))` plus `(definstance Decode [int] ...)` plus `(definstance Decode [cstr] ...)` and consuming them at the call site as `(:: (decode doc off) (Result int cstr))` trips three layered issues that prevent any combination from compiling cleanly. None is the others' root cause; fixing any one in isolation does not unblock the surface.
-status: OPEN (Issues 1 & 3 RESOLVED 2026-06-12 as Prereqs 1 & 3; Issue 2 still blocks the typed surface). Filed 2026-06-12 from the P2a Decode minimal-slice work in `../turmeric-spices/spices/json`. Workaround in tree: `json/decode.tur` ships plain-defn primitive decoders (`json-decode-int`, `json-decode-cstr`) returning the value directly with a sentinel error (-1 / NULL). Documented in the module header. When Issue 2 is addressed, the typeclass surface lands as a P2a follow-up.
+status: RESOLVED 2026-06-12 (all three issues landed same session as Prereqs 1, 2, 3). Filed 2026-06-12 from the P2a Decode minimal-slice work in `../turmeric-spices/spices/json`. Workaround initially in tree: `json/decode.tur` shipped plain-defn primitive decoders. With all three prereqs landed, the typed `Decode` typeclass surface compiles end-to-end. Regression fixture: `tests/fixtures/typeclass-method-parameterized-result-decode/` pins the canonical shape.
 ---
 
 # typeclass instance with parameterized-Result return cannot compile
@@ -45,6 +45,7 @@ order while debugging:
 
 2. **`Result A B` uses the carrier ABI (int64_t) at the value level,
    incompatible with by-value struct return from typeclass instance shims.**
+   **RESOLVED 2026-06-12 as Prereq 2.**
    A parameterized struct (`type_uses_carrier_abi` returns true for
    `n_type_params > 0`) is lowered to `int64_t` at every value-level
    binding site. The typeclass instance method dispatch shim, however,
@@ -150,6 +151,43 @@ Solving all three is a session of its own. Sketch:
    `:A`-polymorphic version requires picking a representation that
    tolerates any element type (likely going through the int64 carrier
    for `(ok x)`).
+
+## Resolution
+
+All three prereqs landed 2026-06-12 in this order:
+
+- **Prereq 1**: `src/compiler/emit_module.c` -- `emit_abi_scan_expr`
+  grew an `EX_HANDLE` case (mirror of the prior `EX_EXISTS_OPEN` fix
+  from `docs/archive/history/open-monomorphizes-polymorphic-fn-only-partially.md`).
+  Polymorphic helpers called from inside `(unsafe ...)` bodies now get
+  seeded for monomorphization.
+
+- **Prereq 3**: `stdlib/result.tur` -- `ok` and `err` made polymorphic
+  with `(defn ok [A B] [x : A] : (Result A B) ...)` and the symmetric
+  `err`, mirroring `stdlib/pair.tur:28`. 73 codegen-snapshot
+  regenerations (prelude no longer emits `static int64_t ok(int64_t)`
+  unconditionally).
+
+- **Prereq 2**: `src/compiler/emit_expr.c` around line 2452 --
+  widened the existing specialized-call carrier->concrete bridge so it
+  fires not only on a bare `TY_INT` argument but also on any
+  aggregate-typed argument whose elab type uses the carrier ABI and is
+  NOT a by-value producer. Pre-fix gate accepted only `TY_INT`;
+  post-fix gate also accepts the parameterized-struct `TY_APP` case
+  via the second disjunct, routing through `emit_carrier_bridge` with
+  `CK_CARRIER -> CK_CONCRETE` to dereference the heap-pointer carrier
+  before passing it to the by-value-struct parameter.
+
+Zero codegen-snapshot regenerations were needed for Prereq 2 -- the
+change only fires on expressions that previously failed to compile.
+
+Regression fixture:
+`tests/fixtures/typeclass-method-parameterized-result-decode/` pins
+the canonical end-to-end shape (`(ok-val (:: (typeclass-method ...)
+(Result A B)))` inside `(unsafe ...)`).
+
+Suite: 1559 passed / 83 failed (+1 vs the pre-Prereq-2 baseline -- the
+new fixture).
 
 ## Validation when fixed
 

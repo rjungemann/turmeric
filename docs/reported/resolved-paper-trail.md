@@ -458,6 +458,32 @@ is emitted as `const T *` rather than `T`, matching the param shim.
 Let-bound captures still store struct values by value. Regression
 fixture: `tests/fixtures/typeclass-unsafe-passbyptr-struct-arg/`.
 
+### typed Decode-typeclass surface: three interacting issues blocking (Result a B)-returning instance methods (FIXED -- 2026-06-12, three prereqs)
+
+[`../archive/history/typeclass-method-parameterized-result-carrier-mismatch.md`](../archive/history/typeclass-method-parameterized-result-carrier-mismatch.md)
+
+The P2a `derive-json` Decode side wanted `(defclass Decode [a] (decode
+: doc -> off -> (Result a cstr)))` with instances on `int`, `cstr`,
+etc. The shape hit three interacting issues; each had to land before
+the surface compiles. **Prereq 1**
+(`src/compiler/emit_module.c`): `emit_abi_scan_expr` got an
+`EX_HANDLE` case, mirror of the prior `EX_EXISTS_OPEN` fix --
+polymorphic helpers called only through `(unsafe ...)` now monomorphize
+correctly (no more undeclared `ok_hyval`). **Prereq 3**
+(`stdlib/result.tur`): `ok` and `err` made polymorphic
+(`(defn ok [A B] [x : A] : (Result A B) ...)`), mirroring
+`stdlib/pair.tur:28`. 73 codegen snapshots regenerated (prelude no
+longer emits `static int64_t ok(int64_t)` unconditionally).
+**Prereq 2** (`src/compiler/emit_expr.c` around line 2452): the
+specialized-call carrier->concrete bridge had a `TY_INT`-only gate
+that missed parameterized-struct `TY_APP` arguments. Widened to also
+accept aggregate types whose elab kind uses the carrier ABI and which
+are NOT by-value producers; routes through `emit_carrier_bridge` with
+`CK_CARRIER -> CK_CONCRETE` to deref the heap-pointer carrier before
+passing to a by-value struct param. Zero codegen regens for this one
+(only fires on previously-broken expressions). Regression fixture:
+`tests/fixtures/typeclass-method-parameterized-result-decode/`.
+
 ## Interpreter (turi) parity (landed)
 
 ### Deep non-tail recursion overflowed the C stack before the depth guard fired (FIXED -- Direction A)

@@ -1,0 +1,28 @@
+;; Regression for docs/archive/history/typeclass-method-parameterized-result-carrier-mismatch.md:
+;; pins the end-to-end shape that the P2a `derive-json` Decode side wants --
+;; a typeclass instance method returning `(Result a cstr)`, ascribed at the
+;; call site, then unboxed via `ok-val` from inside an `(unsafe ...)` body.
+;;
+;; Three layered issues had to land:
+;;   Prereq 1: emit_abi_scan_expr recurses into EX_HANDLE so ok-val's
+;;             monomorphization gets seeded.
+;;   Prereq 3: stdlib `ok`/`err` made polymorphic (`(defn ok [A B] [x : A]
+;;             : (Result A B) ...)` mirroring `pair`'s pattern).
+;;   Prereq 2: emit_expr.c's specialized-call carrier->concrete bridge widened
+;;             to fire on parameterized-Result TY_APP args, not just bare
+;;             TY_INT carriers.
+;;
+;; With all three in tree, this fixture builds + runs and prints `42`.
+
+(defclass Decode [a] (decode [doc val] : (Result a cstr)))
+
+(definstance Decode [int] (decode [doc val]
+  ```c return tur_ok((int64_t)val); ```))
+
+(defn __int->cstr [n : int] #{Unsafe} : cstr
+  ```c char *b = (char*)malloc(24); snprintf(b, 24, "%lld", (long long)n); return b; ```)
+
+(defn main [] : int
+  (println (unsafe (__int->cstr
+    (ok-val (:: (decode 0 42) (Result int cstr))))))
+  0)

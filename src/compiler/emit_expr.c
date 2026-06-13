@@ -2448,10 +2448,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate
                  * argument but the emitted value is a carrier (int64_t), bridge it
-                 * here.  Skip when needs_fn_cast already applied a different coercion. */
+                 * here.  Skip when needs_fn_cast already applied a different coercion.
+                 *
+                 * Prereq 2 (typeclass-method-parameterized-result-carrier-mismatch.md):
+                 * also fire when the emit_arg is an aggregate type that uses the
+                 * carrier ABI at C level (e.g. a parameterized struct like
+                 * `(Result int cstr)`), is NOT a by-value producer, AND the spec
+                 * wants the concrete by-value form.  Without this extension, the
+                 * bridge missed the canonical `ok-val (:: (typeclass-method ...)
+                 * (Result A B))` shape -- the ascription's inner is a TY_APP at
+                 * the elab level but a uniform int64_t carrier at C level, so the
+                 * old TY_INT-only gate skipped a needed unbox. */
                 if (!needs_fn_cast && matched_spec &&
-                    emit_arg && emit_arg->type.kind == TY_INT &&
-                    type_kind_is_aggregate(matched_spec->arg_types[i].kind)) {
+                    emit_arg &&
+                    type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
+                    (emit_arg->type.kind == TY_INT ||
+                     (type_kind_is_aggregate(emit_arg->type.kind) &&
+                      type_uses_carrier_abi(emit_arg->type) &&
+                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)))) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
