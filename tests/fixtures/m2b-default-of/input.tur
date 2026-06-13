@@ -1,0 +1,11 @@
+;; M2b: (default-of T) yields a zero-valued T.  For :int that's 0; for a
+;; defstruct it's every field zeroed.
+
+(defstruct M2bBox [A B] (a :A) (b :B))
+
+(defn main [] : int
+  (let [zi (default-of :int)
+        zb (:: (default-of (M2bBox int int)) (M2bBox int int))]
+    (println (+ zi (.a zb)))
+    (println (.b zb))
+    0))

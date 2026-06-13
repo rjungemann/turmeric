@@ -1,0 +1,5 @@
+(defstruct M2bPair [A B] (fst :A) (snd :B))
+
+(defn main [] : int
+  (let [p (:: (make-struct M2bPair :fst 1 :fst 2) (M2bPair int int))]
+    0))

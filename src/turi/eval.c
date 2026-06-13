@@ -4069,6 +4069,25 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_FLOAT_LIT:
         return turi_float(e->as.f);
 
+    case EX_DEFAULT_OF: {
+        /* M2b: (default-of T) yields a zero-valued T.  The interpreter uses
+         * int64_t as the universal scalar carrier and zero structs/aggregates
+         * are not first-class here -- every Turmeric type the tree-walker
+         * actually evaluates fits in TURI_INT/FLOAT/NIL/BOOL with a zero
+         * bit-pattern.  Match the result type's broad kind to pick the
+         * carrier; default to integer zero (a NULL pointer also fits). */
+        if (e->type.kind == TY_FLOAT32 || e->type.kind == TY_FLOAT64) {
+            return turi_float(0.0);
+        }
+        if (e->type.kind == TY_BOOL) {
+            return turi_bool(false);
+        }
+        if (e->type.kind == TY_NIL) {
+            return turi_nil();
+        }
+        return turi_int(0);
+    }
+
     case EX_CSTR_LIT: {
         /* Intern the string so that identical literals share the same pointer.
          * This is required for HAMT key comparison (pointer equality) to work

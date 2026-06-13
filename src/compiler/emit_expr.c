@@ -1106,6 +1106,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (e->type.kind == TY_FLOAT32) return atom_float32(e->as.f);
             return atom_float(e->as.f);
         case EX_CSTR_LIT: return atom_cstr(e->as.s);
+        case EX_DEFAULT_OF: {
+            /* M2b: (default-of T) -> C99 compound literal (T){0}.  Zero-inits any
+             * scalar, pointer, or aggregate; for value structs every field is
+             * recursively zeroed.  emit_type_c_name resolves to the concrete C
+             * name (already accounts for parametric struct instantiations). */
+            const char *cname = emit_type_c_name(ctx, e->type);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "(%s){0}", cname);
+            buf_putc(&out, '\0');
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
         case EX_SYM_LIT: {
             /* SYM1: reference the TU-local static record for this keyword. */
             const char *cid = sym_codegen_register(e->as.sym_lit_.sym);
@@ -3696,11 +3709,77 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             Buf lit; buf_init(&lit);
             const char *struct_c_name = emit_type_c_name(ctx, e->type);
+            /* M2b: when the make-struct's e->type carries unresolved tyvars
+             * (e.g. body of `(defn ok [A B] [x : A] : (Result A B)
+             *   (make-struct Result :err-val (default-of B) ...))` — B isn't a
+             * param, so the current ABI spec's `bindings[]` doesn't bind it),
+             * struct_c_name collapses to "int64_t" because type_c_name(TY_APP)
+             * falls back when type_has_concrete_codegen_layout is false.  The
+             * StructDef plus its FIELDS were elaborated correctly, so the body
+             * already emits `.is_ok = ...` per-field assignments — only the
+             * outer cast is wrong.  When the enclosing spec's result_type has
+             * the same StructDef, use its concrete C name instead.  Narrowly
+             * scoped: never fires outside specialization, and never fires when
+             * the resolver already produced a non-carrier name.
+             *
+             * The same recovered spine args are also used to type per-field
+             * `(default-of T)` values whose T resolves to a bare unresolved
+             * TYVAR -- without this, the compound literal lands as
+             * `.cstr_field = (int64_t){0}`, which is an int-to-ptr conversion
+             * error in C. */
+            Type rt_recovered_args[16]; uint8_t n_rt_recovered = 0;
+            bool have_rt_recovered = false;
+            if (def && ctx->current_abi_specialization) {
+                Type rt = ctx->current_abi_specialization->result_type;
+                StructDef *rt_def = NULL;
+                if (type_extract_struct_app(&rt, &rt_def, rt_recovered_args,
+                                            &n_rt_recovered)
+                    && rt_def == def) {
+                    have_rt_recovered = true;
+                    if (strcmp(struct_c_name, "int64_t") == 0) {
+                        const char *recovered = emit_type_c_name(ctx, rt);
+                        if (recovered && strcmp(recovered, "int64_t") != 0) {
+                            struct_c_name = recovered;
+                        }
+                    }
+                }
+            }
             buf_printf(&lit, "(%s){", struct_c_name);
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
-                char *fv = emit_value(ctx, body, e->as.make_struct_.field_values[i]);
+                const Expr *fve = e->as.make_struct_.field_values[i];
+                /* M2b: when the field value is (default-of T) and T is the
+                 * struct's tyvar at a known param position, re-type the
+                 * default-of literal as the concrete spine arg instead of the
+                 * carrier int64_t.  Avoids `int-to-ptr` C errors when the
+                 * field's resolved C type is, say, `const char *`. */
+                char *fv = NULL;
+                if (fve->kind == EX_DEFAULT_OF && have_rt_recovered
+                    && def->fields[i].full_type
+                    && def->fields[i].full_type->kind == TY_TYVAR
+                    && def->fields[i].full_type->as.tyvar_.name) {
+                    const char *fty_name = def->fields[i].full_type->as.tyvar_.name;
+                    uint8_t tp_idx = UINT8_MAX;
+                    for (uint8_t tp = 0; tp < def->n_type_params; tp++) {
+                        if (def->type_params[tp]
+                            && strcmp(def->type_params[tp], fty_name) == 0) {
+                            tp_idx = tp; break;
+                        }
+                    }
+                    if (tp_idx != UINT8_MAX && tp_idx < n_rt_recovered) {
+                        const char *fty = emit_type_c_name(ctx,
+                            rt_recovered_args[tp_idx]);
+                        if (fty) {
+                            Buf fb; buf_init(&fb);
+                            buf_printf(&fb, "(%s){0}", fty);
+                            buf_putc(&fb, '\0');
+                            fv = strdup(fb.data);
+                            buf_free(&fb);
+                        }
+                    }
+                }
+                if (!fv) fv = emit_value(ctx, body, fve);
                 bool is_fn_field = (def->fields[i].kind == TY_FN);
-                bool val_is_fn = (e->as.make_struct_.field_values[i]->type.kind == TY_FN);
+                bool val_is_fn = (fve->type.kind == TY_FN);
                 if (i > 0) buf_puts(&lit, ", ");
                 char *mfn = mangle_field_name(def->fields[i].name);
                 if (is_fn_field && val_is_fn) {

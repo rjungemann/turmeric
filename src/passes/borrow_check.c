@@ -255,6 +255,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_FLOAT_LIT:
         case EX_CSTR_LIT:
         case EX_SYM_LIT:
+        case EX_DEFAULT_OF:
             return true;
         case EX_CPS_CONT_APP:
             /* CPS2: walk continuation and value subexpressions */

@@ -2334,6 +2334,31 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     return out;
 }
 
+/* M2b: (default-of T) — yields a zero-valued T.  Used to fill payload slots
+ * the constructor doesn't have a meaningful value for (e.g. `err-val` in
+ * `(ok x)` once stdlib migrates to `make-struct` bodies).
+ *
+ * Surface:  (default-of T)
+ *
+ * Lowers to an EX_DEFAULT_OF expression carrying T as its result type.  The
+ * emit layer turns this into `(T){0}` — a C99 compound literal that zero-
+ * inits any scalar, pointer, or aggregate.
+ *
+ * T may reference type parameters in scope (resolved via the binding scope
+ * the same way ascription resolves them). */
+Expr *elab_default_of(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "default-of: takes exactly one type argument: (default-of T)");
+        return NULL;
+    }
+    Form *type_form = call->as.list.items[1];
+    Type *t = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+    if (!t) return NULL;
+    Expr *out = expr_new(e->arena, EX_DEFAULT_OF, *t, call->span);
+    return out;
+}
+
 /* Phase HRT2/EX1c: (pack value (exists [a] T)) -- existential introduction.
  * Boxes the value as an opaque existential; result type is the TY_EXISTS type node.
  * Syntax:

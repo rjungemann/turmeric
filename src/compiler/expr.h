@@ -360,6 +360,8 @@ typedef enum ExprKind {
     /* CPS2: explicit continuation application in CPS-lowered code.
      * Represents `k(v)` -- applying a continuation to a result value. */
     EX_CPS_CONT_APP,     /* (cps-apply k v) -- continuation application; type is k's result type */
+    /* M2b: (default-of T) — yields a zero-valued T. Type lives in Expr::type. */
+    EX_DEFAULT_OF,
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */

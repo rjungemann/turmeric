@@ -36,9 +36,10 @@
 (defn ok [A B] [x : A]
   #{Construct}
   : (Result A B)
-  ```c
-  return tur_ok((int64_t)(intptr_t)x);
-  ```)
+  (make-struct Result
+    :is-ok true
+    :ok-val x
+    :err-val (default-of B)))
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
 ;;; Parameters:
@@ -59,9 +60,10 @@
 (defn err [A B] [e : B]
   #{Construct}
   : (Result A B)
-  ```c
-  return tur_err((int64_t)(intptr_t)e);
-  ```)
+  (make-struct Result
+    :is-ok false
+    :ok-val (default-of A)
+    :err-val e))
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:

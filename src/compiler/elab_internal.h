@@ -316,6 +316,7 @@ typedef struct Elab {
     /* Phase 11: defstruct */
     const Symbol *sym_defstruct;   /* defstruct */
     const Symbol *sym_make_struct; /* make-struct */
+    const Symbol *sym_default_of;  /* M2b: default-of */
     /* SI4-C: defopaque -- named opaque int64_t newtype for REPL type tags */
     const Symbol *sym_defopaque;   /* defopaque */
     const Symbol *kw_copy;        /* :copy keyword for defstruct */
@@ -977,6 +978,7 @@ Expr *elab_coerce(Elab *e, const Form *call);
 CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name);
 Expr *elab_match(Elab *e, const Form *call);
 Expr *elab_make_struct(Elab *e, const Form *call);
+Expr *elab_default_of(Elab *e, const Form *call);  /* M2b */
 bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *out_args);
 Type elab_struct_field_use_type(Elab *e, const Type *container_type,
                                 const StructDef *def, const StructField *field);

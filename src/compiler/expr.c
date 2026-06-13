@@ -22,6 +22,7 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_FLOAT_LIT: buf_printf(b, "%g", e->as.f); break;
         case EX_CSTR_LIT: buf_putc(b, '"'); buf_write(b, e->as.s.p, e->as.s.len); buf_putc(b, '"'); break;
         case EX_SYM_LIT:  buf_putc(b, ':'); if (e->as.sym_lit_.sym) buf_write(b, e->as.sym_lit_.sym->name, e->as.sym_lit_.sym->len); break;
+        case EX_DEFAULT_OF: buf_puts(b, "(default-of ?)"); break;
         case EX_CPS_CONT_APP:
             buf_puts(b, "(cps-apply ");
             expr_print(b, e->as.cps_cont_app_.cont);

@@ -1172,6 +1172,7 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
+    if (name == e->sym_default_of) return elab_default_of(e, call); /* M2b */
     /* SI4-C: defopaque */
     if (name == e->sym_defopaque) return elab_defopaque(e, call);
     /* Phase G0: ADTs */

@@ -3330,17 +3330,81 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
         memset(have_type_args, 0, def->n_type_params * sizeof(bool));
     }
 
-    if (n_given != def->n_fields) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "make-struct '%s': expected %u field value(s), got %u",
-                  def->name, def->n_fields, n_given);
-        return NULL;
+    /* M2b: detect keyword form `(make-struct Name :field val :field val ...)`.
+     * The form is keyword-style iff the first arg after the struct name is an
+     * F_KEYWORD.  Field order may differ from def->fields[]; we reorder into
+     * value_forms[] indexed by field position before falling through to the
+     * positional elaboration path.  Diagnostics:
+     *   TUR-E0292 -- missing field
+     *   TUR-E0293 -- duplicate field
+     *   TUR-E0294 -- unknown field */
+    Form **value_forms = (Form **)arena_alloc(e->arena, def->n_fields * sizeof(Form *));
+    bool is_keyword_form = (n_given > 0 && call->as.list.items[2]->tag == F_KEYWORD);
+    if (is_keyword_form) {
+        /* Pair count must be even. */
+        if ((n_given % 2u) != 0u) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "make-struct '%s': keyword form requires :field value pairs (odd number of args)",
+                      def->name);
+            return NULL;
+        }
+        uint32_t n_pairs = n_given / 2u;
+        for (uint32_t i = 0; i < def->n_fields; i++) value_forms[i] = NULL;
+        for (uint32_t p = 0; p < n_pairs; p++) {
+            Form *kw = call->as.list.items[2 + p * 2];
+            Form *vf = call->as.list.items[2 + p * 2 + 1];
+            if (kw->tag != F_KEYWORD) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "make-struct '%s': expected :field-name, got non-keyword form",
+                          def->name);
+                return NULL;
+            }
+            const char *kname = kw->as.sym->name;
+            uint32_t klen = kw->as.sym->len;
+            /* Resolve to field index. */
+            uint32_t fi = UINT32_MAX;
+            for (uint32_t i = 0; i < def->n_fields; i++) {
+                const char *fname = def->fields[i].name;
+                if (fname && strlen(fname) == klen && memcmp(fname, kname, klen) == 0) {
+                    fi = i; break;
+                }
+            }
+            if (fi == UINT32_MAX) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "TUR-E0294: make-struct unknown field '%s' for struct '%s'",
+                          kname, def->name);
+                return NULL;
+            }
+            if (value_forms[fi] != NULL) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "TUR-E0293: make-struct duplicate field '%s'", kname);
+                return NULL;
+            }
+            value_forms[fi] = vf;
+        }
+        for (uint32_t i = 0; i < def->n_fields; i++) {
+            if (value_forms[i] == NULL) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "TUR-E0292: make-struct missing field '%s'", def->fields[i].name);
+                return NULL;
+            }
+        }
+    } else {
+        if (n_given != def->n_fields) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "make-struct '%s': expected %u field value(s), got %u",
+                      def->name, def->n_fields, n_given);
+            return NULL;
+        }
+        for (uint32_t i = 0; i < def->n_fields; i++) {
+            value_forms[i] = call->as.list.items[2 + i];
+        }
     }
 
     /* Elaborate each field value */
     Expr **field_values = (Expr **)arena_alloc(e->arena, def->n_fields * sizeof(Expr *));
     for (uint32_t i = 0; i < def->n_fields; i++) {
-        Expr *fv = elab_form(e, call->as.list.items[2 + i]);
+        Expr *fv = elab_form(e, value_forms[i]);
         if (!fv) return NULL;
         field_values[i] = fv;
 
@@ -3349,7 +3413,7 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
                                                 fv->type, inferred_type_args, have_type_args)) {
                 Type expected = elab_struct_field_use_type(e, &fv->type, def, &def->fields[i]);
                 if (fv->type.kind != TY_PTR_VOID && !type_eq(fv->type, expected)) {
-                    diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
+                    diag_emit(DIAG_ERROR, value_forms[i]->span,
                               "make-struct '%s': field '%s' expects %s, got %s",
                               def->name, def->fields[i].name,
                               type_name(expected), type_name(fv->type));
@@ -3366,7 +3430,7 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             TypeKind vk = fv->type.kind;
             if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
                 (void)binding_mark_moved(fv->as.var.binding,
-                                         call->as.list.items[2 + i]->span);
+                                         value_forms[i]->span);
             }
         }
     }
@@ -3424,7 +3488,7 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
                 expected = elab_struct_field_use_type(e, &applied, def, &def->fields[i]);
             }
             if (field_values[i]->type.kind != TY_PTR_VOID && !type_eq(field_values[i]->type, expected)) {
-                diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
+                diag_emit(DIAG_ERROR, value_forms[i]->span,
                           "make-struct '%s': field '%s' expects %s, got %s",
                           def->name, def->fields[i].name,
                           type_name(expected), type_name(field_values[i]->type));

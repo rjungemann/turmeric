@@ -24,12 +24,12 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some [x : int]
-  #{}
-  : int
-  ```c
-  return tur_some(x);
-  ```)
+(defn some [A] [x : A]
+  #{Construct}
+  : (Option A)
+  (make-struct Option
+    :is-some true
+    :value x))
 ;;; none -- return the none Option[A] (NULL).
 ;;;
 ;;; Returns:
@@ -40,12 +40,12 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn none []
-  #{}
-  : int
-  ```c
-  return TUR_NONE;
-  ```)
+(defn none [A]
+  #{Construct}
+  : (Option A)
+  (make-struct Option
+    :is-some false
+    :value (default-of A)))
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:

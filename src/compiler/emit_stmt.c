@@ -97,6 +97,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR:
+        case EX_DEFAULT_OF:    /* M2b: pure zero-initializer, no side effects */
         case EX_CAST:         /* pure expression, no stmt-level side effects */
         case EX_REINTERPRET:  /* compiler-only pure reinterpret node */
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */

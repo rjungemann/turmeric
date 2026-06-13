@@ -1103,8 +1103,22 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * type (a real TY_STRUCT, the by-value form the carrier path miscompiles).
      * Other ABI changes (different opaque ints, pointers, type-apps) keep
      * the carrier emit, which compiles cleanly through the int64 path. */
-    if (!borrow_path && fd && fd->body && fd->body->kind == EX_INLINE_C &&
-        !inline_c_has_ty_template(fd->body->as.inline_c_.inline_c)) {
+    /* M2b: the same monomorphization-vs-carrier choice applies to
+     * `#{Construct}` polymorphic defns whose body is a `(make-struct …)`.
+     * Their carrier-emit body is synthesized in emit_fns.c to the same
+     * `return tur_ok((int64_t)(intptr_t)x);` shape the inline-C body
+     * produces, so for ABI-neutral specs (no by-value struct in args or
+     * result) the carrier path is correct and a spec is wasted code that
+     * also triggers caller/callee ABI mismatch when the caller still
+     * expects the carrier int64 return.  Mirrors the inline-C gate above. */
+    bool body_is_construct_make_struct = fd && fd->body
+        && fd->body->kind == EX_MAKE_STRUCT
+        && fd->binding && fd->binding->is_construct_template;
+    bool body_qualifies_for_carrier_skip =
+        (fd && fd->body && fd->body->kind == EX_INLINE_C
+         && !inline_c_has_ty_template(fd->body->as.inline_c_.inline_c))
+        || body_is_construct_make_struct;
+    if (!borrow_path && body_qualifies_for_carrier_skip) {
         bool needs_byvalue_spec = false;
         for (uint8_t i = 0; i < n_spec_args; i++) {
             if (!type_uses_carrier_abi(arg_types[i]) &&

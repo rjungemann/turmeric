@@ -1,0 +1,10 @@
+;; M2b: (make-struct Name :field value ...) keyword form, with the fields
+;; supplied in reverse order to assert the elaborator reorders to the
+;; defstruct's field positions.
+
+(defstruct M2bPair [A B] (fst :A) (snd :B))
+
+(defn main [] : int
+  (let [p (:: (make-struct M2bPair :snd 20 :fst 7) (M2bPair int int))]
+    (println (+ (.fst p) (.snd p)))
+    0))
