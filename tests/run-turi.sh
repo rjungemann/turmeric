@@ -1159,6 +1159,11 @@ list-basic
 typed/list-basic
 typed/list-concat
 typed/list-macro
+# data-literal-sweet-exp (verified 2026-06-13): #map{...}/#set{...}/[...] under
+# #lang sweet-exp.  cmd_eval now pre-detects the file's #lang and loads the
+# prelude under that reader, so the sweet-exp reader switch no longer wipes the
+# accumulated stdlib (hamt-of was unbound before the fix).
+data-literal-sweet-exp
 "
 
 # Build an associative-set from the default list for O(1) lookup.

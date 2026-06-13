@@ -1,5 +1,24 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (sweet-exp prelude survives reader switch + map/set cluster COMPLETE,
+> 2026-06-13):** a sweep of the map/set/hamt cluster found the runnable surface
+> already complete -- every non-inline-C `map`/`set`/`hamt`/`eqmap`/`mutmap`/
+> data-literal fixture passes + is allowlisted (the inline-C struct-key
+> comparators stay carved by design). The sole holdout, `data-literal-sweet-exp`,
+> failed `unknown function or operator 'hamt-of'` -- not a map gap but a
+> reader/prelude bug: `#lang sweet-exp` flips `env->reader_type` mid-stream and
+> `turi_eval_impl` discards the accumulated `src_acc` (the preloaded stdlib) to
+> avoid re-parsing it under the new reader, so `hamt-of` (a `map.tur` defn) went
+> unbound. Fixed in `cmd_eval`: pre-detect the user file's `#lang` and set
+> `env->reader_type` *before* preloading, so the prelude is parsed under the
+> file's reader from the start (plain s-expr parses under every reader variant)
+> and the user directive no longer triggers a reset. Scoped to the file-eval
+> entry point -- the REPL keeps its protective reset for interactive switches.
+> Unblocks `data-literal-sweet-exp`; **harness 1143 -> 1144 passed, 0 failed;
+> gap 57 -> 56.** Parity 113/115 0-gaps. See
+> [turi-map-set-hamt-interpreter-gap.md](turi-map-set-hamt-interpreter-gap.md)
+> (now marked complete).
+>
 > **Progress (typed-list carrier ops under --interpret, 2026-06-13):** unblocked
 > the carrier-level `list.tur` cluster -- `list-basic`, `typed/list-basic`,
 > `typed/list-concat`, `typed/list-macro`. A Cons cell is a malloc'd

@@ -4841,6 +4841,30 @@ static int cmd_eval(const char *path, bool use_color,
      * preloaded stdlib registers no reader macros and the user file is parsed
      * in a single pass (no self-replay of its own `reader-macros/define`). */
     env->reader_macros->strict = true;
+    /* Pre-detect the user file's #lang so the prelude loads under the SAME
+     * reader.  Otherwise the user file's `#lang sweet-exp` (etc.) flips
+     * env->reader_type mid-stream, and turi_eval_impl discards the accumulated
+     * prelude (src_acc) to avoid re-parsing it under the new reader -- dropping
+     * every preloaded stdlib defn, so e.g. a `#map{...}` literal under
+     * `#lang sweet-exp` fails "unknown function or operator 'hamt-of'".  By
+     * setting the reader first, the prelude is parsed under the file's reader
+     * from the start (plain s-expr parses under every reader variant) and the
+     * user file's directive then matches env->reader_type -- no reset fires.
+     * Scoped to the file-eval entry point; the REPL keeps its protective reset
+     * for genuine interactive reader switches. */
+    {
+        FILE *pf = fopen(path, "rb");
+        if (pf) {
+            char head[512];
+            size_t hn = fread(head, 1, sizeof(head) - 1, pf);
+            fclose(pf);
+            head[hn] = '\0';
+            const char *rest = head; size_t rest_len = hn;
+            ReaderType rt = detect_lang(head, hn, &rest, &rest_len);
+            if (rest != head && reader_type_is_implemented(rt))
+                env->reader_type = rt;
+        }
+    }
     /* Preload macros.tur so that and/or/when/cond/for etc. are available.
      * This is the minimum stdlib needed for any real Turmeric program to work.
      *

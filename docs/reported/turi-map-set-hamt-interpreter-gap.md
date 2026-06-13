@@ -1,5 +1,24 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
+> **STATUS 2026-06-13: the runnable map/set/hamt surface is COMPLETE.** A full
+> re-probe of every `map`/`set`/`hamt`/`eqmap`/`smap`/`wkc`/`mutmap`/data-literal
+> fixture under `--interpret` (`ASAN_OPTIONS=detect_leaks=0`) shows every
+> non-inline-C fixture either passing + allowlisted or being an `errors/*`
+> negative test. The three documented gaps are resolved or carved: scalar-keyed
+> maps (Tier A), pure-turi closure comparators (Tier B), recursive container
+> values, non-int map values, and `eq-carrier-capturing-comparator` (mutmap
+> natives) all pass; inline-C struct-key comparators (`wkc3-struct-map-key`,
+> `eqmap-struct-content`) remain permanent inline-C carve-outs (the comparator
+> body casts a boxed carrier to a struct pointer -- unrunnable in the
+> tree-walker, by design). The last map-literal holdout, `data-literal-sweet-exp`
+> (`unknown function or operator 'hamt-of'`), was NOT a map native gap at all:
+> `#lang sweet-exp` flips the reader mid-stream and `turi_eval_impl` wiped the
+> accumulated stdlib prelude. Fixed by pre-detecting the file's `#lang` in
+> `cmd_eval` so the prelude loads under the file's reader (no reset) -- see the
+> [harness-flip report](turi-harness-flip-reconciliation.md). Map/set is no
+> longer a tracked interpreter gap; this report is retained for the history and
+> the inline-C-struct-key carve rationale.
+>
 > **Progress (MutableMap + option-eq, 2026-06-12):** **`mutmap-*` and `option-eq?`
 > now work under `--interpret`.** `mutmap.tur` is a self-contained open-addressing
 > table (no runtime HAMT dependency), so its 8 ops are re-implemented as
