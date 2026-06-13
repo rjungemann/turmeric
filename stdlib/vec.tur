@@ -264,4 +264,23 @@
 ;; TC1-5: Phase PTC4 -- constrained Eq instance for Vec[A].
 ;; Note: element comparison uses integer equality; correct for all primitive A.
 
-(definstance Eq [Vec] [(Eq A)] (eq? [x y] (vec-eq? x y (fn [a b] (= a b)))))
+(defn vec-eq-loop [A]
+  [xi : int yi : int i : int len : int
+   ^fat cmp : (fn [A A] bool)]
+  : bool
+  (if (= i len)
+    true
+    (if (cmp (:: (vec-get xi i) A) (:: (vec-get yi i) A))
+      (vec-eq-loop xi yi (+ i 1) len cmp)
+      false)))
+
+(definstance Eq [Vec]
+  [(Eq A)]
+  (eq? [x y]
+    (let [xi (:: x :int)
+          yi (:: y :int)
+          lx (vec-len xi)
+          ly (vec-len yi)]
+      (if (= lx ly)
+        (vec-eq-loop xi yi 0 lx (fn [a b] (eq? a b)))
+        false))))

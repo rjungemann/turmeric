@@ -4301,6 +4301,56 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                resolved);
                 }
             }
+            /* M4c-pre-ext (symmetric direction): a by-value concrete
+             * struct ascribed back to :int (e.g. `(:: x :int)` where x
+             * is a Path A spec's owned `Vec__int` param).  The value is
+             * the by-value aggregate `Vec__int`; the ascription target
+             * is the int64_t carrier.  Without bridging, the consumer
+             * gets `int64_t xi = x;` -- a C type mismatch.  Spill to a
+             * local and hand back its address as int64_t, mirroring the
+             * CK_CONCRETE -> CK_CARRIER path that elab-call already
+             * uses at carrier-ABI call boundaries.
+             *
+             * Narrow gate: only fire when the inner produces a *by-value*
+             * carrier-ABI aggregate (an EX_VAR/spec-call/struct-literal),
+             * and the inner's STATIC type uses the carrier ABI (TY_APP
+             * or struct-with-carrier-ABI).  `expr_emits_byvalue_carrier_abi`
+             * captures the producer-side distinction precisely. */
+            if (!ascribe_to_opaque
+                && e->type.kind == TY_INT
+                && e->as.ascribe_.inner->type.kind != TY_INT
+                && type_uses_carrier_abi(e->as.ascribe_.inner->type)
+                && expr_emits_byvalue_carrier_abi(ctx, e->as.ascribe_.inner)) {
+                /* For a param var inside a Path A spec, the binding's stored
+                 * `type` is the elab-time TY_STRUCT/TY_APP, whose def is the
+                 * unparameterized struct (e.g. plain `Vec`).  The spec rewrites
+                 * the param to the monomorphized struct (`Vec__int`) only in
+                 * `current_abi_specialization->arg_types[]`.  Use the spec's
+                 * arg type for cname resolution so the spill local declares
+                 * `Vec__int` to match the param's actual C type. */
+                Type concrete_ty = e->as.ascribe_.inner->type;
+                const Expr *inner_p2 = e->as.ascribe_.inner;
+                while (inner_p2 && inner_p2->kind == EX_ASCRIBE)
+                    inner_p2 = inner_p2->as.ascribe_.inner;
+                if (inner_p2 && inner_p2->kind == EX_VAR
+                    && inner_p2->as.var.binding
+                    && ctx->current_abi_specialization
+                    && ctx->fn_params) {
+                    for (uint8_t pi = 0;
+                         pi < ctx->n_fn_params
+                         && pi < ctx->current_abi_specialization->n_args;
+                         pi++) {
+                        if (ctx->fn_params[pi] == inner_p2->as.var.binding) {
+                            concrete_ty = ctx->current_abi_specialization->arg_types[pi];
+                            break;
+                        }
+                    }
+                }
+                Type resolved = emit_resolve_type(ctx, concrete_ty);
+                return emit_carrier_bridge(ctx, body, inner_val,
+                                           CK_CONCRETE, CK_CARRIER,
+                                           resolved);
+            }
             return inner_val;
         }
         /* Phase HRT2 / EX1e / EXG1: existential pack.
