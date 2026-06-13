@@ -1060,6 +1060,18 @@ seq-transform-map
 seq-transform-map-indexed
 seq-transform-take
 seq-transform-take-while
+# json (verified 2026-06-13): stdlib/json.tur's tagged-AST JSON engine now runs
+# under --interpret.  The malloc/recurse inline-C builders, accessors, encoder,
+# and recursive-descent decoder are re-implemented as layout-exact natives
+# (wk_register_json_natives in src/main.c), overriding the loaded json.tur
+# inline-C bodies; -Xjson-reader auto-loads json.tur so the #json(...) reader
+# macro's node constructors resolve.  See
+# docs/upcoming/turi-json-schema-interpreter-plan.md (Layer 1).
+json-reader-array
+json-reader-escape
+json-reader-nested
+json-reader-null
+json-reader-object
 "
 
 # Build an associative-set from the default list for O(1) lookup.

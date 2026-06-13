@@ -4797,6 +4797,7 @@ static void wk_register_hamt_natives(TuriEnv *env);
 static void wk_register_map_natives(TuriEnv *env);
 static void wk_register_sym_natives(TuriEnv *env);
 static void wk_register_seq_natives(TuriEnv *env);
+static void wk_register_json_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5006,6 +5007,20 @@ static int cmd_eval(const char *path, bool use_color,
             buf_free(&src);
         }
     }
+    /* JR0 (turi-json-schema-interpreter-plan, Layer 1): -Xjson-reader auto-loads
+     * json.tur so the #json(...) reader-macro lowering's json node
+     * constructors (and json/encode|decode|type|get accessors) resolve under
+     * --interpret.  The loaded inline-C bodies are overridden by the layout-exact
+     * natives registered in wk_register_json_natives below.  Skipped when the
+     * opt-in full prelude already loaded json.tur (avoids a redefinition). */
+    if (g_json_reader_enabled && !turi_full_prelude_enabled()) {
+        char pb[4096];
+        tur_stdlib_path("json.tur", pb, sizeof(pb));
+        char load_form[4200];
+        snprintf(load_form, sizeof(load_form), "(load \"%s\")", pb);
+        TuriValue sv = turi_eval(env, load_form);
+        (void)sv;
+    }
     /* Register native overrides for stdlib inline-C functions. */
     wk_register_stdlib_natives(env);
     /* W1b/Gap1: register the raw tur_hamt_* runtime wrappers so hamt.tur (and
@@ -5023,6 +5038,10 @@ static int cmd_eval(const char *path, bool use_color,
      * modules are loaded on demand by user code; the natives override the
      * inline-C bodies. */
     wk_register_seq_natives(env);
+    /* JSON (turi): tagged-AST JSON engine over layout-exact node structs,
+     * overriding json.tur's malloc/recurse inline-C bodies (auto-loaded under
+     * -Xjson-reader, or via an explicit (load "stdlib/json.tur")). */
+    wk_register_json_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers. */
     {
         typedef struct { int64_t value; int64_t next; } TurCons;
@@ -6722,6 +6741,459 @@ static void wk_register_seq_natives(TuriEnv *env) {
     turi_env_register_native(env, "seq-pair-first",      native_seq_cell_fst,     NULL);
     turi_env_register_native(env, "seq-pair-second",     native_seq_cell_snd,     NULL);
     turi_env_register_native(env, "seq-list-nil?",       native_seq_list_nil,     NULL);
+}
+
+/* JSON (stdlib/json.tur): a self-contained tagged-AST JSON engine.  The public
+ * ops are inline-C wrappers over malloc'd structs + a recursive-descent parser
+ * and encoder (strtoll/strtod/strncmp/memcpy), which try_exec_simple_inline_c
+ * cannot run -- so the whole engine is re-implemented as natives with
+ * layout-exact node structures (json-schema-interpreter-plan, Layer 1).
+ *
+ * Node layout: int64[2] = {type, payload}
+ *   0 null   payload 0
+ *   1 bool   payload 0/1
+ *   2 int    payload int64 value
+ *   3 float  payload = double bits (memcpy into the int64 slot)
+ *   4 string payload = (char*) strdup'd
+ *   5 array  payload = (tur_json_vec*) {int64* data; size_t len; size_t cap}
+ *   6 object payload = head of a LIFO list of int64[3] {key, val, next}
+ * Every producer/accessor below agrees bit-for-bit with the json.tur inline-C
+ * so a non-nativized reader (or the encoder/decoder recursion) sees the same
+ * bytes. */
+typedef struct { int64_t *data; size_t len; size_t cap; } tur_json_vec;
+
+/* Extract a NUL-terminated C string from a cstr-typed argument (it may arrive
+ * tagged TURI_CSTR or as a raw pointer in the int64 carrier). */
+static const char *json_arg_cstr(TuriValue v) {
+    if (v.tag == TURI_CSTR) return v.as_cstr;
+    return (const char *)(intptr_t)v.as_int;
+}
+static inline int64_t *json_node_ptr(TuriValue v) {
+    return (int64_t *)(intptr_t)v.as_int;
+}
+
+/* --- builders --- */
+static TuriValue native_json_null(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    int64_t *node = malloc(2 * sizeof(int64_t));
+    node[0] = 0; node[1] = 0;
+    return turi_int((int64_t)(intptr_t)node);
+}
+static TuriValue native_json_bool(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    int64_t v = 0;
+    if (n >= 1) v = (a[0].tag == TURI_BOOL) ? (a[0].as_bool ? 1 : 0)
+                                            : (a[0].as_int ? 1 : 0);
+    int64_t *node = malloc(2 * sizeof(int64_t));
+    node[0] = 1; node[1] = v ? 1 : 0;
+    return turi_int((int64_t)(intptr_t)node);
+}
+static TuriValue native_json_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    int64_t *node = malloc(2 * sizeof(int64_t));
+    node[0] = 2; node[1] = (n >= 1) ? a[0].as_int : 0;
+    return turi_int((int64_t)(intptr_t)node);
+}
+static TuriValue native_json_float(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    double v = (n >= 1) ? ((a[0].tag == TURI_FLOAT) ? a[0].as_float
+                                                    : (double)a[0].as_int)
+                        : 0.0;
+    int64_t *node = malloc(2 * sizeof(int64_t));
+    node[0] = 3;
+    memcpy(&node[1], &v, sizeof(double));
+    return turi_int((int64_t)(intptr_t)node);
+}
+static TuriValue native_json_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *s = (n >= 1) ? json_arg_cstr(a[0]) : "";
+    int64_t *node = malloc(2 * sizeof(int64_t));
+    node[0] = 4; node[1] = (int64_t)(intptr_t)strdup(s ? s : "");
+    return turi_int((int64_t)(intptr_t)node);
+}
+static TuriValue native_json_array_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    tur_json_vec *v = malloc(sizeof(*v));
+    v->data = NULL; v->len = 0; v->cap = 0;
+    int64_t *node = malloc(2 * sizeof(int64_t));
+    node[0] = 5; node[1] = (int64_t)(intptr_t)v;
+    return turi_int((int64_t)(intptr_t)node);
+}
+static TuriValue native_json_array_push(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t *node = json_node_ptr(a[0]);
+    tur_json_vec *v = (tur_json_vec *)(intptr_t)node[1];
+    if (v->len >= v->cap) {
+        v->cap = v->cap > 0 ? v->cap * 2 : 4;
+        v->data = realloc(v->data, v->cap * sizeof(int64_t));
+    }
+    v->data[v->len++] = a[1].as_int;
+    return a[0];
+}
+static TuriValue native_json_object_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    int64_t *node = malloc(2 * sizeof(int64_t));
+    node[0] = 6; node[1] = 0;
+    return turi_int((int64_t)(intptr_t)node);
+}
+static TuriValue native_json_object_put(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 3) return turi_int(0);
+    int64_t *node = json_node_ptr(a[0]);
+    const char *key = json_arg_cstr(a[1]);
+    int64_t *entry = malloc(3 * sizeof(int64_t));
+    entry[0] = (int64_t)(intptr_t)strdup(key ? key : "");
+    entry[1] = a[2].as_int;
+    entry[2] = node[1];
+    node[1] = (int64_t)(intptr_t)entry;
+    return a[0];
+}
+
+/* --- accessors --- */
+static TuriValue native_json_type(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(json_node_ptr(a[0])[0]);
+}
+static TuriValue native_json_get_bool(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_bool(false);
+    return turi_bool(json_node_ptr(a[0])[1] != 0);
+}
+static TuriValue native_json_get_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(json_node_ptr(a[0])[1]);
+}
+static TuriValue native_json_get_float(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_float(0.0);
+    double v;
+    memcpy(&v, &json_node_ptr(a[0])[1], sizeof(double));
+    return turi_float(v);
+}
+static TuriValue native_json_get_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_cstr("");
+    return turi_cstr((const char *)(intptr_t)json_node_ptr(a[0])[1]);
+}
+static TuriValue native_json_array_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    int64_t *node = json_node_ptr(a[0]);
+    tur_json_vec *v = (tur_json_vec *)(intptr_t)node[1];
+    return turi_int((int64_t)v->len);
+}
+static TuriValue native_json_array_get(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2 || a[0].as_int == 0) return turi_int(0);
+    int64_t *node = json_node_ptr(a[0]);
+    tur_json_vec *v = (tur_json_vec *)(intptr_t)node[1];
+    int64_t i = a[1].as_int;
+    if (i < 0 || (size_t)i >= v->len) return turi_int(0);
+    return turi_int(v->data[i]);
+}
+/* json/get: returns a some-option box {int64 is_some; int64 value} (matching the
+ * inline-C struct {bool is_some; int64 value}, padded to int64[2]) or 0 (none). */
+static TuriValue native_json_get(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2 || a[0].as_int == 0) return turi_int(0);
+    int64_t *node = json_node_ptr(a[0]);
+    const char *key = json_arg_cstr(a[1]);
+    int64_t cur = node[1];
+    while (cur) {
+        int64_t *ent = (int64_t *)(intptr_t)cur;
+        if (strcmp((const char *)(intptr_t)ent[0], key) == 0) {
+            int64_t *opt = malloc(2 * sizeof(int64_t));
+            opt[0] = 1; opt[1] = ent[1];
+            return turi_int((int64_t)(intptr_t)opt);
+        }
+        cur = ent[2];
+    }
+    return turi_int(0);
+}
+static TuriValue native_json_get_bang(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2 || a[0].as_int == 0) {
+        fprintf(stderr, "json/get!: null node\n");
+        abort();
+    }
+    int64_t *node = json_node_ptr(a[0]);
+    const char *key = json_arg_cstr(a[1]);
+    int64_t cur = node[1];
+    while (cur) {
+        int64_t *ent = (int64_t *)(intptr_t)cur;
+        if (strcmp((const char *)(intptr_t)ent[0], key) == 0)
+            return turi_int(ent[1]);
+        cur = ent[2];
+    }
+    fprintf(stderr, "json/get!: key not found: %s\n", key);
+    abort();
+}
+
+/* --- encoder: a growable char buffer + recursive node walk --- */
+typedef struct { char *data; size_t len; size_t cap; } tur_json_encbuf;
+static void json_enc_ensure(tur_json_encbuf *b, size_t extra) {
+    if (b->len + extra + 1 > b->cap) {
+        b->cap = (b->len + extra + 1) * 2 + 64;
+        b->data = realloc(b->data, b->cap);
+    }
+}
+static void json_enc_append_s(tur_json_encbuf *b, const char *s) {
+    size_t slen = strlen(s);
+    json_enc_ensure(b, slen);
+    memcpy(b->data + b->len, s, slen);
+    b->len += slen;
+    b->data[b->len] = '\0';
+}
+static void json_enc_append_c(tur_json_encbuf *b, char c) {
+    json_enc_ensure(b, 1);
+    b->data[b->len++] = c;
+    b->data[b->len] = '\0';
+}
+static void json_enc_str(tur_json_encbuf *b, const char *s) {
+    json_enc_append_c(b, '"');
+    for (const char *sp = s; *sp; sp++) {
+        if (*sp == '"')       json_enc_append_s(b, "\\\"");
+        else if (*sp == '\\') json_enc_append_s(b, "\\\\");
+        else if (*sp == '\n') json_enc_append_s(b, "\\n");
+        else if (*sp == '\r') json_enc_append_s(b, "\\r");
+        else if (*sp == '\t') json_enc_append_s(b, "\\t");
+        else                  json_enc_append_c(b, *sp);
+    }
+    json_enc_append_c(b, '"');
+}
+static void json_enc_node(int64_t node, tur_json_encbuf *b) {
+    if (!node) { json_enc_append_s(b, "null"); return; }
+    int64_t *np = (int64_t *)(intptr_t)node;
+    int type = (int)np[0];
+    char tmp[64];
+    switch (type) {
+        case 0: json_enc_append_s(b, "null"); break;
+        case 1: json_enc_append_s(b, np[1] ? "true" : "false"); break;
+        case 2: snprintf(tmp, sizeof(tmp), "%lld", (long long)np[1]);
+                json_enc_append_s(b, tmp); break;
+        case 3: {
+            double v; memcpy(&v, &np[1], sizeof(double));
+            snprintf(tmp, sizeof(tmp), "%.17g", v);
+            json_enc_append_s(b, tmp); break;
+        }
+        case 4: json_enc_str(b, (const char *)(intptr_t)np[1]); break;
+        case 5: {
+            tur_json_vec *v = (tur_json_vec *)(intptr_t)np[1];
+            json_enc_append_c(b, '[');
+            for (size_t i = 0; i < v->len; i++) {
+                if (i > 0) json_enc_append_c(b, ',');
+                json_enc_node(v->data[i], b);
+            }
+            json_enc_append_c(b, ']');
+            break;
+        }
+        case 6: {
+            json_enc_append_c(b, '{');
+            int64_t cur = np[1];
+            int first = 1;
+            while (cur) {
+                int64_t *ent = (int64_t *)(intptr_t)cur;
+                if (!first) json_enc_append_c(b, ',');
+                first = 0;
+                json_enc_str(b, (const char *)(intptr_t)ent[0]);
+                json_enc_append_c(b, ':');
+                json_enc_node(ent[1], b);
+                cur = ent[2];
+            }
+            json_enc_append_c(b, '}');
+            break;
+        }
+        default: json_enc_append_s(b, "null"); break;
+    }
+}
+static TuriValue native_json_encode(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_json_encbuf b;
+    b.data = malloc(256);
+    b.data[0] = '\0';
+    b.len = 0;
+    b.cap = 256;
+    json_enc_node((n >= 1) ? a[0].as_int : 0, &b);
+    return turi_cstr(b.data);
+}
+
+/* --- decoder: recursive-descent over a {s, pos, err} context --- */
+typedef struct { const char *s; size_t pos; int err; } tur_json_ctx;
+static void json_dec_skip_ws(tur_json_ctx *c) {
+    while (c->s[c->pos] == ' ' || c->s[c->pos] == '\n' ||
+           c->s[c->pos] == '\r' || c->s[c->pos] == '\t') c->pos++;
+}
+static char *json_dec_parse_string(tur_json_ctx *c) {
+    if (c->s[c->pos] != '"') { c->err = 1; return NULL; }
+    c->pos++;
+    size_t cap = 64, len = 0;
+    char *buf = malloc(cap);
+    while (c->s[c->pos] && c->s[c->pos] != '"') {
+        if (len + 4 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+        if (c->s[c->pos] == '\\') {
+            c->pos++;
+            switch (c->s[c->pos]) {
+                case '"':  buf[len++] = '"';  break;
+                case '\\': buf[len++] = '\\'; break;
+                case '/':  buf[len++] = '/';  break;
+                case 'n':  buf[len++] = '\n'; break;
+                case 'r':  buf[len++] = '\r'; break;
+                case 't':  buf[len++] = '\t'; break;
+                case 'b':  buf[len++] = '\b'; break;
+                case 'f':  buf[len++] = '\f'; break;
+                default:   buf[len++] = c->s[c->pos]; break;
+            }
+        } else {
+            buf[len++] = c->s[c->pos];
+        }
+        c->pos++;
+    }
+    if (c->s[c->pos] != '"') { c->err = 1; free(buf); return NULL; }
+    c->pos++;
+    buf[len] = '\0';
+    return buf;
+}
+static int64_t json_dec_parse_value(tur_json_ctx *c) {
+    json_dec_skip_ws(c);
+    char ch = c->s[c->pos];
+    if (ch == 'n' && strncmp(c->s + c->pos, "null", 4) == 0) {
+        c->pos += 4;
+        int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 0; node[1] = 0;
+        return (int64_t)(intptr_t)node;
+    }
+    if (ch == 't' && strncmp(c->s + c->pos, "true", 4) == 0) {
+        c->pos += 4;
+        int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 1; node[1] = 1;
+        return (int64_t)(intptr_t)node;
+    }
+    if (ch == 'f' && strncmp(c->s + c->pos, "false", 5) == 0) {
+        c->pos += 5;
+        int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 1; node[1] = 0;
+        return (int64_t)(intptr_t)node;
+    }
+    if (ch == '"') {
+        char *sv = json_dec_parse_string(c);
+        if (!sv) return 0;
+        int64_t *node = malloc(2 * sizeof(int64_t));
+        node[0] = 4; node[1] = (int64_t)(intptr_t)sv;
+        return (int64_t)(intptr_t)node;
+    }
+    if (ch == '-' || (ch >= '0' && ch <= '9')) {
+        char *end;
+        int64_t ival = strtoll(c->s + c->pos, &end, 10);
+        if (*end == '.' || *end == 'e' || *end == 'E') {
+            double fval = strtod(c->s + c->pos, &end);
+            c->pos = (size_t)(end - c->s);
+            int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 3;
+            memcpy(&node[1], &fval, sizeof(double));
+            return (int64_t)(intptr_t)node;
+        }
+        c->pos = (size_t)(end - c->s);
+        int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 2; node[1] = ival;
+        return (int64_t)(intptr_t)node;
+    }
+    if (ch == '[') {
+        c->pos++;
+        tur_json_vec *v = malloc(sizeof(*v));
+        v->data = NULL; v->len = 0; v->cap = 0;
+        json_dec_skip_ws(c);
+        if (c->s[c->pos] != ']') {
+            for (;;) {
+                int64_t elem = json_dec_parse_value(c);
+                if (c->err) { free(v->data); free(v); return 0; }
+                if (v->len >= v->cap) {
+                    v->cap = v->cap > 0 ? v->cap * 2 : 4;
+                    v->data = realloc(v->data, v->cap * sizeof(int64_t));
+                }
+                v->data[v->len++] = elem;
+                json_dec_skip_ws(c);
+                if (c->s[c->pos] == ']') break;
+                if (c->s[c->pos] != ',') { c->err = 1; free(v->data); free(v); return 0; }
+                c->pos++;
+            }
+        }
+        c->pos++;
+        int64_t *node = malloc(2 * sizeof(int64_t));
+        node[0] = 5; node[1] = (int64_t)(intptr_t)v;
+        return (int64_t)(intptr_t)node;
+    }
+    if (ch == '{') {
+        c->pos++;
+        int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 6; node[1] = 0;
+        json_dec_skip_ws(c);
+        if (c->s[c->pos] != '}') {
+            for (;;) {
+                json_dec_skip_ws(c);
+                char *key = json_dec_parse_string(c);
+                if (!key || c->err) { free(node); return 0; }
+                json_dec_skip_ws(c);
+                if (c->s[c->pos] != ':') { c->err = 1; free(key); free(node); return 0; }
+                c->pos++;
+                int64_t val = json_dec_parse_value(c);
+                if (c->err) { free(key); free(node); return 0; }
+                int64_t *entry = malloc(3 * sizeof(int64_t));
+                entry[0] = (int64_t)(intptr_t)key;
+                entry[1] = val;
+                entry[2] = node[1];
+                node[1] = (int64_t)(intptr_t)entry;
+                json_dec_skip_ws(c);
+                if (c->s[c->pos] == '}') break;
+                if (c->s[c->pos] != ',') { c->err = 1; free(node); return 0; }
+                c->pos++;
+            }
+        }
+        c->pos++;
+        return (int64_t)(intptr_t)node;
+    }
+    c->err = 1;
+    return 0;
+}
+static TuriValue native_json_decode(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    const char *s = json_arg_cstr(a[0]);
+    if (!s) return turi_int(0);
+    tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
+    int64_t result = json_dec_parse_value(&ctx);
+    if (ctx.err) return turi_int(0);
+    return turi_int(result);
+}
+
+/* --- free: no-op under the interpreter's process-lifetime policy (match the
+ * signature so a call type-checks and is a harmless no-op). --- */
+static TuriValue native_json_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_nil();
+}
+
+static void wk_register_json_natives(TuriEnv *env) {
+    /* builders */
+    turi_env_register_native(env, "json/null",       native_json_null,       NULL);
+    turi_env_register_native(env, "json/bool",       native_json_bool,       NULL);
+    turi_env_register_native(env, "json/int",        native_json_int,        NULL);
+    turi_env_register_native(env, "json/float",      native_json_float,      NULL);
+    turi_env_register_native(env, "json/string",     native_json_string,     NULL);
+    turi_env_register_native(env, "json/array-new",  native_json_array_new,  NULL);
+    turi_env_register_native(env, "json/array-push", native_json_array_push, NULL);
+    turi_env_register_native(env, "json/object-new", native_json_object_new, NULL);
+    turi_env_register_native(env, "json/object-put", native_json_object_put, NULL);
+    /* accessors */
+    turi_env_register_native(env, "json/type",       native_json_type,       NULL);
+    turi_env_register_native(env, "json/get-bool",   native_json_get_bool,   NULL);
+    turi_env_register_native(env, "json/get-int",    native_json_get_int,    NULL);
+    turi_env_register_native(env, "json/get-float",  native_json_get_float,  NULL);
+    turi_env_register_native(env, "json/get-string", native_json_get_string, NULL);
+    turi_env_register_native(env, "json/array-len",  native_json_array_len,  NULL);
+    turi_env_register_native(env, "json/array-get",  native_json_array_get,  NULL);
+    turi_env_register_native(env, "json/get",        native_json_get,        NULL);
+    turi_env_register_native(env, "json/get!",       native_json_get_bang,   NULL);
+    /* encoder / decoder / free */
+    turi_env_register_native(env, "json/encode",     native_json_encode,     NULL);
+    turi_env_register_native(env, "json/decode",     native_json_decode,     NULL);
+    turi_env_register_native(env, "json/free",       native_json_free,       NULL);
 }
 
 /* SYM (turi): first-class :Sym natives (-Xsymbols).  The interpreter carries a
