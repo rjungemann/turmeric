@@ -1060,6 +1060,45 @@ seq-transform-map
 seq-transform-map-indexed
 seq-transform-take
 seq-transform-take-while
+# json (verified 2026-06-13): stdlib/json.tur's tagged-AST JSON engine now runs
+# under --interpret.  The malloc/recurse inline-C builders, accessors, encoder,
+# and recursive-descent decoder are re-implemented as layout-exact natives
+# (wk_register_json_natives in src/main.c), overriding the loaded json.tur
+# inline-C bodies; -Xjson-reader auto-loads json.tur so the #json(...) reader
+# macro's node constructors resolve.  See
+# docs/upcoming/turi-json-schema-interpreter-plan.md (Layer 1).
+json-reader-array
+json-reader-escape
+json-reader-nested
+json-reader-null
+json-reader-object
+# schema (verified 2026-06-13): stdlib/schema.tur's runtime schema validator now
+# runs under --interpret (Layer 2).  Its inline-C combinator constructors,
+# SchemaError/Result model, error accessors, and the ~175-line recursive
+# sch-decode-rec- decoder are re-implemented as layout-exact natives
+# (wk_register_schema_natives in src/main.c); the transform/fmap/ap/rec fat
+# closures route through turi_call (a TURI_CLOSURE under --interpret).  Also
+# required a tur-vec-homog__ no-op native so the vec-of macro (used by
+# schema/union arms) works under --interpret.  -Xschema-reader auto-loads
+# schema.tur.  schema-applicative-user{,-errors} stay carved (they define their
+# own inline-C helpers).  schema-phantom-infer is already listed above.  See
+# docs/upcoming/turi-json-schema-interpreter-plan.md (Layer 2).
+schema-alternative-union
+schema-applicative-ap
+schema-applicative-error-accumulation
+schema-decode-array
+schema-decode-errors
+schema-decode-literal
+schema-decode-object
+schema-decode-optional
+schema-decode-recursive
+schema-decode-typed-user
+schema-decode-union
+schema-functor-transform
+schema-hkt-alternative
+schema-hkt-functor
+schema-reader-json-str-runtime
+schema-transform-closure
 "
 
 # Build an associative-set from the default list for O(1) lookup.
