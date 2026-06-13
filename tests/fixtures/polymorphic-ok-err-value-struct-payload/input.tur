@@ -1,0 +1,22 @@
+;; Prereq 6 regression: polymorphic `ok` / `err` with a value-struct payload.
+;; Pre-fix the inline-C body `return tur_ok((int64_t)(intptr_t)x);` rejected
+;; the User struct rvalue; post-fix the spec emit detects the boxing-needed
+;; shape (body_is_inline_c + value-struct A + return type uses carrier ABI)
+;; and synthesizes a direct by-value Result struct construction, bypassing
+;; the int64 carrier helpers entirely.
+;;
+;; Expected:
+;;   alice
+;;   boom
+
+(defstruct User [id : int  name : cstr])
+(defstruct Errm [code : int  message : cstr])
+
+(defn main [] : int
+  (let [r-ok  : (Result User cstr) (ok  (make-struct User 7 "alice"))
+        u                          (ok-val r-ok)
+        r-err : (Result int Errm)  (err (make-struct Errm 42 "boom"))
+        e                          (err-val r-err)]
+    (println (.name u))
+    (println (.message e)))
+  0)

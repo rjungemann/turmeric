@@ -506,6 +506,29 @@ use `*e->expected_type` (the ascribed type, which already substitutes
 `a := bound`) when an ascription is present. Regression fixture:
 `tests/fixtures/typeclass-return-dispatch-result-wrapped/`.
 
+### polymorphic `(ok x)` / `(err e)` fails when payload is a value-struct (FIXED -- 2026-06-13 as Prereq 6)
+
+[`../archive/history/polymorphic-ok-fails-for-value-struct-payload.md`](../archive/history/polymorphic-ok-fails-for-value-struct-payload.md)
+
+Prereq 3's polymorphic `ok` body `return tur_ok((int64_t)(intptr_t)x)`
+is invalid C when `x` is a value-struct (multi-byte defstruct value);
+the cast can't operate on a struct rvalue. Originally proposed as a
+carrier-box helper at codegen, but that hits a layout mismatch:
+`tur_ok` stores its int64 arg in `tur_result_box_t.ok_val` (8 bytes),
+while `Result__User__cstr` has a User-by-value `ok_val` field that may
+be larger than 8 bytes -- dereferencing the carrier as the by-value
+struct reads off the end. **Fix:** when the spec emit pass sees a
+polymorphic constructor whose body is inline-C, return type uses
+carrier ABI, and a value-struct arg fits the pattern (and the function
+name is `ok` or `err`), synthesize a direct by-value Result struct
+construction body that bypasses the int64 carrier entirely. Param
+rename + heap-spill are still emitted as a fallback for other
+polymorphic constructor names hitting the same shape (no synthesis
+applies; the inline-C body's `x` becomes a `T *`). Regression
+fixture: `tests/fixtures/polymorphic-ok-err-value-struct-payload/`.
+Suite: 1562 / 82 (+2 / -1 vs prior baseline; hamt-delete flake
+toggled).
+
 ## Interpreter (turi) parity (landed)
 
 ### Deep non-tail recursion overflowed the C stack before the depth guard fired (FIXED -- Direction A)

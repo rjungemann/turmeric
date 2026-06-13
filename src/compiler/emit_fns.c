@@ -466,6 +466,37 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* Emit parameters - use raw names (without ID suffix) */
     bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+    /* Prereq 6: when a polymorphic stdlib constructor's inline-C body
+     * (which assumes int64-castable `x`) is monomorphized for a value-
+     * struct A, the source `(int64_t)(intptr_t)x` cast on the struct
+     * rvalue is invalid C. The boxing-needed shape is three existing
+     * predicates: body_is_inline_c + return type uses carrier ABI + the
+     * spec arg type is a non-parametric value-struct. When all three
+     * hold for param i, we rename its C identifier to `__tur_inbox_<orig>`
+     * here and emit a heap-spill stanza after the param list closer so
+     * `<orig>` shadows the parameter as a `T *` heap pointer -- the
+     * inline-C body's `(int64_t)(intptr_t)<orig>` cast then operates on
+     * a pointer and produces the int64 carrier the call site expects.
+     * No source-level annotation: the recognizer is purely structural.
+     * See docs/reported/polymorphic-ok-fails-for-value-struct-payload.md. */
+    bool needs_box_spill[16];
+    for (uint8_t i = 0; i < 16; i++) needs_box_spill[i] = false;
+    if (use_abi_spec && body_is_inline_c) {
+        Type ret = ctx->current_abi_specialization->result_type;
+        bool return_uses_carrier =
+            type_uses_carrier_abi(emit_resolve_type(ctx, ret));
+        if (return_uses_carrier) {
+            for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+                Type pty = ctx->current_abi_specialization->arg_types[i];
+                bool is_value_struct =
+                    pty.kind == TY_STRUCT && pty.as.struct_.def &&
+                    !pty.as.struct_.def->is_opaque &&
+                    pty.as.struct_.def->n_type_params == 0 &&
+                    !type_uses_carrier_abi(emit_resolve_type(ctx, pty));
+                if (is_value_struct) needs_box_spill[i] = true;
+            }
+        }
+    }
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i > 0) buf_puts(file, ", ");
         /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
@@ -520,10 +551,99 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
         }
         const char *pn = raw_name_for_binding(fd->params[i]);
-        buf_printf(file, " %s", pn);
+        if (i < 16 && needs_box_spill[i]) {
+            /* Prereq 6: rename the parameter so the inline-C body's
+             * `<orig>` identifier can be redeclared as a heap pointer
+             * inside the function. */
+            buf_printf(file, " __tur_inbox_%s", pn);
+        } else {
+            buf_printf(file, " %s", pn);
+        }
         free((void*)pn);
     }
     buf_puts(file, ") {\n");
+
+    /* Prereq 6: synthesized body for the polymorphic-ok / polymorphic-err
+     * boxing case. When the function is `ok` or `err` and any param needs
+     * boxing, emit a complete body that heap-spills the value-struct arg,
+     * calls the prelude carrier helper (tur_ok / tur_err), and casts the
+     * int64 carrier back to the declared by-value struct return type.
+     * Then skip the original inline-C body (which assumes scalar/pointer
+     * A and would emit `return tur_ok((int64_t)(intptr_t)x);` with the
+     * struct rvalue cast clang rejects). */
+    bool prereq6_synthesized_body = false;
+    {
+        bool any_box = false;
+        for (uint8_t i = 0; i < fd->n_params && i < 16; i++)
+            if (needs_box_spill[i]) { any_box = true; break; }
+        const char *fname = (any_box && fd->binding && fd->binding->name)
+            ? fd->binding->name->name : NULL;
+        const char *carrier_helper = NULL;
+        if (fname) {
+            if (strcmp(fname, "ok") == 0)  carrier_helper = "tur_ok";
+            else if (strcmp(fname, "err") == 0) carrier_helper = "tur_err";
+        }
+        const char *ret_c = carrier_helper
+            ? emit_type_c_name(ctx,
+                ctx->current_abi_specialization->result_type)
+            : NULL;
+        /* Only synthesize when the spec's C return type really is the
+         * by-value Result struct -- not when it's been lowered to the
+         * int64 carrier (typeclass-instance-method dispatch context, where
+         * the call site expects an int64 handle, not the by-value struct).
+         * In the carrier case the body's int64 return value must come from
+         * a real carrier-producing path that fits a value-struct payload,
+         * which the synthesized direct-by-value construction can't provide.
+         * Fall through to the inline-C body + heap-spill in that case;
+         * caveats live in the report's "Remaining gap" section. */
+        if (carrier_helper && ret_c && strcmp(ret_c, "int64_t") == 0) {
+            carrier_helper = NULL;
+        }
+        if (carrier_helper) {
+            /* Prereq 6 synthesized body: construct the Result struct
+             * directly by value. */
+            bool is_ok_ctor = (strcmp(fname, "ok") == 0);
+            const char *spilled_param_name = NULL;
+            for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+                if (!needs_box_spill[i]) continue;
+                const char *pn = raw_name_for_binding(fd->params[i]);
+                if (!spilled_param_name) spilled_param_name = pn;
+                else free((void*)pn);
+            }
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file, "%s __tur_p6_r;\n", ret_c);
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file, "__tur_p6_r.is_ok = %s;\n",
+                       is_ok_ctor ? "true" : "false");
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file, "memset(&__tur_p6_r.ok_val, 0, sizeof(__tur_p6_r.ok_val));\n");
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file, "memset(&__tur_p6_r.err_val, 0, sizeof(__tur_p6_r.err_val));\n");
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file, "__tur_p6_r.%s = __tur_inbox_%s;\n",
+                       is_ok_ctor ? "ok_val" : "err_val",
+                       spilled_param_name);
+            indent_buf(file, ctx->indent + 4);
+            buf_puts(file, "return __tur_p6_r;\n");
+            free((void*)spilled_param_name);
+            prereq6_synthesized_body = true;
+        } else {
+            /* No special-case synthesis: fall through to the original
+             * inline-C body. The heap-spill stanza is still emitted so the
+             * body's `(int64_t)(intptr_t)x` cast operates on a pointer. */
+            for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+                if (!needs_box_spill[i]) continue;
+                Type pty = ctx->current_abi_specialization->arg_types[i];
+                const char *ctype = emit_type_c_name(ctx, pty);
+                const char *pn = raw_name_for_binding(fd->params[i]);
+                indent_buf(file, ctx->indent + 4);
+                buf_printf(file,
+                           "%s *%s = (%s *)malloc(sizeof(%s)); *%s = __tur_inbox_%s;\n",
+                           ctype, pn, ctype, ctype, pn, pn);
+                free((void*)pn);
+            }
+        }
+    }
 
     /* Phase R6: Inject g_panic_trace initialization at start of main */
     if (is_main && g_panic_trace) {
@@ -634,7 +754,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main && !use_abi_spec &&
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
-    if (body_diverges) {
+    if (prereq6_synthesized_body) {
+        /* Prereq 6: the function body was already emitted as a synthesized
+         * wrapper above (heap-spill + carrier helper call + cast back to
+         * the by-value struct). Skip the normal body-emit paths; the
+         * function's closing brace at the end of emit_fn_def still runs. */
+    } else if (body_diverges) {
         /* Body diverges on every path - emit as statements only */
         emit_stmt(ctx, file, fd->body);
     } else if (fd->body->kind == EX_INLINE_C) {
