@@ -1,0 +1,7 @@
+tco-self-tail-deep: a 10,000,000-iteration self-recursive countdown whose whole
+point is the *compiled* self-tail-call lowering (the `__tur_tailcall:` label +
+goto in expected.c). The tree-walking interpreter DOES apply self-TCO -- a 1M
+run completes without overflowing the C stack -- but 10M tree-walk iterations
+take ~27s, well over the harness's 10s per-fixture run timeout. Correct under
+--interpret, just impractically slow; a compiled-path codegen test, not an
+interpreter gap.

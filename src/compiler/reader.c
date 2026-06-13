@@ -2969,8 +2969,16 @@ static int try_consume_use_directive(Reader *r,
     }
 
     char abs_path[4096];
-    rm_resolve_relative(r->file->path, path_form->as.s.p,
-                        abs_path, sizeof(abs_path));
+    if (path_form->as.s.p[0] != '/' && r->file && r->file->base_dir) {
+        /* The reading file's path has no usable dirname (e.g. the synthetic
+         * "<eval>" blob under --interpret); resolve the relative path against
+         * the script's base_dir instead. */
+        snprintf(abs_path, sizeof(abs_path), "%s/%s",
+                 r->file->base_dir, path_form->as.s.p);
+    } else {
+        rm_resolve_relative(r->file->path, path_form->as.s.p,
+                            abs_path, sizeof(abs_path));
+    }
 
     if (reader_macros_load_file(r->arena, r->st, abs_path, reg) != 0) {
         /* reader_macros_load_file emitted its own diagnostic; flag the

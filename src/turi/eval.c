@@ -1982,6 +1982,16 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
             if (args[1].as_int == 0) return turi_error("eval: modulo by zero");
             return turi_int(args[0].as_int % args[1].as_int);
         }
+        /* Phase C bitwise ops (bit-and/or/xor/shl/shr).  Builtins.c registers
+         * these for every integer kind; under --interpret every integer is an
+         * int64 carrier, so the kind-preserving width masking the compiled path
+         * applies is a no-op here -- the int64 result matches for in-range
+         * values (the same convention the arithmetic fold path uses). */
+        if (strcmp(op, "&")  == 0) return turi_int(args[0].as_int &  args[1].as_int);
+        if (strcmp(op, "|")  == 0) return turi_int(args[0].as_int |  args[1].as_int);
+        if (strcmp(op, "^")  == 0) return turi_int(args[0].as_int ^  args[1].as_int);
+        if (strcmp(op, "<<") == 0) return turi_int(args[0].as_int << args[1].as_int);
+        if (strcmp(op, ">>") == 0) return turi_int(args[0].as_int >> args[1].as_int);
         return turi_errorf("eval: unknown infix builtin '%s'", op);
     }
 
@@ -6055,6 +6065,11 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
      * memory (the sweet-exp xform map) and crashes. */
     memset(sfile, 0, sizeof(*sfile));
     sfile->path        = "<eval>";
+    /* Resolve in-source relative paths (#use-reader-macros) against the script's
+     * directory: the eval blob's path is the synthetic "<eval>" (no dirname), so
+     * without this a directive like `#use-reader-macros "macros.tur"` would look
+     * in cwd instead of beside the script. */
+    sfile->base_dir    = env->module_base_dir;
     sfile->src         = src_copy;
     sfile->len         = src_len;
     sfile->file_id     = 0;

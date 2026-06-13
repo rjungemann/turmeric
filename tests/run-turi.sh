@@ -399,6 +399,7 @@ any-box-cstr
 any-cast-checked
 any-is-predicate
 arrow-instance-nullary
+kleisli-arrow-instance
 async-effect-spawn
 bare-fat-float-result
 bare-fat-float-result-dedup
@@ -736,6 +737,7 @@ reader-macros-datum
 reader-macros-load-transitive
 reader-macros-raw
 reader-macros-string-body
+reader-macros-use
 recursive-types/fix-type
 recursive-types/hkt-recursive
 recursive-types/mutual-recursion
@@ -763,6 +765,7 @@ sf-let-bind-with-inner-call
 shebang-sweet-lang
 show-bool
 show-cstr
+sized-bitwise-narrow
 sized-cross-param-accept
 sized-size-arith
 sized-static-int
