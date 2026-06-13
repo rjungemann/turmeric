@@ -1164,6 +1164,14 @@ typed/list-macro
 # prelude under that reader, so the sweet-exp reader switch no longer wipes the
 # accumulated stdlib (hamt-of was unbound before the fix).
 data-literal-sweet-exp
+# Free monad (verified 2026-06-13): free.tur's free-bind / free-run have
+# #{Unsafe} inline-C bodies that cast the Free ADT carrier to a C tagged-union
+# and call the ^fat continuation via tur_poly_fn_t.  native_free_bind /
+# native_free_run re-implement them over the PureFree/Suspend TuriStruct +
+# turi_call (free-pure/free-lift are already pure-turi ADT constructors).
+free-pure
+free-lift-bind
+free-interpreter
 "
 
 # Build an associative-set from the default list for O(1) lookup.

@@ -139,6 +139,11 @@ void turi_run_pending_defers(TuriEnv *env);
  * *found to false and returns nil otherwise. */
 TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found);
 
+/* Returns the constructor/struct name of a TURI_STRUCT value (e.g. "PureFree"),
+ * or NULL when v is not a struct.  Lets natives in main.c dispatch on an ADT
+ * constructor without the opaque TuriStruct layout. */
+const char *turi_struct_name(TuriValue v);
+
 /* SEQ: advance a generator VALUE (carrier holds the TuriGen*) one step; returns
  * the yielded value and sets *done to 1 when the generator just exhausted.
  * Lets the seq inline-C natives (main.c) drive a TURI_GEN. */

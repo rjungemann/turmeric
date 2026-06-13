@@ -465,6 +465,11 @@ TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found) {
     return turi_nil();
 }
 
+const char *turi_struct_name(TuriValue v) {
+    if (v.tag == TURI_STRUCT && v.as_struct) return v.as_struct->name;
+    return NULL;
+}
+
 static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
     return make_struct_val_def(name, n, fields, NULL);
 }

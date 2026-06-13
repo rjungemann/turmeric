@@ -1,5 +1,17 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (Free monad under --interpret, 2026-06-13):** unblocked the `free-*`
+> cluster -- `free-pure`, `free-lift-bind`, `free-interpreter`. `free.tur`'s
+> `free-bind` / `free-run` have `#{Unsafe}` inline-C bodies that cast the Free ADT
+> carrier to a C tagged-union and call the `^fat` continuation via a
+> `tur_poly_fn_t`; under `--interpret` the Free value is a `PureFree`/`Suspend`
+> `TuriStruct` and the continuation is a turi closure, so `native_free_bind` /
+> `native_free_run` read the constructor (new public `turi_struct_name` accessor)
+> + payload (field 0) and invoke the continuation via `turi_call`. `free-pure` /
+> `free-lift` are already pure-turi ADT constructors. **Harness 1144 -> 1147
+> passed, 0 failed; gap 56 -> 53.** Parity 113/115 0-gaps; compiled suite
+> unaffected (additive natives + standalone accessor).
+>
 > **Progress (sweet-exp prelude survives reader switch + map/set cluster COMPLETE,
 > 2026-06-13):** a sweep of the map/set/hamt cluster found the runnable surface
 > already complete -- every non-inline-C `map`/`set`/`hamt`/`eqmap`/`mutmap`/

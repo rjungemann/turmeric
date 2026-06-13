@@ -8013,6 +8013,48 @@ static TuriValue native_list_length(TuriEnv *env, TuriValue *a, uint32_t n, void
     return turi_int(count);
 }
 
+/* Free monad (stdlib/free.tur) natives.  free.tur's free-bind / free-fmap /
+ * free-run have #{Unsafe} inline-C bodies that cast the Free ADT carrier to a C
+ * tagged-union struct and invoke the ^fat continuation through a tur_poly_fn_t.
+ * Under --interpret the Free value is a TuriStruct (the ADT constructor
+ * PureFree/Suspend built by adt_ctor_native), and the continuation is a turi
+ * closure -- so these natives read the tag by struct name, read the payload
+ * (field 0 for both arms), and call the continuation via turi_call. */
+static bool free_is_ctor(TuriValue v, const char *name) {
+    const char *nm = turi_struct_name(v);
+    return nm && strcmp(nm, name) == 0;
+}
+/* Invoke a ^fat continuation that may arrive as a closure or as an int64
+ * carrier holding the TuriClosure* (the carrier-readback case). */
+static TuriValue free_call_fat(TuriEnv *env, TuriValue k, TuriValue arg) {
+    if (k.tag == TURI_INT && k.as_int != 0) {
+        TuriClosure *cl = (TuriClosure *)(intptr_t)k.as_int;
+        k.tag = TURI_CLOSURE; k.as_closure = cl;
+    }
+    return turi_call(env, k, &arg, 1);
+}
+/* free-bind : (ma  ^fat kont) -- PureFree x => kont(x); Suspend => pass through. */
+static TuriValue native_free_bind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    if (free_is_ctor(a[0], "PureFree")) {
+        bool f = false; TuriValue x = turi_struct_field(a[0], 0, &f);
+        return free_call_fat(env, a[1], x);
+    }
+    return a[0]; /* Suspend -- pass through */
+}
+/* free-run : (^fat interp  free) -- PureFree x => x; Suspend fx => interp(fx). */
+static TuriValue native_free_run(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    if (free_is_ctor(a[1], "PureFree")) {
+        bool f = false; TuriValue x = turi_struct_field(a[1], 0, &f);
+        return x;
+    }
+    bool f = false; TuriValue inner = turi_struct_field(a[1], 0, &f); /* Suspend fx */
+    return free_call_fat(env, a[0], inner);
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -8738,6 +8780,10 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "list-head",       native_list_head,       NULL);
     turi_env_register_native(env, "list-tail",       native_list_tail,       NULL);
     turi_env_register_native(env, "list-length",     native_list_length,     NULL);
+    /* Free monad (free.tur): #{Unsafe} inline-C bodies re-implemented over the
+     * PureFree/Suspend TuriStruct + turi_call continuation. */
+    turi_env_register_native(env, "free-bind",       native_free_bind,       NULL);
+    turi_env_register_native(env, "free-run",        native_free_run,        NULL);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
     turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);
