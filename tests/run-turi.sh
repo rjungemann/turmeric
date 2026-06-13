@@ -994,9 +994,9 @@ workflow-roundtrip
 # in src/turi/eval.c.  range.tur packs Bound GADT endpoints into a heap struct via
 # inline-C (range-new / range-lower / range-upper); the round-tripped TuriStruct
 # pointer now keeps its TURI_STRUCT tag on readback, so a match over Bound finds
-# its arm instead of the no-arm-matched error.  range-show and range-from-range
-# stay off: they are genuine inline-C carve-outs (snprintf percent-s formatting
-# and a seq/from-range body the simple executor declines).
+# its arm instead of the no-arm-matched error.  range-from-range[-step] are now
+# interpretable too (added in the 2026-06-13 bulk-add below); only range-show
+# stays off as a genuine inline-C carve-out (snprintf percent-s formatting).
 range-bound-gadt
 range-connected-overlaps
 range-constructors
@@ -1111,6 +1111,27 @@ schema-hkt-alternative
 schema-hkt-functor
 schema-reader-json-str-runtime
 schema-transform-closure
+# W5 bulk-add (verified 2026-06-13): non-inline-C fixtures that already pass
+# under --interpret with their flags but were not yet on the allowlist.  Each
+# matches expected.stdout + exit under genuine interpretation (non-trivial
+# output, no inline-C in the fixture body), shrinking the W5 triage surface
+# ahead of the allowlist->denylist flip.  The two range/from-range fixtures are
+# now interpretable (the range.tur ADT-carrier re-tag fix reaches the
+# seq/from-range body); only range-show stays carved (snprintf %s formatting).
+data-literal-nested
+data-literal-vec-basic
+hkt-instance-closure-to-fat
+lint-panic-asserts
+lint-panic-call-allow
+range-from-range
+range-from-range-step
+sized-sz1-subtype
+sized-sz7-static-accept
+tce1-vec-bool
+tce1-vec-cstr
+tce1-vec-float
+tce2-vec-of-infer
+tce5-data-literal-cstr
 "
 
 # Build an associative-set from the default list for O(1) lookup.
