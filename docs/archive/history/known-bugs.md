@@ -21,9 +21,14 @@ and fix status.
 ## KB-001 — `run-turi.sh` silently ignored fixtures missing from the allowlist
 
 **Discovered:** 2026-05-26
-**Status:** Fixed 2026-05-27 — `run_turi_fixture` now emits
-`SKIP <name> (not in turi allowlist)` and the summary line surfaces an
-"allowlist gap" count so missing fixtures are visible.
+**Status:** Fixed 2026-05-27 — `run_turi_fixture` emitted
+`SKIP <name> (not in turi allowlist)` and the summary line surfaced an
+"allowlist gap" count so missing fixtures were visible. **Retired 2026-06-13
+(W5 flip):** the allowlist (`TURI_FIXTURES_DEFAULT`) is gone entirely --
+`run-turi.sh` now runs every fixture under `--interpret` minus the
+`requires.*` marker skips and the auto-detected inline-C carve-outs, so a new
+fixture is run by default and can no longer go invisible. The workaround this
+entry describes is obsolete.
 
 ### Symptom (before fix)
 

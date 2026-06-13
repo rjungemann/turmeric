@@ -466,6 +466,21 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 
 ### W5 -- The flip itself
 
+**DONE 2026-06-13.** The allowlist (`TURI_FIXTURES_DEFAULT`) and its O(1) lookup
+set were deleted from `tests/run-turi.sh`; the harness now runs every fixture
+under `--interpret` minus the `requires.*` marker skips and the auto-detected
+inline-C carve-outs (`errors/*` are handled by the dedicated diag pass). A small
+explicit keep-set (`TURI_INLINEC_RUN`, 10 fixtures whose inline-C is backed by
+native shims / the simple inline-C evaluator) is run despite carrying a ```c
+block, so the flip was coverage-neutral: **1188 passed, 0 failed, 407 skipped**
+(all 407 inline-C carve-outs), exactly the pre-flip pass count with the phantom
+"triage surface" gone. `run-flags.sh`'s three `tur run` assertions
+(try-with-basic, try-with-nested, effect-export-explicit) were flipped to
+`--interpret` (77 passed, 0 failed), the `KB-001` allowlist-gap workaround was
+retired, and the compiled suite is unchanged (1615 passed, 0 failed). The
+precondition below held: a probe confirmed zero non-`errors/` fixtures were
+runnable-but-not-allowlisted, so the flip introduced no new failures.
+
 **Groundwork done.** The harness already (a) auto-skips inline-C carve-outs (W2),
 (b) skips all `requires.*` markers before the allowlist check, (c) runs `errors/*`
 with diag comparison (W3), and (d) has every passing non-inline-C fixture on the
