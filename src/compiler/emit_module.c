@@ -1421,6 +1421,28 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_scan_expr(ctx, e->as.exists_open_.packed, items, n_items);
             emit_abi_scan_expr(ctx, e->as.exists_open_.body,   items, n_items);
             break;
+        case EX_HANDLE: {
+            /* Recurse into the handle body + each handler case body.
+             * Without this, polymorphic helpers reached only through an
+             * `(unsafe ...)` body (which lowers to an EX_HANDLE that
+             * intercepts the Unsafe effect) -- the prototypical case is
+             * `(ok-val r)` inside `(unsafe (... typed-method-call ...))`
+             * for a parameterized Result -- fall off the worklist and
+             * the C linker reports them undeclared. Mirrors the
+             * EX_EXISTS_OPEN fix; tracked in
+             * docs/reported/typeclass-method-parameterized-result-carrier-mismatch.md
+             * (Issue 1 / Prereq 1). */
+            HandleExpr *h = e->as.handle_.handle;
+            if (h) {
+                if (h->body) emit_abi_scan_expr(ctx, h->body, items, n_items);
+                for (uint8_t i = 0; i < h->n_cases; i++) {
+                    if (h->cases[i].body) {
+                        emit_abi_scan_expr(ctx, h->cases[i].body, items, n_items);
+                    }
+                }
+            }
+            break;
+        }
         case EX_REINTERPRET:
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
                 const Expr *rc = e->as.reinterpret_.expr;

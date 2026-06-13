@@ -3,7 +3,7 @@ title: typeclass instance methods returning a parameterized struct (e.g. `(Resul
 category: Codegen / dispatch / stdlib gap
 severity: Medium. Blocks the typeclass surface for any `decode`-shaped class (Decode, Validate, Parse, …) -- anything whose method's natural return type is `Result a B` for some `a` chosen by the call-site instance. Surfaced while landing the P2a `derive-json` Decode side; the workaround (plain-defn decoders with sentinel error values) ships but loses type-level error context.
 description: Implementing `(defclass Decode [a] (decode [doc val] : (Result a cstr)))` plus `(definstance Decode [int] ...)` plus `(definstance Decode [cstr] ...)` and consuming them at the call site as `(:: (decode doc off) (Result int cstr))` trips three layered issues that prevent any combination from compiling cleanly. None is the others' root cause; fixing any one in isolation does not unblock the surface.
-status: OPEN. Filed 2026-06-12 from the P2a Decode minimal-slice work in `../turmeric-spices/spices/json`. Workaround in tree: `json/decode.tur` ships plain-defn primitive decoders (`json-decode-int`, `json-decode-cstr`) returning the value directly with a sentinel error (-1 / NULL). Documented in the module header. When this report's three issues are addressed, the typeclass surface lands as a P2a follow-up.
+status: OPEN (Issue 1 RESOLVED 2026-06-12 as Prereq 1; Issues 2 & 3 still block the typed surface). Filed 2026-06-12 from the P2a Decode minimal-slice work in `../turmeric-spices/spices/json`. Workaround in tree: `json/decode.tur` ships plain-defn primitive decoders (`json-decode-int`, `json-decode-cstr`) returning the value directly with a sentinel error (-1 / NULL). Documented in the module header. When this report's remaining issues are addressed, the typeclass surface lands as a P2a follow-up.
 ---
 
 # typeclass instance with parameterized-Result return cannot compile
@@ -26,15 +26,22 @@ This trips three interacting compiler / stdlib issues, surfaced in this
 order while debugging:
 
 1. **Return-type-dispatched typeclass call site loses monomorphization
-   under `(unsafe ...)`.**  Consumer code shaped like
+   under `(unsafe ...)`.**  **RESOLVED 2026-06-12 as Prereq 1.**
+   Consumer code shaped like
    `(unsafe (__int->cstr (ok-val (:: (decode doc off) (Result int cstr)))))`
-   lowers to C that calls `ok_hyval(...)` -- an undeclared C identifier --
+   lowered to C that called `ok_hyval(...)` -- an undeclared C identifier --
    because the polymorphic `(defn ok-val [A B] [r : (Result A B)] : A ...)`
    in stdlib/result.tur was not monomorphized for the instance's
-   concrete `A`. Removing `(unsafe ...)` and binding the result to a let
-   variable first makes the same shape monomorphize. The interaction is
-   between the `unsafe`-body's effect-handler closure and the
-   typeclass-method dispatch's return-type unification.
+   concrete `A`. Root cause: `emit_abi_scan_expr` in `emit_module.c` had
+   no case for `EX_HANDLE`, so the worklist seeding walker fell into
+   `default: break;` and never traversed the `(unsafe ...)` body's call
+   graph. Fix (mirror of the 2026-06-12 `EX_EXISTS_OPEN` fix from
+   `docs/archive/history/open-monomorphizes-polymorphic-fn-only-partially.md`):
+   add an explicit `EX_HANDLE` case that recurses into the handle body
+   plus every `cases[i].body`. The `ok_val__spec__*` specialization is
+   now emitted; the post-Prereq-1 failure mode is Issue 2's ABI
+   mismatch (an `int64_t` carrier flowing into a function that expects
+   the by-value struct), which is the next layer to peel.
 
 2. **`Result A B` uses the carrier ABI (int64_t) at the value level,
    incompatible with by-value struct return from typeclass instance shims.**
