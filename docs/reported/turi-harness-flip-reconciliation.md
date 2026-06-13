@@ -47,7 +47,8 @@
 > bigger than the sym/seq work and its own dedicated PR. Inventory + layered
 > approach (do the json layer first; it also unblocks `json-reader-*`) is captured
 > in
-> [docs/upcoming/turi-json-schema-interpreter-plan.md](../upcoming/turi-json-schema-interpreter-plan.md).
+> [docs/archive/history/turi-json-schema-interpreter-plan.md](../archive/history/turi-json-schema-interpreter-plan.md)
+> (DONE 2026-06-13; archived).
 
 > **Progress (benchmark-stub collision + math helpers, 2026-06-13):** the
 > `cmd_eval` benchmark-stub block injected `(defn int->float ...)` /

@@ -48,6 +48,7 @@ Plans whose features have shipped and are documented in [../../guides/](../../gu
 - **emit-effects-extraction-plan.md** -- EE0--EE3 effect/continuation source extraction; complete; see compiler-internals.md
 - **test-process-reduction-plan.md** -- macOS Gatekeeper mitigation; all tiers complete
 - **bare-fat-result-type-inference-plan.md** -- Phase A (tail-position retype pass for bare-`^fat` non-int results) shipped and merged (#208); Phase B broken out to [../../upcoming/v1/bare-fat-result-monomorphization-plan.md](../../upcoming/v1/bare-fat-result-monomorphization-plan.md) and deferred until a non-tail consumer exists
+- **turi-json-schema-interpreter-plan.md** -- json + schema under `tur --interpret` via layout-exact natives (`wk_register_json_natives` / `wk_register_schema_natives`); DONE 2026-06-13, the json/schema slice of the TI8.b allowlist->denylist flip
 
 ## Resolved Prerequisite Decisions
 
