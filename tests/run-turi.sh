@@ -1132,6 +1132,16 @@ tce1-vec-cstr
 tce1-vec-float
 tce2-vec-of-infer
 tce5-data-literal-cstr
+# vec/carrier closure readback (verified 2026-06-13): a closure stored into an
+# int64-carrier Vec and read back via the :ptr<void> ascription idiom lost its
+# TURI_CLOSURE tag (vec-get returns a bare TURI_INT), so the subsequent ^fat
+# call errored with expected-function-got-tag-2.  recover_carrier_closure in
+# src/turi/eval.c re-tags the carrier at the call head when the binding is
+# fat/fn-typed.
+vec-get-closure
+sf-vec-of
+vec-captureless-fat-closure-readback
+vec-typed-fat-closure-readback
 "
 
 # Build an associative-set from the default list for O(1) lookup.

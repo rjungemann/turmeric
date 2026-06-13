@@ -1,5 +1,20 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (vec/carrier closure readback fix, 2026-06-13):** fixed the
+> `eval: expected function, got tag 2` class -- a closure stored into an
+> int64-carrier `Vec` (`vec-push!`) and read back via the
+> `(:: (vec-get v i) :ptr<void>)` ascription idiom lost its `TURI_CLOSURE` tag
+> (`native_vec_get` always returns `turi_int(...)`), so the subsequent `^fat`
+> call found a bare `TURI_INT` instead of a callable. New
+> `recover_carrier_closure` (`src/turi/eval.c`) re-tags the carrier back to a
+> closure at the call head, guarded by the head binding's static type
+> (`^fat` / `TY_FN` / `TY_PTR_VOID`) -- safe because closures are
+> process-lifetime under the interpreter, so the recovered pointer stays valid.
+> Unblocked `vec-get-closure`, `sf-vec-of`,
+> `vec-captureless-fat-closure-readback`, `vec-typed-fat-closure-readback`.
+> **Harness 1134 -> 1138 passed, 0 failed; gap 66 -> 62.** Compiled suite
+> 1606/0, parity 113/115 0-gaps -- no regressions.
+>
 > **Progress (W5 allowlist bulk-add, 2026-06-13):** added 14 now-passing
 > non-inline-C fixtures to the `run-turi.sh` allowlist (`data-literal-nested`,
 > `data-literal-vec-basic`, `hkt-instance-closure-to-fat`, `lint-panic-asserts`,

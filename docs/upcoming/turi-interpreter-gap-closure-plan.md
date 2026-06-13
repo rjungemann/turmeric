@@ -471,16 +471,20 @@ error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 with diag comparison (W3), and (d) has every passing non-inline-C fixture on the
 allowlist (the bulk-add). So the allowlist now == "everything that works," and
 the flip is mechanically: replace "in allowlist?" with "not failing." The only
-thing standing between here and a green denylist is the **66** remaining
-allowlist-gap fixtures (2026-06-13; down from 80 -> 212 -> 260) -- each must be
-fixed or carved with a marker. The residual 66 split (probe under `--interpret`
-with `ASAN_OPTIONS=detect_leaks=0`): ~30 call stdlib inline-C ops with no native
-shim (`list-basic`, `typed/list-*`, `gc-*`, the linear-handle fixtures -- the
-W1b native-shim tail); ~12 effect/continuation/multishot fixtures that abort or
-diverge under the interpreter's fiber path; 4 `vec`/fat-closure readback
-(`expected function, got tag 2`); plus a scatter (`tco-self-tail-deep` interp
-timeout, `shebang-tur`, `reader-macros-{use,rx-literal}`, `sized-bitwise-narrow`,
-`data-literal-sweet-exp` `hamt-of`). The pure-turi silent-miscompile blockers (W4) are all
+thing standing between here and a green denylist is the **62** remaining
+allowlist-gap fixtures (2026-06-13; down from 66 -> 80 -> 212 -> 260) -- each
+must be fixed or carved with a marker. The residual 62 split (probe under
+`--interpret` with `ASAN_OPTIONS=detect_leaks=0`): ~30 call stdlib inline-C ops
+with no native shim (`list-basic`, `typed/list-*`, `gc-*`, the linear-handle
+fixtures -- the W1b native-shim tail); ~12 effect/continuation/multishot fixtures
+that abort or diverge under the interpreter's fiber path; plus a scatter
+(`tco-self-tail-deep` interp timeout, `shebang-tur`,
+`reader-macros-{use,rx-literal}`, `sized-bitwise-narrow`, `data-literal-sweet-exp`
+`hamt-of`). The 4 `vec`/fat-closure readback fixtures (`expected function, got
+tag 2`) are **fixed** (2026-06-13): a closure stored into an int64-carrier Vec
+and read back via the `:ptr<void>` ascription idiom lost its `TURI_CLOSURE` tag;
+`recover_carrier_closure` (`src/turi/eval.c`) re-tags the carrier at the call
+head when the binding is fat/fn-typed. The pure-turi silent-miscompile blockers (W4) are all
 cleared; the residue is the W1b native-shim cluster plus the inline-C evaluator
 tail and a small HKT/existential/continuation set.
 
@@ -556,8 +560,8 @@ Track three numbers per PR (all from the probe + harness):
 
 - **probe pass/fail/skip** -- the headline (660/910/92 at W1; target fail -> 0
   non-carved).
-- **`run-turi.sh` summary** -- must stay green every step (1134 passed, 0 failed,
-  470 skipped as of 2026-06-13; 404 inline-c carve-outs + 66 triage surface).
+- **`run-turi.sh` summary** -- must stay green every step (1138 passed, 0 failed,
+  466 skipped as of 2026-06-13; 404 inline-c carve-outs + 62 triage surface).
 - **`check_turi_parity.py`** -- must stay `0 gaps` (113/115 handled, 2 carved
   as of 2026-06-13).
 - **`tests/run.sh`** -- must stay green (`1605 passed, 0 failed` as of
