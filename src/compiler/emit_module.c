@@ -1035,6 +1035,33 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             arg_types[i] = expected_full
                 ? emit_abi_instantiate_type(expected_full, bindings, n_bindings, ctx->type_arena)
                 : fd->param_types[i];
+            /* M4c Path A.1 (docs/upcoming/m4c-execution-plan.md): when this
+             * call dispatches a typeclass-instance method, the param's full
+             * type is the resolved class-var (e.g. `Tuple2`) — the TY_TYVAR
+             * was erased at instance elab.  Override the substitution here:
+             * any param whose generic type matches the instance's resolved
+             * class-var carrier is the class variable in disguise, so use
+             * the call site's receiver type.
+             *
+             * Gate tightly: only fire when (a) the instance is on a
+             * parameterized container (TY_STRUCT with type_params > 0;
+             * `Eq[int]` / `Eq[bool]` / etc. don't need specialization), AND
+             * (b) the call-site binding's type is itself a parameterized
+             * type (TY_APP or TY_STRUCT-with-tparams).  Concrete-→-concrete
+             * (e.g. `Eq[int]` called from a relay polymorphic body) is a
+             * no-op and the original arg_types[] stays. */
+            if (fd->owner_instance && fd->owner_instance->n_type_args == 1
+                && n_bindings == 1
+                && type_eq(generic_arg, fd->owner_instance->type_args[0])
+                && fd->owner_instance->type_args[0].kind == TY_STRUCT
+                && fd->owner_instance->type_args[0].as.struct_.def
+                && fd->owner_instance->type_args[0].as.struct_.def->n_type_params > 0
+                && (bindings[0].type.kind == TY_APP
+                    || (bindings[0].type.kind == TY_STRUCT
+                        && bindings[0].type.as.struct_.def
+                        && bindings[0].type.as.struct_.def->n_type_params > 0))) {
+                arg_types[i] = bindings[0].type;
+            }
             if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
                 abi_changes = true;
             }

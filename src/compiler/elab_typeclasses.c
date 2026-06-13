@@ -4027,5 +4027,27 @@ resolved_user_fallback:;
     out->as.call_.args    = call_args;
     out->as.call_.n_args  = n_args + 1;
     out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
+    /* M4c Path A step 1 (docs/upcoming/m4c-execution-plan.md): bind the
+     * class variable to the CALL SITE'S receiver type so
+     * emit_abi_register_call mints a per-instantiation spec.  HKT carve-out
+     * stays — those keep the uniform-carrier dispatch per Plan M6/M7. */
+    if (best_inst && best_inst->typeclass
+        && out->as.call_.fn_binding != NULL) {
+        TypeClass *tc = best_inst->typeclass;
+        bool is_hkt = false;
+        if (tc->type_param_kinds) {
+            for (uint8_t i = 0; i < tc->n_type_params; i++) {
+                if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
+            }
+        }
+        if (!is_hkt && tc->n_type_params == 1 && tc->type_params[0]) {
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, sizeof(AbiTypeBinding));
+            bindings[0].name = tc->type_params[0]->name;
+            bindings[0].type = obj_orig_type;
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = 1;
+        }
+    }
     return out;
 }

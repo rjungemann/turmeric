@@ -2547,6 +2547,50 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CONCRETE, CK_CARRIER,
                                              e->as.call_.args[i]->type);
                 }
+                /* M4c Path A: same shape as the dict_arg bridge above, but
+                 * for ordinary direct calls to int64-carrier-sink helpers
+                 * (e.g. `(vec-eq? x …)` inside an Eq Vec spec body where x is
+                 * a by-value `Vec__int` param after Path A.1 substitution).
+                 * Without this, the spec body emits `vec_hyeq_qu(x, y, …)`
+                 * passing by-value where the helper expects int64 — a hard
+                 * cc error.  Gate is `!dict_arg` (the dict_arg branch above
+                 * handles its case) AND the same by-value-carrier → int64
+                 * predicate the dict_arg branch uses. */
+                else if (!needs_fn_cast && !matched_spec &&
+                         e->as.call_.dict_arg == NULL &&
+                         emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
+                         type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
+                         type_uses_carrier_in_dispatch(e->as.call_.args[i]->type) &&
+                         expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                         fn_binding && fn_binding->type.kind == TY_FN &&
+                         i < fn_binding->type.as.fn.arity &&
+                         fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
+                    /* M4c Path A: when emit_arg is an EX_VAR bound to a
+                     * spec param, the spill type must match the spec's
+                     * resolved arg type (e.g. `Vec__int`), not the elab-
+                     * time abstract type (e.g. bare `Vec`).  The dict-
+                     * dispatch branch above uses args[i]->type because
+                     * its caller threads abstract typeclass args; here
+                     * we're calling a carrier-helper from inside a spec
+                     * body, so resolve via current_abi_specialization. */
+                    Type bridge_ty = e->as.call_.args[i]->type;
+                    if (ctx->current_abi_specialization
+                        && emit_arg->kind == EX_VAR
+                        && emit_arg->as.var.binding) {
+                        Binding *vb = emit_arg->as.var.binding;
+                        FnDef *cfd = ctx->current_abi_specialization->fn;
+                        for (uint8_t pi = 0; cfd && pi < cfd->n_params
+                                             && pi < ctx->current_abi_specialization->n_args; pi++) {
+                            if (cfd->params[pi] == vb) {
+                                bridge_ty = ctx->current_abi_specialization->arg_types[pi];
+                                break;
+                            }
+                        }
+                    }
+                    raw = emit_carrier_bridge(ctx, body, raw,
+                                             CK_CONCRETE, CK_CARRIER,
+                                             bridge_ty);
+                }
                 /* Phase D: large struct args must be passed as const T*.
                  * Only apply when the CALLEE also uses pass-by-ptr for that param
                  * (i.e., was compiled with Phase D signatures). Generic/typeclass
@@ -3876,6 +3920,40 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool through_carrier = !through_rc
                 && e->as.get_field_.struct_expr->type.kind == TY_STRUCT
                 && def->n_type_params > 0;
+            /* M4c Path A.2 (docs/upcoming/m4c-execution-plan.md): inside an
+             * instance-method spec where the receiver is a class-var param,
+             * the spec's arg type is the concrete monomorphized struct
+             * (e.g. Tuple2__int__int) — by-value, no `n_type_params`.  The
+             * elab-time receiver type is still bare `Tuple2` (TY_STRUCT
+             * with type_params), so `through_carrier` defaults to true.
+             * Override: walk to the param binding and consult the spec's
+             * `arg_types[]`; a concrete by-value struct → direct `.field`
+             * access, no carrier cast. */
+            if (through_carrier
+                && ctx->current_abi_specialization
+                && ctx->current_abi_specialization->fn
+                && ctx->current_abi_specialization->fn->owner_instance
+                && e->as.get_field_.struct_expr->kind == EX_VAR) {
+                Binding *recv_b = e->as.get_field_.struct_expr->as.var.binding;
+                FnDef *fd = ctx->current_abi_specialization->fn;
+                for (uint8_t pi = 0; pi < fd->n_params
+                                     && pi < ctx->current_abi_specialization->n_args; pi++) {
+                    if (fd->params[pi] == recv_b) {
+                        Type spec_arg = ctx->current_abi_specialization->arg_types[pi];
+                        StructDef *sa_def = NULL;
+                        Type sa_args[16]; uint8_t sa_n = 0;
+                        if (type_extract_struct_app(&spec_arg, &sa_def, sa_args, &sa_n)
+                            && sa_def && sa_def == def) {
+                            through_carrier = false;
+                        } else if (spec_arg.kind == TY_STRUCT && spec_arg.as.struct_.def
+                                   && !spec_arg.as.struct_.def->is_opaque
+                                   && spec_arg.as.struct_.def->n_type_params == 0) {
+                            through_carrier = false;
+                        }
+                        break;
+                    }
+                }
+            }
             bool through_pbp = !through_rc && !through_carrier
                 && expr_is_pbp_param(ctx, e->as.get_field_.struct_expr);
             /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...:
