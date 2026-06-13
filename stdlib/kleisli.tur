@@ -70,13 +70,19 @@
 ;;; before being applied -- the same idiom the Backtrack instances use.
 
 (definstance Category [Kleisli]
-  (ident [] (kleisli (fn [x] (some x))))
+  ;; M2b: ascribe (some x) back to :int to thread the Kleisli carrier ABI.
+  (ident [] (kleisli (fn [x] (:: (some x) :int))))
   (comp [f g]
     (let [fc (:: f :int) gc (:: g :int)]
       (kleisli (fn [x]
                  (let [r (k-apply-raw fc x)]
-                   (if (some? r) (k-apply-raw gc (unwrap-or r 0)) (none))))))))
+                   ;; M2b: polymorphic `(none)` returns `(Option A)`; this
+                   ;; closure threads the carrier int64 ABI (k-apply-raw
+                   ;; returns int).  Use the carrier-nil constant directly.
+                   (if (some? r) (k-apply-raw gc (unwrap-or r 0)) 0)))))))
 ;;; ArrowZero [Kleisli] -- the honest zero arrow over Option: ignore the input
 ;;; and fail with `none`. (->) has no such inhabitant; Kleisli does.
 
-(definstance ArrowZero [Kleisli] (zero-arrow [] (kleisli (fn [_] (none)))))
+;; M2b: polymorphic `(none)` here would be `(Option A)`, but the closure
+;; threads the carrier int64 ABI; use the carrier-nil constant directly.
+(definstance ArrowZero [Kleisli] (zero-arrow [] (kleisli (fn [_] 0))))

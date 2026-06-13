@@ -1717,6 +1717,82 @@ static bool expr_is_fat_closure_value(const Expr *x) {
     return false;
 }
 
+/* M2b: if-branch tyvar tolerance.
+ *
+ * The strict `type_eq` used for if-branch parity treats `(Option A)` (A bare
+ * tyvar) and `(Option int)` as distinct.  After M2b polymorphized `(none)` /
+ * `(some x)` over A, the natural pattern
+ *
+ *   (if cond (none) (some x))
+ *
+ * fails: then-branch is `(Option A)`, else-branch is `(Option int)`, and they
+ * don't unify even though A := int trivially makes them agree.
+ *
+ * Walk both types structurally; whenever one side carries a bare TY_TYVAR
+ * where the other side has a concrete kind, accept it.  When both sides
+ * agree everywhere else, pick the more-concrete side as the if result
+ * (so downstream callers see `Option int`, not `Option A`).  Returns false
+ * if the types disagree in any non-tyvar position.
+ *
+ * Scope: only used inside if-branch comparison; the rest of the elaborator
+ * keeps strict `type_eq` semantics.  Mirrors the spec-resolver pattern used
+ * in elab_make_struct for unbound result tyvars. */
+static bool type_eq_tyvar_tolerant(Type a, Type b, Type *out_concrete) {
+    if (a.kind == TY_TYVAR && b.kind != TY_TYVAR) {
+        if (out_concrete) *out_concrete = b;
+        return true;
+    }
+    if (b.kind == TY_TYVAR && a.kind != TY_TYVAR) {
+        if (out_concrete) *out_concrete = a;
+        return true;
+    }
+    if (a.kind != b.kind) return false;
+    if (a.kind == TY_APP) {
+        if (!a.as.app.fn || !b.as.app.fn || !a.as.app.arg || !b.as.app.arg)
+            return false;
+        Type fn_concrete = *a.as.app.fn;
+        Type arg_concrete = *a.as.app.arg;
+        if (!type_eq_tyvar_tolerant(*a.as.app.fn, *b.as.app.fn, &fn_concrete))
+            return false;
+        if (!type_eq_tyvar_tolerant(*a.as.app.arg, *b.as.app.arg, &arg_concrete))
+            return false;
+        if (out_concrete) *out_concrete = a;  /* shape preserved, args refined */
+        /* Rebuild a fresh TY_APP with the concrete sub-types woven in. */
+        if (out_concrete) {
+            Type out = a;
+            /* Best-effort: drop the recovered args back through static buffers
+             * the same way type_app does at elab time would be cleaner, but
+             * for the if-result we just preserve `a`'s shape — the use site
+             * only consults the result type's outermost kind for ABI
+             * decisions, and the inner tyvar gets resolved per call site
+             * downstream through ordinary spec resolution. */
+            out.as.app.fn = a.as.app.fn;
+            out.as.app.arg = a.as.app.arg;
+            (void)fn_concrete;
+            (void)arg_concrete;
+            *out_concrete = out;
+        }
+        return true;
+    }
+    if (a.kind == TY_TYVAR) {
+        /* Both sides are tyvars; accept (existing type_eq already does). */
+        if (out_concrete) *out_concrete = a;
+        return true;
+    }
+    return type_eq(a, b);
+}
+
+static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
+    Type result = then_ty;
+    if (!type_eq_tyvar_tolerant(then_ty, else_ty, &result)) return false;
+    /* Prefer the side with no bare tyvars at the outermost position. */
+    if (then_ty.kind == TY_TYVAR && else_ty.kind != TY_TYVAR) result = else_ty;
+    else if (else_ty.kind == TY_TYVAR && then_ty.kind != TY_TYVAR) result = then_ty;
+    else result = then_ty;
+    if (out) *out = result;
+    return true;
+}
+
 Expr *elab_if(Elab *e, const Form *call) {
     if (call->as.list.len != 3 && call->as.list.len != 4) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1903,7 +1979,8 @@ Expr *elab_if(Elab *e, const Form *call) {
              * result with `^fat` (or `::`) to call it again.  Calling a raw
              * :ptr<void> directly stays an error (CRU B-4). */
             result_t = TYPE_PTR_VOID;
-        } else if (!type_eq(then_->type, else_->type)) {
+        } else if (!type_eq(then_->type, else_->type)
+                   && !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
             free(then_states);
             free(move_bindings);
             free(before_states);

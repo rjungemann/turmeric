@@ -2600,8 +2600,6 @@ static int64_t slice_hylen(int64_t);
 static int64_t slice_hyget(int64_t, int64_t);
 static void slice_hyfree(int64_t);
 static bool slice_hyeq_qu(int64_t, int64_t, int64_t);
-static int64_t some(int64_t);
-static int64_t none();
 static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
@@ -3764,16 +3762,6 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
           return false;
   }
   return true;
-  
-}
-
-static int64_t some(int64_t x) {
-        return tur_some(x);
-  
-}
-
-static int64_t none() {
-        return TUR_NONE;
   
 }
 

@@ -153,7 +153,18 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-from? [xs : int] : int (if (tnil? xs) (none) (some (:: xs :NonEmpty))))
+(defn ne-from? [xs : int] : int
+  ;; Inline-C body: the polymorphic `(none)` / `(some …)` post-M2b return a
+  ;; typed `(Option A)`; this function's contract is the carrier int64 (so
+  ;; `(some? (ne-from? …))` and friends keep working).  Build the carrier
+  ;; Option directly here to bridge the two ABIs without ascription gymnastics.
+  ```c
+  if (xs == 0) return 0;
+  struct { bool is_some; int64_t value; } *o = malloc(sizeof(*o));
+  o->is_some = true;
+  o->value = xs;
+  return (int64_t)(intptr_t)o;
+  ```)
 ;;; ne-unwrap -- recover the NonEmpty payload from a non-none Option.
 ;;;
 ;;; Pair with ne-from? after a some? check; on a none Option this yields a
@@ -217,7 +228,16 @@
 ;;; Since: R2
 
 (defn bidx-of? [n : int i : int] : int
-  (if (and (>= i 0) (< i n)) (some (:: i :BoundedIdx)) (none)))
+  ;; Inline-C body: same carrier-bridge as ne-from?.  Returns the int64
+  ;; Option carrier (0 = none, heap-allocated otherwise) so existing call
+  ;; sites that use `(some? (bidx-of? …))` continue to work post-M2b.
+  ```c
+  if (i < 0 || i >= n) return 0;
+  struct { bool is_some; int64_t value; } *o = malloc(sizeof(*o));
+  o->is_some = true;
+  o->value = i;
+  return (int64_t)(intptr_t)o;
+  ```)
 ;;; bidx-unwrap -- recover the BoundedIdx payload from a non-none Option.
 ;;;
 ;;; Pair with bidx-of? after a some? check.

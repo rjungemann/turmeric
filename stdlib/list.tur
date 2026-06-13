@@ -52,7 +52,7 @@
 ;;;
 ;;; Since: Phase TS3
 
-(defn tcons-of [A] [h :A t :int] : (Cons A) (make-struct Cons h t))
+(defn tcons-of [A] [h :A t :int] : (Cons A) (make-struct Cons :head h :tail t))
 ;;; tnil -- return an empty typed list.
 ;;;
 ;;; Returns:

@@ -25,7 +25,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn pair [A B] [a :A b :B] : (Pair A B) (make-struct Pair a b))
+(defn pair [A B] [a :A b :B] : (Pair A B) (make-struct Pair :fst a :snd b))
 ;;; pair-fst -- return the first element of a Pair[A B].
 ;;;
 ;;; Parameters:

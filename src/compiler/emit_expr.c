@@ -3745,13 +3745,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
             buf_printf(&lit, "(%s){", struct_c_name);
+            bool any_field_emitted = false;
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
                 const Expr *fve = e->as.make_struct_.field_values[i];
-                /* M2b: when the field value is (default-of T) and T is the
-                 * struct's tyvar at a known param position, re-type the
-                 * default-of literal as the concrete spine arg instead of the
-                 * carrier int64_t.  Avoids `int-to-ptr` C errors when the
-                 * field's resolved C type is, say, `const char *`. */
+                /* M2b dead-slot elision: when the field's value is
+                 * `(default-of T)` (zero-valued, no side effects), drop the
+                 * entire `.field = (T){0}` slot — C99 compound literals
+                 * zero-initialize any field not named in the designator list,
+                 * so the elided field still ends up zeroed.  This is the
+                 * "Risk" section's elision rule from the M2b design doc: the
+                 * default-of value for a sum-type's dead slot becomes a no-op
+                 * at the emit level.  Per-field; skips bool/discriminator
+                 * fields' default-of values too (always benign — they zero to
+                 * `false`, the natural default). */
+                if (fve && fve->kind == EX_DEFAULT_OF) continue;
                 char *fv = NULL;
                 if (fve->kind == EX_DEFAULT_OF && have_rt_recovered
                     && def->fields[i].full_type
@@ -3780,7 +3787,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!fv) fv = emit_value(ctx, body, fve);
                 bool is_fn_field = (def->fields[i].kind == TY_FN);
                 bool val_is_fn = (fve->type.kind == TY_FN);
-                if (i > 0) buf_puts(&lit, ", ");
+                if (any_field_emitted) buf_puts(&lit, ", ");
+                any_field_emitted = true;
                 char *mfn = mangle_field_name(def->fields[i].name);
                 if (is_fn_field && val_is_fn) {
                     /* Phase E: use typed fn-ptr cast for concrete fields; fall
@@ -3815,6 +3823,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(mfn);
                 free(fv);
             }
+            /* If every field was elided (every value was `(default-of T)`),
+             * emit `{0}` rather than the empty `{}` (which is a GNU extension,
+             * not standard C99). */
+            if (!any_field_emitted) buf_puts(&lit, "0");
             buf_puts(&lit, "}");
             buf_putc(&lit, '\0');
             char *result = strdup(lit.data);
