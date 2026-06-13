@@ -19,8 +19,20 @@
  * ========================================================================== */
 
 /* The declared C type of parameter `i`, matching the function signature's
- * default (non-pbp, non-poly) path. */
-static Type tco_param_type(const Expr *fn_e, FnDef *fd, uint8_t i) {
+ * default (non-pbp, non-poly) path.
+ *
+ * M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+ * when emitting an ABI spec body, the spec's per-instantiation arg type
+ * is the authoritative C-level shape — the bare fn binding's full type is
+ * the generic (pre-substitution) form which lowers to int64_t for TY_APP.
+ * Consult `current_abi_specialization->arg_types[i]` first when set; this
+ * lets `tco_params_simple` accept by-value-struct params (e.g.
+ * `Vec__int`) that the generic form would reject as carrier-ABI. */
+static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i) {
+    if (ctx && ctx->current_abi_specialization
+        && i < ctx->current_abi_specialization->n_args) {
+        return ctx->current_abi_specialization->arg_types[i];
+    }
     if (fn_e->type.kind == TY_FN && fn_e->type.as.fn.arg_full_types &&
         fn_e->type.as.fn.arg_full_types[i])
         return *fn_e->type.as.fn.arg_full_types[i];
@@ -30,16 +42,31 @@ static Type tco_param_type(const Expr *fn_e, FnDef *fd, uint8_t i) {
 /* A function is TCO-eligible only if every parameter is a plain scalar we can
  * reassign with `p = tmp;`.  Pass-by-pointer structs, poly-fn, fn-typed, and
  * carrier-ABI parameters are excluded so the backedge temporary's C type is
- * unambiguous. */
+ * unambiguous.
+ *
+ * M4 follow-up: a param that resolves to a concrete by-value struct (post-
+ * Path A spec substitution: e.g. `Vec__int` from `(Vec int)` at a spec
+ * call site) is OK to reassign — `Vec__int new = ...; x = new;` is a valid
+ * C struct copy.  The carrier-ABI rejection now checks the EMIT C name
+ * rather than the type-kind: only reject when the emitted name is
+ * "int64_t" (the carrier fallback), which indicates the type would need
+ * a bridge to/from the carrier on reassignment. */
 static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
     if (fd->is_variadic || fd->closure) return false;
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (fd->params[i]->is_poly_fn) return false;
-        Type pty = tco_param_type(fn_e, fd, i);
+        Type pty = tco_param_type(ctx, fn_e, fd, i);
         if (pty.kind == TY_FN) return false;
         Type rpty = emit_resolve_type(ctx, pty);
         if (type_struct_pass_by_ptr(rpty)) return false;
-        if (type_uses_carrier_abi(rpty)) return false;
+        if (type_uses_carrier_abi(rpty)) {
+            /* M4 follow-up: a TY_APP/TY_STRUCT-with-tparams that emits as
+             * a concrete struct name is by-value at this call site (Path A
+             * spec) — TCO is safe.  Only reject when the C emit collapses
+             * to the int64 carrier. */
+            const char *c = emit_type_c_name(ctx, rpty);
+            if (!c || strcmp(c, "int64_t") == 0) return false;
+        }
     }
     return true;
 }
@@ -127,7 +154,7 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     for (uint8_t i = 0; i < n; i++) {
         char *av = emit_value(ctx, body, call->as.call_.args[i]);
         char *t = fresh_tmp(ctx);
-        Type pty = tco_param_type(fn_e, fd, i);
+        Type pty = tco_param_type(ctx, fn_e, fd, i);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, pty), t, av);
         tmps[i] = t;
