@@ -4808,6 +4808,15 @@ static bool turi_full_prelude_enabled(void) {
     return e && strcmp(e, "1") == 0;
 }
 
+/* Contract runtime helpers (defined below; forward-declared so cmd_eval can
+ * register them as native overrides for contract.tur's inline-C bodies). */
+static TuriValue native_contract_check(TuriEnv *env, TuriValue *args,
+                                        uint32_t n, void *ud);
+static TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
+                                            uint32_t n, void *ud);
+static TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
+                                          uint32_t n, void *ud);
+
 /* Phase S0: tur repl — interactive read-eval-print loop. */
 /* Phase INT-1: run a .tur file through the tree-walking interpreter.
  * extra_argv/extra_argc are the arguments after the file path, exposed
@@ -4848,6 +4857,28 @@ static int cmd_eval(const char *path, bool use_color,
         tur_stdlib_path("macros.tur", path_buf, sizeof(path_buf));
         char load_form[4200];
         snprintf(load_form, sizeof(load_form), "(load \"%s\")", path_buf);
+        TuriValue sv = turi_eval(env, load_form);
+        (void)sv;
+    }
+    /* Runtime contracts: loaded right after macros.tur (and, like it, in its own
+     * turi_eval so it lands at the very front of the accumulated source).
+     * contract.tur exports macros (assert!/require!/ensure!/invariant! + their
+     * -msg! variants); the Phase M7 promotion in elaborate_program nulls a
+     * tur/-prefixed module's macros' defining_module_name -- making them
+     * globally visible without an explicit import -- only for modules within
+     * the stdlib-prefix boundary, which (because load-expansion shifts form
+     * indices) effectively covers the earliest-loaded modules.  Loading
+     * contract.tur up front, next to macros.tur, keeps assert!/require!/... in
+     * that promoted region so user code sees them bare under --interpret.  Its
+     * inline-C tur-contract-check / tur-contract-check-inv bodies are overridden
+     * by native_contract_check[_inv] below; without this preload the elaborator
+     * never sees a tur-contract-check binding and silently drops every
+     * :pre/:post/:type check (a silent miscompile). */
+    {
+        char pb[4096];
+        tur_stdlib_path("contract.tur", pb, sizeof(pb));
+        char load_form[4200];
+        snprintf(load_form, sizeof(load_form), "(load \"%s\")", pb);
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
@@ -4934,12 +4965,18 @@ static int cmd_eval(const char *path, bool use_color,
          * accessors work on a Result that flowed as the :int carrier, e.g.
          * `(:: carrier (Result A B))`).  hamt.tur joined once cmd_eval started
          * registering the raw tur_hamt_* runtime wrappers (wk_register_hamt_-
-         * natives, above) -- its ops are thin wrappers over those.  Still
-         * excluded on purpose:
-         *   contract.tur  -- its tur-contract-check inline-C conflicts with the
-         *                    :pre/:post contract lowering (wk_eval_fixture skips
-         *                    it for the same reason); loading it silently broke
-         *                    contract-pre/post/type.
+         * natives, above) -- its ops are thin wrappers over those.
+         *
+         * contract.tur is preloaded too, but NOT in this array -- it is loaded up
+         * front next to macros.tur (Phase M7 macro promotion is order-sensitive;
+         * see that load site).  Its inline-C tur-contract-check /
+         * tur-contract-check-inv bodies are overridden by native_contract_check
+         * / native_contract_check_inv (registered with the other natives below),
+         * so the :pre/:post/:type lowering and the assert!/require!/ensure!/
+         * invariant! macros actually enforce under --interpret instead of being
+         * silently dropped (the elaborator only injects a contract check when
+         * the tur-contract-check binding is visible -- without the preload it was
+         * unbound, so every :pre/:post became a no-op: a silent miscompile).
          * mutmap.tur is now preloaded (below): its inline-C ops are re-implemented
          * as native_mutmap_* overrides over its self-contained open-addressing
          * layout (no tur_hamt_* dependency).  See
@@ -4984,16 +5021,16 @@ static int cmd_eval(const char *path, bool use_color,
      * prelude above covers the typed-stdlib core; when TUR_TURI_FULL_PRELUDE=1
      * the interpreter ADDITIONALLY loads the modules the compiled path
      * auto-loads but the interpreter carves out
-     * (docs/turi-preload-carve-out.txt): contract, mutmap, json, schema.  This
-     * makes the interpreter prelude match the compiled auto-load set so the
-     * carved bucket can be iterated/measured fixture-by-fixture under
-     * --interpret, without committing the extra parse/elab cost -- or contract's
-     * :pre/:post behavior change -- to every run.  Off by default; loaded BEFORE
-     * the native overrides so those still win, and each module is loaded in its
-     * own turi_eval so one failing module does not block the rest. */
+     * (docs/turi-preload-carve-out.txt): json, schema.  This makes the
+     * interpreter prelude match the compiled auto-load set so the carved bucket
+     * can be iterated/measured fixture-by-fixture under --interpret, without
+     * committing the extra parse/elab cost to every run.  Off by default; loaded
+     * BEFORE the native overrides so those still win, and each module is loaded
+     * in its own turi_eval so one failing module does not block the rest.
+     * (contract.tur and mutmap.tur graduated to the default prelude above.) */
     if (turi_full_prelude_enabled()) {
         static const char *full_extra[] = {
-            "contract.tur", "mutmap.tur", "json.tur", "schema.tur", NULL
+            "json.tur", "schema.tur", NULL
         };
         for (int i = 0; full_extra[i] != NULL; i++) {
             char pb[4096];
@@ -5037,6 +5074,17 @@ static int cmd_eval(const char *path, bool use_color,
     }
     /* Register native overrides for stdlib inline-C functions. */
     wk_register_stdlib_natives(env);
+    /* Contract runtime helpers: override contract.tur's inline-C
+     * tur-contract-check / tur-contract-check-inv (which the simple inline-C
+     * executor cannot run -- they call tur_panic) so the :pre/:post/:type
+     * lowering and the assert!/require!/ensure!/invariant! macros actually
+     * panic on a violated contract under --interpret.  Mirrors wk_eval_fixture. */
+    turi_env_register_native(env, "tur-contract-check",
+                             native_contract_check, NULL);
+    turi_env_register_native(env, "tur-contract-check-inv",
+                             native_contract_check_inv, NULL);
+    turi_env_register_native(env, "contract-enabled?",
+                             native_contract_enabled, NULL);
     /* W1b/Gap1: register the raw tur_hamt_* runtime wrappers so hamt.tur (and
      * the map/set layers built on it) work under --interpret.  Previously only
      * wk_eval_fixture did this, so `tur --interpret` on any hamt-using program

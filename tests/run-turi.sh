@@ -345,9 +345,13 @@ recursion-ptr-void-return-in-defmodule
 # conflict-free typed-stdlib subset (typeclass stubs + vec/slice/option/pair/
 # tuple/list/grid/zipper) via the load mechanism, so Cons/Option/Pair/Tuple
 # struct types and the Eq/Clone/Functor typeclasses resolve under tur
-# --interpret.  result/map/set/hamt/contract are deliberately excluded (their
-# interpreter native shims own a different memory layout; see the plan).  The
-# fixtures below now evaluate correctly under the interpreter.
+# --interpret.  result/map/set/hamt followed (their interpreter native shims own
+# a different memory layout; see the plan).  contract.tur now preloads too: its
+# macros (assert!/require!/ensure!/invariant!) and the tur-contract-check runtime
+# helpers behind the :pre/:post/:type lowering are overridden by
+# native_contract_check[_inv], so contracts actually enforce under --interpret
+# instead of being silently dropped.  The fixtures below now evaluate correctly
+# under the interpreter.
 assoc-type-projection
 clone-list
 clone-option
@@ -419,14 +423,22 @@ capability-thread
 category-instance-basic
 codegen-paren-precedence
 codegen-private-defn-collision
+contract-assert
 contract-assert-fail
+contract-ensure
 contract-ensure-fail
+contract-ffi
+contract-invariant
 contract-invariant-fail
+contract-nested
 contract-post
 contract-pre
+contract-require
 contract-require-fail
 contract-type
 contracts-not-stripped
+contracts-stripped
+contracts-stripped-side-effect
 copy-traits-basic
 cps-coloring
 cps-mixed-coloring

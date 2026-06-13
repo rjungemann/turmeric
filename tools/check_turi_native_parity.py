@@ -75,11 +75,14 @@ def compiled_autoload():
 
 def interpreter_prelude():
     """The interpreter preload set.  cmd_eval loads macros.tur first, then the
-    `prelude[]` array, then sym.tur when -Xsymbols is on -- so the parity set is
-    that union (sym is gated but counts as 'reachable under --interpret')."""
+    `prelude[]` array, then contract.tur and sym.tur in their own load passes --
+    so the parity set is that union.  macros.tur and contract.tur both export
+    macros that must register before the user file is read, so they are loaded
+    outside the array; sym.tur is gated on -Xsymbols but counts as 'reachable
+    under --interpret'.  All three are counted explicitly here."""
     src = read(MAIN_C)
     base = _module_array(src, r"static const char\s*\*prelude\[\]")
-    return ["macros.tur"] + base + ["sym.tur"]
+    return ["macros.tur"] + base + ["contract.tur", "sym.tur"]
 
 
 # Top-level definer forms whose name becomes a public stdlib binding.

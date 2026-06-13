@@ -1,5 +1,46 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (runtime contracts + a contract silent-miscompile, 2026-06-13):**
+> **`contract.tur` now preloads under `--interpret`, and contracts actually
+> enforce** -- the 16 `contract-*` / `contracts-*` fixtures pass for the right
+> reasons (harness 1104 -> 1120). Two real defects surfaced and were fixed
+> together:
+>
+> 1. **Silent miscompile: `:pre` / `:post` / `:type` contracts were dropped.**
+>    The elaborator only injects a `tur-contract-check` call when that binding is
+>    *visible* (`elab_fns.c`, `check_fn = scope_lookup(...sym_tur_contract_check)`).
+>    `cmd_eval` never preloaded `contract.tur` nor registered the contract
+>    natives, so `check_fn == NULL` and **every `:pre`/`:post`/`:type` clause
+>    elaborated to a no-op**: `(square-positive -5)` with `:pre (> n 0)` returned
+>    `25` instead of panicking, rc=0. `contract-pre`/`-post`/`-type` were already
+>    on the allowlist but passed only because their happy-path output matched a
+>    silently-unchecked body -- a works-by-luck green hiding a miscompile.
+> 2. **The `assert!`/`require!`/`ensure!`/`invariant!` macros were unbound.**
+>    They live in `contract.tur` (un-preloaded), so any fixture using them errored
+>    `unknown function or operator 'assert!'` -> rc=1. `contract-assert-fail` &c.
+>    *also* passed by luck: they expect a nonzero exit, and the unknown-macro
+>    error happens to exit nonzero.
+>
+> **Fix** (`src/main.c`, `cmd_eval`): preload `contract.tur` (its own `turi_eval`
+> right after `macros.tur`) and register `native_contract_check` /
+> `native_contract_check_inv` / `contract-enabled?` as overrides for the
+> inline-C bodies the tree-walker cannot run (they call `tur_panic`) -- mirroring
+> `wk_eval_fixture`. **Load *order* matters and is the subtle part:** the Phase M7
+> promotion in `elaborate_program` (`elab_toplevel.c:1189`) nulls a `tur/`-module
+> macro's `defining_module_name` (making it globally visible without an explicit
+> import) only for modules inside the `stdlib_prefix` region -- and because
+> `(load ...)` expansion shifts form indices, that boundary effectively covers
+> only the *earliest*-loaded modules. Loading `contract.tur` up front next to
+> `macros.tur` keeps `assert!` &c. in the promoted region; loading it last (after
+> the typed-stdlib prelude) leaves the macros stuck at `tur/contract` visibility
+> and still unbound from a no-defmodule user file. `contract.tur` left the
+> preload carve-out (`docs/turi-preload-carve-out.txt`) and the
+> `TUR_TURI_FULL_PRELUDE` extra set; `check_turi_native_parity.py` counts it
+> alongside `macros.tur`/`sym.tur` as an out-of-array prelude module. Added
+> `contract-assert`, `contract-ensure`, `contract-ffi`, `contract-invariant`,
+> `contract-nested`, `contract-require`, `contracts-stripped`,
+> `contracts-stripped-side-effect` to the allowlist. No codegen change.
+
 > **Next big lift (2026-06-13):** the largest remaining `--interpret` gap is
 > json + schema (19 `schema-*` + 5 `json-reader-*` fixtures) -- a self-contained
 > JSON parser/AST + schema decoder engine (~70 inline-C functions), materially
