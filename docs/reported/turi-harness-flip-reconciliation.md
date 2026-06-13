@@ -1,5 +1,17 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (W5 allowlist bulk-add, 2026-06-13):** added 14 now-passing
+> non-inline-C fixtures to the `run-turi.sh` allowlist (`data-literal-nested`,
+> `data-literal-vec-basic`, `hkt-instance-closure-to-fat`, `lint-panic-asserts`,
+> `lint-panic-call-allow`, `range-from-range[-step]`, `sized-sz1-subtype`,
+> `sized-sz7-static-accept`, `tce1-vec-{bool,cstr,float}`, `tce2-vec-of-infer`,
+> `tce5-data-literal-cstr`). Each genuinely interprets (non-trivial output, no
+> inline-C in the fixture body). `range-from-range[-step]` were previously noted
+> as inline-C carve-outs -- stale after the range.tur ADT-carrier re-tag fix;
+> comment corrected. Pure test-infra change (no compiler touched); parity ratchet
+> 113/115, compiled suite unaffected. **Harness 1120 -> 1134 passed, 0 failed;
+> W5 triage surface 80 -> 66 non-inline-C gaps.**
+>
 > **Progress (runtime contracts + a contract silent-miscompile, 2026-06-13):**
 > **`contract.tur` now preloads under `--interpret`, and contracts actually
 > enforce** -- the 16 `contract-*` / `contracts-*` fixtures pass for the right
