@@ -1,7 +1,13 @@
 # turi: json + schema under `--interpret` (interpreter gap-closure)
 
-> **Status:** Draft Plan (2026-06-13). Not started -- this is the captured
-> inventory + approach so a future session executes it without re-deriving.
+> **Status:** DONE (2026-06-13). Both layers landed -- json and schema run
+> under `--interpret` via layout-exact natives in `src/main.c`
+> (`wk_register_json_natives` / `wk_register_schema_natives`); the 5
+> `json-reader-*` and 16 runnable `schema-*` fixtures are on the
+> `run-turi.sh` allowlist (the 2 `schema-applicative-user*` fixtures stay
+> carved -- they define their own inline-C). A `tur-vec-homog__` no-op native
+> was also needed so the `vec-of` macro works under `--interpret`. The
+> captured inventory + approach below is retained for reference.
 > **Tracking report:**
 > [docs/reported/turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md)
 > (the W5 allowlist->denylist surface).

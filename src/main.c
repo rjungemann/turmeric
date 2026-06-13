@@ -4798,6 +4798,7 @@ static void wk_register_map_natives(TuriEnv *env);
 static void wk_register_sym_natives(TuriEnv *env);
 static void wk_register_seq_natives(TuriEnv *env);
 static void wk_register_json_natives(TuriEnv *env);
+static void wk_register_schema_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5021,6 +5022,19 @@ static int cmd_eval(const char *path, bool use_color,
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
+    /* RD (Layer 2): -Xschema-reader (which also sets g_json_reader_enabled)
+     * auto-loads schema.tur on top of json.tur so the #json-str<T>(...) typed
+     * decode reader family resolves; the inline-C schema engine is overridden by
+     * wk_register_schema_natives below.  Skipped when the full prelude already
+     * loaded schema.tur. */
+    if (g_schema_reader_enabled && !turi_full_prelude_enabled()) {
+        char pb[4096];
+        tur_stdlib_path("schema.tur", pb, sizeof(pb));
+        char load_form[4200];
+        snprintf(load_form, sizeof(load_form), "(load \"%s\")", pb);
+        TuriValue sv = turi_eval(env, load_form);
+        (void)sv;
+    }
     /* Register native overrides for stdlib inline-C functions. */
     wk_register_stdlib_natives(env);
     /* W1b/Gap1: register the raw tur_hamt_* runtime wrappers so hamt.tur (and
@@ -5042,6 +5056,9 @@ static int cmd_eval(const char *path, bool use_color,
      * overriding json.tur's malloc/recurse inline-C bodies (auto-loaded under
      * -Xjson-reader, or via an explicit (load "stdlib/json.tur")). */
     wk_register_json_natives(env);
+    /* SCHEMA (turi): runtime schema validator over the JSON nodes, overriding
+     * schema.tur's inline-C constructors/decoder/accessors (Layer 2). */
+    wk_register_schema_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers. */
     {
         typedef struct { int64_t value; int64_t next; } TurCons;
@@ -7196,6 +7213,487 @@ static void wk_register_json_natives(TuriEnv *env) {
     turi_env_register_native(env, "json/free",       native_json_free,       NULL);
 }
 
+/* SCHEMA (stdlib/schema.tur): the runtime schema validator built on top of the
+ * tagged JSON nodes (Layer 2 of turi-json-schema-interpreter-plan).  A schema
+ * node is int64[4]{kind,a,b,c} with the SCHEMA_* discriminants; the decoder
+ * (sch-decode-rec-) recursively walks (schema, json-node, path) accumulating
+ * SchemaError records into a {data,len,cap} vector.  The constructors malloc
+ * tagged structs and the decoder recurses + invokes transform/fmap/ap fat
+ * closures via a C function pointer -- neither runnable by the simple inline-C
+ * executor -- so the whole engine is re-implemented natively with layout-exact
+ * structs, and the fat-closure call points route through turi_call (the closure
+ * is a TURI_CLOSURE under --interpret, same shape as the seq bridges).
+ *
+ * Schema node:   int64[4]{kind, a, b, c}
+ * Object fields: s[1]=count s[2]=cap s[3]=(int64* data) of {key,inner} pairs
+ * SchemaError:   int64[3]{char* path, char* msg, int64 val}
+ * Error vec:     {int64* data; size_t len; size_t cap}  (== int64[3])
+ * Result:        {bool is_ok; int64 ok_val; int64 err_val} (== int64[3]:
+ *                [0]=is_ok [1]=ok_val [2]=err_val). */
+typedef struct { int64_t kind, a, b, c; } tur_sch_t;
+
+static const char *sch_tyname(int64_t jtype) {
+    switch (jtype) {
+        case 0: return ":nil";    case 1: return ":bool";
+        case 2: return ":int";    case 3: return ":float";
+        case 4: return ":cstr";   case 5: return ":array";
+        case 6: return ":object"; default: return ":unknown";
+    }
+}
+static const char *sch_want_name(int64_t kind) {
+    switch (kind) {
+        case 0: return ":cstr";  case 1: return ":int";
+        case 2: return ":float"; case 3: return ":bool";
+        case 4: return ":nil";   case 6: return ":object";
+        case 7: return ":array"; default: return "value";
+    }
+}
+static int64_t sch_jtype(int64_t node) {
+    if (!node) return -1;
+    return (int64_t)(int)((int64_t *)(intptr_t)node)[0];
+}
+static int64_t sch_jpayload(int64_t node) {
+    return ((int64_t *)(intptr_t)node)[1];
+}
+static void sch_vpush(tur_json_vec *v, int64_t x) {
+    if (v->len == v->cap) {
+        v->cap = v->cap ? v->cap * 2 : 4;
+        v->data = realloc(v->data, v->cap * sizeof(int64_t));
+    }
+    v->data[v->len++] = x;
+}
+static void sch_push_err(tur_json_vec *errs, const char *path,
+                         const char *msg, int64_t val) {
+    int64_t *e = malloc(3 * sizeof(int64_t));
+    e[0] = (int64_t)(intptr_t)strdup(path ? path : "");
+    e[1] = (int64_t)(intptr_t)strdup(msg);
+    e[2] = val;
+    sch_vpush(errs, (int64_t)(intptr_t)e);
+}
+static char *sch_mkpath(const char *base, const char *key) {
+    if (!base || !base[0]) return strdup(key);
+    char *out = malloc(strlen(base) + strlen(key) + 2);
+    sprintf(out, "%s.%s", base, key);
+    return out;
+}
+static char *sch_mkidx(const char *base, int64_t idx) {
+    const char *b = base ? base : "";
+    char *out = malloc(strlen(b) + 24);
+    sprintf(out, "%s[%lld]", b, (long long)idx);
+    return out;
+}
+/* Invoke a stored fat closure (carried as the int64 pointer in the schema node)
+ * with one int64-carrier argument, returning the result as an int64 carrier. */
+static int64_t sch_apply1(TuriEnv *env, int64_t fn_carrier, int64_t arg) {
+    TuriValue av = turi_int(arg);
+    TuriValue r = turi_call(env, seq_as_closure(turi_int(fn_carrier)), &av, 1);
+    if (r.tag == TURI_FLOAT) { int64_t b; memcpy(&b, &r.as_float, 8); return b; }
+    if (r.tag == TURI_BOOL)  return r.as_bool ? 1 : 0;
+    return r.as_int;
+}
+
+/* The recursive decoder -- mirrors sch-decode-rec- (schema.tur) bit-for-bit,
+ * with TUR_APPLY1 / the kind-14 C call routed through turi_call. */
+static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
+                              const char *path, tur_json_vec *ep) {
+    tur_sch_t *s = (tur_sch_t *)(intptr_t)schema;
+    if (!s) return 0;
+    char buf[128];
+    int64_t jt = sch_jtype(node);
+    int64_t jp = node ? sch_jpayload(node) : 0;
+    switch (s->kind) {
+        case 0: case 1: case 2: case 3: case 4: { /* scalars */
+            int64_t want = (s->kind == 0) ? 4 : (s->kind == 1) ? 2 :
+                           (s->kind == 2) ? 3 : (s->kind == 3) ? 1 : 0;
+            if (jt != want) {
+                snprintf(buf, sizeof(buf), "expected %s, got %s",
+                         sch_want_name(s->kind), sch_tyname(jt));
+                sch_push_err(ep, path, buf, node);
+                return 0;
+            }
+            return jp;
+        }
+        case 5: { /* literal */
+            if (s->a == 2) {
+                if (jt != 2 || jp != s->b) {
+                    snprintf(buf, sizeof(buf), "expected literal %lld", (long long)s->b);
+                    sch_push_err(ep, path, buf, node);
+                    return 0;
+                }
+                return s->b;
+            } else {
+                const char *want = (const char *)(intptr_t)s->b;
+                if (jt != 4 || strcmp((const char *)(intptr_t)jp, want) != 0) {
+                    snprintf(buf, sizeof(buf), "expected literal \"%s\"", want);
+                    sch_push_err(ep, path, buf, node);
+                    return 0;
+                }
+                return jp;
+            }
+        }
+        case 6: { /* object */
+            if (jt != 6) {
+                snprintf(buf, sizeof(buf), "expected :object, got %s", sch_tyname(jt));
+                sch_push_err(ep, path, buf, node);
+                return 0;
+            }
+            int64_t fcount = s->a;
+            int64_t *fdata = (int64_t *)(intptr_t)s->c;
+            if (fdata) {
+                for (int64_t i = 0; i < fcount; i++) {
+                    const char *key = (const char *)(intptr_t)fdata[i * 2];
+                    tur_sch_t *fsch = (tur_sch_t *)(intptr_t)fdata[i * 2 + 1];
+                    int64_t *on = (int64_t *)(intptr_t)node;
+                    int64_t cur = on[1]; int64_t found = 0; int present = 0;
+                    while (cur) {
+                        int64_t *ent = (int64_t *)(intptr_t)cur;
+                        if (strcmp((const char *)(intptr_t)ent[0], key) == 0) {
+                            found = ent[1]; present = 1; break;
+                        }
+                        cur = ent[2];
+                    }
+                    char *fpath = sch_mkpath(path, key);
+                    if (!present) {
+                        if (fsch && fsch->kind == 8) { free(fpath); continue; }
+                        sch_push_err(ep, fpath, "missing required field", 0);
+                    } else {
+                        sch_decode_rec(env, (int64_t)(intptr_t)fsch, found, fpath, ep);
+                    }
+                    free(fpath);
+                }
+            }
+            return node;
+        }
+        case 7: { /* array */
+            if (jt != 5) {
+                snprintf(buf, sizeof(buf), "expected :array, got %s", sch_tyname(jt));
+                sch_push_err(ep, path, buf, node);
+                return 0;
+            }
+            int64_t elem = s->a;
+            tur_json_vec *jarr = (tur_json_vec *)(intptr_t)jp;
+            tur_json_vec *out = malloc(sizeof(*out));
+            out->data = NULL; out->len = 0; out->cap = 0;
+            if (jarr) {
+                for (size_t i = 0; i < jarr->len; i++) {
+                    char *ipath = sch_mkidx(path, (int64_t)i);
+                    int64_t dv = sch_decode_rec(env, elem, jarr->data[i], ipath, ep);
+                    free(ipath);
+                    sch_vpush(out, dv);
+                }
+            }
+            return (int64_t)(intptr_t)out;
+        }
+        case 8: { /* optional */
+            if (jt == 0 || node == 0) return 0;
+            return sch_decode_rec(env, s->a, node, path, ep);
+        }
+        case 9: { /* union: first arm that matches wins */
+            tur_json_vec *arms = (tur_json_vec *)(intptr_t)s->a;
+            if (!arms || arms->len == 0) return 0;
+            for (size_t i = 0; i < arms->len; i++) {
+                size_t before = ep->len;
+                int64_t dv = sch_decode_rec(env, arms->data[i], node, path, ep);
+                if (ep->len == before) return dv;
+                ep->len = before;
+            }
+            snprintf(buf, sizeof(buf), "no union arm matched (got %s)", sch_tyname(jt));
+            sch_push_err(ep, path, buf, node);
+            return 0;
+        }
+        case 10: { /* transform / fmap */
+            size_t before = ep->len;
+            int64_t dv = sch_decode_rec(env, s->a, node, path, ep);
+            if (ep->len != before) return 0;
+            return sch_apply1(env, s->b, dv);
+        }
+        case 11: { /* recursive */
+            if (s->c == 0) {
+                s->c = sch_apply1(env, s->a, (int64_t)(intptr_t)s);
+            }
+            return sch_decode_rec(env, s->c, node, path, ep);
+        }
+        case 12: return s->a; /* always */
+        case 13: /* never */
+            sch_push_err(ep, path, (const char *)(intptr_t)s->a, node);
+            return 0;
+        case 14: case 16: { /* ap / ap-fat: apply decoded fn arm to arg arm */
+            size_t before = ep->len;
+            int64_t fv = sch_decode_rec(env, s->a, node, path, ep);
+            int64_t av = sch_decode_rec(env, s->b, node, path, ep);
+            if (ep->len != before) return 0;
+            return sch_apply1(env, fv, av);
+        }
+        case 15: { /* field-of */
+            if (jt != 6) {
+                snprintf(buf, sizeof(buf), "expected :object, got %s", sch_tyname(jt));
+                sch_push_err(ep, path, buf, node);
+                return 0;
+            }
+            const char *key = (const char *)(intptr_t)s->a;
+            tur_sch_t *inner = (tur_sch_t *)(intptr_t)s->b;
+            int64_t *on = (int64_t *)(intptr_t)node;
+            int64_t cur = on[1]; int64_t found = 0; int present = 0;
+            while (cur) {
+                int64_t *ent = (int64_t *)(intptr_t)cur;
+                if (strcmp((const char *)(intptr_t)ent[0], key) == 0) {
+                    found = ent[1]; present = 1; break;
+                }
+                cur = ent[2];
+            }
+            char *fpath = sch_mkpath(path, key);
+            int64_t result;
+            if (!present) {
+                if (inner && inner->kind == 8) { result = 0; }
+                else { sch_push_err(ep, fpath, "missing required field", 0); result = 0; }
+            } else {
+                result = sch_decode_rec(env, (int64_t)(intptr_t)inner, found, fpath, ep);
+            }
+            free(fpath);
+            return result;
+        }
+        default: return 0;
+    }
+}
+
+/* --- schema node constructors (each mallocs int64[4]{kind,a,b,c}) --- */
+static int64_t *sch_alloc(int64_t kind, int64_t a, int64_t b, int64_t c) {
+    int64_t *s = malloc(4 * sizeof(int64_t));
+    s[0] = kind; s[1] = a; s[2] = b; s[3] = c;
+    return s;
+}
+#define SCH_RET(p) turi_int((int64_t)(intptr_t)(p))
+static TuriValue native_schema_str(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud; return SCH_RET(sch_alloc(0, 0, 0, 0));
+}
+static TuriValue native_schema_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud; return SCH_RET(sch_alloc(1, 0, 0, 0));
+}
+static TuriValue native_schema_float(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud; return SCH_RET(sch_alloc(2, 0, 0, 0));
+}
+static TuriValue native_schema_bool(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud; return SCH_RET(sch_alloc(3, 0, 0, 0));
+}
+static TuriValue native_schema_nil(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud; return SCH_RET(sch_alloc(4, 0, 0, 0));
+}
+static TuriValue native_schema_literal_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return SCH_RET(sch_alloc(5, 2, (n >= 1) ? a[0].as_int : 0, 0));
+}
+static TuriValue native_schema_literal_str(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *v = (n >= 1) ? json_arg_cstr(a[0]) : "";
+    return SCH_RET(sch_alloc(5, 4, (int64_t)(intptr_t)strdup(v ? v : ""), 0));
+}
+static TuriValue native_schema_object_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud; return SCH_RET(sch_alloc(6, 0, 0, 0));
+}
+static TuriValue native_schema_field(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 3) return turi_int(0);
+    int64_t *s = json_node_ptr(a[0]);
+    const char *key = json_arg_cstr(a[1]);
+    int64_t count = s[1], cap = s[2];
+    int64_t *data = (int64_t *)(intptr_t)s[3];
+    if (count == cap) {
+        cap = cap ? cap * 2 : 4;
+        data = realloc(data, cap * 2 * sizeof(int64_t));
+        s[2] = cap;
+        s[3] = (int64_t)(intptr_t)data;
+    }
+    data[count * 2]     = (int64_t)(intptr_t)strdup(key ? key : "");
+    data[count * 2 + 1] = a[2].as_int;
+    s[1] = count + 1;
+    return a[0];
+}
+static TuriValue native_schema_array(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return SCH_RET(sch_alloc(7, (n >= 1) ? a[0].as_int : 0, 0, 0));
+}
+static TuriValue native_schema_optional(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return SCH_RET(sch_alloc(8, (n >= 1) ? a[0].as_int : 0, 0, 0));
+}
+static TuriValue native_schema_union(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return SCH_RET(sch_alloc(9, (n >= 1) ? a[0].as_int : 0, 0, 0));
+}
+static TuriValue native_schema_transform(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    return SCH_RET(sch_alloc(10, a[0].as_int, a[1].as_int, 0));
+}
+static TuriValue native_schema_rec(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return SCH_RET(sch_alloc(11, (n >= 1) ? a[0].as_int : 0, 0, 0));
+}
+static TuriValue native_schema_kind(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(-1);
+    return turi_int(json_node_ptr(a[0])[0]);
+}
+static TuriValue native_schema_always(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return SCH_RET(sch_alloc(12, (n >= 1) ? a[0].as_int : 0, 0, 0));
+}
+static TuriValue native_schema_never(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *m = (n >= 1) ? json_arg_cstr(a[0]) : "";
+    return SCH_RET(sch_alloc(13, (int64_t)(intptr_t)strdup(m ? m : ""), 0, 0));
+}
+static TuriValue native_schema_ap(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    return SCH_RET(sch_alloc(14, a[0].as_int, a[1].as_int, 0));
+}
+static TuriValue native_schema_ap_fat(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    return SCH_RET(sch_alloc(16, a[0].as_int, a[1].as_int, 0));
+}
+static TuriValue native_schema_field_of(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    const char *key = json_arg_cstr(a[0]);
+    return SCH_RET(sch_alloc(15, (int64_t)(intptr_t)strdup(key ? key : ""),
+                             a[1].as_int, 0));
+}
+#undef SCH_RET
+
+/* --- SchemaError accessors --- */
+static TuriValue native_schema_error_path(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_cstr("");
+    return turi_cstr((const char *)(intptr_t)json_node_ptr(a[0])[0]);
+}
+static TuriValue native_schema_error_text(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_cstr("");
+    return turi_cstr((const char *)(intptr_t)json_node_ptr(a[0])[1]);
+}
+static TuriValue native_schema_error_count(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    tur_json_vec *v = (tur_json_vec *)(intptr_t)a[0].as_int;
+    return turi_int((int64_t)v->len);
+}
+static TuriValue native_schema_error_at(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2 || a[0].as_int == 0) return turi_int(0);
+    tur_json_vec *v = (tur_json_vec *)(intptr_t)a[0].as_int;
+    int64_t i = a[1].as_int;
+    if (i < 0 || (size_t)i >= v->len) return turi_int(0);
+    return turi_int(v->data[i]);
+}
+static TuriValue native_schema_error_message(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_json_vec *v = (n >= 1) ? (tur_json_vec *)(intptr_t)a[0].as_int : NULL;
+    if (!v || v->len == 0) { char *empty = malloc(1); empty[0] = 0; return turi_cstr(empty); }
+    size_t total = 1;
+    for (size_t i = 0; i < v->len; i++) {
+        int64_t *er = (int64_t *)(intptr_t)v->data[i];
+        const char *path = (const char *)(intptr_t)er[0];
+        const char *msg  = (const char *)(intptr_t)er[1];
+        total += strlen(msg) + 2;
+        if (path && path[0]) total += strlen(path) + 2;
+    }
+    char *out = malloc(total);
+    out[0] = 0;
+    for (size_t i = 0; i < v->len; i++) {
+        int64_t *er = (int64_t *)(intptr_t)v->data[i];
+        const char *path = (const char *)(intptr_t)er[0];
+        const char *msg  = (const char *)(intptr_t)er[1];
+        if (i > 0) strcat(out, "\n");
+        if (path && path[0]) { strcat(out, path); strcat(out, ": "); }
+        strcat(out, msg);
+    }
+    return turi_cstr(out);
+}
+
+/* --- decoder entry points + Result accessors --- */
+static TuriValue native_schema_decode(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    tur_json_vec *errs = malloc(sizeof(*errs));
+    errs->data = NULL; errs->len = 0; errs->cap = 0;
+    int64_t value = sch_decode_rec(e, a[0].as_int, a[1].as_int, "", errs);
+    int64_t *r = malloc(3 * sizeof(int64_t));
+    if (errs->len == 0) {
+        r[0] = 1; r[1] = value; r[2] = 0;
+        free(errs->data); free(errs);
+    } else {
+        r[0] = 0; r[1] = 0; r[2] = (int64_t)(intptr_t)errs;
+    }
+    return turi_int((int64_t)(intptr_t)r);
+}
+static TuriValue native_schema_decode_ok(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_bool(false);
+    return turi_bool(json_node_ptr(a[0])[0] != 0);
+}
+static TuriValue native_schema_decode_value(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(json_node_ptr(a[0])[1]);
+}
+static TuriValue native_schema_decode_errors(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(json_node_ptr(a[0])[2]);
+}
+static TuriValue native_schema_decode_abort(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_json_vec *v = (n >= 1) ? (tur_json_vec *)(intptr_t)a[0].as_int : NULL;
+    fprintf(stderr, "schema-decode!: validation failed\n");
+    if (v) for (size_t i = 0; i < v->len; i++) {
+        int64_t *er = (int64_t *)(intptr_t)v->data[i];
+        const char *path = (const char *)(intptr_t)er[0];
+        const char *msg  = (const char *)(intptr_t)er[1];
+        if (path && path[0]) fprintf(stderr, "  %s: %s\n", path, msg);
+        else                 fprintf(stderr, "  %s\n", msg);
+    }
+    abort();
+}
+
+static void wk_register_schema_natives(TuriEnv *env) {
+    /* constructors */
+    turi_env_register_native(env, "schema/str",         native_schema_str,         NULL);
+    turi_env_register_native(env, "schema/int",         native_schema_int,         NULL);
+    turi_env_register_native(env, "schema/float",       native_schema_float,       NULL);
+    turi_env_register_native(env, "schema/bool",        native_schema_bool,        NULL);
+    turi_env_register_native(env, "schema/nil",         native_schema_nil,         NULL);
+    turi_env_register_native(env, "schema/literal-int", native_schema_literal_int, NULL);
+    turi_env_register_native(env, "schema/literal-str", native_schema_literal_str, NULL);
+    turi_env_register_native(env, "schema/object-new",  native_schema_object_new,  NULL);
+    turi_env_register_native(env, "schema/field",       native_schema_field,       NULL);
+    turi_env_register_native(env, "schema/array",       native_schema_array,       NULL);
+    turi_env_register_native(env, "schema/optional",    native_schema_optional,    NULL);
+    turi_env_register_native(env, "schema/union",       native_schema_union,       NULL);
+    turi_env_register_native(env, "schema/transform",   native_schema_transform,   NULL);
+    turi_env_register_native(env, "schema/rec",         native_schema_rec,         NULL);
+    turi_env_register_native(env, "schema/kind",        native_schema_kind,        NULL);
+    turi_env_register_native(env, "schema/always",      native_schema_always,      NULL);
+    turi_env_register_native(env, "schema/never",       native_schema_never,       NULL);
+    turi_env_register_native(env, "schema/ap",          native_schema_ap,          NULL);
+    turi_env_register_native(env, "schema/ap-fat",      native_schema_ap_fat,      NULL);
+    turi_env_register_native(env, "schema/field-of",    native_schema_field_of,    NULL);
+    turi_env_register_native(env, "schema/fmap",        native_schema_transform,   NULL);
+    /* error accessors */
+    turi_env_register_native(env, "schema-error-path",    native_schema_error_path,    NULL);
+    turi_env_register_native(env, "schema-error-text",    native_schema_error_text,    NULL);
+    turi_env_register_native(env, "schema-error-count",   native_schema_error_count,   NULL);
+    turi_env_register_native(env, "schema-error-at",      native_schema_error_at,      NULL);
+    turi_env_register_native(env, "schema-error-message", native_schema_error_message, NULL);
+    /* decoder + result accessors */
+    turi_env_register_native(env, "schema-decode",        native_schema_decode,        NULL);
+    turi_env_register_native(env, "schema-decode-ok?",    native_schema_decode_ok,     NULL);
+    turi_env_register_native(env, "schema-decode-value",  native_schema_decode_value,  NULL);
+    turi_env_register_native(env, "schema-decode-errors", native_schema_decode_errors, NULL);
+    turi_env_register_native(env, "schema-decode-abort",  native_schema_decode_abort,  NULL);
+}
+
 /* SYM (turi): first-class :Sym natives (-Xsymbols).  The interpreter carries a
  * :Sym as a stable `const Symbol *` (interned in env->st by the EX_SYM_LIT case
  * in eval.c) in the int64 carrier.  These override the inline-C sym.tur bodies
@@ -8113,6 +8611,12 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "ptr=",            native_ptr_eq,          NULL);
     /* Vec operations */
     turi_env_register_native(env, "vec-new",         native_vec_new,         NULL);
+    /* tur-vec-homog__ is vec.tur's compile-time element-homogeneity check, an
+     * inline-C no-op (`(void)a;(void)b;`) the vec-of macro emits between each
+     * element pair.  The simple inline-C executor cannot run a bodyless void,
+     * so vec-of (and [...] data literals) failed under --interpret with
+     * "inline-C not supported"; a no-op native restores them. */
+    turi_env_register_native(env, "tur-vec-homog__", native_json_free,       NULL);
     turi_env_register_native(env, "vec-len",         native_vec_len,         NULL);
     turi_env_register_native(env, "vec-capacity",    native_vec_capacity,    NULL);
     turi_env_register_native(env, "vec-get",         native_vec_get,         NULL);
