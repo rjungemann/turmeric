@@ -108,6 +108,11 @@
 ;; TC1-25: Phase PTC4 -- constrained Eq instance for Pair[A B].
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.
 
+;; M4c-pre: rewrite to consult by-value fields directly via Eq A / Eq B,
+;; mirroring the Eq Tuple2 change.  See
+;; docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
 (definstance Eq [Pair]
   [(Eq A) (Eq B)]
-  (eq? [x y] (pair-eq-carrier? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
+  (eq? [x y]
+    (and (eq? (.fst x) (.fst y))
+         (eq? (.snd x) (.snd y)))))

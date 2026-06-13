@@ -470,6 +470,12 @@
 
 (load "stdlib/typeclass-eq.tur")
 
+;; M4c-pre: rewrite to consult by-value fields directly via Eq A / Eq B,
+;; so M4c can monomorphize the dispatch through a per-instantiation dict
+;; without needing to spill `x`/`y` to the int64 carrier (the legacy
+;; tuple2-eq-carrier? path).  See docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
 (definstance Eq [Tuple2]
   [(Eq A) (Eq B)]
-  (eq? [x y] (tuple2-eq-carrier? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
+  (eq? [x y]
+    (and (eq? (.e1 x) (.e1 y))
+         (eq? (.e2 x) (.e2 y)))))
