@@ -4884,6 +4884,22 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_INLINE_C:
         if (!turi_env_has_cap(env, TURI_CAP_INLINE_C))
             return turi_error("eval: inline-C not allowed in sandboxed environment");
+        /* R2 (turi-interpret-flip-residual-plan): gc!/gc-enable!/gc-disable!
+         * lower (elab_memory.c) to these exact captureless inline-C one-liners.
+         * Call the linked runtime (src/runtime/gc.c) so cycle collection runs
+         * under --interpret instead of the clean carve below. */
+        {
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (ic && ic->n_captures == 0 && ic->n_val_exprs == 0 && ic->code.p) {
+                extern void gc_force(void);
+                extern void gc_enable(void);
+                extern void gc_disable(void);
+                StrSlice c = ic->code;
+                if (c.len == 11 && memcmp(c.p, "gc_force();", 11) == 0)   { gc_force();   return turi_nil(); }
+                if (c.len == 12 && memcmp(c.p, "gc_enable();", 12) == 0)  { gc_enable();  return turi_nil(); }
+                if (c.len == 13 && memcmp(c.p, "gc_disable();", 13) == 0) { gc_disable(); return turi_nil(); }
+            }
+        }
         /* This is the documented clean carve for any inline-C-backed function
          * the tree-walker cannot run -- e.g. a content-keyed map's synthesized
          * MapKey comparator, whose body returns a captured C function-pointer

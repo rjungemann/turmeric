@@ -109,15 +109,19 @@ the compiled path is untouched (additive natives only).
 carriers via `seq_as_closure`/`turi_call`), or it silently miscompiles. Probe a
 value with a non-trivial payload, not an empty handle.
 
-## Bucket R2 -- GC subsystem natives (4, *fix*)
+## Bucket R2 -- GC subsystem natives (4, *fix*) -- **DONE 2026-06-13**
 
-`gc-dag`, `gc-no-false-positives`, `gc-perf`, `gc-stress` -- all hit
-`inline-C not supported` via the GC stdlib (mark/sweep roots, alloc, collect).
-Self-contained subsystem like R1; one `wk_register_gc_natives` over the GC
-runtime. `gc-perf`/`gc-stress` may exceed the harness 10s run timeout under the
-interpreter even once shimmed -- if so, carve **those two** `requires.compiled`
-(perf intent, not an interpreter bug; same call as `tco-self-tail-deep`) and
-keep `gc-dag`/`gc-no-false-positives` as correctness fixtures.
+`gc-dag`, `gc-no-false-positives`, `gc-perf`, `gc-stress` all passed once the
+interpreter could run `gc!`/`gc-enable!`/`gc-disable!`. These were **not** a
+missing-native gap: the rc/weak ops already have `eval.c` case arms
+(`EX_RC_OF`/`EX_RC_CLONE`/`EX_RC_DROP`/`EX_RC_COUNT`/`EX_WEAK`/...), and the GC
+builtins lower (`elab_memory.c`) to exact captureless inline-C one-liners
+(`gc_force();` / `gc_enable();` / `gc_disable();`) -- they were the sole thing
+hitting `EX_INLINE_C`'s clean carve. The fix matches those three code slices in
+the `EX_INLINE_C` eval case (`src/turi/eval.c`) and calls the linked runtime
+(`src/runtime/gc.c`) directly. `gc-perf`/`gc-stress` are small (100 / 20
+iterations) and finish well under the 10s run timeout -- **no carve needed**.
+Harness 1172 -> **1176**, compiled 1615/0, parity 0-gaps; all 4 on the allowlist.
 
 ## Bucket R3 -- HKT stdlib instance resolution (2, *fix or carve*)
 

@@ -1227,6 +1227,16 @@ schan-roundtrip
 # borrow-accessors and a close+free.  fd->int is pure-turi (an ascription).
 childhandle-linear
 tmpfile-linear-borrow
+# R2 GC subsystem (verified 2026-06-13; turi-interpret-flip-residual-plan):
+# gc!/gc-enable!/gc-disable! lower to exact captureless inline-C one-liners
+# (gc_force()/gc_enable()/gc_disable(), elab_memory.c).  The EX_INLINE_C eval
+# case now matches those three slices and calls the linked runtime (gc.c)
+# directly; the rc/weak ops already have eval arms.  gc-perf/gc-stress are small
+# (100 / 20 iterations) so they finish well under the run timeout -- no carve.
+gc-dag
+gc-no-false-positives
+gc-perf
+gc-stress
 # R1 slice 5 (verified 2026-06-13): serial.tur Serializable [int]/[bool]
 # instances -- serialize packs a length-prefixed LE byte buffer, deserialize
 # reads it back (registered under the __inst_Serializable_* binding names so
