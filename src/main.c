@@ -9705,7 +9705,36 @@ static TuriValue native_bt_apply_fat(TuriEnv *env, TuriValue *a, uint32_t n, voi
     return turi_call(env, a[0], &a[1], 1);
 }
 
+/* R6 (turi-interpret-flip-residual-plan): tuple.tur's Eq[Tuple2] instance is
+ * pure-turi but bottoms out in `tuple2-eq-carrier?`, an inline-C body that casts
+ * each Tuple2 to a { e1, e2 } struct and calls two element comparators through C
+ * function pointers.  Re-implement it as a native: read both fields (a make-
+ * struct Tuple2 is a TuriStruct; a carrier int points at an int64[2] {e1,e2}),
+ * and invoke the comparators (turi closures) via turi_call. */
+static int64_t wk_tuple2_field(TuriValue t, int idx) {
+    bool found = false;
+    TuriValue f = turi_struct_field(t, (uint32_t)idx, &found);
+    if (found) return (f.tag == TURI_BOOL) ? (f.as_bool ? 1 : 0) : f.as_int;
+    int64_t *p = (int64_t *)(intptr_t)t.as_int;
+    return p ? p[idx] : 0;
+}
+static TuriValue native_tuple2_eq_carrier(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_bool(false);
+    int64_t a1 = wk_tuple2_field(a[0], 0), a2 = wk_tuple2_field(a[0], 1);
+    int64_t b1 = wk_tuple2_field(a[1], 0), b2 = wk_tuple2_field(a[1], 1);
+    TuriValue c1args[2] = { turi_int(a1), turi_int(b1) };
+    TuriValue r1 = turi_call(env, a[2], c1args, 2);
+    bool e1 = (r1.tag == TURI_BOOL) ? r1.as_bool : (r1.as_int != 0);
+    if (!e1) return turi_bool(false);
+    TuriValue c2args[2] = { turi_int(a2), turi_int(b2) };
+    TuriValue r2 = turi_call(env, a[3], c2args, 2);
+    bool e2 = (r2.tag == TURI_BOOL) ? r2.as_bool : (r2.as_int != 0);
+    return turi_bool(e2);
+}
+
 static void wk_register_backtrack_natives(TuriEnv *env) {
+    turi_env_register_native(env, "tuple2-eq-carrier?", native_tuple2_eq_carrier, NULL);
     turi_env_register_native(env, "bt-nil",        native_bt_nil,       NULL);
     turi_env_register_native(env, "bt-cons",       native_bt_cons,      NULL);
     turi_env_register_native(env, "mzero",         native_bt_nil,       NULL);

@@ -197,16 +197,40 @@ wrong-answer is hidden behind a marker:
 Harness 1179 -> **1182**, compiled 1615/0 (no Result-rep regression), parity
 0-gaps. All three on the allowlist.
 
-## Bucket R6 -- known carve-outs (~2, *carve*)
+## Bucket R6 -- carve sweep -- **DONE 2026-06-13**
 
-- `range-show` -- genuine dependency inline-C (`range.tur`'s `snprintf %s`
-  formatting body); already documented as a carve in the reconciliation report.
-- `reader-macros-rx-literal` -- drives `re.tur`'s regex engine (inline-C). Carve
-  unless R1-style native shims for the regex VM are in scope (they are not, here).
+One last fix + four carves, then a sweep to zero:
 
-Carve `requires.tur-only` with reason `inline-c`. (`elab-defmodule-after-load`
-fails with `inline-C not supported` too but is a *loader* test -- triage whether
-its inline-C is incidental before carving.)
+- **`typed-slots/tuple2-eq-method` -- FIXED.** tuple.tur's `Eq[Tuple2]` instance
+  is pure-turi but bottoms out in `tuple2-eq-carrier?`, an inline-C body casting
+  each Tuple2 to `{e1,e2}` and calling two element comparators via C fn pointers.
+  `native_tuple2_eq_carrier` (`src/main.c`) reads both fields (struct or carrier)
+  and invokes the comparator closures via `turi_call`. Allowlisted.
+- **Carved `requires.tur-only`:** `range-show` (range-bound.tur `snprintf %s`),
+  `reader-macros-rx-literal` (re.tur regex VM), `session-close` (`-Xsessions`
+  builtins, `elab_sessions.c`), `elab-defmodule-after-load` (an *elaboration*
+  test whose loaded helpers carry incidental `printf` inline-C). All still PASS
+  on the compiled path.
+- **Sweep completion:** the five remaining passing-but-unlisted positive
+  fixtures (`gc-cycle`, `gc-disabled`, `taskgroup-with-macro-real`,
+  `typed-field-row-accept`, `unsafe-closure-capture`) were added to the allowlist.
+
+**Result: zero non-inline-C, non-carved fixtures fail under `--interpret`, and
+zero positive non-inline-C fixtures remain unlisted.** Every fixture now passes,
+has an inline-C body (auto-carved), or carries a marker. Harness **1188 passed,
+0 failed**; compiled 1615/0; parity 0-gaps.
+
+---
+
+## W5 -- the flip is now reachable
+
+With R1-R6 done, the allowlist == "everything that works" and every other
+non-inline-C fixture is carved with a marker + reason. The mechanical flip
+(delete `TURI_FIXTURES_DEFAULT`, default `run-turi.sh` to "run everything minus
+`requires.*` + inline-C auto-carve", flip `run-flags.sh`'s three `tur run`
+assertions) is the remaining W5 step, detailed in the gap-closure plan's W5.
+That is a test-infra change with its own review surface and is intentionally left
+as a separate step.
 
 ---
 

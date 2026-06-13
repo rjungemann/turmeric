@@ -1269,6 +1269,25 @@ safe-array-bounds
 polymorphic-ok-err-value-struct-payload
 typeclass-return-dispatch-result-wrapped
 multishot-snapshot
+# R6 (verified 2026-06-13; turi-interpret-flip-residual-plan): tuple.tur's
+# Eq[Tuple2] instance bottoms out in tuple2-eq-carrier?, an inline-C body that
+# casts each Tuple2 to { e1, e2 } and calls two element comparators via C fn
+# pointers.  native_tuple2_eq_carrier reads both fields (struct or carrier) and
+# invokes the comparator closures via turi_call.  (range-show /
+# reader-macros-rx-literal / session-close / elab-defmodule-after-load are carved
+# requires.tur-only -- genuine dependency inline-C / -Xsessions runtime.)
+typed-slots/tuple2-eq-method
+# R6 sweep completion (verified 2026-06-13): these already pass under --interpret
+# (gc-cycle/gc-disabled via the R2 gc! shim; taskgroup-with-macro-real via the R1
+# taskgroup natives + the task-group-with macro; typed-field-row-accept and
+# unsafe-closure-capture are pure-turi).  Allowlisted so the non-inline-C triage
+# surface reaches zero -- every remaining non-inline-C fixture now passes or is
+# carved, making the W5 allowlist->denylist flip reachable.
+gc-cycle
+gc-disabled
+taskgroup-with-macro-real
+typed-field-row-accept
+unsafe-closure-capture
 # R1 slice 5 (verified 2026-06-13): serial.tur Serializable [int]/[bool]
 # instances -- serialize packs a length-prefixed LE byte buffer, deserialize
 # reads it back (registered under the __inst_Serializable_* binding names so
