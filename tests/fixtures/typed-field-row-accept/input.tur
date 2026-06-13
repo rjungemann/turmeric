@@ -1,0 +1,19 @@
+;; P0 typed-field row literals (`#row{k : T ...}`): a row whose slots carry
+;; both a field name and an element type. The row lives entirely at the type
+;; level; at runtime the carrier struct only holds its non-phantom field.
+;;
+;; This fixture mirrors the ECS bare-name row pattern but adds field names so
+;; two rows with identical element types but different names elaborate to
+;; distinct phantom indices.
+
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn make-users [n : int] : (Tbl #row{id : int  name : cstr})
+  (:: (make-struct Tbl n) (Tbl #row{id : int  name : cstr})))
+
+(defn count-rows [t : (Tbl #row{id : int  name : cstr})] : int
+  (.rows t))
+
+(defn main [] : int
+  (println (count-rows (make-users 3)))
+  0)

@@ -1,0 +1,9 @@
+;; P0 typed-field rows reject duplicate field names.
+
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn make-bad [n : int] : (Tbl #row{id : int  id : cstr})
+  (:: (make-struct Tbl n) (Tbl #row{id : int  id : cstr})))
+
+(defn main [] : int
+  (.rows (make-bad 1)))

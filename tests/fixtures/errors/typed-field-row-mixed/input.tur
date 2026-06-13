@@ -1,0 +1,11 @@
+;; P0 typed-field rows reject a mix of bare-type slots and `name : type` slots
+;; in the same `#row{...}` literal.
+
+(defstruct Tbl [^&cols] (rows :int))
+(defopaque Foo :int)
+
+(defn make-bad [n : int] : (Tbl #row{id : int  Foo})
+  (:: (make-struct Tbl n) (Tbl #row{id : int  Foo})))
+
+(defn main [] : int
+  (.rows (make-bad 1)))

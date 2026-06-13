@@ -628,6 +628,12 @@ typedef struct Type {
         struct {
             struct Type **elements;   /* arena-allocated array of element type pointers */
             uint8_t       n_elements; /* number of element types (>= 0) */
+            /* P0 typed-field rows: when non-NULL, a parallel array of interned
+             * field-name strings of length n_elements. NULL = bare positional
+             * row (the existing ECS form `#row{Pos Vel}`). Typed-field rows
+             * `#row{k1 : T1 k2 : T2}` populate this so two rows that differ
+             * only in field names are distinct types. */
+            const char  **field_names;
         } typerow_;
         /* Phase HRT/G2: Named type variable -- parameter typed with a GADT type var */
         struct {
@@ -1179,6 +1185,10 @@ Type type_intersection_build(Arena *a, Type **members, uint8_t n_members);
  * are preserved -- a row is a list, not a set.  n_elements == 0 is the unit
  * row.  Rows do NOT nest-flatten (a row containing a row stays nested). */
 Type type_typerow(Arena *a, Type **elements, uint8_t n_elements);
+/* P0 typed-field row: parallel field_names array. NULL field_names matches
+ * bare-positional type_typerow(). */
+Type type_typerow_named(Arena *a, Type **elements, const char **field_names,
+                       uint8_t n_elements);
 
 /* Variadic HKT rows: order-insensitive (permutation) row equality.
  * Returns true iff `a` and `b` are both TY_TYPEROW with the same multiset of

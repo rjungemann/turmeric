@@ -218,12 +218,25 @@ int type_eq(Type a, Type b) {
      * any two rows would compare equal -- a silent miscompile. */
     if (a.kind == TY_TYPEROW) {
         if (a.as.typerow_.n_elements != b.as.typerow_.n_elements) return 0;
+        /* P0 typed-field rows: if either side has field names, both must,
+         * and names must agree positionally. A bare row and a typed-field
+         * row are distinct types even if the element types coincide. */
+        const char **an = a.as.typerow_.field_names;
+        const char **bn = b.as.typerow_.field_names;
+        if ((an == NULL) != (bn == NULL)) return 0;
         for (uint8_t i = 0; i < a.as.typerow_.n_elements; i++) {
             if (!a.as.typerow_.elements[i] || !b.as.typerow_.elements[i]) {
                 if (a.as.typerow_.elements[i] != b.as.typerow_.elements[i]) return 0;
                 continue;
             }
             if (!type_eq(*a.as.typerow_.elements[i], *b.as.typerow_.elements[i])) return 0;
+            if (an && bn) {
+                if (!an[i] || !bn[i]) {
+                    if (an[i] != bn[i]) return 0;
+                } else if (strcmp(an[i], bn[i]) != 0) {
+                    return 0;
+                }
+            }
         }
         return 1;
     }
@@ -1380,8 +1393,13 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "#row{");
+            const char **names = t.as.typerow_.field_names;
             for (uint8_t i = 0; i < t.as.typerow_.n_elements; i++) {
                 if (i > 0) buf_putc(&tmp, ' ');
+                if (names && names[i]) {
+                    buf_puts(&tmp, names[i]);
+                    buf_puts(&tmp, " : ");
+                }
                 if (t.as.typerow_.elements && t.as.typerow_.elements[i]) {
                     buf_puts(&tmp, type_name(*t.as.typerow_.elements[i]));
                 } else {
@@ -1824,8 +1842,13 @@ static void type_name_buf(Buf *b, Type t) {
         /* Variadic HKT rows: print as the surface form `#row{T1 T2 ...}`. */
         case TY_TYPEROW: {
             buf_puts(b, "#row{");
+            const char **names = t.as.typerow_.field_names;
             for (uint8_t i = 0; i < t.as.typerow_.n_elements; i++) {
                 if (i > 0) buf_putc(b, ' ');
+                if (names && names[i]) {
+                    buf_puts(b, names[i]);
+                    buf_puts(b, " : ");
+                }
                 if (t.as.typerow_.elements && t.as.typerow_.elements[i]) {
                     type_name_buf(b, *t.as.typerow_.elements[i]);
                 } else {
@@ -2924,6 +2947,21 @@ Type type_typerow(Arena *a, Type **elements, uint8_t n_elements) {
     t.hkt_kind = KIND_TYPEROW;
     t.as.typerow_.elements = copy;
     t.as.typerow_.n_elements = n_elements;
+    t.as.typerow_.field_names = NULL;
+    return t;
+}
+
+/* P0 typed-field row constructor. `field_names[i]` is the field name for
+ * `elements[i]`; pass NULL to fall back to the bare-positional form. */
+Type type_typerow_named(Arena *a, Type **elements, const char **field_names,
+                       uint8_t n_elements) {
+    Type t = type_typerow(a, elements, n_elements);
+    if (field_names && n_elements > 0) {
+        const char **ncopy = (const char **)arena_alloc(
+            a, n_elements * sizeof(const char *));
+        for (uint8_t i = 0; i < n_elements; i++) ncopy[i] = field_names[i];
+        t.as.typerow_.field_names = ncopy;
+    }
     return t;
 }
 
@@ -2937,6 +2975,11 @@ bool type_typerow_eq_perm(Type a, Type b) {
     uint8_t n = a.as.typerow_.n_elements;
     if (n != b.as.typerow_.n_elements) return false;
     if (n == 0) return true;
+    /* P0: rows with vs without field names are distinct; rows with names
+     * must match each (name, type) pair in some permutation. */
+    const char **an = a.as.typerow_.field_names;
+    const char **bn = b.as.typerow_.field_names;
+    if ((an == NULL) != (bn == NULL)) return false;
     /* Track which b-elements have already been matched. n <= 255 (uint8_t). */
     bool used[256];
     for (uint8_t j = 0; j < n; j++) used[j] = false;
@@ -2947,7 +2990,13 @@ bool type_typerow_eq_perm(Type a, Type b) {
             if (used[j]) continue;
             Type *bj = b.as.typerow_.elements[j];
             bool eq = (!ai || !bj) ? (ai == bj) : type_eq(*ai, *bj);
-            if (eq) { used[j] = true; matched = true; break; }
+            if (!eq) continue;
+            if (an && bn) {
+                const char *na = an[i], *nb = bn[j];
+                bool name_eq = (!na || !nb) ? (na == nb) : strcmp(na, nb) == 0;
+                if (!name_eq) continue;
+            }
+            used[j] = true; matched = true; break;
         }
         if (!matched) return false;
     }

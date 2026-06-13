@@ -23,8 +23,7 @@ anything else.
 
 ## Non-goals
 
-- No refinement types -- not shipping; do not gate work on them. See
-  [docs/reported/refinement-types-not-implemented.md](../reported/refinement-types-not-implemented.md).
+- No refinement types -- not shipping; do not gate work on them.
 - No API renames-for-the-sake-of. Touching a public function means a
   measurable safety or ergonomics win.
 - No fixture mass-regen as a side effect of a "style" pass. If a phase
@@ -57,34 +56,42 @@ would dramatically reduce churn during the uplift. They are ordered by
 "how many phases does this unblock"; none is a hard blocker -- each phase
 can ship without them, just with more rough edges.
 
-### P0 -- Typed-field row literals (`#row{k:T ...}`)
+### P0 -- Typed-field row literals (`#row{k : T ...}`) -- DONE 2026-06-12
 
-**Blocks:** U3 entirely, U2 (json instance derivation), a chunk of U5
-(json decoder shape checks).
+**Was blocking:** U3 entirely, U2 (json instance derivation), a chunk of
+U5 (json decoder shape checks).
 
-The shipped row literal accepts bare names -- `#row{Pos Vel}` -- which
-is exactly what ECS needs because the component *type* is the only key.
-U3's targets (postgres results, sqlite rows, http headers, json objects)
-need rows of `key:type` pairs:
+`#row{...}` now accepts two slot shapes, gated behind `-Xdata-literals`:
+- Bare-positional (existing): `#row{Pos Vel}` -- ECS component rows.
+- Typed-field (new): `#row{id : int  name : cstr}` -- a parallel
+  `field_names[]` array on `TY_TYPEROW` makes two rows with identical
+  element types but different names distinct phantom indices.
 
-```turmeric
-(Result #row{id:Int32 name:Str created-at:TimeStamp})
-(Request #row{Authorization:Str Content-Type:Str})
-```
+Decisions taken:
+- **Key syntax:** bare ident with the existing `name : type` structural
+  colon, matching turmeric's `defn`/`defstruct` field-annotation style.
+- **Mixing rejected:** a single literal must be entirely bare *or*
+  entirely typed (TUR-E0290). Avoids ambiguous-shape rows.
+- **Duplicate field names rejected** at elab (TUR-E0291).
+- **`(k in r)` term-level predicate deferred.** U3's per-column
+  accessors are hand-typed (`col-id : Frame r -> Col Int32`); generic
+  `column-of` helpers stay out of scope until a concrete need shows up.
+  ECS-style elaboration-time row-membership remains the only check.
 
-Two open design questions for the spec:
-- Is the key a keyword (`#row{:id Int32 ...}`), a bare ident treated as a
-  symbol, or a string? ECS uses bare-ident-as-type-name; for U3 the key
-  is *not* a type, so the syntax has to disambiguate.
-- Row membership predicate -- do we expose `(k in r)` as a constraint at
-  the term level (`col : Frame r -> (k in r) -> Col (lookup k r)`), or
-  only at elaboration time via the existing row-membership check? The
-  ECS surface only uses the latter; U3's `column-of` needs the former
-  or it stays stringly-typed at the value level.
+Fixtures landed:
+- `tests/fixtures/typed-field-row-accept/` -- typed-field row used as a
+  phantom on a row-kinded defstruct, builds + runs.
+- `tests/fixtures/errors/typed-field-row-duplicate-name/` -- TUR-E0291.
+- `tests/fixtures/errors/typed-field-row-mixed/` -- TUR-E0290.
+- `tests/fixtures/errors/typed-field-row-name-mismatch/` -- two rows
+  with same element types but different field names refuse to unify
+  (TUR-E0001), showing the printer renders both forms distinctly.
 
-If we ship typed-field rows but defer the `(k in r)` predicate, U3 still
-works -- callers write `col-id : Frame r -> Col Int32` per known column
-name, which is fine for hand-written DAOs but bad for generic helpers.
+Code touchpoints: `src/compiler/types.h` (added `field_names`),
+`src/compiler/types.c` (`type_typerow_named`, equality, perm-eq, both
+printers), `src/compiler/elab_types.c` (slot detection +
+TUR-E0290/E0291 diagnostics). Reader unchanged -- `name : T` parses to
+F_SYM + F_TYPE_ANN already.
 
 ### P1 -- `defsystem :writes` enforcement (Path A: per-component `WriteCap`)
 
@@ -187,14 +194,18 @@ P2a's experience with json determines whether the template hook is an
 inline-quoted body, a callback into the macro, or a per-class
 `(definstance Derivable ...)` blob. Don't pick until P2a ships.
 
-### P3 -- Sized-types index made load-bearing (SZ6)
+### P3 -- Sized-types index made load-bearing (SZ6) -- DONE 2026-06-10
 
-**Blocks:** U4's hard guarantees (the *signatures* land without it; the
-*errors* do not).
+**Was blocking:** U4's hard guarantees.
 
-Already tracked under `memory: project_sized_types_phase`. Listed here
-only so U4 doesn't ship before someone has decided whether to land SZ6
-in the same release train.
+SZ6 (indexed constructors + erasure), SZ7 (static size-eq/le rejection),
+SZ8 (constructor-chain inference + length-polymorphic helpers), and
+cross-parameter size-variable unification have all landed (resolved
+report: [docs/archive/history/sized-types-phantom-index.md](../archive/history/sized-types-phantom-index.md)).
+U4 is now shippable with real elaborator-enforced dimension errors, not
+just stable signatures. Remaining gap is the projection-side recovery
+tracked in [docs/reported/sz8-projection-size-recovery-gap.md](../reported/sz8-projection-size-recovery-gap.md);
+that's a follow-up, not a U4 blocker.
 
 ### P4 -- `match-fix` sugar for `Fix`-encoded ASTs
 
@@ -258,21 +269,21 @@ marker on the closer. Keeps the U1 PRs small and uniform.
 
 | Prereq | Blocks | Phases unblocked |
 |---|---|---|
-| P0 typed-field rows | U3, parts of U2/U5 | U3 ships in its planned form |
+| ~~P0 typed-field rows~~ DONE | -- | U3 unblocked (shipped 2026-06-12) |
 | P1 `:writes` enforcement | none directly | Stress-tests substructural for U1 |
 | P2a `derive-json` | U2 json (hard prereq) | U2 json collapses to a usable surface |
 | P2b general `derive` | U2 beyond json | U2 generalizes to `Eq`/`Show`/future classes |
-| P3 SZ6 sized index | U4 guarantees | U4 errors actually bite |
+| ~~P3 SZ6 sized index~~ DONE | -- | U4 errors actually bite (shipped 2026-06-10) |
 | P4 `match-fix` sugar | none (sugar only) | U5 readability |
 | P5 negative-fixture harness | U1/U3/U4 validation | "negative fixture" deliverables become real |
 | P6 FFI shim convention | none (hygiene) | U1 PRs stay small |
 
 ### What can ship in parallel with the phases
 
-P1 (`:writes`), P3 (SZ6), and P5 (negative fixtures) can land any time
-relative to the phases without forcing a phase rewrite -- they upgrade
-guarantees rather than change signatures. P0 (typed rows), P2a
-(`derive-json`), P4 (match-fix), and P6 (FFI shim) all change
+P1 (`:writes`) and P5 (negative fixtures) can land any time relative
+to the phases without forcing a phase rewrite -- they upgrade
+guarantees rather than change signatures. (P0 / P3 already landed.)
+P2a (`derive-json`), P4 (match-fix), and P6 (FFI shim) all change
 *surfaces* and should land before their dependent phase to avoid
 double-touching the same spice files. P2b (general `derive`) can land
 after U2 ships -- the hand-written `definstance` fallback covers the
@@ -450,21 +461,21 @@ different use cases sharing a kernel.
 Targets:
 
 1. **`linalg`** -- `Vec n`, `Mat m n`. `vec-dot`, `mat-mul`, `cross`,
-   `transpose` get dimension-correct signatures. Sized-types index is
-   still phantom (see
-   [docs/reported/sized-types-phantom-index.md](../reported/sized-types-phantom-index.md)),
-   so this is "ready to inherit guarantees when SZ6 lands" -- but the
-   *signatures* are stable now and catch the mix-ups they already
-   would.
+   `transpose` get dimension-correct signatures. SZ6 + cross-parameter
+   size-variable unification shipped 2026-06-10 (resolved report
+   archived at
+   [docs/archive/history/sized-types-phantom-index.md](../archive/history/sized-types-phantom-index.md)),
+   so the size index is load-bearing today: a call site that mixes
+   `(Vec 3)` with `(Vec 4)` rejects at the elaborator, not at runtime.
 2. **`rtaudio`/`wav`** -- buffer types parameterized by frame count.
 3. **`raylib`** image/texture -- `Image w h`; sampler functions take
    a sized image.
 4. **`c-dsl`** -- `C.array(T, n)` carries `n` as a phantom index so
    `C.index` on a literal-`n` array is bounds-typed.
 
-Validation: the phantom index has no runtime cost, so the only
-required validation is "old code still compiles". The wins come when
-SZ6 makes the index load-bearing.
+Validation: a negative fixture per target that *fails to compile*
+with mismatched dimensions (now that SZ6 + cross-parameter unification
+have shipped), plus "old code still compiles" for the positive cases.
 
 ### Phase U5 -- HKT recursion for ASTs
 
@@ -542,18 +553,12 @@ churn the row signatures twice).
   Expect more such bugs as U3 lands; budget for one or two main-repo
   fixes per row-using spice and **file them under `docs/reported/`**
   per the CLAUDE.md rule the moment they're seen.
-- **Sized-types index is still phantom.** U4 ships the *signatures*
-  but the dimension errors only become non-bypassable once SZ6 lands
-  (see `memory: project_sized_types_phase`).
-
 ## Out-of-scope follow-ups
 
 - A `derive-json` / `derive-encode` macro that auto-emits a
   `definstance Encode <Struct>` from a `defstruct`. Separately tracked.
 - `Fix`/`Free` ergonomics: a `match-fix` sugar that pattern-matches
   through the unfold without explicit `unFix`. Separately tracked.
-- Refinement-typed `/has` constraints across the whole spice tree --
-  v2 once refinement types ship.
 
 ## Validation harness
 

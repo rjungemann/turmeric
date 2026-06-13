@@ -1749,20 +1749,62 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
          * TY_TYPEROW whose elements are the (positional) element type forms.
          * Distinct from the F_VEC tuple sugar above: a row has kind [*]
          * (KIND_TYPEROW), is compile-time only, and is order-significant.
-         * An empty `#row{}` is the unit row. */
-        uint32_t n = form->as.list.len;
+         * An empty `#row{}` is the unit row.
+         *
+         * P0 typed-field rows: items of the shape `name : T` (a bare F_SYM
+         * immediately followed by an F_TYPE_ANN wrapper) lower to a typed-
+         * field row whose TY_TYPEROW carries a parallel field_names array.
+         * The shape must be homogeneous -- mixing bare types with typed
+         * fields in a single literal is rejected. */
+        uint32_t n_items = form->as.list.len;
+        Form **items_in = form->as.list.items;
+        bool any_ann = false;
+        for (uint32_t i = 0; i < n_items; i++) {
+            if (items_in[i] && items_in[i]->tag == F_TYPE_ANN) { any_ann = true; break; }
+        }
         Type **elems = NULL;
-        if (n > 0) {
-            elems = (Type **)arena_alloc(e->arena, sizeof(Type *) * n);
-            /* L6 follow-up A (strict-row-elements): switch the elaborator
-             * into strict-unknown-name mode while resolving row elements,
-             * so a typo'd component name fails to compile instead of
-             * silently elaborating to a NULL-def opaque placeholder.
-             * Counter-based so a nested #row{...} inside an element type
-             * (e.g. #row{(Query #row{Pos Vel})}) restores correctly. */
+        const char **names = NULL;
+        uint32_t n = 0;
+        if (any_ann) {
+            /* Typed-field row: require strict alternation
+             * (F_SYM, F_TYPE_ANN, F_SYM, F_TYPE_ANN, ...) with even count. */
+            if ((n_items & 1u) != 0) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "#row{...} typed-field literal needs `name : type` slots; "
+                          "got odd number of forms (TUR-E0290)");
+                return NULL;
+            }
+            n = n_items / 2;
+            if (n > 0) {
+                elems = (Type **)arena_alloc(e->arena, sizeof(Type *) * n);
+                names = (const char **)arena_alloc(
+                    e->arena, sizeof(const char *) * n);
+            }
             e->strict_unknown_types++;
             for (uint32_t i = 0; i < n; i++) {
-                Type *et = type_expr_from_form(e, form->as.list.items[i], rec_name,
+                Form *kf = items_in[2 * i];
+                Form *tf = items_in[2 * i + 1];
+                if (!kf || kf->tag != F_SYM || !tf || tf->tag != F_TYPE_ANN) {
+                    e->strict_unknown_types--;
+                    diag_emit(DIAG_ERROR,
+                              (kf ? kf->span : form->span),
+                              "#row{...} slot %u: expected `name : type` "
+                              "(do not mix bare types with typed fields) "
+                              "(TUR-E0290)", i);
+                    return NULL;
+                }
+                /* P0: duplicate field-name check */
+                const char *kname = kf->as.sym->name;
+                for (uint32_t j = 0; j < i; j++) {
+                    if (names[j] && strcmp(names[j], kname) == 0) {
+                        e->strict_unknown_types--;
+                        diag_emit(DIAG_ERROR, kf->span,
+                                  "#row{...} duplicate field name `%s` "
+                                  "(TUR-E0291)", kname);
+                        return NULL;
+                    }
+                }
+                Type *et = type_expr_from_form(e, tf->as.list.items[0], rec_name,
                                                type_params, type_param_kinds,
                                                n_type_params);
                 if (!et) {
@@ -1770,8 +1812,32 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     return NULL;
                 }
                 elems[i] = et;
+                names[i] = kname;
             }
             e->strict_unknown_types--;
+        } else {
+            n = n_items;
+            if (n > 0) {
+                elems = (Type **)arena_alloc(e->arena, sizeof(Type *) * n);
+                /* L6 follow-up A (strict-row-elements): switch the elaborator
+                 * into strict-unknown-name mode while resolving row elements,
+                 * so a typo'd component name fails to compile instead of
+                 * silently elaborating to a NULL-def opaque placeholder.
+                 * Counter-based so a nested #row{...} inside an element type
+                 * (e.g. #row{(Query #row{Pos Vel})}) restores correctly. */
+                e->strict_unknown_types++;
+                for (uint32_t i = 0; i < n; i++) {
+                    Type *et = type_expr_from_form(e, items_in[i], rec_name,
+                                                   type_params, type_param_kinds,
+                                                   n_type_params);
+                    if (!et) {
+                        e->strict_unknown_types--;
+                        return NULL;
+                    }
+                    elems[i] = et;
+                }
+                e->strict_unknown_types--;
+            }
         }
         if (n > 255) {
             diag_emit(DIAG_ERROR, form->span,
@@ -1779,7 +1845,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return NULL;
         }
         Type *row = (Type *)arena_alloc(e->arena, sizeof(Type));
-        *row = type_typerow(e->arena, elems, (uint8_t)n);
+        *row = type_typerow_named(e->arena, elems, names, (uint8_t)n);
         return row;
     } else if (form->tag == F_KEYWORD) {
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */

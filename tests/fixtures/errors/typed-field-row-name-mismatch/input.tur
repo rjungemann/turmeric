@@ -1,0 +1,18 @@
+;; P0 typed-field rows: two rows with identical element types but different
+;; field names are distinct phantom indices and refuse to unify. This is the
+;; behavior U3 leans on -- a `Result #row{id : int}` cannot be passed where a
+;; `Result #row{name : int}` is expected.
+
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn make-id [n : int] : (Tbl #row{id : int})
+  (:: (make-struct Tbl n) (Tbl #row{id : int})))
+
+(defn make-name [n : int] : (Tbl #row{name : int})
+  (:: (make-struct Tbl n) (Tbl #row{name : int})))
+
+(defn use-id [t : (Tbl #row{id : int})] : int
+  (.rows t))
+
+(defn main [] : int
+  (use-id (make-name 1)))
