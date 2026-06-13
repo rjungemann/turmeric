@@ -1246,6 +1246,17 @@ gc-stress
 # full miniKanren whose ~22 inline-C unification primitives are disproportionate
 # to shim for one fixture.)
 hkt-stdlib-backtrack-instances
+# R4 effect/continuation (verified 2026-06-13; turi-interpret-flip-residual-plan):
+#  - async-with-handler: the elaborator stores a non-fn async body raw (not a
+#    thunk); EX_ASYNC pre-evaluated it to a value then errored expected-a-
+#    function.  It now settles the future with that value (a synchronously
+#    completed body is a resolved future under the single-threaded interpreter).
+#  - safe-array-bounds: already produced correct stdout; the only noise was a
+#    benign ASan makecontext-swapcontext warning on stderr.
+# (The multishot/escaping/nested-handler fixtures are carved requires.tur-only:
+#  deep one-shot-continuation gaps -- see turi-interpreter-delimited-control-gaps.md.)
+async-with-handler
+safe-array-bounds
 # R1 slice 5 (verified 2026-06-13): serial.tur Serializable [int]/[bool]
 # instances -- serialize packs a length-prefixed LE byte buffer, deserialize
 # reads it back (registered under the __inst_Serializable_* binding names so

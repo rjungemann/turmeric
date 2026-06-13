@@ -143,22 +143,33 @@ Split fix-vs-carve after the repro:
 
 Harness 1176 -> **1177**, compiled 1615/0, parity 0-gaps.
 
-## Bucket R4 -- effect / multishot continuation divergence (7, *investigate*)
+## Bucket R4 -- effect / multishot continuation divergence (7) -- **DONE 2026-06-13**
 
-`async-with-handler`, `effect-capture-k`, `effect-handler-capture-nested`,
-`fh-multishot-value`, `multishot-copy-capture`, `multishot-handler`,
-`safe-array-bounds`. These drive the interpreter's ucontext fiber path
-(`src/turi/eval.c:691+`, `async_fiber_thunk` at `:198`) and emit the benign ASan
-`makecontext/swapcontext` warning **and** a stdout mismatch -- so the failure is
-real, not just the warning. The shape (multishot resume, nested handler capture)
-overlaps the delimited-control / continuation accounting that the
-[v1 trampoline plan](v1/turi-eval-trampoline-plan.md) restructures.
+Investigated; split 2 fix / 5 carve:
 
-**Disposition: investigate before fix-vs-carve.** First confirm whether each is
-(a) a multishot-resume semantic gap in `eval.c` (fix), or (b) genuinely blocked
-on the explicit-stack evaluator (carve `requires.tur-only` reason
-`interp-continuation`, cross-link the trampoline plan). `multishot-snapshot`
-(below) is the confirmed-miscompile anchor for this family -- start there.
+- **`safe-array-bounds` -- FIXED (was a false negative).** It already produced
+  the correct stdout; the only output was a benign ASan `makecontext/swapcontext`
+  warning on **stderr** (the probe mis-scored it). Allowlisted.
+- **`async-with-handler` -- FIXED.** The elaborator stores a non-`fn` async body
+  *raw* (`elab_concurrent.c`, no thunk wrap), so `EX_ASYNC` pre-evaluated
+  `(with-handler ...)` to its int result and then errored "expected a function".
+  The `EX_ASYNC` eval case (`src/turi/eval.c`) now settles the future with that
+  value when the body completed to a non-closure -- a synchronously completed
+  body *is* a resolved future under the single-threaded interpreter; a
+  `(fn [] ...)` thunk still takes the fiber-spawn path. Allowlisted.
+- **`effect-capture-k`, `effect-handler-capture-nested`, `fh-multishot-value`,
+  `multishot-copy-capture`, `multishot-handler` -- CARVED `requires.tur-only`
+  (`interp-continuation`).** All five are genuine deep delimited-control gaps:
+  resuming a continuation more than once (`^multishot`, SIGABRT), after its
+  `handle` returned (escaping; heap-use-after-free), or *through* nested handlers
+  (loses outer frames; `unhandled effect: B`). They are crashes / clean errors,
+  not silent miscompiles, and need a heap-owned, clonable continuation -- one
+  feature that overlaps the [trampoline plan](v1/turi-eval-trampoline-plan.md).
+  Full analysis + repros:
+  [turi-interpreter-delimited-control-gaps.md](../reported/turi-interpreter-delimited-control-gaps.md).
+  All five still PASS on the compiled path.
+
+Harness 1177 -> **1179**, compiled 1615/0, parity 0-gaps.
 
 ## Bucket R5 -- silent miscompiles (3, *fix; reports filed*)
 

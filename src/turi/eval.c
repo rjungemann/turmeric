@@ -4926,8 +4926,20 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (turi_is_error(cl_val) || env->returning || env->throwing) {
             return cl_val;
         }
-        if (cl_val.tag != TURI_CLOSURE)
-            return turi_errorf("eval: async: expected a function, got tag %d", cl_val.tag);
+        if (cl_val.tag != TURI_CLOSURE) {
+            /* R4 (turi-interpret-flip-residual-plan): the elaborator does not
+             * wrap a non-fn async body in a thunk -- `(async EXPR)` stores EXPR
+             * directly (elab_concurrent.c).  When EXPR is not a `(fn ...)`
+             * literal, the pre-evaluation above already ran the body to
+             * completion in the current context (e.g. `(async (with-handler
+             * ...))` settles to its int result).  Under the single-threaded
+             * interpreter that is observationally a resolved future: settle it
+             * with the value and hand back the future so `await` returns it,
+             * instead of erroring "expected a function".  A `(fn [] ...)` thunk
+             * still takes the fiber-spawn path below. */
+            turi_future_resolve(env, f, cl_val);
+            return turi_future_val(f);
+        }
 
         /* Allocate and initialise the fiber struct. */
         TuriFiber *fiber = (TuriFiber *)calloc(1, sizeof(TuriFiber));
