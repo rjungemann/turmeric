@@ -3,7 +3,7 @@ title: typeclass instance methods returning a parameterized struct (e.g. `(Resul
 category: Codegen / dispatch / stdlib gap
 severity: Medium. Blocks the typeclass surface for any `decode`-shaped class (Decode, Validate, Parse, …) -- anything whose method's natural return type is `Result a B` for some `a` chosen by the call-site instance. Surfaced while landing the P2a `derive-json` Decode side; the workaround (plain-defn decoders with sentinel error values) ships but loses type-level error context.
 description: Implementing `(defclass Decode [a] (decode [doc val] : (Result a cstr)))` plus `(definstance Decode [int] ...)` plus `(definstance Decode [cstr] ...)` and consuming them at the call site as `(:: (decode doc off) (Result int cstr))` trips three layered issues that prevent any combination from compiling cleanly. None is the others' root cause; fixing any one in isolation does not unblock the surface.
-status: OPEN (Issue 1 RESOLVED 2026-06-12 as Prereq 1; Issues 2 & 3 still block the typed surface). Filed 2026-06-12 from the P2a Decode minimal-slice work in `../turmeric-spices/spices/json`. Workaround in tree: `json/decode.tur` ships plain-defn primitive decoders (`json-decode-int`, `json-decode-cstr`) returning the value directly with a sentinel error (-1 / NULL). Documented in the module header. When this report's remaining issues are addressed, the typeclass surface lands as a P2a follow-up.
+status: OPEN (Issues 1 & 3 RESOLVED 2026-06-12 as Prereqs 1 & 3; Issue 2 still blocks the typed surface). Filed 2026-06-12 from the P2a Decode minimal-slice work in `../turmeric-spices/spices/json`. Workaround in tree: `json/decode.tur` ships plain-defn primitive decoders (`json-decode-int`, `json-decode-cstr`) returning the value directly with a sentinel error (-1 / NULL). Documented in the module header. When Issue 2 is addressed, the typeclass surface lands as a P2a follow-up.
 ---
 
 # typeclass instance with parameterized-Result return cannot compile
@@ -57,12 +57,22 @@ order while debugging:
    `ok_val_spec_*`) disagree about its in-memory shape.
 
 3. **`(ok x)` is monomorphic on `:int`, so `(Result a B)` for non-int
-   `a` has no usable constructor.**  `stdlib/result.tur:27` declares
-   `(defn ok [x : int] ...)`. Attempting `(ok true)` to construct a
-   `(Result bool cstr)` rejects at TUR-E0001. Even if (1) and (2) were
-   solved, every non-`int` `a` would need a hand-written constructor or
-   an inline-C struct fill, defeating the typeclass instance's
-   ergonomics.
+   `a` has no usable constructor.**  **RESOLVED 2026-06-12 as Prereq 3.**
+   `stdlib/result.tur:27` declared `(defn ok [x : int] : int ...)`.
+   Attempting `(ok "hi")` for a `(Result cstr cstr)` rejected at
+   TUR-E0001. Made polymorphic by mirroring `pair`'s pattern:
+   `(defn ok [A B] [x : A] : (Result A B) ...)` plus a matching `err`
+   `(defn err [A B] [e : B] : (Result A B) ...)`. The inline-C body
+   still goes through the int64 carrier helpers `tur_ok` / `tur_err`
+   with `(int64_t)(intptr_t)x` boxing -- the type-level polymorphism is
+   what unlocks ascriptions like `(:: (ok "hi") (Result cstr cstr))`;
+   the runtime ABI continues to use the uniform int64 carrier. B (in
+   `ok`) and A (in `err`) are phantom tyvars inferred from context.
+   Suite: 73 codegen-snapshot regenerations (the prelude no longer
+   unconditionally emits `static int64_t ok(int64_t)` declarations;
+   monomorphizations are emitted on demand per call site, matching
+   how `pair` already works). Net diff: 0 regressions vs current
+   baseline (hamt-delete pre-existing flake).
 
 Any of the three issues could be considered the trigger; all three must
 be addressed before a typed `Decode` surface (or `Validate`, or `Parse`,

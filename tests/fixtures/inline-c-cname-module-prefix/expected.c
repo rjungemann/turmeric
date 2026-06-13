@@ -2607,8 +2607,6 @@ static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static int64_t option_hymap(int64_t, int64_t);
 static bool option_hyeq_qu(int64_t, int64_t, int64_t);
-static int64_t ok(int64_t);
-static int64_t err(int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
@@ -3815,16 +3813,6 @@ static bool option_hyeq_qu(int64_t o1, int64_t o2, int64_t cmp_fn) {
      read the box address as code).  Captureless lambdas are boxed at the call
      site via the ^fat auto-shim. */
   return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])((void*)(intptr_t)cmp_fn, a->value, b->value);
-  
-}
-
-static int64_t ok(int64_t x) {
-        return tur_ok(x);
-  
-}
-
-static int64_t err(int64_t e) {
-        return tur_err(e);
   
 }
 

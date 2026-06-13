@@ -17,18 +17,27 @@
 ;;;   x -- the ok value (type A)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated Result[A B] with is-ok=true.
+;;;   A Result[A B] with is-ok=true. B is a phantom tyvar inferred
+;;;   from the call site (or pinned with an ascription such as
+;;;   `(:: (ok x) (Result A B))`).
 ;;;
 ;;; Example:
-;;;   (ok 42)  ; => ok(42)
+;;;   (ok 42)                        ; => Result int B  (B inferred)
+;;;   (:: (ok "hi") (Result cstr cstr))
 ;;;
-;;; Since: Phase TC1
+;;; Since: Phase TC1 (made polymorphic over A/B as Prereq 3, 2026-06-12;
+;;;   the previous monomorphic-on-`:int` shape rejected non-int payloads
+;;;   at TUR-E0001 and blocked the typed Decode surface in the json
+;;;   spice. The body still goes through the int64 carrier helper
+;;;   `tur_ok`; the type-level polymorphism is achieved by ascribing the
+;;;   carrier handle to `(Result A B)` and letting the carrier-ABI
+;;;   codegen take care of the rest).
 
-(defn ok [x : int]
+(defn ok [A B] [x : A]
   #{}
-  : int
+  : (Result A B)
   ```c
-  return tur_ok(x);
+  return tur_ok((int64_t)(intptr_t)x);
   ```)
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
@@ -36,18 +45,22 @@
 ;;;   e -- the error value (type B)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated Result[A B] with is-ok=false.
+;;;   A Result[A B] with is-ok=false. A is a phantom tyvar inferred
+;;;   from the call site (or pinned with an ascription such as
+;;;   `(:: (err msg) (Result A B))`).
 ;;;
 ;;; Example:
-;;;   (err 404)  ; => err(404)
+;;;   (err 404)                       ; => Result A int   (A inferred)
+;;;   (:: (err "missing") (Result int cstr))
 ;;;
-;;; Since: Phase TC1
+;;; Since: Phase TC1 (made polymorphic as Prereq 3, 2026-06-12; same
+;;;   notes as `ok`).
 
-(defn err [e : int]
+(defn err [A B] [e : B]
   #{}
-  : int
+  : (Result A B)
   ```c
-  return tur_err(e);
+  return tur_err((int64_t)(intptr_t)e);
   ```)
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
