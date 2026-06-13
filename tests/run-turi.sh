@@ -1206,6 +1206,21 @@ comonad-capturing-closure
 mutex-linear
 future-split-free
 bytes-linear
+# R1 slice 2 (verified 2026-06-13): taskgroup.tur TaskGroupBlock handle ops
+# (task-group-new/cancel/wait/cancelled?/free) re-implemented as natives over a
+# layout-exact (and cancel_reason-safe) replica.  The cancel native skips the
+# per-fiber thread-local cancelled flag (no fibers run under --interpret).
+taskgroup-linear
+# R1 slice 3 (verified 2026-06-13): chan.tur bounded channels + future settle ops
+# + schan.tur synchronous session channels.  The interpreter is single-threaded,
+# so channels are a plain mutex-guarded bounded ring buffer (a real cond-var
+# block would only deadlock); the fixtures stay within capacity.  future-linear
+# adds promise-fulfill / future-done? over the FutureCell.  schan-roundtrip
+# reuses the ring buffer (SChanBlock prefix == WkChan) + a one-int64 recv cell.
+chan-linear
+asyncchan-linear
+future-linear
+schan-roundtrip
 "
 
 # Build an associative-set from the default list for O(1) lookup.

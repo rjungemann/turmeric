@@ -4805,6 +4805,8 @@ static void wk_register_comonad_natives(TuriEnv *env);
 static void wk_register_mutex_natives(TuriEnv *env);
 static void wk_register_future_natives(TuriEnv *env);
 static void wk_register_bytes_natives(TuriEnv *env);
+static void wk_register_taskgroup_natives(TuriEnv *env);
+static void wk_register_chan_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5145,6 +5147,10 @@ static int cmd_eval(const char *path, bool use_color,
     /* R1: future.tur refcounted FutureCell + serial.tur Bytes (loaded on demand). */
     wk_register_future_natives(env);
     wk_register_bytes_natives(env);
+    /* R1: taskgroup.tur TaskGroupBlock handle ops (loaded on demand). */
+    wk_register_taskgroup_natives(env);
+    /* R1: chan.tur bounded sync/async channel ops (loaded on demand). */
+    wk_register_chan_natives(env);
     /* SYM (turi): first-class :Sym ops, only when -Xsymbols loaded sym.tur. */
     if (g_symbols_enabled)
         wk_register_sym_natives(env);
@@ -9321,11 +9327,189 @@ static TuriValue native_future_cell_free(TuriEnv *env, TuriValue *a, uint32_t n,
     return turi_nil();
 }
 
+static TuriValue native_promise_fulfill(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&fc->lock);
+    if (!fc->is_set) {
+        fc->value = (n > 1) ? a[1].as_int : 0;
+        fc->is_set = true;
+        fc->is_ok = true;
+        pthread_cond_broadcast(&fc->ready);
+    }
+    pthread_mutex_unlock(&fc->lock);
+    return turi_nil();
+}
+static TuriValue native_future_done(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_bool(false);
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&fc->lock);
+    bool done = fc->is_set;
+    pthread_mutex_unlock(&fc->lock);
+    return turi_bool(done);
+}
+
 static void wk_register_future_natives(TuriEnv *env) {
     turi_env_register_native(env, "future-cell-new",  native_future_cell_new,  NULL);
     turi_env_register_native(env, "future-handle",    native_future_handle,    NULL);
     turi_env_register_native(env, "future-cell-free", native_future_cell_free, NULL);
     turi_env_register_native(env, "future-free",      native_future_cell_free, NULL);
+    turi_env_register_native(env, "promise-fulfill",  native_promise_fulfill,  NULL);
+    turi_env_register_native(env, "future-done?",     native_future_done,      NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): chan.tur bounded-channel shims.
+ *
+ * The interpreter is single-threaded, so a real cond-var-blocking channel
+ * would only ever deadlock; the faithful interpreter semantics for the
+ * (single-thread) fixtures is a plain bounded ring buffer guarded by a mutex.
+ * One WkChan backs both the sync (chan-*) and async (async-chan-*) surfaces;
+ * the natives own both the allocation and every access, so they need not match
+ * the compiled ChanBlock layout (which also carries select waiters).
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    pthread_mutex_t lock;
+    int64_t *buf;
+    int64_t head, tail, count, cap;
+} WkChan;
+
+static TuriValue native_chan_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t cap = (n > 0) ? a[0].as_int : 0;
+    if (cap < 1) cap = 1;
+    WkChan *ch = (WkChan *)malloc(sizeof(WkChan));
+    if (!ch) return turi_nil();
+    ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+    if (!ch->buf) { free(ch); return turi_nil(); }
+    pthread_mutex_init(&ch->lock, NULL);
+    ch->head = ch->tail = ch->count = 0; ch->cap = cap;
+    return wk_int_ptr(ch);
+}
+/* push; returns true if there was room */
+static bool wk_chan_push(WkChan *ch, int64_t v) {
+    bool ok = false;
+    pthread_mutex_lock(&ch->lock);
+    if (ch->count < ch->cap) {
+        ch->buf[ch->tail] = v;
+        ch->tail = (ch->tail + 1) % ch->cap;
+        ch->count++;
+        ok = true;
+    }
+    pthread_mutex_unlock(&ch->lock);
+    return ok;
+}
+/* pop into *out; returns true if a value was available */
+static bool wk_chan_pop(WkChan *ch, int64_t *out) {
+    bool ok = false;
+    pthread_mutex_lock(&ch->lock);
+    if (ch->count > 0) {
+        *out = ch->buf[ch->head];
+        ch->head = (ch->head + 1) % ch->cap;
+        ch->count--;
+        ok = true;
+    }
+    pthread_mutex_unlock(&ch->lock);
+    return ok;
+}
+static TuriValue native_chan_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n >= 2 && a[0].as_int) wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int);
+    return turi_nil();
+}
+static TuriValue native_chan_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = 0;
+    if (n >= 1 && a[0].as_int) wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    return turi_int(v);
+}
+static TuriValue native_chan_try_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2 || !a[0].as_int) return turi_bool(false);
+    return turi_bool(wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int));
+}
+static TuriValue native_chan_try_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = 0;
+    if (n >= 1 && a[0].as_int) wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    return turi_int(v);
+}
+static TuriValue native_chan_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    WkChan *ch = (WkChan *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&ch->lock);
+    int64_t c = ch->count;
+    pthread_mutex_unlock(&ch->lock);
+    return turi_int(c);
+}
+static TuriValue native_chan_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n >= 1 && a[0].as_int) {
+        WkChan *ch = (WkChan *)(intptr_t)a[0].as_int;
+        pthread_mutex_destroy(&ch->lock);
+        free(ch->buf);
+        free(ch);
+    }
+    return turi_nil();
+}
+
+/* schan.tur synchronous session channels: same ring buffer (SChanBlock matches
+ * WkChan's leading fields), plus a one-int64 cell.  send/recv return the channel
+ * carrier (the protocol continuation rides the same pointer); recv writes the
+ * popped value into *cell. */
+static TuriValue native_schan_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2 || !a[0].as_int) return turi_int(0);
+    wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int);
+    return a[0];  /* SChan R continuation */
+}
+static TuriValue native_schan_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2 || !a[0].as_int) return turi_int(0);
+    int64_t v = 0;
+    wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    if (a[1].as_int) *(int64_t *)(intptr_t)a[1].as_int = v;  /* write into cell */
+    return a[0];  /* SChan R continuation */
+}
+static TuriValue native_schan_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+    if (!c) return turi_nil();
+    *c = 0;
+    return wk_int_ptr(c);
+}
+static TuriValue native_schan_cell_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    return turi_int(*(int64_t *)(intptr_t)a[0].as_int);
+}
+static TuriValue native_schan_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+static void wk_register_chan_natives(TuriEnv *env) {
+    turi_env_register_native(env, "chan-new",            native_chan_new,      NULL);
+    turi_env_register_native(env, "chan-send",           native_chan_send,     NULL);
+    turi_env_register_native(env, "chan-recv",           native_chan_recv,     NULL);
+    turi_env_register_native(env, "chan-free",           native_chan_free,     NULL);
+    turi_env_register_native(env, "async-chan-new",      native_chan_new,      NULL);
+    turi_env_register_native(env, "async-chan-try-send", native_chan_try_send, NULL);
+    turi_env_register_native(env, "async-chan-try-recv", native_chan_try_recv, NULL);
+    turi_env_register_native(env, "async-chan-count",    native_chan_count,    NULL);
+    turi_env_register_native(env, "async-chan-free",     native_chan_free,     NULL);
+    /* schan.tur synchronous session channels (SChanBlock == WkChan prefix). */
+    turi_env_register_native(env, "schan-new",           native_chan_new,        NULL);
+    turi_env_register_native(env, "schan-send",          native_schan_send,      NULL);
+    turi_env_register_native(env, "schan-recv",          native_schan_recv,      NULL);
+    turi_env_register_native(env, "schan-close",         native_chan_free,       NULL);
+    turi_env_register_native(env, "schan-cell-new",      native_schan_cell_new,  NULL);
+    turi_env_register_native(env, "schan-cell-get",      native_schan_cell_get,  NULL);
+    turi_env_register_native(env, "schan-cell-free",     native_schan_cell_free, NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -9366,6 +9550,84 @@ static void wk_register_bytes_natives(TuriEnv *env) {
     turi_env_register_native(env, "bytes-len",   native_bytes_len,   NULL);
     turi_env_register_native(env, "bytes-data",  native_bytes_data,  NULL);
     turi_env_register_native(env, "bytes-free",  native_bytes_free,  NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): taskgroup.tur TaskGroupBlock shims.
+ *
+ * Replica of taskgroup.tur's TaskGroupBlock.  We include cancel_reason in the
+ * allocation (the canonical documented layout) so cancel-with-reason is safe --
+ * note the compiled task-group-new omits it, a latent OOB write tracked in
+ * docs/reported/taskgroup-block-cancel-reason-layout-overflow.md.
+ *
+ * The cancel native does NOT touch the per-fiber thread-local cancelled flag
+ * (tur_fiber_set_cancelled) that the inline-C body sets: under --interpret no
+ * fibers are running, and the fixtures observe only the group's own flag.
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t done_cond;
+    int64_t task_count;
+    int64_t completed_count;
+    bool cancelled;
+    bool done;
+    int64_t cancel_reason;
+} WkTaskGroup;
+
+static TuriValue native_task_group_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    WkTaskGroup *g = (WkTaskGroup *)malloc(sizeof(WkTaskGroup));
+    if (!g) return turi_nil();
+    pthread_mutex_init(&g->lock, NULL);
+    pthread_cond_init(&g->done_cond, NULL);
+    g->task_count = 0; g->completed_count = 0;
+    g->cancelled = false; g->done = false; g->cancel_reason = 0;
+    return wk_int_ptr(g);
+}
+static TuriValue native_task_group_cancel(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&g->lock);
+    g->cancelled = true; g->done = true; g->cancel_reason = 0;
+    pthread_cond_broadcast(&g->done_cond);
+    pthread_mutex_unlock(&g->lock);
+    return turi_nil();
+}
+static TuriValue native_task_group_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&g->lock);
+    while (!g->done) pthread_cond_wait(&g->done_cond, &g->lock);
+    pthread_mutex_unlock(&g->lock);
+    return turi_nil();
+}
+static TuriValue native_task_group_cancelled(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_bool(false);
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&g->lock);
+    bool c = g->cancelled;
+    pthread_mutex_unlock(&g->lock);
+    return turi_bool(c);
+}
+static TuriValue native_task_group_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_destroy(&g->lock);
+    pthread_cond_destroy(&g->done_cond);
+    free(g);
+    return turi_nil();
+}
+
+static void wk_register_taskgroup_natives(TuriEnv *env) {
+    turi_env_register_native(env, "task-group-new",        native_task_group_new,       NULL);
+    turi_env_register_native(env, "task-group-cancel",     native_task_group_cancel,    NULL);
+    turi_env_register_native(env, "task-group-wait",       native_task_group_wait,      NULL);
+    turi_env_register_native(env, "task-group-cancelled?", native_task_group_cancelled, NULL);
+    turi_env_register_native(env, "task-group-free",       native_task_group_free,      NULL);
 }
 
 /* -------------------------------------------------------------------------

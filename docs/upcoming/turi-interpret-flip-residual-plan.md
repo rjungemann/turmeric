@@ -39,25 +39,38 @@ finishing it.
 
 ## Bucket R1 -- resource/concurrency native-shim campaign (~16, *fix*)
 
-> **Progress (slice 1 landed, 2026-06-13):** 5 fixtures closed via additive
-> `cmd_eval` native registration (`src/main.c`), no codegen change:
-> `safe-box` (wired the existing `wk_register_safe_natives` +
-> `wk_register_typeclass_natives` into the `--interpret` path -- previously only
-> `wk_eval_fixture` registered them), `comonad-capturing-closure`
-> (`wk_register_comonad_natives` over the Identity `{value}` / Pair `Tuple2`
-> layout), `mutex-linear` (faithful `pthread_mutex_t`),
-> `future-split-free` (layout-exact refcounted `WkFutureCell`), and
-> `bytes-linear` (serial.tur `Bytes` int64-header). Harness 1159 -> **1164**,
-> compiled suite 1615/0, parity 0-gaps; all 5 on the allowlist.
+> **Progress (slices 1-3 landed, 2026-06-13):** 11 fixtures closed via additive
+> `cmd_eval` native registration (`src/main.c`), no codegen change. Harness
+> 1159 -> **1169**, compiled suite 1615/0, parity 0-gaps; all on the allowlist.
 >
-> **Remaining R1:** `taskgroup-linear` (large `TaskGroup` struct: mutex+cond+
-> counters+cancelled flag), `session-close` (`make-session`/`close`),
-> `childhandle-linear` (`process/spawn`+`wait` -- real fork/exec),
-> `tmpfile-linear-borrow` (`fs/tmpfile` -- real fd), the channel cluster
-> (`chan-linear`, `asyncchan-linear`, `schan-roundtrip`,
-> `serial-primitive-roundtrip`), and `future-linear`. The channel/taskgroup/
-> process/fs handles each carry a bigger struct or touch the OS; do them as
-> their own slices per the sub-campaign table below.
+> - **Slice 1** (5): `safe-box` (wired the existing `wk_register_safe_natives` +
+>   `wk_register_typeclass_natives` into the `--interpret` path -- previously only
+>   `wk_eval_fixture` registered them), `comonad-capturing-closure`
+>   (`wk_register_comonad_natives`, Identity `{value}` / Pair `Tuple2` layout),
+>   `mutex-linear` (faithful `pthread_mutex_t`), `future-split-free`
+>   (layout-exact refcounted `WkFutureCell`), `bytes-linear` (serial.tur `Bytes`).
+> - **Slice 2** (1): `taskgroup-linear` (`WkTaskGroup` replica;
+>   `cancel`/`wait`/`cancelled?` over the group flag, skipping the per-fiber TLS
+>   cancel). Surfaced and filed a latent compiled-path heap OOB:
+>   [taskgroup-block-cancel-reason-layout-overflow.md](../reported/taskgroup-block-cancel-reason-layout-overflow.md).
+> - **Slice 3** (4): `chan-linear` / `asyncchan-linear` (bounded mutex-guarded
+>   ring buffer -- the single-threaded interpreter cannot block, and the fixtures
+>   stay within capacity), `future-linear` (`promise-fulfill` / `future-done?`),
+>   `schan-roundtrip` (schan.tur synchronous session channels reuse the ring
+>   buffer + a one-int64 recv cell).
+>
+> **Remaining R1 (2, reclassified):**
+> - `serial-primitive-roundtrip` -- needs the **Serializable** typeclass
+>   instance natives (serialize/deserialize int/bool over the length-prefixed
+>   byte buffer) plus `extern-c printf` under `--interpret`. A typeclass+extern-c
+>   concern, not the channel/handle ring-buffer pattern; own slice.
+> - `childhandle-linear` (`process/spawn`+`wait`, real fork/exec) and
+>   `tmpfile-linear-borrow` (`fs/tmpfile`, real fd) -- genuine OS syscalls; doable
+>   as faithful natives but their own slice.
+> - `session-close` -- **not R1.** `make-session`/`close` are `-Xsessions`
+>   compiler/runtime builtins (`src/compiler/elab_sessions.c`), so this is
+>   interpreter session-runtime support, tracked with the runtime-level gaps
+>   rather than a stdlib native shim.
 
 
 The fixture body is pure-turi but it imports a stdlib subsystem whose ops are
