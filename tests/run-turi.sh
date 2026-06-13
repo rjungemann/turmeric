@@ -1005,6 +1005,53 @@ sym-stdlib
 quoted-keyword-type-ann
 sym-map-key
 sym-dynamic
+# seq-* (verified 2026-06-13): the lazy-Seq library now runs under --interpret
+# via native bridges over turi_call + generator advance (wk_register_seq_natives
+# in src/main.c) plus a gen-body returning-flag reset in eval.c.  gen-collect
+# joins too (shared gen-arr natives).  seq-builders-unfold / seq-core-from-vec
+# stay carved -- their fixtures define their own inline-C helpers.
+gen-collect
+seq-builders-cycle
+seq-builders-iterate
+seq-builders-range
+seq-builders-range-step
+seq-builders-repeat
+seq-builders-repeatedly
+seq-combine-chain
+seq-combine-concat
+seq-combine-interleave
+seq-combine-zip
+seq-combine-zip-with
+seq-consume-all
+seq-consume-any
+seq-consume-count
+seq-consume-find
+seq-consume-find-index
+seq-consume-first
+seq-consume-foldl
+seq-consume-for-each
+seq-consume-into-list
+seq-consume-into-vec
+seq-consume-last
+seq-consume-nth
+seq-consume-reduce
+seq-core-collect
+seq-core-empty
+seq-core-for-each
+seq-core-from-list
+seq-core-of
+seq-pipeline-foldl
+seq-transform-chain
+seq-transform-drop
+seq-transform-drop-while
+seq-transform-filter
+seq-transform-filter-map
+seq-transform-flat-map
+seq-transform-flatten
+seq-transform-map
+seq-transform-map-indexed
+seq-transform-take
+seq-transform-take-while
 "
 
 # Build an associative-set from the default list for O(1) lookup.

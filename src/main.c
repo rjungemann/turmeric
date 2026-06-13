@@ -4796,6 +4796,7 @@ static void wk_register_stdlib_natives(TuriEnv *env);
 static void wk_register_hamt_natives(TuriEnv *env);
 static void wk_register_map_natives(TuriEnv *env);
 static void wk_register_sym_natives(TuriEnv *env);
+static void wk_register_seq_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5016,6 +5017,10 @@ static int cmd_eval(const char *path, bool use_color,
     /* SYM (turi): first-class :Sym ops, only when -Xsymbols loaded sym.tur. */
     if (g_symbols_enabled)
         wk_register_sym_natives(env);
+    /* SEQ (turi): lazy-Seq bridges over turi_call + generator advance.  The seq
+     * modules are loaded on demand by user code; the natives override the
+     * inline-C bodies. */
+    wk_register_seq_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers. */
     {
         typedef struct { int64_t value; int64_t next; } TurCons;
@@ -6482,6 +6487,239 @@ static TuriValue native_map_eq_raw_k(TuriEnv *env, TuriValue *a, uint32_t n, voi
     if (n < 4) return turi_bool(false);
     return turi_bool(map_eq_iter(env, set_hamt(a[0]), set_hamt(a[1]),
                                  (tur_hamt_keyeq_fn)(intptr_t)a[2].as_int, a[3]));
+}
+
+/* SEQ (stdlib/seq): the lazy-Seq inline-C bridges assume the COMPILED ABI --
+ * fat-closure calls via a C function pointer and a {__state,__next_fn} generator
+ * struct -- so the tree-walker cannot run them.  Under --interpret a Seq factory
+ * is a TURI_CLOSURE and a generator is a TURI_GEN; re-implement the bridges over
+ * turi_call + turi_gen_advance_val.  A yielded value is boxed as a malloc'd
+ * int64 (NULL = exhausted), matching seq-val-some?/seq-val-unwrap. */
+static TuriValue seq_as_closure(TuriValue v) {
+    /* A factory/callback passed through an `int` param keeps its TURI_CLOSURE
+     * tag; if it arrived as a raw carrier, rebuild the closure value. */
+    if (v.tag == TURI_CLOSURE) return v;
+    return turi_closure((TuriClosure *)(intptr_t)v.as_int);
+}
+static TuriValue native_seq_iter(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
+    if (!s) return turi_nil();
+    return turi_call(e, seq_as_closure(turi_int(s[0])), NULL, 0); /* mk() -> gen */
+}
+static TuriValue native_seq_gen_done(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_bool(true);
+    return turi_bool(turi_gen_done_val(a[0]));
+}
+static TuriValue native_seq_gen_next(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_int(0);
+    int done = 0;
+    /* turi_gen_advance_val already returns a pointer to the generator's value
+     * box (the compiled ptr<void> yield protocol), valid until the next advance
+     * -- exactly what seq-val-some?/seq-val-unwrap expect.  Pass it through; do
+     * not re-box (that would hand back a pointer-to-pointer). */
+    TuriValue v = turi_gen_advance_val(e, a[0], &done);
+    if (done) return turi_int(0);                       /* NULL = exhausted */
+    return v;
+}
+static TuriValue native_seq_val_some(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_bool(n >= 1 && a[0].as_int != 0);
+}
+static TuriValue native_seq_val_unwrap(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(*(int64_t *)(intptr_t)a[0].as_int);
+}
+/* gen<->int identity casts used by the transform layer (the gen is already an
+ * int64 carrier under --interpret). */
+static TuriValue native_seq_gen_to_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int(n >= 1 ? a[0].as_int : 0);
+}
+/* Fat-closure call bridges: the callback is a TURI_CLOSURE under --interpret. */
+static TuriValue native_seq_call_fn0(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_int(0);
+    return turi_call(e, seq_as_closure(a[0]), NULL, 0);
+}
+static TuriValue native_seq_call_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+}
+static TuriValue native_seq_call_fn2(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 3) return turi_int(0);
+    TuriValue args[2] = { a[1], a[2] };
+    return turi_call(e, seq_as_closure(a[0]), args, 2);
+}
+static TuriValue native_seq_call_bool_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_bool(false);
+    TuriValue r = turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    return turi_bool(r.tag == TURI_BOOL ? r.as_bool : r.as_int != 0);
+}
+static TuriValue native_seq_call_void_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_nil();
+    turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    return turi_nil();
+}
+/* gen-arr (stdlib/gen.tur): growable int64 array {len, cap, data} used by
+ * gen-collect / seq-collect.  Re-implemented natively (the inline-C grows via
+ * malloc/free, which the simple executor cannot run faithfully). */
+static TuriValue native_gen_arr_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    int64_t *h = (int64_t *)malloc(3 * sizeof(int64_t));
+    h[0] = 0; h[1] = 0; h[2] = 0;
+    return turi_int((int64_t)(intptr_t)h);
+}
+static TuriValue native_gen_arr_push(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *h = (int64_t *)(intptr_t)a[0].as_int;
+    if (h[0] >= h[1]) {
+        int64_t nc = h[1] ? h[1] * 2 : 4;
+        int64_t *nd = (int64_t *)malloc((size_t)nc * sizeof(int64_t));
+        if (h[1]) {
+            int64_t *od = (int64_t *)(intptr_t)h[2];
+            for (int64_t k = 0; k < h[0]; k++) nd[k] = od[k];
+            free(od);
+        }
+        h[1] = nc; h[2] = (int64_t)(intptr_t)nd;
+    }
+    ((int64_t *)(intptr_t)h[2])[h[0]++] = a[1].as_int;
+    return turi_nil();
+}
+static TuriValue native_gen_arr_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_gen_arr_get(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t *h = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(((int64_t *)(intptr_t)h[2])[a[1].as_int]);
+}
+/* seq option box {bool is_some; int64 value} (offset 0 / offset 8 = slot[1]). */
+static TuriValue native_seq_make_some(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    int64_t *p = (int64_t *)malloc(2 * sizeof(int64_t));
+    p[0] = 1; p[1] = (n >= 1) ? a[0].as_int : 0;
+    return turi_int((int64_t)(intptr_t)p);
+}
+static TuriValue native_seq_make_none(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    int64_t *p = (int64_t *)malloc(2 * sizeof(int64_t));
+    p[0] = 0; p[1] = 0;
+    return turi_int((int64_t)(intptr_t)p);
+}
+static TuriValue native_seq_opt_some(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_bool(false);
+    return turi_bool(((int64_t *)(intptr_t)a[0].as_int)[0] != 0);
+}
+static TuriValue native_seq_opt_unwrap(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[1]);
+}
+/* seq out-vec {int64* data; len; cap}. */
+static TuriValue native_seq_out_vec_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    int64_t *v = (int64_t *)malloc(3 * sizeof(int64_t));
+    v[0] = 0; v[1] = 0; v[2] = 0;
+    return turi_int((int64_t)(intptr_t)v);
+}
+static TuriValue native_seq_out_vec_push(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;   /* {data, len, cap} */
+    if (v[1] == v[2]) {
+        v[2] = v[2] ? v[2] * 2 : 8;
+        v[0] = (int64_t)(intptr_t)realloc((void *)(intptr_t)v[0],
+                                          (size_t)v[2] * sizeof(int64_t));
+    }
+    ((int64_t *)(intptr_t)v[0])[v[1]++] = a[1].as_int;
+    return turi_nil();
+}
+static TuriValue native_seq_vec_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[1]);
+}
+static TuriValue native_seq_vec_get(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(((int64_t *)(intptr_t)v[0])[a[1].as_int]);
+}
+/* seq cons cell / Tuple2: both are {slot0, slot1}. */
+static TuriValue native_seq_make_cell(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    int64_t *c = (int64_t *)malloc(2 * sizeof(int64_t));
+    c[0] = (n >= 1) ? a[0].as_int : 0;
+    c[1] = (n >= 2) ? a[1].as_int : 0;
+    return turi_int((int64_t)(intptr_t)c);
+}
+static TuriValue native_seq_cell_fst(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_seq_cell_snd(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[1]);
+}
+static TuriValue native_seq_list_nil(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_bool(n < 1 || a[0].as_int == 0);
+}
+static void wk_register_seq_natives(TuriEnv *env) {
+    turi_env_register_native(env, "seq-iter",            native_seq_iter,         NULL);
+    turi_env_register_native(env, "seq-gen-done",        native_seq_gen_done,     NULL);
+    turi_env_register_native(env, "seq-gen-next",        native_seq_gen_next,     NULL);
+    turi_env_register_native(env, "seq-val-some?",       native_seq_val_some,     NULL);
+    turi_env_register_native(env, "seq-val-unwrap",      native_seq_val_unwrap,   NULL);
+    /* transform-layer gen<->int + driver aliases (same gen carrier). */
+    turi_env_register_native(env, "seq-gen-to-int",      native_seq_gen_to_int,   NULL);
+    turi_env_register_native(env, "seq-gen-from-int",    native_seq_gen_to_int,   NULL);
+    turi_env_register_native(env, "seq-gen-done-int",    native_seq_gen_done,     NULL);
+    turi_env_register_native(env, "seq-gen-next-int",    native_seq_gen_next,     NULL);
+    /* fat-closure call bridges (one per arity/result shape). */
+    turi_env_register_native(env, "seq-call-fn0",        native_seq_call_fn0,     NULL);
+    turi_env_register_native(env, "seq-call-fn1",        native_seq_call_fn1,     NULL);
+    turi_env_register_native(env, "seq-call-fn2",        native_seq_call_fn2,     NULL);
+    turi_env_register_native(env, "seq-call-bool-fn1",   native_seq_call_bool_fn1, NULL);
+    turi_env_register_native(env, "seq-call-void-fn1",   native_seq_call_void_fn1, NULL);
+    /* gen-arr (gen.tur) {len, cap, data} -- also unblocks gen-collect. */
+    turi_env_register_native(env, "gen-arr-new",         native_gen_arr_new,      NULL);
+    turi_env_register_native(env, "gen-arr-push!",       native_gen_arr_push,     NULL);
+    turi_env_register_native(env, "gen-arr-len",         native_gen_arr_len,      NULL);
+    turi_env_register_native(env, "gen-arr-get",         native_gen_arr_get,      NULL);
+    /* seq option box / out-vec / cons cell / Tuple2 helpers (consistent layouts:
+     * all producers and accessors are nativized together). */
+    turi_env_register_native(env, "seq-make-some",       native_seq_make_some,    NULL);
+    turi_env_register_native(env, "seq-make-none",       native_seq_make_none,    NULL);
+    turi_env_register_native(env, "seq-opt-some?",       native_seq_opt_some,     NULL);
+    turi_env_register_native(env, "seq-opt-unwrap",      native_seq_opt_unwrap,   NULL);
+    turi_env_register_native(env, "seq-out-vec-new",     native_seq_out_vec_new,  NULL);
+    turi_env_register_native(env, "seq-out-vec-push!",   native_seq_out_vec_push, NULL);
+    turi_env_register_native(env, "seq-vec-len",         native_seq_vec_len,      NULL);
+    turi_env_register_native(env, "seq-vec-get",         native_seq_vec_get,      NULL);
+    turi_env_register_native(env, "seq-make-cons",       native_seq_make_cell,    NULL);
+    turi_env_register_native(env, "seq-make-pair",       native_seq_make_cell,    NULL);
+    turi_env_register_native(env, "seq-list-head",       native_seq_cell_fst,     NULL);
+    turi_env_register_native(env, "seq-list-tail",       native_seq_cell_snd,     NULL);
+    turi_env_register_native(env, "seq-pair-first",      native_seq_cell_fst,     NULL);
+    turi_env_register_native(env, "seq-pair-second",     native_seq_cell_snd,     NULL);
+    turi_env_register_native(env, "seq-list-nil?",       native_seq_list_nil,     NULL);
 }
 
 /* SYM (turi): first-class :Sym natives (-Xsymbols).  The interpreter carries a

@@ -1037,6 +1037,13 @@ static void gen_body_thunk(void) {
         g->had_error = true; g->error_val = g->env->throw_value;
         g->env->throwing = false;
     }
+    /* A `(return)` inside the generator body (e.g. seq/take-while's early stop)
+     * terminates the generator; its value is discarded.  The body runs on this
+     * coroutine but shares the consumer's TuriEnv, so a leaked `returning` flag
+     * would otherwise propagate into gen-next's caller (the driver loop would
+     * bail and hand back env->return_value, 0, instead of its accumulator).
+     * Reset it here, mirroring the throwing reset above. */
+    g->env->returning = false;
     g->done = true;
     swapcontext(&g->gen_ctx, &g->caller_ctx);
     abort(); /* unreachable */
@@ -6222,6 +6229,22 @@ TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args
     if (fn.tag != TURI_CLOSURE || !fn.as_closure)
         return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
     return eval_apply(env, fn.as_closure, args, n_args);
+}
+
+/* SEQ (stdlib/seq): public bridges so the seq inline-C natives in main.c can
+ * drive an interpreter generator (TuriGen is defined in this file).  `gen` is a
+ * generator value (the int64 carrier holds the TuriGen*); advance it one step,
+ * setting *done to 1 if it just ran off its end (no value yielded). */
+TuriValue turi_gen_advance_val(TuriEnv *env, TuriValue gen, int *done) {
+    TuriGen *g = (TuriGen *)(intptr_t)gen.as_int;
+    if (!g) { if (done) *done = 1; return turi_int(0); }
+    TuriValue v = gen_advance(env, g);
+    if (done) *done = g->done ? 1 : 0;
+    return v;
+}
+bool turi_gen_done_val(TuriValue gen) {
+    TuriGen *g = (TuriGen *)(intptr_t)gen.as_int;
+    return !g || g->done;
 }
 
 /* Fire all remaining deferred actions (those registered at module/top level).

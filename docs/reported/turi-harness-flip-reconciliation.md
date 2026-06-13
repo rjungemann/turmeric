@@ -1,5 +1,27 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (lazy Seq + generator early-return fix, 2026-06-13):** **the whole
+> `seq/*` lazy-sequence library now runs under `--interpret`** -- 41 `seq-*`
+> fixtures plus `gen-collect` join the allowlist (harness 1048 -> 1090). seq's
+> inline-C bridges assume the *compiled* ABI (fat-closure calls via a C function
+> pointer, a `{__state,__next_fn}` generator struct, malloc/free growable
+> arrays), so the tree-walker declined them. `wk_register_seq_natives`
+> (`src/main.c`) re-implements the bridge surface over the interpreter's value
+> model: `seq-iter`/`seq-gen-next`/`seq-gen-done` drive a `TURI_GEN` via a new
+> public `turi_gen_advance_val` (the yield protocol already hands back a pointer
+> to the value box, so no re-boxing); the `seq-call-*` bridges invoke the
+> `TURI_CLOSURE` callback via `turi_call`; and the option/out-vec/cons/Tuple2 +
+> `gen-arr` `{len,cap,data}` helpers are nativized as a consistent set
+> (producers and accessors together). A real interpreter bug surfaced and was
+> fixed: a `(return)` inside a generator body (e.g. `seq/take-while`'s early
+> stop) left `env->returning` set, and since the gen coroutine shares the
+> consumer's `TuriEnv`, the driver loop saw it and bailed -- returning
+> `env->return_value` (0) instead of its accumulator (`seq-pipeline-foldl`
+> printed 0 for 161700). `gen_body_thunk` now resets `returning` after the body
+> completes, mirroring the existing `throwing` reset. `seq-builders-unfold` /
+> `seq-core-from-vec` stay carved (their fixtures define their own inline-C).
+> No codegen change.
+>
 > **Progress (EX_SYM_LIT + native sym ops, 2026-06-13):** **first-class `:Sym`
 > values (`-Xsymbols`) now work under `--interpret`** -- all 4 sym fixtures
 > (`sym-stdlib`, `quoted-keyword-type-ann`, `sym-map-key`, `sym-dynamic`) pass
