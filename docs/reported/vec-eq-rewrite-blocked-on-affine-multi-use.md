@@ -4,6 +4,44 @@ severity: ergonomics gap / latent inference defect
 date: 2026-06-13
 ---
 
+## Update 2 (2026-06-13, follow-up commit)
+
+**Issue (2) is now fixed.**  Root cause: `elab_toplevel.c` pass-1 forward
+declaration assumed the params vector was always at `name_idx + 1`, so for
+poly defns `(defn name [TypeVars] [params] :ret body)` the `ret_idx`
+pointed at the params vec, the return-keyword probe missed, and
+`return_kind` fell back to `TY_INT`.  Recursive self-calls inside the
+body then resolved through the forward-decl binding's stale `result_kind
+= TY_INT`, manifesting as "if branches have mismatched types: then=bool
+else=int" when the declared return was anything else.
+
+Fix: detect the leading `[TypeVars]` (2-vec) and optional `[Constraints]`
+(3-vec) shape and bump `params_idx_local` past them before computing
+`ret_idx`.  Mirrors the F_VEC detection already used in
+`elab_fns.c:elab_defn`.
+
+Validation: minimal repros (poly-defn recursive returning `:bool`)
+compile and run; full suite stays at the 86-fixture / 1564-pass baseline
+with zero regressions.
+
+**Issue (3): unmasked by the Vec rewrite attempt.**  Once issue (2) was
+fixed, retrying the Vec rewrite hit a third blocker: the
+`(let [xi (:: x :int)] ...)` ascription on a by-value `Vec__int`
+let-binding emits `int64_t xi = x;` directly without a carrier bridge,
+producing a C type mismatch (`incompatible: int64_t = Vec__int`).
+
+This is symmetric to the EX_ASCRIBE bridge widening I added earlier this
+session (`emit_expr.c` int→TY_APP-concrete for the Cons recursive case)
+— it covers one direction but not the other.  The `Vec__int → int`
+direction needs an analogous gate for let-binding C-type selection and a
+matching `emit_carrier_bridge(CK_CONCRETE → CK_CARRIER)` call.
+
+Not pursuing in this session.  The plan needs a fourth lift after the
+three TCO lifts: by-value-struct → carrier let-binding bridge.  Until
+then, Vec definstance stays on the carrier helper.
+
+---
+
 ## Update
 
 Affine multi-use (issue 1) is fully unblocked by let-bound int coercion

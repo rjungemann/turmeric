@@ -1028,7 +1028,30 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         if (name_f->tag == F_SYM) {
                             /* Parse return type annotation if present */
                             TypeKind return_kind = TY_INT; /* default */
-                            uint32_t ret_idx = name_idx + 2; /* name params :ret */
+                            uint32_t params_idx_local = name_idx + 1; /* params usually here */
+                            /* poly-defn-recursive-return-type-inference: a defn with
+                             * explicit type parameters spells as
+                             *   (defn name [TypeVars] [params] :ret body)        -- 2-vec
+                             *   (defn name [TypeVars] [Constraints] [params] :ret body) -- 3-vec
+                             * so the params vector is at name_idx+2 (or +3), not +1.
+                             * Without this skip, ret_idx points at the params vec, the
+                             * keyword/sym/type-ann probe below misses, and the forward
+                             * decl falls back to TY_INT -- breaking recursive self-calls
+                             * inside a poly-defn body (e.g. `: bool` typed as int).
+                             * Mirrors the F_VEC detection in elab_fns.c elab_defn. */
+                            if (f->as.list.len > params_idx_local + 1 &&
+                                f->as.list.items[params_idx_local]->tag == F_VEC &&
+                                f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
+                                /* type-param vec present; bump past it */
+                                params_idx_local++;
+                                /* optional constraint vec between TypeVars and params */
+                                if (f->as.list.len > params_idx_local + 1 &&
+                                    f->as.list.items[params_idx_local]->tag == F_VEC &&
+                                    f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
+                                    params_idx_local++;
+                                }
+                            }
+                            uint32_t ret_idx = params_idx_local + 1; /* :ret follows params */
                             /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
                             if (f->as.list.len > ret_idx && f->as.list.items[ret_idx]->tag == F_MAP) {
                                 ret_idx++;
