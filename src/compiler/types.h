@@ -1367,6 +1367,15 @@ const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 void         type_codegen_reset_struct_apps(void);
 void         type_codegen_emit_struct_apps(Buf *out);
+/* Direction (1) of polymorphic-ok-in-typeclass-instance-method...md:
+ * exposed so emit_expr.c can resolve a parametric struct field's actual
+ * type at the field-access site (the field-expr's Type may still be a
+ * TY_TYVAR after parse; the receiver's type-arg list is the substitution). */
+bool         type_extract_struct_app(const Type *t, struct StructDef **out_def,
+                                     Type *out_args, uint8_t *out_n);
+Type         substitute_struct_app_type(const Type *t,
+                                        const struct StructDef *def,
+                                        const Type *args);
 /* TS4P1: ADT-app (polymorphic ADT monomorphisation) registry. */
 void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);

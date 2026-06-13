@@ -337,7 +337,7 @@ static RegisteredFnPtrTypedef *g_fn_ptr_typedefs = NULL;
 static uint32_t g_n_fn_ptr_typedefs = 0;
 static uint32_t g_cap_fn_ptr_typedefs = 0;
 
-static bool type_extract_struct_app(const Type *t, StructDef **out_def,
+bool type_extract_struct_app(const Type *t, StructDef **out_def,
                                     Type *out_args, uint8_t *out_n) {
     if (!t) return false;
     Type raw[16];
@@ -565,7 +565,7 @@ static void free_struct_app_type(Type t) {
 }
 
 /* Phase D: forward declaration — substitute_struct_app_type is defined below. */
-static Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args);
+Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args);
 
 /* Propagate a parametric opaque's substructural discipline into a TY_APP node.
  * A `(defopaque Name [T] :int :linear)` applied as `(Name X)` should yield a
@@ -655,7 +655,7 @@ static bool struct_type_param_index(const StructDef *def, const char *name, uint
     return false;
 }
 
-static Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args) {
+Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args) {
     if (!t) return type_from_kind(TY_UNKNOWN);
     switch (t->kind) {
         case TY_TYVAR: {
@@ -785,6 +785,26 @@ static const char *struct_field_c_type(const StructDef *owner, const StructField
     }
     if (field->full_type && owner && args) {
         Type resolved = substitute_struct_app_type(field->full_type, owner, args);
+        /* Direction (1) of
+         * docs/reported/polymorphic-ok-in-typeclass-instance-method-with-value-struct-payload.md:
+         * for the stdlib carrier-helper-backed parametric structs (Result,
+         * Option), force the parametric field's slot to a heap pointer when
+         * the resolved type-arg is a non-parametric value-struct. The struct
+         * layout then has a fixed 8-byte slot regardless of T's size and
+         * matches the carrier-box layout (tur_result_box_t / tur_option_t)
+         * that the prelude helpers produce -- so tur_ok / tur_some emit a
+         * carrier whose layout downstream consumers can read directly as
+         * the by-value Result__T__B / Option__T struct. */
+        if (owner && owner->name &&
+            (strcmp(owner->name, "Result") == 0 ||
+             strcmp(owner->name, "Option") == 0) &&
+            resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
+            !resolved.as.struct_.def->is_opaque &&
+            resolved.as.struct_.def->n_type_params == 0) {
+            static char buf[128];
+            snprintf(buf, sizeof(buf), "%s *", type_c_name(resolved));
+            return buf;
+        }
         return type_c_name(resolved);
     }
     switch (field->kind) {

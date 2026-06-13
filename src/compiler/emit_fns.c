@@ -398,9 +398,36 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
         } else if (use_abi_spec) {
-            buf_puts(file, emit_type_c_name(ctx, ctx->current_abi_specialization->result_type));
+            /* Direction (1) of the open report: a typeclass instance
+             * method (__inst_*) whose return type uses the carrier ABI
+             * (parameterized struct like (Result A B)) emits int64_t
+             * return -- the dispatch dict expects a uniform
+             * `int64_t (*)(int64_t, ...)` shape, and the body's
+             * by-value Result__T__B struct gets heap-spilled to a
+             * pointer-as-int64 at the body emit. */
+            Type rt = ctx->current_abi_specialization->result_type;
+            bool is_instance_method =
+                fd->binding && fd->binding->name && fd->binding->name->name &&
+                strncmp(fd->binding->name->name, "__inst_", 7) == 0;
+            if (is_instance_method &&
+                type_uses_carrier_abi(emit_resolve_type(ctx, rt))) {
+                buf_puts(file, "int64_t");
+            } else {
+                buf_puts(file, emit_type_c_name(ctx, rt));
+            }
         } else if (carrier_override.kind == TY_STRUCT) {
             buf_puts(file, emit_type_c_name(ctx, carrier_override));
+        } else if (!is_main && e->type.as.fn.result_full_type &&
+                   fd->binding && fd->binding->name && fd->binding->name->name &&
+                   strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                   type_uses_carrier_abi(emit_resolve_type(ctx,
+                       *e->type.as.fn.result_full_type))) {
+            /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...md:
+             * non-spec instance method whose declared return is a carrier-ABI
+             * parameterized struct (e.g. (Result T E)).  The dispatch dict's
+             * uniform `int64_t (*)(...)` signature requires an int64 return; the
+             * body's by-value struct gets heap-spilled at the return-emit below. */
+            buf_puts(file, "int64_t");
         } else if (!is_main && e->type.as.fn.result_full_type &&
                    emit_inst_fn_return_carrier(fd, e->type.as.fn.result_full_type)) {
             /* instance-method-closure-return: a typeclass-method impl whose
@@ -445,7 +472,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             const char *_body_c = (fd->body && (fd->body->type.kind == TY_APP
                                                 || fd->body->type.kind == TY_STRUCT))
                 ? emit_type_c_name(ctx, fd->body->type) : NULL;
-            if (_body_c && strcmp(_body_c, "int64_t") != 0) {
+            /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...md:
+             * a non-spec instance method whose body codegen produces a
+             * by-value carrier-ABI struct (e.g. Result__User__cstr) must
+             * return int64_t to honor the dispatch dict's uniform pointer
+             * signature; the body return is heap-spilled below.  If the
+             * body codegen is already int64_t (TY_APP that lowered to a
+             * carrier handle), the existing int64_t path is correct. */
+            bool inst_method_struct_body =
+                fd->binding && fd->binding->name && fd->binding->name->name &&
+                strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                _body_c && strcmp(_body_c, "int64_t") != 0 &&
+                type_uses_carrier_abi(fd->body->type);
+            if (inst_method_struct_body) {
+                buf_puts(file, "int64_t");
+            } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                 buf_puts(file, _body_c);
             } else {
                 buf_puts(file, emit_type_c_name(ctx, emit_type_from_kind(result)));
@@ -619,10 +660,25 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_printf(file, "memset(&__tur_p6_r.ok_val, 0, sizeof(__tur_p6_r.ok_val));\n");
             indent_buf(file, ctx->indent + 4);
             buf_printf(file, "memset(&__tur_p6_r.err_val, 0, sizeof(__tur_p6_r.err_val));\n");
+            /* Direction (1) of
+             * polymorphic-ok-in-typeclass-instance-method-...md: the
+             * Result__T__B slot for a value-struct payload is a heap
+             * pointer (`T *`), not the inline T value. Heap-allocate a
+             * copy and store the pointer so the layout matches what
+             * accessors (ok-val / err-val) and the carrier helpers
+             * (tur_ok / tur_err) expect. */
+            const char *payload_arg_c = emit_type_c_name(ctx,
+                ctx->current_abi_specialization->arg_types[0]);
             indent_buf(file, ctx->indent + 4);
-            buf_printf(file, "__tur_p6_r.%s = __tur_inbox_%s;\n",
-                       is_ok_ctor ? "ok_val" : "err_val",
+            buf_printf(file,
+                       "%s *__tur_p6_payload = (%s *)malloc(sizeof(%s));\n",
+                       payload_arg_c, payload_arg_c, payload_arg_c);
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file, "*__tur_p6_payload = __tur_inbox_%s;\n",
                        spilled_param_name);
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file, "__tur_p6_r.%s = __tur_p6_payload;\n",
+                       is_ok_ctor ? "ok_val" : "err_val");
             indent_buf(file, ctx->indent + 4);
             buf_puts(file, "return __tur_p6_r;\n");
             free((void*)spilled_param_name);
@@ -800,13 +856,29 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * guaranteed non-inline-c here (inline-c is handled earlier), so the
          * inline-c-only sub-branches there do not apply. */
         const char *ret_ctype = NULL;
+        bool inst_method_carrier_spill = false;
         if (e->type.kind == TY_FN && !is_main) {
             Type carrier_override = emit_carrier_return_override(fd);
             if (use_abi_spec) {
-                ret_ctype = emit_type_c_name(ctx,
-                    ctx->current_abi_specialization->result_type);
+                Type rt = ctx->current_abi_specialization->result_type;
+                bool is_inst = fd->binding && fd->binding->name &&
+                    fd->binding->name->name &&
+                    strncmp(fd->binding->name->name, "__inst_", 7) == 0;
+                if (is_inst && type_uses_carrier_abi(emit_resolve_type(ctx, rt))) {
+                    ret_ctype = "int64_t";
+                    inst_method_carrier_spill = true;
+                } else {
+                    ret_ctype = emit_type_c_name(ctx, rt);
+                }
             } else if (carrier_override.kind == TY_STRUCT) {
                 ret_ctype = emit_type_c_name(ctx, carrier_override);
+            } else if (e->type.as.fn.result_full_type &&
+                       fd->binding && fd->binding->name && fd->binding->name->name &&
+                       strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                       type_uses_carrier_abi(emit_resolve_type(ctx,
+                           *e->type.as.fn.result_full_type))) {
+                ret_ctype = "int64_t";
+                inst_method_carrier_spill = true;
             } else if (e->type.as.fn.result_full_type &&
                        emit_inst_fn_return_carrier(fd,
                            e->type.as.fn.result_full_type)) {
@@ -817,6 +889,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 const char *fn_ret_td = e->type.as.fn.result_fat
                     ? NULL : emit_fn_return_typedef(fd, &rft);
                 ret_ctype = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
+            } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
+                       strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                       fd->body && type_uses_carrier_abi(fd->body->type)) {
+                /* Direction (1): non-spec instance method, result_full_type
+                 * absent.  Spill only when body codegen is by-value struct
+                 * (matching the signature fallback above). */
+                const char *_body_c2 = emit_type_c_name(ctx, fd->body->type);
+                if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
+                    ret_ctype = "int64_t";
+                    inst_method_carrier_spill = true;
+                } else {
+                    ret_ctype = emit_type_c_name(ctx,
+                        emit_type_from_kind(e->type.as.fn.result_kind));
+                }
             } else {
                 ret_ctype = emit_type_c_name(ctx,
                     emit_type_from_kind(e->type.as.fn.result_kind));
@@ -827,6 +913,26 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Special case: if this is main and it returns int64_t, cast to int */
         if (is_main && result_kind == TY_INT) {
             buf_printf(file, "return (int)%s;\n", ret_val);
+        } else if (inst_method_carrier_spill) {
+            /* Direction (1): instance method whose declared result is a
+             * parameterized struct (e.g. (Result T E)) returns the carrier
+             * int64 handle.  Heap-spill the by-value struct and cast its
+             * pointer as int64_t so the dispatch dict's uniform
+             * `int64_t (*)(...)` signature is honored. */
+            Type rt;
+            if (use_abi_spec) {
+                rt = ctx->current_abi_specialization->result_type;
+            } else if (e->type.as.fn.result_full_type) {
+                rt = emit_resolve_type(ctx, *e->type.as.fn.result_full_type);
+            } else {
+                rt = fd->body->type;
+            }
+            const char *struct_cty = emit_type_c_name(ctx, rt);
+            buf_printf(file,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                struct_cty, struct_cty, struct_cty, ret_val);
         } else if (fd->body->type.kind == TY_FN &&
                    (result_kind == TY_INT || ret_is_int64_carrier)) {
             /* A function-typed body returned through the int64_t closure

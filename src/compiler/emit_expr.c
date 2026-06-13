@@ -3787,16 +3787,63 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 && def->n_type_params > 0;
             bool through_pbp = !through_rc && !through_carrier
                 && expr_is_pbp_param(ctx, e->as.get_field_.struct_expr);
+            /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...:
+             * for Result__T__B / Option__T whose parametric field landed on a
+             * value-struct, the field slot is a heap pointer (`T *`) not the
+             * inline T value, so the access dereferences. Mirrors the
+             * struct_field_c_type rule that picks the pointer layout. */
+            bool field_is_heap_ptr_for_value_struct = false;
+            if (def && def->name &&
+                (strcmp(def->name, "Result") == 0 ||
+                 strcmp(def->name, "Option") == 0)) {
+                /* Resolve any TY_TYVARs in the receiver's type via the
+                 * current spec context so the struct-app args are the
+                 * concrete monomorphized types (e.g. User), not the
+                 * unbound A/B tyvars from the polymorphic source. */
+                Type rt = emit_resolve_type(ctx, e->as.get_field_.struct_expr->type);
+                Type field_resolved = e->type;
+                if (rt.kind == TY_APP || rt.kind == TY_STRUCT) {
+                    Type extracted_args[16];
+                    uint8_t n_extracted = 0;
+                    StructDef *extracted_def = NULL;
+                    if (type_extract_struct_app(&rt, &extracted_def, extracted_args, &n_extracted) &&
+                        extracted_def && extracted_def == def) {
+                        const StructField *f = &def->fields[e->as.get_field_.field_idx];
+                        if (f->full_type) {
+                            field_resolved =
+                                substitute_struct_app_type(f->full_type, def, extracted_args);
+                        }
+                    }
+                }
+                if (field_resolved.kind == TY_STRUCT && field_resolved.as.struct_.def &&
+                    !field_resolved.as.struct_.def->is_opaque &&
+                    field_resolved.as.struct_.def->n_type_params == 0) {
+                    field_is_heap_ptr_for_value_struct = true;
+                }
+            }
             Buf lit; buf_init(&lit);
             if (through_rc) {
-                buf_printf(&lit, "((%s *)((RcControlBlock *)(%s))->value)->%s",
-                           def->name, sv, fname);
+                if (field_is_heap_ptr_for_value_struct)
+                    buf_printf(&lit, "(*((%s *)((RcControlBlock *)(%s))->value)->%s)",
+                               def->name, sv, fname);
+                else
+                    buf_printf(&lit, "((%s *)((RcControlBlock *)(%s))->value)->%s",
+                               def->name, sv, fname);
             } else if (through_carrier) {
-                buf_printf(&lit, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
+                if (field_is_heap_ptr_for_value_struct)
+                    buf_printf(&lit, "(*((%s *)(intptr_t)(%s))->%s)", def->name, sv, fname);
+                else
+                    buf_printf(&lit, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
             } else if (through_pbp) {
-                buf_printf(&lit, "(%s)->%s", sv, fname);
+                if (field_is_heap_ptr_for_value_struct)
+                    buf_printf(&lit, "(*(%s)->%s)", sv, fname);
+                else
+                    buf_printf(&lit, "(%s)->%s", sv, fname);
             } else {
-                buf_printf(&lit, "(%s).%s", sv, fname);
+                if (field_is_heap_ptr_for_value_struct)
+                    buf_printf(&lit, "(*(%s).%s)", sv, fname);
+                else
+                    buf_printf(&lit, "(%s).%s", sv, fname);
             }
             buf_putc(&lit, '\0');
             free(sv);

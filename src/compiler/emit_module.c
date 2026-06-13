@@ -1773,7 +1773,17 @@ static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_i
 static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     if (!spec || !spec->fn) return;
     if (!spec->external_linkage) buf_puts(out, "static ");
-    buf_puts(out, type_c_name(spec->result_type));
+    /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...md:
+     * mirror emit_fns.c's return-type emit for instance method specs whose
+     * return type uses carrier ABI. */
+    bool is_instance_method = spec->fn->binding && spec->fn->binding->name &&
+        spec->fn->binding->name->name &&
+        strncmp(spec->fn->binding->name->name, "__inst_", 7) == 0;
+    if (is_instance_method && type_uses_carrier_abi(spec->result_type)) {
+        buf_puts(out, "int64_t");
+    } else {
+        buf_puts(out, type_c_name(spec->result_type));
+    }
     buf_printf(out, " %s(", spec->clone_name);
     for (uint8_t i = 0; i < spec->n_args; i++) {
         if (i > 0) buf_puts(out, ", ");
@@ -1810,6 +1820,13 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             if (carrier_override.kind == TY_STRUCT) {
                 buf_puts(out, type_c_name(carrier_override));
             } else if (e->type.as.fn.result_full_type &&
+                       fd->binding && fd->binding->name && fd->binding->name->name &&
+                       strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                       type_uses_carrier_abi(*e->type.as.fn.result_full_type)) {
+                /* Direction (1): mirror emit_fns.c -- non-spec instance method
+                 * returning a carrier-ABI parameterized struct emits int64_t. */
+                buf_puts(out, "int64_t");
+            } else if (e->type.as.fn.result_full_type &&
                        emit_inst_fn_return_carrier(fd, e->type.as.fn.result_full_type)) {
                 /* instance-method-closure-return: mirror emit_fns.c so the
                  * forward declaration agrees with the definition and the dict
@@ -1844,7 +1861,15 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 const char *_body_c = (fd->body && (fd->body->type.kind == TY_APP
                                                     || fd->body->type.kind == TY_STRUCT))
                     ? type_c_name(fd->body->type) : NULL;
-                if (_body_c && strcmp(_body_c, "int64_t") != 0) {
+                /* Direction (1): mirror emit_fns.c. */
+                bool inst_method_app_body =
+                    fd->binding && fd->binding->name && fd->binding->name->name &&
+                    strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                    _body_c && strcmp(_body_c, "int64_t") != 0 &&
+                    type_uses_carrier_abi(fd->body->type);
+                if (inst_method_app_body) {
+                    buf_puts(out, "int64_t");
+                } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                     buf_puts(out, _body_c);
                 } else {
                     buf_puts(out, type_c_name(emit_type_from_kind(result)));
