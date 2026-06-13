@@ -1,5 +1,17 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (typed-list carrier ops under --interpret, 2026-06-13):** unblocked
+> the carrier-level `list.tur` cluster -- `list-basic`, `typed/list-basic`,
+> `typed/list-concat`, `typed/list-macro`. A Cons cell is a malloc'd
+> `{ int64_t head; int64_t tail; }` (pointer = int64 carrier, tnil = 0), exactly
+> the compiled ABI; `list.tur`'s typed `tcons` / `list-head` / `list-tail` bind
+> to the existing `native_cons` / `native_list_head` / `native_list_tail` (the
+> same box already backing the untyped `head`/`tail`/`cons` benchmark surface),
+> and a new `native_list_length` walks the chain. The `thead`/`ttail` single-cell
+> tests use `make-struct Cons` + `.head`/`.tail` field access (already dual-rep
+> safe), so the two representations never cross. **Harness 1139 -> 1143 passed,
+> 0 failed; gap 61 -> 57.** Compiled suite + parity green.
+>
 > **Progress (shebang stripping under --interpret, 2026-06-13):** fixed
 > `shebang-tur` (`#!/usr/bin/env tur` lexed as `unexpected character '#'`). The
 > reader's shebang skip only fires at byte 0, but `cmd_eval` appends the user

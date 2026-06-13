@@ -7958,6 +7958,37 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* Typed-list (stdlib/list.tur) carrier-level length.  A Cons cell is a malloc'd
+ * { int64_t head; int64_t tail; }; its pointer is the int64 carrier and tnil is
+ * 0 -- exactly the layout list.tur's inline-C uses, so this reproduces
+ * list-length (which the tree-walker cannot run as inline-C) by walking the
+ * chain.  The carrier ctor + head/tail accessors already exist as native_cons /
+ * native_list_head / native_list_tail (registered for the untyped head/tail/cons
+ * benchmark surface); they read the same box, so list.tur's typed tcons /
+ * list-head / list-tail bind to them too.  The first cell may also be a
+ * make-struct Cons TuriStruct (thead/ttail's representation) -- handled here
+ * defensively, then the carrier tail is followed. */
+static TuriValue native_list_length(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t count = 0;
+    int64_t ptr;
+    if (a[0].tag == TURI_STRUCT) {
+        /* defensive: a make-struct Cons head -- count it, then follow its
+         * carrier tail (any further cells are tcons boxes). */
+        bool f = false; TuriValue t = turi_struct_field(a[0], 1, &f);
+        count = 1; ptr = f ? t.as_int : 0;
+    } else {
+        ptr = a[0].as_int;
+    }
+    while (ptr) {
+        count++;
+        int64_t *cell = (int64_t *)(intptr_t)ptr;
+        ptr = cell[1];
+    }
+    return turi_int(count);
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -8674,6 +8705,15 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-set!",        native_vec_set,         NULL);
     turi_env_register_native(env, "vec-free",        native_vec_free,        NULL);
     turi_env_register_native(env, "vec-eq?",         native_vec_eq,          NULL);
+    /* Typed-list (list.tur) carrier-level ops: inline-C bodies the interpreter
+     * cannot run, bound to the { head, tail } cons-cell box natives.  tcons /
+     * list-head / list-tail reuse the existing native_cons / native_list_head /
+     * native_list_tail (same box layout as the untyped head/tail/cons surface);
+     * list-length is new. */
+    turi_env_register_native(env, "tcons",           native_cons,            NULL);
+    turi_env_register_native(env, "list-head",       native_list_head,       NULL);
+    turi_env_register_native(env, "list-tail",       native_list_tail,       NULL);
+    turi_env_register_native(env, "list-length",     native_list_length,     NULL);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
     turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);

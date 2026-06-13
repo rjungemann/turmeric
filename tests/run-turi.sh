@@ -1148,6 +1148,17 @@ vec-typed-fat-closure-readback
 # unexpected '#'.  shebang-sweet-lang (shebang + #lang) already passed via
 # detect_lang's internal shebang skip and stays green.
 shebang-tur
+# typed-list carrier ops (verified 2026-06-13): list.tur's tcons / list-head /
+# list-tail / list-length are inline-C over a { head, tail } cons-cell box.
+# tcons/list-head/list-tail bind to the existing native_cons/native_list_head/
+# native_list_tail (same box as the untyped head/tail/cons surface); a new
+# native_list_length walks the chain.  Unblocks the carrier-level list fixtures
+# (thead/ttail single-cell tests use make-struct Cons + field access, already
+# dual-rep safe).
+list-basic
+typed/list-basic
+typed/list-concat
+typed/list-macro
 "
 
 # Build an associative-set from the default list for O(1) lookup.

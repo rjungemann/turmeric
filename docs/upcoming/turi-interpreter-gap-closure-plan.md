@@ -473,10 +473,12 @@ allowlist (the bulk-add). So the allowlist now == "everything that works," and
 the flip is mechanically: replace "in allowlist?" with "not failing." The only
 thing standing between here and a green denylist is the **62** remaining
 allowlist-gap fixtures (2026-06-13; down from 66 -> 80 -> 212 -> 260) -- each
-must be fixed or carved with a marker. The residual 62 split (probe under
-`--interpret` with `ASAN_OPTIONS=detect_leaks=0`): ~30 call stdlib inline-C ops
-with no native shim (`list-basic`, `typed/list-*`, `gc-*`, the linear-handle
-fixtures -- the W1b native-shim tail); ~12 effect/continuation/multishot fixtures
+must be fixed or carved with a marker. The residual 57 split (probe under
+`--interpret` with `ASAN_OPTIONS=detect_leaks=0`): ~26 call stdlib inline-C ops
+with no native shim (`gc-*`, the linear-handle fixtures, `grid-*`, `sum-either-*`,
+`free-*` -- the W1b native-shim tail; the carrier-level `list-*` slice is now
+done via `native_list_length` + the existing cons-cell box natives); ~12
+effect/continuation/multishot fixtures
 that abort or diverge under the interpreter's fiber path; plus a scatter
 (`tco-self-tail-deep` interp timeout, `reader-macros-{use,rx-literal}`,
 `sized-bitwise-narrow`, `data-literal-sweet-exp` `hamt-of`). `shebang-tur` is
@@ -561,8 +563,8 @@ Track three numbers per PR (all from the probe + harness):
 
 - **probe pass/fail/skip** -- the headline (660/910/92 at W1; target fail -> 0
   non-carved).
-- **`run-turi.sh` summary** -- must stay green every step (1139 passed, 0 failed,
-  465 skipped as of 2026-06-13; 404 inline-c carve-outs + 61 triage surface).
+- **`run-turi.sh` summary** -- must stay green every step (1143 passed, 0 failed,
+  461 skipped as of 2026-06-13; 404 inline-c carve-outs + 57 triage surface).
 - **`check_turi_parity.py`** -- must stay `0 gaps` (113/115 handled, 2 carved
   as of 2026-06-13).
 - **`tests/run.sh`** -- must stay green (`1605 passed, 0 failed` as of
