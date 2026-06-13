@@ -1005,6 +1005,14 @@ sym-stdlib
 quoted-keyword-type-ann
 sym-map-key
 sym-dynamic
+# Stub-collision + math helpers (verified 2026-06-13): the redundant int->float
+# / cstr->parse-int benchmark stubs were dropped from cmd_eval (the natives own
+# elaboration), so a fixture loading math.tur / str.tur no longer collides; plus
+# float->int / sqrt / floor natives.  (reader-macros-rx-literal and
+# sum-either-str-parse stay off -- they hit re.tur's regex engine and
+# str->int-checked's strtoll+ADT-ctor inline-C, genuine carve-outs.)
+stdlib-float-convert-load
+load-in-imported-module
 # seq-* (verified 2026-06-13): the lazy-Seq library now runs under --interpret
 # via native bridges over turi_call + generator advance (wk_register_seq_natives
 # in src/main.c) plus a gen-body returning-flag reset in eval.c.  gen-collect

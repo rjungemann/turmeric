@@ -1,5 +1,23 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (benchmark-stub collision + math helpers, 2026-06-13):** the
+> `cmd_eval` benchmark-stub block injected `(defn int->float ...)` /
+> `(defn cstr->parse-int ...)` placeholders, so a fixture that
+> `(load ...)`ed `math.tur` / `str.tur` tripped the "already defined by an
+> auto-loaded stdlib module" guard. Both names are native-backed (the native
+> resolves the bare call at elaboration -- verified), so the stubs were
+> **redundant and removed**, clearing the collision. Added `float->int` / `sqrt`
+> / `floor` natives so the loaded math helpers run; `stdlib-float-convert-load`
+> and `load-in-imported-module` now pass and join the allowlist (harness 1090 ->
+> 1091). `errors/unknown-helper-load-hint` moved to `requires.compiled`: the
+> "unknown helper -> load math.tur" hint is a compile-path diagnostic, and under
+> `--interpret` the math helpers are pre-registered natives (for stdlib-free
+> benchmark scripts) so `float->int` is no longer "unknown" there. The other two
+> ex-collision fixtures stay off the allowlist as genuine inline-C carve-outs:
+> `reader-macros-rx-literal` drives `re.tur`'s regex engine and
+> `sum-either-str-parse` uses `str->int-checked`'s `strtoll` + `ctor_Left/Right`
+> inline-C. No codegen change.
+>
 > **Progress (lazy Seq + generator early-return fix, 2026-06-13):** **the whole
 > `seq/*` lazy-sequence library now runs under `--interpret`** -- 41 `seq-*`
 > fixtures plus `gen-collect` join the allowlist (harness 1048 -> 1090). seq's

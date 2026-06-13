@@ -4864,14 +4864,16 @@ static int cmd_eval(const char *path, bool use_color,
              * stub would collide with "already defined by an auto-loaded stdlib
              * module".  vec-new-filled is benchmark-only (no module defn). */
             "(defn vec-new-filled [n :int v :int] :int 0)\n"
-            /* numeric helpers */
-            "(defn cstr->parse-int [s :int] :int 0)\n"
+            /* numeric helpers.  cstr->parse-int and int->float stubs were dropped:
+             * both are native-backed (their natives resolve the bare call at
+             * elaboration), so the stubs were redundant -- and a fixture that
+             * (load ...)s str.tur / math.tur no longer collides with them via the
+             * "already defined by an auto-loaded stdlib module" guard. */
             "(defn bit-shr [x :int n :int] :int 0)\n"
             "(defn bit-xor [x :int y :int] :int 0)\n"
             "(defn println-float [x :float d :int] :nil nil)\n"
             "(defn int->unit-float [x :int] :float 0.0)\n"
             "(defn tur-sqrt [x :float] :float 0.0)\n"
-            "(defn int->float [x :int] :float 0.0)\n"
             /* HAMT operations for hash_map benchmark */
             "(defn hamt-new [] :int 0)\n"
             "(defn hamt-free [m :int] :nil nil)\n"
@@ -7237,6 +7239,23 @@ static TuriValue native_int_to_float(TuriEnv *env, TuriValue *a, uint32_t n, voi
     double v = (n > 0) ? (double)a[0].as_int : 0.0;
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
 }
+/* float->int: truncate toward zero (math.tur's inline-C `(int64_t)x`). */
+static TuriValue native_float_to_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0) ? a[0].as_float : 0.0;
+    return turi_int((int64_t)v);
+}
+/* sqrt / floor: math.tur's libm wrappers (inline-C the tree-walker cannot run). */
+static TuriValue native_math_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = sqrt(x); return rv;
+}
+static TuriValue native_math_floor(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = floor(x); return rv;
+}
 
 /* -------------------------------------------------------------------------
  * I/O benchmark native helpers (file_read.tur, file_write.tur).
@@ -7658,6 +7677,9 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
+    turi_env_register_native(env, "float->int",        native_float_to_int,    NULL);
+    turi_env_register_native(env, "sqrt",              native_math_sqrt,       NULL);
+    turi_env_register_native(env, "floor",             native_math_floor,      NULL);
     /* HAMT operations for hash_map benchmark (int-typed wrappers) */
     turi_env_register_native(env, "hamt-new",          native_tur_hamt_new,    NULL);
     turi_env_register_native(env, "hamt-free",         native_tur_hamt_free,   NULL);
