@@ -49,7 +49,7 @@
 > the simple inline-C executor cannot run -- and (worse) the loose `free(`
 > substring matcher mis-claimed their body, freeing the map box and silently
 > returning false (a UAF; see
-> [turi-inline-c-free-matcher-overclaims.md](../archive/history/turi-inline-c-free-matcher-overclaims.md)).
+> [turi-inline-c-free-matcher-overclaims.md](turi-inline-c-free-matcher-overclaims.md)).
 > Fixed by (a) tightening the free matcher and (b) registering
 > `native_map_eq_raw[_k]` (`src/main.c`), which re-implement the iteration and
 > call the comparator via `turi_call`, mirroring `native_result_eq`. `map-eq`
@@ -133,7 +133,7 @@
 > **Prereq decomposition (2026-06-12):** the remaining Tier B work (content-keyed
 > user comparators) plus the orthogonal non-int-value and clean-carve tasks are
 > broken down into independently-landable prereqs in
-> [docs/upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md)
+> [docs/upcoming/v1/turi-open-reports-prereqs.md](../../upcoming/v1/turi-open-reports-prereqs.md)
 > -- notably a behavior-preserving `void* ctx` thread through the HAMT eq
 > callback (`src/runtime/hamt.h:25`) that unblocks the turi-closure-aware path
 > with no codegen/fixture churn.
@@ -148,12 +148,12 @@ expressiveness hole, not just missing code.
 **Severity:** Medium-High. (1) An ergonomics/coverage gap: a whole stdlib family
 is interpreter-only-broken while passing when compiled. (2) A latent
 memory-safety bug already filed separately
-([turi-native-set-count-layout-overflow.md](../archive/history/turi-native-set-count-layout-overflow.md)).
+([turi-native-set-count-layout-overflow.md](turi-native-set-count-layout-overflow.md)).
 (3) A "works by luck" hazard if the obvious native shim is written naively.
 
 This report is the umbrella tracking entry for the family; the set-count
 overflow has its own report, and the design discussion lives in
-[docs/upcoming/turi-interpreter-gap-closure-plan.md](../upcoming/turi-interpreter-gap-closure-plan.md)
+[docs/upcoming/turi-interpreter-gap-closure-plan.md](../../upcoming/turi-interpreter-gap-closure-plan.md)
 (W1b).
 
 ## Minimal repro

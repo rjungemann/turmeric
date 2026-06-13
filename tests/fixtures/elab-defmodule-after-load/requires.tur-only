@@ -1,0 +1,6 @@
+inline-c (dependency: helper.tur / wrapped.tur). This is an *elaboration* test --
+it checks that a defmodule loaded after a bare-defn file is accepted (per-file
+defmodule check). Its loaded helpers' bodies are incidental printf inline-C the
+interpreter does not run; the property under test is exercised on the compiled
+path. Carve per Bucket R6 of
+docs/upcoming/turi-interpret-flip-residual-plan.md. Still PASSes compiled.

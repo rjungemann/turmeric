@@ -1,5 +1,20 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **ARCHIVED 2026-06-13 -- remaining work handed off to a forward plan.** This
+> report's job (catalogue the allowlist->denylist flip, its blast radius, and the
+> per-bucket recovery) is done. A fresh full-denylist probe (built from `5d5a9c8`)
+> measures **866 pass / 345 fail / 117 skip**, of which **311 fails are inline-C
+> bodies** (permanent TI7 auto-carves) -- leaving **34 non-inline-C fixtures** as
+> the entire remaining obstacle to the flip. Those 34 are decomposed, bucketed,
+> and sequenced (fix-vs-carve per bucket, with file:line pointers) in
+> [docs/upcoming/turi-interpret-flip-residual-plan.md](../../upcoming/turi-interpret-flip-residual-plan.md).
+> Three genuine **silent miscompiles** surfaced during the final probe and were
+> filed (not carved): value-struct Result payloads
+> ([turi-value-struct-payload-interpreter-miscompile.md](../../reported/turi-value-struct-payload-interpreter-miscompile.md))
+> and cloneable-continuation snapshots
+> ([turi-multishot-continuation-snapshot-miscompile.md](../../reported/turi-multishot-continuation-snapshot-miscompile.md)).
+> Retained below for the history and the per-bucket rationale.
+
 > **Progress (4 non-inline-C gaps closed under --interpret, 2026-06-13):** a
 > fresh triage sweep of every non-inline-C, non-allowlisted positive fixture
 > left exactly four genuinely-fixable gaps; all four are now resolved.
@@ -207,7 +222,7 @@
 > bigger than the sym/seq work and its own dedicated PR. Inventory + layered
 > approach (do the json layer first; it also unblocks `json-reader-*`) is captured
 > in
-> [docs/archive/history/turi-json-schema-interpreter-plan.md](../archive/history/turi-json-schema-interpreter-plan.md)
+> [docs/archive/history/turi-json-schema-interpreter-plan.md](turi-json-schema-interpreter-plan.md)
 > (DONE 2026-06-13; archived).
 
 > **Progress (benchmark-stub collision + math helpers, 2026-06-13):** the
@@ -309,12 +324,12 @@
 > into independently-landable groundwork (native-registry parity diff,
 > benchmark-stub overlap audit, opt-in `TUR_TURI_FULL_PRELUDE` flag, carve
 > markers for the move/linearity + `if-bool` divergences) in
-> [docs/upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md).
+> [docs/upcoming/v1/turi-open-reports-prereqs.md](../../upcoming/v1/turi-open-reports-prereqs.md).
 
 **Summary:** `tests/run-turi.sh` was flipped from `tur run` (which compiles and
 runs a native binary) to `tur --interpret` (the actual tree-walking
 interpreter), resolving the blocker in
-[turi-harness-compiles-instead-of-interpreting.md](../archive/history/turi-harness-compiles-instead-of-interpreting.md).
+[turi-harness-compiles-instead-of-interpreting.md](turi-harness-compiles-instead-of-interpreting.md).
 True interpretation turned **31 of the 146 allowlisted fixtures red**; those 31
 were removed from the allowlist (they were never real interpreter coverage).
 This report catalogues the 31 by root cause and records the measured blast

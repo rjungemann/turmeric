@@ -1191,6 +1191,110 @@ typed/grid-basic
 # the full raw set is re-implemented as natives over the identical layout.
 sized-buf-cross-param-accept
 sized-buf-existential-pack-open
+# R1 resource/concurrency native shims (verified 2026-06-13;
+# turi-interpret-flip-residual-plan):
+#  - safe-box: safe.tur box/unbox (wk_register_safe_natives now wired into
+#    cmd_eval, alongside the typeclass instance-method overrides).
+#  - comonad-capturing-closure: comonad.tur Identity/Pair cell accessors
+#    (wk_register_comonad_natives) over the { value } / Tuple2 { e1, e2 } layout.
+#  - mutex-linear: mutex.tur faithful pthread_mutex_t ops.
+#  - future-split-free: future.tur layout-exact refcounted FutureCell
+#    (future-handle bumps the ref; future-free/future-cell-free tear down at 0).
+#  - bytes-linear: serial.tur Bytes (int64* header word 0 = len, data at word 1).
+safe-box
+comonad-capturing-closure
+mutex-linear
+future-split-free
+bytes-linear
+# R1 slice 2 (verified 2026-06-13): taskgroup.tur TaskGroupBlock handle ops
+# (task-group-new/cancel/wait/cancelled?/free) re-implemented as natives over a
+# layout-exact (and cancel_reason-safe) replica.  The cancel native skips the
+# per-fiber thread-local cancelled flag (no fibers run under --interpret).
+taskgroup-linear
+# R1 slice 3 (verified 2026-06-13): chan.tur bounded channels + future settle ops
+# + schan.tur synchronous session channels.  The interpreter is single-threaded,
+# so channels are a plain mutex-guarded bounded ring buffer (a real cond-var
+# block would only deadlock); the fixtures stay within capacity.  future-linear
+# adds promise-fulfill / future-done? over the FutureCell.  schan-roundtrip
+# reuses the ring buffer (SChanBlock prefix == WkChan) + a one-int64 recv cell.
+chan-linear
+asyncchan-linear
+future-linear
+schan-roundtrip
+# R1 slice 4 (verified 2026-06-13): process.tur + fs.tur OS-handle ops as
+# faithful syscalls -- process/spawn forks+execvp's (ChildHandle = pid),
+# process/wait reaps it; fs/tmpfile mkstemp's a { path, fd } pair with
+# borrow-accessors and a close+free.  fd->int is pure-turi (an ascription).
+childhandle-linear
+tmpfile-linear-borrow
+# R2 GC subsystem (verified 2026-06-13; turi-interpret-flip-residual-plan):
+# gc!/gc-enable!/gc-disable! lower to exact captureless inline-C one-liners
+# (gc_force()/gc_enable()/gc_disable(), elab_memory.c).  The EX_INLINE_C eval
+# case now matches those three slices and calls the linked runtime (gc.c)
+# directly; the rc/weak ops already have eval arms.  gc-perf/gc-stress are small
+# (100 / 20 iterations) so they finish well under the run timeout -- no carve.
+gc-dag
+gc-no-false-positives
+gc-perf
+gc-stress
+# R3 HKT instances (verified 2026-06-13; turi-interpret-flip-residual-plan):
+# backtrack.tur's cons-stream monad (Backtrack = linked list of results) reduces
+# to a handful of natives (bt-cons/mreturn/mplus/mbind/bt-length/bt-print/
+# bt-apply-fat over { value, next } cells; mbind/apply via turi_call) -- every
+# Functor/Applicative/Monad/Alternative instance is a pure-turi wrapper over
+# them.  (hkt-stdlib-logic-instances is carved requires.tur-only: logic.tur is a
+# full miniKanren whose ~22 inline-C unification primitives are disproportionate
+# to shim for one fixture.)
+hkt-stdlib-backtrack-instances
+# R4 effect/continuation (verified 2026-06-13; turi-interpret-flip-residual-plan):
+#  - async-with-handler: the elaborator stores a non-fn async body raw (not a
+#    thunk); EX_ASYNC pre-evaluated it to a value then errored expected-a-
+#    function.  It now settles the future with that value (a synchronously
+#    completed body is a resolved future under the single-threaded interpreter).
+#  - safe-array-bounds: already produced correct stdout; the only noise was a
+#    benign ASan makecontext-swapcontext warning on stderr.
+# (The multishot/escaping/nested-handler fixtures are carved requires.tur-only:
+#  deep one-shot-continuation gaps -- see turi-interpreter-delimited-control-gaps.md.)
+async-with-handler
+safe-array-bounds
+# R5 silent miscompiles FIXED (verified 2026-06-13; turi-interpret-flip-residual-plan):
+#  - polymorphic-ok-err-value-struct-payload / typeclass-return-dispatch-result-
+#    wrapped: native ok/err flattened a heap payload (a make-struct struct, a
+#    cstr) to a bare int64, losing the tag, so ok-val/.field/println read garbage.
+#    ok/err now build a make-struct Result (tag-preserving) for heap payloads;
+#    int/bool payloads keep the int64 box (no carrier-ABI regression).
+#  - multishot-snapshot: tur_continuation_snapshot was unhandled in the
+#    interpreter (returned 0); it is an alias for tur_cloneable_cont_clone (a deep
+#    continuation copy), exactly as the compiled path #defines it.
+polymorphic-ok-err-value-struct-payload
+typeclass-return-dispatch-result-wrapped
+multishot-snapshot
+# R6 (verified 2026-06-13; turi-interpret-flip-residual-plan): tuple.tur's
+# Eq[Tuple2] instance bottoms out in tuple2-eq-carrier?, an inline-C body that
+# casts each Tuple2 to { e1, e2 } and calls two element comparators via C fn
+# pointers.  native_tuple2_eq_carrier reads both fields (struct or carrier) and
+# invokes the comparator closures via turi_call.  (range-show /
+# reader-macros-rx-literal / session-close / elab-defmodule-after-load are carved
+# requires.tur-only -- genuine dependency inline-C / -Xsessions runtime.)
+typed-slots/tuple2-eq-method
+# R6 sweep completion (verified 2026-06-13): these already pass under --interpret
+# (gc-cycle/gc-disabled via the R2 gc! shim; taskgroup-with-macro-real via the R1
+# taskgroup natives + the task-group-with macro; typed-field-row-accept and
+# unsafe-closure-capture are pure-turi).  Allowlisted so the non-inline-C triage
+# surface reaches zero -- every remaining non-inline-C fixture now passes or is
+# carved, making the W5 allowlist->denylist flip reachable.
+gc-cycle
+gc-disabled
+taskgroup-with-macro-real
+typed-field-row-accept
+unsafe-closure-capture
+# R1 slice 5 (verified 2026-06-13): serial.tur Serializable [int]/[bool]
+# instances -- serialize packs a length-prefixed LE byte buffer, deserialize
+# reads it back (registered under the __inst_Serializable_* binding names so
+# both (.serialize x) dispatch and the direct __inst_* calls resolve).  The
+# native deserialize uses unsigned shifts, dodging a latent signed-shift UB in
+# serial.tur tracked in docs/reported/serial-deserialize-int-signed-shift-ub.md.
+serial-primitive-roundtrip
 "
 
 # Build an associative-set from the default list for O(1) lookup.

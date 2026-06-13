@@ -7,7 +7,7 @@
 > curated allowlist to a denylist (every fixture runs under `tur --interpret`
 > minus documented carve-outs).
 > **Parent:** [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) Phase TI8.b
-> **Companion report:** [docs/reported/turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md)
+> **Companion report:** [docs/archive/history/turi-harness-flip-reconciliation.md](../archive/history/turi-harness-flip-reconciliation.md)
 
 ---
 
@@ -222,7 +222,7 @@ elements (`map-of-tvec-eq`, `set-of-tvec-eq`, `vec-of-tvec-eq`,
 `vec-of-tvec-eq-manual`, `typed/vec-basic` on the allowlist). The remaining
 sliver (`eq-carrier-capturing-comparator`) additionally needs the `mutmap-*`
 collection natives -- a separate surface. Full analysis:
-[turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md).
+[turi-map-set-hamt-interpreter-gap.md](../archive/history/turi-map-set-hamt-interpreter-gap.md).
 The original spike notes (historical; map's key side is now resolved) follow.
 
 **Original spike (2026-06-11): the Result pattern does NOT directly transfer.**
@@ -259,7 +259,7 @@ write the ~18 natives over `tur_hamt_*`, and resolve the C-callback eq/hash
 (turi-closure-aware HAMT). hamt.tur itself (over the existing `native_tur_hamt_*`)
 is the most tractable starting point. Full umbrella report (three gaps, repro,
 fix directions):
-[turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md),
+[turi-map-set-hamt-interpreter-gap.md](../archive/history/turi-map-set-hamt-interpreter-gap.md),
 plus the narrower
 [turi-native-set-count-layout-overflow.md](../archive/history/turi-native-set-count-layout-overflow.md).
 
@@ -581,7 +581,7 @@ Definition of done = W5 merged with `run-turi.sh` green at denylist default.
 
 - [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) -- parent plan
   (TI8.b lives there; this is its execution detail).
-- [docs/reported/turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md)
+- [docs/archive/history/turi-harness-flip-reconciliation.md](../archive/history/turi-harness-flip-reconciliation.md)
   -- the 31 allowlist reconciliation + the probe + the defmodule fix writeup.
 - [docs/archive/history/turi-harness-compiles-instead-of-interpreting.md](../archive/history/turi-harness-compiles-instead-of-interpreting.md)
   -- the resolved root blocker.

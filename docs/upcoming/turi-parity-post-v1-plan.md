@@ -726,7 +726,7 @@ The foundational correctness fix and the CI ratchet shipped:
   ([turi-harness-compiles-instead-of-interpreting.md](../archive/history/turi-harness-compiles-instead-of-interpreting.md)):
   the allowlist finally exercises `src/turi/eval.c`. Reconciling to true
   interpretation removed **31 false-green entries** (catalogued in
-  [turi-harness-flip-reconciliation.md](../reported/turi-harness-flip-reconciliation.md));
+  [turi-harness-flip-reconciliation.md](../archive/history/turi-harness-flip-reconciliation.md));
   the harness is green at **122 passed, 0 failed**. The `requires.tur-only`
   marker (from TI1) is honored as the symmetric skip to `requires.compiled`.
 
@@ -794,7 +794,7 @@ Remaining steps when the flip is tackled:
 > **Unblocks:** `typed/map-basic`, `data-literal-map-*`, and the whole `map-*`
 > surface under `--interpret`; lets `map.tur` join the `cmd_eval` prelude.
 > **Tracking report:**
-> [docs/reported/turi-map-set-hamt-interpreter-gap.md](../reported/turi-map-set-hamt-interpreter-gap.md)
+> [docs/archive/history/turi-map-set-hamt-interpreter-gap.md](../archive/history/turi-map-set-hamt-interpreter-gap.md)
 > (umbrella; `hamt` and `set` already fixed in W1b -- this phase closes `map`).
 
 ### Why map is still blocked (the corrected diagnosis)

@@ -4799,6 +4799,17 @@ static void wk_register_sym_natives(TuriEnv *env);
 static void wk_register_seq_natives(TuriEnv *env);
 static void wk_register_json_natives(TuriEnv *env);
 static void wk_register_schema_natives(TuriEnv *env);
+static void wk_register_safe_natives(TuriEnv *env);
+static void wk_register_typeclass_natives(TuriEnv *env);
+static void wk_register_comonad_natives(TuriEnv *env);
+static void wk_register_mutex_natives(TuriEnv *env);
+static void wk_register_future_natives(TuriEnv *env);
+static void wk_register_bytes_natives(TuriEnv *env);
+static void wk_register_taskgroup_natives(TuriEnv *env);
+static void wk_register_chan_natives(TuriEnv *env);
+static void wk_register_backtrack_natives(TuriEnv *env);
+static void wk_register_proc_fs_natives(TuriEnv *env);
+static void wk_register_serial_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5123,6 +5134,32 @@ static int cmd_eval(const char *path, bool use_color,
     /* TI10 Tier A: typed Map[K V] scalar-key natives (MapKey/Hash instance
      * comparators + the raw map-*-eq-o bridges over tur_hamt_*_eq_o). */
     wk_register_map_natives(env);
+    /* R1 (turi-interpret-flip-residual-plan): safe.tur box/unbox/array-get/-set
+     * over the int64-carrier layout, and the typeclass instance-method overrides
+     * (Show/Eq inline-C bodies the tree-walker cannot run).  Previously only
+     * wk_eval_fixture registered these, so `tur --interpret` on a program using
+     * (box ...)/(unbox ...) or a stdlib Eq/Show instance hit "inline-C not
+     * supported". */
+    wk_register_safe_natives(env);
+    wk_register_typeclass_natives(env);
+    /* R1: comonad.tur Identity/Pair cell accessors (loaded on demand by user
+     * code; the natives override the inline-C bodies). */
+    wk_register_comonad_natives(env);
+    /* R1: mutex.tur pthread handle ops (loaded on demand). */
+    wk_register_mutex_natives(env);
+    /* R1: future.tur refcounted FutureCell + serial.tur Bytes (loaded on demand). */
+    wk_register_future_natives(env);
+    wk_register_bytes_natives(env);
+    /* R1: taskgroup.tur TaskGroupBlock handle ops (loaded on demand). */
+    wk_register_taskgroup_natives(env);
+    /* R1: chan.tur bounded sync/async channel ops (loaded on demand). */
+    wk_register_chan_natives(env);
+    /* R3: backtrack.tur cons-stream monad primitives (loaded on demand). */
+    wk_register_backtrack_natives(env);
+    /* R1: process.tur spawn/wait + fs.tur tmpfile OS-handle ops (loaded on demand). */
+    wk_register_proc_fs_natives(env);
+    /* R1: serial.tur Serializable int/bool instances (loaded on demand). */
+    wk_register_serial_natives(env);
     /* SYM (turi): first-class :Sym ops, only when -Xsymbols loaded sym.tur. */
     if (g_symbols_enabled)
         wk_register_sym_natives(env);
@@ -5756,19 +5793,42 @@ static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void 
 }
 
 /* Result functions: { bool is_ok (offset 0); int64_t ok_val (offset 8); int64_t err_val (offset 16) }
- * Stored as int64_t[3]: [0]=is_ok, [1]=ok_val, [2]=err_val */
+ * Stored as int64_t[3]: [0]=is_ok, [1]=ok_val, [2]=err_val
+ *
+ * R5 (turi-interpret-flip-residual-plan): the int64 box flattens the payload to
+ * a bare int64, which loses the tag of a *heap* payload (a make-struct User, a
+ * cstr, a closure) -- ok-val then hands back a TURI_INT and a downstream field
+ * access / println reads garbage (the value-struct-payload silent miscompile).
+ * So when the payload is a heap value, build a make-struct Result instead, whose
+ * fields hold the full TuriValue (tag preserved); int/bool payloads keep the box
+ * (no change to the carrier-ABI fixtures that depend on it). result_field reads
+ * both reps, so ok?/err?/ok-val/err-val/result-eq stay uniform. */
+static bool wk_result_payload_is_heap(TuriValue v) {
+    return v.tag == TURI_STRUCT || v.tag == TURI_CSTR ||
+           v.tag == TURI_CLOSURE || v.tag == TURI_FLOAT;
+}
 static TuriValue native_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
+    TuriValue payload = (n > 0) ? a[0] : turi_int(0);
+    if (wk_result_payload_is_heap(payload)) {
+        TuriValue fields[3] = { turi_bool(true), payload, turi_int(0) };
+        return turi_make_struct("Result", fields, 3);
+    }
     int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!r) return turi_nil();
-    r[0] = 1; r[1] = (n > 0) ? a[0].as_int : 0; r[2] = 0;
+    r[0] = 1; r[1] = payload.as_int; r[2] = 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
+    TuriValue payload = (n > 0) ? a[0] : turi_int(0);
+    if (wk_result_payload_is_heap(payload)) {
+        TuriValue fields[3] = { turi_bool(false), turi_int(0), payload };
+        return turi_make_struct("Result", fields, 3);
+    }
     int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!r) return turi_nil();
-    r[0] = 0; r[1] = 0; r[2] = (n > 0) ? a[0].as_int : 0;
+    r[0] = 0; r[1] = 0; r[2] = payload.as_int;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 /* W1b: a Result reaches these shims either as a native int64[3] box
@@ -9119,6 +9179,751 @@ static void wk_register_safe_natives(TuriEnv *env) {
     turi_env_register_native(env, "array-set",   native_safe_array_set, NULL);
     turi_env_register_native(env, "box",         native_safe_box,       NULL);
     turi_env_register_native(env, "unbox",       native_safe_unbox,     NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): comonad.tur native shims.
+ *
+ * comonad.tur's Identity / Pair cells are malloc'd heap structs whose pointer
+ * rides the int64 carrier (the compiled ABI).  The inline-C accessors
+ * (__identity_new/_get/_extract/_duplicate, __pair_new/_env/_val/_extract/
+ * _duplicate) are re-implemented over the identical layout; the *_extend ops
+ * are pure-turi (they call (f wa) then a native constructor) and need no shim.
+ *   Identity = { int64_t value; }
+ *   Pair     = Tuple2 { int64_t e1 (env); int64_t e2 (val); }
+ * ---------------------------------------------------------------------- */
+typedef struct { int64_t e1; int64_t e2; } WkTuple2;
+
+static TuriValue wk_int_ptr(void *p) {
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p; return v;
+}
+
+static TuriValue native_identity_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+    if (!p) return turi_nil();
+    *p = (n > 0) ? a[0].as_int : 0;
+    return wk_int_ptr(p);
+}
+static TuriValue native_identity_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *p = (int64_t *)(intptr_t)a[0].as_int;
+    return p ? turi_int(*p) : turi_int(0);
+}
+static TuriValue native_identity_duplicate(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    /* duplicate w = Identity w (wrap the original carrier) */
+    int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+    if (!p) return turi_nil();
+    *p = (n > 0) ? a[0].as_int : 0;
+    return wk_int_ptr(p);
+}
+static TuriValue native_pair_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    WkTuple2 *p = (WkTuple2 *)malloc(sizeof(WkTuple2));
+    if (!p) return turi_nil();
+    p->e1 = (n > 0) ? a[0].as_int : 0;
+    p->e2 = (n > 1) ? a[1].as_int : 0;
+    return wk_int_ptr(p);
+}
+static TuriValue native_pair_env(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    WkTuple2 *p = (WkTuple2 *)(intptr_t)a[0].as_int;
+    return p ? turi_int(p->e1) : turi_int(0);
+}
+static TuriValue native_pair_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    WkTuple2 *p = (WkTuple2 *)(intptr_t)a[0].as_int;
+    return p ? turi_int(p->e2) : turi_int(0);
+}
+static TuriValue native_pair_duplicate(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    WkTuple2 *src = (WkTuple2 *)(intptr_t)a[0].as_int;
+    if (!src) return turi_nil();
+    WkTuple2 *p = (WkTuple2 *)malloc(sizeof(WkTuple2));
+    if (!p) return turi_nil();
+    p->e1 = src->e1;
+    p->e2 = a[0].as_int;  /* inner = the original cell */
+    return wk_int_ptr(p);
+}
+
+static void wk_register_comonad_natives(TuriEnv *env) {
+    turi_env_register_native(env, "__identity_new",       native_identity_new,       NULL);
+    turi_env_register_native(env, "__identity_get",       native_identity_get,       NULL);
+    turi_env_register_native(env, "__identity_extract",   native_identity_get,       NULL);
+    turi_env_register_native(env, "__identity_duplicate", native_identity_duplicate, NULL);
+    turi_env_register_native(env, "__pair_new",           native_pair_new,           NULL);
+    turi_env_register_native(env, "__pair_env",           native_pair_env,           NULL);
+    turi_env_register_native(env, "__pair_val",           native_pair_val,           NULL);
+    turi_env_register_native(env, "__pair_extract",       native_pair_val,           NULL);
+    turi_env_register_native(env, "__pair_duplicate",     native_pair_duplicate,     NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): mutex.tur native shims.
+ *
+ * Faithful pthread_mutex_t over the int64 carrier (the compiled ABI lowers
+ * Mutex to :ptr<void>).  The interpreter is single-threaded for these fixtures,
+ * but a real mutex keeps lock/unlock/try-lock/free semantics honest.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_mutex_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+    if (!m) return turi_nil();
+    pthread_mutex_init(m, NULL);
+    return wk_int_ptr(m);
+}
+static TuriValue native_mutex_lock(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) pthread_mutex_lock((pthread_mutex_t *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_mutex_unlock(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) pthread_mutex_unlock((pthread_mutex_t *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_mutex_try_lock(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_bool(false);
+    return turi_bool(pthread_mutex_trylock((pthread_mutex_t *)(intptr_t)a[0].as_int) == 0);
+}
+static TuriValue native_mutex_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) {
+        pthread_mutex_t *m = (pthread_mutex_t *)(intptr_t)a[0].as_int;
+        pthread_mutex_destroy(m);
+        free(m);
+    }
+    return turi_nil();
+}
+
+static void wk_register_mutex_natives(TuriEnv *env) {
+    turi_env_register_native(env, "mutex-new",      native_mutex_new,      NULL);
+    turi_env_register_native(env, "mutex-lock",     native_mutex_lock,     NULL);
+    turi_env_register_native(env, "mutex-unlock",   native_mutex_unlock,   NULL);
+    turi_env_register_native(env, "mutex-try-lock", native_mutex_try_lock, NULL);
+    turi_env_register_native(env, "mutex-free",     native_mutex_free,     NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): future.tur FutureCell native shims.
+ *
+ * Layout-exact replica of future.tur's FutureCell so the refcounted
+ * Promise/Future split-free semantics are honest under --interpret:
+ * future-handle bumps refcount; future-cell-free / future-free drop a ref and
+ * tear down at zero (the historical double-free hazard the fixture guards
+ * against).  promise-new / promise-free are pure-turi wrappers over
+ * future-cell-new / future-cell-free, so only these four need natives.
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t  ready;
+    int64_t value;
+    int64_t exn;
+    bool is_set;
+    bool is_ok;
+    int64_t refcount;
+} WkFutureCell;
+
+static TuriValue native_future_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    WkFutureCell *cell = (WkFutureCell *)malloc(sizeof(WkFutureCell));
+    if (!cell) return turi_nil();
+    pthread_mutex_init(&cell->lock, NULL);
+    pthread_cond_init(&cell->ready, NULL);
+    cell->value = 0; cell->exn = 0; cell->is_set = false; cell->is_ok = false;
+    cell->refcount = 1;
+    return wk_int_ptr(cell);
+}
+static TuriValue native_future_handle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    __atomic_add_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL);
+    return wk_int_ptr(fc);
+}
+static TuriValue native_future_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    if (__atomic_sub_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        pthread_mutex_destroy(&fc->lock);
+        pthread_cond_destroy(&fc->ready);
+        free(fc);
+    }
+    return turi_nil();
+}
+
+static TuriValue native_promise_fulfill(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&fc->lock);
+    if (!fc->is_set) {
+        fc->value = (n > 1) ? a[1].as_int : 0;
+        fc->is_set = true;
+        fc->is_ok = true;
+        pthread_cond_broadcast(&fc->ready);
+    }
+    pthread_mutex_unlock(&fc->lock);
+    return turi_nil();
+}
+static TuriValue native_future_done(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_bool(false);
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&fc->lock);
+    bool done = fc->is_set;
+    pthread_mutex_unlock(&fc->lock);
+    return turi_bool(done);
+}
+
+static void wk_register_future_natives(TuriEnv *env) {
+    turi_env_register_native(env, "future-cell-new",  native_future_cell_new,  NULL);
+    turi_env_register_native(env, "future-handle",    native_future_handle,    NULL);
+    turi_env_register_native(env, "future-cell-free", native_future_cell_free, NULL);
+    turi_env_register_native(env, "future-free",      native_future_cell_free, NULL);
+    turi_env_register_native(env, "promise-fulfill",  native_promise_fulfill,  NULL);
+    turi_env_register_native(env, "future-done?",     native_future_done,      NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): chan.tur bounded-channel shims.
+ *
+ * The interpreter is single-threaded, so a real cond-var-blocking channel
+ * would only ever deadlock; the faithful interpreter semantics for the
+ * (single-thread) fixtures is a plain bounded ring buffer guarded by a mutex.
+ * One WkChan backs both the sync (chan-*) and async (async-chan-*) surfaces;
+ * the natives own both the allocation and every access, so they need not match
+ * the compiled ChanBlock layout (which also carries select waiters).
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    pthread_mutex_t lock;
+    int64_t *buf;
+    int64_t head, tail, count, cap;
+} WkChan;
+
+static TuriValue native_chan_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t cap = (n > 0) ? a[0].as_int : 0;
+    if (cap < 1) cap = 1;
+    WkChan *ch = (WkChan *)malloc(sizeof(WkChan));
+    if (!ch) return turi_nil();
+    ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+    if (!ch->buf) { free(ch); return turi_nil(); }
+    pthread_mutex_init(&ch->lock, NULL);
+    ch->head = ch->tail = ch->count = 0; ch->cap = cap;
+    return wk_int_ptr(ch);
+}
+/* push; returns true if there was room */
+static bool wk_chan_push(WkChan *ch, int64_t v) {
+    bool ok = false;
+    pthread_mutex_lock(&ch->lock);
+    if (ch->count < ch->cap) {
+        ch->buf[ch->tail] = v;
+        ch->tail = (ch->tail + 1) % ch->cap;
+        ch->count++;
+        ok = true;
+    }
+    pthread_mutex_unlock(&ch->lock);
+    return ok;
+}
+/* pop into *out; returns true if a value was available */
+static bool wk_chan_pop(WkChan *ch, int64_t *out) {
+    bool ok = false;
+    pthread_mutex_lock(&ch->lock);
+    if (ch->count > 0) {
+        *out = ch->buf[ch->head];
+        ch->head = (ch->head + 1) % ch->cap;
+        ch->count--;
+        ok = true;
+    }
+    pthread_mutex_unlock(&ch->lock);
+    return ok;
+}
+static TuriValue native_chan_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n >= 2 && a[0].as_int) wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int);
+    return turi_nil();
+}
+static TuriValue native_chan_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = 0;
+    if (n >= 1 && a[0].as_int) wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    return turi_int(v);
+}
+static TuriValue native_chan_try_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2 || !a[0].as_int) return turi_bool(false);
+    return turi_bool(wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int));
+}
+static TuriValue native_chan_try_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = 0;
+    if (n >= 1 && a[0].as_int) wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    return turi_int(v);
+}
+static TuriValue native_chan_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    WkChan *ch = (WkChan *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&ch->lock);
+    int64_t c = ch->count;
+    pthread_mutex_unlock(&ch->lock);
+    return turi_int(c);
+}
+static TuriValue native_chan_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n >= 1 && a[0].as_int) {
+        WkChan *ch = (WkChan *)(intptr_t)a[0].as_int;
+        pthread_mutex_destroy(&ch->lock);
+        free(ch->buf);
+        free(ch);
+    }
+    return turi_nil();
+}
+
+/* schan.tur synchronous session channels: same ring buffer (SChanBlock matches
+ * WkChan's leading fields), plus a one-int64 cell.  send/recv return the channel
+ * carrier (the protocol continuation rides the same pointer); recv writes the
+ * popped value into *cell. */
+static TuriValue native_schan_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2 || !a[0].as_int) return turi_int(0);
+    wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int);
+    return a[0];  /* SChan R continuation */
+}
+static TuriValue native_schan_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2 || !a[0].as_int) return turi_int(0);
+    int64_t v = 0;
+    wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    if (a[1].as_int) *(int64_t *)(intptr_t)a[1].as_int = v;  /* write into cell */
+    return a[0];  /* SChan R continuation */
+}
+static TuriValue native_schan_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+    if (!c) return turi_nil();
+    *c = 0;
+    return wk_int_ptr(c);
+}
+static TuriValue native_schan_cell_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    return turi_int(*(int64_t *)(intptr_t)a[0].as_int);
+}
+static TuriValue native_schan_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+static void wk_register_chan_natives(TuriEnv *env) {
+    turi_env_register_native(env, "chan-new",            native_chan_new,      NULL);
+    turi_env_register_native(env, "chan-send",           native_chan_send,     NULL);
+    turi_env_register_native(env, "chan-recv",           native_chan_recv,     NULL);
+    turi_env_register_native(env, "chan-free",           native_chan_free,     NULL);
+    turi_env_register_native(env, "async-chan-new",      native_chan_new,      NULL);
+    turi_env_register_native(env, "async-chan-try-send", native_chan_try_send, NULL);
+    turi_env_register_native(env, "async-chan-try-recv", native_chan_try_recv, NULL);
+    turi_env_register_native(env, "async-chan-count",    native_chan_count,    NULL);
+    turi_env_register_native(env, "async-chan-free",     native_chan_free,     NULL);
+    /* schan.tur synchronous session channels (SChanBlock == WkChan prefix). */
+    turi_env_register_native(env, "schan-new",           native_chan_new,        NULL);
+    turi_env_register_native(env, "schan-send",          native_schan_send,      NULL);
+    turi_env_register_native(env, "schan-recv",          native_schan_recv,      NULL);
+    turi_env_register_native(env, "schan-close",         native_chan_free,       NULL);
+    turi_env_register_native(env, "schan-cell-new",      native_schan_cell_new,  NULL);
+    turi_env_register_native(env, "schan-cell-get",      native_schan_cell_get,  NULL);
+    turi_env_register_native(env, "schan-cell-free",     native_schan_cell_free, NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): process.tur + fs.tur OS-handle shims.
+ *
+ * Faithful syscalls: process/spawn forks+execvp's (ChildHandle = pid), wait
+ * reaps it; fs/tmpfile mkstemp's into a { path, fd } pair (TmpFile), with
+ * borrow-accessors and a close+free.  argv is a cons list of cstr pointers
+ * ({head,tail} cells), matching the compiled inline-C walk.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *path = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : NULL;
+    if (!path) return turi_int(-1);
+    int64_t argv = (n > 1) ? a[1].as_int : 0;
+    int argc = 0;
+    for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1]) argc++;
+    char **args = (char **)malloc((size_t)(argc + 1) * sizeof(char *));
+    if (!args) return turi_int(-1);
+    { int i = 0; for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1])
+        args[i++] = (char *)(intptr_t)((int64_t *)(intptr_t)t)[0]; }
+    args[argc] = NULL;
+    pid_t pid = fork();
+    if (pid < 0) { free(args); return turi_int(-1); }
+    if (pid == 0) { execvp(path, args); _exit(127); }
+    free(args);
+    return turi_int((int64_t)pid);
+}
+static TuriValue native_process_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(-1);
+    int status = 0;
+    if (waitpid((pid_t)a[0].as_int, &status, 0) < 0) return turi_int(-1);
+    if (WIFEXITED(status)) return turi_int((int64_t)WEXITSTATUS(status));
+    return turi_int(-1);
+}
+static TuriValue native_fs_tmpfile(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    char *tmpl = strdup("/tmp/tur_XXXXXX");
+    if (!tmpl) return turi_int(0);
+    int fd = mkstemp(tmpl);
+    if (fd < 0) { free(tmpl); return turi_int(0); }
+    int64_t *pair = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!pair) { close(fd); free(tmpl); return turi_int(0); }
+    pair[0] = (int64_t)(intptr_t)tmpl;
+    pair[1] = (int64_t)fd;
+    return wk_int_ptr(pair);
+}
+static TuriValue native_fs_tmpfile_path(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    return turi_cstr((const char *)(intptr_t)((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_fs_tmpfile_fd(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[1]);
+}
+static TuriValue native_fs_tmpfile_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    int64_t *pair = (int64_t *)(intptr_t)a[0].as_int;
+    close((int)pair[1]);
+    free((void *)(intptr_t)pair[0]);
+    free(pair);
+    return turi_nil();
+}
+
+/* -------------------------------------------------------------------------
+ * R3 (turi-interpret-flip-residual-plan): backtrack.tur cons-stream monad.
+ *
+ * A Backtrack value is a linked list of results -- malloc'd { int64 value;
+ * int64 next; } cells (next=0 is nil), the exact compiled layout.  All the
+ * typeclass instances (Functor/Applicative/Monad/Alternative) and the *-raw
+ * workers are pure-turi wrappers over these inline-C primitives, so shimming
+ * the primitives makes the whole surface interpretable.  mbind/bt-apply-fat
+ * invoke the continuation via turi_call (the interpreter hands it a closure
+ * where the compiled path used a fat-closure thunk).
+ * ---------------------------------------------------------------------- */
+typedef struct { int64_t value; int64_t next; } WkBtCell;
+
+static int64_t wk_bt_cell(int64_t value, int64_t next) {
+    WkBtCell *c = (WkBtCell *)malloc(sizeof(WkBtCell));
+    if (!c) return 0;
+    c->value = value; c->next = next;
+    return (int64_t)(intptr_t)c;
+}
+static TuriValue native_bt_nil(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud; return turi_int(0);
+}
+static TuriValue native_bt_cons(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = (n > 0) ? a[0].as_int : 0;
+    int64_t nx = (n > 1) ? a[1].as_int : 0;
+    return turi_int(wk_bt_cell(v, nx));
+}
+static TuriValue native_bt_mreturn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(wk_bt_cell((n > 0) ? a[0].as_int : 0, 0));
+}
+/* mplus: copy xs's spine, then point its tail at ys (ys shared). */
+static TuriValue native_bt_mplus(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t xs = (n > 0) ? a[0].as_int : 0;
+    int64_t ys = (n > 1) ? a[1].as_int : 0;
+    WkBtCell *xc = (WkBtCell *)(intptr_t)xs;
+    if (!xc) return turi_int(ys);
+    int64_t head = 0; WkBtCell *tail = NULL;
+    while (xc) {
+        int64_t nc = wk_bt_cell(xc->value, 0);
+        if (tail) tail->next = nc; else head = nc;
+        tail = (WkBtCell *)(intptr_t)nc;
+        xc = (WkBtCell *)(intptr_t)xc->next;
+    }
+    if (tail) tail->next = ys;
+    return turi_int(head);
+}
+/* mbind: concatMap -- for each value, turi_call fn to get a sub-stream, flatten
+ * in order (build reversed, then reverse, matching the compiled body). */
+static TuriValue native_bt_mbind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    WkBtCell *cell = (WkBtCell *)(intptr_t)a[0].as_int;
+    int64_t rev = 0;
+    while (cell) {
+        TuriValue arg = turi_int(cell->value);
+        TuriValue sub = turi_call(env, a[1], &arg, 1);
+        WkBtCell *sc = (WkBtCell *)(intptr_t)sub.as_int;
+        while (sc) {
+            rev = wk_bt_cell(sc->value, rev);
+            sc = (WkBtCell *)(intptr_t)sc->next;
+        }
+        cell = (WkBtCell *)(intptr_t)cell->next;
+    }
+    int64_t result = 0;
+    WkBtCell *r = (WkBtCell *)(intptr_t)rev;
+    while (r) {
+        WkBtCell *tmp = (WkBtCell *)(intptr_t)r->next;
+        r->next = result;
+        result = (int64_t)(intptr_t)r;
+        r = tmp;
+    }
+    return turi_int(result);
+}
+static TuriValue native_bt_length(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t cnt = 0;
+    WkBtCell *c = (n > 0) ? (WkBtCell *)(intptr_t)a[0].as_int : NULL;
+    while (c) { cnt++; c = (WkBtCell *)(intptr_t)c->next; }
+    return turi_int(cnt);
+}
+static TuriValue native_bt_print(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    WkBtCell *c = (n > 0) ? (WkBtCell *)(intptr_t)a[0].as_int : NULL;
+    while (c) { printf("%lld\n", (long long)c->value); c = (WkBtCell *)(intptr_t)c->next; }
+    return turi_nil();
+}
+static TuriValue native_bt_apply_fat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_call(env, a[0], &a[1], 1);
+}
+
+/* R6 (turi-interpret-flip-residual-plan): tuple.tur's Eq[Tuple2] instance is
+ * pure-turi but bottoms out in `tuple2-eq-carrier?`, an inline-C body that casts
+ * each Tuple2 to a { e1, e2 } struct and calls two element comparators through C
+ * function pointers.  Re-implement it as a native: read both fields (a make-
+ * struct Tuple2 is a TuriStruct; a carrier int points at an int64[2] {e1,e2}),
+ * and invoke the comparators (turi closures) via turi_call. */
+static int64_t wk_tuple2_field(TuriValue t, int idx) {
+    bool found = false;
+    TuriValue f = turi_struct_field(t, (uint32_t)idx, &found);
+    if (found) return (f.tag == TURI_BOOL) ? (f.as_bool ? 1 : 0) : f.as_int;
+    int64_t *p = (int64_t *)(intptr_t)t.as_int;
+    return p ? p[idx] : 0;
+}
+static TuriValue native_tuple2_eq_carrier(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_bool(false);
+    int64_t a1 = wk_tuple2_field(a[0], 0), a2 = wk_tuple2_field(a[0], 1);
+    int64_t b1 = wk_tuple2_field(a[1], 0), b2 = wk_tuple2_field(a[1], 1);
+    TuriValue c1args[2] = { turi_int(a1), turi_int(b1) };
+    TuriValue r1 = turi_call(env, a[2], c1args, 2);
+    bool e1 = (r1.tag == TURI_BOOL) ? r1.as_bool : (r1.as_int != 0);
+    if (!e1) return turi_bool(false);
+    TuriValue c2args[2] = { turi_int(a2), turi_int(b2) };
+    TuriValue r2 = turi_call(env, a[3], c2args, 2);
+    bool e2 = (r2.tag == TURI_BOOL) ? r2.as_bool : (r2.as_int != 0);
+    return turi_bool(e2);
+}
+
+static void wk_register_backtrack_natives(TuriEnv *env) {
+    turi_env_register_native(env, "tuple2-eq-carrier?", native_tuple2_eq_carrier, NULL);
+    turi_env_register_native(env, "bt-nil",        native_bt_nil,       NULL);
+    turi_env_register_native(env, "bt-cons",       native_bt_cons,      NULL);
+    turi_env_register_native(env, "mzero",         native_bt_nil,       NULL);
+    turi_env_register_native(env, "mreturn",       native_bt_mreturn,   NULL);
+    turi_env_register_native(env, "mplus",         native_bt_mplus,     NULL);
+    turi_env_register_native(env, "mbind",         native_bt_mbind,     NULL);
+    turi_env_register_native(env, "bt-length",     native_bt_length,    NULL);
+    turi_env_register_native(env, "bt-print",      native_bt_print,     NULL);
+    turi_env_register_native(env, "bt-apply-fat",  native_bt_apply_fat, NULL);
+}
+
+static void wk_register_proc_fs_natives(TuriEnv *env) {
+    turi_env_register_native(env, "process/spawn",    native_process_spawn,     NULL);
+    turi_env_register_native(env, "process/wait",     native_process_wait,      NULL);
+    turi_env_register_native(env, "fs/tmpfile",       native_fs_tmpfile,        NULL);
+    turi_env_register_native(env, "fs/tmpfile-path",  native_fs_tmpfile_path,   NULL);
+    turi_env_register_native(env, "fs/tmpfile-fd",    native_fs_tmpfile_fd,     NULL);
+    turi_env_register_native(env, "fs/tmpfile-free",  native_fs_tmpfile_free,   NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): serial.tur Serializable instances.
+ *
+ * serialize packs a length-prefixed little-endian byte buffer (int64* header
+ * word 0 = data length, data starts at word 1 -- the same layout as Bytes);
+ * deserialize reads it back.  Registered under the elaborator instance-binding
+ * names so (.serialize x) dispatch and the direct __inst_* calls both resolve.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_serialize_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = (n > 0) ? a[0].as_int : 0;
+    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + 8);
+    if (!buf) return turi_nil();
+    buf[0] = 8;
+    uint8_t *p = (uint8_t *)(buf + 1);
+    for (int i = 0; i < 8; i++) p[i] = (uint8_t)((v >> (8 * i)) & 0xff);
+    return wk_int_ptr(buf);
+}
+static TuriValue native_deserialize_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    int64_t *b = (int64_t *)(intptr_t)a[0].as_int;
+    if (b[0] < 8) return turi_int(0);
+    uint8_t *p = (uint8_t *)(b + 1);
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v |= ((uint64_t)p[i]) << (8 * i);
+    return turi_int((int64_t)v);
+}
+static TuriValue native_serialize_bool(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = 0;
+    if (n > 0) v = (a[0].tag == TURI_BOOL) ? (a[0].as_bool ? 1 : 0) : (a[0].as_int != 0);
+    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + 1);
+    if (!buf) return turi_nil();
+    buf[0] = 1;
+    *(uint8_t *)(buf + 1) = (uint8_t)v;
+    return wk_int_ptr(buf);
+}
+static TuriValue native_deserialize_bool(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    int64_t *b = (int64_t *)(intptr_t)a[0].as_int;
+    if (b[0] < 1) return turi_int(0);
+    return turi_int(*(uint8_t *)(b + 1) ? 1 : 0);
+}
+
+static void wk_register_serial_natives(TuriEnv *env) {
+    turi_env_register_native(env, "__inst_Serializable_serialize_int",     native_serialize_int,     NULL);
+    turi_env_register_native(env, "__inst_Serializable_deserialize_int",   native_deserialize_int,   NULL);
+    turi_env_register_native(env, "__inst_Serializable_serialize_bool",    native_serialize_bool,    NULL);
+    turi_env_register_native(env, "__inst_Serializable_deserialize_bool",  native_deserialize_bool,  NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): serial.tur Bytes native shims.
+ *
+ * Bytes is a malloc'd int64_t* whose word 0 holds the length and whose data
+ * starts at word 1 (the compiled ABI).  bytes-alloc/len/data/free re-implement
+ * that layout exactly.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_bytes_alloc(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t len = (n > 0) ? a[0].as_int : 0;
+    if (len < 0) len = 0;
+    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + (size_t)len);
+    if (!buf) return turi_nil();
+    buf[0] = len;
+    memset(buf + 1, 0, (size_t)len);
+    return wk_int_ptr(buf);
+}
+static TuriValue native_bytes_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_bytes_data(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    return wk_int_ptr((int64_t *)(intptr_t)a[0].as_int + 1);
+}
+static TuriValue native_bytes_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+static void wk_register_bytes_natives(TuriEnv *env) {
+    turi_env_register_native(env, "bytes-alloc", native_bytes_alloc, NULL);
+    turi_env_register_native(env, "bytes-len",   native_bytes_len,   NULL);
+    turi_env_register_native(env, "bytes-data",  native_bytes_data,  NULL);
+    turi_env_register_native(env, "bytes-free",  native_bytes_free,  NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): taskgroup.tur TaskGroupBlock shims.
+ *
+ * Replica of taskgroup.tur's TaskGroupBlock.  We include cancel_reason in the
+ * allocation (the canonical documented layout) so cancel-with-reason is safe --
+ * note the compiled task-group-new omits it, a latent OOB write tracked in
+ * docs/reported/taskgroup-block-cancel-reason-layout-overflow.md.
+ *
+ * The cancel native does NOT touch the per-fiber thread-local cancelled flag
+ * (tur_fiber_set_cancelled) that the inline-C body sets: under --interpret no
+ * fibers are running, and the fixtures observe only the group's own flag.
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t done_cond;
+    int64_t task_count;
+    int64_t completed_count;
+    bool cancelled;
+    bool done;
+    int64_t cancel_reason;
+} WkTaskGroup;
+
+static TuriValue native_task_group_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    WkTaskGroup *g = (WkTaskGroup *)malloc(sizeof(WkTaskGroup));
+    if (!g) return turi_nil();
+    pthread_mutex_init(&g->lock, NULL);
+    pthread_cond_init(&g->done_cond, NULL);
+    g->task_count = 0; g->completed_count = 0;
+    g->cancelled = false; g->done = false; g->cancel_reason = 0;
+    return wk_int_ptr(g);
+}
+static TuriValue native_task_group_cancel(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&g->lock);
+    g->cancelled = true; g->done = true; g->cancel_reason = 0;
+    pthread_cond_broadcast(&g->done_cond);
+    pthread_mutex_unlock(&g->lock);
+    return turi_nil();
+}
+static TuriValue native_task_group_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&g->lock);
+    while (!g->done) pthread_cond_wait(&g->done_cond, &g->lock);
+    pthread_mutex_unlock(&g->lock);
+    return turi_nil();
+}
+static TuriValue native_task_group_cancelled(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_bool(false);
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_lock(&g->lock);
+    bool c = g->cancelled;
+    pthread_mutex_unlock(&g->lock);
+    return turi_bool(c);
+}
+static TuriValue native_task_group_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkTaskGroup *g = (WkTaskGroup *)(intptr_t)a[0].as_int;
+    pthread_mutex_destroy(&g->lock);
+    pthread_cond_destroy(&g->done_cond);
+    free(g);
+    return turi_nil();
+}
+
+static void wk_register_taskgroup_natives(TuriEnv *env) {
+    turi_env_register_native(env, "task-group-new",        native_task_group_new,       NULL);
+    turi_env_register_native(env, "task-group-cancel",     native_task_group_cancel,    NULL);
+    turi_env_register_native(env, "task-group-wait",       native_task_group_wait,      NULL);
+    turi_env_register_native(env, "task-group-cancelled?", native_task_group_cancelled, NULL);
+    turi_env_register_native(env, "task-group-free",       native_task_group_free,      NULL);
 }
 
 /* -------------------------------------------------------------------------

@@ -1416,6 +1416,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
         return true;
     }
     if (strcmp(name, "tur_cloneable_cont_clone") == 0 ||
+        strcmp(name, "tur_continuation_snapshot") == 0 ||
         strcmp(name, "tur_serial_cont_serialize") == 0 ||
         strcmp(name, "tur_serial_cont_deserialize") == 0) {
         if (n < 1 || args[0].as_int == 0) { *out = turi_int(0); return true; }
@@ -4884,6 +4885,22 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_INLINE_C:
         if (!turi_env_has_cap(env, TURI_CAP_INLINE_C))
             return turi_error("eval: inline-C not allowed in sandboxed environment");
+        /* R2 (turi-interpret-flip-residual-plan): gc!/gc-enable!/gc-disable!
+         * lower (elab_memory.c) to these exact captureless inline-C one-liners.
+         * Call the linked runtime (src/runtime/gc.c) so cycle collection runs
+         * under --interpret instead of the clean carve below. */
+        {
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (ic && ic->n_captures == 0 && ic->n_val_exprs == 0 && ic->code.p) {
+                extern void gc_force(void);
+                extern void gc_enable(void);
+                extern void gc_disable(void);
+                StrSlice c = ic->code;
+                if (c.len == 11 && memcmp(c.p, "gc_force();", 11) == 0)   { gc_force();   return turi_nil(); }
+                if (c.len == 12 && memcmp(c.p, "gc_enable();", 12) == 0)  { gc_enable();  return turi_nil(); }
+                if (c.len == 13 && memcmp(c.p, "gc_disable();", 13) == 0) { gc_disable(); return turi_nil(); }
+            }
+        }
         /* This is the documented clean carve for any inline-C-backed function
          * the tree-walker cannot run -- e.g. a content-keyed map's synthesized
          * MapKey comparator, whose body returns a captured C function-pointer
@@ -4910,8 +4927,20 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (turi_is_error(cl_val) || env->returning || env->throwing) {
             return cl_val;
         }
-        if (cl_val.tag != TURI_CLOSURE)
-            return turi_errorf("eval: async: expected a function, got tag %d", cl_val.tag);
+        if (cl_val.tag != TURI_CLOSURE) {
+            /* R4 (turi-interpret-flip-residual-plan): the elaborator does not
+             * wrap a non-fn async body in a thunk -- `(async EXPR)` stores EXPR
+             * directly (elab_concurrent.c).  When EXPR is not a `(fn ...)`
+             * literal, the pre-evaluation above already ran the body to
+             * completion in the current context (e.g. `(async (with-handler
+             * ...))` settles to its int result).  Under the single-threaded
+             * interpreter that is observationally a resolved future: settle it
+             * with the value and hand back the future so `await` returns it,
+             * instead of erroring "expected a function".  A `(fn [] ...)` thunk
+             * still takes the fiber-spawn path below. */
+            turi_future_resolve(env, f, cl_val);
+            return turi_future_val(f);
+        }
 
         /* Allocate and initialise the fiber struct. */
         TuriFiber *fiber = (TuriFiber *)calloc(1, sizeof(TuriFiber));
