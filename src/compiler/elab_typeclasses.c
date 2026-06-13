@@ -3110,6 +3110,31 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     out->as.call_.fn_expr    = NULL;
     out->as.call_.args       = args;
     out->as.call_.n_args     = n_args;
+    /* M4c Path A return-side
+     * (docs/reported/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
+     * mirror the receiver-dispatch path's abi_bindings population (around
+     * line 4047) so emit_abi_register_call mints a per-instantiation spec
+     * for return-dispatch typeclass methods too.  `bound` here is the
+     * call-site's pinned dispatch-tyvar value — for `(:: (dec 42) (Result
+     * int cstr))` it's `int`, exactly what the spec system needs to
+     * substitute the method's `(Result a cstr)` return into `(Result int
+     * cstr)`.  HKT carve-out preserved. */
+    if (inst && tc && out->as.call_.fn_binding != NULL) {
+        bool is_hkt = false;
+        if (tc->type_param_kinds) {
+            for (uint8_t i = 0; i < tc->n_type_params; i++) {
+                if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
+            }
+        }
+        if (!is_hkt && tc->n_type_params == 1 && tc->type_params[0]) {
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, sizeof(AbiTypeBinding));
+            bindings[0].name = tc->type_params[0]->name;
+            bindings[0].type = bound;
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = 1;
+        }
+    }
     return out;
 }
 

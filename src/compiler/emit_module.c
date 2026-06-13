@@ -1842,7 +1842,16 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     bool is_instance_method = spec->fn->binding && spec->fn->binding->name &&
         spec->fn->binding->name->name &&
         strncmp(spec->fn->binding->name->name, "__inst_", 7) == 0;
-    if (is_instance_method && type_uses_carrier_abi(spec->result_type)) {
+    /* M4c Path A result-side
+     * (docs/reported/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
+     * for non-HKT instance method specs (spec->typeclass_inst is set by
+     * emit_abi_intern_spec), emit the concrete result type rather than the
+     * carrier int64.  HKT classes keep the legacy carrier override.  Without
+     * this override-skip, a `Dec[int]` spec returning `(Result int cstr)`
+     * still lowers to `int64_t`, and the caller's bridge has to unbox — the
+     * very bridge crossing Path A is trying to retire. */
+    if (is_instance_method && type_uses_carrier_abi(spec->result_type)
+        && spec->typeclass_inst == NULL) {
         buf_puts(out, "int64_t");
     } else {
         buf_puts(out, type_c_name(spec->result_type));

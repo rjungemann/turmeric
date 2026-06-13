@@ -404,13 +404,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * return -- the dispatch dict expects a uniform
              * `int64_t (*)(int64_t, ...)` shape, and the body's
              * by-value Result__T__B struct gets heap-spilled to a
-             * pointer-as-int64 at the body emit. */
+             * pointer-as-int64 at the body emit.
+             *
+             * M4c Path A result-side: per-instantiation specs on non-HKT
+             * classes (spec->typeclass_inst set) bypass the dispatch dict
+             * — Path A's call site invokes the spec directly with no
+             * carrier indirection.  Skip the int64_t override for those so
+             * the spec's signature matches its return value and the
+             * caller's bridge becomes unnecessary.  HKT-class specs keep
+             * the carrier override per the M6/M7 carve-out. */
             Type rt = ctx->current_abi_specialization->result_type;
             bool is_instance_method =
                 fd->binding && fd->binding->name && fd->binding->name->name &&
                 strncmp(fd->binding->name->name, "__inst_", 7) == 0;
             if (is_instance_method &&
-                type_uses_carrier_abi(emit_resolve_type(ctx, rt))) {
+                type_uses_carrier_abi(emit_resolve_type(ctx, rt))
+                && ctx->current_abi_specialization->typeclass_inst == NULL) {
                 buf_puts(file, "int64_t");
             } else {
                 buf_puts(file, emit_type_c_name(ctx, rt));
@@ -1068,7 +1077,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 bool is_inst = fd->binding && fd->binding->name &&
                     fd->binding->name->name &&
                     strncmp(fd->binding->name->name, "__inst_", 7) == 0;
-                if (is_inst && type_uses_carrier_abi(emit_resolve_type(ctx, rt))) {
+                /* M4c Path A result-side: non-HKT instance method specs
+                 * (typeclass_inst set) skip the carrier-int64 override.
+                 * The signature emit at L412 + the forward decl at
+                 * emit_module.c:1853 use the same gate; keep them in sync. */
+                if (is_inst && type_uses_carrier_abi(emit_resolve_type(ctx, rt))
+                    && ctx->current_abi_specialization->typeclass_inst == NULL) {
                     ret_ctype = "int64_t";
                     inst_method_carrier_spill = true;
                 } else {
@@ -1147,6 +1161,24 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * pointer-types on the implicit pointer-to-int conversion.  (A void*
              * carrier return needs no cast: the body value is already a pointer.) */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (use_abi_spec
+                   && ctx->current_abi_specialization->typeclass_inst != NULL
+                   && ret_ctype && strcmp(ret_ctype, "int64_t") != 0
+                   && fd->body->type.kind != TY_NEVER
+                   && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
+                   && strcmp(emit_type_c_name(ctx,
+                                emit_resolve_type(ctx, fd->body->type)),
+                             "int64_t") == 0) {
+            /* M4c Path A result-side: the spec's declared return is a
+             * concrete by-value struct (e.g. `Result__int__cstr`), but the
+             * body's last expression elaborates to a carrier-ABI value
+             * (`int64_t` at C level) — e.g. `(ok v)` where ok still emits
+             * its bare carrier symbol.  Unbox by dereferencing the int64
+             * handle as the concrete struct pointer.  Mirrors the carrier
+             * bridge's `carrier→concrete` direction inline at the return
+             * site.  Gated tightly on typeclass_inst so non-instance specs
+             * keep their existing return handling. */
+            buf_printf(file, "return (*(%s *)(intptr_t)%s);\n", ret_ctype, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }
