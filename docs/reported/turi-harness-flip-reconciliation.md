@@ -1,5 +1,23 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (EX_SYM_LIT + native sym ops, 2026-06-13):** **first-class `:Sym`
+> values (`-Xsymbols`) now work under `--interpret`** -- all 4 sym fixtures
+> (`sym-stdlib`, `quoted-keyword-type-ann`, `sym-map-key`, `sym-dynamic`) pass
+> and are on the allowlist (harness 1044 -> 1048). `EX_SYM_LIT` was a documented
+> carve-out (kind 114, "unhandled expression kind"); it now has a case arm in
+> `src/turi/eval.c` that re-interns the literal's name into `env->st` and carries
+> the stable `const Symbol *` as the int64 carrier -- interning by name gives
+> pointer-identity `Eq[Sym]`/`Hash[Sym]` and makes the `str->sym` round-trip
+> agree with literals. `wk_register_sym_natives` (`src/main.c`) overrides the
+> inline-C `sym.tur` bodies the tree-walker cannot run: `sym->str` (reads
+> `Symbol->name`), `sym=?` / `__inst_Eq_eq_qu_Sym` (pointer identity), `str->sym`
+> (interns into the same `env->st`, so it wins over `sym-dynamic.tur`'s
+> runtime-table inline-C and stays pointer-consistent with literals),
+> `__inst_Hash_hash_Sym`, and the `MapKey[Sym]` `mk-cmp`/`mk-box` carriers
+> (symbols key by pointer identity, reusing the int-carrier comparator).
+> `EX_SYM_LIT` was removed from `docs/turi-carve-out.txt` (now handled; parity
+> 113/115, 2 carved); `EX_CONS_LIST` stays carved. No codegen change.
+>
 > **Progress (inline-C ADT-carrier re-tag, 2026-06-13):** **fixed a silent
 > interpreter bug that broke the entire `range-*` family** (14 fixtures all
 > failing `match: no arm matched`) and added the 12 fixable ones to the

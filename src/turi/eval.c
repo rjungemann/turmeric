@@ -4027,6 +4027,27 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_cstr(sym->name);
     }
 
+    case EX_SYM_LIT: {
+        /* SYM (turi): a first-class :Sym value (-Xsymbols).  Compiled code lowers
+         * it to a static `struct __tur_sym *`; the interpreter instead re-interns
+         * the name into env->st and carries the stable `const Symbol *` as the
+         * int64 carrier.  Interning by name guarantees pointer identity for
+         * identical names (so Eq[Sym]/Hash[Sym] -- pointer identity -- and the
+         * str->sym round-trip all agree with the literal), and the native sym ops
+         * (native_sym_to_str/_eq/_hash in main.c, registered as overrides for the
+         * inline-C sym.tur bodies the tree-walker cannot run) read this Symbol*. */
+        const Symbol *s = e->as.sym_lit_.sym;
+        const Symbol *isym = s;
+        if (s) {
+            StrSlice sl = { s->name, s->len };
+            isym = symtab_intern(&env->st, sl);
+        }
+        TuriValue v = {0};
+        v.tag = TURI_INT;
+        v.as_int = (int64_t)(intptr_t)isym;
+        return v;
+    }
+
     /* --- Variable -------------------------------------------------------- */
     case EX_VAR:
         return eval_lookup(env, frame, e->as.var.binding->name->name);

@@ -997,6 +997,14 @@ range-reader-one-sided
 range-reader-shadow-warn
 range-reader-two-sided
 range-span
+# sym-* (verified 2026-06-13): first-class :Sym (-Xsymbols).  EX_SYM_LIT now has
+# an interpreter case arm (carries a stable interned Symbol pointer) plus native
+# sym->str / sym=? / str->sym / Eq[Sym] / Hash[Sym] / MapKey[Sym] overrides for
+# the inline-C sym.tur bodies.  See wk_register_sym_natives in src/main.c.
+sym-stdlib
+quoted-keyword-type-ann
+sym-map-key
+sym-dynamic
 "
 
 # Build an associative-set from the default list for O(1) lookup.

@@ -28,10 +28,11 @@ EX_CPS_CONT_APP -- CPS continuation application; never produced by the elaborato
 # docs/archive/history/turi-capturing-shift-unimplemented.md.
 
 # --- Inline-C-bound literal sugar (TI1 / TI7) ----------------------------
-# The sym/cons-list literals only appear paired with user inline-C in the
-# existing fixtures (__tur_sym field reads, __tur_cons_cell walks), which is a
-# permanent interpreter carve-out (TI7).  Landing them usefully requires native
-# sym=?/sym->str and cons-head/cons-tail overrides, not just the literal case
-# arm; deferred until those natives exist.
-EX_SYM_LIT -- interned symbol literal; inline-C-bound, needs native sym ops (TI1/TI7)
+# EX_SYM_LIT is now handled: the interpreter carries a :Sym as a stable
+# `const Symbol *` interned in env->st (eval.c EX_SYM_LIT case), with native
+# sym->str / sym=? / str->sym / Eq[Sym] / Hash[Sym] / MapKey[Sym] overrides
+# (wk_register_sym_natives, src/main.c) for the inline-C sym.tur bodies the
+# tree-walker cannot run.  EX_CONS_LIST remains carved: cons-list literals only
+# appear paired with user inline-C (__tur_cons_cell walks), and landing them
+# usefully needs native cons-head/cons-tail overrides, not just the case arm.
 EX_CONS_LIST -- cons-list literal; inline-C-bound, needs native cons ops (TI1/TI7)

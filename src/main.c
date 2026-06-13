@@ -4795,6 +4795,7 @@ static int cmd_fmt(int argc, char **argv) {
 static void wk_register_stdlib_natives(TuriEnv *env);
 static void wk_register_hamt_natives(TuriEnv *env);
 static void wk_register_map_natives(TuriEnv *env);
+static void wk_register_sym_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5012,6 +5013,9 @@ static int cmd_eval(const char *path, bool use_color,
     /* TI10 Tier A: typed Map[K V] scalar-key natives (MapKey/Hash instance
      * comparators + the raw map-*-eq-o bridges over tur_hamt_*_eq_o). */
     wk_register_map_natives(env);
+    /* SYM (turi): first-class :Sym ops, only when -Xsymbols loaded sym.tur. */
+    if (g_symbols_enabled)
+        wk_register_sym_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers. */
     {
         typedef struct { int64_t value; int64_t next; } TurCons;
@@ -6478,6 +6482,65 @@ static TuriValue native_map_eq_raw_k(TuriEnv *env, TuriValue *a, uint32_t n, voi
     if (n < 4) return turi_bool(false);
     return turi_bool(map_eq_iter(env, set_hamt(a[0]), set_hamt(a[1]),
                                  (tur_hamt_keyeq_fn)(intptr_t)a[2].as_int, a[3]));
+}
+
+/* SYM (turi): first-class :Sym natives (-Xsymbols).  The interpreter carries a
+ * :Sym as a stable `const Symbol *` (interned in env->st by the EX_SYM_LIT case
+ * in eval.c) in the int64 carrier.  These override the inline-C sym.tur bodies
+ * (sym->str / sym=? / Eq[Sym] / Hash[Sym]), which deref a `struct __tur_sym`
+ * the tree-walker cannot evaluate, and provide str->sym for sym-dynamic.tur. */
+static TuriValue native_sym_to_str(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_nil();
+    const Symbol *s = (const Symbol *)(intptr_t)a[0].as_int;
+    if (!s) return turi_nil();
+    return turi_cstr(s->name);
+}
+static TuriValue native_sym_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_bool(false);
+    /* Symbols are interned: pointer identity is content equality. */
+    return turi_bool(a[0].as_int == a[1].as_int);
+}
+static TuriValue native_sym_hash(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    const Symbol *s = (const Symbol *)(intptr_t)a[0].as_int;
+    return turi_int(s ? (int64_t)s->hash : 0);
+}
+static TuriValue native_str_to_sym(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_nil();
+    const char *str = (a[0].tag == TURI_CSTR)
+                        ? a[0].as_cstr
+                        : (const char *)(intptr_t)a[0].as_int;
+    if (!str) return turi_nil();
+    StrSlice sl = { str, (uint32_t)strlen(str) };
+    const Symbol *s = symtab_intern(&e->st, sl);
+    TuriValue v = {0};
+    v.tag = TURI_INT;
+    v.as_int = (int64_t)(intptr_t)s;
+    return v;
+}
+static void wk_register_sym_natives(TuriEnv *env) {
+    turi_env_register_native(env, "sym->str",  native_sym_to_str, NULL);
+    turi_env_register_native(env, "sym=?",      native_sym_eq,     NULL);
+    turi_env_register_native(env, "str->sym",   native_str_to_sym, NULL);
+    /* Typeclass instance methods: Eq[Sym].eq?, Hash[Sym].hash (pointer identity
+     * / precomputed hash).  MapKey[Sym] reuses the int-carrier comparator already
+     * registered for scalar keys, so no Sym-specific mk-* native is needed. */
+    turi_env_register_native(env, "__inst_Eq_eq_qu_Sym", native_sym_eq,   NULL);
+    turi_env_register_native(env, "__inst_Hash_hash_Sym", native_sym_hash, NULL);
+    /* MapKey[Sym].mk-cmp returns the carrier comparator address; symbols compare
+     * by pointer identity, so reuse the int-carrier eq comparator (its inline-C
+     * body returns a captured C function-pointer address the tree-walker cannot
+     * evaluate).  mk-box (identity) and mk-owned? (0) are plain bodies the simple
+     * inline-C executor already handles. */
+    turi_env_register_native(env, "__inst_MapKey_mk_hycmp_Sym", native_mk_cmp_int, NULL);
+    /* MapKey[Sym].mk-box is inline-C (`(int64_t)(intptr_t)x`) like the cstr/float
+     * boxes (the int box is pure-turi `x` and needs none); reuse the cstr native,
+     * which returns the carrier word unchanged -- the Sym pointer. */
+    turi_env_register_native(env, "__inst_MapKey_mk_hybox_Sym", native_mk_box_cstr, NULL);
 }
 
 static void wk_register_map_natives(TuriEnv *env) {
