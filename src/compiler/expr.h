@@ -139,6 +139,14 @@ struct Binding {
      * for self-recursive references via e->current_fn_name. */
     bool          is_deprecated;
     const char   *deprecation_message;   /* NUL-terminated, arena-owned, or NULL */
+    /* M2a (end-to-end-monomorphization-plan): true if this binding's defn was
+     * annotated with `#{Construct}`. The constructor's body is synthesized by
+     * the codegen as a direct by-value struct construction per ABI spec,
+     * rather than going through the int64 carrier helper in the inline-C
+     * body. The inline-C body is retained as a fallback for the existential /
+     * carrier-return contexts where the call site genuinely wants an int64
+     * handle. Generalizes the by-name `ok`/`err` synthesis from Prereq 6. */
+    bool          is_construct_template;
     /* MF3 (test-suite-cleanup-plan): true if this binding came from an
      * auto-loaded stdlib module. Set during the M7 promotion in
      * elab_toplevel.c. Used by elab_defn to hard-error on user code that

@@ -1437,6 +1437,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_no_unwind_attr = intern_cstr(st, "#no-unwind");
     /* Phase M6: (export-as "c_name") attribute head symbol */
     e->sym_export_as_attr = intern_cstr(st, "export-as");
+    /* M2a: #{Construct} polymorphic-constructor synthesis marker */
+    e->sym_construct_attr = intern_cstr(st, "Construct");
     e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
     e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");
     e->sym_panic_payload_line = intern_cstr(st, "panic-payload-line");

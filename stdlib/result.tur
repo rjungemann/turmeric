@@ -34,7 +34,7 @@
 ;;;   codegen take care of the rest).
 
 (defn ok [A B] [x : A]
-  #{}
+  #{Construct}
   : (Result A B)
   ```c
   return tur_ok((int64_t)(intptr_t)x);
@@ -57,7 +57,7 @@
 ;;;   notes as `ok`).
 
 (defn err [A B] [e : B]
-  #{}
+  #{Construct}
   : (Result A B)
   ```c
   return tur_err((int64_t)(intptr_t)e);

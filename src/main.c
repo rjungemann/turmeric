@@ -7422,14 +7422,16 @@ static void sch_push_err(tur_json_vec *errs, const char *path,
 }
 static char *sch_mkpath(const char *base, const char *key) {
     if (!base || !base[0]) return strdup(key);
-    char *out = malloc(strlen(base) + strlen(key) + 2);
-    sprintf(out, "%s.%s", base, key);
+    size_t n = strlen(base) + strlen(key) + 2;
+    char *out = malloc(n);
+    snprintf(out, n, "%s.%s", base, key);
     return out;
 }
 static char *sch_mkidx(const char *base, int64_t idx) {
     const char *b = base ? base : "";
-    char *out = malloc(strlen(b) + 24);
-    sprintf(out, "%s[%lld]", b, (long long)idx);
+    size_t n = strlen(b) + 24;
+    char *out = malloc(n);
+    snprintf(out, n, "%s[%lld]", b, (long long)idx);
     return out;
 }
 /* Invoke a stored fat closure (carried as the int64 pointer in the schema node)

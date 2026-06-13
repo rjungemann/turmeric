@@ -370,6 +370,10 @@ typedef struct Elab {
     const Symbol *sym_no_unwind_attr;
     /* Phase M6: (export-as "c_name") attribute for explicit C symbol naming */
     const Symbol *sym_export_as_attr;
+    /* M2a (end-to-end-monomorphization-plan): #{Construct} marker on a
+     * polymorphic stdlib constructor defn. Picked up in elab_fns.c when the
+     * defn's effect-row map is parsed. */
+    const Symbol *sym_construct_attr;
     const Symbol *sym_panic_payload_type;
     const Symbol *sym_panic_payload_value;
     const Symbol *sym_panic_payload_file;

@@ -1708,6 +1708,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * Uppercase names are concrete effects; lowercase are row variables.
      * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
     EffectRow *declared_effect_row_defn = NULL;
+    bool defn_has_construct_attr = false;
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
@@ -1718,6 +1719,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
             for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
                 Form *item = maybe_row->as.list.items[j];
                 if (item->tag == F_SYM) {
+                    /* M2a: pluck #{Construct} out of the effect row so it
+                     * doesn't leak into PASS_EFFECT_LOWER as a phantom effect. */
+                    if (item->as.sym == e->sym_construct_attr) {
+                        defn_has_construct_attr = true;
+                        continue;
+                    }
                     syms[n_valid++] = item->as.sym;
                 }
             }
@@ -3020,6 +3027,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* F4: Store ^deprecated attribute on the binding */
     b->is_deprecated = is_deprecated_attr;
     b->deprecation_message = deprecation_msg;
+    /* M2a: propagate #{Construct} marker */
+    b->is_construct_template = defn_has_construct_attr;
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
