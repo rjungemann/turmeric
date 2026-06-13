@@ -2512,7 +2512,6 @@ static bool __fn_573(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
 static bool __fn_597(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
-static bool __fn_624(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
 static int64_t __inst_Functor_fmap_Option(int64_t, tur_poly_fn_t);
 static int64_t __inst_Applicative_pure_Option(int64_t);
@@ -2528,12 +2527,12 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
-static bool __fn_783(int64_t, int64_t);
+static bool __fn_779(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_862(int64_t, int64_t);
+static bool __fn_858(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
-static int64_t __fn_865(int64_t);
+static int64_t __fn_861(int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -3067,16 +3066,20 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Vec,
 };
 
-static bool __fn_624(int64_t a, int64_t b) {
-        return (a) == (b);
-}
-
 static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
-        int64_t *__t6 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t6[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t6[1] = (int64_t)(intptr_t)__fn_624;
-        void *__t7 = __t6;
-        return option_hyeq_qu(x, y, (int64_t)(intptr_t)(__t7));
+        bool __t6;
+        if ((((Option *)(intptr_t)(x))->is_some) == (((Option *)(intptr_t)(y))->is_some)) {
+            bool __t7;
+            if (((Option *)(intptr_t)(x))->is_some) {
+                __t7 = __inst_Eq_eq_qu_int(((Option *)(intptr_t)(x))->value, ((Option *)(intptr_t)(y))->value);
+            } else {
+                __t7 = true;
+            }
+            __t6 = __t7;
+        } else {
+            __t6 = false;
+        }
+        return __t6;
 }
 
 typedef struct dict_Eq_Option {
@@ -3282,14 +3285,14 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
-static bool __fn_783(int64_t a, int64_t b) {
+static bool __fn_779(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t12[1] = (int64_t)(intptr_t)__fn_783;
+        __t12[1] = (int64_t)(intptr_t)__fn_779;
         void *__t13 = __t12;
         return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t13));
 }
@@ -3314,14 +3317,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_862(int64_t a, int64_t b) {
+static bool __fn_858(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_862;
+        __t14[1] = (int64_t)(intptr_t)__fn_858;
         void *__t15 = __t14;
         return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t15));
 }
@@ -3334,7 +3337,7 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_qu = __inst_Eq_eq_qu_MutableMap,
 };
 
-static int64_t __fn_865(int64_t x) {
+static int64_t __fn_861(int64_t x) {
         return (x) + (INT64_C(5));
 }
 
@@ -4431,7 +4434,7 @@ int main(int argc, char **argv) {
         }
         int64_t __t21;
         {
-            int64_t (*add5)(int64_t) = __fn_865;
+            int64_t (*add5)(int64_t) = __fn_861;
             (void)add5;
             printf("%lld\n", (long long)(((int64_t (*)(int64_t))(intptr_t)add5)(INT64_C(10))));
             int64_t __t22;

@@ -178,9 +178,18 @@
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
 ;; Note: element comparison uses integer equality; correct for all primitive A.
 
+;; M4c-pre-ext: rewrite to consult by-value fields directly via Eq A,
+;; mirroring Eq Result/Tuple2/Pair.  `option-eq?` itself stays as a free
+;; helper for callers that consult it directly via the carrier ABI.  See
+;; docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
 (definstance Eq [Option]
   [(Eq A)]
-  (eq? [x y] (option-eq? x y (fn [a b] (= a b)))))
+  (eq? [x y]
+    (if (= (.is-some x) (.is-some y))
+      (if (.is-some x)
+        (eq? (.value x) (.value y))
+        true)
+      false)))
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
 ;;

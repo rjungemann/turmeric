@@ -2512,7 +2512,6 @@ static bool __fn_578(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
 static bool __fn_602(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
-static bool __fn_629(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
 static int64_t __inst_Functor_fmap_Option(int64_t, tur_poly_fn_t);
 static int64_t __inst_Applicative_pure_Option(int64_t);
@@ -2528,15 +2527,15 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
-static bool __fn_788(int64_t, int64_t);
+static bool __fn_784(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_867(int64_t, int64_t);
+static bool __fn_863(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static int64_t __inst_TestFunctor_fmap_option(int64_t, tur_poly_fn_t);
-static int64_t __poly_876(void *, int64_t);
-static int64_t __fn_885(void *, int64_t);
-static int64_t __fn_893(void *, int64_t);
+static int64_t __poly_872(void *, int64_t);
+static int64_t __fn_881(void *, int64_t);
+static int64_t __fn_889(void *, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -3075,16 +3074,20 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Vec,
 };
 
-static bool __fn_629(int64_t a, int64_t b) {
-        return (a) == (b);
-}
-
 static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
-        int64_t *__t6 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t6[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t6[1] = (int64_t)(intptr_t)__fn_629;
-        void *__t7 = __t6;
-        return option_hyeq_qu(x, y, (int64_t)(intptr_t)(__t7));
+        bool __t6;
+        if ((((Option *)(intptr_t)(x))->is_some) == (((Option *)(intptr_t)(y))->is_some)) {
+            bool __t7;
+            if (((Option *)(intptr_t)(x))->is_some) {
+                __t7 = __inst_Eq_eq_qu_int(((Option *)(intptr_t)(x))->value, ((Option *)(intptr_t)(y))->value);
+            } else {
+                __t7 = true;
+            }
+            __t6 = __t7;
+        } else {
+            __t6 = false;
+        }
+        return __t6;
 }
 
 typedef struct dict_Eq_Option {
@@ -3290,14 +3293,14 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
-static bool __fn_788(int64_t a, int64_t b) {
+static bool __fn_784(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t12[1] = (int64_t)(intptr_t)__fn_788;
+        __t12[1] = (int64_t)(intptr_t)__fn_784;
         void *__t13 = __t12;
         return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t13));
 }
@@ -3322,14 +3325,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_867(int64_t a, int64_t b) {
+static bool __fn_863(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_867;
+        __t14[1] = (int64_t)(intptr_t)__fn_863;
         void *__t15 = __t14;
         return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t15));
 }
@@ -3361,20 +3364,20 @@ static dict_TestFunctor_option dict_TestFunctor_option_singleton = {
     .fmap = __inst_TestFunctor_fmap_option,
 };
 
-static int64_t __poly_876(void * __poly_env_877, int64_t __poly_x0_879) {
-        return __inc(__poly_x0_879);
+static int64_t __poly_872(void * __poly_env_873, int64_t __poly_x0_875) {
+        return __inc(__poly_x0_875);
 }
 
-struct __env_887 { tur_thunk_int64_t_int64_t_t __fn; int64_t delta; };
-static int64_t __fn_885(void * __env_p_888, int64_t x) {
-        struct __env_887 *__env___env_887 = (struct __env_887 *)__env_p_888;
-        return (x) + (__env___env_887->delta);
+struct __env_883 { tur_thunk_int64_t_int64_t_t __fn; int64_t delta; };
+static int64_t __fn_881(void * __env_p_884, int64_t x) {
+        struct __env_883 *__env___env_883 = (struct __env_883 *)__env_p_884;
+        return (x) + (__env___env_883->delta);
 }
 
-struct __env_895 { tur_thunk_int64_t_int64_t_t __fn; int64_t delta; };
-static int64_t __fn_893(void * __env_p_896, int64_t x) {
-        struct __env_895 *__env___env_895 = (struct __env_895 *)__env_p_896;
-        return (x) + (__env___env_895->delta);
+struct __env_891 { tur_thunk_int64_t_int64_t_t __fn; int64_t delta; };
+static int64_t __fn_889(void * __env_p_892, int64_t x) {
+        struct __env_891 *__env___env_891 = (struct __env_891 *)__env_p_892;
+        return (x) + (__env___env_891->delta);
 }
 
 static void * array_hyget(void * arr, int64_t idx) {
@@ -4499,32 +4502,32 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            int64_t result_882 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(41)), (tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_876 });
-            (void)result_882;
-            puts((_un_unopt_unsome_qu(result_882)) ? "true" : "false");
-            printf("%lld\n", (long long)(__opt_unwrap(result_882)));
+            int64_t result_878 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(41)), (tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_872 });
+            (void)result_878;
+            puts((_un_unopt_unsome_qu(result_878)) ? "true" : "false");
+            printf("%lld\n", (long long)(__opt_unwrap(result_878)));
         }
         {
-            int64_t delta_883 = INT64_C(100);
-            (void)delta_883;
+            int64_t delta_879 = INT64_C(100);
+            (void)delta_879;
             {
-                struct __env_887 *__t21 = (struct __env_887 *)malloc(sizeof(struct __env_887));
-                __t21->__fn = (tur_thunk_int64_t_int64_t_t)__fn_885;
-                __t21->delta = delta_883;
+                struct __env_883 *__t21 = (struct __env_883 *)malloc(sizeof(struct __env_883));
+                __t21->__fn = (tur_thunk_int64_t_int64_t_t)__fn_881;
+                __t21->delta = delta_879;
                 void *__t22 = __t21;
                 void *__t23 = (void *)(intptr_t)(__t22);
-                int64_t result_890 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(23)), (tur_poly_fn_t){ __t23, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t23)) });
-                (void)result_890;
-                puts((_un_unopt_unsome_qu(result_890)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result_890)));
+                int64_t result_886 = __inst_TestFunctor_fmap_option(__opt_some(INT64_C(23)), (tur_poly_fn_t){ __t23, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t23)) });
+                (void)result_886;
+                puts((_un_unopt_unsome_qu(result_886)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result_886)));
             }
         }
         {
-            int64_t delta_891 = INT64_C(100);
-            (void)delta_891;
-            struct __env_895 *__t24 = (struct __env_895 *)malloc(sizeof(struct __env_895));
-            __t24->__fn = (tur_thunk_int64_t_int64_t_t)__fn_893;
-            __t24->delta = delta_891;
+            int64_t delta_887 = INT64_C(100);
+            (void)delta_887;
+            struct __env_891 *__t24 = (struct __env_891 *)malloc(sizeof(struct __env_891));
+            __t24->__fn = (tur_thunk_int64_t_int64_t_t)__fn_889;
+            __t24->delta = delta_887;
             void *__t25 = __t24;
             void *__t26 = (void *)(intptr_t)(__t25);
             puts((_un_unopt_unsome_qu(__inst_TestFunctor_fmap_option(__opt_none(), (tur_poly_fn_t){ __t26, (int64_t(*)(void*,int64_t))(*( tur_thunk_int64_t_int64_t_t *)(__t26)) }))) ? "true" : "false");
