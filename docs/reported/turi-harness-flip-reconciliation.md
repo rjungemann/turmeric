@@ -1,5 +1,14 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (SizedBuf under --interpret, 2026-06-13):** unblocked
+> `sized-buf-cross-param-accept` and `sized-buf-existential-pack-open`.
+> `sized-buf.tur`'s user-facing ops are thin pure-turi wrappers over
+> `__sized-buf-*-raw` `#{Unsafe}` inline-C primitives operating on a
+> `{ int64_t len; int64_t *data; }` header; the full raw set (new/new-zeroed/
+> free/len/get/set!/fill!/copy!/sum/min/max) is re-implemented as natives over
+> the identical layout. Purely additive interpreter natives -- no stdlib touched.
+> **Harness 1151 -> 1153 passed, 0 failed; gap 49 -> 47.** Parity 113/115 0-gaps.
+>
 > **Progress (Grid under --interpret, 2026-06-13):** unblocked `grid-typed-basic`
 > and `typed/grid-basic`. `grid.tur`'s six ops (`grid-new`/`grid-get`/`grid-set!`/
 > `grid-width`/`grid-height`/`grid-free`) are inline-C over a

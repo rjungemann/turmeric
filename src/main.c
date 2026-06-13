@@ -8129,6 +8129,105 @@ static TuriValue native_grid_free(TuriEnv *env, TuriValue *a, uint32_t n, void *
     return turi_nil();
 }
 
+/* SizedBuf (stdlib/sized-buf.tur) natives.  The user-facing sized-buf-* ops are
+ * thin pure-turi wrappers over these __sized-buf-*-raw #{Unsafe} inline-C
+ * primitives, which operate on a { int64_t len; int64_t *data; } header (the
+ * SizedBuf carrier is the int64 of that pointer).  Re-implemented over the
+ * identical layout. */
+typedef struct { int64_t len; int64_t *data; } TuriSizedBufRep;
+static TuriSizedBufRep *sbuf_of(TuriValue v) { return (TuriSizedBufRep *)(intptr_t)v.as_int; }
+static TuriValue native_sbuf_new_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t k = (n >= 1) ? a[0].as_int : 0;
+    TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
+    if (!b) return turi_int(0);
+    b->len = k;
+    b->data = k > 0 ? (int64_t *)malloc((size_t)k * sizeof(int64_t)) : NULL;
+    return turi_int((int64_t)(intptr_t)b);
+}
+static TuriValue native_sbuf_new_zeroed_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t k = (n >= 1) ? a[0].as_int : 0;
+    TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
+    if (!b) return turi_int(0);
+    b->len = k;
+    b->data = k > 0 ? (int64_t *)calloc((size_t)k, sizeof(int64_t)) : NULL;
+    return turi_int((int64_t)(intptr_t)b);
+}
+static TuriValue native_sbuf_free_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    if (b) { if (b->data) free(b->data); free(b); }
+    return turi_nil();
+}
+static TuriValue native_sbuf_len_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    return turi_int(b ? b->len : 0);
+}
+static TuriValue native_sbuf_get_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int;
+    if (b && i >= 0 && i < b->len) return turi_int(b->data[i]);
+    fprintf(stderr, "sized-buf-get: index out of bounds\n"); _exit(1);
+    return turi_int(0);
+}
+static TuriValue native_sbuf_set_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int, v = a[2].as_int;
+    if (b && i >= 0 && i < b->len) { b->data[i] = v; return a[0]; }
+    fprintf(stderr, "sized-buf-set!: index out of bounds\n"); _exit(1);
+    return a[0];
+}
+static TuriValue native_sbuf_fill_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t v = a[1].as_int;
+    if (b) for (int64_t i = 0; i < b->len; i++) b->data[i] = v;
+    return a[0];
+}
+static TuriValue native_sbuf_copy_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TuriSizedBufRep *d = sbuf_of(a[0]), *s = sbuf_of(a[1]);
+    if (!d || !s) return a[0];
+    if (d->len != s->len) {
+        fprintf(stderr, "sized-buf-copy!: length mismatch (%lld vs %lld)\n",
+                (long long)d->len, (long long)s->len); _exit(1);
+    }
+    if (d->len > 0) memcpy(d->data, s->data, (size_t)d->len * sizeof(int64_t));
+    return a[0];
+}
+static TuriValue native_sbuf_sum_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t s = 0;
+    if (b) for (int64_t i = 0; i < b->len; i++) s += b->data[i];
+    return turi_int(s);
+}
+static TuriValue native_sbuf_min_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    if (!b || b->len == 0) { fprintf(stderr, "sized-buf-min: empty buffer\n"); _exit(1); return turi_int(0); }
+    int64_t m = b->data[0];
+    for (int64_t i = 1; i < b->len; i++) if (b->data[i] < m) m = b->data[i];
+    return turi_int(m);
+}
+static TuriValue native_sbuf_max_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    if (!b || b->len == 0) { fprintf(stderr, "sized-buf-max: empty buffer\n"); _exit(1); return turi_int(0); }
+    int64_t m = b->data[0];
+    for (int64_t i = 1; i < b->len; i++) if (b->data[i] > m) m = b->data[i];
+    return turi_int(m);
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -8867,6 +8966,18 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "grid-width",      native_grid_width,      NULL);
     turi_env_register_native(env, "grid-height",     native_grid_height,     NULL);
     turi_env_register_native(env, "grid-free",       native_grid_free,       NULL);
+    /* SizedBuf (sized-buf.tur): __sized-buf-*-raw inline-C over { len, data }. */
+    turi_env_register_native(env, "__sized-buf-new-raw",        native_sbuf_new_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-new-zeroed-raw", native_sbuf_new_zeroed_raw, NULL);
+    turi_env_register_native(env, "__sized-buf-free-raw",       native_sbuf_free_raw,       NULL);
+    turi_env_register_native(env, "__sized-buf-len-raw",        native_sbuf_len_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-get-raw",        native_sbuf_get_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-set!-raw",       native_sbuf_set_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-fill!-raw",      native_sbuf_fill_raw,       NULL);
+    turi_env_register_native(env, "__sized-buf-copy!-raw",      native_sbuf_copy_raw,       NULL);
+    turi_env_register_native(env, "__sized-buf-sum-raw",        native_sbuf_sum_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-min-raw",        native_sbuf_min_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-max-raw",        native_sbuf_max_raw,        NULL);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
     turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);

@@ -1183,6 +1183,11 @@ sum-either-functor-instance
 # natives over the matching { data, width, height, cx, cy } header.
 grid-typed-basic
 typed/grid-basic
+# SizedBuf (verified 2026-06-13): sized-buf.tur's user ops are thin wrappers over
+# __sized-buf-*-raw #{Unsafe} inline-C primitives over a { len, data } header;
+# the full raw set is re-implemented as natives over the identical layout.
+sized-buf-cross-param-accept
+sized-buf-existential-pack-open
 "
 
 # Build an associative-set from the default list for O(1) lookup.
