@@ -1,5 +1,13 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Next big lift (2026-06-13):** the largest remaining `--interpret` gap is
+> json + schema (19 `schema-*` + 5 `json-reader-*` fixtures) -- a self-contained
+> JSON parser/AST + schema decoder engine (~70 inline-C functions), materially
+> bigger than the sym/seq work and its own dedicated PR. Inventory + layered
+> approach (do the json layer first; it also unblocks `json-reader-*`) is captured
+> in
+> [docs/upcoming/turi-json-schema-interpreter-plan.md](../upcoming/turi-json-schema-interpreter-plan.md).
+
 > **Progress (benchmark-stub collision + math helpers, 2026-06-13):** the
 > `cmd_eval` benchmark-stub block injected `(defn int->float ...)` /
 > `(defn cstr->parse-int ...)` placeholders, so a fixture that
