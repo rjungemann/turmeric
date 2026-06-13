@@ -113,7 +113,22 @@ To unblock the Cons rewrite either:
   is a concrete struct (post-substitution), or
 - A new `(cast int (Cons A))` primitive emits the deref inline.
 
-Both are small language-level work but outside this turn's scope.
+**Probed empirically** (this session, then reverted): widening the
+ascribe bridge to fire on int → TY_APP-with-concrete-struct-spine
+DOES emit the deref inline correctly for inline patterns like
+`(.head (:: t (Cons int)))`. But it regresses ~16 fixtures because
+the let-binding C type emission doesn't honor the ascribed type.
+A pattern like `(let [v1 []:int] …)` desugars to `(let [v1 (:: (vec-of)
+(Vec int))] …)`; the widened gate triggers the bridge and emits
+`(*(Vec__int *)(intptr_t)(vec-of()))`, but the binding declaration
+remains `int64_t v1_NNN = …` — a hard cc type-mismatch.
+
+The deeper unblock is **let-binding emission**: when the RHS is an
+EX_ASCRIBE whose target resolves to a concrete struct app, the binding's
+C type should follow the ascription, not the original int kind. That
+edit lives in the let-emit path in `emit_expr.c` / `emit_stmt.c` and
+is the prerequisite the cons rewrite (and the bridge widening) both
+depend on. Estimated ~½ session of focused work.
 
 ## What "deleting the bridge" would actually require
 
