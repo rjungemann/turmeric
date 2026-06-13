@@ -1191,6 +1191,21 @@ typed/grid-basic
 # the full raw set is re-implemented as natives over the identical layout.
 sized-buf-cross-param-accept
 sized-buf-existential-pack-open
+# R1 resource/concurrency native shims (verified 2026-06-13;
+# turi-interpret-flip-residual-plan):
+#  - safe-box: safe.tur box/unbox (wk_register_safe_natives now wired into
+#    cmd_eval, alongside the typeclass instance-method overrides).
+#  - comonad-capturing-closure: comonad.tur Identity/Pair cell accessors
+#    (wk_register_comonad_natives) over the { value } / Tuple2 { e1, e2 } layout.
+#  - mutex-linear: mutex.tur faithful pthread_mutex_t ops.
+#  - future-split-free: future.tur layout-exact refcounted FutureCell
+#    (future-handle bumps the ref; future-free/future-cell-free tear down at 0).
+#  - bytes-linear: serial.tur Bytes (int64* header word 0 = len, data at word 1).
+safe-box
+comonad-capturing-closure
+mutex-linear
+future-split-free
+bytes-linear
 "
 
 # Build an associative-set from the default list for O(1) lookup.

@@ -4799,6 +4799,12 @@ static void wk_register_sym_natives(TuriEnv *env);
 static void wk_register_seq_natives(TuriEnv *env);
 static void wk_register_json_natives(TuriEnv *env);
 static void wk_register_schema_natives(TuriEnv *env);
+static void wk_register_safe_natives(TuriEnv *env);
+static void wk_register_typeclass_natives(TuriEnv *env);
+static void wk_register_comonad_natives(TuriEnv *env);
+static void wk_register_mutex_natives(TuriEnv *env);
+static void wk_register_future_natives(TuriEnv *env);
+static void wk_register_bytes_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5123,6 +5129,22 @@ static int cmd_eval(const char *path, bool use_color,
     /* TI10 Tier A: typed Map[K V] scalar-key natives (MapKey/Hash instance
      * comparators + the raw map-*-eq-o bridges over tur_hamt_*_eq_o). */
     wk_register_map_natives(env);
+    /* R1 (turi-interpret-flip-residual-plan): safe.tur box/unbox/array-get/-set
+     * over the int64-carrier layout, and the typeclass instance-method overrides
+     * (Show/Eq inline-C bodies the tree-walker cannot run).  Previously only
+     * wk_eval_fixture registered these, so `tur --interpret` on a program using
+     * (box ...)/(unbox ...) or a stdlib Eq/Show instance hit "inline-C not
+     * supported". */
+    wk_register_safe_natives(env);
+    wk_register_typeclass_natives(env);
+    /* R1: comonad.tur Identity/Pair cell accessors (loaded on demand by user
+     * code; the natives override the inline-C bodies). */
+    wk_register_comonad_natives(env);
+    /* R1: mutex.tur pthread handle ops (loaded on demand). */
+    wk_register_mutex_natives(env);
+    /* R1: future.tur refcounted FutureCell + serial.tur Bytes (loaded on demand). */
+    wk_register_future_natives(env);
+    wk_register_bytes_natives(env);
     /* SYM (turi): first-class :Sym ops, only when -Xsymbols loaded sym.tur. */
     if (g_symbols_enabled)
         wk_register_sym_natives(env);
@@ -9119,6 +9141,231 @@ static void wk_register_safe_natives(TuriEnv *env) {
     turi_env_register_native(env, "array-set",   native_safe_array_set, NULL);
     turi_env_register_native(env, "box",         native_safe_box,       NULL);
     turi_env_register_native(env, "unbox",       native_safe_unbox,     NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): comonad.tur native shims.
+ *
+ * comonad.tur's Identity / Pair cells are malloc'd heap structs whose pointer
+ * rides the int64 carrier (the compiled ABI).  The inline-C accessors
+ * (__identity_new/_get/_extract/_duplicate, __pair_new/_env/_val/_extract/
+ * _duplicate) are re-implemented over the identical layout; the *_extend ops
+ * are pure-turi (they call (f wa) then a native constructor) and need no shim.
+ *   Identity = { int64_t value; }
+ *   Pair     = Tuple2 { int64_t e1 (env); int64_t e2 (val); }
+ * ---------------------------------------------------------------------- */
+typedef struct { int64_t e1; int64_t e2; } WkTuple2;
+
+static TuriValue wk_int_ptr(void *p) {
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p; return v;
+}
+
+static TuriValue native_identity_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+    if (!p) return turi_nil();
+    *p = (n > 0) ? a[0].as_int : 0;
+    return wk_int_ptr(p);
+}
+static TuriValue native_identity_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *p = (int64_t *)(intptr_t)a[0].as_int;
+    return p ? turi_int(*p) : turi_int(0);
+}
+static TuriValue native_identity_duplicate(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    /* duplicate w = Identity w (wrap the original carrier) */
+    int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+    if (!p) return turi_nil();
+    *p = (n > 0) ? a[0].as_int : 0;
+    return wk_int_ptr(p);
+}
+static TuriValue native_pair_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    WkTuple2 *p = (WkTuple2 *)malloc(sizeof(WkTuple2));
+    if (!p) return turi_nil();
+    p->e1 = (n > 0) ? a[0].as_int : 0;
+    p->e2 = (n > 1) ? a[1].as_int : 0;
+    return wk_int_ptr(p);
+}
+static TuriValue native_pair_env(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    WkTuple2 *p = (WkTuple2 *)(intptr_t)a[0].as_int;
+    return p ? turi_int(p->e1) : turi_int(0);
+}
+static TuriValue native_pair_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    WkTuple2 *p = (WkTuple2 *)(intptr_t)a[0].as_int;
+    return p ? turi_int(p->e2) : turi_int(0);
+}
+static TuriValue native_pair_duplicate(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    WkTuple2 *src = (WkTuple2 *)(intptr_t)a[0].as_int;
+    if (!src) return turi_nil();
+    WkTuple2 *p = (WkTuple2 *)malloc(sizeof(WkTuple2));
+    if (!p) return turi_nil();
+    p->e1 = src->e1;
+    p->e2 = a[0].as_int;  /* inner = the original cell */
+    return wk_int_ptr(p);
+}
+
+static void wk_register_comonad_natives(TuriEnv *env) {
+    turi_env_register_native(env, "__identity_new",       native_identity_new,       NULL);
+    turi_env_register_native(env, "__identity_get",       native_identity_get,       NULL);
+    turi_env_register_native(env, "__identity_extract",   native_identity_get,       NULL);
+    turi_env_register_native(env, "__identity_duplicate", native_identity_duplicate, NULL);
+    turi_env_register_native(env, "__pair_new",           native_pair_new,           NULL);
+    turi_env_register_native(env, "__pair_env",           native_pair_env,           NULL);
+    turi_env_register_native(env, "__pair_val",           native_pair_val,           NULL);
+    turi_env_register_native(env, "__pair_extract",       native_pair_val,           NULL);
+    turi_env_register_native(env, "__pair_duplicate",     native_pair_duplicate,     NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): mutex.tur native shims.
+ *
+ * Faithful pthread_mutex_t over the int64 carrier (the compiled ABI lowers
+ * Mutex to :ptr<void>).  The interpreter is single-threaded for these fixtures,
+ * but a real mutex keeps lock/unlock/try-lock/free semantics honest.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_mutex_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+    if (!m) return turi_nil();
+    pthread_mutex_init(m, NULL);
+    return wk_int_ptr(m);
+}
+static TuriValue native_mutex_lock(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) pthread_mutex_lock((pthread_mutex_t *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_mutex_unlock(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) pthread_mutex_unlock((pthread_mutex_t *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_mutex_try_lock(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_bool(false);
+    return turi_bool(pthread_mutex_trylock((pthread_mutex_t *)(intptr_t)a[0].as_int) == 0);
+}
+static TuriValue native_mutex_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) {
+        pthread_mutex_t *m = (pthread_mutex_t *)(intptr_t)a[0].as_int;
+        pthread_mutex_destroy(m);
+        free(m);
+    }
+    return turi_nil();
+}
+
+static void wk_register_mutex_natives(TuriEnv *env) {
+    turi_env_register_native(env, "mutex-new",      native_mutex_new,      NULL);
+    turi_env_register_native(env, "mutex-lock",     native_mutex_lock,     NULL);
+    turi_env_register_native(env, "mutex-unlock",   native_mutex_unlock,   NULL);
+    turi_env_register_native(env, "mutex-try-lock", native_mutex_try_lock, NULL);
+    turi_env_register_native(env, "mutex-free",     native_mutex_free,     NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): future.tur FutureCell native shims.
+ *
+ * Layout-exact replica of future.tur's FutureCell so the refcounted
+ * Promise/Future split-free semantics are honest under --interpret:
+ * future-handle bumps refcount; future-cell-free / future-free drop a ref and
+ * tear down at zero (the historical double-free hazard the fixture guards
+ * against).  promise-new / promise-free are pure-turi wrappers over
+ * future-cell-new / future-cell-free, so only these four need natives.
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t  ready;
+    int64_t value;
+    int64_t exn;
+    bool is_set;
+    bool is_ok;
+    int64_t refcount;
+} WkFutureCell;
+
+static TuriValue native_future_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    WkFutureCell *cell = (WkFutureCell *)malloc(sizeof(WkFutureCell));
+    if (!cell) return turi_nil();
+    pthread_mutex_init(&cell->lock, NULL);
+    pthread_cond_init(&cell->ready, NULL);
+    cell->value = 0; cell->exn = 0; cell->is_set = false; cell->is_ok = false;
+    cell->refcount = 1;
+    return wk_int_ptr(cell);
+}
+static TuriValue native_future_handle(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    __atomic_add_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL);
+    return wk_int_ptr(fc);
+}
+static TuriValue native_future_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
+    if (__atomic_sub_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        pthread_mutex_destroy(&fc->lock);
+        pthread_cond_destroy(&fc->ready);
+        free(fc);
+    }
+    return turi_nil();
+}
+
+static void wk_register_future_natives(TuriEnv *env) {
+    turi_env_register_native(env, "future-cell-new",  native_future_cell_new,  NULL);
+    turi_env_register_native(env, "future-handle",    native_future_handle,    NULL);
+    turi_env_register_native(env, "future-cell-free", native_future_cell_free, NULL);
+    turi_env_register_native(env, "future-free",      native_future_cell_free, NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): serial.tur Bytes native shims.
+ *
+ * Bytes is a malloc'd int64_t* whose word 0 holds the length and whose data
+ * starts at word 1 (the compiled ABI).  bytes-alloc/len/data/free re-implement
+ * that layout exactly.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_bytes_alloc(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t len = (n > 0) ? a[0].as_int : 0;
+    if (len < 0) len = 0;
+    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + (size_t)len);
+    if (!buf) return turi_nil();
+    buf[0] = len;
+    memset(buf + 1, 0, (size_t)len);
+    return wk_int_ptr(buf);
+}
+static TuriValue native_bytes_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_bytes_data(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    return wk_int_ptr((int64_t *)(intptr_t)a[0].as_int + 1);
+}
+static TuriValue native_bytes_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+static void wk_register_bytes_natives(TuriEnv *env) {
+    turi_env_register_native(env, "bytes-alloc", native_bytes_alloc, NULL);
+    turi_env_register_native(env, "bytes-len",   native_bytes_len,   NULL);
+    turi_env_register_native(env, "bytes-data",  native_bytes_data,  NULL);
+    turi_env_register_native(env, "bytes-free",  native_bytes_free,  NULL);
 }
 
 /* -------------------------------------------------------------------------

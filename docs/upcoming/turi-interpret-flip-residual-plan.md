@@ -39,6 +39,27 @@ finishing it.
 
 ## Bucket R1 -- resource/concurrency native-shim campaign (~16, *fix*)
 
+> **Progress (slice 1 landed, 2026-06-13):** 5 fixtures closed via additive
+> `cmd_eval` native registration (`src/main.c`), no codegen change:
+> `safe-box` (wired the existing `wk_register_safe_natives` +
+> `wk_register_typeclass_natives` into the `--interpret` path -- previously only
+> `wk_eval_fixture` registered them), `comonad-capturing-closure`
+> (`wk_register_comonad_natives` over the Identity `{value}` / Pair `Tuple2`
+> layout), `mutex-linear` (faithful `pthread_mutex_t`),
+> `future-split-free` (layout-exact refcounted `WkFutureCell`), and
+> `bytes-linear` (serial.tur `Bytes` int64-header). Harness 1159 -> **1164**,
+> compiled suite 1615/0, parity 0-gaps; all 5 on the allowlist.
+>
+> **Remaining R1:** `taskgroup-linear` (large `TaskGroup` struct: mutex+cond+
+> counters+cancelled flag), `session-close` (`make-session`/`close`),
+> `childhandle-linear` (`process/spawn`+`wait` -- real fork/exec),
+> `tmpfile-linear-borrow` (`fs/tmpfile` -- real fd), the channel cluster
+> (`chan-linear`, `asyncchan-linear`, `schan-roundtrip`,
+> `serial-primitive-roundtrip`), and `future-linear`. The channel/taskgroup/
+> process/fs handles each carry a bigger struct or touch the OS; do them as
+> their own slices per the sub-campaign table below.
+
+
 The fixture body is pure-turi but it imports a stdlib subsystem whose ops are
 `#{Unsafe}` inline-C over a fixed C ABI, so the tree-walker declines them with
 `inline-C not supported in interpreter mode`. This is the **same pattern already
