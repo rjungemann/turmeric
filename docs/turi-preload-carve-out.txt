@@ -16,6 +16,5 @@
 # See docs/reported/turi-harness-flip-reconciliation.md and
 #     docs/upcoming/v1/turi-open-reports-prereqs.md (prereqs 2c, 3a, 3b).
 
-contract.tur -- its tur-contract-check inline-C conflicts with the :pre/:post contract lowering (wk_eval_fixture skips it for the same reason); preloading it silently broke contract-pre/post/type.
 json.tur    -- reader-backed (-Xdata-literals/-Xjson gated); preloaded only behind the same -X flag as the compiled path, not unconditionally.
 schema.tur  -- reader-backed (-X gated) and depends on json.tur; same conditional-preload story as json.tur.
