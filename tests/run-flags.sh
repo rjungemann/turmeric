@@ -342,7 +342,7 @@ else
 fi
 
 # try-with-basic: try-with behaves identically to handle
-out=$("$TUR" run tests/fixtures/try-with-basic/input.tur 2>/dev/null); rc=$?
+out=$("$TUR" --interpret tests/fixtures/try-with-basic/input.tur 2>/dev/null); rc=$?
 if [ $rc -ne 0 ]; then
     fail "try-with-basic" "non-zero exit ($rc)"
 elif [ "$out" != "$(printf 'asking\n42')" ]; then
@@ -352,7 +352,7 @@ else
 fi
 
 # try-with-nested: nested try-with handlers work correctly
-out=$("$TUR" run tests/fixtures/try-with-nested/input.tur 2>/dev/null); rc=$?
+out=$("$TUR" --interpret tests/fixtures/try-with-nested/input.tur 2>/dev/null); rc=$?
 if [ $rc -ne 0 ]; then
     fail "try-with-nested" "non-zero exit ($rc)"
 elif [ "$out" != "$(printf 'start\noops')" ]; then
@@ -404,15 +404,20 @@ fi
 # PR5-3-B: effect-export-syntax
 # ---------------------------------------------------------------------------
 
-# effect-export-syntax: (export (effect Write)) is accepted by the parser/elab
-out=$("$TUR" run tests/fixtures/effect-export-explicit/input.tur 2>&1); rc=$?
+# effect-export-syntax: (export (effect Write)) is accepted by the parser/elab.
+# stderr is dropped (the interpreter's sanitizer build emits a benign ASan
+# makecontext/swapcontext warning there); rc captures elaboration errors and
+# stdout carries the program output.
+err=$(mktemp)
+out=$("$TUR" --interpret tests/fixtures/effect-export-explicit/input.tur 2>"$err"); rc=$?
 if [ $rc -ne 0 ]; then
-    fail "effect-export-syntax" "should compile (exit=$rc): $out"
+    fail "effect-export-syntax" "should elaborate (exit=$rc): $(cat "$err")"
 elif [ "$out" != "hello" ]; then
     fail "effect-export-syntax" "unexpected output: '$out'"
 else
     pass "effect-export-syntax"
 fi
+rm -f "$err"
 
 # ---------------------------------------------------------------------------
 # E1: --help / -h (Tier 1)

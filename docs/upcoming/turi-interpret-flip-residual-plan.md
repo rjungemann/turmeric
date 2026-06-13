@@ -222,15 +222,20 @@ has an inline-C body (auto-carved), or carries a marker. Harness **1188 passed,
 
 ---
 
-## W5 -- the flip is now reachable
+## W5 -- the flip (DONE 2026-06-13)
 
 With R1-R6 done, the allowlist == "everything that works" and every other
-non-inline-C fixture is carved with a marker + reason. The mechanical flip
-(delete `TURI_FIXTURES_DEFAULT`, default `run-turi.sh` to "run everything minus
-`requires.*` + inline-C auto-carve", flip `run-flags.sh`'s three `tur run`
-assertions) is the remaining W5 step, detailed in the gap-closure plan's W5.
-That is a test-infra change with its own review surface and is intentionally left
-as a separate step.
+non-inline-C fixture is carved with a marker + reason. The mechanical flip is now
+landed: `TURI_FIXTURES_DEFAULT` (and its O(1) lookup set + `fixture_in_turi_set`)
+were deleted from `tests/run-turi.sh`, which now runs every fixture under
+`--interpret` minus the `requires.*` marker skips and the auto-detected inline-C
+carve-outs (`errors/*` go through the dedicated diag pass, excluded from the
+positive pass). A 10-entry `TURI_INLINEC_RUN` keep-set preserves the inline-C
+fixtures that interpret correctly via native shims, so the flip was
+coverage-neutral: **1188 passed, 0 failed, 407 skipped** (matching the pre-flip
+pass count). `run-flags.sh`'s three `tur run` assertions (`:345`/`:355`/`:408`)
+were flipped to `--interpret` (77 passed, 0 failed); `KB-001` was retired; the
+compiled `tests/run.sh` is unchanged (1615 passed, 0 failed).
 
 ---
 
