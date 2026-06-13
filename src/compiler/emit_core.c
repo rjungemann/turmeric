@@ -2227,6 +2227,16 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     /* No crossing needed. */
     if (src_ck == sink_ck) return src_str;
 
+    /* M3 audit: identify which call site reaches the bridge; trace tagged so
+     * the per-fixture cost of removing it is measurable.  Enable with
+     * TUR_M3_AUDIT=1. */
+    if (getenv("TUR_M3_AUDIT")) {
+        const char *dir = (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+            ? "carrier->concrete" : "concrete->carrier";
+        fprintf(stderr, "[m3-audit] bridge %s type=%s\n",
+                dir, type_name(concrete_ty));
+    }
+
     const char *cname = emit_type_c_name(ctx, concrete_ty);
     Buf out;
     buf_init(&out);
