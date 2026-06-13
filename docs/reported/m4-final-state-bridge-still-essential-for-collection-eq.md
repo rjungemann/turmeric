@@ -74,6 +74,47 @@ Every crossing traces to one of:
    are pre-existing bridge-essential sites that M4 was not chartered
    to retire.
 
+## Probed alternative: stdlib Eq Cons rewrite is blocked on a language gap
+
+The Eq Option rewrite that landed in commit `aca5bdea` (mirror of the
+Tuple2/Pair/Result M4c-pre pattern) works because Option's fields are
+all by-value (`is-some : bool`, `value : A`) — `(.is-some x)` and
+`(.value x)` project directly.
+
+`Eq Cons` follows a different shape: `(defstruct Cons [A] (head A)
+(tail :int))`. The tail is an `:int` carrier (a raw pointer to the
+next Cons cell, or 0 for nil). A direct-projection rewrite needs to
+recursively walk through tails, which requires recovering a `(Cons A)`
+view of an `:int` value:
+
+```turmeric
+(defn cons-list-eq? [A] [t1 : int t2 : int] [(Eq A)] : bool
+  (if (= t1 0) (= t2 0)
+      (if (= t2 0) false
+          (let [c1 (:: t1 (Cons A))
+                c2 (:: t2 (Cons A))]
+            (and (eq? (.head c1) (.head c2))
+                 (cons-list-eq? (.tail c1) (.tail c2)))))))
+```
+
+Probed empirically (`/tmp/cons_test.tur`): the `(:: t1 (Cons A))`
+ascription elaborates cleanly but the emit treats `c1` as `int64_t`
+and `.head c1` fails with `member reference base type 'int64_t' is not
+a structure or union`. The carrier-bridge at `emit_expr.c:4166` (the
+EX_ASCRIBE `carrier→concrete` path) DOES handle this case in
+principle, but its `if` gate (`type_kind_is_aggregate(e->type.kind)
+&& !type_uses_carrier_abi(e->type)`) requires the target to be a
+non-carrier-ABI aggregate; `(Cons A)` with a TYVAR fails the
+`!type_uses_carrier_abi` predicate because TY_APP is carrier-ABI in
+the resolver.
+
+To unblock the Cons rewrite either:
+- The ascription bridge gate widens to fire when the resolved target
+  is a concrete struct (post-substitution), or
+- A new `(cast int (Cons A))` primitive emits the deref inline.
+
+Both are small language-level work but outside this turn's scope.
+
 ## What "deleting the bridge" would actually require
 
 Beyond M4 / Path A:
