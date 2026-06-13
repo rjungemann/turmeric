@@ -405,6 +405,28 @@ static TuriValue reword_unbound_call_head(TuriValue fn_val, const Expr *fn_expr)
     return turi_errorf("unknown function or operator '%s'", nm);
 }
 
+/* vec/carrier closure readback.  A closure stored into an int64-carrier
+ * container (Vec via vec-push!, slice, ...) is held as the raw TuriClosure*
+ * bits, and vec-get reads it back as a bare TURI_INT (the carrier never
+ * preserved the TURI_CLOSURE tag).  When that carrier is then *called* through
+ * a binding the elaborator declared `^fat` or function-typed -- the canonical
+ * `(call1 (:: (vec-get v i) :ptr<void>) x)` idiom -- recover the closure tag so
+ * the call finds a callable instead of erroring "expected function, got tag 2".
+ * The static type guards the reinterpret: it only fires when the call head's
+ * binding is fat / TY_FN / TY_PTR_VOID, i.e. a context where a bare int *is* a
+ * closure carrier (closures are heap-allocated and process-lifetime under the
+ * interpreter, so the recovered pointer stays valid). */
+static TuriValue recover_carrier_closure(TuriValue fn_val, const Binding *b) {
+    if (fn_val.tag == TURI_INT && b && fn_val.as_int != 0 &&
+        (b->is_fat || b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID)) {
+        TuriValue r = {0};
+        r.tag        = TURI_CLOSURE;
+        r.as_closure = (TuriClosure *)(intptr_t)fn_val.as_int;
+        return r;
+    }
+    return fn_val;
+}
+
 /* Early forward declaration (needed by fire_defers_to_mark below) */
 static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
 
@@ -441,6 +463,15 @@ TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found) {
     }
     if (found) *found = false;
     return turi_nil();
+}
+
+const char *turi_struct_name(TuriValue v) {
+    if (v.tag == TURI_STRUCT && v.as_struct) return v.as_struct->name;
+    return NULL;
+}
+
+TuriValue turi_make_struct(const char *name, TuriValue *fields, uint32_t n) {
+    return make_struct_val_def(name, n, fields, NULL);
 }
 
 static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
@@ -3790,6 +3821,8 @@ restart:
             return turi_error("eval: call with no function");
         }
         if (turi_is_error(fn_val) || env->returning || env->throwing) return fn_val;
+        if (e->as.call_.fn_binding)
+            fn_val = recover_carrier_closure(fn_val, e->as.call_.fn_binding);
         if (fn_val.tag != TURI_CLOSURE)
             return turi_errorf("eval: expected function, got tag %d", fn_val.tag);
 
@@ -4331,6 +4364,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_error("eval: call with no function");
         }
         if (turi_is_error(fn_val) || env->returning || env->throwing) return fn_val;
+        if (e->as.call_.fn_binding)
+            fn_val = recover_carrier_closure(fn_val, e->as.call_.fn_binding);
         if (fn_val.tag != TURI_CLOSURE)
             return turi_errorf("eval: expected function, got tag %d", fn_val.tag);
 
@@ -5939,11 +5974,35 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
      * when the pointer is unchanged no directive was present. */
     const char *src_body  = src;
     size_t      body_len  = strlen(src);
+
+    /* Strip a Racket-style shebang line (`#!/usr/bin/env tur`) at the top of
+     * the new source.  The reader's own shebang skip only fires at byte 0 of
+     * the buffer it parses, but under --interpret the user file is appended to
+     * the accumulated <eval> blob (after macros.tur / contract.tur), so its
+     * `#!` is no longer at byte 0 and would lex as "unexpected character '#'".
+     * detect_lang skips a shebang internally only to find a following `#lang`;
+     * a shebang-only file leaves out_rest == src.  Drop the line here so both
+     * the shebang-only and shebang+`#lang` cases reach the reader cleanly.
+     * Mirror the reader's recognition rule (`#!` + `/` / whitespace / EOL). */
+    if (body_len >= 2 && src_body[0] == '#' && src_body[1] == '!' &&
+        (body_len < 3 || src_body[2] == '/' || src_body[2] == ' ' ||
+         src_body[2] == '\t' || src_body[2] == '\n' || src_body[2] == '\r')) {
+        const char *nl = (const char *)memchr(src_body, '\n', body_len);
+        if (nl) {
+            size_t skip = (size_t)(nl - src_body) + 1;  /* past the newline */
+            src_body += skip;
+            body_len -= skip;
+        } else {
+            src_body += body_len;  /* shebang-only file, no newline */
+            body_len  = 0;
+        }
+    }
+
     {
-        const char *rest     = src;
+        const char *rest     = src_body;
         size_t      rest_len = body_len;
-        ReaderType  detected = detect_lang(src, body_len, &rest, &rest_len);
-        if (rest != src) {
+        ReaderType  detected = detect_lang(src_body, body_len, &rest, &rest_len);
+        if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
              * implemented reader the same way the compiled entry points do
              * (src/main.c detect_and_adjust_lang) instead of silently running

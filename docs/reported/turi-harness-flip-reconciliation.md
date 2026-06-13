@@ -1,5 +1,119 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (SizedBuf under --interpret, 2026-06-13):** unblocked
+> `sized-buf-cross-param-accept` and `sized-buf-existential-pack-open`.
+> `sized-buf.tur`'s user-facing ops are thin pure-turi wrappers over
+> `__sized-buf-*-raw` `#{Unsafe}` inline-C primitives operating on a
+> `{ int64_t len; int64_t *data; }` header; the full raw set (new/new-zeroed/
+> free/len/get/set!/fill!/copy!/sum/min/max) is re-implemented as natives over
+> the identical layout. Purely additive interpreter natives -- no stdlib touched.
+> **Harness 1151 -> 1153 passed, 0 failed; gap 49 -> 47.** Parity 113/115 0-gaps.
+>
+> **Progress (Grid under --interpret, 2026-06-13):** unblocked `grid-typed-basic`
+> and `typed/grid-basic`. `grid.tur`'s six ops (`grid-new`/`grid-get`/`grid-set!`/
+> `grid-width`/`grid-height`/`grid-free`) are inline-C over a
+> `{ int64_t *data; int width; int height; int cx; int cy; }` header re-implemented
+> as natives over the identical layout (same self-contained raw-buffer pattern as
+> the vec natives). Purely additive interpreter natives -- no stdlib touched, no
+> snapshot churn. **Harness 1149 -> 1151 passed, 0 failed; gap 51 -> 49.** Parity
+> 113/115 0-gaps.
+>
+> **Progress (Either cluster under --interpret, 2026-06-13):** unblocked
+> `sum-either-str-parse` and `sum-either-functor-instance`. Two pieces: (1) a new
+> public `turi_make_struct(name, fields, n)` API lets natives return an ADT value
+> (e.g. a `Left`/`Right`) without the opaque TuriStruct layout, used by a native
+> `str->int-checked` (str.tur's inline-C strtoll-into-Either); (2) `either.tur`'s
+> Functor `fmap` was a *redundant* inline-C body duplicating the pure-turi
+> `either-map` right above it -- rewritten to `(either-map fn container)`, which
+> is interpretable and semantics-identical. The rewrite shifted the Either-`fmap`
+> codegen, so 4 transitively-Either-compiling fixture snapshots
+> (`arrow-compose-float`, `fat-shim-void-ptr-arrow-compose`,
+> `load-inside-defmodule-injects-names`, `sf-compose-typed`) were regenerated in
+> the same commit (verified the change is just `fmap` delegating to
+> `either_hymap`). **Harness 1147 -> 1149 passed, 0 failed; gap 53 -> 51.**
+> Compiled suite 1606/0 after regen; parity 113/115 0-gaps.
+>
+> **Progress (Free monad under --interpret, 2026-06-13):** unblocked the `free-*`
+> cluster -- `free-pure`, `free-lift-bind`, `free-interpreter`. `free.tur`'s
+> `free-bind` / `free-run` have `#{Unsafe}` inline-C bodies that cast the Free ADT
+> carrier to a C tagged-union and call the `^fat` continuation via a
+> `tur_poly_fn_t`; under `--interpret` the Free value is a `PureFree`/`Suspend`
+> `TuriStruct` and the continuation is a turi closure, so `native_free_bind` /
+> `native_free_run` read the constructor (new public `turi_struct_name` accessor)
+> + payload (field 0) and invoke the continuation via `turi_call`. `free-pure` /
+> `free-lift` are already pure-turi ADT constructors. **Harness 1144 -> 1147
+> passed, 0 failed; gap 56 -> 53.** Parity 113/115 0-gaps; compiled suite
+> unaffected (additive natives + standalone accessor).
+>
+> **Progress (sweet-exp prelude survives reader switch + map/set cluster COMPLETE,
+> 2026-06-13):** a sweep of the map/set/hamt cluster found the runnable surface
+> already complete -- every non-inline-C `map`/`set`/`hamt`/`eqmap`/`mutmap`/
+> data-literal fixture passes + is allowlisted (the inline-C struct-key
+> comparators stay carved by design). The sole holdout, `data-literal-sweet-exp`,
+> failed `unknown function or operator 'hamt-of'` -- not a map gap but a
+> reader/prelude bug: `#lang sweet-exp` flips `env->reader_type` mid-stream and
+> `turi_eval_impl` discards the accumulated `src_acc` (the preloaded stdlib) to
+> avoid re-parsing it under the new reader, so `hamt-of` (a `map.tur` defn) went
+> unbound. Fixed in `cmd_eval`: pre-detect the user file's `#lang` and set
+> `env->reader_type` *before* preloading, so the prelude is parsed under the
+> file's reader from the start (plain s-expr parses under every reader variant)
+> and the user directive no longer triggers a reset. Scoped to the file-eval
+> entry point -- the REPL keeps its protective reset for interactive switches.
+> Unblocks `data-literal-sweet-exp`; **harness 1143 -> 1144 passed, 0 failed;
+> gap 57 -> 56.** Parity 113/115 0-gaps. See
+> [turi-map-set-hamt-interpreter-gap.md](turi-map-set-hamt-interpreter-gap.md)
+> (now marked complete).
+>
+> **Progress (typed-list carrier ops under --interpret, 2026-06-13):** unblocked
+> the carrier-level `list.tur` cluster -- `list-basic`, `typed/list-basic`,
+> `typed/list-concat`, `typed/list-macro`. A Cons cell is a malloc'd
+> `{ int64_t head; int64_t tail; }` (pointer = int64 carrier, tnil = 0), exactly
+> the compiled ABI; `list.tur`'s typed `tcons` / `list-head` / `list-tail` bind
+> to the existing `native_cons` / `native_list_head` / `native_list_tail` (the
+> same box already backing the untyped `head`/`tail`/`cons` benchmark surface),
+> and a new `native_list_length` walks the chain. The `thead`/`ttail` single-cell
+> tests use `make-struct Cons` + `.head`/`.tail` field access (already dual-rep
+> safe), so the two representations never cross. **Harness 1139 -> 1143 passed,
+> 0 failed; gap 61 -> 57.** Compiled suite + parity green.
+>
+> **Progress (shebang stripping under --interpret, 2026-06-13):** fixed
+> `shebang-tur` (`#!/usr/bin/env tur` lexed as `unexpected character '#'`). The
+> reader's shebang skip only fires at byte 0, but `cmd_eval` appends the user
+> file to the accumulated `<eval>` blob (after macros.tur / contract.tur), so
+> the `#!` was mid-buffer. `detect_lang` already skips a shebang internally to
+> find a following `#lang` -- but a shebang-*only* file left `out_rest == src`,
+> so nothing stripped it. `turi_eval_impl` now drops a leading `#!` line from the
+> new source before `detect_lang`, covering both shebang-only and shebang+`#lang`
+> (the latter, `shebang-sweet-lang`, was already green and stays green).
+> **Harness 1138 -> 1139 passed, 0 failed; gap 62 -> 61.** Parity 113/115 0-gaps.
+>
+> **Progress (vec/carrier closure readback fix, 2026-06-13):** fixed the
+> `eval: expected function, got tag 2` class -- a closure stored into an
+> int64-carrier `Vec` (`vec-push!`) and read back via the
+> `(:: (vec-get v i) :ptr<void>)` ascription idiom lost its `TURI_CLOSURE` tag
+> (`native_vec_get` always returns `turi_int(...)`), so the subsequent `^fat`
+> call found a bare `TURI_INT` instead of a callable. New
+> `recover_carrier_closure` (`src/turi/eval.c`) re-tags the carrier back to a
+> closure at the call head, guarded by the head binding's static type
+> (`^fat` / `TY_FN` / `TY_PTR_VOID`) -- safe because closures are
+> process-lifetime under the interpreter, so the recovered pointer stays valid.
+> Unblocked `vec-get-closure`, `sf-vec-of`,
+> `vec-captureless-fat-closure-readback`, `vec-typed-fat-closure-readback`.
+> **Harness 1134 -> 1138 passed, 0 failed; gap 66 -> 62.** Compiled suite
+> 1606/0, parity 113/115 0-gaps -- no regressions.
+>
+> **Progress (W5 allowlist bulk-add, 2026-06-13):** added 14 now-passing
+> non-inline-C fixtures to the `run-turi.sh` allowlist (`data-literal-nested`,
+> `data-literal-vec-basic`, `hkt-instance-closure-to-fat`, `lint-panic-asserts`,
+> `lint-panic-call-allow`, `range-from-range[-step]`, `sized-sz1-subtype`,
+> `sized-sz7-static-accept`, `tce1-vec-{bool,cstr,float}`, `tce2-vec-of-infer`,
+> `tce5-data-literal-cstr`). Each genuinely interprets (non-trivial output, no
+> inline-C in the fixture body). `range-from-range[-step]` were previously noted
+> as inline-C carve-outs -- stale after the range.tur ADT-carrier re-tag fix;
+> comment corrected. Pure test-infra change (no compiler touched); parity ratchet
+> 113/115, compiled suite unaffected. **Harness 1120 -> 1134 passed, 0 failed;
+> W5 triage surface 80 -> 66 non-inline-C gaps.**
+>
 > **Progress (runtime contracts + a contract silent-miscompile, 2026-06-13):**
 > **`contract.tur` now preloads under `--interpret`, and contracts actually
 > enforce** -- the 16 `contract-*` / `contracts-*` fixtures pass for the right
@@ -47,7 +161,8 @@
 > bigger than the sym/seq work and its own dedicated PR. Inventory + layered
 > approach (do the json layer first; it also unblocks `json-reader-*`) is captured
 > in
-> [docs/upcoming/turi-json-schema-interpreter-plan.md](../upcoming/turi-json-schema-interpreter-plan.md).
+> [docs/archive/history/turi-json-schema-interpreter-plan.md](../archive/history/turi-json-schema-interpreter-plan.md)
+> (DONE 2026-06-13; archived).
 
 > **Progress (benchmark-stub collision + math helpers, 2026-06-13):** the
 > `cmd_eval` benchmark-stub block injected `(defn int->float ...)` /

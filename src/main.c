@@ -4841,6 +4841,30 @@ static int cmd_eval(const char *path, bool use_color,
      * preloaded stdlib registers no reader macros and the user file is parsed
      * in a single pass (no self-replay of its own `reader-macros/define`). */
     env->reader_macros->strict = true;
+    /* Pre-detect the user file's #lang so the prelude loads under the SAME
+     * reader.  Otherwise the user file's `#lang sweet-exp` (etc.) flips
+     * env->reader_type mid-stream, and turi_eval_impl discards the accumulated
+     * prelude (src_acc) to avoid re-parsing it under the new reader -- dropping
+     * every preloaded stdlib defn, so e.g. a `#map{...}` literal under
+     * `#lang sweet-exp` fails "unknown function or operator 'hamt-of'".  By
+     * setting the reader first, the prelude is parsed under the file's reader
+     * from the start (plain s-expr parses under every reader variant) and the
+     * user file's directive then matches env->reader_type -- no reset fires.
+     * Scoped to the file-eval entry point; the REPL keeps its protective reset
+     * for genuine interactive reader switches. */
+    {
+        FILE *pf = fopen(path, "rb");
+        if (pf) {
+            char head[512];
+            size_t hn = fread(head, 1, sizeof(head) - 1, pf);
+            fclose(pf);
+            head[hn] = '\0';
+            const char *rest = head; size_t rest_len = hn;
+            ReaderType rt = detect_lang(head, hn, &rest, &rest_len);
+            if (rest != head && reader_type_is_implemented(rt))
+                env->reader_type = rt;
+        }
+    }
     /* Preload macros.tur so that and/or/when/cond/for etc. are available.
      * This is the minimum stdlib needed for any real Turmeric program to work.
      *
@@ -7958,6 +7982,252 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* Typed-list (stdlib/list.tur) carrier-level length.  A Cons cell is a malloc'd
+ * { int64_t head; int64_t tail; }; its pointer is the int64 carrier and tnil is
+ * 0 -- exactly the layout list.tur's inline-C uses, so this reproduces
+ * list-length (which the tree-walker cannot run as inline-C) by walking the
+ * chain.  The carrier ctor + head/tail accessors already exist as native_cons /
+ * native_list_head / native_list_tail (registered for the untyped head/tail/cons
+ * benchmark surface); they read the same box, so list.tur's typed tcons /
+ * list-head / list-tail bind to them too.  The first cell may also be a
+ * make-struct Cons TuriStruct (thead/ttail's representation) -- handled here
+ * defensively, then the carrier tail is followed. */
+static TuriValue native_list_length(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t count = 0;
+    int64_t ptr;
+    if (a[0].tag == TURI_STRUCT) {
+        /* defensive: a make-struct Cons head -- count it, then follow its
+         * carrier tail (any further cells are tcons boxes). */
+        bool f = false; TuriValue t = turi_struct_field(a[0], 1, &f);
+        count = 1; ptr = f ? t.as_int : 0;
+    } else {
+        ptr = a[0].as_int;
+    }
+    while (ptr) {
+        count++;
+        int64_t *cell = (int64_t *)(intptr_t)ptr;
+        ptr = cell[1];
+    }
+    return turi_int(count);
+}
+
+/* Free monad (stdlib/free.tur) natives.  free.tur's free-bind / free-fmap /
+ * free-run have #{Unsafe} inline-C bodies that cast the Free ADT carrier to a C
+ * tagged-union struct and invoke the ^fat continuation through a tur_poly_fn_t.
+ * Under --interpret the Free value is a TuriStruct (the ADT constructor
+ * PureFree/Suspend built by adt_ctor_native), and the continuation is a turi
+ * closure -- so these natives read the tag by struct name, read the payload
+ * (field 0 for both arms), and call the continuation via turi_call. */
+static bool free_is_ctor(TuriValue v, const char *name) {
+    const char *nm = turi_struct_name(v);
+    return nm && strcmp(nm, name) == 0;
+}
+/* Invoke a ^fat continuation that may arrive as a closure or as an int64
+ * carrier holding the TuriClosure* (the carrier-readback case). */
+static TuriValue free_call_fat(TuriEnv *env, TuriValue k, TuriValue arg) {
+    if (k.tag == TURI_INT && k.as_int != 0) {
+        TuriClosure *cl = (TuriClosure *)(intptr_t)k.as_int;
+        k.tag = TURI_CLOSURE; k.as_closure = cl;
+    }
+    return turi_call(env, k, &arg, 1);
+}
+/* free-bind : (ma  ^fat kont) -- PureFree x => kont(x); Suspend => pass through. */
+static TuriValue native_free_bind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    if (free_is_ctor(a[0], "PureFree")) {
+        bool f = false; TuriValue x = turi_struct_field(a[0], 0, &f);
+        return free_call_fat(env, a[1], x);
+    }
+    return a[0]; /* Suspend -- pass through */
+}
+/* free-run : (^fat interp  free) -- PureFree x => x; Suspend fx => interp(fx). */
+static TuriValue native_free_run(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    if (free_is_ctor(a[1], "PureFree")) {
+        bool f = false; TuriValue x = turi_struct_field(a[1], 0, &f);
+        return x;
+    }
+    bool f = false; TuriValue inner = turi_struct_field(a[1], 0, &f); /* Suspend fx */
+    return free_call_fat(env, a[0], inner);
+}
+
+/* str->int-checked (str.tur): inline-C strtoll that returns an Either -- a
+ * (Left code) on failure, (Right n) on a clean parse.  Re-implemented as a
+ * native that builds the Either ADT via turi_make_struct (a cstr arrives as an
+ * int64 carrier holding the char*, same as native_cstr_parse_int reads). */
+static TuriValue native_str_to_int_checked(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *cs = (n >= 1) ? (const char *)(intptr_t)a[0].as_int : NULL;
+    if (!cs || *cs == '\0') {
+        TuriValue f[1] = { turi_int(0) };           /* empty -> Left 0 */
+        return turi_make_struct("Left", f, 1);
+    }
+    char *end = NULL;
+    long long v = strtoll(cs, &end, 10);
+    if (end == cs || *end != '\0') {
+        TuriValue f[1] = { turi_int(1) };           /* garbage -> Left 1 */
+        return turi_make_struct("Left", f, 1);
+    }
+    TuriValue f[1] = { turi_int((int64_t)v) };
+    return turi_make_struct("Right", f, 1);
+}
+
+/* Grid (stdlib/grid.tur) natives.  grid.tur's ops are inline-C over a
+ * { int64_t *data; int width; int height; int cx; int cy; } header (the grid
+ * handle is the int64 carrier of that pointer; cells are row-major int64).
+ * Re-implemented over the identical layout so the tree-walker can run them. */
+typedef struct { int64_t *data; int width; int height; int cx; int cy; } TuriGridRep;
+static TuriValue native_grid_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t w = (n >= 1) ? a[0].as_int : 0;
+    int64_t h = (n >= 2) ? a[1].as_int : 0;
+    TuriGridRep *g = (TuriGridRep *)malloc(sizeof(*g));
+    if (!g) return turi_int(0);
+    g->width = (int)w; g->height = (int)h; g->cx = 0; g->cy = 0;
+    int64_t cells = w * h; if (cells < 0) cells = 0;
+    g->data = (int64_t *)calloc((size_t)cells, sizeof(int64_t));
+    return turi_int((int64_t)(intptr_t)g);
+}
+static TuriValue native_grid_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_int(0);
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    if (!g || !g->data) return turi_int(0);
+    int64_t x = a[1].as_int, y = a[2].as_int;
+    return turi_int(g->data[(size_t)(y * g->width + x)]);
+}
+static TuriValue native_grid_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 4) return turi_nil();
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    if (!g || !g->data) return turi_nil();
+    int64_t x = a[1].as_int, y = a[2].as_int, v = a[3].as_int;
+    g->data[(size_t)(y * g->width + x)] = v;
+    return turi_nil();
+}
+static TuriValue native_grid_width(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    return turi_int(g ? g->width : 0);
+}
+static TuriValue native_grid_height(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    return turi_int(g ? g->height : 0);
+}
+static TuriValue native_grid_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
+    if (g) { if (g->data) free(g->data); free(g); }
+    return turi_nil();
+}
+
+/* SizedBuf (stdlib/sized-buf.tur) natives.  The user-facing sized-buf-* ops are
+ * thin pure-turi wrappers over these __sized-buf-*-raw #{Unsafe} inline-C
+ * primitives, which operate on a { int64_t len; int64_t *data; } header (the
+ * SizedBuf carrier is the int64 of that pointer).  Re-implemented over the
+ * identical layout. */
+typedef struct { int64_t len; int64_t *data; } TuriSizedBufRep;
+static TuriSizedBufRep *sbuf_of(TuriValue v) { return (TuriSizedBufRep *)(intptr_t)v.as_int; }
+static TuriValue native_sbuf_new_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t k = (n >= 1) ? a[0].as_int : 0;
+    TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
+    if (!b) return turi_int(0);
+    b->len = k;
+    b->data = k > 0 ? (int64_t *)malloc((size_t)k * sizeof(int64_t)) : NULL;
+    return turi_int((int64_t)(intptr_t)b);
+}
+static TuriValue native_sbuf_new_zeroed_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t k = (n >= 1) ? a[0].as_int : 0;
+    TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
+    if (!b) return turi_int(0);
+    b->len = k;
+    b->data = k > 0 ? (int64_t *)calloc((size_t)k, sizeof(int64_t)) : NULL;
+    return turi_int((int64_t)(intptr_t)b);
+}
+static TuriValue native_sbuf_free_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    if (b) { if (b->data) free(b->data); free(b); }
+    return turi_nil();
+}
+static TuriValue native_sbuf_len_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    return turi_int(b ? b->len : 0);
+}
+static TuriValue native_sbuf_get_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int;
+    if (b && i >= 0 && i < b->len) return turi_int(b->data[i]);
+    fprintf(stderr, "sized-buf-get: index out of bounds\n"); _exit(1);
+    return turi_int(0);
+}
+static TuriValue native_sbuf_set_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int, v = a[2].as_int;
+    if (b && i >= 0 && i < b->len) { b->data[i] = v; return a[0]; }
+    fprintf(stderr, "sized-buf-set!: index out of bounds\n"); _exit(1);
+    return a[0];
+}
+static TuriValue native_sbuf_fill_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t v = a[1].as_int;
+    if (b) for (int64_t i = 0; i < b->len; i++) b->data[i] = v;
+    return a[0];
+}
+static TuriValue native_sbuf_copy_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TuriSizedBufRep *d = sbuf_of(a[0]), *s = sbuf_of(a[1]);
+    if (!d || !s) return a[0];
+    if (d->len != s->len) {
+        fprintf(stderr, "sized-buf-copy!: length mismatch (%lld vs %lld)\n",
+                (long long)d->len, (long long)s->len); _exit(1);
+    }
+    if (d->len > 0) memcpy(d->data, s->data, (size_t)d->len * sizeof(int64_t));
+    return a[0];
+}
+static TuriValue native_sbuf_sum_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]); int64_t s = 0;
+    if (b) for (int64_t i = 0; i < b->len; i++) s += b->data[i];
+    return turi_int(s);
+}
+static TuriValue native_sbuf_min_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    if (!b || b->len == 0) { fprintf(stderr, "sized-buf-min: empty buffer\n"); _exit(1); return turi_int(0); }
+    int64_t m = b->data[0];
+    for (int64_t i = 1; i < b->len; i++) if (b->data[i] < m) m = b->data[i];
+    return turi_int(m);
+}
+static TuriValue native_sbuf_max_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TuriSizedBufRep *b = sbuf_of(a[0]);
+    if (!b || b->len == 0) { fprintf(stderr, "sized-buf-max: empty buffer\n"); _exit(1); return turi_int(0); }
+    int64_t m = b->data[0];
+    for (int64_t i = 1; i < b->len; i++) if (b->data[i] > m) m = b->data[i];
+    return turi_int(m);
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -8674,6 +8944,40 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-set!",        native_vec_set,         NULL);
     turi_env_register_native(env, "vec-free",        native_vec_free,        NULL);
     turi_env_register_native(env, "vec-eq?",         native_vec_eq,          NULL);
+    /* Typed-list (list.tur) carrier-level ops: inline-C bodies the interpreter
+     * cannot run, bound to the { head, tail } cons-cell box natives.  tcons /
+     * list-head / list-tail reuse the existing native_cons / native_list_head /
+     * native_list_tail (same box layout as the untyped head/tail/cons surface);
+     * list-length is new. */
+    turi_env_register_native(env, "tcons",           native_cons,            NULL);
+    turi_env_register_native(env, "list-head",       native_list_head,       NULL);
+    turi_env_register_native(env, "list-tail",       native_list_tail,       NULL);
+    turi_env_register_native(env, "list-length",     native_list_length,     NULL);
+    /* Free monad (free.tur): #{Unsafe} inline-C bodies re-implemented over the
+     * PureFree/Suspend TuriStruct + turi_call continuation. */
+    turi_env_register_native(env, "free-bind",       native_free_bind,       NULL);
+    turi_env_register_native(env, "free-run",        native_free_run,        NULL);
+    turi_env_register_native(env, "str->int-checked", native_str_to_int_checked, NULL);
+    /* Grid (grid.tur): raw-buffer inline-C re-implemented over the matching
+     * { data, width, height, cx, cy } header. */
+    turi_env_register_native(env, "grid-new",        native_grid_new,        NULL);
+    turi_env_register_native(env, "grid-get",        native_grid_get,        NULL);
+    turi_env_register_native(env, "grid-set!",       native_grid_set,        NULL);
+    turi_env_register_native(env, "grid-width",      native_grid_width,      NULL);
+    turi_env_register_native(env, "grid-height",     native_grid_height,     NULL);
+    turi_env_register_native(env, "grid-free",       native_grid_free,       NULL);
+    /* SizedBuf (sized-buf.tur): __sized-buf-*-raw inline-C over { len, data }. */
+    turi_env_register_native(env, "__sized-buf-new-raw",        native_sbuf_new_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-new-zeroed-raw", native_sbuf_new_zeroed_raw, NULL);
+    turi_env_register_native(env, "__sized-buf-free-raw",       native_sbuf_free_raw,       NULL);
+    turi_env_register_native(env, "__sized-buf-len-raw",        native_sbuf_len_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-get-raw",        native_sbuf_get_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-set!-raw",       native_sbuf_set_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-fill!-raw",      native_sbuf_fill_raw,       NULL);
+    turi_env_register_native(env, "__sized-buf-copy!-raw",      native_sbuf_copy_raw,       NULL);
+    turi_env_register_native(env, "__sized-buf-sum-raw",        native_sbuf_sum_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-min-raw",        native_sbuf_min_raw,        NULL);
+    turi_env_register_native(env, "__sized-buf-max-raw",        native_sbuf_max_raw,        NULL);
     turi_env_register_native(env, "mutmap-new",      native_mutmap_new,      NULL);
     turi_env_register_native(env, "mutmap-len",      native_mutmap_len,      NULL);
     turi_env_register_native(env, "mutmap-set!",     native_mutmap_set,      NULL);

@@ -175,8 +175,4 @@
 
 (definstance Functor [(Either E)]
   (fmap [container fn]
-    ```c
-    tur_adt_Either *p = (tur_adt_Either *)(intptr_t)container;
-    if (p->tag != 1) return container;
-    return ctor_Right(fn.fn(fn.env, p->as.Right._0));
-    ```))
+    (either-map fn container)))

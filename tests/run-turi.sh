@@ -994,9 +994,9 @@ workflow-roundtrip
 # in src/turi/eval.c.  range.tur packs Bound GADT endpoints into a heap struct via
 # inline-C (range-new / range-lower / range-upper); the round-tripped TuriStruct
 # pointer now keeps its TURI_STRUCT tag on readback, so a match over Bound finds
-# its arm instead of the no-arm-matched error.  range-show and range-from-range
-# stay off: they are genuine inline-C carve-outs (snprintf percent-s formatting
-# and a seq/from-range body the simple executor declines).
+# its arm instead of the no-arm-matched error.  range-from-range[-step] are now
+# interpretable too (added in the 2026-06-13 bulk-add below); only range-show
+# stays off as a genuine inline-C carve-out (snprintf percent-s formatting).
 range-bound-gadt
 range-connected-overlaps
 range-constructors
@@ -1111,6 +1111,83 @@ schema-hkt-alternative
 schema-hkt-functor
 schema-reader-json-str-runtime
 schema-transform-closure
+# W5 bulk-add (verified 2026-06-13): non-inline-C fixtures that already pass
+# under --interpret with their flags but were not yet on the allowlist.  Each
+# matches expected.stdout + exit under genuine interpretation (non-trivial
+# output, no inline-C in the fixture body), shrinking the W5 triage surface
+# ahead of the allowlist->denylist flip.  The two range/from-range fixtures are
+# now interpretable (the range.tur ADT-carrier re-tag fix reaches the
+# seq/from-range body); only range-show stays carved (snprintf %s formatting).
+data-literal-nested
+data-literal-vec-basic
+hkt-instance-closure-to-fat
+lint-panic-asserts
+lint-panic-call-allow
+range-from-range
+range-from-range-step
+sized-sz1-subtype
+sized-sz7-static-accept
+tce1-vec-bool
+tce1-vec-cstr
+tce1-vec-float
+tce2-vec-of-infer
+tce5-data-literal-cstr
+# vec/carrier closure readback (verified 2026-06-13): a closure stored into an
+# int64-carrier Vec and read back via the :ptr<void> ascription idiom lost its
+# TURI_CLOSURE tag (vec-get returns a bare TURI_INT), so the subsequent ^fat
+# call errored with expected-function-got-tag-2.  recover_carrier_closure in
+# src/turi/eval.c re-tags the carrier at the call head when the binding is
+# fat/fn-typed.
+vec-get-closure
+sf-vec-of
+vec-captureless-fat-closure-readback
+vec-typed-fat-closure-readback
+# shebang-tur (verified 2026-06-13): turi_eval_impl now strips a leading
+# Racket-style shebang line from the user file before it is appended to the
+# accumulated <eval> blob, so #!/usr/bin/env tur no longer lexes as an
+# unexpected '#'.  shebang-sweet-lang (shebang + #lang) already passed via
+# detect_lang's internal shebang skip and stays green.
+shebang-tur
+# typed-list carrier ops (verified 2026-06-13): list.tur's tcons / list-head /
+# list-tail / list-length are inline-C over a { head, tail } cons-cell box.
+# tcons/list-head/list-tail bind to the existing native_cons/native_list_head/
+# native_list_tail (same box as the untyped head/tail/cons surface); a new
+# native_list_length walks the chain.  Unblocks the carrier-level list fixtures
+# (thead/ttail single-cell tests use make-struct Cons + field access, already
+# dual-rep safe).
+list-basic
+typed/list-basic
+typed/list-concat
+typed/list-macro
+# data-literal-sweet-exp (verified 2026-06-13): #map{...}/#set{...}/[...] under
+# #lang sweet-exp.  cmd_eval now pre-detects the file's #lang and loads the
+# prelude under that reader, so the sweet-exp reader switch no longer wipes the
+# accumulated stdlib (hamt-of was unbound before the fix).
+data-literal-sweet-exp
+# Free monad (verified 2026-06-13): free.tur's free-bind / free-run have
+# #{Unsafe} inline-C bodies that cast the Free ADT carrier to a C tagged-union
+# and call the ^fat continuation via tur_poly_fn_t.  native_free_bind /
+# native_free_run re-implement them over the PureFree/Suspend TuriStruct +
+# turi_call (free-pure/free-lift are already pure-turi ADT constructors).
+free-pure
+free-lift-bind
+free-interpreter
+# Either (verified 2026-06-13): str->int-checked re-implemented as a native that
+# builds the Either ADT via the new turi_make_struct API; either.tur's Functor
+# fmap rewritten from a redundant inline-C body to call the pure-turi either-map
+# (identical semantics, now interpretable).
+sum-either-str-parse
+sum-either-functor-instance
+# Grid (verified 2026-06-13): grid.tur's raw-buffer inline-C ops (grid-new /
+# grid-get / grid-set! / grid-width / grid-height / grid-free) re-implemented as
+# natives over the matching { data, width, height, cx, cy } header.
+grid-typed-basic
+typed/grid-basic
+# SizedBuf (verified 2026-06-13): sized-buf.tur's user ops are thin wrappers over
+# __sized-buf-*-raw #{Unsafe} inline-C primitives over a { len, data } header;
+# the full raw set is re-implemented as natives over the identical layout.
+sized-buf-cross-param-accept
+sized-buf-existential-pack-open
 "
 
 # Build an associative-set from the default list for O(1) lookup.
