@@ -1221,6 +1221,19 @@ chan-linear
 asyncchan-linear
 future-linear
 schan-roundtrip
+# R1 slice 4 (verified 2026-06-13): process.tur + fs.tur OS-handle ops as
+# faithful syscalls -- process/spawn forks+execvp's (ChildHandle = pid),
+# process/wait reaps it; fs/tmpfile mkstemp's a { path, fd } pair with
+# borrow-accessors and a close+free.  fd->int is pure-turi (an ascription).
+childhandle-linear
+tmpfile-linear-borrow
+# R1 slice 5 (verified 2026-06-13): serial.tur Serializable [int]/[bool]
+# instances -- serialize packs a length-prefixed LE byte buffer, deserialize
+# reads it back (registered under the __inst_Serializable_* binding names so
+# both (.serialize x) dispatch and the direct __inst_* calls resolve).  The
+# native deserialize uses unsigned shifts, dodging a latent signed-shift UB in
+# serial.tur tracked in docs/reported/serial-deserialize-int-signed-shift-ub.md.
+serial-primitive-roundtrip
 "
 
 # Build an associative-set from the default list for O(1) lookup.

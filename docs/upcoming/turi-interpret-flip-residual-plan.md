@@ -59,14 +59,19 @@ finishing it.
 >   `schan-roundtrip` (schan.tur synchronous session channels reuse the ring
 >   buffer + a one-int64 recv cell).
 >
-> **Remaining R1 (2, reclassified):**
-> - `serial-primitive-roundtrip` -- needs the **Serializable** typeclass
->   instance natives (serialize/deserialize int/bool over the length-prefixed
->   byte buffer) plus `extern-c printf` under `--interpret`. A typeclass+extern-c
->   concern, not the channel/handle ring-buffer pattern; own slice.
-> - `childhandle-linear` (`process/spawn`+`wait`, real fork/exec) and
->   `tmpfile-linear-borrow` (`fs/tmpfile`, real fd) -- genuine OS syscalls; doable
->   as faithful natives but their own slice.
+> - **Slice 4** (2): `childhandle-linear` (`process/spawn` forks+execvp's,
+>   ChildHandle = pid; `process/wait` reaps it) and `tmpfile-linear-borrow`
+>   (`fs/tmpfile` mkstemp's a `{path,fd}` pair; borrow-accessors + close/free) --
+>   faithful OS syscalls. `fd->int` is pure-turi (an ascription).
+> - **Slice 5** (1): `serial-primitive-roundtrip` -- `Serializable [int]/[bool]`
+>   instance natives over the length-prefixed LE byte buffer, under the
+>   `__inst_Serializable_*` binding names (`extern-c printf` already runs under
+>   `--interpret`). The deserialize native uses unsigned shifts, dodging a latent
+>   signed-shift UB in serial.tur:
+>   [serial-deserialize-int-signed-shift-ub.md](../reported/serial-deserialize-int-signed-shift-ub.md).
+>
+> **R1 stdlib-native surface COMPLETE** (harness 1159 -> **1172**, +13; compiled
+> 1615/0, parity 0-gaps). The one item that stays out of R1:
 > - `session-close` -- **not R1.** `make-session`/`close` are `-Xsessions`
 >   compiler/runtime builtins (`src/compiler/elab_sessions.c`), so this is
 >   interpreter session-runtime support, tracked with the runtime-level gaps

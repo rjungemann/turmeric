@@ -4807,6 +4807,8 @@ static void wk_register_future_natives(TuriEnv *env);
 static void wk_register_bytes_natives(TuriEnv *env);
 static void wk_register_taskgroup_natives(TuriEnv *env);
 static void wk_register_chan_natives(TuriEnv *env);
+static void wk_register_proc_fs_natives(TuriEnv *env);
+static void wk_register_serial_natives(TuriEnv *env);
 
 /* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
  * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
@@ -5151,6 +5153,10 @@ static int cmd_eval(const char *path, bool use_color,
     wk_register_taskgroup_natives(env);
     /* R1: chan.tur bounded sync/async channel ops (loaded on demand). */
     wk_register_chan_natives(env);
+    /* R1: process.tur spawn/wait + fs.tur tmpfile OS-handle ops (loaded on demand). */
+    wk_register_proc_fs_natives(env);
+    /* R1: serial.tur Serializable int/bool instances (loaded on demand). */
+    wk_register_serial_natives(env);
     /* SYM (turi): first-class :Sym ops, only when -Xsymbols loaded sym.tur. */
     if (g_symbols_enabled)
         wk_register_sym_natives(env);
@@ -9510,6 +9516,134 @@ static void wk_register_chan_natives(TuriEnv *env) {
     turi_env_register_native(env, "schan-cell-new",      native_schan_cell_new,  NULL);
     turi_env_register_native(env, "schan-cell-get",      native_schan_cell_get,  NULL);
     turi_env_register_native(env, "schan-cell-free",     native_schan_cell_free, NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): process.tur + fs.tur OS-handle shims.
+ *
+ * Faithful syscalls: process/spawn forks+execvp's (ChildHandle = pid), wait
+ * reaps it; fs/tmpfile mkstemp's into a { path, fd } pair (TmpFile), with
+ * borrow-accessors and a close+free.  argv is a cons list of cstr pointers
+ * ({head,tail} cells), matching the compiled inline-C walk.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *path = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : NULL;
+    if (!path) return turi_int(-1);
+    int64_t argv = (n > 1) ? a[1].as_int : 0;
+    int argc = 0;
+    for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1]) argc++;
+    char **args = (char **)malloc((size_t)(argc + 1) * sizeof(char *));
+    if (!args) return turi_int(-1);
+    { int i = 0; for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1])
+        args[i++] = (char *)(intptr_t)((int64_t *)(intptr_t)t)[0]; }
+    args[argc] = NULL;
+    pid_t pid = fork();
+    if (pid < 0) { free(args); return turi_int(-1); }
+    if (pid == 0) { execvp(path, args); _exit(127); }
+    free(args);
+    return turi_int((int64_t)pid);
+}
+static TuriValue native_process_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(-1);
+    int status = 0;
+    if (waitpid((pid_t)a[0].as_int, &status, 0) < 0) return turi_int(-1);
+    if (WIFEXITED(status)) return turi_int((int64_t)WEXITSTATUS(status));
+    return turi_int(-1);
+}
+static TuriValue native_fs_tmpfile(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    char *tmpl = strdup("/tmp/tur_XXXXXX");
+    if (!tmpl) return turi_int(0);
+    int fd = mkstemp(tmpl);
+    if (fd < 0) { free(tmpl); return turi_int(0); }
+    int64_t *pair = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!pair) { close(fd); free(tmpl); return turi_int(0); }
+    pair[0] = (int64_t)(intptr_t)tmpl;
+    pair[1] = (int64_t)fd;
+    return wk_int_ptr(pair);
+}
+static TuriValue native_fs_tmpfile_path(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    return turi_cstr((const char *)(intptr_t)((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_fs_tmpfile_fd(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[1]);
+}
+static TuriValue native_fs_tmpfile_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_nil();
+    int64_t *pair = (int64_t *)(intptr_t)a[0].as_int;
+    close((int)pair[1]);
+    free((void *)(intptr_t)pair[0]);
+    free(pair);
+    return turi_nil();
+}
+
+static void wk_register_proc_fs_natives(TuriEnv *env) {
+    turi_env_register_native(env, "process/spawn",    native_process_spawn,     NULL);
+    turi_env_register_native(env, "process/wait",     native_process_wait,      NULL);
+    turi_env_register_native(env, "fs/tmpfile",       native_fs_tmpfile,        NULL);
+    turi_env_register_native(env, "fs/tmpfile-path",  native_fs_tmpfile_path,   NULL);
+    turi_env_register_native(env, "fs/tmpfile-fd",    native_fs_tmpfile_fd,     NULL);
+    turi_env_register_native(env, "fs/tmpfile-free",  native_fs_tmpfile_free,   NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * R1 (turi-interpret-flip-residual-plan): serial.tur Serializable instances.
+ *
+ * serialize packs a length-prefixed little-endian byte buffer (int64* header
+ * word 0 = data length, data starts at word 1 -- the same layout as Bytes);
+ * deserialize reads it back.  Registered under the elaborator instance-binding
+ * names so (.serialize x) dispatch and the direct __inst_* calls both resolve.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_serialize_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = (n > 0) ? a[0].as_int : 0;
+    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + 8);
+    if (!buf) return turi_nil();
+    buf[0] = 8;
+    uint8_t *p = (uint8_t *)(buf + 1);
+    for (int i = 0; i < 8; i++) p[i] = (uint8_t)((v >> (8 * i)) & 0xff);
+    return wk_int_ptr(buf);
+}
+static TuriValue native_deserialize_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    int64_t *b = (int64_t *)(intptr_t)a[0].as_int;
+    if (b[0] < 8) return turi_int(0);
+    uint8_t *p = (uint8_t *)(b + 1);
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v |= ((uint64_t)p[i]) << (8 * i);
+    return turi_int((int64_t)v);
+}
+static TuriValue native_serialize_bool(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = 0;
+    if (n > 0) v = (a[0].tag == TURI_BOOL) ? (a[0].as_bool ? 1 : 0) : (a[0].as_int != 0);
+    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + 1);
+    if (!buf) return turi_nil();
+    buf[0] = 1;
+    *(uint8_t *)(buf + 1) = (uint8_t)v;
+    return wk_int_ptr(buf);
+}
+static TuriValue native_deserialize_bool(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || !a[0].as_int) return turi_int(0);
+    int64_t *b = (int64_t *)(intptr_t)a[0].as_int;
+    if (b[0] < 1) return turi_int(0);
+    return turi_int(*(uint8_t *)(b + 1) ? 1 : 0);
+}
+
+static void wk_register_serial_natives(TuriEnv *env) {
+    turi_env_register_native(env, "__inst_Serializable_serialize_int",     native_serialize_int,     NULL);
+    turi_env_register_native(env, "__inst_Serializable_deserialize_int",   native_deserialize_int,   NULL);
+    turi_env_register_native(env, "__inst_Serializable_serialize_bool",    native_serialize_bool,    NULL);
+    turi_env_register_native(env, "__inst_Serializable_deserialize_bool",  native_deserialize_bool,  NULL);
 }
 
 /* -------------------------------------------------------------------------
