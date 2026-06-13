@@ -1142,6 +1142,12 @@ vec-get-closure
 sf-vec-of
 vec-captureless-fat-closure-readback
 vec-typed-fat-closure-readback
+# shebang-tur (verified 2026-06-13): turi_eval_impl now strips a leading
+# Racket-style shebang line from the user file before it is appended to the
+# accumulated <eval> blob, so #!/usr/bin/env tur no longer lexes as an
+# unexpected '#'.  shebang-sweet-lang (shebang + #lang) already passed via
+# detect_lang's internal shebang skip and stays green.
+shebang-tur
 "
 
 # Build an associative-set from the default list for O(1) lookup.

@@ -5965,11 +5965,35 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
      * when the pointer is unchanged no directive was present. */
     const char *src_body  = src;
     size_t      body_len  = strlen(src);
+
+    /* Strip a Racket-style shebang line (`#!/usr/bin/env tur`) at the top of
+     * the new source.  The reader's own shebang skip only fires at byte 0 of
+     * the buffer it parses, but under --interpret the user file is appended to
+     * the accumulated <eval> blob (after macros.tur / contract.tur), so its
+     * `#!` is no longer at byte 0 and would lex as "unexpected character '#'".
+     * detect_lang skips a shebang internally only to find a following `#lang`;
+     * a shebang-only file leaves out_rest == src.  Drop the line here so both
+     * the shebang-only and shebang+`#lang` cases reach the reader cleanly.
+     * Mirror the reader's recognition rule (`#!` + `/` / whitespace / EOL). */
+    if (body_len >= 2 && src_body[0] == '#' && src_body[1] == '!' &&
+        (body_len < 3 || src_body[2] == '/' || src_body[2] == ' ' ||
+         src_body[2] == '\t' || src_body[2] == '\n' || src_body[2] == '\r')) {
+        const char *nl = (const char *)memchr(src_body, '\n', body_len);
+        if (nl) {
+            size_t skip = (size_t)(nl - src_body) + 1;  /* past the newline */
+            src_body += skip;
+            body_len -= skip;
+        } else {
+            src_body += body_len;  /* shebang-only file, no newline */
+            body_len  = 0;
+        }
+    }
+
     {
-        const char *rest     = src;
+        const char *rest     = src_body;
         size_t      rest_len = body_len;
-        ReaderType  detected = detect_lang(src, body_len, &rest, &rest_len);
-        if (rest != src) {
+        ReaderType  detected = detect_lang(src_body, body_len, &rest, &rest_len);
+        if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
              * implemented reader the same way the compiled entry points do
              * (src/main.c detect_and_adjust_lang) instead of silently running

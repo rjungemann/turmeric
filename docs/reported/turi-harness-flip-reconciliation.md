@@ -1,5 +1,16 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (shebang stripping under --interpret, 2026-06-13):** fixed
+> `shebang-tur` (`#!/usr/bin/env tur` lexed as `unexpected character '#'`). The
+> reader's shebang skip only fires at byte 0, but `cmd_eval` appends the user
+> file to the accumulated `<eval>` blob (after macros.tur / contract.tur), so
+> the `#!` was mid-buffer. `detect_lang` already skips a shebang internally to
+> find a following `#lang` -- but a shebang-*only* file left `out_rest == src`,
+> so nothing stripped it. `turi_eval_impl` now drops a leading `#!` line from the
+> new source before `detect_lang`, covering both shebang-only and shebang+`#lang`
+> (the latter, `shebang-sweet-lang`, was already green and stays green).
+> **Harness 1138 -> 1139 passed, 0 failed; gap 62 -> 61.** Parity 113/115 0-gaps.
+>
 > **Progress (vec/carrier closure readback fix, 2026-06-13):** fixed the
 > `eval: expected function, got tag 2` class -- a closure stored into an
 > int64-carrier `Vec` (`vec-push!`) and read back via the
