@@ -1,0 +1,4 @@
+The "unknown helper -> (load stdlib/math.tur)" diagnostic is a compile-path
+feature. Under --interpret the math helpers (int->float, float->int, sqrt,
+floor, ...) are pre-registered as natives for stdlib-free benchmark scripts, so
+float->int is not "unknown" there and no hint fires. Run compiled only.

@@ -139,4 +139,11 @@ void turi_run_pending_defers(TuriEnv *env);
  * *found to false and returns nil otherwise. */
 TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found);
 
+/* SEQ: advance a generator VALUE (carrier holds the TuriGen*) one step; returns
+ * the yielded value and sets *done to 1 when the generator just exhausted.
+ * Lets the seq inline-C natives (main.c) drive a TURI_GEN. */
+TuriValue turi_gen_advance_val(TuriEnv *env, TuriValue gen, int *done);
+/* True if the generator value has run off its end (or is null). */
+bool turi_gen_done_val(TuriValue gen);
+
 #endif /* TURI_EVAL_H */

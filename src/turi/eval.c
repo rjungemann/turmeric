@@ -1037,6 +1037,13 @@ static void gen_body_thunk(void) {
         g->had_error = true; g->error_val = g->env->throw_value;
         g->env->throwing = false;
     }
+    /* A `(return)` inside the generator body (e.g. seq/take-while's early stop)
+     * terminates the generator; its value is discarded.  The body runs on this
+     * coroutine but shares the consumer's TuriEnv, so a leaked `returning` flag
+     * would otherwise propagate into gen-next's caller (the driver loop would
+     * bail and hand back env->return_value, 0, instead of its accumulator).
+     * Reset it here, mirroring the throwing reset above. */
+    g->env->returning = false;
     g->done = true;
     swapcontext(&g->gen_ctx, &g->caller_ctx);
     abort(); /* unreachable */
@@ -3884,7 +3891,30 @@ static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
                                                          args, n_args, fn,
                                                          param_offset, &inline_result);
                 free(body_copy);
-                if (handled) return inline_result;
+                if (handled) {
+                    /* ADT/struct carrier re-tag (range-* "match: no arm matched"
+                     * bug): user ADT/GADT values are TURI_STRUCT in the
+                     * interpreter (adt_ctor_native -> make_struct_val).  An
+                     * inline-C function declared to return such a type (e.g.
+                     * `range-lower : Bound`, which reads back a Bound packed into
+                     * a heap struct by `range-new`) round-trips the TuriStruct*
+                     * through an int64_t field, so the simple executor hands it
+                     * back as a bare TURI_INT -- and a downstream `match` (which
+                     * checks `tag == TURI_STRUCT`) finds no arm.  When the
+                     * declared return type is a user ADT/struct and we got an int
+                     * carrier, the int64 IS the original TuriStruct pointer (it
+                     * came in as args[i].as_int via the union, was stored, and
+                     * returned verbatim); reinterpret it so the struct tag
+                     * survives.  Guard on a non-null pointer so a genuine 0/nil
+                     * carrier is left alone rather than producing a NULL-deref. */
+                    if (inline_result.tag == TURI_INT && inline_result.as_int != 0 &&
+                        (fn->return_type.kind == TY_ADT ||
+                         fn->return_type.kind == TY_STRUCT)) {
+                        inline_result = turi_struct_val(
+                            (TuriStruct *)(intptr_t)inline_result.as_int);
+                    }
+                    return inline_result;
+                }
             }
         }
 
@@ -4002,6 +4032,27 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         StrSlice sl = { e->as.s.p, e->as.s.len };
         const Symbol *sym = symtab_intern(&env->st, sl);
         return turi_cstr(sym->name);
+    }
+
+    case EX_SYM_LIT: {
+        /* SYM (turi): a first-class :Sym value (-Xsymbols).  Compiled code lowers
+         * it to a static `struct __tur_sym *`; the interpreter instead re-interns
+         * the name into env->st and carries the stable `const Symbol *` as the
+         * int64 carrier.  Interning by name guarantees pointer identity for
+         * identical names (so Eq[Sym]/Hash[Sym] -- pointer identity -- and the
+         * str->sym round-trip all agree with the literal), and the native sym ops
+         * (native_sym_to_str/_eq/_hash in main.c, registered as overrides for the
+         * inline-C sym.tur bodies the tree-walker cannot run) read this Symbol*. */
+        const Symbol *s = e->as.sym_lit_.sym;
+        const Symbol *isym = s;
+        if (s) {
+            StrSlice sl = { s->name, s->len };
+            isym = symtab_intern(&env->st, sl);
+        }
+        TuriValue v = {0};
+        v.tag = TURI_INT;
+        v.as_int = (int64_t)(intptr_t)isym;
+        return v;
     }
 
     /* --- Variable -------------------------------------------------------- */
@@ -6178,6 +6229,22 @@ TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args
     if (fn.tag != TURI_CLOSURE || !fn.as_closure)
         return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
     return eval_apply(env, fn.as_closure, args, n_args);
+}
+
+/* SEQ (stdlib/seq): public bridges so the seq inline-C natives in main.c can
+ * drive an interpreter generator (TuriGen is defined in this file).  `gen` is a
+ * generator value (the int64 carrier holds the TuriGen*); advance it one step,
+ * setting *done to 1 if it just ran off its end (no value yielded). */
+TuriValue turi_gen_advance_val(TuriEnv *env, TuriValue gen, int *done) {
+    TuriGen *g = (TuriGen *)(intptr_t)gen.as_int;
+    if (!g) { if (done) *done = 1; return turi_int(0); }
+    TuriValue v = gen_advance(env, g);
+    if (done) *done = g->done ? 1 : 0;
+    return v;
+}
+bool turi_gen_done_val(TuriValue gen) {
+    TuriGen *g = (TuriGen *)(intptr_t)gen.as_int;
+    return !g || g->done;
 }
 
 /* Fire all remaining deferred actions (those registered at module/top level).

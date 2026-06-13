@@ -943,6 +943,123 @@ eq-carrier-capturing-comparator
 option-basic
 typed/option-basic
 option-map-capturing-closure
+# W5 bulk-add (verified 2026-06-12): non-inline-C fixtures that already pass
+# under --interpret with their flags but were not yet on the allowlist.  Each
+# matches expected.stdout + exit under genuine interpretation (no works-by-luck
+# carrier accident -- all produce non-trivial output), shrinking the W5 triage
+# surface ahead of the allowlist->denylist flip.
+cloneable-basic
+cloneable-capture-precision
+cloneable-defer-replay
+cloneable-defer-suspend
+cloneable-drop-rc
+cloneable-multi-resume
+cloneable-rc
+cloneable-ref
+cross-module-macro-vec-arg-in-wrapper-body
+data-literal-computed-values
+data-literal-empty
+data-literal-typed-empty
+defn-class-constraint-list-syntax
+hkt-row-canon-permutation
+hkt-row-defdata-param
+hkt-row-deftype-param
+hkt-row-polymorphic-call-from-polymorphic
+hkt-row-polymorphic-defn
+macro-emits-multiple-top-level-forms
+macro-str-to-sym
+macro-unquote-in-type-position
+refined-nonempty
+sized-cross-param-opaque-accept
+sized-handle-existential-pack-open
+sized-struct-field-share-accept
+top-level-def-init-runs-before-main
+typeclass-poly-wrapper-struct-receiver
+vec-eq-ascribed
+vec-eq-ascribed-multi
+workflow-roundtrip
+# range-* (verified 2026-06-13): unblocked by the inline-C ADT-carrier re-tag fix
+# in src/turi/eval.c.  range.tur packs Bound GADT endpoints into a heap struct via
+# inline-C (range-new / range-lower / range-upper); the round-tripped TuriStruct
+# pointer now keeps its TURI_STRUCT tag on readback, so a match over Bound finds
+# its arm instead of the no-arm-matched error.  range-show and range-from-range
+# stay off: they are genuine inline-C carve-outs (snprintf percent-s formatting
+# and a seq/from-range body the simple executor declines).
+range-bound-gadt
+range-connected-overlaps
+range-constructors
+range-encloses
+range-gap
+range-intersection
+range-predicates
+range-reader-expr-bounds
+range-reader-one-sided
+range-reader-shadow-warn
+range-reader-two-sided
+range-span
+# sym-* (verified 2026-06-13): first-class :Sym (-Xsymbols).  EX_SYM_LIT now has
+# an interpreter case arm (carries a stable interned Symbol pointer) plus native
+# sym->str / sym=? / str->sym / Eq[Sym] / Hash[Sym] / MapKey[Sym] overrides for
+# the inline-C sym.tur bodies.  See wk_register_sym_natives in src/main.c.
+sym-stdlib
+quoted-keyword-type-ann
+sym-map-key
+sym-dynamic
+# Stub-collision + math helpers (verified 2026-06-13): the redundant int->float
+# / cstr->parse-int benchmark stubs were dropped from cmd_eval (the natives own
+# elaboration), so a fixture loading math.tur / str.tur no longer collides; plus
+# float->int / sqrt / floor natives.  (reader-macros-rx-literal and
+# sum-either-str-parse stay off -- they hit re.tur's regex engine and
+# str->int-checked's strtoll+ADT-ctor inline-C, genuine carve-outs.)
+stdlib-float-convert-load
+load-in-imported-module
+# seq-* (verified 2026-06-13): the lazy-Seq library now runs under --interpret
+# via native bridges over turi_call + generator advance (wk_register_seq_natives
+# in src/main.c) plus a gen-body returning-flag reset in eval.c.  gen-collect
+# joins too (shared gen-arr natives).  seq-builders-unfold / seq-core-from-vec
+# stay carved -- their fixtures define their own inline-C helpers.
+gen-collect
+seq-builders-cycle
+seq-builders-iterate
+seq-builders-range
+seq-builders-range-step
+seq-builders-repeat
+seq-builders-repeatedly
+seq-combine-chain
+seq-combine-concat
+seq-combine-interleave
+seq-combine-zip
+seq-combine-zip-with
+seq-consume-all
+seq-consume-any
+seq-consume-count
+seq-consume-find
+seq-consume-find-index
+seq-consume-first
+seq-consume-foldl
+seq-consume-for-each
+seq-consume-into-list
+seq-consume-into-vec
+seq-consume-last
+seq-consume-nth
+seq-consume-reduce
+seq-core-collect
+seq-core-empty
+seq-core-for-each
+seq-core-from-list
+seq-core-of
+seq-pipeline-foldl
+seq-transform-chain
+seq-transform-drop
+seq-transform-drop-while
+seq-transform-filter
+seq-transform-filter-map
+seq-transform-flat-map
+seq-transform-flatten
+seq-transform-map
+seq-transform-map-indexed
+seq-transform-take
+seq-transform-take-while
 "
 
 # Build an associative-set from the default list for O(1) lookup.

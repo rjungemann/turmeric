@@ -1,5 +1,108 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Next big lift (2026-06-13):** the largest remaining `--interpret` gap is
+> json + schema (19 `schema-*` + 5 `json-reader-*` fixtures) -- a self-contained
+> JSON parser/AST + schema decoder engine (~70 inline-C functions), materially
+> bigger than the sym/seq work and its own dedicated PR. Inventory + layered
+> approach (do the json layer first; it also unblocks `json-reader-*`) is captured
+> in
+> [docs/upcoming/turi-json-schema-interpreter-plan.md](../upcoming/turi-json-schema-interpreter-plan.md).
+
+> **Progress (benchmark-stub collision + math helpers, 2026-06-13):** the
+> `cmd_eval` benchmark-stub block injected `(defn int->float ...)` /
+> `(defn cstr->parse-int ...)` placeholders, so a fixture that
+> `(load ...)`ed `math.tur` / `str.tur` tripped the "already defined by an
+> auto-loaded stdlib module" guard. Both names are native-backed (the native
+> resolves the bare call at elaboration -- verified), so the stubs were
+> **redundant and removed**, clearing the collision. Added `float->int` / `sqrt`
+> / `floor` natives so the loaded math helpers run; `stdlib-float-convert-load`
+> and `load-in-imported-module` now pass and join the allowlist (harness 1090 ->
+> 1091). `errors/unknown-helper-load-hint` moved to `requires.compiled`: the
+> "unknown helper -> load math.tur" hint is a compile-path diagnostic, and under
+> `--interpret` the math helpers are pre-registered natives (for stdlib-free
+> benchmark scripts) so `float->int` is no longer "unknown" there. The other two
+> ex-collision fixtures stay off the allowlist as genuine inline-C carve-outs:
+> `reader-macros-rx-literal` drives `re.tur`'s regex engine and
+> `sum-either-str-parse` uses `str->int-checked`'s `strtoll` + `ctor_Left/Right`
+> inline-C. No codegen change.
+>
+> **Progress (lazy Seq + generator early-return fix, 2026-06-13):** **the whole
+> `seq/*` lazy-sequence library now runs under `--interpret`** -- 41 `seq-*`
+> fixtures plus `gen-collect` join the allowlist (harness 1048 -> 1090). seq's
+> inline-C bridges assume the *compiled* ABI (fat-closure calls via a C function
+> pointer, a `{__state,__next_fn}` generator struct, malloc/free growable
+> arrays), so the tree-walker declined them. `wk_register_seq_natives`
+> (`src/main.c`) re-implements the bridge surface over the interpreter's value
+> model: `seq-iter`/`seq-gen-next`/`seq-gen-done` drive a `TURI_GEN` via a new
+> public `turi_gen_advance_val` (the yield protocol already hands back a pointer
+> to the value box, so no re-boxing); the `seq-call-*` bridges invoke the
+> `TURI_CLOSURE` callback via `turi_call`; and the option/out-vec/cons/Tuple2 +
+> `gen-arr` `{len,cap,data}` helpers are nativized as a consistent set
+> (producers and accessors together). A real interpreter bug surfaced and was
+> fixed: a `(return)` inside a generator body (e.g. `seq/take-while`'s early
+> stop) left `env->returning` set, and since the gen coroutine shares the
+> consumer's `TuriEnv`, the driver loop saw it and bailed -- returning
+> `env->return_value` (0) instead of its accumulator (`seq-pipeline-foldl`
+> printed 0 for 161700). `gen_body_thunk` now resets `returning` after the body
+> completes, mirroring the existing `throwing` reset. `seq-builders-unfold` /
+> `seq-core-from-vec` stay carved (their fixtures define their own inline-C).
+> No codegen change.
+>
+> **Progress (EX_SYM_LIT + native sym ops, 2026-06-13):** **first-class `:Sym`
+> values (`-Xsymbols`) now work under `--interpret`** -- all 4 sym fixtures
+> (`sym-stdlib`, `quoted-keyword-type-ann`, `sym-map-key`, `sym-dynamic`) pass
+> and are on the allowlist (harness 1044 -> 1048). `EX_SYM_LIT` was a documented
+> carve-out (kind 114, "unhandled expression kind"); it now has a case arm in
+> `src/turi/eval.c` that re-interns the literal's name into `env->st` and carries
+> the stable `const Symbol *` as the int64 carrier -- interning by name gives
+> pointer-identity `Eq[Sym]`/`Hash[Sym]` and makes the `str->sym` round-trip
+> agree with literals. `wk_register_sym_natives` (`src/main.c`) overrides the
+> inline-C `sym.tur` bodies the tree-walker cannot run: `sym->str` (reads
+> `Symbol->name`), `sym=?` / `__inst_Eq_eq_qu_Sym` (pointer identity), `str->sym`
+> (interns into the same `env->st`, so it wins over `sym-dynamic.tur`'s
+> runtime-table inline-C and stays pointer-consistent with literals),
+> `__inst_Hash_hash_Sym`, and the `MapKey[Sym]` `mk-cmp`/`mk-box` carriers
+> (symbols key by pointer identity, reusing the int-carrier comparator).
+> `EX_SYM_LIT` was removed from `docs/turi-carve-out.txt` (now handled; parity
+> 113/115, 2 carved); `EX_CONS_LIST` stays carved. No codegen change.
+>
+> **Progress (inline-C ADT-carrier re-tag, 2026-06-13):** **fixed a silent
+> interpreter bug that broke the entire `range-*` family** (14 fixtures all
+> failing `match: no arm matched`) and added the 12 fixable ones to the
+> allowlist (harness 1032 -> 1044). **Root cause:** user ADT/GADT values are
+> `TURI_STRUCT` in the tree-walker (`adt_ctor_native` -> `make_struct_val`), but
+> an inline-C function declared to *return* such a type round-trips the
+> `TuriStruct*` through an `int64_t`. `range.tur` packs two `Bound` endpoints
+> into a heap struct via inline-C (`range-new`), then reads them back with
+> `range-lower`/`range-upper` (`: Bound`); the simple inline-C executor handed
+> the field back as a bare `TURI_INT`, so the struct tag was lost and every
+> downstream `match` over `Bound` (which checks `tag == TURI_STRUCT`) found no
+> arm. **Fix** (`src/turi/eval.c`, the unified inline-C return point): when the
+> function's declared `return_type.kind` is `TY_ADT`/`TY_STRUCT` and the executor
+> produced a non-null `TURI_INT`, reinterpret the carrier as the original
+> `TuriStruct*` (`turi_struct_val`). The int64 *is* the original pointer (it came
+> in as `args[i].as_int` via the union, was stored verbatim, and returned), and
+> every interpreter ADT is struct-backed, so the reinterpretation is sound; the
+> non-null guard avoids a NULL-deref on a genuine nil carrier. `range-show` and
+> `range-from-range*` stay carved (genuine inline-C: snprintf %s formatting / a
+> `seq/from-range` body the simple executor declines). No codegen change.
+>
+> **Progress (W5 bulk-add, 2026-06-12):** **30 verified-passing non-inline-C
+> fixtures joined the `run-turi.sh` allowlist** (harness 1002 -> 1032 passed, 0
+> failed). A sweep of the `SKIP_ALLOWLIST` coverage gap (the genuine W5 triage
+> surface) ran every positive (non-`errors/`) gap fixture under `--interpret`
+> *with its `flags`* and pinned the ones whose stdout + exit already match the
+> compiled expectation under true interpretation -- no works-by-luck carrier
+> accident, all produce non-trivial output. The added families: `cloneable-*`
+> (8), `hkt-row-*` (5), `data-literal-*` / `vec-eq-ascribed*` (5), `sized-*`
+> accept-side (3), `macro-*` (3), plus `refined-nonempty`,
+> `typeclass-poly-wrapper-struct-receiver`, `top-level-def-init-runs-before-main`,
+> `defn-class-constraint-list-syntax`, `cross-module-macro-vec-arg-in-wrapper-body`,
+> `workflow-roundtrip`. This shrinks the allowlist->denylist gap by 30 with zero
+> source/codegen change (allowlist-only); the residual positive gap is fixtures
+> that genuinely fail under `--interpret` (need a fix or a `requires.tur-only`
+> carve before the flip).
+>
 > **Prereq decomposition (2026-06-12):** the "de-risked roadmap" below is broken
 > into independently-landable groundwork (native-registry parity diff,
 > benchmark-stub overlap audit, opt-in `TUR_TURI_FULL_PRELUDE` flag, carve
