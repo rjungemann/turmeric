@@ -4926,8 +4926,14 @@ static int cmd_eval(const char *path, bool use_color,
              * elaboration), so the stubs were redundant -- and a fixture that
              * (load ...)s str.tur / math.tur no longer collides with them via the
              * "already defined by an auto-loaded stdlib module" guard. */
-            "(defn bit-shr [x :int n :int] :int 0)\n"
-            "(defn bit-xor [x :int y :int] :int 0)\n"
+            /* bit-shr / bit-xor stubs dropped: both are kind-preserving builtins
+             * (builtins.c BITWISE_OPS, registered for every integer kind) AND
+             * native-backed (native_bit_shr / native_bit_xor below), so the bare
+             * call resolves at elaboration without a stub.  The :int-typed stubs
+             * actually *shadowed* the kind-preserving builtins, breaking narrow-int
+             * use (e.g. (bit-xor 65535u16 3855u16) -> "expected int, got uint16")
+             * -- a divergence from the compiled path.  bit-and/bit-or/bit-shl were
+             * never stubbed and worked on narrow types all along. */
             "(defn println-float [x :float d :int] :nil nil)\n"
             "(defn int->unit-float [x :int] :float 0.0)\n"
             "(defn tur-sqrt [x :float] :float 0.0)\n"
@@ -6610,6 +6616,18 @@ static TuriValue seq_as_closure(TuriValue v) {
      * tag; if it arrived as a raw carrier, rebuild the closure value. */
     if (v.tag == TURI_CLOSURE) return v;
     return turi_closure((TuriClosure *)(intptr_t)v.as_int);
+}
+/* k-apply-raw (stdlib/kleisli.tur): invoke the fat-closure carrier `k` on `x`,
+ * returning the int-level Option it produces.  kleisli.tur's body is
+ * `TUR_APPLY1(k, x)` (a compiled fat-dispatch through a C function pointer)
+ * which the tree-walker cannot run; this native recovers the closure from the
+ * int carrier and invokes it via turi_call.  Mirrors sch_apply1 / native_seq_*. */
+static TuriValue native_k_apply_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_int(0);
+    TuriValue av = turi_int(a[1].as_int);
+    TuriValue r = turi_call(env, seq_as_closure(a[0]), &av, 1);
+    return turi_int(r.as_int);
 }
 static TuriValue native_seq_iter(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -8868,6 +8886,8 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "option-must",     native_option_must,     NULL);
     turi_env_register_native(env, "option-expect",   native_option_expect,   NULL);
     turi_env_register_native(env, "option-map",      native_option_map,      NULL);
+    /* kleisli.tur: fat-closure carrier apply (TUR_APPLY1) -> turi_call. */
+    turi_env_register_native(env, "k-apply-raw",     native_k_apply_raw,     NULL);
     /* Result/ok/err */
     turi_env_register_native(env, "ok",              native_ok,              NULL);
     turi_env_register_native(env, "err",             native_err,             NULL);

@@ -198,6 +198,12 @@ size_t sweet_map_translate_offset(const SweetMap *map, size_t xform_off);
 
 typedef struct SourceFile {
     const char *path;
+    /* Directory to resolve in-source relative paths (e.g. the
+     * `#use-reader-macros "..."` directive) against, used when `path` itself
+     * carries no directory component -- notably the `--interpret`/eval blob
+     * whose path is the synthetic "<eval>".  NULL means fall back to dirname
+     * of `path` (the normal compiled-file case). */
+    const char *base_dir;
     const char *src;     /* full source text (transformed if xform_map set) */
     size_t      len;
     uint16_t    file_id;

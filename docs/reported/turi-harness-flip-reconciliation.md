@@ -1,5 +1,51 @@
 # TI8 harness flip: allowlist reconciliation + full-denylist blast radius
 
+> **Progress (4 non-inline-C gaps closed under --interpret, 2026-06-13):** a
+> fresh triage sweep of every non-inline-C, non-allowlisted positive fixture
+> left exactly four genuinely-fixable gaps; all four are now resolved.
+>
+> 1. **`sized-bitwise-narrow` -- benchmark-stub shadowing + missing interpreter
+>    bitwise ops.** Two interacting defects. (a) `cmd_eval`'s benchmark-stub
+>    block injected `(defn bit-xor [x :int y :int] :int 0)` and the same for
+>    `bit-shr` -- `:int`-typed stubs that *shadowed* the kind-preserving builtins
+>    (`builtins.c` `BITWISE_OPS`, registered for every integer kind), so
+>    `(bit-xor 65535u16 ...)` failed to elaborate ("expected int, got uint16")
+>    while the never-stubbed `bit-and`/`bit-or`/`bit-shl` accepted narrow types
+>    -- a divergence from the compiled path. Both stubs are redundant (the ops
+>    are builtins AND native-backed), so they were dropped, mirroring the earlier
+>    `cstr->parse-int`/`int->float` stub removal. (b) With elaboration fixed, the
+>    interpreter's `BS_BIN_INFIX` evaluator (`eval.c`) had no arms for `&`/`|`/
+>    `^`/`<<`/`>>` -- `bit-and` had in fact *never* run under `--interpret` (the
+>    program died at elaboration before reaching it). Added the five int64
+>    bitwise cases (kind-width masking is a no-op under the int64-carrier model,
+>    matching the arithmetic fold path).
+> 2. **`reader-macros-use` -- `#use-reader-macros "macros.tur"` resolved against
+>    cwd, not the script.** The directive resolves its relative path against
+>    `r->file->path`, which under `--interpret` is the synthetic `<eval>` blob
+>    (no dirname) -> looked in cwd -> "reader-macros: cannot open 'macros.tur'".
+>    Added a `base_dir` field to `SourceFile` (resolution-only; NULL elsewhere so
+>    the compiled path is unchanged), set from `env->module_base_dir` in
+>    `turi_eval_impl`, and had the reader prefer it for relative `#use-reader-macros`
+>    paths. Compiled path verified unaffected.
+> 3. **`kleisli-arrow-instance` -- fat-closure carrier apply via inline-C.**
+>    `kleisli.tur`'s `k-apply-raw` body is `TUR_APPLY1(k, x)` (a compiled
+>    fat-dispatch through a C function pointer) which the tree-walker cannot run.
+>    Added `native_k_apply_raw` (`src/main.c`) which recovers the closure from
+>    the int carrier (`seq_as_closure`) and invokes it via `turi_call` -- the
+>    same pattern as `native_option_map`/`sch_apply1`.
+> 4. **`tco-self-tail-deep` -- correct but impractically slow; carved
+>    `requires.compiled`.** The interpreter DOES apply self-TCO (a 1M-iteration
+>    run completes without overflowing the C stack), but this fixture's 10M
+>    iterations take ~27s, over the harness's 10s run timeout. Its purpose is the
+>    *compiled* `__tur_tailcall:` goto-lowering (it carries an `expected.c`), so a
+>    `requires.compiled` marker is the right classification -- not an interpreter
+>    bug.
+>
+> All compiler changes are additive interpreter natives / a resolution-only
+> SourceFile field; no codegen change, no snapshot churn. `sized-bitwise-narrow`,
+> `reader-macros-use`, and `kleisli-arrow-instance` joined the `run-turi.sh`
+> allowlist. **Harness 1159 passed, 0 failed.** Parity 113/115, native-parity OK.
+>
 > **Progress (SizedBuf under --interpret, 2026-06-13):** unblocked
 > `sized-buf-cross-param-accept` and `sized-buf-existential-pack-open`.
 > `sized-buf.tur`'s user-facing ops are thin pure-turi wrappers over
