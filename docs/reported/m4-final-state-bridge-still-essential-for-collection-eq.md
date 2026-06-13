@@ -113,22 +113,31 @@ To unblock the Cons rewrite either:
   is a concrete struct (post-substitution), or
 - A new `(cast int (Cons A))` primitive emits the deref inline.
 
-**Probed empirically** (this session, then reverted): widening the
-ascribe bridge to fire on int → TY_APP-with-concrete-struct-spine
-DOES emit the deref inline correctly for inline patterns like
-`(.head (:: t (Cons int)))`. But it regresses ~16 fixtures because
-the let-binding C type emission doesn't honor the ascribed type.
-A pattern like `(let [v1 []:int] …)` desugars to `(let [v1 (:: (vec-of)
-(Vec int))] …)`; the widened gate triggers the bridge and emits
-`(*(Vec__int *)(intptr_t)(vec-of()))`, but the binding declaration
-remains `int64_t v1_NNN = …` — a hard cc type-mismatch.
+**Empirical resolution** (follow-up turn): The ascribe-bridge widening
+AND the matching let-binding type widening shipped, both narrowly gated
+to fire only when the inner expression past EX_ASCRIBE unwrap is a plain
+TY_INT (EX_INT_LIT or non-carrier EX_VAR with TY_INT type) — NOT a
+carrier-returning call. This distinguishes `(:: t (Cons int))` (raw
+int handle → deref) from `(:: (vec-of) (Vec int))` (carrier relabel,
+no deref). The inline pattern `(.head (:: t (Cons int)))` now emits
+the deref directly and the let-bound pattern `(let [c (:: t (Cons
+int))] (.head c))` declares the binding as `Cons__int c_NNN`,
+matching the bridge's by-value output.
 
-The deeper unblock is **let-binding emission**: when the RHS is an
-EX_ASCRIBE whose target resolves to a concrete struct app, the binding's
-C type should follow the ascription, not the original int kind. That
-edit lives in the let-emit path in `emit_expr.c` / `emit_stmt.c` and
-is the prerequisite the cons rewrite (and the bridge widening) both
-depend on. Estimated ~½ session of focused work.
+Probed Eq Cons rewrite end-to-end with this widening: the inline body
+elaborates and the per-instantiation spec emit generates BOTH a
+`Cons__int_Cons__int` spec (correct by-value signature) AND a
+spurious `int64_t_int64_t` spec whose signature and body disagree
+(int64 params but `(x).head` body). The clone-name mangling
+(`emit_abi_clone_name` → `type_c_name` on TY_APP) inconsistently
+returns int64 in one path and Cons__int in another, so the same
+arg_types yield two different specs. **The Cons rewrite is still
+blocked**, this time on a deeper clone-name/signature consistency
+issue in the spec generation. The bridge-widening edits in this turn
+nonetheless ship cleanly: suite stays at 172 FAIL baseline; the
+widening fires correctly for the narrowly-gated case and is a no-op
+elsewhere. The widening is shipped infrastructure that the eventual
+Cons rewrite (once the spec-name issue lands) will consume.
 
 ## What "deleting the bridge" would actually require
 

@@ -90,6 +90,35 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
     while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
     if (!p) return emit_type_c_name(ctx, binding_ty);
 
+    /* M4 follow-up: when the init is an EX_ASCRIBE that casts a PLAIN
+     * TY_INT (not a carrier-returning call) to a TY_APP whose spine
+     * resolves to a concrete struct (e.g. `(:: t (Cons int))` where t is
+     * a raw int param), the ascription bridge at `emit_expr.c:4240`
+     * dereferences the int handle to a by-value struct.  Declare the
+     * binding with the target's by-value C type so the bridge's output
+     * type-checks against the binding's declaration.
+     *
+     * Narrow gate: only fire when p (the producer past EX_ASCRIBE
+     * unwrapping) is itself a bare TY_INT value (literal or non-carrier
+     * EX_VAR).  The carrier-relabel case (`(:: (vec-of) (Vec int))`)
+     * has p as an EX_CALL whose spec returns a carrier; that path falls
+     * through to the existing carrier handling below. */
+    if (init && init->kind == EX_ASCRIBE
+        && init->as.ascribe_.inner->type.kind == TY_INT
+        && binding_ty.kind == TY_APP
+        && (p->kind == EX_INT_LIT
+            || (p->kind == EX_VAR && p->as.var.binding
+                && !p->as.var.binding->emit_byvalue_carrier_abi
+                && p->type.kind == TY_INT))) {
+        Type resolved = emit_resolve_type(ctx, binding_ty);
+        StructDef *rd = NULL;
+        Type rargs[16]; uint8_t rn = 0;
+        if (type_extract_struct_app(&resolved, &rd, rargs, &rn)
+            && rd && !rd->is_opaque) {
+            return emit_type_c_name(ctx, resolved);
+        }
+    }
+
     /* The carrier (int64_t) cases -- declare int64_t so a carrier initialiser
      * type-checks and downstream carrier-ABI uses (vec-push!, dispatch) agree:
      *   - a carrier-returning call (not resolved to a concrete-by-value spec);
@@ -4243,6 +4272,34 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 !type_uses_carrier_abi(e->type)) {
                 return emit_carrier_bridge(ctx, body, inner_val,
                                            CK_CARRIER, CK_CONCRETE, e->type);
+            }
+            /* M4 follow-up: also unbox an int→TY_APP cast when the TY_APP
+             * resolves to a concrete struct app — but only when the inner
+             * is a PLAIN int (not a carrier-handle).  Mirrors the
+             * `emit_binding_repr_c_name` gate so emit decisions stay in
+             * sync.  The carrier-relabel case (`(:: (vec-of) (Vec int))`)
+             * has inner as a carrier-call whose value is already a Vec*;
+             * dereferencing it would double-deref. */
+            const Expr *inner_p = e->as.ascribe_.inner;
+            while (inner_p && inner_p->kind == EX_ASCRIBE) inner_p = inner_p->as.ascribe_.inner;
+            bool inner_is_plain_int =
+                inner_p && (inner_p->kind == EX_INT_LIT
+                    || (inner_p->kind == EX_VAR && inner_p->as.var.binding
+                        && !inner_p->as.var.binding->emit_byvalue_carrier_abi
+                        && inner_p->type.kind == TY_INT));
+            if (!ascribe_to_opaque
+                && e->as.ascribe_.inner->type.kind == TY_INT
+                && e->type.kind == TY_APP
+                && inner_is_plain_int) {
+                Type resolved = emit_resolve_type(ctx, e->type);
+                StructDef *rd = NULL;
+                Type rargs[16]; uint8_t rn = 0;
+                if (type_extract_struct_app(&resolved, &rd, rargs, &rn)
+                    && rd && !rd->is_opaque) {
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CARRIER, CK_CONCRETE,
+                                               resolved);
+                }
             }
             return inner_val;
         }
