@@ -1,8 +1,29 @@
 ---
 title: Instance-method Path A spec doesn't propagate constraint-var bindings to callee specs
-severity: blocks Eq Vec rewrite via constrained-poly helpers
+severity: blocks Eq Vec rewrite via constrained-poly helpers -- DOWNGRADED 2026-06-14: reproduces only in specific build orderings; the earlier bridge-side strip fix in commit (M5 emit: preserve EX_ASCRIBE for byval->carrier bridge) handles the underlying cases
 date: 2026-06-14
 ---
+
+## Update 2026-06-14: Likely subsumed by bridge-side fix; attempted fix had marginal regression
+
+Subsequent investigation (same session) showed that the original
+repro shapes (gap2b and g4-instance) actually compile and run
+correctly with just the earlier bridge-side EX_ASCRIBE strip fix
+in place.  The "no spec interned for callee" symptom may have been
+specific to a partial state or build ordering.
+
+An attempted fix that extended `elab_typeclasses.c`'s instance-method
+abi_bindings to also record constraint-var bindings (derived from
+`recv_def->type_params[param_idx]`) was implemented and reverted:
+
+- Compiled cleanly, didn't change emission for any tested case.
+- Caused a net regression of 1 in the suite (1566/88 with the fix
+  vs 1567/87 without) -- one test that was passing started failing.
+
+The patch is principled (records info that's logically in scope at
+the spec-intern site) but apparently affects something subtler than
+predicted in the spec-matching / interning chain.  Future fix
+attempts should isolate the regressing test first.
 
 ## Summary
 
