@@ -157,6 +157,29 @@ never crosses the carrier boundary.
   helpers rewritten as pure-Turmeric loops".  Option D extends
   that same rewrite to drop the int64 ascription step.
 
+## Update 2026-06-14 (session 4): gap 4 FIXED -- constrained-poly helper from instance body now monomorphizes
+
+The 4th gap (a sibling constrained-poly helper called from an instance-
+method Path A spec body did not get a by-value spec interned) is now
+**fixed**.  See
+`docs/reported/m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`
+for the full write-up.  Summary: a three-part coordinated change
+(definstance records the constraint var symbol; instance bodies
+elaborate constraint vars as named tyvars; emit composition augments the
+active instance-method spec's bindings with the constraint var's
+concrete element type, *scoped to that spec only* so it doesn't collide
+with sibling specs the way the session-3 dispatch-call attempt did).
+The hamt-delete regressor stays green.  Pinned by
+`tests/fixtures/m5-instance-spec-constraint-var/`.
+
+This clears the elaboration-infra blocker the session-3 retirement note
+called out: an `Eq Vec` rewrite using `vec-eq-loop-byval` (a constrained-
+poly helper) can now be called from the `Eq Vec` instance body without
+hitting the "no spec interned for callee" wall.  The remaining
+single-body-two-ABIs question for the `Eq Vec` definstance (its body
+serves both the int64 carrier base and the by-value Path A spec) is
+still open -- it is a separate design choice, not this gap.
+
 ## Update 2026-06-14 (session 2, attempt 3): D-lite Eq Vec rewrite hits a 4th gap
 
 With the bridge-side strip fixed, attempted a less-ambitious Eq Vec

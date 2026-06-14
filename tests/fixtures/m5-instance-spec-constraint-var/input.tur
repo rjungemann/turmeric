@@ -1,0 +1,50 @@
+;; M5 (end-to-end-monomorphization gap 4,
+;; docs/reported/m5-instance-spec-doesnt-propagate-constraint-var-bindings.md):
+;; a typeclass-instance method's Path A spec body that calls a sibling
+;; constrained-polymorphic helper over (Vec A) must monomorphize that
+;; callee per receiver element type.
+;;
+;; Before the fix, the instance-method spec recorded only the class var
+;; (a -> (Vec int)); the constraint var A introduced by [(Eq A)] on the
+;; instance was never resolved, so the callee call composed against an
+;; abstract A.  No by-value spec was interned for the callee and the
+;; Eq-Vec spec body passed Vec__int (by value) into the callee's int64
+;; carrier formals -- a hard cc type error.
+;;
+;; The fix has three coordinated parts:
+;;   1. definstance records each constraint var's symbol in TypeConstraint.tyvar.
+;;   2. instance-method bodies elaborate the constraint vars as NAMED tyvars
+;;      (so `(:: x (Vec A))` resolves A to TY_TYVAR, not an anonymous struct).
+;;   3. emit_abi_register_call augments the active instance-method spec's
+;;      bindings with the constraint var's concrete element type, so the
+;;      composition pass substitutes A -> int and interns the callee's
+;;      by-value spec.
+
+(defn callee [A]
+  [(Eq A)]
+  [x : (Vec A) y : (Vec A) i : int len : int]
+  : bool
+  (if (= i len)
+    true
+    (if (eq? (:: (vec-get (:: x :int) i) A) (:: (vec-get (:: y :int) i) A))
+      (callee x y (+ i 1) len)
+      false)))
+
+(defclass MyEq [a] (myeq? [x y] : bool))
+
+(definstance MyEq [Vec]
+  [(Eq A)]
+  (myeq? [x y]
+    (callee (:: x (Vec A)) (:: y (Vec A)) 0 (vec-len (:: x :int)))))
+
+(defn main [] : int
+  (let [a (:: (vec-of) (Vec int))
+        b (:: (vec-of) (Vec int))
+        c (:: (vec-of) (Vec int))]
+    (vec-push! a 1) (vec-push! a 2)
+    (vec-push! b 1) (vec-push! b 2)
+    (vec-push! c 1) (vec-push! c 9)
+    ;; a == b (both [1 2]) -> 1; a == c ([1 2] vs [1 9]) -> 0.
+    (println (if (.myeq? a b) 1 0))
+    (println (if (.myeq? a c) 1 0))
+    0))

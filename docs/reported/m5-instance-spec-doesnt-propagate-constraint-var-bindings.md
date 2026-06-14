@@ -1,8 +1,61 @@
 ---
 title: Instance-method Path A spec doesn't propagate constraint-var bindings to callee specs
-severity: blocks Eq Vec rewrite via constrained-poly helpers -- DOWNGRADED 2026-06-14: reproduces only in specific build orderings; the earlier bridge-side strip fix in commit (M5 emit: preserve EX_ASCRIBE for byval->carrier bridge) handles the underlying cases
+severity: FIXED 2026-06-14 (session 4) -- a constrained-poly helper called from a typeclass-instance method body now monomorphizes per receiver element type; pinned by tests/fixtures/m5-instance-spec-constraint-var/
 date: 2026-06-14
 ---
+
+## Update 2026-06-14 (session 4): FIXED
+
+The two-part remediation in the session-3 update turned out to be a
+*three*-part coordinated fix, and the hamt-delete regression was an
+artifact of doing part A at the wrong site (the dispatch-call's
+abi_bindings, which flow into *every* instance method's own spec).
+Doing the equivalent derivation **emit-side, scoped to the active
+instance-method spec only**, sidesteps that regression entirely.
+
+The three coordinated changes:
+
+1. **`elab_typeclasses.c` (definstance constraint parse)**: record each
+   constraint var's `Symbol` in `TypeConstraint.tyvar` (both the
+   vector-of-lists and the flat constraint-vector branches).  Previously
+   `.tyvar` was left NULL, so the emit side had no name to key the
+   constraint var on.
+
+2. **`elab_types.c` + `elab_internal.h` + `elab_typeclasses.c` (pass 2)**:
+   add an ambient `inst_body_type_params` scope on `Elab`, populated with
+   the instance's constraint vars during method-body pass 2, and consult
+   it in `type_expr_from_form`'s symbol fallback.  This makes an
+   ascription `(:: x (Vec A))` inside an instance body resolve `A` to a
+   NAMED `TY_TYVAR` rather than the anonymous `TY_STRUCT{def=NULL}` that
+   the session-3 trace flagged (`call.bindings[0]: kind=18 TY_STRUCT`).
+   That named identity is what lets the emit composition substitute by
+   name.
+
+3. **`emit_module.c` (`emit_abi_register_call` composition pass)**: when
+   the active specialization is an instance-method spec
+   (`typeclass_inst` set, `fn->owner_instance` available), derive the
+   constraint vars' concrete resolutions from the receiver's resolved
+   `TY_APP` (the class-var binding) -- `param_idx` indexes its elem
+   types -- and splice `{A -> int}` onto the spec's bindings *for the
+   composition pass only*.  It does not change the spec's clone name or
+   identity, so it cannot collide with sibling instance specs (the
+   hamt-delete regressor).
+
+With all three in place the call's binding `{A -> TY_TYVAR("A")}`
+composes against the augmented spec `{a -> (Vec int), A -> int}` to
+yield `Vec__int`, and the callee's by-value spec is interned.
+
+**Validation**: `/tmp/g4-instance.tur` (the motivating repro) compiles
+and exits 0; the regular-outer control still works; full suite is
+`1621 passed, 4 failed` with the same 4 pre-existing failures as
+baseline (hkt-stdlib-option-result-instances, rt-return-dispatch-basic,
+and two errors/rt-* diagnostic-text mismatches -- all reproduce with the
+change reverted).  **hamt-delete passes** (the session-2/3 regressor).
+Pinned by `tests/fixtures/m5-instance-spec-constraint-var/`.
+
+---
+
+(Historical session-1..3 material below.)
 
 ## Update 2026-06-14 (session 3): regressor isolated AND fix shown insufficient
 

@@ -965,17 +965,72 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * bindings so a generic-from-generic call (e.g. a forwarder `fwd` calling
      * `recv`, both `[T R]`) specializes to the concrete clone instead of
      * falling back to the broken carrier template. */
+    /* M5 (end-to-end-monomorphization gap 4): when the active specialization is
+     * a typeclass-instance method, its `bindings[]` record only the class var
+     * (e.g. `a -> (Vec int)`).  A sibling constrained-poly helper called from
+     * the instance body is quantified over the instance's *constraint* var
+     * (e.g. `[(Eq A)]`, with the call's binding type carrying a named TY_TYVAR
+     * `A` after the elab-side fix).  To monomorphize that call we need the
+     * constraint var's concrete resolution -- `A -> int`, the element of the
+     * receiver `(Vec int)`.  Derive those bindings here from the instance's
+     * `type_param_constraints` (param_idx indexes into the receiver's TY_APP
+     * elem types) and splice them onto the active spec's bindings for the
+     * composition pass below.  Emit-side only: it does not change the active
+     * spec's identity or clone name, just what inner calls compose against. */
+    const AbiTypeBinding *spec_bindings = NULL;
+    uint8_t spec_n_bindings = 0;
+    AbiTypeBinding spec_bindings_aug[ABI_TYPE_BINDINGS_MAX];
+    if (ctx->current_abi_specialization) {
+        const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+        spec_bindings = aspec->bindings;
+        spec_n_bindings = aspec->n_bindings;
+        if (aspec->typeclass_inst && aspec->fn && aspec->fn->owner_instance &&
+            aspec->n_bindings > 0 && aspec->n_bindings <= ABI_TYPE_BINDINGS_MAX) {
+            const TypeClassInstance *inst = aspec->fn->owner_instance;
+            /* Receiver's resolved TY_APP comes from the class-var binding
+             * (bindings[0] is the class var per elab_definstance's recording). */
+            const Type *recv = &aspec->bindings[0].type;
+            if (recv->kind == TY_APP && inst->n_type_param_constraints > 0) {
+                /* Extract elem types in type-param order (innermost-first in the
+                 * TY_APP spine, reversed to outermost-first). */
+                Type elem_buf[8];
+                uint8_t n_elem = 0;
+                for (const Type *tx = recv; tx && tx->kind == TY_APP && n_elem < 8;
+                     tx = tx->as.app.fn) {
+                    if (tx->as.app.arg) elem_buf[n_elem++] = *tx->as.app.arg;
+                }
+                for (uint8_t a = 0, b = (uint8_t)(n_elem - 1); n_elem > 0 && a < b; a++, b--) {
+                    Type t = elem_buf[a]; elem_buf[a] = elem_buf[b]; elem_buf[b] = t;
+                }
+                uint8_t naug = aspec->n_bindings;
+                for (uint8_t k = 0; k < naug; k++) spec_bindings_aug[k] = aspec->bindings[k];
+                for (uint8_t c = 0; c < inst->n_type_param_constraints &&
+                                    naug < ABI_TYPE_BINDINGS_MAX; c++) {
+                    const TypeConstraint *tcst = &inst->type_param_constraints[c];
+                    if (tcst->param_idx < 0 || !tcst->tyvar) continue;
+                    if ((uint8_t)tcst->param_idx >= n_elem) continue;
+                    spec_bindings_aug[naug].name = tcst->tyvar->name;
+                    spec_bindings_aug[naug].type = elem_buf[tcst->param_idx];
+                    naug++;
+                }
+                if (naug > aspec->n_bindings) {
+                    spec_bindings = spec_bindings_aug;
+                    spec_n_bindings = naug;
+                }
+            }
+        }
+    }
+
     AbiTypeBinding composed[ABI_TYPE_BINDINGS_MAX];
-    if (ctx->current_abi_specialization &&
-        ctx->current_abi_specialization->n_bindings > 0 &&
+    if (spec_bindings && spec_n_bindings > 0 &&
         n_bindings <= ABI_TYPE_BINDINGS_MAX) {
         bool changed = false;
         for (uint8_t i = 0; i < n_bindings; i++) {
             composed[i].name = bindings[i].name;
             composed[i].type = emit_abi_instantiate_type(
                 &bindings[i].type,
-                ctx->current_abi_specialization->bindings,
-                ctx->current_abi_specialization->n_bindings,
+                spec_bindings,
+                spec_n_bindings,
                 ctx->type_arena);
             /* M5 residual-straddle: the original change check compared
              * type_c_name strings, but TY_TYVAR and TY_INT (and other
@@ -1116,11 +1171,9 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * it through that spec's concrete bindings so a relayed aggregate result
      * specializes to `(Pair int ptr<void>)` rather than the int64_t carrier.  For
      * a concrete top-level call this is a no-op (no tyvars to substitute). */
-    if (ctx->current_abi_specialization &&
-        ctx->current_abi_specialization->n_bindings > 0) {
+    if (spec_bindings && spec_n_bindings > 0) {
         result_type = emit_abi_instantiate_type(
-            &result_type, ctx->current_abi_specialization->bindings,
-            ctx->current_abi_specialization->n_bindings, ctx->type_arena);
+            &result_type, spec_bindings, spec_n_bindings, ctx->type_arena);
     }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;
