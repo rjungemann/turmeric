@@ -1,7 +1,7 @@
 # Plan: Extract Thread Pool into tur-thread-pool Spice
 
 > **Status:** Draft
-> **Last Updated:** 2026-06-01
+> **Last Updated:** 2026-06-14
 > **Type:** Spice Extraction
 > **Spice Location:** `turmeric-spices/spices/thread-pool`
 > **Extracted from:** `turmeric-spices/spices/httpd` (`httpd/pool`)
@@ -17,7 +17,7 @@ coupled to `tur-httpd` in two ways:
 
 1. **Item type is `int` (socket fd).** The pool speaks file-descriptor
    integers directly; there is no generic work-item type.
-2. **Worker dispatch hardcodes `httpd__server__srv_worker_loop`.**
+2. **Worker dispatch hardcodes `httpd__server__srv_worker_loop_trampoline`.**
    Each dequeued item is immediately dispatched to the HTTP
    connection-servicing function via a hardcoded `extern` declaration.
 
@@ -174,6 +174,17 @@ This keeps the default 4× headroom without breaking `tur-httpd` behaviour.
 The `__httpd_warg { int client_fd; void *handler; }` allocation stays in
 `httpd/pool` because it is HTTP-specific (packing fd + handler together).
 
+**Behavior change worth flagging:** today the warg is allocated *after
+dequeue*, inside `pool-worker-loop`, reusing the pool's internal fd slot
+as the carrier. Under the callback model the warg is allocated *before
+submit* by the httpd-side `pool-enqueue` wrapper, and the generic
+`tur-thread-pool` only sees a `ptr<void>`. The callback (an httpd-side
+trampoline that unpacks the warg and calls `srv-worker-loop`) frees the
+warg. Net effect: one extra `malloc`/`free` per accepted connection on
+the listener thread's hot path. At httpd's scale this is negligible
+(connection setup already dominates), but it is a real behavioural
+delta vs. the "pure refactor" framing, not a no-op.
+
 ---
 
 ## Spice manifest (`build.tur`)
@@ -239,3 +250,4 @@ turmeric-spices/spices/httpd/
 | `httpd/pool` caller API changes | Wrapper keeps the existing signatures (`pool-new`, `pool-enqueue`, `pool-stop`); callers in `httpd/server` require no changes. |
 | Callback lifetime | Documented: callback must remain valid for the full pool lifetime (same requirement as `handler` in the current design). |
 | Leak-check regression | The new spice's fixture tests run with ASan leak detection on; process-lifetime workers use `ASAN_OPTIONS=detect_leaks=0` as per existing policy if needed. |
+| Extra `malloc`/`free` per submit | Callback model forces the httpd wrapper to allocate the `__httpd_warg` before submit rather than reusing the pool's fd slot. Negligible relative to per-connection accept/parse/write cost; document but do not micro-optimize for v0.1.0. |

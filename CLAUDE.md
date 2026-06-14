@@ -21,6 +21,58 @@ the test to dodge the breakage. If you fix the bug in the same session,
 the report can become the commit/PR description instead; otherwise it
 stays in `docs/reported/` so it is never forgotten.
 
+## No Lazy `:int` Stand-Ins -- STRICT RULE
+
+Typing a request handle, response handle, ctx, server, connection, file,
+socket, callback function pointer, option value, result value, cons cell,
+HAMT map, vector, struct handle, or any other distinct kind of thing as
+`:int` because "it's a pointer under the hood" is **not allowed**. The
+language has `defopaque`, `defstruct`, `:ptr<T>`, `:fn`, `option<T>`,
+`result<T,E>`, parametric types, and typeclasses for a reason. Reaching for
+`:int` is throwing all of that away and exporting an API the type checker
+cannot help anyone use correctly.
+
+This is the same defect the `tour-tourist` middleware shipped --
+`(fn [req : int] : int)` instead of `(fn [ctx : Ctx] : option<Response>)` --
+and the kind of thing that gets noticed downstream months later when
+something tries to actually compose against it. **Do not ship more of it.**
+
+If you are about to write `:int` for a parameter or return type, **stop**
+and answer:
+
+- Is this value an opaque handle to a thing of a specific kind? -> `defopaque`
+  newtype, or a `:ptr<TheStruct>`. Never `:int`.
+- Is it a callback / function pointer? -> spell out the function type, e.g.
+  `(fn [Request] option<Response>)`. Never `:int`.
+- Is it a boolean? -> `:bool`. Never `:int` with 0/1 convention.
+- Is it nullable / optional? -> `option<T>`. Never `:int` with a 0 sentinel.
+- Is it a tagged union? -> `result<T,E>` or a real ADT. Never `:int` with a
+  status-code convention.
+- Is it genuinely a machine integer with no further structure (length,
+  count, byte, port, file descriptor we cannot wrap right now)? -> `:int` is
+  fine. Default the other way.
+
+The **only** legitimate `:int` is "this really is a number, not a stand-in
+for something else." Everything else gets a real type.
+
+### When you notice this in existing code
+
+If you are mid-task and discover an API leaning on `:int` as a type-eraser
+for handles/callbacks/options/etc., **stop the current task**. Do not paper
+over it with `defopaque` wrappers at the call site, do not "just match the
+existing convention," and do not silently propagate the bad typing into new
+code you are writing. File the finding under `docs/reported/<slug>.md` per
+the Reporting Bugs rule above, surface it to the user, and let them decide
+whether to (a) fix the upstream API now, (b) take the hit and proceed with
+a documented workaround, or (c) shelve the work until the upstream is fixed.
+
+Authoring new code with placeholder `:int` types "for now, we'll tighten it
+later" is the same defect on a shorter clock. Pick the real type up front,
+or stop and ask. **There is no "we'll tighten the types in a follow-up."**
+Follow-ups for type hygiene do not happen on their own, and meanwhile every
+caller written against the loose API is a fresh source of bugs that the
+compiler can no longer catch.
+
 ## Testing Float Behavior -- STRICT RULE
 
 When investigating anything involving floats (type coercion, arithmetic,
