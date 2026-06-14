@@ -1,6 +1,8 @@
 # End-to-end-monomorphization WIP: residual fixture failures (triage)
 
-> **Status:** Open -- triage / findings. Filed 2026-06-14.
+> **Status:** RESOLVED 2026-06-14 -- all of Groups A-E are green. Filed 2026-06-14.
+> Group E (the last open group) closed via `requires.compiled` skip markers on
+> the 10 transitive-inline-C fixtures; see the Group E "Resolution" section.
 > **Severity:** medium. No stable functionality regressed; these are fixtures
 > landed by the in-progress **end-to-end-monomorphization** effort (all added in
 > commit `7de4973`, 2026-06-13) whose backing implementation is incomplete.
@@ -25,8 +27,16 @@ this report). What remains below is **compiler-side** (Groups A-C, failing on
 | `positional-pap-opaque-ok` | B | compiled | RESOLVED |
 | `hkt-stdlib-option-result-instances` | C | compiled | RESOLVED |
 | `kleisli-arrow-instance` | D | turi | RESOLVED (2026-06-14) |
-| `option-of-tvec-eq` | E | turi | OPEN |
-| `result-of-typed-eq` | E | turi | OPEN |
+| `option-of-tvec-eq` | E | turi | RESOLVED (2026-06-14) |
+| `result-of-typed-eq` | E | turi | RESOLVED (2026-06-14) |
+| `data-literal-typed-empty` | E | turi | RESOLVED (2026-06-14) |
+| `m5-constrained-poly-vec-eq` | E | turi | RESOLVED (2026-06-14) |
+| `map-of-tvec-eq` | E | turi | RESOLVED (2026-06-14) |
+| `set-of-tvec-eq` | E | turi | RESOLVED (2026-06-14) |
+| `vec-eq-ascribed` | E | turi | RESOLVED (2026-06-14) |
+| `vec-eq-ascribed-multi` | E | turi | RESOLVED (2026-06-14) |
+| `vec-of-tvec-eq` | E | turi | RESOLVED (2026-06-14) |
+| `vec-of-tvec-eq-manual` | E | turi | RESOLVED (2026-06-14) |
 
 Update 2026-06-14: Groups A, B, C are green (verified via `bash tests/run.sh`
 filtered on the fixture names) -- the compiler-side gaps were closed by the
@@ -220,6 +230,38 @@ inline-C dependency, or add a skip marker to these two fixtures (and audit the
 suite for siblings). Out of scope for the Group D fix; flagged here so it is
 tracked rather than silently surviving. Pre-existing on the baseline
 (`deee4c6`), not introduced by the Group D change.
+
+### Resolution 2026-06-14 -- skip markers (option b), siblings audited
+
+Took option (b) -- explicit `requires.compiled` skip markers -- not option (a).
+Option (a) (teach `fixture_has_inline_c` to follow the transitive `(load ...)`
+chain) is the wrong shape here: stdlib is pervasively inline-C, so any predicate
+that skips a fixture because *something it loads* contains a `` ```c `` block
+would over-skip nearly the whole suite. The interpreter genuinely cannot run
+these fixtures (the dispatch bottoms out in carrier-ABI inline-C), so a precise
+per-fixture skip marker is the accurate signal -- the same philosophy as the
+existing `fixture_has_inline_c` carve-out, just made explicit where static
+body-grep can't see the dependency.
+
+**The audit surfaced 8 siblings beyond the named pair.** A full
+`bash tests/run-turi.sh` run (baseline `a0f5215`) failed on **10** fixtures, all
+the same shape (pure-Turmeric `input.tur`, transitive stdlib inline-C via
+`vec`/`map`/`set` ops and/or per-call-site `eq?`/`option-eq?`/`result-eq?`
+synthesis, all green on `bash tests/run.sh`):
+
+```
+data-literal-typed-empty    m5-constrained-poly-vec-eq   map-of-tvec-eq
+option-of-tvec-eq           result-of-typed-eq           set-of-tvec-eq
+vec-eq-ascribed             vec-eq-ascribed-multi        vec-of-tvec-eq
+vec-of-tvec-eq-manual
+```
+
+Each got a `requires.compiled` marker carrying a one-paragraph note explaining
+the transitive-inline-C dependency. `requires.compiled` is a no-op for
+`tests/run.sh` (compiled coverage unchanged -- verified `summary: 10 passed,
+0 failed` on the filtered run) and a SKIP for `tests/run-turi.sh` (verified all
+10 now print `SKIP ... (requires.compiled)`; turi run drops from 10 failed to
+0 failed). Group E is closed.
 
 ---
 
