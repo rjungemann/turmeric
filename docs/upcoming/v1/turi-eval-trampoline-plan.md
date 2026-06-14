@@ -343,8 +343,16 @@ costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
 
 ### Suggested sub-slicing (each regression-green; ceiling drops only at the end)
 
-1. **T3.0 -- drive EX_MATCH** (tail-aware arm bodies). Independently testable;
-   needed so the call fold actually flattens match-recursive callees.
+1. **T3.0 -- drive EX_MATCH -- LANDED 2026-06-14.** Extracted the arm resolution
+   (scrutinee + pattern scan + guards, all shallow via `eval_expr`) into
+   `eval_match_resolve` and added a `DK_MATCH_BODY` continuation: the driver
+   resolves the winning arm, then descends the arm *body* in the loop (freeing
+   the arm frame on return, like `DK_LET_BODY`). `eval_expr_impl`'s EX_MATCH now
+   delegates to `eval_drive`; `eval_body_tco`'s tail-match copy is untouched.
+   Validated: `run-turi.sh` 1186 passed (same 8 unrelated monomorphization
+   fails), 14/14 `eval|sandbox` ctests, all `adt-*` match fixtures green,
+   `return` through an arm body correct. Needed so the T3 call fold flattens
+   match-recursive callee bodies.
 2. **T3.1 -- `DK_BUILTIN_ARG`** (+ and/or short-circuit). Safe; mirrors
    `DK_MAKE_STRUCT`. No ceiling change yet (calls still recurse).
 3. **T3.2 -- `DK_CALL_ARG` + `DK_CALL_RET` + body-in-loop + TCO**. The ceiling

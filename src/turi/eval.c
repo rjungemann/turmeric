@@ -4071,17 +4071,109 @@ typedef enum {
     DK_LET_BIND,     /* EX_LET/EX_LETREC: evaluating binding[index]'s init */
     DK_LET_BODY,     /* EX_LET/EX_LETREC: evaluating the body (frame owned) */
     DK_MAKE_STRUCT,  /* EX_MAKE_STRUCT: evaluating field[index] (fields owned) */
+    DK_MATCH_BODY,   /* EX_MATCH: evaluating the winning arm body (frame owned) */
 } DriveKind;
 
 typedef struct {
     DriveKind   kind;
     const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET / EX_MAKE_STRUCT */
-    EvalFrame  *frame;  /* lexical env: DO/MAKE_STRUCT=enclosing; LET=owned frame */
+    EvalFrame  *frame;  /* lexical env: DO/MAKE_STRUCT=enclosing; LET/MATCH=owned */
     uint32_t    index;  /* DO: next item; LET: next binding; MAKE_STRUCT: next field */
     TuriValue   last;   /* DO/PROGRAM: last non-defer value so far */
     void       *aux;    /* LET_BODY: DeferItem* defer-stack mark;
                          * MAKE_STRUCT: TuriValue* heap field accumulator */
 } DriveCont;
+
+/* T3.0: resolve an EX_MATCH to its winning arm frame + body WITHOUT evaluating
+ * the body, so eval_drive can descend the body in the loop (flattening
+ * match-recursive callee bodies later folded by T3).  The scrutinee and any
+ * arm guards are evaluated here via eval_expr (shallow, not the deep-recursion
+ * site).  Returns:
+ *   1  -> matched: *out_frame (caller frees after the body) and *out_body set
+ *   0  -> no arm matched
+ *  -1  -> a signal/error during scrutinee or guard eval: *out_val holds it
+ * Mirrors the recursive EX_MATCH in eval_expr_impl exactly. */
+static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
+                              EvalFrame **out_frame, const Expr **out_body,
+                              TuriValue *out_val) {
+    TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
+    if (turi_is_error(val) || env->returning || env->throwing) {
+        *out_val = val; return -1;
+    }
+    MatchArm *arms   = e->as.match_.arms;
+    uint32_t  n_arms = e->as.match_.n_arms;
+    for (uint32_t ai = 0; ai < n_arms; ai++) {
+        MatchArm     *arm = &arms[ai];
+        MatchPattern *pat = &arm->pattern;
+        bool          matched   = false;
+        EvalFrame    *arm_frame = NULL;
+
+        if (pat->is_wildcard) {
+            matched = true; arm_frame = eval_frame_new(frame);
+        } else if (pat->is_var && pat->union_member_idx >= 0) {
+            bool tag_ok = false;
+            if (pat->n_bindings >= 1 && pat->bindings[0]) {
+                TypeKind tk = pat->bindings[0]->type.kind;
+                switch (tk) {
+                case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                    tag_ok = (val.tag == TURI_INT); break;
+                case TY_BOOL:  tag_ok = (val.tag == TURI_BOOL); break;
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                    tag_ok = (val.tag == TURI_FLOAT); break;
+                case TY_CSTR:  tag_ok = (val.tag == TURI_CSTR); break;
+                case TY_NIL:   tag_ok = (val.tag == TURI_NIL); break;
+                default:       tag_ok = (val.tag == TURI_STRUCT || val.tag == TURI_CLOSURE); break;
+                }
+            } else {
+                tag_ok = true;
+            }
+            if (tag_ok) {
+                matched = true; arm_frame = eval_frame_new(frame);
+                if (pat->var_sym) frame_bind(arm_frame, pat->var_sym->name, val);
+            }
+        } else if (pat->is_literal) {
+            switch (pat->lit_kind) {
+            case F_INT:   matched = (val.tag == TURI_INT   && val.as_int   == pat->lit_int);   break;
+            case F_BOOL:  matched = (val.tag == TURI_BOOL  && val.as_bool  == pat->lit_bool);  break;
+            case F_FLOAT: matched = (val.tag == TURI_FLOAT && val.as_float == pat->lit_float); break;
+            case F_STR:   matched = (val.tag == TURI_CSTR  && val.as_cstr  && pat->lit_cstr &&
+                                     strcmp(val.as_cstr, pat->lit_cstr) == 0);                break;
+            case F_NIL:   matched = (val.tag == TURI_NIL); break;
+            default: break;
+            }
+            if (matched) arm_frame = eval_frame_new(frame);
+        } else if (pat->is_var) {
+            matched = true; arm_frame = eval_frame_new(frame);
+            frame_bind(arm_frame, pat->var_sym->name, val);
+        } else {
+            CtorDef *ctor = pat->ctor;
+            if (ctor && val.tag == TURI_STRUCT &&
+                strcmp(val.as_struct->name, ctor->name) == 0) {
+                matched = true; arm_frame = eval_frame_new(frame);
+                for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                    Binding *b = pat->bindings[bi];
+                    if (b && bi < val.as_struct->n_fields)
+                        frame_bind(arm_frame, b->name->name, val.as_struct->fields[bi]);
+                }
+            }
+        }
+
+        if (matched) {
+            if (arm->guard) {
+                TuriValue gv = eval_expr(env, arm_frame, arm->guard);
+                if (turi_is_error(gv) || env->returning || env->throwing) {
+                    eval_frame_free(arm_frame); *out_val = gv; return -1;
+                }
+                if (gv.tag != TURI_BOOL || !gv.as_bool) {
+                    eval_frame_free(arm_frame); continue;  /* guard failed */
+                }
+            }
+            *out_frame = arm_frame; *out_body = arm->body; return 1;
+        }
+    }
+    return 0;  /* no arm matched */
+}
 
 /* do/program item accessors (both kinds share this shape). */
 static inline Expr **drive_seq_items(const Expr *e) {
@@ -4179,6 +4271,25 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 control = control->as.make_struct_.field_values[0];
                 break;
             }
+            case EX_MATCH: {
+                /* Resolve scrutinee + arm + guard synchronously (shallow), then
+                 * descend the winning arm body in the loop. */
+                EvalFrame  *af   = NULL;
+                const Expr *body = NULL;
+                TuriValue   sv   = turi_nil();
+                int mr = eval_match_resolve(env, cf, control, &af, &body, &sv);
+                if (mr == 1) {
+                    DRIVE_PUSH(((DriveCont){ DK_MATCH_BODY, control, af, 0,
+                                             turi_nil(), NULL }));
+                    control = body; cf = af;   /* descend arm body in the loop */
+                } else if (mr == 0) {
+                    cur = turi_error("eval: match: no arm matched");
+                    descending = false;
+                } else {  /* mr == -1: signal during scrutinee/guard */
+                    cur = sv; descending = false;
+                }
+                break;
+            }
             default:
                 /* Black box: evaluate any other kind via the recursive path. */
                 cur = eval_expr(env, cf, control);
@@ -4270,6 +4381,14 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     fire_defers_to_mark(env, (DeferItem *)top->aux, NULL);
                 eval_frame_free(nf);
                 len--;  /* pop; propagate cur (body value or signal) */
+                break;
+            }
+            case DK_MATCH_BODY: {
+                /* Arm body produced cur (value or signal): free the arm frame
+                 * and propagate, matching the recursive EX_MATCH which frees
+                 * arm_frame before returning the body's result. */
+                eval_frame_free(top->frame);
+                len--;
                 break;
             }
             case DK_MAKE_STRUCT: {
@@ -4812,104 +4931,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- G0: match expression -------------------------------------------- */
-    case EX_MATCH: {
-        TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
-        if (turi_is_error(val) || env->returning || env->throwing) return val;
-
-        MatchArm  *arms   = e->as.match_.arms;
-        uint32_t   n_arms = e->as.match_.n_arms;
-
-        for (uint32_t ai = 0; ai < n_arms; ai++) {
-            MatchArm    *arm = &arms[ai];
-            MatchPattern *pat = &arm->pattern;
-
-            bool matched = false;
-            EvalFrame *arm_frame = NULL;
-
-            if (pat->is_wildcard) {
-                matched   = true;
-                arm_frame = eval_frame_new(frame);
-            } else if (pat->is_var && pat->union_member_idx >= 0) {
-                /* IT4: Union type-narrowing arm — check runtime tag against member type */
-                bool tag_ok = false;
-                if (pat->n_bindings >= 1 && pat->bindings[0]) {
-                    TypeKind tk = pat->bindings[0]->type.kind;
-                    switch (tk) {
-                    case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
-                    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-                        tag_ok = (val.tag == TURI_INT); break;
-                    case TY_BOOL:
-                        tag_ok = (val.tag == TURI_BOOL); break;
-                    case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-                        tag_ok = (val.tag == TURI_FLOAT); break;
-                    case TY_CSTR:
-                        tag_ok = (val.tag == TURI_CSTR); break;
-                    case TY_NIL:
-                        tag_ok = (val.tag == TURI_NIL); break;
-                    default:
-                        /* For struct/closure/pointer types, accept any non-primitive. */
-                        tag_ok = (val.tag == TURI_STRUCT || val.tag == TURI_CLOSURE);
-                        break;
-                    }
-                } else {
-                    tag_ok = true; /* no type info — treat as var capture */
-                }
-                if (tag_ok) {
-                    matched   = true;
-                    arm_frame = eval_frame_new(frame);
-                    if (pat->var_sym)
-                        frame_bind(arm_frame, pat->var_sym->name, val);
-                }
-            } else if (pat->is_literal) {
-                switch (pat->lit_kind) {
-                case F_INT:   matched = (val.tag == TURI_INT   && val.as_int   == pat->lit_int);   break;
-                case F_BOOL:  matched = (val.tag == TURI_BOOL  && val.as_bool  == pat->lit_bool);  break;
-                case F_FLOAT: matched = (val.tag == TURI_FLOAT && val.as_float == pat->lit_float); break;
-                case F_STR:   matched = (val.tag == TURI_CSTR  && val.as_cstr  && pat->lit_cstr &&
-                                         strcmp(val.as_cstr, pat->lit_cstr) == 0);                break;
-                case F_NIL:   matched = (val.tag == TURI_NIL); break;
-                default: break;
-                }
-                if (matched) arm_frame = eval_frame_new(frame);
-            } else if (pat->is_var) {
-                matched   = true;
-                arm_frame = eval_frame_new(frame);
-                frame_bind(arm_frame, pat->var_sym->name, val);
-            } else {
-                CtorDef *ctor = pat->ctor;
-                if (ctor && val.tag == TURI_STRUCT &&
-                    strcmp(val.as_struct->name, ctor->name) == 0) {
-                    matched   = true;
-                    arm_frame = eval_frame_new(frame);
-                    for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
-                        Binding *b = pat->bindings[bi];
-                        if (b && bi < val.as_struct->n_fields)
-                            frame_bind(arm_frame, b->name->name,
-                                       val.as_struct->fields[bi]);
-                    }
-                }
-            }
-
-            if (matched) {
-                /* Optional guard: re-check if the arm has a when-guard. */
-                if (arm->guard) {
-                    TuriValue gv = eval_expr(env, arm_frame, arm->guard);
-                    if (turi_is_error(gv) || env->returning || env->throwing) {
-                        eval_frame_free(arm_frame);
-                        return gv;
-                    }
-                    if (gv.tag != TURI_BOOL || !gv.as_bool) {
-                        eval_frame_free(arm_frame);
-                        continue;
-                    }
-                }
-                TuriValue result = eval_expr(env, arm_frame, arm->body);
-                eval_frame_free(arm_frame);
-                return result;
-            }
-        }
-        return turi_error("eval: match: no arm matched");
-    }
+    case EX_MATCH:
+        /* T3.0: delegated to the explicit-stack driver, which resolves the arm
+         * via eval_match_resolve and descends the arm body in the loop so a
+         * match-recursive callee body does not grow the C stack (prerequisite
+         * for the T3 call fold).  Semantics match the former inline version. */
+        return eval_drive(env, frame, e);
 
     /* --- DV0/DV1: Dynamic variables -------------------------------------- */
     case EX_DEFDYNAMIC: {
