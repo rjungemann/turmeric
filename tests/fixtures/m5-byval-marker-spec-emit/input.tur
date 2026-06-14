@@ -1,0 +1,40 @@
+;; M5 residual-straddle (docs/upcoming/m5-residual-straddle-retirement.md):
+;; pins the #{ByVal} marker behavior end-to-end.  A #{ByVal}-marked helper
+;; with a (Vec A) param that's only called from a by-value spec body
+;; should get a per-receiver-type spec interned (Vec__int) AND its
+;; carrier-base body should be suppressed (no observed carrier call,
+;; thanks to emit_abi_fn_skip_generic).
+;;
+;; Without the marker, the body_qualifies_for_carrier_skip gate at
+;; emit_module.c rejects TY_APP arg types and the spec body falls back
+;; to the carrier base -- whose v.data field access fails because v is
+;; int64_t in carrier mode.
+;;
+;; Also pins the composition fix in emit_abi_register_call: the change
+;; check at the composed-bindings step previously used type_c_name
+;; string comparison, which conflated TY_TYVAR and TY_INT (both "int64_t")
+;; and dropped the composed bindings.  With the fix, the by-value Vec__int
+;; arg type reaches the gate correctly.
+
+(defn vec-get-byval [A]
+  [v : (Vec A) i : int]
+  #{ByVal}
+  : A
+  ```c
+  if (i >= 0 && (size_t)i < (size_t)v.len) {
+    return (int64_t)((int64_t *)v.data)[i];
+  }
+  fprintf(stderr, "vec-get-byval index out of bounds\n");
+  exit(1);
+  return 0;
+  ```)
+
+(defn third-byval [A] [v : (Vec A)] : A
+  (vec-get-byval v 2))
+
+(defn main [] : int
+  (let [a (:: (vec-of) (Vec int))]
+    (vec-push! a 10)
+    (vec-push! a 20)
+    (vec-push! a 30)
+    (third-byval a)))

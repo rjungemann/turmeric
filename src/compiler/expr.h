@@ -147,6 +147,19 @@ struct Binding {
      * carrier-return contexts where the call site genuinely wants an int64
      * handle. Generalizes the by-name `ok`/`err` synthesis from Prereq 6. */
     bool          is_construct_template;
+    /* M5 residual-straddle retirement (docs/upcoming/m5-residual-straddle-
+     * retirement.md): true if this binding's defn was annotated with
+     * `#{ByVal}`. Forces emit_abi_intern_spec to mint by-value specs for
+     * TY_APP arg types that would otherwise be rejected by the
+     * `arg_types[i].kind == TY_STRUCT` gate at emit_module.c.
+     *
+     * Scaffolding for the M5 transitional window: marks helpers introduced
+     * for Path A spec bodies (e.g. `vec-get-byval`, `vec-eq-loop-byval`)
+     * whose inline-C bodies cannot compile under carrier semantics.  Goes
+     * away once M5-proper's context-aware gate lands -- at that point the
+     * by-value preference flows from the calling spec body and the marker
+     * is redundant. */
+    bool          prefer_byvalue_spec;
     /* MF3 (test-suite-cleanup-plan): true if this binding came from an
      * auto-loaded stdlib module. Set during the M7 promotion in
      * elab_toplevel.c. Used by elab_defn to hard-error on user code that

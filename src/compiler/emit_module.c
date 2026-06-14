@@ -977,8 +977,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 ctx->current_abi_specialization->bindings,
                 ctx->current_abi_specialization->n_bindings,
                 ctx->type_arena);
-            if (strcmp(type_c_name(bindings[i].type),
-                       type_c_name(composed[i].type)) != 0) {
+            /* M5 residual-straddle: the original change check compared
+             * type_c_name strings, but TY_TYVAR and TY_INT (and other
+             * tyvar-or-carrier kinds) both stringify to "int64_t" -- so
+             * a composition that turns a bare tyvar into a concrete int
+             * looked unchanged and the composed bindings were dropped.
+             * That made every downstream call from a specialized body see
+             * abstract-tyvar arg types, blocking by-value spec interning
+             * for callees called from Path A spec bodies.  Use type_eq
+             * on the kind+def identity instead. */
+            if (bindings[i].type.kind != composed[i].type.kind ||
+                !type_eq(bindings[i].type, composed[i].type)) {
                 changed = true;
             }
         }
@@ -1209,6 +1218,32 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             if (!type_uses_carrier_abi(arg_types[i]) &&
                 arg_types[i].kind == TY_STRUCT) {
                 needs_byvalue_spec = true; break;
+            }
+            /* M5 residual-straddle (docs/upcoming/m5-residual-straddle-
+             * retirement.md): a defn carrying `#{ByVal}` opts into
+             * by-value spec interning for *any* aggregate arg type that
+             * resolves to a concrete struct application -- including
+             * TY_APP (e.g. `(Vec int)` after Path A substitution).  The
+             * default gate above rejects TY_APP because every parametric
+             * struct goes through the carrier ABI in its standard use;
+             * the marker says "this helper is for by-value contexts, so
+             * force the spec mint and let `emit_abi_fn_skip_generic`
+             * suppress the carrier base when no carrier call is observed."
+             *
+             * Scaffolding: removed when M5-proper's context-aware gate
+             * lands and by-value preference flows from the calling spec
+             * body automatically. */
+            if (fn_binding->prefer_byvalue_spec &&
+                arg_types[i].kind == TY_APP) {
+                /* Resolve the head to confirm it's a real struct constructor,
+                 * not a bare-tyvar TY_APP. */
+                Type head = arg_types[i];
+                while (head.kind == TY_APP && head.as.app.fn) {
+                    head = *head.as.app.fn;
+                }
+                if (head.kind == TY_STRUCT && head.as.struct_.def) {
+                    needs_byvalue_spec = true; break;
+                }
             }
         }
         if (!needs_byvalue_spec &&

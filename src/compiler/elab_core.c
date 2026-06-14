@@ -1441,6 +1441,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_export_as_attr = intern_cstr(st, "export-as");
     /* M2a: #{Construct} polymorphic-constructor synthesis marker */
     e->sym_construct_attr = intern_cstr(st, "Construct");
+    /* M5 residual-straddle: #{ByVal} prefer-byvalue-spec marker */
+    e->sym_byval_attr = intern_cstr(st, "ByVal");
     e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
     e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");
     e->sym_panic_payload_line = intern_cstr(st, "panic-payload-line");

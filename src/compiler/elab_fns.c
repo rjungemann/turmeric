@@ -1709,6 +1709,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
     EffectRow *declared_effect_row_defn = NULL;
     bool defn_has_construct_attr = false;
+    bool defn_has_byval_attr = false;
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
@@ -1723,6 +1724,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                      * doesn't leak into PASS_EFFECT_LOWER as a phantom effect. */
                     if (item->as.sym == e->sym_construct_attr) {
                         defn_has_construct_attr = true;
+                        continue;
+                    }
+                    /* M5 residual-straddle: pluck #{ByVal} similarly. */
+                    if (item->as.sym == e->sym_byval_attr) {
+                        defn_has_byval_attr = true;
                         continue;
                     }
                     syms[n_valid++] = item->as.sym;
@@ -3029,6 +3035,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->deprecation_message = deprecation_msg;
     /* M2a: propagate #{Construct} marker */
     b->is_construct_template = defn_has_construct_attr;
+    /* M5 residual-straddle: propagate #{ByVal} marker */
+    b->prefer_byvalue_spec = defn_has_byval_attr;
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));

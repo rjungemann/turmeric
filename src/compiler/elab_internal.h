@@ -375,6 +375,10 @@ typedef struct Elab {
      * polymorphic stdlib constructor defn. Picked up in elab_fns.c when the
      * defn's effect-row map is parsed. */
     const Symbol *sym_construct_attr;
+    /* M5 residual-straddle retirement: #{ByVal} marker symbol.  See the
+     * `prefer_byvalue_spec` comment on Binding in expr.h for the rationale
+     * and demolition date. */
+    const Symbol *sym_byval_attr;
     const Symbol *sym_panic_payload_type;
     const Symbol *sym_panic_payload_value;
     const Symbol *sym_panic_payload_file;
