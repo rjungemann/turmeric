@@ -443,6 +443,44 @@ static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fi
     return turi_struct_val(s);
 }
 
+/* M2b: build a zero-valued TuriValue for a type T -- the interpreter's analogue
+ * of the compiled `(T){0}` compound literal.  Scalars, pointers and type-param
+ * fields collapse to the int64 carrier 0; floats to 0.0; and a struct T to a
+ * TuriStruct with every field recursively zeroed, so `(.field (default-of T))`
+ * reads a real zero instead of failing with "field access on null carrier". */
+static TuriValue turi_default_of(const Type *t) {
+    if (!t) return turi_int(0);
+    switch (t->kind) {
+        case TY_FLOAT32: case TY_FLOAT64: return turi_float(0.0);
+        case TY_BOOL: return turi_bool(false);
+        case TY_NIL:  return turi_nil();
+        default: break;
+    }
+    /* Struct or parametric struct application `(S A B ...)`: build a zeroed
+     * TuriStruct.  type_extract_struct_app recovers the StructDef + the
+     * application's type args (so a parametric field's actual type is known),
+     * which substitute_struct_app_type then resolves before recursing. */
+    StructDef *def = NULL;
+    Type       args[MAX_FN_ARITY];
+    uint8_t    nargs = 0;
+    if (type_extract_struct_app(t, &def, args, &nargs) && def) {
+        uint32_t nf = def->n_fields;
+        if (nf == 0) return make_struct_val_def(def->name, 0, NULL, def);
+        TuriValue *fields = (TuriValue *)malloc((size_t)nf * sizeof(TuriValue));
+        if (!fields) return turi_int(0);
+        for (uint32_t i = 0; i < nf; i++) {
+            StructField *f = &def->fields[i];
+            Type ft = f->full_type ? *f->full_type : (Type){ .kind = f->kind };
+            Type resolved = (nargs > 0) ? substitute_struct_app_type(&ft, def, args) : ft;
+            fields[i] = turi_default_of(&resolved);
+        }
+        TuriValue v = make_struct_val_def(def->name, nf, fields, def);
+        free(fields);
+        return v;
+    }
+    return turi_int(0);
+}
+
 /* W1b: see eval.h.  Read field idx of a struct value (TuriStruct is opaque to
  * main.c, so the Result/Option native shims call this to accept a make-struct
  * value as well as their native int64 box). */
@@ -2738,6 +2776,63 @@ static bool ic_constructor_chases_foreign_ptr(const char *body, const char *varn
     return false;
 }
 
+/* Scan the constructor body region before the malloc for semantic input guards
+ * of the form `if (<cond>) return <expr>;` (optionally brace-wrapped).  Such a
+ * guard short-circuits the constructor based on an argument -- e.g. ne-from?'s
+ * `if (xs == 0) return 0;` -- which the flat-constructor model would otherwise
+ * ignore, building the struct unconditionally (a silent miscompile).  An OOM
+ * guard (`if (!o) return 0;`) sits *after* the malloc and is never seen here.
+ * Returns 1 (and sets *out) if a guard's condition held, 2 if a guard is present
+ * but its condition/return cannot be evaluated (the caller must then decline
+ * rather than guess), or 0 if no guard fired. */
+static int ic_constructor_leading_guard(const char *body, const char *limit,
+                                        TuriValue *args, uint32_t n_args,
+                                        FnDef *fn, uint32_t param_offset,
+                                        TuriValue *out) {
+    const char *p = body;
+    while (p < limit) {
+        p = ic_skip_ws(p);
+        if (p >= limit || !ic_word_eq(p, "if")) return 0; /* first non-if -> stop */
+        p += 2; p = ic_skip_ws(p);
+        if (*p != '(') return 2;
+        const char *cond_start = ++p;
+        int d = 1;
+        while (*p && d > 0) { if (*p=='(') d++; else if (*p==')') { if (--d==0) break; } p++; }
+        if (*p != ')') return 2;
+        const char *cond_end = p++;            /* p now past ')' */
+        p = ic_skip_ws(p);
+        bool brace = (*p == '{');
+        if (brace) { p++; p = ic_skip_ws(p); }
+        if (!ic_word_eq(p, "return")) return 2; /* only `return` guards modeled */
+        p += 6; p = ic_skip_ws(p);
+        const char *ret_start = p;
+        while (*p && *p != ';') p++;
+        if (*p != ';') return 2;
+        const char *ret_end = p++;             /* p now past ';' */
+        if (brace) { p = ic_skip_ws(p); if (*p == '}') p++; }
+        int cl = (int)(cond_end - cond_start), rl = (int)(ret_end - ret_start);
+        char condbuf[256], retbuf[256];
+        if (cl <= 0 || cl >= (int)sizeof(condbuf) || rl < 0 || rl >= (int)sizeof(retbuf))
+            return 2;
+        memcpy(condbuf, cond_start, (size_t)cl); condbuf[cl] = '\0';
+        memcpy(retbuf,  ret_start,  (size_t)rl); retbuf[rl]  = '\0';
+        int64_t cv = 0;
+        if (!ic_eval_assign_expr(condbuf, fn, param_offset, args, n_args, &cv, body))
+            return 2;
+        if (cv != 0) {
+            int64_t rv = 0;
+            if (rl > 0 &&
+                !ic_eval_assign_expr(retbuf, fn, param_offset, args, n_args, &rv, body))
+                return 2;
+            TuriValue v = {0}; v.tag = TURI_INT; v.as_int = rv;
+            *out = v;
+            return 1;                          /* guard fired */
+        }
+        /* condition false -> fall through to the next leading statement */
+    }
+    return 0;
+}
+
 static TuriValue ic_exec_constructor(const char *body,
                                       TuriValue *args, uint32_t n_args,
                                       FnDef *fn, uint32_t param_offset) {
@@ -2759,6 +2854,16 @@ static TuriValue ic_exec_constructor(const char *body,
     if (!malloc_p) return turi_nil();
     /* W4: decline bodies whose semantics exceed a flat constructor. */
     if (ic_constructor_unmodelable(body)) return turi_nil();
+    /* Honor a leading `if (<cond>) return <const>;` input guard before the
+     * malloc (e.g. ne-from?'s empty-list short-circuit); decline if it cannot
+     * be evaluated rather than ignoring it and miscompiling. */
+    {
+        TuriValue gout;
+        int g = ic_constructor_leading_guard(body, malloc_p, args, n_args,
+                                             fn, param_offset, &gout);
+        if (g == 1) return gout;
+        if (g == 2) return turi_nil();
+    }
     /* Scan backwards for variable name.
      * Pattern: "TYPE *varname = (optional_cast)malloc("
      * Start from the char before 'm' in malloc. */
@@ -5059,16 +5164,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * actually evaluates fits in TURI_INT/FLOAT/NIL/BOOL with a zero
          * bit-pattern.  Match the result type's broad kind to pick the
          * carrier; default to integer zero (a NULL pointer also fits). */
-        if (e->type.kind == TY_FLOAT32 || e->type.kind == TY_FLOAT64) {
-            return turi_float(0.0);
-        }
-        if (e->type.kind == TY_BOOL) {
-            return turi_bool(false);
-        }
-        if (e->type.kind == TY_NIL) {
-            return turi_nil();
-        }
-        return turi_int(0);
+        return turi_default_of(&e->type);
     }
 
     case EX_CSTR_LIT: {

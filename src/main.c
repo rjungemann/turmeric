@@ -5851,6 +5851,16 @@ static int64_t result_field_int(TuriValue r, int idx) {
     TuriValue f = result_field(r, idx);
     return (f.tag == TURI_BOOL) ? (f.as_bool ? 1 : 0) : f.as_int;
 }
+/* True if the Result carries the ok tag (dual-rep: TuriStruct or native box). */
+static bool result_is_ok(TuriValue r) { return result_field_int(r, 0) != 0; }
+/* Construct a Result from an is_ok flag + payload, dual-rep-correct: a heap
+ * payload becomes a make-struct Result, a scalar a native int64[3] box -- exactly
+ * native_ok/native_err's logic, so the reading shims (result_field) round-trip it
+ * and a struct ok/err value keeps its tag instead of being flattened to int. */
+static TuriValue result_box_make(TuriEnv *env, bool is_ok, TuriValue payload) {
+    TuriValue arg[1] = { payload };
+    return is_ok ? native_ok(env, arg, 1, NULL) : native_err(env, arg, 1, NULL);
+}
 static TuriValue native_ok_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_bool(false);
@@ -5876,37 +5886,30 @@ static TuriValue native_err_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
 static TuriValue native_result_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_int(0);
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (r && r[0] != 0) { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v; }
+    if (result_is_ok(a[0])) return result_field(a[0], 1);
     return a[1];
 }
 /* ok-val-ptr: get ok_val as a pointer (void*) */
 static TuriValue native_ok_val_ptr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_nil();
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[1] : 0; return v;
+    return result_field(a[0], 1);
 }
 /* err-val-ptr: get err_val as a pointer (void*) */
 static TuriValue native_err_val_ptr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_nil();
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[2] : 0; return v;
+    return result_field(a[0], 2);
 }
 /* result-map: apply Turmeric fn to ok value, return new result */
 static TuriValue native_result_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_nil();
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (!r || r[0] == 0) return a[0]; /* return err unchanged */
-    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[1];
+    if (!result_is_ok(a[0])) return a[0]; /* return err unchanged */
+    TuriValue arg = result_field(a[0], 1);
     TuriValue res = turi_call(env, a[1], &arg, 1);
     if (turi_is_error(res) || env->throwing) return res;  /* propagate callback error */
-    int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!out) return turi_nil();
-    out[0] = 1; out[1] = res.as_int; out[2] = 0;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)out; return v;
+    return result_box_make(env, true, res);
 }
 /* W1b: result-eq? -- (result-eq? r1 r2 ok-cmp err-cmp).  result.tur's version is
  * inline-C that fat-dispatches the two comparison closures, which the simple
@@ -5930,63 +5933,50 @@ static TuriValue native_result_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *
 static TuriValue native_result_map_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_nil();
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (!r || r[0] != 0) return a[0]; /* return ok unchanged */
-    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[2];
+    if (result_is_ok(a[0])) return a[0]; /* return ok unchanged */
+    TuriValue arg = result_field(a[0], 2);
     TuriValue res = turi_call(env, a[1], &arg, 1);
     if (turi_is_error(res) || env->throwing) return res;  /* propagate callback error */
-    int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!out) return turi_nil();
-    out[0] = 0; out[1] = 0; out[2] = res.as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)out; return v;
+    return result_box_make(env, false, res);
 }
 /* result-flat-map: apply fn to ok value (fn returns a result), flatMap */
 static TuriValue native_result_flat_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_nil();
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (!r || r[0] == 0) return a[0]; /* return err unchanged */
-    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[1];
+    if (!result_is_ok(a[0])) return a[0]; /* return err unchanged */
+    TuriValue arg = result_field(a[0], 1);
     return turi_call(env, a[1], &arg, 1);
 }
 /* result-or: return self if ok, else return alt */
 static TuriValue native_result_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_nil();
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (r && r[0] != 0) return a[0];
+    if (result_is_ok(a[0])) return a[0];
     return a[1];
 }
 /* result-or-else: return self if ok, else call f(err_val) */
 static TuriValue native_result_or_else(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_nil();
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (r && r[0] != 0) return a[0];
-    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r ? r[2] : 0;
+    if (result_is_ok(a[0])) return a[0];
+    TuriValue arg = result_field(a[0], 2);
     return turi_call(env, a[1], &arg, 1);
 }
 /* Display helpers */
 static TuriValue native_result_display(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_cstr("err");
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_CSTR;
-    v.as_cstr = (r && r[0] != 0) ? "ok" : "err"; return v;
+    return turi_cstr(result_is_ok(a[0]) ? "ok" : "err");
 }
 static TuriValue native_result_debug(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_cstr("Result::Err");
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_CSTR;
-    v.as_cstr = (r && r[0] != 0) ? "Result::Ok" : "Result::Err"; return v;
+    return turi_cstr(result_is_ok(a[0]) ? "Result::Ok" : "Result::Err");
 }
 static TuriValue native_result_error_message(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_cstr("result is err");
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_CSTR;
-    v.as_cstr = (r && r[0] != 0) ? "result is ok" : "result is err"; return v;
+    return turi_cstr(result_is_ok(a[0]) ? "result is ok" : "result is err");
 }
 /* result-collect: vec<result<T,E>> → result<vec<T>,E>
  * If all elements are ok, returns ok(new_vec_of_ok_vals).
@@ -6071,15 +6061,13 @@ static TuriValue native_result_partition_err(TuriEnv *env, TuriValue *a, uint32_
 static TuriValue native_result_unwrap(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (!r || r[0] == 0) { fprintf(stderr, "unwrap called on err\n"); return turi_int(0); }
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v;
+    if (!result_is_ok(a[0])) { fprintf(stderr, "unwrap called on err\n"); return turi_int(0); }
+    return result_field(a[0], 1);
 }
 static TuriValue native_result_unwrap_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[2] : 0; return v;
+    return result_field(a[0], 2);
 }
 static TuriValue native_result_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -6088,24 +6076,21 @@ static TuriValue native_result_free(TuriEnv *env, TuriValue *a, uint32_t n, void
 }
 static TuriValue native_result_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    if (n < 1) goto panic_err;
-    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
-    if (!r || r[0] == 0) goto panic_err;
-    { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v; }
-panic_err:
-    /* Catchable panic (recoverable by catch-unwind) instead of _exit(1). */
-    turi_runtime_panic(env, "result-must: called on err");
-    return turi_nil(); /* unreachable */
+    if (n < 1 || !result_is_ok(a[0])) {
+        /* Catchable panic (recoverable by catch-unwind) instead of _exit(1). */
+        turi_runtime_panic(env, "result-must: called on err");
+        return turi_nil(); /* unreachable */
+    }
+    return result_field(a[0], 1);
 }
 static TuriValue native_result_must_msg(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    int64_t *r = (n > 0) ? (int64_t *)(intptr_t)a[0].as_int : NULL;
     const char *msg = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "result-must-msg: called on err";
-    if (!r || r[0] == 0) {
+    if (n < 1 || !result_is_ok(a[0])) {
         turi_runtime_panic(env, msg);
         return turi_nil(); /* unreachable */
     }
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v;
+    return result_field(a[0], 1);
 }
 
 /* int->str / show-int-as-cstr: format int64 as decimal string */
