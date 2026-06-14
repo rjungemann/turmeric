@@ -353,8 +353,17 @@ costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
    fails), 14/14 `eval|sandbox` ctests, all `adt-*` match fixtures green,
    `return` through an arm body correct. Needed so the T3 call fold flattens
    match-recursive callee bodies.
-2. **T3.1 -- `DK_BUILTIN_ARG`** (+ and/or short-circuit). Safe; mirrors
-   `DK_MAKE_STRUCT`. No ceiling change yet (calls still recurse).
+2. **T3.1 -- `DK_BUILTIN_ARG` -- LANDED 2026-06-14.** EX_BUILTIN now runs on the
+   driver: regular builtins accumulate args on a heap buffer (via `aux`, like
+   `DK_MAKE_STRUCT`) then apply `eval_builtin`; `BS_AND_SC`/`BS_OR_SC`
+   short-circuit by descending operands and stopping on the decisive value
+   (empty-and->true / empty-or->false preserved). Also shrank `DRIVE_INLINE`
+   32->8 since the driver is now on hot paths (if/let/match/builtin) -- this kept
+   the driver's C frame lean enough that routing EX_BUILTIN through it left the
+   non-tail ceiling **unchanged at ~530** (no regression). Validated:
+   `run-turi.sh` 1186 passed (same 8 unrelated monomorphization fails), 14/14
+   `eval|sandbox` ctests, and/or short-circuit + side-effect ordering correct.
+   Calls still recurse, so the ceiling stays ~530 until T3.2.
 3. **T3.2 -- `DK_CALL_ARG` + `DK_CALL_RET` + body-in-loop + TCO**. The ceiling
    remover and the hard part (TCO + defers + module + no_unwind). Validate the
    `sum-to 5000` probe succeeds and `escape-deep-capture` runs.

@@ -4062,7 +4062,10 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
  * value" rule are preserved exactly.
  * ---------------------------------------------------------------------- */
 
-#define DRIVE_INLINE 32   /* inline work-stack depth before spilling to heap */
+/* Inline work-stack depth before spilling to heap.  Kept small: eval_drive is
+ * now on hot paths (if/let/match/builtin), so its C frame should stay lean;
+ * deeper nesting spills to a heap buffer (bounded only by heap). */
+#define DRIVE_INLINE 8
 
 typedef enum {
     DK_DONE,
@@ -4072,6 +4075,7 @@ typedef enum {
     DK_LET_BODY,     /* EX_LET/EX_LETREC: evaluating the body (frame owned) */
     DK_MAKE_STRUCT,  /* EX_MAKE_STRUCT: evaluating field[index] (fields owned) */
     DK_MATCH_BODY,   /* EX_MATCH: evaluating the winning arm body (frame owned) */
+    DK_BUILTIN_ARG,  /* EX_BUILTIN: evaluating arg[index] (acc owned; or short-circuit) */
 } DriveKind;
 
 typedef struct {
@@ -4271,6 +4275,30 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 control = control->as.make_struct_.field_values[0];
                 break;
             }
+            case EX_BUILTIN: {
+                const BuiltinSpec *spec = control->as.builtin.spec;
+                uint32_t n  = control->as.builtin.n;
+                bool     sc = (spec->shape == BS_AND_SC || spec->shape == BS_OR_SC);
+                if (n == 0) {
+                    /* (and)->true, (or)->false; other 0-ary builtins eval directly. */
+                    cur = sc ? turi_bool(spec->shape == BS_AND_SC)
+                             : eval_builtin(env, spec, NULL, 0);
+                    descending = false;
+                    break;
+                }
+                TuriValue *acc = NULL;
+                if (!sc) {  /* regular builtins accumulate all args, then apply */
+                    acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                    if (!acc) {
+                        result = turi_error("eval: out of memory evaluating builtin arguments");
+                        goto done;
+                    }
+                }
+                DRIVE_PUSH(((DriveCont){ DK_BUILTIN_ARG, control, cf, 0,
+                                         turi_nil(), acc }));
+                control = control->as.builtin.args[0];
+                break;
+            }
             case EX_MATCH: {
                 /* Resolve scrutinee + arm + guard synchronously (shallow), then
                  * descend the winning arm body in the loop. */
@@ -4389,6 +4417,33 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                  * arm_frame before returning the body's result. */
                 eval_frame_free(top->frame);
                 len--;
+                break;
+            }
+            case DK_BUILTIN_ARG: {
+                const Expr        *be   = top->expr;
+                const BuiltinSpec *spec = be->as.builtin.spec;
+                uint32_t           n    = be->as.builtin.n;
+                TuriValue         *acc  = (TuriValue *)top->aux;  /* NULL if short-circuit */
+                if (signaled) { if (acc) free(acc); len--; break; }
+                if (spec->shape == BS_AND_SC) {
+                    if (!turi_is_truthy(cur)) { cur = turi_bool(false); len--; break; }
+                } else if (spec->shape == BS_OR_SC) {
+                    if (turi_is_truthy(cur)) { cur = turi_bool(true); len--; break; }
+                } else {
+                    acc[top->index] = cur;
+                }
+                top->index++;
+                if (top->index < n) {
+                    control = be->as.builtin.args[top->index];
+                    cf = top->frame; descending = true;
+                } else if (spec->shape == BS_AND_SC) {
+                    cur = turi_bool(true);  len--;   /* all operands truthy */
+                } else if (spec->shape == BS_OR_SC) {
+                    cur = turi_bool(false); len--;   /* no operand truthy */
+                } else {
+                    cur = eval_builtin(env, spec, acc, n);
+                    free(acc); len--;
+                }
                 break;
             }
             case DK_MAKE_STRUCT: {
@@ -4573,45 +4628,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Builtin --------------------------------------------------------- */
-    case EX_BUILTIN: {
-        uint32_t  n = e->as.builtin.n;
-
-        /* and/or must short-circuit before evaluating remaining args. */
-        if (e->as.builtin.spec->shape == BS_AND_SC) {
-            for (uint32_t i = 0; i < n; i++) {
-                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
-                if (turi_is_error(v) || env->returning || env->throwing) return v;
-                if (!turi_is_truthy(v)) return turi_bool(false);
-            }
-            return turi_bool(true);
-        }
-        if (e->as.builtin.spec->shape == BS_OR_SC) {
-            for (uint32_t i = 0; i < n; i++) {
-                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
-                if (turi_is_error(v) || env->returning || env->throwing) return v;
-                if (turi_is_truthy(v)) return turi_bool(true);
-            }
-            return turi_bool(false);
-        }
-
-        /* T1: heap-spill scratch (see EVAL_SCRATCH_INLINE) -- lifts the old
-         * n > MAX_EVAL_ARGS cap and keeps the array off the deep-recursion frame. */
-        TuriValue args_inl[EVAL_SCRATCH_INLINE];
-        TuriValue *args = (n <= EVAL_SCRATCH_INLINE) ? args_inl
-                          : (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
-        if (!args) return turi_error("eval: out of memory evaluating builtin arguments");
-        for (uint32_t i = 0; i < n; i++) {
-            args[i] = eval_expr(env, frame, e->as.builtin.args[i]);
-            if (turi_is_error(args[i]) || env->returning || env->throwing) {
-                TuriValue err = args[i];
-                if (args != args_inl) free(args);
-                return err;
-            }
-        }
-        TuriValue r = eval_builtin(env, e->as.builtin.spec, args, n);
-        if (args != args_inl) free(args);
-        return r;
-    }
+    case EX_BUILTIN:
+        /* T3.1: delegated to the explicit-stack driver (DK_BUILTIN_ARG), which
+         * accumulates args on the work-stack and handles the and/or
+         * short-circuit, then applies eval_builtin.  Semantics match the former
+         * inline loop (incl. the empty-and->true / empty-or->false edge). */
+        return eval_drive(env, frame, e);
 
     /* --- Named function definition (defn) -------------------------------- */
     case EX_FN_DEF: {
