@@ -157,7 +157,59 @@ never crosses the carrier boundary.
   helpers rewritten as pure-Turmeric loops".  Option D extends
   that same rewrite to drop the int64 ascription step.
 
-## Recommendation
+## Update 2026-06-14: Option D execution found a deeper wall
+
+Execution of Option D in this session ran into a structural constraint
+not visible in the original plan:
+
+The `(definstance Eq [Vec])` body serves BOTH the carrier base
+(`__inst_Eq_eq_qu_Vec(int64_t, int64_t)`) AND the Path A spec
+(`__inst_Eq_eq_qu_Vec__spec__bool_Vec__int_Vec__int(Vec__int, Vec__int)`).
+Both share one Turmeric source body.  For the spec body, `(.len x)` on
+by-value `Vec__int` is correct.  For the carrier base, `(.len x)` on
+int64 carrier is a hard cc error.  The same helpers (`vec-get-byval`,
+`vec-eq-loop-byval`) cannot be called from both ABIs of the same body
+because `#{ByVal}`'s `prefer_byvalue_spec` flag suppresses the carrier
+base of the helpers (via `emit_abi_fn_skip_generic`) -- correct for
+the spec-only use, but it leaves the carrier base of the instance
+method with unresolved-symbol calls.
+
+Additionally, three latent elab gaps surfaced and were filed under
+`docs/reported/`:
+
+- `m5-eq-vec-rewrite-fn-arg-loses-annotation.md` (gap 1): untyped
+  lambda inside a plain polymorphic defn loses its `(fn [A A] bool)`
+  expected-type vs. inside a definstance body where the lambda
+  inherits TY_TYVAR(A) from the surrounding context.  Mechanism
+  unidentified.  The diagnostic-message half is a one-line fix.
+- `m5-constrained-poly-wrong-instance-on-tyvar-receiver.md` (gap 2-
+  followup): a `(eq? (:: <int> A) (:: <int> A))` inside a constrained-
+  poly defn dispatches to `__inst_Eq_eq_qu_MutableMap` (silent
+  miscompile + SIGSEGV).  Real constraint-dispatch infra missing.
+- The original `elab_typeclasses.c:3388` SEGV — **FIXED** this session.
+
+Conclusion: Option D as a tactical clearance is NOT reachable without
+also addressing the constraint-dispatch gap and the
+single-body-two-ABIs design choice for instance methods.  Both are
+multi-session pieces of elaboration infra work.
+
+The composition fix + `#{ByVal}` marker landed this session ARE useful
+on their own (they're prerequisites for any eventual byval-helper
+migration) and are pinned by the
+`tests/fixtures/m5-byval-marker-spec-emit/` fixture.  But the
+audit's M3 deletion remains blocked by the same bridge sites; the
+straddle persists.
+
+The plan below (Option D detail) is preserved for reference but
+should be considered superseded -- the right next step is either:
+
+1. Diagnostic fix for gap 1 (one-liner, ships independently).
+2. Designed approach for the single-body-two-ABIs question -- either
+   per-instance-method ABI-conditional body emission, or moving Eq
+   Vec to an entirely-by-value design with no carrier base at all
+   (which requires every dispatch site to be ABI-aware).
+
+## Recommendation (original; see Update above)
 
 **Option D as the immediate step**; **Option C as the eventual
 M5 generalization**.
