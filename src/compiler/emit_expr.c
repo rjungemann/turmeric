@@ -25,6 +25,28 @@ static bool type_uses_carrier_in_dispatch(Type t) {
 static const EmitAbiSpecialization *find_matched_abi_spec(
         EmitCtx *ctx, const Expr *e, const Binding *fn_binding) {
     if (!ctx || !e || e->kind != EX_CALL) return NULL;
+    /* M5 emit-side: when emit_module.c interned a spec for this exact call
+     * Expr* (recorded in specialized_call_exprs / specialized_call_names),
+     * emit_call_name returns that spec's clone_name.  Look up the spec by
+     * clone_name so this function agrees with emit_call_name about which
+     * ABI is in effect.  Without this, the type-match loop below tries
+     * to compare the spec's *resolved* arg types (e.g. `Vec__int`) against
+     * the IR call's *abstract* arg types (e.g. `(Vec A)` where A is the
+     * outer spec's tyvar), type_eq fails, matched_spec is NULL, and the
+     * dict_arg arg-bridge at emit_expr.c:2587 fires -- bridging args to
+     * int64 even though the resolved callee takes them by value (cc error). */
+    for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+        if (ctx->specialized_call_exprs[i] != e) continue;
+        const char *clone_name = ctx->specialized_call_names[i];
+        for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+            const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
+            if (spec->clone_name && clone_name &&
+                strcmp(spec->clone_name, clone_name) == 0) {
+                return spec;
+            }
+        }
+        break;
+    }
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;

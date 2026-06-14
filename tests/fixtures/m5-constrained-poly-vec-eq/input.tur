@@ -1,0 +1,28 @@
+;; M5 emit-side follow-up: a constrained-polymorphic defn whose
+;; receiver type is itself parametric in the bound tyvar
+;;   (defn f [A] [(Eq A)] [x : (Vec A) y : (Vec A)] (eq? x y))
+;; previously emitted the by-value spec name at the call site while
+;; bridging the args via (int64_t)(intptr_t)(&...) -- a hard cc error.
+;;
+;; The elab side (commit a301229e) made the spec body bind the right
+;; instance method.  The emit side (this fix) makes find_matched_abi_spec
+;; consult specialized_call_exprs so the arg-bridge sees a matched_spec
+;; and skips the carrier coercion, leaving the by-value Vec args alone.
+
+(defn check-eq-vec [A] [(Eq A)] [x : (Vec A) y : (Vec A)] : bool
+  (eq? x y))
+
+(defn main [] : int
+  (let [a (:: (vec-of) (Vec int))
+        b (:: (vec-of) (Vec int))
+        c (:: (vec-of) (Vec int))]
+    (vec-push! a 1)
+    (vec-push! a 2)
+    (vec-push! b 1)
+    (vec-push! b 2)
+    (vec-push! c 1)
+    (vec-push! c 99)
+    (println (check-eq-vec a b))   ; true
+    (println (check-eq-vec a c))   ; false
+    (println (check-eq-vec a a)))  ; true
+  0)
