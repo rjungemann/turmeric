@@ -1,7 +1,7 @@
 # M5 suite residual: 6 failing fixtures, 3 root causes
 
-**Status:** Root cause A FIXED 2026-06-14 (suite now 4 failed); B and C
-remain (deferred to the M5 effort).
+**Status:** Root causes A and B FIXED 2026-06-14 (suite now 1 failed); C
+remains (the M5 carrier straddle, deferred to its existing plan).
 **Severity:** mixed -- two are name-capture regressions introduced by the
 M5 `Eq Cons` rewrite (real latent bugs that break ordinary user programs),
 one is the known M5 carrier/concrete straddle.
@@ -102,6 +102,17 @@ ascription, so the latent capture never fired.
    capture bug for any other stdlib body that ascribes a bare tyvar.
 
 ## Root cause B -- user class method `default-of` is shadowed by the builtin
+
+**Status: FIXED 2026-06-14.** `elab_call.c:1192` now gates the builtin
+interception on `!elab_name_is_typeclass_method(e, name)`: when a user
+typeclass declares a method named `default-of`, the call falls through to the
+return-dispatch path (which resolves the instance from the expected-type
+channel) instead of being captured by the `(default-of T)` builtin. Stdlib
+never declares a `default-of` class, and its make-struct payload fills
+(`(default-of A)` in option.tur / result.tur) are elaborated before any user
+class is registered, so they still hit the builtin -- verified by a combined
+program that declares `Default` *and* uses `ok`/`err`/`some`. All three
+fixtures PASS; full suite `1622->1625 passed`, no regressions.
 
 **Fixtures:** `rt-return-dispatch-basic`, `errors/rt-return-dispatch-unascribed`,
 `errors/rt-missing-instance`.
