@@ -1,5 +1,32 @@
 # turi: single-scope defers at function exit fire FIFO, not LIFO (interpreter/compiled divergence)
 
+> **RESOLVED 2026-06-14.** The interpreter now mirrors the compiled
+> `tur_frame_fire_chain` two-level ordering: **same-scope LIFO**, and on an early
+> exit (return / throw / panic) **scopes fire outer-first**. Three pieces landed
+> in `src/turi/eval.c`:
+> - A `DeferItem` with `body == NULL` is a **scope-boundary marker**. The driver
+>   pushes one when descending a `do`/`program` block that *directly* registers a
+>   defer (`seq_has_direct_defer` -> `defer_push_scope_marker`). Because `let`,
+>   `if`-branch and function bodies are themselves do-blocks, this marks every
+>   defer scope the compiler frames -- and blocks with no defer stay allocation-free.
+> - `fire_defers_to_mark` (normal-exit / LIFO) now **skips** markers; head-first
+>   across nested scopes already yields the compiled normal-exit order (innermost
+>   scope first, same-scope LIFO).
+> - `fire_defers_to_mark_reversed` was replaced by `fire_defers_to_mark_by_scope`,
+>   which splits the chain into per-scope runs at the markers and fires the runs
+>   **outer-first** while keeping each run head-first (LIFO within the scope) --
+>   instead of the old flat item-reversal that collapsed both axes into one FIFO
+>   walk. `DK_CALL_RET` now picks the by-scope walk only when unwinding
+>   (`returning`/`throwing`) and the plain LIFO walk on normal completion (incl.
+>   the F3 tail-call frame finish); the panic/`catch-unwind`/`catch-panic-of`
+>   boundaries use the by-scope walk.
+>
+> Validated by the new `tests/fixtures/defer-tail-scope-order` fixture (multiple
+> defers in a tail-position scope + nested inner scope + early `return`), which
+> matches the compiled output under both `run.sh` and `run-turi.sh`; the existing
+> `defer-early-return` fixture (a function-scope defer ordered before a `do`-block
+> defer on early return) is also back to green.
+
 **One-line:** Under `tur --interpret`, defers registered in a single scope that
 fires at **function exit** (tail position) run in registration order (FIFO),
 whereas the compiled path -- and the interpreter's own *non-tail* scope path --
