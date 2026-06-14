@@ -183,7 +183,7 @@ change once the form exists.
 
 - `docs/reported/spices-int-stand-in-audit-2026-06-14.md` -- the audit
   that depends on this fix; 5 S1 sites listed there.
-- `docs/reported/no-stdlib-result-builder-for-inline-c.md` -- companion
+- `no-stdlib-result-builder-for-inline-c.md` -- companion
   language-pre-work finding (separate problem; same triggering audit).
 - `docs/archive/history/closure-representation-unification-plan.md` and
   `docs/archive/history/closure-first-class-type-plan.md` -- the closure

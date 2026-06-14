@@ -223,7 +223,7 @@ Eq Vec carrier base.
 
 - `docs/upcoming/m5-residual-straddle-retirement.md` -- the design map;
   findings 1-4 of the session-4 continuation.
-- `docs/reported/m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`
+- `m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`
   -- gap 4 (FIXED); its hamt-delete regressor was the same worklist
   fragility, sidestepped by scoping the augmentation, not by fixing the
   worklist invariant.

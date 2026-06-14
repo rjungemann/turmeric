@@ -209,7 +209,7 @@ proportional to native-HOF nesting, not turi program depth):
   a **pre-existing, unrelated** interpreter divergence -- single-scope defers at
   *function exit* (tail position) fire FIFO instead of compiled LIFO, in the
   `fire_defers_to_mark_reversed` tail path T2 does not touch -- filed as
-  [docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md](../../reported/turi-tail-scope-defers-fire-fifo-not-lifo.md).
+  [docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md](../../archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md).
   **Remaining T2 slices:** EX_MAKE_STRUCT (EX_AND/EX_OR are not distinct kinds --
   they are `BS_AND_SC`/`BS_OR_SC` shapes inside EX_BUILTIN, handled at T3).
 - **T2 slice 3 -- EX_MAKE_STRUCT -- LANDED 2026-06-14. T2 linear-form conversion

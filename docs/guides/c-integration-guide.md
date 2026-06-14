@@ -409,7 +409,7 @@ The same shape works for `(Option Device)` via `tur_some` / `TUR_NONE`.
 
 This is the blessed alternative to two anti-patterns that used to spread
 through spices (see
-[docs/reported/no-stdlib-result-builder-for-inline-c.md](../reported/no-stdlib-result-builder-for-inline-c.md)):
+[docs/archive/history/no-stdlib-result-builder-for-inline-c.md](../archive/history/no-stdlib-result-builder-for-inline-c.md)):
 
 - **Re-declaring the struct in raw C** (`struct { bool is_ok; int64_t ok_val;
   int64_t err_val; } *r = malloc(...)`) and returning it as `:ptr<void>`. This

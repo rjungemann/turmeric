@@ -164,7 +164,7 @@ resting point if F3/F4 stall.
 - **Defer order on tail calls.** F3 must fire each activation's defers before
   reuse, exactly as `eval_apply_inner` does (`:3999-4020`). Do **not** "fix" the
   pre-existing single-scope function-exit FIFO-vs-LIFO divergence here
-  ([docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md](../../reported/turi-tail-scope-defers-fire-fifo-not-lifo.md));
+  ([docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md](../../archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md));
   reproduce current behaviour and track that separately.
 - **Frame-leak-vs-free by tail position (F1).** The subtle correctness piece:
   freeing a let/match frame that a tail chain still uses is a use-after-free;

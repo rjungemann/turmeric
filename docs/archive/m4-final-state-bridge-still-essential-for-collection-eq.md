@@ -203,7 +203,7 @@ spec routing).
 
 ## Audit data (snapshotted)
 
-See `docs/reported/m4-suite-wide-bridge-audit-2026-06-13.txt` for the
+See `history/m4-suite-wide-bridge-audit-2026-06-13.txt` for the
 raw `[m3-audit]` lines per fixture.
 
 ## Related

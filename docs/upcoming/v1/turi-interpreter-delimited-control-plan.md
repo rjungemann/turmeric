@@ -23,7 +23,7 @@ description: Make the tree-walking interpreter's effect-handler/continuation mac
 > to snapshot/restore the suspended fiber stack per resume. `multishot-handler`/
 > `fh-multishot-value` now yield `30`. The originally-degenerate compiled
 > behaviour and its fix are recorded in
-> [docs/reported/turi-effect-multishot-degenerate-resume.md](../../reported/turi-effect-multishot-degenerate-resume.md)
+> [docs/archive/history/turi-effect-multishot-degenerate-resume.md](../../archive/history/turi-effect-multishot-degenerate-resume.md)
 > (now RESOLVED).
 
 ## Status and scope
@@ -41,7 +41,7 @@ interpreter, and all five affected fixtures are carved `requires.tur-only`
 | Resume *through* nested handlers | `effect-handler-capture-nested` | wrong error: `unhandled effect: B` |
 
 The full root-cause analysis with minimal repros lives in
-[docs/reported/turi-interpreter-delimited-control-gaps.md](../../reported/turi-interpreter-delimited-control-gaps.md);
+[docs/archive/history/turi-interpreter-delimited-control-gaps.md](../../archive/history/turi-interpreter-delimited-control-gaps.md);
 this plan turns that report into a sequenced implementation.
 
 Severity: **high among the carve-outs**. Two of the three are hard crashes
@@ -159,7 +159,7 @@ crash fixes, dependency already met); SR follows and lifts this restriction.
 
 ## See also
 
-- [docs/reported/turi-interpreter-delimited-control-gaps.md](../../reported/turi-interpreter-delimited-control-gaps.md)
+- [docs/archive/history/turi-interpreter-delimited-control-gaps.md](../../archive/history/turi-interpreter-delimited-control-gaps.md)
   -- root-cause report with minimal repros (this plan's source).
 - [docs/upcoming/v1/turi-eval-trampoline-plan.md](turi-eval-trampoline-plan.md)
   -- the explicit-stack evaluator this plan builds on (now landed, with the

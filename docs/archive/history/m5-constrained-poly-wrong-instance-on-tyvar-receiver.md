@@ -166,7 +166,7 @@ The existing `vec-eq-loop` ^fat-cmp pattern keeps working as before.
 
 ## Related
 
-- `docs/reported/m5-eq-vec-rewrite-fn-arg-loses-annotation.md` —
+- `m5-eq-vec-rewrite-fn-arg-loses-annotation.md` —
   gap 1 (lambda annotation loss in plain polymorphic defn).
 - `docs/archive/history/m5-constrained-poly-spec-wrong-dispatch-for-parametric-receiver.md` —
   FIXED earlier; addressed parametric receiver (Vec A), not

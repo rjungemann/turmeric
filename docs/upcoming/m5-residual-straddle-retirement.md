@@ -162,7 +162,7 @@ never crosses the carrier boundary.
 The 4th gap (a sibling constrained-poly helper called from an instance-
 method Path A spec body did not get a by-value spec interned) is now
 **fixed**.  See
-`docs/reported/m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`
+`docs/archive/history/m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`
 for the full write-up.  Summary: a three-part coordinated change
 (definstance records the constraint var symbol; instance bodies
 elaborate constraint vars as named tyvars; emit composition augments the
@@ -195,7 +195,7 @@ CPS `abi_bindings` drop (Finding 6) is fixed.  Progress and the new wall:
 
 2. **Bug fixed: CPS dropped `abi_bindings`** (Finding 6).  Committed
    separately (`fix(cps): preserve call abi_bindings ...`).  See
-   `docs/reported/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`.
+   `docs/archive/history/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`.
 
 3. **Bug fixed: heap-use-after-free in `emit_abi_intern_spec`.**  The
    `Eq Vec` by-value rewrite over `vec-eq-ascribed-multi` (Eq[Vec[A]] for
@@ -405,7 +405,7 @@ Bisecting the stdlib change (each step rebuilds + checks `list-basic`):
 So composing one instance-method body through a constrained-poly helper
 causes a sibling spec that used to be minted (`thead`/`ttail`/`unwrap`/
 tuple accessors) to be dropped.  Filed as
-`docs/reported/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`.
+`docs/archive/history/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`.
 
 **Root cause now PINNED** (see the report): it is NOT a worklist
 ordering/collision/capacity issue.  Elaboration is correct and identical
@@ -549,7 +549,7 @@ design choice for the Eq Vec definstance, not a bridge issue.
 
 After landing the M5 elab fix for wrong-instance dispatch on
 EX_ASCRIBE-to-tyvar receiver
-(`docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md`),
+(`docs/archive/history/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md`),
 attempted to push further into the bridge-side gap that prevents
 gap2b's `vec-eq-loop-byval` spec body from compiling.
 

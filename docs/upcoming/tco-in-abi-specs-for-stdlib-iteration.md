@@ -14,7 +14,7 @@ in flight (suite verifying as this plan is written) proves that
 clone-name/signature consistency issue is gated. Cons's recursion uses
 the EX_ASCRIBE bridge widening to project `.head`/`.tail` directly.
 
-But the audit (`docs/reported/m4-suite-wide-bridge-audit-2026-06-13.txt`)
+But the audit (`docs/archive/history/m4-suite-wide-bridge-audit-2026-06-13.txt`)
 shows **14 fixtures × ~82 bridge crossings** remain, almost all due to
 stdlib's collection-Eq instances (`Vec`, `Map`, `MutableMap`, `Set`)
 delegating to inline-C carrier helpers. Cons cleared up because it's

@@ -6,7 +6,7 @@
 > **Triggers:**
 >   - `docs/reported/spices-int-stand-in-audit-2026-06-14.md` (the audit)
 >   - `docs/reported/typed-c-abi-function-pointers.md` (S1 language gap)
->   - `docs/reported/no-stdlib-result-builder-for-inline-c.md` (S3 stdlib gap)
+>   - `docs/archive/history/no-stdlib-result-builder-for-inline-c.md` (S3 stdlib gap)
 > **CLAUDE.md gate:** "No Lazy `:int` Stand-Ins -- STRICT RULE" (2026-06-14)
 >   blocks any new `:int` stand-in writeup; this plan is the prerequisite
 >   that makes the audit fix-up actually achievable without new
@@ -64,7 +64,7 @@ compile time.
 
 ### Why S3 (inline-C constructors) cannot be fixed today
 
-`docs/reported/no-stdlib-result-builder-for-inline-c.md`:
+`docs/archive/history/no-stdlib-result-builder-for-inline-c.md`:
 
 - `stdlib/result.tur`'s `ok` / `err` use `make-struct` -- Turmeric-only,
   not callable from inline-C.
@@ -461,7 +461,7 @@ and *with* the middleware reshape, not on its own.
 - `docs/reported/spices-int-stand-in-audit-2026-06-14.md` -- the audit
   that drives this work; ~50 sites across 19 spices.
 - `docs/reported/typed-c-abi-function-pointers.md` -- S1 language gap.
-- `docs/reported/no-stdlib-result-builder-for-inline-c.md` -- S3 stdlib
+- `docs/archive/history/no-stdlib-result-builder-for-inline-c.md` -- S3 stdlib
   gap.
 - `docs/reported/tourist-middleware-takes-req-not-ctx.md` -- adjacent
   finding; tourist migration depends on both this plan AND that reshape.
