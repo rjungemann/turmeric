@@ -443,6 +443,44 @@ static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fi
     return turi_struct_val(s);
 }
 
+/* M2b: build a zero-valued TuriValue for a type T -- the interpreter's analogue
+ * of the compiled `(T){0}` compound literal.  Scalars, pointers and type-param
+ * fields collapse to the int64 carrier 0; floats to 0.0; and a struct T to a
+ * TuriStruct with every field recursively zeroed, so `(.field (default-of T))`
+ * reads a real zero instead of failing with "field access on null carrier". */
+static TuriValue turi_default_of(const Type *t) {
+    if (!t) return turi_int(0);
+    switch (t->kind) {
+        case TY_FLOAT32: case TY_FLOAT64: return turi_float(0.0);
+        case TY_BOOL: return turi_bool(false);
+        case TY_NIL:  return turi_nil();
+        default: break;
+    }
+    /* Struct or parametric struct application `(S A B ...)`: build a zeroed
+     * TuriStruct.  type_extract_struct_app recovers the StructDef + the
+     * application's type args (so a parametric field's actual type is known),
+     * which substitute_struct_app_type then resolves before recursing. */
+    StructDef *def = NULL;
+    Type       args[MAX_FN_ARITY];
+    uint8_t    nargs = 0;
+    if (type_extract_struct_app(t, &def, args, &nargs) && def) {
+        uint32_t nf = def->n_fields;
+        if (nf == 0) return make_struct_val_def(def->name, 0, NULL, def);
+        TuriValue *fields = (TuriValue *)malloc((size_t)nf * sizeof(TuriValue));
+        if (!fields) return turi_int(0);
+        for (uint32_t i = 0; i < nf; i++) {
+            StructField *f = &def->fields[i];
+            Type ft = f->full_type ? *f->full_type : (Type){ .kind = f->kind };
+            Type resolved = (nargs > 0) ? substitute_struct_app_type(&ft, def, args) : ft;
+            fields[i] = turi_default_of(&resolved);
+        }
+        TuriValue v = make_struct_val_def(def->name, nf, fields, def);
+        free(fields);
+        return v;
+    }
+    return turi_int(0);
+}
+
 /* W1b: see eval.h.  Read field idx of a struct value (TuriStruct is opaque to
  * main.c, so the Result/Option native shims call this to accept a make-struct
  * value as well as their native int64 box). */
@@ -505,15 +543,39 @@ void turi_native_throw(TuriEnv *env, const char *msg) {
     env->throw_value = tv;
 }
 
-/* Defer item: body expression + snapshot frame of captured values. */
+/* Defer item: body expression + snapshot frame of captured values.
+ *
+ * A DeferItem with `body == NULL` is a *scope-boundary marker*: a sentinel
+ * pushed onto the chain at each defer-scope entry (a `let`), so the firing
+ * helpers can mirror the compiled `tur_frame_fire_chain` two-level ordering --
+ * same-scope LIFO, and, on an early exit (return / throw / panic), scopes
+ * outer-first.  Markers carry no body and are never evaluated; they are simply
+ * skipped (LIFO firing) or used to delimit segments (by-scope firing) and then
+ * freed.  See docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
 typedef struct DeferItem {
-    Expr             *body;
+    Expr             *body;       /* NULL => scope-boundary marker (not fired) */
     EvalFrame        *snapshot;   /* captured variable values at defer-call time */
     struct DeferItem *next;
 } DeferItem;
 
-/* Execute all defers pushed above mark (LIFO) and free them.
- * Errors inside defers are silently discarded (like in most languages). */
+/* Push a scope-boundary marker onto the defer chain.  Returns the chain head
+ * that existed *before* the marker -- i.e. the parent scope's defers -- which a
+ * non-tail scope stores as its fire-to mark (so its normal-exit firing consumes
+ * the scope's own defers plus this marker, leaving the parent chain intact). */
+static DeferItem *defer_push_scope_marker(TuriEnv *env) {
+    DeferItem *parent = (DeferItem *)env->defer_stack;
+    DeferItem *m = (DeferItem *)calloc(1, sizeof(DeferItem));
+    m->body     = NULL;
+    m->snapshot = NULL;
+    m->next     = parent;
+    env->defer_stack = m;
+    return parent;
+}
+
+/* Execute all defers pushed above mark (LIFO / head-first) and free them.
+ * Scope-boundary markers are skipped and freed.  Head-first across nested
+ * scopes yields the compiled *normal-exit* ordering: innermost scope first,
+ * same-scope LIFO.  Errors inside defers are silently discarded. */
 static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
                                   EvalFrame *fallback_frame) {
     bool saved_throwing  = env->throwing;
@@ -524,6 +586,11 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     while (env->defer_stack != mark) {
         DeferItem *item = (DeferItem *)env->defer_stack;
         env->defer_stack = item->next;
+
+        if (item->body == NULL) {   /* scope-boundary marker: skip */
+            free(item);
+            continue;
+        }
 
         /* Reset signals so defer body runs cleanly. */
         env->throwing  = false;
@@ -545,38 +612,65 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     env->return_value = saved_rv;
 }
 
-/* Fire defers in reversed (oldest-first / outer-first) order.
- * Used at function exit to match compiled tur_frame_fire_chain semantics:
- * on early-return, outer defers fire before inner defers. */
-static void fire_defers_to_mark_reversed(TuriEnv *env, DeferItem *mark,
-                                          EvalFrame *fallback_frame) {
-    /* Count items */
+/* Fire defers at an *early exit* (return / throw / panic) boundary, reversing
+ * by SCOPE rather than by item.  Mirrors the compiled tur_frame_fire_chain
+ * early-exit semantics: scopes fire outer-first, but within a single scope the
+ * defers stay LIFO.  Scope-boundary markers (body == NULL) delimit the scopes;
+ * the trailing run (after the last marker, down to `mark`) is the outermost
+ * scope and fires first.
+ *
+ * A flat item-reversal -- the previous implementation -- collapsed both axes
+ * into one FIFO walk, so multiple defers in a single (e.g. tail-position) scope
+ * came out oldest-first instead of LIFO.  See
+ * docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
+static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
+                                         EvalFrame *fallback_frame) {
+    /* Collect [head .. mark) into an array, head-first (index 0 = newest). */
     size_t n = 0;
     for (DeferItem *it = (DeferItem *)env->defer_stack; it != mark; it = it->next) n++;
     if (n == 0) return;
 
-    /* Collect into array (index 0 = newest / innermost) */
     DeferItem **items = (DeferItem **)malloc(n * sizeof(DeferItem *));
     DeferItem *cur = (DeferItem *)env->defer_stack;
     for (size_t i = 0; i < n; i++) { items[i] = cur; cur = cur->next; }
     env->defer_stack = mark;
+
+    /* Split into per-scope runs of real (non-marker) items.  A marker closes
+     * the run above it; runs are recorded innermost-first (head-first scan). */
+    size_t *run_start = (size_t *)malloc(n * sizeof(size_t));
+    size_t *run_end   = (size_t *)malloc(n * sizeof(size_t));
+    size_t  n_runs = 0, cur_start = 0;
+    for (size_t k = 0; k < n; k++) {
+        if (items[k]->body == NULL) {   /* marker: close current run, free it */
+            if (k > cur_start) { run_start[n_runs] = cur_start; run_end[n_runs] = k; n_runs++; }
+            cur_start = k + 1;
+            free(items[k]);   /* markers are never fired */
+        }
+    }
+    if (n > cur_start) { run_start[n_runs] = cur_start; run_end[n_runs] = n; n_runs++; }
 
     bool saved_throwing  = env->throwing;
     TuriValue saved_tv   = env->throw_value;
     bool saved_returning = env->returning;
     TuriValue saved_rv   = env->return_value;
 
-    /* Fire reversed: oldest (outermost) first */
-    for (size_t i = n; i-- > 0; ) {
-        DeferItem *item = items[i];
-        env->throwing  = false;
-        env->returning = false;
-        EvalFrame *dframe = item->snapshot;
-        if (dframe) dframe->parent = fallback_frame;
-        eval_expr(env, dframe, item->body);
-        eval_frame_free(item->snapshot);
-        free(item);
+    /* Fire runs outer-first (last recorded = outermost); within a run keep
+     * head-first order (LIFO within the scope). */
+    for (size_t r = n_runs; r-- > 0; ) {
+        for (size_t k = run_start[r]; k < run_end[r]; k++) {
+            DeferItem *item = items[k];
+            env->throwing  = false;
+            env->returning = false;
+            EvalFrame *dframe = item->snapshot;
+            if (dframe) dframe->parent = fallback_frame;
+            eval_expr(env, dframe, item->body);
+            eval_frame_free(item->snapshot);
+            free(item);
+        }
     }
+
+    free(run_start);
+    free(run_end);
     free(items);
 
     env->throwing     = saved_throwing;
@@ -622,7 +716,7 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     fflush(stderr);
     /* Fire all pending defers before exiting (outer-first order). */
     if (!env->in_no_unwind)
-        fire_defers_to_mark_reversed(env, NULL, NULL);
+        fire_defers_to_mark_by_scope(env, NULL, NULL);
     fflush(stdout);
     exit(1);
 }
@@ -2682,6 +2776,63 @@ static bool ic_constructor_chases_foreign_ptr(const char *body, const char *varn
     return false;
 }
 
+/* Scan the constructor body region before the malloc for semantic input guards
+ * of the form `if (<cond>) return <expr>;` (optionally brace-wrapped).  Such a
+ * guard short-circuits the constructor based on an argument -- e.g. ne-from?'s
+ * `if (xs == 0) return 0;` -- which the flat-constructor model would otherwise
+ * ignore, building the struct unconditionally (a silent miscompile).  An OOM
+ * guard (`if (!o) return 0;`) sits *after* the malloc and is never seen here.
+ * Returns 1 (and sets *out) if a guard's condition held, 2 if a guard is present
+ * but its condition/return cannot be evaluated (the caller must then decline
+ * rather than guess), or 0 if no guard fired. */
+static int ic_constructor_leading_guard(const char *body, const char *limit,
+                                        TuriValue *args, uint32_t n_args,
+                                        FnDef *fn, uint32_t param_offset,
+                                        TuriValue *out) {
+    const char *p = body;
+    while (p < limit) {
+        p = ic_skip_ws(p);
+        if (p >= limit || !ic_word_eq(p, "if")) return 0; /* first non-if -> stop */
+        p += 2; p = ic_skip_ws(p);
+        if (*p != '(') return 2;
+        const char *cond_start = ++p;
+        int d = 1;
+        while (*p && d > 0) { if (*p=='(') d++; else if (*p==')') { if (--d==0) break; } p++; }
+        if (*p != ')') return 2;
+        const char *cond_end = p++;            /* p now past ')' */
+        p = ic_skip_ws(p);
+        bool brace = (*p == '{');
+        if (brace) { p++; p = ic_skip_ws(p); }
+        if (!ic_word_eq(p, "return")) return 2; /* only `return` guards modeled */
+        p += 6; p = ic_skip_ws(p);
+        const char *ret_start = p;
+        while (*p && *p != ';') p++;
+        if (*p != ';') return 2;
+        const char *ret_end = p++;             /* p now past ';' */
+        if (brace) { p = ic_skip_ws(p); if (*p == '}') p++; }
+        int cl = (int)(cond_end - cond_start), rl = (int)(ret_end - ret_start);
+        char condbuf[256], retbuf[256];
+        if (cl <= 0 || cl >= (int)sizeof(condbuf) || rl < 0 || rl >= (int)sizeof(retbuf))
+            return 2;
+        memcpy(condbuf, cond_start, (size_t)cl); condbuf[cl] = '\0';
+        memcpy(retbuf,  ret_start,  (size_t)rl); retbuf[rl]  = '\0';
+        int64_t cv = 0;
+        if (!ic_eval_assign_expr(condbuf, fn, param_offset, args, n_args, &cv, body))
+            return 2;
+        if (cv != 0) {
+            int64_t rv = 0;
+            if (rl > 0 &&
+                !ic_eval_assign_expr(retbuf, fn, param_offset, args, n_args, &rv, body))
+                return 2;
+            TuriValue v = {0}; v.tag = TURI_INT; v.as_int = rv;
+            *out = v;
+            return 1;                          /* guard fired */
+        }
+        /* condition false -> fall through to the next leading statement */
+    }
+    return 0;
+}
+
 static TuriValue ic_exec_constructor(const char *body,
                                       TuriValue *args, uint32_t n_args,
                                       FnDef *fn, uint32_t param_offset) {
@@ -2703,6 +2854,16 @@ static TuriValue ic_exec_constructor(const char *body,
     if (!malloc_p) return turi_nil();
     /* W4: decline bodies whose semantics exceed a flat constructor. */
     if (ic_constructor_unmodelable(body)) return turi_nil();
+    /* Honor a leading `if (<cond>) return <const>;` input guard before the
+     * malloc (e.g. ne-from?'s empty-list short-circuit); decline if it cannot
+     * be evaluated rather than ignoring it and miscompiling. */
+    {
+        TuriValue gout;
+        int g = ic_constructor_leading_guard(body, malloc_p, args, n_args,
+                                             fn, param_offset, &gout);
+        if (g == 1) return gout;
+        if (g == 2) return turi_nil();
+    }
     /* Scan backwards for variable name.
      * Pattern: "TYPE *varname = (optional_cast)malloc("
      * Start from the char before 'm' in malloc. */
@@ -4072,6 +4233,19 @@ static inline uint32_t drive_seq_n(const Expr *e) {
     return (e->kind == EX_PROGRAM) ? e->as.program.n : e->as.do_.n;
 }
 
+/* True if a do/program block directly registers a defer (an EX_DEFER item).
+ * Such a block is its own defer scope (the compiler emits a tur_frame for it),
+ * so the driver pushes a scope-boundary marker on entry to delimit its defers
+ * from enclosing scopes' defers when the by-scope (early-exit) walk fires them.
+ * Blocks with no direct defer push no marker -- the common case stays cheap. */
+static inline bool seq_has_direct_defer(const Expr *e) {
+    Expr   **items = drive_seq_items(e);
+    uint32_t n     = drive_seq_n(e);
+    for (uint32_t i = 0; i < n; i++)
+        if (items[i]->kind == EX_DEFER) return true;
+    return false;
+}
+
 static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                const DriveSeed *seed) {
     DriveCont  inl[DRIVE_INLINE];
@@ -4133,10 +4307,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (n == 1 && items[0]->kind != EX_DEFER && do_tail) {
                     /* F2: the sole (tail) item carries the do's tail-ness with no
                      * continuation, so a tail call in it exposes the enclosing
-                     * DK_CALL_RET directly (no DK_DO_SEQ to pop first). */
+                     * DK_CALL_RET directly (no DK_DO_SEQ to pop first).  (A sole
+                     * EX_DEFER item is excluded, so no scope marker is missed.) */
                     control = items[0];   /* cf unchanged; tail stays true */
                     break;
                 }
+                /* A do-block that registers defers is its own defer scope: push a
+                 * boundary marker so its defers stay grouped (same-scope LIFO,
+                 * outer scopes first) when fired at an early exit. */
+                if (seq_has_direct_defer(de))
+                    defer_push_scope_marker(env);
                 DRIVE_PUSH(((DriveCont){ .kind = DK_DO_SEQ, .expr = de,
                                          .frame = cf, .tail = do_tail }));
                 control = items[0];
@@ -4165,9 +4345,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else if (tail) {
                     /* F1: tail let body -- descend directly (leak nf), no separate
                      * defer scope.  Body defers fire at function exit via the
-                     * enclosing DK_CALL_RET, matching the retired eval_body_tco's tail leak
-                     * (frame = new_frame; goto restart).  Keeping nf-free here is
-                     * what lets a tail call in the body reuse the activation. */
+                     * enclosing DK_CALL_RET (matching the retired eval_body_tco's
+                     * tail leak).  The body's do-block pushes the scope-boundary
+                     * marker (see EX_DO/EX_PROGRAM) when it holds defers. */
                     control = control->as.let_.body;
                     cf = nf;   /* tail stays true */
                 } else {
@@ -4553,8 +4733,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else if (top->tail) {
                     /* F1: tail let body -- pop DK_LET_BIND and descend the body
                      * directly (leak nf); body defers fire at function exit
-                     * (matches the retired eval_body_tco).  Exposes the enclosing DK_CALL_RET
-                     * for a tail call in the body. */
+                     * (matches the retired eval_body_tco).  Exposes the enclosing
+                     * DK_CALL_RET for a tail call in the body.  The body's
+                     * do-block pushes the scope marker when it holds defers. */
                     const Expr *body = le->as.let_.body;
                     len--;
                     control = body; cf = nf; tail = true; descending = true;
@@ -4647,9 +4828,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     assert(len >= 2 && st[len - 2].kind == DK_CALL_RET);
                     DriveCont *ret = &st[len - 2];
                     /* (1) finish the current activation: restore its no_unwind
-                     * and fire its defers (LIFO), exactly as before a bounce. */
+                     * and fire its defers.  Reaching a tail call is a *normal*
+                     * frame completion, so fire head-first (innermost scope
+                     * first, same-scope LIFO) -- matching the compiled
+                     * normal-exit ordering. */
                     env->in_no_unwind = ret->was_no_unwind;
-                    fire_defers_to_mark_reversed(env, (DeferItem *)ret->aux, NULL);
+                    fire_defers_to_mark(env, (DeferItem *)ret->aux, NULL);
                     /* (2) re-enter the callee in the same slot.  saved_module is
                      * left as captured by the chain head (restored once at the
                      * chain's end); was_returning / was_no_unwind are recaptured
@@ -4690,7 +4874,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * `return` at the function boundary) + the eval_apply wrapper's
                  * module restore. */
                 env->in_no_unwind = top->was_no_unwind;
-                fire_defers_to_mark_reversed(env, (DeferItem *)top->aux, NULL);
+                /* Fire this call's defers.  On an early exit (return / throw)
+                 * the chain spans multiple leaked scopes, which fire outer-first
+                 * (by-scope reversal); on normal completion fire head-first
+                 * (innermost scope first, same-scope LIFO).  Both mirror the
+                 * compiled tur_frame_fire_chain (see
+                 * docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
+                if (env->returning || env->throwing)
+                    fire_defers_to_mark_by_scope(env, (DeferItem *)top->aux, NULL);
+                else
+                    fire_defers_to_mark(env, (DeferItem *)top->aux, NULL);
                 TuriValue ret;
                 if (env->returning) {
                     ret = env->return_value;
@@ -4971,16 +5164,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * actually evaluates fits in TURI_INT/FLOAT/NIL/BOOL with a zero
          * bit-pattern.  Match the result type's broad kind to pick the
          * carrier; default to integer zero (a NULL pointer also fits). */
-        if (e->type.kind == TY_FLOAT32 || e->type.kind == TY_FLOAT64) {
-            return turi_float(0.0);
-        }
-        if (e->type.kind == TY_BOOL) {
-            return turi_bool(false);
-        }
-        if (e->type.kind == TY_NIL) {
-            return turi_nil();
-        }
-        return turi_int(0);
+        return turi_default_of(&e->type);
     }
 
     case EX_CSTR_LIT: {
@@ -6033,7 +6217,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         env->panicking = true;
         fprintf(stderr, "panic at\n");
         fflush(stderr);
-        fire_defers_to_mark_reversed(env, NULL, NULL);
+        fire_defers_to_mark_by_scope(env, NULL, NULL);
         fflush(stdout);
         exit(1);
     }
@@ -6087,7 +6271,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             (void)prev_panicking;
             /* W4: fire the unwound frames' defers (LIFO) before returning, so
              * `(defer ...)` in the panicking thunk runs during the unwind. */
-            fire_defers_to_mark_reversed(env, defer_mark, frame);
+            fire_defers_to_mark_by_scope(env, defer_mark, frame);
             return turi_err_result_box(env);
         }
     }
@@ -6136,7 +6320,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 longjmp(*prev_jmp, 1);
             fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
             fflush(stderr);
-            fire_defers_to_mark_reversed(env, NULL, NULL);
+            fire_defers_to_mark_by_scope(env, NULL, NULL);
             fflush(stdout);
             exit(1);
         }
