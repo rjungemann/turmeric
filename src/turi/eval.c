@@ -4077,16 +4077,22 @@ typedef enum {
     DK_MATCH_BODY,   /* EX_MATCH: evaluating the winning arm body (frame owned) */
     DK_BUILTIN_ARG,  /* EX_BUILTIN: evaluating arg[index] (acc owned; or short-circuit) */
     DK_CALL_ARG,     /* EX_CALL: evaluating arg[index] (acc owned; callee in `last`) */
+    DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
 } DriveKind;
 
 typedef struct {
     DriveKind   kind;
-    const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET / EX_MAKE_STRUCT */
+    const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET / EX_MAKE_STRUCT / EX_CALL */
     EvalFrame  *frame;  /* lexical env: DO/MAKE_STRUCT=enclosing; LET/MATCH=owned */
     uint32_t    index;  /* DO: next item; LET: next binding; MAKE_STRUCT: next field */
-    TuriValue   last;   /* DO/PROGRAM: last non-defer value so far */
-    void       *aux;    /* LET_BODY: DeferItem* defer-stack mark;
-                         * MAKE_STRUCT: TuriValue* heap field accumulator */
+    TuriValue   last;   /* DO/PROGRAM: last non-defer value; CALL_ARG: callee closure */
+    void       *aux;    /* LET_BODY/CALL_RET: DeferItem* defer-stack mark;
+                         * MAKE_STRUCT / *_ARG: TuriValue* heap accumulator */
+    /* T3.2b: tail-position threading + folded-call (DK_CALL_RET) saved state. */
+    bool        tail;          /* tail-ness to apply to this form's tail child */
+    const char *saved_module;  /* DK_CALL_RET: caller module to restore */
+    bool        was_returning; /* DK_CALL_RET: env->returning at call entry */
+    bool        was_no_unwind; /* DK_CALL_RET: env->in_no_unwind at call entry */
 } DriveCont;
 
 /* T3.0: resolve an EX_MATCH to its winning arm frame + body WITHOUT evaluating
@@ -4208,26 +4214,39 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         st[len++] = (C);                                                       \
     } while (0)
 
-    DRIVE_PUSH(((DriveCont){ DK_DONE, NULL, NULL, 0, turi_nil(), NULL }));
+    DRIVE_PUSH(((DriveCont){ .kind = DK_DONE }));
 
     const Expr *control    = e;
     EvalFrame  *cf         = frame;
     TuriValue   cur        = turi_nil();
     bool        descending = true;
+    /* T3.2b: tail-ness of `control`.  eval_drive is only entered from the
+     * non-tail evaluator (eval_expr_impl), so the initial control is non-tail;
+     * tail-ness becomes true only inside a folded callee body. */
+    bool        tail       = false;
 
     for (;;) {
         if (descending) {
             switch (control->kind) {
             case EX_IF:
-                DRIVE_PUSH(((DriveCont){ DK_IF_BRANCH, control, cf, 0, turi_nil(), NULL }));
-                control = control->as.if_.cond;   /* descend into the test */
+                DRIVE_PUSH(((DriveCont){ .kind = DK_IF_BRANCH, .expr = control,
+                                         .frame = cf, .tail = tail }));
+                control = control->as.if_.cond;   /* descend into the test (non-tail) */
+                tail = false;
                 break;                            /* still descending */
             case EX_DO:
             case EX_PROGRAM: {
-                uint32_t n = drive_seq_n(control);
+                const Expr *de = control;
+                uint32_t    n  = drive_seq_n(de);
                 if (n == 0) { cur = turi_nil(); descending = false; break; }
-                DRIVE_PUSH(((DriveCont){ DK_DO_SEQ, control, cf, 0, turi_nil(), NULL }));
-                control = drive_seq_items(control)[0];
+                bool   do_tail = tail;
+                Expr **items   = drive_seq_items(de);
+                DRIVE_PUSH(((DriveCont){ .kind = DK_DO_SEQ, .expr = de,
+                                         .frame = cf, .tail = do_tail }));
+                control = items[0];
+                /* item 0 is tail only when it is the sole (non-defer) item;
+                 * multi-item tail-ness is decided in the DK_DO_SEQ return path. */
+                tail = (n == 1 && items[0]->kind != EX_DEFER) ? do_tail : false;
                 break;
             }
             case EX_LET:
@@ -4243,16 +4262,18 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                             turi_nil());
                 }
                 if (n > 0) {
-                    DRIVE_PUSH(((DriveCont){ DK_LET_BIND, control, nf, 0, turi_nil(), NULL }));
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_LET_BIND, .expr = control,
+                                             .frame = nf, .tail = tail }));
                     control = control->as.let_.bindings[0].init;
-                    cf = nf;
+                    cf = nf; tail = false;   /* binding inits are non-tail */
                 } else {
-                    /* No bindings: straight to body; mark defers now. */
-                    DriveCont c = { DK_LET_BODY, control, nf, 0, turi_nil(),
-                                    env->defer_stack };
-                    DRIVE_PUSH(c);
+                    /* No bindings: straight to body (which inherits the let's
+                     * tail-ness); mark defers now. */
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_LET_BODY, .expr = control,
+                                             .frame = nf, .tail = tail,
+                                             .aux = env->defer_stack }));
                     control = control->as.let_.body;
-                    cf = nf;
+                    cf = nf;   /* tail unchanged: body is the let's tail position */
                 }
                 break;
             }
@@ -4271,9 +4292,10 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     result = turi_error("eval: out of memory evaluating struct fields");
                     goto done;
                 }
-                DRIVE_PUSH(((DriveCont){ DK_MAKE_STRUCT, control, cf, 0, turi_nil(),
-                                         fields }));
+                DRIVE_PUSH(((DriveCont){ .kind = DK_MAKE_STRUCT, .expr = control,
+                                         .frame = cf, .aux = fields }));
                 control = control->as.make_struct_.field_values[0];
+                tail = false;   /* struct fields are non-tail */
                 break;
             }
             case EX_BUILTIN: {
@@ -4295,9 +4317,10 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                         goto done;
                     }
                 }
-                DRIVE_PUSH(((DriveCont){ DK_BUILTIN_ARG, control, cf, 0,
-                                         turi_nil(), acc }));
+                DRIVE_PUSH(((DriveCont){ .kind = DK_BUILTIN_ARG, .expr = control,
+                                         .frame = cf, .aux = acc }));
                 control = control->as.builtin.args[0];
+                tail = false;   /* builtin args are non-tail */
                 break;
             }
             case EX_CALL: {
@@ -4335,8 +4358,11 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     result = turi_error("eval: out of memory evaluating call arguments");
                     goto done;
                 }
-                DRIVE_PUSH(((DriveCont){ DK_CALL_ARG, control, cf, 0, fn_val, acc }));
+                DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_ARG, .expr = control,
+                                         .frame = cf, .last = fn_val, .aux = acc,
+                                         .tail = tail }));
                 control = control->as.call_.args[0];
+                tail = false;   /* call args are non-tail */
                 break;
             }
             case EX_MATCH: {
@@ -4347,9 +4373,9 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 TuriValue   sv   = turi_nil();
                 int mr = eval_match_resolve(env, cf, control, &af, &body, &sv);
                 if (mr == 1) {
-                    DRIVE_PUSH(((DriveCont){ DK_MATCH_BODY, control, af, 0,
-                                             turi_nil(), NULL }));
-                    control = body; cf = af;   /* descend arm body in the loop */
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_MATCH_BODY, .expr = control,
+                                             .frame = af, .tail = tail }));
+                    control = body; cf = af;   /* arm body: inherits match's tail-ness */
                 } else if (mr == 0) {
                     cur = turi_error("eval: match: no arm matched");
                     descending = false;
@@ -4377,14 +4403,15 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 result = cur;
                 goto done;
             case DK_IF_BRANCH: {
-                const Expr *ie  = top->expr;
-                EvalFrame  *icf = top->frame;
+                const Expr *ie   = top->expr;
+                EvalFrame  *icf  = top->frame;
+                bool        itl  = top->tail;   /* branch inherits the if's tail-ness */
                 len--;  /* pop: the chosen branch's value becomes the if's value */
                 if (signaled) break;  /* propagate cur unchanged */
                 if (turi_is_truthy(cur)) {
-                    control = ie->as.if_.then_; cf = icf; descending = true;
+                    control = ie->as.if_.then_; cf = icf; tail = itl; descending = true;
                 } else if (ie->as.if_.else_or_null) {
-                    control = ie->as.if_.else_or_null; cf = icf; descending = true;
+                    control = ie->as.if_.else_or_null; cf = icf; tail = itl; descending = true;
                 } else {
                     cur = turi_nil();  /* no else: result is nil, keep returning */
                 }
@@ -4399,6 +4426,10 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 top->index++;
                 if (top->index < n) {
                     control = items[top->index]; cf = top->frame; descending = true;
+                    /* the final, non-defer item inherits the do's tail-ness;
+                     * a trailing defer means the last value is *not* in tail pos. */
+                    tail = (top->index == n - 1 &&
+                            items[top->index]->kind != EX_DEFER) ? top->tail : false;
                 } else {
                     cur = top->last; len--;  /* pop; keep returning the last value */
                 }
@@ -4433,11 +4464,12 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     cf = nf; descending = true;
                 } else {
                     /* Bindings done -> body.  Mark defers AFTER bindings so only
-                     * body-registered defers fire on this scope's exit. */
+                     * body-registered defers fire on this scope's exit.  The body
+                     * inherits the let's tail-ness (preserved in top->tail). */
                     top->kind       = DK_LET_BODY;
                     top->aux = env->defer_stack;
                     control = le->as.let_.body;
-                    cf = nf; descending = true;
+                    cf = nf; tail = top->tail; descending = true;
                 }
                 break;
             }
@@ -4468,12 +4500,79 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 if (top->index < n) {
                     control = top->expr->as.call_.args[top->index];
                     cf = top->frame; descending = true;
-                } else {
-                    /* eval_apply copies args into its own TCO buffer, so freeing
-                     * after it returns is safe. */
-                    cur = eval_apply(env, top->last.as_closure, acc, n);
-                    free(acc); len--;
+                    break;
                 }
+                /* All args ready. */
+                TuriClosure *cl = top->last.as_closure;
+                FnDef       *fn = (FnDef *)cl->fn;
+                bool foldable = !cl->native && fn && fn->body &&
+                                fn->body->kind != EX_INLINE_C;
+                if (top->tail || !foldable) {
+                    /* Tail call (eval_apply's TcoFrame loop keeps it O(1)) or a
+                     * leaf (native / inline-C, dispatched inside eval_apply):
+                     * apply directly.  eval_apply copies args, so free after. */
+                    cur = eval_apply(env, cl, acc, n);
+                    free(acc); len--;
+                    break;
+                }
+                /* Non-tail turi-body closure: FOLD -- descend the body in this
+                 * loop so deep non-tail recursion stays off the C stack.
+                 * Reproduces eval_apply_inner's single-activation prologue; the
+                 * body's own tail calls go back through eval_apply (no TCO loop
+                 * needed here). */
+                uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
+                uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
+                if (effective_params != n) {
+                    cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                      fn->binding ? fn->binding->name->name : "<fn>",
+                                      (unsigned)effective_params, (unsigned)n);
+                    free(acc); len--; break;
+                }
+                if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as in eval_apply_inner */
+                    if (env->step_fuel == 0) {
+                        cur = turi_error("eval: step fuel exhausted");
+                        free(acc); len--; break;
+                    }
+                    env->step_fuel--;
+                }
+                EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+                for (uint32_t i = 0; i < n; i++)
+                    frame_bind(call_frame,
+                               fn->params[param_offset + i]->name->name, acc[i]);
+                free(acc);
+                /* Reuse this slot as DK_CALL_RET; stash the caller state the
+                 * epilogue restores. */
+                top->kind          = DK_CALL_RET;
+                top->frame         = call_frame;
+                top->aux           = env->defer_stack;       /* defer mark */
+                top->saved_module  = env->current_module;
+                top->was_returning = env->returning;
+                top->was_no_unwind = env->in_no_unwind;
+                env->current_module = cl->module;
+                env->returning      = false;
+                env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
+                control = fn->body; cf = call_frame; tail = true; descending = true;
+                break;
+            }
+            case DK_CALL_RET: {
+                /* Folded callee body produced cur.  Epilogue = eval_apply_inner's
+                 * single-activation tail (restore in_no_unwind, fire this call's
+                 * defers, resolve the return/throw/value, consume an early
+                 * `return` at the function boundary) + the eval_apply wrapper's
+                 * module restore. */
+                env->in_no_unwind = top->was_no_unwind;
+                fire_defers_to_mark_reversed(env, (DeferItem *)top->aux, NULL);
+                TuriValue ret;
+                if (env->returning) {
+                    ret = env->return_value;
+                    env->returning = top->was_returning;  /* boundary consumes return */
+                } else if (env->throwing) {
+                    ret = env->throw_value;
+                } else {
+                    ret = cur;
+                }
+                env->current_module = top->saved_module;
+                cur = ret; len--;   /* pop; propagate the call's value */
                 break;
             }
             case DK_BUILTIN_ARG: {

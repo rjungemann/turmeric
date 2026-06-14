@@ -378,12 +378,31 @@ costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
      `sum-acc 1_000_000` stays O(1)). Regression-green (1186 passed, same 8
      monomorphization fails; 14/14 `eval|sandbox` ctests; calls/recursion/
      closure-returning HOF correct). The arg-accumulation here is reused by:
-   - **T3.2b -- fold `eval_apply`/`eval_body_tco` body-in-loop + frame-reuse TCO
-     (remaining).** Replace the `eval_apply` call at the end of `DK_CALL_ARG`
-     with the inline apply prologue (`DK_CALL_RET` saving module/returning/
-     no_unwind/defer_mark; native/inline-C leaves; build frame, bind args) and
-     descend the body in the loop with a tail flag, reusing the `DK_CALL_RET`
-     frame for tail calls. This is where the ceiling becomes heap-bounded.
+   - **T3.2b -- non-tail body fold + tail-flag -- LANDED 2026-06-14. The non-tail
+     ceiling is removed.** Used a **hybrid** that avoids reimplementing TCO:
+     only **non-tail turi-body closures are folded** (a `DK_CALL_RET` saves
+     module/returning/no_unwind/defer_mark, builds the call frame, and the body
+     is descended in the loop with `tail=true`); **tail calls and leaf calls
+     (native / inline-C) still go through `eval_apply`**, which already does O(1)
+     TCO via its `TcoFrame` loop. A `bool tail` flag is threaded through the
+     tail-transparent forms (if-branches, do last item, let body, match arm
+     body) so an EX_CALL is classified tail vs non-tail; only non-tail folds.
+     Because folded non-tail calls descend the body in the *same* `eval_drive`
+     C frame (work-stack on the heap), deep non-tail recursion no longer grows
+     the C stack -- it is **heap-bounded**.
+     - Validated: **sum-to 5000 / 50000 / 500000 all run** (was capped ~1064);
+       **TCO preserved** -- `sum-acc 1_000_000` (if-tail), `loop-let`/`loop-do`
+       1_000_000 (let/do-tail) all O(1), no OOM; early-`return` propagates
+       through folded calls (h(3)=342); defers fire; `run-turi.sh` 1186 passed
+       (same 8 unrelated monomorphization fails); 14/14 `eval|sandbox` ctests.
+     - **`escape-deep-capture` unparked** (T3.4): the 5000-non-tail-frame fixture
+       that was `requires.compiled` (C-stack overflow) now PASSes under
+       `--interpret`; its marker was removed so it runs on both paths.
+     - Note: the `eval_depth` guard / `TURI_EVAL_FRAME_BYTES` still bound the
+       *residual* C recursion (eval_apply tail-chain bodies' non-tail subexprs);
+       folded non-tail recursion is unguarded but heap-bounded (a runaway hits a
+       clean driver-stack OOM, never SIGSEGV). Retiring the guard for the
+       synchronous path (T5) is no longer urgent.
 4. **T3.3 -- re-entrancy audit + guard** (T4).
 5. **T3.4 -- raise `max_eval_depth`, retire the `TURI_EVAL_FRAME_BYTES` stopgap,
    unpark `escape-deep-capture`** (T5).
