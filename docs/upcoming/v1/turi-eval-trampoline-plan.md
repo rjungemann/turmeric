@@ -416,7 +416,7 @@ costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
    instead:** native HOFs propagate a callback *throw* (`env->throwing`) but
    **swallow value-level `turi_error` returns** (the recursion-limit error gets
    boxed into a garbage int), filed as
-   [docs/reported/turi-native-hofs-swallow-value-level-errors.md](../../reported/turi-native-hofs-swallow-value-level-errors.md)
+   [docs/archive/history/turi-native-hofs-swallow-value-level-errors.md](../../archive/history/turi-native-hofs-swallow-value-level-errors.md)
    (orthogonal to the trampoline; the fold only shifted the depth at which it
    shows). Residual, unverified: a HOF with a very large C frame could overflow
    before the ~1071 guard; revisit if one is found.

@@ -1,17 +1,17 @@
 # turi: native HOFs swallow value-level errors from their turi_call callback
 
-> **PARTIALLY RESOLVED 2026-06-14.** Guarded the 16 `turi_call` sites whose
-> native returns a `TuriValue` (option/result/set/vec/mutmap/tuple2 eq+map,
-> `hamt-merge-with`, `bt-mbind`, `k-apply-raw`, the `seq-call-*` shims,
-> `contract-check-inv`) with `if (turi_is_error(rv) || env->throwing) return rv;`
-> -- the `deep 3000` repro below now prints a clean `eval: recursion limit
-> exceeded` (rc=1) instead of a garbage integer, and the full suite rose to 1187
-> passed (was 1186), same 8 unrelated monomorphization fails, 14/14 eval|sandbox
-> ctests. **Still open (3 sites):** comparators that return a non-`TuriValue` to
-> a C caller and so cannot return the error value directly --
-> `map_turi_eq_tramp` (`bool`, called by the HAMT), `map_eq_iter` (`bool`), and
-> `sch_apply1` (`int64_t`, schan). They need a side-channel (a sticky error on
-> `env`, checked after the C call returns); deferred.
+> **RESOLVED 2026-06-14.** Two commits. (1) Guarded the 16 `turi_call` sites
+> whose native returns a `TuriValue` with
+> `if (turi_is_error(rv) || env->throwing) return rv;`. (2) Fixed the 3
+> remaining sites that return a non-`TuriValue` to a C caller
+> (`map_turi_eq_tramp` / `map_eq_iter` -> `bool`, `sch_apply1` -> `int64_t`) by
+> **promoting a value-level error to a throw** (`env->throwing = true;
+> env->throw_value = rv;`) so the enclosing native's result is discarded once the
+> driver's post-call `env->throwing` check fires. `deep 3000` (recursion through
+> `option-map`) now prints a clean `eval: recursion limit exceeded` (rc=1)
+> instead of garbage; suite 1187 passed (was 1186), same 8 unrelated
+> monomorphization fails, 14/14 eval|sandbox ctests, `tib-map-turi-comparator`
+> (content-keyed map comparator) still green.
 
 **One-line:** Under `tur --interpret`, a native higher-order function
 (`option-map`, and most of the ~29 `turi_call` sites in `src/main.c`) propagates

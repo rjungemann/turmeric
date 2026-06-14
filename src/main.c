@@ -6471,8 +6471,19 @@ typedef struct { TuriEnv *env; TuriValue cmp; } MapTuriEqCtx;
 
 static bool map_turi_eq_tramp(int64_t a, int64_t b, void *vctx) {
     MapTuriEqCtx *c = (MapTuriEqCtx *)vctx;
+    /* If a prior comparison in this HAMT op already raised, stop calling the
+     * closure -- the enclosing native's result is discarded once the driver
+     * sees env->throwing. */
+    if (c->env->throwing) return false;
     TuriValue args[2] = { turi_int(a), turi_int(b) };
     TuriValue r = turi_call(c->env, c->cmp, args, 2);
+    if (turi_is_error(r) || c->env->throwing) {
+        /* This comparator returns a C bool to the HAMT, so it cannot return the
+         * error value; promote a value-level error to a throw so the enclosing
+         * native (and the driver) propagate it instead of silently mis-hashing. */
+        if (turi_is_error(r)) { c->env->throwing = true; c->env->throw_value = r; }
+        return false;
+    }
     if (r.tag == TURI_BOOL) return r.as_bool;
     if (r.tag == TURI_INT)  return r.as_int != 0;
     return false;
@@ -6657,6 +6668,12 @@ static bool map_eq_iter(TuriEnv *env, Hamt *h1, Hamt *h2,
         cargs[0].tag = TURI_INT; cargs[0].as_int = (int64_t)(intptr_t)v;
         cargs[1].tag = TURI_INT; cargs[1].as_int = (int64_t)(intptr_t)vb;
         TuriValue rv = turi_call(env, val_cmp, cargs, 2);
+        if (turi_is_error(rv) || env->throwing) {
+            /* returns C bool; promote a value-level error to a throw so the
+             * caller (native_map_eq*) and the driver propagate it. */
+            if (turi_is_error(rv)) { env->throwing = true; env->throw_value = rv; }
+            eq = false; break;
+        }
         bool veq = rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0;
         if (!veq) { eq = false; break; }
     }
@@ -7453,6 +7470,12 @@ static char *sch_mkidx(const char *base, int64_t idx) {
 static int64_t sch_apply1(TuriEnv *env, int64_t fn_carrier, int64_t arg) {
     TuriValue av = turi_int(arg);
     TuriValue r = turi_call(env, seq_as_closure(turi_int(fn_carrier)), &av, 1);
+    if (turi_is_error(r) || env->throwing) {
+        /* returns a raw int64 carrier; promote a value-level error to a throw so
+         * the enclosing schema native and the driver propagate it. */
+        if (turi_is_error(r)) { env->throwing = true; env->throw_value = r; }
+        return 0;
+    }
     if (r.tag == TURI_FLOAT) { int64_t b; memcpy(&b, &r.as_float, 8); return b; }
     if (r.tag == TURI_BOOL)  return r.as_bool ? 1 : 0;
     return r.as_int;
