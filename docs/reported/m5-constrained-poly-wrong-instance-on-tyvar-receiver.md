@@ -74,21 +74,35 @@ Bare-A receiver works correctly:
 The difference is whether the receiver's static type ARRIVES as
 TY_TYVAR via an EX_VAR (works) vs via an EX_ASCRIBE to A (broken).
 
-## Root cause
+## Root cause (refined 2026-06-14 after deeper trace)
 
-`elab_typeclasses.c:3653-3671` computes `obj_ck` from the receiver
-TypeKind.  For TY_TYVAR it falls into the KIND_ARROW branch (TY_TYVAR
-isn't in the primitive list).  The instance search loop at L3674+
-then iterates all instances and picks the first non-primitive one
-(L3719: `type_ok = !inst_is_primitive`).  Alphabetical instance
-ordering happens to put `Eq MutableMap` near the head.
+Initial hypothesis was that `elab_typeclasses.c:3653-3671`'s
+KIND_ARROW fallback grabbed the first non-primitive instance.
+Direct instrumentation showed this is NOT where the divergence
+happens — `obj->type.kind` is **TY_INT** (3), not TY_TYVAR (36),
+at `elab_method_call` entry for BOTH the working case (gap2c, bare-A
+receiver) and the broken case (gap2d, EX_ASCRIBE-to-A receiver).
+Both go through the same code path through `elab_method_call`.
 
-The missing logic: when the receiver is TY_TYVAR AND the enclosing
-fn has a class-constraint `(Eq A)` where A matches the receiver tyvar,
-defer dispatch via the constraint dict instead of baking a concrete
-instance.  This is the classic Haskell-style constraint dispatch
-that the rest of the typeclass system relies on but the EX_ASCRIBE
-path misses.
+The divergence happens AFTER `elab_method_call` returns — in
+specialization-emit or call-name resolution.  Two candidate sites:
+
+- `emit_module.c`'s spec interning could be picking a different
+  representative instance for the call's binding.
+- `emit_core.c`'s `emit_call_name` could be re-resolving via
+  `emit_reresolve_method_call` (touched in commit a301229e); a
+  bug in the resolution for the EX_ASCRIBE-stripped path could
+  swap the instance.
+
+Not yet localised.  Next investigator should instrument both
+`emit_abi_register_call` and `emit_reresolve_method_call` to see
+which path bakes `__inst_Eq_eq_qu_MutableMap` into the helper's
+carrier base.
+
+The high-level "missing logic" hypothesis (no constraint-dict
+dispatch when enclosing fn has matching constraint) may still be
+the right shape for the eventual fix, but it should be confirmed
+against the actual emit-side divergence first.
 
 ## Severity
 
