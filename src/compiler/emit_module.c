@@ -675,11 +675,29 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
 
     if (ctx->n_abi_specializations >= ctx->cap_abi_specializations) {
         uint32_t new_cap = ctx->cap_abi_specializations ? ctx->cap_abi_specializations * 2 : 8;
+        /* `ctx->current_abi_specialization` is a raw pointer INTO this array
+         * (set by callers that recurse into a spec body while it is active).
+         * realloc may move the array, leaving that pointer dangling -- a
+         * heap-use-after-free the moment the active spec is read again (e.g.
+         * emit_abi_scan_expr's EX_CALL case reading ->n_bindings).  Capture its
+         * index before the realloc and re-point it after.  Exposed by deep
+         * spec interning (a constrained-poly by-value helper instantiated at
+         * many element types, e.g. the M5 Eq Vec rewrite over
+         * vec-eq-ascribed-multi). */
+        int64_t cur_spec_idx = -1;
+        if (ctx->current_abi_specialization &&
+            ctx->current_abi_specialization >= ctx->abi_specializations &&
+            ctx->current_abi_specialization <
+                ctx->abi_specializations + ctx->n_abi_specializations) {
+            cur_spec_idx = ctx->current_abi_specialization - ctx->abi_specializations;
+        }
         EmitAbiSpecialization *new_specs = (EmitAbiSpecialization *)realloc(
             ctx->abi_specializations, new_cap * sizeof(EmitAbiSpecialization));
         if (!new_specs) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->abi_specializations = new_specs;
         ctx->cap_abi_specializations = new_cap;
+        if (cur_spec_idx >= 0)
+            ctx->current_abi_specialization = &ctx->abi_specializations[cur_spec_idx];
     }
 
     EmitAbiSpecialization *spec = &ctx->abi_specializations[ctx->n_abi_specializations++];

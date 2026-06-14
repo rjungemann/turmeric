@@ -180,6 +180,57 @@ single-body-two-ABIs question for the `Eq Vec` definstance (its body
 serves both the int64 carrier base and the by-value Path A spec) is
 still open -- it is a separate design choice, not this gap.
 
+## Update 2026-06-14 (session 4 cont. 3): Finding 5 confirmed; two compiler bugs fixed; one blocker remains
+
+Picked Finding 5 (representation-precise field-access) back up now that the
+CPS `abi_bindings` drop (Finding 6) is fixed.  Progress and the new wall:
+
+1. **Field-access predicate works (Finding 5 confirmed).**  Gating the
+   carrier deref on a `TY_APP` receiver that is a *carrier-represented*
+   `EX_VAR` param (`emit_byvalue_carrier_abi == false`) -- by-value
+   `TY_APP` receivers (Option/Result/Tuple) keep direct `.field` -- runs
+   the full suite at `1622 passed, 4 failed` **in isolation** (same 4
+   baseline failures, zero regressions).  The blanket-`TY_APP` blast
+   radius (54 fixtures) does not recur.
+
+2. **Bug fixed: CPS dropped `abi_bindings`** (Finding 6).  Committed
+   separately (`fix(cps): preserve call abi_bindings ...`).  See
+   `docs/reported/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`.
+
+3. **Bug fixed: heap-use-after-free in `emit_abi_intern_spec`.**  The
+   `Eq Vec` by-value rewrite over `vec-eq-ascribed-multi` (Eq[Vec[A]] for
+   bool/cstr/int32/uint64/...) interns enough specs to grow
+   `ctx->abi_specializations` past its capacity; the `realloc` moved the
+   array while `ctx->current_abi_specialization` (a raw pointer into it)
+   stayed dangling, and `emit_abi_scan_expr`'s EX_CALL case then read it
+   (ASan: heap-use-after-free at emit_module.c:1565, freed at :678).
+   Fixed by capturing the active spec's index before the realloc and
+   re-pointing it after.  Pure memory-safety fix -- emitted C is
+   byte-identical, it just stops reading freed memory.
+
+4. **Remaining blocker (Finding 7): per-call-node clone recording can't
+   distinguish multiple specs of one source body.**  With (1)-(3) in
+   place the `Eq Vec` rewrite compiles+runs for `int` (probe), nested
+   `Vec[Vec[int]]` (`vec-of-tvec-eq-manual`, carrier-base path), and
+   `m5-byval-marker`.  But `vec-eq-ascribed-multi` (many element types)
+   miscompiles: the `Eq Vec` spec for element `bool`
+   (`__inst_Eq_eq_qu_Vec__spec__bool_Vec__bool_Vec__bool`) calls
+   `vec_len_byval__spec__int64_t_Vec__int` (the *int* spec) with a
+   `Vec__bool` arg -> cc type error.  The per-element specs ARE all
+   interned (Vec__bool/cstr/int32/uint64 exist), but the single shared
+   `Eq Vec` source body's inner `vec-len-byval` call node records ONE
+   clone name (last writer / the int one) via the specialized-call
+   table -- so every element-type Eq Vec spec emits the same callee
+   clone.  The recording must be keyed on `(call node, active spec)`,
+   not the call node alone.  That is the next focused piece; filed
+   thinking lives in this section.
+
+Net for this continuation: bugs (2) and (3) land as standalone compiler
+fixes; the field-access predicate (1) is validated and ready; the
+`Eq Vec`/`Eq Cons` rewrite waits on Finding 7.  The field-access change
+and the stdlib rewrite are reverted from the tree (re-apply is mechanical
+once Finding 7 lands); bugs (2)/(3) stay.
+
 ## Update 2026-06-14 (session 4 cont.): single-body-two-ABIs -- design space fully mapped
 
 Continued straight into the single-body-two-ABIs question.  The
