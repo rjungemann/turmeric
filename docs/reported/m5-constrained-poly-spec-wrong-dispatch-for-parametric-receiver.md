@@ -1,7 +1,69 @@
 ---
 title: M5 constrained-polymorphic spec body picks wrong Eq instance for parametric receiver
-severity: silent miscompile (would be hard cc error)
+severity: silent miscompile (would be hard cc error) -- ELAB FIX LANDED, emit-side bridge follow-up open
 date: 2026-06-13
+---
+
+## Update (same day, follow-up commits)
+
+**Elab-side root cause identified and patched.**  Two related bugs in
+`elab_typeclasses.c` and `typeclass.c`:
+
+1. **Incomplete `is_primitive` list at the obj_ck determination
+   (`elab_typeclasses.c:3640-3647`) and the KIND_ARROW iteration
+   (`elab_typeclasses.c:3675-3679`).**  Only TY_INT/TY_FLOAT/TY_CSTR/...
+   were listed; sized variants TY_INT8/TY_FLOAT32/... weren't.  A
+   receiver of type `:float32` got `obj_ck = KIND_ARROW` (treated as a
+   type constructor) and an `Eq float32` instance got
+   `type_ok = !inst_is_primitive = true` (treated as non-primitive), so
+   the iteration silently matched primitive instances against parametric
+   receivers.  Symmetric fix in `typeclass.c:354-359` for the
+   `typeclass_env_lookup_instance_by_key` KIND_ARROW path.
+
+2. **Constraint check at `typeclass.c:typeclass_instance_constraints_
+   satisfied` rejected TYVAR-substituted constraints.**  For `(Vec A)`
+   receiver with the `Eq Vec` instance's `(Eq A)` constraint, the
+   required_type resolved to a TYVAR and the env lookup returned NULL
+   ("no instance for TYVAR").  The constraint failed, `Eq Vec` was
+   silently dropped, and the iteration fell through to a primitive
+   fallback.  Fix: when the substituted `required_type.kind == TY_TYVAR`,
+   tentatively accept -- the outer defn's own constraint
+   (`defn f [A] [(Eq A)] ...`) guarantees the instance will exist at
+   every monomorphization site; the spec emit re-resolves through the
+   concrete A via `emit_reresolve_method_call`.
+
+After these two fixes, the spec body now binds the correct method:
+`__inst_Eq_eq_qu_Vec__spec__bool_Vec__int_Vec__int` (the per-Vec-int
+Path A spec of `Eq Vec`).  Suite stays at 1562/88 (~3 below baseline,
+all flake variance -- zero snapshot diffs, confirmed by full
+regen-and-compare).
+
+## Remaining: emit-side arg-bridge direction
+
+The probe still doesn't compile end-to-end -- the call's args still go
+through `CK_CONCRETE -> CK_CARRIER` bridging (the inner call site
+treats the callee as the carrier-ABI `__inst_Eq_eq_qu_Vec` binding,
+not the by-value spec name that `emit_reresolve_method_call` produces).
+The emitted C:
+
+```c
+return __inst_Eq_eq_qu_Vec__spec__bool_Vec__int_Vec__int(
+    (int64_t)(intptr_t)(&__t28),    // <-- bridge-to-carrier
+    (int64_t)(intptr_t)(&__t29));   // <-- bridge-to-carrier
+```
+
+passes `int64_t` to a `Vec__int` formal -- cc error.
+
+The two emit decisions (call-name re-resolution at `emit_core.c:967` /
+arg-bridging at `emit_expr.c:2511-2622`) are made independently and
+disagree on which target ABI is in effect.  The arg-bridging path
+should consult the same per-call spec-target decision the name
+re-resolution uses; or alternatively, the name re-resolution should
+emit the carrier-target name when args have been bridged to int64.
+
+This is the M5 emit-side follow-up.  Tracked separately so the elab
+fix can ship without it.
+
 ---
 
 ## Summary

@@ -297,6 +297,18 @@ bool typeclass_instance_constraints_satisfied(const TypeClassInstance *inst,
         } else {
             required_type = inst->type_param_constraints[i].type_arg;
         }
+        /* M5 (docs/reported/m5-constrained-poly-spec-wrong-dispatch-for-
+         * parametric-receiver.md): when the substituted required_type is a
+         * type variable, we're at elab time inside a constrained-polymorphic
+         * defn whose own constraints (e.g. `(Eq A)` on `defn f [A] [(Eq A)]
+         * [x : (Vec A) ...]`) guarantee the instance will exist at every
+         * monomorphization site.  Tentatively accept; the outer call-site
+         * elab resolves A to a concrete type and the spec emit re-resolves
+         * the dispatch through that concrete A.  Without this, `Eq Vec` was
+         * silently dropped for a `(Vec A)` receiver and the dispatch fell
+         * through to a primitive-instance fallback (TUR-E0020 ambiguity
+         * post-fix; wrong-instance silent miscompile pre-fix). */
+        if (required_type.kind == TY_TYVAR) continue;
         TypeClassInstance *constraint_inst = typeclass_env_lookup_instance(
             env, required_tc, &required_type, 1);
         if (!constraint_inst) {
@@ -353,9 +365,15 @@ TypeClassInstance *typeclass_env_lookup_instance_by_key(const TypeClassEnv *env,
         if (inst->n_type_args != key->n_type_args) continue;
         if (inst->n_type_args > 0) {
             TypeKind tk = inst->type_args[0].kind;
+            /* M5 fix: include sized numeric variants (mirrors elab_typeclasses.c). */
             bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
                                  tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID ||
-                                 tk == TY_SYM);
+                                 tk == TY_SYM  ||
+                                 tk == TY_INT8 || tk == TY_INT16 || tk == TY_INT32 ||
+                                 tk == TY_INT64 ||
+                                 tk == TY_UINT8 || tk == TY_UINT16 || tk == TY_UINT32 ||
+                                 tk == TY_UINT64 ||
+                                 tk == TY_FLOAT32 || tk == TY_FLOAT64);
             if (!is_primitive) return inst;
         } else {
             return inst;

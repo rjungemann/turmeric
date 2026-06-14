@@ -3640,9 +3640,19 @@ skip_struct_field_lookup:;
     Kind obj_ck = KIND_STAR;
     {
         TypeKind tk = obj->type.kind;
+        /* M5 fix: the sized numeric variants are primitives too; without
+         * them, an obj of type :float32 / :int8 / etc. gets obj_ck=KIND_ARROW
+         * and the wrong-direction iteration matches via the non-primitive
+         * fallthrough branch instead of the kind-exact-match branch.  See
+         * the symmetric inst_is_primitive fix below at line ~3675. */
         bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
                              tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID ||
-                             tk == TY_SYM  || tk == TY_UNKNOWN);
+                             tk == TY_SYM  || tk == TY_UNKNOWN ||
+                             tk == TY_INT8 || tk == TY_INT16 || tk == TY_INT32 ||
+                             tk == TY_INT64 ||
+                             tk == TY_UINT8 || tk == TY_UINT16 || tk == TY_UINT32 ||
+                             tk == TY_UINT64 ||
+                             tk == TY_FLOAT32 || tk == TY_FLOAT64);
         obj_ck = is_primitive ? KIND_STAR : KIND_ARROW;
     }
 
@@ -3672,10 +3682,26 @@ skip_struct_field_lookup:;
                      * (typically Eq[Set]) and we silently dispatch through
                      * the wrong vtable. */
                     TypeKind itk = inst->type_args[0].kind;
+                    /* M5 fix (docs/reported/m5-constrained-poly-spec-wrong-
+                     * dispatch-for-parametric-receiver.md): the sized numeric
+                     * variants are primitives too -- without listing them, an
+                     * `Eq float32` (or `Eq int32` / `uint8` / etc.) instance
+                     * slips through `type_ok = !inst_is_primitive` for a
+                     * parametric receiver like `(Vec A)`, becomes a false
+                     * "good match", and overrides the correctly-rejected
+                     * `Eq Vec` (rejected by its `(Eq A)` type-param constraint
+                     * because A is still a TYVAR at this elab pass).  Result
+                     * was a baked `__inst_Eq_eq_qu_float32(Vec__int, Vec__int)`
+                     * call -- a hard cc error. */
                     bool inst_is_primitive =
                         (itk == TY_INT  || itk == TY_BOOL || itk == TY_CSTR ||
                          itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID ||
-                         itk == TY_SYM);
+                         itk == TY_SYM  ||
+                         itk == TY_INT8 || itk == TY_INT16 || itk == TY_INT32 ||
+                         itk == TY_INT64 ||
+                         itk == TY_UINT8 || itk == TY_UINT16 || itk == TY_UINT32 ||
+                         itk == TY_UINT64 ||
+                         itk == TY_FLOAT32 || itk == TY_FLOAT64);
                     type_ok = !inst_is_primitive;
                     /* Arrow head (itk == TY_FN): an `Arrow [(->)]` instance
                      * matches only a function receiver, never a struct/vec.
