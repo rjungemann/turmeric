@@ -1446,6 +1446,37 @@ size_t tur_hoist_top_includes_scan(const char *body, size_t len) {
             /* Malformed include — stop scanning, leave it for the C compiler. */
             break;
         }
+        /* `#define <NAME> <VALUE?>` directive? Hoist object-like macros so
+         * the file-scope #include they configure (e.g. `#define
+         * PCRE2_CODE_UNIT_WIDTH 8` before `#include <pcre2.h>`) takes effect
+         * once at file scope rather than per-function -- mirroring the
+         * include-guards issue this scanner exists to fix.  Conservative:
+         * only `#define IDENT [rest]` with no function-like `(` between the
+         * identifier and the value; `#define FOO(X) ...` macros stay in
+         * place. */
+        if (k + 8 <= line_len && L[k] == '#' &&
+            memcmp(L + k + 1, "define", 6) == 0 &&
+            (k + 7 == line_len || L[k+7] == ' ' || L[k+7] == '\t')) {
+            size_t j = k + 7;
+            while (j < line_len && (L[j] == ' ' || L[j] == '\t')) j++;
+            size_t id_start = j;
+            while (j < line_len &&
+                   ((L[j] >= 'A' && L[j] <= 'Z') ||
+                    (L[j] >= 'a' && L[j] <= 'z') ||
+                    (L[j] >= '0' && L[j] <= '9') ||
+                    L[j] == '_')) j++;
+            if (j > id_start &&
+                /* Not a function-like macro: skip if next char (no
+                 * whitespace) is '('. */
+                !(j < line_len && L[j] == '(')) {
+                /* Whole line is the macro definition. */
+                tur_hoist_include_add(L + k, line_len - k);
+                last_consumed = consumed_to;
+                continue;
+            }
+            /* Function-like macro or malformed: stop scanning. */
+            break;
+        }
         /* Anything else: stop. */
         break;
     }
