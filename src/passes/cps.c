@@ -813,7 +813,16 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
                 new_args[i] = cps_mark_expr(a, e->as.call_.args[i]);
             }
             Expr *out = expr_new(a, EX_CALL, e->type, e->span);
-            out->as.call_.fn_binding = e->as.call_.fn_binding;
+            /* Struct-assign the whole call_ member first so every field --
+             * abi_bindings / n_abi_bindings (the named-tyvar substitution emit
+             * uses to mint ABI specializations), dict_arg, is_poly_call,
+             * poly_arg_mask -- survives the CPS tree rebuild.  Previously this
+             * field-copied only fn_binding/fn_expr/args/n_args, silently
+             * dropping abi_bindings: any call inside a CPS-transformed function
+             * lost its by-value specialization (carrier base called with a
+             * by-value struct -> cc type error).  See
+             * docs/reported/m5-eq-vec-byval-rewrite-drops-sibling-specs.md. */
+            out->as.call_ = e->as.call_;
             out->as.call_.fn_expr = e->as.call_.fn_expr
                 ? cps_mark_expr(a, e->as.call_.fn_expr) : NULL;
             out->as.call_.args = new_args;

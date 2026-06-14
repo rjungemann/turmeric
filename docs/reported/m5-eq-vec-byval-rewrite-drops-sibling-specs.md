@@ -1,8 +1,41 @@
 ---
-title: A post-elaboration AST node duplication drops call abi_bindings, omitting unrelated by-value specs
-severity: blocks the M5 Eq Vec by-value rewrite (single-body-two-ABIs); silent-miscompile-shaped (a needed by-value specialization is omitted, leaving a carrier-base call against a by-value struct -> cc type error). ROOT CAUSE PINNED 2026-06-14: emit scans a duplicate EX_CALL node with abi_bindings not copied.
+title: The CPS tree-rebuild pass drops call abi_bindings, omitting by-value specs for calls in CPS-transformed functions
+severity: FIXED 2026-06-14 -- cps_mark_expr's EX_CALL rebuild now struct-assigns the whole call_ member. Was: silent-miscompile-shaped (a needed by-value specialization omitted, carrier base called with a by-value struct -> cc type error).
 date: 2026-06-14
 ---
+
+## FIXED 2026-06-14 (session 4 cont.)
+
+Root cause located by backtracing `EX_CALL` allocation: the duplicate node
+is born in **`cps_mark_expr` (`src/passes/cps.c:810`)**, the CPS pass's
+tree-rebuild (run by `run_core_passes`, `src/main.c:417`, after
+elaboration).  Its `EX_CALL` case field-copied only
+`fn_binding`/`fn_expr`/`args`/`n_args` into the fresh node, leaving
+`abi_bindings`/`n_abi_bindings` (and `dict_arg`/`is_poly_call`/
+`poly_arg_mask`) zeroed by `expr_new`'s memset.  So any call inside a
+function the CPS pass rebuilds lost its named-tyvar substitution, and
+`emit_abi_register_call` early-returned at the `n_bindings == 0` gate --
+no by-value spec interned.
+
+The `Eq Vec` by-value rewrite exposed it because the new
+constrained-poly-helper-calling instance pulls the enclosing functions
+through the CPS rebuild; the same drop is why gap 4's hamt-delete
+regressor and earlier session reverts behaved as they did.
+
+**Fix**: struct-assign the whole `as.call_` member before overriding the
+recursively-rebuilt `fn_expr`/`args`/`n_args`, so every field survives the
+copy.  Suite: `1622 passed, 4 failed` -- the same 4 pre-existing failures
+as the gap-4 baseline, **zero regressions**.  `thead` now interns its
+`Cons__int` spec under the Eq Vec rewrite (`BT_EMIT thead n_bindings=1`).
+
+Note: this clears the spec-drop (Finding 6 of
+`docs/upcoming/m5-residual-straddle-retirement.md`).  The Eq Vec by-value
+rewrite still needs the representation-precise field-access change
+(Finding 5) before it can land -- that is the remaining, independent half.
+
+---
+
+(Original investigation notes below.)
 
 ## Summary
 
