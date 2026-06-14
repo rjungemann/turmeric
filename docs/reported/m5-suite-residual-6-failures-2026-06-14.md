@@ -293,16 +293,31 @@ The two return conventions now coexist correctly: a lifted lambda dispatched
 through the int64 thunk returns the carrier; a directly-called named defn
 returns by value and the body deref-bridges a carrier producer.
 
-### Residual (minor, follow-up)
+### Residual -- FIXED 2026-06-14
 
-The Applicative `ap` line emits a `-Wint-conversion` warning:
+The Applicative `ap` line emitted a `-Wint-conversion` warning:
 `int64_t ff_919 = some(__t26)` where `__t26` is a `void *` closure box passed
-into `some`'s int64 carrier param without a `(int64_t)(intptr_t)` cast.  This
-is a *call-arg* carrier-cast gap (a closure value flowing into a carrier
-parameter), orthogonal to the return-ABI straddle fixed here; it is benign on
-LP64 (same width) and does not fail the build, but it is a "works by luck"
-cast worth tightening in the emit_expr call-arg path.  Filed here rather than
-chased mid-change to keep this fix's blast radius to the return-ABI sites.
+into `some`'s int64 carrier param without a `(int64_t)(intptr_t)` cast -- a
+"works by luck" same-width pointer->int conversion (`(some (:: (fn ...) int))`
+stashes a closure into the Option payload).
+
+Root cause: the direct-call arg emitter (`emit_expr.c`) **strips** the
+`(:: <closure> int)` ascription to its inner closure before emitting, so its
+`needs_fn_cast` test -- which consulted only the *original* arg's type (now
+`TY_INT`) -- missed that the emitted value is a `void *`.  And `some`'s param
+is `TY_TYVAR`, whose carrier-cast branch was gated to inline-C bodies only,
+even though the generic (`!matched_spec`) emit of a make-struct/carrier body
+declares the param `int64_t` (`static int64_t some(int64_t)`).
+
+Fix (two narrow changes at the direct-call arg path):
+1. `needs_fn_cast` also consults the *stripped* `emit_arg`'s type (`TY_FN` /
+   `TY_PTR_VOID`), not just the pre-strip arg type.
+2. the `TY_TYVAR`/`TY_FORALL`/`TY_EXISTS` carrier-param branch fires for the
+   generic emit (`!matched_spec`) as well as inline-C bodies; a matched spec
+   (concrete C param type) keeps the existing no-cast handling.
+
+Now emits `some((int64_t)(intptr_t)(__t27))`.  Full suite `1626 passed, 0
+failed`, no regressions.
 
 ## Validation
 

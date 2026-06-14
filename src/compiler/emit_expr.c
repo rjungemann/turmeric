@@ -2457,9 +2457,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * int64_t when passing to an int64_t parameter. */
                 /* Phase HRT1: EX_POLY_WRAP emits a tur_poly_fn_t struct literal;
                  * it must NOT be cast — pass directly as tur_poly_fn_t to poly params. */
+                /* The original arg may be an `(:: <closure> int)` ascription
+                 * stripped above to its inner fn/closure value -- so the visible
+                 * arg type is TY_INT but the emitted value is a fn/void* pointer.
+                 * Consult the *stripped* emit_arg's type too, otherwise a closure
+                 * stashed into an int64 carrier slot (`(some (:: (fn ...) int))`)
+                 * reaches a carrier param uncast and trips -Wint-conversion.  See
+                 * the residual under root cause C of
+                 * docs/reported/m5-suite-residual-6-failures-2026-06-14.md. */
+                bool emit_arg_is_fnptr = emit_arg &&
+                    (emit_arg->type.kind == TY_FN || emit_arg->type.kind == TY_PTR_VOID);
                 bool needs_fn_cast = (e->as.call_.args[i]->kind != EX_POLY_WRAP) &&
                                      (e->as.call_.args[i]->type.kind == TY_FN ||
-                                      e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                                      e->as.call_.args[i]->type.kind == TY_PTR_VOID ||
+                                      emit_arg_is_fnptr);
                 /* When param expects void * (TY_PTR_VOID), cast to void * not int64_t.
                  * Passing int64_t to void * is invalid in C99 (-Wint-conversion error). */
                 bool cast_to_void_ptr = false;
@@ -2508,12 +2519,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         needs_fn_cast = true;
                         cast_to_void_ptr = false;
                     } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS)
-                               && fn_binding->body_is_inline_c) {
-                        /* Inline-C polymorphic param (e.g. vec-push! [A] [val :A] with
-                         * an inline-C body that treats val as int64_t): the C signature
-                         * keeps val typed int64_t regardless of A.  A TY_FN/TY_PTR_VOID
-                         * actual must be bridged through (int64_t)(intptr_t) -- otherwise
-                         * clang trips -Wint-conversion ("integer from pointer"). */
+                               && (fn_binding->body_is_inline_c || !matched_spec)) {
+                        /* Polymorphic param emitted as the int64 carrier: an
+                         * inline-C body keeps `val` typed int64_t regardless of A,
+                         * and the generic (non-spec, !matched_spec) emit of a
+                         * make-struct/carrier body likewise declares the param
+                         * int64_t (e.g. `static int64_t some(int64_t)`).  A
+                         * TY_FN/TY_PTR_VOID actual (a closure stashed into the
+                         * carrier slot) must be bridged through (int64_t)(intptr_t)
+                         * -- otherwise clang trips -Wint-conversion.  A matched
+                         * spec resolves A to a concrete C type, so it keeps the
+                         * existing (no-cast) handling. */
                         needs_fn_cast = true;
                         cast_to_void_ptr = false;
                     } else {
