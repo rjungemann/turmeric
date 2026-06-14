@@ -1,5 +1,42 @@
 # No way to build a `result<T, E>` from inside an inline-C block
 
+**Status:** Resolved (2026-06-14) -- the blessed path is **Option A**, already
+implemented as the `tur_ok` / `tur_err` / `tur_some` / `TUR_NONE` preamble
+helpers (the "C#1 (test-suite-idioms)" block emitted by
+`src/compiler/emit_module.c:2298-2341`). These share the canonical
+Option/Result heap layout with `stdlib/{option,result}.tur` byte-for-byte, so a
+value built in inline-C flows transparently into the stdlib accessors. The
+remaining gap this report named -- "there is no way to *type* the
+returned-from-inline-C value as a real result" -- does **not** hold: an
+inline-C `defn` can declare `: (Result A B)` / `: (Option A)` directly and
+`return tur_ok(...)` / `tur_some(...)`; the carrier-ABI return path accepts it
+(verified by the fixture below). What was actually missing was the *blessing*:
+the helpers were undocumented outside an archived plan, so spice authors
+hand-rolled the struct instead.
+
+Shipped in this change:
+- `docs/guides/c-integration-guide.md` -- new "Returning `result` / `option`
+  from inline-C" section under Capability structs, with the helper table and a
+  worked typed-handle example, plus the "don't re-declare the struct / don't
+  abort on recoverable failure" guidance.
+- `tests/fixtures/inline-c-typed-result-option/` -- end-to-end fixture: a
+  fallible C constructor returns a *typed* `(Result Device int)` and
+  `(Option Device)` over a `defopaque` handle, inspected by stdlib
+  `ok?`/`err?`/`ok-val`/`some?`/`unwrap`.
+
+No new named `_int` / `_ptr` variants were added (rejected redundant ABI
+surface): the `int64_t` carrier already carries both integer codes and opaque
+handles via the standard `(int64_t)(intptr_t)p` cast.
+
+Downstream follow-up (separate repo, `../turmeric-spices`): `rtmidi` can now
+delete `__ok` / `__err` and retype `midi-in-new` / `midi-in-open` et al. from
+`: ptr<void>` to real `result<MidiIn, int>` -- tracked there, not blocked on
+this repo.
+
+---
+
+**Original report (Reported)**
+
 **Status:** Reported
 **Severity:** Ergonomic / stdlib gap. Every spice that must allocate or
 acquire a fallible resource in inline-C and return `result<Handle, E>` is

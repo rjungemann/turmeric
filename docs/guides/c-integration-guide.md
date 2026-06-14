@@ -355,6 +355,74 @@ The struct is returned as `:ptr` (opaque `void *`) and freed explicitly. This
 is intentionally manual -- `rc<T>` and `weak<T>` cannot track arbitrary C heap
 memory yet, so the caller is responsible for cleanup.
 
+### Returning `result` / `option` from inline-C -- use the preamble helpers
+
+When a C constructor is **fallible** -- it allocates or acquires a handle in C
+and can fail (open a device, connect a socket, parse a file) -- the right
+return type is a real `(Result Handle E)` or `(Option Handle)`, **not** a
+`:ptr<void>` and **not** a magic-sentinel `:int` (`-1`, `0`-as-absent,
+`INT64_MIN`).
+
+You do not need to hand-roll the result struct. Every emitted translation unit
+carries a small set of preamble helpers that build and inspect Option/Result
+values through the **canonical** heap layout (the same one `stdlib/option.tur`
+and `stdlib/result.tur` use), so a value built in C flows straight into the
+stdlib accessors and vice versa:
+
+| Helper | Builds / reads |
+|--------|----------------|
+| `tur_ok(int64_t v)`       | `(Result A B)` that is ok, payload `v` |
+| `tur_err(int64_t e)`      | `(Result A B)` that is err, payload `e` |
+| `tur_is_ok(int64_t r)`    | `bool` -- is the result ok? |
+| `tur_ok_value(int64_t r)` | the ok payload |
+| `tur_err_value(int64_t r)`| the err payload |
+| `tur_some(int64_t x)`     | `(Option A)` that is some, payload `x` |
+| `TUR_NONE`                | the none `(Option A)` (NULL) |
+| `tur_is_some(int64_t o)`  | `bool` -- is the option some? |
+| `tur_opt_value(int64_t o)`| the some payload |
+
+The payload is the `int64_t` carrier, so it covers both integer error codes and
+opaque handles uniformly -- pass a pointer through with the usual
+`(int64_t)(intptr_t)p` cast. There are no separate `_int` / `_ptr` variants to
+remember.
+
+```turmeric
+(defopaque Device :ptr<void>)
+
+;; Fallible C constructor: a *typed* (Result Device int), built with tur_ok /
+;; tur_err. No re-declaration of the result struct layout.
+(defn open-device [id : int] : (Result Device int)
+  ```c
+  #include <stdlib.h>
+  if (id < 0) return tur_err(22);          /* EINVAL */
+  void *h = malloc(device_size());
+  return tur_ok((int64_t)(intptr_t)h);
+  ```)
+
+;; And the consumer is plain Turmeric -- ok?/err?/ok-val all work:
+(defn use-device [id : int] : int
+  (let [r (open-device id)]
+    (if (ok? r) (device-tag (ok-val r)) -1)))
+```
+
+The same shape works for `(Option Device)` via `tur_some` / `TUR_NONE`.
+
+This is the blessed alternative to two anti-patterns that used to spread
+through spices (see
+[docs/reported/no-stdlib-result-builder-for-inline-c.md](../reported/no-stdlib-result-builder-for-inline-c.md)):
+
+- **Re-declaring the struct in raw C** (`struct { bool is_ok; int64_t ok_val;
+  int64_t err_val; } *r = malloc(...)`) and returning it as `:ptr<void>`. This
+  duplicates the layout, drifts silently if the canonical layout changes, and
+  throws away the `Result` type the checker could otherwise enforce.
+- **Aborting on failure** (`fprintf(stderr, ...); abort()`). That is the right
+  call for a genuinely unrecoverable allocation (a control block the process
+  cannot run without -- this is why `threadpool-new` / `task-group-new` abort),
+  but it is wrong for routine, recoverable failures like a device that is
+  busy or a connection that is refused.
+
+See `tests/fixtures/inline-c-typed-result-option/` for an end-to-end example.
+
 ---
 
 ## Calling Turmeric from C
