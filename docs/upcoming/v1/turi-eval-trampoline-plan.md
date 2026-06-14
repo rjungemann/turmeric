@@ -194,6 +194,24 @@ proportional to native-HOF nesting, not turi program depth):
   follow-up if deeply-nested generated source becomes a real workload.
   **Remaining T2 slices:** EX_LET/EX_LETREC (frame + defer lifetime on the
   work-stack), EX_AND/EX_OR, EX_MAKE_STRUCT.
+- **T2 slice 2 -- EX_LET / EX_LETREC -- LANDED 2026-06-14.** The driver now owns
+  the new `EvalFrame` and its defer scope on the work-stack
+  (`DK_LET_BIND` -> `DK_LET_BODY`): bindings evaluate in the owned frame, the
+  body runs after them, and on the return phase each LET continuation runs its
+  own cleanup (free frame; fire body defers on normal exit) -- so a control
+  signal unwinding through it still frees the frame correctly. The blanket
+  "unwind to DONE" was replaced with per-continuation signal handling. EX_LETREC
+  pre-binds its names to nil and re-homes captureless fn literals onto the frame,
+  matching the recursive version. Validated: `run-turi.sh` 1186 passed (same 8
+  unrelated monomorphization fails); nested let / shadowing / letrec mutual
+  recursion correct; early-`return` through a let frees the frame; non-tail
+  let-defers fire LIFO (matching compiled, `defer-order` fixture green). Surfaced
+  a **pre-existing, unrelated** interpreter divergence -- single-scope defers at
+  *function exit* (tail position) fire FIFO instead of compiled LIFO, in the
+  `fire_defers_to_mark_reversed` tail path T2 does not touch -- filed as
+  [docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md](../../reported/turi-tail-scope-defers-fire-fifo-not-lifo.md).
+  **Remaining T2 slices:** EX_MAKE_STRUCT (EX_AND/EX_OR are not distinct kinds --
+  they are `BS_AND_SC`/`BS_OR_SC` shapes inside EX_BUILTIN, handled at T3).
 - **T3-T5** -- unchanged from the design below; T3 folds eval_apply into the
   driver (the actual non-tail FUNCTION-call ceiling remover); T5 makes
   `TURI_EVAL_FRAME_BYTES` dead code for the synchronous path.

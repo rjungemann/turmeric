@@ -4064,14 +4064,21 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
 
 #define DRIVE_INLINE 32   /* inline work-stack depth before spilling to heap */
 
-typedef enum { DK_DONE, DK_IF_BRANCH, DK_DO_SEQ } DriveKind;
+typedef enum {
+    DK_DONE,
+    DK_IF_BRANCH,
+    DK_DO_SEQ,
+    DK_LET_BIND,   /* EX_LET/EX_LETREC: evaluating binding[index]'s init */
+    DK_LET_BODY,   /* EX_LET/EX_LETREC: evaluating the body (frame owned) */
+} DriveKind;
 
 typedef struct {
     DriveKind   kind;
-    const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM being decomposed */
-    EvalFrame  *frame;  /* lexical env at the decomposition point */
-    uint32_t    index;  /* DO/PROGRAM: next item to evaluate */
-    TuriValue   last;   /* DO/PROGRAM: last non-defer value so far */
+    const Expr *expr;       /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET being decomposed */
+    EvalFrame  *frame;      /* lexical env: DO=enclosing; LET=the owned new frame */
+    uint32_t    index;      /* DO/PROGRAM: next item; LET: next binding */
+    TuriValue   last;       /* DO/PROGRAM: last non-defer value so far */
+    void       *defer_mark; /* LET_BODY: env->defer_stack snapshot (DeferItem*) */
 } DriveCont;
 
 /* do/program item accessors (both kinds share this shape). */
@@ -4102,7 +4109,7 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         st[len++] = (C);                                                       \
     } while (0)
 
-    DRIVE_PUSH(((DriveCont){ DK_DONE, NULL, NULL, 0, turi_nil() }));
+    DRIVE_PUSH(((DriveCont){ DK_DONE, NULL, NULL, 0, turi_nil(), NULL }));
 
     const Expr *control    = e;
     EvalFrame  *cf         = frame;
@@ -4113,15 +4120,41 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (descending) {
             switch (control->kind) {
             case EX_IF:
-                DRIVE_PUSH(((DriveCont){ DK_IF_BRANCH, control, cf, 0, turi_nil() }));
+                DRIVE_PUSH(((DriveCont){ DK_IF_BRANCH, control, cf, 0, turi_nil(), NULL }));
                 control = control->as.if_.cond;   /* descend into the test */
                 break;                            /* still descending */
             case EX_DO:
             case EX_PROGRAM: {
                 uint32_t n = drive_seq_n(control);
                 if (n == 0) { cur = turi_nil(); descending = false; break; }
-                DRIVE_PUSH(((DriveCont){ DK_DO_SEQ, control, cf, 0, turi_nil() }));
+                DRIVE_PUSH(((DriveCont){ DK_DO_SEQ, control, cf, 0, turi_nil(), NULL }));
                 control = drive_seq_items(control)[0];
+                break;
+            }
+            case EX_LET:
+            case EX_LETREC: {
+                /* Owns a fresh frame; bindings then body run in it.  EX_LETREC
+                 * pre-binds every name to nil so RHS closures see each other. */
+                EvalFrame *nf = eval_frame_new(cf);
+                uint32_t   n  = control->as.let_.n;
+                if (control->kind == EX_LETREC) {
+                    for (uint32_t i = 0; i < n; i++)
+                        frame_bind(nf,
+                            control->as.let_.bindings[i].binding->name->name,
+                            turi_nil());
+                }
+                if (n > 0) {
+                    DRIVE_PUSH(((DriveCont){ DK_LET_BIND, control, nf, 0, turi_nil(), NULL }));
+                    control = control->as.let_.bindings[0].init;
+                    cf = nf;
+                } else {
+                    /* No bindings: straight to body; mark defers now. */
+                    DriveCont c = { DK_LET_BODY, control, nf, 0, turi_nil(),
+                                    env->defer_stack };
+                    DRIVE_PUSH(c);
+                    control = control->as.let_.body;
+                    cf = nf;
+                }
                 break;
             }
             default:
@@ -4131,13 +4164,13 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 break;
             }
         } else {
-            /* Returning `cur` to the frame on top of the work-stack. */
+            /* Returning `cur` to the frame on top of the work-stack.  Each
+             * continuation runs its own cleanup when a control signal
+             * (error/returning/throwing) passes through it -- LET frames must be
+             * freed (and their body defers fired) on unwind, so this is handled
+             * per-kind rather than by a blanket unwind-to-DONE. */
             DriveCont *top = &st[len - 1];
-            /* Propagate a control signal by abandoning all pending if/do work
-             * (neither form owns frames or defers, so popping is sufficient). */
-            if (turi_is_error(cur) || env->returning || env->throwing) {
-                while (top->kind != DK_DONE) { len--; top = &st[len - 1]; }
-            }
+            bool signaled = turi_is_error(cur) || env->returning || env->throwing;
             switch (top->kind) {
             case DK_DONE:
                 result = cur;
@@ -4146,6 +4179,7 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 const Expr *ie  = top->expr;
                 EvalFrame  *icf = top->frame;
                 len--;  /* pop: the chosen branch's value becomes the if's value */
+                if (signaled) break;  /* propagate cur unchanged */
                 if (turi_is_truthy(cur)) {
                     control = ie->as.if_.then_; cf = icf; descending = true;
                 } else if (ie->as.if_.else_or_null) {
@@ -4156,6 +4190,7 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 break;
             }
             case DK_DO_SEQ: {
+                if (signaled) { len--; break; }  /* abandon the rest of the seq */
                 const Expr *de = top->expr;
                 Expr     **items = drive_seq_items(de);
                 uint32_t   n     = drive_seq_n(de);
@@ -4166,6 +4201,53 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 } else {
                     cur = top->last; len--;  /* pop; keep returning the last value */
                 }
+                break;
+            }
+            case DK_LET_BIND: {
+                EvalFrame *nf = top->frame;
+                if (signaled) {  /* binding init errored/returned/threw */
+                    eval_frame_free(nf); len--;  /* free frame, propagate */
+                    break;
+                }
+                const Expr *le = top->expr;
+                uint32_t    n  = le->as.let_.n;
+                const char *nm = le->as.let_.bindings[top->index].binding->name->name;
+                if (le->kind == EX_LETREC) {
+                    /* Re-home a captureless fn literal onto this frame so siblings
+                     * resolve by name (mirrors the recursive EX_LETREC case). */
+                    if (cur.tag == TURI_CLOSURE && cur.as_closure &&
+                        cur.as_closure->captured == NULL) {
+                        TuriClosure *copy = (TuriClosure *)malloc(sizeof(TuriClosure));
+                        *copy = *cur.as_closure;
+                        copy->captured = nf;
+                        cur = turi_closure(copy);
+                    }
+                    eval_frame_update(nf, nm, cur);
+                } else {
+                    frame_bind(nf, nm, cur);
+                }
+                top->index++;
+                if (top->index < n) {
+                    control = le->as.let_.bindings[top->index].init;
+                    cf = nf; descending = true;
+                } else {
+                    /* Bindings done -> body.  Mark defers AFTER bindings so only
+                     * body-registered defers fire on this scope's exit. */
+                    top->kind       = DK_LET_BODY;
+                    top->defer_mark = env->defer_stack;
+                    control = le->as.let_.body;
+                    cf = nf; descending = true;
+                }
+                break;
+            }
+            case DK_LET_BODY: {
+                EvalFrame *nf = top->frame;
+                /* On normal exit fire this scope's defers; on early-return/throw
+                 * leave them for eval_apply (matches the recursive EX_LET). */
+                if (!env->returning && !env->throwing)
+                    fire_defers_to_mark(env, (DeferItem *)top->defer_mark, NULL);
+                eval_frame_free(nf);
+                len--;  /* pop; propagate cur (body value or signal) */
                 break;
             }
             }
@@ -4274,72 +4356,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_VAR:
         return eval_lookup(env, frame, e->as.var.binding->name->name);
 
-    /* --- Let ------------------------------------------------------------- */
-    case EX_LET: {
-        EvalFrame *new_frame = eval_frame_new(frame);
-        for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            TuriValue v = eval_expr(env, new_frame, e->as.let_.bindings[i].init);
-            if (turi_is_error(v)) { eval_frame_free(new_frame); return v; }
-            if (env->throwing)   { eval_frame_free(new_frame); return env->throw_value; }
-            if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
-            frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name, v);
-        }
-        /* Mark defer stack so defers registered in this let-scope fire on exit. */
-        DeferItem *let_defer_mark = (DeferItem *)env->defer_stack;
-        TuriValue result = eval_expr(env, new_frame, e->as.let_.body);
-        /* Fire this scope's defers on normal exit only.
-         * On early-return or throw, leave defers on the stack; eval_apply will
-         * fire them all in outer-first order (matching tur_frame_fire_chain). */
-        if (!env->returning && !env->throwing)
-            fire_defers_to_mark(env, let_defer_mark, NULL);
-        eval_frame_free(new_frame);
-        return result;
-    }
-
-    /* --- Letrec (mutually-recursive bindings) ---------------------------- */
-    /* EX_LETREC reuses the `as.let_` payload (see elab_forms.c).  Unlike
-     * EX_LET, every binding is evaluated in a single shared frame in which all
-     * names are pre-declared, so mutually-recursive closures can resolve each
-     * other.  Closures capture the frame by pointer and look siblings up by
-     * name at call time, so updating each binding in place is sufficient. */
-    case EX_LETREC: {
-        EvalFrame *new_frame = eval_frame_new(frame);
-        /* Pass 1: pre-bind every name to nil so RHS closures see each other. */
-        for (uint32_t i = 0; i < e->as.let_.n; i++)
-            frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name,
-                       turi_nil());
-        /* Pass 2: evaluate each RHS in the shared frame, updating in place.
-         *
-         * A recursive/mutually-recursive fn literal is hoisted by the
-         * elaborator to a top-level static fn: its init resolves (via EX_VAR)
-         * to a closure whose `captured` frame is NULL, registered globally
-         * only under a mangled name.  The body's recursive reference, however,
-         * resolves to the *lexical* letrec binding name (e.g. "fact"), which
-         * lives only in `new_frame`.  To let that name resolve at call time we
-         * bind a shallow copy of the closure whose captured frame is
-         * `new_frame`, so every sibling becomes reachable by name. */
-        for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            TuriValue v = eval_expr(env, new_frame, e->as.let_.bindings[i].init);
-            if (turi_is_error(v)) { eval_frame_free(new_frame); return v; }
-            if (env->throwing)   { eval_frame_free(new_frame); return env->throw_value; }
-            if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
-            if (v.tag == TURI_CLOSURE && v.as_closure &&
-                v.as_closure->captured == NULL) {
-                TuriClosure *copy = (TuriClosure *)malloc(sizeof(TuriClosure));
-                *copy = *v.as_closure;
-                copy->captured = new_frame;
-                v = turi_closure(copy);
-            }
-            eval_frame_update(new_frame,
-                              e->as.let_.bindings[i].binding->name->name, v);
-        }
-        DeferItem *letrec_defer_mark = (DeferItem *)env->defer_stack;
-        TuriValue result = eval_expr(env, new_frame, e->as.let_.body);
-        if (!env->returning && !env->throwing)
-            fire_defers_to_mark(env, letrec_defer_mark, NULL);
-        eval_frame_free(new_frame);
-        return result;
-    }
+    /* --- Let / Letrec ---------------------------------------------------- */
+    /* T2: delegated to the explicit-stack driver, which owns the new frame and
+     * its defer scope on the work-stack (DK_LET_BIND/DK_LET_BODY) so directly
+     * nested lets do not grow the C stack.  EX_LETREC pre-binds its names to nil
+     * and re-homes captureless fn literals onto the frame, identically to the
+     * recursive version preserved in git history. */
+    case EX_LET:
+    case EX_LETREC:
+        return eval_drive(env, frame, e);
 
     /* --- If / Do / Program ----------------------------------------------- */
     /* T2: the explicit-stack driver flattens directly-nested branch chains and
