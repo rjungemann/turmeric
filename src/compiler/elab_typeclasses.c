@@ -3621,7 +3621,22 @@ skip_capability_field_lookup:;
      * Without this the old KIND_ARROW path spuriously matched the first instance
      * whose type_args[0] failed the (incomplete) primitive test -- typically
      * Hash[float32] -- baking a wrong, type-incompatible callee into the body. */
-    if (obj->type.kind == TY_TYVAR) {
+    /* M5 (docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
+     * An EX_ASCRIBE-to-tyvar receiver (`(:: v A)`) elaborates to a
+     * TY_STRUCT with NULL def -- the "abstract tyvar" representation
+     * the elaborator uses when ascribing a concrete value to a class-
+     * constraint tyvar.  Treat it the same as TY_TYVAR for typeclass
+     * dispatch: pick the carrier-compatible (int) instance, then let
+     * emit-side re-resolution (emit_core.c:emit_reresolve_method_call)
+     * specialize to the concrete A per call site.  Without this branch
+     * the dispatch fell through to the KIND_ARROW iteration below and
+     * picked the first non-primitive instance from the env (typically
+     * `Eq MutableMap`, alphabetically near the head), producing a
+     * silent miscompile that SIGSEGV'd at runtime. */
+    bool obj_is_abstract_tyvar =
+        obj->type.kind == TY_TYVAR ||
+        (obj->type.kind == TY_STRUCT && obj->type.as.struct_.def == NULL);
+    if (obj_is_abstract_tyvar) {
         TypeClassInstance *carrier_inst = NULL;
         FnDef *carrier_method = NULL;
         for (TypeClassInstance *inst = e->typeclass_env.instances;

@@ -1,0 +1,26 @@
+;; M5 (docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
+;; A constrained-poly defn with `(Eq A)` constraint whose `eq?` call
+;; uses an EX_ASCRIBE-to-A receiver `(:: v A)` previously picked the
+;; WRONG instance -- typically `__inst_Eq_eq_qu_MutableMap`
+;; (alphabetically near the head of the env's non-primitive Eq instances)
+;; -- and SIGSEGV'd at runtime.
+;;
+;; Root cause: `(:: v A)` elaborates to TY_STRUCT with NULL def (the
+;; "abstract tyvar" representation), not TY_TYVAR.  The carrier-rep
+;; dispatch branch at elab_typeclasses.c:3624 only fired for TY_TYVAR
+;; and missed this shape, falling through to the KIND_ARROW iteration
+;; that picks the first non-primitive instance.
+;;
+;; Fix: extend the branch to also fire for TY_STRUCT-with-NULL-def.
+;; Both shapes are "abstract tyvar" reps; the dispatch should pick
+;; the int carrier instance and let emit-side re-resolution
+;; specialize per call site.
+
+(defn helper [A]
+  [(Eq A)]
+  [v : int]
+  : bool
+  (eq? (:: v A) (:: v A)))
+
+(defn main [] : int
+  (if (helper 1) 0 1))
