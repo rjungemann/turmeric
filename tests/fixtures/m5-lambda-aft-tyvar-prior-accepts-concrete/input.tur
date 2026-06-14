@@ -1,0 +1,27 @@
+;; m5-eq-vec-rewrite-fn-arg-loses-annotation step 2 (fix-i v2):
+;; an untyped lambda passed AFTER args that already bound the helper's
+;; tyvar A to its own TYVAR (e.g. xs:(Vec A) coming through a polymorphic
+;; defn) used to fail with
+;;     expected (fn [int int] : bool), got (fn [int int] : bool)
+;; because call_collect_type_bindings recorded A -> TYVAR(A), then the
+;; lambda's int-default args triggered type_eq(TYVAR, int) = 0 on the
+;; subsequent binding lookup.
+;;
+;; The fix at elab_call.c's TY_TYVAR case accepts a concrete actual when
+;; the prior binding is the same self-tyvar -- without overwriting the
+;; binding, so the emitter still sees the abstract signal and routes
+;; through the relay path (no hamt-delete-style miscompile).
+
+(defn use-cmp-vec [A]
+  [xs : (Vec A) ys : (Vec A) ^fat cmp : (fn [A A] bool)]
+  : bool
+  (cmp (vec-get xs 0) (vec-get ys 0)))
+
+(defn caller [A] [(Eq A)] [xs : (Vec A) ys : (Vec A)] : bool
+  (use-cmp-vec xs ys (fn [a b] (eq? a b))))
+
+(defn main [] : int
+  (let [a (:: (vec-of) (Vec int))
+        b (:: (vec-of) (Vec int))]
+    (vec-push! a 1) (vec-push! b 1)
+    (if (caller a b) 0 1)))

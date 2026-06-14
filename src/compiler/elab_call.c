@@ -134,6 +134,23 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
             uint8_t idx = 0;
             if (!expected->as.tyvar_.name) return true;
             if (call_find_type_binding(bindings, *n_bindings, expected->as.tyvar_.name, &idx)) {
+                /* m5-eq-vec-rewrite-fn-arg-loses-annotation step 2 (fix-i v2):
+                 * a prior TYVAR-named binding (from an earlier same-tyvar
+                 * actual, e.g. xs:(Vec A) where the outer scope already
+                 * names A) accepts a concrete actual at a later arg
+                 * position without overwriting the binding.  The binding
+                 * stays TYVAR so the emitter's
+                 * emit_abi_type_has_concrete_named_tyvar check
+                 * (emit_module.c:518) still sees the abstract signal and
+                 * routes the call through the relay path.  This unblocks
+                 * the gap-1 lambda-after-typed-args shape without the
+                 * hamt-delete-regressing binding loss that the reverted
+                 * skip-and-upgrade attempt caused. */
+                if (bindings[idx].type.kind == TY_TYVAR &&
+                    bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
+                    actual.kind != TY_TYVAR) {
+                    return true;
+                }
                 return type_eq(bindings[idx].type, actual);
             }
             if (*n_bindings >= 16) return false;

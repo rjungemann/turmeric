@@ -356,6 +356,54 @@ emitter's "abstract" signal:
 Pick (i) for the simplest first attempt; (iii) is cleanest but a
 bigger refactor.
 
+### Session-3 fix landed 2026-06-14: TY_TYVAR prior accepts concrete actual without overwrite
+
+Investigation of the "fix (i)" framing revealed it doesn't actually
+help the canonical motivating case: when `xs:(Vec A)` and `ys:(Vec A)`
+self-bind A -> TYVAR(A) via the surrounding scope's tyvar, NO concrete
+actual ever appears to drive a pass-2 substitution.  Re-ordering args
+within elab_call.c doesn't change that.
+
+The variant that actually worked is a one-branch change to
+`call_collect_type_bindings` in the existing TY_TYVAR-with-prior-binding
+path: when the prior binding is the same self-tyvar (`bindings[idx].type
+== TYVAR(name)` for the same name) AND the new actual is concrete
+(not TYVAR), **accept without overwriting the binding**.
+
+```c
+if (bindings[idx].type.kind == TY_TYVAR &&
+    bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
+    actual.kind != TY_TYVAR) {
+    return true;  // accept; binding stays TYVAR (emitter relay preserved)
+}
+return type_eq(bindings[idx].type, actual);
+```
+
+Crucial difference from the reverted attempt: **the binding stays
+TYVAR**, so `emit_abi_type_has_concrete_named_tyvar` at
+`emit_module.c:518` still returns true and the call still takes the
+relay path.  No hamt-delete-style miscompile because the emit-side
+signal is preserved.
+
+**Validation**:
+- New fixture `tests/fixtures/m5-lambda-aft-tyvar-prior-accepts-concrete/`
+  pins the gap-1 motivating case end-to-end (compiles + exits 0).
+- Suite (`bash tests/run.sh`): identical FAIL set to baseline (0
+  regressions, 0 codegen-snapshot drift) -- the change only fires when
+  prior was self-tyvar AND new actual is concrete, a previously-failing
+  path that simply errored.
+
+**Commit**: see git log for "M5 gap-1 step 2: lambda-after-typed-args
+unblocks ..."
+
+**Scope of fix**: this handles the lambda-after-typed-args shape
+inside plain polymorphic defns.  The `definstance Eq [Vec]` rewrite
+(the original Eq Vec motivating case from
+`m5-residual-straddle-retirement.md`) hits separate gaps before
+reaching this code path -- constraint-var propagation in instance
+method specs (see gap 4 in this report's siblings).  Those remain
+open.
+
 ### Workaround (works today)
 
 Typed lambda: `(fn [a : A b : A] : bool (eq? a b))` succeeds in plain
