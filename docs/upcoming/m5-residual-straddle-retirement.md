@@ -157,6 +157,77 @@ never crosses the carrier boundary.
   helpers rewritten as pure-Turmeric loops".  Option D extends
   that same rewrite to drop the int64 ascription step.
 
+## Update 2026-06-14 (session 2, attempt 3): D-lite Eq Vec rewrite hits a 4th gap
+
+With the bridge-side strip fixed, attempted a less-ambitious Eq Vec
+rewrite using verified patterns:
+
+```turmeric
+(defn vec-eq-loop-byval [A]
+  [(Eq A)]
+  [x : (Vec A) y : (Vec A) i : int len : int]
+  #{ByVal}
+  : bool
+  (if (= i len)
+    true
+    (if (eq? (:: (vec-get (:: x :int) i) A) (:: (vec-get (:: y :int) i) A))
+      (vec-eq-loop-byval x y (+ i 1) len)
+      false)))
+
+(definstance Eq [Vec]
+  [(Eq A)]
+  (eq? [x y]
+    (let [lx (vec-len (:: x :int))
+          ly (vec-len (:: y :int))]
+      (if (= lx ly)
+        (vec-eq-loop-byval (:: x (Vec A)) (:: y (Vec A)) 0 lx)
+        false))))
+```
+
+`vec-eq-loop-byval` works correctly when called from non-instance
+contexts (verified in m5-spec-body-ascription-bridge fixture).
+Called from Eq Vec's spec body, NO byvalue spec is interned for
+vec-eq-loop-byval -- only its int64 carrier base is emitted, and the
+Eq Vec spec body passes Vec__int (by value) into the int64 carrier
+formals -> cc error.
+
+Trace via instrumented `emit_abi_register_call`:
+
+- Reaches register_call for `(vec-eq-loop-byval xv yv 0 lx)` under
+  Eq Vec's spec context (DBG "vebs register_call ENTRY:
+  spec=__inst_Eq_eq_qu_Vec__spec... n_bindings=1").
+- Pre-gate state: `abi_changes=0`, `arg_types[0].kind=21 (TY_APP)`,
+  `c_name=int64_t`.
+
+The composition through Eq Vec's outer spec ({Eq Vec's A -> int})
+isn't producing concrete arg_types for vec-eq-loop-byval -- (Vec A)
+stays abstract, c_name falls back to int64.  Almost certainly a
+Symbol-identity issue between Eq Vec's class-var A and
+vec-eq-loop-byval's own callee A (the call's `abi_bindings` maps
+`{A_callee -> A_outer}` but the composition pass doesn't recognize
+A_callee as needing concrete substitution because the Symbol names
+don't line up in the expected way).
+
+**This is the 4th independent gap** uncovered along the Eq Vec rewrite
+path:
+
+1. (FIXED) Bridge-side EX_ASCRIBE strip at emit_expr.c:2419
+2. (FIXED) Wrong-instance dispatch on EX_ASCRIBE-to-tyvar receiver
+3. (FIXED) SEGV at elab_typeclasses.c:3388 (NULL def)
+4. (NEW) Composition pass doesn't substitute callee tyvars to concrete
+   under instance-method outer spec when callee is a sibling
+   constrained-poly defn (Symbol-identity issue)
+
+The composition pass IS used by today's `vec-eq-loop-spec-probe`
+fixture (which works) -- so the failure is specifically when the
+outer spec is an INSTANCE METHOD spec (`__inst_Eq_eq_qu_Vec__spec__...`),
+not a regular per-defn spec.  Plausibly the instance-method's
+abi_bindings get attached with a different shape.
+
+Reverted the Eq Vec rewrite.  The bridge-side fix from earlier this
+loop stays in tree -- it's a real bug fix with independent value
+(pinned by m5-spec-body-ascription-bridge fixture).
+
 ## Update 2026-06-14 (session 2, follow-up): Bridge-side strip FIXED
 
 The bridge-side gap traced in this session turned out to be an
