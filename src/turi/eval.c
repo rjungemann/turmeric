@@ -74,6 +74,21 @@
 #include "../passes/effect_check.h"
 #include "../passes/borrow_check.h"
 
+/* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
+ * spill above it.  Keeps the per-call scratch off the C stack for the common
+ * low-arity case while bounding deep-recursion frame growth -- the dominant
+ * per-frame cost was several TuriValue[MAX_EVAL_ARGS] (1 KB) arrays.  8 covers
+ * the overwhelmingly common 0..8-arg call with zero allocation. */
+#define EVAL_SCRATCH_INLINE 8
+
+/* T1: language-wide function/effect arity cap (mirrors MAX_FN_ARITY in
+ * compiler/types.h).  Used as a fixed inline buffer size where the arity is
+ * provably bounded -- closure-application TCO buffers and effect-perform args --
+ * so those scratch arrays drop from MAX_EVAL_ARGS (1 KB) to 256 B with no heap
+ * spill.  A defensive guard rejects anything above it (unreachable for
+ * elaboration-checked programs). */
+#define EVAL_MAX_FN_ARITY 16
+
 /* -------------------------------------------------------------------------
  * Tail-call trampoline types (eval.c-internal only; never exposed in headers)
  * ---------------------------------------------------------------------- */
@@ -3839,9 +3854,10 @@ restart:
 
         TuriClosure *tcl = fn_val.as_closure;
 
-        TuriValue tco_args[64]; /* MAX_EVAL_ARGS */
+        /* T1: tail call to a closure -- arity capped at MAX_FN_ARITY. */
+        TuriValue tco_args[EVAL_MAX_FN_ARITY];
         uint32_t  n_args = e->as.call_.n_args;
-        if (n_args > 64)
+        if (n_args > EVAL_MAX_FN_ARITY)
             return turi_errorf("eval: too many call arguments (%u)", n_args);
         for (uint32_t i = 0; i < n_args; i++) {
             tco_args[i] = eval_expr(env, frame, e->as.call_.args[i]);
@@ -3869,8 +3885,12 @@ restart:
 static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
     /* TCO trampoline: loops instead of growing the C call stack for tail calls.
-     * Work area for args copied across iterations. */
-    TuriValue args_buf[64]; /* MAX_EVAL_ARGS */
+     * Work area for args copied across iterations.  T1: closure arity is capped
+     * at MAX_FN_ARITY, so a fixed EVAL_MAX_FN_ARITY buffer suffices and stays
+     * off the deep-recursion frame (256 B, not 1 KB). */
+    TuriValue args_buf[EVAL_MAX_FN_ARITY];
+    if (n_args > EVAL_MAX_FN_ARITY)
+        return turi_errorf("eval: too many call arguments (%u)", n_args);
     if (args && n_args > 0 && args != args_buf)
         memcpy(args_buf, args, n_args * sizeof(TuriValue));
     args = args_buf;
@@ -3988,6 +4008,10 @@ static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
             TcoFrame *tc = (TcoFrame *)result.as_ref;
             cl     = tc->cl;
             n_args = tc->n_args;
+            if (n_args > EVAL_MAX_FN_ARITY) {  /* T1: bounds args_buf fill */
+                free(tc);
+                return turi_errorf("eval: too many call arguments (%u)", n_args);
+            }
             memcpy(args_buf, tc->args, n_args * sizeof(TuriValue));
             free(tc);
             /* env->returning was cleared at start of this iteration; clear
@@ -4256,10 +4280,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Builtin --------------------------------------------------------- */
     case EX_BUILTIN: {
-        TuriValue args[MAX_EVAL_ARGS];
         uint32_t  n = e->as.builtin.n;
-        if (n > MAX_EVAL_ARGS)
-            return turi_errorf("eval: too many builtin arguments (%u)", n);
 
         /* and/or must short-circuit before evaluating remaining args. */
         if (e->as.builtin.spec->shape == BS_AND_SC) {
@@ -4279,11 +4300,23 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_bool(false);
         }
 
+        /* T1: heap-spill scratch (see EVAL_SCRATCH_INLINE) -- lifts the old
+         * n > MAX_EVAL_ARGS cap and keeps the array off the deep-recursion frame. */
+        TuriValue args_inl[EVAL_SCRATCH_INLINE];
+        TuriValue *args = (n <= EVAL_SCRATCH_INLINE) ? args_inl
+                          : (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+        if (!args) return turi_error("eval: out of memory evaluating builtin arguments");
         for (uint32_t i = 0; i < n; i++) {
             args[i] = eval_expr(env, frame, e->as.builtin.args[i]);
-            if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
+            if (turi_is_error(args[i]) || env->returning || env->throwing) {
+                TuriValue err = args[i];
+                if (args != args_inl) free(args);
+                return err;
+            }
         }
-        return eval_builtin(env, e->as.builtin.spec, args, n);
+        TuriValue r = eval_builtin(env, e->as.builtin.spec, args, n);
+        if (args != args_inl) free(args);
+        return r;
     }
 
     /* --- Named function definition (defn) -------------------------------- */
@@ -4399,16 +4432,26 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (fn_val.tag != TURI_CLOSURE)
             return turi_errorf("eval: expected function, got tag %d", fn_val.tag);
 
-        TuriValue args[MAX_EVAL_ARGS];
         uint32_t  n_args = e->as.call_.n_args;
-        if (n_args > MAX_EVAL_ARGS)
-            return turi_errorf("eval: too many call arguments (%u)", n_args);
 
+        /* T1: heap-spill scratch (see EVAL_SCRATCH_INLINE). */
+        TuriValue args_inl[EVAL_SCRATCH_INLINE];
+        TuriValue *args = (n_args <= EVAL_SCRATCH_INLINE) ? args_inl
+                          : (TuriValue *)malloc((size_t)n_args * sizeof(TuriValue));
+        if (!args) return turi_error("eval: out of memory evaluating call arguments");
         for (uint32_t i = 0; i < n_args; i++) {
             args[i] = eval_expr(env, frame, e->as.call_.args[i]);
-            if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
+            if (turi_is_error(args[i]) || env->returning || env->throwing) {
+                TuriValue err = args[i];
+                if (args != args_inl) free(args);
+                return err;
+            }
         }
-        return eval_apply(env, fn_val.as_closure, args, n_args);
+        /* eval_apply copies args into its own TCO work buffer, so freeing here
+         * (after it returns) is safe. */
+        TuriValue r = eval_apply(env, fn_val.as_closure, args, n_args);
+        if (args != args_inl) free(args);
+        return r;
     }
 
     /* --- Early return ---------------------------------------------------- */
@@ -4451,18 +4494,26 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     case EX_MAKE_STRUCT: {
         uint32_t  n = e->as.make_struct_.n_fields;
-        TuriValue fields[MAX_EVAL_ARGS];
-        if (n > MAX_EVAL_ARGS)
-            return turi_errorf("eval: struct has too many fields (%u)", n);
-
+        /* T1: heap-spill scratch (see EVAL_SCRATCH_INLINE) -- lifts the old
+         * n > MAX_EVAL_ARGS field cap. */
+        TuriValue fields_inl[EVAL_SCRATCH_INLINE];
+        TuriValue *fields = (n <= EVAL_SCRATCH_INLINE) ? fields_inl
+                            : (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+        if (!fields) return turi_error("eval: out of memory evaluating struct fields");
         for (uint32_t i = 0; i < n; i++) {
             fields[i] = eval_expr(env, frame, e->as.make_struct_.field_values[i]);
-            if (turi_is_error(fields[i]) || env->returning || env->throwing)
-                return fields[i];
+            if (turi_is_error(fields[i]) || env->returning || env->throwing) {
+                TuriValue err = fields[i];
+                if (fields != fields_inl) free(fields);
+                return err;
+            }
         }
         StructDef *sdef = e->as.make_struct_.def;
         const char *sname = sdef ? sdef->name : "<struct>";
-        return make_struct_val_def(sname, n, fields, sdef);
+        /* make_struct_val_def copies the fields, so freeing here is safe. */
+        TuriValue r = make_struct_val_def(sname, n, fields, sdef);
+        if (fields != fields_inl) free(fields);
+        return r;
     }
 
     case EX_SET_LIT: {
@@ -4752,9 +4803,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         PerformExpr *pe = e->as.perform_.perform;
         const char  *effect_name = pe->effect_name->name;
 
-        TuriValue args[MAX_EVAL_ARGS];
+        /* T1: effect arity is capped at MAX_FN_ARITY; a fixed inline buffer (not
+         * heap) keeps `args` alive across the swapcontext below, which borrows
+         * it via cont->perf_args. */
+        TuriValue args[EVAL_MAX_FN_ARITY];
         uint8_t   n_args = pe->n_args;
-        if (n_args > MAX_EVAL_ARGS)
+        if (n_args > EVAL_MAX_FN_ARITY)
             return turi_errorf("eval: too many effect arguments (%u)", n_args);
 
         for (uint8_t i = 0; i < n_args; i++) {

@@ -29,9 +29,18 @@
  * the Debug/ASan frame keeps both safe.)
  * ---------------------------------------------------------------------- */
 
-/* Conservative upper bound on C-stack bytes per `eval_expr` frame. Set above
- * the ~10 KB measured average to cover frame-type variance within a level. */
-#define TURI_EVAL_FRAME_BYTES   12288u   /* ~12 KB */
+/* Conservative upper bound on C-stack bytes per `eval_expr` frame.
+ *
+ * T1 (turi-eval-trampoline-plan): the dominant per-frame cost used to be several
+ * TuriValue[MAX_EVAL_ARGS] (1 KB) scratch arrays on the C stack; eval.c now
+ * heap-spills / shrinks them (EVAL_SCRATCH_INLINE / EVAL_MAX_FN_ARITY), roughly
+ * halving the per-level frame.  Re-measured on the Debug+ASan build (worst case):
+ * a deep non-tail `sum-to` now stack-overflows at ~1120 logical levels (was
+ * ~650), i.e. ~5.8 KB of real stack per eval_expr frame.  Keeping Direction A's
+ * ~1.25x-of-real frame bound (so the depth guard still trips at ~2x margin below
+ * the crash) gives ~7 KB; the achievable depth roughly doubles (~311 -> ~530
+ * levels) while staying SIGSEGV-safe. */
+#define TURI_EVAL_FRAME_BYTES   7168u   /* ~7 KB (post-T1 re-tune) */
 /* Fraction of the stack we let interpreter recursion consume (the rest is
  * headroom for the base call chain and any non-eval frames within a level). */
 #define TURI_EVAL_STACK_FRACTION_NUM  3u

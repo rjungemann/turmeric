@@ -155,9 +155,29 @@ proportional to native-HOF nesting, not turi program depth):
 
 ### Phase status
 
-- **T1** -- scoped here; sites + return-path map + design pinned. Ready to land.
+- **T1 -- LANDED 2026-06-14.** Heap-spilled / shrank all six scratch arrays:
+  EX_BUILTIN, EX_CALL, EX_MAKE_STRUCT use an inline-8 buffer with a heap spill
+  above it (`EVAL_SCRATCH_INLINE`, also lifting the old `n > MAX_EVAL_ARGS`
+  caps); the arity-bounded `eval_apply_inner` `args_buf`, `eval_body_tco`
+  `tco_args`, and EX_PERFORM `args` shrank to a fixed `EVAL_MAX_FN_ARITY` (16)
+  inline buffer (no heap -- EX_PERFORM's must stay inline because it is borrowed
+  across the `swapcontext`). **Key finding:** the achievable depth was *not*
+  frame-limited but **guard-limited** -- Direction A's `eval_depth` guard
+  (`max_eval_depth`, sized via `TURI_EVAL_FRAME_BYTES = 12288`) tripped at ~311
+  levels, well below the C-stack crash. So realizing T1's win required
+  **re-tuning `TURI_EVAL_FRAME_BYTES`** to the now-smaller frame: the post-T1
+  Debug+ASan crash moved from ~650 to ~1120 levels (sum-to), so the constant
+  dropped 12288 -> 7168 (~1.25x of the measured ~5.8 KB real frame, preserving
+  the ~2x crash margin). Result: ceiling **~311 -> ~531 levels**, beyond it a
+  clean `recursion limit exceeded` (rc=1, never SIGSEGV); regression-clean
+  (`run-turi.sh` 1186 passed, same 8 unrelated monomorphization fails; 14/14
+  `eval|sandbox` ctests). The heap spill is `n <= 8`-inline so the common path
+  allocates nothing; `eval_apply_inner` copies args at entry and frames copy
+  TuriValues by value, so freeing the EX_CALL/builtin/struct containers after
+  use is safe.
 - **T2-T5** -- unchanged from the design below; T2/T3 are the form-group-by-form
-  -group conversion that actually removes the non-tail ceiling.
+  -group conversion that actually removes the non-tail ceiling (and makes
+  `TURI_EVAL_FRAME_BYTES` dead code for the synchronous path, per T5).
 
 ## Design: explicit-stack CEK-style driver
 
@@ -290,12 +310,13 @@ problem.
 
 ## Implementation phases
 
-1. **T1 -- Heap-allocate the arg/field scratch.** Smallest independent win:
-   change `eval_expr_impl`'s `TuriValue args[MAX_EVAL_ARGS]` (and `fields`,
-   etc.) to a heap allocation sized to the actual arity, freed before return.
-   This alone shrinks the C frame and roughly doubles the achievable depth
-   under the *current* recursive evaluator -- shippable on its own and a good
-   bisection point if T2 regresses.
+1. **T1 -- Heap-allocate the arg/field scratch. LANDED 2026-06-14.** Changed
+   `eval_expr_impl`'s `TuriValue args[MAX_EVAL_ARGS]` (and `fields`, perform
+   args, and the TCO buffers) to an inline-8-with-heap-spill / fixed-16 scheme,
+   plus the required `TURI_EVAL_FRAME_BYTES` re-tune (the limiter was the depth
+   guard, not the frame). Roughly doubled the achievable depth (~311 -> ~531)
+   on the *current* recursive evaluator -- shipped on its own; a good bisection
+   point if T2 regresses. See **Phase status** above for the full write-up.
 2. **T2 -- Driver loop for the leaf + linear forms.** Introduce `ContStack`
    and convert the non-application compound forms (`EX_IF`, `EX_DO`, `EX_LET`,
    `EX_AND`/`EX_OR`, `EX_MAKE_STRUCT`) to the loop, keeping `eval_apply` as a
