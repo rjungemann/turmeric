@@ -19,6 +19,59 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0. Status snapshot — 2026-06-13 (post-M4c-pre-ext)
+
+Since the last audit refresh (`0506bab2`), the following landed:
+
+- **M4c Path A**: per-instantiation specs for non-HKT typeclass-instance
+  methods on parameterized concrete-layout types (Vec, Cons, Tuple2).
+  See `docs/upcoming/m4c-execution-plan.md`.
+- **M4c-pre-ext (Cons, Vec)**: stdlib `Eq Cons` and `Eq Vec` rewritten as
+  pure-Turmeric recursive/index loops, retiring direct dependence on
+  `list-eq?` / `vec-eq?` inline-C helpers at the Eq dispatch site. Helpers
+  remain for carrier-ABI consumers. See
+  `docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md`.
+- **TCO lifts #1, #2, #3** (`53c23aed` and predecessors): the
+  `__tur_tailcall:` label loop now composes with ABI specialization, with
+  spec-aware `tco_param_type`, and with typeclass-method-dispatch
+  self-calls (Path A's `dict_arg`-annotated direct call).
+- **Poly-defn recursive return-type inference** (`b1a782bf`): pass-1
+  forward-decl in `elab_toplevel.c` now skips the `[TypeVars]` (and
+  optional `[Constraints]`) vector before computing `ret_idx`, so a
+  recursive call inside `(defn f [A] [...] : bool ...)` sees the
+  declared `:bool` instead of the carrier `TY_INT` default.
+- **By-value → carrier let-binding bridge** (`970bd9a6`): the EX_ASCRIBE
+  emit handler grew a symmetric CK_CONCRETE → CK_CARRIER widening for
+  `(let [xi (:: x :int)] ...)` patterns inside Path A specs, with
+  spec-aware cname resolution (`current_abi_specialization->arg_types[i]`
+  lookup via `ctx->fn_params`). This was the last blocker for Vec Eq's
+  rewrite.
+- **Map finding** (`677c0024`): `Eq Map` doesn't get a Path A spec —
+  not because of its 2-constraint shape (`[(Eq K) (Eq V)]`), but because
+  `(defstruct Map [K V] (carrier :int))` is a **transparent int newtype**
+  whose `type_c_name` short-circuits to `"int64_t"` in every
+  instantiation, so Path A's `abi_changes` check correctly identifies no
+  ABI delta. See `docs/reported/why-path-a-bails-on-map-eq-instance.md`.
+
+Suite: `1564 passed, 86 failed` — identical to the pre-session baseline.
+
+### Counts since last refresh
+
+| Token / marker | Audit baseline | Current |
+|---|---|---|
+| `emit_carrier_bridge` call sites | 4 | 7 (added 3 EX_ASCRIBE widenings — symmetric direction + Cons + Vec) |
+| `(int64_t)(intptr_t)` casts (emit_*) | ~112 | ~88 (counted across emit_*.c) |
+| `type_uses_carrier_abi` checks | ~20+ | ~36 (more dispatch-side gates as Path A landed) |
+| `expr_emits_byvalue_carrier_abi` checks | 5 | 7 |
+| `emit_byvalue_carrier_abi` Binding flag refs | ~6 | 9 |
+
+The bridge call count went **up**, not down — Path A's by-value spec
+params surface new sites where the bridge must fire to interface with
+remaining carrier-ABI stdlib helpers (`vec-len`, `vec-get`, `vec-eq?`).
+M3/M9 still target zero, but the path goes through M2b → M3 → M5 first,
+not through M4c alone. M4c carved up the carrier-vs-by-value boundary;
+it did not yet retire the bridge.
+
 ## 1. Bucket counts
 
 | Bucket | Sites | Disposition |
@@ -64,6 +117,20 @@ Call-site / dispatch boundary lowering (representative -- 20+ total in `emit_exp
 - `src/compiler/emit_expr.c:2478` -- accessor (e.g. `tupleN-Nth`, `ok-val`) deref against matched spec.
 - `src/compiler/emit_expr.c:2528-2534` -- typeclass method arg bridge (CK_CONCRETE -> CK_CARRIER).
 - `src/compiler/emit_expr.c:4074-4076` -- existential pack/open carrier bridge (this one stays; see bucket 5).
+- `src/compiler/emit_expr.c:4273` -- CK_CARRIER -> CK_CONCRETE for an
+  EX_ASCRIBE casting plain `:int` to a concrete aggregate (e.g.
+  `(:: t (Cons int))` where `t` is a raw int param). Added during M4c
+  Path A for the Cons recursive-projection case.
+- `src/compiler/emit_expr.c:4299` -- CK_CARRIER -> CK_CONCRETE for an
+  EX_ASCRIBE casting plain `:int` to a concrete TY_APP. Added during
+  M4c-pre-ext for the Cons let-binding case.
+- `src/compiler/emit_expr.c:4350` -- CK_CONCRETE -> CK_CARRIER for the
+  symmetric case: a by-value spec param ascribed back to `:int` (e.g.
+  `(let [xi (:: x :int)] ...)` inside `Eq Vec`'s spec body). Added
+  2026-06-13 for the Vec Eq rewrite. Spec-aware: looks up the param
+  index in `ctx->fn_params` and pulls the monomorphized type from
+  `current_abi_specialization->arg_types[i]` so the spill local is
+  declared with the correct `Vec__int`-style C name.
 
 Parameter ABI flag plumbing (sites that set / propagate the per-binding
 `emit_byvalue_carrier_abi` flag):
@@ -302,25 +369,54 @@ to it; M5 must measure.
    `some` / `none` / `pair` / `cons` / `vec-of` stay on inline-C for
    now -- they reach `#{Construct}` via M2b's explicit `make-struct`
    body form (see `docs/upcoming/v2/m2b-make-struct-design.md`).
-2. M2b -- introduce `(make-struct StructName :field val ...)` and
+2. **M4c Path A -- LANDED (2026-06-13).** Per-instantiation
+   typeclass-instance-method specs for non-HKT instances on
+   parameterized concrete-layout types. Vec/Cons/Tuple2 ship with
+   `__spec__` clones; dispatch site unboxes int carrier and calls the
+   typed spec body directly. Map deliberately not specialized
+   (transparent int newtype; see Section 0).
+3. **M4c-pre-ext (Cons, Vec) -- LANDED.** `Eq Cons` and `Eq Vec`
+   stdlib instances are pure-Turmeric loops over Path A specs. Cons
+   uses field-projection recursion; Vec uses a let-bound int alias to
+   pass the carrier through `vec-len`/`vec-get` inside the
+   `vec-eq-loop` helper. TCO inside the spec turns each into a goto
+   loop. The inline-C `list-eq?` / `vec-eq?` helpers remain for
+   external carrier-ABI consumers but are no longer the dispatch path.
+4. **M4c-pre-ext (Map, MutableMap) -- NOT PURSUED THIS PHASE.** Map
+   has no Path A spec (transparent int newtype). MutableMap has a
+   real spec and 4 bridge crossings, but its pure-Turmeric rewrite
+   requires exposing slot-by-index accessors (`mutmap-cap`,
+   `mutmap-slot-tag`, etc.) — larger surface change than warranted
+   while the M2b/M3/M5 trunk hasn't landed.
+5. M2b -- introduce `(make-struct StructName :field val ...)` and
    `(default-of T)` core forms; retire the M2a inference path and the
    remaining stdlib inline-C constructor bodies. See M2b design doc.
-3. M3 -- delete `emit_carrier_bridge`'s CK_CARRIER -> CK_CONCRETE
-   path for accessors once M2b has removed the producers.
-3. M4 -- read this audit's `dispatch_method_arg` section; dict shape
-   is already correct, work is retiring the poly fatshim wrapper for
-   non-HKT classes.
-4. M5 -- worklist generalization for constrained-polymorphic defns.
-   Read `hybrid_surprises` 7.3 and 7.5 first.
-5. M6 -- HKT dispatch design pass. Read `hybrid_surprises` 7.3 +
+   **This is the next major implementation phase.** M2b is the only
+   way to reduce the bridge count from its current 7 (it grew from 4
+   under M4c); accessor-side M3 cleanup follows mechanically once M2b
+   producers are direct.
+6. M3 -- delete `emit_carrier_bridge`'s CK_CARRIER -> CK_CONCRETE
+   path for accessors once M2b has removed the producers. The
+   symmetric CK_CONCRETE -> CK_CARRIER path (added 2026-06-13 for the
+   Vec rewrite) is needed only while M4c-pre-ext stdlib helpers
+   straddle the carrier boundary; M5 retires it.
+7. M4-rest -- the dispatch dict struct is still uniform-carrier-shape;
+   the M4 plan's "Dict struct generation per-instance type per method"
+   is not done. Path A works around it by emitting a separate spec
+   clone callable directly. Revisiting the dict layout triggers M5.
+8. M5 -- worklist generalization for constrained-polymorphic defns.
+   Read `hybrid_surprises` 7.3 and 7.5 first. The bridge count drops
+   to 0 only after M5 retires the residual cross-helper carrier
+   straddle introduced by M4c-pre-ext.
+9. M6 -- HKT dispatch design pass. Read `hybrid_surprises` 7.3 +
    `existential_value` section; the HKT path may end up sharing the
    `tur_poly_fn_t` carrier rather than getting full per-(f, A)
    monomorphization, depending on binary-size measurements.
-6. M8 -- rename `tur_ok` / `tur_err` to `tur_box_ok` / `tur_box_err`;
-   gate prelude emission on reachability.
-7. M9 -- delete `emit_carrier_bridge`, `expr_emits_byvalue_carrier_abi`,
-   `type_uses_carrier_in_dispatch`, the `emit_byvalue_carrier_abi`
-   binding flag, and the synthesized-body branch that's now the
-   default path.
-8. M10 -- re-run this audit; file any new hybrid surprises under
-   `docs/reported/`.
+10. M8 -- rename `tur_ok` / `tur_err` to `tur_box_ok` / `tur_box_err`;
+    gate prelude emission on reachability.
+11. M9 -- delete `emit_carrier_bridge`, `expr_emits_byvalue_carrier_abi`,
+    `type_uses_carrier_in_dispatch`, the `emit_byvalue_carrier_abi`
+    binding flag, and the synthesized-body branch that's now the
+    default path.
+12. M10 -- re-run this audit; file any new hybrid surprises under
+    `docs/reported/`.
