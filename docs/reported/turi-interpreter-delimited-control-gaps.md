@@ -1,5 +1,24 @@
 # Interpreter delimited-control gaps: multishot / escaping / nested-handler resume
 
+> **RESOLVED 2026-06-14** (turi-interpreter-delimited-control-plan). The
+> tree-walking interpreter now runs *capturable* handles on the driver
+> work-stack (a heap-owned `TuriWsCont` continuation captured between the
+> `perform` and the matching `DK_PROMPT`), with the ucontext-fiber path kept as
+> the fallback for black-boxed performs (`while`/`try`/`async`/native-HOF
+> bodies). This fixes escaping `k` (heap-owned, survives the handle return) and
+> nested resume (the captured prompt slice re-installs the enclosing handlers).
+> All five fixtures now pass under `--interpret` and their `requires.tur-only`
+> markers are removed; verified against `tests/run-turi.sh` (no regressions).
+>
+> Multishot caveat: the compiled effect-multishot path is itself degenerate
+> (every resume after the first returns the first resume's result), so the
+> interpreter was made to **match** it bug-for-bug. See
+> [turi-effect-multishot-degenerate-resume.md](turi-effect-multishot-degenerate-resume.md).
+>
+> Deferred: capturing a continuation *through a native HOF callback* still
+> errors cleanly (no crash); lifted later by
+> [turi-cek-stackless-reentry-plan.md](../upcoming/v1/turi-cek-stackless-reentry-plan.md) (SR).
+
 **One-line summary:** Under `tur --interpret`, the effect-handler/continuation
 machinery (`src/turi/eval.c` fiber path, `:691+`) is one-shot and single-frame:
 resuming a continuation more than once (`^multishot`), resuming one that has

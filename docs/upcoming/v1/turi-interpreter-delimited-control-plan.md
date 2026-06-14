@@ -6,6 +6,28 @@ description: Make the tree-walking interpreter's effect-handler/continuation mac
 
 # Turi interpreter delimited-control completion -- Plan
 
+> **LANDED 2026-06-14.** Implemented on the driver work-stack (not a fiber-stack
+> deep-copy): a *capturable* handle installs a `DK_PROMPT` and runs its body on
+> `eval_drive_ex`'s work-stack; `perform` captures the slice between itself and
+> the matching prompt as a heap-owned `TuriWsCont` (`src/turi/eval.c`). The
+> ucontext-fiber path is retained as the fallback for performs that black-box
+> away from the work-stack (`while`/`try`/`async`/native-HOF bodies); a static,
+> conservative `ws_capturable` predicate picks the path per handle, guaranteeing
+> a work-stack handle never nests a fiber handle that must escape to it. All five
+> target fixtures pass under `--interpret` with their `requires.tur-only` markers
+> removed; `tests/run-turi.sh` shows no regressions and `check_turi_parity.py` is
+> 0-gap.
+>
+> Deviation from step 2 (multishot): the compiled effect-multishot path is
+> degenerate -- every resume after the first returns the *first* resume's result
+> -- so `multishot-handler`/`fh-multishot-value` expect `20`, not the `30` true
+> multishot would give. The interpreter therefore *matches* the compiled path
+> (first resume runs the slice and caches its result; later resumes return the
+> cache) rather than cloning per resume. Filed as
+> [docs/reported/turi-effect-multishot-degenerate-resume.md](../../reported/turi-effect-multishot-degenerate-resume.md);
+> when the compiled bug is fixed, switch the cache for a per-resume clone and
+> bump the two fixtures to `30`.
+
 ## Status and scope
 
 Under `tur --interpret`, the effect-handler/continuation machinery
