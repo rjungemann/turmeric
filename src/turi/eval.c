@@ -691,8 +691,17 @@ static TuriValue turi_err_result_box(TuriEnv *env) {
 
 #define EFFECT_CONT_STACK_SIZE (256 * 1024)  /* 256 KB per body fiber */
 
+/* Work-stack (trampoline) continuation -- the heap-owned, delimited-control
+ * representation used by capturable handles (DC plan).  Defined fully near the
+ * driver (after DriveCont); here we only need the pointer in TuriEffectCont. */
+typedef struct TuriWsCont TuriWsCont;
+
 /* Full definition of TuriEffectCont (forward-declared in value.h). */
 struct TuriEffectCont {
+    /* Non-NULL when this continuation is a work-stack continuation (captured by
+     * the trampoline driver, not a ucontext fiber).  EX_RESUME branches on it. */
+    TuriWsCont        *ws;
+
     ucontext_t         body_ctx;      /* fiber context for body execution */
     ucontext_t         handler_ctx;   /* most-recent handler context */
     char              *body_stack;    /* mmap'd body fiber stack */
@@ -874,6 +883,31 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
     TuriValue result = eval_expr(env, hframe, matched->body);
     eval_frame_free(hframe);
     return result;
+}
+
+/* Fiber perform: signal the innermost ucontext handler and block until resumed.
+ * Shared by the eval_expr_impl EX_PERFORM path and the driver's work-stack
+ * fallback (a perform that finds no DK_PROMPT on the current work-stack -- e.g.
+ * a black-boxed perform, or one whose handler is an enclosing fiber handle).
+ * `args` must stay live in the caller's frame across the swapcontext (the
+ * handler reads cont->perf_args during dispatch). */
+static TuriValue eval_perform_fiber(TuriEnv *env, const char *effect_name,
+                                    TuriValue *args, uint8_t n_args) {
+    TuriHandlerFrame *top = (TuriHandlerFrame *)env->handler_stack;
+    if (!top) return turi_errorf("eval: unhandled effect: %s", effect_name);
+    TuriEffectCont *cont = top->cont;
+    cont->perf_name   = effect_name;
+    cont->perf_args   = args;
+    cont->n_perf_args = n_args;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    swapcontext(&cont->body_ctx, &cont->handler_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+    return cont->resume_val;
 }
 
 /* -------------------------------------------------------------------------
@@ -3650,6 +3684,8 @@ typedef enum {
     DK_BUILTIN_ARG,  /* EX_BUILTIN: evaluating arg[index] (acc owned; or short-circuit) */
     DK_CALL_ARG,     /* EX_CALL: evaluating arg[index] (acc owned; callee in `last`) */
     DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
+    DK_PROMPT,       /* EX_HANDLE (DC): delimited-control prompt; aux = HandleExpr*,
+                      * frame = handler lexical frame, index = active flag (1/0). */
 } DriveKind;
 
 typedef struct {
@@ -3662,9 +3698,9 @@ typedef struct {
                          * MAKE_STRUCT / *_ARG: TuriValue* heap accumulator */
     /* T3.2b: tail-position threading + folded-call (DK_CALL_RET) saved state. */
     bool        tail;          /* tail-ness to apply to this form's tail child */
-    const char *saved_module;  /* DK_CALL_RET: caller module to restore */
+    const char *saved_module;  /* DK_CALL_RET / DK_PROMPT: module to restore */
     bool        was_returning; /* DK_CALL_RET: env->returning at call entry */
-    bool        was_no_unwind; /* DK_CALL_RET: env->in_no_unwind at call entry */
+    bool        was_no_unwind; /* DK_CALL_RET / DK_PROMPT: env->in_no_unwind to restore */
 } DriveCont;
 
 /* F4: activation seed for eval_drive_ex.  When non-NULL, the driver pushes a
@@ -3679,6 +3715,263 @@ typedef struct {
     bool        was_returning;  /* env->returning at activation entry */
     bool        was_no_unwind;  /* env->in_no_unwind at activation entry */
 } DriveSeed;
+
+/* -------------------------------------------------------------------------
+ * DC (turi-interpreter-delimited-control-plan): work-stack delimited control.
+ *
+ * A capturable handle runs its body ON the driver work-stack behind a DK_PROMPT
+ * frame, instead of on a ucontext fiber.  When the body performs, the driver
+ * captures the slice of work-stack frames between the perform and the matching
+ * prompt as a heap-owned TuriWsCont (the continuation `k`).  Because the slice
+ * is heap-owned it survives the handle frame returning (escaping k) and a
+ * resume re-installs the captured prompt(s), so a perform inside a resumed
+ * continuation still finds the enclosing handlers (nested resume).
+ *
+ * Multishot: each resume runs an INDEPENDENT clone of the captured slice (deep
+ * copy of the owned frames + arg accumulators), so resuming `k` with distinct
+ * values yields distinct runs -- matching the compiled path's true multishot.
+ * ---------------------------------------------------------------------- */
+struct TuriWsCont {
+    DriveCont   *frames;        /* captured slice, work-stack order (bottom..top) */
+    size_t       n_frames;
+    HandleExpr  *handler;       /* cases for re-dispatch on resume */
+    EvalFrame   *handler_frame; /* lexical frame the handler closes over */
+    /* env snapshot at the perform/capture point (restored before running the
+     * slice on resume; the slice's own DK_CALL_RET epilogues unwind from there). */
+    const char  *perf_module;
+    bool         perf_no_unwind;
+    void        *perf_defer;    /* DeferItem* */
+};
+
+/* Shallow-copy a frame's bindings into a fresh frame (parent set by caller).
+ * Bindings are re-linked most-recent-first to preserve shadowing order. */
+static EvalFrame *clone_frame_bindings(EvalFrame *src, EvalFrame *parent) {
+    EvalFrame *nf = (EvalFrame *)malloc(sizeof(EvalFrame));
+    nf->parent = parent;
+    nf->bindings = NULL;
+    /* Collect src bindings (head-first) then re-prepend in reverse to preserve
+     * the original head-first order. */
+    size_t n = 0;
+    for (EvalBinding *b = src->bindings; b; b = b->next) n++;
+    if (n) {
+        EvalBinding **arr = (EvalBinding **)malloc(n * sizeof(EvalBinding *));
+        size_t i = 0;
+        for (EvalBinding *b = src->bindings; b; b = b->next) arr[i++] = b;
+        for (size_t j = n; j-- > 0; ) frame_bind(nf, arr[j]->name, arr[j]->value);
+        free(arr);
+    }
+    return nf;
+}
+
+/* Clone a captured slice into fresh DriveCont frames for an independent resume.
+ * Owned frames (LET_BIND/LET_BODY/MATCH_BODY/CALL_RET) are deep-copied and any
+ * `.frame` pointing at an owned frame is remapped to its clone; per-frame heap
+ * arg accumulators (BUILTIN_ARG/CALL_ARG/MAKE_STRUCT) are duplicated so the two
+ * runs never share mutable state.  `out` must hold `n` DriveConts. */
+static void clone_ws_slice(const DriveCont *src, size_t n, DriveCont *out) {
+    /* Map owned source frames -> clones. */
+    EvalFrame *keys[64]; EvalFrame *vals[64]; size_t nmap = 0;
+    for (size_t i = 0; i < n; i++) {
+        DriveKind k = src[i].kind;
+        if ((k == DK_LET_BIND || k == DK_LET_BODY || k == DK_MATCH_BODY ||
+             k == DK_CALL_RET) && src[i].frame && nmap < 64) {
+            keys[nmap] = src[i].frame;
+            vals[nmap] = clone_frame_bindings(src[i].frame, src[i].frame->parent);
+            nmap++;
+        }
+    }
+    /* Re-parent clones whose parent is itself an owned (cloned) frame. */
+    for (size_t m = 0; m < nmap; m++)
+        for (size_t p = 0; p < nmap; p++)
+            if (vals[m]->parent == keys[p]) { vals[m]->parent = vals[p]; break; }
+    /* Copy DriveConts, remapping frames and duplicating accumulators. */
+    for (size_t i = 0; i < n; i++) {
+        out[i] = src[i];
+        if (out[i].frame)
+            for (size_t m = 0; m < nmap; m++)
+                if (out[i].frame == keys[m]) { out[i].frame = vals[m]; break; }
+        /* Duplicate heap accumulators (aux) that hold partial results. */
+        if (src[i].aux) {
+            size_t cnt = 0;
+            if (src[i].kind == DK_BUILTIN_ARG)
+                cnt = src[i].expr->as.builtin.n;
+            else if (src[i].kind == DK_CALL_ARG)
+                cnt = src[i].expr->as.call_.n_args;
+            else if (src[i].kind == DK_MAKE_STRUCT)
+                cnt = src[i].expr->as.make_struct_.n_fields;
+            if (cnt) {
+                TuriValue *acc = (TuriValue *)malloc(cnt * sizeof(TuriValue));
+                memcpy(acc, src[i].aux, cnt * sizeof(TuriValue));
+                out[i].aux = acc;
+            }
+        }
+    }
+}
+
+/* Wrap a work-stack continuation in a TURI_EFFECT_CONT value (discriminated by
+ * the ws pointer being non-NULL). */
+static TuriValue turi_ws_cont_val(TuriWsCont *wc) {
+    TuriEffectCont *c = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+    c->ws = wc;
+    return turi_effect_cont(c);
+}
+
+/* Conservative "does evaluating e synchronously perform an effect?" -- returns
+ * true unless e is provably perform-free.  Used to reject black-box positions
+ * (match scrutinee/guards, resume k/value, set!/return values, get-field
+ * receivers, and any non-modelled form) whose performs the driver cannot
+ * capture.  Over-reports (any call / unmodelled form -> true) so it never
+ * misses a perform; the cost is only that more handles fall back to fibers. */
+static bool ws_has_perform(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EX_PERFORM: return true;
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
+    case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DEFAULT_OF:
+    case EX_FN: case EX_FN_DEF: case EX_EXTERN_C:
+        return false;
+    case EX_IF:
+        return ws_has_perform(e->as.if_.cond) ||
+               ws_has_perform(e->as.if_.then_) ||
+               ws_has_perform(e->as.if_.else_or_null);
+    case EX_DO:
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            if (ws_has_perform(e->as.do_.items[i])) return true;
+        return false;
+    case EX_PROGRAM:
+        for (uint32_t i = 0; i < e->as.program.n; i++)
+            if (ws_has_perform(e->as.program.items[i])) return true;
+        return false;
+    case EX_LET: case EX_LETREC:
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            if (ws_has_perform(e->as.let_.bindings[i].init)) return true;
+        return ws_has_perform(e->as.let_.body);
+    case EX_BUILTIN:
+        for (uint32_t i = 0; i < e->as.builtin.n; i++)
+            if (ws_has_perform(e->as.builtin.args[i])) return true;
+        return false;
+    case EX_MAKE_STRUCT:
+        for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+            if (ws_has_perform(e->as.make_struct_.field_values[i])) return true;
+        return false;
+    case EX_SET:        return ws_has_perform(e->as.set_.value);
+    case EX_RETURN:     return ws_has_perform(e->as.return_.value);
+    case EX_GET_FIELD:  return ws_has_perform(e->as.get_field_.struct_expr);
+    case EX_RESUME:     return ws_has_perform(e->as.resume_.resume->k) ||
+                               ws_has_perform(e->as.resume_.resume->value);
+    default:
+        /* EX_CALL, EX_HANDLE, EX_WHILE, EX_TRY_CATCH, ... -- conservatively
+         * assume a perform may run synchronously. */
+        return true;
+    }
+}
+
+/* Decide whether a handle body can run on the work-stack: true iff every
+ * perform reachable from `e` is reached through driver-transparent forms (so
+ * the perform lands in eval_drive_ex's descending switch with the prompt
+ * visible on `st`).  Conservative: anything uncertain -> false -> fiber path.
+ * `depth` bounds recursion through direct callee bodies. */
+static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int depth) {
+    if (!e) return true;
+    if (depth <= 0) return false;   /* give up on very deep / cyclic chains */
+    switch (e->kind) {
+    case EX_PERFORM: {
+        PerformExpr *pe = e->as.perform_.perform;
+        for (uint8_t i = 0; i < pe->n_args; i++)
+            if (ws_has_perform(pe->args[i])) return false;  /* args run via eval_expr */
+        return true;
+    }
+    case EX_IF:
+        return ws_capturable(env, frame, e->as.if_.cond, depth) &&
+               ws_capturable(env, frame, e->as.if_.then_, depth) &&
+               ws_capturable(env, frame, e->as.if_.else_or_null, depth);
+    case EX_DO:
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            if (!ws_capturable(env, frame, e->as.do_.items[i], depth)) return false;
+        return true;
+    case EX_PROGRAM:
+        for (uint32_t i = 0; i < e->as.program.n; i++)
+            if (!ws_capturable(env, frame, e->as.program.items[i], depth)) return false;
+        return true;
+    case EX_LET: case EX_LETREC:
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            if (!ws_capturable(env, frame, e->as.let_.bindings[i].init, depth)) return false;
+        return ws_capturable(env, frame, e->as.let_.body, depth);
+    case EX_BUILTIN:
+        for (uint32_t i = 0; i < e->as.builtin.n; i++)
+            if (!ws_capturable(env, frame, e->as.builtin.args[i], depth)) return false;
+        return true;
+    case EX_MAKE_STRUCT:
+        for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+            if (!ws_capturable(env, frame, e->as.make_struct_.field_values[i], depth)) return false;
+        return true;
+    case EX_MATCH:
+        /* Scrutinee + guards run via eval_match_resolve -> eval_expr (black box). */
+        if (ws_has_perform(e->as.match_.scrutinee)) return false;
+        for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+            if (ws_has_perform(e->as.match_.arms[i].guard)) return false;
+            if (!ws_capturable(env, frame, e->as.match_.arms[i].body, depth)) return false;
+        }
+        return true;
+    case EX_HANDLE: {
+        const HandleExpr *h = e->as.handle_.handle;
+        if (!ws_capturable(env, frame, h->body, depth)) return false;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            if (!ws_capturable(env, frame, h->cases[i].body, depth)) return false;
+        return true;
+    }
+    case EX_WITH_HANDLER: {
+        /* Capturable only if the handler value is a static (handler ...) literal
+         * whose case bodies are themselves capturable. */
+        const Expr *hexpr = e->as.with_handler_.handler;
+        if (!hexpr || hexpr->kind != EX_HANDLER_LIT) return false;
+        const HandleExpr *h = hexpr->as.handler_lit_.handle;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            if (!ws_capturable(env, frame, h->cases[i].body, depth)) return false;
+        return ws_capturable(env, frame, e->as.with_handler_.body, depth);
+    }
+    case EX_RESUME:
+        return !ws_has_perform(e->as.resume_.resume->k) &&
+               !ws_has_perform(e->as.resume_.resume->value);
+    case EX_CALL: {
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            if (!ws_capturable(env, frame, e->as.call_.args[i], depth)) return false;
+        /* A direct, foldable turi callee runs its body on the work-stack
+         * (DK_CALL_RET), so its performs are capturable -- recurse into it. */
+        if (e->as.call_.fn_binding) {
+            TuriValue fv = eval_lookup(env, frame, e->as.call_.fn_binding->name->name);
+            if (fv.tag == TURI_CLOSURE && fv.as_closure && !fv.as_closure->native &&
+                fv.as_closure->fn && ((FnDef *)fv.as_closure->fn)->body) {
+                FnDef *fn = (FnDef *)fv.as_closure->fn;
+                if (fn->body->kind == EX_INLINE_C) return true;  /* leaf, no perform */
+                return ws_capturable(env, fv.as_closure->captured, fn->body, depth - 1);
+            }
+        }
+        /* Native / indirect callee: cannot fold; safe iff no performing value is
+         * passed into it (a native HOF could black-box a performing closure). */
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            if (ws_has_perform(e->as.call_.args[i])) return false;
+        return true;
+    }
+    /* Closure-creating forms: capturable to *evaluate* (they just build a
+     * closure), but a performing body could later be invoked under a black box,
+     * so reject those outright -- keeps the native-HOF case on the fiber path. */
+    case EX_FN:      return !ws_has_perform(((FnDef *)e->as.fn_.fn)->body);
+    case EX_FN_DEF:  return !ws_has_perform(((FnDef *)e->as.fn_def_.fn)->body);
+    /* Leaves / values with no synchronous perform. */
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
+    case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DEFAULT_OF:
+    case EX_HANDLER_LIT: case EX_EXTERN_C:
+        return true;
+    case EX_SET:        return !ws_has_perform(e->as.set_.value);
+    case EX_RETURN:     return !ws_has_perform(e->as.return_.value);
+    case EX_GET_FIELD:  return !ws_has_perform(e->as.get_field_.struct_expr);
+    default:
+        /* Any other form is a black box for the driver: capturable only if it
+         * contains no perform at all. */
+        return !ws_has_perform(e);
+    }
+}
 
 /* T3.0: resolve an EX_MATCH to its winning arm frame + body WITHOUT evaluating
  * the body, so eval_drive can descend the body in the loop (flattening
@@ -4008,6 +4301,164 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 break;
             }
+            case EX_HANDLE: {
+                /* DC: a capturable handle installs a DK_PROMPT and runs its body
+                 * on the work-stack; otherwise fall back to the fiber path. */
+                const HandleExpr *h = control->as.handle_.handle;
+                if (ws_capturable(env, cf, h->body, 64)) {
+                    bool ok = true;
+                    for (uint8_t i = 0; i < h->n_cases && ok; i++)
+                        ok = ws_capturable(env, cf, h->cases[i].body, 64);
+                    if (ok) {
+                        DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)h,
+                                                 .frame = cf, .tail = tail, .index = 1,
+                                                 .saved_module = env->current_module,
+                                                 .was_no_unwind = env->in_no_unwind }));
+                        control = h->body; tail = false;   /* body runs under the prompt */
+                        break;                             /* keep descending */
+                    }
+                }
+                cur = eval_handle(env, cf, h);   /* fiber fallback */
+                descending = false;
+                break;
+            }
+            case EX_WITH_HANDLER: {
+                /* DC: materialise a HandleExpr from the handler value and run it
+                 * on the work-stack when capturable; else fiber-fallback. */
+                TuriValue hvv = eval_expr(env, cf, control->as.with_handler_.handler);
+                if (turi_is_error(hvv) || env->returning || env->throwing) {
+                    cur = hvv; descending = false; break;
+                }
+                if (hvv.tag != TURI_HANDLER) {
+                    cur = turi_error("eval: with-handler: first argument must be a handler value");
+                    descending = false; break;
+                }
+                TuriHandlerVal *hv = hvv.as_handler;
+                /* Heap-own the HandleExpr + cases: a captured continuation may
+                 * outlive this driver frame, so they cannot live on the C stack. */
+                HandleExpr *h = (HandleExpr *)malloc(sizeof(HandleExpr));
+                HandleCase *cs = (HandleCase *)malloc((size_t)hv->n_cases * sizeof(HandleCase));
+                for (uint8_t i = 0; i < hv->n_cases; i++) cs[i] = *hv->cases[i];
+                h->body = control->as.with_handler_.body;
+                h->cases = cs; h->n_cases = hv->n_cases;
+                bool ok = ws_capturable(env, cf, h->body, 64);
+                for (uint8_t i = 0; i < h->n_cases && ok; i++)
+                    ok = ws_capturable(env, cf, h->cases[i].body, 64);
+                if (ok) {
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)h,
+                                             .frame = cf, .tail = tail, .index = 1,
+                                             .saved_module = env->current_module,
+                                             .was_no_unwind = env->in_no_unwind }));
+                    control = h->body; tail = false;
+                    break;
+                }
+                cur = eval_handle(env, cf, h);   /* fiber fallback (borrows h) */
+                descending = false;
+                break;
+            }
+            case EX_PERFORM: {
+                PerformExpr *pe = control->as.perform_.perform;
+                const char  *effect_name = pe->effect_name->name;
+                TuriValue pargs[EVAL_MAX_FN_ARITY];
+                uint8_t n = pe->n_args;
+                if (n > EVAL_MAX_FN_ARITY) {
+                    cur = turi_errorf("eval: too many effect arguments (%u)", n);
+                    descending = false; break;
+                }
+                bool sig = false;
+                for (uint8_t i = 0; i < n; i++) {
+                    pargs[i] = eval_expr(env, cf, pe->args[i]);
+                    if (turi_is_error(pargs[i]) || env->returning || env->throwing) {
+                        cur = pargs[i]; sig = true; break;
+                    }
+                }
+                if (sig) { descending = false; break; }
+                /* Scan downward for the nearest active prompt that handles this
+                 * effect (propagating past prompts that don't). */
+                long pidx = -1; HandleCase *matched = NULL;
+                for (long i = (long)len - 1; i >= 0 && !matched; i--) {
+                    if (st[i].kind != DK_PROMPT || !st[i].index) continue;
+                    HandleExpr *h = (HandleExpr *)st[i].aux;
+                    for (uint8_t c = 0; c < h->n_cases; c++)
+                        if (strcmp(h->cases[c].effect_name->name, effect_name) == 0) {
+                            matched = &h->cases[c]; pidx = i; break;
+                        }
+                }
+                if (pidx < 0) {
+                    /* No work-stack prompt: black-boxed perform or an enclosing
+                     * fiber handler -- use the fiber path (we are physically on
+                     * that fiber's stack when one exists). */
+                    cur = eval_perform_fiber(env, effect_name, pargs, n);
+                    descending = false; break;
+                }
+                /* Capture the slice st[pidx+1 .. len-1] as a heap continuation. */
+                size_t nf = (len - 1) - (size_t)pidx;
+                TuriWsCont *wc = (TuriWsCont *)calloc(1, sizeof(TuriWsCont));
+                wc->n_frames = nf;
+                if (nf) {
+                    wc->frames = (DriveCont *)malloc(nf * sizeof(DriveCont));
+                    memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
+                }
+                wc->handler        = (HandleExpr *)st[pidx].aux;
+                wc->handler_frame  = st[pidx].frame;
+                wc->perf_module    = env->current_module;
+                wc->perf_no_unwind = env->in_no_unwind;
+                wc->perf_defer     = env->defer_stack;
+                /* Unwind to the prompt and run its matched case body; its value
+                 * becomes the handle's value (received by DK_PROMPT@pidx). */
+                len = (size_t)pidx + 1;
+                st[pidx].index = 0;   /* disable while its own case body runs */
+                EvalFrame *hf = eval_frame_new(st[pidx].frame);
+                for (uint8_t i = 0; i < matched->n_params && i < n; i++)
+                    frame_bind(hf, matched->param_bindings[i]->name->name, pargs[i]);
+                frame_bind(hf, matched->k_binding->name->name, turi_ws_cont_val(wc));
+                env->current_module = st[pidx].saved_module;
+                env->in_no_unwind   = st[pidx].was_no_unwind;
+                control = matched->body; cf = hf; tail = st[pidx].tail;
+                /* descending stays true */
+                break;
+            }
+            case EX_RESUME: {
+                ResumeExpr *re = control->as.resume_.resume;
+                TuriValue k = eval_expr(env, cf, re->k);
+                if (turi_is_error(k) || env->returning || env->throwing) {
+                    cur = k; descending = false; break;
+                }
+                TuriValue v = eval_expr(env, cf, re->value);
+                if (turi_is_error(v) || env->returning || env->throwing) {
+                    cur = v; descending = false; break;
+                }
+                if (k.tag != TURI_EFFECT_CONT) {
+                    cur = turi_error("eval: resume: not a continuation");
+                    descending = false; break;
+                }
+                if (!k.as_cont->ws) {
+                    cur = eval_resume_cont(env, cf, k.as_cont, v);  /* fiber cont */
+                    descending = false; break;
+                }
+                TuriWsCont *wc = k.as_cont->ws;
+                /* True multishot: re-install the prompt and push an INDEPENDENT
+                 * clone of the captured slice, then feed v to the hole.  Cloning
+                 * keeps repeated resumes (and resumes of an escaped k) from
+                 * sharing the original's owned frames / arg accumulators. */
+                DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
+                                         .frame = wc->handler_frame, .tail = tail,
+                                         .index = 1,
+                                         .saved_module = env->current_module,
+                                         .was_no_unwind = env->in_no_unwind }));
+                if (wc->n_frames) {
+                    DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
+                    clone_ws_slice(wc->frames, wc->n_frames, clone);
+                    for (size_t i = 0; i < wc->n_frames; i++)
+                        DRIVE_PUSH(clone[i]);
+                    free(clone);
+                }
+                env->current_module = wc->perf_module;
+                env->in_no_unwind   = wc->perf_no_unwind;
+                env->defer_stack    = wc->perf_defer;
+                cur = v; descending = false;
+                break;
+            }
             default:
                 /* Black box: evaluate any other kind via the recursive path. */
                 cur = eval_expr(env, cf, control);
@@ -4298,6 +4749,15 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     free(fields);
                     len--;  /* pop; keep returning the struct value */
                 }
+                break;
+            }
+            case DK_PROMPT: {
+                /* The handle body (or a resumed slice) finished with `cur`, which
+                 * is the handle's / resume's value.  Restore the env boundary and
+                 * propagate. */
+                env->current_module = top->saved_module;
+                env->in_no_unwind   = top->was_no_unwind;
+                len--;   /* pop; propagate cur (value or signal) */
                 break;
             }
             }
@@ -4979,23 +5439,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
 
         /* Always yield to the innermost handler so nested handlers can
-         * propagate unmatched effects upward (see eval_handle_inner). */
-        TuriHandlerFrame *top = (TuriHandlerFrame *)env->handler_stack;
-        if (!top) return turi_errorf("eval: unhandled effect: %s", effect_name);
-        TuriEffectCont *cont = top->cont;
-        cont->perf_name   = effect_name;
-        cont->perf_args   = args;
-        cont->n_perf_args = n_args;
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-        swapcontext(&cont->body_ctx, &cont->handler_ctx);
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
-        /* Resumed: return the value sent by resume k v. */
-        return cont->resume_val;
+         * propagate unmatched effects upward (see eval_handle_inner).  This
+         * path is reached for performs black-boxed away from the driver's
+         * work-stack; capturable handles intercept perform in eval_drive_ex. */
+        return eval_perform_fiber(env, effect_name, args, n_args);
     }
 
     /* (handle BODY cases...) — install handler, run BODY in a fiber. */
@@ -5077,6 +5524,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
         if (k.tag != TURI_EFFECT_CONT)
             return turi_error("eval: resume: not a continuation");
+
+        /* A work-stack continuation can only be resumed from inside the driver
+         * (eval_drive_ex EX_RESUME), where the captured slice is pushed back
+         * onto the live work-stack.  Reaching here means a capture/resume
+         * crossed a black box (e.g. a native HOF callback) -- the deferred SR
+         * case.  Fail cleanly rather than treating it as a fiber cont. */
+        if (k.as_cont->ws)
+            return turi_error("eval: cannot resume a work-stack continuation "
+                              "through a non-driver (native HOF) frame");
 
         return eval_resume_cont(env, frame, k.as_cont, val);
     }

@@ -4450,10 +4450,29 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * TurEffectCaptureCtx.dispatch fn and points ctx.table at the handler
      * value's table.  Multishot entries (cont_kind == CK_MULTISHOT) wrap the
      * fiber continuation in a cloneable cont, mirroring the inline path. */
-    buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; };\n");
+    /* True-multishot snapshot fields mirror the per-handle path: capture the
+     * fiber's suspended stack at the perform point and restore it per resume so
+     * each resume re-runs an independent copy.  See
+     * docs/reported/turi-effect-multishot-degenerate-resume.md.  The extra
+     * fields + restore are gated on multishot use so non-multishot programs keep
+     * the original (smaller) struct and codegen unchanged. */
+    bool msdyn_multishot = shared || expr_has_multishot_handler(program);
+    if (msdyn_multishot)
+        buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; "
+                      "FiberBlock *fiber; char *stack_image; size_t image_size; "
+                      "ucontext_t saved_ctx; };\n");
+    else
+        buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; };\n");
     buf_puts(out, "static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val);\n");
     buf_puts(out, "static int64_t __tur_msdyn_cont(void *__env, int64_t __v) {\n");
     buf_puts(out, "    struct __tur_msdyn_env *__e = (struct __tur_msdyn_env *)__env;\n");
+    if (msdyn_multishot) {
+        buf_puts(out, "    if (__e->fiber && __e->stack_image) {\n");
+        buf_puts(out, "        memcpy(__e->fiber->stack, __e->stack_image, __e->image_size);\n");
+        buf_puts(out, "        __e->fiber->ctx = __e->saved_ctx;\n");
+        buf_puts(out, "        __e->fiber->done = 0;\n");
+        buf_puts(out, "    }\n");
+    }
     buf_puts(out, "    return tur_handler_dispatch(__e->ctx, __e->k_int, __v);\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static void *__tur_msdyn_clone(const void *__env) {\n");
@@ -4482,6 +4501,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "                struct __tur_msdyn_env *__ms = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));\n");
     buf_puts(out, "                if (!__ms) abort();\n");
     buf_puts(out, "                __ms->ctx = __ctx_void; __ms->k_int = __k_int;\n");
+    /* Snapshot the fiber stack for true multishot.  Gated on msdyn_multishot
+     * (NOT cloneable-shift) so a cloneable-shift-only program -- which emits
+     * this branch as dead code -- keeps the original struct/codegen. */
+    if (msdyn_multishot) {
+    buf_puts(out, "                __ms->fiber = __fiber;\n");
+    buf_puts(out, "                __ms->image_size = __fiber->stack_size;\n");
+    buf_puts(out, "                __ms->stack_image = (char *)malloc(__fiber->stack_size);\n");
+    buf_puts(out, "                if (!__ms->stack_image) abort();\n");
+    buf_puts(out, "                memcpy(__ms->stack_image, __fiber->stack, __fiber->stack_size);\n");
+    buf_puts(out, "                __ms->saved_ctx = __fiber->ctx;\n");
+    }
     buf_puts(out, "                int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__tur_msdyn_cont, __ms, __tur_msdyn_clone, free);\n");
     buf_puts(out, "                return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_ms, __en->env);\n");
     buf_puts(out, "            }\n");

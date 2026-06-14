@@ -6,6 +6,26 @@ description: Make the tree-walking interpreter's effect-handler/continuation mac
 
 # Turi interpreter delimited-control completion -- Plan
 
+> **LANDED 2026-06-14.** Implemented on the driver work-stack (not a fiber-stack
+> deep-copy): a *capturable* handle installs a `DK_PROMPT` and runs its body on
+> `eval_drive_ex`'s work-stack; `perform` captures the slice between itself and
+> the matching prompt as a heap-owned `TuriWsCont` (`src/turi/eval.c`). The
+> ucontext-fiber path is retained as the fallback for performs that black-box
+> away from the work-stack (`while`/`try`/`async`/native-HOF bodies); a static,
+> conservative `ws_capturable` predicate picks the path per handle, guaranteeing
+> a work-stack handle never nests a fiber handle that must escape to it. All five
+> target fixtures pass under `--interpret` with their `requires.tur-only` markers
+> removed; `tests/run-turi.sh` shows no regressions and `check_turi_parity.py` is
+> 0-gap.
+>
+> Step 2 (multishot) -- true multishot on both paths: the interpreter clones the
+> captured slice per resume (`clone_ws_slice`), and the compiled path was fixed
+> to snapshot/restore the suspended fiber stack per resume. `multishot-handler`/
+> `fh-multishot-value` now yield `30`. The originally-degenerate compiled
+> behaviour and its fix are recorded in
+> [docs/reported/turi-effect-multishot-degenerate-resume.md](../../reported/turi-effect-multishot-degenerate-resume.md)
+> (now RESOLVED).
+
 ## Status and scope
 
 Under `tur --interpret`, the effect-handler/continuation machinery

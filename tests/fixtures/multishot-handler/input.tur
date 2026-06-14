@@ -1,5 +1,6 @@
 ;; MS1: ^multishot k allows multiple resumes in a handler clause.
-;; Uses snapshot semantics: each (resume k v) automatically snapshots k first.
+;; True multishot: each (resume k v) runs an independent copy of the captured
+;; continuation, so (resume k 10) -> 10 and (resume k 20) -> 20, summing to 30.
 
 (defeffect Ask [] :int)
 
