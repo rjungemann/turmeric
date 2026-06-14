@@ -3385,6 +3385,19 @@ skip_struct_field_lookup:;
         }
         if (base.kind == TY_STRUCT) {
             StructDef *def = base.as.struct_.def;
+            /* Gap H item 2 (mirrored from the earlier struct-field-lookup
+             * branch at L3320-3336): the class-var receiver can be left as
+             * a TY_STRUCT with NULL def when the class type variable was
+             * never concretely bound -- e.g. inside a constrained-poly
+             * defn `[(Eq A)] [x : A]` whose receiver's resolved type stays
+             * an unbound stand-in.  Dereferencing `def->n_fields` here
+             * segfaulted (the original report's "elab_typeclasses.c:3388
+             * SEGV").  Bail out to the regular typeclass-dispatch lookup
+             * below, which emits a clean diagnostic if no instance matches.
+             *
+             * Filed under docs/reported/m5-eq-vec-rewrite-fn-arg-loses-
+             * annotation.md (gap 2). */
+            if (!def) goto skip_capability_field_lookup;
             for (uint32_t i = 0; i < def->n_fields; i++) {
                 if (strcmp(def->fields[i].name, method_name) == 0 &&
                     def->fields[i].kind == TY_FN) {
@@ -3413,6 +3426,7 @@ skip_struct_field_lookup:;
                 }
             }
         }
+skip_capability_field_lookup:;
     }
 
     /* Phase 16 v2 fallback: when receiver has TY_UNKNOWN or TY_INT type
