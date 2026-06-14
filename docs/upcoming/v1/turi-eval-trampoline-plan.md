@@ -403,7 +403,23 @@ costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
        folded non-tail recursion is unguarded but heap-bounded (a runaway hits a
        clean driver-stack OOM, never SIGSEGV). Retiring the guard for the
        synchronous path (T5) is no longer urgent.
-4. **T3.3 -- re-entrancy audit + guard** (T4).
+4. **T3.3 -- re-entrancy audit + guard. AUDITED 2026-06-14 -- no guard needed.**
+   `turi_call` (the native-HOF re-entry point) goes
+   `turi_call -> eval_apply -> eval_apply_inner -> eval_body_tco -> eval_expr`,
+   and `eval_expr`'s depth guard already bounds the re-entry: deep recursion
+   *through* a native HOF (e.g. `option-map`) trips the `eval_depth` limit at
+   ~1071 cycles and **does not SIGSEGV** (verified: deep(1050) OK, deep(1100)
+   hits the limit). So the planned explicit `eval_apply` re-entry guard is
+   unnecessary for normal-frame HOFs -- and counterproductive: prototyped, it
+   merely lowered the limit (more error-swallowing cases, see below) without
+   adding safety, so it was reverted. **Surfaced a real pre-existing bug
+   instead:** native HOFs propagate a callback *throw* (`env->throwing`) but
+   **swallow value-level `turi_error` returns** (the recursion-limit error gets
+   boxed into a garbage int), filed as
+   [docs/reported/turi-native-hofs-swallow-value-level-errors.md](../../reported/turi-native-hofs-swallow-value-level-errors.md)
+   (orthogonal to the trampoline; the fold only shifted the depth at which it
+   shows). Residual, unverified: a HOF with a very large C frame could overflow
+   before the ~1071 guard; revisit if one is found.
 5. **T3.4 -- raise `max_eval_depth`, retire the `TURI_EVAL_FRAME_BYTES` stopgap,
    unpark `escape-deep-capture`** (T5).
 
