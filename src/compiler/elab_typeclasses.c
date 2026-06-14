@@ -1717,7 +1717,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      */
     TypeConstraint *type_param_constraints = NULL;
     uint8_t n_type_param_constraints = 0;
-    
+    /* Names of the tyvars introduced by the constraint vector (e.g. `A` in
+     * `[(Eq A)]`).  These must be in scope as type variables while elaborating
+     * the instance method bodies so that a bare `A` in an ascription such as
+     * `(:: t1 (Cons A))` resolves to the constraint tyvar rather than a
+     * same-named global type.  Pushed onto e->sig_tyvars for pass 2.  See
+     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
+    const Symbol *constraint_tyvar_syms[32];
+    uint8_t n_constraint_tyvar_syms = 0;
+
     if (call->as.list.len > impls_start) {
         Form *next_form = call->as.list.items[impls_start];
         if (next_form->tag == F_VEC && next_form->as.list.len > 0) {
@@ -1778,6 +1786,17 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             Form *type_arg_form = constraint_form->as.list.items[1];
                             if (type_arg_form->tag == F_SYM) {
                                 const Symbol *type_param_name = type_arg_form->as.sym;
+                                if (n_constraint_tyvar_syms < 32) {
+                                    bool dup = false;
+                                    for (uint8_t d = 0; d < n_constraint_tyvar_syms; d++) {
+                                        if (constraint_tyvar_syms[d] == type_param_name) {
+                                            dup = true; break;
+                                        }
+                                    }
+                                    if (!dup)
+                                        constraint_tyvar_syms[n_constraint_tyvar_syms++] =
+                                            type_param_name;
+                                }
                                 bool found = false;
                                 for (uint8_t j = 0; j < n_type_args; j++) {
                                     if (type_arg_syms && type_arg_syms[j] &&
@@ -2623,6 +2642,25 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         passes[i].arrow_return    = arrow_return;
     }
 
+    /* Bring the constraint tyvars (e.g. `A` from `[(Eq A)]`) into the
+     * signature-tyvar scope for the duration of pass 2's body elaboration, so a
+     * bare `A` in an ascription resolves to the tyvar over a same-named global
+     * type (root cause A). Saved/restored to keep enclosing scopes intact. */
+    uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
+    for (uint8_t ti = 0; ti < n_constraint_tyvar_syms; ti++) {
+        if (e->n_sig_tyvars >= 32) break;
+        const char *nm = constraint_tyvar_syms[ti]
+            ? constraint_tyvar_syms[ti]->name : NULL;
+        if (!nm) continue;
+        bool dup = false;
+        for (uint8_t s = 0; s < e->n_sig_tyvars; s++) {
+            if (e->sig_tyvars[s] && strcmp(e->sig_tyvars[s], nm) == 0) {
+                dup = true; break;
+            }
+        }
+        if (!dup) e->sig_tyvars[e->n_sig_tyvars++] = nm;
+    }
+
     /* Pass 2: every sibling's FnDef shell and `method_impls` slot is now
      * populated, so elaborate each method body.  A call to a sibling defined
      * later in this same `definstance` -- or a mutually recursive pair --
@@ -2704,6 +2742,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         method_def_expr->as.fn_def_.fn = method_fd;
         elab_register_file_def(e, method_def_expr);
     }
+    /* Restore the signature-tyvar scope now that every method body is done. */
+    e->n_sig_tyvars = saved_n_sig_tyvars;
 
     /* Instance was registered and its fields wired up before the body loops
      * (see above) so intra-instance `.sibling self` dispatch resolves -- now

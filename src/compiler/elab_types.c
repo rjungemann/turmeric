@@ -2305,8 +2305,30 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     Form *expr_form = call->as.list.items[1];
     Form *type_form = call->as.list.items[2];
 
-    /* Parse the ascribed type */
-    Type *ascribed = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+    /* Parse the ascribed type.
+     *
+     * Thread the enclosing definition's in-scope type variables
+     * (`e->sig_tyvars`, populated while elaborating a defn/instance body) into
+     * the resolver as `type_params`.  type_expr_from_form checks a bare name
+     * against `type_params` BEFORE the global type table, so an instance tyvar
+     * like `A` shadows a same-named global type.  Without this, a user program
+     * that defines a top-level type named `A` (a common tyvar name) captures
+     * the `A` in stdlib ascriptions such as `(:: t1 (Cons A))` in the `Eq Cons`
+     * instance body -- the `(Eq A)` constraint stops behaving as a dictionary
+     * tyvar and `.eq?` dispatch goes ambiguous.  See
+     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
+    const Symbol **scope_tyvars = NULL;
+    uint8_t n_scope_tyvars = e->n_sig_tyvars;
+    if (n_scope_tyvars > 0) {
+        scope_tyvars = (const Symbol **)arena_alloc(
+            e->arena, sizeof(const Symbol *) * n_scope_tyvars);
+        for (uint8_t i = 0; i < n_scope_tyvars; i++) {
+            scope_tyvars[i] = e->sig_tyvars[i]
+                ? intern_cstr(e->st, e->sig_tyvars[i]) : NULL;
+        }
+    }
+    Type *ascribed = type_expr_from_form(e, type_form, NULL,
+                                         scope_tyvars, NULL, n_scope_tyvars);
     if (!ascribed) return NULL;
 
     /* Phase RT: push the ascribed type onto the expected-type channel so that

@@ -1,0 +1,62 @@
+;; no-stdlib-result-builder-for-inline-c.md -- blessed inline-C result/option
+;; construction.
+;;
+;; A fallible C constructor (one that allocates/acquires a handle in C and may
+;; fail) can return a *real typed* `(Result Handle E)` / `(Option Handle)` --
+;; not a `:ptr<void>` or a magic-sentinel `:int` -- by calling the preamble
+;; helpers tur_ok / tur_err / tur_some / TUR_NONE.  The helpers share the
+;; canonical Result/Option heap layout with stdlib, so the typed value flows
+;; straight into the stdlib accessors (ok?, err?, ok-val, some?, unwrap).
+;; No spice needs to re-declare `{ bool is_ok; int64_t ok_val; ... }` by hand.
+
+(defopaque Device :ptr<void>)
+
+;; open-device : id -> (Result Device int)
+;;   allocates the device handle in C; err 22 (EINVAL) for a negative id.
+(defn open-device [id : int] : (Result Device int)
+  ```c
+  #include <stdlib.h>
+  if (id < 0) return tur_err(22);
+  int64_t *h = (int64_t *)malloc(sizeof(int64_t));
+  *h = 1000 + id;
+  return tur_ok((int64_t)(intptr_t)h);
+  ```)
+
+;; device-tag : read the int stashed behind the opaque Device handle.
+(defn device-tag [d : Device] : int
+  ```c return (int)*(int64_t *)(intptr_t)d; ```)
+
+;; device-free : release a Device handle.
+(defn device-free [d : Device] : void
+  ```c free((void *)(intptr_t)d); ```)
+
+;; maybe-open : id -> (Option Device)   none for a negative id.
+(defn maybe-open [id : int] : (Option Device)
+  ```c
+  #include <stdlib.h>
+  if (id < 0) return TUR_NONE;
+  int64_t *h = (int64_t *)malloc(sizeof(int64_t));
+  *h = 2000 + id;
+  return tur_some((int64_t)(intptr_t)h);
+  ```)
+
+(defn main [] : int
+  (do
+    ;; typed Result built in C, inspected by stdlib accessors
+    (let [r (open-device 7)]
+      (do
+        (println (ok? r))                 ;; true
+        (println (device-tag (ok-val r))) ;; 1007
+        (device-free (ok-val r))))
+    (let [e (open-device -1)]
+      (do
+        (println (err? e))                ;; true
+        (println (err-val e))))           ;; 22
+    ;; typed Option built in C, inspected by stdlib accessors
+    (let [o (maybe-open 5)]
+      (do
+        (println (some? o))               ;; true
+        (println (device-tag (unwrap o))) ;; 2005
+        (device-free (unwrap o))))
+    (println (some? (maybe-open -1)))     ;; false
+    0))

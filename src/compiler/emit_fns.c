@@ -199,6 +199,41 @@ static char *emit_fat_return_value(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     return emit_value(ctx, body, e);
 }
 
+/* M5 straddle (root cause C of m5-suite-residual-6-failures): true when every
+ * tail leaf of `e` is a call that emits an int64 carrier value -- a
+ * #{Construct} helper (some/ok/err/none) or a typeclass-method impl
+ * (__inst_*), both of which return the carrier handle regardless of their
+ * declared (Option A)/(Result A B) type.  Used to decide whether a by-value
+ * carrier-aggregate return needs a carrier->concrete deref bridge.  Shared
+ * with emit_module.c's forward-decl mirror via emit_internal.h. */
+bool fn_body_tail_is_carrier_producer(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fn_body_tail_is_carrier_producer(e->as.ascribe_.inner);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   fn_body_tail_is_carrier_producer(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_IF:
+            return e->as.if_.else_or_null &&
+                   fn_body_tail_is_carrier_producer(e->as.if_.then_) &&
+                   fn_body_tail_is_carrier_producer(e->as.if_.else_or_null);
+        case EX_LET:
+        case EX_LETREC:
+            return fn_body_tail_is_carrier_producer(e->as.let_.body);
+        case EX_CALL: {
+            const Binding *b = e->as.call_.fn_binding;
+            if (!b) return false;
+            if (b->is_construct_template) return true;
+            if (b->name && b->name->name &&
+                strncmp(b->name->name, "__inst_", 7) == 0) return true;
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -533,7 +568,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
                 _body_c && strcmp(_body_c, "int64_t") != 0 &&
                 type_uses_carrier_abi(fd->body->type);
-            if (inst_method_struct_body) {
+            /* M5 straddle (root cause C): a lifted lambda with no
+             * result_full_type whose body's tail value comes from a
+             * carrier-int64 producer (some/ok/err/none or an __inst_ method)
+             * emits the int64 carrier -- and it is dispatched through the
+             * int64-in/int64-out fat/poly thunk, so its signature must be
+             * int64 too, NOT the by-value `_body_c` aggregate.  Without this
+             * the signature (Option__int) and the body-return block (which
+             * lowers the bare result_kind to int64) disagree -> cc error.  A
+             * genuine by-value aggregate body (e.g. (Pair float float) via
+             * make-struct) is not a carrier producer and keeps `_body_c`. */
+            bool body_is_carrier_producer =
+                _body_c && strcmp(_body_c, "int64_t") != 0 &&
+                type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type)) &&
+                fn_body_tail_is_carrier_producer(fd->body);
+            if (inst_method_struct_body || body_is_carrier_producer) {
                 buf_puts(file, "int64_t");
             } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                 buf_puts(file, _body_c);
@@ -1111,6 +1160,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * bridge's `carrier→concrete` direction inline at the return
              * site.  Gated tightly on typeclass_inst so non-instance specs
              * keep their existing return handling. */
+            buf_printf(file, "return (*(%s *)(intptr_t)%s);\n", ret_ctype, ret_val);
+        } else if (!ret_is_int64_carrier && ret_ctype
+                   && fd->body->type.kind != TY_NEVER
+                   && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
+                   && fn_body_tail_is_carrier_producer(fd->body)) {
+            /* M5 straddle (root cause C): an ordinary function or lifted lambda
+             * whose declared return is a by-value carrier aggregate
+             * (Option__int / Result__int__int) but whose tail value comes from
+             * a carrier-int64 producer (some/ok/err/none or an __inst_ method).
+             * The caller spills the result by value and re-carriers via &tmp,
+             * so the body must hand back the by-value struct: deref the int64
+             * handle as the concrete struct.  Same carrier->concrete unbox as
+             * the M4c spec branch above, generalized past the typeclass_inst
+             * gate to non-spec carrier-returning bodies. */
             buf_printf(file, "return (*(%s *)(intptr_t)%s);\n", ret_ctype, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);

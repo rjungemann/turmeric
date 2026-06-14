@@ -1189,7 +1189,16 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
-    if (name == e->sym_default_of) return elab_default_of(e, call); /* M2b */
+    /* M2b: (default-of T) is a builtin zero-value form, BUT a user program may
+     * legitimately declare a typeclass method named `default-of` (the canonical
+     * return-position-only dispatch example).  When such a class is in scope,
+     * let the method shadow the builtin: fall through so the return-dispatch
+     * path below resolves it from the expected-type channel.  Stdlib never
+     * declares a `default-of` class, so its `(default-of A)` make-struct payload
+     * fills still hit the builtin.  See root cause B of
+     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md. */
+    if (name == e->sym_default_of && !elab_name_is_typeclass_method(e, name))
+        return elab_default_of(e, call);
     /* SI4-C: defopaque */
     if (name == e->sym_defopaque) return elab_defopaque(e, call);
     /* Phase G0: ADTs */
