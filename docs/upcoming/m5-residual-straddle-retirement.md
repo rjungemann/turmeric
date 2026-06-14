@@ -157,6 +157,44 @@ never crosses the carrier boundary.
   helpers rewritten as pure-Turmeric loops".  Option D extends
   that same rewrite to drop the int64 ascription step.
 
+## Update 2026-06-14 (session 2): Bridge-side trace, partial progress
+
+After landing the M5 elab fix for wrong-instance dispatch on
+EX_ASCRIBE-to-tyvar receiver
+(`docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md`),
+attempted to push further into the bridge-side gap that prevents
+gap2b's `vec-eq-loop-byval` spec body from compiling.
+
+Concretely, the spec body emits
+
+```c
+return __inst_Eq_eq_qu_int(vec_hyget(x, i), vec_hyget(y, i));
+```
+
+with `x: Vec__int` by value passed to `vec_hyget(int64_t v, ...)` —
+cc type error.  The source has `(:: x :int)` ascriptions around `x`
+and `y` that should fire the CK_CONCRETE → CK_CARRIER bridge at
+`emit_expr.c:4393`.
+
+Trace finding: the EX_ASCRIBE node for x/y **never reaches the emit
+handler** for vec-eq-loop-byval's spec body.  Instrumented at the
+EX_ASCRIBE case entry; only Eq Vec's carrier-base body fires it
+(twice, for its own `(:: x :int)` / `(:: y :int)`).  The
+vec-eq-loop-byval spec body's ascriptions have been transformed or
+elided at elab/AST time — they don't survive to emit.
+
+Tried extending the `emit_byvalue_carrier_abi` flag setter at
+`emit_fns.c:617-624` to recognize the ORIGINAL elab-time TY_APP
+param type (so the bridge gate's `expr_emits_byvalue_carrier_abi`
+check passes for spec params).  Compiled and tested; no effect on
+the bridge because the bridge ITSELF doesn't run for this body.
+
+Reverted the unproductive change.  The real fix needs to address
+the earlier AST transformation — probably in `elab_call.c`'s arg-
+coercion path, where `(:: x :int)` passed as `vec-get`'s `v:int`
+formal gets rewritten or elided.  Hours of additional elab-side
+trace needed; not in scope for this session.
+
 ## Update 2026-06-14: Option D execution found a deeper wall
 
 Execution of Option D in this session ran into a structural constraint
