@@ -2416,7 +2416,32 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *arg_expr = e->as.call_.args[i];
-                while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
+                /* M5 residual-straddle (docs/upcoming/m5-residual-straddle-
+                 * retirement.md): the strip below historically erased
+                 * EX_ASCRIBE wrappers before emit_value so the call could
+                 * see the underlying value directly.  But a Path A spec
+                 * body uses `(:: x :int)` to widen a by-value carrier-ABI
+                 * param (e.g. Vec__int) to the int64 carrier for a downstream
+                 * carrier-helper call (vec-get, etc.).  Stripping the
+                 * EX_ASCRIBE bypassed the CK_CONCRETE -> CK_CARRIER bridge
+                 * at emit_expr.c:4393, so the by-value value reached the
+                 * int64 formal as-is and cc failed.  Preserve the EX_ASCRIBE
+                 * wrapper when it's the kind that would trigger the byval-
+                 * to-carrier bridge: ascribe target is TY_INT, inner is a
+                 * by-value carrier-ABI EX_VAR (a spec param), and the
+                 * inner's elab-time type uses carrier ABI. */
+                bool preserve_ascribe_for_bridge = false;
+                if (arg_expr && arg_expr->kind == EX_ASCRIBE &&
+                    arg_expr->type.kind == TY_INT &&
+                    arg_expr->as.ascribe_.inner &&
+                    arg_expr->as.ascribe_.inner->type.kind != TY_INT &&
+                    type_uses_carrier_abi(arg_expr->as.ascribe_.inner->type) &&
+                    expr_emits_byvalue_carrier_abi(ctx, arg_expr->as.ascribe_.inner)) {
+                    preserve_ascribe_for_bridge = true;
+                }
+                if (!preserve_ascribe_for_bridge) {
+                    while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
+                }
                 const Expr *emit_arg = arg_expr;
                 if (matched_spec && arg_expr && arg_expr->kind == EX_REINTERPRET &&
                     arg_expr->as.reinterpret_.expr &&
