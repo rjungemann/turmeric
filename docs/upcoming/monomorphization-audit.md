@@ -203,6 +203,24 @@ lowering rule and drops only the accessor's carrier-deref bridge.
   - `:516-528` param slot types are concrete (`const T*` for pass-by-ptr structs; `tur_poly_fn_t` for rank-2 params).
 - `src/compiler/emit_stmt.c:535-560` -- dict singleton initializers with method-impl pointers.
 
+**M4-rest dispatch side -- 2026-06-13.**  The corresponding call-site
+emit at `emit_expr.c:1685-1793` had two redundant patterns:
+  1. The default direct-call path: when `best_method->binding` is
+     resolved (the typical case), the call lowers to a direct
+     `__inst_X_method(args)` rather than going through the dict at
+     all.  Phase H §1 in `elab_typeclasses.c:4042-4051`.  Most fixtures
+     hit this path -- zero `dict_X_singleton.method(...)` calls in
+     `tests/fixtures/*/expected.c`.
+  2. The fallback dispatch path (rare): when `fn_expr` is `EX_DICT`,
+     the emitted call wrapped the slot in
+     `((ret_t (*)(...))(intptr_t)(dict_X_singleton.method))(args)`.
+     The slot was already typed by emit_stmt.c, so the intptr_t round-
+     trip was dead weight.  Commit (this) gates direct call on
+     `is_direct_dict_dispatch` (gf->kind == EX_DICT &&
+     method_name[0] != '\0'), mirroring the Phase E typed-fn-field
+     path -- arg casts still apply (a TY_FN arg destined for an
+     int64_t slot keeps its fn->int64 cast).
+
 ### 5.2 Per-instance method return-type emit (78589845 fix)
 
 - `src/compiler/emit_module.c:1777-1825` -- instance-method return-type emit mirrors `emit_fns.c`. Detects non-spec method whose body produces a by-value struct.
@@ -455,10 +473,20 @@ to it; M5 must measure.
    symmetric CK_CONCRETE -> CK_CARRIER path (added 2026-06-13 for the
    Vec rewrite) is needed only while M4c-pre-ext stdlib helpers
    straddle the carrier boundary; M5 retires it.
-7. M4-rest -- the dispatch dict struct is still uniform-carrier-shape;
-   the M4 plan's "Dict struct generation per-instance type per method"
-   is not done. Path A works around it by emitting a separate spec
-   clone callable directly. Revisiting the dict layout triggers M5.
+7. **M4-rest -- LANDED (2026-06-13) by trim, not by rework.**  The
+   audit's earlier framing -- "dispatch dict struct is still
+   uniform-carrier-shape, the M4 plan's per-method-typed slots is not
+   done" -- was wrong.  The dict struct WAS already typed per
+   instance method (see Section 5.1 + commit `78589845`).  What was
+   missing was the call-site direct-call format for the rare
+   `fn_expr == EX_DICT` dispatch case; that landed in
+   `emit_expr.c:1707` (new `is_direct_dict_dispatch` flag composed
+   with Phase E's typed-fn-field path).  Zero fixture-snapshot diffs
+   because the EX_DICT fn_expr branch is itself dormant -- Phase H §1
+   (`elab_typeclasses.c:4042`) already routes the typical case
+   through `best_method->binding` direct calls.  M4-rest is plumbing
+   for a dormant path; the real dict-shape change is M5 (per-call-site
+   monomorphization of constrained-polymorphic consumers).
 8. M5 -- worklist generalization for constrained-polymorphic defns.
    Read `hybrid_surprises` 7.3 and 7.5 first. The bridge count drops
    to 0 only after M5 retires the residual cross-helper carrier
