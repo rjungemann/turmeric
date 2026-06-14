@@ -582,6 +582,86 @@ static void free_struct_app_type(Type t) {
     }
 }
 
+/* phantom-typeparam-lowering: a field type "erases" its (unresolved) type
+ * parameters when its C codegen layout does not depend on what those params are
+ * instantiated to.  This is true for concrete types, and for type applications
+ * headed by an *opaque* constructor (an int64 carrier regardless of its args,
+ * e.g. `(Dense m A)`).  It is false for a bare type-parameter field (`(fst A)`
+ * in `(defstruct Pair [A B] (fst A) (snd B))`) and for an application headed by
+ * a *non-opaque* struct/adt whose own layout still depends on a param.
+ *
+ * Only when *every* field of a struct erases its params is the struct's layout
+ * independent of the parameters -- i.e. they are genuinely *phantom* -- so the
+ * struct-app may be safely monomorphised by defaulting the unresolved args to
+ * int64.  For a struct like Tuple3 whose fields *are* the params, this returns
+ * false, so the app stays a generic int64 carrier and ABI specialization (which
+ * keys off the generic-vs-instantiated C name differing) keeps working. */
+static bool field_type_erases_params(const Type *t, int depth) {
+    if (!t || depth > 32) return false;
+    if (type_has_concrete_codegen_layout(t)) return true;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return false;
+        case TY_APP: {
+            StructDef *sdef = NULL;
+            AdtDef    *adef = NULL;
+            Type args[16];
+            uint8_t n_args = 0;
+            if (type_extract_struct_app(t, &sdef, args, &n_args) && sdef) {
+                if (sdef->is_opaque) return true;  /* int64 carrier, args erased */
+                for (uint8_t i = 0; i < n_args; i++)
+                    if (!field_type_erases_params(&args[i], depth + 1)) return false;
+                return true;
+            }
+            if (type_extract_adt_app(t, &adef, args, &n_args) && adef) {
+                /* ADT applications lower to an int64 heap handle regardless of
+                 * their type arguments, so the params are layout-erased. */
+                return true;
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+/* True when defaulting `def`'s unresolved type params to int64 preserves the C
+ * struct layout (all params are phantom).  See field_type_erases_params. */
+static bool struct_app_params_are_phantom(const StructDef *def) {
+    if (!def || def->is_opaque || def->n_type_params == 0) return false;
+    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
+        if (!field_type_erases_params(def->fields[fi].full_type, 0)) return false;
+    }
+    return true;
+}
+
+/* phantom-typeparam-lowering: clone a struct-app TY_APP spine, replacing any
+ * *phantom* type argument -- one that is not a concrete codegen layout (e.g. an
+ * unresolved TY_TYVAR like `m` in `(PairD m A)` when neither m nor A appears as
+ * a bare field type) -- with the int64 default.  A phantom parameter never
+ * affects the struct's C layout, so all phantom instantiations share a single
+ * monomorph (`PairD__int__int`); this lets make-struct/let-binding sites lower
+ * to the real aggregate struct instead of collapsing the value to `int64_t`,
+ * which produces invalid `(int64_t){.fst = ...}` designated initializers.
+ *
+ * Sets *changed to true when at least one arg was defaulted.  The returned Type
+ * owns freshly malloc'd spine nodes (free with free_struct_app_type). */
+static Type normalize_struct_app_phantom_args(Type t, bool *changed) {
+    if (t.kind != TY_APP) return t;
+    Type out = t;
+    out.as.app.fn = (Type *)malloc(sizeof(Type));
+    out.as.app.arg = (Type *)malloc(sizeof(Type));
+    if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+    *out.as.app.fn = normalize_struct_app_phantom_args(*t.as.app.fn, changed);
+    if (t.as.app.arg && !type_has_concrete_codegen_layout(t.as.app.arg)) {
+        *out.as.app.arg = type_from_kind(TY_INT);
+        if (changed) *changed = true;
+    } else {
+        *out.as.app.arg = clone_struct_app_type(*t.as.app.arg);
+    }
+    return out;
+}
+
 /* Phase D: forward declaration — substitute_struct_app_type is defined below. */
 Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args);
 
@@ -650,6 +730,10 @@ static const char *register_struct_app(Type t) {
                 if (def->fields[fi].full_type && n_args > 0) {
                     Type resolved = substitute_struct_app_type(def->fields[fi].full_type, def, args);
                     fk = resolved.kind;
+                    /* resolved is a fully owned clone (substitute_struct_app_type
+                     * deep-clones); free it now that we have its kind. No-op for
+                     * non-APP scalars. */
+                    free_struct_app_type(resolved);
                 }
                 total += phase_d_field_size(fk);
             }
@@ -679,7 +763,14 @@ Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type 
         case TY_TYVAR: {
             uint8_t idx = 0;
             if (t->as.tyvar_.name && struct_type_param_index(def, t->as.tyvar_.name, &idx)) {
-                return args[idx];
+                /* Deep-clone the substituted arg so the returned tree is fully
+                 * owned (no aliasing into the caller's `args[]` spine) and can
+                 * be released with free_struct_app_type.  A TY_APP arg (e.g. the
+                 * concrete (Tuple2 cstr int) bound to a tyvar) would otherwise be
+                 * shared, making any free() at the call site a double-free of
+                 * the original tree's nodes.  clone is a no-op copy for non-APP
+                 * args. */
+                return clone_struct_app_type(args[idx]);
             }
             return *t;
         }
@@ -816,8 +907,9 @@ static const char *struct_field_c_type(const StructDef *owner, const StructField
                 Type resolved = substitute_struct_app_type(field->full_type, owner, args);
                 if (resolved.kind == TY_FN) {
                     const char *td = register_fn_ptr_typedef(&resolved);
-                    if (td) return td;
+                    if (td) { free_struct_app_type(resolved); return td; }
                 }
+                free_struct_app_type(resolved);
             }
         }
         return "int64_t";
@@ -842,9 +934,17 @@ static const char *struct_field_c_type(const StructDef *owner, const StructField
             resolved.as.struct_.def->n_type_params == 0) {
             static char buf[128];
             snprintf(buf, sizeof(buf), "%s *", type_c_name(resolved));
+            /* resolved is a fully owned clone (substitute_struct_app_type
+             * deep-clones); type_c_name only reads it, so release it. No-op
+             * for the non-APP scalar this branch handles. */
+            free_struct_app_type(resolved);
             return buf;
         }
-        return type_c_name(resolved);
+        const char *name = type_c_name(resolved);
+        /* resolved is a fully owned clone; type_c_name only reads it (and clones
+         * again internally when registering), so release it here. */
+        free_struct_app_type(resolved);
+        return name;
     }
     switch (field->kind) {
         case TY_INT:      return "int64_t";
@@ -1070,6 +1170,9 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
                     }
                 }
             }
+            /* resolved is a fully owned clone used above only for dependency
+             * emission and type_eq lookups; free it. No-op for non-APP. */
+            free_struct_app_type(resolved);
         }
     }
 
@@ -2193,6 +2296,30 @@ const char *type_c_name(Type t) {
             if (type_is_transparent_int_newtype(t)) return "int64_t";
             if (type_has_concrete_codegen_layout(&t)) {
                 return register_struct_app(t);
+            }
+            /* phantom-typeparam-lowering: a struct-app whose only non-concrete
+             * args are *phantom* type parameters (used solely inside a field's
+             * type application, never as a bare field type) still has a fixed C
+             * layout.  Default the phantom args to int64 and register the
+             * resulting monomorph, so make-struct/let-binding sites emit the
+             * real aggregate (`PairD__int__int`) instead of collapsing to
+             * `int64_t` and producing an invalid `(int64_t){.fst = ...}`. */
+            {
+                StructDef *def = NULL;
+                Type args[16];
+                uint8_t n_args = 0;
+                if (type_extract_struct_app(&t, &def, args, &n_args)
+                    && def && !def->is_opaque
+                    && struct_app_params_are_phantom(def)) {
+                    bool changed = false;
+                    Type norm = normalize_struct_app_phantom_args(t, &changed);
+                    const char *name = "int64_t";
+                    if (changed && type_has_concrete_codegen_layout(&norm)) {
+                        name = register_struct_app(norm);
+                    }
+                    free_struct_app_type(norm);
+                    return name;
+                }
             }
             return "int64_t";
         }

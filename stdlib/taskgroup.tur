@@ -82,6 +82,7 @@
       int64_t completed_count;
       bool cancelled;
       bool done;
+      int64_t cancel_reason;
   } TaskGroupBlock;
   TaskGroupBlock *g = (TaskGroupBlock *)malloc(sizeof(TaskGroupBlock));
   if (!g) { fprintf(stderr, "task-group-new: oom\n"); abort(); }
@@ -91,6 +92,7 @@
   g->completed_count = 0;
   g->cancelled = false;
   g->done = false;
+  g->cancel_reason = 0;
   return (void *)g;
   ```)
 ;;; fiber-cancelled? -- check whether the current fiber has been cancelled.

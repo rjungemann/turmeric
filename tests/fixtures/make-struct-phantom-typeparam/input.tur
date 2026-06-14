@@ -1,0 +1,31 @@
+;; Regression: make-struct on a defstruct whose type parameters appear only
+;; *indirectly* -- threaded through a type application like (Dense m A) rather
+;; than as a bare field type -- must lower to the concrete aggregate C struct
+;; (PairD__int__int / World__int__int__int), not collapse the value to int64_t.
+;;
+;; Before the fix, the make-struct emit step produced an invalid C99 designated
+;; initializer on a non-aggregate: `(int64_t){.fst = ..., .snd = ...}`, which
+;; the C compiler rejects.  The struct's phantom type parameters have no layout
+;; impact, so every phantom instantiation shares one monomorph.
+;; See docs/reported/make-struct-phantom-typeparam-lowering.md (now fixed).
+
+(defopaque Dense [n A] :int)
+
+(defstruct PairD [m A] (fst (Dense m A)) (snd (Dense m A)))
+
+(defstruct World [m A B] (pos (Dense m A)) (vel (Dense m B)))
+
+(defn dn [n A] [v : int] : (Dense n A)
+  (:: v :Dense))
+
+(defn dense->int [d : (Dense n A)] : int
+  (:: d :int))
+
+(defn main [] : int
+  ;; PairD: both fields share the same phantom params m,A.
+  (let [p (make-struct PairD (dn 7) (dn 35))]
+    (println (+ (dense->int (.fst p)) (dense->int (.snd p)))))  ; 42
+  ;; World: distinct phantom params per field (m,A) and (m,B).
+  (let [w (make-struct World (dn 3) (dn 9))]
+    (println (+ (dense->int (.pos w)) (dense->int (.vel w)))))  ; 12
+  0)
