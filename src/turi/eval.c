@@ -31,6 +31,7 @@
 #include "eval.h"
 #include "fiber.h"
 
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <setjmp.h>
@@ -4241,12 +4242,19 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 if (n == 0) { cur = turi_nil(); descending = false; break; }
                 bool   do_tail = tail;
                 Expr **items   = drive_seq_items(de);
+                if (n == 1 && items[0]->kind != EX_DEFER && do_tail) {
+                    /* F2: the sole (tail) item carries the do's tail-ness with no
+                     * continuation, so a tail call in it exposes the enclosing
+                     * DK_CALL_RET directly (no DK_DO_SEQ to pop first). */
+                    control = items[0];   /* cf unchanged; tail stays true */
+                    break;
+                }
                 DRIVE_PUSH(((DriveCont){ .kind = DK_DO_SEQ, .expr = de,
                                          .frame = cf, .tail = do_tail }));
                 control = items[0];
-                /* item 0 is tail only when it is the sole (non-defer) item;
-                 * multi-item tail-ness is decided in the DK_DO_SEQ return path. */
-                tail = (n == 1 && items[0]->kind != EX_DEFER) ? do_tail : false;
+                /* multi-item / non-tail-do: item 0 is never in tail position;
+                 * the final item's tail-ness is decided in the DK_DO_SEQ path. */
+                tail = false;
                 break;
             }
             case EX_LET:
@@ -4266,14 +4274,22 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                                              .frame = nf, .tail = tail }));
                     control = control->as.let_.bindings[0].init;
                     cf = nf; tail = false;   /* binding inits are non-tail */
+                } else if (tail) {
+                    /* F1: tail let body -- descend directly (leak nf), no separate
+                     * defer scope.  Body defers fire at function exit via the
+                     * enclosing DK_CALL_RET, matching eval_body_tco's tail leak
+                     * (frame = new_frame; goto restart).  Keeping nf-free here is
+                     * what lets a tail call in the body reuse the activation. */
+                    control = control->as.let_.body;
+                    cf = nf;   /* tail stays true */
                 } else {
-                    /* No bindings: straight to body (which inherits the let's
-                     * tail-ness); mark defers now. */
+                    /* Non-tail let: own the frame on the work-stack so the
+                     * body's defers fire (and nf frees) at let-scope exit. */
                     DRIVE_PUSH(((DriveCont){ .kind = DK_LET_BODY, .expr = control,
                                              .frame = nf, .tail = tail,
                                              .aux = env->defer_stack }));
                     control = control->as.let_.body;
-                    cf = nf;   /* tail unchanged: body is the let's tail position */
+                    cf = nf;
                 }
                 break;
             }
@@ -4349,20 +4365,26 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     descending = false; break;
                 }
                 uint32_t n = control->as.call_.n_args;
-                if (n == 0) {
-                    cur = eval_apply(env, fn_val.as_closure, NULL, 0);
-                    descending = false; break;
-                }
-                TuriValue *acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
-                if (!acc) {
-                    result = turi_error("eval: out of memory evaluating call arguments");
-                    goto done;
+                /* T3.2c: zero-arg calls flow through DK_CALL_ARG too (acc==NULL),
+                 * so a zero-arg tail call reuses the enclosing activation and a
+                 * zero-arg non-tail call folds -- both stay off the C stack. */
+                TuriValue *acc = NULL;
+                if (n > 0) {
+                    acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                    if (!acc) {
+                        result = turi_error("eval: out of memory evaluating call arguments");
+                        goto done;
+                    }
                 }
                 DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_ARG, .expr = control,
                                          .frame = cf, .last = fn_val, .aux = acc,
                                          .tail = tail }));
-                control = control->as.call_.args[0];
-                tail = false;   /* call args are non-tail */
+                if (n > 0) {
+                    control = control->as.call_.args[0];
+                    tail = false;   /* call args are non-tail */
+                } else {
+                    cur = turi_nil(); descending = false;  /* args ready: run handler */
+                }
                 break;
             }
             case EX_MATCH: {
@@ -4373,9 +4395,16 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 TuriValue   sv   = turi_nil();
                 int mr = eval_match_resolve(env, cf, control, &af, &body, &sv);
                 if (mr == 1) {
-                    DRIVE_PUSH(((DriveCont){ .kind = DK_MATCH_BODY, .expr = control,
-                                             .frame = af, .tail = tail }));
-                    control = body; cf = af;   /* arm body: inherits match's tail-ness */
+                    if (tail) {
+                        /* F1: tail match arm body -- descend directly (leak af);
+                         * exposes the enclosing DK_CALL_RET for a tail call in the
+                         * arm body, matching eval_body_tco's tail leak. */
+                        control = body; cf = af;   /* tail stays true */
+                    } else {
+                        DRIVE_PUSH(((DriveCont){ .kind = DK_MATCH_BODY, .expr = control,
+                                                 .frame = af, .tail = tail }));
+                        control = body; cf = af;   /* arm body: inherits match's tail-ness */
+                    }
                 } else if (mr == 0) {
                     cur = turi_error("eval: match: no arm matched");
                     descending = false;
@@ -4425,11 +4454,24 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 if (items[top->index]->kind != EX_DEFER) top->last = cur;
                 top->index++;
                 if (top->index < n) {
-                    control = items[top->index]; cf = top->frame; descending = true;
-                    /* the final, non-defer item inherits the do's tail-ness;
-                     * a trailing defer means the last value is *not* in tail pos. */
-                    tail = (top->index == n - 1 &&
-                            items[top->index]->kind != EX_DEFER) ? top->tail : false;
+                    bool is_tail_item = (top->index == n - 1 &&
+                                         items[top->index]->kind != EX_DEFER &&
+                                         top->tail);
+                    if (is_tail_item) {
+                        /* F2: pop DK_DO_SEQ before descending the final (tail)
+                         * item so a tail call in it exposes the enclosing
+                         * DK_CALL_RET.  The last value IS the do's value, so the
+                         * cont's bookkeeping is no longer needed. */
+                        const Expr *item = items[top->index];
+                        EvalFrame  *f    = top->frame;
+                        len--;
+                        control = item; cf = f; tail = true; descending = true;
+                    } else {
+                        /* trailing-defer do or non-tail do: the value item runs
+                         * non-tail (its value is captured in top->last). */
+                        control = items[top->index]; cf = top->frame;
+                        tail = false; descending = true;
+                    }
                 } else {
                     cur = top->last; len--;  /* pop; keep returning the last value */
                 }
@@ -4461,15 +4503,22 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 top->index++;
                 if (top->index < n) {
                     control = le->as.let_.bindings[top->index].init;
-                    cf = nf; descending = true;
+                    cf = nf; tail = false; descending = true;  /* inits are non-tail */
+                } else if (top->tail) {
+                    /* F1: tail let body -- pop DK_LET_BIND and descend the body
+                     * directly (leak nf); body defers fire at function exit
+                     * (matches eval_body_tco).  Exposes the enclosing DK_CALL_RET
+                     * for a tail call in the body. */
+                    const Expr *body = le->as.let_.body;
+                    len--;
+                    control = body; cf = nf; tail = true; descending = true;
                 } else {
-                    /* Bindings done -> body.  Mark defers AFTER bindings so only
-                     * body-registered defers fire on this scope's exit.  The body
-                     * inherits the let's tail-ness (preserved in top->tail). */
+                    /* Non-tail let -> body.  Mark defers AFTER bindings so only
+                     * body-registered defers fire on this scope's exit. */
                     top->kind       = DK_LET_BODY;
                     top->aux = env->defer_stack;
                     control = le->as.let_.body;
-                    cf = nf; tail = top->tail; descending = true;
+                    cf = nf; tail = false; descending = true;
                 }
                 break;
             }
@@ -4493,33 +4542,32 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
             case DK_CALL_ARG: {
                 TuriValue *acc = (TuriValue *)top->aux;
-                if (signaled) { free(acc); len--; break; }
-                acc[top->index] = cur;
-                top->index++;
                 uint32_t n = top->expr->as.call_.n_args;
-                if (top->index < n) {
-                    control = top->expr->as.call_.args[top->index];
-                    cf = top->frame; descending = true;
-                    break;
+                if (signaled) { free(acc); len--; break; }
+                if (n > 0) {
+                    acc[top->index] = cur;
+                    top->index++;
+                    if (top->index < n) {
+                        control = top->expr->as.call_.args[top->index];
+                        cf = top->frame; tail = false; descending = true;  /* args non-tail */
+                        break;
+                    }
                 }
-                /* All args ready. */
+                /* All args ready (a zero-arg call reaches here directly with
+                 * acc == NULL). */
                 TuriClosure *cl = top->last.as_closure;
                 FnDef       *fn = (FnDef *)cl->fn;
                 bool foldable = !cl->native && fn && fn->body &&
                                 fn->body->kind != EX_INLINE_C;
-                if (top->tail || !foldable) {
-                    /* Tail call (eval_apply's TcoFrame loop keeps it O(1)) or a
-                     * leaf (native / inline-C, dispatched inside eval_apply):
-                     * apply directly.  eval_apply copies args, so free after. */
+                if (!foldable) {
+                    /* Leaf: native / inline-C, dispatched inside eval_apply
+                     * (no driver re-entry).  eval_apply copies args, so free. */
                     cur = eval_apply(env, cl, acc, n);
                     free(acc); len--;
                     break;
                 }
-                /* Non-tail turi-body closure: FOLD -- descend the body in this
-                 * loop so deep non-tail recursion stays off the C stack.
-                 * Reproduces eval_apply_inner's single-activation prologue; the
-                 * body's own tail calls go back through eval_apply (no TCO loop
-                 * needed here). */
+                /* Turi-body closure: shared prologue (arity + step-fuel checks,
+                 * build the call frame, bind args). */
                 uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
                 uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
                 if (effective_params != n) {
@@ -4540,8 +4588,41 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     frame_bind(call_frame,
                                fn->params[param_offset + i]->name->name, acc[i]);
                 free(acc);
-                /* Reuse this slot as DK_CALL_RET; stash the caller state the
-                 * epilogue restores. */
+
+                if (top->tail) {
+                    /* F3: tail call -- REUSE the enclosing activation's
+                     * DK_CALL_RET instead of pushing a new one, so a tail chain
+                     * stays O(1) on the work-stack.  F1/F2 guarantee that no
+                     * cleanup continuation sits between this DK_CALL_ARG and the
+                     * enclosing DK_CALL_RET, so st[len-2] IS that activation.
+                     * The sequence mirrors eval_apply_inner's per-iteration
+                     * pre-bounce cleanup (:4001-4004) + top-of-loop re-entry. */
+                    assert(len >= 2 && st[len - 2].kind == DK_CALL_RET);
+                    DriveCont *ret = &st[len - 2];
+                    /* (1) finish the current activation: restore its no_unwind
+                     * and fire its defers (LIFO), exactly as before a bounce. */
+                    env->in_no_unwind = ret->was_no_unwind;
+                    fire_defers_to_mark_reversed(env, (DeferItem *)ret->aux, NULL);
+                    /* (2) re-enter the callee in the same slot.  saved_module is
+                     * left as captured by the chain head (restored once at the
+                     * chain's end); was_returning / was_no_unwind are recaptured
+                     * per iteration, matching eval_apply_inner. */
+                    env->current_module = cl->module;
+                    ret->frame         = call_frame;
+                    ret->aux           = (void *)env->defer_stack; /* new defer mark */
+                    ret->was_returning = env->returning;
+                    ret->was_no_unwind = env->in_no_unwind;        /* = caller's */
+                    env->returning      = false;
+                    env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
+                    len--;  /* pop DK_CALL_ARG; ret is now st[len-1] */
+                    control = fn->body; cf = call_frame; tail = true; descending = true;
+                    break;
+                }
+
+                /* Non-tail turi-body closure: FOLD -- reuse THIS slot as
+                 * DK_CALL_RET and descend the body in the loop so deep non-tail
+                 * recursion stays off the C stack.  Reproduces
+                 * eval_apply_inner's single-activation prologue. */
                 top->kind          = DK_CALL_RET;
                 top->frame         = call_frame;
                 top->aux           = env->defer_stack;       /* defer mark */
@@ -4591,7 +4672,7 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 top->index++;
                 if (top->index < n) {
                     control = be->as.builtin.args[top->index];
-                    cf = top->frame; descending = true;
+                    cf = top->frame; tail = false; descending = true;  /* args non-tail */
                 } else if (spec->shape == BS_AND_SC) {
                     cur = turi_bool(true);  len--;   /* all operands truthy */
                 } else if (spec->shape == BS_OR_SC) {
@@ -4611,7 +4692,7 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 top->index++;
                 if (top->index < n) {
                     control = me->as.make_struct_.field_values[top->index];
-                    cf = top->frame; descending = true;
+                    cf = top->frame; tail = false; descending = true;  /* fields non-tail */
                 } else {
                     StructDef *sd = me->as.make_struct_.def;
                     /* make_struct_val_def copies the fields, so free after. */
