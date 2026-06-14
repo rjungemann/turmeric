@@ -175,9 +175,28 @@ proportional to native-HOF nesting, not turi program depth):
   allocates nothing; `eval_apply_inner` copies args at entry and frames copy
   TuriValues by value, so freeing the EX_CALL/builtin/struct containers after
   use is safe.
-- **T2-T5** -- unchanged from the design below; T2/T3 are the form-group-by-form
-  -group conversion that actually removes the non-tail ceiling (and makes
-  `TURI_EVAL_FRAME_BYTES` dead code for the synchronous path, per T5).
+- **T2 -- STARTED 2026-06-14 (slice 1: EX_IF + EX_DO/EX_PROGRAM).** Added the
+  explicit-stack driver `eval_drive` (`src/turi/eval.c`): a heap work-stack
+  (`DriveCont`/`DRIVE_INLINE` inline-32 + spill) with a descend/return loop that
+  flattens directly-nested EX_IF branch chains and EX_DO/EX_PROGRAM sequences
+  off the C stack. `eval_expr_impl`'s EX_IF and EX_DO/EX_PROGRAM cases now
+  delegate to it; every other kind (incl. EX_CALL/EX_BUILTIN) is still evaluated
+  as a black box via the recursive `eval_expr`, so this is behaviour-preserving.
+  Control-flow signals (error/returning/throwing) unwind the work-stack to the
+  bottom; the EX_DO defer-skip-for-last-value rule is reproduced exactly.
+  Validated: full `run-turi.sh` 1186 passed (same 8 unrelated monomorphization
+  fails), 14/14 `eval|sandbox` ctests, early-`return` through nested if/do
+  correct. A non-tail nested if-else chain ~800 deep now evaluates (was past the
+  ~531 eval ceiling); beyond that the limiter is the **elaborator's** own
+  recursion over deeply-nested source (a SIGSEGV at ~1000 nested forms in
+  `elab_if`/`elab_form`), which is a *separate, pre-existing* limitation -- the
+  elaborator is not trampolined and is out of scope for this plan; worth a
+  follow-up if deeply-nested generated source becomes a real workload.
+  **Remaining T2 slices:** EX_LET/EX_LETREC (frame + defer lifetime on the
+  work-stack), EX_AND/EX_OR, EX_MAKE_STRUCT.
+- **T3-T5** -- unchanged from the design below; T3 folds eval_apply into the
+  driver (the actual non-tail FUNCTION-call ceiling remover); T5 makes
+  `TURI_EVAL_FRAME_BYTES` dead code for the synchronous path.
 
 ## Design: explicit-stack CEK-style driver
 

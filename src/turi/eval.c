@@ -4050,6 +4050,134 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
 }
 
 /* -------------------------------------------------------------------------
+ * T2 (turi-eval-trampoline-plan): explicit-stack driver for the linear control
+ * forms.  Flattens directly-nested EX_IF branch chains and EX_DO/EX_PROGRAM
+ * sequences onto a heap work-stack instead of the C stack, so a long branch
+ * chain or sequence no longer grows one C frame per level.  Every other expr
+ * kind -- including function application (EX_CALL) and builtins -- is evaluated
+ * as a black box via the (still recursive) eval_expr, so this is a
+ * behaviour-preserving refactor; the non-tail FUNCTION-call ceiling is removed
+ * later (T3, which folds eval_apply into this loop).  Control-flow signals
+ * (error / returning / throwing) and the EX_DO "defers don't count as the last
+ * value" rule are preserved exactly.
+ * ---------------------------------------------------------------------- */
+
+#define DRIVE_INLINE 32   /* inline work-stack depth before spilling to heap */
+
+typedef enum { DK_DONE, DK_IF_BRANCH, DK_DO_SEQ } DriveKind;
+
+typedef struct {
+    DriveKind   kind;
+    const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM being decomposed */
+    EvalFrame  *frame;  /* lexical env at the decomposition point */
+    uint32_t    index;  /* DO/PROGRAM: next item to evaluate */
+    TuriValue   last;   /* DO/PROGRAM: last non-defer value so far */
+} DriveCont;
+
+/* do/program item accessors (both kinds share this shape). */
+static inline Expr **drive_seq_items(const Expr *e) {
+    return (e->kind == EX_PROGRAM) ? e->as.program.items : e->as.do_.items;
+}
+static inline uint32_t drive_seq_n(const Expr *e) {
+    return (e->kind == EX_PROGRAM) ? e->as.program.n : e->as.do_.n;
+}
+
+static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
+    DriveCont  inl[DRIVE_INLINE];
+    DriveCont *st  = inl;
+    size_t     len = 0, cap = DRIVE_INLINE;
+    TuriValue  result;
+
+    /* push helper: grows from the inline buffer onto the heap as needed. */
+    #define DRIVE_PUSH(C) do {                                                  \
+        if (len == cap) {                                                       \
+            size_t ncap = cap * 2;                                             \
+            DriveCont *ni = (DriveCont *)malloc(ncap * sizeof(DriveCont));     \
+            if (!ni) { result = turi_error("eval: out of memory (driver stack)"); \
+                       goto done; }                                            \
+            memcpy(ni, st, len * sizeof(DriveCont));                           \
+            if (st != inl) free(st);                                           \
+            st = ni; cap = ncap;                                              \
+        }                                                                      \
+        st[len++] = (C);                                                       \
+    } while (0)
+
+    DRIVE_PUSH(((DriveCont){ DK_DONE, NULL, NULL, 0, turi_nil() }));
+
+    const Expr *control    = e;
+    EvalFrame  *cf         = frame;
+    TuriValue   cur        = turi_nil();
+    bool        descending = true;
+
+    for (;;) {
+        if (descending) {
+            switch (control->kind) {
+            case EX_IF:
+                DRIVE_PUSH(((DriveCont){ DK_IF_BRANCH, control, cf, 0, turi_nil() }));
+                control = control->as.if_.cond;   /* descend into the test */
+                break;                            /* still descending */
+            case EX_DO:
+            case EX_PROGRAM: {
+                uint32_t n = drive_seq_n(control);
+                if (n == 0) { cur = turi_nil(); descending = false; break; }
+                DRIVE_PUSH(((DriveCont){ DK_DO_SEQ, control, cf, 0, turi_nil() }));
+                control = drive_seq_items(control)[0];
+                break;
+            }
+            default:
+                /* Black box: evaluate any other kind via the recursive path. */
+                cur = eval_expr(env, cf, control);
+                descending = false;
+                break;
+            }
+        } else {
+            /* Returning `cur` to the frame on top of the work-stack. */
+            DriveCont *top = &st[len - 1];
+            /* Propagate a control signal by abandoning all pending if/do work
+             * (neither form owns frames or defers, so popping is sufficient). */
+            if (turi_is_error(cur) || env->returning || env->throwing) {
+                while (top->kind != DK_DONE) { len--; top = &st[len - 1]; }
+            }
+            switch (top->kind) {
+            case DK_DONE:
+                result = cur;
+                goto done;
+            case DK_IF_BRANCH: {
+                const Expr *ie  = top->expr;
+                EvalFrame  *icf = top->frame;
+                len--;  /* pop: the chosen branch's value becomes the if's value */
+                if (turi_is_truthy(cur)) {
+                    control = ie->as.if_.then_; cf = icf; descending = true;
+                } else if (ie->as.if_.else_or_null) {
+                    control = ie->as.if_.else_or_null; cf = icf; descending = true;
+                } else {
+                    cur = turi_nil();  /* no else: result is nil, keep returning */
+                }
+                break;
+            }
+            case DK_DO_SEQ: {
+                const Expr *de = top->expr;
+                Expr     **items = drive_seq_items(de);
+                uint32_t   n     = drive_seq_n(de);
+                if (items[top->index]->kind != EX_DEFER) top->last = cur;
+                top->index++;
+                if (top->index < n) {
+                    control = items[top->index]; cf = top->frame; descending = true;
+                } else {
+                    cur = top->last; len--;  /* pop; keep returning the last value */
+                }
+                break;
+            }
+            }
+        }
+    }
+done:
+    if (st != inl) free(st);
+    #undef DRIVE_PUSH
+    return result;
+}
+
+/* -------------------------------------------------------------------------
  * Expression evaluator
  * ---------------------------------------------------------------------- */
 
@@ -4213,34 +4341,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return result;
     }
 
-    /* --- If -------------------------------------------------------------- */
-    case EX_IF: {
-        TuriValue cond = eval_expr(env, frame, e->as.if_.cond);
-        if (turi_is_error(cond) || env->returning || env->throwing) return cond;
-        if (turi_is_truthy(cond)) {
-            return eval_expr(env, frame, e->as.if_.then_);
-        } else if (e->as.if_.else_or_null) {
-            return eval_expr(env, frame, e->as.if_.else_or_null);
-        }
-        return turi_nil();
-    }
-
-    /* --- Do / Program ---------------------------------------------------- */
+    /* --- If / Do / Program ----------------------------------------------- */
+    /* T2: the explicit-stack driver flattens directly-nested branch chains and
+     * sequences onto a heap work-stack (see eval_drive).  Semantics are
+     * identical to the former per-case recursion preserved in git history. */
+    case EX_IF:
     case EX_DO:
-    case EX_PROGRAM: {
-        Expr   **items = (e->kind == EX_PROGRAM) ? e->as.program.items : e->as.do_.items;
-        uint32_t n     = (e->kind == EX_PROGRAM) ? e->as.program.n     : e->as.do_.n;
-        /* Defers appended at the end (by rc auto-drop injection) must not
-         * count as the "last value" — only the last non-defer item does. */
-        TuriValue last = turi_nil();
-        for (uint32_t i = 0; i < n; i++) {
-            TuriValue v = eval_expr(env, frame, items[i]);
-            if (turi_is_error(v) || env->returning || env->throwing) return v;
-            if (items[i]->kind != EX_DEFER)
-                last = v;
-        }
-        return last;
-    }
+    case EX_PROGRAM:
+        return eval_drive(env, frame, e);
 
     /* --- While ----------------------------------------------------------- */
     case EX_WHILE: {
