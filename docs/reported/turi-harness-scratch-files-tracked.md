@@ -1,5 +1,14 @@
 # 39 turi-harness scratch files are git-tracked despite being .gitignored
 
+> **RESOLVED 2026-06-14.** The 38 still-tracked `turi.stdout`/`turi.stderr`
+> scratch files were untracked with `git rm --cached` (left on disk); the
+> existing `.gitignore` rules (lines 95-99) keep them out of future commits.
+> Verified: `git ls-files 'tests/fixtures/**/turi.stdout'
+> 'tests/fixtures/**/turi.stderr'` now returns empty, every untracked path is
+> covered by `git check-ignore`, and a fresh harness run leaves `git status`
+> clean. (The count was 38, not the 39 in the original report -- one had already
+> been pruned in the interim.)
+
 **Summary:** `tests/run-turi.sh` writes per-run scratch output to
 `<fixture>/turi.stdout` and `<fixture>/turi.stderr`. These paths are listed in
 `.gitignore` (lines 95-99), but 39 such files are already tracked in the repo --
