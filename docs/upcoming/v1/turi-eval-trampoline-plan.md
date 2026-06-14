@@ -232,6 +232,142 @@ proportional to native-HOF nesting, not turi program depth):
   driver (the actual non-tail FUNCTION-call ceiling remover); T5 makes
   `TURI_EVAL_FRAME_BYTES` dead code for the synchronous path.
 
+## T3 scoping (2026-06-14)
+
+Grounded against the current `src/turi/eval.c` after T1/T2 landed. T3 is the
+headline -- it removes the non-tail FUNCTION-call ceiling -- and the largest,
+riskiest slice. Post-T2 baseline: a non-tail `sum-to` still tops out at **~531
+levels** (T2 did not touch calls).
+
+### Why both EX_CALL *and* EX_BUILTIN must fold (the sum-to chain)
+
+`(+ n (sum-to (- n 1)))` is the canonical non-tail recursion. Tracing one level
+on today's code:
+
+```
+eval_drive(if)            -- if body driven (T2)
+  -> else branch (+ n (sum-to ..))  is EX_BUILTIN -> driver default ->
+     eval_expr(EX_BUILTIN)          [C frame]  evals arg1 ...
+       -> eval_expr(EX_CALL sum-to) [C frame]
+            -> eval_apply -> eval_apply_inner [C frame]  (TCO loop)
+                 -> eval_body_tco(sum-to body = if) [C frame]
+                      -> tail if -> else (+ ..) is default -> eval_expr(+)  ...repeat
+```
+
+So **per level** the live C frames are the `EX_BUILTIN(+)` evaluation *and* the
+`eval_apply`/`eval_apply_inner`/`eval_body_tco` chain. The ceiling only drops
+when **both** the builtin arg-eval and the whole call/apply/body path move onto
+the work-stack. A partial fold (e.g. only EX_CALL) will not move the ceiling.
+
+### Application machinery to fold (inventory, with pointers)
+
+`eval_apply_inner` (`eval.c:3885`, the TCO loop) + `eval_apply` wrapper
+(`:4044`) do, in order:
+
+1. copy args to an arity-bounded buffer; `env->current_module = cl->module`
+   (restored by the `eval_apply` wrapper) (`:3902`);
+2. step-fuel check (`:3905`);
+3. **native dispatch** -- `cl->native(...)`, no TCO (`:3912`) -- a *leaf*;
+4. arity check with `skip_env_param`/`param_offset` (`:3917`);
+5. **inline-C native override** -- `turi_env_get(fname)->native` (`:3926`) -- leaf;
+6. **inline-C pattern executor** -- `try_exec_simple_inline_c` + the ADT/struct
+   re-tag (`:3940`) -- leaf;
+7. build `call_frame`, bind args (`:3986`);
+8. save `defer_mark` / `was_returning` / `was_no_unwind`; `env->returning=false`;
+   set `env->in_no_unwind` (`:3992`);
+9. `eval_body_tco(call_frame, fn->body)` (`:3999`);
+10. restore `in_no_unwind`; `fire_defers_to_mark_reversed(defer_mark)` (function
+    -exit defers, FIFO -- see the defer-order report) (`:4001-4004`);
+11. **TCO bounce**: if the body returned a `TcoFrame` (`:4007`), rebind args and
+    loop (no C growth);
+12. normal return: pick `return_value`/`throw_value`/`result`, restore
+    `was_returning` (`:4024`).
+
+`eval_body_tco` (`:3666`) is the **tail dispatcher**: it `goto restart`s on
+tail-position EX_IF/EX_DO/EX_LET/EX_MATCH and emits a `TcoFrame` (`tco_bounce`,
+`:106`) for a tail call; non-tail sub-exprs fall to `default -> eval_expr`
+(`:3877`) -- which is exactly the recursion T3 removes.
+
+### Design: a unified application loop in the driver
+
+Add three continuations and evaluate the callee body *in the driver loop*:
+
+- **`DK_BUILTIN_ARG`** -- accumulate EX_BUILTIN args (same shape as
+  `DK_MAKE_STRUCT`), then call `eval_builtin` (a leaf). Also handles the
+  `BS_AND_SC`/`BS_OR_SC` short-circuit (descend next operand, stop early on the
+  decisive value). Removes the `EX_BUILTIN(+)` C frame from the chain.
+- **`DK_CALL_ARG`** -- accumulate EX_CALL args (resolve the callee first), then
+  "enter the callee".
+- **Enter callee** -- steps 1-8 above. Native / inline-C-override / inline-C-
+  pattern callees are **leaves** (call directly, push the value back into the
+  loop, no body descend). A real closure: save module/returning/no_unwind/
+  defer_mark into a **`DK_CALL_RET`** frame, build `call_frame`, bind args, and
+  **descend `fn->body`** (so the body's non-tail sub-exprs use the loop).
+- **`DK_CALL_RET`** -- steps 10/12 on body return: restore `in_no_unwind`, fire
+  defers, restore module + `was_returning`, pick the return value; on a control
+  signal, the same cleanup runs as it unwinds (mirrors the per-continuation
+  cleanup added for `DK_LET_BODY` in T2).
+
+### The crux: preserving TCO without `eval_body_tco`
+
+Once the body descends in the driver, `eval_body_tco`'s tail handling no longer
+runs, so the driver must reproduce it -- otherwise tail recursion grows the
+*work-stack* linearly (heap-bounded but a regression of today's O(1) tail
+calls). Approach: thread an explicit **tail flag** through the descend. The body
+descends in tail mode; the T2 linear forms already pick their tail sub-position
+(if->branches, do->last item, let->body, match->arm body), so tail-ness
+propagates; non-tail positions (builtin args, `if` cond, non-last `do` items,
+call args) descend in non-tail mode. A **tail** EX_CALL whose enclosing frame is
+`DK_CALL_RET` does *frame reuse*: fire the current call's defers, rebind the new
+callee's args into a fresh `call_frame`, and re-descend the new body -- i.e. the
+`eval_apply_inner` loop expressed as in-place reuse of the `DK_CALL_RET` frame
+(the existing `TcoFrame` mechanism can be retired or reused as the carrier).
+Getting the **defer-firing order on tail calls** right (each iteration fires the
+previous call's defers before reuse, per step 10) is the subtle part.
+
+### Prerequisite / scope-cap: EX_MATCH (and EX_WHILE)
+
+Callee bodies are very often an `EX_MATCH`; it is **not** yet driven
+(`eval.c:4815` non-tail, `:3737` tail). If the body descends and hits a
+black-boxed EX_MATCH, the arm body re-enters `eval_expr` and the ceiling returns
+for match-recursive code (the common functional style). So **drive EX_MATCH**
+(arm-body in the loop, tail-aware) as part of T3, or the ceiling only lifts for
+`if`-recursive code. `EX_WHILE` (`:4421`) is an internal loop already C-flat; its
+body sub-exprs still recurse via `eval_expr` -- lower priority.
+
+### Re-entrancy (T4)
+
+`turi_call` (`eval.c:6349`; 8 sites in eval.c, **29 in main.c** native HOFs /
+comparators) must spawn a *fresh* driver loop per call so native-HOF nesting
+costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
+
+### Suggested sub-slicing (each regression-green; ceiling drops only at the end)
+
+1. **T3.0 -- drive EX_MATCH** (tail-aware arm bodies). Independently testable;
+   needed so the call fold actually flattens match-recursive callees.
+2. **T3.1 -- `DK_BUILTIN_ARG`** (+ and/or short-circuit). Safe; mirrors
+   `DK_MAKE_STRUCT`. No ceiling change yet (calls still recurse).
+3. **T3.2 -- `DK_CALL_ARG` + `DK_CALL_RET` + body-in-loop + TCO**. The ceiling
+   remover and the hard part (TCO + defers + module + no_unwind). Validate the
+   `sum-to 5000` probe succeeds and `escape-deep-capture` runs.
+4. **T3.3 -- re-entrancy audit + guard** (T4).
+5. **T3.4 -- raise `max_eval_depth`, retire the `TURI_EVAL_FRAME_BYTES` stopgap,
+   unpark `escape-deep-capture`** (T5).
+
+### Risks
+
+- **TCO regression**: easiest mistake is letting tail recursion grow the
+  work-stack. Gate every step on a tail-recursive probe (`sum-acc 1_000_000`)
+  staying O(1)/heap-flat.
+- **Defer order at function exit**: the fold must keep
+  `fire_defers_to_mark_reversed` semantics (and not "fix" the pre-existing
+  single-scope FIFO bug as a side effect -- track that separately).
+- **Leaf dispatch fidelity**: native / inline-C-override / inline-C-pattern
+  paths (incl. the ADT/struct re-tag) must be reproduced exactly at "enter
+  callee", or struct-returning inline-C silently miscompiles.
+- **Scope**: this is the biggest single change to the hottest function. T1+T2
+  plus the Direction-A guard remain a coherent safe resting point if T3.2 stalls.
+
 ## Design: explicit-stack CEK-style driver
 
 Convert the recursion into a loop that drives an explicit stack of
