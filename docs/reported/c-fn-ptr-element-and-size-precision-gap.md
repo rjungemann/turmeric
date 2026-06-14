@@ -1,12 +1,15 @@
-# `(c-fn ...)` lowers `ptr<T>` to `void *` and `int` to `int64_t`, losing C-ABI precision
+# `(c-fn ...)` lowers `int` to `int64_t` and drops `const`, losing C-ABI precision
 
-**Status:** Reported
-**Severity:** Medium. Surfaces as a hard `-Wincompatible-function-pointer-types`
+**Status:** Partially fixed -- ptr<T> precision shipped 2026-06-14
+(turmeric `6cd02e2a`).  Residual gap: integer-width (`int` ->
+`int64_t` instead of `size_t` / `unsigned int`) and `const`
+qualification on pointers.
+**Severity:** Medium. Still surfaces as a `-Wincompatible-function-pointer-types`
 error whenever a typed `(c-fn ...)` is passed to a real C callback whose
-signature uses element-typed pointers (e.g. `const unsigned char *`) or
-size types (`size_t`, `unsigned int`). The C compiler rejects the
-function-pointer cast even though every parameter is int64-wide at
-runtime, so the call would actually work.
+signature uses non-int64 integer slots (e.g. `size_t messageSize`) or
+const-qualified pointers (e.g. `const unsigned char *message`). The C
+compiler rejects the function-pointer cast even though every parameter
+is int64-wide at runtime, so the call would actually work.
 **Discovered:** 2026-06-14, while wiring rtmidi's
 `rtmidi_in_set_callback` through the S1 callback migration
 (`docs/reported/spices-int-stand-in-audit-2026-06-14.md` / branch
@@ -21,13 +24,18 @@ shaped per `docs/archive/history/typed-c-abi-function-pointers.md`,
 lowers parameter and result types to their *carrier* C types rather
 than to a precise C type. In particular:
 
-- `ptr<u8>` lowers to `void *` (instead of `unsigned char *`).
-- `ptr<T>` for any non-`void` `T` lowers to `void *`.
+- ~~`ptr<u8>` lowers to `void *` (instead of `unsigned char *`).~~
+  **Fixed 2026-06-14, turmeric commit `6cd02e2a`.** cfnptrs now
+  preserve per-arg full Type in the typedef registry and emit
+  precise element-pointer types.  A regression fixture at
+  `tests/fixtures/c-fn-ptr-element-precise/` exercises this.
+- ~~`ptr<T>` for any non-`void` `T` lowers to `void *`.~~ **Fixed
+  alongside the above.**
 - `int` lowers to `int64_t` (`long long`), so a callback whose real C
   signature takes `size_t` / `unsigned int` / `int` (machine word) is
-  type-incompatible at the function-pointer level.
+  type-incompatible at the function-pointer level.  **Residual.**
 - `const` qualifiers are also lost (a `const T *` parameter ends up
-  spelled `void *`).
+  spelled `T *`).  **Residual.**
 
 At runtime everything is int64-wide and the call would dispatch
 correctly, but the C front-end rejects the assignment with
@@ -104,12 +112,15 @@ type safety the c-fn was supposed to provide for a hand-written cast.
 Walk each `(c-fn [A...] R)` parameter `Type` when emitting the C
 function-pointer typedef and:
 
-1. If `A` is `ptr<T>` with a known `T` other than `void`, emit
+1. ~~If `A` is `ptr<T>` with a known `T` other than `void`, emit
    `T_c_name *` instead of `void *`. For `ptr<u8>` specifically, emit
-   `unsigned char *` (since `u8` already has a precise C name).
+   `unsigned char *` (since `u8` already has a precise C name).~~
+   **Done 2026-06-14, turmeric `6cd02e2a`.**
 2. Preserve a `const` discipline if the type carries one -- this needs
    a tiny type-level annotation in `ptr<T>` (e.g. `ptr<T :const>`).
+   **Residual.**
 3. Add a `:size` (or `:usize`) primitive that lowers to `size_t`.
+   **Residual.**
 
 Pros: removes every inline-C cast at C-callback registration sites.
 Each typed c-fn really *is* a sound C-level type.
