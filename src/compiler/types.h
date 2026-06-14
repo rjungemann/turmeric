@@ -508,6 +508,18 @@ typedef struct Type {
              * docs/upcoming/closure-first-class-type-plan.md.  B-0 only plumbs
              * the bit; nothing sets it true yet. */
             bool boxed;
+            /* typed-c-abi-function-pointers: true when this TY_FN denotes a
+             * bare C-ABI function pointer `R (*)(A...)` -- spelled `(c-fn
+             * [A...] R)` in source -- rather than a Turmeric closure value.
+             * A cfnptr is *never* boxed; it carries no implicit environment
+             * and lowers to the concrete `R (*)(A...)` typedef (via
+             * register_fn_ptr_typedef) in every position.  At the type level
+             * it is distinct from an ordinary `(fn ...)`: a *capturing* closure
+             * (a boxed fat box) cannot satisfy a cfnptr parameter, while a
+             * *captureless* bare fn of the same signature coerces in (a
+             * captureless fn IS a bare code pointer at the C ABI).  See
+             * docs/reported/typed-c-abi-function-pointers.md. */
+            bool cfnptr;
             /* sized-types-cross-param-unification: per-parameter raw type
              * annotation Form*, retained so call-site elaboration can
              * re-extract the size-index template (e.g. `(SizedVec n)`)
@@ -1075,6 +1087,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_poly_fn[i] = false;  /* CCL: must initialise or UBSan fires on bool read (macOS miscompile) */
     t.as.fn.result_fat = false;  /* A#1: must initialise or UBSan fires on bool read */
     t.as.fn.boxed = false;  /* CRU B-1: must initialise or UBSan fires on bool read */
+    t.as.fn.cfnptr = false; /* typed-c-abi-function-pointers: default to a Turmeric closure type */
     t.as.fn.is_variadic = false;  /* AR6: default non-variadic */
     t.as.fn.result_borrow_arg = -1; /* LS4: no lifetime-tied borrow return by default */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */

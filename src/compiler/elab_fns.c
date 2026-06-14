@@ -114,7 +114,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
          * resolves identically to the keyword form. */
         if (head == e->sym_forall || head == e->sym_exists ||
             head == e->sym_forall_u || head == e->sym_exists_u ||
-            head == e->sym_arrow || head == e->sym_fn ||
+            head == e->sym_arrow || head == e->sym_fn || head == e->sym_c_fn ||
             /* LS1: borrow *type* heads -- &T / &mut T (and lifetime-annotated
              * &'a T / &mut 'a T) are type-constructor forms, not generic
              * applications.  `&`-headed lists are also caught by has_amp below,
@@ -1333,7 +1333,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
                  * those; only fully-concrete, effect-free signatures become the
                  * typed carrier. */
                 bool effectful = ann->as.fn.effect_row != NULL;
-                bool carrier_ok = plain && !effectful && !ann->as.fn.is_variadic &&
+                /* typed-c-abi-function-pointers: a cfnptr is a *bare* C function
+                 * pointer, not a tur_poly_fn_t {env, fn} carrier -- it must keep
+                 * its nominal TY_FN (cfnptr) type so the param lowers to the
+                 * concrete `R (*)(A...)` typedef and only captureless callbacks
+                 * are admitted.  Never demote it onto the poly carrier. */
+                bool carrier_ok = plain && !effectful && !ann->as.fn.cfnptr &&
+                                  !ann->as.fn.is_variadic &&
                                   ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
                                   !fn_type_has_named_tyvar(ann) &&
                                   fn_type_is_carrier_safe(ann);

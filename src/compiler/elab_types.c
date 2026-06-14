@@ -1058,8 +1058,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
          * The optional #{...} map is an effect-row annotation.
          * The last element is the return type. */
         if (form->as.list.len >= 2 && form->as.list.items[0]->tag == F_SYM
-                && form->as.list.items[0]->as.sym == e->sym_fn) {
-            uint32_t idx = 1; /* skip 'fn' head */
+                && (form->as.list.items[0]->as.sym == e->sym_fn
+                    || form->as.list.items[0]->as.sym == e->sym_c_fn)) {
+            /* typed-c-abi-function-pointers: `(c-fn [A...] R)` shares the
+             * `(fn [A...] R)` parsing path but stamps the result type as a
+             * bare C-ABI function pointer (cfnptr) rather than a closure. */
+            bool is_cfnptr = (form->as.list.items[0]->as.sym == e->sym_c_fn);
+            uint32_t idx = 1; /* skip 'fn'/'c-fn' head */
             /* Expect a vector of param type annotations */
             if (idx >= form->as.list.len || form->as.list.items[idx]->tag != F_VEC) {
                 diag_emit(DIAG_ERROR, form->span,
@@ -1170,6 +1175,9 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 for (uint8_t i = 0; i < n_fn_args; i++) aFT[i] = fn_arg_full[i];
                 fn_t->as.fn.arg_full_types = aFT;
             }
+            /* typed-c-abi-function-pointers: a (c-fn ...) is a bare C function
+             * pointer, never a closure box. */
+            fn_t->as.fn.cfnptr = is_cfnptr;
             return fn_t;
         }
 

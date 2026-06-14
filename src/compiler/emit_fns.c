@@ -599,6 +599,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
         if (fd->params[i]->is_poly_fn) {
             buf_puts(file, "tur_poly_fn_t");
+        } else if (fd->param_types[i].kind == TY_FN
+                   && fd->param_types[i].as.fn.cfnptr) {
+            /* typed-c-abi-function-pointers: a cfnptr parameter is a bare C
+             * function pointer `R (*)(A...)`, declared via the concrete
+             * fn-ptr typedef so the (possibly inline-C) body can invoke it
+             * directly and external C libraries see the exact ABI shape.
+             * Falls back to int64_t only when the signature is non-concrete. */
+            const char *td = register_fn_ptr_typedef(&fd->param_types[i]);
+            buf_puts(file, td ? td : "int64_t");
         } else if (fd->param_types[i].kind == TY_FN) {
             /* ER4: function-typed parameters are passed as int64_t (opaque
              * function pointer) in Turmeric's calling convention. */

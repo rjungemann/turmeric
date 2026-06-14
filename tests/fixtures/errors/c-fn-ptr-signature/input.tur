@@ -1,0 +1,12 @@
+; typed-c-abi-function-pointers: a callback whose argument/result kinds do
+; not match the (c-fn ...) parameter signature is rejected at compile time.
+
+(defn apply-cb [cb : (c-fn [int] int) x : int] : int
+  ```c
+  return cb(x);
+  ```)
+
+(defn floaty [n : float] : int 0)
+
+(defn main [] : int
+  (apply-cb floaty 5))

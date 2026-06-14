@@ -188,6 +188,7 @@ typedef struct Elab {
     const Symbol *sym_while;
     const Symbol *sym_defn;     /* Phase 2 */
     const Symbol *sym_fn;       /* Phase 2 */
+    const Symbol *sym_c_fn;     /* typed-c-abi-function-pointers: (c-fn [A...] R) bare C fn-ptr type */
     const Symbol *sym_lambda;   /* λ — Unicode alias for fn */
     const Symbol *sym_extern_c; /* Phase 2 */
     const Symbol *sym_caret_mut;     /* ^mut */

@@ -2675,6 +2675,72 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
+        /* typed-c-abi-function-pointers: a `(c-fn [A...] R)` parameter is a
+         * bare C function pointer.  The same-kind match above would admit ANY
+         * TY_FN argument -- including a capturing closure or a wrong-shape fn --
+         * so enforce the real contract here: the argument must be a captureless
+         * (non-boxed) fn of the exact signature.  Capturing closures (which
+         * carry an environment that a raw C pointer cannot represent) and
+         * arity/signature mismatches are hard errors. */
+        if (expected_arg_kind == TY_FN && fn_type.kind == TY_FN &&
+                fn_type.as.fn.arg_full_types) {
+            uint32_t cfn_idx = fn_binding->closure_fn_binding ? i + 1 : i;
+            Type *exp_cfn = (cfn_idx < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[cfn_idx] : NULL;
+            if (exp_cfn && exp_cfn->kind == TY_FN && exp_cfn->as.fn.cfnptr) {
+                if (args[i]->type.kind != TY_FN) {
+                    /* Non-fn argument: let the generic mismatch path report it. */
+                    arg_ok = false;
+                } else if (args[i]->type.as.fn.boxed) {
+                    Buf cap; buf_init(&cap);
+                    if (args[i]->kind == EX_CLOSURE && args[i]->as.closure_.closure) {
+                        struct Closure *clo = args[i]->as.closure_.closure;
+                        for (uint8_t ci = 0; ci < clo->n_captures; ci++) {
+                            if (ci > 0) buf_puts(&cap, ", ");
+                            if (clo->captures[ci] && clo->captures[ci]->name)
+                                buf_puts(&cap, clo->captures[ci]->name->name);
+                        }
+                    }
+                    buf_putc(&cap, '\0');
+                    diag_emit(DIAG_ERROR, args[i]->span,
+                        "argument %u of '%s' is a capturing closure, but the "
+                        "parameter is a C function pointer (c-fn) and cannot "
+                        "carry an environment%s%s. Pass a captureless function "
+                        "(one with no free variables) or an extern-c declaration.",
+                        i + 1, fn_binding->name->name,
+                        cap.data[0] ? "; captures: " : "", cap.data);
+                    buf_free(&cap);
+                    return NULL;
+                } else if (args[i]->type.as.fn.arity != exp_cfn->as.fn.arity) {
+                    diag_emit(DIAG_ERROR, args[i]->span,
+                        "argument %u of '%s' has the wrong arity for C function "
+                        "pointer parameter: expected %u parameter(s), got %u",
+                        i + 1, fn_binding->name->name,
+                        (unsigned)exp_cfn->as.fn.arity,
+                        (unsigned)args[i]->type.as.fn.arity);
+                    return NULL;
+                } else {
+                    bool sig_ok = (args[i]->type.as.fn.result_kind
+                                   == exp_cfn->as.fn.result_kind);
+                    for (uint8_t si = 0; sig_ok && si < exp_cfn->as.fn.arity; si++) {
+                        if (args[i]->type.as.fn.arg_kinds[si]
+                                != exp_cfn->as.fn.arg_kinds[si])
+                            sig_ok = false;
+                    }
+                    if (!sig_ok) {
+                        Buf eb; buf_init(&eb); type_print(&eb, *exp_cfn); buf_putc(&eb, '\0');
+                        Buf gb; buf_init(&gb); type_print(&gb, args[i]->type); buf_putc(&gb, '\0');
+                        diag_emit(DIAG_ERROR, args[i]->span,
+                            "argument %u of '%s' has type %s, which does not "
+                            "match the C function pointer parameter type %s",
+                            i + 1, fn_binding->name->name, gb.data, eb.data);
+                        buf_free(&eb); buf_free(&gb);
+                        return NULL;
+                    }
+                    arg_ok = true;
+                }
+            }
+        }
         /* Nominal identity: a same-kind struct/opaque/ADT argument must be the
          * *same* type, not merely the same TypeKind.  Full param types come from
          * arg_full_types (Phase 1).  Placed before the escape hatches: those only

@@ -1932,6 +1932,11 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         if (i > 0) buf_puts(out, ", ");
         if (spec->fn->params[i]->is_poly_fn) {
             buf_puts(out, "tur_poly_fn_t");
+        } else if (spec->fn->param_types[i].kind == TY_FN
+                   && spec->fn->param_types[i].as.fn.cfnptr) {
+            /* typed-c-abi-function-pointers: cfnptr -> concrete typedef. */
+            const char *td = register_fn_ptr_typedef(&spec->fn->param_types[i]);
+            buf_puts(out, td ? td : "int64_t");
         } else if (spec->fn->param_types[i].kind == TY_FN) {
             buf_puts(out, "int64_t");
         } else {
@@ -2027,6 +2032,13 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             if (j > 0) buf_puts(out, ", ");
             if (fd->params[j]->is_poly_fn) {
                 buf_puts(out, "tur_poly_fn_t");
+            } else if (fd->param_types[j].kind == TY_FN
+                       && fd->param_types[j].as.fn.cfnptr) {
+                /* typed-c-abi-function-pointers: keep the forward declaration's
+                 * cfnptr param in lockstep with the definition's `R (*)(A...)`
+                 * typedef so the two prototypes do not conflict. */
+                const char *td = register_fn_ptr_typedef(&fd->param_types[j]);
+                buf_puts(out, td ? td : "int64_t");
             } else if (fd->param_types[j].kind == TY_FN) {
                 buf_puts(out, "int64_t");
             } else if (fd->params[j]->is_fat &&
@@ -2070,6 +2082,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 buf_puts(out, ", ");
                 if (fd->params[j]->is_poly_fn) {
                     buf_puts(out, "tur_poly_fn_t");
+                } else if (fd->param_types[j].kind == TY_FN
+                           && fd->param_types[j].as.fn.cfnptr) {
+                    /* typed-c-abi-function-pointers: cfnptr -> concrete typedef. */
+                    const char *td = register_fn_ptr_typedef(&fd->param_types[j]);
+                    buf_puts(out, td ? td : "int64_t");
                 } else if (fd->param_types[j].kind == TY_FN) {
                     buf_puts(out, "int64_t");
                 } else if (fd->params[j]->is_fat &&

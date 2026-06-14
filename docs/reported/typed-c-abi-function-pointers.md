@@ -1,6 +1,10 @@
 # No typed C-ABI function pointer in the type system
 
-**Status:** Reported
+**Status:** Implemented (2026-06-14) -- the `(c-fn [A...] R)` type form landed.
+See the "Implementation" section at the bottom for what shipped and how it is
+validated. The original report follows unchanged for context.
+
+**Status (original):** Reported
 **Severity:** Language gap. Blocks S1 fixes in
 `docs/reported/spices-int-stand-in-audit-2026-06-14.md` (5 callback sites
 across `tourist`, `httpd`, `rtmidi`, `osc`). Without it, callbacks passed
@@ -190,3 +194,90 @@ change once the form exists.
 - `CLAUDE.md` -- "No Lazy `:int` Stand-Ins -- STRICT RULE" (added
   2026-06-14) -- this finding is exactly the kind of language gap that
   rule expects to be surfaced rather than papered over.
+
+---
+
+## Implementation (2026-06-14)
+
+### Surface syntax
+
+The chosen spelling is **`(c-fn [A...] R)`** -- the `c-fn` head shares the
+existing `(fn [A...] R)` type-expression parser, so the argument vector and
+return type read identically; only the lowering and assignability differ.
+It is valid in any type-annotation position (`(c-fn ...)` spaced form):
+
+```turmeric
+(defn run-twice [cb : (c-fn [float] float) x : float] : float
+  ```c
+  return cb(cb(x));   ; cb is a bare double (*)(double) -- called directly
+  ```)
+```
+
+### Representation
+
+Rather than a brand-new `TY_CFNPTR` kind (which would have needed a `case`
+in every one of the ~23 `TypeKind` switches, most just delegating to TY_FN),
+the form is a `bool cfnptr` discriminator on the existing `as.fn` union
+(parallel to `boxed`). All the boring machinery (copy-kind, drop glue, kind)
+reuses TY_FN's behavior unchanged; only the four places where a cfnptr must
+*differ* branch on the flag:
+
+1. **Assignability** (`type_eq`, `src/compiler/types.c`): a cfnptr unifies
+   with another cfnptr, or with a *captureless* (non-`boxed`) bare fn of the
+   same signature -- because a captureless fn already *is* a bare code
+   pointer at the C ABI -- but **never** with a `boxed` (capturing) closure.
+   This is what stops a fat closure from silently flowing into a raw C sink.
+2. **Lowering** (`type_c_name`, plus the param/prototype emitters in
+   `emit_fns.c` / `emit_module.c`): a cfnptr emits the concrete
+   `R (*)(A...)` typedef via the pre-existing `register_fn_ptr_typedef`
+   machinery (the same typedef used for concrete fn-typed struct fields),
+   not the `int64_t`/`void*` carrier. The call-site argument cast
+   (`emit_expr.c`) casts the captureless fn *through that typedef* rather
+   than to `int64_t`.
+3. **Carrier opt-out** (`elab_fns.c`): a plain `(fn ...)` parameter is
+   normally demoted onto the `tur_poly_fn_t {env, fn}` carrier; a cfnptr
+   stays on the nominal-TY_FN path so it keeps its concrete C signature.
+4. **Diagnostics** (`elab_call.c`): the same-`TypeKind` argument match would
+   admit *any* TY_FN at a cfnptr parameter, so the contract is enforced
+   explicitly -- a capturing closure (cites the captured names), a wrong
+   arity, or a mismatched arg/result signature each produce a tailored
+   compile error.
+
+### Parsing routing
+
+Two dispatch points learned the new head symbol `sym_c_fn` (interned as
+`c-fn`): `type_expr_from_form` (the type-expression parser) and
+`fn_type_from_form_impl` (the defn-parameter type router that recognizes
+type-constructor heads like `fn`/`->`/`lref`).
+
+### Files touched
+
+`types.h` (flag + init), `types.c` (`type_eq`, `type_c_name`, `type_name`,
+`type_name_buf`), `elab_internal.h` + `elab_core.c` (symbol),
+`elab_types.c` (parse), `elab_fns.c` (router + carrier opt-out),
+`elab_call.c` (enforcement diagnostics), `emit_fns.c` (param decl),
+`emit_module.c` (forward-decl / CPS / spec prototypes), `emit_expr.c`
+(call-arg cast).
+
+### Validation (matches the criteria above)
+
+- `tests/fixtures/c-fn-ptr-callback/` -- a captureless defn passed as a
+  `(c-fn [float] float)` runs the inline-C sink (which calls it through the
+  raw `double (*)(double)` pointer) and prints `8.10`. Non-int kinds prove
+  the concrete-ABI typedef, not the int64_t carrier.
+- `tests/fixtures/errors/c-fn-ptr-capturing/` -- a capturing lambda is a
+  compile error citing `captures: k`.
+- `tests/fixtures/errors/c-fn-ptr-arity/` -- an arity-2 fn at a 1-arg cfnptr
+  parameter is a compile error citing the count.
+- `tests/fixtures/errors/c-fn-ptr-signature/` -- a `(fn [float] int)` at a
+  `(c-fn [int] int)` parameter is a compile error citing both types.
+
+### Scope / follow-ups
+
+The feature is complete for the **parameter** (callback-sink) use case that
+the 5 S1 audit sites need, plus value/local/let positions (everything that
+routes through `type_c_name`). A cfnptr also works as a return type and a
+struct-field type when the signature is fully concrete (it reuses the same
+typedef path). Migrating the 5 S1 sites in `../turmeric-spices` from `:int`
+/ `:ptr<void>` to `(c-fn ...)` is now a one-line-per-site signature change;
+that migration lives in the spices repo and is tracked by the audit doc.
