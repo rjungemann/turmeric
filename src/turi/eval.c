@@ -4076,6 +4076,7 @@ typedef enum {
     DK_MAKE_STRUCT,  /* EX_MAKE_STRUCT: evaluating field[index] (fields owned) */
     DK_MATCH_BODY,   /* EX_MATCH: evaluating the winning arm body (frame owned) */
     DK_BUILTIN_ARG,  /* EX_BUILTIN: evaluating arg[index] (acc owned; or short-circuit) */
+    DK_CALL_ARG,     /* EX_CALL: evaluating arg[index] (acc owned; callee in `last`) */
 } DriveKind;
 
 typedef struct {
@@ -4299,6 +4300,45 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 control = control->as.builtin.args[0];
                 break;
             }
+            case EX_CALL: {
+                /* T3.2a: resolve the callee here, accumulate args on the
+                 * work-stack, then apply via eval_apply (still recursive -- the
+                 * body-in-loop + TCO fold is T3.2b).  The closure value rides in
+                 * `last`; the arg accumulator in `aux`. */
+                TuriValue fn_val;
+                if (control->as.call_.fn_binding) {
+                    fn_val = eval_lookup(env, cf,
+                                 control->as.call_.fn_binding->name->name);
+                } else if (control->as.call_.fn_expr) {
+                    fn_val = eval_expr(env, cf, control->as.call_.fn_expr);
+                    fn_val = reword_unbound_call_head(fn_val, control->as.call_.fn_expr);
+                } else {
+                    cur = turi_error("eval: call with no function");
+                    descending = false; break;
+                }
+                if (turi_is_error(fn_val) || env->returning || env->throwing) {
+                    cur = fn_val; descending = false; break;
+                }
+                if (control->as.call_.fn_binding)
+                    fn_val = recover_carrier_closure(fn_val, control->as.call_.fn_binding);
+                if (fn_val.tag != TURI_CLOSURE) {
+                    cur = turi_errorf("eval: expected function, got tag %d", fn_val.tag);
+                    descending = false; break;
+                }
+                uint32_t n = control->as.call_.n_args;
+                if (n == 0) {
+                    cur = eval_apply(env, fn_val.as_closure, NULL, 0);
+                    descending = false; break;
+                }
+                TuriValue *acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                if (!acc) {
+                    result = turi_error("eval: out of memory evaluating call arguments");
+                    goto done;
+                }
+                DRIVE_PUSH(((DriveCont){ DK_CALL_ARG, control, cf, 0, fn_val, acc }));
+                control = control->as.call_.args[0];
+                break;
+            }
             case EX_MATCH: {
                 /* Resolve scrutinee + arm + guard synchronously (shallow), then
                  * descend the winning arm body in the loop. */
@@ -4417,6 +4457,23 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                  * arm_frame before returning the body's result. */
                 eval_frame_free(top->frame);
                 len--;
+                break;
+            }
+            case DK_CALL_ARG: {
+                TuriValue *acc = (TuriValue *)top->aux;
+                if (signaled) { free(acc); len--; break; }
+                acc[top->index] = cur;
+                top->index++;
+                uint32_t n = top->expr->as.call_.n_args;
+                if (top->index < n) {
+                    control = top->expr->as.call_.args[top->index];
+                    cf = top->frame; descending = true;
+                } else {
+                    /* eval_apply copies args into its own TCO buffer, so freeing
+                     * after it returns is safe. */
+                    cur = eval_apply(env, top->last.as_closure, acc, n);
+                    free(acc); len--;
+                }
                 break;
             }
             case DK_BUILTIN_ARG: {
@@ -4731,44 +4788,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Function call --------------------------------------------------- */
-    case EX_CALL: {
-        TuriValue fn_val;
-        if (e->as.call_.fn_binding) {
-            fn_val = eval_lookup(env, frame,
-                                 e->as.call_.fn_binding->name->name);
-        } else if (e->as.call_.fn_expr) {
-            fn_val = eval_expr(env, frame, e->as.call_.fn_expr);
-            fn_val = reword_unbound_call_head(fn_val, e->as.call_.fn_expr);
-        } else {
-            return turi_error("eval: call with no function");
-        }
-        if (turi_is_error(fn_val) || env->returning || env->throwing) return fn_val;
-        if (e->as.call_.fn_binding)
-            fn_val = recover_carrier_closure(fn_val, e->as.call_.fn_binding);
-        if (fn_val.tag != TURI_CLOSURE)
-            return turi_errorf("eval: expected function, got tag %d", fn_val.tag);
-
-        uint32_t  n_args = e->as.call_.n_args;
-
-        /* T1: heap-spill scratch (see EVAL_SCRATCH_INLINE). */
-        TuriValue args_inl[EVAL_SCRATCH_INLINE];
-        TuriValue *args = (n_args <= EVAL_SCRATCH_INLINE) ? args_inl
-                          : (TuriValue *)malloc((size_t)n_args * sizeof(TuriValue));
-        if (!args) return turi_error("eval: out of memory evaluating call arguments");
-        for (uint32_t i = 0; i < n_args; i++) {
-            args[i] = eval_expr(env, frame, e->as.call_.args[i]);
-            if (turi_is_error(args[i]) || env->returning || env->throwing) {
-                TuriValue err = args[i];
-                if (args != args_inl) free(args);
-                return err;
-            }
-        }
-        /* eval_apply copies args into its own TCO work buffer, so freeing here
-         * (after it returns) is safe. */
-        TuriValue r = eval_apply(env, fn_val.as_closure, args, n_args);
-        if (args != args_inl) free(args);
-        return r;
-    }
+    case EX_CALL:
+        /* T3.2a: delegated to the explicit-stack driver (DK_CALL_ARG), which
+         * resolves the callee and accumulates args on the work-stack, then
+         * applies via eval_apply.  Semantics match the former inline loop; the
+         * body-in-loop + TCO fold that removes the non-tail ceiling is T3.2b. */
+        return eval_drive(env, frame, e);
 
     /* --- Early return ---------------------------------------------------- */
     case EX_RETURN: {

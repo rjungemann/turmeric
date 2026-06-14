@@ -366,7 +366,24 @@ costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
    Calls still recurse, so the ceiling stays ~530 until T3.2.
 3. **T3.2 -- `DK_CALL_ARG` + `DK_CALL_RET` + body-in-loop + TCO**. The ceiling
    remover and the hard part (TCO + defers + module + no_unwind). Validate the
-   `sum-to 5000` probe succeeds and `escape-deep-capture` runs.
+   `sum-to 5000` probe succeeds and `escape-deep-capture` runs. **Split:**
+   - **T3.2a -- `DK_CALL_ARG` -- LANDED 2026-06-14.** EX_CALL now runs on the
+     driver: it resolves the callee (fn_binding/fn_expr + recover_carrier_closure
+     + reword_unbound_call_head), accumulates args on the work-stack (closure in
+     `last`, accumulator in `aux`), then applies via the existing (recursive)
+     `eval_apply`. Because the builtin *and* the call now share one `eval_drive`
+     loop, the call's `eval_expr`/`eval_expr_impl` C frames vanish from the
+     per-level chain, so the **non-tail ceiling ~doubled (~530 -> ~1064)** as a
+     bonus -- and **TCO is preserved** (eval_apply's TcoFrame loop is untouched:
+     `sum-acc 1_000_000` stays O(1)). Regression-green (1186 passed, same 8
+     monomorphization fails; 14/14 `eval|sandbox` ctests; calls/recursion/
+     closure-returning HOF correct). The arg-accumulation here is reused by:
+   - **T3.2b -- fold `eval_apply`/`eval_body_tco` body-in-loop + frame-reuse TCO
+     (remaining).** Replace the `eval_apply` call at the end of `DK_CALL_ARG`
+     with the inline apply prologue (`DK_CALL_RET` saving module/returning/
+     no_unwind/defer_mark; native/inline-C leaves; build frame, bind args) and
+     descend the body in the loop with a tail flag, reusing the `DK_CALL_RET`
+     frame for tail calls. This is where the ceiling becomes heap-bounded.
 4. **T3.3 -- re-entrancy audit + guard** (T4).
 5. **T3.4 -- raise `max_eval_depth`, retire the `TURI_EVAL_FRAME_BYTES` stopgap,
    unpark `escape-deep-capture`** (T5).
