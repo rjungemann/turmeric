@@ -1,0 +1,29 @@
+;; inline-c-multi-include-hoist -- regression: two functions sharing a header
+;;
+;; Before the inline-c-function-scope-include-guards fix, the second
+;; function's `#include <time.h>` was a no-op (the header's include guard
+;; was already defined by the first function's body include), so `struct
+;; timespec` was invisible to the second function and the C compiler
+;; failed with "use of undeclared identifier 'timespec'". The emitter now
+;; lifts every top-of-block #include to file scope, deduped.
+
+(defn ts-sec [] : int
+  ```c
+  #include <time.h>
+  struct timespec ts;
+  ts.tv_sec = 42; ts.tv_nsec = 0;
+  return (int64_t)ts.tv_sec;
+  ```)
+
+(defn ts-nsec [] : int
+  ```c
+  #include <time.h>
+  struct timespec ts;
+  ts.tv_sec = 0; ts.tv_nsec = 7;
+  return (int64_t)ts.tv_nsec;
+  ```)
+
+(defn main [] : int
+  (println (ts-sec))
+  (println (ts-nsec))
+  0)

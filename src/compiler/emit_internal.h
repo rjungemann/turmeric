@@ -35,6 +35,22 @@ extern bool g_cps_path;
 extern bool g_needs_hamt;
 /* stdlib/re.tur: track if any inline-C body references <regex.h>. */
 extern bool g_needs_regex_h;
+
+/* inline-c-function-scope-include-guards fix: deduped #include set lifted
+ * from inline-C bodies. See globals.c and emit_core.c. */
+extern char    **g_hoisted_includes;
+extern uint32_t  g_n_hoisted_includes;
+extern uint32_t  g_cap_hoisted_includes;
+
+/* Append `n` bytes of `line` (the full `#include ...` directive without a
+ * trailing newline) to the deduped global set. */
+void   tur_hoist_include_add(const char *line, size_t n);
+
+/* Scan `body` (length `len`) for leading blank/comment/`#include` lines,
+ * append each `#include` to the global set, and return the byte count
+ * consumed at the start of `body`. The caller should `memmove` to drop the
+ * consumed prefix. */
+size_t tur_hoist_top_includes_scan(const char *body, size_t len);
 /* AR8: Variadic rest parameters - track if any variadic defn is compiled */
 extern bool g_has_variadics;
 /* prelude-macros (Defect B / F3): set when the user-callable `cons` runtime

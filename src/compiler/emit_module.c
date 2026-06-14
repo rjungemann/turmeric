@@ -2486,6 +2486,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_regex_h) {
         buf_puts(out, "#include <regex.h>\n");
     }
+    /* inline-c-function-scope-include-guards fix: emit every `#include`
+     * directive that elab lifted from the top of an inline-C body so
+     * include-guarded headers (sqlite3.h, rtmidi_c.h, lo/lo.h, ...) are
+     * visible to every inline-C function in this TU. The same scan strips
+     * the directives from each body at substitute time, so they appear
+     * exactly once -- here. */
+    for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        buf_puts(out, g_hoisted_includes[i]);
+        buf_puts(out, "\n");
+    }
     /* AR8: Variadic rest-list cons-cell helper -- only emit when module has variadics */
     if (g_has_variadics) {
         buf_puts(out, "/* AR8: __tur_cons_of -- allocate and link a cons cell */\n");
@@ -6119,7 +6129,16 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     buf_puts(out, "#include <stdbool.h>\n");
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdlib.h>\n");
-    buf_puts(out, "#include <string.h>\n\n");
+    buf_puts(out, "#include <string.h>\n");
+    /* inline-c-function-scope-include-guards fix: lift inline-C `#include`s
+     * to file scope in the .h so every importer's .c (and this module's
+     * own .c) sees the typedefs, instead of having the second/third user
+     * silently miss them due to the system header's include guards. */
+    for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        buf_puts(out, g_hoisted_includes[i]);
+        buf_puts(out, "\n");
+    }
+    buf_puts(out, "\n");
 
     /* load-not-expanded-in-imported-or-project-modules: the whole-program path
      * emits the rank-2 polymorphic closure type `tur_poly_fn_t` as part of its

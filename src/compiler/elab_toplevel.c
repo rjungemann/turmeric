@@ -583,6 +583,16 @@ Expr *elab_form(Elab *e, Form *f) {
                     }
                 }
             }
+            /* inline-c-function-scope-include-guards fix: pre-populate the
+             * hoisted-include set during elaboration so emit_module can
+             * write the directives at file scope before any function body
+             * is emitted. The same scan re-runs at emit time inside
+             * inline_c_substitute to strip the lines from the body; dedup
+             * makes that idempotent. */
+            extern size_t tur_hoist_top_includes_scan(const char *body, size_t len);
+            if (f->as.cblock.p) {
+                (void)tur_hoist_top_includes_scan(f->as.cblock.p, f->as.cblock.len);
+            }
             /* inline-c-cname-module-prefix-plan: resolve __TUR_CNAME_<name>__
              * splices into captures so module-prefixed callees get their exact
              * C name (prefix + (export-as ...) alias). Unresolved names stay as

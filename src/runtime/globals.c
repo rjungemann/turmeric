@@ -2,6 +2,7 @@
  * the tur compiler driver (main.c) and libturi (tur_eval_basic, REPL, etc.).
  * main.c modifies these after parsing CLI flags; all defaults are "off". */
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Phase U5: Global configuration for unsafe linting */
@@ -49,6 +50,18 @@ bool g_needs_hamt = false;
  * <regex.h>. When true, the emitter hoists `#include <regex.h>` into the
  * preamble so multiple re_* functions can share the typedef. */
 bool g_needs_regex_h = false;
+
+/* inline-c-function-scope-include-guards fix: deduped set of
+ * `#include <...>` / `#include "..."` directives lifted from the top of
+ * inline-C bodies during elaboration. Emitted at file scope by emit_program
+ * (monolithic) and emit_header (separate-compilation) so include-guarded
+ * headers (e.g. sqlite3.h) are visible to every inline-C function in the TU.
+ * Per-function `#include` is otherwise skipped by the header's own include
+ * guard after the first occurrence -- hiding the header's typedefs from
+ * subsequent functions. */
+char    **g_hoisted_includes = NULL;
+uint32_t  g_n_hoisted_includes = 0;
+uint32_t  g_cap_hoisted_includes = 0;
 
 /* AR8: Variadic rest parameters -- track if any variadic defn is compiled */
 bool g_has_variadics = false;

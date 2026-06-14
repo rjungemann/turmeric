@@ -1341,6 +1341,113 @@ bool inline_c_has_cname_template(const InlineC *ic) {
     return false;
 }
 
+/* inline-c-function-scope-include-guards fix: scan the start of `body` for
+ * `#include <...>` / `#include "..."` directives, strip them from the body,
+ * and add each one (deduped) to ctx->hoisted_includes. The emitter later
+ * emits the collected directives at file scope so include-guarded headers
+ * (e.g. sqlite3.h) are visible to every inline-C function in the TU --
+ * function-scope #include is otherwise hidden from later functions by the
+ * header's own include guard.
+ *
+ * Conservative scanner: only consumes leading lines made entirely of
+ * whitespace, comments (// and / *...* /), or `#include <foo>` /
+ * `#include "foo"`. Stops at the first line that doesn't match -- so an
+ * #include sitting after real C code (e.g. inside an #ifdef block guarded
+ * by surrounding logic) is left in place.
+ *
+ * Modifies `body` in place by shifting the tail over the consumed prefix.
+ */
+extern char    **g_hoisted_includes;
+extern uint32_t  g_n_hoisted_includes;
+extern uint32_t  g_cap_hoisted_includes;
+
+void tur_hoist_include_add(const char *line, size_t n) {
+    /* Trim trailing whitespace/CR. */
+    while (n > 0 && (line[n-1] == ' ' || line[n-1] == '\t' || line[n-1] == '\r'))
+        n--;
+    if (n == 0) return;
+    for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        const char *e = g_hoisted_includes[i];
+        if (strlen(e) == n && memcmp(e, line, n) == 0) return; /* dup */
+    }
+    if (g_n_hoisted_includes == g_cap_hoisted_includes) {
+        uint32_t cap = g_cap_hoisted_includes ? g_cap_hoisted_includes * 2 : 8;
+        char **nh = (char **)realloc(g_hoisted_includes, cap * sizeof(char *));
+        if (!nh) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_hoisted_includes = nh;
+        g_cap_hoisted_includes = cap;
+    }
+    char *copy = (char *)malloc(n + 1);
+    if (!copy) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(copy, line, n);
+    copy[n] = '\0';
+    g_hoisted_includes[g_n_hoisted_includes++] = copy;
+}
+
+/* Returns the count of bytes consumed at the start of `body` (the prefix
+ * containing only blank lines, comments, and #include directives that were
+ * hoisted). Caller should `memmove(body, body+consumed, ...)` to drop them. */
+size_t tur_hoist_top_includes_scan(const char *body, size_t len) {
+    size_t i = 0;
+    size_t last_consumed = 0;
+    while (i < len) {
+        /* Find end of current line. */
+        size_t line_start = i;
+        while (i < len && body[i] != '\n') i++;
+        size_t line_end = i;
+        if (i < len) i++; /* consume '\n' */
+        size_t consumed_to = i;
+        size_t line_len = line_end - line_start;
+        const char *L = body + line_start;
+        /* Skip leading whitespace. */
+        size_t k = 0;
+        while (k < line_len && (L[k] == ' ' || L[k] == '\t')) k++;
+        /* Blank line? continue, count as part of hoistable prefix. */
+        if (k == line_len) { last_consumed = consumed_to; continue; }
+        /* `// ...` line comment? skip. */
+        if (k + 1 < line_len && L[k] == '/' && L[k+1] == '/') {
+            last_consumed = consumed_to;
+            continue;
+        }
+        /* `#include ...` directive? */
+        if (k + 8 <= line_len && L[k] == '#' &&
+            memcmp(L + k + 1, "include", 7) == 0 &&
+            (k + 8 == line_len || L[k+8] == ' ' || L[k+8] == '\t')) {
+            /* Validate that the rest of the line is `<...>` or `"..."` plus
+             * optional trailing whitespace/comment. */
+            size_t j = k + 8;
+            while (j < line_len && (L[j] == ' ' || L[j] == '\t')) j++;
+            if (j < line_len && (L[j] == '<' || L[j] == '"')) {
+                char close = (L[j] == '<') ? '>' : '"';
+                size_t end = j + 1;
+                while (end < line_len && L[end] != close) end++;
+                if (end < line_len && L[end] == close) {
+                    /* OK; record `#include <...>` (from k to end+1). */
+                    tur_hoist_include_add(L + k, (end + 1) - k);
+                    last_consumed = consumed_to;
+                    continue;
+                }
+            }
+            /* Malformed include — stop scanning, leave it for the C compiler. */
+            break;
+        }
+        /* Anything else: stop. */
+        break;
+    }
+    return last_consumed;
+}
+
+static char *strip_hoistable_includes(EmitCtx *ctx, char *body) {
+    (void)ctx;
+    if (!body) return body;
+    size_t len = strlen(body);
+    size_t consumed = tur_hoist_top_includes_scan(body, len);
+    if (consumed > 0) {
+        memmove(body, body + consumed, len - consumed + 1);
+    }
+    return body;
+}
+
 /* SS2: Perform __TUR_CAP_N__ / __TUR_VAL_N__ substitution on an InlineC node.
  * Emits val_exprs[N] into temp vars in body, then returns a malloc'd C string
  * with all __TUR_CAP_N__ and __TUR_VAL_N__ placeholders substituted.
@@ -1358,7 +1465,7 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
     /* Fast path: no substitution needed. */
     if (ic->n_captures == 0 && ic->n_val_exprs == 0 && !has_ty_template &&
         !has_cname_template) {
-        return strndup(ic->code.p, ic->code.len);
+        return strip_hoistable_includes(ctx, strndup(ic->code.p, ic->code.len));
     }
 
     /* Build capture name array. */
@@ -1501,7 +1608,7 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
     buf_putc(&result, '\0');
     char *out = strdup(result.data);
     buf_free(&result);
-    return out;
+    return strip_hoistable_includes(ctx, out);
 }
 
 /* ------------ builtin emitters ------------ */
