@@ -1,6 +1,7 @@
 # M5 suite residual: 6 failing fixtures, 3 root causes
 
-**Status:** Reported
+**Status:** Root cause A FIXED 2026-06-14 (suite now 4 failed); B and C
+remain (deferred to the M5 effort).
 **Severity:** mixed -- two are name-capture regressions introduced by the
 M5 `Eq Cons` rewrite (real latent bugs that break ordinary user programs),
 one is the known M5 carrier/concrete straddle.
@@ -24,7 +25,19 @@ FAIL errors/rt-missing-instance                 -- B: method `default-of` shadow
 
 ## Root cause A -- a global type named `A` captures the tyvar `A` in `Eq Cons`
 
-**Fixtures:** `positional-opaque-ok`, `positional-pap-opaque-ok`.
+**Status: FIXED 2026-06-14.** An in-scope instance/defn type variable now
+shadows a same-named global type at ascription sites. Two changes:
+
+- `elab_typeclasses.c` (`elab_definstance`): collect the constraint-vector
+  tyvars (e.g. `A` in `[(Eq A)]`) and push them onto `e->sig_tyvars` for the
+  duration of pass-2 method-body elaboration (saved/restored).
+- `elab_types.c` (`elab_ascribe`): thread `e->sig_tyvars` into
+  `type_expr_from_form` as `type_params`, which the resolver checks before the
+  global type table -- so `(:: t1 (Cons A))` resolves `A` to the tyvar.
+
+Pinned by `positional-opaque-ok` / `positional-pap-opaque-ok` (now PASS). Full
+suite: `1620->1622 passed`, no regressions.
+
 **Severity:** real latent bug. Any user program that defines a top-level type
 (`defopaque`/`defstruct`) named `A` -- a *very* common type-variable name --
 now fails to compile stdlib, with an error pointing into `stdlib/list.tur`
