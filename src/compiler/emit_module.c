@@ -675,11 +675,29 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
 
     if (ctx->n_abi_specializations >= ctx->cap_abi_specializations) {
         uint32_t new_cap = ctx->cap_abi_specializations ? ctx->cap_abi_specializations * 2 : 8;
+        /* `ctx->current_abi_specialization` is a raw pointer INTO this array
+         * (set by callers that recurse into a spec body while it is active).
+         * realloc may move the array, leaving that pointer dangling -- a
+         * heap-use-after-free the moment the active spec is read again (e.g.
+         * emit_abi_scan_expr's EX_CALL case reading ->n_bindings).  Capture its
+         * index before the realloc and re-point it after.  Exposed by deep
+         * spec interning (a constrained-poly by-value helper instantiated at
+         * many element types, e.g. the M5 Eq Vec rewrite over
+         * vec-eq-ascribed-multi). */
+        int64_t cur_spec_idx = -1;
+        if (ctx->current_abi_specialization &&
+            ctx->current_abi_specialization >= ctx->abi_specializations &&
+            ctx->current_abi_specialization <
+                ctx->abi_specializations + ctx->n_abi_specializations) {
+            cur_spec_idx = ctx->current_abi_specialization - ctx->abi_specializations;
+        }
         EmitAbiSpecialization *new_specs = (EmitAbiSpecialization *)realloc(
             ctx->abi_specializations, new_cap * sizeof(EmitAbiSpecialization));
         if (!new_specs) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->abi_specializations = new_specs;
         ctx->cap_abi_specializations = new_cap;
+        if (cur_spec_idx >= 0)
+            ctx->current_abi_specialization = &ctx->abi_specializations[cur_spec_idx];
     }
 
     EmitAbiSpecialization *spec = &ctx->abi_specializations[ctx->n_abi_specializations++];
@@ -743,19 +761,37 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
 }
 
 static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, const char *clone_name) {
+    /* M5 Finding 7: also record the active outer spec so the same source-body
+     * call recorded under different outer specs (per element type) stays
+     * distinguishable at lookup. */
+    const char *outer = ctx->current_abi_specialization
+        ? ctx->current_abi_specialization->clone_name : NULL;
+    /* Idempotent: if this exact (call, outer) pair is already recorded, keep
+     * the existing entry (re-scanning a spec body must not duplicate). */
+    for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+        if (ctx->specialized_call_exprs[i] == call &&
+            ctx->specialized_call_outer[i] == outer) {
+            ctx->specialized_call_names[i] = clone_name;
+            return;
+        }
+    }
     if (ctx->n_specialized_calls >= ctx->cap_specialized_calls) {
         uint32_t new_cap = ctx->cap_specialized_calls ? ctx->cap_specialized_calls * 2 : 8;
         const Expr **new_exprs = (const Expr **)realloc(ctx->specialized_call_exprs,
             new_cap * sizeof(Expr *));
         const char **new_names = (const char **)realloc(ctx->specialized_call_names,
             new_cap * sizeof(char *));
-        if (!new_exprs || !new_names) { fprintf(stderr, "tur: oom\n"); abort(); }
+        const char **new_outer = (const char **)realloc(ctx->specialized_call_outer,
+            new_cap * sizeof(char *));
+        if (!new_exprs || !new_names || !new_outer) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->specialized_call_exprs = new_exprs;
         ctx->specialized_call_names = new_names;
+        ctx->specialized_call_outer = new_outer;
         ctx->cap_specialized_calls = new_cap;
     }
     ctx->specialized_call_exprs[ctx->n_specialized_calls] = call;
     ctx->specialized_call_names[ctx->n_specialized_calls] = clone_name;
+    ctx->specialized_call_outer[ctx->n_specialized_calls] = outer;
     ctx->n_specialized_calls++;
 }
 
@@ -965,17 +1001,72 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * bindings so a generic-from-generic call (e.g. a forwarder `fwd` calling
      * `recv`, both `[T R]`) specializes to the concrete clone instead of
      * falling back to the broken carrier template. */
+    /* M5 (end-to-end-monomorphization gap 4): when the active specialization is
+     * a typeclass-instance method, its `bindings[]` record only the class var
+     * (e.g. `a -> (Vec int)`).  A sibling constrained-poly helper called from
+     * the instance body is quantified over the instance's *constraint* var
+     * (e.g. `[(Eq A)]`, with the call's binding type carrying a named TY_TYVAR
+     * `A` after the elab-side fix).  To monomorphize that call we need the
+     * constraint var's concrete resolution -- `A -> int`, the element of the
+     * receiver `(Vec int)`.  Derive those bindings here from the instance's
+     * `type_param_constraints` (param_idx indexes into the receiver's TY_APP
+     * elem types) and splice them onto the active spec's bindings for the
+     * composition pass below.  Emit-side only: it does not change the active
+     * spec's identity or clone name, just what inner calls compose against. */
+    const AbiTypeBinding *spec_bindings = NULL;
+    uint8_t spec_n_bindings = 0;
+    AbiTypeBinding spec_bindings_aug[ABI_TYPE_BINDINGS_MAX];
+    if (ctx->current_abi_specialization) {
+        const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+        spec_bindings = aspec->bindings;
+        spec_n_bindings = aspec->n_bindings;
+        if (aspec->typeclass_inst && aspec->fn && aspec->fn->owner_instance &&
+            aspec->n_bindings > 0 && aspec->n_bindings <= ABI_TYPE_BINDINGS_MAX) {
+            const TypeClassInstance *inst = aspec->fn->owner_instance;
+            /* Receiver's resolved TY_APP comes from the class-var binding
+             * (bindings[0] is the class var per elab_definstance's recording). */
+            const Type *recv = &aspec->bindings[0].type;
+            if (recv->kind == TY_APP && inst->n_type_param_constraints > 0) {
+                /* Extract elem types in type-param order (innermost-first in the
+                 * TY_APP spine, reversed to outermost-first). */
+                Type elem_buf[8];
+                uint8_t n_elem = 0;
+                for (const Type *tx = recv; tx && tx->kind == TY_APP && n_elem < 8;
+                     tx = tx->as.app.fn) {
+                    if (tx->as.app.arg) elem_buf[n_elem++] = *tx->as.app.arg;
+                }
+                for (uint8_t a = 0, b = (uint8_t)(n_elem - 1); n_elem > 0 && a < b; a++, b--) {
+                    Type t = elem_buf[a]; elem_buf[a] = elem_buf[b]; elem_buf[b] = t;
+                }
+                uint8_t naug = aspec->n_bindings;
+                for (uint8_t k = 0; k < naug; k++) spec_bindings_aug[k] = aspec->bindings[k];
+                for (uint8_t c = 0; c < inst->n_type_param_constraints &&
+                                    naug < ABI_TYPE_BINDINGS_MAX; c++) {
+                    const TypeConstraint *tcst = &inst->type_param_constraints[c];
+                    if (tcst->param_idx < 0 || !tcst->tyvar) continue;
+                    if ((uint8_t)tcst->param_idx >= n_elem) continue;
+                    spec_bindings_aug[naug].name = tcst->tyvar->name;
+                    spec_bindings_aug[naug].type = elem_buf[tcst->param_idx];
+                    naug++;
+                }
+                if (naug > aspec->n_bindings) {
+                    spec_bindings = spec_bindings_aug;
+                    spec_n_bindings = naug;
+                }
+            }
+        }
+    }
+
     AbiTypeBinding composed[ABI_TYPE_BINDINGS_MAX];
-    if (ctx->current_abi_specialization &&
-        ctx->current_abi_specialization->n_bindings > 0 &&
+    if (spec_bindings && spec_n_bindings > 0 &&
         n_bindings <= ABI_TYPE_BINDINGS_MAX) {
         bool changed = false;
         for (uint8_t i = 0; i < n_bindings; i++) {
             composed[i].name = bindings[i].name;
             composed[i].type = emit_abi_instantiate_type(
                 &bindings[i].type,
-                ctx->current_abi_specialization->bindings,
-                ctx->current_abi_specialization->n_bindings,
+                spec_bindings,
+                spec_n_bindings,
                 ctx->type_arena);
             /* M5 residual-straddle: the original change check compared
              * type_c_name strings, but TY_TYVAR and TY_INT (and other
@@ -1116,11 +1207,9 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * it through that spec's concrete bindings so a relayed aggregate result
      * specializes to `(Pair int ptr<void>)` rather than the int64_t carrier.  For
      * a concrete top-level call this is a no-op (no tyvars to substitute). */
-    if (ctx->current_abi_specialization &&
-        ctx->current_abi_specialization->n_bindings > 0) {
+    if (spec_bindings && spec_n_bindings > 0) {
         result_type = emit_abi_instantiate_type(
-            &result_type, ctx->current_abi_specialization->bindings,
-            ctx->current_abi_specialization->n_bindings, ctx->type_arena);
+            &result_type, spec_bindings, spec_n_bindings, ctx->type_arena);
     }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;
@@ -5273,6 +5362,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.cap_abi_specializations = 0;
     ctx.specialized_call_exprs = NULL;
     ctx.specialized_call_names = NULL;
+    ctx.specialized_call_outer = NULL;
     ctx.n_specialized_calls = 0;
     ctx.cap_specialized_calls = 0;
     ctx.carrier_call_bindings = NULL;
@@ -5979,6 +6069,7 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
+    free(ctx.specialized_call_outer);
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
@@ -6404,6 +6495,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             free(hdr_ctx.abi_specializations[i].clone_name);
         free(hdr_ctx.abi_specializations);
         free(hdr_ctx.specialized_call_exprs);
+        free(hdr_ctx.specialized_call_outer);
         free(hdr_ctx.specialized_call_names);
         free(hdr_ctx.carrier_call_bindings);
         if (n_decls > 0) buf_putc(out, '\n');
@@ -6579,6 +6671,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.cap_abi_specializations = 0;
     ctx.specialized_call_exprs = NULL;
     ctx.specialized_call_names = NULL;
+    ctx.specialized_call_outer = NULL;
     ctx.n_specialized_calls = 0;
     ctx.cap_specialized_calls = 0;
     ctx.carrier_call_bindings = NULL;
@@ -7052,6 +7145,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
+    free(ctx.specialized_call_outer);
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);

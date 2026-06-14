@@ -35,17 +35,34 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
      * outer spec's tyvar), type_eq fails, matched_spec is NULL, and the
      * dict_arg arg-bridge at emit_expr.c:2587 fires -- bridging args to
      * int64 even though the resolved callee takes them by value (cc error). */
+    /* M5 Finding 7: the same source-body call Expr* is recorded once per outer
+     * spec (one entry per element type for a shared instance-method body).
+     * Prefer the entry whose recorded outer spec matches the CURRENT active
+     * spec, so e.g. the `Eq Vec` spec for `bool` resolves the inner
+     * `vec-len-byval` call to its `Vec__bool` clone instead of the
+     * first-recorded `Vec__int` one.  Fall back to the first entry for this
+     * call when no outer-matched entry exists (top-level / single-spec case,
+     * preserving prior behaviour). */
+    const char *active_outer = ctx->current_abi_specialization
+        ? ctx->current_abi_specialization->clone_name : NULL;
+    const char *fallback_clone = NULL;
+    bool saw_call = false;
     for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
         if (ctx->specialized_call_exprs[i] != e) continue;
-        const char *clone_name = ctx->specialized_call_names[i];
+        if (!saw_call) { fallback_clone = ctx->specialized_call_names[i]; saw_call = true; }
+        if (ctx->specialized_call_outer[i] == active_outer) {
+            fallback_clone = ctx->specialized_call_names[i];
+            break;
+        }
+    }
+    if (saw_call) {
         for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
             const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
-            if (spec->clone_name && clone_name &&
-                strcmp(spec->clone_name, clone_name) == 0) {
+            if (spec->clone_name && fallback_clone &&
+                strcmp(spec->clone_name, fallback_clone) == 0) {
                 return spec;
             }
         }
-        break;
     }
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
@@ -4061,6 +4078,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool through_carrier = !through_rc
                 && e->as.get_field_.struct_expr->type.kind == TY_STRUCT
                 && def->n_type_params > 0;
+            /* M5 single-body-two-ABIs (docs/upcoming/m5-residual-straddle-
+             * retirement.md, Finding 5): a by-value Vec/Cons helper written in
+             * pure Turmeric -- e.g. `(defn vec-len-byval [A] [v : (Vec A)]
+             * (.len v))` -- has a `(Vec A)` (TY_APP) receiver.  Its
+             * monomorphized spec receives `v` by value (direct `.field`), but
+             * its carrier base (kept alive for the uniform dictionary slot,
+             * reached on untyped/abstract-element dispatch) gets `v` as the
+             * int64 carrier and must deref through the carrier typedef
+             * (`.len`/`.data`/`.cap` offsets are element-agnostic).  Gate
+             * precisely on the param's tracked representation: cast only when
+             * the receiver is a carrier-represented EX_VAR param (its
+             * `emit_byvalue_carrier_abi` flag is false -- C type is the int64
+             * carrier).  A by-value TY_APP receiver (Option/Result/Tuple specs,
+             * value-struct payloads -- flag true) keeps direct field access. */
+            if (!through_rc && !through_carrier && def->n_type_params > 0
+                && e->as.get_field_.struct_expr->type.kind == TY_APP
+                && e->as.get_field_.struct_expr->kind == EX_VAR
+                && e->as.get_field_.struct_expr->as.var.binding
+                && !e->as.get_field_.struct_expr->as.var.binding->emit_byvalue_carrier_abi) {
+                through_carrier = true;
+            }
             /* M4c Path A.2 (docs/upcoming/m4c-execution-plan.md): inside an
              * instance-method spec where the receiver is a class-var param,
              * the spec's arg type is the concrete monomorphized struct

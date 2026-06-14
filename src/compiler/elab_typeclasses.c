@@ -1782,6 +1782,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         /* Type argument being constrained (optional, at index 1) */
                         Type constrained_type = TYPE_INT; /* Default */
                         int8_t p_idx = -1;
+                        const Symbol *ct_var = NULL;
                         if (constraint_form->as.list.len >= 2) {
                             Form *type_arg_form = constraint_form->as.list.items[1];
                             if (type_arg_form->tag == F_SYM) {
@@ -1797,6 +1798,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         constraint_tyvar_syms[n_constraint_tyvar_syms++] =
                                             type_param_name;
                                 }
+                                /* M5 gap 4: also record the constraint var on the
+                                 * TypeConstraint so the emit composition pass can
+                                 * resolve it to its concrete element type. */
+                                ct_var = type_param_name;
                                 bool found = false;
                                 for (uint8_t j = 0; j < n_type_args; j++) {
                                     if (type_arg_syms && type_arg_syms[j] &&
@@ -1840,7 +1845,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         type_param_constraints[i] = (TypeConstraint){
                             .typeclass = constraint_tc,
                             .type_arg = constrained_type,
-                            .param_idx = p_idx
+                            .param_idx = p_idx,
+                            .tyvar = ct_var
                         };
                     }
                 } else {
@@ -1876,10 +1882,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         
                         Type constrained_type = TYPE_INT;
                         int8_t p_idx = -1;
+                        const Symbol *ct_var = NULL;
                         if (idx + 1 < n_items) {
                             Form *type_arg_form = next_form->as.list.items[idx + 1];
                             if (type_arg_form->tag == F_SYM) {
                                 const Symbol *type_param_name = type_arg_form->as.sym;
+                                ct_var = type_param_name;
                                 bool found = false;
                                 for (uint8_t j = 0; j < n_type_args; j++) {
                                     if (type_arg_syms && type_arg_syms[j] &&
@@ -1923,7 +1931,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         type_param_constraints[i] = (TypeConstraint){
                             .typeclass = constraint_tc,
                             .type_arg = constrained_type,
-                            .param_idx = p_idx
+                            .param_idx = p_idx,
+                            .tyvar = ct_var
                         };
                     }
                 }
@@ -2645,7 +2654,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     /* Bring the constraint tyvars (e.g. `A` from `[(Eq A)]`) into the
      * signature-tyvar scope for the duration of pass 2's body elaboration, so a
      * bare `A` in an ascription resolves to the tyvar over a same-named global
-     * type (root cause A). Saved/restored to keep enclosing scopes intact. */
+     * type (root cause A). Saved/restored to keep enclosing scopes intact.
+     * (M5 gap 4 reached the same goal via a separate `inst_body_type_params`
+     * scope; main's `sig_tyvars` route subsumes it, so only `.tyvar` recording
+     * above is kept for the emit-side composition pass.) */
     uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
     for (uint8_t ti = 0; ti < n_constraint_tyvar_syms; ti++) {
         if (e->n_sig_tyvars >= 32) break;
