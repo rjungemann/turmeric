@@ -147,6 +147,35 @@ only the enclosing form (definstance vs plain defn) differs.  The
 gap is a top-down inference channel that fires from one but not the
 other.
 
+### Further trace 2026-06-14 (session 2, attempt 3)
+
+Instrumented `elab_fn` at the closure-conversion point.  Side-by-side
+between gap1b (definstance body, works) and gap1e (plain defn body,
+fails):
+
+- gap1b: only 3 lambdas reach `elab_fn`, all with `e->current_fn_name =
+  ?top`.  The "cmp arg" lambda inside the Eq Vec instance method body
+  is NOT one of them.
+- gap1e: 3 lambdas in `?top` + 1 in `caller` (the cmp arg lambda).
+
+This means the Eq Vec body's `(fn [a b] (eq? a b))` is being
+**optimised away at the typeclass-elab level** -- it never reaches
+`elab_fn`.  Most likely it's eta-reduced to a direct reference to
+`eq?` (the typeclass method itself), which already carries TY_FN
+with fully-typed `arg_full_types`.  The cmp arg at the call site is
+then the typeclass method reference, not a lambda Expr -- which is
+why its TY_FN has aft populated and unification succeeds.
+
+The plain-defn case (`caller`) doesn't trigger the eta-reduction (or
+the optimisation gate excludes that context), so the lambda goes
+through `elab_fn` and produces a TY_FN with NULL aft.
+
+The optimisation site itself was not localised this session.
+Suspects: a typeclass-method-elab early-rewrite in
+`elab_typeclasses.c`, or an eta-reduction in `elab_call.c` when an
+arg's value is exactly `(fn [a b] (method a b))` and `method` is a
+typeclass method.
+
 ### Two-step fix
 
 1. **Diagnostic** (one-liner): add TY_FN to the enrichment whitelist
