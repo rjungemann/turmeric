@@ -2010,7 +2010,16 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
                     _body_c && strcmp(_body_c, "int64_t") != 0 &&
                     type_uses_carrier_abi(fd->body->type);
-                if (inst_method_app_body) {
+                /* M5 straddle (root cause C): mirror emit_fns.c -- a lifted
+                 * lambda whose tail value is a carrier-int64 producer
+                 * (some/ok/err/none or an __inst_ method) is dispatched through
+                 * the int64 fat/poly thunk, so its forward decl is int64, not
+                 * the by-value `_body_c` aggregate. */
+                bool body_is_carrier_producer =
+                    _body_c && strcmp(_body_c, "int64_t") != 0 &&
+                    type_uses_carrier_abi(fd->body->type) &&
+                    fn_body_tail_is_carrier_producer(fd->body);
+                if (inst_method_app_body || body_is_carrier_producer) {
                     buf_puts(out, "int64_t");
                 } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                     buf_puts(out, _body_c);

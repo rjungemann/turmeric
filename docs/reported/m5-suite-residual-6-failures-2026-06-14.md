@@ -1,10 +1,11 @@
 # M5 suite residual: 6 failing fixtures, 3 root causes
 
-**Status:** Root causes A and B FIXED 2026-06-14 (suite now 1 failed). C
-investigated and fully root-caused (bidirectional carrier/concrete straddle
-across 3 emit sites); deferred to the existing straddle-retirement plan -- a
-verified regression-free partial increment is described under root cause C but
-intentionally left unshipped (it does not green the fixture on its own).
+**Status:** ALL THREE root causes FIXED 2026-06-14. Full suite
+`1626 passed, 0 failed` (from the original 6 failures). A = tyvar/global
+shadowing at ascriptions; B = `default-of` builtin vs user method; C =
+return-ABI disagreement for carrier-producing lifted lambdas (3 emit sites
+realigned to the int64 carrier). One benign `-Wint-conversion` residual noted
+under root cause C as a follow-up.
 **Severity:** mixed -- two are name-capture regressions introduced by the
 M5 `Eq Cons` rewrite (real latent bugs that break ordinary user programs),
 one is the known M5 carrier/concrete straddle.
@@ -177,8 +178,12 @@ the same name and shadowed them.
 
 ## Root cause C -- M5 carrier/concrete straddle in Option HKT instances
 
+**Status: FIXED 2026-06-14.** The coordinated three-site fix landed; the
+fixture passes and the full suite is `1626 passed, 0 failed`. See "Resolution"
+below.
+
 **Fixture:** `hkt-stdlib-option-result-instances`.
-**Severity:** the genuine M5 monomorphization residual (already tracked
+**Severity:** the genuine M5 monomorphization residual (was tracked
 conceptually in `docs/upcoming/m5-residual-straddle-retirement.md`), surfacing
 here as a hard `cc` error rather than a miscompile.
 
@@ -247,15 +252,57 @@ this area regressed the suite (see the "+1 hamt-delete regressor" notes in
 `m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`), so it is not
 a contained fix.
 
-### Proposed fix direction
+### Resolution (2026-06-14)
 
-Falls under the existing residual-straddle retirement
-(`docs/upcoming/m5-residual-straddle-retirement.md`); not a new bug.  The
-`wrap`-case deref-bridge generalization above is a verified, regression-free
-*increment* toward it (direct-call carrier-returning defns), but was left
-unshipped here to avoid landing a partial codegen change on the active M5
-branch that does not green the target fixture.  The lambda/spec/poly-wrapper
-slice is the remaining work and belongs with the coordinated straddle retire.
+The actual root cause turned out to be narrower and cleaner than the
+"three-way carrier discipline" framing above feared: the lifted lambda
+`__fn_895` had **no `result_full_type`**, so the three emit sites that decide
+its C return type fell into their respective `else` branches and *disagreed*:
+
+| site | else-branch logic | result for `__fn_895` |
+|---|---|---|
+| signature (`emit_fns.c`) | `fd->body->type` -> `_body_c` | `Option__int` (wrong) |
+| forward decl (`emit_module.c`) | `fd->body->type` -> `_body_c` | `Option__int` (wrong) |
+| body-return (`emit_fns.c`) | `emit_type_from_kind(result_kind)` | `int64_t` (right) |
+
+The body-return block was already correct (the body value `some(...)` IS an
+int64 carrier, and the lambda is dispatched through the int64-in/int64-out
+fat/poly thunk).  The two `_body_c` sites over-eagerly used the by-value
+aggregate name.  Aligning all three to int64 for a *carrier-producer* body
+fixes it -- and because `__fn_895` now returns int64, its poly wrapper
+`__poly_897` (`return __fn_895(x0)`, int64->int64) becomes consistent for
+free.  **No `make_poly_wrapper` change was needed.**
+
+A new shared predicate `fn_body_tail_is_carrier_producer` (every tail leaf is
+a `#{Construct}` helper or `__inst_` method, i.e. emits the int64 carrier)
+discriminates a carrier-producer lambda (-> int64) from a genuine by-value
+aggregate body like `(Pair float float)` via `make-struct` (-> keep
+`_body_c`).  The three coordinated changes:
+
+1. `emit_fns.c` signature `else` branch -- carrier-producer body emits int64.
+2. `emit_module.c` forward-decl `else` branch -- same (mirror), via the
+   now-shared predicate exported in `emit_internal.h`.
+3. `emit_fns.c` body-return -- a `CK_CARRIER -> CK_CONCRETE` deref bridge for
+   the *other* convention: a **named** defn (which DOES have a
+   `result_full_type`, so it keeps the by-value `Option__int` return that its
+   caller spills) whose body is a carrier producer.  This is the `wrap` case
+   (`(defn wrap [x:int] : (Option int) (some x))`) and generalizes the
+   existing M4c spec-only deref past its `typeclass_inst` gate.
+
+The two return conventions now coexist correctly: a lifted lambda dispatched
+through the int64 thunk returns the carrier; a directly-called named defn
+returns by value and the body deref-bridges a carrier producer.
+
+### Residual (minor, follow-up)
+
+The Applicative `ap` line emits a `-Wint-conversion` warning:
+`int64_t ff_919 = some(__t26)` where `__t26` is a `void *` closure box passed
+into `some`'s int64 carrier param without a `(int64_t)(intptr_t)` cast.  This
+is a *call-arg* carrier-cast gap (a closure value flowing into a carrier
+parameter), orthogonal to the return-ABI straddle fixed here; it is benign on
+LP64 (same width) and does not fail the build, but it is a "works by luck"
+cast worth tightening in the emit_expr call-arg path.  Filed here rather than
+chased mid-change to keep this fix's blast radius to the return-ABI sites.
 
 ## Validation
 
