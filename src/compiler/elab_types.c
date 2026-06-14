@@ -1109,6 +1109,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                            (at->kind == TY_STRUCT && at->as.struct_.def != NULL))) {
                     any_compound_arg = true;
                 }
+                /* c-fn-ptr-element-and-size-precision-gap fix: when this is a
+                 * c-fn (bare C-ABI function pointer) and the arg is `ptr<T>`
+                 * with a known element type, preserve the full type so the
+                 * typedef lowering can emit `T *` instead of `void *`.  The
+                 * non-cfnptr (closure) path keeps its lossy TypeKind lowering
+                 * to avoid snapshot churn on unrelated typedefs. */
+                if (is_cfnptr && at && at->kind == TY_PTR_VOID && at->as.ptr.inner) {
+                    any_compound_arg = true;
+                }
             }
             /* Optional #{...} effect-row annotation */
             EffectRow *fn_effect_row = NULL;

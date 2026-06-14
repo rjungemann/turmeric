@@ -341,6 +341,13 @@ typedef struct RegisteredFnPtrTypedef {
     TypeKind result_kind;
     uint8_t  arity;
     TypeKind arg_kinds[MAX_FN_ARITY];
+    /* c-fn-ptr-element-and-size-precision-gap fix: per-arg full Type
+     * (interned in the type arena, lives for the whole compilation) so a
+     * `ptr<T>` parameter on a (c-fn ...) lowers to `T *` instead of the
+     * lossy `void *` that type_from_kind would give us.  NULL entries
+     * (typical for non-cfnptr fn-pointer typedefs and for primitives)
+     * fall back to type_from_kind(arg_kinds[i]). */
+    Type    *arg_full_types[MAX_FN_ARITY];
     bool     emitted;
 } RegisteredFnPtrTypedef;
 
@@ -722,16 +729,28 @@ static bool fn_type_is_concrete_for_ptr(const Type *t) {
 }
 
 /* Phase E: Build a stable typedef name for a concrete fn type, e.g.
- * "tur_fnptr_int64_t_int32_t_t" for (fn [:int32] :int). */
+ * "tur_fnptr_int64_t_int32_t_t" for (fn [:int32] :int).
+ *
+ * c-fn-ptr-element-and-size-precision-gap fix: when the fn_type is a cfnptr
+ * and an arg has a non-NULL arg_full_types[i], mangle in its precise C name
+ * (e.g. `unsigned char *` -> `unsigned_char___` rather than the lossy
+ * `void *` -> `void___`).  This is what lets two cfnptrs with different
+ * ptr<T> element types get distinct typedefs. */
 static char *fn_ptr_typedef_name(const Type *fn_type) {
     Buf name; buf_init(&name);
     buf_puts(&name, "tur_fnptr_");
     const char *ret_c = type_c_name(type_from_kind(fn_type->as.fn.result_kind));
     for (const char *p = ret_c; *p; p++)
         buf_putc(&name, isalnum((unsigned char)*p) ? *p : '_');
+    bool use_full = fn_type->as.fn.cfnptr && fn_type->as.fn.arg_full_types != NULL;
     for (uint8_t i = 0; i < fn_type->as.fn.arity; i++) {
         buf_putc(&name, '_');
-        const char *arg_c = type_c_name(type_from_kind(fn_type->as.fn.arg_kinds[i]));
+        const char *arg_c;
+        if (use_full && fn_type->as.fn.arg_full_types[i]) {
+            arg_c = type_c_name(*fn_type->as.fn.arg_full_types[i]);
+        } else {
+            arg_c = type_c_name(type_from_kind(fn_type->as.fn.arg_kinds[i]));
+        }
         for (const char *p = arg_c; *p; p++)
             buf_putc(&name, isalnum((unsigned char)*p) ? *p : '_');
     }
@@ -771,6 +790,15 @@ const char *register_fn_ptr_typedef(const Type *fn_type) {
     entry->arity = fn_type->as.fn.arity;
     for (uint8_t i = 0; i < fn_type->as.fn.arity; i++)
         entry->arg_kinds[i] = fn_type->as.fn.arg_kinds[i];
+    /* c-fn-ptr-element-and-size-precision-gap fix: snapshot per-arg full
+     * types for cfnptrs so the later emit pass can use precise element-typed
+     * pointer names.  The Type pointers live in the elaboration arena, which
+     * outlives codegen; storing the pointer is safe. */
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) entry->arg_full_types[i] = NULL;
+    if (fn_type->as.fn.cfnptr && fn_type->as.fn.arg_full_types) {
+        for (uint8_t i = 0; i < fn_type->as.fn.arity; i++)
+            entry->arg_full_types[i] = fn_type->as.fn.arg_full_types[i];
+    }
 
     return entry->typedef_name;
 }
@@ -2841,7 +2869,14 @@ void type_codegen_reset_fn_ptr_typedefs(void) {
 }
 
 /* Phase E: Emit all registered fn-ptr typedefs.
- * Must be called before any struct typedef that uses them as field types. */
+ * Must be called before any struct typedef that uses them as field types.
+ *
+ * c-fn-ptr-element-and-size-precision-gap fix: when an entry carries a
+ * non-NULL arg_full_types[j] (populated for cfnptrs in
+ * register_fn_ptr_typedef), emit its precise C type rather than the
+ * lossy carrier from type_from_kind(arg_kinds[j]).  Lets a (c-fn
+ * [ptr<u8>] void) lower to `void (*)(uint8_t *)` instead of
+ * `void (*)(void *)`. */
 void type_codegen_emit_fn_ptr_typedefs(Buf *out) {
     for (uint32_t i = 0; i < g_n_fn_ptr_typedefs; i++) {
         RegisteredFnPtrTypedef *entry = &g_fn_ptr_typedefs[i];
@@ -2854,7 +2889,13 @@ void type_codegen_emit_fn_ptr_typedefs(Buf *out) {
         } else {
             for (uint8_t j = 0; j < entry->arity; j++) {
                 if (j > 0) buf_puts(out, ", ");
-                buf_puts(out, type_c_name(type_from_kind(entry->arg_kinds[j])));
+                const char *arg_c;
+                if (entry->arg_full_types[j]) {
+                    arg_c = type_c_name(*entry->arg_full_types[j]);
+                } else {
+                    arg_c = type_c_name(type_from_kind(entry->arg_kinds[j]));
+                }
+                buf_puts(out, arg_c);
             }
         }
         buf_puts(out, ");\n");

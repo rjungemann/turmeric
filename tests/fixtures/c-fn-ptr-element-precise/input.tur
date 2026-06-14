@@ -1,0 +1,41 @@
+;; c-fn-ptr-element-precise -- regression: a (c-fn ...) parameter whose arg
+;; is `ptr<T>` for a known concrete T lowers to `T *` rather than `void *`.
+;;
+;; Before the c-fn-ptr-element-and-size-precision-gap fix, both `(c-fn
+;; [ptr<u8>] void)` and `(c-fn [ptr<void>] void)` collapsed to
+;; `void (*)(void *)`, making the typed c-fn slot indistinguishable at the
+;; C-ABI level and triggering -Wincompatible-function-pointer-types when
+;; the value was passed to a real C callback (e.g. RtMidiCCallback's
+;; `const unsigned char *` parameter).
+;;
+;; The fix consults arg_full_types[i] (now preserved for cfnptrs whose args
+;; have a concrete ptr<T> element type), so each typed c-fn gets its own
+;; typedef with the precise C element pointer.
+
+(defn handle-u8 [buf : ptr<u8>] : void
+  ```c
+  /* read first byte and print it */
+  printf("u8[0]=%d\n", (int)buf[0]);
+  ```)
+
+(defn handle-void [buf : ptr<void>] : void
+  ```c
+  printf("void-buf-nonnull=%d\n", buf != NULL ? 1 : 0);
+  ```)
+
+(defn dispatch-u8 [cb : (c-fn [ptr<u8>] void)] : void
+  ```c
+  static uint8_t b[1] = { 7 };
+  cb(b);
+  ```)
+
+(defn dispatch-void [cb : (c-fn [ptr<void>] void)] : void
+  ```c
+  static int marker = 99;
+  cb((void *)&marker);
+  ```)
+
+(defn main [] : int
+  (dispatch-u8 handle-u8)
+  (dispatch-void handle-void)
+  0)
