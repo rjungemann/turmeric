@@ -1994,9 +1994,13 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 /* inline-c-struct-return: mirror emit_fns.c -- a by-value struct
                  * return lowers to the struct's C name even for inline-C bodies. */
                 bool typed_struct = rft && rft->kind == TY_STRUCT;
+                /* typed-c-abi-function-pointers: mirror emit_fns.c -- a cfnptr
+                 * return lowers to its concrete typedef even for inline-C
+                 * bodies, so the forward decl agrees with the definition. */
+                bool typed_cfnptr = rft && rft->kind == TY_FN && rft->as.fn.cfnptr;
                 if (fn_ret_td && !body_is_inline_c) {
                     buf_puts(out, fn_ret_td);
-                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct)) {
+                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct || typed_cfnptr)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {
                     buf_puts(out, "int64_t");
@@ -6383,6 +6387,15 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                  * params are also int64_t; poly-fn params use the poly carrier. */
                 if (fd->params[j]->is_poly_fn) {
                     buf_puts(out, "tur_poly_fn_t");
+                } else if (fd->param_types[j].kind == TY_FN
+                           && fd->param_types[j].as.fn.cfnptr) {
+                    /* typed-c-abi-function-pointers: a cfnptr parameter is a
+                     * bare C-ABI function pointer.  Emit the same concrete
+                     * typedef the .c definition uses so the prototype agrees
+                     * across the .h/.c boundary (and across modules that
+                     * #include this header). */
+                    const char *td = register_fn_ptr_typedef(&fd->param_types[j]);
+                    buf_puts(out, td ? td : "int64_t");
                 } else if (fd->param_types[j].kind == TY_FN) {
                     buf_puts(out, "int64_t");
                 } else if (fd->params[j]->is_fat) {

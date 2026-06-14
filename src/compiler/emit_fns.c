@@ -496,9 +496,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * from an inline-C body, so `return fh;` agrees with the declared
              * type.  Carrier-ABI structs are handled by carrier_override above. */
             bool typed_struct = (rft.kind == TY_STRUCT);
+            /* typed-c-abi-function-pointers: a cfnptr return lowers to its
+             * concrete `R (*)(A...)` typedef even from an inline-C body, so
+             * the header prototype (which uses type_c_name) and the .c
+             * definition agree -- and so an inline-C body returning the bare
+             * function pointer type-checks against the declared return.  */
+            bool typed_cfnptr = (rft.kind == TY_FN && rft.as.fn.cfnptr);
             if (fn_ret_td && !body_is_inline_c) {
                 buf_puts(file, fn_ret_td);
-            } else if (!body_is_inline_c || typed_ptr || typed_struct) {
+            } else if (!body_is_inline_c || typed_ptr || typed_struct || typed_cfnptr) {
                 buf_puts(file, emit_type_c_name(ctx, rft));
             } else {
                 buf_puts(file, "int64_t");
