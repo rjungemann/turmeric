@@ -58,14 +58,36 @@ becomes a heap value (a snapshot of the work-stack + environment chain up to the
 prompt) that can be copied and re-entered -- precisely what multishot, escaping,
 and nested resume all require.
 
-**Recommended sequencing: land the trampoline evaluator first**, then build
-delimited control on top of its reified stack. Attempting clonable continuations
-on the current ucontext-fiber representation is possible (deep-copy the fiber
-stack on capture) but fragile -- it duplicates raw C stack memory and interacts
-badly with ASan -- so it is a fallback, not the primary path. See the
-`tur_continuation_snapshot` overlap noted in
+**Sequencing: the trampoline evaluator is now landed**
+([turi-eval-trampoline-plan.md](turi-eval-trampoline-plan.md) T1-T3.2b, plus the
+frame-reuse follow-up [turi-cek-frame-reuse-tco-plan.md](turi-cek-frame-reuse-tco-plan.md)
+F1-F5), so this plan's hard dependency is satisfied and **it can land now** --
+build delimited control on the existing `DriveCont` work-stack. Attempting
+clonable continuations on the current ucontext-fiber representation is possible
+(deep-copy the fiber stack on capture) but fragile -- it duplicates raw C stack
+memory and interacts badly with ASan -- so it is a fallback, not the primary
+path. See the `tur_continuation_snapshot` overlap noted in
 [turi-multishot-continuation-snapshot-miscompile.md](../../reported/turi-multishot-continuation-snapshot-miscompile.md):
 the same clone primitive backs that fix.
+
+### Scope boundary: capture through a native HOF (deferred to SR)
+
+This plan captures a continuation as the work-stack slice from the capture point
+up to the matching prompt. That is complete for control that flows through
+turi-code forms (`perform`/`handle`/`shift`/`reset`) -- which is **all five
+target fixtures**. It is *not* complete when the capture point sits inside the
+callback of a native / inline-C higher-order function (e.g. a `shift` inside the
+`fn` passed to a recursive `option-map`): today that callback runs on a live C
+frame the work-stack slice cannot see, so the captured continuation would omit
+the native's pending work. Carve that case out cleanly (a clear error, matching
+the existing capturable-grammar limits in
+[turi-capturing-shift-unimplemented.md](../../archive/history/turi-capturing-shift-unimplemented.md))
+and **defer it to**
+[turi-cek-stackless-reentry-plan.md](turi-cek-stackless-reentry-plan.md) (SR),
+which puts native callbacks on the work-stack (`DK_NATIVE_RESUME`) so this plan's
+capture/clone path extends across them with no rework -- it adds a frame kind the
+capture logic already knows how to copy. **Do this plan first** (higher-severity
+crash fixes, dependency already met); SR follows and lifts this restriction.
 
 ## Proposed implementation (on the trampoline)
 
@@ -108,6 +130,9 @@ the same clone primitive backs that fix.
 - Run the full effect/continuation interpreter surface to guard against
   regressions in the already-green one-shot cases (`effect-*`, `shift*`,
   `callcc*`, `cloneable-context-*`, `serial-context-*`).
+- A continuation captured *inside a native HOF callback* produces a clean error
+  (not a crash or silent miscompile), deferred to SR; the five target fixtures do
+  not exercise that case.
 - `bash tests/run.sh` unchanged (all five already pass compiled);
   `tools/check_turi_parity.py` 0-gaps; `bash tests/run-turi.sh` green with the
   five newly added.
@@ -117,7 +142,12 @@ the same clone primitive backs that fix.
 - [docs/reported/turi-interpreter-delimited-control-gaps.md](../../reported/turi-interpreter-delimited-control-gaps.md)
   -- root-cause report with minimal repros (this plan's source).
 - [docs/upcoming/v1/turi-eval-trampoline-plan.md](turi-eval-trampoline-plan.md)
-  -- the explicit-stack evaluator this plan builds on.
+  -- the explicit-stack evaluator this plan builds on (now landed, with the
+  [frame-reuse follow-up](turi-cek-frame-reuse-tco-plan.md)).
+- [docs/upcoming/v1/turi-cek-stackless-reentry-plan.md](turi-cek-stackless-reentry-plan.md)
+  -- the follow-up (SR) that lands *after* this plan and lifts its
+  "capture through a native HOF" restriction by putting native callbacks on the
+  work-stack. Shares the resume protocol.
 - [docs/reported/turi-multishot-continuation-snapshot-miscompile.md](../../reported/turi-multishot-continuation-snapshot-miscompile.md)
   -- shares the clone primitive (step 5).
 - [docs/archive/history/turi-interpret-flip-residual-plan.md](../../archive/history/turi-interpret-flip-residual-plan.md)

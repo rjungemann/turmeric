@@ -1,7 +1,7 @@
 ---
 title: Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 category: Planning
-description: Eliminate the last source of unbounded C recursion in the tree-walking interpreter -- a native / inline-C higher-order function that re-applies a closure through turi_call on a live C frame -- by reifying that callback onto the driver work-stack as an explicit resume continuation, the turi analog of tur's heap DK chain. With no synchronous native re-entry left, the eval_depth increment in eval_apply, the depth guard, and the TURI_EVAL_FRAME_BYTES byte-estimate retire: interpreter recursion becomes provably heap-bounded. This is also the evaluation substrate under turi-interpreter-delimited-control-plan.md, so turi gets first-class delimited control the same way tur has it.
+description: Eliminate the last source of unbounded C recursion in the tree-walking interpreter -- a native / inline-C higher-order function that re-applies a closure through turi_call on a live C frame -- by reifying that callback onto the driver work-stack as an explicit resume continuation, the turi analog of tur's heap DK chain. With no synchronous native re-entry left, the eval_depth increment in eval_apply, the depth guard, and the TURI_EVAL_FRAME_BYTES byte-estimate retire: interpreter recursion becomes provably heap-bounded. It also completes turi-interpreter-delimited-control-plan.md (which lands first), letting continuations be captured through native HOFs as well, so turi gets first-class delimited control the same way tur has it.
 ---
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
@@ -41,13 +41,17 @@ The payoff is twofold:
    become dead: interpreter recursion is provably heap-bounded (turi becomes
    *stronger* than tur here, which still C-recurses for ordinary recursion and
    reifies only delimited-control regions).
-2. **It is the substrate delimited control needs.** A work-stack that is the
-   sole locus of control is exactly what
+2. **It is the substrate that *completes* delimited control.** A work-stack
+   that is the sole locus of control is what
    [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
-   wants for multishot / escaping / nested-handler continuations: a continuation
-   becomes a slice of this work-stack, not a ucontext fiber. The two plans share
-   the resume protocol; this one is the foundation and should land first (or
-   merge).
+   (DC) needs for continuations captured *through* a native HOF callback. DC
+   ships **first** -- its five target fixtures capture through turi-code control
+   (`perform`/`handle`/`shift`), never across a native HOF, so they are tractable
+   on today's work-stack and deliver the high-severity crash fixes now. SR then
+   *removes DC's residual restriction* ("no capture through a native HOF") by
+   putting that callback on the work-stack too. The two share the resume
+   protocol; this plan extends DC's continuation representation rather than
+   preceding it. See the sequencing note in DC.
 
 This is a large, invasive change -- a real CPS conversion of the re-entrant
 native surface -- hence its own plan. The frame-reuse hybrid + guard is a correct
@@ -146,13 +150,13 @@ driver continuation that schedules the closure application:
    receivers) to the enter/resume form. The set is small and enumerable (grep
    `turi_call` / the inline-C `TUR_APPLY*` recognizer); each conversion is local.
 
-5. **Continuations are work-stack slices (tie-in).** With control fully on the
-   work-stack, capturing a continuation at a `perform`/`shift` is copying the
-   slice from the capture point up to the matching `DK_PROMPT`, exactly as
-   [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
-   step 1 describes -- now trivially heap-owned and clonable because no C frame
-   is involved. This plan supplies that plan's substrate; land them together (or
-   fold that plan's steps 1-4 in as this plan's final phase).
+5. **Continuations capture through natives too (tie-in).** DC lands first and
+   represents a continuation as the work-stack slice from the capture point up to
+   the matching `DK_PROMPT`. Once SR puts native callbacks on the work-stack
+   (`DK_NATIVE_RESUME`), that slice can also span a suspended native HOF, so DC's
+   clone-on-resume logic *extends* to capture-through-a-native -- the one case DC
+   carves out until SR. No rework: SR adds a frame kind DC's capture already
+   knows how to copy.
 
 ## Retiring the guard (the headline payoff)
 
@@ -196,12 +200,15 @@ safe resting point.
    synchronous native re-entry remains; remove the `eval_depth` increment +
    check and `TURI_EVAL_FRAME_BYTES`. Re-run the probe: deep HOF re-entry is now
    heap-bounded with **no** limit error and no crash.
-5. **N5 -- delimited-control completion.** Fold in
-   [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
-   steps 1-4 (capture = work-stack slice; clone-on-resume for multishot;
-   heap lifetime; re-establish handler/prompt stack), un-carving the five
-   `requires.tur-only` `interp-continuation` fixtures. turi now has delimited
-   control the way tur does -- on a heap continuation, not the C stack.
+5. **N5 -- extend delimited control through natives.** DC has already shipped
+   (continuations as work-stack slices; clone-on-resume; heap lifetime;
+   re-established handler/prompt stack) and un-carved the five
+   `requires.tur-only` `interp-continuation` fixtures, restricted to capture
+   through turi-code control. N5 lifts that restriction: with native callbacks
+   now on the work-stack (`DK_NATIVE_RESUME`), DC's capture/clone path extends to
+   span a suspended native HOF. Add a fixture that captures a continuation across
+   a native HOF (e.g. `shift` inside the callback of a recursive `option-map`)
+   and un-carve it.
 
 ## Risks and trade-offs
 
@@ -248,8 +255,11 @@ safe resting point.
   there note frame reuse does **not** by itself retire the guard -- this is the
   follow-up that does.
 - [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
-  -- multishot / escaping / nested continuations; this plan is its evaluation
-  substrate (shared resume protocol). Land this first, then fold that in as N5.
+  -- multishot / escaping / nested continuations. **Lands first** (its hard
+  dependency, the explicit-stack evaluator, is already met; SR is not required
+  for its target fixtures). SR follows and removes DC's residual "no capture
+  through a native HOF" restriction (N5) -- it extends DC's continuation
+  representation, it does not precede it.
 - [turi-eval-trampoline-plan.md](turi-eval-trampoline-plan.md) -- the
   explicit-stack driver (`eval_drive`) whose `DriveCont` stack is the work-stack
   used here.
