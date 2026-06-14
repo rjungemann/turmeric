@@ -1,6 +1,6 @@
 ---
 title: M5 constrained-polymorphic spec body picks wrong Eq instance for parametric receiver
-severity: silent miscompile (would be hard cc error) -- ELAB FIX LANDED, emit-side bridge follow-up open
+severity: silent miscompile (would be hard cc error) -- FULLY FIXED (elab + emit)
 date: 2026-06-13
 ---
 
@@ -38,7 +38,20 @@ Path A spec of `Eq Vec`).  Suite stays at 1562/88 (~3 below baseline,
 all flake variance -- zero snapshot diffs, confirmed by full
 regen-and-compare).
 
-## Remaining: emit-side arg-bridge direction
+## Resolved: emit-side arg-bridge direction (commit follow-up to a301229e)
+
+`find_matched_abi_spec` now consults `specialized_call_exprs[]` first
+(emit_expr.c:25-50).  When emit_module.c has interned a spec for this
+exact call Expr*, the spec is looked up by `clone_name` instead of by
+type-matching `spec->arg_types[i]` against the IR call's still-abstract
+`args[i]->type`.  The arg-bridge at emit_expr.c:2587 then sees
+`matched_spec != NULL` and skips the carrier coercion, leaving the
+by-value `Vec__int` args alone.
+
+Fixture: `tests/fixtures/m5-constrained-poly-vec-eq/`.  Suite remains
+at 1563/88 (was 1562/88 -- +1 is the new fixture; identical FAIL set).
+
+## Original analysis (preserved for context)
 
 The probe still doesn't compile end-to-end -- the call's args still go
 through `CK_CONCRETE -> CK_CARRIER` bridging (the inner call site
