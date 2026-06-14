@@ -734,7 +734,7 @@ The foundational correctness fix and the CI ratchet shipped:
 
 > **Execution detail:** the full per-bucket plan for closing the remaining
 > failures lives in
-> [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
+> [turi-interpreter-gap-closure-plan.md](../archive/history/turi-interpreter-gap-closure-plan.md)
 > (workstreams W1-W5, the fix-vs-carve decision rule, sequencing, and metrics).
 > This section is the summary; that doc is the working plan.
 
@@ -768,7 +768,7 @@ stands at **912 passed, 0 failed** (181 -> 463 -> 912), with the remaining gap
 down to **260** (~244 genuine failures: the W1b native-shim cluster + W4 silent
 miscompiles + a small semantic tail). The native-shim-conflicted modules
 (`result/map/set/hamt/contract`) stay excluded pending W1b -- see the
-[gap-closure plan](turi-interpreter-gap-closure-plan.md) for the per-workstream
+[gap-closure plan](../archive/history/turi-interpreter-gap-closure-plan.md) for the per-workstream
 detail.
 
 Remaining buckets: typed-stdlib native-shim reconciliation (W1b), inline-C
@@ -1006,7 +1006,15 @@ the harness.
 
 ---
 
-## Phase TI9 -- Parity matrix guide
+## Phase TI9 -- Parity matrix guide -- **DONE 2026-06-14**
+
+Shipped as [docs/guides/turi-parity-guide.md](../guides/turi-parity-guide.md):
+the feature-by-feature parity matrix (tur vs. turi), the continuation feature
+gap, the documented carve-outs (cross-linked to `docs/turi-carve-out.txt` /
+`docs/turi-preload-carve-out.txt` and the two `check_turi_*_parity.py` gates),
+the tree-walker performance note, and a "how to ask 'does feature X work?'"
+section. Linked from `docs/guides/README.md` (Reference + topic index). The
+carve-out file's forward reference to this guide now resolves.
 
 Create `docs/guides/turi-parity-guide.md`. Sections:
 

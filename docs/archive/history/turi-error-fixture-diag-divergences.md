@@ -147,4 +147,4 @@ green.
 Filed while executing TI8.b/W3 (the errors/ harness-coverage piece). The 282
 matching fixtures are now CI-validated under turi; these 9 are tracked here and
 denylisted. See
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md).
+[docs/archive/history/turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md).

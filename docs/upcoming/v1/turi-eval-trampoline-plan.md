@@ -265,5 +265,5 @@ problem.
 ## Cross-references
 
 - Report / origin: [docs/reported/turi-deep-recursion-c-stack-overflow.md](../../reported/turi-deep-recursion-c-stack-overflow.md)
-- Broader interpreter parity tracking: [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md), [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
+- Broader interpreter parity tracking: [turi-parity-post-v1-plan.md](../turi-parity-post-v1-plan.md), [turi-interpreter-gap-closure-plan.md](../../archive/history/turi-interpreter-gap-closure-plan.md)
 - Parked fixture: `tests/fixtures/escape-deep-capture` (`requires.compiled`)

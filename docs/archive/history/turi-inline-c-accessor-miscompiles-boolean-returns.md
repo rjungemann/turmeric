@@ -97,5 +97,5 @@ After a fix, the repro prints `false`; `result-basic` either prints the correct
 ## Status
 
 Filed while investigating TI8.b/W1b. This is a W4 (silent-miscompile) item in
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md);
+[docs/archive/history/turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md);
 it is independent of the native-shim reconciliation and can be fixed on its own.

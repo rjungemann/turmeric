@@ -11,7 +11,7 @@
 > **Type:** Interpreter / Test Infra
 > **Scope:** post-v1 -- the *last* tranche of non-inline-C fixtures that fail
 > under `tur --interpret`, blocking the allowlist->denylist flip (W5).
-> **Parent:** [turi-interpreter-gap-closure-plan.md](../../upcoming/turi-interpreter-gap-closure-plan.md)
+> **Parent:** [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
 > (this is the concrete decomposition of that plan's W5 "residual" set)
 > **Grand-parent:** [turi-parity-post-v1-plan.md](../../upcoming/turi-parity-post-v1-plan.md) Phase TI8.b
 
@@ -289,7 +289,7 @@ Suggested PR slicing (each independently green, allowlist additions in-PR):
 
 ## See Also
 
-- [turi-interpreter-gap-closure-plan.md](../../upcoming/turi-interpreter-gap-closure-plan.md) --
+- [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md) --
   parent (W1-W5; this decomposes W5's residual).
 - [docs/archive/history/turi-harness-flip-reconciliation.md](turi-harness-flip-reconciliation.md)
   -- historical catalogue of the flip.
