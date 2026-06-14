@@ -274,13 +274,28 @@
       (vec-eq-loop xi yi (+ i 1) len cmp)
       false)))
 
+(defn vec-len-byval [A] [v : (Vec A)] : int
+  (.len v))
+
+(defn vec-data-get__ [data : ptr<void> i : int] : int
+  ```c return ((int64_t *)(intptr_t)data)[i]; ```)
+
+(defn vec-eq-loop-byval [A]
+  [(Eq A)]
+  [x : (Vec A) y : (Vec A) i : int len : int]
+  : bool
+  (if (= i len)
+    true
+    (if (eq? (:: (vec-data-get__ (.data x) i) A)
+             (:: (vec-data-get__ (.data y) i) A))
+      (vec-eq-loop-byval x y (+ i 1) len)
+      false)))
+
 (definstance Eq [Vec]
   [(Eq A)]
   (eq? [x y]
-    (let [xi (:: x :int)
-          yi (:: y :int)
-          lx (vec-len xi)
-          ly (vec-len yi)]
+    (let [lx (vec-len-byval (:: x (Vec A)))
+          ly (vec-len-byval (:: y (Vec A)))]
       (if (= lx ly)
-        (vec-eq-loop xi yi 0 lx (fn [a b] (eq? a b)))
+        (vec-eq-loop-byval (:: x (Vec A)) (:: y (Vec A)) 0 lx)
         false))))

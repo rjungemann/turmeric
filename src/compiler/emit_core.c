@@ -1070,12 +1070,27 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
         if (reresolved) return reresolved;
     }
     if (ctx && call) {
+        /* M5 Finding 7: the same source-body call Expr* is recorded once per
+         * outer spec (per element type for a shared instance-method body).
+         * Prefer the entry whose recorded outer spec matches the CURRENT active
+         * spec, so each element-type spec body emits its own callee clone;
+         * fall back to the first entry (top-level / single-spec, unchanged). */
+        const char *active_outer = ctx->current_abi_specialization
+            ? ctx->current_abi_specialization->clone_name : NULL;
+        const char *matched = NULL;
+        bool saw = false;
         for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
-            if (ctx->specialized_call_exprs[i] == call) {
-                char *name = strdup(ctx->specialized_call_names[i]);
-                if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
-                return name;
+            if (ctx->specialized_call_exprs[i] != call) continue;
+            if (!saw) { matched = ctx->specialized_call_names[i]; saw = true; }
+            if (ctx->specialized_call_outer[i] == active_outer) {
+                matched = ctx->specialized_call_names[i];
+                break;
             }
+        }
+        if (saw) {
+            char *name = strdup(matched);
+            if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+            return name;
         }
         if (call->kind == EX_CALL && b) {
             for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {

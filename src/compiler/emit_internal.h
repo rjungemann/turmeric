@@ -206,6 +206,15 @@ typedef struct EmitCtx {
     uint32_t     cap_abi_specializations;
     const Expr **specialized_call_exprs;
     const char **specialized_call_names;
+    /* M5 Finding 7: the clone_name of the active (outer) specialization at the
+     * moment this call was recorded -- NULL when recorded at top level.  One
+     * shared source body (e.g. an `Eq Vec` instance method) is scanned once per
+     * outer spec (Vec__int, Vec__bool, ...); each scan records the SAME inner
+     * call Expr* with a DIFFERENT callee clone_name.  Keying the lookup on
+     * (call Expr*, outer clone_name) instead of the call Expr* alone lets each
+     * element-type spec body resolve its own callee clone, instead of all of
+     * them collapsing onto the first-recorded (int) clone. */
+    const char **specialized_call_outer;
     uint32_t     n_specialized_calls;
     uint32_t     cap_specialized_calls;
     /* KB-022: function bindings that are the target of a direct (non-specialized)

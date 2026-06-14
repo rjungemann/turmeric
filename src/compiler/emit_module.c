@@ -761,19 +761,37 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
 }
 
 static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, const char *clone_name) {
+    /* M5 Finding 7: also record the active outer spec so the same source-body
+     * call recorded under different outer specs (per element type) stays
+     * distinguishable at lookup. */
+    const char *outer = ctx->current_abi_specialization
+        ? ctx->current_abi_specialization->clone_name : NULL;
+    /* Idempotent: if this exact (call, outer) pair is already recorded, keep
+     * the existing entry (re-scanning a spec body must not duplicate). */
+    for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+        if (ctx->specialized_call_exprs[i] == call &&
+            ctx->specialized_call_outer[i] == outer) {
+            ctx->specialized_call_names[i] = clone_name;
+            return;
+        }
+    }
     if (ctx->n_specialized_calls >= ctx->cap_specialized_calls) {
         uint32_t new_cap = ctx->cap_specialized_calls ? ctx->cap_specialized_calls * 2 : 8;
         const Expr **new_exprs = (const Expr **)realloc(ctx->specialized_call_exprs,
             new_cap * sizeof(Expr *));
         const char **new_names = (const char **)realloc(ctx->specialized_call_names,
             new_cap * sizeof(char *));
-        if (!new_exprs || !new_names) { fprintf(stderr, "tur: oom\n"); abort(); }
+        const char **new_outer = (const char **)realloc(ctx->specialized_call_outer,
+            new_cap * sizeof(char *));
+        if (!new_exprs || !new_names || !new_outer) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->specialized_call_exprs = new_exprs;
         ctx->specialized_call_names = new_names;
+        ctx->specialized_call_outer = new_outer;
         ctx->cap_specialized_calls = new_cap;
     }
     ctx->specialized_call_exprs[ctx->n_specialized_calls] = call;
     ctx->specialized_call_names[ctx->n_specialized_calls] = clone_name;
+    ctx->specialized_call_outer[ctx->n_specialized_calls] = outer;
     ctx->n_specialized_calls++;
 }
 
@@ -5344,6 +5362,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.cap_abi_specializations = 0;
     ctx.specialized_call_exprs = NULL;
     ctx.specialized_call_names = NULL;
+    ctx.specialized_call_outer = NULL;
     ctx.n_specialized_calls = 0;
     ctx.cap_specialized_calls = 0;
     ctx.carrier_call_bindings = NULL;
@@ -6050,6 +6069,7 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
+    free(ctx.specialized_call_outer);
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
@@ -6475,6 +6495,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             free(hdr_ctx.abi_specializations[i].clone_name);
         free(hdr_ctx.abi_specializations);
         free(hdr_ctx.specialized_call_exprs);
+        free(hdr_ctx.specialized_call_outer);
         free(hdr_ctx.specialized_call_names);
         free(hdr_ctx.carrier_call_bindings);
         if (n_decls > 0) buf_putc(out, '\n');
@@ -6650,6 +6671,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.cap_abi_specializations = 0;
     ctx.specialized_call_exprs = NULL;
     ctx.specialized_call_names = NULL;
+    ctx.specialized_call_outer = NULL;
     ctx.n_specialized_calls = 0;
     ctx.cap_specialized_calls = 0;
     ctx.carrier_call_bindings = NULL;
@@ -7123,6 +7145,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
+    free(ctx.specialized_call_outer);
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
