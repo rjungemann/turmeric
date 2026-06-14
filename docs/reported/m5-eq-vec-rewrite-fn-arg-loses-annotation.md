@@ -176,6 +176,53 @@ Suspects: a typeclass-method-elab early-rewrite in
 arg's value is exactly `(fn [a b] (method a b))` and `method` is a
 typeclass method.
 
+### AST-diff finding 2026-06-14 (session 2, attempt 4)
+
+Two corrections to earlier analyses:
+
+1. **gap1b doesn't actually work**.  Earlier comparison showed
+   "definstance body works, plain defn fails", attributed to a
+   typeclass-elab optimisation.  AST dumping showed the user-level
+   `(definstance Eq [Vec])` in gap1b was being **silently overridden
+   by stdlib's existing Eq Vec** -- the user's `loop-helper` was
+   never emitted (`emit-c` output has no `loop_helper` symbol).
+   The "working" path was stdlib's Eq Vec body using
+   `(vec-eq-loop xi yi 0 lx (fn [a b] (eq? a b)))` where xi/yi are
+   typed `:int` -- so the lambda's int args match the helper's A
+   (bound only via cmp).
+   
+   With a fresh class (`defclass MyClass [a]`) that doesn't shadow,
+   the definstance body's call to the helper FAILS with the same
+   "expected (fn [] : ?)" error.  The gap is universal across
+   contexts.
+
+2. **Root cause refined**: in helper signatures with `[x : (Vec A)
+   y : (Vec A) ... cmp : (fn [A A] bool)]`, args 0/1 bind helper's
+   `A` to the outer caller's abstract tyvar FIRST.  When cmp's
+   `(fn [A A] bool)` is then checked against the lambda's
+   `(fn [int int] :bool)`, A is already bound to TYVAR; the
+   concrete int from the lambda doesn't unify with TYVAR.
+   `call_collect_type_bindings`'s TY_TYVAR case fails on
+   `type_eq(prior=TYVAR, actual=int)`.
+
+3. **Attempted fix**: in `call_collect_type_bindings` TY_TYVAR
+   case, allow a CONCRETE actual to upgrade a prior abstract-
+   placeholder binding (where the placeholder is TY_TYVAR OR
+   TY_STRUCT-NULL-def).  The principle: an abstract placeholder
+   was "any type"; a concrete is a valid instantiation; this is
+   exactly what unification should do.
+   
+   Result: the simple plain-defn case (gap1e) now compiles and
+   runs correctly.  But the suite saw a NET ZERO change: one
+   test (emit-abi-trace) started passing, one test (hamt-delete)
+   started SIGSEGV'ing at runtime.  The hamt-delete regression
+   suggests the upgrade is too permissive in some context --
+   probably interacts with how HAMT specs are interned across
+   multiple call sites with different concrete types.
+   
+   Reverted.  The fix is on the right track but needs a tighter
+   gate that excludes whatever HAMT pattern conflicts.
+
 ### Two-step fix
 
 1. **Diagnostic** (one-liner): add TY_FN to the enrichment whitelist
