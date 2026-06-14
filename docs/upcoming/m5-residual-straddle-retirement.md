@@ -157,7 +157,34 @@ never crosses the carrier boundary.
   helpers rewritten as pure-Turmeric loops".  Option D extends
   that same rewrite to drop the int64 ascription step.
 
-## Update 2026-06-14 (session 2): Bridge-side trace, partial progress
+## Update 2026-06-14 (session 2, follow-up): Bridge-side strip FIXED
+
+The bridge-side gap traced in this session turned out to be an
+**emit-side EX_ASCRIBE strip**, not an elab-time AST transform.  At
+`emit_expr.c:2419`, the call-arg emit path stripped all EX_ASCRIBE
+wrappers BEFORE invoking emit_value -- so the L4393 CK_CONCRETE ->
+CK_CARRIER bridge inside the EX_ASCRIBE handler never got a chance
+to fire for call arguments.
+
+Fix: a narrow gate that preserves EX_ASCRIBE wrappers when they
+match the L4393 bridge's firing conditions (target=TY_INT, inner is
+a by-value carrier-ABI EX_VAR, inner's elab-time type uses carrier
+ABI).  Now `(:: x :int)` on a by-value `Vec__int` spec param spills
+to a temp and yields `(int64_t)(intptr_t)(&__t)` as expected.
+
+Pinned by `tests/fixtures/m5-spec-body-ascription-bridge/`.  gap2b's
+constrained-poly defn with parametric receivers + direct `(eq? ...)`
+dispatch now compiles AND runs correctly end-to-end (exit=0).
+
+This UNBLOCKS the broader Option D direction for ANY constrained-poly
+helper that uses `(:: param :int)` to bridge by-value spec params
+into carrier-ABI helpers.  The `Eq Vec` rewrite specifically still
+hits the "single-body-two-ABIs" wall (Update below) because its
+body shape requires `(.len x)` to work for both the carrier base
+(x: int64) AND the spec (x: Vec__int).  That's an architectural
+design choice for the Eq Vec definstance, not a bridge issue.
+
+## Update 2026-06-14 (session 2): Bridge-side trace, partial progress (SUPERSEDED by follow-up above)
 
 After landing the M5 elab fix for wrong-instance dispatch on
 EX_ASCRIBE-to-tyvar receiver
