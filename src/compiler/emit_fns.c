@@ -660,28 +660,31 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     buf_puts(file, ") {\n");
 
-    /* M2a (end-to-end-monomorphization-plan, generalized from Prereq 6):
-     * synthesize a direct by-value constructor body for any `#{Construct}`-
-     * annotated polymorphic constructor. The body heap-spills the payload
-     * arg, builds the result struct in place, and returns by value. The
-     * inline-C body is retained as a fallback for the carrier-return path
-     * (typeclass-instance-method dispatch context where the call site
-     * expects an int64 handle).
+    /* M2b RETIRED M2a inference (2026-06-13).
      *
-     * Shape inference (M2a "Option 1"): the result type names a defstruct
-     * with exactly one :bool discriminator field and N payload fields, each
-     * typed by a distinct type parameter. The constructor's payload arg is
-     * a single tyvar; match its name against the defstruct's `type_params`
-     * to pick which payload slot to fill. Tag value comes from the slot's
-     * position among non-bool fields (first → true, second → false).
+     * Background: M2a (generalized from Prereq 6) used shape inference to
+     * synthesize a direct by-value constructor body for `#{Construct}`-
+     * annotated polymorphic constructors with value-struct payloads.  It
+     * reconstructed the discriminator-tag + payload-field assignment by
+     * matching the param's C type against StructDef type-params, then
+     * emitted `__tur_p6_r.is_ok = true; memset(...); __tur_p6_r.ok_val =
+     * payload;` style code.
      *
-     * If the shape doesn't match (no struct extraction, no discriminator,
-     * arity mismatch, or no matching slot), fall through to the inline-C
-     * body. The marker is opt-in, so unannotated constructors are
-     * unaffected.
+     * Why retired: M2b shipped `(make-struct StructName :field val ...)`
+     * and `(default-of T)` body forms in elab_structs.c / elab_types.c.
+     * stdlib's ok/err/some/none/pair/tcons-of now have explicit make-struct
+     * bodies; the normal EX_MAKE_STRUCT emit at emit_expr.c:3700-3731
+     * handles the field-by-field construction including heap-spill for
+     * value-struct payload fields via struct_field_c_type's pointer
+     * lowering.  Empirically, disabling the inference branch produced
+     * cleaner C (designated initializer instead of memset-then-assign)
+     * with zero fixture-snapshot diffs across the suite (1564/86 baseline)
+     * because no fixture's snapshot exercised the inference path -- the
+     * stdlib migration to make-struct made it dead code.
      *
-     * See docs/upcoming/v2/m2b-make-struct-design.md for the planned
-     * `make-struct` body form that supersedes this inference in M2b. */
+     * The variable name `prereq6_synthesized_body` stays for the symmetric
+     * m2b_carrier_synth control flow below; this flag remains false
+     * because the normal body-emit path handles the by-value case now. */
     bool prereq6_synthesized_body = false;
 
     /* M2b (end-to-end-monomorphization-plan, Plan M2): synthesize a CARRIER
@@ -787,150 +790,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     {
-        bool any_box = false;
-        for (uint8_t i = 0; i < fd->n_params && i < 16; i++)
-            if (needs_box_spill[i]) { any_box = true; break; }
-        bool is_construct = (fd->binding && fd->binding->is_construct_template);
-        const char *ret_c = (is_construct && any_box)
-            ? emit_type_c_name(ctx,
-                ctx->current_abi_specialization->result_type)
-            : NULL;
-        /* Skip synthesis when the spec's C return type is the int64 carrier
-         * (typeclass-instance-method dispatch context). Body's inline-C
-         * still routes through tur_ok/tur_err/etc. -- the surviving
-         * carrier sliver tracked in the open report. */
-        bool synth_ok = (ret_c && strcmp(ret_c, "int64_t") != 0);
-
-        StructDef *def = NULL;
-        Type extracted_args[16];
-        uint8_t n_extracted = 0;
-        if (synth_ok) {
-            Type rt = ctx->current_abi_specialization->result_type;
-            if (!type_extract_struct_app(&rt, &def, extracted_args, &n_extracted) || !def) {
-                synth_ok = false;
-            }
-        }
-
-        /* Identify discriminator + payload field.
+        /* M2b retirement of the M2a inference path: the shape-inference
+         * code that used to live here (Result/Option/discriminator field
+         * detection + tyvar-position matching + memset-spill emit) is gone.
+         * ok/err/some/none now have explicit (make-struct ...) bodies in
+         * stdlib; the normal EX_MAKE_STRUCT emit handles their construction
+         * including value-struct payload heap-spill via struct_field_c_type.
+         * Empirically the inference branch was dead code -- disabling it
+         * produced zero fixture-snapshot diffs and ran the suite clean
+         * (1564/86 baseline).  See the M2b design doc and audit Section 10
+         * for the migration history.
          *
-         * Strategy: rather than tyvar-name matching (the param's tyvar
-         * name is unreliable post-elaboration), match the spec's concrete
-         * payload-arg C type against the extracted struct-arg types --
-         * that tells us which type-param position the constructor fills,
-         * and we then find the field whose declared tyvar references the
-         * same type-param-index in the StructDef. */
-        int disc_field_idx = -1;
-        int payload_field_idx = -1;
-        int payload_position = -1;  /* position among non-bool fields */
-        int param_pos_in_struct = -1;  /* index in def->type_params */
-        if (synth_ok) {
-            /* Must have exactly one payload arg (M2a inference rule). */
-            if (fd->n_params != 1) synth_ok = false;
-        }
-        if (synth_ok) {
-            /* Find which type-param slot the constructor's payload arg fills. */
-            const char *arg_c = emit_type_c_name(ctx,
-                ctx->current_abi_specialization->arg_types[0]);
-            for (uint8_t i = 0; i < n_extracted; i++) {
-                const char *slot_c = emit_type_c_name(ctx, extracted_args[i]);
-                if (arg_c && slot_c && strcmp(arg_c, slot_c) == 0) {
-                    param_pos_in_struct = (int)i;
-                    break;
-                }
-            }
-            if (param_pos_in_struct < 0) synth_ok = false;
-        }
-        if (synth_ok) {
-            /* Find discriminator: lone :bool field. */
-            int n_bool = 0;
-            for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-                if (def->fields[fi].kind == TY_BOOL) {
-                    disc_field_idx = (int)fi;
-                    n_bool++;
-                }
-            }
-            if (n_bool != 1) synth_ok = false;
-        }
-        if (synth_ok) {
-            /* Find the payload field whose declared tyvar name matches the
-             * struct's type_params[param_pos_in_struct]. Track its position
-             * among non-bool fields to derive the discriminator tag value
-             * (first non-bool slot → true, subsequent → false). */
-            const char *target_tyvar =
-                (def->type_params && param_pos_in_struct < def->n_type_params)
-                ? def->type_params[param_pos_in_struct] : NULL;
-            int pos = 0;
-            for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-                if ((int)fi == disc_field_idx) continue;
-                const StructField *f = &def->fields[fi];
-                bool match = false;
-                if (target_tyvar && f->full_type
-                    && f->full_type->kind == TY_TYVAR
-                    && f->full_type->as.tyvar_.name
-                    && strcmp(f->full_type->as.tyvar_.name, target_tyvar) == 0) {
-                    match = true;
-                }
-                if (match) {
-                    payload_field_idx = (int)fi;
-                    payload_position = pos;
-                    break;
-                }
-                pos++;
-            }
-            if (payload_field_idx < 0) synth_ok = false;
-        }
-
-        if (synth_ok && is_construct && any_box) {
-            char *disc_name = mangle_field_name(def->fields[disc_field_idx].name);
-            char *payload_name = mangle_field_name(def->fields[payload_field_idx].name);
-            bool tag_value = (payload_position == 0);  /* first non-bool slot → true */
-            const char *spilled_param_name = NULL;
-            for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
-                if (!needs_box_spill[i]) continue;
-                const char *pn = raw_name_for_binding(fd->params[i]);
-                if (!spilled_param_name) spilled_param_name = pn;
-                else free((void*)pn);
-            }
-            indent_buf(file, ctx->indent + 4);
-            buf_printf(file, "%s __tur_p6_r;\n", ret_c);
-            indent_buf(file, ctx->indent + 4);
-            buf_printf(file, "__tur_p6_r.%s = %s;\n",
-                       disc_name, tag_value ? "true" : "false");
-            /* Zero every non-discriminator field so the unfilled payload
-             * slots are deterministic. */
-            for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-                if ((int)fi == disc_field_idx) continue;
-                char *mfn = mangle_field_name(def->fields[fi].name);
-                indent_buf(file, ctx->indent + 4);
-                buf_printf(file,
-                           "memset(&__tur_p6_r.%s, 0, sizeof(__tur_p6_r.%s));\n",
-                           mfn, mfn);
-                free(mfn);
-            }
-            /* Heap-spill payload: matches struct_field_c_type's pointer
-             * lowering for value-struct payload fields. */
-            const char *payload_arg_c = emit_type_c_name(ctx,
-                ctx->current_abi_specialization->arg_types[0]);
-            indent_buf(file, ctx->indent + 4);
-            buf_printf(file,
-                       "%s *__tur_p6_payload = (%s *)malloc(sizeof(%s));\n",
-                       payload_arg_c, payload_arg_c, payload_arg_c);
-            indent_buf(file, ctx->indent + 4);
-            buf_printf(file, "*__tur_p6_payload = __tur_inbox_%s;\n",
-                       spilled_param_name);
-            indent_buf(file, ctx->indent + 4);
-            buf_printf(file, "__tur_p6_r.%s = __tur_p6_payload;\n",
-                       payload_name);
-            indent_buf(file, ctx->indent + 4);
-            buf_puts(file, "return __tur_p6_r;\n");
-            free((void*)spilled_param_name);
-            free(disc_name);
-            free(payload_name);
-            prereq6_synthesized_body = true;
-        } else {
-            /* No special-case synthesis: fall through to the original
-             * inline-C body. The heap-spill stanza is still emitted so the
-             * body's `(int64_t)(intptr_t)x` cast operates on a pointer. */
+         * The heap-spill stanza below stays: it sets up the `__tur_inbox_X`
+         * pointer for the few inline-C `#{Construct}` bodies that may still
+         * cast their params via `(int64_t)(intptr_t)x`.  Stdlib has none,
+         * but the safety net is cheap and future user code can rely on it. */
+        {
             for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
                 if (!needs_box_spill[i]) continue;
                 Type pty = ctx->current_abi_specialization->arg_types[i];
