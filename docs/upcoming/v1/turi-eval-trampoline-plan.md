@@ -420,8 +420,32 @@ costs bounded C recursion, not turi-program depth. Add a shallow re-entry guard.
    (orthogonal to the trampoline; the fold only shifted the depth at which it
    shows). Residual, unverified: a HOF with a very large C frame could overflow
    before the ~1071 guard; revisit if one is found.
-5. **T3.4 -- raise `max_eval_depth`, retire the `TURI_EVAL_FRAME_BYTES` stopgap,
-   unpark `escape-deep-capture`** (T5).
+5. **T3.4 -- guard re-tune for the residual path -- LANDED 2026-06-14.** The
+   `escape-deep-capture` unpark already happened in T3.2b. The plan's T5
+   "retire the `eval_depth` guard / `TURI_EVAL_FRAME_BYTES` stopgap" does **not**
+   apply to the hybrid: the guard is still load-bearing for the *residual*
+   C-recursion the hybrid retains -- recursion *through* native HOFs
+   (`turi_call -> eval_apply -> eval_body_tco -> eval_expr`) and the few
+   not-yet-driven expr kinds. Folded non-tail recursion bypasses the guard
+   entirely (heap-bounded), so the constant no longer needs to model the
+   `sum-to` path. Re-measured the now-binding path: HOF re-entry through
+   `option-map` stack-overflows at ~1625 `eval_depth` (Debug+ASan, 12.5 MB), and
+   the T1-era `TURI_EVAL_FRAME_BYTES = 7168` had eroded the margin to ~1.5x for
+   it. Re-tuned to **9472** (`max_eval_depth` ~811, ~2x margin below the crash),
+   restoring Direction A's safety factor. Validated: deep HOF recursion errors
+   cleanly (no SIGSEGV) at all depths; `sum-to 500000` and `escape-deep-capture`
+   unaffected (folded); `run-turi.sh` 1187 passed (same 8 unrelated
+   monomorphization fails), 14/14 `eval|sandbox` ctests. **The guard stays** (it
+   is not dead code in the hybrid); T5's removal is intentionally not done.
+
+   **Trampoline plan status: COMPLETE for its stated goal.** Deep non-tail
+   recursion is heap-bounded (sum-to 500000, escape-deep-capture pass under
+   `--interpret`), TCO is preserved (sum-acc/loop-let/loop-do at 1e6 stay O(1)),
+   and the residual C-recursion path (native-HOF re-entry) is SIGSEGV-safe with a
+   2x guard margin and propagates callback errors cleanly. Optional future work:
+   drive the remaining cold expr kinds (EX_WHILE etc.) and the full CEK
+   frame-reuse TCO (would let the guard shrink further), but neither is needed
+   for the goal.
 
 ### Risks
 

@@ -31,16 +31,23 @@
 
 /* Conservative upper bound on C-stack bytes per `eval_expr` frame.
  *
- * T1 (turi-eval-trampoline-plan): the dominant per-frame cost used to be several
- * TuriValue[MAX_EVAL_ARGS] (1 KB) scratch arrays on the C stack; eval.c now
- * heap-spills / shrinks them (EVAL_SCRATCH_INLINE / EVAL_MAX_FN_ARITY), roughly
- * halving the per-level frame.  Re-measured on the Debug+ASan build (worst case):
- * a deep non-tail `sum-to` now stack-overflows at ~1120 logical levels (was
- * ~650), i.e. ~5.8 KB of real stack per eval_expr frame.  Keeping Direction A's
- * ~1.25x-of-real frame bound (so the depth guard still trips at ~2x margin below
- * the crash) gives ~7 KB; the achievable depth roughly doubles (~311 -> ~530
- * levels) while staying SIGSEGV-safe. */
-#define TURI_EVAL_FRAME_BYTES   7168u   /* ~7 KB (post-T1 re-tune) */
+ * Post-trampoline (turi-eval-trampoline-plan, T1-T3.2b): deep *non-tail*
+ * recursion is folded onto the heap work-stack (eval_drive) and no longer
+ * touches this guard at all -- it is heap-bounded.  The guard now binds only the
+ * *residual* C-recursion that still flows through `eval_expr`: recursion through
+ * native HOFs (a callback re-enters via turi_call -> eval_apply -> eval_body_tco
+ * -> eval_expr) and the few not-yet-driven expr kinds.  That HOF-re-entry path
+ * is the worst case (~8 C frames per eval_depth) and is what this constant must
+ * be sized against -- NOT the (now-folded) `sum-to` path the T1 value was tuned
+ * for.
+ *
+ * T3.4 re-tune: measured (Debug+ASan, 12.5 MB stack) HOF re-entry through
+ * `option-map` stack-overflows at ~1625 `eval_depth`.  9472 B/level gives
+ * max_eval_depth ~811, i.e. the guard trips at a ~2x margin below that crash
+ * (restoring Direction A's safety factor, which the 7168 value had eroded to
+ * ~1.5x for this path).  Folded non-tail recursion is unaffected (it bypasses
+ * the guard); Release builds have smaller frames and sustain more. */
+#define TURI_EVAL_FRAME_BYTES   9472u   /* ~9.25 KB (T3.4: sized for HOF re-entry) */
 /* Fraction of the stack we let interpreter recursion consume (the rest is
  * headroom for the base call chain and any non-eval frames within a level). */
 #define TURI_EVAL_STACK_FRACTION_NUM  3u
