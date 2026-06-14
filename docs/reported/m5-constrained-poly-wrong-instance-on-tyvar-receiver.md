@@ -1,8 +1,26 @@
 ---
 title: Constrained-poly defn with (Eq A) constraint dispatches eq? to wrong instance when receiver type is TY_TYVAR (silent miscompile / SIGSEGV)
-severity: silent miscompile, SIGSEGV at runtime
+severity: silent miscompile, SIGSEGV at runtime -- FIXED 2026-06-14
 date: 2026-06-14
 ---
+
+## Resolved 2026-06-14
+
+Fix landed at elab_typeclasses.c L3624: the carrier-rep dispatch
+branch (previously gated on `obj->type.kind == TY_TYVAR`) now also
+fires for "TY_STRUCT with NULL def" -- the alternate "abstract
+tyvar" representation that EX_ASCRIBE-to-class-constraint-tyvar
+elaborates to.  Both shapes now hit the same carrier-int dispatch
+path; emit-side re-resolution (`emit_reresolve_method_call`)
+specialises per call site.
+
+Pinned by `tests/fixtures/m5-constrained-poly-wrong-instance-fix/`.
+
+The bridge-side cc errors that gap2b (vec-eq-loop-byval shape)
+still hits are SEPARATE from this bug -- they're the M4c-pre-ext
+residual straddle, tracked in
+`docs/upcoming/m5-residual-straddle-retirement.md`.  Wrong-instance
+dispatch itself is now correct.
 
 ## Summary
 
