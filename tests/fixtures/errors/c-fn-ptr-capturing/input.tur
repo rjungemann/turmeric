@@ -1,0 +1,12 @@
+; typed-c-abi-function-pointers: a *capturing* closure carries an
+; environment that a bare C function pointer cannot represent, so passing
+; one to a `(c-fn ...)` parameter is a compile error citing the captures.
+
+(defn apply-cb [cb : (c-fn [int] int) x : int] : int
+  ```c
+  return cb(x);
+  ```)
+
+(defn main [] : int
+  (let [k 10]
+    (apply-cb (fn [n : int] : int (+ n k)) 5)))

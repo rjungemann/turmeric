@@ -2463,6 +2463,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* When param expects void * (TY_PTR_VOID), cast to void * not int64_t.
                  * Passing int64_t to void * is invalid in C99 (-Wint-conversion error). */
                 bool cast_to_void_ptr = false;
+                /* typed-c-abi-function-pointers: when the callee param is a
+                 * cfnptr (declared `R (*)(A...)`), the fn argument must be cast
+                 * through that typedef -- a raw (int64_t) cast would be an
+                 * int->pointer mismatch in C.  NULL = use the int64_t/void*
+                 * carrier cast as before. */
+                const char *fn_cast_typedef = NULL;
                 /* Phase P3: TY_INT (int64_t) arg passed to a TY_PTR_VOID (void*) param
                  * requires (void*)(intptr_t) coercion. Occurs when persistent-map
                  * lowering passes a map handle (int64_t) to hamt/count etc. */
@@ -2502,11 +2508,28 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         needs_fn_cast = true;
                         cast_to_void_ptr = true;
                     } else if (pk == TY_FN) {
-                        /* ER2: TY_FN parameter — stored as int64_t in C.  A function
-                         * reference (TY_FN) or closure pointer (TY_PTR_VOID) passed to it
-                         * must be cast to int64_t via intptr_t. */
-                        needs_fn_cast = true;
-                        cast_to_void_ptr = false;
+                        /* typed-c-abi-function-pointers: a cfnptr param is the
+                         * concrete `R (*)(A...)` typedef, not the int64_t
+                         * carrier; cast the (captureless) fn argument through
+                         * that typedef so the emitted C is well-typed. */
+                        const Type *pft = fn_binding->type.as.fn.arg_full_types
+                            ? fn_binding->type.as.fn.arg_full_types[param_idx] : NULL;
+                        if (pft && pft->kind == TY_FN && pft->as.fn.cfnptr) {
+                            const char *td = register_fn_ptr_typedef(pft);
+                            if (td) {
+                                fn_cast_typedef = td;
+                                needs_fn_cast = true;
+                            } else {
+                                needs_fn_cast = true;
+                                cast_to_void_ptr = false;
+                            }
+                        } else {
+                            /* ER2: TY_FN parameter — stored as int64_t in C.  A function
+                             * reference (TY_FN) or closure pointer (TY_PTR_VOID) passed to it
+                             * must be cast to int64_t via intptr_t. */
+                            needs_fn_cast = true;
+                            cast_to_void_ptr = false;
+                        }
                     } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS)
                                && fn_binding->body_is_inline_c) {
                         /* Inline-C polymorphic param (e.g. vec-push! [A] [val :A] with
@@ -2536,7 +2559,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 if (needs_fn_cast) {
                     Buf cast; buf_init(&cast);
-                    if (cast_to_void_ptr) {
+                    if (fn_cast_typedef) {
+                        /* typed-c-abi-function-pointers: cast through the bare
+                         * `R (*)(A...)` typedef (a captureless fn's C name
+                         * decays to a function pointer of that exact shape). */
+                        buf_printf(&cast, "(%s)(%s)", fn_cast_typedef, raw);
+                    } else if (cast_to_void_ptr) {
                         buf_printf(&cast, "(void *)(intptr_t)(%s)", raw);
                     } else {
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);

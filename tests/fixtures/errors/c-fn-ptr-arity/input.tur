@@ -1,0 +1,12 @@
+; typed-c-abi-function-pointers: a wrong-arity callback is rejected at the
+; (c-fn ...) parameter, citing the expected vs. actual parameter count.
+
+(defn apply-cb [cb : (c-fn [int] int) x : int] : int
+  ```c
+  return cb(x);
+  ```)
+
+(defn two [a : int b : int] : int (+ a b))
+
+(defn main [] : int
+  (apply-cb two 5))

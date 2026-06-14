@@ -1,0 +1,23 @@
+; typed-c-abi-function-pointers: a `(c-fn [A...] R)` parameter is a bare
+; C-ABI function pointer `R (*)(A...)`, not a Turmeric closure carrier.  A
+; captureless Turmeric defn passed here is invoked directly through the raw
+; function pointer by the (inline-C) sink -- the realistic external-C
+; callback shape.  Float args/result exercise the concrete-ABI typedef
+; (double (*)(double)), not the int64_t carrier.
+
+(defn run-twice [cb : (c-fn [float] float) x : float] : float
+  ```c
+  return cb(cb(x));
+  ```)
+
+(defn inc-half [v : float] : float
+  (+. v 0.5))
+
+(defn show [r : float] : int
+  ```c
+  printf("%.2f\n", r);
+  return 0;
+  ```)
+
+(defn main [] : int
+  (show (run-twice inc-half 7.1)))

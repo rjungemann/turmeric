@@ -1213,6 +1213,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_while     = intern_cstr(st, "while");
     e->sym_defn      = intern_cstr(st, "defn");
     e->sym_fn        = intern_cstr(st, "fn");
+    e->sym_c_fn      = intern_cstr(st, "c-fn");
     e->sym_lambda    = intern_cstr(st, "\xce\xbb"); /* λ */
     e->sym_extern_c  = intern_cstr(st, "extern-c");
     e->sym_caret_mut     = intern_cstr(st, "^mut");

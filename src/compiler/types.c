@@ -70,6 +70,17 @@ int type_eq(Type a, Type b) {
         }
     }
     if (a.kind == TY_FN) {
+        /* typed-c-abi-function-pointers: a cfnptr is a bare C-ABI function
+         * pointer.  It unifies with another cfnptr, or with a *captureless*
+         * (non-boxed) bare fn of the same signature -- because a captureless
+         * fn already IS a bare code pointer at the C ABI -- but never with a
+         * *capturing* (boxed) closure value.  This is what keeps a fat closure
+         * from silently flowing into a raw C callback sink. */
+        if (a.as.fn.cfnptr || b.as.fn.cfnptr) {
+            if ((a.as.fn.cfnptr && b.as.fn.boxed) ||
+                (b.as.fn.cfnptr && a.as.fn.boxed))
+                return 0;
+        }
         if (a.as.fn.arity != b.as.fn.arity) return 0;
         for (uint8_t i = 0; i < a.as.fn.arity; i++) {
             if (a.as.fn.arg_kinds[i] != b.as.fn.arg_kinds[i])
@@ -1193,7 +1204,7 @@ const char *type_name(Type t) {
             /* Build into a buf, then strdup. */
             Buf tmp;
             buf_init(&tmp);
-            buf_puts(&tmp, "(fn [");
+            buf_puts(&tmp, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
             for (uint8_t i = 0; i < t.as.fn.arity; i++) {
                 if (i > 0) buf_puts(&tmp, " ");
                 buf_puts(&tmp, type_name(type_from_kind(t.as.fn.arg_kinds[i])));
@@ -1651,7 +1662,7 @@ static void type_name_buf(Buf *b, Type t) {
         /* IT4: Top type */
         case TY_ANY:     buf_puts(b, "any"); break;
         case TY_FN: {
-            buf_puts(b, "(fn [");
+            buf_puts(b, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
             for (uint8_t i = 0; i < t.as.fn.arity; i++) {
                 if (i > 0) buf_puts(b, " ");
                 type_name_buf(b, type_from_kind(t.as.fn.arg_kinds[i]));
@@ -2062,6 +2073,15 @@ const char *type_c_name(Type t) {
             return "void *";
         case TY_NEVER:   return "void";  /* never type has no values, use void */
         case TY_FN: {
+            /* typed-c-abi-function-pointers: a cfnptr lowers to the concrete
+             * bare `R (*)(A...)` typedef -- it is a raw C function pointer with
+             * no implicit environment, so it never uses the int64_t/void*
+             * carrier.  Falls back to void* only when the signature is not
+             * fully concrete (no real C function-pointer type can be formed). */
+            if (t.as.fn.cfnptr) {
+                const char *td = register_fn_ptr_typedef(&t);
+                return td ? td : "void *";
+            }
             /* CRU B-1: a boxed TY_FN (first-class closure value) is carried as
              * a void* holding the { thunk, env... } box -- identical to the
              * TY_PTR_VOID carrier, so closures and legacy :ptr<void> sinks
