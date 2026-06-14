@@ -4,7 +4,85 @@ severity: blocks Eq Vec rewrite via constrained-poly helpers -- DOWNGRADED 2026-
 date: 2026-06-14
 ---
 
-## Update 2026-06-14: Likely subsumed by bridge-side fix; attempted fix had marginal regression
+## Update 2026-06-14 (session 3): regressor isolated AND fix shown insufficient
+
+Re-attempted the principled fix today: at
+`elab_typeclasses.c:4123` (receiver-dispatch spec-intern site), extend
+`abi_bindings[]` to also record `{constraint.tyvar->name -> elem-type}`
+for each `TypeConstraint` with `param_idx >= 0`, by walking
+`obj_orig_type`'s TY_APP arg chain.
+
+**Suite baseline vs patched** (compare `/tmp/m5-baseline.fails`,
+`/tmp/m5-gap4.fails`):
+
+- baseline: 1568 passed, 87 failed
+- patched: 1567 passed, 88 failed
+- diff: **+1 hamt-delete** (the SAME regressor as the prior attempt --
+  not a different test, and not a build-ordering artifact).
+
+**End-to-end check on the motivating case (g4-instance.tur)**:
+still fails with the same cc error -- `callee(int64_t, ...)` called
+with `Vec__int` args.  The principled fix at the elab site does NOT
+unblock the case on its own.
+
+### Why the fix is insufficient
+
+Trace evidence from the prior session:
+
+```
+call.bindings[0]: name=A type.kind=18 (TY_STRUCT, def=NULL -- abstract tyvar)
+```
+
+The call to `callee` from inside `myeq?`'s spec body has its
+abi_bindings recorded by `elab_call.c` (not by my elab_typeclasses
+fix).  callee's binding type is `TY_STRUCT(NULL, name="A")`, NOT
+`TY_TYVAR(name="A")`.
+
+`emit_module.c:570 emit_abi_instantiate_type` only substitutes by name
+on the `TY_TYVAR` case.  For `TY_STRUCT(NULL)` it returns the type
+unchanged.  So even when the outer spec's bindings carry the correct
+`{A -> int}` (as my fix arranges), the composition pass fails to use
+it because the call's binding type doesn't match the substitution
+shape.
+
+The principled fix at the outer spec-intern site is **necessary but
+not sufficient**.  To actually unblock g4-instance, either:
+
+1. **Elab side**: fix `elab_call.c`'s binding capture for calls inside
+   instance-method bodies so the call's binding type is recorded as
+   `TY_TYVAR(name="A")` rather than `TY_STRUCT(NULL, name="A")`.  Find
+   where the constraint var `A` is parsed as a TY_STRUCT instead of a
+   TY_TYVAR -- probably the elab type-name resolution at the instance
+   body scope doesn't have `A` in the type-var environment.
+
+2. **Emit side**: extend `emit_abi_instantiate_type`'s TY_STRUCT case
+   to substitute by-name when the struct has NULL def and a non-NULL
+   name string.  Broader change, higher regression surface.
+
+(1) is more principled.  (2) is more localized.  Either needs to be
+combined with the elab_typeclasses fix to land both halves coherently.
+
+### hamt-delete regressor: not yet root-caused
+
+Despite hamt-delete using only primitive-typed Eq instances (no
+constraint vars), the extended outer bindings still affect it -- likely
+through a downstream spec-name collision when the extra binding makes
+`emit_abi_clone_name` produce a different mangled name for some HAMT
+internal.  Pinning the exact mechanism requires per-spec emit tracing
+that exceeds this session's budget.
+
+### Conclusion
+
+Gap 4 is real, the proposed fix is structurally correct, and a single
+end-to-end attempt is NOT enough to land it.  The work is at minimum a
+two-part change (elab_call + elab_typeclasses, OR emit_module +
+elab_typeclasses) plus regression triage for hamt-delete.  Estimated
+4-8 hours of focused trace + iterate.
+
+The fix is reverted; the report stays open as the canonical place to
+resume from.  Prior attempt material from session 2 below for context.
+
+## Update 2026-06-14 (session 2): Likely subsumed by bridge-side fix; attempted fix had marginal regression
 
 Subsequent investigation (same session) showed that the original
 repro shapes (gap2b and g4-instance) actually compile and run
