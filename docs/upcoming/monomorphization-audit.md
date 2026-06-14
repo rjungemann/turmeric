@@ -258,20 +258,47 @@ box, and (b) suppress prelude emission when no user code references them.
 Places where the carrier convention is load-bearing in a non-obvious
 way. Each later phase needs to be aware of these to avoid regressing.
 
-### 7.1 Prereq 6 synthesized constructor body (M2's prototype)
+### 7.1 Prereq 6 synthesized constructor body — RETIRED (2026-06-13)
 
-- `src/compiler/emit_fns.c:607-699` -- synthesized body for polymorphic `ok` / `err` when payload is a value-struct.
-  - `:624-625` detect `ok` / `err` by name; look up `tur_ok` / `tur_err`.
-  - `:640-642` skip synthesis if the spec's return type is int64 (typeclass-instance-method dispatch context).
-  - `:643-685` synthesize direct path: heap-allocate the payload copy, construct the by-value Result struct, return directly.
-  - `:689` fall through to original inline-C body when return type is `int64_t` (the carrier case).
-  - `:635-638` comment documents the gap: instance-method dispatch expects an int64 handle but the synthesized direct-by-value body contradicts it -- the surviving sliver of the open `polymorphic-ok-in-typeclass-instance-method-...` report.
+Commit `61252971` deleted the M2a shape-inference path (the
+`__tur_p6_r.is_ok = true; memset(...); __tur_p6_r.ok_val = payload;`
+emission).  Stdlib `ok` / `err` / `some` / `none` / `pair` / `tcons-of`
+already had explicit `(make-struct ...)` bodies; the normal
+EX_MAKE_STRUCT emit at `emit_expr.c:3700-3731` handles the field-by-
+field construction including heap-spill for value-struct payload
+fields via `struct_field_c_type`'s pointer lowering.
 
-This is the canonical pattern M2 generalizes: detect a polymorphic
-stdlib constructor, conditionally emit direct struct construction
-instead of the carrier round-trip. M2 replaces the by-name special
-case with a `#{Construct}` annotation and makes the direct path the
-default rather than the conditional path.
+Empirical: disabling the inference branch produced **zero** fixture-
+snapshot diffs across the suite (1564/86 baseline), AND cleaner C:
+
+    before:
+      Result__User__cstr __tur_p6_r;
+      __tur_p6_r.is_ok = true;
+      memset(&__tur_p6_r.ok_val, 0, sizeof(__tur_p6_r.ok_val));
+      memset(&__tur_p6_r.err_val, 0, sizeof(__tur_p6_r.err_val));
+      User *__tur_p6_payload = (User *)malloc(sizeof(User));
+      *__tur_p6_payload = __tur_inbox_x;
+      __tur_p6_r.ok_val = __tur_p6_payload;
+      return __tur_p6_r;
+
+    after:
+      User *x = (User *)malloc(sizeof(User)); *x = __tur_inbox_x;
+      return (Result__User__cstr){.is_ok = true, .ok_val = x};
+
+The `(default-of B)` for the missing payload slot lowers to the
+designated-initializer's implicit zero, eliminating the explicit
+memset stanza.
+
+What's left of `emit_fns.c:783-820`: a narrow heap-spill stanza that
+sets up `__tur_inbox_X` pointers for any `#{Construct}` body that
+still casts via `(int64_t)(intptr_t)x` in inline-C.  Stdlib has none
+today; the stanza is defensive cover for future user code.
+
+Still open: the orthogonal `m2b_carrier_synth` path
+(`emit_fns.c:680-720`) for `#{Construct}` defns whose spec emits in
+the int64-carrier-return context (typeclass-instance-method
+dispatch).  Retired only when M4 reworks dict slots to per-instance
+typed pointers.
 
 ### 7.2 Instance-method return ABI mismatch (78589845's wrapper)
 
@@ -327,7 +354,11 @@ The reports the plan supersedes -- their residue lives in code as
 - `typeclass-method-parameterized-result-carrier-mismatch` (Prereqs 1-3, FIXED): carrier-bridge logic in `emit_carrier_bridge` and `expr_emits_byvalue_carrier_abi` is dead post-M2+M3.
 - `closure-env-layout-for-pass-by-pointer-struct-param-captures` (FIXED): closure env layout decision at `emit_expr.c:2687-2796` is dead for typed-closure path post-M5.
 - Prereq 5 (FIXED): return-dispatch wrapper-extract at `emit_core.c:968-1062` is dead post-M5.
-- Prereq 6 (PARTIAL): synthesized-body branch in `emit_fns.c:607-699` becomes the *default* path in M2.
+- Prereq 6 (RETIRED 2026-06-13): the M2a inference branch at
+  `emit_fns.c:783-945` is deleted (commit `61252971`).  Normal
+  EX_MAKE_STRUCT emit handles the construction; designated-
+  initializer C output replaces the memset-then-assign synth. See
+  Section 7.1.
 - `polymorphic-ok-in-typeclass-instance-method-with-value-struct-payload.md` (OPEN): lands implicitly with M2 + M4.
 
 M10 re-runs this audit, confirms each of the above is gone (or
@@ -358,17 +389,14 @@ to it; M5 must measure.
 
 ## 10. Next steps
 
-1. **M2a -- LANDED (2026-06-13).** Generalized `emit_fns.c:607-699` to
-   be `#{Construct}`-attribute-driven, with StructDef-based field
-   inference (lone `:bool` discriminator + type-param-position matching
-   for the payload slot). `ok` / `err` in `stdlib/result.tur` retagged
-   `#{Construct}`. The open
-   `polymorphic-ok-err-value-struct-payload` fixture passes; zero
-   regressions in `tests/run.sh`. The carrier-fallback path is retained
-   for the int64-return (typeclass-instance-method dispatch) context.
-   `some` / `none` / `pair` / `cons` / `vec-of` stay on inline-C for
-   now -- they reach `#{Construct}` via M2b's explicit `make-struct`
-   body form (see `docs/upcoming/v2/m2b-make-struct-design.md`).
+1. **M2a -- LANDED (2026-06-13) and SUBSEQUENTLY RETIRED.**
+   Generalized inference shipped as the `#{Construct}`-driven synth
+   in `emit_fns.c:607-699`.  Once M2b's `(make-struct ...)` body
+   form landed (elaborator side at `elab_structs.c` / `elab_types.c`,
+   emit at `emit_expr.c:3700-3731` / `:1138`), stdlib migration to
+   explicit make-struct bodies made the inference path dead code; it
+   was deleted in commit `61252971`.  See Section 7.1 for the before/
+   after C emission diff.
 2. **M4c Path A -- LANDED (2026-06-13).** Per-instantiation
    typeclass-instance-method specs for non-HKT instances on
    parameterized concrete-layout types. Vec/Cons/Tuple2 ship with
@@ -388,13 +416,40 @@ to it; M5 must measure.
    requires exposing slot-by-index accessors (`mutmap-cap`,
    `mutmap-slot-tag`, etc.) — larger surface change than warranted
    while the M2b/M3/M5 trunk hasn't landed.
-5. M2b -- introduce `(make-struct StructName :field val ...)` and
-   `(default-of T)` core forms; retire the M2a inference path and the
-   remaining stdlib inline-C constructor bodies. See M2b design doc.
-   **This is the next major implementation phase.** M2b is the only
-   way to reduce the bridge count from its current 7 (it grew from 4
-   under M4c); accessor-side M3 cleanup follows mechanically once M2b
-   producers are direct.
+5. **M2b core forms -- LANDED (pre-session).** `(make-struct
+   StructName :field val ...)` and `(default-of T)` core forms
+   elaborate cleanly (`elab_structs.c` keyword form,
+   `elab_types.c:elab_default_of`, EX_MAKE_STRUCT / EX_DEFAULT_OF
+   emit).  Stdlib `ok` / `err` / `some` / `none` / `pair` / `tcons-of`
+   bodies migrated to make-struct.
+6. **M2b M2a-inference retirement -- LANDED (2026-06-13).** Deleted
+   the shape-inference synth in `emit_fns.c:783-945` (commit
+   `61252971`).  Normal EX_MAKE_STRUCT emit handles the
+   construction; 125 lines removed; zero fixture diffs; cleaner C
+   output (designated initializer instead of memset-then-assign).
+   See Section 7.1.
+7. **M2b residual** -- the orthogonal `m2b_carrier_synth` path
+   (`emit_fns.c:680-720`) for `#{Construct}` defns emitted in the
+   int64-carrier-return context (typeclass-instance-method dispatch)
+   stays until M4 reworks dict slots.  HKT method bodies
+   (`fmap`/`pure`/`ap`/`bind`/`throw-error` for `Option`/`Result`)
+   keep their inline-C `tur_ok` / `tur_some` calls for the same
+   reason -- they're in carrier-dispatch position.
+8. M3 -- delete `emit_carrier_bridge`'s CK_CARRIER -> CK_CONCRETE
+   path for accessors once M2b has removed the producers.  The
+   symmetric CK_CONCRETE -> CK_CARRIER path (added 2026-06-13 for the
+   Vec rewrite) is needed only while M4c-pre-ext stdlib helpers
+   straddle the carrier boundary; M5 retires it.
+
+   **M3 deletion is currently blocked.**  The bridge call sites at
+   `emit_expr.c:1750, 2511, 2575, 2619, 4273, 4299, 4350` are all
+   load-bearing for the present monomorphization shape: M4c Path A
+   specs interface with carrier-ABI stdlib helpers (vec-len /
+   vec-get / vec-eq?) by bridging both directions at the let-binding
+   and call-arg boundaries.  Pulling out the bridge needs HKT-method
+   migration AND the dict layout rework first (M4-rest + M5).  The
+   audit's earlier framing -- "M3 follows mechanically from M2b" --
+   was optimistic; M3 actually rides on M4-rest.
 6. M3 -- delete `emit_carrier_bridge`'s CK_CARRIER -> CK_CONCRETE
    path for accessors once M2b has removed the producers. The
    symmetric CK_CONCRETE -> CK_CARRIER path (added 2026-06-13 for the
