@@ -324,9 +324,66 @@ too invasive:
   so by-value helpers never need a carrier base.  Biggest blast radius;
   belongs to the later M-phases, not this retirement.
 
-Nothing was landed in this continuation (the experiment is reverted); the
-deliverable is this mapped design space.  Gap 4's fix (committed) is the
-enabler and stands on its own.
+### Finding 5 -- a representation-precise field-access predicate IS clean, but does not unblock on its own
+
+The follow-up gated the carrier cast precisely: cast a `TY_APP` receiver
+only when it is a carrier-represented `EX_VAR` param (its
+`emit_byvalue_carrier_abi` flag is false -- its C type is the int64
+carrier).  By-value `TY_APP` receivers (flag true) keep direct
+`.field`.  This is the representation-precise form Finding 4 called for,
+and it is correct: the `Eq Vec` probe compiles bridge-free, the carrier
+base derefs, and `vec-of-tvec-eq-manual` links.
+
+**But the suite still regressed** -- and crucially, the regression is NOT
+the field-access change.  Reverting `emit_expr.c` and keeping ONLY the
+stdlib `Eq Vec` rewrite still fails `list-basic` et al.  So the field-
+access predicate is sound; the blocker is elsewhere (Finding 6).
+
+### Finding 6 -- the real blocker: the Eq Vec rewrite drops UNRELATED sibling specs
+
+Bisecting the stdlib change (each step rebuilds + checks `list-basic`):
+
+- add the three `*-byval` helpers only, `Eq Vec` UNCHANGED -> `list-basic`
+  passes.  Helper *existence* is harmless.
+- rewrite the `Eq [Vec]` instance body to call `vec-eq-loop-byval`
+  (a constrained-poly helper) -> `list-basic` FAILS, and the emitted C
+  has **no `thead__spec`** at all (`thead` is an unrelated Cons accessor,
+  `(.head l)`).  The call site builds `Cons__int` by value and passes it
+  to the carrier base `thead(int64_t)` -> cc type error.
+
+So composing one instance-method body through a constrained-poly helper
+perturbs the **global ABI-spec interning worklist** and a sibling spec
+that used to be minted (`thead`/`ttail`/`unwrap`/tuple accessors) no
+longer is.  This is the *same class* of fragility as gap 4's hamt-delete
+regressor -- which was sidestepped by scoping the augmentation, not by
+fixing the underlying worklist invariant.  Filed as
+`docs/reported/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`.
+
+### Revised recommendation
+
+The field-access work (Findings 1-5) is solvable and the
+representation-precise predicate is the right shape -- but it is **moot
+until the spec-worklist fragility (Finding 6) is fixed**.  The Eq Vec
+rewrite cannot land while changing one instance body silently drops
+unrelated specs.  Correct order of operations for a future session:
+
+1. **First**, fix the spec-interning worklist invariant (Finding 6 /
+   the filed report): an instance-method body composing through a
+   constrained-poly helper must not change whether sibling defns get
+   their by-value specs.  Instrument `emit_abi_register_call` for
+   `thead`'s binding with vs without the Eq Vec rewrite -- determine
+   whether it reaches the intern path or `emit_abi_note_carrier_call`,
+   and why the rewrite flips it.
+2. **Then**, land the representation-precise field-access predicate
+   (Finding 5) so the by-value helpers are dual-ABI.
+3. **Then**, rewrite `Eq Vec` / `Eq Cons` + regen snapshots in one PR.
+
+Until step 1 lands, the residual L2662/L4393 straddle stays; gap 4's fix
+(committed) remains the standalone enabler.
+
+Nothing was landed in this continuation (all experiments reverted); the
+deliverable is this fully-mapped design space plus the filed
+spec-worklist report.
 
 ## Update 2026-06-14 (session 2, attempt 3): D-lite Eq Vec rewrite hits a 4th gap
 
