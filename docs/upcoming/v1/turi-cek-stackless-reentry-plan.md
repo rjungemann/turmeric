@@ -1,0 +1,261 @@
+---
+title: Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
+category: Planning
+description: Eliminate the last source of unbounded C recursion in the tree-walking interpreter -- a native / inline-C higher-order function that re-applies a closure through turi_call on a live C frame -- by reifying that callback onto the driver work-stack as an explicit resume continuation, the turi analog of tur's heap DK chain. With no synchronous native re-entry left, the eval_depth increment in eval_apply, the depth guard, and the TURI_EVAL_FRAME_BYTES byte-estimate retire: interpreter recursion becomes provably heap-bounded. This is also the evaluation substrate under turi-interpreter-delimited-control-plan.md, so turi gets first-class delimited control the same way tur has it.
+---
+
+# Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
+
+## Status and scope
+
+After [turi-cek-frame-reuse-tco-plan.md](turi-cek-frame-reuse-tco-plan.md)
+(F1-F5, landed) the interpreter has **exactly one** remaining source of
+unbounded C-stack recursion:
+
+> A native or inline-C **higher-order function** that re-applies a closure
+> *synchronously, through its own live C frame*, via `turi_call` /
+> `eval_apply` -> `eval_apply_driven` -> `eval_drive_ex`.
+
+Everything else is already heap-bounded: deep non-tail recursion folds onto the
+driver work-stack, tail recursion reuses one work-stack slot (`DK_CALL_RET`), and
+neither touches the C stack per level. The depth guard that F5 had to put back on
+`eval_apply` (`src/turi/eval.c:4451`, `env->eval_depth >= env->max_eval_depth`)
+and the hand-tuned `TURI_EVAL_FRAME_BYTES` byte-per-frame estimate
+(`src/turi/env.c:50`) exist **solely** to keep that residual native-re-entry
+recursion from SIGSEGV-ing. (Grounded: an `option-map` self-recursion probe
+SIGSEGVs at ~10k levels with no guard; F5 made it trip the limit gracefully
+instead -- but "gracefully refuse" is not "support".)
+
+This plan removes the recursion itself rather than guarding it. A native that
+needs to apply a closure stops calling back on the C stack; it **suspends onto
+the driver work-stack** with a resume continuation, the driver applies the
+closure on its heap stack, then resumes the native with the result. This is the
+direct interpreter analog of how `tur` (compiled) keeps its delimited context on
+the heap `DK` chain (`src/runtime/cps_prompt.c`) instead of the C stack.
+
+The payoff is twofold:
+
+1. **The guard retires.** With no synchronous native re-entry left, runtime
+   recursion depth no longer maps to C-stack depth at all. `eval_apply`'s
+   `eval_depth++/--`, the depth-limit check, and `TURI_EVAL_FRAME_BYTES` all
+   become dead: interpreter recursion is provably heap-bounded (turi becomes
+   *stronger* than tur here, which still C-recurses for ordinary recursion and
+   reifies only delimited-control regions).
+2. **It is the substrate delimited control needs.** A work-stack that is the
+   sole locus of control is exactly what
+   [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
+   wants for multishot / escaping / nested-handler continuations: a continuation
+   becomes a slice of this work-stack, not a ucontext fiber. The two plans share
+   the resume protocol; this one is the foundation and should land first (or
+   merge).
+
+This is a large, invasive change -- a real CPS conversion of the re-entrant
+native surface -- hence its own plan. The frame-reuse hybrid + guard is a correct
+resting point if it stalls.
+
+## How `tur` does it (the model)
+
+The compiled multi-prompt machine (`cps-transform-plan`, `src/runtime/cps_prompt.c`)
+represents the live continuation as a **heap linked list** of `DK` nodes, never
+the C stack:
+
+```c
+typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0 } DKKind;
+struct DK { DKKind kind; DKFrame fn; intptr_t env; int tag;
+            DKBody body; intptr_t body_env; DK *next; };
+```
+
+A `DKK_FRAME` node *is* "given the value, here is the rest of the computation"
+(`fn`, closed over `env`). `emit_cps.c` CPS-transforms only the functions that
+use delimited control (its `uses_base_delimited` / `uses_callcc` /
+`uses_serial_dk` predicates gate this), so the C stack is still used for ordinary
+calls but is never *captured*.
+
+The interpreter already has the structural analog: `eval_drive`'s `DriveCont`
+work-stack (`src/turi/eval.c:3642` `DriveKind`, `:3668` `DriveCont`) is a heap
+array of "given the value, continue" frames -- `DK_CALL_RET`, `DK_IF_BRANCH`,
+`DK_DO_SEQ`, `DK_LET_BIND/BODY`, etc. The frame-reuse plan already proved tail
+chains and non-tail folds live entirely on it. **The gap is that native
+re-entry escapes the work-stack back onto the C stack** -- the interpreter has a
+CEK driver for turi code, but native HOFs call `turi_call` synchronously and
+re-enter `eval_drive_ex` on a fresh C frame. Closing that gap is the whole plan.
+
+## The residual recursion, precisely
+
+Two categories of synchronous re-entry exist today; both must move onto the
+work-stack:
+
+1. **Native / inline-C HOFs that apply a closure.** e.g. `option-map`
+   (`stdlib/option.tur:135`, `^fat f`, body `r->value = TUR_APPLY1(f, ...)`):
+   under `--interpret` the inline-C apply recognizer runs `f` via `eval_apply`
+   on a C frame. The same shape covers `vec`/list iteration, fold/reduce, and
+   comparator-taking ops. These are the unbounded ones (the recursion depth is a
+   program property).
+
+2. **In-evaluator `turi_call` sites.** Confirmed call sites in `eval.c`:
+   `:1225` (continuation/shift form receiver), `:1381` (TsFrame context replay),
+   `:1670` / `:1700` (shift receiver), `:6183` (STM `tvar-modify`), `:6748`
+   (`Show` dispatch), plus the public `turi_call` (`:6569`) and the async fiber /
+   catch-unwind thunks (`:193`, `:5611`, `:5657`). Each runs a closure to
+   completion on the calling C frame.
+
+Note `turi_call` is **public API** (`eval.h`) used by embedders. The plan keeps a
+synchronous `turi_call` for *external* callers (it pumps the driver to
+completion); a single embedder-initiated frame is bounded and fine. What must go
+stackless is **program-internal** re-entry (category 1, and the internal users of
+category 2), because only that scales with program recursion depth.
+
+## Design: native callbacks as work-stack resume continuations
+
+Defunctionalize each re-entrant native into an **enter / resume** pair and add a
+driver continuation that schedules the closure application:
+
+1. **New `DriveKind`: `DK_NATIVE_RESUME`.** Carries an opaque native-state
+   pointer and a C resume function `TuriValue (*resume)(TuriEnv*, void *state,
+   TuriValue applied_result, bool *done, TuriValue *out)`. It sits on the
+   work-stack exactly where a `DK_CALL_RET` would, beneath the application it
+   requested -- the structural twin of tur's `DKK_FRAME`.
+
+2. **A native yields instead of calling back.** A re-entrant native, instead of
+   `turi_call(env, f, args, n)`, returns a *request* to the driver:
+   "apply closure `f` to `args`, then resume me (`state`, `resume`) with the
+   result." The driver:
+   a. pushes `DK_NATIVE_RESUME{state, resume}`,
+   b. drives the application of `f` (folding / reusing on the work-stack like any
+      call -- so the callback's own recursion is heap-bounded too),
+   c. on completion, calls `resume(state, result, &done, &out)`. If the native
+      wants to apply again (a loop -- `vec/for-each`, `fold`), `resume` updates
+      `state` and asks for the next application (the slot is reused, no growth);
+      when `done`, `out` is the native's value and the slot pops.
+
+   This is a small coroutine protocol: the native's C frame no longer spans the
+   callback. A `fold` over N elements becomes N work-stack iterations in one
+   `DK_NATIVE_RESUME` slot, not N nested C frames.
+
+3. **The driver gains a "native request" return channel.** `eval_apply_driven`'s
+   leaf-dispatch path (today `cl->native(...)` returns a value;
+   `src/turi/eval.c:~4340`) learns a third outcome besides value/error: a
+   `TURI_TAG_APPLY_REQUEST`-tagged value (internal only, never escapes, like the
+   retired `TURI_TAG_TCO`) that the *driver* -- not `eval_apply` -- consumes by
+   installing the `DK_NATIVE_RESUME` frame. Natives invoked outside a driver
+   (rare; only from a raw `turi_call` with no enclosing drive) fall back to the
+   synchronous `turi_call` pump.
+
+4. **Convert the re-entrant surface.** Port the inline-C apply path (category 1)
+   and the internal category-2 users (`tvar-modify`, `Show`, the shift/context
+   receivers) to the enter/resume form. The set is small and enumerable (grep
+   `turi_call` / the inline-C `TUR_APPLY*` recognizer); each conversion is local.
+
+5. **Continuations are work-stack slices (tie-in).** With control fully on the
+   work-stack, capturing a continuation at a `perform`/`shift` is copying the
+   slice from the capture point up to the matching `DK_PROMPT`, exactly as
+   [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
+   step 1 describes -- now trivially heap-owned and clonable because no C frame
+   is involved. This plan supplies that plan's substrate; land them together (or
+   fold that plan's steps 1-4 in as this plan's final phase).
+
+## Retiring the guard (the headline payoff)
+
+Once **no** program-internal path re-enters evaluation on the C stack, the
+maximum C-stack depth reached during `eval` is bounded by the *static* nesting of
+a single form being descended (a deeply nested literal / builtin chain), which is
+a parse-time constant, not a function of runtime recursion. Therefore:
+
+- Remove `env->eval_depth++/--` and the limit check from `eval_apply`
+  (`src/turi/eval.c:4451`) and from `eval_expr` (`:4453`).
+- Delete `TURI_EVAL_FRAME_BYTES`, `turi_default_max_eval_depth`, and the
+  `max_eval_depth` machinery in `src/turi/env.c`, or repurpose `max_eval_depth`
+  as a *static AST-nesting* safety net (cheap, optional).
+- Keep the sandbox **step-fuel** limit (`step_fuel`) -- that bounds *work*, not
+  C stack, and is orthogonal.
+
+Gate this retirement hard: it is only sound once an audit proves no synchronous
+`turi_call`-from-native remains on a program-reachable path (a grep + a
+"poison the C re-entry" assertion during the conversion phases). Until then the
+guard stays.
+
+## Implementation phases
+
+Each phase is independently landable and regression-green; the F5 guard is the
+safe resting point.
+
+1. **N1 -- protocol scaffold.** Add `DK_NATIVE_RESUME`, the internal
+   apply-request tag, and the driver plumbing (push/resume/pop). Convert **one**
+   site (`tvar-modify`, `:6183` -- simplest, single application) end to end. No
+   guard change. Validate STM fixtures.
+2. **N2 -- inline-C HOF apply.** Route the inline-C `^fat`/`TUR_APPLY*` callback
+   path through the protocol so `option-map` & co. no longer C-recurse. This is
+   where the unbounded recursion moves onto the heap. Validate the `option-map`
+   self-recursion probe now runs O(1)-heap-bounded at 1e6 with the guard still
+   in place (it just never trips).
+3. **N3 -- remaining internal re-entry.** Convert the shift/context receivers
+   (`:1225`, `:1670`, `:1700`), the `TsFrame` replay (`:1381`), and `Show`
+   (`:6748`). Keep the public `turi_call` synchronous (driver-pump for external
+   callers; protocol for internal ones).
+4. **N4 -- audit + retire the guard.** Grep/assert no program-internal
+   synchronous native re-entry remains; remove the `eval_depth` increment +
+   check and `TURI_EVAL_FRAME_BYTES`. Re-run the probe: deep HOF re-entry is now
+   heap-bounded with **no** limit error and no crash.
+5. **N5 -- delimited-control completion.** Fold in
+   [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
+   steps 1-4 (capture = work-stack slice; clone-on-resume for multishot;
+   heap lifetime; re-establish handler/prompt stack), un-carving the five
+   `requires.tur-only` `interp-continuation` fixtures. turi now has delimited
+   control the way tur does -- on a heap continuation, not the C stack.
+
+## Risks and trade-offs
+
+- **Exhaustiveness gates the payoff.** A single missed re-entrant native keeps
+  C-recursing, so the guard cannot retire until N4's audit is airtight. Mitigate
+  with a debug "C re-entry poison" assert that fires if `eval_apply_driven` is
+  entered recursively from within a native on a program path.
+- **`turi_call` is public API.** Embedders rely on its synchronous return.
+  Preserve that contract via a driver-pump wrapper; only internal callers use the
+  yield protocol. The embedder's single re-entry frame is bounded (not program
+  recursion) -- acceptable, and matches tur's "C stack for ordinary calls".
+- **Per-native conversion cost.** Each re-entrant native becomes a small state
+  machine. The set is small and enumerable, but the inline-C apply recognizer is
+  the fiddly one (it must thread loop/branch state through `resume`).
+- **ucontext fiber path.** Async/effect fibers (`eval.c` `:691+`, `:193`)
+  interact with resume; sequence N5 to reconcile the fiber representation with
+  work-stack continuations (the delimited-control plan already plans this).
+- **Scope.** The largest interpreter change since the trampoline. Slice behind
+  the harness (N1-N5); revert to the F5 guard if N2/N3 stall.
+
+## Validation
+
+- **Heap-bounded HOF re-entry (the goal):** the `option-map` self-recursion probe
+  (and a `fold`/`vec-for-each` recursive probe) run at 1e6 with O(1) C stack --
+  after N2 with the guard never tripping, after N4 with the guard *gone* and no
+  crash and no "recursion limit exceeded".
+- **TCO unchanged:** the four tail shapes (if/let/do/match) stay O(1); non-tail
+  `sum-to 500000` heap-bounded.
+- **Effects / continuations:** all `effect-*`, `shift*`, `callcc*`,
+  `cloneable-context-*`, `serial-context-*` green; after N5 the five
+  `interp-continuation` carve-outs (`fh-multishot-value`, `multishot-*`,
+  `effect-capture-k`, `effect-handler-capture-nested`) pass and are un-carved.
+- **No regressions:** `bash tests/run-turi.sh` green (baseline failure set
+  unchanged), `tools/check_turi_parity.py` 0-gaps, `ctest -R "eval|sandbox"`
+  green, `bash tests/run.sh` unchanged (compiled path untouched).
+- **Audit (N4):** grep confirms no program-internal synchronous
+  `turi_call`-from-native remains; the C-re-entry poison assert never fires
+  across the whole suite.
+
+## See also
+
+- [turi-cek-frame-reuse-tco-plan.md](turi-cek-frame-reuse-tco-plan.md) -- F1-F5
+  (landed); F5 added the `eval_apply` depth guard this plan retires. The "Risks"
+  there note frame reuse does **not** by itself retire the guard -- this is the
+  follow-up that does.
+- [turi-interpreter-delimited-control-plan.md](turi-interpreter-delimited-control-plan.md)
+  -- multishot / escaping / nested continuations; this plan is its evaluation
+  substrate (shared resume protocol). Land this first, then fold that in as N5.
+- [turi-eval-trampoline-plan.md](turi-eval-trampoline-plan.md) -- the
+  explicit-stack driver (`eval_drive`) whose `DriveCont` stack is the work-stack
+  used here.
+- `src/runtime/cps_prompt.c` -- tur's compiled heap `DK` chain; the model this
+  plan mirrors in the interpreter ("just as tur does").
+- `src/turi/eval.c`: `eval_apply` depth guard (`:4451`), `DriveKind`/`DriveCont`
+  (`:3642`/`:3668`), `eval_apply_driven`/`eval_drive_ex` leaf dispatch, the
+  `turi_call` re-entry sites (`:1225`/`:1381`/`:1670`/`:1700`/`:6183`/`:6748`).
+- `src/turi/env.c:50` -- `TURI_EVAL_FRAME_BYTES` (retired in N4).
