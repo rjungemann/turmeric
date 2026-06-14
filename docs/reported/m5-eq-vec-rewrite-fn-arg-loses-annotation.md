@@ -228,17 +228,50 @@ Two corrections to earlier analyses:
 1. **Diagnostic** (one-liner): add TY_FN to the enrichment whitelist
    at `elab_call.c:3007` so the error message shows the real expected
    type instead of "(fn [] : ?)".  Independent of the deeper fix and
-   strictly improves observability.
+   strictly improves observability.  **LANDED 2026-06-14.**  Probe:
+   `(defn h [A] [^fat cmp : (fn [A A] bool)] : bool (cmp 1 1))`
+   called with `(h 42)` now reports `expected (fn [int int] : bool),
+   got int` instead of `(fn [] : ?)`.
 
 2. **Lambda inference channel**: identify what populates
    arg_full_types in the definstance body case and replicate it for
-   plain polymorphic defn bodies.  Open: the populating code path was
-   not located in this session.  Suspects:
-   - typeclass constraint solver pass after method-call dispatch,
-   - elab_method_call's auto-shim that reroutes `(eq? a b)` through
-     `(.eq? a b)`,
-   - a hidden side-effect in the `e->n_sig_tyvars` / `e->scope`
-     handling specific to definstance bodies.
+   plain polymorphic defn bodies.
+
+   **Session-3 trace finding (2026-06-14)**: there is NO existing
+   mechanism populating arg_full_types on lambdas from caller context.
+   `elab_fn` (elab_fns.c:3165) reads only the lambda's own explicit
+   annotations; `elab_call_fn`'s arg loop does not pass expected types
+   through `elab_form`.  The earlier "definstance body works" claim was
+   misattribution (stdlib Eq Vec shadowing per the AST-diff finding).
+   The gap is universal across enclosing contexts.  All three suspects
+   above are ruled out by direct grep of `arg_full_types` writers.
+
+   **Session-3 fix attempt (REVERTED)**: pushed expected_type at
+   elab_call.c:2630 and consumed it in elab_fn after param parsing
+   (conservative split: only set `param_full_types[i]`, leave
+   `param_kinds[i]` and `params[i]->type` as TY_INT default so the body
+   keeps int-operator dispatch).  Added compensating logic in
+   `call_collect_type_bindings` TY_TYVAR case: same-name self-binding
+   skip + narrow "prior self-tyvar can be upgraded by concrete actual"
+   path.
+
+   Probes (gap1-probe plain defn; gap1-instance definstance body) BOTH
+   compiled and exited 0.  Suite: +75 unique FAILs vs diagnostic-only
+   baseline:
+   - 72 codegen-snapshot drift (deterministic; regen-able).
+   - 1 stdout mismatch: **hamt-delete** (same regression as the prior
+     attempt at TY_TYVAR upgrade; the narrower self-tyvar gate did NOT
+     prevent it -- the upgrade still interacts with HAMT spec interning
+     in a way the gate doesn't capture).
+   - 2 build failures including `m5-byval-marker-spec-emit` (fixture
+     pinning prior M5 work; conservative split breaks its spec-emit
+     path).
+
+   Reverted.  For the next attempt, isolate hamt-delete's specific
+   call_collect_type_bindings path FIRST (likely a HAMT-of-HAMT spec
+   that registers two A bindings for the same param shape).  Then trace
+   what m5-byval-marker-spec-emit's spec lookup does differently when
+   the helper's arg_full_types now carries TY_TYVAR vs NULL.
 
 ### Workaround (works today)
 

@@ -3006,7 +3006,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             Type expected_ty = type_from_kind(expected_arg_kind);
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
                  expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER ||
-                 expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
+                 expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT ||
+                 expected_arg_kind == TY_FN) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
