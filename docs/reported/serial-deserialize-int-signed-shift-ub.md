@@ -64,4 +64,4 @@ this unsigned form; mirror it in `serial.tur` for the compiled path.
 ## Notes
 
 Found while implementing the R1 Serializable interpreter natives
-([turi-interpret-flip-residual-plan.md](../upcoming/turi-interpret-flip-residual-plan.md)).
+([turi-interpret-flip-residual-plan.md](../archive/history/turi-interpret-flip-residual-plan.md)).

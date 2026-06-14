@@ -1,5 +1,11 @@
 # turi `--interpret` flip: residual-gap plan (W5 tail)
 
+> **COMPLETE 2026-06-14 -- archived.** All buckets R1-R6 are done and the W5 flip
+> landed (`tests/run-turi.sh` now defaults to the denylist; see the "W5 -- the
+> flip (DONE 2026-06-13)" section below). Zero non-inline-C, non-carved fixtures
+> fail under `--interpret`. Retained as the historical record of how the flip got
+> finished; no open items remain.
+
 > **Status:** Draft Plan
 > **Last Updated:** 2026-06-13
 > **Type:** Interpreter / Test Infra
@@ -7,7 +13,7 @@
 > under `tur --interpret`, blocking the allowlist->denylist flip (W5).
 > **Parent:** [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
 > (this is the concrete decomposition of that plan's W5 "residual" set)
-> **Grand-parent:** [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) Phase TI8.b
+> **Grand-parent:** [turi-parity-post-v1-plan.md](../../upcoming/turi-parity-post-v1-plan.md) Phase TI8.b
 
 ---
 
@@ -31,7 +37,7 @@ miscompiles. Each bucket below carries a fix-vs-carve disposition (per the
 gap-closure plan's decision rule) and grounded pointers so the work is mechanical.
 
 The harness-flip reconciliation report
-([archived](../archive/history/turi-harness-flip-reconciliation.md)) is the
+([archived](turi-harness-flip-reconciliation.md)) is the
 historical catalogue of how the flip got here; this plan is the forward map for
 finishing it.
 
@@ -52,7 +58,7 @@ finishing it.
 > - **Slice 2** (1): `taskgroup-linear` (`WkTaskGroup` replica;
 >   `cancel`/`wait`/`cancelled?` over the group flag, skipping the per-fiber TLS
 >   cancel). Surfaced and filed a latent compiled-path heap OOB:
->   [taskgroup-block-cancel-reason-layout-overflow.md](../reported/taskgroup-block-cancel-reason-layout-overflow.md).
+>   [taskgroup-block-cancel-reason-layout-overflow.md](../../reported/taskgroup-block-cancel-reason-layout-overflow.md).
 > - **Slice 3** (4): `chan-linear` / `asyncchan-linear` (bounded mutex-guarded
 >   ring buffer -- the single-threaded interpreter cannot block, and the fixtures
 >   stay within capacity), `future-linear` (`promise-fulfill` / `future-done?`),
@@ -68,7 +74,7 @@ finishing it.
 >   `__inst_Serializable_*` binding names (`extern-c printf` already runs under
 >   `--interpret`). The deserialize native uses unsigned shifts, dodging a latent
 >   signed-shift UB in serial.tur:
->   [serial-deserialize-int-signed-shift-ub.md](../reported/serial-deserialize-int-signed-shift-ub.md).
+>   [serial-deserialize-int-signed-shift-ub.md](../../reported/serial-deserialize-int-signed-shift-ub.md).
 >
 > **R1 stdlib-native surface COMPLETE** (harness 1159 -> **1172**, +13; compiled
 > 1615/0, parity 0-gaps). The one item that stays out of R1:
@@ -164,9 +170,9 @@ Investigated; split 2 fix / 5 carve:
   `handle` returned (escaping; heap-use-after-free), or *through* nested handlers
   (loses outer frames; `unhandled effect: B`). They are crashes / clean errors,
   not silent miscompiles, and need a heap-owned, clonable continuation -- one
-  feature that overlaps the [trampoline plan](v1/turi-eval-trampoline-plan.md).
+  feature that overlaps the [trampoline plan](../../upcoming/v1/turi-eval-trampoline-plan.md).
   Full analysis + repros:
-  [turi-interpreter-delimited-control-gaps.md](../reported/turi-interpreter-delimited-control-gaps.md).
+  [turi-interpreter-delimited-control-gaps.md](../../reported/turi-interpreter-delimited-control-gaps.md).
   All five still PASS on the compiled path.
 
 Harness 1177 -> **1179**, compiled 1615/0, parity 0-gaps.
@@ -183,14 +189,14 @@ wrong-answer is hidden behind a marker:
   now build a make-struct `Result` (tag-preserving) when the payload is a heap
   value; int/bool payloads keep the int64 box, so the carrier-ABI fixtures are
   unaffected. `result_field` reads both reps.
-  [turi-value-struct-payload-interpreter-miscompile.md](../reported/turi-value-struct-payload-interpreter-miscompile.md)
+  [turi-value-struct-payload-interpreter-miscompile.md](../turi-value-struct-payload-interpreter-miscompile.md)
   (RESOLVED).
 - **`multishot-snapshot`** -- `tur_continuation_snapshot` was unhandled in
   `ts_try_cont_builtin` (`src/turi/eval.c`) so it returned 0 and the snapshot
   resumed to 0. It is an alias for `tur_cloneable_cont_clone` (a deep
   continuation copy) -- exactly as the compiled path `#define`s it
   (`emit_module.c:3083`). One-line fix: match the alias in the clone branch.
-  [turi-multishot-continuation-snapshot-miscompile.md](../reported/turi-multishot-continuation-snapshot-miscompile.md)
+  [turi-multishot-continuation-snapshot-miscompile.md](../turi-multishot-continuation-snapshot-miscompile.md)
   (RESOLVED). (Note: this was a *cloneable*-continuation alias gap, not the deep
   one-shot-fiber multishot work the R4 family needs.)
 
@@ -285,9 +291,9 @@ Suggested PR slicing (each independently green, allowlist additions in-PR):
 
 - [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md) --
   parent (W1-W5; this decomposes W5's residual).
-- [docs/archive/history/turi-harness-flip-reconciliation.md](../archive/history/turi-harness-flip-reconciliation.md)
+- [docs/archive/history/turi-harness-flip-reconciliation.md](turi-harness-flip-reconciliation.md)
   -- historical catalogue of the flip.
-- [v1/turi-eval-trampoline-plan.md](v1/turi-eval-trampoline-plan.md) -- relevant to
+- [v1/turi-eval-trampoline-plan.md](../../upcoming/v1/turi-eval-trampoline-plan.md) -- relevant to
   the R4 continuation set.
 - `src/main.c` `cmd_eval` (`:4801`), the `wk_register_*_natives` cluster
   (`:5106-5139`, defs from `:5616`), `wk_register_safe_natives` (`:9117`).

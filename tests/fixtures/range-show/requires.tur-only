@@ -2,4 +2,4 @@ inline-c (dependency: stdlib/range-bound.tur). The fixture body is pure-turi but
 range->str / bound->str render interval notation via inline-C snprintf "%s"
 formatting over the Bound carrier, which the tree-walker does not run. Library
 inline-C, not a language gap -- carve per Bucket R6 of
-docs/upcoming/turi-interpret-flip-residual-plan.md. Still PASSes compiled.
+docs/archive/history/turi-interpret-flip-residual-plan.md. Still PASSes compiled.

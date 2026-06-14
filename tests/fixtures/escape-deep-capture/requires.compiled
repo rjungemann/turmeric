@@ -1,5 +1,0 @@
-escape-deep-capture: invokes the escape continuation from 5000 non-tail
-recursive frames; the build-up overflows the tree-walking interpreter C stack
-before the escape fires. Escape semantics themselves work under --interpret
-(see continuation-escape / escape-real / escape-nested-reset); this fixture
-specifically stresses unbounded capture depth, a compiled-path property.

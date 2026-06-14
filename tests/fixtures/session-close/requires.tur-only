@@ -2,4 +2,4 @@ interp-sessions: make-session / close are -Xsessions compiler/runtime builtins
 (src/compiler/elab_sessions.c), lowered to inline-C the tree-walker cannot run.
 This is interpreter session-runtime support, not a stdlib native shim --
 reclassified out of R1 and carved per Bucket R6 of
-docs/upcoming/turi-interpret-flip-residual-plan.md. Still PASSes compiled.
+docs/archive/history/turi-interpret-flip-residual-plan.md. Still PASSes compiled.

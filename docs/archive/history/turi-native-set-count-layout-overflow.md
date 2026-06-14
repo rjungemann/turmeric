@@ -99,7 +99,7 @@ TuriStructs are four different in-memory shapes for the "same" value, and the
 
 Direction 1 is preferred and is part of the W1b "reconcile the native-shim
 layer" follow-up in
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md).
+[docs/archive/history/turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md).
 The same audit applies to the `native_ok`/`ok-val`/`result-map` (Result) and
 hamt-invalidation shims, which have the analogous mismatch with `result.tur` /
 `hamt.tur`.

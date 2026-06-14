@@ -5599,6 +5599,7 @@ static TuriValue native_hamt_merge_with(TuriEnv *env, TuriValue *a, uint32_t n, 
             call_args[1].tag = TURI_INT; call_args[1].as_int = (int64_t)(intptr_t)v;
             call_args[2] = ctx;
             TuriValue rv = turi_call(env, fn, call_args, 3);
+            if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
             new_val = (void *)(intptr_t)rv.as_int;
         } else {
             new_val = v;
@@ -5732,6 +5733,7 @@ static TuriValue native_option_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *
     cargs[0].tag = TURI_INT; cargs[0].as_int = option_field_int(a[0], 1);
     cargs[1].tag = TURI_INT; cargs[1].as_int = option_field_int(a[1], 1);
     TuriValue rv = turi_call(env, a[2], cargs, 2);
+    if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
     return turi_bool(rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0);
 }
 static TuriValue native_some_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -5786,6 +5788,7 @@ static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void 
     if (!option_is_some(a[0])) return turi_int(0);
     TuriValue arg; arg.tag = TURI_INT; arg.as_int = option_field_int(a[0], 1);
     TuriValue rv = turi_call(env, a[1], &arg, 1);
+    if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
     int64_t *r = (int64_t *)malloc(2 * sizeof(int64_t));
     if (!r) return turi_int(0);
     r[0] = 1; r[1] = rv.as_int;
@@ -5899,6 +5902,7 @@ static TuriValue native_result_map(TuriEnv *env, TuriValue *a, uint32_t n, void 
     if (!r || r[0] == 0) return a[0]; /* return err unchanged */
     TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[1];
     TuriValue res = turi_call(env, a[1], &arg, 1);
+    if (turi_is_error(res) || env->throwing) return res;  /* propagate callback error */
     int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!out) return turi_nil();
     out[0] = 1; out[1] = res.as_int; out[2] = 0;
@@ -5919,6 +5923,7 @@ static TuriValue native_result_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *
     TuriValue cmp = a_ok ? a[2] : a[3];    /* ok-cmp or err-cmp */
     TuriValue cargs[2] = { result_field(a[0], idx), result_field(a[1], idx) };
     TuriValue res = turi_call(env, cmp, cargs, 2);
+    if (turi_is_error(res) || env->throwing) return res;  /* propagate callback error */
     return turi_bool(res.tag == TURI_BOOL ? res.as_bool : res.as_int != 0);
 }
 /* result-map-err: apply fn to err value, return new result */
@@ -5929,6 +5934,7 @@ static TuriValue native_result_map_err(TuriEnv *env, TuriValue *a, uint32_t n, v
     if (!r || r[0] != 0) return a[0]; /* return ok unchanged */
     TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[2];
     TuriValue res = turi_call(env, a[1], &arg, 1);
+    if (turi_is_error(res) || env->throwing) return res;  /* propagate callback error */
     int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!out) return turi_nil();
     out[0] = 0; out[1] = 0; out[2] = res.as_int;
@@ -6296,6 +6302,11 @@ static TuriValue native_set_eq_cmp(TuriEnv *env, TuriValue *a, uint32_t n, void 
             cargs[0].tag = TURI_INT; cargs[0].as_int = (int64_t)(intptr_t)ka;
             cargs[1].tag = TURI_INT; cargs[1].as_int = (int64_t)(intptr_t)kb;
             TuriValue rv = turi_call(env, cmp, cargs, 2);
+            if (turi_is_error(rv) || env->throwing) {  /* propagate callback error */
+                tur_hamt_iter_free((HamtIter *)iter_b);
+                tur_hamt_iter_free((HamtIter *)iter_a);
+                return rv;
+            }
             if (rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0) { found = true; break; }
         }
         tur_hamt_iter_free((HamtIter *)iter_b);
@@ -6460,8 +6471,19 @@ typedef struct { TuriEnv *env; TuriValue cmp; } MapTuriEqCtx;
 
 static bool map_turi_eq_tramp(int64_t a, int64_t b, void *vctx) {
     MapTuriEqCtx *c = (MapTuriEqCtx *)vctx;
+    /* If a prior comparison in this HAMT op already raised, stop calling the
+     * closure -- the enclosing native's result is discarded once the driver
+     * sees env->throwing. */
+    if (c->env->throwing) return false;
     TuriValue args[2] = { turi_int(a), turi_int(b) };
     TuriValue r = turi_call(c->env, c->cmp, args, 2);
+    if (turi_is_error(r) || c->env->throwing) {
+        /* This comparator returns a C bool to the HAMT, so it cannot return the
+         * error value; promote a value-level error to a throw so the enclosing
+         * native (and the driver) propagate it instead of silently mis-hashing. */
+        if (turi_is_error(r)) { c->env->throwing = true; c->env->throw_value = r; }
+        return false;
+    }
     if (r.tag == TURI_BOOL) return r.as_bool;
     if (r.tag == TURI_INT)  return r.as_int != 0;
     return false;
@@ -6646,6 +6668,12 @@ static bool map_eq_iter(TuriEnv *env, Hamt *h1, Hamt *h2,
         cargs[0].tag = TURI_INT; cargs[0].as_int = (int64_t)(intptr_t)v;
         cargs[1].tag = TURI_INT; cargs[1].as_int = (int64_t)(intptr_t)vb;
         TuriValue rv = turi_call(env, val_cmp, cargs, 2);
+        if (turi_is_error(rv) || env->throwing) {
+            /* returns C bool; promote a value-level error to a throw so the
+             * caller (native_map_eq*) and the driver propagate it. */
+            if (turi_is_error(rv)) { env->throwing = true; env->throw_value = rv; }
+            eq = false; break;
+        }
         bool veq = rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0;
         if (!veq) { eq = false; break; }
     }
@@ -6687,6 +6715,7 @@ static TuriValue native_k_apply_raw(TuriEnv *env, TuriValue *a, uint32_t n, void
     if (n < 2) return turi_int(0);
     TuriValue av = turi_int(a[1].as_int);
     TuriValue r = turi_call(env, seq_as_closure(a[0]), &av, 1);
+    if (turi_is_error(r) || env->throwing) return r;  /* propagate callback error */
     return turi_int(r.as_int);
 }
 static TuriValue native_seq_iter(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -6749,12 +6778,14 @@ static TuriValue native_seq_call_bool_fn1(TuriEnv *e, TuriValue *a, uint32_t n, 
     (void)ud;
     if (n < 2) return turi_bool(false);
     TuriValue r = turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    if (turi_is_error(r) || e->throwing) return r;  /* propagate callback error */
     return turi_bool(r.tag == TURI_BOOL ? r.as_bool : r.as_int != 0);
 }
 static TuriValue native_seq_call_void_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_nil();
-    turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    TuriValue r = turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    if (turi_is_error(r) || e->throwing) return r;  /* propagate callback error */
     return turi_nil();
 }
 /* gen-arr (stdlib/gen.tur): growable int64 array {len, cap, data} used by
@@ -7439,6 +7470,12 @@ static char *sch_mkidx(const char *base, int64_t idx) {
 static int64_t sch_apply1(TuriEnv *env, int64_t fn_carrier, int64_t arg) {
     TuriValue av = turi_int(arg);
     TuriValue r = turi_call(env, seq_as_closure(turi_int(fn_carrier)), &av, 1);
+    if (turi_is_error(r) || env->throwing) {
+        /* returns a raw int64 carrier; promote a value-level error to a throw so
+         * the enclosing schema native and the driver propagate it. */
+        if (turi_is_error(r)) { env->throwing = true; env->throw_value = r; }
+        return 0;
+    }
     if (r.tag == TURI_FLOAT) { int64_t b; memcpy(&b, &r.as_float, 8); return b; }
     if (r.tag == TURI_BOOL)  return r.as_bool ? 1 : 0;
     return r.as_int;
@@ -8331,6 +8368,7 @@ static TuriValue native_vec_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)
         cargs[0].tag = TURI_INT; cargs[0].as_int = d1[i];
         cargs[1].tag = TURI_INT; cargs[1].as_int = d2[i];
         TuriValue rv = turi_call(env, cmp, cargs, 2);
+        if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
         bool eq = rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0;
         if (!eq) return turi_bool(false);
     }
@@ -8495,6 +8533,7 @@ static TuriValue native_mutmap_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *
         cargs[0].tag = TURI_INT; cargs[0].as_int = v_a;
         cargs[1].tag = TURI_INT; cargs[1].as_int = v_b;
         TuriValue rv = turi_call(env, cmp, cargs, 2);
+        if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
         if (!(rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0)) return turi_bool(false);
     }
     return turi_bool(true);
@@ -9671,6 +9710,7 @@ static TuriValue native_bt_mbind(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     while (cell) {
         TuriValue arg = turi_int(cell->value);
         TuriValue sub = turi_call(env, a[1], &arg, 1);
+        if (turi_is_error(sub) || env->throwing) return sub;  /* propagate callback error */
         WkBtCell *sc = (WkBtCell *)(intptr_t)sub.as_int;
         while (sc) {
             rev = wk_bt_cell(sc->value, rev);
@@ -9727,10 +9767,12 @@ static TuriValue native_tuple2_eq_carrier(TuriEnv *env, TuriValue *a, uint32_t n
     int64_t b1 = wk_tuple2_field(a[1], 0), b2 = wk_tuple2_field(a[1], 1);
     TuriValue c1args[2] = { turi_int(a1), turi_int(b1) };
     TuriValue r1 = turi_call(env, a[2], c1args, 2);
+    if (turi_is_error(r1) || env->throwing) return r1;  /* propagate callback error */
     bool e1 = (r1.tag == TURI_BOOL) ? r1.as_bool : (r1.as_int != 0);
     if (!e1) return turi_bool(false);
     TuriValue c2args[2] = { turi_int(a2), turi_int(b2) };
     TuriValue r2 = turi_call(env, a[3], c2args, 2);
+    if (turi_is_error(r2) || env->throwing) return r2;  /* propagate callback error */
     bool e2 = (r2.tag == TURI_BOOL) ? r2.as_bool : (r2.as_int != 0);
     return turi_bool(e2);
 }
@@ -10021,6 +10063,7 @@ static TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
         exit(1);
     }
     TuriValue result = turi_call(env, pred, &obj, 1);
+    if (turi_is_error(result) || env->throwing) return result;  /* propagate callback error */
     bool ok = true;
     if (result.tag == TURI_BOOL)     ok = result.as_bool;
     else if (result.tag == TURI_INT) ok = (result.as_int != 0);

@@ -74,6 +74,21 @@
 #include "../passes/effect_check.h"
 #include "../passes/borrow_check.h"
 
+/* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
+ * spill above it.  Keeps the per-call scratch off the C stack for the common
+ * low-arity case while bounding deep-recursion frame growth -- the dominant
+ * per-frame cost was several TuriValue[MAX_EVAL_ARGS] (1 KB) arrays.  8 covers
+ * the overwhelmingly common 0..8-arg call with zero allocation. */
+#define EVAL_SCRATCH_INLINE 8
+
+/* T1: language-wide function/effect arity cap (mirrors MAX_FN_ARITY in
+ * compiler/types.h).  Used as a fixed inline buffer size where the arity is
+ * provably bounded -- closure-application TCO buffers and effect-perform args --
+ * so those scratch arrays drop from MAX_EVAL_ARGS (1 KB) to 256 B with no heap
+ * spill.  A defensive guard rejects anything above it (unreachable for
+ * elaboration-checked programs). */
+#define EVAL_MAX_FN_ARITY 16
+
 /* -------------------------------------------------------------------------
  * Tail-call trampoline types (eval.c-internal only; never exposed in headers)
  * ---------------------------------------------------------------------- */
@@ -3839,9 +3854,10 @@ restart:
 
         TuriClosure *tcl = fn_val.as_closure;
 
-        TuriValue tco_args[64]; /* MAX_EVAL_ARGS */
+        /* T1: tail call to a closure -- arity capped at MAX_FN_ARITY. */
+        TuriValue tco_args[EVAL_MAX_FN_ARITY];
         uint32_t  n_args = e->as.call_.n_args;
-        if (n_args > 64)
+        if (n_args > EVAL_MAX_FN_ARITY)
             return turi_errorf("eval: too many call arguments (%u)", n_args);
         for (uint32_t i = 0; i < n_args; i++) {
             tco_args[i] = eval_expr(env, frame, e->as.call_.args[i]);
@@ -3869,8 +3885,12 @@ restart:
 static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
     /* TCO trampoline: loops instead of growing the C call stack for tail calls.
-     * Work area for args copied across iterations. */
-    TuriValue args_buf[64]; /* MAX_EVAL_ARGS */
+     * Work area for args copied across iterations.  T1: closure arity is capped
+     * at MAX_FN_ARITY, so a fixed EVAL_MAX_FN_ARITY buffer suffices and stays
+     * off the deep-recursion frame (256 B, not 1 KB). */
+    TuriValue args_buf[EVAL_MAX_FN_ARITY];
+    if (n_args > EVAL_MAX_FN_ARITY)
+        return turi_errorf("eval: too many call arguments (%u)", n_args);
     if (args && n_args > 0 && args != args_buf)
         memcpy(args_buf, args, n_args * sizeof(TuriValue));
     args = args_buf;
@@ -3988,6 +4008,10 @@ static TuriValue eval_apply_inner(TuriEnv *env, TuriClosure *cl,
             TcoFrame *tc = (TcoFrame *)result.as_ref;
             cl     = tc->cl;
             n_args = tc->n_args;
+            if (n_args > EVAL_MAX_FN_ARITY) {  /* T1: bounds args_buf fill */
+                free(tc);
+                return turi_errorf("eval: too many call arguments (%u)", n_args);
+            }
             memcpy(args_buf, tc->args, n_args * sizeof(TuriValue));
             free(tc);
             /* env->returning was cleared at start of this iteration; clear
@@ -4023,6 +4047,588 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
     TuriValue r = eval_apply_inner(env, cl, args, n_args);
     env->current_module = saved_module;
     return r;
+}
+
+/* -------------------------------------------------------------------------
+ * T2 (turi-eval-trampoline-plan): explicit-stack driver for the linear control
+ * forms.  Flattens directly-nested EX_IF branch chains and EX_DO/EX_PROGRAM
+ * sequences onto a heap work-stack instead of the C stack, so a long branch
+ * chain or sequence no longer grows one C frame per level.  Every other expr
+ * kind -- including function application (EX_CALL) and builtins -- is evaluated
+ * as a black box via the (still recursive) eval_expr, so this is a
+ * behaviour-preserving refactor; the non-tail FUNCTION-call ceiling is removed
+ * later (T3, which folds eval_apply into this loop).  Control-flow signals
+ * (error / returning / throwing) and the EX_DO "defers don't count as the last
+ * value" rule are preserved exactly.
+ * ---------------------------------------------------------------------- */
+
+/* Inline work-stack depth before spilling to heap.  Kept small: eval_drive is
+ * now on hot paths (if/let/match/builtin), so its C frame should stay lean;
+ * deeper nesting spills to a heap buffer (bounded only by heap). */
+#define DRIVE_INLINE 8
+
+typedef enum {
+    DK_DONE,
+    DK_IF_BRANCH,
+    DK_DO_SEQ,
+    DK_LET_BIND,     /* EX_LET/EX_LETREC: evaluating binding[index]'s init */
+    DK_LET_BODY,     /* EX_LET/EX_LETREC: evaluating the body (frame owned) */
+    DK_MAKE_STRUCT,  /* EX_MAKE_STRUCT: evaluating field[index] (fields owned) */
+    DK_MATCH_BODY,   /* EX_MATCH: evaluating the winning arm body (frame owned) */
+    DK_BUILTIN_ARG,  /* EX_BUILTIN: evaluating arg[index] (acc owned; or short-circuit) */
+    DK_CALL_ARG,     /* EX_CALL: evaluating arg[index] (acc owned; callee in `last`) */
+    DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
+} DriveKind;
+
+typedef struct {
+    DriveKind   kind;
+    const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET / EX_MAKE_STRUCT / EX_CALL */
+    EvalFrame  *frame;  /* lexical env: DO/MAKE_STRUCT=enclosing; LET/MATCH=owned */
+    uint32_t    index;  /* DO: next item; LET: next binding; MAKE_STRUCT: next field */
+    TuriValue   last;   /* DO/PROGRAM: last non-defer value; CALL_ARG: callee closure */
+    void       *aux;    /* LET_BODY/CALL_RET: DeferItem* defer-stack mark;
+                         * MAKE_STRUCT / *_ARG: TuriValue* heap accumulator */
+    /* T3.2b: tail-position threading + folded-call (DK_CALL_RET) saved state. */
+    bool        tail;          /* tail-ness to apply to this form's tail child */
+    const char *saved_module;  /* DK_CALL_RET: caller module to restore */
+    bool        was_returning; /* DK_CALL_RET: env->returning at call entry */
+    bool        was_no_unwind; /* DK_CALL_RET: env->in_no_unwind at call entry */
+} DriveCont;
+
+/* T3.0: resolve an EX_MATCH to its winning arm frame + body WITHOUT evaluating
+ * the body, so eval_drive can descend the body in the loop (flattening
+ * match-recursive callee bodies later folded by T3).  The scrutinee and any
+ * arm guards are evaluated here via eval_expr (shallow, not the deep-recursion
+ * site).  Returns:
+ *   1  -> matched: *out_frame (caller frees after the body) and *out_body set
+ *   0  -> no arm matched
+ *  -1  -> a signal/error during scrutinee or guard eval: *out_val holds it
+ * Mirrors the recursive EX_MATCH in eval_expr_impl exactly. */
+static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
+                              EvalFrame **out_frame, const Expr **out_body,
+                              TuriValue *out_val) {
+    TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
+    if (turi_is_error(val) || env->returning || env->throwing) {
+        *out_val = val; return -1;
+    }
+    MatchArm *arms   = e->as.match_.arms;
+    uint32_t  n_arms = e->as.match_.n_arms;
+    for (uint32_t ai = 0; ai < n_arms; ai++) {
+        MatchArm     *arm = &arms[ai];
+        MatchPattern *pat = &arm->pattern;
+        bool          matched   = false;
+        EvalFrame    *arm_frame = NULL;
+
+        if (pat->is_wildcard) {
+            matched = true; arm_frame = eval_frame_new(frame);
+        } else if (pat->is_var && pat->union_member_idx >= 0) {
+            bool tag_ok = false;
+            if (pat->n_bindings >= 1 && pat->bindings[0]) {
+                TypeKind tk = pat->bindings[0]->type.kind;
+                switch (tk) {
+                case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                    tag_ok = (val.tag == TURI_INT); break;
+                case TY_BOOL:  tag_ok = (val.tag == TURI_BOOL); break;
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                    tag_ok = (val.tag == TURI_FLOAT); break;
+                case TY_CSTR:  tag_ok = (val.tag == TURI_CSTR); break;
+                case TY_NIL:   tag_ok = (val.tag == TURI_NIL); break;
+                default:       tag_ok = (val.tag == TURI_STRUCT || val.tag == TURI_CLOSURE); break;
+                }
+            } else {
+                tag_ok = true;
+            }
+            if (tag_ok) {
+                matched = true; arm_frame = eval_frame_new(frame);
+                if (pat->var_sym) frame_bind(arm_frame, pat->var_sym->name, val);
+            }
+        } else if (pat->is_literal) {
+            switch (pat->lit_kind) {
+            case F_INT:   matched = (val.tag == TURI_INT   && val.as_int   == pat->lit_int);   break;
+            case F_BOOL:  matched = (val.tag == TURI_BOOL  && val.as_bool  == pat->lit_bool);  break;
+            case F_FLOAT: matched = (val.tag == TURI_FLOAT && val.as_float == pat->lit_float); break;
+            case F_STR:   matched = (val.tag == TURI_CSTR  && val.as_cstr  && pat->lit_cstr &&
+                                     strcmp(val.as_cstr, pat->lit_cstr) == 0);                break;
+            case F_NIL:   matched = (val.tag == TURI_NIL); break;
+            default: break;
+            }
+            if (matched) arm_frame = eval_frame_new(frame);
+        } else if (pat->is_var) {
+            matched = true; arm_frame = eval_frame_new(frame);
+            frame_bind(arm_frame, pat->var_sym->name, val);
+        } else {
+            CtorDef *ctor = pat->ctor;
+            if (ctor && val.tag == TURI_STRUCT &&
+                strcmp(val.as_struct->name, ctor->name) == 0) {
+                matched = true; arm_frame = eval_frame_new(frame);
+                for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                    Binding *b = pat->bindings[bi];
+                    if (b && bi < val.as_struct->n_fields)
+                        frame_bind(arm_frame, b->name->name, val.as_struct->fields[bi]);
+                }
+            }
+        }
+
+        if (matched) {
+            if (arm->guard) {
+                TuriValue gv = eval_expr(env, arm_frame, arm->guard);
+                if (turi_is_error(gv) || env->returning || env->throwing) {
+                    eval_frame_free(arm_frame); *out_val = gv; return -1;
+                }
+                if (gv.tag != TURI_BOOL || !gv.as_bool) {
+                    eval_frame_free(arm_frame); continue;  /* guard failed */
+                }
+            }
+            *out_frame = arm_frame; *out_body = arm->body; return 1;
+        }
+    }
+    return 0;  /* no arm matched */
+}
+
+/* do/program item accessors (both kinds share this shape). */
+static inline Expr **drive_seq_items(const Expr *e) {
+    return (e->kind == EX_PROGRAM) ? e->as.program.items : e->as.do_.items;
+}
+static inline uint32_t drive_seq_n(const Expr *e) {
+    return (e->kind == EX_PROGRAM) ? e->as.program.n : e->as.do_.n;
+}
+
+static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
+    DriveCont  inl[DRIVE_INLINE];
+    DriveCont *st  = inl;
+    size_t     len = 0, cap = DRIVE_INLINE;
+    TuriValue  result;
+
+    /* push helper: grows from the inline buffer onto the heap as needed. */
+    #define DRIVE_PUSH(C) do {                                                  \
+        if (len == cap) {                                                       \
+            size_t ncap = cap * 2;                                             \
+            DriveCont *ni = (DriveCont *)malloc(ncap * sizeof(DriveCont));     \
+            if (!ni) { result = turi_error("eval: out of memory (driver stack)"); \
+                       goto done; }                                            \
+            memcpy(ni, st, len * sizeof(DriveCont));                           \
+            if (st != inl) free(st);                                           \
+            st = ni; cap = ncap;                                              \
+        }                                                                      \
+        st[len++] = (C);                                                       \
+    } while (0)
+
+    DRIVE_PUSH(((DriveCont){ .kind = DK_DONE }));
+
+    const Expr *control    = e;
+    EvalFrame  *cf         = frame;
+    TuriValue   cur        = turi_nil();
+    bool        descending = true;
+    /* T3.2b: tail-ness of `control`.  eval_drive is only entered from the
+     * non-tail evaluator (eval_expr_impl), so the initial control is non-tail;
+     * tail-ness becomes true only inside a folded callee body. */
+    bool        tail       = false;
+
+    for (;;) {
+        if (descending) {
+            switch (control->kind) {
+            case EX_IF:
+                DRIVE_PUSH(((DriveCont){ .kind = DK_IF_BRANCH, .expr = control,
+                                         .frame = cf, .tail = tail }));
+                control = control->as.if_.cond;   /* descend into the test (non-tail) */
+                tail = false;
+                break;                            /* still descending */
+            case EX_DO:
+            case EX_PROGRAM: {
+                const Expr *de = control;
+                uint32_t    n  = drive_seq_n(de);
+                if (n == 0) { cur = turi_nil(); descending = false; break; }
+                bool   do_tail = tail;
+                Expr **items   = drive_seq_items(de);
+                DRIVE_PUSH(((DriveCont){ .kind = DK_DO_SEQ, .expr = de,
+                                         .frame = cf, .tail = do_tail }));
+                control = items[0];
+                /* item 0 is tail only when it is the sole (non-defer) item;
+                 * multi-item tail-ness is decided in the DK_DO_SEQ return path. */
+                tail = (n == 1 && items[0]->kind != EX_DEFER) ? do_tail : false;
+                break;
+            }
+            case EX_LET:
+            case EX_LETREC: {
+                /* Owns a fresh frame; bindings then body run in it.  EX_LETREC
+                 * pre-binds every name to nil so RHS closures see each other. */
+                EvalFrame *nf = eval_frame_new(cf);
+                uint32_t   n  = control->as.let_.n;
+                if (control->kind == EX_LETREC) {
+                    for (uint32_t i = 0; i < n; i++)
+                        frame_bind(nf,
+                            control->as.let_.bindings[i].binding->name->name,
+                            turi_nil());
+                }
+                if (n > 0) {
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_LET_BIND, .expr = control,
+                                             .frame = nf, .tail = tail }));
+                    control = control->as.let_.bindings[0].init;
+                    cf = nf; tail = false;   /* binding inits are non-tail */
+                } else {
+                    /* No bindings: straight to body (which inherits the let's
+                     * tail-ness); mark defers now. */
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_LET_BODY, .expr = control,
+                                             .frame = nf, .tail = tail,
+                                             .aux = env->defer_stack }));
+                    control = control->as.let_.body;
+                    cf = nf;   /* tail unchanged: body is the let's tail position */
+                }
+                break;
+            }
+            case EX_MAKE_STRUCT: {
+                uint32_t n = control->as.make_struct_.n_fields;
+                if (n == 0) {
+                    StructDef *sd = control->as.make_struct_.def;
+                    cur = make_struct_val_def(sd ? sd->name : "<struct>", 0, NULL, sd);
+                    descending = false;
+                    break;
+                }
+                /* Heap field accumulator persists across the per-field descents;
+                 * freed when the struct is built or on signal-unwind. */
+                TuriValue *fields = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                if (!fields) {
+                    result = turi_error("eval: out of memory evaluating struct fields");
+                    goto done;
+                }
+                DRIVE_PUSH(((DriveCont){ .kind = DK_MAKE_STRUCT, .expr = control,
+                                         .frame = cf, .aux = fields }));
+                control = control->as.make_struct_.field_values[0];
+                tail = false;   /* struct fields are non-tail */
+                break;
+            }
+            case EX_BUILTIN: {
+                const BuiltinSpec *spec = control->as.builtin.spec;
+                uint32_t n  = control->as.builtin.n;
+                bool     sc = (spec->shape == BS_AND_SC || spec->shape == BS_OR_SC);
+                if (n == 0) {
+                    /* (and)->true, (or)->false; other 0-ary builtins eval directly. */
+                    cur = sc ? turi_bool(spec->shape == BS_AND_SC)
+                             : eval_builtin(env, spec, NULL, 0);
+                    descending = false;
+                    break;
+                }
+                TuriValue *acc = NULL;
+                if (!sc) {  /* regular builtins accumulate all args, then apply */
+                    acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                    if (!acc) {
+                        result = turi_error("eval: out of memory evaluating builtin arguments");
+                        goto done;
+                    }
+                }
+                DRIVE_PUSH(((DriveCont){ .kind = DK_BUILTIN_ARG, .expr = control,
+                                         .frame = cf, .aux = acc }));
+                control = control->as.builtin.args[0];
+                tail = false;   /* builtin args are non-tail */
+                break;
+            }
+            case EX_CALL: {
+                /* T3.2a: resolve the callee here, accumulate args on the
+                 * work-stack, then apply via eval_apply (still recursive -- the
+                 * body-in-loop + TCO fold is T3.2b).  The closure value rides in
+                 * `last`; the arg accumulator in `aux`. */
+                TuriValue fn_val;
+                if (control->as.call_.fn_binding) {
+                    fn_val = eval_lookup(env, cf,
+                                 control->as.call_.fn_binding->name->name);
+                } else if (control->as.call_.fn_expr) {
+                    fn_val = eval_expr(env, cf, control->as.call_.fn_expr);
+                    fn_val = reword_unbound_call_head(fn_val, control->as.call_.fn_expr);
+                } else {
+                    cur = turi_error("eval: call with no function");
+                    descending = false; break;
+                }
+                if (turi_is_error(fn_val) || env->returning || env->throwing) {
+                    cur = fn_val; descending = false; break;
+                }
+                if (control->as.call_.fn_binding)
+                    fn_val = recover_carrier_closure(fn_val, control->as.call_.fn_binding);
+                if (fn_val.tag != TURI_CLOSURE) {
+                    cur = turi_errorf("eval: expected function, got tag %d", fn_val.tag);
+                    descending = false; break;
+                }
+                uint32_t n = control->as.call_.n_args;
+                if (n == 0) {
+                    cur = eval_apply(env, fn_val.as_closure, NULL, 0);
+                    descending = false; break;
+                }
+                TuriValue *acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                if (!acc) {
+                    result = turi_error("eval: out of memory evaluating call arguments");
+                    goto done;
+                }
+                DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_ARG, .expr = control,
+                                         .frame = cf, .last = fn_val, .aux = acc,
+                                         .tail = tail }));
+                control = control->as.call_.args[0];
+                tail = false;   /* call args are non-tail */
+                break;
+            }
+            case EX_MATCH: {
+                /* Resolve scrutinee + arm + guard synchronously (shallow), then
+                 * descend the winning arm body in the loop. */
+                EvalFrame  *af   = NULL;
+                const Expr *body = NULL;
+                TuriValue   sv   = turi_nil();
+                int mr = eval_match_resolve(env, cf, control, &af, &body, &sv);
+                if (mr == 1) {
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_MATCH_BODY, .expr = control,
+                                             .frame = af, .tail = tail }));
+                    control = body; cf = af;   /* arm body: inherits match's tail-ness */
+                } else if (mr == 0) {
+                    cur = turi_error("eval: match: no arm matched");
+                    descending = false;
+                } else {  /* mr == -1: signal during scrutinee/guard */
+                    cur = sv; descending = false;
+                }
+                break;
+            }
+            default:
+                /* Black box: evaluate any other kind via the recursive path. */
+                cur = eval_expr(env, cf, control);
+                descending = false;
+                break;
+            }
+        } else {
+            /* Returning `cur` to the frame on top of the work-stack.  Each
+             * continuation runs its own cleanup when a control signal
+             * (error/returning/throwing) passes through it -- LET frames must be
+             * freed (and their body defers fired) on unwind, so this is handled
+             * per-kind rather than by a blanket unwind-to-DONE. */
+            DriveCont *top = &st[len - 1];
+            bool signaled = turi_is_error(cur) || env->returning || env->throwing;
+            switch (top->kind) {
+            case DK_DONE:
+                result = cur;
+                goto done;
+            case DK_IF_BRANCH: {
+                const Expr *ie   = top->expr;
+                EvalFrame  *icf  = top->frame;
+                bool        itl  = top->tail;   /* branch inherits the if's tail-ness */
+                len--;  /* pop: the chosen branch's value becomes the if's value */
+                if (signaled) break;  /* propagate cur unchanged */
+                if (turi_is_truthy(cur)) {
+                    control = ie->as.if_.then_; cf = icf; tail = itl; descending = true;
+                } else if (ie->as.if_.else_or_null) {
+                    control = ie->as.if_.else_or_null; cf = icf; tail = itl; descending = true;
+                } else {
+                    cur = turi_nil();  /* no else: result is nil, keep returning */
+                }
+                break;
+            }
+            case DK_DO_SEQ: {
+                if (signaled) { len--; break; }  /* abandon the rest of the seq */
+                const Expr *de = top->expr;
+                Expr     **items = drive_seq_items(de);
+                uint32_t   n     = drive_seq_n(de);
+                if (items[top->index]->kind != EX_DEFER) top->last = cur;
+                top->index++;
+                if (top->index < n) {
+                    control = items[top->index]; cf = top->frame; descending = true;
+                    /* the final, non-defer item inherits the do's tail-ness;
+                     * a trailing defer means the last value is *not* in tail pos. */
+                    tail = (top->index == n - 1 &&
+                            items[top->index]->kind != EX_DEFER) ? top->tail : false;
+                } else {
+                    cur = top->last; len--;  /* pop; keep returning the last value */
+                }
+                break;
+            }
+            case DK_LET_BIND: {
+                EvalFrame *nf = top->frame;
+                if (signaled) {  /* binding init errored/returned/threw */
+                    eval_frame_free(nf); len--;  /* free frame, propagate */
+                    break;
+                }
+                const Expr *le = top->expr;
+                uint32_t    n  = le->as.let_.n;
+                const char *nm = le->as.let_.bindings[top->index].binding->name->name;
+                if (le->kind == EX_LETREC) {
+                    /* Re-home a captureless fn literal onto this frame so siblings
+                     * resolve by name (mirrors the recursive EX_LETREC case). */
+                    if (cur.tag == TURI_CLOSURE && cur.as_closure &&
+                        cur.as_closure->captured == NULL) {
+                        TuriClosure *copy = (TuriClosure *)malloc(sizeof(TuriClosure));
+                        *copy = *cur.as_closure;
+                        copy->captured = nf;
+                        cur = turi_closure(copy);
+                    }
+                    eval_frame_update(nf, nm, cur);
+                } else {
+                    frame_bind(nf, nm, cur);
+                }
+                top->index++;
+                if (top->index < n) {
+                    control = le->as.let_.bindings[top->index].init;
+                    cf = nf; descending = true;
+                } else {
+                    /* Bindings done -> body.  Mark defers AFTER bindings so only
+                     * body-registered defers fire on this scope's exit.  The body
+                     * inherits the let's tail-ness (preserved in top->tail). */
+                    top->kind       = DK_LET_BODY;
+                    top->aux = env->defer_stack;
+                    control = le->as.let_.body;
+                    cf = nf; tail = top->tail; descending = true;
+                }
+                break;
+            }
+            case DK_LET_BODY: {
+                EvalFrame *nf = top->frame;
+                /* On normal exit fire this scope's defers; on early-return/throw
+                 * leave them for eval_apply (matches the recursive EX_LET). */
+                if (!env->returning && !env->throwing)
+                    fire_defers_to_mark(env, (DeferItem *)top->aux, NULL);
+                eval_frame_free(nf);
+                len--;  /* pop; propagate cur (body value or signal) */
+                break;
+            }
+            case DK_MATCH_BODY: {
+                /* Arm body produced cur (value or signal): free the arm frame
+                 * and propagate, matching the recursive EX_MATCH which frees
+                 * arm_frame before returning the body's result. */
+                eval_frame_free(top->frame);
+                len--;
+                break;
+            }
+            case DK_CALL_ARG: {
+                TuriValue *acc = (TuriValue *)top->aux;
+                if (signaled) { free(acc); len--; break; }
+                acc[top->index] = cur;
+                top->index++;
+                uint32_t n = top->expr->as.call_.n_args;
+                if (top->index < n) {
+                    control = top->expr->as.call_.args[top->index];
+                    cf = top->frame; descending = true;
+                    break;
+                }
+                /* All args ready. */
+                TuriClosure *cl = top->last.as_closure;
+                FnDef       *fn = (FnDef *)cl->fn;
+                bool foldable = !cl->native && fn && fn->body &&
+                                fn->body->kind != EX_INLINE_C;
+                if (top->tail || !foldable) {
+                    /* Tail call (eval_apply's TcoFrame loop keeps it O(1)) or a
+                     * leaf (native / inline-C, dispatched inside eval_apply):
+                     * apply directly.  eval_apply copies args, so free after. */
+                    cur = eval_apply(env, cl, acc, n);
+                    free(acc); len--;
+                    break;
+                }
+                /* Non-tail turi-body closure: FOLD -- descend the body in this
+                 * loop so deep non-tail recursion stays off the C stack.
+                 * Reproduces eval_apply_inner's single-activation prologue; the
+                 * body's own tail calls go back through eval_apply (no TCO loop
+                 * needed here). */
+                uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
+                uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
+                if (effective_params != n) {
+                    cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                      fn->binding ? fn->binding->name->name : "<fn>",
+                                      (unsigned)effective_params, (unsigned)n);
+                    free(acc); len--; break;
+                }
+                if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as in eval_apply_inner */
+                    if (env->step_fuel == 0) {
+                        cur = turi_error("eval: step fuel exhausted");
+                        free(acc); len--; break;
+                    }
+                    env->step_fuel--;
+                }
+                EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+                for (uint32_t i = 0; i < n; i++)
+                    frame_bind(call_frame,
+                               fn->params[param_offset + i]->name->name, acc[i]);
+                free(acc);
+                /* Reuse this slot as DK_CALL_RET; stash the caller state the
+                 * epilogue restores. */
+                top->kind          = DK_CALL_RET;
+                top->frame         = call_frame;
+                top->aux           = env->defer_stack;       /* defer mark */
+                top->saved_module  = env->current_module;
+                top->was_returning = env->returning;
+                top->was_no_unwind = env->in_no_unwind;
+                env->current_module = cl->module;
+                env->returning      = false;
+                env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
+                control = fn->body; cf = call_frame; tail = true; descending = true;
+                break;
+            }
+            case DK_CALL_RET: {
+                /* Folded callee body produced cur.  Epilogue = eval_apply_inner's
+                 * single-activation tail (restore in_no_unwind, fire this call's
+                 * defers, resolve the return/throw/value, consume an early
+                 * `return` at the function boundary) + the eval_apply wrapper's
+                 * module restore. */
+                env->in_no_unwind = top->was_no_unwind;
+                fire_defers_to_mark_reversed(env, (DeferItem *)top->aux, NULL);
+                TuriValue ret;
+                if (env->returning) {
+                    ret = env->return_value;
+                    env->returning = top->was_returning;  /* boundary consumes return */
+                } else if (env->throwing) {
+                    ret = env->throw_value;
+                } else {
+                    ret = cur;
+                }
+                env->current_module = top->saved_module;
+                cur = ret; len--;   /* pop; propagate the call's value */
+                break;
+            }
+            case DK_BUILTIN_ARG: {
+                const Expr        *be   = top->expr;
+                const BuiltinSpec *spec = be->as.builtin.spec;
+                uint32_t           n    = be->as.builtin.n;
+                TuriValue         *acc  = (TuriValue *)top->aux;  /* NULL if short-circuit */
+                if (signaled) { if (acc) free(acc); len--; break; }
+                if (spec->shape == BS_AND_SC) {
+                    if (!turi_is_truthy(cur)) { cur = turi_bool(false); len--; break; }
+                } else if (spec->shape == BS_OR_SC) {
+                    if (turi_is_truthy(cur)) { cur = turi_bool(true); len--; break; }
+                } else {
+                    acc[top->index] = cur;
+                }
+                top->index++;
+                if (top->index < n) {
+                    control = be->as.builtin.args[top->index];
+                    cf = top->frame; descending = true;
+                } else if (spec->shape == BS_AND_SC) {
+                    cur = turi_bool(true);  len--;   /* all operands truthy */
+                } else if (spec->shape == BS_OR_SC) {
+                    cur = turi_bool(false); len--;   /* no operand truthy */
+                } else {
+                    cur = eval_builtin(env, spec, acc, n);
+                    free(acc); len--;
+                }
+                break;
+            }
+            case DK_MAKE_STRUCT: {
+                TuriValue *fields = (TuriValue *)top->aux;
+                if (signaled) { free(fields); len--; break; }  /* abandon, propagate */
+                const Expr *me = top->expr;
+                uint32_t    n  = me->as.make_struct_.n_fields;
+                fields[top->index] = cur;
+                top->index++;
+                if (top->index < n) {
+                    control = me->as.make_struct_.field_values[top->index];
+                    cf = top->frame; descending = true;
+                } else {
+                    StructDef *sd = me->as.make_struct_.def;
+                    /* make_struct_val_def copies the fields, so free after. */
+                    cur = make_struct_val_def(sd ? sd->name : "<struct>",
+                                              n, fields, sd);
+                    free(fields);
+                    len--;  /* pop; keep returning the struct value */
+                }
+                break;
+            }
+            }
+        }
+    }
+done:
+    if (st != inl) free(st);
+    #undef DRIVE_PUSH
+    return result;
 }
 
 /* -------------------------------------------------------------------------
@@ -4122,101 +4728,24 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_VAR:
         return eval_lookup(env, frame, e->as.var.binding->name->name);
 
-    /* --- Let ------------------------------------------------------------- */
-    case EX_LET: {
-        EvalFrame *new_frame = eval_frame_new(frame);
-        for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            TuriValue v = eval_expr(env, new_frame, e->as.let_.bindings[i].init);
-            if (turi_is_error(v)) { eval_frame_free(new_frame); return v; }
-            if (env->throwing)   { eval_frame_free(new_frame); return env->throw_value; }
-            if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
-            frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name, v);
-        }
-        /* Mark defer stack so defers registered in this let-scope fire on exit. */
-        DeferItem *let_defer_mark = (DeferItem *)env->defer_stack;
-        TuriValue result = eval_expr(env, new_frame, e->as.let_.body);
-        /* Fire this scope's defers on normal exit only.
-         * On early-return or throw, leave defers on the stack; eval_apply will
-         * fire them all in outer-first order (matching tur_frame_fire_chain). */
-        if (!env->returning && !env->throwing)
-            fire_defers_to_mark(env, let_defer_mark, NULL);
-        eval_frame_free(new_frame);
-        return result;
-    }
+    /* --- Let / Letrec ---------------------------------------------------- */
+    /* T2: delegated to the explicit-stack driver, which owns the new frame and
+     * its defer scope on the work-stack (DK_LET_BIND/DK_LET_BODY) so directly
+     * nested lets do not grow the C stack.  EX_LETREC pre-binds its names to nil
+     * and re-homes captureless fn literals onto the frame, identically to the
+     * recursive version preserved in git history. */
+    case EX_LET:
+    case EX_LETREC:
+        return eval_drive(env, frame, e);
 
-    /* --- Letrec (mutually-recursive bindings) ---------------------------- */
-    /* EX_LETREC reuses the `as.let_` payload (see elab_forms.c).  Unlike
-     * EX_LET, every binding is evaluated in a single shared frame in which all
-     * names are pre-declared, so mutually-recursive closures can resolve each
-     * other.  Closures capture the frame by pointer and look siblings up by
-     * name at call time, so updating each binding in place is sufficient. */
-    case EX_LETREC: {
-        EvalFrame *new_frame = eval_frame_new(frame);
-        /* Pass 1: pre-bind every name to nil so RHS closures see each other. */
-        for (uint32_t i = 0; i < e->as.let_.n; i++)
-            frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name,
-                       turi_nil());
-        /* Pass 2: evaluate each RHS in the shared frame, updating in place.
-         *
-         * A recursive/mutually-recursive fn literal is hoisted by the
-         * elaborator to a top-level static fn: its init resolves (via EX_VAR)
-         * to a closure whose `captured` frame is NULL, registered globally
-         * only under a mangled name.  The body's recursive reference, however,
-         * resolves to the *lexical* letrec binding name (e.g. "fact"), which
-         * lives only in `new_frame`.  To let that name resolve at call time we
-         * bind a shallow copy of the closure whose captured frame is
-         * `new_frame`, so every sibling becomes reachable by name. */
-        for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            TuriValue v = eval_expr(env, new_frame, e->as.let_.bindings[i].init);
-            if (turi_is_error(v)) { eval_frame_free(new_frame); return v; }
-            if (env->throwing)   { eval_frame_free(new_frame); return env->throw_value; }
-            if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
-            if (v.tag == TURI_CLOSURE && v.as_closure &&
-                v.as_closure->captured == NULL) {
-                TuriClosure *copy = (TuriClosure *)malloc(sizeof(TuriClosure));
-                *copy = *v.as_closure;
-                copy->captured = new_frame;
-                v = turi_closure(copy);
-            }
-            eval_frame_update(new_frame,
-                              e->as.let_.bindings[i].binding->name->name, v);
-        }
-        DeferItem *letrec_defer_mark = (DeferItem *)env->defer_stack;
-        TuriValue result = eval_expr(env, new_frame, e->as.let_.body);
-        if (!env->returning && !env->throwing)
-            fire_defers_to_mark(env, letrec_defer_mark, NULL);
-        eval_frame_free(new_frame);
-        return result;
-    }
-
-    /* --- If -------------------------------------------------------------- */
-    case EX_IF: {
-        TuriValue cond = eval_expr(env, frame, e->as.if_.cond);
-        if (turi_is_error(cond) || env->returning || env->throwing) return cond;
-        if (turi_is_truthy(cond)) {
-            return eval_expr(env, frame, e->as.if_.then_);
-        } else if (e->as.if_.else_or_null) {
-            return eval_expr(env, frame, e->as.if_.else_or_null);
-        }
-        return turi_nil();
-    }
-
-    /* --- Do / Program ---------------------------------------------------- */
+    /* --- If / Do / Program ----------------------------------------------- */
+    /* T2: the explicit-stack driver flattens directly-nested branch chains and
+     * sequences onto a heap work-stack (see eval_drive).  Semantics are
+     * identical to the former per-case recursion preserved in git history. */
+    case EX_IF:
     case EX_DO:
-    case EX_PROGRAM: {
-        Expr   **items = (e->kind == EX_PROGRAM) ? e->as.program.items : e->as.do_.items;
-        uint32_t n     = (e->kind == EX_PROGRAM) ? e->as.program.n     : e->as.do_.n;
-        /* Defers appended at the end (by rc auto-drop injection) must not
-         * count as the "last value" — only the last non-defer item does. */
-        TuriValue last = turi_nil();
-        for (uint32_t i = 0; i < n; i++) {
-            TuriValue v = eval_expr(env, frame, items[i]);
-            if (turi_is_error(v) || env->returning || env->throwing) return v;
-            if (items[i]->kind != EX_DEFER)
-                last = v;
-        }
-        return last;
-    }
+    case EX_PROGRAM:
+        return eval_drive(env, frame, e);
 
     /* --- While ----------------------------------------------------------- */
     case EX_WHILE: {
@@ -4255,36 +4784,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Builtin --------------------------------------------------------- */
-    case EX_BUILTIN: {
-        TuriValue args[MAX_EVAL_ARGS];
-        uint32_t  n = e->as.builtin.n;
-        if (n > MAX_EVAL_ARGS)
-            return turi_errorf("eval: too many builtin arguments (%u)", n);
-
-        /* and/or must short-circuit before evaluating remaining args. */
-        if (e->as.builtin.spec->shape == BS_AND_SC) {
-            for (uint32_t i = 0; i < n; i++) {
-                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
-                if (turi_is_error(v) || env->returning || env->throwing) return v;
-                if (!turi_is_truthy(v)) return turi_bool(false);
-            }
-            return turi_bool(true);
-        }
-        if (e->as.builtin.spec->shape == BS_OR_SC) {
-            for (uint32_t i = 0; i < n; i++) {
-                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
-                if (turi_is_error(v) || env->returning || env->throwing) return v;
-                if (turi_is_truthy(v)) return turi_bool(true);
-            }
-            return turi_bool(false);
-        }
-
-        for (uint32_t i = 0; i < n; i++) {
-            args[i] = eval_expr(env, frame, e->as.builtin.args[i]);
-            if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
-        }
-        return eval_builtin(env, e->as.builtin.spec, args, n);
-    }
+    case EX_BUILTIN:
+        /* T3.1: delegated to the explicit-stack driver (DK_BUILTIN_ARG), which
+         * accumulates args on the work-stack and handles the and/or
+         * short-circuit, then applies eval_builtin.  Semantics match the former
+         * inline loop (incl. the empty-and->true / empty-or->false edge). */
+        return eval_drive(env, frame, e);
 
     /* --- Named function definition (defn) -------------------------------- */
     case EX_FN_DEF: {
@@ -4382,34 +4887,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Function call --------------------------------------------------- */
-    case EX_CALL: {
-        TuriValue fn_val;
-        if (e->as.call_.fn_binding) {
-            fn_val = eval_lookup(env, frame,
-                                 e->as.call_.fn_binding->name->name);
-        } else if (e->as.call_.fn_expr) {
-            fn_val = eval_expr(env, frame, e->as.call_.fn_expr);
-            fn_val = reword_unbound_call_head(fn_val, e->as.call_.fn_expr);
-        } else {
-            return turi_error("eval: call with no function");
-        }
-        if (turi_is_error(fn_val) || env->returning || env->throwing) return fn_val;
-        if (e->as.call_.fn_binding)
-            fn_val = recover_carrier_closure(fn_val, e->as.call_.fn_binding);
-        if (fn_val.tag != TURI_CLOSURE)
-            return turi_errorf("eval: expected function, got tag %d", fn_val.tag);
-
-        TuriValue args[MAX_EVAL_ARGS];
-        uint32_t  n_args = e->as.call_.n_args;
-        if (n_args > MAX_EVAL_ARGS)
-            return turi_errorf("eval: too many call arguments (%u)", n_args);
-
-        for (uint32_t i = 0; i < n_args; i++) {
-            args[i] = eval_expr(env, frame, e->as.call_.args[i]);
-            if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
-        }
-        return eval_apply(env, fn_val.as_closure, args, n_args);
-    }
+    case EX_CALL:
+        /* T3.2a: delegated to the explicit-stack driver (DK_CALL_ARG), which
+         * resolves the callee and accumulates args on the work-stack, then
+         * applies via eval_apply.  Semantics match the former inline loop; the
+         * body-in-loop + TCO fold that removes the non-tail ceiling is T3.2b. */
+        return eval_drive(env, frame, e);
 
     /* --- Early return ---------------------------------------------------- */
     case EX_RETURN: {
@@ -4449,21 +4932,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase S4: Structs ---------------------------------------------- */
 
-    case EX_MAKE_STRUCT: {
-        uint32_t  n = e->as.make_struct_.n_fields;
-        TuriValue fields[MAX_EVAL_ARGS];
-        if (n > MAX_EVAL_ARGS)
-            return turi_errorf("eval: struct has too many fields (%u)", n);
-
-        for (uint32_t i = 0; i < n; i++) {
-            fields[i] = eval_expr(env, frame, e->as.make_struct_.field_values[i]);
-            if (turi_is_error(fields[i]) || env->returning || env->throwing)
-                return fields[i];
-        }
-        StructDef *sdef = e->as.make_struct_.def;
-        const char *sname = sdef ? sdef->name : "<struct>";
-        return make_struct_val_def(sname, n, fields, sdef);
-    }
+    case EX_MAKE_STRUCT:
+        /* T2: delegated to the explicit-stack driver (DK_MAKE_STRUCT), which
+         * accumulates the evaluated fields on a heap buffer hung off the
+         * work-stack so a struct whose field is itself a struct literal does not
+         * grow the C stack.  Semantics match the former per-field loop.  The
+         * EVAL_SCRATCH_INLINE inline buffer added in T1 no longer applies here
+         * (the accumulator must persist across the per-field descents). */
+        return eval_drive(env, frame, e);
 
     case EX_SET_LIT: {
         /* Build a sorted, deduplicated int64_t set stored as {int64_t *items, int64_t n}.
@@ -4601,104 +5077,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- G0: match expression -------------------------------------------- */
-    case EX_MATCH: {
-        TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
-        if (turi_is_error(val) || env->returning || env->throwing) return val;
-
-        MatchArm  *arms   = e->as.match_.arms;
-        uint32_t   n_arms = e->as.match_.n_arms;
-
-        for (uint32_t ai = 0; ai < n_arms; ai++) {
-            MatchArm    *arm = &arms[ai];
-            MatchPattern *pat = &arm->pattern;
-
-            bool matched = false;
-            EvalFrame *arm_frame = NULL;
-
-            if (pat->is_wildcard) {
-                matched   = true;
-                arm_frame = eval_frame_new(frame);
-            } else if (pat->is_var && pat->union_member_idx >= 0) {
-                /* IT4: Union type-narrowing arm — check runtime tag against member type */
-                bool tag_ok = false;
-                if (pat->n_bindings >= 1 && pat->bindings[0]) {
-                    TypeKind tk = pat->bindings[0]->type.kind;
-                    switch (tk) {
-                    case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
-                    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-                        tag_ok = (val.tag == TURI_INT); break;
-                    case TY_BOOL:
-                        tag_ok = (val.tag == TURI_BOOL); break;
-                    case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-                        tag_ok = (val.tag == TURI_FLOAT); break;
-                    case TY_CSTR:
-                        tag_ok = (val.tag == TURI_CSTR); break;
-                    case TY_NIL:
-                        tag_ok = (val.tag == TURI_NIL); break;
-                    default:
-                        /* For struct/closure/pointer types, accept any non-primitive. */
-                        tag_ok = (val.tag == TURI_STRUCT || val.tag == TURI_CLOSURE);
-                        break;
-                    }
-                } else {
-                    tag_ok = true; /* no type info — treat as var capture */
-                }
-                if (tag_ok) {
-                    matched   = true;
-                    arm_frame = eval_frame_new(frame);
-                    if (pat->var_sym)
-                        frame_bind(arm_frame, pat->var_sym->name, val);
-                }
-            } else if (pat->is_literal) {
-                switch (pat->lit_kind) {
-                case F_INT:   matched = (val.tag == TURI_INT   && val.as_int   == pat->lit_int);   break;
-                case F_BOOL:  matched = (val.tag == TURI_BOOL  && val.as_bool  == pat->lit_bool);  break;
-                case F_FLOAT: matched = (val.tag == TURI_FLOAT && val.as_float == pat->lit_float); break;
-                case F_STR:   matched = (val.tag == TURI_CSTR  && val.as_cstr  && pat->lit_cstr &&
-                                         strcmp(val.as_cstr, pat->lit_cstr) == 0);                break;
-                case F_NIL:   matched = (val.tag == TURI_NIL); break;
-                default: break;
-                }
-                if (matched) arm_frame = eval_frame_new(frame);
-            } else if (pat->is_var) {
-                matched   = true;
-                arm_frame = eval_frame_new(frame);
-                frame_bind(arm_frame, pat->var_sym->name, val);
-            } else {
-                CtorDef *ctor = pat->ctor;
-                if (ctor && val.tag == TURI_STRUCT &&
-                    strcmp(val.as_struct->name, ctor->name) == 0) {
-                    matched   = true;
-                    arm_frame = eval_frame_new(frame);
-                    for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
-                        Binding *b = pat->bindings[bi];
-                        if (b && bi < val.as_struct->n_fields)
-                            frame_bind(arm_frame, b->name->name,
-                                       val.as_struct->fields[bi]);
-                    }
-                }
-            }
-
-            if (matched) {
-                /* Optional guard: re-check if the arm has a when-guard. */
-                if (arm->guard) {
-                    TuriValue gv = eval_expr(env, arm_frame, arm->guard);
-                    if (turi_is_error(gv) || env->returning || env->throwing) {
-                        eval_frame_free(arm_frame);
-                        return gv;
-                    }
-                    if (gv.tag != TURI_BOOL || !gv.as_bool) {
-                        eval_frame_free(arm_frame);
-                        continue;
-                    }
-                }
-                TuriValue result = eval_expr(env, arm_frame, arm->body);
-                eval_frame_free(arm_frame);
-                return result;
-            }
-        }
-        return turi_error("eval: match: no arm matched");
-    }
+    case EX_MATCH:
+        /* T3.0: delegated to the explicit-stack driver, which resolves the arm
+         * via eval_match_resolve and descends the arm body in the loop so a
+         * match-recursive callee body does not grow the C stack (prerequisite
+         * for the T3 call fold).  Semantics match the former inline version. */
+        return eval_drive(env, frame, e);
 
     /* --- DV0/DV1: Dynamic variables -------------------------------------- */
     case EX_DEFDYNAMIC: {
@@ -4752,9 +5136,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         PerformExpr *pe = e->as.perform_.perform;
         const char  *effect_name = pe->effect_name->name;
 
-        TuriValue args[MAX_EVAL_ARGS];
+        /* T1: effect arity is capped at MAX_FN_ARITY; a fixed inline buffer (not
+         * heap) keeps `args` alive across the swapcontext below, which borrows
+         * it via cont->perf_args. */
+        TuriValue args[EVAL_MAX_FN_ARITY];
         uint8_t   n_args = pe->n_args;
-        if (n_args > MAX_EVAL_ARGS)
+        if (n_args > EVAL_MAX_FN_ARITY)
             return turi_errorf("eval: too many effect arguments (%u)", n_args);
 
         for (uint8_t i = 0; i < n_args; i++) {

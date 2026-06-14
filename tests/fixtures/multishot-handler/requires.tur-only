@@ -4,5 +4,5 @@ continuation multiple times (^multishot), after its handle returned, or through
 nested handlers, which SIGABRTs / heap-use-after-frees / loses outer handlers.
 Genuine interpreter gap (the compiled path is correct), not a fixture bug. Deep
 continuation work overlapping the trampoline plan; carve per Bucket R4 of
-docs/upcoming/turi-interpret-flip-residual-plan.md and the analysis in
+docs/archive/history/turi-interpret-flip-residual-plan.md and the analysis in
 docs/reported/turi-interpreter-delimited-control-gaps.md.

@@ -43,7 +43,7 @@
 > `exg5-rc-in-exists`)**, plus `accessor`/`simple-return`/mixed (4). Tightening
 > `ic_exec_constructor` first is the highest-leverage slice. Full matcher->fixture
 > map and the prereq decomposition:
-> [docs/upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md).
+> [docs/archive/history/turi-open-reports-prereqs.md](turi-open-reports-prereqs.md).
 >
 > **Update (2026-06-12, conditional-snprintf):** the `ic_exec_snprintf_fmt`
 > matcher no longer blindly takes the *first* `snprintf` when two are guarded by
@@ -119,7 +119,7 @@ secondary claim on a printf helper -- but the wrong *answer* comes from the
 `constructor` claims.) **Two matchers cover 16 of 20**: tightening
 `ic_exec_constructor` (12) then `ic_exec_snprintf_fmt` (4) is the
 highest-leverage first slice. Full prereq decomposition:
-[../upcoming/v1/turi-open-reports-prereqs.md](../upcoming/v1/turi-open-reports-prereqs.md).
+[../upcoming/v1/turi-open-reports-prereqs.md](turi-open-reports-prereqs.md).
 
 Examples (rc=0, wrong stdout):
 
@@ -171,4 +171,4 @@ does.
 
 Filed while executing TI8.b/W2. The carve mechanism skips these under turi; this
 report keeps the silent-miscompile evaluator bug visible for W4. See
-[docs/upcoming/turi-interpreter-gap-closure-plan.md](../upcoming/turi-interpreter-gap-closure-plan.md).
+[docs/archive/history/turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md).

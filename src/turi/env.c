@@ -29,9 +29,25 @@
  * the Debug/ASan frame keeps both safe.)
  * ---------------------------------------------------------------------- */
 
-/* Conservative upper bound on C-stack bytes per `eval_expr` frame. Set above
- * the ~10 KB measured average to cover frame-type variance within a level. */
-#define TURI_EVAL_FRAME_BYTES   12288u   /* ~12 KB */
+/* Conservative upper bound on C-stack bytes per `eval_expr` frame.
+ *
+ * Post-trampoline (turi-eval-trampoline-plan, T1-T3.2b): deep *non-tail*
+ * recursion is folded onto the heap work-stack (eval_drive) and no longer
+ * touches this guard at all -- it is heap-bounded.  The guard now binds only the
+ * *residual* C-recursion that still flows through `eval_expr`: recursion through
+ * native HOFs (a callback re-enters via turi_call -> eval_apply -> eval_body_tco
+ * -> eval_expr) and the few not-yet-driven expr kinds.  That HOF-re-entry path
+ * is the worst case (~8 C frames per eval_depth) and is what this constant must
+ * be sized against -- NOT the (now-folded) `sum-to` path the T1 value was tuned
+ * for.
+ *
+ * T3.4 re-tune: measured (Debug+ASan, 12.5 MB stack) HOF re-entry through
+ * `option-map` stack-overflows at ~1625 `eval_depth`.  9472 B/level gives
+ * max_eval_depth ~811, i.e. the guard trips at a ~2x margin below that crash
+ * (restoring Direction A's safety factor, which the 7168 value had eroded to
+ * ~1.5x for this path).  Folded non-tail recursion is unaffected (it bypasses
+ * the guard); Release builds have smaller frames and sustain more. */
+#define TURI_EVAL_FRAME_BYTES   9472u   /* ~9.25 KB (T3.4: sized for HOF re-entry) */
 /* Fraction of the stack we let interpreter recursion consume (the rest is
  * headroom for the base call chain and any non-eval frames within a level). */
 #define TURI_EVAL_STACK_FRACTION_NUM  3u

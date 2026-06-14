@@ -120,5 +120,5 @@ the same clone primitive backs that fix.
   -- the explicit-stack evaluator this plan builds on.
 - [docs/reported/turi-multishot-continuation-snapshot-miscompile.md](../../reported/turi-multishot-continuation-snapshot-miscompile.md)
   -- shares the clone primitive (step 5).
-- [docs/upcoming/turi-interpret-flip-residual-plan.md](../turi-interpret-flip-residual-plan.md)
+- [docs/archive/history/turi-interpret-flip-residual-plan.md](../../archive/history/turi-interpret-flip-residual-plan.md)
   -- W5 flip (landed); bucket R4 tracks these as the remaining continuation gap.

@@ -14,7 +14,7 @@
 #
 # Format:  <module>.tur -- <one-line rationale>
 # See docs/reported/turi-harness-flip-reconciliation.md and
-#     docs/upcoming/v1/turi-open-reports-prereqs.md (prereqs 2c, 3a, 3b).
+#     docs/archive/history/turi-open-reports-prereqs.md (prereqs 2c, 3a, 3b).
 
 json.tur    -- reader-backed (-Xdata-literals/-Xjson gated); preloaded only behind the same -X flag as the compiled path, not unconditionally.
 schema.tur  -- reader-backed (-X gated) and depends on json.tur; same conditional-preload story as json.tur.

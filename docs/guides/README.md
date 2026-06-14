@@ -180,6 +180,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[compiler-flags-guide.md](compiler-flags-guide.md)** -- All `-X` feature flags and diagnostic flags: status, what each enables, dependency graph, and common combinations
 - **[test-runner-contract.md](test-runner-contract.md)** -- Test framework API and contract
 - **[sandboxing-guide.md](sandboxing-guide.md)** -- Running untrusted code safely: `turi_env_new_sandboxed`, capability flags, step-fuel limits, and native function exposure
+- **[turi-parity-guide.md](turi-parity-guide.md)** -- Feature-by-feature parity matrix between the compiled path (`tur`) and the tree-walking interpreter (`turi`): what interprets, documented carve-outs, and how to check
 
 ---
 
@@ -199,6 +200,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Tools → [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [lsp-guide.md](lsp-guide.md), [vscode-guide.md](vscode-guide.md), [vim-guide.md](vim-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
 - Embedding and sandboxing → [eval-api.md](eval-api.md), [sandboxing-guide.md](sandboxing-guide.md), [c-integration-guide.md](c-integration-guide.md)
+- Interpreter (turi) parity → [turi-parity-guide.md](turi-parity-guide.md)
 
 **By level:**
 - Beginner → [quickstart.md](quickstart.md), [repl-tutorial.md](repl-tutorial.md), then core feature guides
