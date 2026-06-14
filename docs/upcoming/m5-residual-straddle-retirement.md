@@ -180,6 +180,154 @@ single-body-two-ABIs question for the `Eq Vec` definstance (its body
 serves both the int64 carrier base and the by-value Path A spec) is
 still open -- it is a separate design choice, not this gap.
 
+## Update 2026-06-14 (session 4 cont.): single-body-two-ABIs -- design space fully mapped
+
+Continued straight into the single-body-two-ABIs question.  The
+investigation rewrote `Eq Vec` end-to-end through by-value helpers
+(experiment reverted) and pinned down exactly where the wall is.
+
+### Finding 1 -- gap 4's fix already solves it for CONCRETE element types
+
+With gap 4 fixed, a single `Eq Vec` source body
+
+```turmeric
+(definstance Eq [Vec]
+  [(Eq A)]
+  (eq? [x y]
+    (let [lx (vec-len-byval (:: x (Vec A)))
+          ly (vec-len-byval (:: y (Vec A)))]
+      (if (= lx ly)
+        (vec-eq-loop-byval (:: x (Vec A)) (:: y (Vec A)) 0 lx)
+        false))))
+```
+
+emits BOTH a working carrier base and a working by-value spec:
+
+- **spec** `__inst_Eq_eq_qu_Vec__spec__bool_Vec__int_Vec__int(Vec__int x,
+  Vec__int y)` passes `x`/`y` straight into the by-value helper specs --
+  **no `(int64_t)(intptr_t)(&...)` spill**.  Whole-file bridge count for
+  the probe dropped to 0.  The L2662/L4393 bridges are retired for this
+  path.
+- **carrier base** `__inst_Eq_eq_qu_Vec(int64_t x, int64_t y)` lowers the
+  `(:: x (Vec A))` ascription to `(*(Vec__int *)(intptr_t)(x))` (the
+  accessor-side CK_CARRIER -> CK_CONCRETE deref) and calls the by-value
+  helper specs.  The carrier base is kept alive because the typeclass
+  dictionary singleton holds `.eq_qu = __inst_Eq_eq_qu_Vec` (uniform
+  int64 dispatch slot).
+
+So `(:: x (Vec A))` is the load-bearing construct: a no-op in the spec,
+a deref in the carrier base.  One body, two ABIs -- **for concrete A**.
+
+### Finding 2 -- the residual hard case is ABSTRACT element types
+
+`tests/fixtures/vec-of-tvec-eq-manual` dispatches `(.eq? @Vec a b)` on
+vecs built with bare `(vec-new)` -- **untyped** (`:int` carrier, element
+type abstract).  This reaches `Eq Vec`'s *carrier base* with no concrete
+`Vec__int` to deref to, so the `vec-*-byval` calls inside it fall back to
+the helpers' own **carrier bases** (no by-value spec exists for an
+abstract element).  Those carrier bases must therefore exist and compile.
+
+Two helper shapes were tried for the carrier base; both fail:
+
+- **inline-C `#{ByVal}` helper** (body assumes the by-value C struct):
+  its carrier base is uncompilable (`v.len` on an `int64_t`).  Suppressing
+  it via `prefer_byvalue_spec` is **unsafe** -- `vec-of-tvec-eq-manual`
+  emits a *real* carrier call to `vec_hylen_hybyval`, so suppression turns
+  the C compile error into an `ld: undefined reference`.
+- **pure-Turmeric field-access helper** `(.len v)` (no inline-C, no
+  marker): the spec is perfect, but the carrier base still emits `v.len`
+  on the `int64_t` param -- **field access is not ABI-aware**.  The deref
+  only happens at a CK_CARRIER -> CK_CONCRETE *ascription* boundary; a
+  bare `(.field v)` on a carrier-represented struct value does not deref.
+
+### Finding 3 -- the real fix is ABI-aware field-access lowering
+
+The root cause is narrow and now precise: **`(.field v)` on a value whose
+static type is a parameterized struct but whose C representation is the
+int64 carrier must lower to `((Layout *)(intptr_t)v)->field`, not
+`v.field`.**  For element-agnostic fields (`len`, `cap`, `data`) the
+layout offset does not depend on the element type, so even an abstract-A
+carrier base can deref against a representative `{ void* data; int64_t
+len; int64_t cap; }` shape.  With that one change:
+
+- `vec-len-byval` / `vec-get-byval` become genuinely dual-ABI in pure
+  Turmeric (deref in the carrier base, direct in the spec), so their
+  carrier bases compile and `vec-of-tvec-eq-manual` links.
+- `Eq Vec` (and `Eq Cons`, same shape) can drop `(:: x :int)` + the
+  carrier `vec-len`/`vec-eq-loop` helpers entirely; the spec path is
+  bridge-free and the carrier path still works.
+- No `#{ByVal}` marker, no carrier-base suppression, no stdlib API twin.
+
+### Finding 4 -- the naive ABI-aware field-access change has WIDE blast radius (empirical)
+
+The field-access lowering already casts through the carrier typedef for a
+parameterized receiver, but only gates on `struct_expr->type.kind ==
+TY_STRUCT` (`emit_expr.c` EX_GET_FIELD, the `through_carrier` predicate).
+A `(Vec A)` receiver is `TY_APP`, so the cast never fired for it -- hence
+`(.len v)` emitting `v.len` on an int64 in the helper carrier base.
+
+Extending `through_carrier` to also fire for `TY_APP` receivers
+(`def->n_type_params > 0`) **made the `Eq Vec` rewrite fully work**:
+
+- spec body bridge-free (0 `(int64_t)(intptr_t)(&...)` spills whole file),
+- `vec-len-byval` carrier base correctly `((Vec *)(intptr_t)(v))->len`,
+- `vec-of-tvec-eq-manual` (untyped `@Vec` carrier-base path) links AND
+  runs (`true/false/true/false`).
+
+BUT the full suite regressed by **54 build failures** (e.g. `list-basic`,
+`option-basic`, `result-typed-basic`, `tuple-*`, `fn-type-*`, `hrt-*`,
+`hkt-stdlib-*`).  Root cause: **a `TY_APP` parameterized-struct receiver
+is NOT uniformly carrier-represented.**  `Option__int` / `Result__T__B` /
+`Tuple2__..` frequently arrive *by value* (their by-value specs, value-
+struct payloads, tuple accessors), and the blanket `TY_APP` cast wrongly
+forced `((Option *)(intptr_t)v)->is_some` on an already-by-value struct.
+The `TY_STRUCT` path avoided this because the Path A.2 override
+(`current_abi_specialization->arg_types[]`) reliably proved by-value-ness;
+for `TY_APP` the same override does not catch the many non-spec / value-
+struct sites, so the default-to-carrier-cast broke them.
+
+Experiment reverted.
+
+### Recommendation
+
+ABI-aware field-access lowering is still the right *direction*, but it
+**cannot** key off the static `TY_STRUCT`/`TY_APP` kind alone -- that is
+the empirically-confirmed trap (Finding 4).  It needs a
+**representation-precise predicate**: cast through the carrier typedef
+only when the receiver's actual C representation at this site is the int64
+carrier, not a by-value struct.  Sketch of what that predicate must
+consult, in priority order:
+
+1. the active spec's `arg_types[]` (already done for `TY_STRUCT` via the
+   Path A.2 override) -- generalize it to resolve `TY_APP` receivers too;
+2. for non-`EX_VAR` / non-spec receivers, the expression's *emit-time*
+   representation (whether `emit_value` produced a carrier int64 or a
+   by-value struct) rather than its static `Type.kind`.
+
+(2) is the hard part: today field access reads `struct_expr->type.kind`,
+which conflates the two representations a `(Vec A)` value can have.  A
+clean fix likely threads a "this value is carrier-represented" bit out of
+`emit_value` (or a helper like `expr_emits_byvalue_carrier_abi`, already
+used by the bridge machinery) and gates the cast on it.  That is a
+real -- but bounded -- emit refactor, and the correct scope for it is its
+own focused change, NOT a one-line `TY_APP` add.
+
+The two fallback options if the representation-precise predicate proves
+too invasive:
+
+- **B -- two-body instance emission**: emit the carrier base from a
+  carrier-helper body and the spec from a by-value-helper body.  Removes
+  the need for ABI-aware field access but doubles the instance source or
+  needs an ABI-conditional body selector in `emit_typeclasses.c`.
+- **C -- drop the uniform dict carrier base** (full monomorphization,
+  the M-plan endgame): the abstract-element dispatch path stops existing,
+  so by-value helpers never need a carrier base.  Biggest blast radius;
+  belongs to the later M-phases, not this retirement.
+
+Nothing was landed in this continuation (the experiment is reverted); the
+deliverable is this mapped design space.  Gap 4's fix (committed) is the
+enabler and stands on its own.
+
 ## Update 2026-06-14 (session 2, attempt 3): D-lite Eq Vec rewrite hits a 4th gap
 
 With the bridge-side strip fixed, attempted a less-ambitious Eq Vec
