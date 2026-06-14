@@ -1,7 +1,10 @@
 # M5 suite residual: 6 failing fixtures, 3 root causes
 
-**Status:** Root causes A and B FIXED 2026-06-14 (suite now 1 failed); C
-remains (the M5 carrier straddle, deferred to its existing plan).
+**Status:** Root causes A and B FIXED 2026-06-14 (suite now 1 failed). C
+investigated and fully root-caused (bidirectional carrier/concrete straddle
+across 3 emit sites); deferred to the existing straddle-retirement plan -- a
+verified regression-free partial increment is described under root cause C but
+intentionally left unshipped (it does not green the fixture on its own).
 **Severity:** mixed -- two are name-capture regressions introduced by the
 M5 `Eq Cons` rewrite (real latent bugs that break ordinary user programs),
 one is the known M5 carrier/concrete straddle.
@@ -195,10 +198,64 @@ consumer-side of the Option Monad/Functor instance disagree on whether the
 arm is carrier or by-value -- the CK_CONCRETE <-> CK_CARRIER straddle the M5
 plan is in the middle of retiring.
 
+### Deeper analysis (2026-06-14 investigation)
+
+This is NOT a regression: the fixture was added in `0fd565f` and has never
+passed -- it is an aspirational target of the in-flight monomorphization, not
+previously-working behavior.
+
+The disagreement is **bidirectional** -- two call conventions want opposite
+return ABIs for the same `(Option int)`-typed value, and the `#{Construct}`
+helpers sit in the middle producing only the carrier form:
+
+1. **Direct-call named defn wants by-value + a deref bridge.** A minimal
+   `(defn wrap [x : int] : (Option int) (some x))` fails identically:
+   ```
+   static Option__int wrap(int64_t x) { return some(x); }   // some() returns int64_t
+   ```
+   The caller already bridges by value -- `Option__int __t = wrap(...);
+   some_qu((int64_t)(intptr_t)(&__t))` -- so the *intended* ABI here is a
+   by-value return.  The bug is only that the body `return some(x)` hands back
+   the int64 carrier; it needs a `CK_CARRIER -> CK_CONCRETE` deref
+   (`return *(Option__int*)(intptr_t)some(x);`).  emit_fns.c already has
+   exactly this unbox at the return site (the `*(%s *)(intptr_t)%s` branch),
+   but it is gated tightly on `use_abi_spec && typeclass_inst != NULL`
+   (M4c Path A only).  A contained experiment generalizing that branch to
+   non-spec carrier-returning bodies (guarded by a "tail leaf is a
+   `#{Construct}` helper or `__inst_` method" predicate) fixes the `wrap`
+   case with **zero suite regressions** -- but does not green the fixture,
+   because:
+
+2. **A lifted lambda dispatched through a poly wrapper wants the int64
+   carrier.** `(fn [x] (some (+ x 1)))` lifts to `__fn_895`, which is invoked
+   *only* through `__poly_897(void*, int64_t) { return __fn_895(x0); }` (the
+   fat/`tur_poly_fn_t` ABI is int64-in/int64-out).  Here the inner lambda
+   should return the **carrier int64** -- the opposite of `wrap` -- so that
+   both `return some(...)` and the wrapper's `return __fn_895(...)` are
+   int64-consistent.  Instead `__fn_895` is monomorphized to return by-value
+   `Option__int` (it is emitted as an ABI **spec**, so it bypasses the
+   non-spec return-emit path entirely), and `__poly_897` then mismatches in
+   the reverse direction.
+
+So a complete fix must coordinate THREE emit sites with a single carrier
+discipline: (a) the non-spec return-emit (direct calls -> by-value + deref
+bridge), (b) the **spec** return-emit and lifted-lambda return type
+(poly-dispatched lambdas -> int64 carrier), and (c) `make_poly_wrapper` so the
+wrapper and its inner agree.  This is precisely the
+`CK_CONCRETE <-> CK_CARRIER` straddle retirement; prior principled attempts in
+this area regressed the suite (see the "+1 hamt-delete regressor" notes in
+`m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`), so it is not
+a contained fix.
+
 ### Proposed fix direction
 
-Falls under the existing residual-straddle retirement; not a new bug. Track
-there. Listing it here only so the suite's red state is fully accounted for.
+Falls under the existing residual-straddle retirement
+(`docs/upcoming/m5-residual-straddle-retirement.md`); not a new bug.  The
+`wrap`-case deref-bridge generalization above is a verified, regression-free
+*increment* toward it (direct-call carrier-returning defns), but was left
+unshipped here to avoid landing a partial codegen change on the active M5
+branch that does not green the target fixture.  The lambda/spec/poly-wrapper
+slice is the remaining work and belongs with the coordinated straddle retire.
 
 ## Validation
 
