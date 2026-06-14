@@ -16,15 +16,23 @@ input-guard miscompile -- has since been fixed (see the commit that accompanies
 this report). What remains below is **compiler-side** (Groups A-C, failing on
 *both* backends) plus **one deep interpreter gap** (Group D).
 
-| Fixture | Group | Backends failing |
-|---|---|---|
-| `rt-return-dispatch-basic` | A | compiled + turi |
-| `errors/rt-return-dispatch-unascribed` | A | compiled + turi |
-| `errors/rt-missing-instance` | A | compiled + turi |
-| `positional-opaque-ok` | B | compiled |
-| `positional-pap-opaque-ok` | B | compiled |
-| `hkt-stdlib-option-result-instances` | C | compiled |
-| `kleisli-arrow-instance` | D | turi |
+| Fixture | Group | Backends failing | Status |
+|---|---|---|---|
+| `rt-return-dispatch-basic` | A | compiled + turi | RESOLVED |
+| `errors/rt-return-dispatch-unascribed` | A | compiled + turi | RESOLVED |
+| `errors/rt-missing-instance` | A | compiled + turi | RESOLVED |
+| `positional-opaque-ok` | B | compiled | RESOLVED |
+| `positional-pap-opaque-ok` | B | compiled | RESOLVED |
+| `hkt-stdlib-option-result-instances` | C | compiled | RESOLVED |
+| `kleisli-arrow-instance` | D | turi | RESOLVED (2026-06-14) |
+| `option-of-tvec-eq` | E | turi | OPEN |
+| `result-of-typed-eq` | E | turi | OPEN |
+
+Update 2026-06-14: Groups A, B, C are green (verified via `bash tests/run.sh`
+filtered on the fixture names) -- the compiler-side gaps were closed by the
+intervening M5 / return-directed-dispatch landings. Group D is fixed (see
+below). Group E is a newly-noticed pre-existing pair of turi failures in the
+same monomorphization batch (`970bd9a`); see the new Group E section.
 
 ---
 
@@ -155,6 +163,64 @@ convention the tree-walker must be taught explicitly. Scoped out of the current
 turi pass because it touches the `^fat` carrier model rather than a single
 shim; the other four turi-side fixtures in this batch were fixed.
 
+**RESOLVED 2026-06-14.** The native `k-apply-raw` shim already existed
+(`native_k_apply_raw`, added in `970bd9a`) and correctly recovered the closure
+via `seq_as_closure` + `turi_call`. The remaining defect was one level up: the
+shim flattened the closure's return with `return turi_int(r.as_int)`. Under
+`--interpret` the int-level Option carrier is **dual-rep** -- `some` may yield
+either a native `int64[2]` box (`TURI_INT`) or a `make-struct` `TuriStruct`
+(`TURI_STRUCT`). The Kleisli closure body `(:: (some x) :int)` returns the
+`TuriStruct` form, so `turi_int(r.as_int)` reinterpreted the struct pointer as a
+raw `int64[2]` box: `some?` read offset 0 (the `tag` word, non-zero -> spurious
+`true`) and `unwrap-or` read offset 8, which under ASan's `malloc_fill_byte`
+surfaced as the `0xBEBEBEBE00000002` poison. The fix preserves `r`'s tag
+(`return r;`) so the dual-rep option shims (`option_field` / `option_is_some`)
+see the value in whichever representation `some` produced. `src/main.c`
+`native_k_apply_raw`. Validates: `kleisli-arrow-instance` matches its
+`expected.stdout` (`true / 41 / 21 / false / false`) on both backends.
+
+---
+
+## Group E -- typed-vec `.eq?` fixtures error under `--interpret` (turi, pre-existing)
+
+**One-line:** `option-of-tvec-eq` and `result-of-typed-eq` (both added in the
+same monomorphization batch, `970bd9a`) fail the turi positive pass: under
+`--interpret` they abort with `eval: inline-C not supported in interpreter mode`
+and produce empty stdout, which mismatches their `expected.stdout`
+(`true / false / false`).
+
+**Repro:** `tur -Xdata-literals --interpret tests/fixtures/option-of-tvec-eq/input.tur`
+
+**Root cause (two-part):**
+
+1. The fixtures build a `(Vec int)` with `vec-push!` and compare
+   `Option (Vec int)` / `Result` values via `.eq?` (per-call-site
+   `option-eq?` / `result-eq?` synthesis from M4c-pre-ext). The dispatch
+   reaches a stdlib defn whose body is inline-C with no interpreter native
+   override in this typed-vec configuration, so the tree-walker bails with
+   the generic inline-C carve message.
+
+2. They are **not** auto-skipped by the turi harness's inline-C carve-out
+   (`fixture_has_inline_c`), because that predicate greps only the fixture's
+   *own* `input.tur` for a `` ```c `` block -- it does not follow the
+   transitive `(load "stdlib/...")` chain that actually drags in the
+   inline-C. So a fixture with a pure-Turmeric body but an inline-C
+   *dependency* is run, then fails instead of skipping.
+
+**Why this is distinct from Group D:** Group D was a real ABI bug in the
+fat-closure return path; Group E is a coverage/triage gap -- the fixtures
+exercise stdlib inline-C the interpreter legitimately cannot run, and the
+harness should either (a) extend the carve-out to follow loads, or (b) carry an
+explicit per-fixture skip marker (e.g. `requires.compiled`). No correctness bug
+in the compiled backend (both fixtures pass `tur build`); the failure is
+purely turi-side.
+
+**Fix direction:** Either teach `fixture_has_inline_c` to detect a transitive
+inline-C dependency, or add a skip marker to these two fixtures (and audit the
+suite for siblings). Out of scope for the Group D fix; flagged here so it is
+tracked rather than silently surviving. Pre-existing on the baseline
+(`deee4c6`), not introduced by the Group D change.
+
 ---
 
 ## How to validate fixes
@@ -166,4 +232,7 @@ shim; the other four turi-side fixtures in this batch were fixed.
 - Group C: `tur build tests/fixtures/hkt-stdlib-option-result-instances/input.tur`
   succeeds and runs to its `expected.stdout`.
 - Group D: `tur --interpret tests/fixtures/kleisli-arrow-instance/input.tur`
-  matches `expected.stdout` (and equals `tur build` output).
+  matches `expected.stdout` (and equals `tur build` output). DONE.
+- Group E: `option-of-tvec-eq` / `result-of-typed-eq` either auto-skip under
+  `bash tests/run-turi.sh` (carve-out extended) or carry an explicit skip
+  marker; `tur build` of both still matches `expected.stdout`.

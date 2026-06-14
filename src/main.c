@@ -6701,7 +6701,15 @@ static TuriValue native_k_apply_raw(TuriEnv *env, TuriValue *a, uint32_t n, void
     TuriValue av = turi_int(a[1].as_int);
     TuriValue r = turi_call(env, seq_as_closure(a[0]), &av, 1);
     if (turi_is_error(r) || env->throwing) return r;  /* propagate callback error */
-    return turi_int(r.as_int);
+    /* The arrow body returns an int-level Option.  Under --interpret the
+     * Option carrier is dual-rep: `some` may yield either a native int64[2]
+     * box (TURI_INT) or a make-struct TuriStruct (TURI_STRUCT).  Preserve r's
+     * tag rather than flattening to turi_int(r.as_int) -- collapsing a
+     * TURI_STRUCT to a bare int pointer drops the struct tag, and downstream
+     * some?/unwrap-or would then misread the TuriStruct as a raw int64[2]
+     * box.  Returning r keeps both representations intact for the dual-rep
+     * option shims (option_field / option_is_some). */
+    return r;
 }
 static TuriValue native_seq_iter(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
