@@ -3872,7 +3872,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else if (tail) {
                     /* F1: tail let body -- descend directly (leak nf), no separate
                      * defer scope.  Body defers fire at function exit via the
-                     * enclosing DK_CALL_RET, matching eval_body_tco's tail leak
+                     * enclosing DK_CALL_RET, matching the retired eval_body_tco's tail leak
                      * (frame = new_frame; goto restart).  Keeping nf-free here is
                      * what lets a tail call in the body reuse the activation. */
                     control = control->as.let_.body;
@@ -3993,7 +3993,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     if (tail) {
                         /* F1: tail match arm body -- descend directly (leak af);
                          * exposes the enclosing DK_CALL_RET for a tail call in the
-                         * arm body, matching eval_body_tco's tail leak. */
+                         * arm body, matching the retired eval_body_tco's tail leak. */
                         control = body; cf = af;   /* tail stays true */
                     } else {
                         DRIVE_PUSH(((DriveCont){ .kind = DK_MATCH_BODY, .expr = control,
@@ -4102,7 +4102,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else if (top->tail) {
                     /* F1: tail let body -- pop DK_LET_BIND and descend the body
                      * directly (leak nf); body defers fire at function exit
-                     * (matches eval_body_tco).  Exposes the enclosing DK_CALL_RET
+                     * (matches the retired eval_body_tco).  Exposes the enclosing DK_CALL_RET
                      * for a tail call in the body. */
                     const Expr *body = le->as.let_.body;
                     len--;
@@ -4171,7 +4171,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                       (unsigned)effective_params, (unsigned)n);
                     free(acc); len--; break;
                 }
-                if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as in eval_apply_inner */
+                if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as the retired eval_apply_inner charged it */
                     if (env->step_fuel == 0) {
                         cur = turi_error("eval: step fuel exhausted");
                         free(acc); len--; break;
@@ -4190,8 +4190,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * stays O(1) on the work-stack.  F1/F2 guarantee that no
                      * cleanup continuation sits between this DK_CALL_ARG and the
                      * enclosing DK_CALL_RET, so st[len-2] IS that activation.
-                     * The sequence mirrors eval_apply_inner's per-iteration
-                     * pre-bounce cleanup (:4001-4004) + top-of-loop re-entry. */
+                     * The sequence reproduces the per-iteration pre-bounce
+                     * cleanup + top-of-loop re-entry of the retired TcoFrame
+                     * trampoline (eval_apply_inner), now folded into the driver. */
                     assert(len >= 2 && st[len - 2].kind == DK_CALL_RET);
                     DriveCont *ret = &st[len - 2];
                     /* (1) finish the current activation: restore its no_unwind
@@ -4201,7 +4202,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     /* (2) re-enter the callee in the same slot.  saved_module is
                      * left as captured by the chain head (restored once at the
                      * chain's end); was_returning / was_no_unwind are recaptured
-                     * per iteration, matching eval_apply_inner. */
+                     * per iteration, as the retired trampoline loop did. */
                     env->current_module = cl->module;
                     ret->frame         = call_frame;
                     ret->aux           = (void *)env->defer_stack; /* new defer mark */
@@ -4216,8 +4217,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
 
                 /* Non-tail turi-body closure: FOLD -- reuse THIS slot as
                  * DK_CALL_RET and descend the body in the loop so deep non-tail
-                 * recursion stays off the C stack.  Reproduces
-                 * eval_apply_inner's single-activation prologue. */
+                 * recursion stays off the C stack.  Reproduces the
+                 * single-activation prologue of the retired eval_apply_inner. */
                 top->kind          = DK_CALL_RET;
                 top->frame         = call_frame;
                 top->aux           = env->defer_stack;       /* defer mark */
@@ -4231,8 +4232,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case DK_CALL_RET: {
-                /* Folded callee body produced cur.  Epilogue = eval_apply_inner's
-                 * single-activation tail (restore in_no_unwind, fire this call's
+                /* Folded callee body produced cur.  Epilogue = the retired
+                 * eval_apply_inner's single-activation tail (restore
+                 * in_no_unwind, fire this call's
                  * defers, resolve the return/throw/value, consume an early
                  * `return` at the function boundary) + the eval_apply wrapper's
                  * module restore. */
@@ -4331,7 +4333,7 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                                    TuriValue *args, uint32_t n_args) {
     /* SB3: step-fuel check for the activation (TCO iterations are charged in
-     * the DK_CALL_ARG reuse path).  Mirrors eval_apply_inner's per-call charge,
+     * the DK_CALL_ARG reuse path).  Mirrors the retired eval_apply_inner's per-call charge,
      * which preceded even the native dispatch. */
     if (env->step_fuel_limit > 0) {
         if (env->step_fuel == 0)
@@ -4433,12 +4435,28 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
  * env->current_module across the whole call (including any tail-call chain), so
  * a callee's module context never leaks back to its caller.  The DK_CALL_RET
  * epilogue already restores it to the same value, so this is idempotent for the
- * turi-body path and the safety net for the native/inline-C leaf path. */
+ * turi-body path and the safety net for the native/inline-C leaf path.
+ *
+ * F5: this is also where the eval_depth recursion guard now lives.  Before the
+ * unification, the guard rode on eval_expr, which the OLD eval_body_tco called
+ * once per HOF re-entry level (evaluating the recursive call's args).  The
+ * driver evaluates control flow and call args on its heap work-stack WITHOUT
+ * re-entering eval_expr, so a native HOF that re-applies a recursing closure
+ * (turi_call -> eval_apply -> eval_apply_driven -> eval_drive_ex -> leaf native
+ * -> turi_call -> ...) would otherwise never bump eval_depth and would
+ * stack-overflow instead of tripping the limit.  eval_apply is on every such
+ * C-recursion cycle (and is bypassed entirely by the folded non-tail and reused
+ * tail paths, which stay heap-/O(1)-bounded), so guarding it bounds exactly the
+ * residual native-re-entry recursion -- nothing else. */
 static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
+    if (env->eval_depth >= env->max_eval_depth)
+        return turi_error("eval: recursion limit exceeded");
+    env->eval_depth++;
     const char *saved_module = env->current_module;
     TuriValue r = eval_apply_driven(env, cl, args, n_args);
     env->current_module = saved_module;
+    env->eval_depth--;
     return r;
 }
 
