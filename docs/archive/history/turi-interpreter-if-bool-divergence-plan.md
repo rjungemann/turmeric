@@ -6,6 +6,26 @@ description: Fix the two remaining `if condition must be bool, got int` divergen
 
 # Turi interpreter `if`-bool type divergence -- Plan
 
+> **RESOLVED 2026-06-14 -- archived.** The divergence is gone:
+> `contract-release` now PASSES under `--interpret` (prints `contracts-enabled`,
+> rc=0) because `contract.tur` is loaded up front in the `cmd_eval`/`--interpret`
+> path ([src/main.c](../../../src/main.c), the `contract.tur` preload at the
+> top of `cmd_eval`, *before* the typed-stdlib prelude array), so its
+> `(defn contract-enabled? [] :bool true)` types the `if` condition `:bool`
+> before the elaborator's bool check runs. The native override at
+> `turi_env_register_native(env, "contract-enabled?", ...)` supplies the runtime
+> impl (also `bool`), so there is no int/bool mismatch. Its `requires.tur-only`
+> marker has been removed; it runs genuinely interpreted under the post-W5
+> denylist harness. `result-question-op-sweet` remains carved, but for the
+> *correct* reason: its `u-ok`/`u-ok-val` helpers are genuine inline-C
+> (`malloc` + struct deref) the tree-walker cannot run, so it auto-skips via the
+> inline-C carve (its redundant `requires.tur-only` was removed too -- it was the
+> only inline-C fixture carrying one). The `?`-operator desugar's int-carrier
+> `if` would only resurface *if* those helpers were ever reimplemented as natives;
+> that is a hypothetical, not a live blocker. Neither root cause from the plan
+> below required a code change -- the prelude graduation of `contract.tur` (an
+> independent landing) closed #1, and the inline-C carve covers #2.
+
 ## Status and scope
 
 Two fixtures remain carved `requires.tur-only` with reason "if-bool type-check
@@ -122,9 +142,9 @@ recurrence.
 
 ## See also
 
-- [docs/upcoming/v1/turi-open-reports-prereqs.md](turi-open-reports-prereqs.md)
+- [docs/archive/history/turi-open-reports-prereqs.md](turi-open-reports-prereqs.md)
   -- Prereq 3d, which carved these two with `requires.tur-only`.
-- [docs/archive/history/turi-harness-flip-reconciliation.md](../../archive/history/turi-harness-flip-reconciliation.md)
+- [docs/archive/history/turi-harness-flip-reconciliation.md](turi-harness-flip-reconciliation.md)
   -- the if-bool bucket of the original blast-radius measurement.
-- [docs/upcoming/turi-interpret-flip-residual-plan.md](../turi-interpret-flip-residual-plan.md)
+- [docs/archive/history/turi-interpret-flip-residual-plan.md](turi-interpret-flip-residual-plan.md)
   -- W5 flip (landed); these fixtures stay carved until this plan lands.

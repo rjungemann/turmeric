@@ -60,5 +60,5 @@ cannot drift again. Initialise `cancel_reason = 0` in `new`.
 ## Notes
 
 Found while implementing the R1 taskgroup interpreter native shims
-([turi-interpret-flip-residual-plan.md](../upcoming/turi-interpret-flip-residual-plan.md)).
+([turi-interpret-flip-residual-plan.md](../archive/history/turi-interpret-flip-residual-plan.md)).
 The shim deliberately allocates the full struct to avoid inheriting this bug.

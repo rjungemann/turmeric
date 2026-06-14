@@ -133,7 +133,7 @@
 > **Prereq decomposition (2026-06-12):** the remaining Tier B work (content-keyed
 > user comparators) plus the orthogonal non-int-value and clean-carve tasks are
 > broken down into independently-landable prereqs in
-> [docs/upcoming/v1/turi-open-reports-prereqs.md](../../upcoming/v1/turi-open-reports-prereqs.md)
+> [docs/archive/history/turi-open-reports-prereqs.md](turi-open-reports-prereqs.md)
 > -- notably a behavior-preserving `void* ctx` thread through the HAMT eq
 > callback (`src/runtime/hamt.h:25`) that unblocks the turi-closure-aware path
 > with no codegen/fixture churn.

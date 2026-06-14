@@ -7,7 +7,7 @@
 > bodies** (permanent TI7 auto-carves) -- leaving **34 non-inline-C fixtures** as
 > the entire remaining obstacle to the flip. Those 34 are decomposed, bucketed,
 > and sequenced (fix-vs-carve per bucket, with file:line pointers) in
-> [docs/upcoming/turi-interpret-flip-residual-plan.md](../../upcoming/turi-interpret-flip-residual-plan.md).
+> [docs/archive/history/turi-interpret-flip-residual-plan.md](turi-interpret-flip-residual-plan.md).
 > Three genuine **silent miscompiles** surfaced during the final probe and were
 > filed (not carved): value-struct Result payloads
 > ([turi-value-struct-payload-interpreter-miscompile.md](../../reported/turi-value-struct-payload-interpreter-miscompile.md))
@@ -324,7 +324,7 @@
 > into independently-landable groundwork (native-registry parity diff,
 > benchmark-stub overlap audit, opt-in `TUR_TURI_FULL_PRELUDE` flag, carve
 > markers for the move/linearity + `if-bool` divergences) in
-> [docs/upcoming/v1/turi-open-reports-prereqs.md](../../upcoming/v1/turi-open-reports-prereqs.md).
+> [docs/archive/history/turi-open-reports-prereqs.md](turi-open-reports-prereqs.md).
 
 **Summary:** `tests/run-turi.sh` was flipped from `tur run` (which compiles and
 runs a native binary) to `tur --interpret` (the actual tree-walking

@@ -99,5 +99,5 @@ still pass on the compiled path).
 - `tests/run.sh` already exercises all five on the compiled path (still green).
 
 Tracked for the flip in
-[docs/upcoming/turi-interpret-flip-residual-plan.md](../upcoming/turi-interpret-flip-residual-plan.md)
+[docs/archive/history/turi-interpret-flip-residual-plan.md](../archive/history/turi-interpret-flip-residual-plan.md)
 (Bucket R4).

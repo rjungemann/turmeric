@@ -1,7 +1,0 @@
-if-bool type-check divergence: under --interpret the tree-walker's type checker
-rejects (if (contract-enabled?) ...) with "if condition must be bool, got int"
-because it does not see contract-enabled? as returning bool. The compiled path
-types it correctly and prints "contracts-enabled". Genuine interpreter/type-check
-divergence, not a fixture bug -- carve per prereq 3d of
-docs/upcoming/v1/turi-open-reports-prereqs.md (the if-bool bucket of
-docs/reported/turi-harness-flip-reconciliation.md).

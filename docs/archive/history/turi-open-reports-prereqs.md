@@ -1,5 +1,12 @@
 # Prerequisite tasks to de-risk the three open turi-* reports
 
+> **COMPLETE 2026-06-14 -- archived.** Every prereq in this doc landed or was
+> otherwise resolved (see the Status summary table at the bottom: 1a-3d all
+> landed/resolved). The three reports it de-risked are themselves closed -- the
+> harness flip (W5) shipped, the inline-C matcher tightening (W4) landed, and the
+> map/set/hamt comparator gap (Tier B) closed. Retained as the historical record
+> of the groundwork; no open items remain.
+
 A planning pass over the three still-open turi interpreter reports, decomposing
 each big lift into smaller, independently-landable groundwork that eases (and
 de-risks) the eventual fix. Grounded with file:line pointers and current
@@ -7,9 +14,9 @@ measurements taken 2026-06-12 against `./build/tur`.
 
 Open reports surveyed:
 
-- [docs/reported/turi-inline-c-silent-miscompiles.md](../../archive/history/turi-inline-c-silent-miscompiles.md)
-- [docs/archive/history/turi-map-set-hamt-interpreter-gap.md](../../archive/history/turi-map-set-hamt-interpreter-gap.md)
-- [docs/archive/history/turi-harness-flip-reconciliation.md](../../archive/history/turi-harness-flip-reconciliation.md)
+- [docs/reported/turi-inline-c-silent-miscompiles.md](turi-inline-c-silent-miscompiles.md)
+- [docs/archive/history/turi-map-set-hamt-interpreter-gap.md](turi-map-set-hamt-interpreter-gap.md)
+- [docs/archive/history/turi-harness-flip-reconciliation.md](turi-harness-flip-reconciliation.md)
 
 ---
 
@@ -31,7 +38,7 @@ mis-claim to *unclaimed*, never disturb a correct claim).
 ### Prereq 1b -- the report's "22 remain" is stale; it is **20** (data below) (FOLDED 2026-06-12)
 
 The corrected count and the matcher->fixture map below have been folded into
-[the report](../../archive/history/turi-inline-c-silent-miscompiles.md) (the stale
+[the report](turi-inline-c-silent-miscompiles.md) (the stale
 "22 remain" is marked superseded; the table now lives in the report body).
 Re-verified against `./build/tur`: 5 of 25 are clean errors (rc=1), 20 still
 silently miscompile (rc=0).
@@ -67,7 +74,7 @@ to a clean `rc=1` error, via refuse-rather-than-guess guards on each matcher
 (constructor / snprintf / accessor / simple-return). Each matcher was validated
 against its correctly-claimed regression set; full interpreter harness 983/0,
 compiled suite 1599/0, zero regressions. Details + per-matcher guard list:
-[../../archive/history/turi-inline-c-silent-miscompiles.md](../../archive/history/turi-inline-c-silent-miscompiles.md)
+[../../archive/history/turi-inline-c-silent-miscompiles.md](turi-inline-c-silent-miscompiles.md)
 (the report's "RESOLVED (W4)" banner).
 
 ### Prereq 1d -- a "known-good inline-C" regression set
@@ -146,7 +153,7 @@ form to match the compiled float32 ascription. Verified 2026-06-12:
 and is on the `run-turi.sh` allowlist (line 901); the interpreter harness is
 **982 passed, 0 failed**. Full write-up + the *inherent* `EX_REINTERPRET`
 limitation (`::` is value-preserving, not bit-preserving, under the interpreter):
-[../../archive/history/turi-map-nonint-value-carrier-ascription.md](../../archive/history/turi-map-nonint-value-carrier-ascription.md).
+[../../archive/history/turi-map-nonint-value-carrier-ascription.md](turi-map-nonint-value-carrier-ascription.md).
 
 Original framing: `Map int cstr` / `Map int float` mis-rendered because
 `map-get`'s generic int64 carrier was not reinterpreted by `(:: ... :V)` -- a

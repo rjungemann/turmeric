@@ -2,4 +2,4 @@ inline-c (dependency: stdlib/re.tur). The #rx"..." reader literal drives re.tur'
 regex engine, whose matcher/compile primitives are inline-C the interpreter does
 not run. Re-implementing the regex VM as natives is disproportionate library
 work -- carve per Bucket R6 of
-docs/upcoming/turi-interpret-flip-residual-plan.md. Still PASSes compiled.
+docs/archive/history/turi-interpret-flip-residual-plan.md. Still PASSes compiled.

@@ -79,5 +79,5 @@ overlaps the explicit-stack restructuring in
 - `tests/run.sh` unchanged (interpreter-only fix).
 
 Tracked for the flip in
-[docs/upcoming/turi-interpret-flip-residual-plan.md](../upcoming/turi-interpret-flip-residual-plan.md)
+[docs/archive/history/turi-interpret-flip-residual-plan.md](history/turi-interpret-flip-residual-plan.md)
 (Buckets R5/R4).

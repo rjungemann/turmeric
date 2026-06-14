@@ -1,7 +1,0 @@
-if-bool type-check divergence (+ inline-C): under --interpret the ? operator
-desugars to an if on the Result's ok-ness carrier, which the tree-walker's type
-checker reports as "if condition must be bool, got int". The fixture also uses
-inline-C u-ok/u-ok-val helpers, which the interpreter does not run. The compiled
-path prints 42/22. Genuine interpreter divergence, not a fixture bug -- carve per
-prereq 3d of docs/upcoming/v1/turi-open-reports-prereqs.md (the if-bool bucket of
-docs/reported/turi-harness-flip-reconciliation.md).

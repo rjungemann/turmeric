@@ -97,5 +97,5 @@ dual-rep readers that already do this for the accessor side.
 - `tests/run.sh` unchanged (interpreter-only fix; no codegen touched).
 
 Tracked for the flip in
-[docs/upcoming/turi-interpret-flip-residual-plan.md](../upcoming/turi-interpret-flip-residual-plan.md)
+[docs/archive/history/turi-interpret-flip-residual-plan.md](history/turi-interpret-flip-residual-plan.md)
 (Bucket R5).
