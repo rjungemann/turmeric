@@ -29,25 +29,27 @@
  * the Debug/ASan frame keeps both safe.)
  * ---------------------------------------------------------------------- */
 
-/* Conservative upper bound on C-stack bytes per `eval_expr` frame.
+/* Conservative upper bound on C-stack bytes per recursion level.
  *
  * Post-trampoline (turi-eval-trampoline-plan, T1-T3.2b): deep *non-tail*
- * recursion is folded onto the heap work-stack (eval_drive) and no longer
- * touches this guard at all -- it is heap-bounded.  The guard now binds only the
- * *residual* C-recursion that still flows through `eval_expr`: recursion through
- * native HOFs (a callback re-enters via turi_call -> eval_apply -> eval_body_tco
- * -> eval_expr) and the few not-yet-driven expr kinds.  That HOF-re-entry path
- * is the worst case (~8 C frames per eval_depth) and is what this constant must
- * be sized against -- NOT the (now-folded) `sum-to` path the T1 value was tuned
- * for.
+ * recursion is folded onto the heap work-stack (eval_drive) and *tail* recursion
+ * reuses a single work-stack slot (turi-cek-frame-reuse-tco-plan, F1-F4); neither
+ * touches this guard -- both are heap-/O(1)-bounded.  The guard binds only the
+ * *residual* C-recursion: a native HOF whose callback re-enters evaluation via
+ * turi_call.  After the F4 unification that cycle is
+ * turi_call -> eval_apply -> eval_apply_driven -> eval_drive_ex -> (leaf native)
+ * -> turi_call -> ..., and it bumps eval_depth once per `eval_apply` (where the
+ * guard now lives -- the driver no longer routes per-level through eval_expr, so
+ * the guard moved off eval_expr onto eval_apply; see eval.c).
  *
- * T3.4 re-tune: measured (Debug+ASan, 12.5 MB stack) HOF re-entry through
- * `option-map` stack-overflows at ~1625 `eval_depth`.  9472 B/level gives
- * max_eval_depth ~811, i.e. the guard trips at a ~2x margin below that crash
- * (restoring Direction A's safety factor, which the 7168 value had eroded to
- * ~1.5x for this path).  Folded non-tail recursion is unaffected (it bypasses
- * the guard); Release builds have smaller frames and sustain more. */
-#define TURI_EVAL_FRAME_BYTES   9472u   /* ~9.25 KB (T3.4: sized for HOF re-entry) */
+ * The driver-based re-entry frame is cheaper than the old
+ * eval_body_tco -> eval_expr chain (measured Debug+ASan, 12.5 MB stack: HOF
+ * re-entry through `option-map` now stack-overflows far deeper than the ~1625
+ * eval_depth the old path hit), so 9472 B/level -- giving max_eval_depth ~811 --
+ * is comfortably conservative here: the guard trips with a large margin below
+ * the crash.  Keeping the value pins the user-visible recursion ceiling where it
+ * was.  Release builds have smaller frames and sustain more. */
+#define TURI_EVAL_FRAME_BYTES   9472u   /* ~9.25 KB (sized for native HOF re-entry) */
 /* Fraction of the stack we let interpreter recursion consume (the rest is
  * headroom for the base call chain and any non-eval frames within a level). */
 #define TURI_EVAL_STACK_FRACTION_NUM  3u
