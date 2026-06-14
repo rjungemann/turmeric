@@ -273,6 +273,89 @@ Two corrections to earlier analyses:
    what m5-byval-marker-spec-emit's spec lookup does differently when
    the helper's arg_full_types now carries TY_TYVAR vs NULL.
 
+### Session-3 read-only trace (2026-06-14): hamt-delete root cause located
+
+The `call_collect_type_bindings` skip-same-name-self-binding logic
+(part (c) of the reverted attempt) loses information the emitter
+relies on.  Trace via code reading, no instrumentation needed.
+
+**The information flow**:
+- `elab_call.c:3599-3604` -- after `call_collect_type_bindings` runs,
+  the resulting `type_bindings[]` is COPIED into the EX_CALL Expr as
+  `out->as.call_.abi_bindings` (size `n_abi_bindings`).
+- `emit_module.c:789-803` -- the emitter reads `call->as.call_.abi_bindings`
+  and walks each binding through `emit_abi_type_has_concrete_named_tyvar`
+  (`emit_module.c:518`) to decide whether the call is "abstract" and
+  needs the **relay path** vs. the carrier path.
+- `emit_module.c:522` -- TY_TYVAR with a non-NULL name (and not
+  KIND_TYPEROW) is considered "abstract".
+
+**Before my fix**: when expected=TYVAR(A) met actual=TYVAR(A) inside
+a polymorphic context (e.g. a polymorphic stdlib helper calling
+another polymorphic helper recursively or sideways), the original
+code recorded `A -> TYVAR(A)`.  Downstream the emitter saw the
+named tyvar, set `abstract=true`, took the relay path.
+
+**With my fix**: the same-name pair returns `true` without recording.
+If A was the ONLY binding that would have been recorded for that
+call, `n_abi_bindings=0`, the abstract loop never sees it,
+`abstract` stays false, and the call falls through to the
+**carrier path** instead of the relay path.  For HAMT-touching code
+this swaps in a wrong ABI shape at some call site (silent
+miscompile → empty stdout / SIGSEGV).
+
+**Why the "narrow self-tyvar upgrade" gate didn't help**: the upgrade
+fires only when a LATER concrete actual arrives.  If the call has
+ONLY tyvar-vs-tyvar pairs (no concrete actual follows), the upgrade
+never triggers and the binding stays absent.  HAMT helpers that
+forward TYVAR(K)/TYVAR(V) to inner helpers without any concrete
+ground-out are exactly this shape.
+
+**Why the fix worked on the probes**: gap1-probe and gap1-instance
+both pass at least one concrete actual (the int args `1 1`) after
+the lambda position.  That concrete actual fires the upgrade gate
+and re-establishes the binding.  Probes were therefore an incomplete
+exemplar of the call patterns the change perturbs.
+
+**Implications for the next attempt**:
+
+The fundamental issue is the **arg-order coupling**: when the lambda
+sits at arg position i=0 and inherits TYVAR(A), it commits A's
+binding before any concrete actual at i>0 can ground it.
+
+Three fix shapes that would sidestep this without losing the
+emitter's "abstract" signal:
+
+(i) **Two-pass arg-binding collection.** First pass: collect bindings
+    only from concrete actuals (skip lambda/abstract args).  Second
+    pass: type-check lambda actuals against the now-grounded
+    expected types.  Preserves the original record-self-binding
+    behavior for genuinely-abstract calls; only re-orders when both
+    concrete and lambda actuals coexist.
+
+(ii) **Lambda-side fresh-tyvar.** In elab_fn's aft propagation (part
+    (b)), don't copy the helper's TYVAR(A) into the lambda's aft
+    verbatim.  Allocate a FRESH symbol (`A_lambda_NN`) and use that.
+    The unification at the call site sees `TYVAR(A_helper) vs
+    TYVAR(A_lambda_NN)` (different names), records
+    `A_helper -> TYVAR(A_lambda_NN)`, which the emitter still
+    treats as "abstract" (relay path preserved).  Later concrete
+    actuals try `A_helper -> int` and the prior is TYVAR ->
+    type_eq fails -- same problem as the simple case.  Unless paired
+    with (i), still broken.
+
+(iii) **Side-channel the expected aft to the lambda WITHOUT going
+    through e->expected_type.**  Attach the expected aft directly to
+    the lambda Expr (e.g. `args[i]->expected_full_type`) after
+    elab_form returns, so the call-site unifier can use it for THIS
+    call only.  Don't mutate the lambda's own fn_type.  This avoids
+    the lambda's aft becoming "actual" data in the unifier -- it
+    stays expected-context.  Requires the unifier to take an
+    `actual_expected_full[]` channel separate from `actual.as.fn.aft`.
+
+Pick (i) for the simplest first attempt; (iii) is cleanest but a
+bigger refactor.
+
 ### Workaround (works today)
 
 Typed lambda: `(fn [a : A b : A] : bool (eq? a b))` succeeds in plain
