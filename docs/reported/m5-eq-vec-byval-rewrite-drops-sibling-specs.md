@@ -1,6 +1,6 @@
 ---
-title: Rewriting Eq[Vec] to call a constrained-poly helper drops unrelated sibling specs from the interning worklist
-severity: blocks the M5 Eq Vec by-value rewrite (single-body-two-ABIs); silent miscompile risk -- a needed by-value specialization is omitted, leaving a carrier-base call against a by-value struct (cc type error)
+title: A post-elaboration AST node duplication drops call abi_bindings, omitting unrelated by-value specs
+severity: blocks the M5 Eq Vec by-value rewrite (single-body-two-ABIs); silent-miscompile-shaped (a needed by-value specialization is omitted, leaving a carrier-base call against a by-value struct -> cc type error). ROOT CAUSE PINNED 2026-06-14: emit scans a duplicate EX_CALL node with abi_bindings not copied.
 date: 2026-06-14
 ---
 
@@ -85,28 +85,87 @@ field-access codegen (the failure reproduces with the companion
 - Expected: rewriting one instance body must not change whether an
   unrelated accessor (`thead`/`ttail`/`unwrap`) gets its by-value spec.
 
-## Root-cause hypothesis (not yet pinned)
+## Root cause -- PINNED 2026-06-14 (session 4 cont.): emit scans a DUPLICATE call node with `abi_bindings` dropped
 
-The spec worklist in `emit_module.c` (`emit_abi_intern_spec` +
-`emit_abi_register_call`) is order- and content-sensitive.  Gap 4's
-emit-side augmentation (constraint-var bindings spliced onto the active
-instance-method spec) now fires for `Eq[Vec]` because its body calls a
-constrained-poly helper.  Plausible mechanisms, in order of suspicion:
+It is *not* a worklist ordering/collision/capacity issue (the original
+three hypotheses are disproven below).  Tracing `thead` end-to-end with
+the rewrite applied:
 
-1. The augmented composition mints additional specs (for
-   `vec-eq-loop-byval` / `vec-get-byval` / `eq?` per element type) that
-   change worklist iteration such that `thead`'s registration is visited
-   in a state where `abi_changes` is computed false (so it is recorded
-   as a carrier call instead of interned) -- mirrors the gap-4
-   hamt-delete note about `emit_abi_clone_name` / carrier-call ordering.
-2. A spec-name collision: the new specs mangle to a name that aliases an
-   existing slot, evicting `thead`'s.
-3. A fixed worklist capacity being hit earlier, dropping later
-   registrations.
+1. **Elaboration is correct and identical.**  In both clean and rewritten
+   trees, `elab_call` collects `{A -> int}` for `(thead l)` (inputs at the
+   binding-collection site are byte-identical: expected `(type-app Cons
+   tyvar)`, arg `(type-app Cons int)`), and the call node is saved with
+   `n_abi_bindings = 1`:
+   ```
+   DBG_TH SAVE thead: node=0x..072c8 n_type_bindings=1   # rewrite
+   DBG_TH SAVE thead: node=0x..fdf90 n_type_bindings=1   # clean
+   ```
 
-Pinning it needs per-registration tracing of `thead`'s binding through
-`emit_abi_register_call` (does it reach the intern path or the
-`emit_abi_note_carrier_call` path?) with and without the Eq Vec rewrite.
+2. **Emit scans a DIFFERENT node in the rewritten tree.**
+   `emit_abi_register_call` sees, for the *same single* source-level
+   `(thead l)` call (list-basic has exactly one, at `input.tur:12`):
+   ```
+   # clean:   ENTRY node=0x..fdf90 n_bindings=1   <- SAME node as SAVE -> interns Cons__int spec
+   # rewrite: ENTRY node=0x..cf558 n_bindings=0   <- DIFFERENT node, abi_bindings empty -> early return at
+   #                                                 emit_module.c:959 (`!bindings || n_bindings==0`), no spec
+   ```
+   The early return at `n_bindings==0` is why `thead__spec` is never
+   interned and the carrier base is called with `Cons__int`.
+
+So the rewrite causes a **post-elaboration AST node duplication**: the
+`(thead l)` node that emit scans (`cf558`) is a copy of the elaborated
+node (`072c8`) with `call_.abi_bindings` / `n_abi_bindings` NOT carried
+over.  In the clean tree no such copy happens (emit scans the original
+elaborated node).
+
+### What the duplicate is NOT
+
+- Not the variadic-call path (`elab_call.c:2549`, sets `abi_bindings=0`)
+  -- `thead` is not variadic.
+- Not the poly-call path (`elab_call.c:3878`, `is_poly_call=true`,
+  `abi_bindings` unset) -- instrumented, never fires for `thead`.
+- Not a second elaboration of the call -- there is exactly one `SAVE`
+  for `thead` in both trees.
+
+### Where to look next
+
+The duplicate node is created by a **conditional whole-program AST pass
+inside `elaborate_program`** that rewrites/replaces call nodes and
+field-copies an `EX_CALL` without `abi_bindings`/`n_abi_bindings`.  Ruled
+out so far:
+
+- not `emit_module.c` / `emit_fns.c` (no `as.call_.fn_binding/args` field
+  reconstruction there; the emit ABI scan reads whatever node the AST
+  already holds);
+- not a second elaboration of the call (one `SAVE` only);
+- not the variadic (`elab_call.c:2549`) or poly (`elab_call.c:3878`)
+  call-construction paths.
+
+So the duplicate is produced somewhere **between the `elab_call` save and
+the emit ABI scan** by a pass that rebuilds the `(thead l)` node without
+carrying `abi_bindings`.  It is NOT a generic `expr_clone` (none exists in
+`expr.c`) and NOT field-reconstructed in `emit_module.c`/`emit_fns.c`.
+Remaining candidates, to check in order:
+
+- a post-elaboration whole-program rewrite inside `elaborate_program`
+  (e.g. the Phase M7 promotion noted at `src/main.c:4901`, contract
+  insertion, or a monomorphization/normalization pass);
+- an emit-phase body clone in a TU not yet grepped (`emit_core.c`,
+  `emit_cps.c`, `emit_stmt.c`) that reconstructs call nodes.
+
+The fix is to **propagate `abi_bindings` + `n_abi_bindings` across that
+rebuild** (or struct-assign the whole `as.call_` member instead of
+copying individual fields).  Next tracing step: instrument `EX_CALL` node
+construction / `as.call_.fn_binding` assignment across those passes to
+catch where node `cf558` is born for `thead` (it carries
+`fn_binding->name == "thead"`, `is_global == 1`, `fn_expr == NULL`).  A
+regression guard: `grep -c thead__spec` on the emitted C must be > 0 with
+the Eq Vec by-value rewrite applied.
+
+This also retro-explains gap 4's hamt-delete regressor and the recurring
+session reverts: they are the same node-duplication-drops-`abi_bindings`
+fragility surfacing under different instances, not three separate worklist
+bugs.
 
 ## Why it matters
 

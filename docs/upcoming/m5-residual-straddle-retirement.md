@@ -352,12 +352,23 @@ Bisecting the stdlib change (each step rebuilds + checks `list-basic`):
   to the carrier base `thead(int64_t)` -> cc type error.
 
 So composing one instance-method body through a constrained-poly helper
-perturbs the **global ABI-spec interning worklist** and a sibling spec
-that used to be minted (`thead`/`ttail`/`unwrap`/tuple accessors) no
-longer is.  This is the *same class* of fragility as gap 4's hamt-delete
-regressor -- which was sidestepped by scoping the augmentation, not by
-fixing the underlying worklist invariant.  Filed as
+causes a sibling spec that used to be minted (`thead`/`ttail`/`unwrap`/
+tuple accessors) to be dropped.  Filed as
 `docs/reported/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`.
+
+**Root cause now PINNED** (see the report): it is NOT a worklist
+ordering/collision/capacity issue.  Elaboration is correct and identical
+(`(thead l)` is saved with `n_abi_bindings = 1` in both trees).  The
+rewrite triggers a **post-elaboration AST node duplication**: emit scans
+a *copy* of the `(thead l)` node whose `call_.abi_bindings` were not
+carried over (`n_bindings == 0`), so `emit_abi_register_call` early-
+returns and never interns `thead__spec`.  Node-pointer trace:
+`SAVE node=072c8 n=1` (elab) vs `ENTRY node=cf558 n=0` (emit) for the one
+source-level call; in the clean tree both are the same node (`n=1`).  The
+fix is to propagate `abi_bindings`/`n_abi_bindings` across whichever
+emit-phase body/items copy produces that duplicate.  This retro-explains
+gap 4's hamt-delete regressor and the earlier reverts as the same
+node-duplication fragility, not three separate worklist bugs.
 
 ### Revised recommendation
 
