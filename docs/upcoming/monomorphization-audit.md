@@ -19,7 +19,32 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
-## 0. Status snapshot — 2026-06-13 (post-M4c-pre-ext)
+## 0. Status snapshot — 2026-06-14 (post-M5 emit-side follow-up)
+
+Today's landings:
+
+- **M5 elab dispatch fix** (`a301229e`): `is_primitive` lists at
+  `elab_typeclasses.c:3640-3647` / `:3675-3679` and the symmetric
+  `typeclass.c:354-359` KIND_ARROW iteration learned the sized numeric
+  variants (TY_INT8/16/32/64, TY_UINT*, TY_FLOAT32/64); plus
+  `typeclass_instance_constraints_satisfied` tentatively accepts a
+  TYVAR-substituted constraint (the outer defn's own `(Eq A)` already
+  guarantees the instance at every monomorphization site).
+- **M5 emit arg-bridge fix** (this session): `find_matched_abi_spec`
+  now consults `specialized_call_exprs[]` first and looks the spec up
+  by `clone_name`.  The arg-bridge at `emit_expr.c:2587` and the
+  call-name resolution at `emit_core.c:1030` now agree on the target
+  ABI for constrained-poly defns with parametric receivers (e.g.
+  `(defn f [A] [(Eq A)] [x : (Vec A) y : (Vec A)] (eq? x y))`).
+  Fixture: `tests/fixtures/m5-constrained-poly-vec-eq/`.
+
+Together these close the report at
+`docs/archive/history/m5-constrained-poly-spec-wrong-dispatch-for-parametric-receiver.md`.
+The plan's canonical M5 example
+`(defn fold-eq [A] [^&: Eq A] [xs : (Vec A) y : A] ...)` shape now
+compiles end-to-end.
+
+## 0a. Status snapshot — 2026-06-13 (post-M4c-pre-ext)
 
 Since the last audit refresh (`0506bab2`), the following landed:
 
