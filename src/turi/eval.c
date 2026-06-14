@@ -4068,17 +4068,19 @@ typedef enum {
     DK_DONE,
     DK_IF_BRANCH,
     DK_DO_SEQ,
-    DK_LET_BIND,   /* EX_LET/EX_LETREC: evaluating binding[index]'s init */
-    DK_LET_BODY,   /* EX_LET/EX_LETREC: evaluating the body (frame owned) */
+    DK_LET_BIND,     /* EX_LET/EX_LETREC: evaluating binding[index]'s init */
+    DK_LET_BODY,     /* EX_LET/EX_LETREC: evaluating the body (frame owned) */
+    DK_MAKE_STRUCT,  /* EX_MAKE_STRUCT: evaluating field[index] (fields owned) */
 } DriveKind;
 
 typedef struct {
     DriveKind   kind;
-    const Expr *expr;       /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET being decomposed */
-    EvalFrame  *frame;      /* lexical env: DO=enclosing; LET=the owned new frame */
-    uint32_t    index;      /* DO/PROGRAM: next item; LET: next binding */
-    TuriValue   last;       /* DO/PROGRAM: last non-defer value so far */
-    void       *defer_mark; /* LET_BODY: env->defer_stack snapshot (DeferItem*) */
+    const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET / EX_MAKE_STRUCT */
+    EvalFrame  *frame;  /* lexical env: DO/MAKE_STRUCT=enclosing; LET=owned frame */
+    uint32_t    index;  /* DO: next item; LET: next binding; MAKE_STRUCT: next field */
+    TuriValue   last;   /* DO/PROGRAM: last non-defer value so far */
+    void       *aux;    /* LET_BODY: DeferItem* defer-stack mark;
+                         * MAKE_STRUCT: TuriValue* heap field accumulator */
 } DriveCont;
 
 /* do/program item accessors (both kinds share this shape). */
@@ -4155,6 +4157,26 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     control = control->as.let_.body;
                     cf = nf;
                 }
+                break;
+            }
+            case EX_MAKE_STRUCT: {
+                uint32_t n = control->as.make_struct_.n_fields;
+                if (n == 0) {
+                    StructDef *sd = control->as.make_struct_.def;
+                    cur = make_struct_val_def(sd ? sd->name : "<struct>", 0, NULL, sd);
+                    descending = false;
+                    break;
+                }
+                /* Heap field accumulator persists across the per-field descents;
+                 * freed when the struct is built or on signal-unwind. */
+                TuriValue *fields = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                if (!fields) {
+                    result = turi_error("eval: out of memory evaluating struct fields");
+                    goto done;
+                }
+                DRIVE_PUSH(((DriveCont){ DK_MAKE_STRUCT, control, cf, 0, turi_nil(),
+                                         fields }));
+                control = control->as.make_struct_.field_values[0];
                 break;
             }
             default:
@@ -4234,7 +4256,7 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     /* Bindings done -> body.  Mark defers AFTER bindings so only
                      * body-registered defers fire on this scope's exit. */
                     top->kind       = DK_LET_BODY;
-                    top->defer_mark = env->defer_stack;
+                    top->aux = env->defer_stack;
                     control = le->as.let_.body;
                     cf = nf; descending = true;
                 }
@@ -4245,9 +4267,29 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 /* On normal exit fire this scope's defers; on early-return/throw
                  * leave them for eval_apply (matches the recursive EX_LET). */
                 if (!env->returning && !env->throwing)
-                    fire_defers_to_mark(env, (DeferItem *)top->defer_mark, NULL);
+                    fire_defers_to_mark(env, (DeferItem *)top->aux, NULL);
                 eval_frame_free(nf);
                 len--;  /* pop; propagate cur (body value or signal) */
+                break;
+            }
+            case DK_MAKE_STRUCT: {
+                TuriValue *fields = (TuriValue *)top->aux;
+                if (signaled) { free(fields); len--; break; }  /* abandon, propagate */
+                const Expr *me = top->expr;
+                uint32_t    n  = me->as.make_struct_.n_fields;
+                fields[top->index] = cur;
+                top->index++;
+                if (top->index < n) {
+                    control = me->as.make_struct_.field_values[top->index];
+                    cf = top->frame; descending = true;
+                } else {
+                    StructDef *sd = me->as.make_struct_.def;
+                    /* make_struct_val_def copies the fields, so free after. */
+                    cur = make_struct_val_def(sd ? sd->name : "<struct>",
+                                              n, fields, sd);
+                    free(fields);
+                    len--;  /* pop; keep returning the struct value */
+                }
                 break;
             }
             }
@@ -4625,29 +4667,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase S4: Structs ---------------------------------------------- */
 
-    case EX_MAKE_STRUCT: {
-        uint32_t  n = e->as.make_struct_.n_fields;
-        /* T1: heap-spill scratch (see EVAL_SCRATCH_INLINE) -- lifts the old
-         * n > MAX_EVAL_ARGS field cap. */
-        TuriValue fields_inl[EVAL_SCRATCH_INLINE];
-        TuriValue *fields = (n <= EVAL_SCRATCH_INLINE) ? fields_inl
-                            : (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
-        if (!fields) return turi_error("eval: out of memory evaluating struct fields");
-        for (uint32_t i = 0; i < n; i++) {
-            fields[i] = eval_expr(env, frame, e->as.make_struct_.field_values[i]);
-            if (turi_is_error(fields[i]) || env->returning || env->throwing) {
-                TuriValue err = fields[i];
-                if (fields != fields_inl) free(fields);
-                return err;
-            }
-        }
-        StructDef *sdef = e->as.make_struct_.def;
-        const char *sname = sdef ? sdef->name : "<struct>";
-        /* make_struct_val_def copies the fields, so freeing here is safe. */
-        TuriValue r = make_struct_val_def(sname, n, fields, sdef);
-        if (fields != fields_inl) free(fields);
-        return r;
-    }
+    case EX_MAKE_STRUCT:
+        /* T2: delegated to the explicit-stack driver (DK_MAKE_STRUCT), which
+         * accumulates the evaluated fields on a heap buffer hung off the
+         * work-stack so a struct whose field is itself a struct literal does not
+         * grow the C stack.  Semantics match the former per-field loop.  The
+         * EVAL_SCRATCH_INLINE inline buffer added in T1 no longer applies here
+         * (the accumulator must persist across the per-field descents). */
+        return eval_drive(env, frame, e);
 
     case EX_SET_LIT: {
         /* Build a sorted, deduplicated int64_t set stored as {int64_t *items, int64_t n}.

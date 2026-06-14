@@ -212,6 +212,22 @@ proportional to native-HOF nesting, not turi program depth):
   [docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md](../../reported/turi-tail-scope-defers-fire-fifo-not-lifo.md).
   **Remaining T2 slices:** EX_MAKE_STRUCT (EX_AND/EX_OR are not distinct kinds --
   they are `BS_AND_SC`/`BS_OR_SC` shapes inside EX_BUILTIN, handled at T3).
+- **T2 slice 3 -- EX_MAKE_STRUCT -- LANDED 2026-06-14. T2 linear-form conversion
+  complete.** Added `DK_MAKE_STRUCT`: the descend allocates a heap field
+  accumulator hung off the work-stack (via the renamed multi-purpose `aux`
+  pointer on `DriveCont`), evaluates each field in turn, and on completion calls
+  `make_struct_val_def` and frees the accumulator; a control signal frees it and
+  propagates. This is the same descend-and-accumulate shape T3 will use for call
+  args, so it doubles as the T3 template. (The T1 inline-8 fast path no longer
+  applies here -- the accumulator must persist across the per-field descents --
+  so small structs now take one accumulator malloc; acceptable, pooling is a
+  later perf item.) Validated: `run-turi.sh` 1186 passed (same 8 unrelated
+  monomorphization fails), 14/14 `eval|sandbox` ctests, nested `make-struct` and
+  early-`return` inside a field expr (accumulator freed) correct.
+  **T2 is done** for every linear form the plan named; the next step is **T3**
+  (fold `eval_apply`/`eval_body_tco` into the driver -- the non-tail
+  FUNCTION-call ceiling remover -- which also subsumes the EX_BUILTIN and
+  and/or short-circuit paths).
 - **T3-T5** -- unchanged from the design below; T3 folds eval_apply into the
   driver (the actual non-tail FUNCTION-call ceiling remover); T5 makes
   `TURI_EVAL_FRAME_BYTES` dead code for the synchronous path.
