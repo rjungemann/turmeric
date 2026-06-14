@@ -103,20 +103,74 @@ Blocks the M4c-pre-ext straddle retirement.
 
 ## Root cause hypothesis
 
-For the first form (`^fat cmp : (fn [A A] bool)`):
-- The elaborator's instance-method scope binds `a` (Eq's class var) to
-  Vec and registers `A` (the constraint var) as a fresh tyvar.
-- vec-eq-loop-byval's own `[A]` tyvar SHADOWS the instance's A in some
-  lookup, so when checking the cmp arg, the elaborator looks up the
-  callee's cmp.arg_full_types and finds them empty (the previous A
-  binding got blown away).
+### Diagnostic finding (2026-06-14, post-investigation)
 
-For the second form (constrained-poly helper calling `eq?`):
-- elab_method_call at line 3388 dispatches the inner `(eq? ...)` and
-  walks a null pointer -- likely a missing dict context when the
-  enclosing fn is a constrained-poly defn rather than an instance.
+The diagnostic message itself is misleading.  At
+`elab_call.c:3006-3014`, the expected-type enrichment whitelist for the
+"expected X, got Y" diagnostic is
+`{UNION, INTERSECTION, APP, HANDLER, STRUCT, ADT}` -- it omits TY_FN.
+For a TY_FN-expected param the message degrades to `type_from_kind(TY_FN)`
+which stringifies to `(fn [] : ?)`.  The REAL expected type is the
+helper's declared `(fn [A A] bool)`.  One-line fix to the diagnostic.
 
-Both need elab-side investigation.
+### The actual elab gap
+
+The lambda `(fn [a b] (eq? a b))` elaborates to TY_FN with
+`arg_kinds=[TY_INT, TY_INT]` and `arg_full_types=NULL` in BOTH contexts
+(verified by instrumenting `elab_fn`'s final fn_type construction).
+
+But by the time the call site reaches `call_collect_type_bindings`,
+the lambda's `actual.as.fn.arg_full_types` is:
+- Inside a `(definstance Eq [Vec] [(Eq A)] (eq? [x y] ...))` body:
+  **non-NULL**, pointing to TY_TYVAR(A) for both positions.
+- Inside a `(defn caller [A] [(Eq A)] ...)` polymorphic defn:
+  **NULL**.
+
+The lambda's arg_full_types is populated AFTER `elab_fn` returns but
+BEFORE `call_collect_type_bindings` runs, via some pass that fires in
+the definstance context but not the plain polymorphic defn context.
+The mechanism is not visible via direct grep for `arg_full_types =`
+mutations -- it must run through a chain of typeclass-resolution
+helpers that have side effects on the lambda's TY_FN structure.
+
+`type_eq(TY_TYVAR(A), TY_INT) = 0` (kind mismatch at `types.c:65`),
+so once the lambda DOES get arg_full_types=NULL, the cmp's
+`(fn [A A] bool)` expected vs `(fn [int int] :bool)` actual fails:
+A was previously bound to TY_TYVAR(A) via args 0/1's `(Vec A)` formals,
+then arg 4's actual TY_INT for the lambda doesn't match.
+
+### Why definstance bodies are different
+
+Confirmed by side-by-side trace.  The exact same lambda source, the
+exact same `[(Eq A)]` constraint, the exact same helper signature --
+only the enclosing form (definstance vs plain defn) differs.  The
+gap is a top-down inference channel that fires from one but not the
+other.
+
+### Two-step fix
+
+1. **Diagnostic** (one-liner): add TY_FN to the enrichment whitelist
+   at `elab_call.c:3007` so the error message shows the real expected
+   type instead of "(fn [] : ?)".  Independent of the deeper fix and
+   strictly improves observability.
+
+2. **Lambda inference channel**: identify what populates
+   arg_full_types in the definstance body case and replicate it for
+   plain polymorphic defn bodies.  Open: the populating code path was
+   not located in this session.  Suspects:
+   - typeclass constraint solver pass after method-call dispatch,
+   - elab_method_call's auto-shim that reroutes `(eq? a b)` through
+     `(.eq? a b)`,
+   - a hidden side-effect in the `e->n_sig_tyvars` / `e->scope`
+     handling specific to definstance bodies.
+
+### Workaround (works today)
+
+Typed lambda: `(fn [a : A b : A] : bool (eq? a b))` succeeds in plain
+polymorphic defns.  Inside a definstance method body, the typed lambda
+hits a SEPARATE bug (the SEGV at elab_typeclasses.c:3388 in the
+constrained-poly helper alternative form -- unverified for the
+definstance-body case).
 
 ## Workaround
 
