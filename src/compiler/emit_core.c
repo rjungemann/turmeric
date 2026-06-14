@@ -647,10 +647,44 @@ bool expr_has_multishot_handler(const Expr *e) {
             if (expr_has_multishot_handler(e->as.compose_handlers_.h1)) return true;
             return expr_has_multishot_handler(e->as.compose_handlers_.h2);
         case EX_LET:
+        case EX_LETREC:
             for (uint32_t i = 0; i < e->as.let_.n; i++) {
                 if (expr_has_multishot_handler(e->as.let_.bindings[i].init)) return true;
             }
             return expr_has_multishot_handler(e->as.let_.body);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_has_multishot_handler(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            if (e->as.call_.fn_expr && expr_has_multishot_handler(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_has_multishot_handler(e->as.call_.args[i])) return true;
+            return false;
+        case EX_MATCH:
+            if (expr_has_multishot_handler(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (expr_has_multishot_handler(e->as.match_.arms[i].guard)) return true;
+                if (expr_has_multishot_handler(e->as.match_.arms[i].body)) return true;
+            }
+            return false;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (expr_has_multishot_handler(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_WHILE:
+            if (expr_has_multishot_handler(e->as.while_.cond)) return true;
+            return expr_has_multishot_handler(e->as.while_.body);
+        case EX_RETURN:  return expr_has_multishot_handler(e->as.return_.value);
+        case EX_SET:     return expr_has_multishot_handler(e->as.set_.value);
+        case EX_FN:      return e->as.fn_.fn && expr_has_multishot_handler(e->as.fn_.fn->body);
+        case EX_GET_FIELD: return expr_has_multishot_handler(e->as.get_field_.struct_expr);
+        case EX_SET_FIELD:
+            if (expr_has_multishot_handler(e->as.set_field_.receiver)) return true;
+            return expr_has_multishot_handler(e->as.set_field_.value);
+        case EX_RESUME:
+            if (expr_has_multishot_handler(e->as.resume_.resume->k)) return true;
+            return expr_has_multishot_handler(e->as.resume_.resume->value);
         case EX_IF:
             if (expr_has_multishot_handler(e->as.if_.cond)) return true;
             if (expr_has_multishot_handler(e->as.if_.then_)) return true;

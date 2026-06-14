@@ -18,15 +18,13 @@ description: Make the tree-walking interpreter's effect-handler/continuation mac
 > removed; `tests/run-turi.sh` shows no regressions and `check_turi_parity.py` is
 > 0-gap.
 >
-> Deviation from step 2 (multishot): the compiled effect-multishot path is
-> degenerate -- every resume after the first returns the *first* resume's result
-> -- so `multishot-handler`/`fh-multishot-value` expect `20`, not the `30` true
-> multishot would give. The interpreter therefore *matches* the compiled path
-> (first resume runs the slice and caches its result; later resumes return the
-> cache) rather than cloning per resume. Filed as
-> [docs/reported/turi-effect-multishot-degenerate-resume.md](../../reported/turi-effect-multishot-degenerate-resume.md);
-> when the compiled bug is fixed, switch the cache for a per-resume clone and
-> bump the two fixtures to `30`.
+> Step 2 (multishot) -- true multishot on both paths: the interpreter clones the
+> captured slice per resume (`clone_ws_slice`), and the compiled path was fixed
+> to snapshot/restore the suspended fiber stack per resume. `multishot-handler`/
+> `fh-multishot-value` now yield `30`. The originally-degenerate compiled
+> behaviour and its fix are recorded in
+> [docs/reported/turi-effect-multishot-degenerate-resume.md](../../reported/turi-effect-multishot-degenerate-resume.md)
+> (now RESOLVED).
 
 ## Status and scope
 

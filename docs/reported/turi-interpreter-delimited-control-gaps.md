@@ -10,9 +10,9 @@
 > All five fixtures now pass under `--interpret` and their `requires.tur-only`
 > markers are removed; verified against `tests/run-turi.sh` (no regressions).
 >
-> Multishot caveat: the compiled effect-multishot path is itself degenerate
-> (every resume after the first returns the first resume's result), so the
-> interpreter was made to **match** it bug-for-bug. See
+> Multishot: true multishot on both paths -- the interpreter clones the captured
+> slice per resume; the compiled path snapshots/restores the suspended fiber
+> stack per resume (a degeneracy that was fixed in the same effort). See
 > [turi-effect-multishot-degenerate-resume.md](turi-effect-multishot-degenerate-resume.md).
 >
 > Deferred: capturing a continuation *through a native HOF callback* still

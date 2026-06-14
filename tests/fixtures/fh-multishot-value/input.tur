@@ -1,7 +1,7 @@
 ;; FH6: a ^multishot handler *value* resumed multiple times through
 ;; (with-handler ...) behaves identically to the inline (handle ...) form
-;; (snapshot semantics via the dynamic dispatcher).  Matches the canonical
-;; multishot-handler fixture's result (20).
+;; (true multishot via the dynamic dispatcher).  Matches the canonical
+;; multishot-handler fixture's result (30 = 10 + 20).
 (defeffect Pick [] :int)
 (defn main [] : int
   (let [r (with-handler

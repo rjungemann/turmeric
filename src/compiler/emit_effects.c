@@ -408,20 +408,33 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint8_t i = 0; i < h->n_cases; i++) {
         HandleCase *ms_c = &h->cases[i];
         if (ms_c->cont_kind != CK_MULTISHOT) continue;
-        /* Env struct: captures the dispatch context and fiber pointer */
-        buf_printf(hbuf, "struct __ms_env_%d_%d { void *__ctx; int64_t __k_int; };\n",
+        /* Env struct: captures the dispatch context + fiber, plus a snapshot of
+         * the fiber's suspended-at-perform stack image so each resume re-runs an
+         * INDEPENDENT copy of the continuation (true multishot).  See
+         * docs/reported/turi-effect-multishot-degenerate-resume.md. */
+        buf_printf(hbuf, "struct __ms_env_%d_%d { void *__ctx; int64_t __k_int; "
+                         "FiberBlock *__fiber; char *__stack_image; size_t __image_size; "
+                         "ucontext_t __saved_ctx; };\n",
                    handle_id, (int)i);
-        /* Continuation function: calls dispatch_fn_name(ctx, k_int, v) */
+        /* Continuation function: restore the fiber to its captured perform point,
+         * then dispatch_fn(ctx, k_int, v) resumes that fresh copy. */
         buf_printf(hbuf,
             "static int64_t __ms_cont_fn_%d_%d(void *__env, int64_t __v) {\n",
             handle_id, (int)i);
         buf_printf(hbuf,
             "    struct __ms_env_%d_%d *__e = (struct __ms_env_%d_%d *)__env;\n",
             handle_id, (int)i, handle_id, (int)i);
+        buf_puts(hbuf,
+            "    if (__e->__fiber && __e->__stack_image) {\n"
+            "        memcpy(__e->__fiber->stack, __e->__stack_image, __e->__image_size);\n"
+            "        __e->__fiber->ctx = __e->__saved_ctx;\n"
+            "        __e->__fiber->done = 0;\n"
+            "    }\n");
         buf_printf(hbuf,
             "    return %s(__e->__ctx, __e->__k_int, __v);\n", dispatch_fn_name);
         buf_puts(hbuf, "}\n");
-        /* Clone function: shallow copy of env (ctx and k_int are both plain pointers) */
+        /* Clone function: shallow copy.  The stack image is written once at
+         * capture and only read on restore, so clones safely share it. */
         buf_printf(hbuf,
             "static void *__ms_env_clone_%d_%d(const void *__env) {\n",
             handle_id, (int)i);
@@ -459,6 +472,15 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                 handle_id, (int)i, handle_id, (int)i, handle_id, (int)i);
             buf_puts(hbuf, "        if (!__ms_e) abort();\n");
             buf_printf(hbuf, "        __ms_e->__ctx = __ctx_void; __ms_e->__k_int = __k_int;\n");
+            /* Snapshot the fiber's stack at the perform point so each resume can
+             * restore and re-run an independent copy (true multishot). */
+            buf_puts(hbuf,
+                "        __ms_e->__fiber = __fiber;\n"
+                "        __ms_e->__image_size = __fiber->stack_size;\n"
+                "        __ms_e->__stack_image = (char *)malloc(__fiber->stack_size);\n"
+                "        if (!__ms_e->__stack_image) abort();\n"
+                "        memcpy(__ms_e->__stack_image, __fiber->stack, __fiber->stack_size);\n"
+                "        __ms_e->__saved_ctx = __fiber->ctx;\n");
             buf_printf(hbuf,
                 "        int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__ms_cont_fn_%d_%d, __ms_e, __ms_env_clone_%d_%d, free);\n",
                 handle_id, (int)i, handle_id, (int)i);

@@ -3685,9 +3685,7 @@ typedef enum {
     DK_CALL_ARG,     /* EX_CALL: evaluating arg[index] (acc owned; callee in `last`) */
     DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
     DK_PROMPT,       /* EX_HANDLE (DC): delimited-control prompt; aux = HandleExpr*,
-                      * frame = handler lexical frame, index = active flag (1/0),
-                      * prompt_cont = TuriWsCont* to cache into (resume prompt) or
-                      * NULL (original handle prompt). */
+                      * frame = handler lexical frame, index = active flag (1/0). */
 } DriveKind;
 
 typedef struct {
@@ -3703,7 +3701,6 @@ typedef struct {
     const char *saved_module;  /* DK_CALL_RET / DK_PROMPT: module to restore */
     bool        was_returning; /* DK_CALL_RET: env->returning at call entry */
     bool        was_no_unwind; /* DK_CALL_RET / DK_PROMPT: env->in_no_unwind to restore */
-    void       *prompt_cont;   /* DK_PROMPT: TuriWsCont* to cache into, or NULL */
 } DriveCont;
 
 /* F4: activation seed for eval_drive_ex.  When non-NULL, the driver pushes a
@@ -3730,11 +3727,9 @@ typedef struct {
  * resume re-installs the captured prompt(s), so a perform inside a resumed
  * continuation still finds the enclosing handlers (nested resume).
  *
- * Multishot note: to match the COMPILED path's (degenerate) effect-multishot
- * semantics -- where every resume after the first returns the first resume's
- * result -- the first resume runs the slice and caches its result, and
- * subsequent resumes return the cache.  See
- * docs/reported/turi-effect-multishot-degenerate-resume.md.
+ * Multishot: each resume runs an INDEPENDENT clone of the captured slice (deep
+ * copy of the owned frames + arg accumulators), so resuming `k` with distinct
+ * values yields distinct runs -- matching the compiled path's true multishot.
  * ---------------------------------------------------------------------- */
 struct TuriWsCont {
     DriveCont   *frames;        /* captured slice, work-stack order (bottom..top) */
@@ -3746,10 +3741,72 @@ struct TuriWsCont {
     const char  *perf_module;
     bool         perf_no_unwind;
     void        *perf_defer;    /* DeferItem* */
-    /* cached-replay multishot (see note above). */
-    bool         resumed;
-    TuriValue    cached;
 };
+
+/* Shallow-copy a frame's bindings into a fresh frame (parent set by caller).
+ * Bindings are re-linked most-recent-first to preserve shadowing order. */
+static EvalFrame *clone_frame_bindings(EvalFrame *src, EvalFrame *parent) {
+    EvalFrame *nf = (EvalFrame *)malloc(sizeof(EvalFrame));
+    nf->parent = parent;
+    nf->bindings = NULL;
+    /* Collect src bindings (head-first) then re-prepend in reverse to preserve
+     * the original head-first order. */
+    size_t n = 0;
+    for (EvalBinding *b = src->bindings; b; b = b->next) n++;
+    if (n) {
+        EvalBinding **arr = (EvalBinding **)malloc(n * sizeof(EvalBinding *));
+        size_t i = 0;
+        for (EvalBinding *b = src->bindings; b; b = b->next) arr[i++] = b;
+        for (size_t j = n; j-- > 0; ) frame_bind(nf, arr[j]->name, arr[j]->value);
+        free(arr);
+    }
+    return nf;
+}
+
+/* Clone a captured slice into fresh DriveCont frames for an independent resume.
+ * Owned frames (LET_BIND/LET_BODY/MATCH_BODY/CALL_RET) are deep-copied and any
+ * `.frame` pointing at an owned frame is remapped to its clone; per-frame heap
+ * arg accumulators (BUILTIN_ARG/CALL_ARG/MAKE_STRUCT) are duplicated so the two
+ * runs never share mutable state.  `out` must hold `n` DriveConts. */
+static void clone_ws_slice(const DriveCont *src, size_t n, DriveCont *out) {
+    /* Map owned source frames -> clones. */
+    EvalFrame *keys[64]; EvalFrame *vals[64]; size_t nmap = 0;
+    for (size_t i = 0; i < n; i++) {
+        DriveKind k = src[i].kind;
+        if ((k == DK_LET_BIND || k == DK_LET_BODY || k == DK_MATCH_BODY ||
+             k == DK_CALL_RET) && src[i].frame && nmap < 64) {
+            keys[nmap] = src[i].frame;
+            vals[nmap] = clone_frame_bindings(src[i].frame, src[i].frame->parent);
+            nmap++;
+        }
+    }
+    /* Re-parent clones whose parent is itself an owned (cloned) frame. */
+    for (size_t m = 0; m < nmap; m++)
+        for (size_t p = 0; p < nmap; p++)
+            if (vals[m]->parent == keys[p]) { vals[m]->parent = vals[p]; break; }
+    /* Copy DriveConts, remapping frames and duplicating accumulators. */
+    for (size_t i = 0; i < n; i++) {
+        out[i] = src[i];
+        if (out[i].frame)
+            for (size_t m = 0; m < nmap; m++)
+                if (out[i].frame == keys[m]) { out[i].frame = vals[m]; break; }
+        /* Duplicate heap accumulators (aux) that hold partial results. */
+        if (src[i].aux) {
+            size_t cnt = 0;
+            if (src[i].kind == DK_BUILTIN_ARG)
+                cnt = src[i].expr->as.builtin.n;
+            else if (src[i].kind == DK_CALL_ARG)
+                cnt = src[i].expr->as.call_.n_args;
+            else if (src[i].kind == DK_MAKE_STRUCT)
+                cnt = src[i].expr->as.make_struct_.n_fields;
+            if (cnt) {
+                TuriValue *acc = (TuriValue *)malloc(cnt * sizeof(TuriValue));
+                memcpy(acc, src[i].aux, cnt * sizeof(TuriValue));
+                out[i].aux = acc;
+            }
+        }
+    }
+}
 
 /* Wrap a work-stack continuation in a TURI_EFFECT_CONT value (discriminated by
  * the ws pointer being non-NULL). */
@@ -4255,7 +4312,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     if (ok) {
                         DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)h,
                                                  .frame = cf, .tail = tail, .index = 1,
-                                                 .prompt_cont = NULL,
                                                  .saved_module = env->current_module,
                                                  .was_no_unwind = env->in_no_unwind }));
                         control = h->body; tail = false;   /* body runs under the prompt */
@@ -4291,7 +4347,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (ok) {
                     DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)h,
                                              .frame = cf, .tail = tail, .index = 1,
-                                             .prompt_cont = NULL,
                                              .saved_module = env->current_module,
                                              .was_no_unwind = env->in_no_unwind }));
                     control = h->body; tail = false;
@@ -4382,20 +4437,22 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     descending = false; break;
                 }
                 TuriWsCont *wc = k.as_cont->ws;
-                if (wc->resumed) {
-                    /* cached-replay multishot: matches the compiled path's
-                     * degenerate semantics (subsequent resume == first result). */
-                    cur = wc->cached; descending = false; break;
-                }
-                /* First resume: re-install the prompt (for re-dispatch + result
-                 * caching) and push the captured slice, then feed v to the hole. */
+                /* True multishot: re-install the prompt and push an INDEPENDENT
+                 * clone of the captured slice, then feed v to the hole.  Cloning
+                 * keeps repeated resumes (and resumes of an escaped k) from
+                 * sharing the original's owned frames / arg accumulators. */
                 DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
                                          .frame = wc->handler_frame, .tail = tail,
-                                         .index = 1, .prompt_cont = wc,
+                                         .index = 1,
                                          .saved_module = env->current_module,
                                          .was_no_unwind = env->in_no_unwind }));
-                for (size_t i = 0; i < wc->n_frames; i++)
-                    DRIVE_PUSH(wc->frames[i]);
+                if (wc->n_frames) {
+                    DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
+                    clone_ws_slice(wc->frames, wc->n_frames, clone);
+                    for (size_t i = 0; i < wc->n_frames; i++)
+                        DRIVE_PUSH(clone[i]);
+                    free(clone);
+                }
                 env->current_module = wc->perf_module;
                 env->in_no_unwind   = wc->perf_no_unwind;
                 env->defer_stack    = wc->perf_defer;
@@ -4695,15 +4752,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case DK_PROMPT: {
-                /* The handle body (or a resumed slice) finished with `cur`,
-                 * which is the handle's / resume's value.  Restore the env
-                 * boundary and, for a resume prompt, cache the first result. */
+                /* The handle body (or a resumed slice) finished with `cur`, which
+                 * is the handle's / resume's value.  Restore the env boundary and
+                 * propagate. */
                 env->current_module = top->saved_module;
                 env->in_no_unwind   = top->was_no_unwind;
-                if (!signaled && top->prompt_cont) {
-                    TuriWsCont *wc = (TuriWsCont *)top->prompt_cont;
-                    if (!wc->resumed) { wc->resumed = true; wc->cached = cur; }
-                }
                 len--;   /* pop; propagate cur (value or signal) */
                 break;
             }

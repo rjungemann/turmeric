@@ -1,9 +1,31 @@
 # Compiled effect-handler multishot resumes return the FIRST resume's result
 
+> **RESOLVED 2026-06-14.** Both paths now implement true multishot.
+> - **Compiled:** the multishot continuation env captures a *snapshot* of the
+>   suspended fiber's stack at the perform point and restores it before each
+>   resume, so every `(resume k v)` re-runs an independent copy
+>   (`src/compiler/emit_effects.c` `__ms_env`/`__ms_cont_fn`; the dynamic
+>   dispatcher mirror in `src/compiler/emit_module.c` `__tur_msdyn_env`). The
+>   stack-copy lives in the generated binary, which is built by plain `cc`
+>   (no ASan), so the copy is safe there.
+> - **Link failure** (non-trivial continuation -> `undefined reference to
+>   tur_cloneable_cont_alloc`) was a second bug: `expr_has_multishot_handler`
+>   (`src/compiler/emit_core.c`) did not descend into `EX_BUILTIN`/`EX_CALL`/
+>   `EX_MATCH`/... so a handler nested in e.g. `(println (handle ...))` failed to
+>   emit the cloneable runtime. The traversal is now comprehensive.
+> - **Interpreter:** the work-stack continuation clones its captured slice per
+>   resume (`src/turi/eval.c` `clone_ws_slice`) instead of caching the first
+>   result.
+> - **Fixtures:** `multishot-handler` / `fh-multishot-value` now expect `30`
+>   (was `20`); `multishot-copy-capture` stays `200`. Verified compiled vs
+>   `--interpret` agree on trivial and non-trivial continuations.
+>
+> Original report (degenerate behaviour) preserved below.
+
 **One-line summary:** For an algebraic-effect handler with `^multishot k`, the
-**compiled** path makes every `(resume k v)` after the first return the *first*
+**compiled** path made every `(resume k v)` after the first return the *first*
 resume's result, ignoring the new `v` (and re-running nothing). True multishot
-(the documented design) would run the captured continuation afresh per resume.
+(the documented design) runs the captured continuation afresh per resume.
 
 **Severity:** Medium -- **silent miscompile** of `^multishot` effect handlers
 (rc=0, wrong value). Single-resume handlers are correct; only the 2nd+ resume of
