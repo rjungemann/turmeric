@@ -1160,19 +1160,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * concrete by-value struct (e.g. `Result__int__cstr`), but the
              * body's last expression elaborates to a carrier-ABI value
              * (`int64_t` at C level) — e.g. `(ok v)` where ok still emits
-             * its bare carrier symbol.  Unbox by dereferencing the int64
-             * handle as the concrete struct pointer.  Mirrors the carrier
-             * bridge's `carrier→concrete` direction inline at the return
-             * site.  Gated tightly on typeclass_inst so non-instance specs
-             * keep their existing return handling.
+             * its bare carrier symbol.  Route through emit_carrier_bridge so
+             * the canonical-carrier field-by-field unbox kicks in for
+             * Result/Option sinks with sub-word payloads
+             * (decode-bool-carrier-instance-ascription); the legacy
+             * `*(T *)(intptr_t)x` deref stays for other parametric sinks.
              *
              * instance-method-return-carrier-bridge: also skip the deref when
              * the body tail already emits the struct by value (a post-M2
              * #{Construct} spec like `(ok (make-struct ...))` lowers to its
-             * by-value `*__spec__*` clone).  Dereferencing an already-by-value
-             * aggregate as a heap pointer is the derive-decode-struct `cc`
-             * error; fall through to the plain by-value return below. */
-            buf_printf(file, "return (*(%s *)(intptr_t)%s);\n", ret_ctype, ret_val);
+             * by-value `*__spec__*` clone). */
+            Type sink_rt = ctx->current_abi_specialization->result_type;
+            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                CK_CARRIER, CK_CONCRETE, sink_rt);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "return %s;\n", bridged);
+            free(bridged);
         } else if (!ret_is_int64_carrier && ret_ctype
                    && fd->body->type.kind != TY_NEVER
                    && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
@@ -1182,12 +1185,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * whose declared return is a by-value carrier aggregate
              * (Option__int / Result__int__int) but whose tail value comes from
              * a carrier-int64 producer (some/ok/err/none or an __inst_ method).
-             * The caller spills the result by value and re-carriers via &tmp,
-             * so the body must hand back the by-value struct: deref the int64
-             * handle as the concrete struct.  Same carrier->concrete unbox as
-             * the M4c spec branch above, generalized past the typeclass_inst
-             * gate to non-spec carrier-returning bodies. */
-            buf_printf(file, "return (*(%s *)(intptr_t)%s);\n", ret_ctype, ret_val);
+             * Same carrier->concrete unbox as the M4c spec branch above. */
+            Type sink_rt = (e->type.kind == TY_FN && e->type.as.fn.result_full_type)
+                ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
+                : emit_resolve_type(ctx, fd->body->type);
+            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                CK_CARRIER, CK_CONCRETE, sink_rt);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "return %s;\n", bridged);
+            free(bridged);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

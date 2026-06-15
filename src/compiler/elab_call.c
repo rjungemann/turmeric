@@ -266,13 +266,39 @@ static Type call_instantiate_type(Elab *e, const Type *t,
     }
 }
 
+static bool call_reinterpret_kind_is_integral(TypeKind k) {
+    switch (k) {
+        case TY_BOOL:
+        case TY_INT:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static Expr *call_wrap_reinterpret(Elab *e, Expr *inner, TypeKind target_kind, Span span) {
     if (!inner) return NULL;
     TypeKind source_kind = inner->type.kind;
     if (source_kind == target_kind) return inner;
     int src_size = type_size_bytes(source_kind);
     int dst_size = type_size_bytes(target_kind);
-    if (src_size <= 0 || dst_size <= 0 || src_size != dst_size) return inner;
+    if (src_size <= 0 || dst_size <= 0) return inner;
+    /* decode-bool-carrier-instance-ascription: a polymorphic call whose result
+     * is the int64 carrier but whose declared return resolves to a sub-word
+     * integral scalar (bool, int8/16/32) still needs to be re-typed at the
+     * elab level so `(ok-val (:: ... (Result bool cstr)))` is `bool`, not
+     * `int`. Emit lowers size-mismatched integral pairs as plain C casts;
+     * same-size pairs keep the bit-preserving union trick (still correct for
+     * float<->int and cstr<->int). Mixing float with an integer at different
+     * sizes is neither bit- nor value-meaningful, so bail in that case. */
+    if (src_size != dst_size) {
+        if (!call_reinterpret_kind_is_integral(source_kind) ||
+            !call_reinterpret_kind_is_integral(target_kind)) {
+            return inner;
+        }
+    }
     Expr *out = expr_new(e->arena, EX_REINTERPRET, type_from_kind(target_kind), span);
     out->as.reinterpret_.expr = inner;
     out->as.reinterpret_.source_kind = source_kind;
