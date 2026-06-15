@@ -258,9 +258,9 @@ SZ8 (constructor-chain inference + length-polymorphic helpers), and
 cross-parameter size-variable unification have all landed (resolved
 report: [docs/archive/history/sized-types-phantom-index.md](../archive/history/sized-types-phantom-index.md)).
 U4 is now shippable with real elaborator-enforced dimension errors, not
-just stable signatures. Remaining gap is the projection-side recovery
-tracked in [docs/reported/sz8-projection-size-recovery-gap.md](../reported/sz8-projection-size-recovery-gap.md);
-that's a follow-up, not a U4 blocker.
+just stable signatures. The projection-side recovery gap has since been
+closed (resolved report:
+[docs/archive/sz8-projection-size-recovery-gap.md](../archive/sz8-projection-size-recovery-gap.md)).
 
 ### P4 -- `match-fix` sugar for `Fix`-encoded ASTs
 

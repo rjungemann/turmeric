@@ -704,6 +704,76 @@ static bool sz8_ctor_is_sized(Elab *e, const CtorDef *ctor) {
     return false;
 }
 
+/* SZ8 projection-size recovery (sz8-projection-size-recovery-gap): recover the
+ * declared type-annotation Form describing expr `x`'s static type, so cross-
+ * parameter size unification can re-extract a size index from arguments that
+ * are not direct calls.  Handles:
+ *   - EX_VAR        -> the binding's retained `decl_type_form`
+ *   - EX_CALL       -> the callee's declared return-type Form
+ *   - EX_GET_FIELD  -> the receiver's recovered type Form, projected to the
+ *                      struct type argument the field's (bare) type variable
+ *                      selects (e.g. `.fst` of `(Pair2 (Dense (Static 3) A) ..)`
+ *                      yields `(Dense (Static 3) A)`).
+ * Returns NULL when no Form is recoverable (the size stays polymorphic). */
+static const Form *sz_recover_type_form(Elab *e, const Expr *x) {
+    if (!x) return NULL;
+    switch (x->kind) {
+        case EX_VAR:
+            return x->as.var.binding ? x->as.var.binding->decl_type_form : NULL;
+        case EX_CALL: {
+            const Binding *callee = x->as.call_.fn_binding;
+            if (!callee) return NULL;
+            const Type *cft = &callee->type;
+            if (callee->closure_fn_binding) cft = &callee->closure_fn_binding->type;
+            if (cft && cft->kind == TY_FN && cft->as.fn.result_type_form)
+                return cft->as.fn.result_type_form;
+            return NULL;
+        }
+        case EX_GET_FIELD: {
+            const StructDef *def = x->as.get_field_.def;
+            uint32_t fi = x->as.get_field_.field_idx;
+            if (!def || fi >= def->n_fields) return NULL;
+            const StructField *field = &def->fields[fi];
+            /* Only a field whose declared type is a bare struct type variable
+             * threads a recoverable index: map that variable to its struct
+             * type-parameter position, then index into the receiver Form. */
+            if (!field->full_type || field->full_type->kind != TY_TYVAR ||
+                !field->full_type->as.tyvar_.name)
+                return NULL;
+            uint8_t pi = 0;
+            bool found = false;
+            for (uint8_t i = 0; i < def->n_type_params; i++) {
+                if (def->type_params[i] &&
+                    strcmp(def->type_params[i], field->full_type->as.tyvar_.name) == 0) {
+                    pi = i; found = true; break;
+                }
+            }
+            if (!found) return NULL;
+            const Form *recv = sz_recover_type_form(e, x->as.get_field_.struct_expr);
+            if (!recv || recv->tag != F_LIST) return NULL;
+            /* recv = (StructName arg0 arg1 ...); the type arg is at items[1+pi]. */
+            if ((uint32_t)(1 + pi) >= recv->as.list.len) return NULL;
+            return recv->as.list.items[1 + pi];
+        }
+        default:
+            return NULL;
+    }
+}
+
+/* SZ8 projection-size recovery: the first parseable Size form among a type-app
+ * Form's argument positions (items[1..]), mirroring the template-extraction
+ * convention used by sz_cross_param_unify below.  Returns the SizeTerm, or
+ * NULL when no argument position parses as a size. */
+static SizeTerm *sz_first_size_term(Elab *e, const Form *tform) {
+    if (!tform || tform->tag != F_LIST) return NULL;
+    for (uint32_t k = 1; k < tform->as.list.len; k++) {
+        SizeTerm *st = size_term_from_form(e->arena, tform->as.list.items[k],
+                                           NULL, NULL);
+        if (st) return st;
+    }
+    return NULL;
+}
+
 /* sized-types-cross-param-unification: a function signature that names the
  * same size variable in two or more parameters (e.g. both `xs : (SizedVec n)`
  * and `ys : (SizedVec n)`) shares scope on `n`; the elaborator must reject
@@ -742,34 +812,21 @@ static bool sz_cross_param_unify(Elab *e, const Form *call,
             if (probe) { tmpl_form = pf->as.list.items[k]; break; }
         }
         if (!tmpl_form) continue;
-        /* Arg's inferred size index (set by sz8_infer_ctor_size_index). */
+        /* Arg's inferred size index (set by sz8_infer_ctor_size_index for
+         * sized-GADT constructor applications). */
         Expr *a = args[i];
         const SizeTerm *arg_idx = (a && a->kind == EX_CALL)
                                   ? a->as.call_.size_index : NULL;
-        /* SZ8 non-GADT: when the arg is a call to a function whose declared
-         * return type carries a Size form (e.g. `mk-dense-2 : (Dense (Static 2)
-         * A)`), derive the call's size_index from that return form on the fly.
-         * Mirrors sz8_infer_ctor_size_index for plain defn-shaped callers --
-         * the source of the index is the callee's return annotation, not a
-         * GADT constructor chain.  For now this only handles closed Size
-         * expressions; an open template like `(Dense n A)` returns SZT_VAR,
-         * which the substitution table below still handles correctly. */
-        if (!arg_idx && a && a->kind == EX_CALL && a->as.call_.fn_binding) {
-            const Binding *callee = a->as.call_.fn_binding;
-            const Type *cft = &callee->type;
-            if (callee->closure_fn_binding) cft = &callee->closure_fn_binding->type;
-            if (cft && cft->kind == TY_FN && cft->as.fn.result_type_form) {
-                const Form *rt = cft->as.fn.result_type_form;
-                if (rt->tag == F_LIST && rt->as.list.len >= 2) {
-                    for (uint32_t k = 1; k < rt->as.list.len; k++) {
-                        SizeTerm *st = size_term_from_form(e->arena,
-                                                           rt->as.list.items[k],
-                                                           NULL, NULL);
-                        if (st) { arg_idx = st; break; }
-                    }
-                }
-            }
-        }
+        /* SZ8 non-GADT / projection-size recovery: when the GADT path did not
+         * supply an index, recover one from the argument's declared type Form.
+         * This covers direct calls whose callee declares a Size-carrying return
+         * type (`mk-dense-2 : (Dense (Static 2) A)`), plain variables that flow
+         * a sized value (`let [a (mk-2)] ... a`), and struct field projections
+         * (`(.fst p)` of `p : (Pair2 (Dense (Static 3) A) ..)`).  Closed Size
+         * expressions fold to a constant below; an open template like
+         * `(Dense n A)` yields SZT_VAR, which the substitution table handles. */
+        if (!arg_idx)
+            arg_idx = sz_first_size_term(e, sz_recover_type_form(e, a));
         if (!arg_idx) continue;  /* un-inferable -> stays polymorphic */
         /* Case 1: template is a bare size variable -- bind it in subst, or
          * require equality with the prior binding. */

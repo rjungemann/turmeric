@@ -1,0 +1,23 @@
+; sz8-projection-size-recovery-gap.md, probe B: SZ8 cross-parameter size
+; unification must fire when sized values flow in as plain let-bound variables
+; (EX_VAR args), not just direct calls.  The direct-call form
+; `(sized-buf-copy! (mk-2) (mk-3))` already rejects; binding the operands to
+; `a`/`b` first must reject identically, recovering each binding's size index
+; from its initializer's declared return-type Form.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defn mk-2 [] : (SizedBuf (Static 2))
+  (:: (sized-buf-new-zeroed 2) :SizedBuf))
+
+(defn mk-3 [] : (SizedBuf (Static 3))
+  (:: (sized-buf-new-zeroed 3) :SizedBuf))
+
+(defn main [] : int
+  (let [a (mk-2)
+        b (mk-3)]
+    ; ERROR: TUR-E0260 -- `a` has size 2, `b` has size 3, but sized-buf-copy!
+    ; shares `n` across its dst and src parameters.
+    (sized-buf-copy! a b)
+    0))

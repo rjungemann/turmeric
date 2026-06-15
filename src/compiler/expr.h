@@ -205,6 +205,14 @@ struct Binding {
     const struct Form  *defn_form;
     bool                bare_fat_lazy;
     bool                bare_fat_specialized;
+    /* SZ8 (sz8-projection-size-recovery-gap): the declared type-annotation
+     * Form for this binding (a function parameter's `: T` annotation, or a
+     * let binding's annotation / inferred initializer result type).  Retained
+     * so cross-parameter size unification can recover a value's static size
+     * index when it flows in as a plain variable or a struct field projection
+     * (EX_VAR / EX_GET_FIELD args), not just a direct call.  NULL when no form
+     * is recoverable. */
+    const struct Form  *decl_type_form;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */
