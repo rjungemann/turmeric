@@ -1980,7 +1980,7 @@ static int cmd_build(const char *input, const char *out_path,
      * symbols twice and the link fails with `multiple definition of
      * tur_hamt_*`.  The library supersedes the standalone sources, so drop
      * any bare `.c` source argument from the autolink flags whenever -lturi
-     * is present.  See docs/reported/tur-eval-import-duplicate-hamt-symbols.md. */
+     * is present.  See docs/archive/tur-eval-import-duplicate-hamt-symbols.md. */
     if (autolink.len > 1 && strstr(autolink.data, "-lturi")) {
         Buf filtered;
         buf_init(&filtered);
