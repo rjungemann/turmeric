@@ -484,7 +484,7 @@ done
 | **A. `:heap` reinterpret casts** (`Vec`/`Map`/`Set`/`MutableMap`/`Cons`) | **124** | carrier->concrete | int64-carrier producers (`vec-of`, `mutmap-new`, ...) feed typed-pointer consumers; post-#377 these are `(Vec__int *)(intptr_t)h` **casts**, not 24-byte deref-copies | benign; clears only when collection PRODUCERS monomorphize (deferred inline-C-body infra) -- **a typed dict slot does NOT touch these** |
 | **B. pbp-pointer derefs** (`Tuple3`..`Tuple8`) | **7** | carrier->concrete | structs >16B pass by `const T*`; an ABI-spec callee takes them by value, so the caller derefs the pbp pointer (`tuplen-struct-param-passing`) | legitimate pass-by-pointer convention; **not a carrier crossing** -- the bridge is reached only by an over-match (see (a) below) |
 | **C. blessed inline-C construction** (`Result`/`Option`) | **6** | carrier->concrete | a user/instance **inline-C body** builds the value via `tur_ok`/`tur_err`/`tur_some` (returns the int64 carrier) but its declared return is a by-value struct, so the call site derefs once (`inline-c-typed-result-option` 5, `typeclass-method-parameterized-result-decode` 1) | this is the **deliberately blessed** "inline-C may return a real typed Result/Option" boundary (`inline-c-typed-result-option` exists to bless it); inherently carrier -- a typed dict slot does NOT touch it either |
-| **D. inline-C carrier-instance dispatch-arg spill** (`Pair int int`) | **1** | concrete->carrier | a by-value `Pair__int__int` passed into the `Serializable [Pair]` `serialize` instance method, whose **body is inline-C** (`struct {int64_t fst; int64_t snd;} *p = (void*)(intptr_t)x; ...`) and so reads its arg as a carrier pointer (`serial-composite-instances`) | **NOT a typed-dict-slot win** -- see the 2026-06-15 correction below; this is the SAME blessed inline-C carrier boundary as bucket C, on the argument side |
+| **D. inline-C carrier-instance dispatch-arg spill** (`Pair int int`) | **1 -> 0 (RESOLVED)** | concrete->carrier | was a by-value `Pair__int__int` passed into the `Serializable [Pair]` `serialize` instance method, whose body was inline-C reading its arg as a carrier pointer (`serial-composite-instances`) | **RESOLVED 2026-06-15** by rewriting the `serialize` body to pure-Turmeric (`(serial-pair-bytes (:: (.fst x) :int) (:: (.snd x) :int))`) so M4c Path A mints `serialize_Pair__spec__(Pair__int__int)` -- direct typed dispatch, no spill. Byte layout unchanged; `deserialize` untouched. See the resolution note below |
 | **E. type-erased channel** (`SChan<SRecv ...>`) | **2** | carrier->concrete | `generic-relay-aggregate-result` -- the genuinely type-erased channel path | carrier by design (matrix roadblock 4); never deleted |
 
 ### The correction
@@ -591,6 +591,57 @@ No code changed in this update -- the deliverable is the corrected baseline and
 the root-cause categorization that re-scopes "M4 dict-ABI" from "the dominant
 remaining item" down to "a 1-crossing cleanup," and re-points the real
 remaining carrier weight at the producer boundary.
+
+## Resolution 2026-06-15 (bucket D cleared: pure-Turmeric Pair serialize; baseline 140 -> 139)
+
+Landed the bucket-D fix via the route that avoids the dead ends found above
+(no new infra, no wire-format change). The single `concrete->carrier`
+`Pair int int` crossing in `serial-composite-instances` is gone; the audit
+baseline is now **21 fixtures / 139 crossings** (buckets A/B/C/E unchanged).
+
+- **`Serializable [Pair]` `serialize` rewritten to pure-Turmeric**
+  (`stdlib/serial.tur`): `(serial-pair-bytes (:: (.fst x) :int) (:: (.snd x)
+  :int))`, where `serial-pair-bytes [fst : int snd : int] : ptr<void>` is a new
+  fixed-arity inline-C helper emitting the **identical** `[len=16][fst][snd]`
+  raw layout. Because the instance body is now Turmeric (not inline-C), M4c Path
+  A mints `__inst_Serializable_serialize_Pair__spec__(Pair__int__int)` and the
+  `(.serialize p)` dispatch calls it directly with the by-value Pair -- no
+  carrier spill. `deserialize` and the fixture's `rd-pair` reader are untouched
+  (byte layout preserved), so this is **not** option (i)'s wire-format-changing
+  recursive rewrite, and **not** option (ii)'s new by-pointer-spec infra -- a
+  third, smaller route the corrected analysis surfaced.
+
+- **`Serializable [Option]` `serialize` deliberately LEFT inline-C.** A
+  symmetric rewrite was attempted and **reverted** because it segfaults: `none`
+  is the NULL carrier (`0`), so a pure-Turmeric body mints a by-value
+  `serialize_Option__spec__(Option__int)` whose call-site dispatch derefs the
+  carrier (`*(Option__int *)(intptr_t)(0)`) *before the body runs*, crashing on
+  the none case. The deref is emitted by the bridge at the call site, so no
+  body-level NULL guard can save it; the inline-C body NULL-checks `o` and is
+  safe. Option therefore stays uniform-carrier (it never crossed the bridge --
+  it has no by-value spec). A real fix needs Option to stop representing none as
+  NULL (a non-NULL by-value/tagged repr) -- out of scope here. A `;;` NOTE on
+  the instance records this so it is not "cleaned up" into a segfault later.
+
+- **deserialize recursion is genuinely blocked (separate finding).** While
+  scoping this I confirmed empirically that `(:: (deserialize b) A)` inside a
+  `(Serializable A)`-constrained fn **silently mis-dispatches** to
+  `__inst_Serializable_deserialize_ptr_void` instead of A's instance (probe:
+  `(round 42)` over `(deserialize (serialize x))` returned via the ptr_void
+  instance and errored at runtime, not a compile error). That is why the
+  format-preserving route (above) is the only correct one: a recursive
+  format would need recursive `deserialize`, which the language cannot dispatch
+  on a return-type type variable. Filed as
+  [docs/reported/return-dispatch-tyvar-silent-misdispatch.md](return-dispatch-tyvar-silent-misdispatch.md).
+
+- **Validation:** `serial-composite-instances` -> 0 crossings, output unchanged
+  (`pair=7035` / `opt-some=99` / `opt-none=-1`). Compiled suite **1647 passed, 0
+  failed**; interpreter gate **1206 passed, 2 failed** (the 2 are the documented
+  pre-existing `eq-carrier-capturing-comparator` / `mutmap-eq`). No `expected.c`
+  snapshots reference the serialize symbols (the serial fixtures carry none), so
+  no regen was needed. No spice uses `Serializable [Pair]` (the only changed
+  instance) -- the sibling `spices/{httpd,json}` "serialize" hits are
+  spice-local `serialize-response`, not the stdlib instance.
 
 ## Related
 
