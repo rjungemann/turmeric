@@ -1,5 +1,27 @@
 # 9 `errors/` fixtures whose diagnostic diverges under `--interpret`
 
+> **RESOLVED:** all 9 divergences are closed. Verified on the current tree
+> (`tur --interpret`, ASan-clean modulo the interpreter's process-lifetime
+> leaks the harness already runs with `detect_leaks=0`):
+>
+> - **reporting-stage (2 of 3):** `unbound-call-head` now emits
+>   `tur: unknown function or operator 'foo'` and `tce3-map-heterogeneous-val`
+>   emits the `TUR-E0001` elaboration diagnostic -- `cmd_eval` surfaces the
+>   runtime/elaboration error to stderr instead of swallowing it.
+> - **reporting-stage (3rd):** `unknown-helper-load-hint` carries a
+>   `requires.compiled` marker (the load-hint is a compiled-path concern), so
+>   the turi errors pass skips it -- it is no longer a divergence.
+> - **missing-check (4):** `lifetime-cyclic` emits `TUR-E0106`,
+>   `reader-macros-strict-collision` emits `already registered`, and
+>   `lang-unknown`/`lang-not-implemented` emit `#lang ... is not yet
+>   implemented` under `--interpret`.
+> - **TI3.2 carve-out (2):** `serial-context-{,do-}not-capturable` now emit
+>   `TUR-E0706 serial-shift context is not capturable` under the interpreter.
+>
+> `TURI_ERRORS_DENY` is empty and the errors pass is green:
+> `TURI_FILTER=errors/ bash tests/run-turi.sh` reports
+> `318 passed, 0 failed, 0 skipped`. Moved to history.
+
 **Summary:** With `tests/fixtures/errors/*` now wired into `run-turi.sh` (W3),
 **282 of 298** negative fixtures emit the exact same diagnostic under
 `tur --interpret` as on the compiled path -- the interpreter shares the
