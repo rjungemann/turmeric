@@ -225,6 +225,130 @@ Re-run the suite-wide `TUR_M3_AUDIT=1` audit after each of 1-3 lands; when
 the count reaches 0, delete `emit_carrier_bridge` per the step-3 checklist
 above and confirm the suite stays green.
 
+## Update 2026-06-15 (post-#369 re-audit; by-value direction chosen; M3 -> M7 sequencing)
+
+Re-ran the per-fixture audit on the tree with **M5 D.4 (this branch) + #369
+(`Eq [Cons]` carrier rewrite)** both present, and settled the direction question
+that the "what is left" list above left open. Recording the result so the next
+engineer does not re-derive it.
+
+### New baseline (methodology: `TUR_M3_AUDIT=1 tur emit-c <fixture>` per fixture, with and without `-Xdata-literals`, counting every probe line)
+
+| | pre-#369 | post-#369 (now) |
+|---|---|---|
+| fixtures crossing | 1217 | **21** |
+| total crossings | 2576 | **142** (141 carrier->concrete + 1 concrete->carrier) |
+
+(The 142 vs #369's "~53" is a counting-scope difference: this sweep counts
+every crossing in the 21 fixtures including the by-value-spec *call-boundary*
+derefs and the `-Xdata-literals` variants, not just the carrier bases.)
+
+**Every remaining crossing now has a CONCRETE element type** (no abstract
+`tyvar`) -- the universal `Cons tyvar` crossings are gone. Distribution:
+
+- **`Vec int` -- 114 (dominant).** Two sources, both from the **by-value**
+  `Eq [Vec]` (`stdlib/vec.tur`, which uses `vec-len-byval`/`vec-eq-loop-byval`
+  over `(:: x (Vec A))`):
+  1. the `Eq [Vec]` carrier base deref'ing `(:: x (Vec A))` -> `*(Vec__int*)x`
+     to feed the by-value `vec-*-byval` specs;
+  2. call sites deref'ing carrier `vec-of` handles to feed the by-value
+     `__inst_Eq_eq_qu_Vec__spec__Vec__int` directly.
+- **long tail (~28):** `MutableMap` (4), `Result Device` (3), `Tuple3..8`,
+  `Pair`, `Option Device`, `SChan`, `Result int cstr` -- HKT / dispatch-arg /
+  FAIL-prone paths.
+
+### The blocker is a genuine M5-vs-#369 direction conflict (confirmed empirically)
+
+`Eq [Cons]` (#369) is **carrier-based**: body delegates to carrier `list-eq?`
+with an element closure, receiver stays int64 (`(:: x :int)` is a relabel), no
+by-value Cons spec, no bridge. `Eq [Vec]` (M5) is **by-value**: receiver becomes
+`Vec__int`, helpers are the `*-byval` twins.
+
+Prototyped rewriting `Eq [Vec]` carrier-based to match `Eq [Cons]`. It **reduces
+crossings but breaks the build** (`incompatible type for argument 1 of
+'vec_hyeq_qu'`): dispatching `Eq [Vec]` on a concrete `(Vec int)` mints a
+by-value spec (receiver `Vec__int`), and the carrier-based body's `(:: x :int)`
+then has to *widen* that struct back to the carrier -- **exactly the EX_ASCRIBE
+`CK_CONCRETE -> CK_CARRIER` bridge that M5 D.4 deleted** (this report's sibling,
+`m5-residual-straddle-retirement`). `Eq [Cons]` only works carrier-based because
+Cons stays a carrier (no by-value spec is minted). So the two directions are
+**incompatible**, and the carrier route is closed on this branch.
+
+### Direction chosen: by-value (M7-aligned)
+
+Keep the by-value collection direction (consistent with the plan's north star
+and M5 D.4). Do **not** revert `Eq [Vec]` to carrier-based. The 142 crossings
+clear when the carrier *producers* stop handing int64 to by-value consumers --
+i.e. when collection construction/ops are monomorphized -- not by another
+stdlib instance rewrite.
+
+### Roadblocks for the by-value direction (record before starting)
+
+1. **Mutable collections need reference semantics -> "by-value" means a TYPED
+   POINTER, not a by-value struct.** `Vec`/`Map`/`Set`/`MutableMap` are
+   heap-backed and mutated in place (`vec-push!` reallocs `data`, bumps
+   `len`/`cap`). A literal by-value `Vec__int {int64_t* data; size_t len, cap;}`
+   passed by value copies the header, so an in-place push on the copy is invisible
+   to the caller -- a **silent mutation miscompile**. The correct monomorphic ABI
+   for these is `Vec__int*` (a typed pointer): still fully clang-checked, kills
+   the `*(Vec__int*)int64` bridge, and preserves identity/mutation. Only the
+   genuinely-immutable value types (Option, Result, Pair, Tuple, immutable Cons)
+   are by-value structs. **Settle this per-type distinction before editing
+   stdlib.**
+2. **The dispatch dict slot is still int64-uniform.** Confirmed
+   `dict_Eq_Vec { bool (*eq_qu)(int64_t, int64_t); }`. Abstract dispatch (a
+   generic `(defn all-eq [A] [(Eq A)] ...)` through the dict) therefore still
+   forces the value through int64 regardless of a typed-pointer Vec. The M3
+   report calls M4 "landed" but the dict-slot rework is **not** done for these
+   instances; the lone remaining `concrete->carrier` crossing is this gap.
+   Full deletion needs typed dict slots (or per-(instance,element) dict
+   monomorphization) -- M4 dict-ABI work, not stdlib edits.
+3. **Producers are int64-returning inline-C.** `vec-new`/`vec-of`/`vec-push!`/
+   `vec-get`/`vec-len`/`vec-free` have hardcoded `int64_t` C signatures. The 114
+   `Vec int` crossings are these producers feeding by-value consumers. Removing
+   them requires converting every primitive to the typed-pointer signature per
+   element type -- the **inline-C-body monomorphization** the M5 docs deferred as
+   its own infra. Sequencing is therefore producers-first, bridge-deletion-last.
+4. **The carrier cannot fully die; it relocates.** The plan keeps the carrier for
+   existentials, `tur_poly_fn_t`, and the heterogeneous HAMT (`Vec @Any`, a vec
+   inside a type-erased map). So Vec is not *uniformly* typed-pointer -- there is
+   both a `Vec__int*` path and a carrier path, with a bridge at the pack/open
+   boundary. **Realistic M3 goal: delete the bridge from the MONOMORPHIC paths;
+   `emit_carrier_bridge` itself survives for the type-erased boundary.** The
+   step-3 "delete `emit_carrier_bridge` outright" checklist above should be
+   re-scoped accordingly.
+5. **MutableMap multi-param** (`K` recorded `TY_STRUCT` not `TY_TYVAR`) -- partly
+   addressed in #364 but the audit still shows 4 crossings; the multi-param path
+   needs finishing.
+6. **Snapshot blast radius.** A Vec ABI change regenerates a large fraction of
+   the ~1640 `expected.c` snapshots -- one coordinated regen per the fixture
+   STRICT RULE; coordinate timing with in-flight vec-touching branches.
+
+### Sequencing (this is really starting M7 + M4 dict-ABI, with M3 as the payoff)
+
+1. **Per-type ABI decision matrix** -- classify every parameterized stdlib type
+   as by-value-struct (Option/Result/Pair/Tuple/immutable Cons) vs typed-pointer
+   (Vec/Map/Set/MutableMap). Write it down; it gates everything else.
+2. **Vec typed-pointer vertical slice** -- convert the Vec primitives
+   (`vec-new`/`-of`/`-push!`/`-get`/`-len`/`-free`/...) to the `Vec__int*` ABI
+   per element type (inline-C-body monomorphization), and type the `Eq [Vec]`
+   dict slot. Target: the 114 `Vec int` crossings drop to 0; suite green; one
+   coordinated snapshot regen. Proves the pattern before Map/Set/MutableMap.
+3. **Replicate for Map/Set/MutableMap** (incl. the MutableMap multi-param fix).
+4. **M4 dict-ABI** -- typed dict slots / per-(instance,element) dict
+   monomorphization so abstract dispatch stops forcing int64; clears the
+   `concrete->carrier` dispatch-arg gap.
+5. **Re-audit; delete the bridge from monomorphic paths** -- when the audit shows
+   only the existential/`@Any`/`tur_poly_fn_t` carrier boundary remaining, scope
+   `emit_carrier_bridge` down to that boundary (do not delete the function
+   wholesale; see roadblock 4) and confirm the suite stays green.
+
+### Status
+
+Direction settled (by-value). No code changed in this update -- the deliverable
+is the corrected baseline, the confirmed incompatibility, and the sequencing.
+The tractable first increment is step 2 (the Vec typed-pointer vertical slice).
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
