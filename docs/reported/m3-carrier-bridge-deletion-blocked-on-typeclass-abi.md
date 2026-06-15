@@ -457,6 +457,115 @@ Remaining typed-pointer migrations (matrix step 3 / 4): `GVec` (niche GADT demo)
 The 48 crossings clear when **M4 dict-ABI** (typed dict slots) lands -- that is the
 dominant remaining item, not further stdlib `:heap` flips.
 
+## Update 2026-06-15 (full-tree audit refresh + crossing-by-ROOT-CAUSE categorization; "M4 dict-ABI is the dominant item" is WRONG)
+
+Re-ran the per-fixture sweep on the current branch head (suite **1647 passed,
+0 failed**), this time **using each fixture's own `flags` file** (so the
+`-Xdata-literals` variants that the "48" sweep dropped are counted) and
+**classifying every crossing by the OUTERMOST type constructor and direction**.
+Methodology, reproducible:
+
+```sh
+for dir in tests/fixtures/*/; do
+  input="$dir/input.tur"; [ -f "$input" ] || input="$dir/$(basename "$dir").tur"
+  flags=""; [ -f "$dir/flags" ] && flags=$(cat "$dir/flags")
+  TUR_M3_AUDIT=1 ./build/tur $flags emit-c "$input" 2>&1 >/dev/null | grep '\[m3-audit\]'
+done
+```
+
+**Accurate current baseline: 22 fixtures, 140 crossings.** (Higher than the
+"48" line above only because that sweep omitted `-Xdata-literals` and the
+`m5-*` constrained-poly fixtures; the underlying tree is the same.)
+
+### The crossings, bucketed by genuine root cause
+
+| Bucket | count | direction | root cause | verdict |
+|---|---|---|---|---|
+| **A. `:heap` reinterpret casts** (`Vec`/`Map`/`Set`/`MutableMap`/`Cons`) | **124** | carrier->concrete | int64-carrier producers (`vec-of`, `mutmap-new`, ...) feed typed-pointer consumers; post-#377 these are `(Vec__int *)(intptr_t)h` **casts**, not 24-byte deref-copies | benign; clears only when collection PRODUCERS monomorphize (deferred inline-C-body infra) -- **a typed dict slot does NOT touch these** |
+| **B. pbp-pointer derefs** (`Tuple3`..`Tuple8`) | **7** | carrier->concrete | structs >16B pass by `const T*`; an ABI-spec callee takes them by value, so the caller derefs the pbp pointer (`tuplen-struct-param-passing`) | legitimate pass-by-pointer convention; **not a carrier crossing** -- the bridge is reached only by an over-match (see (a) below) |
+| **C. blessed inline-C construction** (`Result`/`Option`) | **6** | carrier->concrete | a user/instance **inline-C body** builds the value via `tur_ok`/`tur_err`/`tur_some` (returns the int64 carrier) but its declared return is a by-value struct, so the call site derefs once (`inline-c-typed-result-option` 5, `typeclass-method-parameterized-result-decode` 1) | this is the **deliberately blessed** "inline-C may return a real typed Result/Option" boundary (`inline-c-typed-result-option` exists to bless it); inherently carrier -- a typed dict slot does NOT touch it either |
+| **D. genuine dispatch-arg spill** (`Pair int int`) | **1** | concrete->carrier | a by-value `Pair__int__int` passed into an int64-uniform dict slot (`serial-composite-instances`) | **this is the ONLY crossing a typed dict slot (M4 dict-ABI) actually fixes** |
+| **E. type-erased channel** (`SChan<SRecv ...>`) | **2** | carrier->concrete | `generic-relay-aggregate-result` -- the genuinely type-erased channel path | carrier by design (matrix roadblock 4); never deleted |
+
+### The correction
+
+The "Update 2026-06-15 (post-#377 ...)" verdict above -- *"The 48 crossings
+clear when M4 dict-ABI (typed dict slots) lands -- that is the dominant
+remaining item"* -- **does not survive the by-root-cause breakdown.** A typed
+dict slot rewrites the dict's `bool (*)(int64_t, int64_t)` to
+`bool (*)(Pair__int__int, Pair__int__int)` so abstract dispatch stops
+spilling. That clears bucket **D only: 1 crossing.** It does **nothing** for
+the 124 `:heap` casts (bucket A -- those are producer-side), the 7 pbp derefs
+(B -- a different convention), the 6 inline-C constructions (C -- the blessed
+carrier boundary), or the 2 SChan (E -- type-erased by design).
+
+Why the earlier sweep over-credited M4: M4c Path A (already merged) mints typed
+per-instance **specs** and rewrites every **Turmeric-level direct dispatch** to
+call them (`find_matched_abi_spec`, `emit_expr.c:2430`). So the
+deref-copy-through-a-carrier-dict hot path the original report worried about
+(`emit-abi-trace` Tuple2: 2 -> **0** crossings now) is *already gone*. What
+M4c left on the table is exactly bucket D: the case where a by-value struct is
+passed into a dict slot that is still consumed as a runtime value (a `(Pair A B)`
+into the uniform `int64` slot, not specialized away). That is a single
+dispatch-arg spill, not a dominant deref-copy class.
+
+### What this means for deleting / down-scoping `emit_carrier_bridge`
+
+The real remaining carrier **source** is the producer boundary, not the dict:
+
+1. **Collection producers (bucket A, 124).** `vec-of`/`mutmap-set!`/etc. are
+   inline-C carrier bases returning int64 (kept that way on purpose -- see the
+   Vec slice's "stdlib flip is inline-C, not pure-Turmeric" section: interpreter
+   parity + float-element reads). Until these return `Vec__A *` per element type
+   (the deferred inline-C-body monomorphization), their results stay int64 and
+   the `:heap` cast fires. **These casts are free and correct**, so the pragmatic
+   end state is to *accept* them: the matrix's roadblock 4 already says the
+   bridge survives for the type-erased boundary; bucket A is the same shape (a
+   cast, never a copy).
+2. **Inline-C `tur_ok`/`tur_some` (bucket C, 6).** Blessed and intentional.
+   Down-scoping the bridge must *keep* this path.
+3. **M4 typed dict slots (bucket D, 1).** Worth doing for ABI cleanliness and to
+   close the `concrete->carrier` spill, but it is a **1-crossing win**, not the
+   dominant item. Scope it accordingly; do not gate the bridge down-scope on it.
+
+**Revised sequencing for the bridge down-scope** (supersedes the "48 crossings
+clear when M4 dict-ABI lands" framing): the bridge cannot be *deleted* (buckets
+A/C/E are by-design carrier crossings that must keep working), so the realistic
+goal stays "down-scope `emit_carrier_bridge` to the casts/blessed-construction/
+type-erased boundary." Concretely:
+
+- (a) **CONFIRMED this session:** bucket B (pbp deref) *does* reach
+  `emit_carrier_bridge`, but only by an **over-match**, not because it is a
+  carrier crossing. `emit_expr.c:2633-2643` is the carrier-bridge `if`; its
+  guard fires when `matched_spec && aggregate-arg && (TY_INT || (aggregate &&
+  type_uses_carrier_abi && !byvalue))`. A pbp `const Tuple3*` param satisfies
+  the aggregate-carrier branch, so the bridge runs and emits
+  `(*(Tuple3__int__int__int *)(intptr_t)(t))` -- the deref the dedicated pbp
+  `else if` at `emit_expr.c:2665-2678` was written to emit as the cleaner
+  `(*(t))`. Because the bridge `if` precedes the pbp `else if`, the pbp branch
+  never runs for these args. The two outputs are **semantically identical**
+  (both deref the pointer; the `(intptr_t)` round-trip is well-defined and the
+  cast is redundant), so this is a correctness-neutral *audit-clarity* + minor
+  codegen-cleanliness issue, **not a bug**. Tightening it -- gate the 2633 `if`
+  with `!expr_is_pbp_param(ctx, emit_arg)` so a genuine pbp param falls through
+  to the dedicated deref -- is a low-risk increment, but it changes the emitted
+  C for the `Tuple3..8` pbp call sites and so needs a coordinated snapshot
+  regen; left for a regen-window change rather than rushed here. Net: the audit
+  over-counts by 7 (these are pbp derefs, not carrier crossings).
+- (b) Land M4 typed dict slots for the bucket-D dispatch-arg spill (the
+  `m4c-execution-plan.md` Path A explicitly left the dict struct untouched; this
+  is the per-instantiation dict-singleton emit at `emit_stmt.c:399-547` keyed by
+  the call-site instantiation). 1-crossing payoff but completes the M4 story.
+- (c) Producer monomorphization (bucket A) and inline-C-body monomorphization
+  (bucket C) remain the genuinely large, deferred items -- and per the Vec
+  slice's findings they may stay carrier-based for interpreter-parity reasons,
+  in which case bucket A's casts are the *permanent* shape, not a defect.
+
+No code changed in this update -- the deliverable is the corrected baseline and
+the root-cause categorization that re-scopes "M4 dict-ABI" from "the dominant
+remaining item" down to "a 1-crossing cleanup," and re-points the real
+remaining carrier weight at the producer boundary.
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
