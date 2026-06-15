@@ -105,26 +105,26 @@ Grouped by spice. The fix in every case is one of:
 | `httpd/server.tur:272` | `srv-call-handler [handler : ptr<void> req : int] : int` | Typed handler + `Request`/`Response` opaques |
 | `httpd/write.tur:70,216,233` | `serialize-response`, `wbuf-bytes`, `wbuf-len` | `Wbuf` opaque, `Response` opaque |
 
-### sqlite (6 findings)
+### ~~sqlite (6 findings)~~ -- **fixed**
 
-| File:line | Function | Handle is |
-|---|---|---|
-| `sqlite/db.tur:218` | `db-close [db : int]` | `sqlite3*` |
-| `sqlite/db.tur:235` | `db-exec [db : int sql : cstr]` | `sqlite3*` |
-| `sqlite/db.tur:259` | `db-prepare [db : int sql : cstr]` | `sqlite3*` |
-| `sqlite/db.tur:283` | `db-query [db : int sql : cstr]` | `sqlite3*` |
-| `sqlite/stmt.tur:19` | `stmt-step [stmt : int]` | `sqlite3_stmt*` |
-| `sqlite/row.tur:23` | `col-count [stmt : int]` | `sqlite3_stmt*` |
+`defopaque Db` and `defopaque Stmt` are exported from `sqlite/db.tur` and
+threaded through `db.tur`, `stmt.tur`, `row.tur`, and `error.tur`. The 6
+original audit findings (`db-close`, `db-exec`, `db-prepare`, `db-query`,
+`stmt-step`, `col-count`) all take the nominal type. Remaining S4 work
+(`row : int` cons-list in `sqlite/row.tur`) is out of scope here.
 
-Proposed: `defopaque Db`, `defopaque Stmt`, threaded through everywhere.
+### ~~postgres (5 findings)~~ -- **fixed**
 
-### postgres (5 findings)
-
-| File:line | Function | Handle is |
-|---|---|---|
-| `postgres/db.tur:186,202,225` | `db-close`, `db-exec`, `db-query` | `PGconn*` |
-| `postgres/stmt.tur:142` | `stmt-prepare` | `PGconn*` |
-| `postgres/notify.tur:121` | `notify-listen` | `PGconn*` |
+`defopaque Conn` added in `postgres/db.tur` and threaded through `db.tur`,
+`stmt.tur`, and `notify.tur`. All 5 audit findings (`db-close`, `db-exec`,
+`db-query`, `stmt-prepare`, `notify-listen`) now take `conn : Conn`.
+Adjacent `conn : int` parameters on `db-query-params`, `db-begin`,
+`db-commit`, `db-rollback`, `stmt-exec-prepared`, `stmt-deallocate`,
+`notify-unlisten`, and `notify-poll` were retyped in the same pass for
+consistency. Internal `__pq-*-raw` helpers also take `Conn`. The
+`PGresult*` rows handle (`rows : int` in `postgres/row.tur`) and the
+`PGnotify*` notification handle (`n : int` in `postgres/notify.tur`)
+remain as follow-up work.
 
 ### opengl (5 findings)
 
@@ -185,8 +185,14 @@ Note `tls-wrap-fd` also takes `fd : int` -- that one really is an fd.
   Result-typed returns also landed (`(Result Regex cstr)`, etc.) once the
   project-mode kind preload was wired up in 2026-06-14's
   `spice-defn-return-result-kind-mismatch` fix.
-- `png/reader.tur` -- image handle
-- `wav/reader.tur` -- `SNDFILE*`
+- ~~`png/reader.tur` -- image handle~~ **fixed**: `defopaque Img`
+  exported from `png/info.tur`; `png-read`, `img-free`, all `img-*`
+  accessors and `pixel-*` helpers now take `img : Img`. `png-write`
+  retyped to match. Negative case errors with `TUR-E0001`.
+- ~~`wav/reader.tur` -- `SNDFILE*`~~ **fixed**: `defopaque Wav` exported
+  from `wav/info.tur`; `wav-open-read`, `wav-open-write`, `wav-close`,
+  `wav-read-float`, `wav-seek`, and all `wav-*` accessors now take
+  `w : Wav`. Negative case errors with `TUR-E0001`.
 
 ---
 
@@ -249,8 +255,8 @@ Middleware opaques exist, these should become `list<Route>` and
 | **osc** | **S1 + S2: 3 handles + 1 callback** |
 | plot | clean |
 | **plutovg** | **S2: 5 handle types** |
-| **png** | **S2: 1 handle type** |
-| **postgres** | **S2: 5 handle types** |
+| ~~png~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Img`) |
+| ~~postgres~~ | ~~S2: 5 handle types~~ -- fixed (`defopaque Conn`); `Rows`/`Notification` remain |
 | raygui | clean |
 | **raylib** | **S2: 3 handle types** |
 | ~~regex~~ | ~~S2: 1 handle type~~ -- fixed in `tur-regex` v0.2.0 |
@@ -259,7 +265,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | scscm | clean |
 | sdf-raylib | clean |
 | signal | clean |
-| **sqlite** | **S2: 6 handle types (db, stmt, row)** |
+| ~~sqlite~~ | ~~S2: 6 handle types~~ -- fixed (`defopaque Db`, `defopaque Stmt`); row alist S4 remains |
 | stats | clean |
 | test | clean |
 | tidal | clean |
@@ -267,10 +273,11 @@ Middleware opaques exist, these should become `list<Route>` and
 | **tourist** | **S1 + S2 + S3 + S4 (worst offender)** |
 | **valkey** | **S2: 1 handle type (client)** |
 | watch | clean |
-| **wav** | **S2: 1 handle type** |
+| ~~wav~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Wav`) |
 | zlib | clean |
 
-19 spices need work, 16 are clean (regex S2 done 2026-06-14 in v0.2.0; 18 remain).
+19 spices need work, 16 are clean. As of 2026-06-14: regex, sqlite, png, wav,
+and postgres are fixed (5 done); **14 remain**.
 
 ---
 
