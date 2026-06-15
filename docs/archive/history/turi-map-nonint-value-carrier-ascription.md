@@ -132,7 +132,7 @@ than a typed accessor.
 
 Direction 1 is preferred and is the natural continuation of TI10 (Tier A+ /
 Tier B), aligned with the umbrella
-[turi-map-set-hamt-interpreter-gap.md](turi-map-set-hamt-interpreter-gap.md).
+[turi-map-set-hamt-interpreter-gap.md](../turi-map-set-hamt-interpreter-gap.md).
 
 ## Validation
 
@@ -148,5 +148,5 @@ values; this value-side carrier gap is tracked here for a Tier A+ follow-up.
 The user-facing consequence of the inherent `EX_REINTERPRET` limitation (the
 "separate observation" above) -- that `::` is value-preserving, not
 bit-preserving, under the interpreter -- is documented for end users in
-[docs/guides/eval-api.md](../guides/eval-api.md) under "Interpreter value
+[docs/guides/eval-api.md](../../guides/eval-api.md) under "Interpreter value
 semantics: `::` is value-preserving, not bit-preserving".
