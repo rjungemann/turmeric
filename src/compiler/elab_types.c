@@ -2424,6 +2424,24 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * for downstream type-checking purposes. Type is erased at codegen. */
     Expr *out = expr_new(e->arena, EX_ASCRIBE, *ascribed, call->span);
     out->as.ascribe_.inner = inner;
+
+    /* Fat-handle ascription: reinterpreting a one-word carrier (:int or
+     * :ptr<void>) as a function type means "this carrier already holds a
+     * { thunk, env } fat-closure handle" -- e.g. a closure pulled out of a
+     * cons cell with list-head, or a handler threaded around as :int.  Mark
+     * the resulting TY_FN as *boxed* so a ^fat parameter passes it through and
+     * fat-dispatches it (slot 0), instead of auto-shimming it as a bare,
+     * non-capturing function pointer.  The shim path double-boxes an already-
+     * fat record (slot 1 becomes the record pointer, then dispatch calls it as
+     * code) and BUS/SEGV-faults.  type_eq ignores the boxed bit for two TY_FN
+     * of the same signature, and boxed-TY_FN is interchangeable with
+     * TY_PTR_VOID, so this is invisible to ordinary type-checking; it only
+     * flips the ^fat arg classifier from shim to pass-through.  See
+     * docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
+    if (ascribed->kind == TY_FN &&
+        (src_kind == TY_INT || src_kind == TY_PTR_VOID)) {
+        out->type.as.fn.boxed = true;
+    }
     return out;
 }
 

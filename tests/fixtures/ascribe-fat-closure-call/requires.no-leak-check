@@ -1,0 +1,1 @@
+make-adder closures are heap fat records the demo never frees (process-lifetime).

@@ -1,0 +1,31 @@
+;; Regression: invoking an already-fat closure that lives in an :int carrier
+;; via (:: handle (fn ...)) -- the spelling that previously double-shimmed the
+;; already-fat record and BUS/SEGV-faulted. See
+;; docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md.
+;;
+;; The ascription of a one-word carrier (:int / :ptr<void>) to a function type
+;; now marks the result as an already-boxed fat handle, so the call
+;; fat-dispatches through slot 0 instead of synthesising a __tur_fatshim
+;; wrapper around the record pointer.
+
+;; A capturing closure -- a genuine fat { thunk, env } record -- returned as a
+;; one-word :ptr<void> handle.
+(defn make-adder [k : int] : ptr<void>
+  (let [_k k]
+    (fn [n : int] : int (+ n _k))))
+
+;; Pure-Turmeric fat dispatch: ascribe the :int carrier back to its closure
+;; type and call it. No inline-C, no bespoke ABI cast.
+(defn apply-fat [f : int arg : int] : int
+  ((:: f (fn [int] int)) arg))
+
+(defn main [] : int
+  ;; Store fat handles in a cons list (carried as :int), pull them back out
+  ;; with list-head (also :int), and invoke through the ascription idiom.
+  (let [chain (tcons (:: (make-adder 10) int)
+                     (tcons (:: (make-adder 100) int) (tnil)))
+        a (apply-fat (list-head chain) 5)
+        b (apply-fat (list-head (list-tail chain)) 5)]
+    (println a)    ; 15
+    (println b)    ; 105
+    0))
