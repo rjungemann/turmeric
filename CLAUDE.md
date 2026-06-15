@@ -21,6 +21,28 @@ the test to dodge the breakage. If you fix the bug in the same session,
 the report can become the commit/PR description instead; otherwise it
 stays in `docs/reported/` so it is never forgotten.
 
+### Archiving resolved reports -- STRICT RULE
+
+`docs/reported/` holds **open** findings only. When a report is resolved,
+**move it into the archive** -- never leave it parked in `docs/reported/`,
+and **never create a `history/` subdirectory under `docs/reported/`**:
+
+- `docs/archive/<slug>.md` -- the resolved report itself.
+- `docs/archive/history/<slug>.md` -- the per-fix paper trail / older
+  resolved bug reports.
+
+`docs/reported/history/` is **forbidden**. A `pre-commit` hook
+(`tools/git-hooks/pre-commit`) rejects any commit that stages a path under
+`docs/reported/history/`. Enable it once per clone with:
+
+```sh
+git config core.hooksPath tools/git-hooks
+```
+
+If you find a resolved report sitting in `docs/reported/` (or a stray
+`docs/reported/history/`), relocate it to `docs/archive/` (or
+`docs/archive/history/`); do not duplicate an already-archived report.
+
 ## No Lazy `:int` Stand-Ins -- STRICT RULE
 
 Typing a request handle, response handle, ctx, server, connection, file,
