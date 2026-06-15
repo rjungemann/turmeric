@@ -7,12 +7,14 @@
 ; signature whose shared size variable `n` unifies cleanly across
 ; both arguments.
 ;
-; `use-world` is defined but never called.  Codegen for a *constructed*
-; World still hits a pre-existing make-struct lowering bug when a
-; struct type parameter does not appear directly as a field type
-; (see docs/reported/make-struct-phantom-typeparam-lowering.md); the
-; elaborator-level threading -- which is the P2 question -- is
-; independent and exercised here.
+; `make-world` constructs a World via `make-struct`.  This used to hit a
+; codegen lowering bug: when a struct type parameter (`m`) does not appear
+; directly as a field type -- only threaded through a field's opaque type
+; application `(Dense m A)` -- make-struct collapsed the initializer cast to
+; `(int64_t){.pos = ..., .vel = ...}`, an invalid designated initializer on a
+; non-aggregate.  The fix keys the cast off the struct's mangled C name, so
+; both the all-phantom World and a mixed phantom/by-value struct lower to their
+; real aggregates.  See docs/reported/make-struct-phantom-typeparam-lowering.md.
 
 (defgadt Size []
   (Static (int) : (Size))
@@ -21,8 +23,22 @@
 
 (defopaque Dense [n A] :int)
 
-; `m` is the shared size parameter; both fields carry it.
+; `m` is the shared size parameter; both fields carry it -- only ever inside
+; the opaque `(Dense m A)` / `(Dense m B)` applications, never as a bare field
+; type, so `m` is a phantom parameter.
 (defstruct World [m A B] (pos (Dense m A)) (vel (Dense m B)))
+
+; Mixed phantom/by-value struct: `m`/`A` are phantom (only inside the opaque
+; `(Dense m A)`), but `B` is carried by value in `(raw B)`.  Once `B` resolves
+; this must monomorphise to a real aggregate (`Cell__int__int__int`), not the
+; int64 carrier.
+(defstruct Cell [m A B] (idx (Dense m A)) (raw B))
+
+(defn dn [n A] [] : (Dense n A)
+  (:: 0 :Dense))
+
+(defn dense->int [n A] [d : (Dense n A)] : int
+  (:: d :int))
 
 (defn zip [A B] [xs : (Dense n A) ys : (Dense n B)] : int
   0)
@@ -35,5 +51,9 @@
   (zip (.pos w) (.vel w)))
 
 (defn main [] : int
-  (println 0)
+  (let [w   (make-struct World (dn) (dn))
+        c   (make-struct Cell (dn) 0)]
+    (println (+ (dense->int (.pos w))
+                (+ (dense->int (.vel w))
+                   (+ (dense->int (.idx c)) (.raw c))))))
   0)

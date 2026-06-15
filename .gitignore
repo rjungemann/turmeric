@@ -101,3 +101,6 @@ tests/fixtures/*/*/turi.stderr
 # REPL-compiled spice shared libraries and their symbol manifests.
 *.so
 *.so.manifest
+
+# Claude Code agent worktrees (transient, harness-managed)
+.claude/worktrees/
