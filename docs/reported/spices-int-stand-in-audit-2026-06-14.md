@@ -126,26 +126,25 @@ consistency. Internal `__pq-*-raw` helpers also take `Conn`. The
 `PGnotify*` notification handle (`n : int` in `postgres/notify.tur`)
 remain as follow-up work.
 
-### opengl (5 findings)
+### ~~opengl (5 findings)~~ -- **fixed (already shipped)**
 
-| File:line | Function | Handle is |
-|---|---|---|
-| `opengl/buffers.tur:23,37,70` | `make-vao`, `make-vbo`, `bind-vao` | `GLuint` VAO / VBO |
-| `opengl/shaders.tur:27,74` | `compile-shader`, `shader-program` | `GLuint` shader / program |
-| `opengl/window.tur:25` | `make-window` | `GLFWwindow*` (and a width/height pair -- those `:int`s ARE real ints) |
+All seven public handle types -- `Vao`, `Vbo`, `Ebo`, `Shader`, `Program`,
+`Window`, `Texture` -- are `defopaque :int` in `opengl/types.tur` and
+threaded through every relevant constructor / binder / accessor across
+`buffers.tur`, `shaders.tur`, `window.tur`, `input.tur`, and `textures.tur`.
+The audit caught this stale: the rewrite landed before this doc was filed.
 
-Proposed: `defopaque Vao`, `Vbo`, `Shader`, `Program`, `Window`. Note that
-GL object names actually are `GLuint` (32-bit), but conflating window
-pointers with shader IDs is still a category error.
+### ~~plutovg (5 findings)~~ -- **fixed (already shipped)**
 
-### plutovg (5 findings)
-
-| File:line | Function | Handle is |
-|---|---|---|
-| `plutovg/canvas.tur:79,102` | `canvas-create`, `canvas-destroy` | `plutovg_canvas_t*` |
-| `plutovg/surface.tur:54` | `surface-create` | `plutovg_surface_t*` |
-| `plutovg/path.tur:86` | `path-destroy` | `plutovg_path_t*` |
-| `plutovg/font.tur:108` | `font-face-destroy` | `plutovg_font_face_t*` |
+All five public handle types -- `Canvas`, `Surface`, `Path`, `FontFace`,
+`Paint` -- are `defopaque :int` in `plutovg/types.tur` and threaded through
+every relevant constructor / accessor across `canvas.tur`, `surface.tur`,
+`path.tur`, `font.tur`, and `paint.tur`. `canvas-of` and `font-face-of`
+extractors already in place. Secondary handle leaks remain (and are not
+on the original audit): `dashes : int` in `canvas.tur:670,686,695,719`,
+`fc : int` (font cache) in `font.tur:237,258,279,310`, `stops : int`
+(gradient stops) in `paint.tur:185,223,233`, and `box : int` (bounding
+rect) in `path.tur:421,429,436,443,450`.
 
 ### osc (3 findings beyond the S1 handler param)
 
@@ -155,12 +154,18 @@ pointers with shader IDs is still a category error.
 | `osc/bundle.tur:24,52` | `bundle-new`, `bundle-add-msg` | `lo_bundle*`, `lo_message*` |
 | `osc/server.tur:110` | `server-free` | `lo_server_thread*` |
 
-### raylib (3 findings)
+### ~~raylib (3 findings)~~ -- **fixed (already shipped)**
 
-| File:line | Function | Handle is |
-|---|---|---|
-| `raylib/audio.tur:49,66` | `load-sound`, `unload-sound` | `Sound*` (heap-copied) |
-| `raylib/audio.tur:102` | `load-music-stream` | `Music*` (heap-copied) |
+`defopaque Sound` and `defopaque Music` in `raylib/audio.tur`; threaded
+through `load-sound`, `unload-sound`, `play-sound`, `load-music-stream`,
+`unload-music-stream`, `play-music-stream`, `update-music-stream`. Broad
+follow-up leakage in non-audited modules remains (and was not on the
+original audit): `model : int`, `mesh : int`, `material : int`,
+`transform : int` in `raylib/models.tur`; `font : int` in `raylib/text.tur`;
+`tex : int` in `raylib/textures.tur`; `camera : int` in `raylib/camera.tur`
+and `raylib/core.tur`; plus pervasive `col : int` (`Color`), `pos : int`
+(`Vector2`), `rec : int` (`Rectangle`), `center : int`, `v1`/`v2`/`v3 : int`
+across `shapes.tur` -- candidates for a separate `raylib` v0.2.0 sweep.
 
 ### ~~tls (2 findings)~~ -- **fixed**
 
@@ -267,14 +272,14 @@ Middleware opaques exist, these should become `list<Route>` and
 | linalg | clean |
 | math | clean |
 | notebook | not audited (large, mostly string/parsing) |
-| **opengl** | **S2: 5 handle types** |
+| ~~opengl~~ | ~~S2: 5 handle types~~ -- already fixed (7 opaques in `opengl/types.tur`) |
 | **osc** | **S1 + S2: 3 handles + 1 callback** |
 | plot | clean |
-| **plutovg** | **S2: 5 handle types** |
+| ~~plutovg~~ | ~~S2: 5 handle types~~ -- already fixed (5 opaques in `plutovg/types.tur`); dash-array/font-cache/gradient-stops/rect remain |
 | ~~png~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Img`) |
 | ~~postgres~~ | ~~S2: 5 handle types~~ -- fixed (`defopaque Conn`); `Rows`/`Notification` remain |
 | raygui | clean |
-| **raylib** | **S2: 3 handle types** |
+| ~~raylib~~ | ~~S2: 3 handle types~~ -- audit set fixed (`Sound`, `Music`); broad follow-up leakage in models/text/textures/camera/shapes remains |
 | ~~regex~~ | ~~S2: 1 handle type~~ -- fixed in `tur-regex` v0.2.0 |
 | ~~rtaudio~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Audio`); `DeviceInfo` handle + callback remain |
 | **rtmidi** | **S1 + S2: 2 handles + 1 callback** |
@@ -293,7 +298,13 @@ Middleware opaques exist, these should become `list<Route>` and
 | zlib | clean |
 
 19 spices need work, 16 are clean. As of 2026-06-14: regex, sqlite, png, wav,
-postgres, valkey, rtaudio, and tls are fixed (8 done); **11 remain**.
+postgres, valkey, rtaudio, tls, plus three already-shipped-at-audit-time
+(opengl, plutovg, raylib's audited subset) are fixed (11 done); **8 remain**.
+Remaining S2 work: tourist, httpd, osc, rtmidi handles (each paired with an
+S1 callback fix); follow-up handle leaks inside plutovg (dash-array,
+font-cache, gradient-stops, rect), raylib (models, text, textures, camera,
+shapes), rtaudio (DeviceInfo, callback), valkey (`redisReply*`, `__msg*`),
+and postgres (`PGresult*`, `PGnotify*`).
 
 ---
 
