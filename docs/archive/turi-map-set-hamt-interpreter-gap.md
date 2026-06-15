@@ -1,5 +1,30 @@
 # map/set/hamt are not usable under `--interpret` (missing natives + C-callback HAMT)
 
+> **RESOLVED + ARCHIVED 2026-06-15.** All three gaps this umbrella tracks are
+> closed and re-verified against a fresh Debug build:
+> - **Gap 1 (natives):** `typed/map-basic` and the scalar-keyed map/set/hamt
+>   family pass under `tur --interpret`.
+> - **Gap 2 (C-callback eq vs turi closures, TI10 Tier B):** **DONE.** The
+>   `tur_hamt_*_eq_ctx` ctx-carrying entry points (`src/runtime/hamt.h:156-166`,
+>   `hamt.c`) plus the `map_turi_eq_tramp` trampoline (`src/main.c`) let a
+>   content-keyed `MapKey` instance written in Turmeric ride along as a turi
+>   *closure*: the `native_map_*_eq[_o]` natives detect a `TURI_CLOSURE`
+>   comparator and route it through `_eq_ctx`, invoking it via `turi_call` on
+>   collision. `tib-map-turi-comparator` passes under `--interpret`.
+> - **Gap 3 / non-int values (open item (b) below):** RESOLVED 2026-06-12, see
+>   [history/turi-map-nonint-value-carrier-ascription.md](history/turi-map-nonint-value-carrier-ascription.md).
+>
+> The only map fixtures that still decline under `--interpret` are *inline-C*
+> struct/boxed-key comparators (`eqmap-struct-content`, `eqmap-struct-float-fields`,
+> `wkc3-struct-map-key`); they fail **cleanly** (rc=1, "inline-C not supported"),
+> the correct TI7 carve-out, not a gap in this report. Separately, while
+> verifying this, a generic-dict dispatch divergence was found in
+> `gde4-generic-size-map` (the interpreter bakes the representative instance for
+> a `^Class A` parameter over a `TY_APP`-bound tyvar) -- a distinct defect, not a
+> collection-natives gap, filed as
+> [../reported/turi-generic-dict-dispatch-bakes-representative-instance.md](../reported/turi-generic-dict-dispatch-bakes-representative-instance.md).
+> The original progress notes are kept below for history.
+>
 > **Progress (TI10 Tier A, 2026-06-12):** **hamt, set, and scalar-keyed map are
 > now FIXED.** The map blocker below was resolved not by representing the C
 > function pointer as a turi value, but by registering the `MapKey`/`Hash`
@@ -56,7 +81,7 @@ expressiveness hole, not just missing code.
 **Severity:** Medium-High. (1) An ergonomics/coverage gap: a whole stdlib family
 is interpreter-only-broken while passing when compiled. (2) A latent
 memory-safety bug already filed separately
-([turi-native-set-count-layout-overflow.md](turi-native-set-count-layout-overflow.md)).
+([history/turi-native-set-count-layout-overflow.md](history/turi-native-set-count-layout-overflow.md)).
 (3) A "works by luck" hazard if the obvious native shim is written naively.
 
 This report is the umbrella tracking entry for the family; the set-count
