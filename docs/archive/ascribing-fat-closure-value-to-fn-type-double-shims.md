@@ -6,13 +6,18 @@ description: There is no pure-Turmeric way to invoke a fat closure that is alrea
 
 # Ascribing an already-fat closure value to a `(fn ...)` type double-shims it
 
-> **Status:** Compiler fix landed 2026-06-14 (Solution 1 below). The
->   stdlib-side de-workaround of the four inline-C fat-dispatch copies
->   (Solution 2) is partially in place on main -- `httpd-mw-fold` no longer
->   walks the cons list in inline-C, but the per-middleware dispatch still
->   goes through the inline-C `httpd-mw-apply` helper; `httpd-call`,
->   `logic.tur:apply-fat`, and `parsec.tur:apply-fat` are also still
->   inline-C. Solution 1 unblocks finishing Solution 2 in a follow-up.
+> **Status:** RESOLVED 2026-06-15. Solution 1 (compiler, 2026-06-14) removed
+>   the silent miscompile. Solution 2 (this session) finished the stdlib-side
+>   de-workaround: the four named standalone inline-C fat-dispatch helpers --
+>   `logic.tur:apply-fat`, `parsec.tur:apply-fat`, `httpd.tur:httpd-call`,
+>   `httpd.tur:httpd-mw-apply` -- are now pure Turmeric on top of the
+>   `(:: handle (fn ...))` ascription idiom, as are the two byte-identical
+>   siblings `logic.tur:apply-goal` and `parsec.tur:apply-parser`. The
+>   remaining `fat[0]` dereferences in `logic.tur:mbind`, `parsec.tur:mbind`,
+>   and `parsec.tur:many-c-impl` are *not* standalone dispatch copies -- they
+>   interleave the fat call with C-level Cell/Input struct walking, so
+>   de-inline-C-ing them is a separate, larger task tracked under the
+>   stdlib-inline-c-deworkaround-plan, not this report.
 
 ## Resolution (2026-06-04)
 
@@ -204,9 +209,13 @@ Relevant pointers:
 
 ## Status
 
-FIXED 2026-06-04 -- see the Resolution section at the top. Solution 1 (the
-elaborator change) removed the silent miscompile; Solution 2 (pure-Turmeric
-dispatch) retired all four inline-C fat-dispatch copies, so `httpd-mw-fold`
+RESOLVED 2026-06-15 -- see the status note at the top. Solution 1 (the
+elaborator change, 2026-06-14) removed the silent miscompile; Solution 2
+(this session) retired the four named standalone inline-C fat-dispatch copies
+plus the two byte-identical siblings (`apply-goal`, `apply-parser`) by
+rewriting them on the `(:: handle (fn ...))` ascription idiom. `httpd-mw-fold`
 -- the original trigger from
 [stdlib-inline-c-deworkaround-plan](../upcoming/stdlib-inline-c-deworkaround-plan.md)
-Phase 2 -- is now fully pure Turmeric.
+Phase 2 -- is now fully pure Turmeric. Validated by the
+`ascribe-fat-closure-call` regression fixture and the full httpd/parsec/logic
+fixture sets (47 passed) plus the complete suite.

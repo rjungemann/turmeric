@@ -361,11 +361,8 @@
 ;; apply-fat: call any fat closure with one int64_t arg; returns int64_t
 
 
-(defn apply-fat [f arg] : int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)f;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, arg);
-  ```)
+(defn apply-fat [f : int arg : int] : int
+  ((:: f (fn [int] int)) arg))
 ;;; apply-goal -- call a goal fat closure with a substitution (UState).
 ;;;
 ;;; Parameters:
@@ -376,11 +373,8 @@
 ;;;   Solution list (list of substitutions) (:int).
 ;; apply-goal: call a goal fat closure with a UState
 
-(defn apply-goal [g state] : int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)g;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, state);
-  ```)
+(defn apply-goal [g : int state : int] : int
+  ((:: g (fn [int] int)) state))
 ;;; -- Goal constructors ────────────────────────────────────────────────────────
 ;;; unify-goal-impl -- implementation helper: unify two terms against a state.
 
