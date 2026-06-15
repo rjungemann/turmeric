@@ -2428,6 +2428,33 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     Buf out;
     buf_init(&out);
 
+    /* end-to-end-monomorphization (C-3): a :heap-tagged type (Vec/Map/Set/...)
+     * is represented as a typed pointer `T__A *` whose bit pattern IS the int64
+     * carrier.  Crossing the carrier boundary is therefore a pure reinterpret
+     * cast, never a struct deref-copy (CK_CARRIER->CONCRETE) or address-of
+     * spill (CK_CONCRETE->CARRIER): the value is already pointer-sized and
+     * shared by identity.  Without this, a heap receiver flowing through the
+     * carrier (e.g. the abstract `vec-new` base result feeding a `(Vec A)`
+     * spec param) emitted `*(int64_t *)(intptr_t)(handle)` -- a wild deref of
+     * the header's first word, segfaulting at runtime. */
+    if (type_is_heap_struct(concrete_ty)) {
+        if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {
+            /* If the concrete C type is a pointer (`Vec__int *`), cast to it;
+             * when abstract (cname collapses to int64_t) the carrier already
+             * holds exactly what the sink wants -- pass through unchanged. */
+            if (cname && strchr(cname, '*'))
+                buf_printf(&out, "(%s)(intptr_t)(%s)", cname, src_str);
+            else
+                buf_printf(&out, "%s", src_str);
+        } else {
+            buf_printf(&out, "(int64_t)(intptr_t)(%s)", src_str);
+        }
+        free(src_str);
+        char *result = strdup(out.data);
+        buf_free(&out);
+        return result;
+    }
+
     if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {
         if (carrier_is_inline(concrete_ty.kind)) {
             /* Inline scalar: union bitwise reinterpret int64_t -> concrete. */

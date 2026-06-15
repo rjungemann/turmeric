@@ -54,9 +54,18 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                    def->name, rv, mfn);
     } else if (type_is_heap_struct(emit_resolve_type(ctx,
                    e->as.set_field_.receiver->type))) {
-        /* end-to-end-monomorphization: a :heap receiver is a typed pointer;
-         * the field write derefs through it (shared heap header). */
-        buf_printf(&lhs, "(%s)->%s", rv, mfn);
+        /* end-to-end-monomorphization: a :heap receiver is a typed pointer in
+         * concrete positions (`(p)->field`); in the abstract polymorphic base
+         * it arrives as the int64 carrier and must be cast through the canonical
+         * layout-generic header (`((Vec *)(intptr_t)rv)->field`).  Discriminate
+         * on the lowered C type of the receiver. */
+        Type recv_rty = emit_resolve_type(ctx, e->as.set_field_.receiver->type);
+        const char *recv_cn = type_c_name(recv_rty);
+        bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
+        if (recv_is_ptr)
+            buf_printf(&lhs, "(%s)->%s", rv, mfn);
+        else
+            buf_printf(&lhs, "((%s *)(intptr_t)(%s))->%s", def->name, rv, mfn);
     } else {
         buf_printf(&lhs, "(%s).%s", rv, mfn);
     }

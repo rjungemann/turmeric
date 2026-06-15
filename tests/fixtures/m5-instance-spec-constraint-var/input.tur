@@ -44,7 +44,7 @@
 (definstance MyEq [Vec]
   [(Eq A)]
   (myeq? [x y]
-    (callee (:: x (Vec A)) (:: y (Vec A)) 0 (vec-len x))))
+    (callee (:: x (Vec A)) (:: y (Vec A)) 0 (vec-len (:: x (Vec A))))))
 
 (defn main [] : int
   (let [a (:: (vec-of) (Vec int))

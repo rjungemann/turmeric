@@ -4084,8 +4084,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 Type recv_rty = emit_resolve_type(ctx,
                     e->as.get_field_.struct_expr->type);
                 if (type_is_heap_struct(recv_rty)) {
+                    /* A :heap receiver is a typed pointer (`Vec__int *`) only in
+                     * concrete monomorphic positions, where its lowered C type is
+                     * a pointer.  In the abstract polymorphic *base* (e.g. the
+                     * carrier body of `(defn vec-len-byval [A] [v : (Vec A)]
+                     * (.len v))`, kept alive for the Eq[Vec] uniform dict slot)
+                     * the receiver arrives as the int64 carrier, so it must be
+                     * cast through the canonical layout-generic header
+                     * (`((Vec *)(intptr_t)sv)->field`) -- the same deref the
+                     * non-heap `through_carrier` path below emits.  Discriminate
+                     * on whether the lowered receiver type is a pointer. */
+                    const char *recv_cn = emit_type_c_name(ctx, recv_rty);
+                    bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
                     Buf hb; buf_init(&hb);
-                    buf_printf(&hb, "(%s)->%s", sv, fname);
+                    if (recv_is_ptr)
+                        buf_printf(&hb, "(%s)->%s", sv, fname);
+                    else
+                        buf_printf(&hb, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
                     buf_putc(&hb, '\0');
                     free(sv);
                     free(fname);

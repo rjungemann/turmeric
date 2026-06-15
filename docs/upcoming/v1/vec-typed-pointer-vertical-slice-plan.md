@@ -281,6 +281,88 @@ crossing remains until M4).
    Vec (the receiver is already a typed pointer, no twin needed). Remove them;
    confirm green. (Keep the redirect mechanism itself until Map/Set also flip.)
 
+## Status: LANDED 2026-06-15 (step 3 shipped; the stdlib flip is inline-C, not pure-Turmeric)
+
+The Vec typed-pointer slice is in tree. What shipped diverges from the
+sub-step-3 sketch above on the *producer body* question, for a reason the
+sketch missed -- recorded here so it is not re-litigated:
+
+- **`Vec` is tagged `:heap`** (`stdlib/vec.tur`), so `(Vec A)` lowers to
+  `Vec__A *` in every monomorphic position (spec params, `Eq[Vec]` dispatch).
+- **The producers stayed INLINE-C carrier bases**, NOT pure-Turmeric
+  make-struct/field-access bodies. Two reasons the pure-Turmeric rewrite is the
+  wrong shape here:
+  1. **Interpreter parity.** `tur --interpret` routes a call to a
+     `native_vec_*` override ONLY when the callee body is inline-C (eval.c's
+     "native override for inline-C functions" path). A pure-Turmeric
+     `vec-push!` bypasses the native and runs source the tree-walker cannot
+     execute (it bottoms out in the raw-buffer inline-C helpers, which have no
+     native). Keeping the bodies inline-C preserves interpreter parity for
+     free.
+  2. **Float element reads.** `vec-get`/`vec-pop!` return the element tyvar
+     `A`; a pure-Turmeric `(:: ... A)` body mints an A-monomorphized spec
+     (e.g. returning `double` for `A=float`) whose carrier read numerically
+     converts the float bits instead of bit-reinterpreting them. Inline-C
+     bodies are not return-specialized, so the carrier base returns the raw
+     int64 and the call-site ascription does the correct reinterpret.
+
+  The inline-C bodies take/return the int64 carrier, which for a `:heap` value
+  IS the header pointer; concrete call sites reach them through the C-3
+  reinterpret-cast (below). Mutation is visible to all holders because the
+  handle is a shared pointer, never a by-value header copy.
+
+### Compiler support that landed (the actual enabling work)
+
+- **C-1 (already in tree):** `:heap` lowering of `(Vec A)` -> `Vec__A *`.
+- **C-3 (`emit_carrier_bridge`, `src/compiler/emit_core.c`):** a `:heap` type
+  crosses the carrier boundary as a pure reinterpret CAST
+  (`(Vec__int *)(intptr_t)h`), never a struct deref-copy. This is what turns
+  the ~114 `Vec int` `carrier->concrete` crossings from 24-byte header
+  deref-copies (the segfaulting / mutation-hazard shape) into casts.
+- **pass-by-pointer (`type_struct_pass_by_ptr`, `src/compiler/types.c`):** a
+  `:heap` type is never pbp-wrapped (it is already a pointer; wrapping made a
+  `(Vec A)` parameter a double pointer `Vec__A **` and every field access read
+  the wrong memory).
+- **ABI-aware field access (`EX_GET_FIELD` in `emit_expr.c`, set-field in
+  `emit_stmt.c`):** a `:heap` receiver derefs directly (`(p)->field`) in
+  concrete positions but casts through the canonical layout-generic header
+  (`((Vec *)(intptr_t)v)->field`) in the abstract polymorphic *base* (e.g. the
+  `Eq[Vec]` carrier base, which keeps `vec-len-byval`'s `(.len v)` alive for
+  the uniform dict slot).
+- **Interpreter element-tag side table (`src/main.c`):** a native vec stores
+  raw int64 carrier cells, losing the value tag. The typed `vec-get` return
+  makes the read-back ascription a transparent `EX_REINTERPRET` (it no longer
+  re-tags). Vecs are homogeneous, so `native_vec_push` records the element tag
+  per vec-header pointer and `vec-get`/`vec-pop!` re-tag float/cstr/bool
+  carriers. Restores interpreter parity for `tce1-vec-{float,cstr}` etc.
+
+### Result
+
+- Full compiled suite green (`1642 passed, 0 failed`), 75 `expected.c`
+  regenerated in the same commit.
+- `tur --interpret` suite at baseline (`1201 passed, 2 failed` -- the 2 are
+  pre-existing `eq-carrier-capturing-comparator` / `mutmap-eq`).
+- Spice roundtrip: `../turmeric-spices/spices/{ecs,json}` -- only pre-existing
+  failures (ecs HKT-row `poly-call-row`/`query-typed`/`sized-dense-rt`; json
+  `derive-{decode,encode}-struct` Decode/Result carrier). The heavy Vec users
+  (spawn1k, sparse-rt, for-each-*) all pass.
+- The ~114 `Vec int` `carrier->concrete` crossings are now reinterpret CASTS
+  (verified via `TUR_M3_AUDIT=1`); the ~6 residual in `m5-constrained-poly-vec-eq`
+  are the abstract-dispatch dict-slot residual that M4 (typed dict slots)
+  clears -- out of scope for this slice.
+
+### Still open (steps 4-5, unchanged)
+
+- **M4 dict-ABI:** the `Eq[Vec]` dict slot is still `bool (*)(int64_t,...)`, so
+  abstract dispatch through a generic `(defn f [A] [(Eq A)] ...)` keeps the
+  residual `concrete->carrier` crossing. Typed dict slots clear it.
+- **Step 5 (`*-byval` twin deletion):** `vec-len-byval` / `vec-get-byval` /
+  `vec-eq-loop-byval` and the Option C twin-redirect are still in tree; defer
+  their removal until Map/Set also flip (the redirect mechanism is shared).
+- **Map/Set/MutableMap typed-pointer migration (step 3 continuation):** same
+  inline-C-base + `:heap` recipe applies; their producers are likewise
+  native-overridden in the interpreter, so they too stay inline-C.
+
 ## Validation harness
 
 - `bash tests/run.sh`: zero new `FAIL`; snapshots regenerated in the same

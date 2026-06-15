@@ -9,7 +9,7 @@
   (let [r (schema-decode (schema/array (schema/int))
                          (json/decode "[10, 20, 30]"))]
     (if (schema-decode-ok? r)
-      (let [v (schema-decode-value r)]
+      (let [v (:: (schema-decode-value r) (Vec int))]
         (+ (+ (vec-get v 0) (vec-get v 1)) (vec-get v 2)))
       -1)))
 

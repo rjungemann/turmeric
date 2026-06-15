@@ -273,7 +273,7 @@
 ;;;
 ;;; Since: R2
 
-(defn vec-get-checked [v : int b : BoundedIdx] : int (vec-get v (bidx->int b)))
+(defn vec-get-checked [A] [v : (Vec A) b : BoundedIdx] : A (vec-get v (bidx->int b)))
 ;;; slice-get-checked -- index a Slice with a proven-in-range BoundedIdx (total).
 ;;;
 ;;; Parameters:
