@@ -68,12 +68,20 @@ change to these types' layout.
 | `Map [K V]` | `(carrier :int)` | immutable/persistent **but** a HAMT node tree -- pass a pointer to the root, never deep-copy | **DONE**: `:heap`-tagged, `(Map K V)` -> `Map__K__V *`. The `(carrier :int)` field is internal-only (never accessed structurally; the C struct is really `{void* hamt}`), so it does not need typing for the `:heap` flip -- the handle is now a typed pointer regardless |
 | `Set [A]` | `(hamt :ptr<void>)` | immutable/persistent, HAMT-backed (same as Map) | **DONE**: `:heap`-tagged, `(Set A)` -> `Set__A *` |
 | `Cons [A]` | `(head A) (tail :int)` | immutable/persistent **but** a linked node chain -- a `(Cons A)` value is a pointer to the head cell | **DONE**: `:heap`-tagged, `(Cons A)` -> `Cons__A *` (the handle is now a typed pointer; #369's carrier-based `Eq [Cons]` keeps working because `(:: x :int)` relabels the pointer to the int64 carrier). The `tail :int` field stays an internal next-cell link (like Map's `carrier :int`); fully typing it to `(Cons A)` is a further No-Lazy-`:int` step, not required for the `:heap` flip |
-| `GVec [a]` | GADT `GVNil`/`GVCons int (GVec int)` | length-indexed linked GADT (niche/demo) | int64 carrier -> `GVec__a *` |
+| `GVec [a]` | GADT `GVNil`/`GVCons int (GVec int)` | length-indexed linked GADT (niche/demo) | **PENDING** -- `GVec` is a `defgadt` (tagged-union lowering), not a `defstruct`, so the `:heap` attribute does not apply. Needs separate GADT-side typed-pointer infra; deferred (niche/demo, no bridge crossings) |
 
 Two distinct rationales land in this column: **mutable** (Vec, MutableMap --
 must share so mutation is visible) and **immutable-but-heap-linked** (Cons, Map,
 Set, GVec -- by-value would be *safe* but means deep-copying a node graph, so we
 pass a pointer to the root). Both get a typed pointer.
+
+**Migration status (2026-06-15):** all `defstruct`-backed heap collections are
+migrated -- `Vec` (#377), then `Set` / `MutableMap` / `Map` / `Cons` (this
+session). Each is a one-line `:heap` `defstruct` flip riding the Vec slice's
+compiler support, validated at suite 1646/0 + interpreter gate + ecs/json/frame
+spice roundtrip with zero snapshot drift. Only `GVec` (a GADT) remains, and it is
+deferred pending GADT-side infra. The remaining ~48 carrier-bridge crossings are
+the **M4 dict-ABI** item (typed dict slots), not further `:heap` flips.
 
 ### Type-erased carrier (stays int64 / opaque; not in the bridge's monomorphic path)
 
