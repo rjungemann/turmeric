@@ -192,9 +192,16 @@ crossing remains until M4).
 
 ## Sub-steps (each independently landable + green)
 
-1. **C-1 behind a flag, no stdlib change.** Add the `#{Heap}` tag + pointer
-   lowering, tag *nothing* yet. Suite must be byte-identical (zero snapshot
-   drift) -- proves the flag is inert when unset. Pin with a unit test.
+1. **C-1 behind a flag, no stdlib change. -- LANDED 2026-06-15.** Added the
+   `:heap` defstruct annotation + `StructDef.is_heap` (following the
+   `:copy`/`:linear` precedent), and the gated `type_c_name` lowering that maps
+   a `:heap`-tagged TY_STRUCT/TY_APP to `Name *` / `T__A *`. Tagged nothing yet;
+   full suite byte-identical (**1639 passed, 0 failed**, zero snapshot drift),
+   proving the flag is the sole gate. Pinned by `tur_heap_abi_unit`
+   (`tests/compiler/test_heap_abi.c`): bare name when unset, `Name *` when set,
+   no sticky state. NOTE: the marker spelling is the keyword `:heap` (not
+   `#{...}`); `#{...}` is the effect-set attribute syntax and is reserved for
+   `defn`, so the struct attribute reuses the `:copy`/`:linear` keyword slot.
 2. **`heap-box` + C-2.** Land the primitive and the name-substitution, pinned
    by a tiny fixture (`heap-box-roundtrip`) that boxes/reads a `make-struct`
    for two distinct element types and checks the emitted C uses `Vec__int *` /
