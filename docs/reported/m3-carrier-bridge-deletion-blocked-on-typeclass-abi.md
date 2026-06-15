@@ -327,8 +327,12 @@ stdlib instance rewrite.
 ### Sequencing (this is really starting M7 + M4 dict-ABI, with M3 as the payoff)
 
 1. **Per-type ABI decision matrix** -- classify every parameterized stdlib type
-   as by-value-struct (Option/Result/Pair/Tuple/immutable Cons) vs typed-pointer
-   (Vec/Map/Set/MutableMap). Write it down; it gates everything else.
+   as by-value-struct (Option/Result/Pair/Tuple/Either/Slice), typed-pointer
+   (Vec/MutableMap mutable; Map/Set/Cons/GVec immutable-but-heap-linked), or
+   type-erased carrier (the opaque/HKT handles). **LOCKED 2026-06-15:**
+   [docs/upcoming/parametric-type-abi-matrix.md](../upcoming/parametric-type-abi-matrix.md).
+   Key correction this produced: Cons is typed-pointer, not by-value -- it is a
+   linked node chain, so the receiver is `Cons__A *`, not a by-value cell.
 2. **Vec typed-pointer vertical slice** -- convert the Vec primitives
    (`vec-new`/`-of`/`-push!`/`-get`/`-len`/`-free`/...) to the `Vec__int*` ABI
    per element type (inline-C-body monomorphization), and type the `Eq [Vec]`
