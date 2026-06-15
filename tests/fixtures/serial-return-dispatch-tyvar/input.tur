@@ -1,0 +1,19 @@
+;; return-dispatch-tyvar-silent-misdispatch.md regression:
+;; a return-type-polymorphic typeclass method (Serializable's `deserialize`,
+;; whose class var `a` appears only in the result) dispatched via a return-type
+;; ascription to a CONSTRAINED type variable A -- `(:: (deserialize b) A)` --
+;; must select A's instance per monomorphization, NOT silently fall to the
+;; `ptr<void>` instance.  Before the fix `(round-ok 42)` ran the ptr<void>
+;; deserialize and mis-decoded; now it re-resolves to deserialize_int /
+;; deserialize_bool per spec.
+(load "stdlib/serial.tur")
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn round-ok [A] [(Serializable A) (Eq A)] [x : A] : bool
+  (eq? (:: (deserialize (serialize x)) A) x))
+
+(defn main [] : int
+  (printf "int-ok=%lld\n"  (if (round-ok 42)   1 0))   ; 1
+  (printf "int2-ok=%lld\n" (if (round-ok -7)   1 0))   ; 1
+  (printf "bool-ok=%lld\n" (if (round-ok true) 1 0))   ; 1
+  0)

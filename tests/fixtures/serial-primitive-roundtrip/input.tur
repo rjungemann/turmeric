@@ -23,7 +23,7 @@
 (defn check-bool [expected : bool] : int
   (let [b (.serialize expected)]
     (let [got (__inst_Serializable_deserialize_bool b)]
-      (if (= got (if expected 1 0))
+      (if (= got expected)
         (do
           (printf "bool ok: %lld\n" (if expected 1 0))
           1)

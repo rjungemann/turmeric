@@ -153,7 +153,7 @@
 
 (defclass Serializable [a]
   (serialize [x] : ptr<void>)
-  (deserialize [b : ptr<void>] : int))
+  (deserialize [b : ptr<void>] : a))
 ;; ---------------------------------------------------------------------------
 ;; Primitive instances
 ;; Each instance packs its value as little-endian bytes, prefixed by length.
@@ -356,12 +356,46 @@
 ;; so these instances pack/unpack those carriers directly.  This is correct for
 ;; fixed-width primitive elements (int / bool / float and any int64-carried
 ;; nominal type).  Like the Eq/Clone container instances, an element that is a
-;; cstr or other pointer-to-heap serializes its *address*, not its contents; for
-;; those, deserialize cannot recover the value (the standard return-type-dispatch
-;; limitation -- (deserialize b) cannot select the element instance from a type
-;; variable).  Use a concrete (definstance Serializable [YourType] ...) when an
-;; element owns heap data.
+;; cstr or other pointer-to-heap serializes its *address*, not its contents.
+;;
+;; NOTE: `(deserialize b)` CAN now dispatch on a constrained type variable --
+;; `(:: (deserialize b) A)` inside a `(... [(Serializable A)] ...)` body
+;; re-resolves to A's instance per monomorphization (see
+;; docs/archive/return-dispatch-tyvar-silent-misdispatch.md).  The composite
+;; bodies below still pack element carriers directly (not via recursive
+;; `(:: (deserialize sub) A)`) for the in-process raw-carrier round-trip, so a
+;; cstr/heap element still serializes its address; use a concrete
+;; (definstance Serializable [YourType] ...) when an element owns heap data and
+;; you need cross-process recovery.
 ;; ---------------------------------------------------------------------------
+;;; serial-pair-bytes -- raw [len=16][fst][snd] Pair byte layout from two int64
+;;; element carriers.
+;;;
+;;; Fixed-arity (takes the element carriers as plain ints, not the Pair), so the
+;;; `(serialize ...)` instance body that calls it stays pure-Turmeric rather than
+;;; inline-C.  That lets the per-instantiation spec machinery (M4c Path A) mint a
+;;; typed `serialize_Pair__spec__(Pair__int__int)` and dispatch a by-value Pair
+;;; directly -- no `concrete->carrier` bridge spill.  The byte layout is
+;;; identical to the prior inline-C body, so `deserialize` is unchanged.
+;;;
+;;; Parameters:
+;;;   fst -- first element's int64 carrier
+;;;   snd -- second element's int64 carrier
+;;;
+;;; Returns:
+;;;   A raw :ptr<void> bytes value (see the module note on the raw-buffer surface).
+;;;
+;;; Since: end-to-end-monomorphization (M4 bucket-D)
+(defn serial-pair-bytes [fst : int snd : int] : ptr<void>
+  ```c
+  int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
+  if (!buf) { fprintf(stderr, "serialize Pair: oom\n"); exit(1); }
+  buf[0] = 16;
+  buf[1] = fst;
+  buf[2] = snd;
+  return buf;
+  ```)
+
 ;;; Serializable [Pair] -- serialize a Pair[A B] as its two int64 element carriers.
 ;;;
 ;;; Layout: [int64 len=16][int64 fst][int64 snd].
@@ -372,15 +406,7 @@
 (definstance Serializable [Pair]
   [(Serializable A) (Serializable B)]
   (serialize [x]
-    ```c
-    struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)x;
-    int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
-    if (!buf) { fprintf(stderr, "serialize Pair: oom\n"); exit(1); }
-    buf[0] = 16;
-    buf[1] = p ? p->fst : 0;
-    buf[2] = p ? p->snd : 0;
-    return buf;
-    ```)
+    (serial-pair-bytes (:: (.fst x) :int) (:: (.snd x) :int)))
   (deserialize [b]
     ```c
     if (!b || ((int64_t*)b)[0] < 16) {
@@ -400,6 +426,12 @@
 
 (definstance Serializable [Option]
   [(Serializable A)]
+  ;; NOTE: serialize stays inline-C (carrier-based) on purpose -- `none` is the
+  ;; NULL carrier (0), so a pure-Turmeric body would mint a by-value
+  ;; `serialize_Option__spec__(Option__int)` whose dispatch derefs the carrier
+  ;; (`*(Option__int *)0`) and segfaults on none.  The inline-C body NULL-checks
+  ;; `o` and so handles none safely; it keeps the uniform-carrier ABI (no
+  ;; by-value spec, no concrete->carrier bridge -- this instance never crossed).
   (serialize [x]
     ```c
     struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;

@@ -1006,16 +1006,28 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     const Expr *dict = call->as.call_.dict_arg;
     if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return NULL;
     if (dict->as.dict_.method_name[0] == '\0') return NULL;
-    if (call->as.call_.n_args < 1 || !call->as.call_.args) return NULL;
 
-    /* Receiver is arg 0.  Strip ascriptions, then require a type variable so we
-     * only act on genuinely-polymorphic constrained-generic dispatch (a concrete
-     * receiver already baked the correct instance at elaboration). */
-    const Expr *recv = call->as.call_.args[0];
-    while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-    if (!recv || recv->type.kind != TY_TYVAR) return NULL;
+    /* The dispatch type variable is normally the receiver (arg 0): an
+     * argument-dispatched constrained-generic call (`(eq? x y)` with `x : A`).
+     * For a RETURN-dispatch method (`(:: (deserialize b) A)`, where the class
+     * var appears only in the result) there is no tyvar argument -- the call's
+     * *result* type carries the abstract tyvar instead.  Pick whichever is a
+     * type variable.  A concrete receiver/result already baked the correct
+     * instance at elaboration, so we only act on a genuine tyvar.
+     * (return-dispatch-tyvar-silent-misdispatch.md) */
+    Type disp_ty;
+    bool have_disp = false;
+    if (call->as.call_.n_args >= 1 && call->as.call_.args) {
+        const Expr *recv = call->as.call_.args[0];
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        if (recv && recv->type.kind == TY_TYVAR) { disp_ty = recv->type; have_disp = true; }
+    }
+    if (!have_disp && call->type.kind == TY_TYVAR) {
+        disp_ty = call->type; have_disp = true;
+    }
+    if (!have_disp) return NULL;
 
-    Type resolved = emit_resolve_type(ctx, recv->type);
+    Type resolved = emit_resolve_type(ctx, disp_ty);
     if (resolved.kind == TY_TYVAR) return NULL; /* still unbound: keep base/repr */
     const char *component = emit_inst_suffix_component(resolved.kind);
     /* WKC3: a named struct/ADT key resolves to TY_STRUCT; its instance is
