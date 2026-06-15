@@ -1,5 +1,24 @@
 # Pure-turi silent miscompiles (11 real interpreter bugs + 1 legit carve)
 
+> **RESOLVED:** all 12 are now closed. The 9 covered by the earlier updates
+> below were fixed in W4/W1b; the **3 "deep" remainders are verified fixed on
+> the current tree** under `ASAN_OPTIONS=detect_leaks=0 ./build/tur --interpret
+> <fixture>/input.tur`:
+>
+> - **`range-bound-show-ord`** -- stdout now matches `expected.stdout` exactly
+>   (Exclusive bound renders `(7`, Inclusive `[3`); the conditional-snprintf
+>   inline-C path no longer always takes the first branch.
+> - **`codegen-private-defn-collision`** -- prints `100` then `200` (no longer
+>   `200/200`); the two modules' private `__h` defns resolve per-module instead
+>   of last-wins.
+> - **`rc-unique-violation`** -- `(ref/from-rc rc)` with a live `weak` now panics
+>   with a nonzero exit: `panic: ref/from-rc requires unique rc
+>   (strong_count==1 and weak_count==0), got strong=1 weak=1`.
+>
+> All three PASS under `tests/run-turi.sh` (no `requires.*` carve, not on any
+> denylist) and the `reader-cond` legit carve remains `requires.compiled`.
+> Moved to history.
+
 > **Update (TI8.b/W4, 2026-06-11): 6 of the 11 fixed.** Four root causes in
 > `src/turi/eval.c`:
 > - **`EX_ASCRIBE` primitive coercion** -- `(:: x bool/float/int)` now reconciles
