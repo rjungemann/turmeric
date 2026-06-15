@@ -429,8 +429,15 @@ pre-existing failures (ecs `poly-call-row`/`query-typed`/`sized-dense-rt`; json
 `derive-{decode,encode}-struct`; frame `group_test`/`interop_test`/`reshape_test`
 ld errors -- all identical with the change reverted).
 
-Remaining typed-pointer migrations (matrix step 3 continuation): `Map` (blocked on
-its `(carrier :int)` No-Lazy-`:int` field needing a real type first), `Cons` (#369
+`Map` migrated too (same commit): its producers were already typed `(Map K V)`
+and its `(carrier :int)` field is internal-only (never accessed structurally; the
+real C struct is `{void* hamt}`), so the `:heap` flip needs no field retyping --
+`(Map K V)` -> `Map__K__V *`. Suite green (1646/0), zero snapshot drift, spice
+roundtrip clean (frame is the heavy Map user). Map is immutable/persistent so the
+by-value copy was harmless; the flip is matrix conformance + prerequisite to the
+eventual bridge down-scoping.
+
+Remaining typed-pointer migrations (matrix step 3 continuation): `Cons` (#369
 left it carrier-based; the typed-pointer migration is the deeper fix), `GVec`
 (niche). The 48 crossings clear when **M4 dict-ABI** (typed dict slots) lands --
 that is the dominant remaining item, not further stdlib `:heap` flips.

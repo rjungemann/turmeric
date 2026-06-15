@@ -19,7 +19,7 @@
 ;;; structurally (every operation is inline-C or delegates to one).
 ;;;
 ;;; Since: Phase TM0
-(defstruct Map [K V] (carrier :int))
+(defstruct Map :heap [K V] (carrier :int))
 ;;; map-new -- create a new empty typed map.
 ;;;
 ;;; map-new is generic and nullary, so its K/V cannot be inferred from
