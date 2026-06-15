@@ -484,7 +484,7 @@ done
 | **A. `:heap` reinterpret casts** (`Vec`/`Map`/`Set`/`MutableMap`/`Cons`) | **124** | carrier->concrete | int64-carrier producers (`vec-of`, `mutmap-new`, ...) feed typed-pointer consumers; post-#377 these are `(Vec__int *)(intptr_t)h` **casts**, not 24-byte deref-copies | benign; clears only when collection PRODUCERS monomorphize (deferred inline-C-body infra) -- **a typed dict slot does NOT touch these** |
 | **B. pbp-pointer derefs** (`Tuple3`..`Tuple8`) | **7** | carrier->concrete | structs >16B pass by `const T*`; an ABI-spec callee takes them by value, so the caller derefs the pbp pointer (`tuplen-struct-param-passing`) | legitimate pass-by-pointer convention; **not a carrier crossing** -- the bridge is reached only by an over-match (see (a) below) |
 | **C. blessed inline-C construction** (`Result`/`Option`) | **6** | carrier->concrete | a user/instance **inline-C body** builds the value via `tur_ok`/`tur_err`/`tur_some` (returns the int64 carrier) but its declared return is a by-value struct, so the call site derefs once (`inline-c-typed-result-option` 5, `typeclass-method-parameterized-result-decode` 1) | this is the **deliberately blessed** "inline-C may return a real typed Result/Option" boundary (`inline-c-typed-result-option` exists to bless it); inherently carrier -- a typed dict slot does NOT touch it either |
-| **D. genuine dispatch-arg spill** (`Pair int int`) | **1** | concrete->carrier | a by-value `Pair__int__int` passed into an int64-uniform dict slot (`serial-composite-instances`) | **this is the ONLY crossing a typed dict slot (M4 dict-ABI) actually fixes** |
+| **D. inline-C carrier-instance dispatch-arg spill** (`Pair int int`) | **1** | concrete->carrier | a by-value `Pair__int__int` passed into the `Serializable [Pair]` `serialize` instance method, whose **body is inline-C** (`struct {int64_t fst; int64_t snd;} *p = (void*)(intptr_t)x; ...`) and so reads its arg as a carrier pointer (`serial-composite-instances`) | **NOT a typed-dict-slot win** -- see the 2026-06-15 correction below; this is the SAME blessed inline-C carrier boundary as bucket C, on the argument side |
 | **E. type-erased channel** (`SChan<SRecv ...>`) | **2** | carrier->concrete | `generic-relay-aggregate-result` -- the genuinely type-erased channel path | carrier by design (matrix roadblock 4); never deleted |
 
 ### The correction
@@ -552,10 +552,36 @@ type-erased boundary." Concretely:
   C for the `Tuple3..8` pbp call sites and so needs a coordinated snapshot
   regen; left for a regen-window change rather than rushed here. Net: the audit
   over-counts by 7 (these are pbp derefs, not carrier crossings).
-- (b) Land M4 typed dict slots for the bucket-D dispatch-arg spill (the
-  `m4c-execution-plan.md` Path A explicitly left the dict struct untouched; this
-  is the per-instantiation dict-singleton emit at `emit_stmt.c:399-547` keyed by
-  the call-site instantiation). 1-crossing payoff but completes the M4 story.
+- (b) ~~Land M4 typed dict slots for the bucket-D dispatch-arg spill.~~
+  **CORRECTED 2026-06-15 (next-session investigation): bucket D is NOT a
+  typed-dict-slot win.** The crossing is `(.serialize p)` where `p :
+  Pair__int__int` (by-value) dispatches to the `Serializable [Pair]` instance
+  method `__inst_Serializable_serialize_Pair`, emitted as a **direct call** (not
+  through the dict singleton -- `fn_binding` is set, M4c Path A's `abi_bindings`
+  ARE populated `a -> (Pair int int)`). No `__spec__` is minted because the
+  instance body is **inline-C** (`struct {int64_t fst; int64_t snd;} *p =
+  (void*)(intptr_t)x; ...`): it reinterprets its arg as a carrier *pointer*, so
+  a by-value spec would make `(intptr_t)x` a hard type error. The spec gate at
+  `emit_module.c:1455-1461` only mints a by-value spec for a concrete
+  `TY_STRUCT` arg, and even the M5 `#{ByVal}` TY_APP extension forces *by value*
+  -- which this body cannot accept. Contrast `Eq [Tuple2]` (pure-Turmeric body
+  `(and (eq? (.e1 x) ...) ...)`) which DOES re-elaborate under typed params and
+  mints `__inst_Eq_eq_qu_Tuple2__spec__...(Tuple2__int__int, ...)`, eliminating
+  its crossing. So the discriminator is **inline-C-vs-Turmeric instance body**,
+  not dict-slot typing. A typed dict slot changes the indirect-dispatch path
+  (dict consumed as a runtime value), which this fixture does not exercise.
+  **Net: there are ZERO crossings in the current audit that a typed dict slot
+  alone fixes.** The genuine fixes for bucket D are: (i) rewrite
+  `Serializable [Pair]`/`[Option]` to **pure-Turmeric recursive bodies** that
+  dispatch `serialize` on `.fst`/`.snd` via their declared-but-currently-unused
+  `[(Serializable A) (Serializable B)]` constraints -- this both eliminates the
+  crossing AND fixes a latent miscompile (the inline-C body writes raw int64
+  `fst`/`snd`, so it is "correct for int-carrier elements" only and silently
+  serializes a dangling *pointer* for by-value-struct elements like
+  `Pair (Pair int int) cstr`; the wire format changes, so the fixture's
+  `rd-pair` raw-layout reader must change too); OR (ii) new "by-pointer spec for
+  inline-C carrier instance bodies" infra (pass `Pair__int__int *`, leave the
+  body's `(intptr_t)x` working) -- larger codegen change + coordinated regen.
 - (c) Producer monomorphization (bucket A) and inline-C-body monomorphization
   (bucket C) remain the genuinely large, deferred items -- and per the Vec
   slice's findings they may stay carrier-based for interpreter-parity reasons,
