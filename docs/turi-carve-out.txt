@@ -7,7 +7,7 @@
 # here that is actually handled (or names a nonexistent kind) is flagged as
 # stale.  Keep the rationale short and point at the tracking doc/report.
 #
-# See docs/upcoming/v1/turi-parity-post-v1-plan.md (Phases TI3.2, TI7) and
+# See docs/upcoming/turi-parity-post-v1-plan.md (Phases TI3.2, TI7) and
 # docs/guides/turi-parity-guide.md for the full discussion.
 
 # --- CPS transform (Risks #5 / Sequencing) -------------------------------

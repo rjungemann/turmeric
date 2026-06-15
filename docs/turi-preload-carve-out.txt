@@ -13,7 +13,7 @@
 # measuring the bucket under --interpret without changing the default path.
 #
 # Format:  <module>.tur -- <one-line rationale>
-# See docs/reported/turi-harness-flip-reconciliation.md and
+# See docs/archive/history/turi-harness-flip-reconciliation.md and
 #     docs/archive/history/turi-open-reports-prereqs.md (prereqs 2c, 3a, 3b).
 
 json.tur    -- reader-backed (-Xdata-literals/-Xjson gated); preloaded only behind the same -X flag as the compiled path, not unconditionally.

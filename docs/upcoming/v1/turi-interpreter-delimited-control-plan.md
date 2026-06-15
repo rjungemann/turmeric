@@ -87,7 +87,7 @@ clonable continuations on the current ucontext-fiber representation is possible
 (deep-copy the fiber stack on capture) but fragile -- it duplicates raw C stack
 memory and interacts badly with ASan -- so it is a fallback, not the primary
 path. See the `tur_continuation_snapshot` overlap noted in
-[turi-multishot-continuation-snapshot-miscompile.md](../../reported/turi-multishot-continuation-snapshot-miscompile.md):
+[turi-multishot-continuation-snapshot-miscompile.md](../../archive/turi-multishot-continuation-snapshot-miscompile.md):
 the same clone primitive backs that fix.
 
 ### Scope boundary: capture through a native HOF (deferred to SR)
@@ -168,7 +168,7 @@ crash fixes, dependency already met); SR follows and lifts this restriction.
   -- the follow-up (SR) that lands *after* this plan and lifts its
   "capture through a native HOF" restriction by putting native callbacks on the
   work-stack. Shares the resume protocol.
-- [docs/reported/turi-multishot-continuation-snapshot-miscompile.md](../../reported/turi-multishot-continuation-snapshot-miscompile.md)
+- [docs/archive/turi-multishot-continuation-snapshot-miscompile.md](../../archive/turi-multishot-continuation-snapshot-miscompile.md)
   -- shares the clone primitive (step 5).
 - [docs/archive/history/turi-interpret-flip-residual-plan.md](../../archive/history/turi-interpret-flip-residual-plan.md)
   -- W5 flip (landed); bucket R4 tracks these as the remaining continuation gap.
