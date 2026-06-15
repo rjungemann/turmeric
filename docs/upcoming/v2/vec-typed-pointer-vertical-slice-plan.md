@@ -228,12 +228,50 @@ crossing remains until M4).
    All gated on `is_heap`: full suite green, zero snapshot drift. Surfaced (and
    filed) a pre-existing make-struct cstr-into-carrier-field gap that does not
    affect the Vec migration.
-3. **Tag `Vec` `:heap` + rewrite producers/accessors.** Flip vec.tur: make-struct
-   now boxes, so `vec-new` becomes `(make-struct Vec :data ... :len 0 :cap 0)`;
-   `vec-len`/`vec-get`/`.len`/`.data` deref the typed pointer; `vec-push!`'s
-   realloc operates on the raw element-agnostic `data` buffer (no `A` subst).
-   Rebuild; expect wide snapshot churn -- regenerate per the Fixture STRICT RULE
-   in the same commit. Suite green.
+2b. **`set!` field-write through a `:heap` pointer. -- LANDED 2026-06-15.**
+   Completes the primitive toolkit (construct + read + WRITE). `(set! (.field p)
+   v)` on a `:heap` receiver is interior-mutable (no `^mut` required, like rc)
+   and lowers to `(p)->field = v` -- so a mutation in a callee is visible to the
+   caller (reference semantics, the matrix's correctness requirement; a by-value
+   header copy would lose it). `elab_set_field` skips the `^mut` gate for a heap
+   receiver; `emit_set_field_stmt` derefs. Gated on `is_heap`; suite green
+   (**1640/0**), zero drift. Pinned by extending `heap-make-struct-roundtrip`
+   with a `bump-int` callee that mutates the shared header (caller observes 99/8).
+   NOTE: `set!` field-write in *polymorphic* context (`set! (.field b) v` where
+   the field is a bare tyvar) is a pre-existing elab type-check gap, unrelated to
+   heap -- the pin uses a concrete-typed callee. Vec's mutators are concrete per
+   spec, so this does not block 3.
+
+   **Primitive toolkit for the typed-pointer ABI is now complete:** construct
+   (make-struct boxes), read (`(p)->field`), write (`set!` derefs), mutation
+   visible across calls (shared pointer). The remaining work is the stdlib flip.
+
+3. **Tag `Vec` `:heap` + rewrite producers/accessors (the stdlib flip).** Now
+   fully expressible in pure Turmeric (no inline-C-body monomorphization):
+   - `vec-new [A] [] : (Vec A)` -> `(make-struct Vec :data <null-buf> :len 0 :cap 0)`
+     (make-struct boxes to `Vec__A *`).
+   - `vec-len`/`vec-get` -> `(.len v)` / raw-buffer read over `(.data v)`
+     (the existing `vec-data-get-checked__` element-agnostic helper).
+   - `vec-set!`/`vec-pop!`/`vec-push!` -> `set!` on `.len`/`.cap`/`.data` plus
+     element-agnostic raw-buffer inline-C helpers (`vec-buf-grow__`,
+     `vec-buf-set__`) over `ptr<void>`. The realloc never needs `A`.
+   - `vec-of` macro is unchanged (it expands to `vec-new` + `vec-push!`).
+
+   **Not yet started -- two hard gates that must be satisfied in the same change:**
+   - **Coordinated snapshot regen.** Tagging Vec `:heap` changes `(Vec A)`'s C
+     name everywhere -> a large fraction of the ~1640 `expected.c` regenerate.
+     Per the Fixture STRICT RULE this is one coordinated commit; coordinate
+     timing with in-flight Vec-touching branches.
+   - **Spice (ecs/json) validation.** The plan's validation harness requires the
+     `../turmeric-spices/spices/{ecs,json}` roundtrip for any Vec-touching
+     change (ecs is the canonical heavy Vec user). **The sibling checkout must be
+     present** (`git clone https://github.com/rjungemann/turmeric-spices/
+     ../turmeric-spices`); it was absent in the session that built the toolkit,
+     which is why 3 was deferred rather than rushed.
+   - Interpreter parity: all core vec fns have native overrides in `src/main.c`
+     (`native_vec_*`), which win over the Turmeric source bodies, so the
+     tree-walker is unaffected by the source rewrite -- but re-audit the 10
+     existing `requires.compiled` vec fixtures after the flip.
 4. **C-3 + re-audit.** Confirm `TUR_M3_AUDIT=1` shows `Vec int`
    `carrier->concrete` crossings at 0 (modulo the M4 dict-slot residual).
    Confirm the by-value mutation hazard is gone (a `vec-push!` through a passed

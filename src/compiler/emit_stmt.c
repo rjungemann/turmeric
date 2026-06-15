@@ -52,6 +52,11 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (e->as.set_field_.receiver_is_rc) {
         buf_printf(&lhs, "((%s *)((RcControlBlock *)(%s))->value)->%s",
                    def->name, rv, mfn);
+    } else if (type_is_heap_struct(emit_resolve_type(ctx,
+                   e->as.set_field_.receiver->type))) {
+        /* end-to-end-monomorphization: a :heap receiver is a typed pointer;
+         * the field write derefs through it (shared heap header). */
+        buf_printf(&lhs, "(%s)->%s", rv, mfn);
     } else {
         buf_printf(&lhs, "(%s).%s", rv, mfn);
     }
