@@ -1,0 +1,30 @@
+;; end-to-end-monomorphization (Vec typed-pointer slice): a :heap-tagged struct
+;; used through GENERIC [A] functions.  box-mk/box-val/box-bump are polymorphic
+;; over the element type; called with A=int they monomorphize to per-element
+;; specs (Box__int *), so make-struct boxes the header to a typed pointer, field
+;; reads deref it ((p)->field), and (set! (.tag b) ...) writes through the shared
+;; heap header -- a mutation in a callee is visible to the caller (reference
+;; semantics, not a by-value header copy).  Complements heap-make-struct-roundtrip
+;; (which constructs via a direct `(:: (make-struct Box ...) (Box int))`
+;; ascription) by exercising the same heap ABI reached through generic dispatch.
+(defstruct Box :heap [A] (val :A) (tag :int))
+
+(defn box-mk [A] [v : A] : (Box A)
+  (make-struct Box :val v :tag 0))
+
+(defn box-val [A] [b : (Box A)] : A
+  (.val b))
+
+(defn box-bump [A] [b : (Box A)] : void
+  (set! (.tag b) (+ (.tag b) 1)))
+
+(defn box-tag [A] [b : (Box A)] : int
+  (.tag b))
+
+(defn main [] : int
+  (let [bi (box-mk 42)]
+    (box-bump bi)
+    (box-bump bi)
+    (println (box-val bi))   ; 42
+    (println (box-tag bi)))  ; 2 -- mutations visible
+  0)

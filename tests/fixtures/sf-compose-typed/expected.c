@@ -2638,13 +2638,6 @@ static bool map_hyeq_hyraw_qu(int64_t, int64_t, int64_t);
 static bool map_hyeq_hyraw_hyk_qu(int64_t, int64_t, int64_t, int64_t);
 static bool map_hyeq_hydynamic(int64_t, int64_t, int64_t);
 static void tur_hymap_hyhomog_un_un(int64_t, int64_t);
-static int64_t vec_hynew();
-static int64_t vec_hylen(int64_t);
-static int64_t vec_hyget(int64_t, int64_t);
-static void vec_hypush_ex(int64_t, int64_t);
-static int64_t vec_hypop_ex(int64_t);
-static void vec_hyset_ex(int64_t, int64_t, int64_t);
-static void vec_hyfree(int64_t);
 static void tur_hyvec_hyhomog_un_un(int64_t, int64_t);
 static bool vec_hyeq_qu(int64_t, int64_t, int64_t);
 static int64_t vec_hylen_hybyval(int64_t);
@@ -4063,66 +4056,6 @@ static bool map_hyeq_hydynamic(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 static void tur_hymap_hyhomog_un_un(int64_t a, int64_t b) {
         (void)a; (void)b; 
-}
-
-static int64_t vec_hynew() {
-        struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-  v->data = NULL;
-  v->len = 0;
-  v->cap = 0;
-  return (int64_t)(intptr_t)v;
-  
-}
-
-static int64_t vec_hylen(int64_t v) {
-        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  return (int)vec->len;
-  
-}
-
-static int64_t vec_hyget(int64_t v, int64_t i) {
-        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
-  fprintf(stderr, "tvec index out of bounds\n");
-  exit(1);
-  return 0;
-  
-}
-
-static void vec_hypush_ex(int64_t v, int64_t val) {
-        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (vec->len >= vec->cap) {
-    size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
-    int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
-    for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
-    free(vec->data);
-    vec->data = new_data;
-    vec->cap = new_cap;
-  }
-  vec->data[vec->len++] = val;
-  
-}
-
-static int64_t vec_hypop_ex(int64_t v) {
-        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (vec->len == 0) return 0;
-  return (int64_t)vec->data[--vec->len];
-  
-}
-
-static void vec_hyset_ex(int64_t v, int64_t i, int64_t val) {
-        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
-  fprintf(stderr, "vec-set! index out of bounds\n");
-  exit(1);
-  
-}
-
-static void vec_hyfree(int64_t v) {
-        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (vec->data) free(vec->data);
-  free(vec);
-  
 }
 
 static void tur_hyvec_hyhomog_un_un(int64_t a, int64_t b) {

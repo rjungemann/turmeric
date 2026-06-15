@@ -9,7 +9,7 @@
 ;;; Vec -- parameterized growable array with element type A.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Vec [A] (data :ptr<void>) (len :int) (cap :int))
+(defstruct Vec :heap [A] (data :ptr<void>) (len :int) (cap :int))
 ;;; vec-new -- allocate a new empty Vec[A].
 ;;;
 ;;; Returns:
@@ -20,11 +20,44 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-new []
+;; --- Producer/accessor ABI (end-to-end-monomorphization, Vec typed-pointer
+;; slice) ---
+;;
+;; `Vec` is :heap, so `(Vec A)` lowers to a typed pointer `Vec__A *` to a
+;; heap-allocated `{ data, len, cap }` header in every monomorphic position
+;; (spec params, Eq[Vec] dispatch).  The producers below stay INLINE-C
+;; *carrier bases*: their bodies take/return the int64 carrier (which, for a
+;; :heap value, IS the header pointer) and operate on the layout-generic
+;; anonymous `{ int64_t *data; int64_t len; int64_t cap; }` struct.  Two
+;; reasons this is the right shape rather than pure-Turmeric make-struct/
+;; field-access bodies:
+;;
+;;   1. The interpreter (--interpret) routes a call to a native override ONLY
+;;      when the callee's body is inline-C (eval.c: the native-override-for-
+;;      inline-C-functions path).  The native_vec_* builtins (src/main.c)
+;;      implement Vec over the interpreter's own value model, so keeping these
+;;      bodies inline-C preserves interpreter parity for free.  A pure-Turmeric
+;;      body would bypass the native and run source that the tree-walker cannot
+;;      execute.
+;;   2. The element buffer (`data`) is int64-carried for every A, and a
+;;      return-typed-A body would mint an A-monomorphized spec (e.g. returning
+;;      `double` for A=float) whose carrier read numerically converts the float
+;;      bits instead of bit-reinterpreting them.  Inline-C bodies are not
+;;      return-specialized, so the carrier base returns the raw int64 and the
+;;      call-site `(:: (vec-get v i) :float)` ascription does the correct union
+;;      reinterpret.
+;;
+;; At concrete call sites the typed pointer reaches these int64-carrier bases
+;; through the C-3 carrier reinterpret-cast (emit_carrier_bridge), so
+;; `(void*)(intptr_t)v` is always valid.  Mutation is visible to all holders
+;; because the handle is a shared pointer, never a by-value header copy.
+
+(defn vec-new [A]
+  []
   #{}
-  : int
+  : (Vec A)
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
   v->cap = 0;
@@ -43,11 +76,12 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-len [v : int]
+(defn vec-len [A]
+  [v : (Vec A)]
   #{}
   : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   ```)
 ;;; vec-get -- return the element at index i (bounds-checked).
@@ -65,12 +99,12 @@
 ;;; Since: Phase TC1
 
 (defn vec-get [A]
-  [v :int i :int]
+  [v : (Vec A) i :int]
   #{}
   :A
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < (size_t)vec->len) return (int64_t)vec->data[i];
   fprintf(stderr, "tvec index out of bounds\n");
   exit(1);
   return 0;
@@ -87,20 +121,20 @@
 ;;; Since: Phase TC1
 
 (defn vec-push! [A]
-  [v :int val :A]
+  [v : (Vec A) val :A]
   #{}
   :nil
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len >= vec->cap) {
-    size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
     int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
-    for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
+    for (int64_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
     free(vec->data);
     vec->data = new_data;
     vec->cap = new_cap;
   }
-  vec->data[vec->len++] = val;
+  vec->data[vec->len++] = (int64_t)val;
   ```)
 ;;; vec-pop! -- remove and return the last element of a Vec[A].
 ;;;
@@ -116,11 +150,11 @@
 ;;; Since: Phase TC1
 
 (defn vec-pop! [A]
-  [v :int]
+  [v : (Vec A)]
   #{}
   :A
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
   ```)
@@ -137,12 +171,12 @@
 ;;; Since: Phase TC1
 
 (defn vec-set! [A]
-  [v :int i :int val :A]
+  [v : (Vec A) i :int val :A]
   #{}
   :void
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < (size_t)vec->len) { vec->data[i] = (int64_t)val; return; }
   fprintf(stderr, "vec-set! index out of bounds\n");
   exit(1);
   ```)
@@ -156,11 +190,12 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-free [v : int]
+(defn vec-free [A]
+  [v : (Vec A)]
   #{}
   : void
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->data) free(vec->data);
   free(vec);
   ```)

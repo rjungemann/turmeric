@@ -8062,6 +8062,72 @@ static TuriValue native_slice_free(TuriEnv *env, TuriValue *a, uint32_t n, void 
     return turi_nil();
 }
 
+/* Interpreter vec element-tag side table (end-to-end-monomorphization, Vec
+ * typed-pointer slice).
+ *
+ * A native vec stores raw int64 carrier cells in its `data` buffer, so the
+ * value tag (TURI_FLOAT / TURI_CSTR / TURI_INT) is lost on push.  Before the
+ * Vec typed-pointer migration, `vec-get`'s tyvar return type made the
+ * `(:: (vec-get v i) :float)` read-back an EX_ASCRIBE that re-tagged the
+ * carrier; now `vec-get` returns the concrete element type, so the elaborator
+ * lowers that read to a *transparent* EX_REINTERPRET (tag-preserving by
+ * design -- see eval.c) and the re-tag is lost.  Vecs are homogeneous
+ * (tur-vec-homog__ enforces a single element type), so we record the element
+ * tag once per vec-header pointer here and re-tag on get/pop.  Vecs built by
+ * other natives (schema/json int64 buffers) are absent from the table and
+ * default to TURI_INT, which is correct -- those only ever hold int carriers.
+ * The table is process-lifetime (the interpreter never frees it); entries for
+ * freed vecs are harmless (a later vec may reuse the address and overwrite the
+ * stale tag on its first push). */
+typedef struct { void *key; uint8_t tag; } TurVecTagEnt;
+static TurVecTagEnt *g_vec_tag_tab = NULL;
+static size_t g_vec_tag_cap = 0;
+static size_t g_vec_tag_n   = 0;
+
+static size_t vec_tag_probe(void *key) {
+    size_t mask = g_vec_tag_cap - 1;
+    size_t h = ((uintptr_t)key >> 4) & mask;
+    while (g_vec_tag_tab[h].key && g_vec_tag_tab[h].key != key)
+        h = (h + 1) & mask;
+    return h;
+}
+static void vec_tag_set(void *key, uint8_t tag) {
+    if (!key) return;
+    if (g_vec_tag_n * 2 >= g_vec_tag_cap) {
+        size_t old_cap = g_vec_tag_cap;
+        TurVecTagEnt *old = g_vec_tag_tab;
+        g_vec_tag_cap = old_cap ? old_cap * 2 : 64;
+        g_vec_tag_tab = (TurVecTagEnt *)calloc(g_vec_tag_cap, sizeof(TurVecTagEnt));
+        g_vec_tag_n = 0;
+        for (size_t i = 0; i < old_cap; i++)
+            if (old[i].key) {
+                g_vec_tag_tab[vec_tag_probe(old[i].key)] = old[i];
+                g_vec_tag_n++;
+            }
+        free(old);
+    }
+    size_t h = vec_tag_probe(key);
+    if (!g_vec_tag_tab[h].key) g_vec_tag_n++;
+    g_vec_tag_tab[h].key = key;
+    g_vec_tag_tab[h].tag = tag;
+}
+static uint8_t vec_tag_get(void *key) {
+    if (!key || g_vec_tag_cap == 0) return (uint8_t)TURI_INT;
+    size_t h = vec_tag_probe(key);
+    return g_vec_tag_tab[h].key ? g_vec_tag_tab[h].tag : (uint8_t)TURI_INT;
+}
+/* Re-tag a raw int64 carrier read from a vec cell according to the vec's
+ * recorded homogeneous element tag, so float/cstr elements round-trip with
+ * their value tag under --interpret (matching the compiled bit-reinterpret). */
+static TuriValue vec_retag_cell(void *vec_key, int64_t cell) {
+    switch ((int)vec_tag_get(vec_key)) {
+        case TURI_FLOAT: { union { int64_t i; double d; } u; u.i = cell; return turi_float(u.d); }
+        case TURI_CSTR:  return turi_cstr((const char *)(intptr_t)cell);
+        case TURI_BOOL:  return turi_bool(cell != 0);
+        default:         return turi_int(cell);
+    }
+}
+
 /* Vec layout: { int64_t *data; size_t len; size_t cap; }
  * Stored as int64_t[3]: [0]=data ptr (as int64_t), [1]=len, [2]=cap */
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -8093,7 +8159,7 @@ static TuriValue native_vec_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
         _exit(1);
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
-    return turi_int(data[i]);
+    return vec_retag_cell(v, data[i]);
 }
 static TuriValue native_vec_push(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -8115,6 +8181,9 @@ static TuriValue native_vec_push(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     }
     data[len] = a[1].as_int;
     v[1] = len + 1;
+    /* Record the homogeneous element tag so vec-get/pop re-tag float/cstr/bool
+     * carriers (the buffer only holds raw int64 cells). */
+    if (a[1].tag != TURI_INT) vec_tag_set(v, (uint8_t)a[1].tag);
     return turi_nil();
 }
 static TuriValue native_vec_pop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -8127,7 +8196,7 @@ static TuriValue native_vec_pop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
     v[1]--;
-    return turi_int(data[v[1]]);
+    return vec_retag_cell(v, data[v[1]]);
 }
 static TuriValue native_vec_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -8140,6 +8209,7 @@ static TuriValue native_vec_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
     data[i] = a[2].as_int;
+    if (a[2].tag != TURI_INT) vec_tag_set(v, (uint8_t)a[2].tag);
     return turi_nil();
 }
 static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {

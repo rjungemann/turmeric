@@ -535,7 +535,7 @@
 ;;;
 ;;; Since: Phase SC7
 
-(defn schema/alt [a : int b : int] : int (schema/union (vec-of a b)))
+(defn schema/alt [a : int b : int] : int (schema/union (:: (vec-of a b) :int)))
 ;;; schema/ap-fat -- closure-aware Validation applicative (kind 16).
 ;;;
 ;;; Like schema/ap, but applies the decoded function arm to the decoded

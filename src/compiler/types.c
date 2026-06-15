@@ -3651,6 +3651,11 @@ bool type_is_subtype(Type sub, Type super_) {
 /* Phase D: returns true when t is a struct type whose estimated sizeof exceeds 16
  * bytes, meaning it should be passed as const T* rather than by value. */
 bool type_struct_pass_by_ptr(Type t) {
+    /* end-to-end-monomorphization: a :heap type already lowers to a typed
+     * pointer `T__A *`, so it is passed by value (the pointer itself), never
+     * pass-by-pointer-wrapped -- wrapping would make the param a double
+     * pointer `T__A **` and every field access read the wrong memory. */
+    if (type_is_heap_struct(t)) return false;
     switch (t.kind) {
         case TY_STRUCT: {
             StructDef *def = t.as.struct_.def;

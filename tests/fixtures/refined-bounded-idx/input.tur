@@ -14,7 +14,7 @@
   ```)
 
 (defn main [] : int
-  (let [v (vec-new)]
+  (let [v (:: (vec-new) (Vec int))]
     (vec-push! v 11)
     (vec-push! v 22)
     (vec-push! v 33)
