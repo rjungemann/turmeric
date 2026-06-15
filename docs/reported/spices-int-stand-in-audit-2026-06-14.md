@@ -178,8 +178,20 @@ Note `tls-wrap-fd` also takes `fd : int` -- that one really is an fd.
 
 ### Smaller spices (one handle each)
 
-- `valkey/client.tur:50,101`, `valkey/cmd.tur:51` -- `redisContext*`
-- `rtaudio/core.tur:82` -- `RtAudio` C++ instance
+- ~~`valkey/client.tur:50,101`, `valkey/cmd.tur:51` -- `redisContext*`~~
+  **fixed in `tur-valkey` v0.2.0**: `defopaque Client` exported from
+  `valkey/client.tur`; `client-close`, `client-ping`, all `cmd-*`, and all
+  `pubsub-*` (subscribe/unsubscribe/publish/recv) parameters now take
+  `c : Client`. `redisReply*` (`r : int` in `valkey/reply.tur`) and the
+  `__msg*` push handle (`m : int` in `valkey/pubsub.tur`) remain as
+  follow-up work.
+- ~~`rtaudio/core.tur:82` -- `RtAudio` C++ instance~~
+  **fixed in `tur-rtaudio` v0.2.0**: `defopaque Audio` exported from
+  `rtaudio/core.tur`; `audio-free`, `audio-api`, and every `device-*` /
+  `stream-*` function that took the backend handle now takes
+  `a : Audio`. The `RtAudioDeviceInfo*` accessor handle (`di : int` in
+  `rtaudio/devices.tur`) and the audio callback (`callback : int` in
+  `rtaudio/stream.tur:62`, an S1-class hole) remain as follow-up work.
 - ~~`regex/regex.tur:56,95` -- compiled regex~~ **fixed in `tur-regex` v0.2.0**:
   `defopaque Regex` + `defopaque Match`; all public parameters retyped.
   Result-typed returns also landed (`(Result Regex cstr)`, etc.) once the
@@ -260,7 +272,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | raygui | clean |
 | **raylib** | **S2: 3 handle types** |
 | ~~regex~~ | ~~S2: 1 handle type~~ -- fixed in `tur-regex` v0.2.0 |
-| **rtaudio** | **S2: 1 handle type** |
+| ~~rtaudio~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Audio`); `DeviceInfo` handle + callback remain |
 | **rtmidi** | **S1 + S2: 2 handles + 1 callback** |
 | scscm | clean |
 | sdf-raylib | clean |
@@ -271,13 +283,13 @@ Middleware opaques exist, these should become `list<Route>` and
 | tidal | clean |
 | **tls** | **S2: 2 handle types** |
 | **tourist** | **S1 + S2 + S3 + S4 (worst offender)** |
-| **valkey** | **S2: 1 handle type (client)** |
+| ~~valkey~~ | ~~S2: 1 handle type (client)~~ -- fixed (`defopaque Client`); `redisReply*` and `__msg*` remain |
 | watch | clean |
 | ~~wav~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Wav`) |
 | zlib | clean |
 
 19 spices need work, 16 are clean. As of 2026-06-14: regex, sqlite, png, wav,
-and postgres are fixed (5 done); **14 remain**.
+postgres, valkey, and rtaudio are fixed (7 done); **12 remain**.
 
 ---
 
