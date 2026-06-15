@@ -242,6 +242,17 @@ Expr *elab_defrec(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
+/* c-fn-ptr-element-and-size-precision-gap fix: map a pointer-width integer type
+ * name to its precise FFI C spelling (size_t / ptrdiff_t).  Returns
+ * CNUM_DEFAULT for every other name.  Kept in sync with the usize/isize
+ * carrier entries in typekind_from_symbol -- the carrier (TY_UINT64 / TY_INT64)
+ * comes from there; this only adds the precise spelling hint. */
+static uint8_t c_num_spelling_for_name(const char *name) {
+    if (strcmp(name, "usize") == 0 || strcmp(name, "size")  == 0) return CNUM_SIZE_T;
+    if (strcmp(name, "isize") == 0 || strcmp(name, "ssize") == 0) return CNUM_PTRDIFF_T;
+    return CNUM_DEFAULT;
+}
+
 /* ptr-generic-parameterised-type: parse a "ptr<T>" type-name string into a
  * typed raw pointer Type (kind TY_PTR_VOID with a non-NULL pointee).  The
  * pointee spelling carries no leading colon -- e.g. "ptr<float>",
@@ -264,8 +275,28 @@ Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     if (name[len - 1] != '>') return NULL;
     const char *inner = name + 4;
     uint32_t inner_len = len - 5;            /* between "ptr<" and the final '>' */
-    /* Legacy untyped pointer: defer to the existing TY_PTR_VOID handling. */
-    if (inner_len == 4 && memcmp(inner, "void", 4) == 0) return NULL;
+    /* c-fn-ptr-element-and-size-precision-gap fix: a `const-` prefix on the
+     * pointee marks a const-qualified pointer (`ptr<const-u8>` -> `const u8 *`).
+     * The space-free `const-` spelling is used because `<` / `>` are
+     * symbol-continuation chars but ':' and ' ' are not, so the whole
+     * `ptr<...>` must tokenize as one keyword/symbol. */
+    bool is_const = false;
+    if (inner_len > 6 && memcmp(inner, "const-", 6) == 0) {
+        is_const = true;
+        inner += 6;
+        inner_len -= 6;
+    }
+    /* Legacy untyped pointer: defer to the existing TY_PTR_VOID handling --
+     * except `ptr<const-void>`, which needs a const-qualified void* and so is
+     * built here (the bare ptr<void> path cannot carry the const flag). */
+    if (inner_len == 4 && memcmp(inner, "void", 4) == 0) {
+        if (!is_const) return NULL;
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *t = type_simple(TY_PTR_VOID, CK_COPY);
+        t->as.ptr.inner = NULL;
+        t->as.ptr.is_const = true;
+        return t;
+    }
     if (inner_len == 0) {
         diag_emit(DIAG_ERROR, span, "empty pointee type in 'ptr<...>'");
         return NULL;
@@ -284,6 +315,7 @@ Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     if (!pointee) return NULL;
     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
     *t = type_ptr(pointee);
+    t->as.ptr.is_const = is_const;
     return t;
 }
 
@@ -454,6 +486,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (k != TY_UNKNOWN) {
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_from_kind(k);
+                t->c_num_spelling = c_num_spelling_for_name(sym->name);
                 return t;
             }
         }
@@ -1115,7 +1148,16 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                  * typedef lowering can emit `T *` instead of `void *`.  The
                  * non-cfnptr (closure) path keeps its lossy TypeKind lowering
                  * to avoid snapshot churn on unrelated typedefs. */
-                if (is_cfnptr && at && at->kind == TY_PTR_VOID && at->as.ptr.inner) {
+                if (is_cfnptr && at && at->kind == TY_PTR_VOID &&
+                    (at->as.ptr.inner || at->as.ptr.is_const)) {
+                    any_compound_arg = true;
+                }
+                /* c-fn-ptr-element-and-size-precision-gap fix (residual): a
+                 * size_t / ptrdiff_t-spelled integer carrier (`:usize` /
+                 * `:isize`) must keep its full type so the typedef lowering
+                 * emits `size_t` / `ptrdiff_t` instead of the lossy int64
+                 * carrier.  Only matters for cfnptrs (FFI signatures). */
+                if (is_cfnptr && at && at->c_num_spelling != CNUM_DEFAULT) {
                     any_compound_arg = true;
                 }
             }
@@ -1177,6 +1219,17 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                  ret_t->kind == TY_FN || ret_t->kind == TY_APP ||
                  ret_t->kind == TY_ADT ||
                  (ret_t->kind == TY_STRUCT && ret_t->as.struct_.def != NULL))) {
+                fn_t->as.fn.result_full_type = ret_t;
+            }
+            /* c-fn-ptr-element-and-size-precision-gap fix: a cfnptr result that
+             * is size_t/ptrdiff_t-spelled, an element-typed pointer, or a
+             * const-qualified pointer must keep its full type so the typedef
+             * return slot lowers precisely (e.g. `size_t (*)(...)` or
+             * `const unsigned char *(*)(...)`) instead of the lossy carrier. */
+            if (is_cfnptr && ret_t &&
+                (ret_t->c_num_spelling != CNUM_DEFAULT ||
+                 (ret_t->kind == TY_PTR_VOID &&
+                  (ret_t->as.ptr.inner || ret_t->as.ptr.is_const)))) {
                 fn_t->as.fn.result_full_type = ret_t;
             }
             if (any_compound_arg) {
@@ -1884,6 +1937,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         if (k != TY_UNKNOWN) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_from_kind(k);
+            t->c_num_spelling = c_num_spelling_for_name(sym->name);
             return t;
         }
         /* Phase TA1: check defalias table before struct/ADT fallback */

@@ -348,6 +348,10 @@ typedef struct RegisteredFnPtrTypedef {
      * (typical for non-cfnptr fn-pointer typedefs and for primitives)
      * fall back to type_from_kind(arg_kinds[i]). */
     Type    *arg_full_types[MAX_FN_ARITY];
+    /* c-fn-ptr-element-and-size-precision-gap fix: per-cfnptr full result Type
+     * (NULL otherwise), so a size_t / element-typed / const-qualified return
+     * lowers precisely instead of via type_from_kind(result_kind). */
+    Type    *result_full_type;
     bool     emitted;
 } RegisteredFnPtrTypedef;
 
@@ -830,7 +834,13 @@ static bool fn_type_is_concrete_for_ptr(const Type *t) {
 static char *fn_ptr_typedef_name(const Type *fn_type) {
     Buf name; buf_init(&name);
     buf_puts(&name, "tur_fnptr_");
-    const char *ret_c = type_c_name(type_from_kind(fn_type->as.fn.result_kind));
+    /* c-fn-ptr-element-and-size-precision-gap fix: mangle the precise result
+     * type when a cfnptr preserved one (size_t / element-ptr / const-ptr), so
+     * two cfnptrs that share a carrier result kind but differ on the precise
+     * return type get distinct typedefs. */
+    const char *ret_c = (fn_type->as.fn.cfnptr && fn_type->as.fn.result_full_type)
+        ? type_c_name(*fn_type->as.fn.result_full_type)
+        : type_c_name(type_from_kind(fn_type->as.fn.result_kind));
     for (const char *p = ret_c; *p; p++)
         buf_putc(&name, isalnum((unsigned char)*p) ? *p : '_');
     bool use_full = fn_type->as.fn.cfnptr && fn_type->as.fn.arg_full_types != NULL;
@@ -890,6 +900,10 @@ const char *register_fn_ptr_typedef(const Type *fn_type) {
         for (uint8_t i = 0; i < fn_type->as.fn.arity; i++)
             entry->arg_full_types[i] = fn_type->as.fn.arg_full_types[i];
     }
+    /* c-fn-ptr-element-and-size-precision-gap fix: snapshot the precise result
+     * type (size_t / element-ptr / const-ptr) for cfnptrs, NULL otherwise. */
+    entry->result_full_type = (fn_type->as.fn.cfnptr)
+        ? fn_type->as.fn.result_full_type : NULL;
 
     return entry->typedef_name;
 }
@@ -2171,6 +2185,12 @@ static void type_name_buf(Buf *b, Type t) {
 }
 
 const char *type_c_name(Type t) {
+    /* c-fn-ptr-element-and-size-precision-gap fix: a precise FFI spelling on an
+     * integer carrier overrides the by-TypeKind name.  Only set on full Types
+     * preserved for cfnptr signatures (CNUM_DEFAULT everywhere else), so this
+     * never perturbs ordinary carrier lowering. */
+    if (t.c_num_spelling == CNUM_SIZE_T)    return "size_t";
+    if (t.c_num_spelling == CNUM_PTRDIFF_T) return "ptrdiff_t";
     switch (t.kind) {
         case TY_UNKNOWN: return "/*unknown*/ void";
         case TY_NIL:     return "void";
@@ -2194,6 +2214,10 @@ const char *type_c_name(Type t) {
             if (t.as.ptr.inner) {
                 const char *inner_c = type_c_name(*t.as.ptr.inner);
                 Buf b; buf_init(&b);
+                /* c-fn-ptr-element-and-size-precision-gap fix: `ptr<const-T>`
+                 * lowers to `const T *` so a typed c-fn slot matches a C
+                 * callback's const-qualified pointer parameter. */
+                if (t.as.ptr.is_const) buf_puts(&b, "const ");
                 buf_puts(&b, inner_c);
                 buf_puts(&b, " *");
                 buf_putc(&b, '\0');
@@ -2201,6 +2225,9 @@ const char *type_c_name(Type t) {
                 buf_free(&b);
                 return r;
             }
+            /* ptr<const-void> -- the untyped-pointer spelling with a const
+             * qualifier (e.g. a `const void *userData` C-callback slot). */
+            if (t.as.ptr.is_const) return "const void *";
             return "void *";
         case TY_NEVER:   return "void";  /* never type has no values, use void */
         case TY_FN: {
@@ -3004,12 +3031,40 @@ void type_codegen_reset_fn_ptr_typedefs(void) {
  * lossy carrier from type_from_kind(arg_kinds[j]).  Lets a (c-fn
  * [ptr<u8>] void) lower to `void (*)(uint8_t *)` instead of
  * `void (*)(void *)`. */
+/* c-fn-ptr-element-and-size-precision-gap fix: true if a Type lowers to a C
+ * name declared in <stddef.h> (size_t / ptrdiff_t) -- directly or through a
+ * pointee. */
+static bool type_needs_stddef(const Type *t) {
+    if (!t) return false;
+    if (t->c_num_spelling == CNUM_SIZE_T || t->c_num_spelling == CNUM_PTRDIFF_T)
+        return true;
+    if (t->kind == TY_PTR_VOID && t->as.ptr.inner)
+        return type_needs_stddef(t->as.ptr.inner);
+    return false;
+}
+
 void type_codegen_emit_fn_ptr_typedefs(Buf *out) {
+    /* Emit <stddef.h> once if any not-yet-emitted typedef references size_t /
+     * ptrdiff_t.  These spellings only appear with the new :usize / :isize
+     * cfnptr surface, so this never fires for pre-existing fixtures -- no
+     * snapshot churn -- and it keeps the size types self-contained instead of
+     * adding the header to the shared preamble (which would churn every
+     * snapshot).  A mid-file include is legal at file scope and idempotent. */
+    for (uint32_t i = 0; i < g_n_fn_ptr_typedefs; i++) {
+        RegisteredFnPtrTypedef *entry = &g_fn_ptr_typedefs[i];
+        if (entry->emitted) continue;
+        bool needs = type_needs_stddef(entry->result_full_type);
+        for (uint8_t j = 0; !needs && j < entry->arity; j++)
+            needs = type_needs_stddef(entry->arg_full_types[j]);
+        if (needs) { buf_puts(out, "#include <stddef.h>\n"); break; }
+    }
     for (uint32_t i = 0; i < g_n_fn_ptr_typedefs; i++) {
         RegisteredFnPtrTypedef *entry = &g_fn_ptr_typedefs[i];
         if (entry->emitted) continue;
         entry->emitted = true;
-        const char *ret_c = type_c_name(type_from_kind(entry->result_kind));
+        const char *ret_c = entry->result_full_type
+            ? type_c_name(*entry->result_full_type)
+            : type_c_name(type_from_kind(entry->result_kind));
         buf_printf(out, "typedef %s (*%s)(", ret_c, entry->typedef_name);
         if (entry->arity == 0) {
             buf_puts(out, "void");
