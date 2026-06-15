@@ -615,6 +615,20 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
+        /* SZ8 projection-size recovery: retain a type-annotation Form so a
+         * downstream call passing `b` (or a field projection of it) can recover
+         * its static size index.  Prefer an explicit binding annotation; else
+         * inherit the initializer call's declared return-type Form (e.g.
+         * `a (mk-2)` where `mk-2 : (SizedBuf (Static 2))`). */
+        if (type_ann_form) {
+            b->decl_type_form = type_ann_form;
+        } else if (init && init->kind == EX_CALL && init->as.call_.fn_binding) {
+            const Binding *callee = init->as.call_.fn_binding;
+            const Type *cft = &callee->type;
+            if (callee->closure_fn_binding) cft = &callee->closure_fn_binding->type;
+            if (cft && cft->kind == TY_FN && cft->as.fn.result_type_form)
+                b->decl_type_form = cft->as.fn.result_type_form;
+        }
         /* TY4: borrow-escape at a let binding.  If the init is a borrow of a
          * referent that lives in a deeper (shorter-lived) scope than this
          * binding, the borrow would outlive the value it points to. */

@@ -1263,6 +1263,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * call sites can re-extract the size-index template. */
             if (n_params > 0 && n_params <= MAX_FN_ARITY)
                 param_type_forms_buf[n_params - 1] = type_form;
+            /* SZ8 projection-size recovery: also stash the declared annotation
+             * Form on the parameter binding itself, so a callee whose argument
+             * is this parameter (or a field projection of it) can recover its
+             * static size index at the call site. */
+            params[n_params - 1]->decl_type_form = type_form;
             /* Phase CCL (fn-first-class-application): a spaced `: fn` annotation
              * (the bare `fn` keyword/symbol) is the first-class poly-closure
              * carrier -- mirror the fused `:fn` keyword handling above. */

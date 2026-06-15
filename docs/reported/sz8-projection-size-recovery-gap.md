@@ -3,7 +3,7 @@ title: SZ8 cross-parameter unification does not fire on EX_GET_FIELD args (follo
 category: Expressiveness hole / elaborator gap
 severity: Medium. Type substitution through `defstruct` projection works (P2 of ecs-e2c is structurally answered), but SZ8's static-mismatch rejection does not reach struct field projections. Blocks the final payoff of P2 for ECS E2c -- the "bounded-capacity world" only fully rejects mismatched literals when projections carry inferred size indices.
 description: After the SZ8 non-GADT fix (sz8-opaque-phantom-size-not-load-bearing.md), cross-parameter size unification covers two arg kinds: GADT constructor calls (existing) and plain function calls whose callee declares a return-type Size form (newly added via TY_FN.result_type_form). It does not cover struct field projections: `(zip (.pos w) (.vel w))` where `w : (World (Static 3) A B)` type-checks even when zip's shared `n` should reject mismatched literal indices. The root cause is the placeholder representation used for size literals in type-app slots -- a Size literal lowers to a plain TY_INT placeholder, so the original `(Static k)` Form is not recoverable from the projected field's Type. To close the gap, the projection result needs to carry the receiver's size form (either by attaching the Form to the TY_APP node and threading it through struct_field_instantiate_type, or by walking the receiver Expr's binding back to its declared type-annotation Form at the unifier site).
-status: OPEN. Filed 2026-06-12 as a P2 follow-up. Recommended next step: extend the SizeTerm-recovery path in `sz_cross_param_unify` (src/compiler/elab_call.c) to handle EX_GET_FIELD args by walking through the struct value's TY_APP chain (or binding-annotation Form) to recover the projected field's size index.
+status: RESOLVED 2026-06-15. Filed 2026-06-12 as a P2 follow-up. Fixed by retaining the declared type-annotation Form on `Binding` (`decl_type_form`) for function parameters and let bindings, and extending the SizeTerm-recovery path in `sz_cross_param_unify` (src/compiler/elab_call.c) to recover size indices from EX_VAR and EX_GET_FIELD arguments via that Form. Both probes now raise TUR-E0260; regression fixtures `tests/fixtures/errors/sized-struct-field-share-reject` and `tests/fixtures/errors/sized-buf-let-bound-cross-reject` cover the struct-projection and let-bound cases.
 ---
 
 # SZ8 cross-parameter unification does not fire on struct field projections
@@ -113,15 +113,44 @@ Two viable paths:
 Option 1 is local to the type system; option 2 keeps the type system
 simpler but adds Form-tracking to Binding.
 
+## Resolution (2026-06-15)
+
+Implemented a variant of option 2 ("walk back from the receiver
+binding") that keeps the type system untouched and tracks Forms on
+`Binding`:
+
+1. **`Binding.decl_type_form`** (`src/compiler/expr.h`) -- a retained
+   `const Form *` for a binding's declared type. Populated for function
+   parameters (`elab_fns.c`, alongside `param_type_forms`) and for let
+   bindings (`elab_forms.c`): the explicit `: T` annotation when present,
+   otherwise the initializer call's declared return-type Form (so
+   `(let [a (mk-2)] ...)` inherits `(SizedBuf (Static 2))`).
+2. **`sz_recover_type_form` / `sz_first_size_term`**
+   (`src/compiler/elab_call.c`) -- recover an argument's type Form
+   (EX_VAR -> binding form; EX_CALL -> callee return form; EX_GET_FIELD
+   -> receiver form projected to the struct type arg the field's bare
+   type variable selects), then take the first parseable Size form,
+   mirroring the existing template-extraction convention.
+3. **`sz_cross_param_unify`** now derives each non-GADT argument's size
+   index through those helpers, subsuming the prior inline EX_CALL-only
+   path and adding EX_VAR / EX_GET_FIELD coverage.
+
+A field whose declared type is a compound application (e.g. World's
+`(pos (Dense m A))`, sized by the struct's own shared parameter) stays
+polymorphic -- such a struct cannot carry mismatched per-field sizes, so
+there is no reject case to miss, and the P2 accept fixture is unaffected.
+
 ## Validation of a fix
 
-- The probe above raises TUR-E0260 at the `zip` call.
+- The probes above raise TUR-E0260 at the `zip` / `sized-buf-copy!` call.
 - The matched companion
   (`tests/fixtures/sized-struct-field-share-accept` -- the P2 accept
   fixture) continues to type-check and run.
-- A new fixture pair
-  `tests/fixtures/errors/sized-struct-field-share-reject` exercises
-  the mismatch case for regression coverage.
+- New fixtures
+  `tests/fixtures/errors/sized-struct-field-share-reject` (probe A) and
+  `tests/fixtures/errors/sized-buf-let-bound-cross-reject` (probe B)
+  exercise the mismatch cases for regression coverage.
+- Full suite: `1637 passed, 0 failed`.
 
 ## Related
 

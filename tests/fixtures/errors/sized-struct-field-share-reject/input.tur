@@ -1,0 +1,24 @@
+; sz8-projection-size-recovery-gap.md, probe A: SZ8 cross-parameter size
+; unification must fire on struct field projections (EX_GET_FIELD args), not
+; just direct calls.  `p`'s two fields pin Dense to distinct literal sizes
+; ((Static 3) vs (Static 5)); projecting them into zip -- whose shared `n`
+; spans both parameters -- recovers each projection's size index from the
+; receiver's declared type Form and rejects the mismatch statically.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defopaque Dense [n A] :int)
+(defstruct Pair2 [A B] (fst A) (snd B))
+
+(defn zip [A B] [xs : (Dense n A) ys : (Dense n B)] : int 0)
+
+(defn use-pair [A B]
+    [p : (Pair2 (Dense (Static 3) A) (Dense (Static 5) B))] : int
+  ; ERROR: TUR-E0260 -- (.fst p) has size 3, (.snd p) has size 5, but zip's
+  ; shared `n` cannot unify the two.
+  (zip (.fst p) (.snd p)))
+
+(defn main [] : int 0)
