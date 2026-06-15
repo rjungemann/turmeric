@@ -19,6 +19,25 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0e. Status snapshot — 2026-06-15 (Option C LANDED -- M4c Path A bridge has zero producers)
+
+Implemented Option C as a **by-value twin redirect**: when a by-value spec
+body calls a carrier inline-C helper `FOO` (receiver `:int`) and a
+`FOO-byval` pure-Turmeric twin exists, the emitter redirects the call to the
+twin's interned spec (`emit_abi_try_byval_twin_redirect` in
+`emit_module.c`), so the by-value struct receiver flows straight in -- no
+spill bridge.  Added `vec-get-byval` (+ `vec-data-get-checked__`) to
+`stdlib/vec.tur`; the redirect also covers `vec-len`.
+
+- **Bridge firing**: the M4c Path A `CK_CONCRETE -> CK_CARRIER` site now has
+  **zero producers** (was: `m5-lambda-aft-tyvar-prior-accepts-concrete`).
+  EX_ASCRIBE still fires only for the two bridge-pin fixtures.  D.4 (delete
+  the bridge branches) is now within reach: M4c Path A has no producers; the
+  EX_ASCRIBE branch is kept alive only by its two dedicated pins.
+- Suite green 1635/0; 75 snapshots regenerated.  Pinned by
+  `tests/fixtures/m5-option-c-vec-byval-redirect`.  Full write-up in
+  `m5-residual-straddle-retirement.md` (session 8).
+
 ## 0d. Status snapshot — 2026-06-15 (m5-lambda producer = Option C, D.4 gated)
 
 The last non-pin M4c-Path-A producer,

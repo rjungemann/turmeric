@@ -6,6 +6,67 @@ description: Retire the two CK_CONCRETE -> CK_CARRIER bridges introduced by M4c-
 
 # M5 Residual Straddle Retirement -- Plan
 
+## STATUS 2026-06-15 (session 8): Option C LANDED -- M4c Path A bridge has zero producers
+
+Implemented Option C (auto-monomorphize a carrier inline-C helper to a
+by-value twin at the by-value-spec call boundary) via the **by-value twin
+redirect**, retiring the last M4c-Path-A producer
+(`m5-lambda-aft-tyvar-prior-accepts-concrete`).
+
+### What landed
+
+- **stdlib/vec.tur**: pure-Turmeric dual-ABI `vec-get-byval` twin (+ a shared
+  `vec-data-get-checked__` ptr<void> core).  Uses the already-landed
+  representation-precise field-access predicate (`.data`/`.len`), so it is
+  direct in a by-value spec and derefs through the carrier in its base.
+- **emit_module.c** `emit_abi_try_byval_twin_redirect`: when, inside a
+  by-value spec, a call targets a carrier helper `FOO` (receiver declared
+  `:int`) and a `FOO-byval` twin exists whose by-value signature
+  consistency-checks against the resolved arg types, the call is redirected
+  to the twin's interned spec (recorded in `specialized_call_exprs`), so the
+  call name and the by-value arg ABI both use the twin -- no spill bridge.
+  Runs *before* the no-abi-bindings early-return because a carrier accessor
+  carries its element type in the RETURN position (the call has no
+  abi_bindings yet still takes a by-value struct receiver).
+
+### Result (env-gated probe + emit-c sweep)
+
+| Bridge site | Fires for |
+|---|---|
+| **M4c Path A** (`emit_expr.c`) | **(none)** -- zero producers |
+| EX_ASCRIBE (`emit_expr.c`) | `m5-instance-spec-constraint-var`, `m5-spec-body-ascription-bridge` (the two fixtures that exist to *pin* bridge behaviour) |
+
+The M4c Path A `CK_CONCRETE -> CK_CARRIER` bridge now has **no real
+producers at all**.  The redirect also covers `vec-len` (same carrier
+`[v : int]` shape, `vec-len-byval` twin), and is arity+consistency gated so
+`vec-eq-loop`/`mutmap-eq?` etc. never mis-fire.  Suite green at 1635/0; 75
+codegen snapshots regenerated (gensym churn from the new stdlib helpers).
+Pinned by `tests/fixtures/m5-option-c-vec-byval-redirect` (and exercised by
+`m5-lambda-aft-tyvar-prior-accepts-concrete`).
+
+The `m5-byval-marker-spec-emit` fixture's *local* `vec-get-byval` helper was
+renamed to `vget-marker-byval` -- it collided with the new stdlib name (the
+"rename the local definition" the elaborator's own diagnostic asks for); its
+`#{ByVal}`-marker test purpose is unchanged.
+
+### Remaining toward D.4 / "bridge count -> 0"
+
+Only the two EX_ASCRIBE **bridge-pin** fixtures still exercise a bridge.
+The M4c Path A branch now has zero producers and is a candidate for deletion
+(D.4); the EX_ASCRIBE branch is kept alive only by its two dedicated pins,
+so D.4 there means retiring/repurposing those pins.  Both are mechanical
+follow-ups, not new infra.
+
+### Design note (redirect pairing)
+
+The twin pairing is by the `<callee>-byval` naming **convention**, made safe
+by the consistency gate (the twin's by-value param types, derived by
+unifying the twin's abstract receiver against the resolved receiver, must
+equal the resolved call arg types).  A future hardening could make the
+pairing **explicit** (a `#{ByValTwin <name>}` attribute on the carrier
+helper) to remove the convention's latent footgun, but the consistency gate
+already rejects type-incompatible pairs.
+
 ## STATUS 2026-06-15 (session 7): m5-lambda producer analyzed -- it is the Option C case
 
 Investigated the last non-pin M4c-Path-A producer,

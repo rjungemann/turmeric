@@ -984,10 +984,107 @@ static bool emit_inner_closure_needs_float_spec(Binding *inner,
     return false;
 }
 
+/* Option C (end-to-end-monomorphization): redirect a call to a carrier
+ * inline-C helper FOO (receiver declared `:int`) to its pure-Turmeric
+ * by-value twin `FOO-byval` when, inside a by-value spec, the receiver arg
+ * resolves to a concrete by-value struct.  This retires the M4c Path A spill
+ * bridge (emit_expr.c) for the canonical "by-value spec body calls a carrier
+ * stdlib accessor" case (e.g. `(vec-get xs 0)` with xs : Vec__int).
+ *
+ * Narrowly gated and consistency-checked: the twin's by-value param types
+ * (derived by unifying the twin's abstract receiver against the resolved
+ * receiver) must equal the resolved call arg types, so a carrier-int caller
+ * (e.g. vec-eq-loop's `(vec-get xi i)` with xi an int64 carrier) never
+ * redirects -- it falls through to the existing bridge unchanged.
+ *
+ * Returns true (and records a specialized-call redirect to the twin's spec
+ * clone) when the redirect applies. */
+static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
+                                             const Expr **items, uint32_t n_items) {
+    if (!ctx->current_abi_specialization || call->as.call_.fn_expr) return false;
+    Binding *fn_binding = call->as.call_.fn_binding;
+    if (!fn_binding || fn_binding->type.kind != TY_FN || !fn_binding->is_global
+        || fn_binding->closure_fn_binding) return false;
+    if (!fn_binding->name || !fn_binding->name->name) return false;
+    uint8_t nargs = call->as.call_.n_args;
+    /* Cheap O(1) gates first: receiver param must be the int64 carrier. */
+    if (nargs < 1 || fn_binding->type.as.fn.arity != nargs
+        || fn_binding->type.as.fn.arg_kinds[0] != TY_INT) return false;
+
+    char twin_name[256];
+    int nlen = snprintf(twin_name, sizeof twin_name, "%s-byval", fn_binding->name->name);
+    if (nlen <= 0 || nlen >= (int)sizeof twin_name) return false;
+    Binding *twin_binding = NULL; const Expr *twin_fe = NULL;
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *it = items[i];
+        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
+            && it->as.fn_def_.fn->binding && it->as.fn_def_.fn->binding->name
+            && it->as.fn_def_.fn->binding->name->name
+            && strcmp(it->as.fn_def_.fn->binding->name->name, twin_name) == 0) {
+            twin_binding = it->as.fn_def_.fn->binding; twin_fe = it; break;
+        }
+    }
+    FnDef *twin_fd = twin_fe ? twin_fe->as.fn_def_.fn : NULL;
+    if (!twin_fd || twin_fd->n_params != nargs) return false;
+
+    const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+    const AbiTypeBinding *sb = aspec->bindings;
+    uint8_t snb = aspec->n_bindings;
+
+    /* Resolve the call arg types through the active spec. */
+    Type twin_args[MAX_FN_ARITY];
+    Type resolved_recv = emit_type_from_kind(TY_UNKNOWN);
+    for (uint8_t i = 0; i < nargs; i++) {
+        Type at = call->as.call_.args[i]->type;
+        if (sb && snb > 0) at = emit_abi_instantiate_type(&at, sb, snb, ctx->type_arena);
+        twin_args[i] = at;
+        if (i == 0) resolved_recv = at;
+    }
+    StructDef *rsd = NULL; Type rargs[8]; uint8_t rn = 0;
+    if (!type_extract_struct_app(&resolved_recv, &rsd, rargs, &rn) || !rsd) return false;
+
+    /* Derive twin bindings by unifying the twin's abstract receiver param
+     * (e.g. (Vec A)) against the resolved receiver (e.g. Vec int). */
+    StructDef *asd = NULL; Type aargs[8]; uint8_t an = 0;
+    if (!type_extract_struct_app(&twin_fd->params[0]->type, &asd, aargs, &an)
+        || asd != rsd || an != rn) return false;
+    AbiTypeBinding twin_b[ABI_TYPE_BINDINGS_MAX]; uint8_t twin_nb = 0;
+    for (uint8_t p = 0; p < an && twin_nb < ABI_TYPE_BINDINGS_MAX; p++) {
+        if (aargs[p].kind == TY_TYVAR && aargs[p].as.tyvar_.name) {
+            twin_b[twin_nb].name = aargs[p].as.tyvar_.name;
+            twin_b[twin_nb].type = rargs[p];
+            twin_nb++;
+        }
+    }
+
+    /* Consistency: the twin's params instantiated through twin_b must equal
+     * the resolved call arg types (rejects carrier-int callers). */
+    for (uint8_t i = 0; i < nargs; i++) {
+        Type tp = emit_abi_instantiate_type(&twin_fd->params[i]->type, twin_b, twin_nb,
+                                            ctx->type_arena);
+        if (!type_eq(tp, twin_args[i])) return false;
+    }
+
+    Type twin_result = call->type;
+    if (sb && snb > 0)
+        twin_result = emit_abi_instantiate_type(&twin_result, sb, snb, ctx->type_arena);
+
+    EmitAbiSpecialization *tw = emit_abi_intern_spec(ctx, twin_binding, twin_fe, twin_fd,
+        twin_b, twin_nb, twin_args, nargs, twin_result, call);
+    if (!tw || !tw->clone_name) return false;
+    emit_abi_record_specialized_call(ctx, call, tw->clone_name);
+    return true;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
     if (!call || call->kind != EX_CALL || !call->as.call_.fn_binding) return;
+    /* Option C: a carrier accessor (vec-get) carries its element type in the
+     * RETURN position, so the call may have no abi_bindings yet still take a
+     * by-value struct receiver inside a spec.  Attempt the by-value twin
+     * redirect before the no-bindings early-return below. */
+    if (emit_abi_try_byval_twin_redirect(ctx, call, items, n_items)) return;
     /* GS5/CS3: elab attaches the named-tyvar substitution to the call when it
      * matters; absence of bindings means there is nothing to specialize. */
     const AbiTypeBinding *bindings = call->as.call_.abi_bindings;

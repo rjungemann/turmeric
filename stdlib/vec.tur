@@ -280,6 +280,29 @@
 (defn vec-data-get__ [data : ptr<void> i : int] : int
   ```c return ((int64_t *)(intptr_t)data)[i]; ```)
 
+;;; vec-data-get-checked__ -- bounds-checked indexed read over a raw data ptr.
+;; Internal: shared inline-C core for the by-value vec-get-byval (and the
+;; carrier vec-get, if it ever delegates).  Aborts on out-of-range like
+;; vec-get.
+
+(defn vec-data-get-checked__ [data : ptr<void> i : int len : int] : int
+  ```c
+  if (i >= 0 && (size_t)i < (size_t)len) return ((int64_t *)(intptr_t)data)[i];
+  fprintf(stderr, "tvec index out of bounds\n");
+  exit(1);
+  return 0;
+  ```)
+
+;;; vec-get-byval -- by-value Vec[A] indexed read (Option C twin of vec-get).
+;; M5 (end-to-end-monomorphization): the by-value counterpart of vec-get.
+;; The emitter redirects a `vec-get` call inside a by-value spec body here so
+;; the Vec receiver flows by value instead of bridging back to the int64
+;; carrier.  Dual-ABI: `.data`/`.len` field access lowers direct in a spec
+;; and derefs through the carrier in the (element-agnostic) base.
+
+(defn vec-get-byval [A] [v : (Vec A) i : int] : A
+  (:: (vec-data-get-checked__ (.data v) i (.len v)) A))
+
 (defn vec-eq-loop-byval [A]
   [(Eq A)]
   [x : (Vec A) y : (Vec A) i : int len : int]

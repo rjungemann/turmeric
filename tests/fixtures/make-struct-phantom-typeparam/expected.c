@@ -2529,7 +2529,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_585(int64_t, int64_t);
+static bool __fn_587(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
@@ -2549,7 +2549,7 @@ static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_885(int64_t, int64_t);
+static bool __fn_892(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -2610,6 +2610,7 @@ static bool vec_hyeq_qu(int64_t, int64_t, int64_t);
 static bool vec_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t vec_hylen_hybyval(int64_t);
 static int64_t vec_hydata_hyget_un_un(void *, int64_t);
+static int64_t vec_hydata_hyget_hychecked_un_un(void *, int64_t, int64_t);
 static bool vec_hyeq_hyloop_hybyval(int64_t, int64_t, int64_t, int64_t);
 static int64_t slice_hynew(void *, int64_t);
 static int64_t slice_hylen(int64_t);
@@ -3053,14 +3054,14 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
     .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float,
 };
 
-static bool __fn_585(int64_t a, int64_t b) {
+static bool __fn_587(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         int64_t *__t2 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t2[1] = (int64_t)(intptr_t)__fn_585;
+        __t2[1] = (int64_t)(intptr_t)__fn_587;
         void *__t3 = __t2;
         return map_hyeq_hydynamic(x, y, (int64_t)(intptr_t)(__t3));
 }
@@ -3076,13 +3077,13 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
 static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
         bool __t4;
         {
-            int64_t lx_619 = vec_hylen_hybyval(x);
-            (void)lx_619;
-            int64_t ly_620 = vec_hylen_hybyval(y);
-            (void)ly_620;
+            int64_t lx_626 = vec_hylen_hybyval(x);
+            (void)lx_626;
+            int64_t ly_627 = vec_hylen_hybyval(y);
+            (void)ly_627;
             bool __t5;
-            if ((lx_619) == (ly_620)) {
-                __t5 = vec_hyeq_hyloop_hybyval(x, y, INT64_C(0), lx_619);
+            if ((lx_626) == (ly_627)) {
+                __t5 = vec_hyeq_hyloop_hybyval(x, y, INT64_C(0), lx_626);
             } else {
                 __t5 = false;
             }
@@ -3322,18 +3323,18 @@ static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         __tur_tailcall:;
         if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
             {
-                int64_t t1_799 = ((Cons *)(intptr_t)(x))->tail;
-                (void)t1_799;
-                int64_t t2_800 = ((Cons *)(intptr_t)(y))->tail;
-                (void)t2_800;
-                if ((t1_799) == (INT64_C(0))) {
-                    return (t2_800) == (INT64_C(0));
+                int64_t t1_806 = ((Cons *)(intptr_t)(x))->tail;
+                (void)t1_806;
+                int64_t t2_807 = ((Cons *)(intptr_t)(y))->tail;
+                (void)t2_807;
+                if ((t1_806) == (INT64_C(0))) {
+                    return (t2_807) == (INT64_C(0));
                 } else {
-                    if ((t2_800) == (INT64_C(0))) {
+                    if ((t2_807) == (INT64_C(0))) {
                         return false;
                     } else {
-                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_799));
-                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_800));
+                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_806));
+                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_807));
                         x = __t12;
                         y = __t13;
                         goto __tur_tailcall;
@@ -3365,14 +3366,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_885(int64_t a, int64_t b) {
+static bool __fn_892(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_885;
+        __t14[1] = (int64_t)(intptr_t)__fn_892;
         void *__t15 = __t14;
         return mutmap_hyeq_qu_hybyval(x, y, (void *)(intptr_t)(__t15));
 }
@@ -3770,6 +3771,14 @@ static int64_t vec_hylen_hybyval(int64_t v) {
 
 static int64_t vec_hydata_hyget_un_un(void * data, int64_t i) {
         return ((int64_t *)(intptr_t)data)[i]; 
+}
+
+static int64_t vec_hydata_hyget_hychecked_un_un(void * data, int64_t i, int64_t len) {
+        if (i >= 0 && (size_t)i < (size_t)len) return ((int64_t *)(intptr_t)data)[i];
+  fprintf(stderr, "tvec index out of bounds\n");
+  exit(1);
+  return 0;
+  
 }
 
 static bool vec_hyeq_hyloop_hybyval(int64_t x, int64_t y, int64_t i, int64_t len) {
@@ -4535,14 +4544,14 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            PairD__int__int p_889 = (PairD__int__int){.fst = dn(INT64_C(7)), .snd = dn(INT64_C(35))};
-            (void)p_889;
-            printf("%lld\n", (long long)((dense_hy_gtint((p_889).fst)) + (dense_hy_gtint((p_889).snd))));
+            PairD__int__int p_896 = (PairD__int__int){.fst = dn(INT64_C(7)), .snd = dn(INT64_C(35))};
+            (void)p_896;
+            printf("%lld\n", (long long)((dense_hy_gtint((p_896).fst)) + (dense_hy_gtint((p_896).snd))));
         }
         {
-            World__int__int__int w_890 = (World__int__int__int){.pos = dn(INT64_C(3)), .vel = dn(INT64_C(9))};
-            (void)w_890;
-            printf("%lld\n", (long long)((dense_hy_gtint((w_890).pos)) + (dense_hy_gtint((w_890).vel))));
+            World__int__int__int w_897 = (World__int__int__int){.pos = dn(INT64_C(3)), .vel = dn(INT64_C(9))};
+            (void)w_897;
+            printf("%lld\n", (long long)((dense_hy_gtint((w_897).pos)) + (dense_hy_gtint((w_897).vel))));
         }
         int64_t __t25;
         __t25 = INT64_C(0);
