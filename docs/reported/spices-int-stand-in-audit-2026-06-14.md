@@ -113,7 +113,7 @@ original audit findings (`db-close`, `db-exec`, `db-prepare`, `db-query`,
 `stmt-step`, `col-count`) all take the nominal type. Remaining S4 work
 (`row : int` cons-list in `sqlite/row.tur`) is out of scope here.
 
-### ~~postgres (5 findings)~~ -- **fixed**
+### ~~postgres (5 findings)~~ -- **fully fixed**
 
 `defopaque Conn` added in `postgres/db.tur` and threaded through `db.tur`,
 `stmt.tur`, and `notify.tur`. All 5 audit findings (`db-close`, `db-exec`,
@@ -121,10 +121,17 @@ original audit findings (`db-close`, `db-exec`, `db-prepare`, `db-query`,
 Adjacent `conn : int` parameters on `db-query-params`, `db-begin`,
 `db-commit`, `db-rollback`, `stmt-exec-prepared`, `stmt-deallocate`,
 `notify-unlisten`, and `notify-poll` were retyped in the same pass for
-consistency. Internal `__pq-*-raw` helpers also take `Conn`. The
-`PGresult*` rows handle (`rows : int` in `postgres/row.tur`) and the
-`PGnotify*` notification handle (`n : int` in `postgres/notify.tur`)
-remain as follow-up work.
+consistency. Internal `__pq-*-raw` helpers also take `Conn`.
+
+Follow-up handles fixed in `tur-postgres` v0.2.0 (2026-06-14):
+`defopaque Rows` + `rows-of` exported from `postgres/row.tur`
+(`rows-count`/`rows-free`/`row-get`/`row-get-int`/`col-count`/`col-name`
+now take `rows : Rows`); `defopaque Notification` + `notification-of`
+exported from `postgres/notify.tur` (`notification-channel` /
+`notification-payload` take `n : Notification`). Callers extract typed
+handles from `db-query` / `db-query-params` / `stmt-exec-prepared` /
+`notify-poll` ok-results with `rows-of` / `notification-of`. All four
+postgres modules and all four tests typecheck clean.
 
 ### ~~opengl (5 findings)~~ -- **fixed (already shipped)**
 
@@ -191,9 +198,13 @@ parameter is still `:int` -- that one really is a file descriptor.
   **fixed in `tur-valkey` v0.2.0**: `defopaque Client` exported from
   `valkey/client.tur`; `client-close`, `client-ping`, all `cmd-*`, and all
   `pubsub-*` (subscribe/unsubscribe/publish/recv) parameters now take
-  `c : Client`. `redisReply*` (`r : int` in `valkey/reply.tur`) and the
-  `__msg*` push handle (`m : int` in `valkey/pubsub.tur`) remain as
-  follow-up work.
+  `c : Client`. ~~`redisReply*` and `__msg*` follow-up handles~~
+  **fixed in `tur-valkey` v0.3.0** (2026-06-14): `defopaque Reply` +
+  `reply-of` exported from `valkey/reply.tur` (all `reply-*` params/returns
+  retyped, including the sub-Reply returned by `reply-array-get`);
+  `defopaque Message` + `message-of` exported from `valkey/pubsub.tur`
+  (`message-channel`/`message-payload` take `m : Message`). All four valkey
+  modules typecheck clean.
 - ~~`rtaudio/core.tur:82` -- `RtAudio` C++ instance~~
   **fixed in `tur-rtaudio` v0.2.0**: `defopaque Audio` exported from
   `rtaudio/core.tur`; `audio-free`, `audio-api`, and every `device-*` /
@@ -277,7 +288,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | plot | clean |
 | ~~plutovg~~ | ~~S2: 5 handle types~~ -- already fixed (5 opaques in `plutovg/types.tur`); dash-array/font-cache/gradient-stops/rect remain |
 | ~~png~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Img`) |
-| ~~postgres~~ | ~~S2: 5 handle types~~ -- fixed (`defopaque Conn`); `Rows`/`Notification` remain |
+| ~~postgres~~ | ~~S2: 5 handle types~~ -- fully fixed (`Conn`, `Rows`, `Notification`) |
 | raygui | clean |
 | ~~raylib~~ | ~~S2: 3 handle types~~ -- audit set fixed (`Sound`, `Music`); broad follow-up leakage in models/text/textures/camera/shapes remains |
 | ~~regex~~ | ~~S2: 1 handle type~~ -- fixed in `tur-regex` v0.2.0 |
@@ -292,7 +303,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | tidal | clean |
 | ~~tls~~ | ~~S2: 2 handle types~~ -- fixed (`defopaque TlsCtx`, `defopaque TlsConn`) |
 | **tourist** | **S1 + S2 + S3 + S4 (worst offender)** |
-| ~~valkey~~ | ~~S2: 1 handle type (client)~~ -- fixed (`defopaque Client`); `redisReply*` and `__msg*` remain |
+| ~~valkey~~ | ~~S2: 1 handle type (client)~~ -- fully fixed (`Client`, `Reply`, `Message`) |
 | watch | clean |
 | ~~wav~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Wav`) |
 | zlib | clean |
@@ -303,8 +314,7 @@ postgres, valkey, rtaudio, tls, plus three already-shipped-at-audit-time
 Remaining S2 work: tourist, httpd, osc, rtmidi handles (each paired with an
 S1 callback fix); follow-up handle leaks inside plutovg (dash-array,
 font-cache, gradient-stops, rect), raylib (models, text, textures, camera,
-shapes), rtaudio (DeviceInfo, callback), valkey (`redisReply*`, `__msg*`),
-and postgres (`PGresult*`, `PGnotify*`).
+shapes), and rtaudio (DeviceInfo, callback).
 
 ---
 
