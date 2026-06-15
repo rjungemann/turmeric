@@ -330,7 +330,7 @@ stdlib instance rewrite.
    as by-value-struct (Option/Result/Pair/Tuple/Either/Slice), typed-pointer
    (Vec/MutableMap mutable; Map/Set/Cons/GVec immutable-but-heap-linked), or
    type-erased carrier (the opaque/HKT handles). **LOCKED 2026-06-15:**
-   [docs/upcoming/parametric-type-abi-matrix.md](../upcoming/parametric-type-abi-matrix.md).
+   [docs/parametric-type-abi-matrix.md](../parametric-type-abi-matrix.md).
    Key correction this produced: Cons is typed-pointer, not by-value -- it is a
    linked node chain, so the receiver is `Cons__A *`, not a by-value cell.
 2. **Vec typed-pointer vertical slice** -- convert the Vec primitives

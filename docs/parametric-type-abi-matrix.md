@@ -123,7 +123,7 @@ snapshots in the same change.
 
 ## Related
 
-- [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
+- [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
   -- the M3 tracking report; this matrix is its sequencing step 1.
-- [docs/upcoming/end-to-end-monomorphization-plan.md](end-to-end-monomorphization-plan.md)
+- [docs/upcoming/end-to-end-monomorphization-plan.md](upcoming/end-to-end-monomorphization-plan.md)
   -- §M2/§M4/§M7, the plan this refines.
