@@ -63,10 +63,10 @@ change to these types' layout.
 
 | Type | Def | Why pointer, not by-value | Current rep / cleanup |
 |---|---|---|---|
-| `Vec [A]` | `(data :ptr<void>) (len :int) (cap :int)` | **mutable** -- `vec-push!` reallocs `data`, bumps `len`/`cap`; a by-value copy would drop the mutation | int64 carrier -> `Vec__A *` |
-| `MutableMap [K V]` | `(storage :ptr<void>)` | **mutable** hashtable, in-place set/delete | int64 carrier -> `MutableMap__K__V *`; also the multi-param `K=TY_STRUCT` elab gap |
-| `Map [K V]` | `(carrier :int)` | immutable/persistent **but** a HAMT node tree -- pass a pointer to the root, never deep-copy | the `:int` field is a No-Lazy-`:int` stand-in; typed-pointer migration also retires it |
-| `Set [A]` | `(hamt :ptr<void>)` | immutable/persistent, HAMT-backed (same as Map) | int64 carrier -> `Set__A *` |
+| `Vec [A]` | `(data :ptr<void>) (len :int) (cap :int)` | **mutable** -- `vec-push!` reallocs `data`, bumps `len`/`cap`; a by-value copy would drop the mutation | **DONE** (#377): `:heap`-tagged, `(Vec A)` -> `Vec__A *` |
+| `MutableMap [K V]` | `(storage :ptr<void>)` | **mutable** hashtable, in-place set/delete -- `mutmap-set!` reallocs `storage` and writes back `m->storage`, so a by-value header copy goes stale (a "works by luck" hazard while only read-only dispatch touched it) | **DONE**: `:heap`-tagged, `(MutableMap K V)` -> `MutableMap__K__V *`. The multi-param `K=TY_STRUCT` elab gap is orthogonal (M4 dict-ABI) |
+| `Map [K V]` | `(carrier :int)` | immutable/persistent **but** a HAMT node tree -- pass a pointer to the root, never deep-copy | the `:int` field is a No-Lazy-`:int` stand-in; typed-pointer migration also retires it (NOT yet migrated -- the `:int` field needs typing first) |
+| `Set [A]` | `(hamt :ptr<void>)` | immutable/persistent, HAMT-backed (same as Map) | **DONE**: `:heap`-tagged, `(Set A)` -> `Set__A *` |
 | `Cons [A]` | `(head A) (tail :int)` | immutable/persistent **but** a linked node chain -- a `(Cons A)` value is a pointer to the head cell | `tail :int` is a No-Lazy-`:int` stand-in for `(Cons A)`; typed-pointer types it `Cons__A *`. (#369 left Cons carrier-based for `Eq`; the typed-pointer migration is the deeper fix) |
 | `GVec [a]` | GADT `GVNil`/`GVCons int (GVec int)` | length-indexed linked GADT (niche/demo) | int64 carrier -> `GVec__a *` |
 

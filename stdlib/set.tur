@@ -10,7 +10,7 @@
 ;;; Set -- parameterized persistent set with element type A.
 ;;;
 ;;; Since: Phase TC2
-(defstruct Set [A] (hamt :ptr<void>))
+(defstruct Set :heap [A] (hamt :ptr<void>))
 ;;; set-new -- create a new empty Set[A].
 ;;;
 ;;; Returns:

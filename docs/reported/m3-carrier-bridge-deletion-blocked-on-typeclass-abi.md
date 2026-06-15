@@ -382,6 +382,59 @@ Next implementation increment: plan sub-step 1 (the inert `#{Heap}`/`:heap`
 struct attribute + pointer lowering, gated so the suite stays byte-identical
 until a type is tagged).
 
+## Update 2026-06-15 (post-#377 audit refresh; Set + MutableMap `:heap` landed)
+
+### Refreshed audit baseline (Vec slice #377 is now merged)
+
+The "142 crossings / 21 fixtures" and "~53 long tail" figures above predate the
+Vec slice (#377) merging. Re-ran the per-fixture sweep
+(`TUR_M3_AUDIT=1 tur emit-c <fixture>`, stderr captured directly) on the current
+tree. **Accurate post-#377 baseline: 14 fixtures, 48 crossings.** Distribution:
+
+| Type | crossings | nature |
+|---|---|---|
+| `Vec int` | 28 | now reinterpret CASTS (post-#377 `:heap`), concentrated in the M5 constrained-poly / instance-spec residual (`m5-constrained-poly-vec-eq` 12, `m5-instance-spec-constraint-var` 8) -- the M4 dict-ABI residual |
+| `Result`/`Option`/`Pair`/`Tuple3..8` | 14 | by-value-struct types at the *typeclass-dispatch* boundary (the dict slot is still `int64_t (*)(...)`) -- the **M4 dict-ABI** item, not a per-type-rep issue |
+| `MutableMap int int` | 4 | dispatch-arg crossings via `(:: a (MutableMap int int))` -> `.eq?` |
+| `SChan` | 2 | type-erased channel path (FAIL-prone) |
+
+The dominant `Cons tyvar` crossings (2376 of the old 2429) are long gone -- they
+were retired by the #369 `Eq [Cons]` rewrite.
+
+### Set + MutableMap migrated to `:heap` (matrix step 3, this change)
+
+Tagged `Set` and `MutableMap` `:heap` (the same flip #377 did for `Vec`). The Vec
+slice already landed all the enabling compiler support (`:heap` lowering,
+`emit_carrier_bridge` reinterpret-cast for heap types, `type_struct_pass_by_ptr`
+skip, ABI-aware field access), so both types are a one-line `defstruct` flip --
+no producer retyping, no compiler change. Both keep their existing inline-C
+carrier-base producers (which take/return the int64 carrier = the header pointer,
+exactly like Vec).
+
+- **MutableMap**: the load-bearing fix. `mutmap-set!` reallocs `storage` and
+  writes back `m->storage` (`stdlib/mutmap.tur:139`), so the pre-`:heap` by-value
+  `MutableMap__K__V` header copy at the dispatch boundary held a **stale storage
+  pointer after a resize** -- a CLAUDE.md "works by luck" hazard that was benign
+  only because `Eq`'s dispatch is read-only. `:heap` makes `(MutableMap K V)` a
+  shared `MutableMap__K__V *`, so the 4 `MutableMap int int` deref-copy crossings
+  become reinterpret casts and the staleness hazard is gone.
+- **Set**: matrix conformance. `Set` has a single immutable HAMT pointer field, so
+  the by-value copy was harmless, but `:heap` brings it in line with the matrix and
+  is prerequisite to the eventual `*-byval` twin retirement / bridge down-scoping.
+
+Validation: zero snapshot drift (neither type's C name appears in any
+`expected.c`); full compiled suite green; spice roundtrip
+(`../turmeric-spices/spices/{ecs,json,frame}`) shows only the documented
+pre-existing failures (ecs `poly-call-row`/`query-typed`/`sized-dense-rt`; json
+`derive-{decode,encode}-struct`; frame `group_test`/`interop_test`/`reshape_test`
+ld errors -- all identical with the change reverted).
+
+Remaining typed-pointer migrations (matrix step 3 continuation): `Map` (blocked on
+its `(carrier :int)` No-Lazy-`:int` field needing a real type first), `Cons` (#369
+left it carrier-based; the typed-pointer migration is the deeper fix), `GVec`
+(niche). The 48 crossings clear when **M4 dict-ABI** (typed dict slots) lands --
+that is the dominant remaining item, not further stdlib `:heap` flips.
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
