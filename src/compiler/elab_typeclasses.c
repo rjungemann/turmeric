@@ -3087,6 +3087,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
 
     Type bound;
     TypeClassInstance *inst = NULL;
+    bool abstract_return_dispatch = false;
     if (!e->expected_type) {
         /* Mechanism B (return-type-dispatch-nullary-arrow plan, T3): with no
          * expected type a nullary arrow method (e.g. Category `ident`) has
@@ -3125,10 +3126,36 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                       name->name);
             return NULL;
         }
-        /* Use the typed lookup so struct instances are discriminated by identity
-         * (HasSchema[User] vs HasSchema[Post]); it matches primitives by kind
-         * and structs by StructDef pointer. */
-        inst = typeclass_env_lookup_instance(env, tc, &bound, 1);
+        /* return-dispatch-tyvar (docs/reported/return-dispatch-tyvar-silent-
+         * misdispatch.md): when the ascription pins the result to an *abstract*
+         * type variable -- e.g. `(:: (deserialize b) A)` inside a constrained
+         * `(defn round [A] [(Serializable A)] ...)` -- `bound` is a TY_TYVAR
+         * (or the TY_STRUCT-NULL-def "abstract tyvar" representation) and there
+         * is no concrete instance to pick yet.  Mirror the receiver-dispatch
+         * path (`obj_is_abstract_tyvar` in elab_method_call): select the
+         * carrier-compatible `int` instance as the polymorphic-base
+         * representative, and tag the call so the emit-side re-resolution
+         * (emit_core.c) specializes it to the concrete A per monomorphization.
+         * Without this we either silently mis-dispatched to the `ptr<void>`
+         * instance (the original bug, back when `deserialize` returned `:int`
+         * and the class var was absent from the signature) or hard-errored. */
+        bool bound_is_abstract_tyvar =
+            bound.kind == TY_TYVAR ||
+            (bound.kind == TY_STRUCT && bound.as.struct_.def == NULL);
+        if (bound_is_abstract_tyvar) {
+            for (TypeClassInstance *it = env->instances; it; it = it->next) {
+                if (it->typeclass != tc) continue;
+                if (midx >= it->n_method_impls || !it->method_impls[midx]) continue;
+                if (it->n_type_args > 0 && it->type_args[0].kind == TY_INT) {
+                    inst = it;
+                    break;
+                }
+            }
+            abstract_return_dispatch = (inst != NULL);
+        }
+        if (!inst) {
+            inst = typeclass_env_lookup_instance(env, tc, &bound, 1);
+        }
         if (!inst) {
             diag_emit(DIAG_ERROR, call->span,
                       "no instance '%s %s'", tc->name->name, type_name(bound));
@@ -3212,6 +3239,18 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = 1;
         }
+    }
+    /* return-dispatch-tyvar: tag the abstract-tyvar return-dispatch call with a
+     * dict_arg carrying the (representative int) instance + method name, so the
+     * emit-side return-dispatch re-resolution can specialize it to the concrete
+     * A per monomorphization (keyed on the call's result type, which is the
+     * abstract tyvar here).  `out->type` stays the tyvar `bound`. */
+    if (abstract_return_dispatch && inst) {
+        Expr *dict_expr = make_dict_expr(e, inst, call->span);
+        tur_mangle_ident(name->name, dict_expr->as.dict_.method_name,
+                         sizeof(dict_expr->as.dict_.method_name));
+        out->as.call_.dict_arg = dict_expr;
+        out->type = bound;  /* keep the abstract tyvar for emit re-resolution */
     }
     return out;
 }

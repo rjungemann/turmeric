@@ -10,11 +10,12 @@ severity: Medium-high. SILENT miscompile, not a hard error. A typeclass method
   and then misbehaves at runtime. This is exactly the class of bug CLAUDE.md
   flags ("works by luck because the register classes happen to match" / silent
   miscompile).
-status: OPEN -- 2026-06-15. Discovered while scoping the M4 bucket-D fix
-  (docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md
-  "Resolution 2026-06-15"). Not fixed this session; the bucket-D fix routed
-  around it (format-preserving Pair serialize that needs no recursive
-  deserialize). Filed so it is not forgotten.
+status: RESOLVED -- 2026-06-15 (see "Resolution" below). Both fix directions
+  landed: the silent misdispatch is gone AND constrained return-dispatch now
+  works (`(round 42)` prints `got=42`). Discovered while scoping the M4
+  bucket-D fix
+  (docs/archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md or the
+  reported/ copy, "Resolution 2026-06-15").
 ---
 
 # Return-type dispatch on a constrained type var silently picks the `ptr<void>` instance
@@ -129,6 +130,58 @@ Pointers to confirm:
   constraint in scope is a compile error (no dict to dispatch through).
 - Full suite stays green; add a fixture pinning the round-trip
   (`tests/fixtures/serial-return-dispatch-tyvar/`).
+
+## Resolution 2026-06-15
+
+Both fix directions landed in one change; the root cause was deeper than the
+"return-dispatch on a tyvar" framing.
+
+**Root cause (corrected):** the class declared `(deserialize [b : ptr<void>]
+: int)` -- the class variable `a` appeared in **neither** a parameter nor the
+return (it was erased to the `:int` carrier, a "No Lazy `:int`" defect). So
+`deserialize` was not even *detected* as a return-dispatch method
+(`elab_try_return_dispatch` found no method whose return mentions the class
+var); the bare-name path then arg-dispatched on `b : ptr<void>` and always
+picked the `[ptr<void>]` instance, for **any** caller -- silently.
+
+**Fixes:**
+
+1. **`stdlib/serial.tur`** -- declare `deserialize`'s result as the class var:
+   `(deserialize [b : ptr<void>] : a)`. This is the correct typing (deserialize
+   returns a value of type `a`) and makes it a genuine return-dispatch method.
+   Side effect: the explicit per-instance callees now carry their true return
+   type (e.g. `deserialize_bool : bool`), so `serial-primitive-roundtrip`'s
+   `(= got (if expected 1 0))` carrier-int workaround became `(= got expected)`
+   (both `bool`). The emitted C ABI for the carrier instances is unchanged
+   (`int64_t (void*)`); only the type-checker's view tightened.
+
+2. **`elab_typeclasses.c` (`elab_try_return_dispatch`)** -- when the ascription
+   pins the result to an *abstract* type variable (a constrained `(defn round
+   [A] [(Serializable A)] ...)` body), `bound` is a TY_TYVAR. Instead of
+   erroring (direction 1) we mirror the receiver-dispatch path
+   (`obj_is_abstract_tyvar`): pick the carrier-compatible `int` instance as the
+   polymorphic-base representative and tag the call with a `dict_arg` (+ method
+   name) so emit re-resolution can specialize it.
+
+3. **`emit_core.c` (`emit_reresolve_method_call`)** -- generalize the dispatch-
+   type selection: the constrained-generic re-resolution keyed only on a tyvar
+   *receiver* (`args[0]`); now, when no argument is a tyvar but the call's
+   *result* type is (the return-dispatch case), it resolves from `call->type`
+   instead. In a monomorphization where `A = int`/`bool`/..., this emits
+   `__inst_Serializable_deserialize_<T>` directly.
+
+**Validation:** the repro `(round 42)` prints `got=42`; a multi-type pin
+(`tests/fixtures/serial-return-dispatch-tyvar/`, `requires.compiled`)
+round-trips int and bool through `(:: (deserialize (serialize x)) A)` and
+confirms per-spec dispatch to `deserialize_int` / `deserialize_bool`. A
+concrete ascription (`(:: (deserialize b) int)`) also now dispatches correctly
+-- a new capability. Compiled suite **1648 passed, 0 failed**; interpreter gate
+**1206 passed, 2 failed** (the pre-existing `eq-carrier-capturing-comparator` /
+`mutmap-eq`). No `expected.c` drift; no spice uses generic `deserialize`.
+
+This also retires the long-standing `stdlib/serial.tur` comment that
+`deserialize` "cannot dispatch on a type var" -- it now can, for both concrete
+and constrained-tyvar ascriptions on non-HKT classes.
 
 ## Related
 

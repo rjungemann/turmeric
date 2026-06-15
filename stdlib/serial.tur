@@ -153,7 +153,7 @@
 
 (defclass Serializable [a]
   (serialize [x] : ptr<void>)
-  (deserialize [b : ptr<void>] : int))
+  (deserialize [b : ptr<void>] : a))
 ;; ---------------------------------------------------------------------------
 ;; Primitive instances
 ;; Each instance packs its value as little-endian bytes, prefixed by length.
@@ -356,11 +356,17 @@
 ;; so these instances pack/unpack those carriers directly.  This is correct for
 ;; fixed-width primitive elements (int / bool / float and any int64-carried
 ;; nominal type).  Like the Eq/Clone container instances, an element that is a
-;; cstr or other pointer-to-heap serializes its *address*, not its contents; for
-;; those, deserialize cannot recover the value (the standard return-type-dispatch
-;; limitation -- (deserialize b) cannot select the element instance from a type
-;; variable).  Use a concrete (definstance Serializable [YourType] ...) when an
-;; element owns heap data.
+;; cstr or other pointer-to-heap serializes its *address*, not its contents.
+;;
+;; NOTE: `(deserialize b)` CAN now dispatch on a constrained type variable --
+;; `(:: (deserialize b) A)` inside a `(... [(Serializable A)] ...)` body
+;; re-resolves to A's instance per monomorphization (see
+;; docs/archive/return-dispatch-tyvar-silent-misdispatch.md).  The composite
+;; bodies below still pack element carriers directly (not via recursive
+;; `(:: (deserialize sub) A)`) for the in-process raw-carrier round-trip, so a
+;; cstr/heap element still serializes its address; use a concrete
+;; (definstance Serializable [YourType] ...) when an element owns heap data and
+;; you need cross-process recovery.
 ;; ---------------------------------------------------------------------------
 ;;; serial-pair-bytes -- raw [len=16][fst][snd] Pair byte layout from two int64
 ;;; element carriers.

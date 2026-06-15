@@ -632,7 +632,9 @@ baseline is now **21 fixtures / 139 crossings** (buckets A/B/C/E unchanged).
   format-preserving route (above) is the only correct one: a recursive
   format would need recursive `deserialize`, which the language cannot dispatch
   on a return-type type variable. Filed as
-  [docs/reported/return-dispatch-tyvar-silent-misdispatch.md](return-dispatch-tyvar-silent-misdispatch.md).
+  [docs/archive/return-dispatch-tyvar-silent-misdispatch.md](../archive/return-dispatch-tyvar-silent-misdispatch.md)
+  (RESOLVED 2026-06-15 -- both directions landed; `deserialize` now dispatches
+  on a constrained type var).
 
 - **Validation:** `serial-composite-instances` -> 0 crossings, output unchanged
   (`pair=7035` / `opt-some=99` / `opt-none=-1`). Compiled suite **1647 passed, 0
