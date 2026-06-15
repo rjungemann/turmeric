@@ -6,6 +6,53 @@ description: Retire the two CK_CONCRETE -> CK_CARRIER bridges introduced by M4c-
 
 # M5 Residual Straddle Retirement -- Plan
 
+## STATUS 2026-06-15 (session 10): D.4 LANDED for EX_ASCRIBE -- bridge count -> 0
+
+The EX_ASCRIBE `CK_CONCRETE -> CK_CARRIER` producer bridge (the `(:: x :int)`
+spill for a by-value spec param) is now **deleted**. With session 9's M4c Path
+A deletion, this was the last `CK_CONCRETE -> CK_CARRIER` producer site --
+**the producer-side bridge count is now 0.**
+
+### What landed
+
+- **Redirect extension (Gap 1)** in `emit_abi_try_byval_twin_redirect`
+  (`emit_module.c`): when a call arg is a bare `EX_VAR` bound to an active-spec
+  param, resolve its type from the spec's concrete `arg_types[pi]` instead of
+  instantiating the elab-time type. This lets the Option C twin redirect fire
+  for `(vec-get x i)` / `(vec-len x)` inside an *instance-method* spec, whose
+  receiver arrives element-erased (bare `TY_STRUCT Vec`). Previously the
+  redirect only fired for plain constrained-poly defn specs.
+- **Pins migrated off `(:: x :int)`**:
+  - `m5-instance-spec-constraint-var` -> bare idiom; now pins the instance-
+    method-spec redirect (Gap 1) on top of gap-4 constraint-var propagation.
+  - `m5-spec-body-ascription-bridge` -> renamed `m5-spec-body-byval-redirect`,
+    bare idiom; pins the redirect for a return-position element-type accessor
+    (`at1-helper [A] [x : (Vec A)] : A`).
+- **Bridge deleted** in `emit_expr.c` (replaced by an explanatory comment).
+  An emit-c sweep over the full suite (incl. `-Xdata-literals`) confirms zero
+  producers.
+
+### Gap 2 did not block
+
+The "twin clone collides across the dual-ABI instance method" gap was an
+artifact of the `(:: x (Vec A))` carrier-helper form, which the chosen bare
+idiom does not use. Dropping the ascription makes the redirect intern a single
+`vec_len_byval__spec__int64_t_Vec__int` clone shared by both ABIs (carrier base
+deref-bridges its int64 receiver, spec passes direct) -- no collision, no
+recording-key change needed.
+
+### Result
+
+`bash tests/run.sh`: **1636 passed, 0 failed**, zero codegen-snapshot drift.
+The only remaining `emit_carrier_bridge` sites are `CK_CARRIER -> CK_CONCRETE`
+(accessor-side unbox -- M3's target, still load-bearing) and the existential /
+HKT carrier producers that the plan keeps. Full write-up + repro:
+`docs/archive/history/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
+
+**M5's residual-straddle retirement is complete**: both `CK_CONCRETE ->
+CK_CARRIER` producer bridges (M4c Path A + EX_ASCRIBE) are gone. M3 (delete
+the symmetric accessor-side path) is now unblocked as a separate phase.
+
 ## STATUS 2026-06-15 (session 9): D.4 LANDED for M4c Path A -- dead bridge branch deleted
 
 With Option C in tree (session 8) the M4c Path A `CK_CONCRETE -> CK_CARRIER`
@@ -68,8 +115,8 @@ element-erased instance-method receivers AND key the twin-redirect clone per
 `(call, active-spec)` -- then migrate the pins and delete the bridge; or
 (2) a decision to keep the bridge as supported `(:: struct :int)` widening
 surface and close D.4-for-EX_ASCRIBE as won't-do. Full analysis, repro, and
-fix directions:
-`docs/reported/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
+fix directions (RESOLVED in session 10, see above):
+`docs/archive/history/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
 
 ## Why
 

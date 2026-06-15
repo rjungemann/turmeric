@@ -1037,6 +1037,24 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
     for (uint8_t i = 0; i < nargs; i++) {
         Type at = call->as.call_.args[i]->type;
         if (sb && snb > 0) at = emit_abi_instantiate_type(&at, sb, snb, ctx->type_arena);
+        /* Gap 1 (instance-method spec receiver): a bare-EX_VAR arg bound to a
+         * param of the active spec arrives with the param's elab-time type,
+         * which for an instance-method spec receiver is the ELEMENT-ERASED
+         * bare `TY_STRUCT Vec` (no tyvar for `emit_abi_instantiate_type` to
+         * substitute).  The spec's own `arg_types[pi]` already carries the
+         * monomorphized `Vec__int`, so prefer it -- this lets the redirect fire
+         * for `(vec-get x i)` inside `__inst_*__spec__*` the same way it does
+         * for a plain constrained-poly defn spec (where the receiver elab type
+         * is `(Vec A)` and instantiates cleanly). */
+        const Expr *av = call->as.call_.args[i];
+        if (av && av->kind == EX_VAR && av->as.var.binding && aspec->fn) {
+            for (uint8_t pi = 0; pi < aspec->fn->n_params && pi < aspec->n_args; pi++) {
+                if (aspec->fn->params[pi] == av->as.var.binding) {
+                    at = aspec->arg_types[pi];
+                    break;
+                }
+            }
+        }
         twin_args[i] = at;
         if (i == 0) resolved_recv = at;
     }

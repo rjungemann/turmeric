@@ -19,6 +19,27 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0f. Status snapshot — 2026-06-15 (M5 D.4 COMPLETE -- producer-side bridge count -> 0)
+
+Both `CK_CONCRETE -> CK_CARRIER` producer bridges are now deleted:
+
+- **M4c Path A** (`emit_expr.c`): deleted (commit `f134708`) -- zero producers
+  after Option C.
+- **EX_ASCRIBE** (`emit_expr.c`): deleted. Extended the Option C twin redirect
+  to fire inside instance-method specs (resolve an element-erased bare-`EX_VAR`
+  receiver via the active spec's `arg_types[]`), migrated the two pin fixtures
+  off the `(:: x :int)` idiom, then deleted the bridge. Emit-c sweep over the
+  full suite (incl. `-Xdata-literals`): zero producers.
+
+The remaining `emit_carrier_bridge` callers are all `CK_CARRIER -> CK_CONCRETE`
+(accessor-side unbox -- M3's separate target) plus the existential / HKT
+carrier producers the plan keeps. Suite green 1636/0, zero snapshot drift.
+Pins: `m5-instance-spec-constraint-var` (instance-method-spec redirect),
+`m5-spec-body-byval-redirect` (return-position element-type redirect). Full
+write-up: `m5-residual-straddle-retirement.md` (session 10) +
+`docs/archive/history/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
+**M5's residual-straddle retirement is complete**; M3 is unblocked.
+
 ## 0. Status snapshot — 2026-06-14 (post-M5 emit-side follow-up)
 
 Today's landings:

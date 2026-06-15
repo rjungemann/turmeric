@@ -1,13 +1,19 @@
 # M5 D.4 for the EX_ASCRIBE producer bridge is blocked on redirect coverage
 
-> **Status:** OPEN (investigation, 2026-06-15). Filed while looking into the
-> remaining D.4 work after the M4c Path A branch was deleted (commit `f134708`).
-> **Severity:** low-medium. Not a miscompile -- the bridge is correct and the
-> suite is green. This is a *planning correction*: the audit / M5 retirement
-> doc framed "delete the EX_ASCRIBE `CK_CONCRETE -> CK_CARRIER` branch" as a
-> mechanical follow-up gated only on "retiring the two pin fixtures". It is
-> not mechanical; it is blocked on two real emit gaps in the Option C
-> by-value-twin redirect.
+> **Status:** RESOLVED 2026-06-15 (same session). Direction 1 taken: extended
+> the Option C redirect (Gap 1 fix), migrated the two pins off the `(:: x :int)`
+> idiom, and deleted the EX_ASCRIBE `CK_CONCRETE -> CK_CARRIER` producer bridge.
+> Suite green 1636/0, zero snapshot drift. See "Resolution" at the bottom.
+> Filed while looking into the remaining D.4 work after the M4c Path A branch
+> was deleted (commit `f134708`).
+> **Severity:** low-medium. Not a miscompile -- the bridge was correct and the
+> suite was green throughout. This was a *planning correction*: the audit / M5
+> retirement doc framed "delete the EX_ASCRIBE `CK_CONCRETE -> CK_CARRIER`
+> branch" as a mechanical follow-up gated only on "retiring the two pin
+> fixtures". It was not mechanical; it needed a redirect-coverage extension
+> first (Gap 1). Gap 2 (below) turned out NOT to block: it was an artifact of
+> the `(:: x (Vec A))` carrier-helper form, which the chosen bare-idiom
+> migration does not use.
 
 ## One-line
 
@@ -188,3 +194,67 @@ sed 's/(vec-len (:: x :int))/(vec-len (:: x (Vec A)))/' \
   tests/fixtures/m5-instance-spec-constraint-var/input.tur > /tmp/g2.tur
 $TUR build /tmp/g2.tur -o /tmp/g2   # cc error: vec_len_byval__spec__int64_t_int64_t(Vec__int)
 ```
+
+## Resolution 2026-06-15 (Direction 1)
+
+Took Direction 1. The fix turned out to be **Gap 1 only** -- Gap 2 does not
+arise on the chosen migration path.
+
+### Gap 1 fix -- redirect resolves the element-erased receiver via spec arg_types
+
+`emit_abi_try_byval_twin_redirect` (`emit_module.c`) resolved each call arg
+type by instantiating the call arg's *elab-time* type through the active spec's
+tyvar bindings. For an instance-method spec receiver that elab type is the
+element-erased bare `TY_STRUCT Vec` (no tyvar to substitute), so struct-app
+extraction failed and the redirect bailed.
+
+Fix: when a call arg is a bare `EX_VAR` bound to a parameter of the active
+spec's `fn`, prefer the spec's own concrete `arg_types[pi]` (e.g. `Vec__int`)
+over the instantiated elab type. This mirrors what the (now-deleted) M4c
+Path A and EX_ASCRIBE bridges already did to recover the monomorphized param
+type, and lets the redirect fire for `(vec-get x i)` / `(vec-len x)` inside
+`__inst_*__spec__*` exactly as it already did for a plain constrained-poly
+defn spec. ~12 lines in the redirect's arg-resolution loop.
+
+### Gap 2 did NOT block -- it was an artifact of the `(:: x (Vec A))` form
+
+The Gap 2 repro re-ascribed the carrier-helper call to `(:: x (Vec A))`, which
+made the redirect intern an `int64_t`-param twin and collide across the two
+ABIs. The chosen migration does **not** use that form: it drops the ascription
+entirely (`(vec-len x)`), so the Gap 1 fix resolves the receiver straight to
+`Vec__int` and interns a *single* `vec_len_byval__spec__int64_t_Vec__int`
+clone. The carrier base and the by-value spec share that one clone -- the
+carrier base deref-bridges its int64 receiver (`*(Vec__int*)x`) at the call
+site (the existing `CK_CARRIER -> CK_CONCRETE` arg adaptation), the spec passes
+it direct. No collision; the per-call-node clone recording is correct as-is.
+So no `emit_abi_record_specialized_call` keying change was needed.
+
+### Pins migrated, bridge deleted
+
+- `m5-instance-spec-constraint-var`: rewritten to the bare idiom
+  (`(vec-get x i)`, `(vec-len x)`); now also pins the Gap-1 instance-method-spec
+  redirect coverage in addition to gap-4 constraint-var propagation.
+- `m5-spec-body-ascription-bridge` -> renamed `m5-spec-body-byval-redirect`,
+  rewritten to the bare idiom; pins the redirect for a plain constrained-poly
+  defn whose carrier-helper result carries the element type in *return*
+  position (`at1-helper [A] [x : (Vec A)] : A`).
+- The EX_ASCRIBE `CK_CONCRETE -> CK_CARRIER` producer bridge in `emit_expr.c`
+  is **deleted** (replaced with an explanatory comment). An emit-c sweep over
+  the full suite (incl. `-Xdata-literals`) confirms zero producers.
+
+The symmetric `CK_CARRIER -> CK_CONCRETE` accessor-side path stays -- it is
+still load-bearing (e.g. the `vec-len-byval` carrier base derefs `(:: x (Vec
+A))` through it) and is M3's separate target, not part of this D.4.
+
+### Residual (minor)
+
+Deleting the bridge means a *hand-written* `(:: x :int)` on a by-value struct
+(only meaningful inside a by-value spec body, which no idiomatic code writes)
+now falls through to a carrier-relabel and would surface as a `cc` type error
+rather than a clean Turmeric diagnostic. No in-tree code hits this. If it ever
+matters, add an elaborator-level rejection per Direction 2's diagnostic note.
+
+### Validation
+
+`bash tests/run.sh`: 1636 passed, 0 failed, zero codegen-snapshot drift. Both
+migrated pins build and run to their `expected.stdout` on the compiled backend.
