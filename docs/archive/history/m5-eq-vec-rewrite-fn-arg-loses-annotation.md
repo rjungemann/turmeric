@@ -93,7 +93,7 @@ SUMMARY: AddressSanitizer: SEGV elab_typeclasses.c:3388 in elab_method_call
 ```
 
 Two distinct elaborator gaps, both blocking the Option D Eq Vec
-rewrite from `docs/upcoming/m5-residual-straddle-retirement.md`.
+rewrite from `docs/m5-residual-straddle-retirement.md`.
 
 ## Severity
 
@@ -427,7 +427,7 @@ build and pass.
 
 ## Related
 
-- `docs/upcoming/m5-residual-straddle-retirement.md` -- Option D plan
+- `docs/m5-residual-straddle-retirement.md` -- Option D plan
   that this gap blocks.
 - `docs/upcoming/end-to-end-monomorphization-plan.md` -- M5 phase.
 - `docs/archive/history/m5-constrained-poly-spec-wrong-dispatch-for-parametric-receiver.md`

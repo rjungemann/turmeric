@@ -136,7 +136,7 @@ infrastructure stays inert until M4c-pre + M4c land together.
 
 - [docs/upcoming/m4-typeclass-per-method-abi-plan.md](../upcoming/m4-typeclass-per-method-abi-plan.md)
   — the parent plan (now needs an M4c-pre phase prepended).
-- [docs/upcoming/m4b-handoff.md](../upcoming/m4b-handoff.md)
+- [docs/m4b-handoff.md](../m4b-handoff.md)
   — M4b's deliverable.
 - [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
   — the M3 deletion blocker that this whole chain unblocks.

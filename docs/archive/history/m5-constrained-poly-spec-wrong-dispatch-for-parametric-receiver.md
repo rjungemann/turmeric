@@ -187,7 +187,7 @@ to work — and the example currently mis-compiles in the same way.
 ## Related
 
 - `docs/upcoming/end-to-end-monomorphization-plan.md` — M5 phase.
-- `docs/upcoming/monomorphization-audit.md` — Section 10 step 8.
+- `docs/monomorphization-audit.md` — Section 10 step 8.
 - `src/compiler/emit_module.c:951-1170` — `emit_abi_register_call` /
   spec interning.
 - `src/compiler/elab_typeclasses.c:4042` — Phase H §1 direct call

@@ -184,7 +184,7 @@ below.
 
 **Fixture:** `hkt-stdlib-option-result-instances`.
 **Severity:** the genuine M5 monomorphization residual (was tracked
-conceptually in `docs/upcoming/m5-residual-straddle-retirement.md`), surfacing
+conceptually in `docs/m5-residual-straddle-retirement.md`), surfacing
 here as a hard `cc` error rather than a miscompile.
 
 ### Observed
@@ -334,7 +334,7 @@ failed`, no regressions.
 ## Cross-references
 
 - `docs/upcoming/end-to-end-monomorphization-plan.md` -- the M5 effort.
-- `docs/upcoming/m5-residual-straddle-retirement.md` -- root cause C.
+- `docs/m5-residual-straddle-retirement.md` -- root cause C.
 - `docs/reported/make-struct-phantom-typeparam-lowering.md` -- origin of the
   `default-of` builtin behind root cause B.
 - `CLAUDE.md` -- Fixture Snapshots / "a codegen mismatch is a real failure"

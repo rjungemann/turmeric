@@ -29,7 +29,7 @@ as the gap-4 baseline, **zero regressions**.  `thead` now interns its
 `Cons__int` spec under the Eq Vec rewrite (`BT_EMIT thead n_bindings=1`).
 
 Note: this clears the spec-drop (Finding 6 of
-`docs/upcoming/m5-residual-straddle-retirement.md`).  The Eq Vec by-value
+`docs/m5-residual-straddle-retirement.md`).  The Eq Vec by-value
 rewrite still needs the representation-precise field-access change
 (Finding 5) before it can land -- that is the remaining, independent half.
 
@@ -204,7 +204,7 @@ bugs.
 
 This is the standing blocker for the M5 single-body-two-ABIs goal.  The
 field-access half of that work (making `(.len v)` dual-ABI) is solvable
-(see `docs/upcoming/m5-residual-straddle-retirement.md`), but it is moot
+(see `docs/m5-residual-straddle-retirement.md`), but it is moot
 until the Eq Vec instance body can call a by-value helper *without*
 perturbing sibling specs.  The same worklist fragility is the recurring
 theme behind gap 4's hamt-delete regressor and the earlier session
@@ -221,7 +221,7 @@ Eq Vec carrier base.
 
 ## Related
 
-- `docs/upcoming/m5-residual-straddle-retirement.md` -- the design map;
+- `docs/m5-residual-straddle-retirement.md` -- the design map;
   findings 1-4 of the session-4 continuation.
 - `m5-instance-spec-doesnt-propagate-constraint-var-bindings.md`
   -- gap 4 (FIXED); its hamt-delete regressor was the same worklist

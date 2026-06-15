@@ -291,7 +291,7 @@ shape) would also compile.
 
 ## Related
 
-- `docs/upcoming/m5-residual-straddle-retirement.md` — Option D plan
+- `docs/m5-residual-straddle-retirement.md` — Option D plan
   that this gap blocks.
 - `docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md`
   — fixed earlier this session; addressed a different but adjacent

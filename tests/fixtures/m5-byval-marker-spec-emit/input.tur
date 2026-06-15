@@ -1,4 +1,4 @@
-;; M5 residual-straddle (docs/upcoming/m5-residual-straddle-retirement.md):
+;; M5 residual-straddle (docs/m5-residual-straddle-retirement.md):
 ;; pins the #{ByVal} marker behavior end-to-end.  A #{ByVal}-marked helper
 ;; with a (Vec A) param that's only called from a by-value spec body
 ;; should get a per-receiver-type spec interned (Vec__int) AND its

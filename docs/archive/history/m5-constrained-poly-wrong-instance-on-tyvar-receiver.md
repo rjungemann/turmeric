@@ -19,7 +19,7 @@ Pinned by `tests/fixtures/m5-constrained-poly-wrong-instance-fix/`.
 The bridge-side cc errors that gap2b (vec-eq-loop-byval shape)
 still hits are SEPARATE from this bug -- they're the M4c-pre-ext
 residual straddle, tracked in
-`docs/upcoming/m5-residual-straddle-retirement.md`.  Wrong-instance
+`docs/m5-residual-straddle-retirement.md`.  Wrong-instance
 dispatch itself is now correct.
 
 ## Summary
@@ -171,5 +171,5 @@ The existing `vec-eq-loop` ^fat-cmp pattern keeps working as before.
 - `docs/archive/history/m5-constrained-poly-spec-wrong-dispatch-for-parametric-receiver.md` —
   FIXED earlier; addressed parametric receiver (Vec A), not
   TY_TYVAR-via-ascription.
-- `docs/upcoming/m5-residual-straddle-retirement.md` — Option D
+- `docs/m5-residual-straddle-retirement.md` — Option D
   plan that this gap blocks.

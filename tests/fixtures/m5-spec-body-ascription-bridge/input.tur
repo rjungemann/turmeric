@@ -1,4 +1,4 @@
-;; M5 residual-straddle (docs/upcoming/m5-residual-straddle-retirement.md):
+;; M5 residual-straddle (docs/m5-residual-straddle-retirement.md):
 ;; A Path A spec body that uses `(:: x :int)` to widen a by-value
 ;; carrier-ABI param (e.g. Vec__int) to the int64 carrier for a
 ;; downstream carrier-helper call (vec-get, vec-len, etc.) previously

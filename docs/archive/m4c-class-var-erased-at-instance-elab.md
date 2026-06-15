@@ -171,7 +171,7 @@ execution plan can resume.
 
 - [docs/upcoming/m4c-execution-plan.md](../upcoming/m4c-execution-plan.md)
   — the plan this report refines (step 2 specifically).
-- [docs/upcoming/m4b-handoff.md](../upcoming/m4b-handoff.md)
+- [docs/m4b-handoff.md](../m4b-handoff.md)
 - [docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md](m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md)
   — M4c-pre's unblock (resolved).
 - [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
