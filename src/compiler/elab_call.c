@@ -1489,6 +1489,25 @@ Expr *elab_call(Elab *e, Form *call) {
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
 
+    /* constrained-generic-as-value (docs/reported/constrained-generic-as-value-
+     * bakes-representative.md): a call through an immutable let-bound alias of a
+     * global function -- `(let [g count-it] (g box))` -- was elaborated as an
+     * indirect call through `g`, so the emit-side per-call-site generic-dict
+     * specialization (which keys on a named callee) never fired and the base
+     * clone baked the carrier representative instance (returning the wrong
+     * answer, rc=0).  An alias `g.source_binding == count-it` makes `(g args)`
+     * semantically identical to `(count-it args)` (the binding is immutable and
+     * source_binding is only set for global TY_FN inits, elab_forms.c), so
+     * resolve the call head to the global here: the direct-call path below then
+     * attaches the same abi_bindings a direct `(count-it args)` call gets, and
+     * the GDE machinery specializes to the receiver's real instance. */
+    if (fn_binding && !fn_binding->is_global && !fn_binding->is_poly_fn &&
+        fn_binding->type.kind == TY_FN && fn_binding->source_binding &&
+        fn_binding->source_binding->is_global &&
+        fn_binding->source_binding->type.kind == TY_FN) {
+        fn_binding = fn_binding->source_binding;
+    }
+
     /* Phase RT: return-type-directed dispatch for a typeclass method whose
      * dispatch variable appears only in its return type (e.g. (default-of),
      * (schema-of)).  Such methods cannot be resolved from arguments; the

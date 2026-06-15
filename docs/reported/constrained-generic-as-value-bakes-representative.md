@@ -1,5 +1,29 @@
 # Constrained-generic function as a value bakes the carrier representative instance
 
+> **PARTIALLY RESOLVED 2026-06-15.** The **`let`-bound alias** case is fixed: a
+> call through an immutable let-bound alias of a global function
+> (`(let [g count-it] (g box))`) now elaborates to a **direct** call to the
+> global (`elab_call.c` follows `Binding.source_binding` when resolving the call
+> head), so the existing emit-side per-call-site GDE specialization fires and
+> dispatches to the receiver's real instance. `(g (make-struct Box 0))` now
+> returns `7` on **both** backends (was `-1`, rc=0 on the compiled path);
+> `(h 42)` stays `-1`. Regression fixture:
+> `tests/fixtures/gde6-generic-dict-alias-call/`. Compiled suite 1648/0 (one
+> snapshot, `macro-quasiquote-unquote`, regenerated -- an alias call there is
+> now a direct call); turi harness 1207 passed / 2 failed (pre-existing).
+>
+> **Still open:** the **coerced + indirect** case below
+> (`(apply-fn count-it box)`, where `count-it` is coerced to a concrete
+> `(fn [Box] int)` parameter and applied through an opaque fn param) still bakes
+> the representative on **both** backends (`-1`). There is no `source_binding`
+> alias to follow -- the value flows through a function-typed *parameter*, so the
+> application site `(f b)` cannot recover `count-it`. Closing it needs
+> capture-site specialization (the coercion site *does* statically know
+> `A = Box` from the callee's param type), i.e. extending
+> `emit_abi_scan_fn_values` with a GDE-style instance-re-resolution hatch plus an
+> `atom_var` resolution that does not depend on an active outer spec. Tracked as
+> the remaining work here.
+
 **Summary:** When a class-constrained generic function (e.g.
 `(defn count-it [^Size A] [x :A] :int (size x))`) is reached **indirectly** --
 bound to a local (`(let [g count-it] (g box))`) or coerced to a concrete
@@ -28,6 +52,18 @@ backends also *disagree*.
 (definstance Size [Box] (size [x : Box] 7))     ; pure-Turmeric, distinct answer
 (defn count-it [^Size A] [x :A] :int (size x))  ; generic-dict driver
 ```
+
+Status as of the 2026-06-15 partial fix (was: both indirect rows `-1` on
+compiled; the `let`-bound row also diverged interp-vs-compiled):
+
+| Application form | `--interpret` | `tur run` (compiled) | correct | status |
+| --- | --- | --- | --- | --- |
+| `(count-it (make-struct Box 0))` -- direct | `7` | `7` | `7` | OK |
+| `(let [g count-it] (g (make-struct Box 0)))` -- local binding | `7` | `7` | `7` | **fixed** |
+| `(apply-fn count-it (make-struct Box 0))` -- coerced + indirect | `-1` | `-1` | `7` | **open** |
+| `(let [g count-it] (g 42))` -- local binding, primitive | `-1` | `-1` | `-1` | OK |
+
+Original (pre-fix) matrix:
 
 | Application form | `--interpret` | `tur run` (compiled) | correct |
 | --- | --- | --- | --- |

@@ -4423,7 +4423,7 @@ int main(int argc, char **argv) {
         {
             int64_t (*add5)(int64_t) = __fn_886;
             (void)add5;
-            printf("%lld\n", (long long)(((int64_t (*)(int64_t))(intptr_t)add5)(INT64_C(10))));
+            printf("%lld\n", (long long)(__fn_886(INT64_C(10))));
             int64_t __t24;
             __t24 = INT64_C(0);
             __t23 = __t24;

@@ -1,0 +1,24 @@
+;; GDE6: a generic-dict driver reached through an immutable let-bound alias of a
+;; global function still specialises to the receiver's real instance.
+;;
+;; `(let [g count-it] (g box))` is semantically identical to `(count-it box)`,
+;; but was elaborated as an indirect call through `g`, so emit-side generic-dict
+;; specialization (keyed on a named callee) never fired and the base clone baked
+;; the carrier representative `Size [int]` -- returning -1 instead of 7 (rc=0) on
+;; the COMPILED path.  Resolving the alias call to its global lets the existing
+;; per-call-site specialization fire.  Pure-Turmeric instances, so the output is
+;; visible and identical under `tur run` and `tur --interpret`.
+;; See docs/reported/constrained-generic-as-value-bakes-representative.md.
+
+(defclass Size [a] (size [x] : int))
+(definstance Size [int] (size [x] -1))
+(defstruct Box [n : int])
+(definstance Size [Box] (size [x : Box] 7))
+(defn count-it [^Size A] [x :A] :int (size x))
+
+(defn main [] : int
+  (let [g count-it]
+    (println (g (make-struct Box 0))))   ; 7  via Size [Box] through the alias
+  (let [h count-it]
+    (println (h 42)))                    ; -1 via Size [int] through the alias
+  0)
