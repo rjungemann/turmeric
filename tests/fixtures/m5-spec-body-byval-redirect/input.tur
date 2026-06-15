@@ -1,0 +1,39 @@
+;; M5 D.4 (end-to-end-monomorphization, docs/upcoming/m5-residual-straddle-retirement.md):
+;; Pins the Option C by-value twin redirect for a constrained-poly defn spec
+;; body whose carrier-helper result carries the element type in RETURN
+;; position.  `(vec-get x i)` calls the carrier stdlib accessor
+;; (declared `[v : int] : A`) on a by-value `(Vec A)` spec param; the emitter
+;; redirects it to the pure-Turmeric `vec-get-byval` twin so the by-value
+;; receiver flows straight in.  `at1-helper` returns `(vec-get x 0)` as the
+;; bare element type `: A` (no result ascription), exercising the
+;; return-position element-type path of emit_abi_register_call.
+;;
+;; History: this fixture was `m5-spec-body-ascription-bridge`; it originally
+;; pinned the `(:: x :int)` + EX_ASCRIBE CK_CONCRETE -> CK_CARRIER spill
+;; bridge that let a by-value spec body call a carrier helper.  M5 D.4 deleted
+;; that bridge in favour of the twin redirect; the fixture is migrated to the
+;; redirect idiom (drop the `(:: x :int)` widening, call the carrier helper
+;; directly) and renamed accordingly.
+
+(defn at1-helper [A]
+  [x : (Vec A)]
+  : A
+  (vec-get x 0))
+
+(defn vec-eq-loop-spec-probe [A]
+  [(Eq A)]
+  [x : (Vec A) y : (Vec A) i : int len : int]
+  : bool
+  (if (= i len)
+    true
+    (if (eq? (:: (vec-get x i) A) (:: (vec-get y i) A))
+      (vec-eq-loop-spec-probe x y (+ i 1) len)
+      false)))
+
+(defn main [] : int
+  (let [a (:: (vec-of) (Vec int))]
+    (vec-push! a 42)
+    (vec-push! a 17)
+    (let [first (at1-helper a)
+          loop-eq (vec-eq-loop-spec-probe a a 0 2)]
+      (if (and (= first 42) loop-eq) 0 1))))

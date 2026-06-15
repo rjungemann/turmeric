@@ -6,6 +6,118 @@ description: Retire the two CK_CONCRETE -> CK_CARRIER bridges introduced by M4c-
 
 # M5 Residual Straddle Retirement -- Plan
 
+## STATUS 2026-06-15 (session 10): D.4 LANDED for EX_ASCRIBE -- bridge count -> 0
+
+The EX_ASCRIBE `CK_CONCRETE -> CK_CARRIER` producer bridge (the `(:: x :int)`
+spill for a by-value spec param) is now **deleted**. With session 9's M4c Path
+A deletion, this was the last `CK_CONCRETE -> CK_CARRIER` producer site --
+**the producer-side bridge count is now 0.**
+
+### What landed
+
+- **Redirect extension (Gap 1)** in `emit_abi_try_byval_twin_redirect`
+  (`emit_module.c`): when a call arg is a bare `EX_VAR` bound to an active-spec
+  param, resolve its type from the spec's concrete `arg_types[pi]` instead of
+  instantiating the elab-time type. This lets the Option C twin redirect fire
+  for `(vec-get x i)` / `(vec-len x)` inside an *instance-method* spec, whose
+  receiver arrives element-erased (bare `TY_STRUCT Vec`). Previously the
+  redirect only fired for plain constrained-poly defn specs.
+- **Pins migrated off `(:: x :int)`**:
+  - `m5-instance-spec-constraint-var` -> bare idiom; now pins the instance-
+    method-spec redirect (Gap 1) on top of gap-4 constraint-var propagation.
+  - `m5-spec-body-ascription-bridge` -> renamed `m5-spec-body-byval-redirect`,
+    bare idiom; pins the redirect for a return-position element-type accessor
+    (`at1-helper [A] [x : (Vec A)] : A`).
+- **Bridge deleted** in `emit_expr.c` (replaced by an explanatory comment).
+  An emit-c sweep over the full suite (incl. `-Xdata-literals`) confirms zero
+  producers.
+
+### Gap 2 did not block
+
+The "twin clone collides across the dual-ABI instance method" gap was an
+artifact of the `(:: x (Vec A))` carrier-helper form, which the chosen bare
+idiom does not use. Dropping the ascription makes the redirect intern a single
+`vec_len_byval__spec__int64_t_Vec__int` clone shared by both ABIs (carrier base
+deref-bridges its int64 receiver, spec passes direct) -- no collision, no
+recording-key change needed.
+
+### Result
+
+`bash tests/run.sh`: **1636 passed, 0 failed**, zero codegen-snapshot drift.
+The only remaining `emit_carrier_bridge` sites are `CK_CARRIER -> CK_CONCRETE`
+(accessor-side unbox -- M3's target, still load-bearing) and the existential /
+HKT carrier producers that the plan keeps. Full write-up + repro:
+`docs/archive/history/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
+
+**M5's residual-straddle retirement is complete**: both `CK_CONCRETE ->
+CK_CARRIER` producer bridges (M4c Path A + EX_ASCRIBE) are gone. M3 (delete
+the symmetric accessor-side path) is now unblocked as a separate phase.
+
+## STATUS 2026-06-15 (session 9): D.4 LANDED for M4c Path A -- dead bridge branch deleted
+
+With Option C in tree (session 8) the M4c Path A `CK_CONCRETE -> CK_CARRIER`
+site at `emit_expr.c` had zero producers. This session executed **D.4** for it:
+the branch is **deleted outright**.
+
+### Verification before deletion
+
+Instrumented the exact M4c Path A site with an env-gated probe
+(`TUR_M4C_PATHA_PROBE`) and swept `emit-c` over the full fixture suite
+(1292 fixtures with a resolvable entry point): **0 firings**. The branch was
+provably dead, not merely dead for the pin fixtures.
+
+### What landed
+
+- **emit_expr.c**: the `else if (... M4c Path A ...)` branch (the
+  by-value-spec-body-calls-carrier-helper spill-and-re-form-carrier path) is
+  removed, replaced by a comment pointing at the Option C redirect
+  (`emit_abi_try_byval_twin_redirect`) that now handles this case at the call
+  boundary. The preceding `dict_arg` `if` stands alone (it was the `if` head of
+  the `if/else if` chain; dropping the `else if` is mechanical).
+
+### Result
+
+- `bash tests/run.sh`: **1636 passed, 0 failed**, zero codegen-snapshot drift.
+  Deleting a zero-producer branch is byte-identical output, so **no snapshot
+  regen was required** -- the green suite with no codegen mismatch is itself the
+  proof the branch never fired.
+- The M4c Path A bridge branch no longer exists. The only remaining
+  `CK_CONCRETE -> CK_CARRIER` producers are the **two EX_ASCRIBE bridge-pin
+  fixtures** (`m5-instance-spec-constraint-var`,
+  `m5-spec-body-ascription-bridge`), which exist specifically to pin bridge
+  behaviour.
+
+### Remaining toward "bridge count -> 0"
+
+D.4 for the **EX_ASCRIBE** branch is the only open piece: the
+`CK_CONCRETE -> CK_CARRIER` site is kept alive solely by its two dedicated pin
+fixtures (`m5-instance-spec-constraint-var`, `m5-spec-body-ascription-bridge`),
+which use the explicit `(:: x :int)` widening idiom.
+
+**It is NOT mechanical.** A follow-up investigation (same session) tried to
+migrate the pins to the Option C redirect idiom (drop `(:: x :int)`, let the
+twin redirect retarget `vec-len`/`vec-get` to their `*-byval` twins) so the
+bridge could be deleted. It is blocked on two real emit gaps:
+
+1. The redirect does not fire for an instance-method spec receiver, which
+   arrives as the element-erased bare `TY_STRUCT Vec` (kind 18) -- struct-app
+   extraction fails, so it falls back to the carrier base. The pin must
+   re-ascribe to `(Vec A)` to expose the element type.
+2. Even with `(:: x (Vec A))`, the redirect's per-call-node clone recording
+   (`emit_abi_record_specialized_call`) collides across the dual-ABI instance
+   method: the carrier base mints an `int64_t`-param twin clone that the
+   by-value spec then wrongly reuses (`Vec__int` into `int64_t` -> cc error).
+   This is the Finding-7 `(call, active-spec)` keying issue recurring for the
+   twin-redirect path.
+
+So finishing D.4 here is either (1) real emit work -- extend the redirect to
+element-erased instance-method receivers AND key the twin-redirect clone per
+`(call, active-spec)` -- then migrate the pins and delete the bridge; or
+(2) a decision to keep the bridge as supported `(:: struct :int)` widening
+surface and close D.4-for-EX_ASCRIBE as won't-do. Full analysis, repro, and
+fix directions (RESOLVED in session 10, see above):
+`docs/archive/history/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
+
 ## Why
 
 M4c Path A specializes typeclass-instance methods on parameterized

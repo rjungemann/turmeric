@@ -1,5 +1,5 @@
 ;; M5 (end-to-end-monomorphization gap 4,
-;; docs/reported/m5-instance-spec-doesnt-propagate-constraint-var-bindings.md):
+;; docs/archive/history/m5-instance-spec-doesnt-propagate-constraint-var-bindings.md):
 ;; a typeclass-instance method's Path A spec body that calls a sibling
 ;; constrained-polymorphic helper over (Vec A) must monomorphize that
 ;; callee per receiver element type.
@@ -19,6 +19,15 @@
 ;;      bindings with the constraint var's concrete element type, so the
 ;;      composition pass substitutes A -> int and interns the callee's
 ;;      by-value spec.
+;;
+;; M5 D.4 (redirect coverage): this fixture also pins the Option C by-value
+;; twin redirect firing inside an INSTANCE-METHOD spec body.  `(vec-len x)` /
+;; `(vec-get x i)` call the carrier stdlib helpers on a by-value `Vec__int`
+;; receiver; the redirect retargets them to `vec-len-byval` / `vec-get-byval`.
+;; Inside an instance-method spec the receiver arrives element-erased (bare
+;; TY_STRUCT Vec), so emit_abi_try_byval_twin_redirect resolves its concrete
+;; type from the active spec's arg_types[] (Gap 1 fix).  This replaces the
+;; retired `(:: x :int)` + EX_ASCRIBE spill bridge.
 
 (defn callee [A]
   [(Eq A)]
@@ -26,7 +35,7 @@
   : bool
   (if (= i len)
     true
-    (if (eq? (:: (vec-get (:: x :int) i) A) (:: (vec-get (:: y :int) i) A))
+    (if (eq? (vec-get x i) (vec-get y i))
       (callee x y (+ i 1) len)
       false)))
 
@@ -35,7 +44,7 @@
 (definstance MyEq [Vec]
   [(Eq A)]
   (myeq? [x y]
-    (callee (:: x (Vec A)) (:: y (Vec A)) 0 (vec-len (:: x :int)))))
+    (callee (:: x (Vec A)) (:: y (Vec A)) 0 (vec-len x))))
 
 (defn main [] : int
   (let [a (:: (vec-of) (Vec int))

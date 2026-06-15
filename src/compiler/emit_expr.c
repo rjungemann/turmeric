@@ -2705,50 +2705,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CONCRETE, CK_CARRIER,
                                              e->as.call_.args[i]->type);
                 }
-                /* M4c Path A: same shape as the dict_arg bridge above, but
-                 * for ordinary direct calls to int64-carrier-sink helpers
-                 * (e.g. `(vec-eq? x …)` inside an Eq Vec spec body where x is
-                 * a by-value `Vec__int` param after Path A.1 substitution).
-                 * Without this, the spec body emits `vec_hyeq_qu(x, y, …)`
-                 * passing by-value where the helper expects int64 — a hard
-                 * cc error.  Gate is `!dict_arg` (the dict_arg branch above
-                 * handles its case) AND the same by-value-carrier → int64
-                 * predicate the dict_arg branch uses. */
-                else if (!needs_fn_cast && !matched_spec &&
-                         e->as.call_.dict_arg == NULL &&
-                         emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
-                         type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
-                         type_uses_carrier_in_dispatch(e->as.call_.args[i]->type) &&
-                         expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
-                         fn_binding && fn_binding->type.kind == TY_FN &&
-                         i < fn_binding->type.as.fn.arity &&
-                         fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
-                    /* M4c Path A: when emit_arg is an EX_VAR bound to a
-                     * spec param, the spill type must match the spec's
-                     * resolved arg type (e.g. `Vec__int`), not the elab-
-                     * time abstract type (e.g. bare `Vec`).  The dict-
-                     * dispatch branch above uses args[i]->type because
-                     * its caller threads abstract typeclass args; here
-                     * we're calling a carrier-helper from inside a spec
-                     * body, so resolve via current_abi_specialization. */
-                    Type bridge_ty = e->as.call_.args[i]->type;
-                    if (ctx->current_abi_specialization
-                        && emit_arg->kind == EX_VAR
-                        && emit_arg->as.var.binding) {
-                        Binding *vb = emit_arg->as.var.binding;
-                        FnDef *cfd = ctx->current_abi_specialization->fn;
-                        for (uint8_t pi = 0; cfd && pi < cfd->n_params
-                                             && pi < ctx->current_abi_specialization->n_args; pi++) {
-                            if (cfd->params[pi] == vb) {
-                                bridge_ty = ctx->current_abi_specialization->arg_types[pi];
-                                break;
-                            }
-                        }
-                    }
-                    raw = emit_carrier_bridge(ctx, body, raw,
-                                             CK_CONCRETE, CK_CARRIER,
-                                             bridge_ty);
-                }
+                /* M4c Path A (RETIRED -- M5 D.4, end-to-end-monomorphization
+                 * plan): a by-value spec body that called an int64-carrier-sink
+                 * stdlib helper (e.g. `(vec-len x)` / `(vec-get x i)` inside an
+                 * `Eq Vec` Path A spec) used to spill the by-value `Vec__int`
+                 * receiver to a temp and pass `&temp` as an int64 carrier here.
+                 * Option C (the by-value twin redirect in
+                 * emit_abi_try_byval_twin_redirect, emit_module.c) now retargets
+                 * such calls to the helper's `*-byval` twin spec at the call
+                 * boundary, so the carrier never has to be re-formed and this
+                 * `CK_CONCRETE -> CK_CARRIER` site has zero producers. Verified
+                 * by an emit-c sweep over the full fixture suite (0 firings).
+                 * The branch is deleted outright; if a future carrier helper
+                 * lacks a by-value twin the consistency-gated redirect simply
+                 * leaves the call alone, which is a clean elaborator error
+                 * rather than a silent re-spill. */
                 /* Phase D: large struct args must be passed as const T*.
                  * Only apply when the CALLEE also uses pass-by-ptr for that param
                  * (i.e., was compiled with Phase D signatures). Generic/typeclass
@@ -4451,56 +4422,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                resolved);
                 }
             }
-            /* M4c-pre-ext (symmetric direction): a by-value concrete
-             * struct ascribed back to :int (e.g. `(:: x :int)` where x
-             * is a Path A spec's owned `Vec__int` param).  The value is
-             * the by-value aggregate `Vec__int`; the ascription target
-             * is the int64_t carrier.  Without bridging, the consumer
-             * gets `int64_t xi = x;` -- a C type mismatch.  Spill to a
-             * local and hand back its address as int64_t, mirroring the
-             * CK_CONCRETE -> CK_CARRIER path that elab-call already
-             * uses at carrier-ABI call boundaries.
-             *
-             * Narrow gate: only fire when the inner produces a *by-value*
-             * carrier-ABI aggregate (an EX_VAR/spec-call/struct-literal),
-             * and the inner's STATIC type uses the carrier ABI (TY_APP
-             * or struct-with-carrier-ABI).  `expr_emits_byvalue_carrier_abi`
-             * captures the producer-side distinction precisely. */
-            if (!ascribe_to_opaque
-                && e->type.kind == TY_INT
-                && e->as.ascribe_.inner->type.kind != TY_INT
-                && type_uses_carrier_abi(e->as.ascribe_.inner->type)
-                && expr_emits_byvalue_carrier_abi(ctx, e->as.ascribe_.inner)) {
-                /* For a param var inside a Path A spec, the binding's stored
-                 * `type` is the elab-time TY_STRUCT/TY_APP, whose def is the
-                 * unparameterized struct (e.g. plain `Vec`).  The spec rewrites
-                 * the param to the monomorphized struct (`Vec__int`) only in
-                 * `current_abi_specialization->arg_types[]`.  Use the spec's
-                 * arg type for cname resolution so the spill local declares
-                 * `Vec__int` to match the param's actual C type. */
-                Type concrete_ty = e->as.ascribe_.inner->type;
-                const Expr *inner_p2 = e->as.ascribe_.inner;
-                while (inner_p2 && inner_p2->kind == EX_ASCRIBE)
-                    inner_p2 = inner_p2->as.ascribe_.inner;
-                if (inner_p2 && inner_p2->kind == EX_VAR
-                    && inner_p2->as.var.binding
-                    && ctx->current_abi_specialization
-                    && ctx->fn_params) {
-                    for (uint8_t pi = 0;
-                         pi < ctx->n_fn_params
-                         && pi < ctx->current_abi_specialization->n_args;
-                         pi++) {
-                        if (ctx->fn_params[pi] == inner_p2->as.var.binding) {
-                            concrete_ty = ctx->current_abi_specialization->arg_types[pi];
-                            break;
-                        }
-                    }
-                }
-                Type resolved = emit_resolve_type(ctx, concrete_ty);
-                return emit_carrier_bridge(ctx, body, inner_val,
-                                           CK_CONCRETE, CK_CARRIER,
-                                           resolved);
-            }
+            /* M4c-pre-ext symmetric `(:: x :int)` spill bridge (RETIRED --
+             * M5 D.4, end-to-end-monomorphization plan): a by-value concrete
+             * struct ascribed back to `:int` inside a Path A spec body used to
+             * spill to a temp and hand back its address as the int64 carrier,
+             * so a downstream carrier inline-C helper (`vec-len`/`vec-get`)
+             * could consume it.  Option C (the by-value twin redirect in
+             * emit_abi_try_byval_twin_redirect, emit_module.c) now retargets
+             * those carrier-helper calls to their `*-byval` twins at the call
+             * boundary -- including inside instance-method specs, where the
+             * receiver arrives element-erased and the redirect recovers its
+             * concrete type from the active spec's arg_types[].  So the
+             * `(:: x :int)`-widen-a-by-value-struct idiom is no longer emitted
+             * by any stdlib/spice code; an emit-c sweep over the full fixture
+             * suite (incl. -Xdata-literals) confirms this CK_CONCRETE ->
+             * CK_CARRIER site has zero producers.  The branch is deleted; a
+             * by-value struct ascribed to `:int` now falls through to the
+             * carrier-relabel return below (a no-op for an already-carrier
+             * value). */
             return inner_val;
         }
         /* Phase HRT2 / EX1e / EXG1: existential pack.
