@@ -27,44 +27,68 @@ decoders compile; M4 can land later without rolling spices back.
 
 ## The exact bug it fixes
 
-### Minimal repro (intentionally not yet in-tree)
+### Minimal repro (already in-tree, currently red)
+
+`../turmeric-spices/spices/json/tests/decode-bool.tur` exercises this
+exact seam today. `Decode [bool]` ships in `spices/json/src/json/encode.tur:278`,
+so the instance is no longer missing — the remaining failure is purely the
+return-carrier seam:
 
 ```turmeric
-(definstance Decode [bool] (decode [doc val]
-  ```c
-  /* ... probe "true" / "false" ... */
-  return tur_ok((int64_t)1);
-  ```))
-
 (defn show [b : bool] : void
   (if b (println "1") (println "0")))
 
-(defn main [] : int
-  (let [r (:: (decode doc handle) (Result bool cstr))]
-    (show (ok-val r))   ;; <-- clang error here
-    0))
+;; in main:
+(show (ok-val (:: (decode doc a) (Result bool cstr))))
 ```
 
-clang reports:
+Observed at 2026-06-15 against `./build/tur`:
 
 ```
-error: passing 'int64_t' to parameter of incompatible type 'Result__bool__cstr'
+tests/decode-bool.tur:32:13: error [TUR-E0001]:
+  function 'show' arg 1: expected bool, got int
 ```
 
-The instance body produced an `int64_t` (via `tur_ok(...)`), but the
-ascribed type `(Result bool cstr)` lowers to the by-value struct
-`Result__bool__cstr`. The C compiler is right; the ABI seam is wrong.
+The error fires at the **elaborator**, not at clang -- `ok-val r` resolves
+its declared `:A` return against the carrier-typed value the dispatch shim
+yields (an `int64_t` carrier) rather than the by-value struct's payload
+type. The elaborator sees `int`, the call site declares `bool`, type-check
+rejects it.
+
+**Why this matters for the plan's shape.** The plan was originally framed
+around a C-level mismatch; the in-tree failure is one elaboration step
+earlier. The fix still routes through `emit_carrier_bridge`, but the
+predicate has to participate in **typing** (so `ok-val r` resolves to the
+declared `A`, not the carrier `int`), not just in emission. Concretely: the
+dispatch-call type returned to the elaborator must be the substituted
+by-value type, and the emit-side bridge then has to honor that type when
+lowering to C. Body-side carrier emission (`emit_fns.c:493-512`) is
+already correct -- this is purely a consumer-side fix.
+
+A separate, deeper sub-bug surfaces in
+`../turmeric-spices/spices/json/tests/derive-decode-struct.tur` (clang
+error in `tests_derive-decode-struct_tur.c`: `Result__User__cstr` where
+arithmetic/pointer required). The emitted C wraps an already-by-value
+constructor return in a redundant `*(Result__User__cstr *)(intptr_t)`
+deref. This is the SAME root cause -- a missing or wrongly-directed
+bridge at an ascribed `(Result T cstr)` site -- but the wrong direction
+(consumer side did NOT need the deref; producer side already by-value).
+The predicate the plan adds must also AVOID inserting a bridge when the
+producer already returns by-value. Treat this as a second acceptance
+fixture, not a separate work item.
 
 ### Where the seam lives
 
 | Layer | What it does | Status |
 |---|---|---|
 | Polymorphic stdlib constructors (`ok`, `err`, `some`, `none`) | `#{Construct}` + `make-struct` -- by-value codegen | **Done (M2).** See `stdlib/result.tur:36-66`. |
-| Typeclass dispatch dict layout (`emit_typeclasses.c`) | Uniform `int64_t (*)(...)` slot per method | **Open (M4).** Tracked in `docs/upcoming/m4-typeclass-per-method-abi-plan.md`. |
-| Carrier-bridge / by-value twin (`emit_carrier_bridge`, PRs #364/#369) | Reinterpret int64 carrier as by-value struct at known boundaries | **Live.** Already covers stdlib accessors. |
-| **This plan** -- extend the bridge to typeclass instance method returns | Reinterpret the dispatch shim's `int64_t` return as the declared by-value struct | **Open. Subject of this doc.** |
+| Instance-body carrier-return signature (`emit_fns.c:493-512`) | `__inst_*` whose declared return uses carrier-ABI emits `int64_t` return type | **Live.** Body-side already shaped correctly. |
+| Typeclass dispatch dict slot type (`emit_stmt.c:518`, `emit_module.c:2377`) | Uniform `int64_t (*)(...)` slot per method | **Open (M4).** Tracked in `docs/upcoming/m4-typeclass-per-method-abi-plan.md`. |
+| Carrier-bridge / by-value twin (`emit_carrier_bridge` in `emit_core.c:2410`; predicate `type_uses_carrier_in_dispatch` in `emit_expr.c:17`) | Reinterpret int64 carrier as by-value struct at known boundaries | **Live.** Already used at five sites in `emit_expr.c` (lines 1809, 2640, 2704, 4458, 4484). |
+| Existing fn-typed return carrier helper (`emit_inst_fn_return_carrier`, `emit_internal.h:317`) | Returns the carrier C-type for an `__inst_*` method whose return is a fn value | **Live.** Direct precedent for the new value-side helper this plan adds. |
+| **This plan** -- extend the consumer-side bridge to typeclass instance method returns | Resolve the dispatch call's elaborated type to the substituted by-value struct AND insert `emit_carrier_bridge` at the call-result lowering | **Open. Subject of this doc.** |
 
-The third row is what we reuse; the fourth row is what we add.
+The fourth and fifth rows are what we reuse; the bottom row is what we add. Note the file rename: the original draft cited `emit_typeclasses.c` -- no such file exists in this tree.
 
 ## Why the bridge (and not "just do M4")
 
@@ -86,17 +110,29 @@ M4; this is a single-seam fix, not a general escape hatch.
 
 ### 1. Detection
 
-In `emit_typeclasses.c` (or wherever the dispatch-shim wrapper is
-emitted), at the point a typeclass instance method is being lowered:
+Two participants:
 
-- Resolve the method's declared return type after instance-type
-  substitution. (e.g. for `Decode bool`, the `decode` method's declared
-  return `(Result A cstr)` substitutes to `(Result bool cstr)`.)
-- Predicate: is this type a *by-value polymorphic struct*? Reuse the
-  existing `type_uses_carrier_in_dispatch` check inverted, or whatever
-  predicate `emit_carrier_bridge` already keys on. Do **not** introduce
-  a new predicate -- this is interim work; rely on what already
-  classifies these types.
+**At the elaborator** (`src/compiler/elab_typeclasses.c`, dispatch-call
+type resolution -- search for the call sites that mint
+`__inst_<Class>_<method>_<T>` references): when the method's declared
+return type after instance-type substitution is a by-value polymorphic
+struct (Result, Option, Pair, Tuple, Either, Slice per
+`docs/parametric-type-abi-matrix.md`), record that the call's *result
+type* is the substituted by-value type, NOT the carrier `int`. Without
+this, the type-check that rejects `decode-bool.tur:32` never has the
+information to accept the call.
+
+**At emission** (`src/compiler/emit_expr.c`, EX_CALL lowering for
+`__inst_*` callees): when the elaborator marked a call as by-value-typed
+but the callee's C signature still returns `int64_t` (which it does
+until M4 lands), insert an `emit_carrier_bridge` at the call-result
+position. Predicate: reuse `type_uses_carrier_in_dispatch` -- this is
+interim work; do not introduce a new predicate.
+
+Model the new helper on `emit_inst_fn_return_carrier`
+(`emit_internal.h:317`): same shape (FnDef + result-full-type -> C-type
+decision), called from the same emit sites that the fn-typed twin is
+called from (emit_fns.c:514, emit_module.c:2377, emit_stmt.c:518).
 
 ### 2. Reinterpret
 
@@ -150,14 +186,15 @@ struct type directly).
 
 ## Validation
 
-1. **Spice-side decoder fixture.** Write
-   `../turmeric-spices/spices/json/tests/decode-bool.tur` with a typed
-   helper (`(defn show [b : bool] ...)`) consuming the ascribed
-   `(Result bool cstr)`. Expected: PASS.
-2. **`derive-decode-struct.tur`.** The same root cause blocks this
-   fixture today. Expected: flips from FAIL to PASS as a side effect.
-   If it doesn't, the bridge predicate is not catching the relevant
-   seam; investigate before merging.
+1. **Spice-side decoder fixture.**
+   `../turmeric-spices/spices/json/tests/decode-bool.tur` already
+   exists and is currently red (TUR-E0001 at line 32). Expected:
+   flips from FAIL to PASS, with stdout `1\n0\nerr\nerr\n`.
+2. **`derive-decode-struct.tur`.** Same root cause, currently red at
+   cc with a `Result__User__cstr` arithmetic-type error. Expected:
+   flips from FAIL to PASS as a side effect. If it doesn't, the bridge
+   predicate is not catching the relevant seam; investigate before
+   merging. (See the in-tree clang trace in "the exact bug" section.)
 3. **Full `bash tests/run.sh`.** Zero `FAIL` regressions. Snapshot
    regen if dispatch-shim wrappers move into emitted C (likely; budget
    for it per `CLAUDE.md`'s Fixture Snapshots rule).
@@ -176,6 +213,29 @@ When `docs/upcoming/m4-typeclass-per-method-abi-plan.md` ships:
 3. The bridge wrapper from this plan becomes dead. Delete the predicate
    call site, delete the wrapper-emit branch, and confirm `tests/run.sh`
    stays green. One PR.
+
+## Prereqs done (2026-06-15 refinement pass)
+
+- File references corrected: original draft cited `emit_typeclasses.c`
+  (no such file). Real participants are `elab_typeclasses.c`,
+  `emit_expr.c`, `emit_fns.c`, `emit_stmt.c`, `emit_module.c`.
+- Error site corrected: the in-tree failure is TUR-E0001 at the
+  elaborator, not a clang error. Predicate must participate in typing,
+  not just emission.
+- Fixture status corrected: `decode-bool.tur` is in-tree and red, not
+  "intentionally not yet in-tree." `Decode [bool]` already ships at
+  `spices/json/src/json/encode.tur:278`.
+- Direction lock confirmed: Result/Option are in the by-value-struct
+  camp per `docs/parametric-type-abi-matrix.md`, locked 2026-06-15 in
+  `docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`.
+- Helper precedent identified: model new bridge on
+  `emit_inst_fn_return_carrier` (the fn-typed twin already wired through
+  the same three emit sites this work will touch).
+- Sub-bug catalogued: the `derive-decode-struct.tur` clang failure is
+  the same root cause in a wrong-direction shape (already-by-value
+  producer being re-deref'd). The predicate must AVOID inserting a
+  bridge when the producer already returns by-value; treat the fixture
+  as a second acceptance gate.
 
 ## Cross-references
 
