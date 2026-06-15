@@ -3931,6 +3931,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
             }
+            /* end-to-end-monomorphization: a :heap make-struct whose element type
+             * is still abstract (the constructor's carrier base, e.g. `vec-new`'s
+             * `[A]` base where `(Vec A)` is the int64 carrier) has struct_c_name
+             * collapse to "int64_t".  The header layout is element-agnostic, so
+             * box through the unspecialized header typedef (`def->name`, e.g.
+             * `Vec`) and return the pointer as an int64 carrier.  Without this the
+             * literal would be the invalid `(int64_t){.data = ...}`. */
+            bool ms_heap_abstract_base = ms_heap && def
+                && strcmp(struct_c_name, "int64_t") == 0;
+            if (ms_heap_abstract_base)
+                struct_c_name = def->name;
             buf_printf(&lit, "(%s){", struct_c_name);
             bool any_field_emitted = false;
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
@@ -4030,6 +4041,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "*%s = %s;\n", tmp, lit.data);
                 buf_free(&lit);
+                /* Carrier base: the function returns the int64 carrier, so pack
+                 * the typed pointer.  Concrete spec: return the typed pointer
+                 * (`Vec__int *`) directly -- it IS the type of `(Vec A)`. */
+                if (ms_heap_abstract_base) {
+                    Buf cb; buf_init(&cb);
+                    buf_printf(&cb, "(int64_t)(intptr_t)%s", tmp);
+                    buf_putc(&cb, '\0');
+                    free(tmp);
+                    char *r = strdup(cb.data);
+                    buf_free(&cb);
+                    return r;
+                }
                 return tmp;
             }
             char *result = strdup(lit.data);
@@ -4083,7 +4106,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             {
                 Type recv_rty = emit_resolve_type(ctx,
                     e->as.get_field_.struct_expr->type);
-                if (type_is_heap_struct(recv_rty)) {
+                /* Only the typed-pointer (concrete monomorphic) receiver derefs
+                 * directly.  An abstract-element receiver in a carrier base
+                 * (e.g. `vec-len-byval`'s `[A]` base, where `(Vec A)` is the
+                 * int64 carrier because A has no concrete layout) must fall
+                 * through to the element-agnostic carrier-deref path below;
+                 * `(sv)->field` there would deref an int64_t. */
+                if (type_is_concrete_heap_struct(recv_rty)) {
                     Buf hb; buf_init(&hb);
                     buf_printf(&hb, "(%s)->%s", sv, fname);
                     buf_putc(&hb, '\0');

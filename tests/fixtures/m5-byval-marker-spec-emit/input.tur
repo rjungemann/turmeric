@@ -21,8 +21,8 @@
   #{ByVal}
   : A
   ```c
-  if (i >= 0 && (size_t)i < (size_t)v.len) {
-    return (int64_t)((int64_t *)v.data)[i];
+  if (i >= 0 && (size_t)i < (size_t)v->len) {
+    return (int64_t)((int64_t *)v->data)[i];
   }
   fprintf(stderr, "vget-marker-byval index out of bounds\n");
   exit(1);

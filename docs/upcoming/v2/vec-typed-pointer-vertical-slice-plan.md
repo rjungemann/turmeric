@@ -246,32 +246,57 @@ crossing remains until M4).
    (make-struct boxes), read (`(p)->field`), write (`set!` derefs), mutation
    visible across calls (shared pointer). The remaining work is the stdlib flip.
 
-3. **Tag `Vec` `:heap` + rewrite producers/accessors (the stdlib flip).** Now
-   fully expressible in pure Turmeric (no inline-C-body monomorphization):
-   - `vec-new [A] [] : (Vec A)` -> `(make-struct Vec :data <null-buf> :len 0 :cap 0)`
-     (make-struct boxes to `Vec__A *`).
-   - `vec-len`/`vec-get` -> `(.len v)` / raw-buffer read over `(.data v)`
-     (the existing `vec-data-get-checked__` element-agnostic helper).
-   - `vec-set!`/`vec-pop!`/`vec-push!` -> `set!` on `.len`/`.cap`/`.data` plus
-     element-agnostic raw-buffer inline-C helpers (`vec-buf-grow__`,
-     `vec-buf-set__`) over `ptr<void>`. The realloc never needs `A`.
-   - `vec-of` macro is unchanged (it expands to `vec-new` + `vec-push!`).
+3. **Tag `Vec` `:heap` + rewrite producers/accessors (the stdlib flip). -- LANDED 2026-06-15.**
+   `Vec` is tagged `:heap`; the core ops (`vec-new`/`-len`/`-get`/`-push!`/
+   `-pop!`/`-set!`/`-free`) keep **inline-C bodies** but are retyped with a
+   `(Vec A)` typed-pointer receiver/return instead of the old `:int` carrier.
+   In monomorphic code `(Vec A)` lowers to `Vec__A *`, so a vec-op call passes
+   the typed pointer directly -- no `CK_CARRIER -> CK_CONCRETE` deref-copy
+   bridge, and no by-value 24-byte header copy (the silent-mutation hazard).
 
-   **Not yet started -- two hard gates that must be satisfied in the same change:**
-   - **Coordinated snapshot regen.** Tagging Vec `:heap` changes `(Vec A)`'s C
-     name everywhere -> a large fraction of the ~1640 `expected.c` regenerate.
-     Per the Fixture STRICT RULE this is one coordinated commit; coordinate
-     timing with in-flight Vec-touching branches.
-   - **Spice (ecs/json) validation.** The plan's validation harness requires the
-     `../turmeric-spices/spices/{ecs,json}` roundtrip for any Vec-touching
-     change (ecs is the canonical heavy Vec user). **The sibling checkout must be
-     present** (`git clone https://github.com/rjungemann/turmeric-spices/
-     ../turmeric-spices`); it was absent in the session that built the toolkit,
-     which is why 3 was deferred rather than rushed.
-   - Interpreter parity: all core vec fns have native overrides in `src/main.c`
-     (`native_vec_*`), which win over the Turmeric source bodies, so the
-     tree-walker is unaffected by the source rewrite -- but re-audit the 10
-     existing `requires.compiled` vec fixtures after the flip.
+   **Design correction vs the original plan:** the bodies stayed inline-C
+   rather than becoming pure-Turmeric wrappers over make-struct + raw-buffer
+   helpers. Two reasons: (a) the element value must reinterpret (not numeric-
+   convert) through the int64 carrier -- a `val : A` inline-C param / `: A`
+   return gets this for free at the carrier boundary, whereas a pure-Turmeric
+   `(:: val :int)` numeric-truncates a float; (b) **interpreter parity** -- the
+   tree-walker defers a *directly* inline-C defn to its `native_vec_*` override,
+   but evaluates a pure-Turmeric wrapper body, hitting the helper's inline-C
+   (no native) and erroring. Keeping the bodies inline-C with only the receiver
+   type changed (`:int` -> `(Vec A)`) is the minimal correct flip.
+
+   Enabling compiler work landed alongside (all gated on `:heap`):
+   - **C-3:** `emit_carrier_bridge` emits a plain cast (`(Vec__int *)(intptr_t)h`)
+     for a `:heap` concrete type instead of the deref-copy.
+   - **Field-access gate:** the `:heap` direct-deref `(p)->field` fires only for
+     a *concrete* receiver (new `type_is_concrete_heap_struct`); an abstract-
+     element carrier base falls through to the element-agnostic carrier deref.
+   - **`type_struct_pass_by_ptr` guard:** a `:heap` type is already an 8-byte
+     pointer -- never spilled to a `const T **` (double-indirection / mutation
+     hazard).
+   - **make-struct abstract-base boxing:** make-struct of a `:heap` type with an
+     abstract element boxes through the element-agnostic header typedef and
+     returns the int64 carrier (exercised by the `Box` roundtrip fixture).
+   - **Interpreter `println` shape fix:** a `TURI_INT` carrier under a
+     `BS_PRINTLN_FLOAT`/`_CSTR` shape is reinterpreted to the matching tag --
+     the now-elided `(:: (vec-get v i) :float)` ascription used to do this.
+
+   **Validation (all gates satisfied):**
+   - Compiled suite **1643 passed, 0 failed** (76 `expected.c` snapshots
+     regenerated in the same commit -- the coordinated regen).
+   - Interpreter (`run-turi.sh`) back to **baseline (1203 passed, 2 failed)** --
+     both failures (`eq-carrier-capturing-comparator`, `mutmap-eq`) pre-existing;
+     **zero new regressions** after the `println` shape fix.
+   - Float/cstr/int/bool element round-trip correct (compiled + interpreted);
+     mutation through a passed `(Vec A)` is visible to the caller (reference
+     semantics).
+   - **Spice:** the sibling checkout was cloned; the `ecs` spice (canonical heavy
+     Vec user) builds and its vec-heavy tests pass (`for-each`, `defcomponent`,
+     `defquery`, `poly-call-row`, `query-typed` under `-Xdata-literals`). `json`
+     is blocked by a missing external `yyjson.h` (environmental, unrelated).
+   - Seven fixtures adopted the typed idiom (`(:: (vec-new) (Vec T))` /
+     element-typed pushes); `m5-byval-marker-spec-emit`'s inline-C updated
+     `v.len`/`v.data` -> `v->len`/`v->data` for the typed-pointer receiver.
 4. **C-3 + re-audit.** Confirm `TUR_M3_AUDIT=1` shows `Vec int`
    `carrier->concrete` crossings at 0 (modulo the M4 dict-slot residual).
    Confirm the by-value mutation hazard is gone (a `vec-push!` through a passed

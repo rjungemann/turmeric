@@ -2429,7 +2429,13 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     buf_init(&out);
 
     if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {
-        if (carrier_is_inline(concrete_ty.kind)) {
+        if (type_is_heap_struct(concrete_ty)) {
+            /* end-to-end-monomorphization C-3: a :heap typed-pointer type's
+             * monomorphic ABI is `T__A *`, and the carrier int64 IS that header
+             * pointer.  Recover it with a plain cast (no deref/copy) -- cname is
+             * already "T__A *" for a heap type. */
+            buf_printf(&out, "(%s)(intptr_t)(%s)", cname, src_str);
+        } else if (carrier_is_inline(concrete_ty.kind)) {
             /* Inline scalar: union bitwise reinterpret int64_t -> concrete. */
             buf_printf(&out, "((union { int64_t s; %s d; }){.s = (%s)}).d",
                        cname, src_str);
@@ -2439,7 +2445,11 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         }
     } else {
         /* CK_CONCRETE -> CK_CARRIER */
-        if (carrier_is_inline(concrete_ty.kind)) {
+        if (type_is_heap_struct(concrete_ty)) {
+            /* end-to-end-monomorphization C-3: a :heap typed pointer is already
+             * the header address; pack it as int64 with no spill/copy. */
+            buf_printf(&out, "(int64_t)(intptr_t)(%s)", src_str);
+        } else if (carrier_is_inline(concrete_ty.kind)) {
             /* Inline scalar: union bitwise reinterpret concrete -> int64_t. */
             buf_printf(&out, "((union { %s s; int64_t d; }){.s = (%s)}).d",
                        cname, src_str);

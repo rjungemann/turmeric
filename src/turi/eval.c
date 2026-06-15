@@ -2168,10 +2168,23 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         case TURI_FLOAT: printf("%g\n", a.as_float); break;
         case TURI_INT:
         default:
+            /* end-to-end-monomorphization (M3 Vec typed-pointer slice): the
+             * builtin SHAPE encodes the argument's STATIC type, so a TURI_INT
+             * runtime value under a float/cstr shape is the int64 carrier word
+             * and must be reinterpreted -- the compiled path and EX_ASCRIBE do
+             * the same.  This used to be done by the now-elided
+             * `(:: (vec-get v i) :float)` ascription (vec-get's typed `(Vec A)`
+             * receiver resolves its return to the concrete element type, so the
+             * ascription is redundant and dropped). */
             if (spec->shape == BS_PRINTLN_UINT)
                 printf("%llu\n", (unsigned long long)(uint64_t)a.as_int);
-            else if (spec->shape == BS_PRINTLN_FLOAT32)
-                printf("%.7g\n", a.as_float);
+            else if (spec->shape == BS_PRINTLN_FLOAT) {
+                union { int64_t i; double d; } u; u.i = a.as_int;
+                printf("%g\n", u.d);
+            } else if (spec->shape == BS_PRINTLN_FLOAT32)
+                printf("%.7g\n", (double)a.as_int);
+            else if (spec->shape == BS_PRINTLN_CSTR)
+                puts((const char *)(intptr_t)a.as_int);
             else
                 printf("%lld\n", (long long)a.as_int);
             break;

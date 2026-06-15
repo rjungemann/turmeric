@@ -9,7 +9,7 @@
 ;;; Vec -- parameterized growable array with element type A.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Vec [A] (data :ptr<void>) (len :int) (cap :int))
+(defstruct Vec :heap [A] (data :ptr<void>) (len :int) (cap :int))
 ;;; vec-new -- allocate a new empty Vec[A].
 ;;;
 ;;; Returns:
@@ -20,11 +20,24 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-new []
+;; end-to-end-monomorphization (M3 Vec typed-pointer slice): the core ops are
+;; inline-C over the element-agnostic header layout, but typed with a
+;; `(Vec A)` (typed-pointer) receiver/return rather than the old `:int`
+;; carrier.  This is the load-bearing change: in monomorphic code `(Vec A)`
+;; lowers to `Vec__A *`, so a vec-op call passes the typed pointer directly --
+;; no `CK_CARRIER -> CK_CONCRETE` deref-copy bridge, and no by-value header
+;; copy (which would silently drop in-place mutation).  Element values still
+;; ride the int64 carrier inside the `data` buffer for every A, so a `val : A`
+;; param / `: A` return reinterprets through the carrier at the call boundary
+;; (e.g. a :float element round-trips as a bit-reinterpret).  Keeping the
+;; bodies inline-C (not pure-Turmeric wrappers) preserves interpreter parity:
+;; the tree-walker defers an inline-C defn to its `native_vec_*` override.
+(defn vec-new [A]
+  []
   #{}
-  : int
+  : (Vec A)
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
   v->cap = 0;
@@ -43,11 +56,12 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-len [v : int]
+(defn vec-len [A]
+  [v : (Vec A)]
   #{}
   : int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
   return (int)vec->len;
   ```)
 ;;; vec-get -- return the element at index i (bounds-checked).
@@ -65,12 +79,12 @@
 ;;; Since: Phase TC1
 
 (defn vec-get [A]
-  [v :int i :int]
+  [v : (Vec A) i :int]
   #{}
   :A
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
+  if (i >= 0 && (size_t)i < (size_t)vec->len) return (int64_t)vec->data[i];
   fprintf(stderr, "tvec index out of bounds\n");
   exit(1);
   return 0;
@@ -87,15 +101,15 @@
 ;;; Since: Phase TC1
 
 (defn vec-push! [A]
-  [v :int val :A]
+  [v : (Vec A) val :A]
   #{}
   :nil
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
   if (vec->len >= vec->cap) {
     size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
     int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
-    for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
+    for (size_t i = 0; i < (size_t)vec->len; i++) new_data[i] = vec->data[i];
     free(vec->data);
     vec->data = new_data;
     vec->cap = new_cap;
@@ -116,11 +130,11 @@
 ;;; Since: Phase TC1
 
 (defn vec-pop! [A]
-  [v :int]
+  [v : (Vec A)]
   #{}
   :A
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
   ```)
@@ -137,12 +151,12 @@
 ;;; Since: Phase TC1
 
 (defn vec-set! [A]
-  [v :int i :int val :A]
+  [v : (Vec A) i :int val :A]
   #{}
   :void
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
+  if (i >= 0 && (size_t)i < (size_t)vec->len) { vec->data[i] = val; return; }
   fprintf(stderr, "vec-set! index out of bounds\n");
   exit(1);
   ```)
@@ -156,11 +170,12 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-free [v : int]
+(defn vec-free [A]
+  [v : (Vec A)]
   #{}
   : void
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
   if (vec->data) free(vec->data);
   free(vec);
   ```)

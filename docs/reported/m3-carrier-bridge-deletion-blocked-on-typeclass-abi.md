@@ -382,6 +382,32 @@ Next implementation increment: plan sub-step 1 (the inert `#{Heap}`/`:heap`
 struct attribute + pointer lowering, gated so the suite stays byte-identical
 until a type is tagged).
 
+## Update 2026-06-15 (Vec typed-pointer vertical slice LANDED -- step 2 done)
+
+Step 2 of the sequencing (the Vec typed-pointer vertical slice) is now landed.
+`Vec` is tagged `:heap`; the core ops keep inline-C bodies but are retyped with
+a `(Vec A)` typed-pointer receiver/return (lowering to `Vec__A *`), so a vec-op
+call passes the typed pointer directly -- no `CK_CARRIER -> CK_CONCRETE`
+deref-copy and no by-value 24-byte header copy (the "works by luck" mutation
+hazard this report flagged). Compiler work that landed: C-3 (the bridge emits a
+cast, not a deref-copy, for `:heap` concrete types), a concrete-receiver gate on
+the `:heap` field-deref (`type_is_concrete_heap_struct`), a `pass_by_ptr` guard
+(a `:heap` type is never spilled to `const T **`), make-struct abstract-base
+boxing, and an interpreter `println` shape-based carrier reinterpret (the typed
+receiver elides the `(:: (vec-get v i) :float)` ascription that used to do it).
+
+Measured effect (`TUR_M3_AUDIT=1`): empty `main` 0 crossings; `vec-eq-ascribed`
+**14 -> 6 crossings, 0 deref-copies (all casts)**. The residual crossings are the
+int64 dict-slot dispatch boundary (the M4 dict-ABI item), not the accessor
+deref-copy this slice removed. Full compiled suite 1643/0; interpreter back to
+baseline (zero new regressions); float/cstr/int/bool round-trip correct;
+mutation-through-param visible to the caller; ecs spice validated. Details +
+the design correction (bodies stayed inline-C for carrier-reinterpret and
+interpreter parity, rather than pure-Turmeric wrappers) are in
+[docs/upcoming/v2/vec-typed-pointer-vertical-slice-plan.md](../upcoming/v2/vec-typed-pointer-vertical-slice-plan.md)
+sub-step 3. Next: step 3 (Map/Set/MutableMap) and step 4 (M4 dict-ABI) to clear
+the remaining dispatch-boundary crossings.
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)

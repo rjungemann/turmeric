@@ -14,10 +14,10 @@
 
   (let [a []:bool
         b []:bool]
-    (vec-push! a 1)        ; bool sok?red as int64
-    (vec-push! b 1)
-    (vec-push! a 0)
-    (vec-push! b 0)
+    (vec-push! a (:: 1 :bool))
+    (vec-push! b (:: 1 :bool))
+    (vec-push! a (:: 0 :bool))
+    (vec-push! b (:: 0 :bool))
     (println (.eq? a b)))   ; true (Vec[bool])
 
   (let [a []:cstr
@@ -26,13 +26,13 @@
 
   (let [a []:int32
         b []:int32]
-    (vec-push! a 7)
-    (vec-push! b 7)
+    (vec-push! a (:: 7 :int32))
+    (vec-push! b (:: 7 :int32))
     (println (.eq? a b)))   ; true (Vec[int32])
 
   (let [a []:uint64
         b []:uint64]
-    (vec-push! a 100)
-    (vec-push! b 200)
+    (vec-push! a (:: 100 :uint64))
+    (vec-push! b (:: 200 :uint64))
     (println (.eq? a b)))   ; false (Vec[uint64], differ)
   0)

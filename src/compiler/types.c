@@ -3651,6 +3651,11 @@ bool type_is_subtype(Type sub, Type super_) {
 /* Phase D: returns true when t is a struct type whose estimated sizeof exceeds 16
  * bytes, meaning it should be passed as const T* rather than by value. */
 bool type_struct_pass_by_ptr(Type t) {
+    /* end-to-end-monomorphization: a :heap type's ABI is already a typed pointer
+     * (8 bytes) -- never spill it to a pass-by-ptr `const T **`.  Doing so both
+     * double-indirects (a correctness hazard for mutation through the pointer)
+     * and emits a `const`-qualified pointer-to-pointer that breaks in-place ops. */
+    if (type_is_heap_struct(t)) return false;
     switch (t.kind) {
         case TY_STRUCT: {
             StructDef *def = t.as.struct_.def;
@@ -3684,6 +3689,15 @@ bool type_is_heap_struct(Type t) {
             return def && def->is_heap;
     }
     return false;
+}
+
+/* end-to-end-monomorphization: a :heap struct whose element types are concrete,
+ * i.e. it has a monomorphic typed-pointer ABI (`Vec__int *`).  An abstract-
+ * element heap type (`(Vec A)`, A a tyvar) is NOT concrete -- it flows as the
+ * int64 carrier in a carrier base, and field access must deref through the
+ * element-agnostic header typedef, not the typed pointer. */
+bool type_is_concrete_heap_struct(Type t) {
+    return type_is_heap_struct(t) && type_has_concrete_codegen_layout(&t);
 }
 
 /* end-to-end-monomorphization: the by-value struct C name for a (heap or not)
