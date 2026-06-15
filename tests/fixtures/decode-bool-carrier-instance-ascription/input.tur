@@ -1,0 +1,47 @@
+;; decode-bool-carrier-instance-ascription -- carrier-source typeclass
+;; instance whose declared return is `(Result A cstr)` with `A` a sub-word
+;; primitive (bool). The instance body returns the int64 `tur_ok` carrier;
+;; the call site ascribes `(:: (decode ...) (Result bool cstr))` and the
+;; outer `ok-val` consumer expects `bool`, not `int`.
+;;
+;; The fix has two parts:
+;;
+;;   1. elab_call.c `call_wrap_reinterpret` allows size-mismatched scalar
+;;      reinterprets when both kinds are integral, so the call's elab type
+;;      becomes `bool` instead of `int` and TUR-E0001 stops firing.
+;;
+;;   2. emit_core.c `emit_carrier_bridge` (and the two return sites in
+;;      emit_fns.c) reconstructs Result/Option field-by-field from the
+;;      canonical `tur_result_box_t` / `tur_option_t` carrier layout when
+;;      lowering carrier->by-value, so the consumer reads the right bytes
+;;      for sub-word payload widths.
+;;
+;; Without either fix, this fixture fails: without (1) the compile errors
+;; with TUR-E0001; without (2) the deref reads padding bytes of the
+;; carrier box and prints "false" / "true" inverted.
+
+(defmodule decode_bool_carrier_test (export)
+
+(defclass Decode [a] (decode [doc : int] : (Result a cstr)))
+
+(definstance Decode [bool]
+  (decode [doc]
+    ```c return tur_ok((int64_t)(doc == 1)); ```))
+
+(definstance Decode [int]
+  (decode [doc]
+    ```c return tur_ok((int64_t)(doc * 10)); ```))
+
+(defn show-bool [b : bool] : void
+  (if b (println "true") (println "false")))
+
+(defn show-int [n : int] : void
+  (println n))
+
+(defn main [] : int
+  ;; A=bool carrier-source case (the actual bug fix).
+  (show-bool (ok-val (:: (decode 1) (Result bool cstr))))
+  (show-bool (ok-val (:: (decode 0) (Result bool cstr))))
+  ;; A=int still works through the same bridge (no regression).
+  (show-int  (ok-val (:: (decode 5) (Result int  cstr))))
+  0))

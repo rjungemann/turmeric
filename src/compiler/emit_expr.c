@@ -1281,7 +1281,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             int src_size = reinterpret_kind_size_bytes(src_kind);
             int dst_size = reinterpret_kind_size_bytes(dst_kind);
             if (!reinterpret_kind_is_scalar(src_kind) || !reinterpret_kind_is_scalar(dst_kind) ||
-                src_size <= 0 || src_size != dst_size) {
+                src_size <= 0 || dst_size <= 0) {
                 fprintf(stderr,
                         "tur: emit: invalid EX_REINTERPRET %s -> %s\n",
                         typekind_to_string(src_kind), typekind_to_string(dst_kind));
@@ -1292,8 +1292,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             Type src = type_simple(src_kind, CK_COPY);
             Type dst = type_simple(dst_kind, CK_COPY);
             Buf out; buf_init(&out);
-            buf_printf(&out, "((union { %s s; %s d; }){.s = %s}).d",
-                       type_c_name(src), type_c_name(dst), inner);
+            if (src_size == dst_size) {
+                buf_printf(&out, "((union { %s s; %s d; }){.s = %s}).d",
+                           type_c_name(src), type_c_name(dst), inner);
+            } else {
+                /* Integral narrowing/widening across the int64 carrier (elab
+                 * call_wrap_reinterpret only allows size mismatch when both
+                 * kinds are integral). A plain C cast does the right thing. */
+                buf_printf(&out, "(%s)(%s)", type_c_name(dst), inner);
+            }
             buf_putc(&out, '\0');
             free(inner);
             char *result = strdup(out.data);

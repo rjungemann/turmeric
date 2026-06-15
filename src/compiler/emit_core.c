@@ -2473,8 +2473,109 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
             buf_printf(&out, "((union { int64_t s; %s d; }){.s = (%s)}).d",
                        cname, src_str);
         } else {
-            /* Pointer carrier: dereference the heap pointer. */
-            buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+            /* decode-bool-carrier-instance-ascription:
+             * The carrier source produced by inline-C `tur_ok` / `tur_some`
+             * always lays out its payload fields as int64_t (the universal
+             * `tur_result_box_t` / `tur_option_t` shape). The by-value sink
+             * struct `Result__T__U` / `Option__T` lays them out at native
+             * widths. The two layouts only coincide when every field's
+             * resolved type is 8-byte-shaped (int, cstr, ptr, value-struct
+             * with the lines 1049-1062 carve-out forcing a `T *` slot).
+             *
+             * For sub-word payloads (bool, int8/16/32, float32) a plain
+             * `*(Result__T__U *)` deref reads padding bytes of the carrier
+             * box. Reconstruct field-by-field from the canonical carrier
+             * layout instead. The non-Result/Option fallback keeps the
+             * legacy deref so unrelated parametric structs (Pair, user
+             * defstructs) are unaffected. */
+            StructDef *def = NULL;
+            Type type_args[16];
+            uint8_t n_args = 0;
+            bool used_canonical = false;
+            if (type_extract_struct_app(&concrete_ty, &def, type_args, &n_args) &&
+                def && def->name &&
+                (strcmp(def->name, "Result") == 0 || strcmp(def->name, "Option") == 0)) {
+                const char *box_t = (strcmp(def->name, "Result") == 0)
+                    ? "tur_result_box_t" : "tur_option_t";
+                char *src_tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s *%s = (%s *)(intptr_t)(%s);\n",
+                           box_t, src_tmp, box_t, src_str);
+                buf_printf(&out, "(%s){", cname);
+                for (uint32_t fi = 0; fi < def->n_fields; fi++) {
+                    const StructField *f = &def->fields[fi];
+                    if (fi > 0) buf_puts(&out, ", ");
+                    /* C field name == Turmeric field name with '-' -> '_'. */
+                    char fname[64];
+                    size_t fl = 0;
+                    for (const char *p = f->name; *p && fl + 1 < sizeof(fname); p++) {
+                        fname[fl++] = (*p == '-') ? '_' : *p;
+                    }
+                    fname[fl] = 0;
+                    buf_printf(&out, ".%s = ", fname);
+                    if (f->kind == TY_BOOL) {
+                        /* The carrier box stores is_ok / is_some as `bool` at
+                         * offset 0 -- read straight through. */
+                        buf_printf(&out, "%s->%s", src_tmp, fname);
+                        continue;
+                    }
+                    /* Substitute the field's tyvar against the call's args
+                     * (e.g. ok-val: TY_TYVAR "A" -> type_args[0]) and ask the
+                     * existing bridge to do the carrier->concrete cast for
+                     * that one scalar/pointer/composite field. The recursive
+                     * call is bounded -- field types are strictly smaller than
+                     * the whole struct -- and reuses every special case
+                     * (heap-tagged, carrier_is_inline, pointer deref) so we
+                     * stay consistent with the rest of the bridge. */
+                    Type field_ty;
+                    if (f->full_type && def->n_type_params > 0) {
+                        /* substitute_struct_app_type allocates spine nodes for
+                         * compound results; for the field types we care about
+                         * here (bare TY_TYVAR -> scalar/cstr/value-struct) the
+                         * result is a leaf and there is nothing to free. */
+                        field_ty = substitute_struct_app_type(f->full_type, def, type_args);
+                    } else if (f->full_type) {
+                        field_ty = *f->full_type;
+                    } else {
+                        field_ty = type_simple(f->kind, CK_COPY);
+                    }
+                    /* The carrier box always stores ok_val/err_val/value as
+                     * int64_t. Cast it back to the substituted field type:
+                     * value-shaped scalars (TY_INT and same-size widths) are
+                     * identity; sub-word integrals truncate via plain C cast;
+                     * float widths bit-reinterpret via a union; pointer-shaped
+                     * types (cstr, ptr_void, and the value-struct slot forced
+                     * to `T *` by the carve-out at types.c:1049-1062) cast
+                     * through `intptr_t`. */
+                    const char *fcname = emit_type_c_name(ctx, field_ty);
+                    TypeKind fk = field_ty.kind;
+                    bool is_struct_ptr_slot =
+                        (fk == TY_STRUCT && field_ty.as.struct_.def &&
+                         field_ty.as.struct_.def->n_type_params == 0);
+                    if (fk == TY_INT || fk == TY_INT64 || fk == TY_UINT64) {
+                        buf_printf(&out, "%s->%s", src_tmp, fname);
+                    } else if (fk == TY_FLOAT || fk == TY_FLOAT64 || fk == TY_FLOAT32) {
+                        buf_printf(&out,
+                            "((union { int64_t s; %s d; }){.s = %s->%s}).d",
+                            fcname, src_tmp, fname);
+                    } else if (fk == TY_CSTR || fk == TY_PTR_VOID || is_struct_ptr_slot) {
+                        buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
+                                   fcname, src_tmp, fname);
+                    } else {
+                        /* Integral narrowing (bool, int8/16/32, uint8/16/32)
+                         * and any other small-scalar field: a plain C cast
+                         * does the right thing on the int64 carrier slot. */
+                        buf_printf(&out, "(%s)(%s->%s)", fcname, src_tmp, fname);
+                    }
+                }
+                buf_printf(&out, "}");
+                free(src_tmp);
+                used_canonical = true;
+            }
+            if (!used_canonical) {
+                /* Pointer carrier: dereference the heap pointer. */
+                buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+            }
         }
     } else {
         /* CK_CONCRETE -> CK_CARRIER */
