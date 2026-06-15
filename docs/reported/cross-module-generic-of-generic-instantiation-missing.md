@@ -3,10 +3,71 @@ title: Cross-module generic-of-generic instantiation: callee not emitted when ca
 category: Codegen / monomorphization gap
 severity: Latent miscompile (C-level "undefined function"). Surfaces when a generic function `g` in module B calls a generic function `f` from module A, and the program reaches `g` only through a third-party caller that does not directly reference `f`. The C emitter monomorphizes `g` but does not transitively instantiate `f` for the specialised types, leaving a dangling reference that the C compiler rejects.
 description: Pure cross-module generic dispatch breaks when the caller's own caller doesn't directly import or use the callee. The fix surfaced organically: in the calling translation unit, add an explicit direct call to the callee generic at the right type, and instantiation works. That's a workaround, not a fix -- a TU that calls `g(x)` should pull in every monomorphization `g`'s body needs without the user manually anchoring it.
-status: OPEN. Surfaced 2026-06-14 while wiring E2c slice 2 (sized storage shapes in turmeric-spices).
+status: RESOLVED 2026-06-15. Root cause was the generic-unsafe *relay* carrier suppression, not the monomorphization worklist; reproduces single-file as well as cross-module. Fixed with a carrier-relay closure pass in `src/compiler/emit_module.c`. Regression fixture: `tests/fixtures/cross-module-generic-of-generic-accept/`.
 ---
 
 # Cross-module generic-of-generic instantiation gap
+
+## Resolution (2026-06-15)
+
+**The bug is not cross-module specific.** It reproduces in a single file
+whenever a generic function calls another generic function and the callee is
+reached *only* through that generic caller's body:
+
+```turmeric
+(defopaque Box [A] :int)
+(defn box-make [A] [k : int] : (Box A) (:: k :Box))
+(defn box-get  [A] [b : (Box A)] : int (:: b :int))
+(defn use-box  [A] [b : (Box A)] : int (box-get b))   ;; generic -> generic
+(defn main [] : int
+  (let [b : (Box int) (box-make 7)]
+    (println (use-box b)) 0))
+;; pre-fix: cc error -- undefined reference to `box_hyget`
+```
+
+**Root cause.** Not the monomorphization worklist (which *is* transitive). The
+gap was in the emit-time ABI scan's *carrier* handling
+(`src/compiler/emit_module.c`):
+
+- `box-get` takes `(Box A)`, a compound type with a named tyvar, so
+  `emit_abi_fn_is_generic_unsafe` flags it. Its carrier body is only emitted
+  when a *direct carrier call* is observed (the KB-022 fallback in
+  `emit_abi_fn_skip_generic`).
+- The call `(box-get b)` inside `use-box`'s body *is* visited by the scan, but
+  `emit_abi_call_is_generic_relay` classifies it as a "relay" (enclosing fn
+  generic-unsafe, abstract bindings, callee generic-unsafe) and **suppresses
+  the carrier note**, on the assumption that `use-box` will be *specialized* so
+  the relay composes to a concrete callee spec.
+- That assumption only holds for ABI-*changing* compound types (by-value
+  aggregates). `Box` is `defopaque ... :int`, so `(Box A)` erases to the
+  int64 carrier: `use-box` is ABI-invariant and gets **carrier-emitted**, never
+  specialized. Its carrier body then references `box-get`'s carrier -- which the
+  relay suppression kept from being emitted. Dangling C symbol, no `tur`-level
+  diagnostic (`tur check` passes; `cc` fails).
+
+**Fix.** A `emit_abi_carrier_relay_closure` pass runs right after
+`emit_abi_scan_program` on each emit path (whole-program + both
+separate-compilation paths). It iterates to a fixpoint: for every
+generic-unsafe function that *is* carrier-noted (i.e. its carrier body will be
+emitted), it walks the body and carrier-notes the generic-unsafe relay callees
+it reaches. Because it fires **only** for carrier-emitted (not specialized)
+enclosers, the genuine by-value-aggregate relay case -- where the encloser
+specializes and is never carrier-noted -- is left untouched. The closure
+transitively covers chains (`level1 -> level2 -> level3`) via the fixpoint.
+
+**Validation.**
+
+- The single-file and three-module repros above both build and print `7`; the
+  workaround anchor call is no longer needed.
+- New regression fixture `tests/fixtures/cross-module-generic-of-generic-accept/`
+  (three-module shape, no anchor) passes under `tests/run.sh`.
+- Full suite: `1644 passed, 0 failed`.
+
+The original report follows, for context.
+
+---
+
+## Original report
 
 ## Summary
 

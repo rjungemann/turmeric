@@ -1,0 +1,9 @@
+;; Module B: a generic `use-box` that calls module A's generic `box-get`.
+;; Because `Box` is opaque-over-int, `use-box` is ABI-invariant and gets
+;; carrier-emitted rather than specialized; the emitter must still emit
+;; `box-get`'s carrier even though `main` never calls it directly.
+(defmodule mod-b
+  (export use-box)
+  (import mod-a :refer [Box box-get])
+  (defn use-box [A] [b : (Box A)] : int
+    (box-get b)))

@@ -1,0 +1,16 @@
+;; Regression fixture for
+;; docs/reported/cross-module-generic-of-generic-instantiation-missing.md
+;;
+;; A generic function `use-box` (module B) calls a generic function `box-get`
+;; (module A).  `main` reaches `box-get` only transitively through `use-box`
+;; and never calls it directly -- the pre-fix workaround was to add an explicit
+;; `box-get` anchor call here.  Post-fix the emitter's carrier-relay closure
+;; emits `box-get`'s carrier without any anchor, so this builds and prints 7.
+(defmodule main-mod
+  (export)
+  (import mod-a :refer [Box box-make])
+  (import mod-b :refer [use-box])
+  (defn main [] : int
+    (let [b : (Box int) (box-make 7)]
+      (println (use-box b))
+      0)))

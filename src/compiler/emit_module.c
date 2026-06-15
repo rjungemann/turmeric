@@ -2139,6 +2139,159 @@ static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_i
     }
 }
 
+/* cross-module-generic-of-generic-instantiation-missing: walk a
+ * carrier-emitted generic-unsafe function's body and carrier-note the
+ * generic-unsafe *relay* callees it reaches.
+ *
+ * During the main scan, a call from inside a generic-unsafe body to another
+ * generic-unsafe function (with abstract bindings) is classified as a "relay"
+ * (emit_abi_call_is_generic_relay) and suppressed from carrier-noting, on the
+ * assumption that the enclosing generic will be *specialized* -- composing the
+ * relay's abstract bindings to concrete ones so the callee specializes too.
+ *
+ * That assumption fails when the enclosing generic is ABI-invariant (e.g. all
+ * its compound types are opaque-over-int, like `(Box A)` for
+ * `defopaque Box [A] :int`): no spec is ever minted and the function is emitted
+ * as a *carrier*.  Its carrier body then references the relay callee's carrier
+ * -- which the relay suppression kept from being emitted -> dangling C symbol.
+ *
+ * Close the gap as a fixpoint over the *carrier-noted* functions only: if an
+ * enclosing generic-unsafe function is itself carrier-emitted, its relay
+ * callees are genuinely referenced by that carrier body and must be carrier-
+ * emitted too.  Because this fires only for carrier-noted (not specialized)
+ * enclosers, the genuine by-value-aggregate relay case -- where the encloser
+ * specializes and is never carrier-noted -- is untouched. */
+static bool emit_abi_carrier_relay_walk(EmitCtx *ctx, const Expr *enclosing_fn,
+                                        const Expr *e,
+                                        const Expr **items, uint32_t n_items) {
+    if (!e) return false;
+    bool changed = false;
+    switch (e->kind) {
+        case EX_CALL: {
+            if (!e->as.call_.fn_expr && e->as.call_.fn_binding) {
+                const Expr *saved = ctx->current_scan_fn;
+                ctx->current_scan_fn = enclosing_fn;
+                bool relay = emit_abi_call_is_generic_relay(ctx, e, items, n_items);
+                ctx->current_scan_fn = saved;
+                if (relay &&
+                    !emit_abi_has_carrier_call(ctx, e->as.call_.fn_binding)) {
+                    emit_abi_note_carrier_call(ctx, e->as.call_.fn_binding);
+                    changed = true;
+                }
+            }
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn,
+                                                       e->as.call_.args[i], items, n_items);
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn,
+                                                   e->as.call_.fn_expr, items, n_items);
+            break;
+        }
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn,
+                                                       e->as.fn_def_.fn->body, items, n_items);
+            break;
+        case EX_DEF:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.def_.init, items, n_items);
+            break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn,
+                                                       e->as.let_.bindings[i].init, items, n_items);
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.let_.body, items, n_items);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.do_.items[i], items, n_items);
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.builtin.args[i], items, n_items);
+            break;
+        case EX_IF:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.if_.cond, items, n_items);
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.if_.then_, items, n_items);
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.if_.else_or_null, items, n_items);
+            break;
+        case EX_WHILE:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.while_.cond, items, n_items);
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.while_.body, items, n_items);
+            break;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn,
+                                                       e->as.make_struct_.field_values[i], items, n_items);
+            break;
+        case EX_GET_FIELD:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.get_field_.struct_expr, items, n_items);
+            break;
+        case EX_SET_FIELD:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.set_field_.receiver, items, n_items);
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.set_field_.value, items, n_items);
+            break;
+        case EX_MATCH:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.match_.scrutinee, items, n_items);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.match_.arms[i].body, items, n_items);
+                if (e->as.match_.arms[i].guard)
+                    changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.match_.arms[i].guard, items, n_items);
+            }
+            break;
+        case EX_RETURN:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.return_.value, items, n_items);
+            break;
+        case EX_ASCRIBE:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.ascribe_.inner, items, n_items);
+            break;
+        case EX_CAST:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.cast_.expr, items, n_items);
+            break;
+        case EX_REINTERPRET:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.reinterpret_.expr, items, n_items);
+            break;
+        case EX_EXISTS_PACK:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.exists_pack_.value, items, n_items);
+            break;
+        case EX_EXISTS_OPEN:
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.exists_open_.packed, items, n_items);
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.exists_open_.body, items, n_items);
+            break;
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (h) {
+                if (h->body) changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, h->body, items, n_items);
+                for (uint8_t i = 0; i < h->n_cases; i++) {
+                    if (h->cases[i].body)
+                        changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, h->cases[i].body, items, n_items);
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return changed;
+}
+
+/* Fixpoint driver for emit_abi_carrier_relay_walk -- see that function. */
+static void emit_abi_carrier_relay_closure(EmitCtx *ctx, const Expr **items, uint32_t n_items) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t i = 0; i < n_items; i++) {
+            const Expr *e = items[i];
+            if (e->kind != EX_FN_DEF || !e->as.fn_def_.fn) continue;
+            FnDef *fd = e->as.fn_def_.fn;
+            /* Only carrier-emitted generic-unsafe functions reference relay
+             * callees through a carrier body; specialized enclosers resolve
+             * their relays via binding composition and never get here. */
+            if (!emit_abi_fn_is_generic_unsafe(e)) continue;
+            if (!emit_abi_has_carrier_call(ctx, fd->binding)) continue;
+            changed |= emit_abi_carrier_relay_walk(ctx, e, fd->body, items, n_items);
+        }
+    }
+}
+
 /* J3: Forward-declare a specialization clone.
  * Whole-program mode (external_linkage=false): emits 'static <ret> <clone>(...);'
  * Separate-compilation mode (external_linkage=true): omits 'static' so the
@@ -5545,6 +5698,10 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* J1: ABI specialization scan (extracted into emit_abi_scan_program). */
     emit_abi_scan_program(&ctx, items, n_items);
+    /* cross-module-generic-of-generic-instantiation-missing: complete the
+     * carrier-call set across generic-unsafe relays reached only through a
+     * carrier-emitted (ABI-invariant) generic body. */
+    emit_abi_carrier_relay_closure(&ctx, items, n_items);
 
     /* Phase I: --emit-abi-trace -- report the resolved ABI path per call site. */
     if (g_emit_abi_trace) {
@@ -6583,6 +6740,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         hdr_ctx.separate_compilation = true;
         hdr_ctx.type_arena = &hdr_type_arena;
         emit_abi_scan_program(&hdr_ctx, h_items, h_n_items);
+        emit_abi_carrier_relay_closure(&hdr_ctx, h_items, h_n_items);
 
         /* J6: Inject forced specs (borrow specs from other modules pointing here). */
         for (uint32_t fi = 0; fi < n_forced; fi++) {
@@ -6929,6 +7087,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
 
     /* J1/J2: ABI specialization scan (populates ctx.abi_specializations). */
     emit_abi_scan_program(&ctx, impl_items, impl_n_items);
+    emit_abi_carrier_relay_closure(&ctx, impl_items, impl_n_items);
 
     /* J2: Phase I parity -- emit ABI trace for the impl path. */
     if (g_emit_abi_trace) {
