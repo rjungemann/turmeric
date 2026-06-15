@@ -31,13 +31,11 @@ and **never create a `history/` subdirectory under `docs/reported/`**:
 - `docs/archive/history/<slug>.md` -- the per-fix paper trail / older
   resolved bug reports.
 
-`docs/reported/history/` is **forbidden**. A `pre-commit` hook
-(`tools/git-hooks/pre-commit`) rejects any commit that stages a path under
-`docs/reported/history/`. Enable it once per clone with:
-
-```sh
-git config core.hooksPath tools/git-hooks
-```
+`docs/reported/history/` is **forbidden**. A Claude Code `PreToolUse` hook
+(in `.claude/settings.json`) blocks it at the source: any `Write`/`Edit`
+whose path falls under `docs/reported/history/`, and any `Bash` command that
+references that path, is denied before it runs. No git config or per-clone
+setup is required -- the hook ships with the repo.
 
 If you find a resolved report sitting in `docs/reported/` (or a stray
 `docs/reported/history/`), relocate it to `docs/archive/` (or
