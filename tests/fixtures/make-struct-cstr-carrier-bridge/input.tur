@@ -1,0 +1,16 @@
+;; Regression: make-struct assigning a cstr value into an int64 carrier field
+;; (a :A tyvar field instantiated at cstr) must bridge the value through the
+;; (int64_t)(intptr_t) cast, not emit `.field = "literal"` bare.
+;;
+;; Before the fix, the EX_MAKE_STRUCT field-assignment loop's val_is_c_ptr test
+;; covered TY_PTR_VOID/TY_RC/TY_REF/TY_WEAK/TY_EXISTS/TY_FORALL but not TY_CSTR,
+;; so a const char* value assigned to the int64 carrier field was emitted as an
+;; implicit pointer->integer conversion that clang flags with -Wint-conversion.
+;; See docs/reported/make-struct-cstr-into-carrier-field-no-bridge-cast.md.
+
+(defstruct Box :heap [A] (val :A) (tag :int))
+
+(defn main [] : int
+  (let [bc (:: (make-struct Box :val "hello" :tag 9) (Box cstr))]
+    (println (:: (.val bc) cstr)))
+  0)

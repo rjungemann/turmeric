@@ -1,8 +1,14 @@
 ---
 title: make-struct emits a -Wint-conversion warning for a cstr value in an int64 carrier field
 severity: Low. Not a runtime miscompile -- the int64 field is wide enough to hold the pointer bits and the value round-trips correctly -- but it is type-unsafe C (an implicit pointer->integer conversion the C compiler warns on), and it defeats the "every conversion is a real cast clang can check" goal of the monomorphization plan. Caught while exercising the :heap make-struct path (Vec typed-pointer vertical slice, step 2).
-status: OPEN (noted, not yet fixed). Sidestepped in the step-2 fixture by using int/bool element types; does NOT affect the real Vec migration (the Vec header fields are data/len/cap, never element-typed cstr).
+status: RESOLVED. `TY_CSTR` added to the `val_is_c_ptr` test in the `EX_MAKE_STRUCT` field-assignment loop (`src/compiler/emit_expr.c`), so a cstr value flowing into an int64 carrier field is now bridged as `(int64_t)(intptr_t)<cstr>`. Locked in by `tests/fixtures/make-struct-cstr-carrier-bridge/`. Full suite green (1643 passed, 0 failed).
 ---
+
+> **RESOLVED:** the fix direction below was applied verbatim -- `TY_CSTR` is now
+> part of `val_is_c_ptr`. The repro builds warning-free and prints `hello`; the
+> new `make-struct-cstr-carrier-bridge` fixture snapshots the bridge cast. No
+> other fixture snapshots changed (the prediction of "possibly zero" held). Kept
+> for history.
 
 # make-struct: cstr value into an int64 carrier field lacks the intptr bridge cast
 
