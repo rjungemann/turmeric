@@ -2,8 +2,47 @@
 title: Quasi-quote unquote in defstruct field-type slot rejected; eager field-type parse blocks list-valued unquotes
 category: Macro / defstruct interaction
 severity: Macro-system ergonomics gap. A macro that wants to emit `(defstruct Name [name : (TyCtor TyArg1 TyArg2)])` where `TyArg1` is unquoted from the macro's bound vars cannot use the colon-separated field-list form; the defstruct field-type parser appears to read the type expression at template-parse time, before unquote substitution. Workarounds exist (paired-form `(name type)` field list, polymorphic type-param shape) but the colon form is the more common surface and the failure mode is obscure.
-status: OPEN. Surfaced 2026-06-14 while wiring E2c slice 3 (sized-defworld macro).
+status: RESOLVED 2026-06-15. The F_TYPE_ANN case in substitute_params
+  (src/compiler/elab_macros.c) recurses into its payload, so unquotes inside a
+  defstruct field's `: type-expr` -- including nested unquotes in a
+  type-constructor application like `(SizedBuf ~cap)` / `(Box ~inner)` -- are
+  substituted before the expansion reaches the type parser. Fix landed in
+  e32da19 (the same F_TYPE_ANN recursion that closed
+  macro-unquote-in-type-position-rejected.md); this report's defstruct-field
+  variant was confirmed fixed and pinned by a regression fixture. Surfaced
+  2026-06-14 while wiring E2c slice 3 (sized-defworld macro).
 ---
+
+> **RESOLVED 2026-06-15.** Both shapes below compile on current HEAD:
+> the colon-form field list with a list-valued unquote spliced into a
+> size-index slot, and a bare-symbol unquote in a type-constructor's
+> element slot.
+>
+> Root cause was the same one closed by
+> [macro-unquote-in-type-position-rejected.md](macro-unquote-in-type-position-rejected.md):
+> `substitute_params` (src/compiler/elab_macros.c) treated the reader's
+> `: type-expr` wrapper (F_TYPE_ANN) as a leaf, so unquotes inside a
+> field type never got substituted from macro args and reached
+> `type_expr_from_form` as live F_UNQUOTE forms -- tripping
+> `unsupported type expression form`. The F_TYPE_ANN case now recurses
+> into its payload (commit e32da19), which covers defstruct field types
+> because the field vector's items (including the F_TYPE_ANN wrappers)
+> are walked by the same pass.
+>
+> Confirmed with teeth: reverting the F_TYPE_ANN recursion to the
+> pre-fix `return f;` makes the macro form fail with the exact
+> `unsupported type expression form` diagnostic at the field-type
+> unquote, while the hand-written equivalent still compiles -- proving
+> the gap is the macro/unquote path, not the type. Regression fixture:
+> `tests/fixtures/macro-defstruct-field-type-unquote/`.
+>
+> The `(Static 4)`-style failures in the original repros below were a
+> separate confound: an integer literal is only a valid type argument
+> for a size-indexed type (under `-Xsized-types`), so a plain parametric
+> struct rejects it regardless of how the form is produced. The macro
+> bug reproduces cleanly once a real size-indexed type (e.g.
+> `(defopaque SizedBuf [n] :int)` with `(SizedBuf (Static N))`) or a
+> flag-free parametric struct (`(Box ~inner)`) is used.
 
 # Quasi-quote / defstruct field-type interaction
 

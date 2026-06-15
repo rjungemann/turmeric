@@ -1,0 +1,42 @@
+;; Regression for the defstruct-field-type variant of "unquote in type
+;; position". A backquoted macro body that emits a (defstruct ...) must
+;; substitute unquotes (~Symbol) sitting inside a field's type-expression
+;; -- including unquotes NESTED inside a type-constructor application like
+;; (Box ~inner) -- before the expansion reaches the type parser.
+;;
+;; Pre-fix, substitute_params (src/compiler/elab_macros.c) recursed into
+;; an F_TYPE_ANN payload for defn parameter / return types, but the same
+;; F_TYPE_ANN wrapper appears on a defstruct field's `: type-expr`. The
+;; element-type slot of a type application (the `~inner` in `(Box ~inner)`)
+;; was left untouched, so the live F_UNQUOTE reached type_expr_from_form
+;; and tripped "unsupported type expression form (expected symbol,
+;; keyword, or list)". The hand-written (defstruct IntBoxPair [first :
+;; (Box int) ...]) compiled fine, proving the gap was the macro/unquote
+;; path, not the type itself.
+;;
+;; The F_TYPE_ANN case in substitute_params recurses into its payload, so
+;; unquotes inside defstruct field types participate in the same
+;; substitution pass as everywhere else.
+;;
+;; See docs/reported/history/quasi-quote-defstruct-field-type-unquote-rejected.md.
+
+(defstruct Box [A] (val A))
+
+;; Macro that emits a defstruct whose first field type is built from a
+;; type-constructor application with the element type spliced from a macro
+;; arg: (Box ~inner).
+(defmacro emit-pair [name inner]
+  `(defstruct ~name [first : (Box ~inner) second : int]))
+
+(emit-pair IntBoxPair int)
+
+;; Round-trip: instantiate the macro-emitted struct and read both fields.
+;; (.val (.first p)) forces the elaborator to recognise `first` as a
+;; (Box int) -- if the unquoted element type had not substituted, the
+;; field type would be malformed and the build would have failed.
+(defn main [] : int
+  (let [b (make-struct Box 7)
+        p (make-struct IntBoxPair b 35)]
+    (println (.val (.first p)))   ;; 7
+    (println (.second p))          ;; 35
+    0))
