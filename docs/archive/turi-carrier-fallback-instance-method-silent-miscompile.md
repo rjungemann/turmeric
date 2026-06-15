@@ -2,10 +2,65 @@
 title: Typeclass method dispatch on an opaque/rc receiver silently miscompiles under `--interpret` (carrier-fallback instance method runs as a relay)
 category: Bug Report -- interpreter / typeclass dispatch
 severity: High. A positive program prints a wrong value with exit 0 (the worst failure mode per CLAUDE.md). Bounded to the `--interpret` path; the compiled path is correct. Surfaces for any `(.method obj)` where `obj`'s type dispatches through the **carrier-fallback** instance method (an opaque `defopaque` handle, an `rc<T>`, or any receiver whose instance method emits as the abstract `__inst_<Class>_<method>_T` carrier symbol rather than a concrete `__inst_..._<Type>`).
-status: OPEN. Root-caused this session (see below); fix is a focused interpreter-dispatch change, not landed. This report reclassifies `exg5-rc-in-exists` out of `turi-inline-c-silent-miscompiles.md` -- its `0`-instead-of-`99` is NOT an inline-C-matcher bug (the inline-C body is never reached); it is this dispatch bug.
+status: RESOLVED 2026-06-15. Root cause was narrower than the carrier-relay
+theory below: the interpreter prelude (`wk_register_typeclass_natives`,
+`src/main.c`) hard-registered `__inst_Show_show_T` -> `native_show_float` as a
+legacy float hack. The `_T` suffix is the ABSTRACT/carrier mangling (not
+float-specific -- TY_FLOAT now mangles to `_float`), so that registration
+HIJACKED every user `Show` instance over a carrier-typed receiver and returned
+"0" for any non-float arg. Fix: drop the `__inst_Show_show_T` prelude
+registration (`Show [float]` is served by `__inst_Show_show_float`), letting the
+user's own instance method resolve. Regression fixture:
+`tests/fixtures/show-instance-over-opaque-carrier/`. This report also
+reclassified `exg5-rc-in-exists` out of `turi-inline-c-silent-miscompiles.md`.
 ---
 
 # Carrier-fallback instance method runs as a carrier relay under `--interpret`
+
+## Resolution (2026-06-15)
+
+The live root cause was simpler than the carrier-relay theory in "Root cause"
+below (which traced a real EX_CLOSURE relay FnDef but missed that a prelude
+native shadows it). Instrumenting `turi_env_set` showed the interpreter prelude
+binds, before the user program runs:
+
+```
+__inst_Show_show_int   -> native_show_int
+__inst_Show_show_float -> native_show_float
+__inst_Show_show_T     -> native_show_float   <-- the culprit
+__inst_Show_show_bool  -> native_show_bool
+__inst_Show_show_cstr  -> native_show_cstr
+```
+
+`__inst_Show_show_T` (`src/main.c` `wk_register_typeclass_natives`) was a legacy
+hack from when `TY_FLOAT` mangled to the `_T` carrier suffix. It now mangles to
+`_float` (served by `__inst_Show_show_float`), so the `_T` binding only ever
+catches **user** `Show` instances whose receiver is carrier-typed (opaque
+handle, `rc<T>`). `native_show_float` reads `a[0]` as a float; for any
+non-float receiver `a[0].tag != TURI_FLOAT`, so it formats `0.0` -> `"0"`. The
+EX_FN_DEF that would register the user's own instance keeps the pre-existing
+native (an inline-C-bodied method is intentionally not allowed to clobber a
+registered native), so the hijack wins.
+
+**Fix:** delete the `__inst_Show_show_T -> native_show_float` prelude
+registration. `Show [float]` is unaffected (it resolves via
+`__inst_Show_show_float`); user carrier-typed `Show` instances now resolve to
+their own method. Outcomes:
+
+- A **pure-Turmeric** carrier-typed `Show` instance now returns the real value
+  under `--interpret` (was silently `0`). Pinned by
+  `tests/fixtures/show-instance-over-opaque-carrier/` (prints `WIDGET!`).
+- An **inline-C-bodied** carrier-typed `Show` instance (exg5) now produces the
+  clean "inline-C not supported" carve-out error instead of a silent `0` --
+  the accepted turi behaviour for inline-C fixtures.
+
+Validation: `tests/run.sh` 1647/0; `tests/run-turi.sh` 1206 passed / 2 failed
+(the 2 are pre-existing `eq-carrier-capturing-comparator` / `mutmap-eq`);
+`exg5-rc-in-exists` no longer silently miscompiles.
+
+> The original investigation notes below are kept for the record; the
+> carrier-relay FnDef they describe is real but was not the load-bearing cause
+> (the prelude native shadowed it before it could be called).
 
 ## Minimal repro
 

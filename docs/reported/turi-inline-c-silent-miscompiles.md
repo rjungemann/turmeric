@@ -12,14 +12,16 @@
 > hardening landed this session (`ic_format_snprintf_call` now declines when an
 > arg expression fails to evaluate, rather than formatting a guessed `0`).
 >
-> The **one remaining `exit-0 wrong-output`** case is `exg5-rc-in-exists`
-> (`0` instead of `99`), and it is **NOT an inline-C-matcher bug** -- the
-> inline-C body is never reached. It is a typeclass-dispatch bug
-> (carrier-fallback instance method runs as a relay under `--interpret`),
-> reclassified to its own report:
-> [turi-carrier-fallback-instance-method-silent-miscompile.md](turi-carrier-fallback-instance-method-silent-miscompile.md).
-> Net: this report's matcher-tightening goal is met; close it once exg5 is
-> tracked under the new report (done).
+> The **one remaining `exit-0 wrong-output`** case was `exg5-rc-in-exists`
+> (`0` instead of `99`), and it was **NOT an inline-C-matcher bug** -- the
+> inline-C body is never reached. It was a typeclass-dispatch bug (the
+> interpreter prelude hijacked the carrier-fallback `__inst_Show_show_T`
+> instance method with a float native), reclassified to its own report and
+> **FIXED 2026-06-15**:
+> [../archive/turi-carrier-fallback-instance-method-silent-miscompile.md](../archive/turi-carrier-fallback-instance-method-silent-miscompile.md).
+> Net: with exg5 fixed and the matcher-tightening goal met, **all 25 are now
+> resolved** (PASS, clean-error, or -- for exg5 -- fixed dispatch). This report
+> can be archived.
 
 > **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
 > [turi-inline-c-accessor-miscompiles-boolean-returns.md](history/turi-inline-c-accessor-miscompiles-boolean-returns.md))

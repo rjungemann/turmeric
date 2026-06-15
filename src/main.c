@@ -10140,8 +10140,16 @@ static void wk_register_typeclass_natives(TuriEnv *env) {
     /* Show typeclass instances */
     turi_env_register_native(env, "__inst_Show_show_int",   native_show_int,   NULL);
     turi_env_register_native(env, "__inst_Show_show_float", native_show_float, NULL);
-    /* TY_FLOAT falls through to "T" suffix in the elaborator's type suffix builder */
-    turi_env_register_native(env, "__inst_Show_show_T",     native_show_float, NULL);
+    /* NOTE: do NOT register the carrier-fallback `__inst_Show_show_T` here.
+     * The `_T` suffix is the ABSTRACT/carrier mangling, not float-specific
+     * (TY_FLOAT now mangles to the concrete `_float` suffix above).  Any
+     * user-defined `Show` instance over a carrier-typed receiver -- an
+     * opaque handle, an `rc<T>`, etc. -- emits its method as
+     * `__inst_Show_show_T`, so pre-binding that name to native_show_float
+     * silently HIJACKS the user's instance and returns "0" for every
+     * non-float receiver (turi-carrier-fallback-instance-method-silent-
+     * miscompile / exg5-rc-in-exists).  Leaving it unbound lets the user's
+     * own instance method resolve. */
     turi_env_register_native(env, "__inst_Show_show_bool",  native_show_bool,  NULL);
     turi_env_register_native(env, "__inst_Show_show_cstr",  native_show_cstr,  NULL);
     /* Standalone show helpers used in some fixtures */
