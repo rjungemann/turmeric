@@ -353,6 +353,35 @@ Direction settled (by-value). No code changed in this update -- the deliverable
 is the corrected baseline, the confirmed incompatibility, and the sequencing.
 The tractable first increment is step 2 (the Vec typed-pointer vertical slice).
 
+## Update 2026-06-15 (Vec vertical-slice execution plan written)
+
+Step 2 now has a grounded execution plan:
+[docs/upcoming/v2/vec-typed-pointer-vertical-slice-plan.md](../upcoming/v2/vec-typed-pointer-vertical-slice-plan.md).
+Baseline re-confirmed green (`bash tests/run.sh`: **1639 passed, 0 failed**).
+
+The plan settles the mechanism question the sequencing left open ("inline-C-body
+monomorphization the M5 docs deferred as its own infra"). Inspecting the emitted
+C for `vec-eq-ascribed` produced the load-bearing insight: the Vec element buffer
+(`data`) stays `int64`-carried for **every** element type -- `Vec__int`,
+`Vec__cstr`, `Vec__bool` differ only in the *type label on the 24-byte header
+pointer*, the memory is byte-identical. So "typed pointer" types the **header**,
+not the elements, and the producers' inline-C bodies are identical across `A`
+except for the struct type *name*. That collapses "inline-C-body
+monomorphization" from a general C-rewrite problem to a single primitive
+(`heap-box [A] [v : A] : ptr<A>`) whose body substitutes one concrete C name --
+auditable token replacement, not a C parser.
+
+It also re-confirms (from the emitted C) that today's `Eq [Vec]` passes
+`Vec__int` **by value** (24-byte header copy via `*(Vec__int *)(intptr_t)(h)`),
+which is correct-by-luck only because Eq is read-only -- a CLAUDE.md "works by
+luck" latent miscompile the moment a by-value Vec reaches a mutator. The
+typed-pointer ABI (`Vec__A *`) fixes that and converts the ~114 `Vec int`
+deref-copy crossings to (eventually zero) casts.
+
+Next implementation increment: plan sub-step 1 (the inert `#{Heap}`/`:heap`
+struct attribute + pointer lowering, gated so the suite stays byte-identical
+until a type is tagged).
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
