@@ -1,5 +1,41 @@
 # Generic-dict dispatch bakes the representative instance under `--interpret`
 
+> **RESOLVED 2026-06-15.** Both divergences are fixed in `src/turi/eval.c`; the
+> silent miscompile is gone. Validation: `gde4-generic-size-map` under
+> `--interpret` now exits **rc=1 with the clean "inline-C not supported"**
+> carve-out error (was silently `-1/-1/-1/-1`, rc=0); the compiled path stays
+> `0/1/2/-1`. A new pure-Turmeric regression fixture
+> `tests/fixtures/gde5-generic-dict-reresolve/` (a `Size [Box]` instance with no
+> inline-C) proves the positive re-resolution end to end: `count-it` over a `Box`
+> routes to `Size [Box]` (`7`) and over an `int` to the `Size [int]`
+> representative (`-1`), matching the compiled output. Compiled suite 1648/0;
+> turi harness 1207 passed / 2 failed (the 2 -- `eq-carrier-capturing-comparator`,
+> `mutmap-eq` -- are pre-existing).
+>
+> **Fix (divergence 1, generic-dict non-specialisation).** The elaborator bakes
+> the carrier representative (`Size [int]`) into a generic body whose receiver is
+> a class-constrained tyvar and relies on emit-side per-call-site re-resolution
+> (`emit_core.c:emit_reresolve_method_call`); the tree-walker had no such pass.
+> The interpreter now mirrors it at runtime: the concrete type a generic call
+> pins onto a tyvar already rides on the call's `abi_bindings` (e.g. the outer
+> `(count-it m0)` carries `{A -> Map cstr int}`), so `frame_record_abi` stores
+> that tyvar->type substitution on the callee's `EvalFrame` (`TyvarBind`), and at
+> a baked method call whose receiver is a tyvar (`dict_arg` set,
+> `abi_bindings[0].type` is `TY_TYVAR`) `gde_reresolve_method` re-resolves the
+> instance from the tyvar's concrete type -- matching by head-constructor name,
+> falling back to `typeclass_env_lookup_instance_by_key`. Purely additive: it
+> only fires for generic (tyvar-receiver) method calls that carry both a
+> `dict_arg` and a resolvable tyvar, so concrete-receiver dispatch is untouched.
+>
+> **Fix (divergence 2, inline-C accessor overclaim).** `ic_exec_accessor`
+> mis-modelled `return tur_hamt_count(m->hamt);` as a bare field read and returned
+> the raw `hamt` pointer. It now declines (refuse-rather-than-guess) any return
+> expression that applies a function to the field (an identifier run immediately
+> followed by `(`), so the body falls through to the clean inline-C carve-out
+> error instead of a fresh silent miscompile.
+>
+> Original report follows.
+
 **Summary:** Under `tur --interpret`, a generic function that dispatches a
 typeclass method through a dictionary-passing parameter over a `TY_APP`-bound
 type variable (the GDE1/GDE2 "generic-dict" machinery) does **not** specialise

@@ -1,0 +1,29 @@
+;; GDE5: generic-dict dispatch re-resolves to the receiver's real instance under
+;; --interpret, not just the compiled path.
+;;
+;; count-it [^Size A] is a generic-dict driver: the elaborator bakes the carrier
+;; representative Size [int] into its body and the COMPILED path re-resolves the
+;; instance per call site.  This fixture proves the INTERPRETER now mirrors that
+;; re-resolution (turi-generic-dict-dispatch-bakes-representative-instance.md):
+;; a Box argument routes to Size [Box] (-> 7); an int argument stays on the
+;; Size [int] representative (-> -1).  Both instances are pure Turmeric (no
+;; inline-C), so the fixture produces visible, identical output under
+;; `tur run` and `tur --interpret`.
+
+(defclass Size [a] (size [x] : int))
+
+;; Representative (int-carrier) instance -- the wrong answer for a Box.
+(definstance Size [int] (size [x] -1))
+
+;; Box instance -- pure Turmeric, returns a distinct constant.
+(defstruct Box [n : int])
+(definstance Size [Box] (size [x : Box] 7))
+
+;; Generic-dict driver: dispatches size through ^Size A.
+(defn count-it [^Size A] [x :A] :int (size x))
+
+(defn main [] : int
+  (let [b (make-struct Box 0)]
+    (println (count-it b))       ; 7  via Size [Box], NOT the -1 representative
+    (println (count-it 42)))     ; -1 via Size [int] representative
+  0)

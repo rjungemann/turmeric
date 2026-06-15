@@ -312,16 +312,39 @@ typedef struct EvalBinding {
     struct EvalBinding *next;
 } EvalBinding;
 
+/* generic-dict-dispatch: a runtime tyvar->concrete-type substitution captured at
+ * a generic function's call site, so a typeclass method baked to the carrier
+ * representative inside the body can re-resolve to the receiver's real instance.
+ * See docs/reported/turi-generic-dict-dispatch-bakes-representative-instance.md. */
+typedef struct TyvarBind {
+    const char       *name;   /* interned tyvar name, e.g. "A" */
+    Type              type;   /* the concrete type bound to it at this call site */
+    struct TyvarBind *next;
+} TyvarBind;
+
 struct EvalFrame {
     EvalBinding  *bindings;
     EvalFrame    *parent;
+    TyvarBind    *tyvars;   /* generic-dict tyvar substitutions (usually NULL) */
 };
 
 static EvalFrame *eval_frame_new(EvalFrame *parent) {
     EvalFrame *f = (EvalFrame *)malloc(sizeof(EvalFrame));
     f->bindings = NULL;
     f->parent   = parent;
+    f->tyvars   = NULL;
     return f;
+}
+
+/* Resolve a tyvar name to its concrete type through the frame chain. */
+static bool frame_lookup_tyvar(EvalFrame *f, const char *name, Type *out) {
+    for (EvalFrame *cur = f; cur; cur = cur->parent)
+        for (TyvarBind *tb = cur->tyvars; tb; tb = tb->next)
+            if (tb->name == name || strcmp(tb->name, name) == 0) {
+                *out = tb->type;
+                return true;
+            }
+    return false;
 }
 
 static void eval_frame_free(EvalFrame *f) {
@@ -3123,6 +3146,24 @@ static TuriValue ic_exec_accessor(const char *body,
         }
     }
 
+    /* generic-dict-dispatch (turi-generic-dict-dispatch-bakes-representative-
+     * instance.md, divergence 2): a return expression that APPLIES a function to
+     * the field -- e.g. `return tur_hamt_count(m->hamt);` -- is not a bare field
+     * accessor.  The field-extraction paths below would silently drop the wrapping
+     * call and return the raw field (rc=0, wrong: a Map's hamt pointer instead of
+     * its count).  We cannot invoke an arbitrary C function here, so decline and
+     * let the clean "inline-C not supported" error fire.  Detect an identifier run
+     * immediately followed by `(` in the return expression; casts (`(Type)expr`)
+     * were stripped above and never have that shape. */
+    for (const char *p = ret; *p && *p != ';'; ) {
+        if (isalnum((unsigned char)*p) || *p == '_') {
+            while (isalnum((unsigned char)*p) || *p == '_') p++;
+            if (*ic_skip_ws(p) == '(') return turi_nil();  /* function call applied to field */
+        } else {
+            p++;
+        }
+    }
+
     /* Skip variable name and look for -> or . */
     const char *varstart = ret;
     while (isalnum((unsigned char)*ret)||*ret=='_') ret++;
@@ -3825,6 +3866,124 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     return false;
 }
 
+/* ----- generic-dict-dispatch re-resolution ------------------------------------
+ * The elaborator bakes the carrier representative instance (e.g. Size [int]) into
+ * a generic function body whose receiver is a class-constrained tyvar, and relies
+ * on emit-side per-call-site specialization to re-resolve.  The interpreter has
+ * no such pass, so it must re-resolve at runtime from the tyvar's concrete type
+ * captured at the call site (the call's abi_bindings).  See
+ * docs/reported/turi-generic-dict-dispatch-bakes-representative-instance.md. */
+
+/* Head constructor name of a concrete type (descends TY_APP to its base). */
+static const char *gde_type_head_name(const Type *t) {
+    if (!t) return NULL;
+    while (t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
+    switch (t->kind) {
+    case TY_STRUCT: return t->as.struct_.def ? t->as.struct_.def->name : NULL;
+    case TY_ADT:    return t->as.adt_.def ? t->as.adt_.def->name : NULL;
+    case TY_REC:    return t->as.rec.name;
+    default:        return NULL;
+    }
+}
+
+/* True for a concrete `*`-kinded primitive -- these dispatch to the int-carrier
+ * representative, so they keep the elaborator's baked instance. */
+static bool gde_type_is_primitive_star(const Type *t) {
+    switch (t->kind) {
+    case TY_INT: case TY_BOOL: case TY_CSTR: case TY_NIL: case TY_FLOAT:
+    case TY_PTR_VOID: case TY_SYM:
+    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+    case TY_FLOAT32: case TY_FLOAT64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Re-resolve a baked-representative typeclass method (carried by `dict_arg`) to
+ * the instance matching the runtime-concrete receiver `concrete`.  Returns a
+ * method closure, or nil if no better instance applies (caller keeps the baked
+ * callee). */
+static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
+                                      const Type *concrete) {
+    if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
+    /* Primitives dispatch to the int-carrier representative the elaborator already
+     * baked -- nothing to re-resolve. */
+    if (gde_type_is_primitive_star(concrete)) return turi_nil();
+    TypeClassInstance *rep = dict_arg->as.dict_.instance;
+    if (!rep || !rep->typeclass) return turi_nil();
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    TypeClass   *tc      = rep->typeclass;
+
+    TypeClassInstance *match = NULL;
+    /* Precise: match by the concrete type's head constructor name. */
+    const char *head = gde_type_head_name(concrete);
+    if (head) {
+        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+            if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
+                                ? inst->type_arg_syms[0]->name : NULL;
+            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
+        }
+    }
+    /* Fallback: structured dispatch key (ARROW -> first non-primitive instance). */
+    if (!match) {
+        TypeClassDispatchKey key;
+        memset(&key, 0, sizeof(key));
+        key.typeclass       = tc;
+        key.type_args       = (Type *)concrete;
+        key.n_type_args     = 1;
+        key.constructor_kind = KIND_ARROW;
+        match = typeclass_env_lookup_instance_by_key(tc_env, &key);
+    }
+    if (!match || match == rep) return turi_nil();
+
+    /* Same method slot as the baked dict node (sanitized-name match, as EX_DICT). */
+    const char *mname = dict_arg->as.dict_.method_name;
+    for (uint32_t mi = 0; mi < tc->n_methods; mi++) {
+        const char *orig = tc->methods[mi].name->name;
+        char san[128]; size_t olen = strlen(orig);
+        if (olen >= sizeof(san)) olen = sizeof(san) - 1;
+        for (size_t k = 0; k < olen; k++) {
+            char c = orig[k];
+            san[k] = ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                      (c >= 'A' && c <= 'Z')) ? c : '_';
+        }
+        san[olen] = '\0';
+        if (strcmp(san, mname) != 0) continue;
+        if (mi >= match->n_method_impls || !match->method_impls[mi]) return turi_nil();
+        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        memset(cl, 0, sizeof(*cl));
+        cl->fn       = match->method_impls[mi];
+        cl->captured = NULL;
+        return turi_closure(cl);
+    }
+    return turi_nil();
+}
+
+/* Record the concrete type substitutions a call site pins onto the callee's
+ * tyvars (its abi_bindings), resolving any still-abstract tyvar through the
+ * caller's own substitution so nested generics compose. */
+static void frame_record_abi(EvalFrame *callee, EvalFrame *caller, const Expr *call) {
+    for (uint8_t i = 0; i < call->as.call_.n_abi_bindings; i++) {
+        AbiTypeBinding *ab = &call->as.call_.abi_bindings[i];
+        if (!ab->name) continue;
+        Type t = ab->type;
+        if (t.kind == TY_TYVAR && t.as.tyvar_.name) {
+            Type r;
+            if (frame_lookup_tyvar(caller, t.as.tyvar_.name, &r)) t = r;
+        }
+        if (t.kind == TY_TYVAR) continue;  /* still abstract: nothing to pin */
+        TyvarBind *tb = (TyvarBind *)malloc(sizeof(TyvarBind));
+        tb->name = ab->name;
+        tb->type = t;
+        tb->next = callee->tyvars;
+        callee->tyvars = tb;
+    }
+}
+
 /* -------------------------------------------------------------------------
  * T2 (turi-eval-trampoline-plan): explicit-stack driver for the linear control
  * forms.  Flattens directly-nested EX_IF branch chains and EX_DO/EX_PROGRAM
@@ -4422,20 +4581,39 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * body-in-loop + TCO fold is T3.2b).  The closure value rides in
                  * `last`; the arg accumulator in `aux`. */
                 TuriValue fn_val;
-                if (control->as.call_.fn_binding) {
+                /* generic-dict-dispatch: a typeclass method baked to the carrier
+                 * representative (dict_arg set, receiver tyvar in abi_bindings[0])
+                 * re-resolves to the receiver's real instance using the concrete
+                 * type the enclosing generic call pinned onto that tyvar. */
+                bool gde_resolved = false;
+                if (control->as.call_.dict_arg &&
+                    control->as.call_.n_abi_bindings >= 1 &&
+                    control->as.call_.fn_binding) {
+                    AbiTypeBinding *ab0 = &control->as.call_.abi_bindings[0];
+                    if (ab0->type.kind == TY_TYVAR && ab0->type.as.tyvar_.name) {
+                        Type concrete;
+                        if (frame_lookup_tyvar(cf, ab0->type.as.tyvar_.name, &concrete) &&
+                            concrete.kind != TY_TYVAR) {
+                            TuriValue rv = gde_reresolve_method(
+                                env, control->as.call_.dict_arg, &concrete);
+                            if (rv.tag == TURI_CLOSURE) { fn_val = rv; gde_resolved = true; }
+                        }
+                    }
+                }
+                if (!gde_resolved && control->as.call_.fn_binding) {
                     fn_val = eval_lookup(env, cf,
                                  control->as.call_.fn_binding->name->name);
-                } else if (control->as.call_.fn_expr) {
+                } else if (!gde_resolved && control->as.call_.fn_expr) {
                     fn_val = eval_expr(env, cf, control->as.call_.fn_expr);
                     fn_val = reword_unbound_call_head(fn_val, control->as.call_.fn_expr);
-                } else {
+                } else if (!gde_resolved) {
                     cur = turi_error("eval: call with no function");
                     descending = false; break;
                 }
                 if (turi_is_error(fn_val) || env->returning || env->throwing) {
                     cur = fn_val; descending = false; break;
                 }
-                if (control->as.call_.fn_binding)
+                if (!gde_resolved && control->as.call_.fn_binding)
                     fn_val = recover_carrier_closure(fn_val, control->as.call_.fn_binding);
                 if (fn_val.tag != TURI_CLOSURE) {
                     cur = turi_errorf("eval: expected function, got tag %d", fn_val.tag);
@@ -4824,6 +5002,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     frame_bind(call_frame,
                                fn->params[param_offset + i]->name->name, acc[i]);
                 free(acc);
+                /* generic-dict-dispatch: pin this call's concrete tyvar
+                 * substitutions onto the callee frame so a baked-representative
+                 * method call inside the body can re-resolve its instance. */
+                if (top->expr->as.call_.n_abi_bindings > 0)
+                    frame_record_abi(call_frame, top->frame, top->expr);
 
                 if (top->tail) {
                     /* F3: tail call -- REUSE the enclosing activation's
