@@ -2,6 +2,48 @@
 title: Vec Eq rewrite to pure-Turmeric blocked on (1) affine multi-use AND (2) polymorphic-defn recursive-call return-type inference
 severity: ergonomics gap / latent inference defect
 date: 2026-06-13
+status: RESOLVED (2026-06-15)
+---
+
+## Resolution (2026-06-15)
+
+All three blockers are fixed and the Vec Eq rewrite has landed in pure
+Turmeric -- the carrier-int helper is gone.
+
+- **Issue (1) affine multi-use** -- unblocked (see Update below).
+- **Issue (2) poly-defn recursive return inference** -- fixed in the
+  `elab_toplevel.c` pass-1 forward-decl fix (Update 2).
+- **Issue (3) by-value-struct -> carrier let-binding bridge** -- fixed by
+  the m5-residual-straddle work; the EX_ASCRIBE `(:: x :int)` widening now
+  fires the `CK_CONCRETE -> CK_CARRIER` bridge for by-value carrier-ABI
+  params. Regression-guarded by fixture
+  `tests/fixtures/m5-spec-body-ascription-bridge/`.
+
+The shipped instance (`stdlib/vec.tur`) takes the field-projection route
+that sidesteps the multi-use entirely -- `vec-eq-loop-byval` receives
+`x : (Vec A)` by value and reads `(.data x)` / `(.len x)`, so each
+recursive level rebinds fresh, exactly like the Cons rewrite:
+
+```turmeric
+(definstance Eq [Vec]
+  [(Eq A)]
+  (eq? [x y]
+    (let [lx (vec-len-byval (:: x (Vec A)))
+          ly (vec-len-byval (:: y (Vec A)))]
+      (if (= lx ly)
+        (vec-eq-loop-byval (:: x (Vec A)) (:: y (Vec A)) 0 lx)
+        false))))
+```
+
+Landed via #359 (`deee4c6`, constrained-poly helpers monomorphize from
+instance bodies). Runtime-guarded by `tests/fixtures/m5-constrained-poly-vec-eq/`
+(`eq?` over `Vec int` -> `true/false/true`) plus the collection-of-Vec eq
+fixtures (`map-of-tvec-eq`, `option-of-tvec-eq`, `set-of-tvec-eq`). The
+dead carrier-int `vec-eq-loop` probe helper has been removed from
+`stdlib/vec.tur`.
+
+Archived to `docs/archive/` as resolved.
+
 ---
 
 ## Update 2 (2026-06-13, follow-up commit)
