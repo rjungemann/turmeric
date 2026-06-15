@@ -3142,12 +3142,8 @@
 
 
 (defn httpd-call [handler : int conn : ptr<void>] : nil
-  ```c
-  if (!handler) return;
-  int64_t *fat = (int64_t *)(intptr_t)handler;
-  typedef void (*fn1_t)(void *, int64_t);
-  ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
-  ```)
+  (when (not (= handler 0))
+    ((:: handler (fn [ptr<void>] nil)) conn)))
 ;;; defroute -- macro sugar for (router-add router method pattern handler).
 ;;;
 ;;; Example:
@@ -3289,17 +3285,13 @@
 ;;;
 ;;; The middleware is a fat closure of shape
 ;;; (fn [next :int] :ptr<void> ...); this performs a single fat-closure
-;;; dispatch -- the same ABI glue as httpd-call -- and returns the wrapped
-;;; handler. It holds no cons-layout knowledge; the (pure-Turmeric) list
-;;; walk lives in httpd-mw-fold. The caller guards against a null mw, so a
-;;; bare dereference of fat[0] here is safe.
+;;; dispatch -- the same ascription idiom as httpd-call -- and returns the
+;;; wrapped handler. It holds no cons-layout knowledge; the list walk lives
+;;; in httpd-mw-fold. The caller guards against a null mw, so dispatching the
+;;; already-fat handle via (:: mw (fn [int] int)) here is safe.
 
 (defn httpd-mw-apply [mw : int cur : int] : int
-  ```c
-  int64_t *fat = (int64_t *)(intptr_t)mw;
-  typedef int64_t (*fn1_t)(void *, int64_t);
-  return ((fn1_t)(intptr_t)fat[0])((void *)fat, cur);
-  ```)
+  ((:: mw (fn [int] int)) cur))
 ;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
 ;;; middlewares over a base handler. Each cell holds a fat closure value of
 ;;; shape (fn [next :int] :ptr<void> ...). Applied right-to-left so the list

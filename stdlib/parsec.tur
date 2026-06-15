@@ -334,12 +334,8 @@
 ;;;   (apply-fat my-fn 42)  ; => result of calling my-fn with 42
 
 
-(defn apply-fat [f arg] : int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)f;
-  int64_t thunk = fat[0];
-  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, arg);
-  ```)
+(defn apply-fat [f : int arg : int] : int
+  ((:: f (fn [int] int)) arg))
 ;; apply-parser: call a parser fat closure with an Input
 ;;; apply-parser -- run a parser fat closure against an Input.
 ;;;
@@ -353,12 +349,8 @@
 ;;; Example:
 ;;;   (apply-parser (item) (input-new "a" 0))  ; => Cell{Pair(97, Input@1)}
 
-(defn apply-parser [p inp] : int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)p;
-  int64_t thunk = fat[0];
-  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, inp);
-  ```)
+(defn apply-parser [p : int inp : int] : int
+  ((:: p (fn [int] int)) inp))
 ;;; ── Core parsers ─────────────────────────────────────────────────────────────
 ;; pfail: always fails
 ;;; pfail -- parser that always fails, consuming no input.
