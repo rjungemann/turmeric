@@ -3,7 +3,8 @@ title: Plan M3 ("delete `emit_carrier_bridge`") is gated on M4, not just M2
 category: Codegen / ABI — monomorphization plan refinement
 severity: Low. M3 is presented in `docs/upcoming/end-to-end-monomorphization-plan.md` as a 1-2-session phase to retire the carrier-bridge machinery after M2 lands. Empirical audit (this session) shows that claim was over-optimistic: even with the full M2b stdlib migration in tree, the bridge is still load-bearing for typeclass-method-dispatch call sites. The actual deletion needs M4 (per-method typeclass ABI) first.
 description: I shipped instrumentation (`TUR_M3_AUDIT=1`) inside `emit_carrier_bridge` so the per-call-site cost of removing it is measurable. Running the full suite under the audit shows only 2 crossings (and both inside already-FAILing pre-existing fixtures), which initially looked like the bridge was dead. Attempting the M3 deletion, the suite regressed by ~6 fixtures with cc errors of the form "passing 'int64_t' to parameter of incompatible type 'Result__int__cstr'". Direct per-fixture re-audit then showed the bridge IS firing for those — `tests/run.sh` was swallowing per-fixture stderr in the snapshot/test phase, so the suite-wide audit count was misleadingly low. The bridge's remaining role is `carrier→concrete` at `EX_ASCRIBE` (when a typeclass-method return like `(:: (decode …) (Result int cstr))` produces an int64 carrier but the ascription's outer context wants the by-value struct) and `concrete→carrier` at the typeclass-instance dispatch arg-cast site (when a by-value `Tuple2__int__int` is passed to a dict-dispatched `__inst_Eq_eq_qu_Tuple2(int64_t, int64_t)`).
-status: PARTIALLY RESOLVED 2026-06-13. Path A landed for arg-side AND return-side substitution (commits `0fd565fe` and `c6088488`). **Suite-wide bridge audit** (`TUR_M3_AUDIT=1` per-fixture) reveals 14 fixtures still cross the bridge with ~82 total crossings — but those are NOT residuals from Path A's mechanism. They are **legitimate, essential bridge uses**: stdlib `Eq` instances on collection types (`Vec`, `Map`, `MutableMap`, `Set`, `Cons`) consult inline-C carrier helpers (`vec-eq?`, `map-eq?`, etc.) that fundamentally require the int64 carrier ABI to iterate opaque memory. With Path A specializing the instance methods to by-value param types, the bridge fires (correctly) at the helper call sites to spill the by-value back to int64. Additional bridge-essential cases: `generic-relay-aggregate-result` (SChan), `tuplen-struct-param-passing`, `data-literal-typed-empty`, `serial-composite-instances`. **The bridge is not dead code; it's load-bearing for any dispatch path that bottoms out in an inline-C carrier helper.** Deleting it requires rewriting every such stdlib helper to be ABI-agnostic — a substantial parallel effort that would touch `vec-eq?`, `map-eq?`, `mutmap-eq?`, `option-eq?`, `set-eq?`, `list-eq?`, `vec-fmap`, `map-fmap`, etc., reimplementing each in pure Turmeric without inline-C helpers that take int64. That's strictly beyond the M4 scope as originally written.
+status: STILL BLOCKED -- re-validated 2026-06-15 (see "Re-validation 2026-06-15" below). On the current merged tree (`origin/main`, and this branch which trails it by 3 unrelated cfnptr commits) the bridge fires for **1186 fixtures / 2426 crossings** -- not the 14/82 this status line previously recorded. The M4c Path A commits cited below (`0fd565fe`, `c6088488`, `78589845`, `a45ff6c1`, `a301229e`) exist on **no fetched ref**: that experimental Path A / M5 work was never merged (the M5 plan's own log confirms "all experiments reverted"). So the tree never carried the by-value instance specs that shrank the crossing count; the dominant crossing is the long-standing `Eq [Cons]` carrier base (`stdlib/list.tur:165`) recursing through `(:: t1 (Cons A))` with `A` abstract -- present in every program that links stdlib. Deleting `emit_carrier_bridge` today would break those 1186 fixtures. M3 remains blocked on M4+M5 actually landing on main; the historical (unmerged) numbers below are retained for context.
+historical-status: PARTIALLY RESOLVED 2026-06-13. Path A landed for arg-side AND return-side substitution (commits `0fd565fe` and `c6088488`). **Suite-wide bridge audit** (`TUR_M3_AUDIT=1` per-fixture) reveals 14 fixtures still cross the bridge with ~82 total crossings — but those are NOT residuals from Path A's mechanism. They are **legitimate, essential bridge uses**: stdlib `Eq` instances on collection types (`Vec`, `Map`, `MutableMap`, `Set`, `Cons`) consult inline-C carrier helpers (`vec-eq?`, `map-eq?`, etc.) that fundamentally require the int64 carrier ABI to iterate opaque memory. With Path A specializing the instance methods to by-value param types, the bridge fires (correctly) at the helper call sites to spill the by-value back to int64. Additional bridge-essential cases: `generic-relay-aggregate-result` (SChan), `tuplen-struct-param-passing`, `data-literal-typed-empty`, `serial-composite-instances`. **The bridge is not dead code; it's load-bearing for any dispatch path that bottoms out in an inline-C carrier helper.** Deleting it requires rewriting every such stdlib helper to be ABI-agnostic — a substantial parallel effort that would touch `vec-eq?`, `map-eq?`, `mutmap-eq?`, `option-eq?`, `set-eq?`, `list-eq?`, `vec-fmap`, `map-fmap`, etc., reimplementing each in pure Turmeric without inline-C helpers that take int64. That's strictly beyond the M4 scope as originally written.
 ---
 
 # Plan M3 deletion is blocked on M4's per-method typeclass ABI
@@ -106,6 +107,55 @@ across the same call.
    `tests/compiler/test_emit_carrier_bridge.c`, and the CMake target
    `tur_codegen_carrier_bridge`).
 4. Full suite must remain at baseline.
+
+## Re-validation 2026-06-15
+
+Ran step 2 of the validation harness on a fresh Debug build of the current
+tree. Verdict: **the bridge is more load-bearing than ever; deletion is
+firmly blocked.** Details:
+
+- **Suite-wide audit** (`TUR_M3_AUDIT=1 ./build/tur build <fixture>` per
+  fixture, stderr captured directly so the `tests/run.sh` swallow described
+  above can't mislead): **1186 fixtures cross the bridge, 2426 total
+  crossings.** That is ~85x the fixture count and ~30x the crossing count
+  this report originally recorded.
+
+- **Even an empty program crosses.** `(defn main [] : int 0)` emits **2**
+  `carrier->concrete type=(type-app Cons tyvar)` crossings. They come from
+  `stdlib/list.tur:165`'s `(definstance Eq [Cons] ...)` carrier base, whose
+  body recurses with `(eq? (:: t1 (Cons A)) (:: t2 (Cons A)))`. With `A`
+  abstract in the carrier base, each `(:: tN (Cons A))` ascription lowers to
+  `(*(Cons__... *)(intptr_t)(tN))` -- the `CK_CARRIER -> CK_CONCRETE`
+  accessor-side path M3 targets. Every program that links stdlib list (i.e.
+  every program) inherits these two crossings, which is why the suite-wide
+  count is so high. This is exactly M5's Finding 2/3 (the residual hard case
+  is *abstract* element types in the instance carrier base; the fix is
+  ABI-aware field-access lowering, which M5 documents as designed but **not
+  landed**).
+
+- **The M4c Path A / M5 work was never merged.** `git fetch origin main`
+  then `git log` for the commits this report and
+  `docs/upcoming/m5-residual-straddle-retirement.md` cite as "landed"
+  (`0fd565fe`, `c6088488`, `78589845`, `a45ff6c1`, `a301229e`) finds them on
+  **no ref**. The M5 plan's own session logs end with "all experiments
+  reverted" / "the field-access change and the stdlib rewrite are reverted
+  from the tree." So the by-value instance specialization that this report's
+  original audit measured against was experimental and is not in the tree;
+  the merged tree only ever had the carrier-base `Eq Cons` / `Eq Vec` shape,
+  which crosses the bridge universally.
+
+- **`origin/main` is 3 commits ahead** of this branch, all unrelated cfnptr
+  ABI tweaks (`#363`/`#362`/`#365` lineage); they do not touch the bridge or
+  the monomorphization path, so the bridge state is identical on both.
+
+Net: no code change is warranted here. Deleting `emit_carrier_bridge` now
+would break 1186 fixtures. M3 stays blocked on M4 (per-method typeclass ABI)
+**and** M5 (residual-straddle retirement / ABI-aware field-access lowering)
+actually landing on `main` -- neither has. The audit probe at
+`src/compiler/emit_core.c` `emit_carrier_bridge` remains the correct
+re-verification hook for whenever that work does land; re-run this same
+suite-wide audit and expect the count to fall to 0 before attempting the
+deletion in step 3.
 
 ## Related
 
