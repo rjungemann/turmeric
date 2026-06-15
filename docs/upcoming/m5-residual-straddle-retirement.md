@@ -6,6 +6,48 @@ description: Retire the two CK_CONCRETE -> CK_CARRIER bridges introduced by M4c-
 
 # M5 Residual Straddle Retirement -- Plan
 
+## STATUS 2026-06-15 (session 5): Vec/Cons rewrite LANDED & green; MutableMap is the last real producer
+
+The earlier "session 4 cont. 3" note below said the field-access predicate
+and `Eq Vec` stdlib rewrite were *reverted from the tree*. **That is now
+stale.** The `Eq [Vec]` / `Eq [Cons]` by-value rewrite **and** the Finding-7
+per-call `(call, active-spec)` clone keying both **landed** in commit
+`deee4c6` ("fix(m5): gap 4 FIXED ..."). The suite is green at
+**1635 passed, 0 failed**. `stdlib/vec.tur` carries `vec-len-byval` /
+`vec-eq-loop-byval`; `vec-eq-ascribed-multi` (the multi-element case
+Finding 7 unblocked) passes.
+
+**Measured current bridge state** (env-gated probe at the two
+`emit_carrier_bridge(CK_CONCRETE, CK_CARRIER, ...)` sites -- now
+`emit_expr.c` ~2748 M4c Path A and ~4500 EX_ASCRIBE -- plus an `emit-c`
+sweep over every fixture):
+
+| Bridge site | Fixtures it still fires for |
+|---|---|
+| M4c Path A (~2748) | `mutmap-eq`, `m5-lambda-aft-tyvar-prior-accepts-concrete` |
+| EX_ASCRIBE (~4500) | `m5-instance-spec-constraint-var`, `m5-spec-body-ascription-bridge` (both exist to *pin* bridge behaviour) |
+
+So the Vec/Cons producers are gone; **`mutmap-eq` (the `Eq [MutableMap]`
+instance) is the one remaining "real" producer** of the M4c Path A bridge.
+Retiring it the Vec way was attempted this session and hit a new gap:
+`Eq [MutableMap]` is over the **multi-param** `MutableMap [K V]`, and the
+*unconstrained* type-ctor param `K` is recorded in the instance-method
+call's `abi_bindings` as a concrete `TY_STRUCT`, not an abstract `TY_TYVAR`
+(the constrained `V` resolves fine). So no by-value spec interns and the
+spec body passes a by-value struct into the int64 carrier base (`cc`
+error). Full trace + root cause + proposed elaborator fix filed under
+`docs/reported/m5-multiparam-instance-unconstrained-tyvar-blocks-byval-spec.md`.
+The experiment (stdlib + an emit-side composition extension) was reverted;
+the tree stays at the green baseline.
+
+**Net:** D.4 ("delete the M4c Path A / EX_ASCRIBE branches outright") still
+cannot proceed -- the branches remain load-bearing for `mutmap-eq`,
+`m5-lambda-aft-tyvar-prior-accepts-concrete`, and the two pin fixtures.
+The next workable piece toward the audit's "bridge count -> 0" is the
+elaborator fix in the filed report (carry unconstrained instance type-ctor
+params as named tyvars), after which the `Eq [MutableMap]` by-value rewrite
+becomes mechanical.
+
 ## Why
 
 M4c Path A specializes typeclass-instance methods on parameterized

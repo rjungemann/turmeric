@@ -19,6 +19,26 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0b. Status snapshot — 2026-06-15 (Vec/Cons rewrite landed; MutableMap is last real producer)
+
+- The `Eq [Vec]` / `Eq [Cons]` by-value rewrite + Finding-7 per-call
+  `(call, active-spec)` clone keying **landed** in `deee4c6`; suite green
+  at 1635/0. `stdlib/vec.tur` has `vec-len-byval` / `vec-eq-loop-byval`;
+  `vec-eq-ascribed-multi` (multi-element) passes.
+- Bridge **firing** (not static call-site count, which is still 7) measured
+  via env-gated probe + `emit-c` sweep: the two M5-target
+  `CK_CONCRETE -> CK_CARRIER` sites now fire only for `mutmap-eq` +
+  `m5-lambda-aft-tyvar-prior-accepts-concrete` (M4c Path A) and the two
+  dedicated bridge-pin fixtures (EX_ASCRIBE). The Vec/Cons producers are
+  gone.
+- `mutmap-eq` (`Eq [MutableMap]`) is the last "real" M4c-Path-A producer.
+  Retiring it the Vec way is blocked by a new gap: the unconstrained
+  type-ctor param `K` of the multi-param `MutableMap [K V]` is carried as a
+  `TY_STRUCT`, not a `TY_TYVAR`, in the instance-method call's
+  `abi_bindings`, so no by-value spec interns. See
+  `docs/reported/m5-multiparam-instance-unconstrained-tyvar-blocks-byval-spec.md`
+  and the STATUS note in `m5-residual-straddle-retirement.md`.
+
 ## 0. Status snapshot — 2026-06-14 (post-M5 emit-side follow-up)
 
 Today's landings:
