@@ -3,10 +3,21 @@ title: ECS E2c (sized-rectangular dense iteration) needs a bounded-capacity worl
 category: Planning gap / scope mismatch
 severity: Planning correction. SZ6-SZ8 shipped (2026-06-10) and the ECS spice plan claims E2c is "now a transparent spice-side update." It isn't: the dense storage's runtime-grown semantics are incompatible with cross-parameter size unification as currently shipped, so E2c requires a sized-world API redesign before any wiring can land.
 description: The ECS spice plan asserts that E2c is unblocked by SZ6-SZ8. In practice, the shipped cross-parameter size unification only succeeds when the size index is derived from a GADT constructor chain (e.g. `SVCons int (SizedVec n) : (SizedVec (Add 1 n))`). Dense storage in `ecs/storage` is a malloc'd buffer that grows in place via `dense-set!`; the handle is an opaque `int` with no constructor chain, so any size index attached to it would be a true phantom -- never unifiable in any load-bearing way. Lifting `__fe-min-cap` to a static check requires a world-API redesign (bounded-capacity worlds with a single size parameter threaded through every storage), which is not a transparent spice-side update.
-status: OPEN. Recommended next step: redesign the world API before queueing further spice-side work on E2c.
+status: RESOLVED 2026-06-15. All three recommended directions landed. The ECS spice plan's E2c entry was reclassified from "spice-side wiring pending (prereq landed)" to "design pending (prereq alone is not enough)" and now points at this report; the runtime `__fe-min-cap` fallback was left in place; and the follow-up `docs/upcoming/ecs-sized-world-plan.md` was opened, settling all four design questions (Q1 cap lifecycle = fixed at construction, Q2 sparse/tag = uniform `n`, Q3 spawn = `result<EntityId, WorldFull>`, Q4 accessors = runtime bounds checks stay) and speccing the `defworld` capacity surface. No spice-side wiring landed ahead of the design plan.
 ---
 
 # E2c needs a bounded-capacity world API
+
+> **Resolution (2026-06-15).** This planning correction has been fully
+> actioned and is archived. The overclaiming E2c entry in
+> [`docs/upcoming/ecs-spice-plan.md`](../upcoming/ecs-spice-plan.md) was
+> rewritten (status header + the "Prereq shipped" and "Design pending"
+> sections all now state E2c is gated on a bounded-capacity world-API
+> redesign, not on SZ6-SZ8 alone), the runtime `__fe-min-cap` fallback
+> stays in place, and the follow-up
+> [`docs/upcoming/ecs-sized-world-plan.md`](../upcoming/ecs-sized-world-plan.md)
+> answers every design question raised below. The original analysis is
+> preserved verbatim for the record.
 
 ## Summary
 

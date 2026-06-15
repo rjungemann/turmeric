@@ -1,5 +1,17 @@
 # `workstealing-balance` fixture: last-element pop/steal race double-consumes an item (`items-processed: 9`)
 
+**Status:** RESOLVED 2026-06-15. Applied Option A: `bwsd-pop` in
+`tests/fixtures/workstealing-balance/input.tur` is now a canonical
+Chase-Lev `take` -- it claims `bottom` first, issues a `SEQ_CST` fence,
+re-reads `top`, and CASes `top` itself when only the last element remains
+so the owner and a thief can no longer both consume the same slot.
+`bwsd-steal` was aligned to match (read `top`, `SEQ_CST` fence, read
+`bottom`, signed `(int64_t)(bottom - top) <= 0` emptiness test that
+tolerates `bottom` lagging `top` during a concurrent pop). Validation:
+600 concurrent runs under core saturation all printed `items-processed: 8`;
+50 ThreadSanitizer runs were race-clean; the fixture passes via
+`TUR_TEST_FILTER='^workstealing-balance$' bash tests/run.sh`.
+
 **One-line summary:** The inlined work-stealing deque in
 `tests/fixtures/workstealing-balance/input.tur` uses a non-canonical
 Chase-Lev `pop` that omits the single-element CAS arbitration, so the

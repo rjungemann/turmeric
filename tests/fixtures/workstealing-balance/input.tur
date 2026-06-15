@@ -74,12 +74,26 @@
       size_t  bottom;
   } BWsd;
   BWsd *dq = (BWsd *)d;
-  size_t b = __atomic_load_n((size_t *)&dq->bottom, __ATOMIC_ACQUIRE);
-  size_t t = __atomic_load_n((size_t *)&dq->top,    __ATOMIC_ACQUIRE);
-  if (b == t) return NULL;
-  b--;
-  void *item = dq->buffer[b & dq->mask];
-  __atomic_store_n((size_t *)&dq->bottom, b, __ATOMIC_RELEASE);
+  /* Canonical Chase-Lev take: claim bottom first, full fence, re-read top,
+     and CAS top ourselves when only the last element remains so the owner
+     and a thief cannot both consume the same slot. */
+  size_t b = __atomic_load_n((size_t *)&dq->bottom, __ATOMIC_RELAXED) - 1;
+  __atomic_store_n((size_t *)&dq->bottom, b, __ATOMIC_RELAXED);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  size_t t = __atomic_load_n((size_t *)&dq->top, __ATOMIC_RELAXED);
+  void *item = NULL;
+  if (t <= b) {                 /* non-empty */
+      item = dq->buffer[b & dq->mask];
+      if (t == b) {             /* last element: race the thief for it */
+          if (!__atomic_compare_exchange_n((size_t *)&dq->top, &t, t + 1,
+                                           0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+              item = NULL;       /* lost the race to a steal */
+          }
+          __atomic_store_n((size_t *)&dq->bottom, b + 1, __ATOMIC_RELAXED);
+      }
+  } else {                      /* empty: restore bottom */
+      __atomic_store_n((size_t *)&dq->bottom, b + 1, __ATOMIC_RELAXED);
+  }
   return item;
   ```)
 
@@ -94,9 +108,12 @@
       size_t  bottom;
   } BWsd;
   BWsd *dq = (BWsd *)d;
-  size_t t   = __atomic_load_n((size_t *)&dq->top,    __ATOMIC_ACQUIRE);
+  /* Read top first, full fence, then bottom -- pairs with bwsd-pop's
+     SEQ_CST fence so exactly one side wins the last element. */
+  size_t t = __atomic_load_n((size_t *)&dq->top, __ATOMIC_ACQUIRE);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
   size_t bot = __atomic_load_n((size_t *)&dq->bottom, __ATOMIC_ACQUIRE);
-  if (bot == t) return NULL;
+  if ((int64_t)(bot - t) <= 0) return NULL;   /* empty (signed: bot may lag t mid-pop) */
   void *item = dq->buffer[t & dq->mask];
   if (__atomic_compare_exchange_n((size_t *)&dq->top, &t, t + 1,
                                    0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
