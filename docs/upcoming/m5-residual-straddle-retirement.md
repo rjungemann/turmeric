@@ -6,6 +6,83 @@ description: Retire the two CK_CONCRETE -> CK_CARRIER bridges introduced by M4c-
 
 # M5 Residual Straddle Retirement -- Plan
 
+## STATUS 2026-06-15 (session 7): m5-lambda producer analyzed -- it is the Option C case
+
+Investigated the last non-pin M4c-Path-A producer,
+`m5-lambda-aft-tyvar-prior-accepts-concrete`.  **Finding: it is not a
+localized gap (unlike MutableMap); it is the deferred Option C case --
+"a by-value spec body calls a carrier-typed inline-C stdlib helper."**
+
+### Evidence
+
+The fixture's `use-cmp-vec` gets a clean by-value spec, but the bridge
+fires *inside* it on the `(vec-get xs 0)` calls:
+
+```c
+static bool use_cmp_vec__spec__bool_Vec__int_Vec__int_bool(Vec__int xs, Vec__int ys, int64_t cmp) {
+    Vec__int __t30 = xs;            // spill by-value Vec__int ...
+    Vec__int __t31 = ys;
+    return (*thunk)(cmp,
+        vec_hyget((int64_t)(intptr_t)(&__t30), 0),   // ... and pass &spill as int64 carrier
+        vec_hyget((int64_t)(intptr_t)(&__t31), 0));
+}
+```
+
+`vec-get` is declared `(defn vec-get [A] [v : int i : int] : A ...)` -- a
+**carrier-typed** (`v : int`) inline-C helper whose body hard-rolls
+`struct {...} *vec = (void*)(intptr_t)v;`.  `vec-len` has the same shape.
+They are deliberately carrier-typed so the uniform-dispatch / untyped-`@Vec`
+path can call them with any vec handle.
+
+So the M4c Path A bridge here is the **designed, correct** handling of
+"by-value struct passed to a carrier inline-C helper": spill to a temp,
+take its address, cast to the int64 carrier.  It is not a miscompile and
+not an accidental straddle.
+
+### Why it is not localized
+
+- It cannot be fixed in the fixture: editing `use-cmp-vec` to call a
+  `vec-get-byval` twin would dodge the very straddle the audit is tracking
+  (and violate the "don't rewrite tests to dodge breakage" rule).
+- The representation-precise field-access predicate (Finding 5) already
+  landed (`emit_expr.c:4095-4101`), so a *pure-Turmeric* `vec-len-byval`
+  /`vec-get-byval` using `(.data v)`/`(.len v)` is dual-ABI.  But the
+  fixture calls `vec-get` (carrier), not the twin, and changing `vec-get`'s
+  own signature from `[v : int]` to `[v : (Vec A)]` has wide ripple (every
+  untyped-`:int` vec caller would need a typed `(Vec A)`).
+- The remaining producers are exactly: this one (Option C) plus the two
+  EX_ASCRIBE fixtures that *exist to pin* bridge behaviour.  None is an
+  accidental producer a localized change removes.
+
+### Conclusion: D.4 is gated on Option C
+
+The audit's "bridge count -> 0" / D.4 (delete the bridge branches) is gated
+on **Option C**: auto-monomorphize a carrier inline-C helper to a by-value
+spec at the by-value-spec call boundary.  The existing per-instantiation
+clone machinery (`emit_module.c:1108`) already emits a concrete-signature
+clone but leaves the inline-C body verbatim, so a `Vec__int` spec body
+keeps `(void*)(intptr_t)v` and would not compile -- which is why the
+call-site bridge handles it instead.
+
+Recommended approach (its own focused session + the M6-style design pass
+the plan calls for):
+
+1. **Inline-C body rewriter** keyed on the stable carrier idiom
+   `struct {...} *NAME = (void*)(intptr_t)PARAM;` for a param that the
+   active spec resolves to a by-value struct: rewrite to
+   `struct {...} NAME_v = PARAM; struct {...} *NAME = &NAME_v;` (or rewrite
+   `vec->field` to `PARAM.field`).  This is the doc's Option C; it
+   generalizes to every carrier vec/stdlib helper without an API twin.
+2. Alternative (narrower, hackier): an emit-time redirect table mapping
+   `vec-get`/`vec-len`/... to pre-written pure-Turmeric `*-byval` twins
+   when the receiver arg is a by-value struct in a spec context.  Avoids
+   inline-C parsing but adds a hand-maintained twin per helper and a
+   call-name redirect in the core call-emit path.
+
+Until Option C lands, this single bridge (and the two pin fixtures) keep
+the M4c Path A / EX_ASCRIBE branches alive; the producer set will not reach
+zero.  No code changed this session -- the deliverable is this analysis.
+
 ## STATUS 2026-06-15 (session 6): MutableMap straddle RETIRED
 
 The last real M4c-Path-A producer, `Eq [MutableMap]`, is now retired the

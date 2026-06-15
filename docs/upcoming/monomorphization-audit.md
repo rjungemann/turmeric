@@ -19,6 +19,19 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0d. Status snapshot — 2026-06-15 (m5-lambda producer = Option C, D.4 gated)
+
+The last non-pin M4c-Path-A producer,
+`m5-lambda-aft-tyvar-prior-accepts-concrete`, was analyzed: its bridge is a
+by-value `Vec__int` spilled to call the **carrier-typed** inline-C helper
+`vec-get` (`[v : int]`, like `vec-len`).  This is the deferred Option C
+case (auto-monomorphize a carrier inline-C helper at the by-value-spec
+boundary), not a localized gap -- so the audit's "bridge count -> 0" / D.4
+is gated on Option C.  The remaining producers are this one plus the two
+EX_ASCRIBE bridge-pin fixtures.  Full analysis + recommended approach
+(inline-C body rewriter) in `m5-residual-straddle-retirement.md`
+(session 7).  No code changed.
+
 ## 0c. Status snapshot — 2026-06-15 (MutableMap straddle RETIRED)
 
 - `Eq [MutableMap]` rewritten to the by-value path (mirrors Vec/Cons).
