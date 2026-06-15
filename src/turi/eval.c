@@ -3337,7 +3337,16 @@ static TuriValue ic_format_snprintf_call(const char *fp,
         if(alen>0&&alen<256){
             char abuf[256]; memcpy(abuf,as,(size_t)alen); abuf[alen]='\0';
             int64_t val=0;
-            ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body);
+            /* Refuse-rather-than-guess (turi-inline-c-silent-miscompiles):
+             * ic_eval_assign_expr returns false when it cannot faithfully
+             * evaluate the argument (an unresolved local, a cast-deref through
+             * an unmodeled struct, etc.).  Ignoring that and formatting the
+             * leftover `val=0` is exactly the silent-miscompile class this
+             * family of bugs is about -- decline the whole match so
+             * try_exec_simple_inline_c falls through to a clean "inline-C not
+             * supported" error instead of a plausible-but-wrong number. */
+            if(!ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body))
+                return turi_nil();
             sn_args[sn_argc++]=val;
         }
     }
