@@ -42,12 +42,34 @@ provably dead, not merely dead for the pin fixtures.
 
 ### Remaining toward "bridge count -> 0"
 
-D.4 for the **EX_ASCRIBE** branch is now the only open piece: it is kept alive
-solely by its two dedicated pin fixtures, so finishing it means retiring or
-repurposing those pins (and then deleting/​shrinking the EX_ASCRIBE
-`CK_CONCRETE -> CK_CARRIER` site + the symmetric M3 accessor-side
-`CK_CARRIER -> CK_CONCRETE` path they backstop). Mechanical, but a deliberate
-decision about the pins -- left for its own focused session.
+D.4 for the **EX_ASCRIBE** branch is the only open piece: the
+`CK_CONCRETE -> CK_CARRIER` site is kept alive solely by its two dedicated pin
+fixtures (`m5-instance-spec-constraint-var`, `m5-spec-body-ascription-bridge`),
+which use the explicit `(:: x :int)` widening idiom.
+
+**It is NOT mechanical.** A follow-up investigation (same session) tried to
+migrate the pins to the Option C redirect idiom (drop `(:: x :int)`, let the
+twin redirect retarget `vec-len`/`vec-get` to their `*-byval` twins) so the
+bridge could be deleted. It is blocked on two real emit gaps:
+
+1. The redirect does not fire for an instance-method spec receiver, which
+   arrives as the element-erased bare `TY_STRUCT Vec` (kind 18) -- struct-app
+   extraction fails, so it falls back to the carrier base. The pin must
+   re-ascribe to `(Vec A)` to expose the element type.
+2. Even with `(:: x (Vec A))`, the redirect's per-call-node clone recording
+   (`emit_abi_record_specialized_call`) collides across the dual-ABI instance
+   method: the carrier base mints an `int64_t`-param twin clone that the
+   by-value spec then wrongly reuses (`Vec__int` into `int64_t` -> cc error).
+   This is the Finding-7 `(call, active-spec)` keying issue recurring for the
+   twin-redirect path.
+
+So finishing D.4 here is either (1) real emit work -- extend the redirect to
+element-erased instance-method receivers AND key the twin-redirect clone per
+`(call, active-spec)` -- then migrate the pins and delete the bridge; or
+(2) a decision to keep the bridge as supported `(:: struct :int)` widening
+surface and close D.4-for-EX_ASCRIBE as won't-do. Full analysis, repro, and
+fix directions:
+`docs/reported/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
 
 ## Why
 
