@@ -3,7 +3,8 @@ title: Plan M3 ("delete `emit_carrier_bridge`") is gated on M4, not just M2
 category: Codegen / ABI — monomorphization plan refinement
 severity: Low. M3 is presented in `docs/upcoming/end-to-end-monomorphization-plan.md` as a 1-2-session phase to retire the carrier-bridge machinery after M2 lands. Empirical audit (this session) shows that claim was over-optimistic: even with the full M2b stdlib migration in tree, the bridge is still load-bearing for typeclass-method-dispatch call sites. The actual deletion needs M4 (per-method typeclass ABI) first.
 description: I shipped instrumentation (`TUR_M3_AUDIT=1`) inside `emit_carrier_bridge` so the per-call-site cost of removing it is measurable. Running the full suite under the audit shows only 2 crossings (and both inside already-FAILing pre-existing fixtures), which initially looked like the bridge was dead. Attempting the M3 deletion, the suite regressed by ~6 fixtures with cc errors of the form "passing 'int64_t' to parameter of incompatible type 'Result__int__cstr'". Direct per-fixture re-audit then showed the bridge IS firing for those — `tests/run.sh` was swallowing per-fixture stderr in the snapshot/test phase, so the suite-wide audit count was misleadingly low. The bridge's remaining role is `carrier→concrete` at `EX_ASCRIBE` (when a typeclass-method return like `(:: (decode …) (Result int cstr))` produces an int64 carrier but the ascription's outer context wants the by-value struct) and `concrete→carrier` at the typeclass-instance dispatch arg-cast site (when a by-value `Tuple2__int__int` is passed to a dict-dispatched `__inst_Eq_eq_qu_Tuple2(int64_t, int64_t)`).
-status: STILL BLOCKED -- re-validated 2026-06-15 (see "Re-validation 2026-06-15" below). On the current merged tree (`origin/main`, and this branch which trails it by 3 unrelated cfnptr commits) the bridge fires for **1186 fixtures / 2426 crossings** -- not the 14/82 this status line previously recorded. The M4c Path A commits cited below (`0fd565fe`, `c6088488`, `78589845`, `a45ff6c1`, `a301229e`) exist on **no fetched ref**: that experimental Path A / M5 work was never merged (the M5 plan's own log confirms "all experiments reverted"). So the tree never carried the by-value instance specs that shrank the crossing count; the dominant crossing is the long-standing `Eq [Cons]` carrier base (`stdlib/list.tur:165`) recursing through `(:: t1 (Cons A))` with `A` abstract -- present in every program that links stdlib. Deleting `emit_carrier_bridge` today would break those 1186 fixtures. M3 remains blocked on M4+M5 actually landing on main; the historical (unmerged) numbers below are retained for context.
+status: MOSTLY UNBLOCKED -- 2026-06-15 (see "Resolution 2026-06-15" below). On the current merged tree (`origin/main`, with M5 Option C `#364` and the M5 emit fixes landed) the bridge fired for **1188 fixtures / 2429 crossings**, but **2376 of those (98%) were a single pattern**: the `Eq [Cons]` carrier base (`stdlib/list.tur`) recursing through `(:: t1 (Cons A))` with `A` abstract, emitted into every program that links stdlib. That instance was also **silently miscompiled** (invoking `(eq? cons cons)` via spec or abstract dispatch produced hard cc errors) and **never tested** -- `list-basic` exercises the separate `list-eq?` function, not the instance. **Fixed this session** by rewriting `Eq [Cons]` to delegate to carrier-based `list-eq?` with an element-comparison closure (the proven `Eq [Vec]` pattern): empty `main` crossings 2 -> 0, the instance now compiles + returns correct results, full suite 1637/0. Remaining: a **~53-crossing long tail** (abstract-element `Vec`, multi-param `MutableMap`, and the pre-existing `concrete->carrier` dispatch-arg-bridge gap that fails identically for `Vec` and `Cons`). The bridge cannot be deleted outright until those clear -- M4/M5 work -- but M3 is no longer dominated by `Eq [Cons]`.
+NOTE-on-earlier-status: an earlier 2026-06-15 status line on this report claimed the M4c Path A / M5 work "was never merged" and that the tree was blocked on 1186 fixtures. That was WRONG -- it came from auditing a stale checkout that predated M5 Option C (`#364`) and from looking up squash-merged commits by their pre-merge short SHAs (which no longer exist after squash). M5 Option C IS merged; the accurate status is above.
 historical-status: PARTIALLY RESOLVED 2026-06-13. Path A landed for arg-side AND return-side substitution (commits `0fd565fe` and `c6088488`). **Suite-wide bridge audit** (`TUR_M3_AUDIT=1` per-fixture) reveals 14 fixtures still cross the bridge with ~82 total crossings — but those are NOT residuals from Path A's mechanism. They are **legitimate, essential bridge uses**: stdlib `Eq` instances on collection types (`Vec`, `Map`, `MutableMap`, `Set`, `Cons`) consult inline-C carrier helpers (`vec-eq?`, `map-eq?`, etc.) that fundamentally require the int64 carrier ABI to iterate opaque memory. With Path A specializing the instance methods to by-value param types, the bridge fires (correctly) at the helper call sites to spill the by-value back to int64. Additional bridge-essential cases: `generic-relay-aggregate-result` (SChan), `tuplen-struct-param-passing`, `data-literal-typed-empty`, `serial-composite-instances`. **The bridge is not dead code; it's load-bearing for any dispatch path that bottoms out in an inline-C carrier helper.** Deleting it requires rewriting every such stdlib helper to be ABI-agnostic — a substantial parallel effort that would touch `vec-eq?`, `map-eq?`, `mutmap-eq?`, `option-eq?`, `set-eq?`, `list-eq?`, `vec-fmap`, `map-fmap`, etc., reimplementing each in pure Turmeric without inline-C helpers that take int64. That's strictly beyond the M4 scope as originally written.
 ---
 
@@ -108,7 +109,15 @@ across the same call.
    `tur_codegen_carrier_bridge`).
 4. Full suite must remain at baseline.
 
-## Re-validation 2026-06-15
+## Re-validation 2026-06-15 (SUPERSEDED -- contains a wrong "never merged" claim; see "Resolution 2026-06-15" below)
+
+> **This section is wrong and is kept only as a record of the mistake.** It
+> was written against a stale checkout that predated M5 Option C (`#364`) and
+> concluded the M4c/M5 work "was never merged" because it looked the commits
+> up by their pre-squash short SHAs. After merging `origin/main` (which DOES
+> contain M5 Option C) and rebuilding, the real story is in "Resolution
+> 2026-06-15". Do not trust the numbers or the "blocked on M4+M5 actually
+> landing" verdict in this section.
 
 Ran step 2 of the validation harness on a fresh Debug build of the current
 tree. Verdict: **the bridge is more load-bearing than ever; deletion is
@@ -156,6 +165,65 @@ actually landing on `main` -- neither has. The audit probe at
 re-verification hook for whenever that work does land; re-run this same
 suite-wide audit and expect the count to fall to 0 before attempting the
 deletion in step 3.
+
+## Resolution 2026-06-15 (Eq[Cons] retired -- 98% of crossings gone, suite green)
+
+After merging `origin/main` (M5 Option C `#364` + the M5 emit fixes present),
+rebuilding, and running the audit *with per-fixture stderr captured directly*:
+
+- **1188 fixtures crossed, 2429 total crossings.** Categorized by type:
+  **2376 (98%)** were `carrier->concrete (type-app Cons tyvar)`; the rest a
+  long tail (`Vec int` 27+6, `MutableMap` 4, `Result Device` 3, `SChan` 2,
+  `Option Device` 2, `Tuple3..8` ~1 each, `Pair` 1, `Result int cstr` 1).
+
+- **The dominant crosser was `Eq [Cons]` and it was a latent miscompile.**
+  Its body recursed via `(eq? (:: t1 (Cons A)) (:: t2 (Cons A)))`. Because
+  `Cons`'s `tail` field is typed `:int` (a stand-in for `(Cons A)` -- exactly
+  the "No Lazy `:int`" defect), `(.tail x)` loses its type and the ascription
+  forced the `CK_CARRIER -> CK_CONCRETE` bridge. The instance is emitted into
+  every binary (for the dict singleton), so it crossed twice in *every*
+  program -- including an empty `main`. Worse, invoking `(eq? cons cons)`
+  emitted by-value `Cons__int` into the `int64_t` carrier dict slot (cc error)
+  and a bogus `*(int64_t*)tail` deref; it compiled into binaries but **no
+  fixture ever called it** (`list-basic` tests the standalone `list-eq?`
+  function), so the breakage was invisible.
+
+- **Fix** (`stdlib/list.tur`): rewrite `Eq [Cons]` to delegate to the
+  carrier-based `list-eq?` with an element-comparison closure
+  `(fn [a b] (eq? (:: a A) (:: b A)))` -- the same element-ascription pattern
+  that makes `Eq [Vec]` work. The receiver stays an int64 carrier
+  end-to-end (`(:: x :int)` is a relabel, no spill), no by-value Cons spec is
+  minted, and no carrier-bridge fires. The carrier base now reads
+  `return list_hyeq_qu(x, y, <elem-closure>);`.
+
+- **Validation**: empty `main` crossings 2 -> 0; the previously-broken
+  `(eq? cons cons)` compiles and returns correct element-wise results
+  (`a==b` true, `a==c` false); **full suite 1637 passed, 0 failed**. 75
+  `expected.c` snapshots regenerated in the same commit (the `Eq [Cons]`
+  body is emitted into every program).
+
+### What is left before `emit_carrier_bridge` can be deleted
+
+The ~53-crossing long tail, none of which is `Eq [Cons]`:
+
+1. **`Vec int` (27 carrier->concrete + 6 concrete->carrier)** -- abstract-
+   element `Vec` dispatch and the `vec-*-byval` carrier bases (M5 Finding 2).
+2. **`MutableMap` (4)** -- the multi-param instance whose unconstrained
+   type-ctor param `K` records as `TY_STRUCT` not `TY_TYVAR` (documented
+   blocker in `#364`'s message and the M5 docs).
+3. **`concrete->carrier` dispatch-arg-bridge gap** -- a user-defined
+   polymorphic fn specialized to a by-value concrete type (e.g.
+   `poly-eq [A] [(Eq A)] (eq? x y)` with `A = (Cons int)` / `(Vec int)`)
+   calls the carrier dict slot with by-value args and fails to compile.
+   This reproduces identically for `Vec` and `Cons`, so it is a pre-existing
+   general gap, **orthogonal to `Eq [Cons]`** and to the `carrier->concrete`
+   accessor path M3 deletes. It is an M4/M5 (per-method dict ABI) item.
+4. The handful of `Result Device` / `Option Device` / `SChan` / `TupleN`
+   crossings sit in already-FAIL-prone or HKT/typeclass paths (audit §7).
+
+Re-run the suite-wide `TUR_M3_AUDIT=1` audit after each of 1-3 lands; when
+the count reaches 0, delete `emit_carrier_bridge` per the step-3 checklist
+above and confirm the suite stays green.
 
 ## Related
 
