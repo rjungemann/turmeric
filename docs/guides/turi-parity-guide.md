@@ -105,7 +105,7 @@ fix needs a heap-owned, clonable continuation that carries its prompt/handler
 stack; it is sequenced behind the explicit-stack evaluator. See
 [the delimited-control plan](../upcoming/v1/turi-interpreter-delimited-control-plan.md),
 the [trampoline plan](../upcoming/v1/turi-eval-trampoline-plan.md), and the
-[root-cause report](../reported/turi-interpreter-delimited-control-gaps.md).
+[root-cause report](../archive/history/turi-interpreter-delimited-control-gaps.md).
 
 One-shot effects/handlers, `call/cc`/`escape`, abortive and context-capturing
 `shift`/`reset`, and serializable/cloneable continuations all work today -- only

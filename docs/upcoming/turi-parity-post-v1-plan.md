@@ -130,7 +130,7 @@ alongside it (see Risks #5 and Sequencing).
 6. **Effect / channel select:** `EX_WITH_HANDLER`, `EX_SELECT`.
 7. **CPS transform (new since 2026-06-01):** `EX_CALLCC`,
    `EX_CPS_CONT_APP`. Both originate in the CPS pipeline
-   (`docs/upcoming/cps-transform-plan.md`); the interpreter strategy
+   (`docs/archive/history/cps-transform-plan.md`); the interpreter strategy
    for them should fall out of however that plan lands -- adding case
    arms ahead of it risks rework.
 
@@ -409,7 +409,7 @@ Two viable strategies:
    write because the swap primitives exist; cost is per-generator
    stack allocation.
 2. **CPS-rewrite at elaboration.** The compiler already has a CPS
-   pipeline (`docs/upcoming/cps-transform-plan.md`). Reuse it to flatten
+   pipeline (`docs/archive/history/cps-transform-plan.md`). Reuse it to flatten
    the generator body into an explicit state machine, then evaluate
    that state machine in the interpreter without stack juggling.
 
@@ -553,11 +553,12 @@ call dispatch on both backends, and the runtime `tur_tvar_modify` writes
 `fn(old)`. `tests/fixtures/stm-cas/` guards the compiled path; all 73
 `expected.c` snapshots were regenerated for the two new runtime
 functions. See
-[docs/reported/stm-tvar-cas-swap-modify-compiled-path-broken.md](../reported/stm-tvar-cas-swap-modify-compiled-path-broken.md).
+[docs/archive/history/stm-tvar-cas-swap-modify-compiled-path-broken.md](../archive/history/stm-tvar-cas-swap-modify-compiled-path-broken.md).
 A separate compiled-`or-else` bug (branches emit as no-op stubs) was
 found while validating and filed at
-[docs/reported/stm-or-else-compiled-branches-are-noop-stubs.md](../reported/stm-or-else-compiled-branches-are-noop-stubs.md);
-it is **not** fixed here.
+[docs/archive/history/stm-or-else-compiled-branches-are-noop-stubs.md](../archive/history/stm-or-else-compiled-branches-are-noop-stubs.md);
+it was **not** fixed in this STM pass but has since been resolved (the
+`EX_STM` codegen arm now emits its body for real -- see the report).
 
 ### Tests / harness note
 
@@ -1088,7 +1089,7 @@ the gap from growing while the bigger phases land.
    policy"). Make sure TI1.2 (`EX_SYM_LIT`) reuses the same lifetime
    convention; LSan suppressions live in `tests/run-turi.sh` already
    (`ASAN_OPTIONS=detect_leaks=0`).
-5. **CPS-transform interplay.** If `docs/upcoming/cps-transform-plan.md`
+5. **CPS-transform interplay.** If `docs/archive/history/cps-transform-plan.md`
    lands first and changes how generators / shift-reset are
    represented, TI2-TI3 should rebase on top of it rather than
    building a parallel implementation. Coordinate before starting TI2.
@@ -1129,9 +1130,9 @@ the gap from growing while the bigger phases land.
   API.
 - [docs/guides/repl.md](../guides/repl.md) -- REPL surface that runs on
   turi.
-- [docs/upcoming/cps-transform-plan.md](cps-transform-plan.md) -- may
+- [docs/archive/history/cps-transform-plan.md](../archive/history/cps-transform-plan.md) -- may
   reshape how TI2-TI3 are implemented.
-- [docs/upcoming/error-handling-deferred-plan.md](error-handling-deferred-plan.md)
+- [docs/archive/history/error-handling-deferred-plan.md](../archive/history/error-handling-deferred-plan.md)
   -- R2 (`catch-unwind`) blocks TI5.
 - [src/turi/eval.c](../../src/turi/eval.c) -- the file that grows in
   this plan.
