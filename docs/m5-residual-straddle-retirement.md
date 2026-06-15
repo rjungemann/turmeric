@@ -6,6 +6,49 @@ description: Retire the two CK_CONCRETE -> CK_CARRIER bridges introduced by M4c-
 
 # M5 Residual Straddle Retirement -- Plan
 
+## STATUS 2026-06-15 (session 9): D.4 LANDED for M4c Path A -- dead bridge branch deleted
+
+With Option C in tree (session 8) the M4c Path A `CK_CONCRETE -> CK_CARRIER`
+site at `emit_expr.c` had zero producers. This session executed **D.4** for it:
+the branch is **deleted outright**.
+
+### Verification before deletion
+
+Instrumented the exact M4c Path A site with an env-gated probe
+(`TUR_M4C_PATHA_PROBE`) and swept `emit-c` over the full fixture suite
+(1292 fixtures with a resolvable entry point): **0 firings**. The branch was
+provably dead, not merely dead for the pin fixtures.
+
+### What landed
+
+- **emit_expr.c**: the `else if (... M4c Path A ...)` branch (the
+  by-value-spec-body-calls-carrier-helper spill-and-re-form-carrier path) is
+  removed, replaced by a comment pointing at the Option C redirect
+  (`emit_abi_try_byval_twin_redirect`) that now handles this case at the call
+  boundary. The preceding `dict_arg` `if` stands alone (it was the `if` head of
+  the `if/else if` chain; dropping the `else if` is mechanical).
+
+### Result
+
+- `bash tests/run.sh`: **1636 passed, 0 failed**, zero codegen-snapshot drift.
+  Deleting a zero-producer branch is byte-identical output, so **no snapshot
+  regen was required** -- the green suite with no codegen mismatch is itself the
+  proof the branch never fired.
+- The M4c Path A bridge branch no longer exists. The only remaining
+  `CK_CONCRETE -> CK_CARRIER` producers are the **two EX_ASCRIBE bridge-pin
+  fixtures** (`m5-instance-spec-constraint-var`,
+  `m5-spec-body-ascription-bridge`), which exist specifically to pin bridge
+  behaviour.
+
+### Remaining toward "bridge count -> 0"
+
+D.4 for the **EX_ASCRIBE** branch is now the only open piece: it is kept alive
+solely by its two dedicated pin fixtures, so finishing it means retiring or
+repurposing those pins (and then deleting/​shrinking the EX_ASCRIBE
+`CK_CONCRETE -> CK_CARRIER` site + the symmetric M3 accessor-side
+`CK_CARRIER -> CK_CONCRETE` path they backstop). Mechanical, but a deliberate
+decision about the pins -- left for its own focused session.
+
 ## Why
 
 M4c Path A specializes typeclass-instance methods on parameterized
