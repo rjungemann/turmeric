@@ -1,9 +1,11 @@
 # `(c-fn ...)` lowers `int` to `int64_t` and drops `const`, losing C-ABI precision
 
-**Status:** Partially fixed -- ptr<T> precision shipped 2026-06-14
-(turmeric `6cd02e2a`).  Residual gap: integer-width (`int` ->
-`int64_t` instead of `size_t` / `unsigned int`) and `const`
-qualification on pointers.
+**Status:** Fixed.  ptr<T> precision shipped 2026-06-14 (turmeric
+`6cd02e2a`); the residual integer-width and `const` gap is closed by
+this change (2026-06-15) -- new `:usize` / `:isize` carriers
+(`size_t` / `ptrdiff_t`) and the `ptr<const-T>` spelling
+(`const T *`), in both parameter and result position of a `(c-fn ...)`
+typedef.  See "Resolution" below.
 **Severity:** Medium. Still surfaces as a `-Wincompatible-function-pointer-types`
 error whenever a typed `(c-fn ...)` is passed to a real C callback whose
 signature uses non-int64 integer slots (e.g. `size_t messageSize`) or
@@ -31,11 +33,13 @@ than to a precise C type. In particular:
   `tests/fixtures/c-fn-ptr-element-precise/` exercises this.
 - ~~`ptr<T>` for any non-`void` `T` lowers to `void *`.~~ **Fixed
   alongside the above.**
-- `int` lowers to `int64_t` (`long long`), so a callback whose real C
+- ~~`int` lowers to `int64_t` (`long long`), so a callback whose real C
   signature takes `size_t` / `unsigned int` / `int` (machine word) is
-  type-incompatible at the function-pointer level.  **Residual.**
-- `const` qualifiers are also lost (a `const T *` parameter ends up
-  spelled `T *`).  **Residual.**
+  type-incompatible at the function-pointer level.~~ **Fixed 2026-06-15:**
+  the `:usize` / `:isize` carriers lower to `size_t` / `ptrdiff_t`.
+- ~~`const` qualifiers are also lost (a `const T *` parameter ends up
+  spelled `T *`).~~ **Fixed 2026-06-15:** the `ptr<const-T>` spelling
+  lowers to `const T *`.
 
 At runtime everything is int64-wide and the call would dispatch
 correctly, but the C front-end rejects the assignment with
@@ -156,6 +160,83 @@ beyond just c-fn callbacks (struct fields, return values, ...).
 - Rebuild `../turmeric-spices/spices/rtmidi` against the fixed c-fn
   lowering. The cast workaround in
   `midi-in-set-callback` should be removable.
+
+## Resolution (2026-06-15)
+
+Implemented Option A.  The residual integer-width and `const` gaps are
+closed with two small, additive bits of surface plus the precise
+lowering that consumes them.  No new `TypeKind` was added: the size
+carriers reuse the existing `TY_UINT64` / `TY_INT64` runtime
+representation and the const-ness is a flag on the existing
+`TY_PTR_VOID` ptr type, so the change is purely a *C-spelling* refinement
+that is erased everywhere except the precise `(c-fn ...)` typedef path.
+This means a `:usize` is ABI-identical to a `:uint64` and the runtime
+carrier / dispatch is completely unchanged -- only the emitted C
+function-pointer type tightens.
+
+### New surface
+
+- `:usize` / `:size` -- a `size_t`-spelled unsigned integer (carrier
+  `uint64`).
+- `:isize` / `:ssize` -- a `ptrdiff_t`-spelled signed integer (carrier
+  `int64`).
+- `ptr<const-T>` -- a const-qualified pointer (`const T *`).  The
+  space-free `const-` prefix is used because the whole `ptr<...>` form
+  must tokenize as a single keyword/symbol: `<` / `>` are
+  symbol-continuation characters but `:` and a space are not, so the
+  report's original `ptr<T :const>` spelling cannot lex.  `ptr<const-void>`
+  lowers to `const void *`.
+
+### Lowering
+
+`(c-fn [float ptr<const-u8> usize ptr<void>] void)` now lowers to
+
+```c
+void (*)(double, const uint8_t *, size_t, void *)
+```
+
+which is assignment-compatible with rtmidi's
+
+```c
+void (*)(double timeStamp, const unsigned char *message,
+         size_t messageSize, void *userData);
+```
+
+(`uint8_t` *is* `unsigned char` on every supported platform), so the
+`(RtMidiCCallback)callback` cast in `spices/rtmidi/src/rtmidi/in.tur`
+can be removed.  Both parameter and result positions are handled
+(`(c-fn [ptr<void>] usize)` -> `size_t (*)(void *)`).
+
+### Implementation
+
+- `types.h`: `CNumSpelling` enum + `Type.c_num_spelling` byte; `is_const`
+  flag on the `ptr` union member.
+- `types.c`: `type_c_name` honours `c_num_spelling` (`size_t` /
+  `ptrdiff_t`) and the ptr `is_const` flag (`const T *`).  The fn-ptr
+  typedef registry gains a `result_full_type` so a precise result lowers
+  too, and mangles the precise spelling into the typedef name (distinct
+  signatures get distinct typedefs).  `type_codegen_emit_fn_ptr_typedefs`
+  emits `#include <stddef.h>` *only* when a registered typedef references
+  `size_t` / `ptrdiff_t` -- keeping the header out of the shared preamble
+  avoids churning all ~1442 fixture snapshots, and the include never
+  fires for pre-existing fixtures.
+- `elab_core.c`: `typekind_from_symbol` resolves the `usize` / `isize`
+  carriers.
+- `elab_types.c`: a `c_num_spelling_for_name` helper stamps the precise
+  spelling onto primitive Types; `ptr_type_from_keyword_name` parses the
+  `const-` prefix; the cfnptr arg/result full-type preservation is
+  extended to size-spelled carriers and const pointers.
+
+### Validation
+
+- New regression fixture `tests/fixtures/c-fn-ptr-size-const-precise/`
+  exercises the exact rtmidi shape and dispatches the callback for real
+  (proves the size_t / const-pointer args round-trip at runtime).
+- The lazy `<stddef.h>` emission was confirmed to fire for `:isize`
+  (`ptrdiff_t`) and to stay absent for ptr<u8>-only cfnptrs.
+- Follow-up (spice side): rebuild `../turmeric-spices/spices/rtmidi`
+  against this lowering and drop the `(RtMidiCCallback)callback` cast in
+  `midi-in-set-callback`.
 
 ## Cross-references
 

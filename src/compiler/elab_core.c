@@ -51,6 +51,15 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "uint64") == 0) return TY_UINT64;
     if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
+    /* c-fn-ptr-element-and-size-precision-gap fix: pointer-width integer
+     * carriers for C FFI.  `usize`/`size` are size_t-spelled (carrier uint64),
+     * `isize`/`ssize` are ptrdiff_t-spelled (carrier int64).  The size_t /
+     * ptrdiff_t spelling is attached as a CNumSpelling at the Type-construction
+     * site (see typekind_size_spelling); here we only resolve the carrier kind. */
+    if (strcmp(name, "usize") == 0) return TY_UINT64;
+    if (strcmp(name, "size")  == 0) return TY_UINT64;
+    if (strcmp(name, "isize") == 0) return TY_INT64;
+    if (strcmp(name, "ssize") == 0) return TY_INT64;
     /* Short-form sized aliases */
     if (strcmp(name, "i8")  == 0) return TY_INT8;
     if (strcmp(name, "i16") == 0) return TY_INT16;

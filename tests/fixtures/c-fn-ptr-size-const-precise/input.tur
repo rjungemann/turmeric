@@ -1,0 +1,36 @@
+;; c-fn-ptr-size-const-precise -- regression: the residual half of
+;; c-fn-ptr-and-size-precision-gap.  A (c-fn ...) slot typed with a
+;; size_t-spelled integer (`:usize` / `:isize`) or a const-qualified pointer
+;; (`ptr<const-T>`) lowers to the precise C signature -- `size_t`, `ptrdiff_t`,
+;; `const T *` -- instead of the lossy int64_t / non-const carrier.
+;;
+;; This is exactly the rtmidi RtMidiCCallback shape:
+;;   void (*)(double, const unsigned char *, size_t, void *)
+;; which used to force a hand-written `(RtMidiCCallback)callback` cast in the
+;; inline-C registration body because the int64_t/void* carrier triggered
+;; -Wincompatible-function-pointer-types.  With precise lowering the typed
+;; c-fn IS a sound C-level type and the cast is unnecessary.
+;;
+;; The callback is dispatched for real, so this also proves the size_t /
+;; const-pointer arguments round-trip correctly at runtime (the carrier is
+;; still int64-wide, so dispatch is unchanged -- only the C spelling tightened).
+
+(defn handle [ts : float msg : ptr<const-u8> n : usize ud : ptr<void>] : void
+  ```c
+  /* sum the n bytes of msg and print, ignoring ts/ud */
+  (void)ts; (void)ud;
+  long acc = 0;
+  for (size_t i = 0; i < n; i++) acc += (long)msg[i];
+  printf("ts=%d sum=%ld n=%d\n", (int)ts, acc, (int)n);
+  ```)
+
+(defn dispatch [cb : (c-fn [float ptr<const-u8> usize ptr<void>] void)] : void
+  ```c
+  /* No (RtMidiCCallback)cb cast needed: cb already has the precise C type. */
+  static const unsigned char buf[3] = { 10, 20, 12 };
+  cb(2.0, buf, (size_t)3, NULL);
+  ```)
+
+(defn main [] : int
+  (dispatch handle)
+  0)

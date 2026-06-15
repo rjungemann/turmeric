@@ -24,6 +24,20 @@ typedef enum CopyKind {
     CK_LINEAR,    /* Linear: must be used exactly once (LT0) */
     CK_MULTISHOT, /* MS1: multi-shot continuation; may be resumed any number of times */
 } CopyKind;
+
+/* c-fn-ptr-element-and-size-precision-gap fix: optional precise C spelling for
+ * an integer carrier used in a (c-fn ...) FFI signature.  CNUM_DEFAULT means
+ * "spell by TypeKind" (int64_t / uint64_t / ...).  The other variants make
+ * type_c_name emit the precise C name so a typed c-fn parameter matches an
+ * external C callback's `size_t` / `ptrdiff_t` slot exactly.  This is a
+ * pure C-spelling hint: the runtime carrier stays the underlying TypeKind
+ * (TY_UINT64 / TY_INT64), so a :usize is ABI-identical to a :uint64 and is
+ * erased to the carrier everywhere except the precise cfnptr typedef path. */
+typedef enum CNumSpelling {
+    CNUM_DEFAULT = 0, /* spell by TypeKind */
+    CNUM_SIZE_T,      /* size_t   (carrier TY_UINT64) */
+    CNUM_PTRDIFF_T,   /* ptrdiff_t (carrier TY_INT64) */
+} CNumSpelling;
 /* UT0: backward-compat alias — all former CK_MOVE sites now mean CK_UNIQUE */
 #define CK_MOVE CK_UNIQUE
 
@@ -439,6 +453,10 @@ typedef struct Type {
     /* Phase TP3: kind annotation -- uint16_t encoding (see Kind typedef above).
      * KIND_STAR for concrete types; KIND_ARROW{N} for N-ary type constructors. */
     Kind hkt_kind;
+    /* c-fn-ptr-element-and-size-precision-gap fix: CNumSpelling for integer
+     * carriers (0 == CNUM_DEFAULT).  Only consulted by type_c_name in the
+     * precise cfnptr typedef path; erased everywhere else. */
+    uint8_t c_num_spelling;
     union {
         struct {
             TypeKind arg_kinds[MAX_FN_ARITY];
@@ -551,6 +569,13 @@ typedef struct Type {
          * letting codegen lower ptr<T> to `T *` in C. */
         struct {
             struct Type *inner; /* pointee type T, or NULL for ptr<void> */
+            /* c-fn-ptr-element-and-size-precision-gap fix: true for the
+             * `ptr<const-T>` spelling -- type_c_name emits `const T *` so a
+             * typed c-fn parameter matches an external C callback's
+             * const-qualified pointer slot (e.g. `const unsigned char *`).
+             * A pure C-spelling hint; the runtime carrier is an ordinary
+             * pointer, so a const ptr is ABI-identical to a non-const one. */
+            bool is_const;
         } ptr;
         /* Phase 9: rc<T> and weak<T> store the inner type T */
         struct {
