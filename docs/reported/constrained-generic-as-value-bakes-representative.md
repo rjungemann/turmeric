@@ -23,6 +23,32 @@
 > `emit_abi_scan_fn_values` with a GDE-style instance-re-resolution hatch plus an
 > `atom_var` resolution that does not depend on an active outer spec. Tracked as
 > the remaining work here.
+>
+> **Working mitigation (today):** wrap the call in a lambda whose body is a
+> **direct** call, *with an explicit param type annotation*:
+> `(apply-fn (fn [b : Box] (count-it b)) box)` returns `7` on both backends --
+> the inner `(count-it b)` is a direct call where GDE fires. This is the
+> recommended idiom until the bare-coercion case is specialized.
+>
+> **Related inference gap (found 2026-06-15):** the *same* lambda **without** the
+> annotation -- `(fn [b] (count-it b))` -- returns `-1` on **both** backends. The
+> expected param type `(fn [Box] int)` is **not** propagated into the lambda's
+> `b` (bidirectional inference does not push the coercion target into the lambda
+> parameter), so `b` stays the carrier tyvar and the inner direct call bakes the
+> representative. So the bare-coercion fix and the annotation-free-lambda fix
+> share a root: a pinned concrete type at the *use* site is not threaded to the
+> point where GDE keys its specialization. A capture-site spec (above) or
+> propagating the expected fn type into the lambda param would both close it.
+>
+> **Why not landed in this pass:** unlike the `let`-alias case (a 6-line
+> elaborator redirect that *reuses* the already-correct direct-call path), every
+> bare-coercion fix needs *new* machinery in the delicate monomorphization
+> emitter (capture-site spec interning + a non-outer-spec resolution) or a
+> non-trivial elaborator eta-expansion that must synthesize the concrete
+> param-type annotation (an un-annotated eta-expansion miscompiles, per the gap
+> above). Given the uncommon pattern and the working annotated-lambda idiom, that
+> larger change is left as dedicated follow-up rather than risking a fragile
+> partial fix / snapshot churn in the spec path.
 
 **Summary:** When a class-constrained generic function (e.g.
 `(defn count-it [^Size A] [x :A] :int (size x))`) is reached **indirectly** --
