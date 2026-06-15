@@ -205,6 +205,41 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     return false;
 }
 
+/* instance-method-return-carrier-bridge: true when the tail leaf/leaves of `e`
+ * already emit a *by-value* concrete carrier-ABI aggregate rather than the
+ * int64 carrier handle.  Walks the same tail forms as
+ * fn_body_tail_is_carrier_producer (ascribe/do/if/let), delegating the leaf
+ * decision to expr_emits_byvalue_carrier_abi.
+ *
+ * Post-M2, a #{Construct} helper (ok/err/some/none) specialized at a concrete
+ * call site lowers to its by-value `*__spec__*` clone, so a body whose tail is
+ * `(ok (make-struct ...))` hands back the struct by value.  The carrier->concrete
+ * return-deref in emit_fns.c must NOT fire for such a body -- dereferencing an
+ * already-by-value aggregate as a heap pointer is a hard `cc` error (the
+ * derive-decode-struct seam).  An `if` is by-value when EITHER branch is (the
+ * two branches must agree in representation anyway; a mismatch is a separate
+ * bug, and suppressing the deref is the safe direction). */
+bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.ascribe_.inner);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   fn_body_tail_emits_byvalue_carrier_abi(
+                       ctx, e->as.do_.items[e->as.do_.n - 1]);
+        case EX_IF:
+            return e->as.if_.else_or_null &&
+                   (fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_) ||
+                    fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null));
+        case EX_LET:
+        case EX_LETREC:
+            return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.let_.body);
+        default:
+            return expr_emits_byvalue_carrier_abi(ctx, e);
+    }
+}
+
 static bool reinterpret_kind_is_scalar(TypeKind kind) {
     switch (kind) {
         case TY_BOOL:

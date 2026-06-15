@@ -1154,7 +1154,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                    && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
                    && strcmp(emit_type_c_name(ctx,
                                 emit_resolve_type(ctx, fd->body->type)),
-                             "int64_t") == 0) {
+                             "int64_t") == 0
+                   && !fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
             /* M4c Path A result-side: the spec's declared return is a
              * concrete by-value struct (e.g. `Result__int__cstr`), but the
              * body's last expression elaborates to a carrier-ABI value
@@ -1163,12 +1164,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * handle as the concrete struct pointer.  Mirrors the carrier
              * bridge's `carrier→concrete` direction inline at the return
              * site.  Gated tightly on typeclass_inst so non-instance specs
-             * keep their existing return handling. */
+             * keep their existing return handling.
+             *
+             * instance-method-return-carrier-bridge: also skip the deref when
+             * the body tail already emits the struct by value (a post-M2
+             * #{Construct} spec like `(ok (make-struct ...))` lowers to its
+             * by-value `*__spec__*` clone).  Dereferencing an already-by-value
+             * aggregate as a heap pointer is the derive-decode-struct `cc`
+             * error; fall through to the plain by-value return below. */
             buf_printf(file, "return (*(%s *)(intptr_t)%s);\n", ret_ctype, ret_val);
         } else if (!ret_is_int64_carrier && ret_ctype
                    && fd->body->type.kind != TY_NEVER
                    && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
-                   && fn_body_tail_is_carrier_producer(fd->body)) {
+                   && fn_body_tail_is_carrier_producer(fd->body)
+                   && !fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
             /* M5 straddle (root cause C): an ordinary function or lifted lambda
              * whose declared return is a by-value carrier aggregate
              * (Option__int / Result__int__int) but whose tail value comes from

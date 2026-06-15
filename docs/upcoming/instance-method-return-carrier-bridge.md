@@ -6,6 +6,43 @@ description: Typeclass instance methods whose declared return type is a polymorp
 
 # Instance-method return carrier bridge
 
+## Status: interim bridge shipped (2026-06-15)
+
+The consumer-side seam is closed. Two findings during execution refined the
+plan's framing:
+
+1. **The elaborator side already worked.** An ascribed dispatch site
+   (`(:: (decode doc root) (Result User cstr))`) already monomorphizes the
+   instance into a `*__spec__*` clone whose C signature returns the by-value
+   struct (`Result__User__cstr`), and the call site already consumes it by
+   value. No `elab_typeclasses.c` change was needed -- the residual bug was
+   purely in emission.
+
+2. **The bug was a wrong-direction deref, not a missing bridge.** The M4c /
+   M5 return-position branches in `emit_fns.c` unconditionally re-applied the
+   `carrier->concrete` deref (`*(Result__User__cstr *)(intptr_t)...`) to the
+   spec body's return value. Post-M2 a `#{Construct}` `ok`/`err` body lowers
+   to its by-value `ok__spec__*` clone, so the value is *already* the struct
+   and the deref is the `derive-decode-struct.tur` clang error
+   ("aggregate value used where an integer was expected").
+
+**Fix.** A new tail-walking predicate
+`fn_body_tail_emits_byvalue_carrier_abi` (emit_expr.c, built on the existing
+`expr_emits_byvalue_carrier_abi`) reports when the body's tail already emits
+a by-value carrier-ABI aggregate. Both return-deref branches in
+`emit_fns.c` (M4c Path A result-side, and the M5 straddle branch) now skip
+the deref when it fires, falling through to a plain `return <byvalue>;`. The
+inline-C carrier instances (`tur_ok`) are unaffected -- their tail is raw
+inline-C, not a by-value producer, so the legitimate `carrier->concrete`
+deref still runs.
+
+**Validation that shipped.** `derive-decode-struct.tur` flips FAIL->PASS
+(`id=42, name="alice"` / `{"id":42,"name":"alice"}`); `decode-primitives.tur`
+stays green; a self-contained turmeric-side regression lives at
+`tests/fixtures/instance-method-return-carrier-bridge/` (the json spice's
+`decode-bool.tur` could not be added from a turmeric-rooted web session).
+The `decode-bool` instance/fixture themselves remain spice-side follow-ups.
+
 ## TL;DR
 
 Right now, you cannot write a typeclass instance method whose declared
