@@ -77,7 +77,7 @@ and signature threading without ever calling `make-struct`.
 
 ## Related
 
-- [sz8-projection-size-recovery-gap.md](sz8-projection-size-recovery-gap.md)
+- [sz8-projection-size-recovery-gap.md](../archive/sz8-projection-size-recovery-gap.md)
   (the SZ8 follow-up that prompted this report)
 - [ecs-e2c-sized-dense-needs-bounded-world.md](ecs-e2c-sized-dense-needs-bounded-world.md)
   (P2 -- the parent doc whose fixture surfaced this bug)

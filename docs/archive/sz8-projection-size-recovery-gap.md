@@ -156,7 +156,7 @@ there is no reject case to miss, and the P2 accept fixture is unaffected.
 
 - [sz8-opaque-phantom-size-not-load-bearing.md](sz8-opaque-phantom-size-not-load-bearing.md)
   (the P1 fix; landed 2026-06-12)
-- [ecs-e2c-sized-dense-needs-bounded-world.md](ecs-e2c-sized-dense-needs-bounded-world.md)
+- [ecs-e2c-sized-dense-needs-bounded-world.md](../reported/ecs-e2c-sized-dense-needs-bounded-world.md)
   (P2 -- parent question; structurally answered, this report tracks
   the remaining static-rejection gap)
 - `tests/fixtures/sized-struct-field-share-accept/input.tur` (the

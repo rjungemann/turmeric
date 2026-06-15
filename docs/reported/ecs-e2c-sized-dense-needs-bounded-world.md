@@ -140,7 +140,7 @@ Witness:
 
 Two follow-up gaps surfaced while answering P2:
 
-- [sz8-projection-size-recovery-gap.md](sz8-projection-size-recovery-gap.md)
+- [sz8-projection-size-recovery-gap.md](../archive/sz8-projection-size-recovery-gap.md)
   -- SZ8 cross-param unification does not yet *statically reject*
   size mismatches across struct projections (the Size form is lost
   at the `TY_INT` placeholder step). The structural threading is
@@ -178,7 +178,7 @@ The reject fixture passes call expressions directly
 (`(sized-buf-copy! (mk-2) (mk-3))`); a `let`-bound version of the
 same mismatch silently compiles and aborts at runtime. That is the
 EX_VAR sibling of the EX_GET_FIELD gap tracked under
-[sz8-projection-size-recovery-gap.md](sz8-projection-size-recovery-gap.md);
+[sz8-projection-size-recovery-gap.md](../archive/sz8-projection-size-recovery-gap.md);
 closing that report would promote the let-bound path to a static
 rejection too.
 
