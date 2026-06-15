@@ -2150,6 +2150,10 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     /* Resolve the struct def -- either directly or through the rc wrapper. */
     StructDef *def = NULL;
     bool receiver_is_rc = false;
+    /* end-to-end-monomorphization: a :heap receiver is a typed pointer to a
+     * shared heap header -- mutation through it is interior (like rc), so no
+     * `^mut` on the local binding is required, and the field write derefs. */
+    bool receiver_is_heap = type_is_heap_struct(receiver->type);
     Type rt = receiver->type;
     const Type *receiver_struct_type = &receiver->type;
     if (rt.kind == TY_STRUCT) {
@@ -2200,9 +2204,9 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         return NULL;
     }
 
-    /* Direct-struct receivers require ^mut on the binding.  Through-rc
-     * is interior-mutable so any rc<Struct> binding is fine. */
-    if (!receiver_is_rc && receiver->kind == EX_VAR) {
+    /* Direct-struct receivers require ^mut on the binding.  Through-rc and
+     * through a :heap typed pointer are interior-mutable so any binding is fine. */
+    if (!receiver_is_rc && !receiver_is_heap && receiver->kind == EX_VAR) {
         Binding *rb = receiver->as.var.binding;
         if (rb->is_moved) {
             diag_emit_with_code(DIAG_ERROR, target->span, TUR_E0005_USE_AFTER_MOVE,

@@ -324,6 +324,7 @@ typedef struct Elab {
     const Symbol *kw_move;        /* :move keyword for defstruct */
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     const Symbol *kw_affine;      /* :affine keyword for defopaque (at-most-once) */
+    const Symbol *kw_heap;        /* :heap keyword for defstruct (typed-pointer ABI) */
     /* Phase 12: Borrow traits */
     const Symbol *sym_borrow;      /* & symbol for immutable borrow */
     const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */

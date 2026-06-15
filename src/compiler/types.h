@@ -308,6 +308,14 @@ typedef struct StructDef {
     bool is_copy;           /* :copy annotation */
     bool is_linear;         /* LT4: :linear annotation -- exactly-once (CK_LINEAR) */
     bool is_affine;         /* :affine annotation -- at-most-once (SK_AFFINE / CK_UNIQUE) */
+    /* end-to-end-monomorphization (M3->M7, Vec typed-pointer vertical slice):
+     * :heap marks a parameterized type whose natural monomorphic ABI is a typed
+     * POINTER (`T__A *`) to a heap-allocated header, not a by-value struct -- the
+     * parametric-type ABI matrix's "typed pointer" class (Vec/Map/Set/MutableMap/
+     * Cons/GVec). type_c_name lowers a :heap-tagged TY_STRUCT/TY_APP to `Name *`.
+     * Inert until a type is tagged; see
+     * docs/upcoming/v2/vec-typed-pointer-vertical-slice-plan.md. */
+    bool is_heap;
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
     /* SI4-C: opaque newtype -- always int64_t in C; name only used for REPL type tags. */
     bool is_opaque;
@@ -1426,6 +1434,12 @@ void         type_codegen_emit_fn_ptr_typedefs(Buf *out);
 /* Phase D: true if t is a struct type whose sizeof exceeds 16 bytes,
  * meaning it should be passed as const T* rather than by value. */
 bool         type_struct_pass_by_ptr(Type t);
+/* end-to-end-monomorphization: true when t is a (possibly applied) :heap struct
+ * -- its monomorphic ABI is a typed pointer `T__A *`. */
+bool         type_is_heap_struct(Type t);
+/* end-to-end-monomorphization: the by-value struct C name (`Vec__int`) for a
+ * struct/struct-app, WITHOUT the trailing " *" the heap pointer lowering adds. */
+const char  *type_struct_value_c_name(Type t);
 /* SC7 (carrier-duality): true for a parametric struct with a single `:int`
  * field (e.g. `(defstruct Schema [A] (raw :int))`).  Such a phantom wrapper is
  * a transparent newtype over int64 -- one C representation everywhere, so HKT

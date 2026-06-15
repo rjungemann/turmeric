@@ -40,6 +40,14 @@ write-up: `m5-residual-straddle-retirement.md` (session 10) +
 `docs/archive/history/m5-exascribe-bridge-d4-blocked-on-redirect-coverage.md`.
 **M5's residual-straddle retirement is complete**; M3 is unblocked.
 
+**Next: Vec typed-pointer vertical slice** (M3 sequencing step 2). Execution
+plan written 2026-06-15:
+`docs/upcoming/v2/vec-typed-pointer-vertical-slice-plan.md`. Converts the Vec
+primitives from the int64 carrier to the matrix-mandated `Vec__A *` typed-pointer
+ABI, driving the ~114 `Vec int` carrier-bridge crossings toward 0 and retiring
+the by-value-header copy that is a latent mutation miscompile. Baseline re-
+verified green (1639/0).
+
 ## 0. Status snapshot — 2026-06-14 (post-M5 emit-side follow-up)
 
 Today's landings:

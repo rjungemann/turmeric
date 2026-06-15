@@ -1,0 +1,4 @@
+:heap typed-pointer ABI is a compiled-backend codegen feature (make-struct
+heap-boxes to a typed pointer; field access derefs through it). The tree-walking
+interpreter has no notion of the :heap pointer ABI, so this fixture is owned by
+the compiled suite. Remove once the interpreter models the typed-pointer ABI.

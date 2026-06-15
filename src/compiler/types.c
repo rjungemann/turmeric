@@ -2290,6 +2290,19 @@ static void type_name_buf(Buf *b, Type t) {
     }
 }
 
+/* end-to-end-monomorphization: intern "<base> *" for a :heap-tagged type whose
+ * monomorphic ABI is a typed pointer to its heap-allocated header. `base` is the
+ * by-value struct C name (e.g. "Vec__int"); the result is "Vec__int *". */
+static const char *heap_ptr_c_name(const char *base) {
+    Buf b; buf_init(&b);
+    buf_puts(&b, base);
+    buf_puts(&b, " *");
+    buf_putc(&b, '\0');
+    const char *r = intern_type_name(b.data);
+    buf_free(&b);
+    return r;
+}
+
 const char *type_c_name(Type t) {
     /* c-fn-ptr-element-and-size-precision-gap fix: a precise FFI spelling on an
      * integer carrier overrides the by-TypeKind name.  Only set on full Types
@@ -2414,6 +2427,9 @@ const char *type_c_name(Type t) {
             if (t.as.struct_.def->is_opaque) return "int64_t";
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* end-to-end-monomorphization: :heap structs lower to a typed pointer. */
+            if (t.as.struct_.def->is_heap)
+                return heap_ptr_c_name(t.as.struct_.def->name);
             return t.as.struct_.def->name;
         /* Phase G0: ADT types are passed as int64_t (opaque heap pointer) */
         case TY_ADT:
@@ -2428,7 +2444,20 @@ const char *type_c_name(Type t) {
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
             if (type_has_concrete_codegen_layout(&t)) {
-                return register_struct_app(t);
+                const char *base = register_struct_app(t);
+                /* end-to-end-monomorphization: a :heap-tagged parameterized type
+                 * (Vec/Map/Set/...) lowers to a typed pointer `T__A *` to its
+                 * heap-allocated header, not the by-value struct. The by-value
+                 * struct typedef is still registered (above) -- the pointer just
+                 * points at it. */
+                StructDef *hdef = NULL;
+                Type happ_args[16];
+                uint8_t happ_n = 0;
+                if (type_extract_struct_app(&t, &hdef, happ_args, &happ_n)
+                    && hdef && hdef->is_heap) {
+                    return heap_ptr_c_name(base);
+                }
+                return base;
             }
             /* phantom-typeparam-lowering: a struct-app whose only non-concrete
              * args are *phantom* type parameters (used solely inside a field's
@@ -3639,4 +3668,37 @@ bool type_struct_pass_by_ptr(Type t) {
         default:
             return false;
     }
+}
+
+/* end-to-end-monomorphization: true when t is a (possibly applied) struct type
+ * whose StructDef carries the :heap attribute -- i.e. its monomorphic ABI is a
+ * typed pointer `T__A *` to a heap-allocated header (the parametric-type ABI
+ * matrix's typed-pointer class). */
+bool type_is_heap_struct(Type t) {
+    if (t.kind == TY_STRUCT)
+        return t.as.struct_.def && t.as.struct_.def->is_heap;
+    if (t.kind == TY_APP) {
+        StructDef *def = NULL;
+        Type args[16]; uint8_t n_args = 0;
+        if (type_extract_struct_app(&t, &def, args, &n_args))
+            return def && def->is_heap;
+    }
+    return false;
+}
+
+/* end-to-end-monomorphization: the by-value struct C name for a (heap or not)
+ * struct/struct-app -- the same name type_c_name returns for a non-heap struct
+ * (`Vec__int`), WITHOUT the trailing " *" that the heap pointer lowering adds.
+ * make-struct uses this to build the underlying header literal before boxing it
+ * onto the heap. Returns "int64_t" (via the generic fallback) when t has no
+ * concrete layout. */
+const char *type_struct_value_c_name(Type t) {
+    if (t.kind == TY_STRUCT && t.as.struct_.def
+        && !t.as.struct_.def->is_opaque
+        && !type_is_transparent_int_newtype(t))
+        return t.as.struct_.def->name;
+    if (t.kind == TY_APP && !type_is_transparent_int_newtype(t)
+        && type_has_concrete_codegen_layout(&t))
+        return register_struct_app(t);
+    return type_c_name(t);
 }

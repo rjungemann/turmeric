@@ -1,0 +1,25 @@
+;; end-to-end-monomorphization (M3->M7 Vec typed-pointer vertical slice, step 2/3):
+;; a :heap-tagged parameterized struct's `make-struct` heap-allocates the header
+;; and returns a TYPED POINTER (Box__int * / Box__bool *); field reads deref it
+;; ((p)->field), and `set!` field writes mutate the shared heap header through
+;; the pointer -- so a mutation in a callee is visible to the caller (reference
+;; semantics, NOT a by-value header copy).  Two element types prove per-element
+;; monomorphization (same layout; only the C pointer's type label differs).
+;; This is the proxy for vec-new/.len/.data/vec-push! before the real Vec flip.
+(defstruct Box :heap [A] (val :A) (tag :int))
+
+;; mutate through the typed pointer in a callee (interior mutability -- no ^mut)
+(defn bump-int [b : (Box int)] : nil
+  (set! (.val b) 99)
+  (set! (.tag b) (+ (.tag b) 1)))
+
+(defn main [] : int
+  (let [bi (:: (make-struct Box :val 42 :tag 7) (Box int))
+        bb (:: (make-struct Box :val true :tag 9) (Box bool))]
+    (println (.val bi))            ; 42
+    (println (:: (.val bb) bool))  ; true
+    (println (.tag bb))            ; 9
+    (bump-int bi)                  ; mutate the shared heap header in a callee
+    (println (.val bi))            ; 99 -- caller sees the mutation
+    (println (.tag bi)))           ; 8
+  0)

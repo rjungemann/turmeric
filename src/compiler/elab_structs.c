@@ -465,24 +465,33 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
     
-    /* Check for optional :copy / :move / :linear annotation */
+    /* Check for optional leading :copy / :move / :linear / :heap annotations.
+     * A loop (rather than a single check at index 2) lets :heap combine with the
+     * substructural keyword in any order, while remaining backward-compatible
+     * with the single-keyword form (the `else break` preserves the old
+     * "unrecognised keyword -> fall through to fields/type-params" behaviour). */
     bool is_copy = false;
     bool is_linear = false;
+    bool is_heap = false;
     uint32_t fields_start_idx = 2;
 
-    if (call->as.list.len >= 3) {
-        Form *kw_form = call->as.list.items[2];
-        if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
+    while (fields_start_idx < call->as.list.len) {
+        Form *kw_form = call->as.list.items[fields_start_idx];
+        if (kw_form->tag != F_KEYWORD) break;
+        if (kw_form->as.sym == e->kw_copy) {
             is_copy = true;
-            fields_start_idx = 3;
-        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
+        } else if (kw_form->as.sym == e->kw_move) {
             is_copy = false;
-            fields_start_idx = 3;
-        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_linear) {
+        } else if (kw_form->as.sym == e->kw_linear) {
             /* LT4: :linear structs are exactly-once (CK_LINEAR). */
             is_linear = true;
-            fields_start_idx = 3;
+        } else if (kw_form->as.sym == e->kw_heap) {
+            /* end-to-end-monomorphization: typed-pointer ABI (Vec/Map/Set/...). */
+            is_heap = true;
+        } else {
+            break;
         }
+        fields_start_idx++;
     }
     
     /* Phase TM0: optional type-parameter vector [K V ...] before field definitions.
@@ -680,6 +689,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
+        def->is_heap = is_heap;
         def->needs_drop_glue = false;
         def->origin_file_id = call->span.file_id;
         /* Phase TM0 */
@@ -696,6 +706,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
+        def->is_heap = is_heap;
         /* Phase HKT-P4: record the file that defined this struct. */
         def->origin_file_id = call->span.file_id;
         /* Phase TM0 */
