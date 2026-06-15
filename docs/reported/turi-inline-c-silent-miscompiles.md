@@ -1,5 +1,28 @@
 # 25 inline-C fixtures silently miscompile under `--interpret`
 
+> **Re-audit 2026-06-15: effectively resolved -- the matchers now decline.**
+> Classifying all 25 by `--interpret` outcome (stdout vs `expected.stdout` vs
+> exit code) on the current tree: **24 of 25 are no longer silent miscompiles.**
+> They now either PASS (`backtrack-bind`, `backtrack-do-macro`,
+> `backtrack-guard`, `backtrack-nested`, `show-float`) or CLEAN-ERROR with a
+> non-zero exit ("inline-C not supported" / a diagnostic) -- the
+> refuse-rather-than-guess outcome this report asked for. The cumulative matcher
+> tightenings (the `->` decline in `ic_exec_snprintf_fmt:3462`, the
+> `ic_exec_accessor` guards, etc.) did the job; an additional snprintf-arg
+> hardening landed this session (`ic_format_snprintf_call` now declines when an
+> arg expression fails to evaluate, rather than formatting a guessed `0`).
+>
+> The **one remaining `exit-0 wrong-output`** case was `exg5-rc-in-exists`
+> (`0` instead of `99`), and it was **NOT an inline-C-matcher bug** -- the
+> inline-C body is never reached. It was a typeclass-dispatch bug (the
+> interpreter prelude hijacked the carrier-fallback `__inst_Show_show_T`
+> instance method with a float native), reclassified to its own report and
+> **FIXED 2026-06-15**:
+> [../archive/turi-carrier-fallback-instance-method-silent-miscompile.md](../archive/turi-carrier-fallback-instance-method-silent-miscompile.md).
+> Net: with exg5 fixed and the matcher-tightening goal met, **all 25 are now
+> resolved** (PASS, clean-error, or -- for exg5 -- fixed dispatch). This report
+> can be archived.
+
 > **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
 > [turi-inline-c-accessor-miscompiles-boolean-returns.md](history/turi-inline-c-accessor-miscompiles-boolean-returns.md))
 > converted **3** of these (the accessor-path cases incl. `result-basic`) from

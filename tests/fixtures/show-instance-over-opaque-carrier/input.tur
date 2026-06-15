@@ -1,0 +1,25 @@
+;; Regression: turi-carrier-fallback-instance-method-silent-miscompile.
+;;
+;; A user-defined typeclass instance over a CARRIER-typed receiver (an opaque
+;; handle, an rc<T>, etc.) emits its method under the abstract `_T` carrier
+;; suffix -- e.g. `__inst_Show_show_T`.  The interpreter prelude used to
+;; pre-register `__inst_Show_show_T` -> native_show_float (a legacy float
+;; hack), which HIJACKED every such user instance and returned "0" for any
+;; non-float receiver: a silent miscompile (exit 0, wrong output).
+;;
+;; With the prelude no longer claiming the carrier suffix, the user's own
+;; (pure-Turmeric) instance method resolves and produces the real value under
+;; --interpret, matching the compiled path.
+
+(defopaque Widget :int)
+
+(defclass Show [a]
+  (show [x] : cstr))
+
+(definstance Show [Widget]
+  (show [x] : cstr "WIDGET!"))
+
+(defn main [] : int
+  (let [w (:: 5 Widget)]
+    (println (.show w)))
+  0)
