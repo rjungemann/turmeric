@@ -2521,7 +2521,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_582(int64_t, int64_t);
+static bool __fn_587(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
@@ -2541,7 +2541,7 @@ static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_875(int64_t, int64_t);
+static bool __fn_892(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -2602,6 +2602,7 @@ static bool vec_hyeq_qu(int64_t, int64_t, int64_t);
 static bool vec_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t vec_hylen_hybyval(int64_t);
 static int64_t vec_hydata_hyget_un_un(void *, int64_t);
+static int64_t vec_hydata_hyget_hychecked_un_un(void *, int64_t, int64_t);
 static bool vec_hyeq_hyloop_hybyval(int64_t, int64_t, int64_t, int64_t);
 static int64_t slice_hynew(void *, int64_t);
 static int64_t slice_hylen(int64_t);
@@ -2661,8 +2662,11 @@ static void mutmap_hyset_ex(int64_t, int64_t, int64_t, int64_t);
 static int64_t mutmap_hyget(int64_t, int64_t, int64_t);
 static bool mutmap_hyhas_qu(int64_t, int64_t, int64_t);
 static bool mutmap_hydelete_ex(int64_t, int64_t, int64_t);
-static bool mutmap_hyeq_qu(int64_t, int64_t, int64_t);
+static bool mutmap_hyeq_hystorage_qu(void *, void *, int64_t);
+static void * mutmap_hystorage_hyfield_un_un(int64_t);
+static bool mutmap_hyeq_qu(int64_t, int64_t, void *);
 static void mutmap_hyfree(int64_t);
+static bool mutmap_hyeq_qu_hybyval(int64_t, int64_t, void *);
 static int64_t open_hydevice(int64_t);
 static int64_t device_hytag(int64_t);
 static void device_hyfree(int64_t);
@@ -3047,14 +3051,14 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
     .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float,
 };
 
-static bool __fn_582(int64_t a, int64_t b) {
+static bool __fn_587(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         int64_t *__t2 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t2[1] = (int64_t)(intptr_t)__fn_582;
+        __t2[1] = (int64_t)(intptr_t)__fn_587;
         void *__t3 = __t2;
         return map_hyeq_hydynamic(x, y, (int64_t)(intptr_t)(__t3));
 }
@@ -3070,13 +3074,13 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
 static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
         bool __t4;
         {
-            int64_t lx_616 = vec_hylen_hybyval(x);
-            (void)lx_616;
-            int64_t ly_617 = vec_hylen_hybyval(y);
-            (void)ly_617;
+            int64_t lx_626 = vec_hylen_hybyval(x);
+            (void)lx_626;
+            int64_t ly_627 = vec_hylen_hybyval(y);
+            (void)ly_627;
             bool __t5;
-            if ((lx_616) == (ly_617)) {
-                __t5 = vec_hyeq_hyloop_hybyval(x, y, INT64_C(0), lx_616);
+            if ((lx_626) == (ly_627)) {
+                __t5 = vec_hyeq_hyloop_hybyval(x, y, INT64_C(0), lx_626);
             } else {
                 __t5 = false;
             }
@@ -3316,18 +3320,18 @@ static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         __tur_tailcall:;
         if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
             {
-                int64_t t1_796 = ((Cons *)(intptr_t)(x))->tail;
-                (void)t1_796;
-                int64_t t2_797 = ((Cons *)(intptr_t)(y))->tail;
-                (void)t2_797;
-                if ((t1_796) == (INT64_C(0))) {
-                    return (t2_797) == (INT64_C(0));
+                int64_t t1_806 = ((Cons *)(intptr_t)(x))->tail;
+                (void)t1_806;
+                int64_t t2_807 = ((Cons *)(intptr_t)(y))->tail;
+                (void)t2_807;
+                if ((t1_806) == (INT64_C(0))) {
+                    return (t2_807) == (INT64_C(0));
                 } else {
-                    if ((t2_797) == (INT64_C(0))) {
+                    if ((t2_807) == (INT64_C(0))) {
                         return false;
                     } else {
-                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_796));
-                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_797));
+                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_806));
+                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_807));
                         x = __t12;
                         y = __t13;
                         goto __tur_tailcall;
@@ -3359,16 +3363,16 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_875(int64_t a, int64_t b) {
+static bool __fn_892(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_875;
+        __t14[1] = (int64_t)(intptr_t)__fn_892;
         void *__t15 = __t14;
-        return mutmap_hyeq_qu(x, y, (int64_t)(intptr_t)(__t15));
+        return mutmap_hyeq_qu_hybyval(x, y, (void *)(intptr_t)(__t15));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3764,6 +3768,14 @@ static int64_t vec_hylen_hybyval(int64_t v) {
 
 static int64_t vec_hydata_hyget_un_un(void * data, int64_t i) {
         return ((int64_t *)(intptr_t)data)[i]; 
+}
+
+static int64_t vec_hydata_hyget_hychecked_un_un(void * data, int64_t i, int64_t len) {
+        if (i >= 0 && (size_t)i < (size_t)len) return ((int64_t *)(intptr_t)data)[i];
+  fprintf(stderr, "tvec index out of bounds\n");
+  exit(1);
+  return 0;
+  
 }
 
 static bool vec_hyeq_hyloop_hybyval(int64_t x, int64_t y, int64_t i, int64_t len) {
@@ -4456,14 +4468,12 @@ static bool mutmap_hydelete_ex(int64_t m, int64_t h, int64_t key) {
   
 }
 
-static bool mutmap_hyeq_qu(int64_t m1, int64_t m2, int64_t val_cmp) {
+static bool mutmap_hyeq_hystorage_qu(void * pa, void * pb, int64_t val_cmp) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
-  struct { void *storage; } *a = (void*)(intptr_t)m1;
-  struct { void *storage; } *b = (void*)(intptr_t)m2;
-  struct __tur_mm_storage *sa = (struct __tur_mm_storage *)a->storage;
-  struct __tur_mm_storage *sb = (struct __tur_mm_storage *)b->storage;
+  struct __tur_mm_storage *sa = (struct __tur_mm_storage *)(intptr_t)pa;
+  struct __tur_mm_storage *sb = (struct __tur_mm_storage *)(intptr_t)pb;
   if (sa->len != sb->len) return false;
   for (uint64_t i = 0; i < sa->cap; i++) {
       if (sa->slots[i].tag != TUR_MM_OCCUPIED) continue;
@@ -4493,11 +4503,23 @@ static bool mutmap_hyeq_qu(int64_t m1, int64_t m2, int64_t val_cmp) {
   
 }
 
+static void * mutmap_hystorage_hyfield_un_un(int64_t m) {
+        return (void*)((struct { void *storage; } *)(intptr_t)m)->storage; 
+}
+
+static bool mutmap_hyeq_qu(int64_t m1, int64_t m2, void * val_cmp) {
+        return mutmap_hyeq_hystorage_qu((void *)(intptr_t)(mutmap_hystorage_hyfield_un_un(m1)), (void *)(intptr_t)(mutmap_hystorage_hyfield_un_un(m2)), (int64_t)(intptr_t)(val_cmp));
+}
+
 static void mutmap_hyfree(int64_t m) {
         struct { void *storage; } *mm = (void*)(intptr_t)m;
   if (mm->storage) free(mm->storage);
   free(mm);
   
+}
+
+static bool mutmap_hyeq_qu_hybyval(int64_t x, int64_t y, void * val_cmp) {
+        return mutmap_hyeq_hystorage_qu((void *)(intptr_t)(((MutableMap *)(intptr_t)(x))->storage), (void *)(intptr_t)(((MutableMap *)(intptr_t)(y))->storage), (int64_t)(intptr_t)(val_cmp));
 }
 
 static int64_t open_hydevice(int64_t id) {
@@ -4535,24 +4557,24 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            int64_t r_881 = open_hydevice(INT64_C(7));
-            (void)r_881;
-            puts((ok_qu(r_881)) ? "true" : "false");
-            printf("%lld\n", (long long)(device_hytag(ok_val__spec__int64_t_Result__Device__int((*(Result__Device__int *)(intptr_t)(r_881))))));
-            device_hyfree(ok_val__spec__int64_t_Result__Device__int((*(Result__Device__int *)(intptr_t)(r_881))));
+            int64_t r_898 = open_hydevice(INT64_C(7));
+            (void)r_898;
+            puts((ok_qu(r_898)) ? "true" : "false");
+            printf("%lld\n", (long long)(device_hytag(ok_val__spec__int64_t_Result__Device__int((*(Result__Device__int *)(intptr_t)(r_898))))));
+            device_hyfree(ok_val__spec__int64_t_Result__Device__int((*(Result__Device__int *)(intptr_t)(r_898))));
         }
         {
-            int64_t e_882 = open_hydevice(INT64_C(-1));
-            (void)e_882;
-            puts((err_qu(e_882)) ? "true" : "false");
-            printf("%lld\n", (long long)(err_val__spec__int64_t_Result__Device__int((*(Result__Device__int *)(intptr_t)(e_882)))));
+            int64_t e_899 = open_hydevice(INT64_C(-1));
+            (void)e_899;
+            puts((err_qu(e_899)) ? "true" : "false");
+            printf("%lld\n", (long long)(err_val__spec__int64_t_Result__Device__int((*(Result__Device__int *)(intptr_t)(e_899)))));
         }
         {
-            int64_t o_883 = maybe_hyopen(INT64_C(5));
-            (void)o_883;
-            puts((some_qu(o_883)) ? "true" : "false");
-            printf("%lld\n", (long long)(device_hytag(unwrap__spec__int64_t_Option__Device((*(Option__Device *)(intptr_t)(o_883))))));
-            device_hyfree(unwrap__spec__int64_t_Option__Device((*(Option__Device *)(intptr_t)(o_883))));
+            int64_t o_900 = maybe_hyopen(INT64_C(5));
+            (void)o_900;
+            puts((some_qu(o_900)) ? "true" : "false");
+            printf("%lld\n", (long long)(device_hytag(unwrap__spec__int64_t_Option__Device((*(Option__Device *)(intptr_t)(o_900))))));
+            device_hyfree(unwrap__spec__int64_t_Option__Device((*(Option__Device *)(intptr_t)(o_900))));
         }
         puts((some_qu(maybe_hyopen(INT64_C(-1)))) ? "true" : "false");
         int64_t __t25;

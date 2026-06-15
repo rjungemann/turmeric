@@ -300,17 +300,21 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-eq? [m1 : int m2 : int ^fat val-cmp]
+;;; mutmap-eq-storage? -- structural equality over two raw storage pointers.
+;; Internal helper: the fixed-arity inline-C core shared by the carrier
+;; `mutmap-eq?` and the by-value `mutmap-eq?-byval`.  Takes the two `storage`
+;; field values directly (ptr<void>), so it is agnostic to whether the caller
+;; held the map by int64 carrier or by value.
+
+(defn mutmap-eq-storage? [pa : ptr<void> pb : ptr<void> ^fat val-cmp]
   #{}
   : bool
   ```c
   enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
-  struct { void *storage; } *a = (void*)(intptr_t)m1;
-  struct { void *storage; } *b = (void*)(intptr_t)m2;
-  struct __tur_mm_storage *sa = (struct __tur_mm_storage *)a->storage;
-  struct __tur_mm_storage *sb = (struct __tur_mm_storage *)b->storage;
+  struct __tur_mm_storage *sa = (struct __tur_mm_storage *)(intptr_t)pa;
+  struct __tur_mm_storage *sb = (struct __tur_mm_storage *)(intptr_t)pb;
   if (sa->len != sb->len) return false;
   for (uint64_t i = 0; i < sa->cap; i++) {
       if (sa->slots[i].tag != TUR_MM_OCCUPIED) continue;
@@ -338,6 +342,19 @@
   }
   return true;
   ```)
+;;; mutmap-storage-field__ -- read the raw storage pointer out of a carrier
+;; MutableMap wrapper.  Internal bridge so the carrier-ABI mutmap-eq? can
+;; share the by-value storage-comparison core.
+
+(defn mutmap-storage-field__ [m : int] : ptr<void>
+  ```c return (void*)((struct { void *storage; } *)(intptr_t)m)->storage; ```)
+
+(defn mutmap-eq? [m1 : int m2 : int ^fat val-cmp]
+  #{}
+  : bool
+  (mutmap-eq-storage? (mutmap-storage-field__ m1)
+                      (mutmap-storage-field__ m2)
+                      val-cmp))
 ;;; mutmap-free -- free the storage and wrapper.
 ;;;
 ;;; Parameters:
@@ -356,12 +373,32 @@
   if (mm->storage) free(mm->storage);
   free(mm);
   ```)
+;;; mutmap-eq?-byval -- structural equality on two by-value MutableMap[K V].
+;; M5 (end-to-end-monomorphization): the by-value counterpart of mutmap-eq?,
+;; used by the Eq[MutableMap] instance so a Path A spec receiver
+;; (MutableMap__K__V by value) flows straight into the comparator without
+;; bridging back to the int64 carrier.  Reads the K/V-independent `storage`
+;; field off each by-value struct and delegates to the shared inline-C core.
+;; The receiver is taken by value, so the carrier base derefs at the call
+;; boundary (CK_CARRIER -> CK_CONCRETE) rather than as an inline `.field`.
+(defn mutmap-eq?-byval [K V]
+  [x : (MutableMap K V) y : (MutableMap K V) ^fat val-cmp] : bool
+  (mutmap-eq-storage? (.storage x) (.storage y) val-cmp))
+
 ;;; Eq [MutableMap] -- structural equality using the value type's Eq.
 ;; Constrained instance: requires Eq[V] for value comparison.  Keys
 ;; compared by raw int64 equality on the hash + key representation.
 ;; The cross-plan-followups F3-5 dispatcher synthesises the value
 ;; comparator at the call site when V is itself a TY_APP.
-
+;;
+;; M5: the receiver is ascribed to its parameterized type so a Path A spec
+;; passes the by-value MutableMap__K__V straight into mutmap-eq?-byval -- no
+;; carrier round-trip.  The unconstrained K is resolved for spec interning by
+;; the abstract-receiver unification in emit_abi_register_call (which needs K
+;; recorded as a named tyvar -- the elab-side multi-param instance fix).
 (definstance Eq [MutableMap]
   [(Eq V)]
-  (eq? [x y] (mutmap-eq? x y (fn [a b] (= a b)))))
+  (eq? [x y]
+    (mutmap-eq?-byval (:: x (MutableMap K V))
+                      (:: y (MutableMap K V))
+                      (fn [a b] (= a b)))))

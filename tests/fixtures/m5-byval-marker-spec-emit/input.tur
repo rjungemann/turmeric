@@ -16,7 +16,7 @@
 ;; and dropped the composed bindings.  With the fix, the by-value Vec__int
 ;; arg type reaches the gate correctly.
 
-(defn vec-get-byval [A]
+(defn vget-marker-byval [A]
   [v : (Vec A) i : int]
   #{ByVal}
   : A
@@ -24,13 +24,13 @@
   if (i >= 0 && (size_t)i < (size_t)v.len) {
     return (int64_t)((int64_t *)v.data)[i];
   }
-  fprintf(stderr, "vec-get-byval index out of bounds\n");
+  fprintf(stderr, "vget-marker-byval index out of bounds\n");
   exit(1);
   return 0;
   ```)
 
 (defn third-byval [A] [v : (Vec A)] : A
-  (vec-get-byval v 2))
+  (vget-marker-byval v 2))
 
 (defn main [] : int
   (let [a (:: (vec-of) (Vec int))]

@@ -1,0 +1,17 @@
+;; Option C (end-to-end-monomorphization, m5-residual-straddle-retirement):
+;; a by-value spec body that calls the carrier stdlib accessor `vec-get`
+;; (declared `[v : int]`) is redirected to the pure-Turmeric `vec-get-byval`
+;; twin, so the by-value `Vec__int` receiver flows straight in -- retiring
+;; the M4c Path A spill bridge.  The carrier-int caller path (untyped @Vec)
+;; is unaffected; this pins the redirect end-to-end at runtime.
+
+(defn sum-first-two [A] [v : (Vec A)] : int
+  (+ (:: (vec-get v 0) :int) (:: (vec-get v 1) :int)))
+
+(defn main [] : int
+  (let [a (:: (vec-of) (Vec int))]
+    (vec-push! a 10)
+    (vec-push! a 20)
+    (vec-push! a 30)
+    (println (sum-first-two a))
+    0))
