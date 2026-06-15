@@ -2673,6 +2673,32 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         if (!dup) e->sig_tyvars[e->n_sig_tyvars++] = nm;
     }
 
+    /* M5 (multi-param struct instance): also bring the instance head's full
+     * type-ctor param list (e.g. K and V of `MutableMap [K V]`) into sig-tyvar
+     * scope, not only the constraint-named ones.  Without this, an
+     * *unconstrained* param (`K`, with no `(Eq K)`) used in a method-body
+     * ascription `(MutableMap K V)` falls back to an opaque TY_STRUCT instead
+     * of an abstract tyvar, so the call's abi_bindings record it as a concrete
+     * struct and a by-value helper called from the instance body never gets a
+     * by-value spec interned.  See
+     * docs/reported/m5-multiparam-instance-unconstrained-tyvar-blocks-byval-spec.md. */
+    for (uint8_t ta = 0; ta < n_type_args; ta++) {
+        if (type_args[ta].kind != TY_STRUCT || !type_args[ta].as.struct_.def)
+            continue;
+        StructDef *hsd = type_args[ta].as.struct_.def;
+        for (uint8_t k = 0; k < hsd->n_type_params && e->n_sig_tyvars < 32; k++) {
+            const char *nm = hsd->type_params[k];
+            if (!nm) continue;
+            bool dup = false;
+            for (uint8_t s = 0; s < e->n_sig_tyvars; s++) {
+                if (e->sig_tyvars[s] && strcmp(e->sig_tyvars[s], nm) == 0) {
+                    dup = true; break;
+                }
+            }
+            if (!dup) e->sig_tyvars[e->n_sig_tyvars++] = nm;
+        }
+    }
+
     /* Pass 2: every sibling's FnDef shell and `method_impls` slot is now
      * populated, so elaborate each method body.  A call to a sibling defined
      * later in this same `definstance` -- or a mutually recursive pair --

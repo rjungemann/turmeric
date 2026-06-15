@@ -1,5 +1,36 @@
 # M5: unconstrained instance type-ctor param blocks by-value spec interning
 
+## RESOLVED 2026-06-15
+
+Fixed via the two coordinated changes proposed below (direction 1 + the
+emit-composition extension):
+
+1. **Elaborator** (`elab_typeclasses.c`, `elab_definstance`): the instance
+   head's *full* type-ctor param list (e.g. `K` and `V` of
+   `MutableMap [K V]`) is now pushed into `e->sig_tyvars` for pass-2 body
+   elaboration, not only the constraint-named ones. So a bare `K` in
+   `(:: x (MutableMap K V))` resolves to a named tyvar instead of an opaque
+   `TY_STRUCT`, and the call's `abi_bindings` record `K` as `TY_TYVAR`.
+2. **Emit composition** (`emit_module.c`, `emit_abi_register_call`): the
+   instance-method augmentation now resolves **all** type-ctor params by
+   name from the receiver struct's own `type_params` (`recv`'s head
+   `StructDef`), paired with the resolved `elem_buf` types -- not just the
+   constrained ones from `type_param_constraints`.
+
+`stdlib/mutmap.tur`'s `Eq [MutableMap]` was rewritten to the by-value path
+(`mutmap-eq?-byval` + shared `mutmap-eq-storage?` core). The
+`mutmap_eq__byval__spec__..._MutableMap__int__int_...` spec now interns and
+the instance spec body calls it with by-value args (zero `(intptr_t)(&...)`
+spills); the M4c Path A bridge no longer fires for `mutmap-eq` (measured by
+env-gated probe + emit-c sweep -- it now fires only for
+`m5-lambda-aft-tyvar-prior-accepts-concrete`). Suite green at 1635/0; 75
+codegen snapshots regenerated (gensym-counter churn from the new stdlib
+helpers). Pinned at runtime by `tests/fixtures/mutmap-eq`.
+
+The original report follows.
+
+---
+
 ## Summary
 
 A typeclass instance over a **multi-parameter** parametric struct

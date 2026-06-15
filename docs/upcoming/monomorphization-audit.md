@@ -19,6 +19,22 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0c. Status snapshot — 2026-06-15 (MutableMap straddle RETIRED)
+
+- `Eq [MutableMap]` rewritten to the by-value path (mirrors Vec/Cons).
+  Enablers: (1) elab `elab_definstance` now scopes a multi-param instance's
+  *full* type-ctor param list as tyvars (not just constraint-named), so the
+  unconstrained `K` of `MutableMap [K V]` is a `TY_TYVAR`; (2) emit
+  `emit_abi_register_call` resolves all type-ctor params by name from the
+  receiver struct's `type_params`. The `mutmap_eq__byval__spec__...` interns;
+  the M4c Path A bridge stops firing for `mutmap-eq`.
+- Bridge **firing** now (probe + sweep): M4c Path A fires only for
+  `m5-lambda-aft-tyvar-prior-accepts-concrete`; EX_ASCRIBE only for the two
+  bridge-pin fixtures. (Static call-site count unchanged at 7.)
+- Suite green 1635/0; 75 codegen snapshots regenerated (gensym churn).
+  Resolved report:
+  `docs/archive/history/m5-multiparam-instance-unconstrained-tyvar-blocks-byval-spec.md`.
+
 ## 0b. Status snapshot — 2026-06-15 (Vec/Cons rewrite landed; MutableMap is last real producer)
 
 - The `Eq [Vec]` / `Eq [Cons]` by-value rewrite + Finding-7 per-call

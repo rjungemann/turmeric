@@ -1049,6 +1049,42 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     spec_bindings_aug[naug].type = elem_buf[tcst->param_idx];
                     naug++;
                 }
+                /* M5 (multi-param struct instance): the constraint loop above
+                 * only resolves CONSTRAINED type-ctor params (e.g. V via
+                 * `Eq V`).  A multi-param struct instance (e.g. MutableMap
+                 * [K V]) also needs its UNconstrained params (K) bound so a
+                 * by-value helper called from the instance body monomorphizes
+                 * fully instead of straddling back to the int64 carrier.
+                 * Recover ALL of them by name from the receiver struct's own
+                 * type-param list: `recv` is `MutableMap int int`, whose head
+                 * StructDef declares `type_params = [K, V]`, paired
+                 * position-by-position with the resolved elem types in
+                 * `elem_buf` (both outermost-first).  These are the same names
+                 * the instance body's `(:: x (MutableMap K V))` ascription uses
+                 * (the elab-side multi-param fix records them as tyvars). */
+                const Type *recv_head = recv;
+                while (recv_head && recv_head->kind == TY_APP)
+                    recv_head = recv_head->as.app.fn;
+                if (recv_head && recv_head->kind == TY_STRUCT &&
+                    recv_head->as.struct_.def) {
+                    StructDef *rsd = recv_head->as.struct_.def;
+                    for (uint8_t p = 0; p < rsd->n_type_params && p < n_elem &&
+                                        naug < ABI_TYPE_BINDINGS_MAX; p++) {
+                        const char *nm = rsd->type_params[p];
+                        if (!nm) continue;
+                        bool seen = false;
+                        for (uint8_t q = 0; q < naug; q++) {
+                            if (spec_bindings_aug[q].name &&
+                                strcmp(spec_bindings_aug[q].name, nm) == 0) {
+                                seen = true; break;
+                            }
+                        }
+                        if (seen) continue;
+                        spec_bindings_aug[naug].name = nm;
+                        spec_bindings_aug[naug].type = elem_buf[p];
+                        naug++;
+                    }
+                }
                 if (naug > aspec->n_bindings) {
                     spec_bindings = spec_bindings_aug;
                     spec_n_bindings = naug;

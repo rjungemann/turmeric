@@ -6,6 +6,42 @@ description: Retire the two CK_CONCRETE -> CK_CARRIER bridges introduced by M4c-
 
 # M5 Residual Straddle Retirement -- Plan
 
+## STATUS 2026-06-15 (session 6): MutableMap straddle RETIRED
+
+The last real M4c-Path-A producer, `Eq [MutableMap]`, is now retired the
+same by-value way as Vec/Cons. Two coordinated changes landed:
+
+1. **Elaborator** (`elab_typeclasses.c`): a multi-param struct instance now
+   brings its *full* type-ctor param list (`K` and `V` of
+   `MutableMap [K V]`) into sig-tyvar scope, not just the constraint-named
+   ones, so an unconstrained `K` in `(:: x (MutableMap K V))` resolves to a
+   named tyvar (was an opaque `TY_STRUCT`, which blocked spec interning).
+2. **Emit composition** (`emit_module.c`): the instance-method augmentation
+   resolves **all** type-ctor params by name from the receiver struct's own
+   `type_params`, not only the constrained ones.
+
+`stdlib/mutmap.tur` `Eq [MutableMap]` rewritten through `mutmap-eq?-byval`
++ a shared `mutmap-eq-storage?` inline-C core (over raw `ptr<void>`
+storage). The by-value spec now interns and the instance spec body passes
+by-value args with zero `(intptr_t)(&...)` spills. Suite green at 1635/0;
+75 codegen snapshots regenerated (gensym churn from the new stdlib
+helpers). Resolved report:
+`docs/archive/history/m5-multiparam-instance-unconstrained-tyvar-blocks-byval-spec.md`.
+
+**Bridge firing now** (env-gated probe + emit-c sweep):
+
+| Bridge site | Fires for |
+|---|---|
+| M4c Path A (~`emit_expr.c:2748`) | `m5-lambda-aft-tyvar-prior-accepts-concrete` only |
+| EX_ASCRIBE (~`emit_expr.c:4500`) | `m5-instance-spec-constraint-var`, `m5-spec-body-ascription-bridge` (dedicated bridge-pin fixtures) |
+
+So `mutmap-eq` has dropped out. The remaining M4c-Path-A producer is the
+single `m5-lambda-aft-tyvar-prior-accepts-concrete` fixture; the EX_ASCRIBE
+sites are only the two fixtures that exist to *pin* bridge behaviour.
+Before D.4 ("delete the branches outright") can proceed, those producers
+need their own resolution (the lambda fixture's straddle + retiring or
+re-pinning the two pin fixtures).
+
 ## STATUS 2026-06-15 (session 5): Vec/Cons rewrite LANDED & green; MutableMap is the last real producer
 
 The earlier "session 4 cont. 3" note below said the field-access predicate
