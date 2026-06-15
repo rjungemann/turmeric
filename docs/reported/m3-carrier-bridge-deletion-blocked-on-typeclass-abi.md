@@ -552,6 +552,21 @@ type-erased boundary." Concretely:
   C for the `Tuple3..8` pbp call sites and so needs a coordinated snapshot
   regen; left for a regen-window change rather than rushed here. Net: the audit
   over-counts by 7 (these are pbp derefs, not carrier crossings).
+  **RESOLVED 2026-06-15 (this session):** landed exactly the suggested gate --
+  `!expr_is_pbp_param(ctx, emit_arg)` added to the carrier-bridge `if` at
+  `emit_expr.c` (the `(... matched_spec ... aggregate-carrier ...)` guard). A
+  genuine pbp param now skips the bridge and falls through to the dedicated pbp
+  `else if`, which emits `(*(t))` instead of the redundant
+  `(*(Tuple3__int__int__int *)(intptr_t)(t))` cast-round-trip. `expr_is_pbp_param`
+  is side-effect-free, so the gate adds no spurious struct-app registration.
+  Net effect: **bucket B is gone** -- `tuplen-struct-param-passing` (6) and
+  `tuple-type-bracket-sugar` (1) drop to 0 crossings; the audit baseline falls
+  from **22 fixtures / 140 crossings to 20 fixtures / 133 crossings**. The
+  emitted C for the `Tuple3..8` matched-spec pbp call sites changed
+  (`(*(T *)(intptr_t)(t))` -> `(*(t))`), but **no `expected.c` snapshot
+  referenced that pattern** (neither changed fixture has a snapshot), so the
+  feared "coordinated snapshot regen" turned out to be zero drift. Full suite
+  **1649 passed, 0 failed**.
 - (b) ~~Land M4 typed dict slots for the bucket-D dispatch-arg spill.~~
   **CORRECTED 2026-06-15 (next-session investigation): bucket D is NOT a
   typed-dict-slot win.** The crossing is `(.serialize p)` where `p :

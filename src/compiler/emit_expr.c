@@ -2665,8 +2665,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * (Result A B))` shape -- the ascription's inner is a TY_APP at
                  * the elab level but a uniform int64_t carrier at C level, so the
                  * old TY_INT-only gate skipped a needed unbox. */
+                /* A genuine pass-by-pointer struct param (`const T*`) is NOT a
+                 * carrier int64_t -- it satisfies the aggregate-carrier branch
+                 * only by over-match.  Excluding it here lets the dedicated pbp
+                 * deref branch below emit the cleaner `(*(t))` instead of the
+                 * redundant `(*(T *)(intptr_t)(t))` cast-round-trip.  The two are
+                 * semantically identical (both deref a real pointer to a by-value
+                 * copy), so this is a codegen-clarity tightening, not a behaviour
+                 * change.  expr_is_pbp_param is side-effect-free (the comment on
+                 * the pbp branch below explains why it is the safe predicate to
+                 * consult here). */
                 if (!needs_fn_cast && matched_spec &&
                     emit_arg &&
+                    !expr_is_pbp_param(ctx, emit_arg) &&
                     type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
