@@ -7,7 +7,7 @@
 > curated allowlist to a denylist (every fixture runs under `tur --interpret`
 > minus documented carve-outs).
 > **Parent:** [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) Phase TI8.b
-> **Companion report:** [docs/reported/turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md)
+> **Companion report:** [docs/archive/history/turi-harness-flip-reconciliation.md](../../archive/history/turi-harness-flip-reconciliation.md)
 
 ---
 
@@ -543,9 +543,9 @@ Definition of done = W5 merged with `run-turi.sh` green at denylist default.
 
 - [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) -- parent plan
   (TI8.b lives there; this is its execution detail).
-- [docs/reported/turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md)
+- [docs/archive/history/turi-harness-flip-reconciliation.md](../../archive/history/turi-harness-flip-reconciliation.md)
   -- the 31 allowlist reconciliation + the probe + the defmodule fix writeup.
-- [docs/reported/turi-harness-compiles-instead-of-interpreting.md](../../reported/turi-harness-compiles-instead-of-interpreting.md)
+- [docs/archive/history/turi-harness-compiles-instead-of-interpreting.md](../../archive/history/turi-harness-compiles-instead-of-interpreting.md)
   -- the resolved root blocker.
 - [docs/turi-carve-out.txt](../../turi-carve-out.txt) -- EX_* carve-out list the
   ratchet enforces.
