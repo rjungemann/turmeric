@@ -1,7 +1,21 @@
 # `(c-fn ...)` typedef emitted to per-module `.c` but referenced by the `.h`
 
-**Status:** Open. Surfaced 2026-06-14 while applying the spice-side
-follow-up of `c-fn-ptr-element-and-size-precision-gap.md` -- updating
+> **FIXED (verified 2026-06-15):** Option A landed. Under separate compilation
+> a `(c-fn [...] R)` typedef referenced by an exported defn's signature is now
+> registered during the header walk and flushed into the per-module `.h` ahead
+> of the declaration that names it (see `src/compiler/emit_module.c` -- the
+> `cfnptr-typedef-emitted-to-c-not-h` comment blocks register the result/param
+> typedefs at ~6528-6552, and `type_codegen_emit_fn_ptr_typedefs(out)` flushes
+> them into the header at ~6653, before the forward-decl loop). A two-module
+> `--shared` project that exports a c-fn-param defn and imports it across the
+> `.h` boundary now links clean; the typedef is defined in `app__sink.h` before
+> its use. Locked in by the `build-shared-exported-cfn-typedef-in-header`
+> regression case in `tests/run-build-project.sh`. The original repro depended
+> on the sibling spices checkout; the regression is reproduced entirely
+> in-repo with a synthetic two-module project, so no spice is required.
+
+**Status:** Fixed (see banner above). Surfaced 2026-06-14 while applying the
+spice-side follow-up of `c-fn-ptr-element-and-size-precision-gap.md` -- updating
 `spices/rtmidi/src/rtmidi/in.tur:midi-in-set-callback` to the precise
 `(c-fn [float ptr<const-u8> usize ptr<void>] void)` signature and
 dropping the `(RtMidiCCallback)callback` cast.

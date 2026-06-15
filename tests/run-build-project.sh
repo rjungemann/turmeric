@@ -748,6 +748,66 @@ else
     pass "build-shared-rc-runtime"
 fi
 
+# cfnptr-typedef-emitted-to-c-not-h: a module that EXPORTS a defn whose
+# signature carries a `(c-fn [...] R)` parameter (a bare C-ABI function pointer)
+# must, under separate compilation (`--shared`), emit the precise fn-ptr typedef
+# into its generated `.h` BEFORE the exported declaration that names it -- not
+# into the `.c` after it has already included its own `.h`.  Before the fix the
+# `.h` referenced `tur_fnptr_..._t` while the typedef was emitted only in the
+# `.c`, so cc rejected the header with implicit-int / conflicting-types and any
+# importing TU that included the header failed the same way.  A clean `--shared`
+# link (the sink module's `.c` includes its own `.h`, and the consumer module's
+# `.c` includes the sink `.h`) is the regression assertion; we additionally
+# grep the generated header to confirm the typedef precedes its use.
+CFNPTR="$WORK/cfnptr"
+mkdir -p "$CFNPTR/src/app"
+cat > "$CFNPTR/build.tur" <<'EOF'
+(defpackage tur-cfnptr
+  :name    "tur-cfnptr"
+  :version "0.1.0"
+  :exports #{ "app/sink" ["run-twice"] "app/main" ["apply-it"] })
+EOF
+# app/sink exports a defn whose first param is a `(c-fn [float] float)`; app/main
+# imports it across the module (.h) boundary and passes a captureless defn as the
+# raw C-ABI callback.  Both modules reference the same fn-ptr typedef name, so the
+# typedef must live in app/sink's header for the cross-module include to compile.
+cat > "$CFNPTR/src/app/sink.tur" <<'EOF'
+(defmodule app/sink
+  (export run-twice)
+  (defn run-twice [cb : (c-fn [float] float) x : float] : float
+    ```c
+    return cb(cb(x));
+    ```))
+EOF
+cat > "$CFNPTR/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (import app/sink :refer [run-twice])
+  (export apply-it)
+  (defn inc-half [v : float] : float
+    (+. v 0.5))
+  (defn apply-it [x : float] : float
+    (run-twice inc-half x)))
+EOF
+cfnptr_out=$(cd "$WORK" && "$TUR" build "$CFNPTR" --shared -o "$WORK/cfnptr.so" 2>&1)
+cfnptr_rc=$?
+if [ $cfnptr_rc -ne 0 ] || [ ! -f "$WORK/cfnptr.so" ]; then
+    fail "build-shared-exported-cfn-typedef-in-header" "tur build --shared exit=$cfnptr_rc: $cfnptr_out"
+else
+    # The fn-ptr typedef must be DEFINED in the sink header before the exported
+    # declaration that references it (proves the emit landed in the .h, not the .c).
+    sink_h="$CFNPTR/build/obj/app__sink.h"
+    if [ -f "$sink_h" ] \
+       && grep -q "typedef .*(\*tur_fnptr_double_double_t)(double);" "$sink_h" \
+       && td_line=$(grep -n "typedef .*tur_fnptr_double_double_t" "$sink_h" | head -1 | cut -d: -f1) \
+       && use_line=$(grep -n "run_hytwice" "$sink_h" | grep "tur_fnptr_double_double_t" | head -1 | cut -d: -f1) \
+       && [ -n "$td_line" ] && [ -n "$use_line" ] && [ "$td_line" -lt "$use_line" ]; then
+        pass "build-shared-exported-cfn-typedef-in-header"
+    else
+        fail "build-shared-exported-cfn-typedef-in-header" \
+            "shared build linked but typedef not emitted into header before its use (td=$td_line use=$use_line in $sink_h)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
