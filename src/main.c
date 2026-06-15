@@ -1972,6 +1972,39 @@ static int cmd_build(const char *input, const char *out_path,
         }
     }
 
+    /* When -lturi is linked, libturi.a already contains every runtime
+     * translation unit (hamt.c.o, gc.c.o, eval.c.o, ...).  A program that
+     * also pulls in a runtime source directly via a `__tur_autolink__:
+     * src/runtime/<x>.c` hint (e.g. stdlib/hamt.tur's hamt/autolink-hint,
+     * dragged in transitively by `import turi/eval`) would then define those
+     * symbols twice and the link fails with `multiple definition of
+     * tur_hamt_*`.  The library supersedes the standalone sources, so drop
+     * any bare `.c` source argument from the autolink flags whenever -lturi
+     * is present.  See docs/archive/tur-eval-import-duplicate-hamt-symbols.md. */
+    if (autolink.len > 1 && strstr(autolink.data, "-lturi")) {
+        Buf filtered;
+        buf_init(&filtered);
+        const char *p = autolink.data;
+        while (*p) {
+            while (*p == ' ') p++;          /* skip leading spaces */
+            if (!*p) break;
+            const char *start = p;
+            while (*p && *p != ' ') p++;     /* token = [start, p) */
+            size_t tlen = (size_t)(p - start);
+            /* Drop a source-file argument (does not begin with '-', ends in
+             * ".c") -- libturi already provides its object.  Keep flags and
+             * non-source paths (-I.../-L.../-lturi/-fsanitize=...). */
+            bool is_c_source = tlen > 2 && start[0] != '-' &&
+                               start[tlen - 2] == '.' && start[tlen - 1] == 'c';
+            if (is_c_source) continue;
+            if (filtered.len > 0) buf_putc(&filtered, ' ');
+            buf_write(&filtered, start, tlen);
+        }
+        buf_putc(&filtered, '\0');
+        buf_free(&autolink);
+        autolink = filtered;
+    }
+
     Buf cmd;
     buf_init(&cmd);
     buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
