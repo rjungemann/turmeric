@@ -6505,7 +6505,16 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             if (separate_compilation && !fd->binding->is_exported) continue;
             if (e->type.kind == TY_FN) {
                 if (e->type.as.fn.result_full_type) {
-                    (void)type_c_name(*e->type.as.fn.result_full_type);
+                    const Type *rft = e->type.as.fn.result_full_type;
+                    (void)type_c_name(*rft);
+                    /* cfnptr-typedef-emitted-to-c-not-h: a cfnptr result
+                     * type in an exported defn must have its fn-ptr
+                     * typedef emitted into the header before the
+                     * declaration that uses it.  Register here so the
+                     * flush below picks it up. */
+                    if (rft->kind == TY_FN && rft->as.fn.cfnptr) {
+                        (void)register_fn_ptr_typedef(rft);
+                    }
                 } else {
                     (void)type_c_name(emit_type_from_kind(e->type.as.fn.result_kind));
                 }
@@ -6515,6 +6524,13 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                     (void)type_c_name(*e->type.as.fn.arg_full_types[j]);
                 } else {
                     (void)type_c_name(fd->param_types[j]);
+                }
+                /* cfnptr-typedef-emitted-to-c-not-h: same as result --
+                 * register the cfnptr param's typedef so it lands in the
+                 * header ahead of the declaration. */
+                if (fd->param_types[j].kind == TY_FN
+                    && fd->param_types[j].as.fn.cfnptr) {
+                    (void)register_fn_ptr_typedef(&fd->param_types[j]);
                 }
             }
         } else if (e->kind == EX_EXTERN_C) {

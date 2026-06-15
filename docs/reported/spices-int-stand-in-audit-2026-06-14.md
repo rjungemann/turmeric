@@ -162,14 +162,18 @@ pointers with shader IDs is still a category error.
 | `raylib/audio.tur:49,66` | `load-sound`, `unload-sound` | `Sound*` (heap-copied) |
 | `raylib/audio.tur:102` | `load-music-stream` | `Music*` (heap-copied) |
 
-### tls (2 findings)
+### ~~tls (2 findings)~~ -- **fixed**
 
-| File:line | Function | Handle is |
-|---|---|---|
-| `tls/ctx.tur:45` | `tls-ctx-new` | mbedTLS context |
-| `tls/conn.tur:59,115` | `tls-wrap-fd`, `tls-handshake` | `tls_ctx_t*`, `tls_conn_t*` |
-
-Note `tls-wrap-fd` also takes `fd : int` -- that one really is an fd.
+`defopaque TlsCtx` exported from `tls/ctx.tur`; `defopaque TlsConn` exported
+from `tls/conn.tur`. `tls-ctx-new` now returns `TlsCtx`; `tls-wrap-fd`
+takes `ctx : TlsCtx` and returns `TlsConn`; every other ctx-* / conn-*
+function parameter takes the nominal type. Because both constructors use
+the literal `0` as a failure sentinel (no Result wrapper -- S3 follow-up),
+`tls-ctx-null?` / `tls-conn-null?` predicates were added and exported so
+callers no longer need a literal `(= ctx 0)` test that would no longer
+typecheck. Both test fixtures (`ctx-lifecycle`, `tls-roundtrip`) updated
+to import and use the new types and predicates. The `tls-wrap-fd` `fd`
+parameter is still `:int` -- that one really is a file descriptor.
 
 ### rtmidi (2 handle findings)
 
@@ -281,7 +285,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | stats | clean |
 | test | clean |
 | tidal | clean |
-| **tls** | **S2: 2 handle types** |
+| ~~tls~~ | ~~S2: 2 handle types~~ -- fixed (`defopaque TlsCtx`, `defopaque TlsConn`) |
 | **tourist** | **S1 + S2 + S3 + S4 (worst offender)** |
 | ~~valkey~~ | ~~S2: 1 handle type (client)~~ -- fixed (`defopaque Client`); `redisReply*` and `__msg*` remain |
 | watch | clean |
@@ -289,7 +293,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | zlib | clean |
 
 19 spices need work, 16 are clean. As of 2026-06-14: regex, sqlite, png, wav,
-postgres, valkey, and rtaudio are fixed (7 done); **12 remain**.
+postgres, valkey, rtaudio, and tls are fixed (8 done); **11 remain**.
 
 ---
 
