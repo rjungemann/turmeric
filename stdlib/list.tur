@@ -12,7 +12,7 @@
 ;;; Cons -- parameterized cons cell with typed head and tail.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Cons [A] (head A) (tail :int))
+(defstruct Cons :heap [A] (head A) (tail :int))
 ;;; tcons -- prepend a value to a typed list.
 ;;;
 ;;; Parameters:

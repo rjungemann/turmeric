@@ -437,10 +437,25 @@ roundtrip clean (frame is the heavy Map user). Map is immutable/persistent so th
 by-value copy was harmless; the flip is matrix conformance + prerequisite to the
 eventual bridge down-scoping.
 
-Remaining typed-pointer migrations (matrix step 3 continuation): `Cons` (#369
-left it carrier-based; the typed-pointer migration is the deeper fix), `GVec`
-(niche). The 48 crossings clear when **M4 dict-ABI** (typed dict slots) lands --
-that is the dominant remaining item, not further stdlib `:heap` flips.
+`Cons` migrated too (subsequent commit): tagged `:heap`, so `(Cons A)` ->
+`Cons__A *`. This is the pervasive/risky one (#369 deliberately left it
+carrier-based), so it was validated harder: compiled suite 1646/0, zero snapshot
+drift, spice roundtrip clean, **interpreter gate 1205 passed / 2 failed** (the 2
+are the documented pre-existing `eq-carrier-capturing-comparator` / `mutmap-eq`).
+The #369 carrier-based `Eq [Cons]` keeps working: its body's `(:: x :int)`
+relabels the `Cons__A *` handle to the int64 carrier (a cast, not a by-value
+spill), so no by-value Cons spec is minted -- the typed-pointer direction is
+compatible with the carrier-based instance, unlike the by-value-*struct* direction
+that #369 found "closed." The `(tail :int)` field stays an internal next-cell link
+(analogous to Map's `carrier :int`); fully typing it `(Cons A)` is a further
+No-Lazy-`:int` step, not required for the `:heap` flip. NOTE: run-turi.sh
+correctly SKIPS user-inline-C fixtures (e.g. the `variadic-*` set, which build
+their `& rest` cons lists with inline-C), so those are not an interpreter gate for
+this change -- they pass identically in compiled mode.
+
+Remaining typed-pointer migrations (matrix step 3 / 4): `GVec` (niche GADT demo).
+The 48 crossings clear when **M4 dict-ABI** (typed dict slots) lands -- that is the
+dominant remaining item, not further stdlib `:heap` flips.
 
 ## Related
 
