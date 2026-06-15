@@ -1,5 +1,10 @@
 # `tur_eval_import` fails: duplicate runtime symbols when autolinking libturi
 
+> **Status: RESOLVED** (same session). `cmd_build` in `src/main.c` now
+> drops bare `.c` source arguments from the `__tur_autolink__` flags
+> whenever `-lturi` is also linked, since `libturi.a` already provides
+> those runtime objects. See the **Resolution** section at the bottom.
+
 ## Summary
 
 The ctest target `tur_eval_import` (`tests/turi/eval-import.sh`, building
@@ -93,3 +98,30 @@ program consumes the runtime (one definition, in the library).
 - `ctest --test-dir build -R tur_eval_import` links and passes.
 - `bash tests/run.sh` stays green (this target is a dedicated ctest, not
   part of the fixture sweep).
+
+## Resolution
+
+Implemented direction (1)/(2): in `cmd_build` (`src/main.c`), after the
+`__tur_autolink__` flags are collected and the relative runtime paths are
+anchored, the flags are filtered when they contain `-lturi`. Any
+whitespace-separated token that is a source file (does not begin with `-`
+and ends in `.c`) is dropped, because `libturi.a` already contains the
+object for every runtime translation unit. Flags (`-I.../-L.../-lturi/
+-fsanitize=...`) and non-source paths are kept untouched.
+
+This makes the two runtime-acquisition paths mutually exclusive at the
+link line:
+
+- A normal map-using program (no `-lturi`) still compiles
+  `src/runtime/hamt.c` directly via `hamt/autolink-hint` -- unchanged,
+  because the filter only triggers under `-lturi`.
+- A `(import turi/eval)` program links `-lturi` and the now-redundant
+  `src/runtime/hamt.c` source argument is dropped, so `tur_hamt_*` is
+  defined exactly once (in the library).
+
+Verified:
+
+- `ctest --test-dir build -R tur_eval_import` -> Passed.
+- `bash tests/run.sh` -> `summary: 1640 passed, 0 failed`.
+- A map fixture with no `-lturi` (`eqmap-cstr-content`) still builds and
+  runs, confirming the standalone `hamt.c` compile path is intact.
