@@ -308,6 +308,14 @@ typedef struct StructDef {
     bool is_copy;           /* :copy annotation */
     bool is_linear;         /* LT4: :linear annotation -- exactly-once (CK_LINEAR) */
     bool is_affine;         /* :affine annotation -- at-most-once (SK_AFFINE / CK_UNIQUE) */
+    /* end-to-end-monomorphization (M3->M7, Vec typed-pointer vertical slice):
+     * :heap marks a parameterized type whose natural monomorphic ABI is a typed
+     * POINTER (`T__A *`) to a heap-allocated header, not a by-value struct -- the
+     * parametric-type ABI matrix's "typed pointer" class (Vec/Map/Set/MutableMap/
+     * Cons/GVec). type_c_name lowers a :heap-tagged TY_STRUCT/TY_APP to `Name *`.
+     * Inert until a type is tagged; see
+     * docs/upcoming/v2/vec-typed-pointer-vertical-slice-plan.md. */
+    bool is_heap;
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
     /* SI4-C: opaque newtype -- always int64_t in C; name only used for REPL type tags. */
     bool is_opaque;
