@@ -1,54 +1,43 @@
 # Constrained-generic function as a value bakes the carrier representative instance
 
-> **PARTIALLY RESOLVED 2026-06-15.** The **`let`-bound alias** case is fixed: a
-> call through an immutable let-bound alias of a global function
-> (`(let [g count-it] (g box))`) now elaborates to a **direct** call to the
-> global (`elab_call.c` follows `Binding.source_binding` when resolving the call
-> head), so the existing emit-side per-call-site GDE specialization fires and
-> dispatches to the receiver's real instance. `(g (make-struct Box 0))` now
-> returns `7` on **both** backends (was `-1`, rc=0 on the compiled path);
-> `(h 42)` stays `-1`. Regression fixture:
-> `tests/fixtures/gde6-generic-dict-alias-call/`. Compiled suite 1648/0 (one
-> snapshot, `macro-quasiquote-unquote`, regenerated -- an alias call there is
-> now a direct call); turi harness 1207 passed / 2 failed (pre-existing).
+> **RESOLVED 2026-06-15.** All three reachability forms now dispatch the
+> receiver's real instance on **both** backends (`7` for a `Box`, `-1` for the
+> `int` representative), with **zero** snapshot churn beyond the single benign
+> regen noted below. Each fix *reuses the already-correct direct-call GDE path*
+> rather than adding machinery to the delicate monomorphization emitter:
 >
-> **Still open:** the **coerced + indirect** case below
-> (`(apply-fn count-it box)`, where `count-it` is coerced to a concrete
-> `(fn [Box] int)` parameter and applied through an opaque fn param) still bakes
-> the representative on **both** backends (`-1`). There is no `source_binding`
-> alias to follow -- the value flows through a function-typed *parameter*, so the
-> application site `(f b)` cannot recover `count-it`. Closing it needs
-> capture-site specialization (the coercion site *does* statically know
-> `A = Box` from the callee's param type), i.e. extending
-> `emit_abi_scan_fn_values` with a GDE-style instance-re-resolution hatch plus an
-> `atom_var` resolution that does not depend on an active outer spec. Tracked as
-> the remaining work here.
+> 1. **`let`-bound alias** -- `(let [g count-it] (g box))`. `elab_call.c` follows
+>    `Binding.source_binding` when resolving a call head, so an immutable alias of
+>    a global function elaborates to a **direct** call and the existing
+>    per-call-site specialization fires. Fixture:
+>    `tests/fixtures/gde6-generic-dict-alias-call/`. (One snapshot,
+>    `macro-quasiquote-unquote`, regenerated -- an alias call there is now a
+>    direct call, behaviour unchanged.)
 >
-> **Working mitigation (today):** wrap the call in a lambda whose body is a
-> **direct** call, *with an explicit param type annotation*:
-> `(apply-fn (fn [b : Box] (count-it b)) box)` returns `7` on both backends --
-> the inner `(count-it b)` is a direct call where GDE fires. This is the
-> recommended idiom until the bare-coercion case is specialized.
+> 2. **Bidirectional inference** -- `(apply-fn (fn [b] (count-it b)) box)`. The
+>    call site pushes the parameter's concrete fn type onto the expected-type
+>    channel while elaborating a lambda arg, and `elab_fn` types an UN-annotated
+>    param from that expected type (gated to non-primitive struct/adt/app types,
+>    so primitive lambdas are untouched -- zero churn). `b : Box`, so the inner
+>    direct `(count-it b)` pins `Size [Box]`. (Previously `-1` even *with* a
+>    lambda unless the param was explicitly annotated `: Box`.)
 >
-> **Related inference gap (found 2026-06-15):** the *same* lambda **without** the
-> annotation -- `(fn [b] (count-it b))` -- returns `-1` on **both** backends. The
-> expected param type `(fn [Box] int)` is **not** propagated into the lambda's
-> `b` (bidirectional inference does not push the coercion target into the lambda
-> parameter), so `b` stays the carrier tyvar and the inner direct call bakes the
-> representative. So the bare-coercion fix and the annotation-free-lambda fix
-> share a root: a pinned concrete type at the *use* site is not threaded to the
-> point where GDE keys its specialization. A capture-site spec (above) or
-> propagating the expected fn type into the lambda param would both close it.
+> 3. **Eta-expansion of a bare coercion** -- `(apply-fn count-it box)`.
+>    `try_eta_expand_generic_fn_arg` (`elab_call.c`) rewrites a bare
+>    constrained-generic global fn passed where a concrete fn type is expected
+>    into `(fn [g] (count-it g))`; fix (2) types `g`, and the body is a direct
+>    call. Gated to the dispatch-relevant case (a tyvar param pinned to a
+>    non-primitive concrete type) and to simple fns (no substructural/variadic/
+>    fat/rank-2 params), so nothing else is rewritten -- zero churn.
 >
-> **Why not landed in this pass:** unlike the `let`-alias case (a 6-line
-> elaborator redirect that *reuses* the already-correct direct-call path), every
-> bare-coercion fix needs *new* machinery in the delicate monomorphization
-> emitter (capture-site spec interning + a non-outer-spec resolution) or a
-> non-trivial elaborator eta-expansion that must synthesize the concrete
-> param-type annotation (an un-annotated eta-expansion miscompiles, per the gap
-> above). Given the uncommon pattern and the working annotated-lambda idiom, that
-> larger change is left as dedicated follow-up rather than risking a fragile
-> partial fix / snapshot churn in the spec path.
+> Combined regression fixture for (2) and (3):
+> `tests/fixtures/gde7-generic-dict-coerced-fn-arg/`. Validation: compiled suite
+> **1649 passed / 0 failed**; turi harness **1208 passed / 2 failed** (the 2 --
+> `eq-carrier-capturing-comparator`, `mutmap-eq` -- are pre-existing). The
+> `let`-alias resolution shipped first (commit history); fixes (2) and (3) closed
+> the coerced-parameter case and the related inference gap together.
+>
+> Original report follows.
 
 **Summary:** When a class-constrained generic function (e.g.
 `(defn count-it [^Size A] [x :A] :int (size x))`) is reached **indirectly** --

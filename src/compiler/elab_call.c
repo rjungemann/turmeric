@@ -2372,6 +2372,71 @@ void elab_sweep_bare_fat_lazy(Elab *e) {
     }
 }
 
+/* constrained-generic-as-value-bakes-representative.md: eta-expand a BARE
+ * constrained-generic global function passed where a concrete function type is
+ * expected -- `(apply-fn count-it box)` with `apply-fn : (fn [(fn [Box] int) ..])`
+ * -- into `(fn [g..] (count-it g..))`.  Passing the bare fn coerces it to the
+ * carrier representative instance (a silent miscompile); the eta-expanded
+ * lambda's body is a DIRECT call where the existing per-call-site generic-dict
+ * specialization fires, and its un-annotated params are typed from `expected`
+ * via bidirectional inference (see elab_fn).  Returns the elaborated lambda, or
+ * NULL when not applicable (caller elaborates the arg normally).  Gated to the
+ * dispatch-relevant case (a tyvar param pinned to a non-primitive concrete type)
+ * and to simple fns (no substructural/variadic/fat/rank-2 params). */
+static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
+                                           const Type *expected) {
+    if (!arg_form || arg_form->tag != F_SYM) return NULL;
+    if (!expected || expected->kind != TY_FN || !expected->as.fn.arg_full_types)
+        return NULL;
+    bool qerr = false;
+    Binding *vb = elab_lookup_sym(e, arg_form->as.sym, arg_form->span, &qerr);
+    if (!vb) return NULL;
+    /* Follow a let-bound alias to its global (mirrors the call-head rule). */
+    if (!vb->is_global && vb->source_binding && vb->source_binding->is_global)
+        vb = vb->source_binding;
+    if (!vb->is_global || vb->type.kind != TY_FN || vb->is_poly_fn) return NULL;
+    const Type *vt = &vb->type;
+    if (!vt->as.fn.arg_full_types) return NULL;
+    uint8_t ar = vt->as.fn.arity;
+    if (ar == 0 || ar > MAX_FN_ARITY || ar != expected->as.fn.arity) return NULL;
+    bool pins_nonprim = false;
+    for (uint8_t k = 0; k < ar; k++) {
+        if (vt->as.fn.arg_linear[k] || vt->as.fn.arg_affine[k] ||
+            vt->as.fn.arg_borrow[k] || vt->as.fn.arg_unique[k] ||
+            vt->as.fn.arg_unique_mut[k] || vt->as.fn.arg_relevant[k] ||
+            vt->as.fn.arg_fat[k] || vt->as.fn.arg_poly_fn[k])
+            return NULL;
+        const Type *gt = vt->as.fn.arg_full_types[k];
+        const Type *ct = expected->as.fn.arg_full_types[k];
+        if (gt && gt->kind == TY_TYVAR && ct &&
+            (ct->kind == TY_STRUCT || ct->kind == TY_ADT || ct->kind == TY_APP))
+            pins_nonprim = true;
+    }
+    if (!pins_nonprim) return NULL;
+    /* Build (fn [g$eta$0 ...] (<name> g$eta$0 ...)). */
+    Span sp = arg_form->span;
+    Form **pvec   = (Form **)arena_alloc(e->arena, ar * sizeof(Form *));
+    Form **bitems = (Form **)arena_alloc(e->arena, (ar + 1u) * sizeof(Form *));
+    bitems[0] = form_sym(e->arena, sp, arg_form->as.sym);
+    for (uint8_t k = 0; k < ar; k++) {
+        char nm[32];
+        int nl = snprintf(nm, sizeof(nm), "g$eta$%u", (unsigned)k);
+        const Symbol *psym = symtab_intern(e->st, strslice(nm, (uint32_t)nl));
+        pvec[k]       = form_sym(e->arena, sp, psym);
+        bitems[k + 1] = form_sym(e->arena, sp, psym);
+    }
+    Form **fnitems = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    fnitems[0] = form_sym(e->arena, sp, e->sym_fn);
+    fnitems[1] = form_vec(e->arena, sp, pvec, ar);
+    fnitems[2] = form_list(e->arena, sp, bitems, ar + 1u);
+    Form *eta = form_list(e->arena, sp, fnitems, 3);
+    Type *saved = e->expected_type;
+    e->expected_type = (Type *)expected;
+    Expr *r = elab_form(e, eta);
+    e->expected_type = saved;
+    return r;
+}
+
 /* Phase 2: Elaborate a function call (f a b c) */
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
@@ -2729,7 +2794,42 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     Type *saved_expected_return = e->expected_type;
     e->expected_type = NULL;
     for (uint32_t i = 0; i < n_args; i++) {
-        args[i] = elab_form(e, call->as.list.items[1 + i]);
+        /* Bidirectional inference (constrained-generic-as-value-bakes-
+         * representative.md): when the arg is a lambda form and the parameter
+         * expects a concrete function type, push that type onto the expected-type
+         * channel so the lambda's un-annotated params can be typed from context
+         * (see elab_fn).  Scoped to lambda args so no other arg elaboration is
+         * affected; restored immediately after. */
+        const Form *arg_form = call->as.list.items[1 + i];
+        /* Expected concrete fn type for this parameter (if any). */
+        const Type *exp_param_fn = NULL;
+        if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t idx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (idx < fn_type.as.fn.arity && fn_type.as.fn.arg_full_types[idx] &&
+                fn_type.as.fn.arg_full_types[idx]->kind == TY_FN)
+                exp_param_fn = fn_type.as.fn.arg_full_types[idx];
+        }
+        /* Eta-expand a bare constrained-generic fn arg so its body dispatches
+         * the real instance (see try_eta_expand_generic_fn_arg). */
+        Expr *eta = exp_param_fn
+            ? try_eta_expand_generic_fn_arg(e, arg_form, exp_param_fn) : NULL;
+        if (eta) {
+            args[i] = eta;
+        } else {
+            /* Bidirectional inference: push the param's concrete fn type while
+             * elaborating a lambda arg so its un-annotated params type from
+             * context.  Scoped to lambda args; restored immediately after. */
+            bool pushed_expected = false;
+            if (exp_param_fn && arg_form->tag == F_LIST && arg_form->as.list.len >= 1 &&
+                arg_form->as.list.items[0]->tag == F_SYM &&
+                (arg_form->as.list.items[0]->as.sym == e->sym_fn ||
+                 arg_form->as.list.items[0]->as.sym == e->sym_lambda)) {
+                e->expected_type = (Type *)exp_param_fn;
+                pushed_expected = true;
+            }
+            args[i] = elab_form(e, call->as.list.items[1 + i]);
+            if (pushed_expected) e->expected_type = NULL;
+        }
         if (!args[i]) return NULL;
         TypeKind expected_arg_kind = TY_INT;
         if (fn_type.kind == TY_FN) {
