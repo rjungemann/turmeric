@@ -1,7 +1,7 @@
 # 25 inline-C fixtures silently miscompile under `--interpret`
 
 > **Update (TI8.b/W4):** the `ic_exec_accessor` boolean-return guard (see
-> [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md))
+> [turi-inline-c-accessor-miscompiles-boolean-returns.md](history/turi-inline-c-accessor-miscompiles-boolean-returns.md))
 > converted **3** of these (the accessor-path cases incl. `result-basic`) from
 > silent-wrong to clean-error. **22 remain**, miscompiling via the *other*
 > `ic_exec_*` matchers (constructor / snprintf / switch-string / linked-list /
@@ -45,7 +45,7 @@ Examples (rc=0, wrong stdout):
   (`88235808160464 ...`) instead of `42 / 42 / 1007`.
 - `backtrack-bind` -> prints `0` instead of `2 / 4 / 6`.
 - `result-basic` -> predicate inverted (see
-  [turi-inline-c-accessor-miscompiles-boolean-returns.md](turi-inline-c-accessor-miscompiles-boolean-returns.md)).
+  [turi-inline-c-accessor-miscompiles-boolean-returns.md](history/turi-inline-c-accessor-miscompiles-boolean-returns.md)).
 - `weak-dangling`, `instance-head-hole-pair` -> the silent miscompiles first
   found during the TI8 allowlist reconciliation.
 

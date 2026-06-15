@@ -293,7 +293,7 @@ instead of that box).
 **Adjacent bug surfaced during the spike (W4, independent):**
 `ic_exec_accessor` silently miscompiles `return p == NULL || !p->field;` (drops
 the `!`/`||`), inverting predicates like `result-basic`'s `u-err?` -- filed at
-[docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md).
+[docs/reported/history/turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/history/turi-inline-c-accessor-miscompiles-boolean-returns.md).
 
 ---
 
@@ -421,7 +421,7 @@ the bare field -- turning silent-wrong into a clean "inline-C not supported"
 error for *any* program with that shape. Fixed 3 of the 25 inline-C cases
 (incl. `result-basic`) with **zero regressions** (allowlisted `inline-c-binop` /
 `gen-*` still pass; harness 463/0; compiled 1573/0). Reports:
-[turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/turi-inline-c-accessor-miscompiles-boolean-returns.md)
+[turi-inline-c-accessor-miscompiles-boolean-returns.md](../../reported/history/turi-inline-c-accessor-miscompiles-boolean-returns.md)
 (FIXED) and
 [turi-inline-c-silent-miscompiles.md](../../reported/turi-inline-c-silent-miscompiles.md)
 (3 fixed, 22 remain via other `ic_exec_*` matchers).
