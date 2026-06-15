@@ -2526,9 +2526,10 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
+static bool __fn_826(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_910(int64_t, int64_t);
+static bool __fn_912(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -3323,31 +3324,16 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
+static bool __fn_826(int64_t a, int64_t b) {
+        return __inst_Eq_eq_qu_int(a, b);
+}
+
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        __tur_tailcall:;
-        if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
-            {
-                int64_t t1_824 = ((Cons *)(intptr_t)(x))->tail;
-                (void)t1_824;
-                int64_t t2_825 = ((Cons *)(intptr_t)(y))->tail;
-                (void)t2_825;
-                if ((t1_824) == (INT64_C(0))) {
-                    return (t2_825) == (INT64_C(0));
-                } else {
-                    if ((t2_825) == (INT64_C(0))) {
-                        return false;
-                    } else {
-                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_824));
-                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_825));
-                        x = __t12;
-                        y = __t13;
-                        goto __tur_tailcall;
-                    }
-                }
-            }
-        } else {
-            return false;
-        }
+        int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t12[1] = (int64_t)(intptr_t)__fn_826;
+        void *__t13 = __t12;
+        return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t13));
 }
 
 typedef struct dict_Eq_Cons {
@@ -3370,14 +3356,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_910(int64_t a, int64_t b) {
+static bool __fn_912(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_910;
+        __t14[1] = (int64_t)(intptr_t)__fn_912;
         void *__t15 = __t14;
         return mutmap_hyeq_qu_hybyval(x, y, (void *)(intptr_t)(__t15));
 }
@@ -4678,20 +4664,20 @@ int main(int argc, char **argv) {
         }
         int64_t __t23;
         {
-            void * sched_937 = scheduler_hymt_hynew(INT64_C(2));
-            (void)sched_937;
+            void * sched_939 = scheduler_hymt_hynew(INT64_C(2));
+            (void)sched_939;
             {
-                int64_t fa_938 = fiber_hynew((void *)(intptr_t)(fiber_hya), INT64_C(0));
-                (void)fa_938;
+                int64_t fa_940 = fiber_hynew((void *)(intptr_t)(fiber_hya), INT64_C(0));
+                (void)fa_940;
                 {
-                    int64_t fb_939 = fiber_hynew((void *)(intptr_t)(fiber_hyb), INT64_C(0));
-                    (void)fb_939;
-                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_937), fa_938);
-                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_937), fb_939);
+                    int64_t fb_941 = fiber_hynew((void *)(intptr_t)(fiber_hyb), INT64_C(0));
+                    (void)fb_941;
+                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_939), fa_940);
+                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_939), fb_941);
                     thread_hysleep(INT64_C(100));
-                    scheduler_hymt_hyfree((void *)(intptr_t)(sched_937));
-                    fiber_hyfree(fa_938);
-                    fiber_hyfree(fb_939);
+                    scheduler_hymt_hyfree((void *)(intptr_t)(sched_939));
+                    fiber_hyfree(fa_940);
+                    fiber_hyfree(fb_941);
                 }
             }
             int64_t __t24;

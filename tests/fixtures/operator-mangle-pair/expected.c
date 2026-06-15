@@ -2526,9 +2526,10 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
+static bool __fn_801(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_885(int64_t, int64_t);
+static bool __fn_887(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -3299,31 +3300,16 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
+static bool __fn_801(int64_t a, int64_t b) {
+        return __inst_Eq_eq_qu_int(a, b);
+}
+
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        __tur_tailcall:;
-        if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
-            {
-                int64_t t1_799 = ((Cons *)(intptr_t)(x))->tail;
-                (void)t1_799;
-                int64_t t2_800 = ((Cons *)(intptr_t)(y))->tail;
-                (void)t2_800;
-                if ((t1_799) == (INT64_C(0))) {
-                    return (t2_800) == (INT64_C(0));
-                } else {
-                    if ((t2_800) == (INT64_C(0))) {
-                        return false;
-                    } else {
-                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_799));
-                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_800));
-                        x = __t12;
-                        y = __t13;
-                        goto __tur_tailcall;
-                    }
-                }
-            }
-        } else {
-            return false;
-        }
+        int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t12[1] = (int64_t)(intptr_t)__fn_801;
+        void *__t13 = __t12;
+        return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t13));
 }
 
 typedef struct dict_Eq_Cons {
@@ -3346,14 +3332,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_885(int64_t a, int64_t b) {
+static bool __fn_887(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_885;
+        __t14[1] = (int64_t)(intptr_t)__fn_887;
         void *__t15 = __t14;
         return mutmap_hyeq_qu_hybyval(x, y, (void *)(intptr_t)(__t15));
 }
@@ -4517,18 +4503,18 @@ int main(int argc, char **argv) {
         }
         int64_t __t23;
         {
-            int64_t s_895 = _gt_gt_gt(INT64_C(2), INT64_C(3));
-            (void)s_895;
-            int64_t p_896 = _lt_lt_lt(INT64_C(2), INT64_C(3));
-            (void)p_896;
-            int64_t d_897 = _eq_eq_eq(INT64_C(10), INT64_C(4));
-            (void)d_897;
-            int64_t b_898 = _ex_ex_ex(INT64_C(4), INT64_C(2));
-            (void)b_898;
-            printf("%lld\n", (long long)(s_895));
-            printf("%lld\n", (long long)(p_896));
-            printf("%lld\n", (long long)(d_897));
-            printf("%lld\n", (long long)(b_898));
+            int64_t s_897 = _gt_gt_gt(INT64_C(2), INT64_C(3));
+            (void)s_897;
+            int64_t p_898 = _lt_lt_lt(INT64_C(2), INT64_C(3));
+            (void)p_898;
+            int64_t d_899 = _eq_eq_eq(INT64_C(10), INT64_C(4));
+            (void)d_899;
+            int64_t b_900 = _ex_ex_ex(INT64_C(4), INT64_C(2));
+            (void)b_900;
+            printf("%lld\n", (long long)(s_897));
+            printf("%lld\n", (long long)(p_898));
+            printf("%lld\n", (long long)(d_899));
+            printf("%lld\n", (long long)(b_900));
             int64_t __t24;
             __t24 = INT64_C(0);
             __t23 = __t24;

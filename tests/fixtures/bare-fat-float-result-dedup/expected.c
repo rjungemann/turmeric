@@ -2527,11 +2527,12 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
+static bool __fn_800(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_884(int64_t, int64_t);
+static bool __fn_886(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
-static double __fn_892(void *, double);
+static double __fn_894(void *, double);
 static double run_hywith_un_unbf_unfloat(void *, double);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -3300,31 +3301,16 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
+static bool __fn_800(int64_t a, int64_t b) {
+        return __inst_Eq_eq_qu_int(a, b);
+}
+
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        __tur_tailcall:;
-        if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
-            {
-                int64_t t1_798 = ((Cons *)(intptr_t)(x))->tail;
-                (void)t1_798;
-                int64_t t2_799 = ((Cons *)(intptr_t)(y))->tail;
-                (void)t2_799;
-                if ((t1_798) == (INT64_C(0))) {
-                    return (t2_799) == (INT64_C(0));
-                } else {
-                    if ((t2_799) == (INT64_C(0))) {
-                        return false;
-                    } else {
-                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_798));
-                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_799));
-                        x = __t12;
-                        y = __t13;
-                        goto __tur_tailcall;
-                    }
-                }
-            }
-        } else {
-            return false;
-        }
+        int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t12[1] = (int64_t)(intptr_t)__fn_800;
+        void *__t13 = __t12;
+        return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t13));
 }
 
 typedef struct dict_Eq_Cons {
@@ -3347,14 +3333,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_884(int64_t a, int64_t b) {
+static bool __fn_886(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_884;
+        __t14[1] = (int64_t)(intptr_t)__fn_886;
         void *__t15 = __t14;
         return mutmap_hyeq_qu_hybyval(x, y, (void *)(intptr_t)(__t15));
 }
@@ -3367,18 +3353,18 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_qu = __inst_Eq_eq_qu_MutableMap,
 };
 
-struct __env_894 { tur_thunk_double_double_t __fn; double k; };
-static double __fn_892(void * __env_p_895, double x) {
-        struct __env_894 *__env___env_894 = (struct __env_894 *)__env_p_895;
-        return (x) * (__env___env_894->k);
+struct __env_896 { tur_thunk_double_double_t __fn; double k; };
+static double __fn_894(void * __env_p_897, double x) {
+        struct __env_896 *__env___env_896 = (struct __env_896 *)__env_p_897;
+        return (x) * (__env___env_896->k);
 }
 
 static double run_hywith_un_unbf_unfloat(void * g, double x) {
         double __t16;
         {
-            double y_899 = (*( tur_thunk_double_double_t *)(g))(g, x);
-            (void)y_899;
-            __t16 = use_hyfloat(y_899);
+            double y_901 = (*( tur_thunk_double_double_t *)(g))(g, x);
+            (void)y_901;
+            __t16 = use_hyfloat(y_901);
         }
         return __t16;
 }
@@ -4511,8 +4497,8 @@ static double use_hyfloat(double y) {
 }
 
 static void * make_hyscale(double k) {
-        struct __env_894 *__t24 = (struct __env_894 *)malloc(sizeof(struct __env_894));
-        __t24->__fn = (tur_thunk_double_double_t)__fn_892;
+        struct __env_896 *__t24 = (struct __env_896 *)malloc(sizeof(struct __env_896));
+        __t24->__fn = (tur_thunk_double_double_t)__fn_894;
         __t24->k = k;
         void *__t25 = __t24;
         return __t25;

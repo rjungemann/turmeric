@@ -2526,9 +2526,10 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
+static bool __fn_797(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_881(int64_t, int64_t);
+static bool __fn_883(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -3304,31 +3305,16 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
+static bool __fn_797(int64_t a, int64_t b) {
+        return __inst_Eq_eq_qu_int(a, b);
+}
+
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        __tur_tailcall:;
-        if (__inst_Eq_eq_qu_int(((Cons *)(intptr_t)(x))->head, ((Cons *)(intptr_t)(y))->head)) {
-            {
-                int64_t t1_795 = ((Cons *)(intptr_t)(x))->tail;
-                (void)t1_795;
-                int64_t t2_796 = ((Cons *)(intptr_t)(y))->tail;
-                (void)t2_796;
-                if ((t1_795) == (INT64_C(0))) {
-                    return (t2_796) == (INT64_C(0));
-                } else {
-                    if ((t2_796) == (INT64_C(0))) {
-                        return false;
-                    } else {
-                        int64_t __t12 = (*(int64_t *)(intptr_t)(t1_795));
-                        int64_t __t13 = (*(int64_t *)(intptr_t)(t2_796));
-                        x = __t12;
-                        y = __t13;
-                        goto __tur_tailcall;
-                    }
-                }
-            }
-        } else {
-            return false;
-        }
+        int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t12[1] = (int64_t)(intptr_t)__fn_797;
+        void *__t13 = __t12;
+        return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t13));
 }
 
 typedef struct dict_Eq_Cons {
@@ -3351,14 +3337,14 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_881(int64_t a, int64_t b) {
+static bool __fn_883(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_881;
+        __t14[1] = (int64_t)(intptr_t)__fn_883;
         void *__t15 = __t14;
         return mutmap_hyeq_qu_hybyval(x, y, (void *)(intptr_t)(__t15));
 }
@@ -4509,13 +4495,13 @@ int main(int argc, char **argv) {
             *__t23 = INT64_C(100);
             RcControlBlock *__t24 = rc_cb_alloc(0, 3, NULL);
             __t24->value = __t23;
-            RcControlBlock * x_883 = __t24;
-            (void)x_883;
+            RcControlBlock * x_885 = __t24;
+            (void)x_885;
             tur_frame __frame_25;
             tur_frame_init(&__frame_25, NULL);
-            int64_t __t26 = rc_strong_count(x_883);
+            int64_t __t26 = rc_strong_count(x_885);
             printf("%lld\n", (long long)(__t26));
-            struct __defer_env_27 __t29 = {.x = x_883};
+            struct __defer_env_27 __t29 = {.x = x_885};
             tur_frame_push_defer(&__frame_25, __defer_28, &__t29);
             tur_frame_fire_lifo(&__frame_25);
         }
@@ -4524,13 +4510,13 @@ int main(int argc, char **argv) {
             *__t30 = INT64_C(200);
             RcControlBlock *__t31 = rc_cb_alloc(0, 3, NULL);
             __t31->value = __t30;
-            RcControlBlock * x_884 = __t31;
-            (void)x_884;
+            RcControlBlock * x_886 = __t31;
+            (void)x_886;
             {
-                void *__t32 = tur_ref_from_rc(x_884);
-                void * r_885 = __t32;
-                (void)r_885;
-                int64_t __t33 = *((int64_t *)r_885);
+                void *__t32 = tur_ref_from_rc(x_886);
+                void * r_887 = __t32;
+                (void)r_887;
+                int64_t __t33 = *((int64_t *)r_887);
                 printf("%lld\n", (long long)(__t33));
             }
         }

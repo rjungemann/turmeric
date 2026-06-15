@@ -165,15 +165,8 @@
 (definstance Eq [Cons]
   [(Eq A)]
   (eq? [x y]
-    (if (eq? (.head x) (.head y))
-      (let [t1 (.tail x)
-            t2 (.tail y)]
-        (if (= t1 0)
-          (= t2 0)
-          (if (= t2 0)
-            false
-            (eq? (:: t1 (Cons A)) (:: t2 (Cons A))))))
-      false)))
+    (list-eq? (:: x :int) (:: y :int)
+              (fn [a b] (eq? (:: a A) (:: b A))))))
 ;;; __cons-fmap -- apply a typed thunk to every head element of a Cons list.
 ;;;
 ;;; Walks the cons chain, allocates a new cell for each node, and writes
