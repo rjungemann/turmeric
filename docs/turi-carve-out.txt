@@ -32,7 +32,10 @@ EX_CPS_CONT_APP -- CPS continuation application; never produced by the elaborato
 # `const Symbol *` interned in env->st (eval.c EX_SYM_LIT case), with native
 # sym->str / sym=? / str->sym / Eq[Sym] / Hash[Sym] / MapKey[Sym] overrides
 # (wk_register_sym_natives, src/main.c) for the inline-C sym.tur bodies the
-# tree-walker cannot run.  EX_CONS_LIST remains carved: cons-list literals only
-# appear paired with user inline-C (__tur_cons_cell walks), and landing them
-# usefully needs native cons-head/cons-tail overrides, not just the case arm.
-EX_CONS_LIST -- cons-list literal; inline-C-bound, needs native cons ops (TI1/TI7)
+# tree-walker cannot run.  EX_CONS_LIST is now handled (eval.c EX_CONS_LIST
+# case): a variadic `& rest` tail builds a chain of `{int64_t head; int64_t
+# tail}` cells boxed as int64 with nil == 0, matching the codegen __tur_cons_of
+# ABI -- so `(= rest 0)` and the inline-C __tur_cons_cell walkers interoperate
+# with a rest list the interpreter produced.  CONSUMING that list through the
+# stdlib `head`/`tail`/`cons` accessors still hits the inline-C carve-out (those
+# bodies are raw ```c blocks); native cons accessors are future TI1/TI7 work.

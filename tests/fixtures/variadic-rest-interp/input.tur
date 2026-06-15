@@ -1,0 +1,28 @@
+;; turi-parity TI1.3: variadic `& rest` rest-list construction (EX_CONS_LIST)
+;; under the tree-walking interpreter.
+;;
+;; The elaborator bundles the surplus args of a variadic call into a single
+;; EX_CONS_LIST argument, lowered by codegen to a chain of __tur_cons_of cells
+;; (head pointer boxed as int64, nil == 0).  The interpreter reproduces that
+;; exact ABI so `(= rest 0)` distinguishes an empty rest from a non-empty one.
+;;
+;; This fixture is inline-C-free, so it runs identically under `tur run`
+;; (compiled) and `tur --interpret` (tree-walker).
+
+(defn rest-empty? [& rest : int] : bool
+  (= rest 0))
+
+;; `rest` here is itself a single value (the inner list pointer / nil), so
+;; passing it on bundles it as a ONE-element rest -- never empty.  Both the
+;; compiled and interpreted paths must agree on that.
+(defn wrap-empty? [& rest : int] : bool
+  (rest-empty? rest))
+
+(defn main [] : int
+  (do
+    (println (rest-empty?))            ;; nil rest        -> true
+    (println (rest-empty? 42))         ;; one element     -> false
+    (println (rest-empty? 1 2 3 4 5))  ;; five elements   -> false
+    (println (wrap-empty?))            ;; rest=nil wrapped -> [0]   -> false
+    (println (wrap-empty? 7 8))        ;; rest=ptr wrapped -> [ptr] -> false
+    0))

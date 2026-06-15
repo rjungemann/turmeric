@@ -5451,6 +5451,51 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return sv;
     }
 
+    case EX_CONS_LIST: {
+        /* AR8 / turi-parity TI1.3: build a right-folded cons list matching the
+         * codegen ABI.  The compiler lowers a variadic `& rest` argument tail to
+         * a chain of `__tur_cons_of` cells -- `{ int64_t head; int64_t tail; }`
+         * with the head pointer boxed as an int64 and nil == 0 (see
+         * emit_expr.c:EX_CONS_LIST / emit_module.c:__tur_cons_of).  The
+         * interpreter reproduces that exact layout so `(= rest 0)`, the
+         * inline-C `__tur_cons_cell` walkers, and `stdlib/args.tur` all
+         * interoperate with a rest list the tree-walker produced.
+         *
+         * Each head is the element's raw int64 value carrier -- the same
+         * 8-byte payload codegen casts with `(int64_t)(intptr_t)(elem)` for an
+         * int/cstr/opaque/bool element (the documented variadic element types).
+         * Cells are process-lifetime, like the rest of the interpreter's
+         * heap. */
+        uint32_t cn = e->as.cons_list_.n;
+        int64_t tail = 0;  /* nil sentinel */
+        for (int32_t i = (int32_t)cn - 1; i >= 0; i--) {
+            TuriValue iv = eval_expr(env, frame, e->as.cons_list_.items[i]);
+            if (turi_is_error(iv) || env->returning || env->throwing) {
+                /* Unwind the partial chain so an aborted build leaks nothing. */
+                while (tail) {
+                    int64_t *c = (int64_t *)(intptr_t)tail;
+                    tail = c[1];
+                    free(c);
+                }
+                return iv;
+            }
+            int64_t *cell = (int64_t *)malloc(2 * sizeof(int64_t));
+            if (!cell) {
+                while (tail) {
+                    int64_t *c = (int64_t *)(intptr_t)tail;
+                    tail = c[1];
+                    free(c);
+                }
+                return turi_error("eval: out of memory (cons-list)");
+            }
+            cell[0] = iv.as_int;  /* head: raw value carrier */
+            cell[1] = tail;       /* tail: previously-built cell (or nil) */
+            tail = (int64_t)(intptr_t)cell;
+        }
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = tail;
+        return v;
+    }
+
     case EX_GET_FIELD: {
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
         if (turi_is_error(sv) || env->returning || env->throwing) return sv;
