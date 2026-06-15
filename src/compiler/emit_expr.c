@@ -3994,7 +3994,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     TypeKind vek = e->as.make_struct_.field_values[i]->type.kind;
                     bool val_is_c_ptr = (vek == TY_PTR_VOID || vek == TY_RC
                                          || vek == TY_REF || vek == TY_WEAK
-                                         || vek == TY_EXISTS || vek == TY_FORALL);
+                                         || vek == TY_EXISTS || vek == TY_FORALL
+                                         || vek == TY_CSTR);
                     bool field_is_c_ptr = (def->fields[i].kind == TY_PTR_VOID
                                            || def->fields[i].kind == TY_RC
                                            || def->fields[i].kind == TY_WEAK
