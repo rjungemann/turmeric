@@ -322,6 +322,12 @@ bool type_uses_carrier_abi(Type t);
  * producer call (a #{Construct} helper or an __inst_ method).  Defined in
  * emit_fns.c; consumed there and in emit_module.c's forward-decl mirror. */
 bool fn_body_tail_is_carrier_producer(const struct Expr *e);
+/* instance-method-return-carrier-bridge: every tail leaf of `e` already emits a
+ * by-value concrete carrier-ABI aggregate (post-M2 #{Construct} spec, make-struct
+ * literal, by-value var).  Gates off the carrier->concrete return deref so an
+ * already-by-value producer is not dereferenced as a heap pointer.  Defined in
+ * emit_expr.c. */
+bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
 /* RT/SC5: carrier-return bridge.  A typeclass instance method whose declared
  * return is the dispatch type variable lowers to the int64_t carrier, but its
  * body resolves to a concrete by-value struct for that instance.  When the

@@ -1,0 +1,52 @@
+;; instance-method-return-carrier-bridge -- a typeclass instance method whose
+;; declared return type is a by-value polymorphic struct (Result a cstr) built
+;; through the M2 #{Construct} `ok` + `make-struct` path.
+;;
+;; Dispatching that method through an ascribed call site monomorphizes the
+;; instance into a `*__spec__*` clone that returns the struct BY VALUE.  The
+;; return-position lowering in emit_fns.c must NOT re-apply the
+;; carrier->concrete deref to an already-by-value producer -- doing so emits
+;; `*(Result__Point__cstr *)(intptr_t)ok__spec__...(...)`, which clang rejects
+;; with "aggregate value used where an integer was expected".
+;;
+;; This is the turmeric-side regression for
+;; docs/upcoming/instance-method-return-carrier-bridge.md (the
+;; derive-decode-struct seam, reproduced without the json spice).  The `int`
+;; instance keeps its inline-C `tur_ok` carrier body so the legitimate
+;; carrier->concrete deref path stays exercised alongside the by-value one.
+
+(defstruct Point [x : int  y : int])
+
+(defclass Decode [a]
+  (decode [doc : int] : (Result a cstr)))
+
+;; By-value instance: body is `(ok (make-struct ...))`, the M2 path that lowers
+;; to the by-value `ok__spec__Result__Point__cstr_Point` clone under a concrete
+;; ascription.  This is the seam the bridge fix unblocks.
+(definstance Decode [Point]
+  (decode [doc]
+    (:: (ok (make-struct Point doc (+ doc 1)))
+        (Result Point cstr))))
+
+;; Carrier instance: inline-C returns the int64 `tur_ok` carrier handle, so the
+;; ascribed dispatch still needs the carrier->concrete deref.  Guards against the
+;; fix over-suppressing the bridge.
+(definstance Decode [int]
+  (decode [doc]
+    ```c return tur_ok((int64_t)(doc * 10)); ```))
+
+;; Typed helpers consume the unwrapped payloads BY VALUE -- the original
+;; TUR-E0001 / cc failure mode.
+(defn show-point [p : Point] : void
+  (println (.x p))
+  (println (.y p)))
+
+(defn show-int [n : int] : void
+  (println n))
+
+(defn main [] : int
+  (let [p (ok-val (:: (decode 42) (Result Point cstr)))
+        n (ok-val (:: (decode 5)  (Result int   cstr)))]
+    (show-point p)
+    (show-int n))
+  0)
