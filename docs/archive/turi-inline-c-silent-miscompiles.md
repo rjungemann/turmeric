@@ -1,5 +1,13 @@
 # 25 inline-C fixtures silently miscompile under `--interpret`
 
+> **RESOLVED + ARCHIVED 2026-06-15.** Re-verified against a fresh Debug build:
+> all 25 fixtures run under `tur --interpret` (`ASAN_OPTIONS=detect_leaks=0`)
+> yield **0 silent miscompiles** -- 5 PASS (`backtrack-bind`,
+> `backtrack-do-macro`, `backtrack-guard`, `backtrack-nested`, `show-float`) and
+> 20 clean-error (rc=1: the "inline-C not supported" decline, or a TUR-W0039
+> dispatch warning escalated to a hard error). No fixture exits 0 with wrong
+> output. The matcher-tightening goal is met; this report is archived.
+>
 > **Re-audit 2026-06-15: effectively resolved -- the matchers now decline.**
 > Classifying all 25 by `--interpret` outcome (stdout vs `expected.stdout` vs
 > exit code) on the current tree: **24 of 25 are no longer silent miscompiles.**
@@ -18,7 +26,7 @@
 > interpreter prelude hijacked the carrier-fallback `__inst_Show_show_T`
 > instance method with a float native), reclassified to its own report and
 > **FIXED 2026-06-15**:
-> [../archive/turi-carrier-fallback-instance-method-silent-miscompile.md](../archive/turi-carrier-fallback-instance-method-silent-miscompile.md).
+> [turi-carrier-fallback-instance-method-silent-miscompile.md](turi-carrier-fallback-instance-method-silent-miscompile.md).
 > Net: with exg5 fixed and the matcher-tightening goal met, **all 25 are now
 > resolved** (PASS, clean-error, or -- for exg5 -- fixed dispatch). This report
 > can be archived.
