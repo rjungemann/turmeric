@@ -118,7 +118,7 @@ compiled path stays `0 / 1 / 2 / -1`.
 ## Status
 
 Found while assessing the tractability of
-[turi-map-set-hamt-interpreter-gap.md](turi-map-set-hamt-interpreter-gap.md)
+[turi-map-set-hamt-interpreter-gap.md](../archive/turi-map-set-hamt-interpreter-gap.md)
 (that umbrella's gaps -- the map/set/hamt natives, Tier B turi-closure
 comparators, and non-int values -- are now all closed; `tib-map-turi-comparator`
 passes under `--interpret`). `gde4-generic-size-map` is a *different* defect --
