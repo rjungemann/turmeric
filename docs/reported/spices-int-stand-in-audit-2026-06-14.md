@@ -180,7 +180,11 @@ Note `tls-wrap-fd` also takes `fd : int` -- that one really is an fd.
 
 - `valkey/client.tur:50,101`, `valkey/cmd.tur:51` -- `redisContext*`
 - `rtaudio/core.tur:82` -- `RtAudio` C++ instance
-- `regex/regex.tur:56,95` -- compiled regex
+- ~~`regex/regex.tur:56,95` -- compiled regex~~ **fixed in `tur-regex` v0.2.0**:
+  `defopaque Regex` + `defopaque Match`; all public parameters retyped.
+  Result-typed returns also landed (`(Result Regex cstr)`, etc.) once the
+  project-mode kind preload was wired up in 2026-06-14's
+  `spice-defn-return-result-kind-mismatch` fix.
 - `png/reader.tur` -- image handle
 - `wav/reader.tur` -- `SNDFILE*`
 
@@ -249,7 +253,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | **postgres** | **S2: 5 handle types** |
 | raygui | clean |
 | **raylib** | **S2: 3 handle types** |
-| **regex** | **S2: 1 handle type** |
+| ~~regex~~ | ~~S2: 1 handle type~~ -- fixed in `tur-regex` v0.2.0 |
 | **rtaudio** | **S2: 1 handle type** |
 | **rtmidi** | **S1 + S2: 2 handles + 1 callback** |
 | scscm | clean |
@@ -266,7 +270,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | **wav** | **S2: 1 handle type** |
 | zlib | clean |
 
-19 spices need work, 16 are clean.
+19 spices need work, 16 are clean (regex S2 done 2026-06-14 in v0.2.0; 18 remain).
 
 ---
 
@@ -302,6 +306,13 @@ These are isolated, high-value, and unlock the session plan. Order:
 `tourist/middleware.tur:114`. Mechanical -- the bodies already build
 the underlying `result<cstr>` / `option<Response>` shape; just declare
 the right type. Big readability win at handler sites.
+
+**Unblocked** (2026-06-14): `(defn f [] : (Result A B) ...)` at module
+scope in a spice now typechecks and builds. See
+[spice-defn-return-result-kind-mismatch.md](spice-defn-return-result-kind-mismatch.md)
+for the fix. `tur-regex` v0.2.0 demonstrates the new shape end-to-end
+(`regex-compile` returns `(Result Regex cstr)`, `regex-match` returns
+`(Result Match cstr)`, etc.).
 
 ### Phase 4: Fix S2 opaque handles, spice by spice
 

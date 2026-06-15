@@ -2046,7 +2046,13 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         FnDef *fd = e->as.fn_def_.fn;
         if (strcmp(fd->binding->name->name, "main") == 0) continue;
         if (emit_abi_fn_skip_generic(ctx, e)) continue;
-        if (!ctx->separate_compilation || !fd->binding->is_exported) {
+        /* spice-defn-return-result-kind-mismatch: stdlib defns are preloaded
+         * into every project-mode TU so type-app kind checks against
+         * Result/Option/Pair/Tuple* work.  Force them to `static` even
+         * though they are marked exported -- otherwise every spice .c
+         * emits external symbols and the linker rejects the duplicates. */
+        if (!ctx->separate_compilation || !fd->binding->is_exported ||
+            fd->binding->is_from_stdlib) {
             buf_puts(out, "static ");
         }
         if (e->type.kind == TY_FN) {
@@ -6313,6 +6319,14 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                     if (td) type_codegen_emit_fn_ptr_typedefs(out);
                 }
             }
+            /* spice-defn-return-result-kind-mismatch: wrap the typedef in
+             * a `#ifndef TUR_STRUCT_<Name>_DEFINED` guard.  Project-mode
+             * preload (load_project_prelude) now seeds Option/Result/Pair
+             * /Tuple* into every TU so type-app kind checks work; without
+             * a guard each TU header re-emits the typedef and any TU that
+             * includes two of them triggers `redefinition of 'Result'`. */
+            buf_printf(out, "#ifndef TUR_STRUCT_%s_DEFINED\n", def->name);
+            buf_printf(out, "#define TUR_STRUCT_%s_DEFINED\n", def->name);
             buf_printf(out, "typedef struct %s {\n", def->name);
             for (uint32_t j = 0; j < def->n_fields; j++) {
                 StructField *f = &def->fields[j];
@@ -6344,7 +6358,8 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                 buf_printf(out, "    %s %s;\n", ctype, mfn);
                 free(mfn);
             }
-            buf_printf(out, "} %s;\n\n", def->name);
+            buf_printf(out, "} %s;\n", def->name);
+            buf_printf(out, "#endif\n\n");
         }
     }
 
@@ -6515,11 +6530,36 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             if (separate_compilation && !fd->binding->is_exported) {
                 free((void*)fn_name); continue;
             }
+            /* spice-defn-return-result-kind-mismatch: stdlib defns are
+             * emitted as `static` per TU (see emit_fn_forward_decls), so
+             * skip their header forward decl too -- emitting `extern`
+             * names that resolve to no external symbol would just be
+             * link-time noise. */
+            if (separate_compilation && fd->binding->is_from_stdlib) {
+                free((void*)fn_name); continue;
+            }
 
             /* Emit function declaration */
             if (e->type.kind == TY_FN) {
                 if (e->type.as.fn.result_full_type) {
-                    buf_puts(out, type_c_name(*e->type.as.fn.result_full_type));
+                    /* spice-defn-return-result-kind-mismatch: mirror the
+                     * inline-C-return rule from emit_fn_forward_decls -- an
+                     * inline-C body returning a carrier-ABI TY_APP (e.g.
+                     * `(Result Regex cstr)`) emits `int64_t`, not the
+                     * by-value struct name.  Without this, the header
+                     * forward decl prototypes `Result__Regex__cstr foo(...)`
+                     * while the .c body defines `int64_t foo(...)` and
+                     * the C compiler rejects the redeclaration. */
+                    const Type *rft = e->type.as.fn.result_full_type;
+                    bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+                    bool typed_ptr = rft->kind == TY_PTR_VOID && rft->as.ptr.inner;
+                    bool typed_struct = rft->kind == TY_STRUCT;
+                    bool typed_cfnptr = rft->kind == TY_FN && rft->as.fn.cfnptr;
+                    if (body_is_inline_c && !typed_ptr && !typed_struct && !typed_cfnptr) {
+                        buf_puts(out, "int64_t");
+                    } else {
+                        buf_puts(out, type_c_name(*rft));
+                    }
                 } else {
                     TypeKind result = e->type.as.fn.result_kind;
                     buf_puts(out, type_c_name(emit_type_from_kind(result)));

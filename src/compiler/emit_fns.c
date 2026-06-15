@@ -452,9 +452,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * linkage (no static) so they can be called from other compilation units.
      * J3: ABI-specialization clone bodies emitted with external_linkage also
      * drop 'static' so they are visible to borrower TUs at link time. */
+    /* spice-defn-return-result-kind-mismatch: stdlib defns preloaded into
+     * every project-mode TU stay `static` -- otherwise every TU emits an
+     * external copy of e.g. `ok-val` and the linker rejects the duplicates. */
     bool needs_static = !is_main &&
         !ctx->fn_name_override_external &&
-        !(ctx->separate_compilation && fd->binding->is_exported);
+        !(ctx->separate_compilation && fd->binding->is_exported
+          && !fd->binding->is_from_stdlib);
     if (needs_static) {
         buf_printf(file, "static ");
     }

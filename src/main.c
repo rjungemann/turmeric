@@ -879,6 +879,34 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
 
     static const char *prelude_files[] = {
         "macros.tur",
+        /* spice-defn-return-result-kind-mismatch: also preload the typed
+         * parametric stdlib so that project-mode (build/emit-h/emit-c-to-dir)
+         * has Result/Option/Pair/Tuple/etc. registered with their proper
+         * arrow kinds. Without this, a spice declaring `: (Result A B)` at
+         * defn return-type position hits TUR-E0012 because Result resolves
+         * through the "unknown name -> opaque struct, kind *" fallback.
+         *
+         * Codegen note: bindings created during this prelude window are
+         * marked `is_from_stdlib`. emit_implementation already skips
+         * non-exported stdlib bindings; exported ones (`ok`, `ok-val`,
+         * `make-struct Result ...`) are static-or-inline-C wrappers so
+         * link-safe duplication mirrors how `emit_closure_fat_runtime`
+         * already emits its fixed runtime per module .c. */
+        "safe.tur",
+        "hamt.tur",
+        "typeclass-eq.tur",
+        "typeclass-functor.tur",
+        "typeclass-clone.tur",
+        "typeclass-hash.tur",
+        "typeclass-applicative.tur",
+        "typeclass-alternative.tur",
+        "typeclass-monad.tur",
+        "typeclass-monaderror.tur",
+        "typeclass-bifunctor.tur",
+        "option.tur",
+        "result.tur",
+        "pair.tur",
+        "tuple.tur",
         NULL
     };
 
