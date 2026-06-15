@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "jq -r '.tool_input.file_path // empty' | { read -r f; if [[ \"$f\" == *TEMP.md ]]; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"TEMP.md is the user scratchpad and is protected by a project hook. Never edit it without an explicit user request; if the user truly wants this, they must temporarily disable the hook in .claude/settings.json.\"}}'; fi; }"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | { read -r f; case \"$f\" in *docs/reported/history/*|*docs/reported/history) echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"docs/reported/history/ is forbidden. Resolved reports go in the archive: docs/archive/<slug>.md (the report) or docs/archive/history/<slug>.md (per-fix paper trail). docs/reported/ is for OPEN findings only and must never grow a history/ subtree.\"}}';; esac; }"
           }
         ]
       },
@@ -17,6 +21,10 @@
             "type": "command",
             "if": "Bash(git commit*)",
             "command": "if git diff --cached --name-only 2>/dev/null | grep -qx 'TEMP.md'; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"TEMP.md is staged. Unstage it before committing: git restore --staged TEMP.md. TEMP.md is the user scratchpad and should never be committed by Claude.\"}}'; fi"
+          },
+          {
+            "type": "command",
+            "command": "if jq -r '.tool_input.command // empty' | grep -Eq '(\\b(mkdir|touch|tee|cp|mv|install|rsync|ln|dd)\\b[^|;&]*docs/reported/history|>[^|;&]*docs/reported/history)'; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"This command writes into docs/reported/history/, which is forbidden. Resolved reports go in docs/archive/ (or docs/archive/history/ for the per-fix paper trail), never under docs/reported/. Do not create or write into docs/reported/history/.\"}}'; fi"
           }
         ]
       }
