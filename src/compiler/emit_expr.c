@@ -3881,7 +3881,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return result;
             }
             Buf lit; buf_init(&lit);
-            const char *struct_c_name = emit_type_c_name(ctx, e->type);
+            /* end-to-end-monomorphization: for a :heap-tagged type, make-struct
+             * builds the by-value header literal (`(Vec__int){...}`) and then
+             * heap-boxes it, returning the typed pointer `Vec__int *` (== the
+             * type of `(Vec A)`).  So the compound literal must use the by-value
+             * name, not the pointer name type_c_name now returns for a heap
+             * type.  Non-heap types are unchanged. */
+            Type ms_resolved = emit_resolve_type(ctx, e->type);
+            bool ms_heap = type_is_heap_struct(ms_resolved);
+            const char *struct_c_name = ms_heap
+                ? type_struct_value_c_name(ms_resolved)
+                : emit_type_c_name(ctx, e->type);
             /* M2b: when the make-struct's e->type carries unresolved tyvars
              * (e.g. body of `(defn ok [A B] [x : A] : (Result A B)
              *   (make-struct Result :err-val (default-of B) ...))` — B isn't a
@@ -3910,7 +3920,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     && rt_def == def) {
                     have_rt_recovered = true;
                     if (strcmp(struct_c_name, "int64_t") == 0) {
-                        const char *recovered = emit_type_c_name(ctx, rt);
+                        /* For a heap type, recover the by-value header name (not
+                         * the pointer name) so the compound literal is valid. */
+                        const char *recovered = ms_heap
+                            ? type_struct_value_c_name(emit_resolve_type(ctx, rt))
+                            : emit_type_c_name(ctx, rt);
                         if (recovered && strcmp(recovered, "int64_t") != 0) {
                             struct_c_name = recovered;
                         }
@@ -4002,6 +4016,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (!any_field_emitted) buf_puts(&lit, "0");
             buf_puts(&lit, "}");
             buf_putc(&lit, '\0');
+            /* end-to-end-monomorphization: heap-box the by-value header literal.
+             * Emits `T *tmp = malloc(sizeof(T)); *tmp = (T){...};` and returns
+             * the typed pointer `tmp`, which is the C representation of the
+             * :heap type `(T A)`.  This is the boxing step that replaces a
+             * separate `heap-box` primitive -- the constructor itself owns it. */
+            if (ms_heap && strcmp(struct_c_name, "int64_t") != 0) {
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                           struct_c_name, tmp, struct_c_name, struct_c_name);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*%s = %s;\n", tmp, lit.data);
+                buf_free(&lit);
+                return tmp;
+            }
             char *result = strdup(lit.data);
             buf_free(&lit);
             return result;
@@ -4045,6 +4074,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             const char *fname_raw = def->fields[e->as.get_field_.field_idx].name;
             char *fname = mangle_field_name(fname_raw);
+            /* end-to-end-monomorphization: a :heap receiver is a typed pointer
+             * (`Vec__int *`) in monomorphic code -- field access dereferences
+             * directly (`(sv)->field`), bypassing the carrier/by-value/pbp
+             * dichotomy below.  Resolve the receiver type through the active
+             * spec so an element-erased / tyvar receiver still classifies. */
+            {
+                Type recv_rty = emit_resolve_type(ctx,
+                    e->as.get_field_.struct_expr->type);
+                if (type_is_heap_struct(recv_rty)) {
+                    Buf hb; buf_init(&hb);
+                    buf_printf(&hb, "(%s)->%s", sv, fname);
+                    buf_putc(&hb, '\0');
+                    free(sv);
+                    free(fname);
+                    char *r = strdup(hb.data);
+                    buf_free(&hb);
+                    return r;
+                }
+            }
             bool through_rc = e->as.get_field_.struct_expr->type.kind == TY_RC;
             bool through_carrier = !through_rc
                 && e->as.get_field_.struct_expr->type.kind == TY_STRUCT

@@ -90,7 +90,15 @@ After the slice:
 - The ~114 `Vec int` `carrier->concrete` crossings drop to 0; the remaining
   crossings are the documented type-erased boundary.
 
-## Mechanism: heap-box + make-struct, no inline-C string surgery
+## Mechanism: make-struct boxes directly, no inline-C string surgery
+
+> **Superseded note (2026-06-15):** the design below was written around a
+> separate `heap-box [A] [v : A] : ptr<A>` primitive. Execution (sub-step 2)
+> replaced it with **make-struct doing the heap-box itself** -- see the sub-step
+> 2 entry under "Sub-steps". The `heap-box` primitive and C-2's inline-C
+> `A`-substitution are NOT needed. The section is kept for the design rationale
+> (the value-vs-pointer split, the element-buffer-stays-int64 insight); read it
+> with that substitution in mind.
 
 The producers become pure-Turmeric over a **single** generic heap primitive,
 so per-element monomorphization rides the existing make-struct / ABI-spec
@@ -164,14 +172,15 @@ genuinely by-value).
   `#{Heap}` type the field is *already* a pointer, so reconcile the two rules
   (a `#{Heap}` field is `T *`, full stop; no double-pointer).
 
-### C-2: `heap-box` inline-C `A`-name substitution (the one monomorphization case)
+### C-2: ~~`heap-box` inline-C `A`-name substitution~~ -- DROPPED 2026-06-15
 
-When emitting an ABI spec of a `defn [A]` whose body is inline-C, substitute
-the spec's concrete C name for the type-var token `A` in the body string,
-gated on a marker (`#{CStructName A}` or similar) so it fires *only* for
-`heap-box` and siblings, never for arbitrary inline-C. This is the minimal,
-auditable form of "inline-C-body monomorphization" -- a token replacement on an
-explicitly opted-in body, not a C parser.
+Superseded by the make-struct-boxing design (sub-step 2 above). Because
+`make-struct` of a `:heap` type does the `malloc`+copy itself, building the C
+from the *known concrete type*, there is no inline-C body that needs an `A`
+token rewrite. The only genuinely-inline-C producer left is `vec-push!`'s
+realloc, which operates on the element-agnostic raw `data` buffer and so needs
+no per-`A` substitution. No inline-C-body monomorphization infrastructure is
+required for the Vec slice.
 
 ### C-3: carrier boundary keeps a cast, not a deref
 
@@ -202,14 +211,29 @@ crossing remains until M4).
    no sticky state. NOTE: the marker spelling is the keyword `:heap` (not
    `#{...}`); `#{...}` is the effect-set attribute syntax and is reserved for
    `defn`, so the struct attribute reuses the `:copy`/`:linear` keyword slot.
-2. **`heap-box` + C-2.** Land the primitive and the name-substitution, pinned
-   by a tiny fixture (`heap-box-roundtrip`) that boxes/reads a `make-struct`
-   for two distinct element types and checks the emitted C uses `Vec__int *` /
-   `Vec__cstr *`. No stdlib flip yet.
-3. **Tag `Vec` `#{Heap}` + rewrite producers/accessors.** Flip vec.tur to the
-   typed-pointer producers over `heap-box`. Rebuild; expect wide snapshot
-   churn -- regenerate per the Fixture STRICT RULE in the same commit. Suite
-   green.
+2. **make-struct heap-boxing + field deref. -- LANDED 2026-06-15 (design pivot:
+   no separate `heap-box` primitive).** A generic `heap-box [A] [v : A] : ptr<A>`
+   hits a value-vs-pointer conflict: `(make-struct Vec ...)` has type `(Vec A)`,
+   which now lowers to the pointer, so make-struct can't yield the by-value
+   header heap-box wants. Resolution: make **`make-struct` of a `:heap` type box
+   itself** -- build the by-value header literal (`(Vec__int){...}`) with the
+   *value* C name, `malloc` + copy, return the typed pointer `Vec__int *`. No
+   `heap-box`, no inline-C `A`-substitution (C-2 dropped: the emitter builds the
+   C from the known concrete type, never a token-rewrite of an opt-in body).
+   Landed: `type_is_heap_struct` / `type_struct_value_c_name` (`types.c/.h`);
+   `EX_MAKE_STRUCT` boxing + M2b rt-recovery of the value name; `EX_GET_FIELD`
+   `(p)->field` deref for a `:heap` receiver. Pinned by
+   `tests/fixtures/heap-make-struct-roundtrip/` (`Box [A]` over int/bool ->
+   `Box__int *` / `Box__bool *`, field reads deref), `requires.compiled`.
+   All gated on `is_heap`: full suite green, zero snapshot drift. Surfaced (and
+   filed) a pre-existing make-struct cstr-into-carrier-field gap that does not
+   affect the Vec migration.
+3. **Tag `Vec` `:heap` + rewrite producers/accessors.** Flip vec.tur: make-struct
+   now boxes, so `vec-new` becomes `(make-struct Vec :data ... :len 0 :cap 0)`;
+   `vec-len`/`vec-get`/`.len`/`.data` deref the typed pointer; `vec-push!`'s
+   realloc operates on the raw element-agnostic `data` buffer (no `A` subst).
+   Rebuild; expect wide snapshot churn -- regenerate per the Fixture STRICT RULE
+   in the same commit. Suite green.
 4. **C-3 + re-audit.** Confirm `TUR_M3_AUDIT=1` shows `Vec int`
    `carrier->concrete` crossings at 0 (modulo the M4 dict-slot residual).
    Confirm the by-value mutation hazard is gone (a `vec-push!` through a passed
