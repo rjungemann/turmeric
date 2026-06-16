@@ -298,9 +298,14 @@
 ;;; Eq [Vec] -- element-wise equality using the element type's Eq instance.
 ;; TC1-5: Phase PTC4 -- constrained Eq instance for Vec[A].
 ;; Note: element comparison uses integer equality; correct for all primitive A.
-
-(defn vec-len-byval [A] [v : (Vec A)] : int
-  (.len v))
+;;
+;; The by-value `vec-len-byval` / `vec-eq-loop-byval` twins that the old
+;; by-value `Eq [Vec]` used were retired once the instance moved to the
+;; carrier-based `vec-eq?` delegation below (end-to-end-monomorphization root 2
+;; retirement) -- they are no longer reachable, so they are gone (plan step 5).
+;; `vec-get-byval` (the Option C twin redirect target for `vec-get` inside
+;; specs) and `vec-data-get__` stay; they are part of the shared redirect
+;; mechanism still used by Map/Set-bound fixtures.
 
 (defn vec-data-get__ [data : ptr<void> i : int] : int
   ```c return ((int64_t *)(intptr_t)data)[i]; ```)
@@ -328,22 +333,19 @@
 (defn vec-get-byval [A] [v : (Vec A) i : int] : A
   (:: (vec-data-get-checked__ (.data v) i (.len v)) A))
 
-(defn vec-eq-loop-byval [A]
-  [(Eq A)]
-  [x : (Vec A) y : (Vec A) i : int len : int]
-  : bool
-  (if (= i len)
-    true
-    (if (eq? (:: (vec-data-get__ (.data x) i) A)
-             (:: (vec-data-get__ (.data y) i) A))
-      (vec-eq-loop-byval x y (+ i 1) len)
-      false)))
-
+;; end-to-end-monomorphization (root 2 retirement): Vec is a `:heap` type
+;; (typed pointer `Vec__A *` post-#377), so `(:: x :int)` relabels the handle
+;; to the int64 carrier with a pure cast -- not a by-value struct spill.  That
+;; makes the carrier-based instance shape viable here exactly as it is for
+;; `Eq [Cons]` (see stdlib/list.tur): delegate to the carrier-based `vec-eq?`
+;; with an element-comparison closure, so the instance method stays all-carrier
+;; and mints no by-value spec whose carrier base would have to bridge
+;; `(Vec__int *)(intptr_t)` casts back to the typed helpers.  The earlier
+;; "carrier-based Eq [Vec] breaks the build" finding predated #377, when
+;; `(Vec A)` was a by-value `Vec__int` and the relabel was a struct widening;
+;; that no longer holds.
 (definstance Eq [Vec]
   [(Eq A)]
   (eq? [x y]
-    (let [lx (vec-len-byval (:: x (Vec A)))
-          ly (vec-len-byval (:: y (Vec A)))]
-      (if (= lx ly)
-        (vec-eq-loop-byval (:: x (Vec A)) (:: y (Vec A)) 0 lx)
-        false))))
+    (vec-eq? (:: x :int) (:: y :int)
+             (fn [a b] (eq? (:: a A) (:: b A))))))

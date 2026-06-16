@@ -19,6 +19,31 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0g. Status snapshot — 2026-06-16 (root 2: `Eq [Vec]` retired to carrier-based; audit 98 -> 70)
+
+`Eq [Vec]` was the last collection instance on the **by-value direction**
+(`vec-len-byval` / `vec-eq-loop-byval` over `(:: x (Vec A))`), so its carrier
+base bridged `(Vec__int *)(intptr_t)` back to the typed `*-byval` specs in every
+program -- the dominant root-2 `Vec int` `carrier->concrete` deref crossings.
+Post-#377 `Vec` is `:heap` (a typed pointer), so `(:: x :int)` is now a pure
+pointer->int cast (not the by-value struct widening that #369 found "closed"),
+exactly as for `Eq [Cons]`. Rewrote `Eq [Vec]` to delegate to the carrier-based
+`vec-eq?` with an element-comparison closure -- byte-identical in shape to
+`Eq [Cons]` -- and added the emit support (`emit_var_spec_arg_type` +
+concrete-`:heap`-pointer-to-`:int` EX_ASCRIBE/`preserve_ascribe_for_bridge`
+routing through `emit_carrier_bridge(CK_CONCRETE, CK_CARRIER)`) so the typed
+direct-dispatch spec relabels its `Vec__int *` receiver cleanly (no
+`-Wint-conversion`). The now-dead `vec-len-byval` / `vec-eq-loop-byval` twins
+were deleted (plan step 5, Vec only). Suite **1653/0** (77 snapshots
+regenerated), interpreter gate **1209/2** (documented pre-existing), spice json
+**6/6** / ecs **22/30** (8 ecs failures identical on baseline). M3 audit:
+**17 fixtures / 70 crossings** (was 98); the residual is by-design carrier
+boundaries (`:heap` casts, blessed inline-C construction, the typed
+Result/Option-at-dispatch M4 dict-ABI item, MutableMap's still-`:int` producers,
+type-erased SChan) -- the old deref-copy root-2 shape is gone. Full write-up:
+`docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`
+("Update 2026-06-16").
+
 ## 0f. Status snapshot — 2026-06-15 (M5 D.4 COMPLETE -- producer-side bridge count -> 0)
 
 Both `CK_CONCRETE -> CK_CARRIER` producer bridges are now deleted:
