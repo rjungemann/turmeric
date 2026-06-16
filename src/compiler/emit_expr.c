@@ -2672,8 +2672,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * (Result A B))` shape -- the ascription's inner is a TY_APP at
                  * the elab level but a uniform int64_t carrier at C level, so the
                  * old TY_INT-only gate skipped a needed unbox. */
+                /* A genuine pass-by-pointer struct param (`const T*`) is NOT a
+                 * carrier int64_t -- it satisfies the aggregate-carrier branch
+                 * only by over-match.  Excluding it here lets the dedicated pbp
+                 * deref branch below emit the cleaner `(*(t))` instead of the
+                 * redundant `(*(T *)(intptr_t)(t))` cast-round-trip.  The two are
+                 * semantically identical (both deref a real pointer to a by-value
+                 * copy), so this is a codegen-clarity tightening, not a behaviour
+                 * change.  expr_is_pbp_param is side-effect-free (the comment on
+                 * the pbp branch below explains why it is the safe predicate to
+                 * consult here). */
                 if (!needs_fn_cast && matched_spec &&
                     emit_arg &&
+                    !expr_is_pbp_param(ctx, emit_arg) &&
                     type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
@@ -2810,6 +2821,28 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     raw = strdup(_ab.data);
                     buf_free(&_ab);
                     free(_tmp);
+                }
+                /* end-to-end-monomorphization (bucket A): a `:heap` value that
+                 * is emitted as its typed pointer (e.g. a `Vec__int *` from a
+                 * vec-new/-push spec, or a let-bound typed-pointer var) must be
+                 * bridged to the int64 carrier when the callee slot is the
+                 * carrier (the inline-C carrier base, or a generic `A`-element
+                 * sink such as `some`/`ok`/`vec-push!`-base).  Without the cast
+                 * clang warns (`-Wint-conversion`) or errs on the implicit
+                 * pointer->int conversion.  Skip when the matched spec already
+                 * types this slot as the `:heap` pointer (the typed consumer
+                 * takes `Vec__int *` directly -- no bridge). */
+                if (emit_arg &&
+                    type_is_heap_struct(emit_resolve_type(ctx, emit_arg->type)) &&
+                    expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                    !(matched_spec && i < matched_spec->n_args &&
+                      type_is_heap_struct(matched_spec->arg_types[i]))) {
+                    Buf _hb; buf_init(&_hb);
+                    buf_printf(&_hb, "(int64_t)(intptr_t)(%s)", raw);
+                    buf_putc(&_hb, '\0');
+                    free(raw);
+                    raw = strdup(_hb.data);
+                    buf_free(&_hb);
                 }
                 arg_strs[i] = raw;
             }

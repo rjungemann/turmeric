@@ -552,6 +552,21 @@ type-erased boundary." Concretely:
   C for the `Tuple3..8` pbp call sites and so needs a coordinated snapshot
   regen; left for a regen-window change rather than rushed here. Net: the audit
   over-counts by 7 (these are pbp derefs, not carrier crossings).
+  **RESOLVED 2026-06-15 (this session):** landed exactly the suggested gate --
+  `!expr_is_pbp_param(ctx, emit_arg)` added to the carrier-bridge `if` at
+  `emit_expr.c` (the `(... matched_spec ... aggregate-carrier ...)` guard). A
+  genuine pbp param now skips the bridge and falls through to the dedicated pbp
+  `else if`, which emits `(*(t))` instead of the redundant
+  `(*(Tuple3__int__int__int *)(intptr_t)(t))` cast-round-trip. `expr_is_pbp_param`
+  is side-effect-free, so the gate adds no spurious struct-app registration.
+  Net effect: **bucket B is gone** -- `tuplen-struct-param-passing` (6) and
+  `tuple-type-bracket-sugar` (1) drop to 0 crossings; the audit baseline falls
+  from **22 fixtures / 140 crossings to 20 fixtures / 133 crossings**. The
+  emitted C for the `Tuple3..8` matched-spec pbp call sites changed
+  (`(*(T *)(intptr_t)(t))` -> `(*(t))`), but **no `expected.c` snapshot
+  referenced that pattern** (neither changed fixture has a snapshot), so the
+  feared "coordinated snapshot regen" turned out to be zero drift. Full suite
+  **1649 passed, 0 failed**.
 - (b) ~~Land M4 typed dict slots for the bucket-D dispatch-arg spill.~~
   **CORRECTED 2026-06-15 (next-session investigation): bucket D is NOT a
   typed-dict-slot win.** The crossing is `(.serialize p)` where `p :
@@ -644,6 +659,86 @@ baseline is now **21 fixtures / 139 crossings** (buckets A/B/C/E unchanged).
   no regen was needed. No spice uses `Serializable [Pair]` (the only changed
   instance) -- the sibling `spices/{httpd,json}` "serialize" hits are
   spice-local `serialize-response`, not the stdlib instance.
+
+## Update 2026-06-16 (bucket A, Vec producer monomorphization: baseline 133 -> 93)
+
+Executed the producer-side of bucket A for **Vec** (the vec-typed-pointer plan's
+deferred "inline-C-body monomorphization"): the inline-C Vec producers/accessors
+(`vec-new`/`-push!`/`-get`/`-len`/`-set!`/`-pop!`/`-free`) now get **typed
+per-element ABI specs** so their results bind typed-pointer locals
+(`Vec__int * a = vec_new__spec__Vec__int()`) and their `:heap` params take
+`Vec__int *` directly. Downstream typed consumers (the `Eq[Vec]` spec, nested
+`vec-push!`, the `.eq?` dispatch) then receive the typed pointer with **no
+`(Vec__int *)(intptr_t)h` reinterpret cast** -- the bucket-A crossing is gone for
+every producer->typed-consumer chain.
+
+### Mechanism (return/param-specialize the inline-C base; the carrier base is untouched)
+
+- **Spec-mint gate** (`emit_module.c`): an inline-C producer/accessor whose
+  DECLARED signature carries a structural `(Vec _)` slot gets a typed spec at a
+  concrete call (keyed on `fd->param_types[i]` / `fd->return_type`, NOT the
+  resolved arg -- otherwise the generic `some`/`ok` constructors, whose `A`
+  element merely *resolved* to a Vec, were wrongly specialized and lowered
+  Option/Result to a by-value struct passed into the int64 dict slot).
+- **Float/cstr safety** (`emit_module.c`): in a Vec-producer spec, ONLY the
+  `(Vec _)` slots are typed; every element/scalar slot is forced back to the
+  int64 carrier (`TYPE_INT`). The inline-C bodies read carrier values with a
+  *bit reinterpret* (`return (int64_t)vec->data[i];`), which a monomorphized
+  `double`/`const char *` slot would turn into a numeric conversion -- the
+  `0.5 -> 0` and `const char *`-from-`int64` miscompiles the first (un-forced)
+  cut produced on `tce3-map-cstr-val`.
+- **`__TUR_RET__` template** (`emit_core.c`): `vec-new`'s body returns
+  `(__TUR_RET__)(intptr_t)v` -- `int64_t` for the carrier base (byte-identical to
+  the old `(int64_t)` cast, so the base and all snapshots are unchanged), the
+  typed pointer (`Vec__int *`) for the spec. The signature side mirrors it
+  (`emit_fns.c` `typed_heap_spec`: an inline-C `:heap` result under an active
+  spec lowers to the typed pointer; the forward decl already used
+  `type_c_name(spec->result_type)`).
+- **Concrete->carrier bridge** (`emit_expr.c`): where a typed `Vec__int *` value
+  reaches an int64 carrier-base consumer (the carrier base, or a generic
+  `A`-element sink like `some`/`vec-push!`-base, or a forced element slot), the
+  arg is wrapped `(int64_t)(intptr_t)(...)` -- the symmetric counterpart to the
+  carrier->concrete bridge. Without it, the typed pointer hit the int64 param as
+  an implicit `-Wint-conversion` (vec/set) or a hard cc error (Option/Result).
+
+### Scope (Vec only, by design)
+
+The gate is scoped to the `Vec` struct constructor (`type_is_heap_vec`):
+Map/Set/MutableMap/Cons are the plan's later steps and have the additional
+cstr/float-value monomorphization edges that surfaced here, so they stay on the
+carrier base this increment. The carrier base (`vec_hynew`/`vec_hylen`/... with
+int64 signatures) is kept for abstract dispatch, the interpreter (the
+`native_vec_*` overrides still fire -- the bodies stay inline-C), and the
+type-erased boundary.
+
+### What the audit shows now
+
+`TUR_M3_AUDIT=1` per-fixture sweep: **15 fixtures, 93 crossings** (down from
+20 / 133 after the bucket-B fix). The 40 removed crossings are the
+`carrier->concrete` derefs at typed Vec consumers that the producer specs made
+unnecessary. The residual in the typed-Vec-Eq fixtures (`vec-of-tvec-eq` 12,
+`option-of-tvec-eq` 12, ...) is **root 2** -- the uniform-int64 `Eq[Vec]` dict
+slot / synthesized comparator-thunk carrier (M4 dict-ABI), which the producer
+slice does not touch.
+
+### Validation
+
+- Compiled suite **1649 passed, 0 failed**, **zero `expected.c` drift** (the
+  base `vec_hynew` body is byte-identical; the new `*__spec__Vec__*` clones only
+  appear in typed-Eq-on-Vec fixtures that carry no snapshot).
+- Interpreter gate **1206 passed, 2 failed** (the documented pre-existing
+  `eq-carrier-capturing-comparator` / `mutmap-eq`).
+- Spice roundtrip: `../turmeric-spices/spices/{ecs,json}` -- ecs **22/25** (the
+  documented `poly-call-row`/`query-typed`/`sized-dense-rt`), json **5/6** (the
+  documented `Decode bool` gap). No new failures; ecs is the heavy Vec user.
+
+### Remaining for bucket A
+
+- Replicate the producer slice for **Map/Set/MutableMap/Cons** (each needs the
+  cstr/float-value-slot carrier-forcing this Vec slice proved out).
+- **Root 2 (M4 dict-ABI):** typed `Eq[Vec]` dict slots / per-(instance,element)
+  dict monomorphization to retire the carrier-base + comparator-thunk casts that
+  dominate the residual 93.
 
 ## Related
 

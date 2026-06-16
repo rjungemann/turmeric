@@ -61,7 +61,7 @@
   v->data = NULL;
   v->len = 0;
   v->cap = 0;
-  return (int64_t)(intptr_t)v;
+  return (__TUR_RET__)(intptr_t)v;
   ```)
 ;;; vec-len -- return the number of elements in a Vec[A].
 ;;;

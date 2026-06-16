@@ -1354,6 +1354,15 @@ bool inline_c_has_ty_template(const InlineC *ic) {
     for (uint32_t i = 0; i + 9 < len; i++) {
         if (memcmp(code + i, "__TUR_TY_", 9) == 0) return true;
     }
+    /* end-to-end-monomorphization: `__TUR_RET__` (the active spec's concrete
+     * result C name, or int64_t for the carrier base) makes the body ABI-
+     * dependent the same way `__TUR_TY_<NAME>__` does -- a `:heap` producer
+     * uses it for its return cast (`return (__TUR_RET__)(intptr_t)v;`). */
+    if (len >= 11) {
+        for (uint32_t i = 0; i + 11 <= len; i++) {
+            if (memcmp(code + i, "__TUR_RET__", 11) == 0) return true;
+        }
+    }
     return false;
 }
 
@@ -1628,6 +1637,23 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
                     i = j + 2; matched = true;
                 }
             }
+        }
+        /* end-to-end-monomorphization: `__TUR_RET__` expands to the active ABI
+         * spec's concrete result C name (e.g. `Vec__int *` for `vec-new`'s
+         * `(Vec int)` spec), or `int64_t` for the carrier base when no spec is
+         * active.  Lets a `:heap` producer's inline-C body cast its return to
+         * the right type for both ABIs from one body:
+         *   `return (__TUR_RET__)(intptr_t)v;`
+         * -> `return (int64_t)(intptr_t)v;`   (carrier base)
+         * -> `return (Vec__int *)(intptr_t)v;` (typed spec). */
+        if (!matched && i + 11 <= len && memcmp(code + i, "__TUR_RET__", 11) == 0) {
+            const char *resolved = "int64_t";
+            const EmitAbiSpecialization *spec =
+                ctx ? ctx->current_abi_specialization : NULL;
+            if (spec)
+                resolved = type_c_name(spec->result_type);
+            buf_puts(&result, resolved);
+            i += 11; matched = true;
         }
         /* Name-reference splice: __TUR_CNAME_<source-name>__ expands to the
          * mangled C identifier of <source-name>, routed through the same

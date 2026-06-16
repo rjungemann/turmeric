@@ -541,9 +541,19 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * definition agree -- and so an inline-C body returning the bare
              * function pointer type-checks against the declared return.  */
             bool typed_cfnptr = (rft.kind == TY_FN && rft.as.fn.cfnptr);
+            /* end-to-end-monomorphization (bucket A): a `:heap` result on an
+             * inline-C producer (e.g. `vec-new : (Vec A)`) lowers to the typed
+             * pointer (`Vec__int *`) in an active ABI spec, so the spec binds a
+             * typed-pointer local at the call site (no `(Vec__int *)(intptr_t)h`
+             * cast at downstream typed consumers).  The carrier base (no active
+             * spec) keeps int64.  The body returns via `__TUR_RET__`, which
+             * matches: int64_t for the base, the typed pointer for the spec. */
+            bool typed_heap_spec = body_is_inline_c && use_abi_spec &&
+                                   type_is_heap_struct(rft);
             if (fn_ret_td && !body_is_inline_c) {
                 buf_puts(file, fn_ret_td);
-            } else if (!body_is_inline_c || typed_ptr || typed_struct || typed_cfnptr) {
+            } else if (!body_is_inline_c || typed_ptr || typed_struct ||
+                       typed_cfnptr || typed_heap_spec) {
                 buf_puts(file, emit_type_c_name(ctx, rft));
             } else {
                 buf_puts(file, "int64_t");

@@ -1094,6 +1094,22 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
     return true;
 }
 
+/* end-to-end-monomorphization (bucket A): a concrete `:heap` type whose struct
+ * constructor is `Vec` -- the typed-pointer producer slice currently covers Vec
+ * only (Map/Set/MutableMap/Cons are later steps in the vec-typed-pointer plan).
+ * Used to scope inline-C producer/accessor spec-minting to Vec so the broader
+ * `:heap` family is untouched this increment. */
+static bool type_is_heap_vec(Type t) {
+    if (!type_is_heap_struct(t)) return false;
+    StructDef *def = NULL;
+    if (t.kind == TY_STRUCT) def = t.as.struct_.def;
+    else if (t.kind == TY_APP) {
+        Type args[16]; uint8_t n = 0;
+        if (!type_extract_struct_app(&t, &def, args, &n)) return false;
+    }
+    return def && def->name && strcmp(def->name, "Vec") == 0;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -1459,6 +1475,22 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 arg_types[i].kind == TY_STRUCT) {
                 needs_byvalue_spec = true; break;
             }
+            /* end-to-end-monomorphization (bucket A, vec producer slice): an
+             * inline-C producer/accessor whose parameter is a concrete `:heap`
+             * type (e.g. `(Vec int)` -> `Vec__int *`) gets a typed spec so the
+             * call site passes the typed pointer directly instead of the int64
+             * carrier with a `(Vec__int *)(intptr_t)h` reinterpret cast.  The
+             * spec param-type emit (emit_fns.c:685, `use_abi_spec`) already
+             * lowers a `:heap` arg to `Vec__int *`; the inline-C body reads it
+             * as `(void*)(intptr_t)v`, valid for a pointer just as for an int64.
+             * The int64 carrier base is untouched (abstract / interpreter /
+             * type-erased uses keep it).  Concrete-only: an abstract `(Vec A)`
+             * has no layout and stays on the carrier. */
+            if (fd && i < fd->n_params && fd->param_types &&
+                type_is_heap_vec(fd->param_types[i]) &&
+                type_has_concrete_codegen_layout(&arg_types[i])) {
+                needs_byvalue_spec = true; break;
+            }
             /* M5 residual-straddle (docs/upcoming/m5-residual-straddle-
              * retirement.md): a defn carrying `#{ByVal}` opts into
              * by-value spec interning for *any* aggregate arg type that
@@ -1491,11 +1523,66 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             !type_uses_carrier_abi(result_type)) {
             needs_byvalue_spec = true;
         }
+        /* end-to-end-monomorphization (bucket A): a producer returning a
+         * concrete `:heap` type (e.g. `vec-new : (Vec int)` -> `Vec__int *`)
+         * gets a typed spec so its result binds a typed-pointer local, killing
+         * the per-use `(Vec__int *)(intptr_t)h` cast at downstream typed
+         * consumers.  The spec return-type emit (emit_fns.c) lowers the `:heap`
+         * result to `Vec__int *`; the body's return goes through the
+         * `__TUR_RET__` template (int64_t for the carrier base, the typed
+         * pointer for the spec). */
+        if (!needs_byvalue_spec && fd &&
+            type_is_heap_vec(fd->return_type) &&
+            type_has_concrete_codegen_layout(&result_type)) {
+            needs_byvalue_spec = true;
+        }
         if (!needs_byvalue_spec) {
             if (!emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {
                 emit_abi_note_carrier_call(ctx, fn_binding);
             }
             return;
+        }
+    }
+
+    /* end-to-end-monomorphization (bucket A, float/cstr safety): for an
+     * inline-C `:heap` producer/accessor (e.g. vec-new/-push!/-get, map-get),
+     * specialize ONLY the `:heap` slots to their typed pointer; keep every
+     * element / scalar slot on the int64 carrier.  The inline-C bodies read
+     * carrier values with a *bit reinterpret* (`return (int64_t)vec->data[i];`,
+     * `(int64_t)val`), which is correct only when the slot is the int64 carrier.
+     * Monomorphizing an element tyvar (A=float, V=cstr) would retype the slot
+     * to `double` / `const char *` and turn the reinterpret into a NUMERIC
+     * conversion -- the `0.5 -> 0` / `const char *` warnings the broad gate
+     * produced.  Forcing non-heap slots back to TYPE_INT keeps the body's
+     * carrier reads sound and lets the call site reinterpret as today; the
+     * `:heap` slots stay typed pointers (reinterpret-safe). */
+    {
+        /* A Vec producer/accessor is identified by its DECLARED signature
+         * carrying a structural `(Vec _)` slot -- not by a bare tyvar that
+         * merely resolved to a Vec at this call (that would wrongly catch the
+         * generic `some`/`ok` constructors whose `A` element happens to be a
+         * Vec).  Keep those declared-Vec slots typed; force everything else to
+         * the int64 carrier the inline-C body reads. */
+        bool ret_is_vec = fd && type_is_heap_vec(fd->return_type);
+        bool any_heap_slot = ret_is_vec;
+        for (uint8_t i = 0; i < n_spec_args && !any_heap_slot; i++)
+            if (fd && i < fd->n_params && fd->param_types &&
+                type_is_heap_vec(fd->param_types[i])) any_heap_slot = true;
+        bool heap_inline_c_producer = fd && fd->body &&
+            fd->body->kind == EX_INLINE_C && any_heap_slot;
+        if (heap_inline_c_producer) {
+            /* The inline-C body reads every non-Vec slot as the int64 carrier;
+             * force all of them to TYPE_INT so the spec signature, forward
+             * decl, clone name, and body agree (int->int is a no-op;
+             * float/cstr/struct -> int64 is the carrier the body expects).  A
+             * nil result keeps `void`. */
+            for (uint8_t i = 0; i < n_spec_args; i++) {
+                bool slot_is_vec = fd && i < fd->n_params && fd->param_types &&
+                    type_is_heap_vec(fd->param_types[i]);
+                if (!slot_is_vec) arg_types[i] = TYPE_INT;
+            }
+            if (!ret_is_vec && result_type.kind != TY_NIL)
+                result_type = TYPE_INT;
         }
     }
 
