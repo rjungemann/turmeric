@@ -5363,7 +5363,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "-Xdata-literals")     == 0) g_data_literals_enabled = true;
         else if (strcmp(tok, "-Xjson-reader")       == 0) g_json_reader_enabled = true;
         else if (strcmp(tok, "-Xschema-reader")     == 0) { g_schema_reader_enabled = true; g_json_reader_enabled = true; }
-        else if (strcmp(tok, "-Xsized-types")       == 0) { g_sized_types_enabled = true; g_gadt_enabled = true; }
+        else if (strcmp(tok, "-Xsized-types")       == 0) { /* sized-types-default-on: deprecated no-op (sized types are enabled by default) */ }
         else if (strcmp(tok, "-Xlinear")            == 0) g_linear_enabled           = true;
         else if (strcmp(tok, "-Xunique-types")      == 0) g_unique_enabled           = true;
         else if (strcmp(tok, "-Xsubstructural")     == 0) { g_substructural_enabled = true; g_linear_enabled = true; }
@@ -10821,8 +10821,8 @@ static int usage(void) {
         "  --no-contracts                   strip contract checks; predicates not evaluated (Phase C2)\n"
         "  -Xeffect-types                   enable full effect typing: TY_HANDLER, ET4 checks (ET4)\n"
         "  -Xgadt                           DEPRECATED no-op; defgadt syntax and GADT type checking are enabled by default (G1-G4)\n"
-        "  -Xsized-types                    enable sized types: type-level size indices (SZ4+; implies -Xgadt)\n"
-        "  --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8; needs -Xsized-types)\n"
+        "  -Xsized-types                    DEPRECATED no-op; sized types are enabled by default (SZ4+)\n"
+        "  --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8)\n"
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
         "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
         "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
@@ -11632,9 +11632,9 @@ int main(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "-Xsized-types") == 0) {
-            /* Phase SZ4: enable sized types (implies -Xgadt) */
-            g_sized_types_enabled = true;
-            g_gadt_enabled = true;
+            /* sized-types-default-on: deprecated no-op (sized types are
+             * enabled by default). Strip the flag so it doesn't reach later
+             * argument-position logic, mirroring -Xgadt. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

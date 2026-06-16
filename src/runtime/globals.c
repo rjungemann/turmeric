@@ -92,8 +92,11 @@ bool g_json_reader_enabled = false;
 /* RD: -Xschema-reader — enable #json-str<T>(...) typed-decode reader macros. */
 bool g_schema_reader_enabled = false;
 
-/* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
-bool g_sized_types_enabled = false;
+/* Phase SZ4: -Xsized-types — was opt-in; now ON by default. Sized types are
+ * mature: stdlib uses (Static n) (stdlib/sized*.tur), the tur-ecs spice
+ * depends on sized storages, and the in-tree fixture coverage is broad. The
+ * `-Xsized-types` CLI flag is now a deprecated no-op, mirroring -Xgadt. */
+bool g_sized_types_enabled = true;
 
 /* Phase SZ8: --dump-sizes flag */
 bool g_dump_sizes = false;
