@@ -405,7 +405,7 @@ static bool type_extract_adt_app(const Type *t, AdtDef **out_def,
     return true;
 }
 
-static bool type_has_concrete_codegen_layout(const Type *t) {
+bool type_has_concrete_codegen_layout(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
         case TY_NIL:

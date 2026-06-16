@@ -1437,6 +1437,10 @@ bool         type_struct_pass_by_ptr(Type t);
 /* end-to-end-monomorphization: true when t is a (possibly applied) :heap struct
  * -- its monomorphic ABI is a typed pointer `T__A *`. */
 bool         type_is_heap_struct(Type t);
+/* True when t is a fully concrete (tyvar-free) type with a monomorphizable C
+ * codegen layout -- e.g. `(Vec int)` but not `(Vec A)`.  Gates spec-minting on
+ * concrete-only call sites. */
+bool         type_has_concrete_codegen_layout(const Type *t);
 /* end-to-end-monomorphization: the by-value struct C name (`Vec__int`) for a
  * struct/struct-app, WITHOUT the trailing " *" the heap pointer lowering adds. */
 const char  *type_struct_value_c_name(Type t);

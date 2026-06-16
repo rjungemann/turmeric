@@ -2815,6 +2815,28 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_free(&_ab);
                     free(_tmp);
                 }
+                /* end-to-end-monomorphization (bucket A): a `:heap` value that
+                 * is emitted as its typed pointer (e.g. a `Vec__int *` from a
+                 * vec-new/-push spec, or a let-bound typed-pointer var) must be
+                 * bridged to the int64 carrier when the callee slot is the
+                 * carrier (the inline-C carrier base, or a generic `A`-element
+                 * sink such as `some`/`ok`/`vec-push!`-base).  Without the cast
+                 * clang warns (`-Wint-conversion`) or errs on the implicit
+                 * pointer->int conversion.  Skip when the matched spec already
+                 * types this slot as the `:heap` pointer (the typed consumer
+                 * takes `Vec__int *` directly -- no bridge). */
+                if (emit_arg &&
+                    type_is_heap_struct(emit_resolve_type(ctx, emit_arg->type)) &&
+                    expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                    !(matched_spec && i < matched_spec->n_args &&
+                      type_is_heap_struct(matched_spec->arg_types[i]))) {
+                    Buf _hb; buf_init(&_hb);
+                    buf_printf(&_hb, "(int64_t)(intptr_t)(%s)", raw);
+                    buf_putc(&_hb, '\0');
+                    free(raw);
+                    raw = strdup(_hb.data);
+                    buf_free(&_hb);
+                }
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
