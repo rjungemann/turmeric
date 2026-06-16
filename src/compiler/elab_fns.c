@@ -3374,6 +3374,28 @@ Expr *elab_fn(Elab *e, const Form *call) {
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
         b->is_param = true;
+        /* Bidirectional inference (constrained-generic-as-value-bakes-
+         * representative.md): when this lambda is elaborated against an expected
+         * function type (pushed by the call site for a fn-typed parameter), type
+         * an UN-annotated param from the expected arg type instead of defaulting
+         * to the int carrier.  This lets `(fn [b] (count-it b))` passed where
+         * `(fn [Box] int)` is expected see `b : Box`, so the inner direct
+         * typeclass-method dispatch pins its real instance rather than baking the
+         * carrier representative.  Gated to NON-primitive expected types
+         * (struct/adt/app): for primitives the int carrier is already correct, so
+         * leaving them untouched avoids churning existing codegen. */
+        if (e->expected_type && e->expected_type->kind == TY_FN &&
+            n_params < e->expected_type->as.fn.arity &&
+            e->expected_type->as.fn.arg_full_types) {
+            Type *exp_full = e->expected_type->as.fn.arg_full_types[n_params];
+            if (exp_full && (exp_full->kind == TY_STRUCT ||
+                             exp_full->kind == TY_ADT ||
+                             exp_full->kind == TY_APP)) {
+                param_kinds[n_params] = exp_full->kind;
+                b->type = *exp_full;
+                param_full_types[n_params] = exp_full;
+            }
+        }
         if (g_linear_enabled && next_param_linear) {
             b->is_linear = true;
             next_param_linear = false;

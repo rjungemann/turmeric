@@ -5,7 +5,7 @@ Prereq 3a of docs/upcoming/v1/turi-open-reports-prereqs.md.  Companion to
 check_turi_parity.py: where that script ratchets the *expression-kind* parity
 (every EX_* the compiler emits has a case arm in eval.c), this one ratchets the
 *module preload* parity that drives the allowlist->denylist harness flip
-(docs/reported/turi-harness-flip-reconciliation.md).
+(docs/archive/history/turi-harness-flip-reconciliation.md).
 
 The compiled path auto-loads a fixed set of stdlib modules so every compiled
 program sees the typed-collection / typeclass / macro definitions for free

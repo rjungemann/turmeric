@@ -369,7 +369,7 @@ failures (including four fixtures the TI0 audit "verified" via
 verified directly with `tur --interpret`, not through the harness.
 
 Full write-up, repro, and the recommended (cascading) fix:
-[docs/reported/turi-harness-compiles-instead-of-interpreting.md](../../reported/turi-harness-compiles-instead-of-interpreting.md).
+[docs/archive/history/turi-harness-compiles-instead-of-interpreting.md](../../archive/history/turi-harness-compiles-instead-of-interpreting.md).
 The wiring flip belongs with the TI8 triage (it turns CI red until the
 ~31 fixtures are fixed or carved out) and is intentionally **not**
 bundled into TI1.
@@ -667,7 +667,7 @@ unhandled-kind default. Implementing it for real means adding a native
 channel layer (opaque `TURI_CHANNEL` + `chan-new`/`send`/`recv` natives +
 a fiber-parking `turi_select`), plus native (non-inline-C) channel fixtures
 to test against. Full write-up:
-[docs/reported/turi-select-needs-channel-primitives.md](../../reported/turi-select-needs-channel-primitives.md).
+[docs/archive/history/turi-select-needs-channel-primitives.md](../../archive/history/turi-select-needs-channel-primitives.md).
 
 ---
 
@@ -711,10 +711,10 @@ The foundational correctness fix and the CI ratchet shipped:
   0 gaps.**
 - **`tests/run-turi.sh` now runs `tur --interpret`**, not `tur run`. This
   resolves the blocker
-  ([turi-harness-compiles-instead-of-interpreting.md](../../reported/turi-harness-compiles-instead-of-interpreting.md)):
+  ([turi-harness-compiles-instead-of-interpreting.md](../../archive/history/turi-harness-compiles-instead-of-interpreting.md)):
   the allowlist finally exercises `src/turi/eval.c`. Reconciling to true
   interpretation removed **31 false-green entries** (catalogued in
-  [turi-harness-flip-reconciliation.md](../../reported/turi-harness-flip-reconciliation.md));
+  [turi-harness-flip-reconciliation.md](../../archive/history/turi-harness-flip-reconciliation.md));
   the harness is green at **122 passed, 0 failed**. The `requires.tur-only`
   marker (from TI1) is honored as the symmetric skip to `requires.compiled`.
 
