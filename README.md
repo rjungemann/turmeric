@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.20.0` -- variadic HKT rows, associated type members on typeclasses, application image dumps via serializable continuations, sized types for GADTs, and turi interpreter parity across generators, delimited control, and STM.
+**Latest release:** `v0.21.0` -- Vec migrates to the `:heap` typed-pointer ABI, `-Xsized-types` flips ON by default, M5 by-value twin redirect lands for carrier stdlib accessors, and parametric `:linear` opaques now enforce single-use.
 
 ## What
 

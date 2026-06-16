@@ -4,6 +4,30 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.21.0] -- 2026-06-15
+
+### Added
+
+- **Sized types ON by default (#392).** `-Xsized-types` flips on, with
+  SZ8 recovering size indices from variables and struct projections
+  (#367).
+- **`EX_CONS_LIST` interpreter support** plus an autolink-duplicate
+  fix.
+
+### Changed
+
+- **Vec migrated to the `:heap` typed-pointer ABI (#377).** Carrier-based
+  Eq[Vec] retired (audit 98 -> 70, #393) and Vec inline-C producers
+  monomorphized to typed pointers (Bucket A, #391).
+- **M5 Option C: by-value twin redirect for carrier stdlib accessors
+  (#369).** Carrier->concrete return deref for by-value instance
+  methods; the EX_ASCRIBE CK_CONCRETE->CK_CARRIER bridge is gone
+  (#368).
+- **Pure-Turmeric fat-closure dispatch finishes de-inline-C.** Ascribing
+  `:int` / `:ptr<void>` carrier to a fn type marks it boxed.
+- **cfnptr `:usize` / `:isize` lower to `size_t` / `ptrdiff_t`**, and
+  `ptr<const-T>` lowers to `const T*`.
+
 ### Fixed
 
 - **Parametric `:linear` opaques now enforce single-use.** A
@@ -17,6 +41,23 @@ All notable changes to Turmeric are documented here.
   `tests/fixtures/errors/parametric-linear-double-use/`. Unblocked the
   ECS `WriteCap<T>` capability surface (Phase I of the ECS prereq
   plan).
+- **Generic-dict dispatch re-resolution under `--interpret` (#386)**,
+  carrier-fallback instance method dispatch under `--interpret` (#381),
+  and return-dispatch on constrained type variables (with deserialize
+  support).
+- **Carrier-source Result/Option bridge for sub-word payload types.**
+- **Generic-of-generic carrier callees emit via a carrier-relay
+  closure.**
+- **`make-struct` cstr->int64 carrier field bridge cast (#374)** and
+  phantom-typeparam lowering for mixed phantom/by-value structs.
+- **c-fn-ptr typedefs emitted to the module header before use (#375).**
+- **Workstealing-balance deque race (#372).**
+- **`Serializable[int].deserialize` avoids signed left-shift UB.**
+
+### Removed
+
+- **EX_ASCRIBE CK_CONCRETE->CK_CARRIER bridge (#368).**
+- **Dead carrier-int `vec-eq-loop`** following Eq[Vec] retirement.
 
 ## [0.20.0] -- 2026-06-11
 
