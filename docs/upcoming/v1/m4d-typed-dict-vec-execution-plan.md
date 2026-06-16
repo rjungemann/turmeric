@@ -124,6 +124,61 @@ Phase 1 is the **safe, high-value increment** and removes the dead crossings for
 *every* non-HKT instance, not just Eq[Vec]. It does not need typed dict slots at
 all -- it just stops emitting provably-dead carrier dispatch.
 
+### Phase 1 attempt 2026-06-16 -- 84 -> 8, then reverted; the consumption model is subtler than "dict singleton scan"
+
+A full Phase 1 was implemented (dict-consumed scan + dict-emit gate +
+`emit_abi_fn_skip_generic` extension to drop the carrier-base method) and got the
+**audit from 93 -> 57 crossings** (every dead non-HKT carrier base gone;
+`defn-basic`'s snapshot dropped **600 lines** of unused Eq/Clone/Hash/Ord/Show
+instance bodies). But the full suite went to **84 failed**, then **8 failed**
+after the consumption signal was refined to the recorded specialized-call set
+(`ctx->specialized_call_exprs`, exact call-expr match, checked AFTER
+`emit_abi_register_call`). The change was **reverted** -- the residual 8 expose
+that an instance carrier-base method is reached by MORE paths than the dict
+singleton, and crucially by paths that do not exist at consumption-scan time:
+
+1. **Primitive direct dispatch.** `Eq[cstr]` / `Hash[bool]` concrete dispatch is
+   NOT monomorphized to a `__spec` (only struct/app receivers are, M4c Path A);
+   it calls `__inst_Eq_eq_qu_cstr` **directly**. So the method is live even
+   though its dict singleton is dead. (`cgi-constrained-generic-dispatch`.)
+2. **Specialized-generic instance resolution at EMIT time.** A constrained
+   generic `(defn geq [^Eq K] (eq? a b))` specialized to `K=cstr` resolves the
+   inner `(eq? a b)` to `__inst_Eq_eq_qu_cstr` **during spec-body emission** --
+   *after* the abi-scan that does the consumption marking has run. The
+   pre-emit scan sees only the generic body's abstract `EX_DICT`, never the
+   per-K resolved call, so it cannot mark the cstr/bool/Map method live.
+   (`serial-return-dispatch-tyvar`, the `Map` cases.)
+3. **Constrained-generic dict passing.** `(f m)` with `[(Eq A)]`, `A=Map`, passes
+   `&dict_Eq_Map_singleton`; the bare-dict mark should catch it but the dispatch
+   structure (dict as the call's dict_arg vs a value arg) made the scan miss it.
+   (`gde-generic-dict-eq-map`, `gde4-generic-size-map`.)
+
+**Conclusion: the dict-emit gate (dict struct + singleton) IS safe to skip on a
+pure bare-dict/witness scan, but skipping the carrier-base METHOD body is not,
+because method liveness is only fully known after emit** (specialized generics
+resolve `__inst_X` symbols during spec emission). And the dict-only skip does
+NOT reduce the audit -- the crossings live in the method body, which must stay.
+
+So the **robust Phase 1 is a two-pass emit / emitted-symbol-reference sweep**:
+emit the program once, collect the set of `__inst_*` and `dict_*_singleton`
+symbols actually *referenced* (excluding their own definitions), then re-emit
+(or post-process) dropping unreferenced static definitions. That is a
+dead-static-definition DCE over the emitted C -- definitively correct (it
+matches exactly what clang would DCE at -O2) and immune to all three paths
+above, because it observes the *final* references rather than predicting them.
+It is a larger change than the single-pass scan this plan first sketched;
+estimate it as its own increment. The single-pass receiver-concreteness /
+specialized-call heuristics are a dead end (they cannot see emit-time
+specialized-generic resolution).
+
+Alternative narrower scope if the two-pass emit is too invasive: restrict the
+method skip to instances whose type arg is a **parametric struct/app that has a
+minted per-instantiation `__spec`** (proving concrete dispatch bypasses the
+carrier base) AND whose dict is bare-dict/witness-dead AND that no constrained
+generic specializes over (path 2). The `Map`-via-generic-dict case shows even
+struct/app instances can be live, so this still needs path-2 coverage -- i.e.
+it does not avoid the core difficulty. The two-pass emit is the clean answer.
+
 ## Phase 2 -- typed element-comparator thunks (the ~50 live crossings)
 
 The recursive `Vec[Vec[int]]` eq synthesizes an element comparator
