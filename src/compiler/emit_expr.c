@@ -1200,6 +1200,31 @@ static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr) {
     return false;
 }
 
+/* end-to-end-monomorphization: resolve the concrete monomorphized type of an
+ * EX_VAR that is a parameter of the active ABI spec.  `emit_resolve_type` does
+ * not substitute the spec's element bindings into a parametric param type
+ * (e.g. an instance-method receiver `x : (Vec A)` stays `(Vec A)` even though
+ * the spec is `(Vec int)`), so consult `current_abi_specialization->arg_types[]`
+ * by matching the binding against `fn->params[]` -- the same pattern Path A
+ * uses for `.field` access (emit_expr.c §4249).  Returns true and writes the
+ * concrete arg type into *out when the var is such a spec param; false
+ * otherwise (caller falls back to emit_resolve_type). */
+static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
+                                   Type *out) {
+    if (!ctx || !var_expr || var_expr->kind != EX_VAR) return false;
+    Binding *b = var_expr->as.var.binding;
+    const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+    if (!b || !aspec || !aspec->fn) return false;
+    FnDef *fd = aspec->fn;
+    for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
+        if (fd->params[pi] == b) {
+            *out = aspec->arg_types[pi];
+            return true;
+        }
+    }
+    return false;
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
@@ -2497,6 +2522,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     type_uses_carrier_abi(arg_expr->as.ascribe_.inner->type) &&
                     expr_emits_byvalue_carrier_abi(ctx, arg_expr->as.ascribe_.inner)) {
                     preserve_ascribe_for_bridge = true;
+                }
+                /* end-to-end-monomorphization (root 2 retirement): a `(:: x :int)`
+                 * whose inner resolves to a CONCRETE `:heap` type (`Vec__int *`)
+                 * must keep the ascribe so the EX_ASCRIBE emit performs the
+                 * pointer->int64 carrier relabel; stripping it here would pass
+                 * the raw typed pointer into a carrier int64 param
+                 * (-Wint-conversion).  The carrier base (abstract `(Vec A)` ->
+                 * int64) does not match this gate. */
+                if (!preserve_ascribe_for_bridge && arg_expr &&
+                    arg_expr->kind == EX_ASCRIBE &&
+                    arg_expr->type.kind == TY_INT &&
+                    arg_expr->as.ascribe_.inner) {
+                    const Expr *asc_inner = arg_expr->as.ascribe_.inner;
+                    Type inner_r;
+                    if (!emit_var_spec_arg_type(ctx, asc_inner, &inner_r))
+                        inner_r = emit_resolve_type(ctx, asc_inner->type);
+                    if (type_is_heap_struct(inner_r) &&
+                        type_has_concrete_codegen_layout(&inner_r)) {
+                        preserve_ascribe_for_bridge = true;
+                    }
                 }
                 if (!preserve_ascribe_for_bridge) {
                     while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
@@ -4579,6 +4624,29 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * by-value struct ascribed to `:int` now falls through to the
              * carrier-relabel return below (a no-op for an already-carrier
              * value). */
+            /* end-to-end-monomorphization (root 2 retirement): a `:heap` typed
+             * pointer (`Vec__int *`, `Cons__int *`, ...) ascribed back to the
+             * int64 carrier (`(:: x :int)`) needs an explicit pointer->int
+             * relabel.  Inside a by-value/typed spec the inner value IS the
+             * concrete typed pointer, so returning it raw passes a pointer into
+             * an int64 carrier param (-Wint-conversion / hard cc error).  Gate
+             * on a CONCRETE heap layout so the carrier base -- where the inner
+             * resolves to abstract `(Vec A)` and is already emitted as int64 --
+             * is untouched (no snapshot drift, no redundant cast).  This is the
+             * symmetric counterpart to C-3's carrier->concrete heap cast. */
+            if (e->type.kind == TY_INT) {
+                Type inner_resolved;
+                if (!emit_var_spec_arg_type(ctx, e->as.ascribe_.inner,
+                                            &inner_resolved))
+                    inner_resolved =
+                        emit_resolve_type(ctx, e->as.ascribe_.inner->type);
+                if (type_is_heap_struct(inner_resolved) &&
+                    type_has_concrete_codegen_layout(&inner_resolved)) {
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CONCRETE, CK_CARRIER,
+                                               inner_resolved);
+                }
+            }
             return inner_val;
         }
         /* Phase HRT2 / EX1e / EXG1: existential pack.

@@ -740,6 +740,99 @@ slice does not touch.
   dict monomorphization to retire the carrier-base + comparator-thunk casts that
   dominate the residual 93.
 
+## Update 2026-06-16 (root 2: `Eq [Vec]` retired to the carrier-based shape; 98 -> 70)
+
+Re-ran the full per-fixture sweep on the current branch head (suite **1653
+passed, 0 failed**). Baseline was **17 fixtures / 98 crossings**; after this
+change it is **17 fixtures / 70 crossings**, and the dominant `Vec int`
+`carrier->concrete` *deref* crossings (root 2 -- the `Eq [Vec]` carrier base
+bridging to the `*-byval` typed specs) are gone, replaced by the clean
+carrier-based delegation plus a handful of cheap `concrete->carrier` heap
+*casts*.
+
+### What changed and why it is now possible
+
+`Eq [Vec]` was the last **by-value-direction** collection instance: its body
+called `vec-len-byval` / `vec-eq-loop-byval` over `(:: x (Vec A))`, so a
+concrete dispatch minted a `Vec__int *`-param spec whose carrier base
+(`bool __inst_Eq_eq_qu_Vec(int64_t, int64_t)`, referenced by the dict
+singleton) had to bridge `(Vec__int *)(intptr_t)(x)` back to the byval specs --
+4-6 `carrier->concrete` crossings emitted into *every* program that links
+stdlib.
+
+The "Update 2026-06-15 (post-#369 ...)" entry above found the carrier-based
+rewrite "breaks the build" -- but that predated #377, when `(Vec A)` was a
+**by-value `Vec__int`** and `(:: x :int)` was a struct *widening* (the
+`CK_CONCRETE -> CK_CARRIER` EX_ASCRIBE bridge M5 D.4 deleted). Post-#377 `Vec`
+is `:heap`, so `(Vec A)` is a typed pointer `Vec__A *` and `(:: x :int)` is a
+pure pointer->int *cast*. That is exactly why `Eq [Cons]` (#369) works
+carrier-based, and the same is now true for Vec. Rewrote `Eq [Vec]`
+(`stdlib/vec.tur`) to mirror `Eq [Cons]`:
+
+```turmeric
+(definstance Eq [Vec]
+  [(Eq A)]
+  (eq? [x y]
+    (vec-eq? (:: x :int) (:: y :int)
+             (fn [a b] (eq? (:: a A) (:: b A))))))
+```
+
+The carrier base now delegates to the carrier-based `vec-eq?` with an
+element-comparison closure -- byte-for-byte the `Eq [Cons]` shape -- and mints
+no by-value spec carrier base to bridge.
+
+### Enabling compiler support (`src/compiler/emit_expr.c`)
+
+The carrier-based body still mints a typed `__inst_Eq_eq_qu_Vec__spec__(Vec__int
+*, ...)` for concrete direct dispatch (M4c Path A), whose body calls the int64
+`vec-eq?` via `(:: x :int)`. That ascription needs an explicit pointer->int64
+relabel; without it the typed pointer reached the carrier int64 param as a
+`-Wint-conversion`. Two additions, both gated to a CONCRETE `:heap` layout so
+the carrier base (abstract `(Vec A)` = int64) is untouched (no snapshot drift,
+no redundant cast):
+
+- `emit_var_spec_arg_type` helper -- resolves a spec-param var's concrete
+  monomorphized type from `current_abi_specialization->arg_types[]` (the
+  Path A `.field`-access pattern), because `emit_resolve_type` leaves a
+  parametric receiver `(Vec A)` abstract.
+- EX_ASCRIBE `(:: x :int)` emit + the call-arg `preserve_ascribe_for_bridge`
+  gate now route a concrete-heap-pointer-to-`:int` ascription through
+  `emit_carrier_bridge(CK_CONCRETE, CK_CARRIER)` (which already emits the clean
+  `(int64_t)(intptr_t)(...)` heap cast).
+
+### Cleanup (plan step 5, now unblocked for Vec)
+
+`vec-len-byval` and `vec-eq-loop-byval` became unreachable (only self-
+referential) and were deleted from `stdlib/vec.tur`. `vec-get-byval` /
+`vec-data-get__` stay -- they are the shared Option C redirect mechanism still
+used by Map/Set-bound fixtures.
+
+### Validation
+
+- Compiled suite **1653 passed, 0 failed**; 77 `expected.c` snapshots
+  regenerated in the same change (the `Eq [Vec]` carrier base is emitted into
+  every program -- the diff is uniformly "byval-spec calls -> `vec_hyeq_qu` +
+  comparator closure," identical in shape to the existing `Eq [Cons]` base).
+- Interpreter gate **1209 passed, 2 failed** (the documented pre-existing
+  `eq-carrier-capturing-comparator` / `mutmap-eq`).
+- Spice roundtrip: json **6/6**; ecs **22/30** -- the 8 ecs failures
+  (`poly-call-row`, `query-typed`, `sized-{dense,sparse,tag,world}-rt`,
+  `sized-world-spawn`, `sized-zip-cross-shape`) are confirmed **identical on
+  the pre-change baseline** (HKT-row gaps + the in-progress `(Static N)`
+  sized-world type form); the heavy-Vec users (spawn1k, sparse-rt,
+  sparse-stress, for-each-*) all pass.
+
+### Residual 70, by category (unchanged from prior analysis)
+
+The remaining crossings are no longer dominated by root 2; they split into the
+by-design carrier boundaries the plan keeps: cheap `:heap` casts
+(`concrete->carrier` Vec, the symmetric of bucket A), the blessed inline-C
+`tur_ok`/`tur_some` construction (`inline-c-typed-result-option`), the typed
+`Result`/`Option`-at-dispatch boundary (genuine M4 dict-ABI), the 4
+`MutableMap int int` producer crossings (its producers are still `:int`-typed
+-- the No-Lazy-`:int` retype is the prerequisite to its producer slice), and
+the type-erased `SChan` path. None is the old deref-copy root-2 shape.
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
