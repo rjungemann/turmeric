@@ -179,6 +179,59 @@ generic specializes over (path 2). The `Map`-via-generic-dict case shows even
 struct/app instances can be live, so this still needs path-2 coverage -- i.e.
 it does not avoid the core difficulty. The two-pass emit is the clean answer.
 
+### Phase 1 attempt #2 2026-06-16 -- pre-emit spec-constraint liveness ALSO insufficient; two-pass emit confirmed as the only robust route
+
+A second pre-emit attempt added a **spec-constraint liveness** check on top of
+the bare-dict/witness + specialized-dispatch marking: keep an instance when some
+interned ABI spec is a constrained generic (`(defn f [^Class K] ...)`) whose fn
+constrains the instance's class AND some resolved type in the spec matches the
+instance's head. This was meant to cover path 2 (the emit-time specialized-
+generic resolution) by reading it off the interned spec table rather than
+predicting it.
+
+It got **further** -- `cgi-constrained-generic-dispatch` and
+`serial-return-dispatch-tyvar` passed (the `geq [^Eq K]`->cstr / `ghash`->bool
+cases ARE visible as specs binding cstr/bool under an Eq/Hash constraint). But it
+**still failed** on `gde-generic-dict-eq-map` (`__inst_Eq_eq_qu_Map`),
+`gde4-generic-size-map`, `cloneable-drop-rc` (`__inst_Clone_clone_int`),
+`union-types-typeclass-dispatch`. Root cause, confirmed by probe: `eq2 [^Eq A]`
+called on a `(Map cstr int)` specializes to a **carrier spec** -- `A` binds to
+the int64 carrier, NOT to a concrete `Map` head -- because `Map` is a `:heap`/
+carrier type. So the spec's resolved types do NOT contain a `Map`-headed type the
+liveness check can match, yet the spec body still emits `__inst_Eq_eq_qu_Map`
+during emission. The instance is resolved at emit time with no concrete trace in
+the spec table.
+
+**Definitive conclusion (after two pre-emit attempts): no pre-emit scan can be
+both safe and useful here.** Any constrained generic specialized to a carrier
+spec resolves the instance method at emit time with no concrete binding visible
+before emission. Over-approximating to cover it (keep every instance whose class
+is constrained by ANY carrier spec) collapses to "keep almost everything" and
+loses the reduction. The **two-pass / post-emit emitted-symbol-reference DCE is
+the only robust route** and should be implemented as follows:
+
+1. Route each instance-method carrier-base **definition + forward decl** and each
+   `dict_X` **struct + singleton** into a side buffer keyed by the symbol name
+   (instead of straight into the file buffer). Everything else (main, ordinary
+   fns, ALL spec bodies, the dict-consuming code) emits to the file buffer as
+   today.
+2. After all emission, compute the live set by a fixpoint reference scan:
+   - seed: every `__inst_*` / `dict_*_singleton` token that appears in the file
+     buffer (the non-instance/non-dict output) -> live;
+   - propagate: a live `dict_X_singleton`'s initializer references its methods ->
+     those `__inst_*` become live; a live instance-method body may reference
+     other instances -> live; iterate to fixpoint.
+3. Append only the live side-buffer definitions (decl + def) to the file, in the
+   original order, dropping the dead ones.
+
+This observes the FINAL references, so it is immune to all of path 1/2/3 and to
+the carrier-spec case above -- it matches exactly what clang DCEs at -O2, but at
+the source level so the emit-c audit and compile time benefit too. The plumbing
+(intercepting instance-method + dict emission into keyed side buffers, then the
+fixpoint splice) is the real work; budget it as a focused increment. Both
+single-pass attempts are reverted; the tree is at the green Vec-producer-slice
+baseline.
+
 ## Phase 2 -- typed element-comparator thunks (the ~50 live crossings)
 
 The recursive `Vec[Vec[int]]` eq synthesizes an element comparator
