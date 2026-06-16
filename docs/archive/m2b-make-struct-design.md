@@ -2,7 +2,20 @@
 title: M2b -- make-struct / default-of body form for #{Construct}
 category: Planning -- ABI / Codegen rework
 description: Design for M2b of the end-to-end monomorphization plan -- replace the implicit shape-inference path that M2a uses with explicit (make-struct ...) / (default-of T) body forms. Lets #{Construct} cover constructors that the M2a inference can't reach (Option's some/none with one payload slot; Cons / Pair where the constructor name doesn't match the discriminator's word root; vec-of which isn't a tagged-union constructor at all).
+status: shipped (verified 2026-06-15)
 ---
+
+## Resolution (2026-06-15)
+
+`make-struct` and `default-of` are live across the targeted stdlib types:
+
+- `stdlib/result.tur:39-65` -- both `ok` and `err` use `(make-struct Result ... :err-val (default-of B))` etc.
+- `stdlib/option.tur:30, 46-48` -- `some` / `none` use `(make-struct Option ... :value (default-of A))`.
+- `stdlib/pair.tur:28` -- `pair` is `(make-struct Pair :fst a :snd b)`.
+- `stdlib/list.tur:55` -- `tcons-of` is `(make-struct Cons :head h :tail t)`.
+
+`vec-of` is intentionally out of scope (see `stdlib/vec.tur:32` note). The
+plan's stated goals -- covering `Option`, `Cons`, `Pair` -- are met.
 
 # M2b -- make-struct / default-of body form for `#{Construct}`
 

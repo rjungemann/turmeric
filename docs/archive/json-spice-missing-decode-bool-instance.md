@@ -2,7 +2,25 @@
 title: json spice -- missing `Decode bool` instance breaks `derive-json` on any struct with a `bool` field
 category: Reported -- spice (json) / typeclass instance gap
 severity: ergonomics gap (compile-time error, no miscompile, no silent breakage)
+status: resolved 2026-06-15 (verified)
 ---
+
+## Resolution (2026-06-15)
+
+`Decode [bool]` ships at `../turmeric-spices/spices/json/src/json/encode.tur:278`
+(landed via turmeric-spices#3). The instance uses the pure-inline-C
+literal-`true`/`false` probe sketched in this report's "Proposed fix"
+section. Sub-word `bool` payloads through ascribed `(Result bool cstr)`
+required a concurrent turmeric-side bridge fix (PR #387; root cause writeup
+at `docs/archive/decode-bool-carrier-instance-ascription.md`) -- without it
+the `Decode [bool]` instance compiled but read padding bytes from the
+carrier box.
+
+**Verified 2026-06-15:**
+- `tur run spices/json/tests/derive-encode-struct.tur` prints
+  `{"id":7,"name":"alice","active":true}`.
+- `tur run spices/json/tests/decode-bool.tur` prints `1`, `0`, `err`, `err`
+  (the four-case truth table).
 
 # json spice -- missing `Decode bool` instance
 
