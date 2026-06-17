@@ -19,6 +19,36 @@ The audit is keyed by code location with the columns the plan asked for:
 
 Updated as later phases land.
 
+## 0h. Status snapshot — 2026-06-17 (post-#400 floor: 34 crossings; collection-Eq cascade down-scope COMPLETE)
+
+After #400 (the pure-Turmeric TCO'd `Eq [Vec]` rewrite -- the by-value
+`vec-eq-loop` self-tail-call lowered to a goto loop inside the `Vec__int *`
+spec) the `TUR_M3_AUDIT=1` per-fixture sweep is **34 crossings / 10 fixtures**
+(was 60 after #399), with **zero monomorphic deref-copy crossings**. All 34 are
+permanent by-design boundaries:
+
+- **22 `Vec int`** -- live element-comparator thunks `__fn_N(int64_t, int64_t)`
+  for nested `Vec[Vec[...]]` eq. The comparator gets its args from `vec-get`
+  over the int64 `data[]` buffer, so it casts `(Vec__int *)(intptr_t)` to call
+  the typed `Eq [Vec]` spec. A **reinterpret cast** (Vec is `:heap`), not a
+  deref-copy. The `Eq [Vec]` **carrier base no longer crosses** post-#400 (it
+  delegates to carrier `vec_hylen`/`vec_hyeq_hyloop`). These 22 clear only via
+  element-buffer monomorphization (matrix-excluded); the disposition is to
+  **accept them** (M4d Phase 2b).
+- **10 `Result`/`Option`** -- blessed inline-C `tur_ok`/`tur_some` construction
+  (the deliberately blessed boundary; `inline-c-typed-result-option`,
+  `decode-bool-carrier-instance-ascription`, etc.).
+- **2 `SChan`** -- the type-erased channel path (`generic-relay-aggregate-result`).
+
+The realistic M3 goal -- *delete the bridge from the monomorphic paths, keep it
+for the cast / blessed-construction / type-erased boundary* -- is therefore
+**met for the non-HKT collection-Eq cascade**. Remaining optional work: M4d
+Phase 1 (post-emit dead-static DCE of unconsumed instance bases/dicts) is a
+code-size cleanup needing a coordinated snapshot regen, no longer an
+audit-crossing win. Full write-up:
+`docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`
+("Update 2026-06-17 (post-#400 audit floor)").
+
 ## 0g. Status snapshot — 2026-06-16 (root 2: `Eq [Vec]` retired to carrier-based; audit 98 -> 70)
 
 `Eq [Vec]` was the last collection instance on the **by-value direction**
