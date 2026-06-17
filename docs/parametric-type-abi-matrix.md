@@ -105,6 +105,41 @@ Non-parametric handle structs (`MutexGuard`, `FileHandle`, `Socket`,
 `RateLimitOpts`, `Ref`) are out of scope -- they are not generic and do not
 cross the bridge.
 
+## The element buffer stays int64 -- the typed-pointer decision is HEADER-only (frontier)
+
+The typed-pointer column types a heap collection's **header** (`Vec__A *`,
+`Set__A *`, ...), **not its element storage.** A `Vec__int`, `Vec__cstr`, and
+`Vec__bool` differ only in the type label on the 24-byte header; the backing
+`data` buffer is `int64_t[]` in **all three** -- every element is stored as an
+int64 carrier regardless of `A`. This is deliberate (locked here):
+
+- the interpreter's `native_vec_*` walk the same int64 buffer, so a typed
+  element buffer would fork compiled vs interpreted storage and break parity;
+- `float`/`cstr` elements are reinterpret-read out of the int64 slot
+  (`(int64_t)vec->data[i]` is a *bit* reinterpret, not a numeric conversion);
+  a typed `double[]`/`const char *[]` buffer would change those reads.
+
+**Consequence (the permanent residual).** `vec-get` returns an element as
+**int64**. When the element type is itself a `:heap` collection (`Vec[Vec[int]]`,
+`Set[Vec[int]]`, ...), the structural-eq comparator must reinterpret that int64
+back to the typed pointer -- `(Vec__int *)(intptr_t)(elem)` -- to dispatch the
+inner typed `Eq` spec. These are the **22 `Vec int` comparator-thunk crossings**
+that dominate the post-#400 M3 audit floor. They are cheap reinterpret casts
+(Vec is `:heap`, so the int64 *is* the pointer), correct and free at `-O2`, and
+they **cannot be removed by typed dict slots or a typed comparator parameter** --
+a typed comparator only relocates the cast to the `vec-get` call site, because
+the *source* (`vec_hyget` over the int64 buffer) is int64. Eliminating them
+requires **element-buffer monomorphization** (`vec-get` returning `Vec__int *`
+per element type, a typed `data` buffer), which this matrix **rules out** for
+the parity/float reasons above.
+
+**Disposition: accept them as the permanent type-erased boundary** (M4d Phase
+2b; M3 report "Update 2026-06-17"). The bridge is down-scoped *to* this boundary,
+not deleted from it. Revisiting element-buffer monomorphization is a separate,
+deep frontier (it interacts with interpreter parity and float-element storage)
+and is **not** scheduled under the current monomorphization plan; it would need
+its own design pass alongside, or after, the M6/M7 HKT work.
+
 ## Consequences for sequencing
 
 1. **Mutable vs linked is the only fork that matters for correctness.** Get
