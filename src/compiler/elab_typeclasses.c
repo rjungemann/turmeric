@@ -6,7 +6,8 @@
 /* ---- file-local helper forward declarations ---- */
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
     uint32_t *out_body_start,
-    const Symbol **class_type_params, uint8_t n_class_type_params);
+    const Symbol **class_type_params, uint8_t n_class_type_params,
+    const Symbol **assoc_type_names, uint8_t n_assoc_type_names);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
 static bool rt_type_mentions_tyvar(const Type *t, const char *name);
 
@@ -594,7 +595,9 @@ static const Symbol *class_type_param_match(const char *kw_name, uint32_t kw_len
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
                                                uint32_t *out_body_start,
                                                const Symbol **class_type_params,
-                                               uint8_t n_class_type_params) {
+                                               uint8_t n_class_type_params,
+                                               const Symbol **assoc_type_names,
+                                               uint8_t n_assoc_type_names) {
     if (method_form->tag != F_LIST || method_form->as.list.len < 3) {
         diag_emit(DIAG_ERROR, span,
                   "typeclass method requires (name [params...] : return-type)");
@@ -647,6 +650,25 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         uint8_t actual_p = 0;
         for (uint8_t i = 0; i < n_params; i++) {
             Form *p = params_form->as.list.items[i];
+            /* ECS E2d-P6 (Issue 2 secondary): substructural / borrow caret
+             * markers (^borrow, ^mut, ^unique, ^linear, ^affine, ^relevant,
+             * ^fat) annotate the *next* parameter; they are not parameters
+             * themselves.  Skip them so they do not consume a param slot --
+             * otherwise `[^borrow s : S idx : int val : E]` mis-aligned the
+             * parsed param types (treating `^borrow` as a param), so an
+             * instance method inheriting those types saw the wrong type per
+             * position.  (The borrow discipline itself is enforced on the
+             * elaborated instance-method FnDefs and at call sites.) */
+            if (p->tag == F_SYM &&
+                (p->as.sym == e->sym_caret_borrow ||
+                 p->as.sym == e->sym_caret_mut ||
+                 p->as.sym == e->sym_caret_unique ||
+                 p->as.sym == e->sym_caret_linear ||
+                 p->as.sym == e->sym_caret_affine ||
+                 p->as.sym == e->sym_caret_relevant ||
+                 p->as.sym == e->sym_caret_fat)) {
+                continue;
+            }
             if (p->tag == F_SYM) {
                 param_names[actual_p] = p->as.sym;
                 /* Default to int for now - type inference for method params deferred */
@@ -689,9 +711,19 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     if (tp) {
                         param_types[prev] = type_tyvar_named(tp->name);
                     } else {
-                        diag_emit(DIAG_ERROR, p->span,
-                                  "unsupported type in typeclass method parameter");
-                        return NULL;
+                        /* ECS E2d-P6 (Issue 1): a parameter typed by an associated
+                         * type member (e.g. `val :Elem`) is an abstract projection
+                         * resolved per instance; carry it as a named TY_TYVAR. */
+                        const Symbol *am = class_type_param_match(kw->name, kw->len,
+                                                                  assoc_type_names,
+                                                                  n_assoc_type_names);
+                        if (am) {
+                            param_types[prev] = type_tyvar_named(am->name);
+                        } else {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "unsupported type in typeclass method parameter");
+                            return NULL;
+                        }
                     }
                 }
             } else if (p->tag == F_TYPE_ANN) {
@@ -712,9 +744,32 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     memcmp(inner_f->as.sym->name, "fn", 2) == 0) {
                     param_types[actual_p - 1] = TYPE_PTR_VOID;
                     param_is_fn[actual_p - 1] = true;
+                } else if (inner_f &&
+                           (inner_f->tag == F_SYM || inner_f->tag == F_KEYWORD) &&
+                           class_type_param_match(inner_f->as.sym->name,
+                                                  inner_f->as.sym->len,
+                                                  assoc_type_names,
+                                                  n_assoc_type_names)) {
+                    /* ECS E2d-P6 (Issue 1): a spaced `: Elem` naming an associated
+                     * type member is an abstract projection; carry it as a named
+                     * TY_TYVAR (resolved per instance, like the keyword form). */
+                    const Symbol *am = class_type_param_match(inner_f->as.sym->name,
+                                                              inner_f->as.sym->len,
+                                                              assoc_type_names,
+                                                              n_assoc_type_names);
+                    param_types[actual_p - 1] = type_tyvar_named(am->name);
                 } else {
+                    /* ECS E2d-P6 (Issue 2): resolve class type parameters used in
+                     * a spaced `: S` (or parametric `: (Dense S)`) parameter
+                     * annotation to a named TY_TYVAR.  Without the class type
+                     * params here, `S` was parsed as an opaque/unknown type and
+                     * the return-only-dispatch detector could not see that S
+                     * appears in argument position, mis-classifying an
+                     * argument-dispatchable method as return-only. */
                     Type *ft = inner_f
-                        ? type_expr_from_form(e, inner_f, NULL, NULL, NULL, 0)
+                        ? type_expr_from_form(e, inner_f, NULL,
+                                              class_type_params, NULL,
+                                              n_class_type_params)
                         : NULL;
                     if (!ft) {
                         diag_emit(DIAG_ERROR, p->span,
@@ -770,7 +825,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                         param_is_fn[actual_p] = true;
                     } else {
                         Type *ft = ti
-                            ? type_expr_from_form(e, ti, NULL, NULL, NULL, 0)
+                            ? type_expr_from_form(e, ti, NULL,
+                                                  class_type_params, NULL,
+                                                  n_class_type_params)
                             : NULL;
                         if (!ft) {
                             diag_emit(DIAG_ERROR, type_f->span,
@@ -781,7 +838,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     }
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
-                    Type *ft = type_expr_from_form(e, type_f, NULL, NULL, NULL, 0);
+                    Type *ft = type_expr_from_form(e, type_f, NULL,
+                                                   class_type_params, NULL,
+                                                   n_class_type_params);
                     if (!ft) {
                         diag_emit(DIAG_ERROR, type_f->span,
                                   "unsupported type form in typeclass method parameter");
@@ -870,9 +929,24 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 if (tp) {
                     return_type = type_tyvar_named(tp->name);
                 } else {
-                    diag_emit(DIAG_ERROR, ret_form->span,
-                              "unsupported return type in typeclass method");
-                    return NULL;
+                    /* ECS E2d-P6 (Issue 1): a return type naming an associated
+                     * type member (e.g. `(type Elem : Type)` -> `: Elem`) is an
+                     * abstract projection over the instance type, resolved per
+                     * instance.  Represent it as a named TY_TYVAR carrying the
+                     * associated-type name; elab_definstance substitutes it with
+                     * the instance's `(type Elem = T)` binding, and a call site
+                     * recovers the concrete result from the dispatched instance
+                     * method (argument dispatch keys on the receiver type). */
+                    const Symbol *am = class_type_param_match(kw->name, kw->len,
+                                                              assoc_type_names,
+                                                              n_assoc_type_names);
+                    if (am) {
+                        return_type = type_tyvar_named(am->name);
+                    } else {
+                        diag_emit(DIAG_ERROR, ret_form->span,
+                                  "unsupported return type in typeclass method");
+                        return NULL;
+                    }
                 }
             }
         } else if (ret_form->tag == F_TYPE_ANN) {
@@ -1164,7 +1238,8 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         Form *method_form = call->as.list.items[method_form_idx[i]];
         uint32_t body_start = 0;
         TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start,
-                                                         type_params, n_type_params);
+                                                         type_params, n_type_params,
+                                                         assoc_type_names, n_assoc_types);
         if (!method) return NULL;
         methods[i] = *method;
         method_body_starts[i] = body_start;
@@ -1412,6 +1487,46 @@ static bool build_inst_type_suffix(const Type *type_args,
     return true;
 }
 
+/* ECS E2d-P6 (Issue 2 secondary): substitute a class method's parameter type --
+ * which may reference the class's type parameters as named TY_TYVARs (e.g.
+ * `val : E` parses to TY_TYVAR("E")) -- with the concrete instance type args, so
+ * an instance method body whose params are unannotated (`[s idx val]`) inherits
+ * the substituted types (S -> (Dense Pos), E -> Pos) instead of being left as
+ * abstract tyvars.  Recurses through TY_APP so a parametric param type like
+ * `(Dense E)` is rewritten too.  Returns the type unchanged when it mentions no
+ * class type parameter. */
+static Type elab_subst_class_tyvars(Arena *arena, Type t,
+                                    const Symbol **type_params,
+                                    uint8_t n_type_params,
+                                    const Type *type_args,
+                                    uint8_t n_type_args) {
+    if (t.kind == TY_TYVAR && t.as.tyvar_.name) {
+        for (uint8_t k = 0; k < n_type_params && k < n_type_args; k++) {
+            if (type_params[k] &&
+                strcmp(type_params[k]->name, t.as.tyvar_.name) == 0) {
+                return type_args[k];
+            }
+        }
+        return t;
+    }
+    if (t.kind == TY_APP) {
+        if (t.as.app.fn) {
+            Type *fn = (Type *)arena_alloc(arena, sizeof(Type));
+            *fn = elab_subst_class_tyvars(arena, *t.as.app.fn, type_params,
+                                          n_type_params, type_args, n_type_args);
+            t.as.app.fn = fn;
+        }
+        if (t.as.app.arg) {
+            Type *arg = (Type *)arena_alloc(arena, sizeof(Type));
+            *arg = elab_subst_class_tyvars(arena, *t.as.app.arg, type_params,
+                                           n_type_params, type_args, n_type_args);
+            t.as.app.arg = arg;
+        }
+        return t;
+    }
+    return t;
+}
+
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
  *
  * Defines an instance of a typeclass for concrete types.
@@ -1604,11 +1719,33 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                        (akw->len == 3 && memcmp(akw->name, "nil", 3) == 0)) {
                                 app_arg_type = TYPE_NIL;
                             } else {
-                                /* Unknown type arg — treat as opaque struct */
-                                memset(&app_arg_type, 0, sizeof(app_arg_type));
-                                app_arg_type.kind = TY_STRUCT;
-                                app_arg_type.copy_kind = CK_MOVE;
-                                app_arg_type.as.struct_.def = NULL;
+                                /* ECS E2d-P6 (Issue 2 secondary): resolve a known
+                                 * struct/ADT symbol to its real def, mirroring the
+                                 * top-level type-arg parser above.  Without this an
+                                 * applied head like `(Dense Pos)` recorded `Pos`
+                                 * as an opaque NULL-def struct, so substituting the
+                                 * instance type arg into an inherited param type
+                                 * (`s : S` -> `(Dense Pos)`) produced an imprecise
+                                 * receiver that failed to bind the helper's `(Dense
+                                 * A)` type variable.  A primitive numeric name also
+                                 * resolves here. */
+                                TypeKind ank = typekind_from_symbol(akw->name);
+                                Binding *asb = scope_lookup(e->scope, akw);
+                                if (ank != TY_UNKNOWN) {
+                                    app_arg_type = type_simple(ank, CK_COPY);
+                                } else if (asb && asb->type.kind == TY_STRUCT &&
+                                           asb->type.as.struct_.def) {
+                                    app_arg_type = asb->type;
+                                } else if (asb && asb->type.kind == TY_ADT &&
+                                           asb->type.as.adt_.def) {
+                                    app_arg_type = asb->type;
+                                } else {
+                                    /* Unknown name — treat as opaque struct */
+                                    memset(&app_arg_type, 0, sizeof(app_arg_type));
+                                    app_arg_type.kind = TY_STRUCT;
+                                    app_arg_type.copy_kind = CK_MOVE;
+                                    app_arg_type.as.struct_.def = NULL;
+                                }
                             }
                         } else {
                             diag_emit(DIAG_ERROR, aarg_form->span,
@@ -2179,6 +2316,57 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     /* Phase HKT-P4: record the file that defined this instance. */
     inst->origin_file_id = call->span.file_id;
 
+    /* assoc-types-plan: resolve and store associated-type bindings.  Every
+     * member the class declares must be bound exactly once; an unknown member
+     * name or a missing binding is a hard error reported on the instance, so a
+     * wrong/forgotten projection surfaces here rather than at a downstream use
+     * site.
+     *
+     * ECS E2d-P6 (Issue 1): resolved up front -- before the method loop --
+     * so an instance method body whose param/return type names an associated
+     * member (e.g. `val : Elem` -> TY_TYVAR("Elem")) can substitute it with the
+     * concrete binding (`(type Elem = Pos)` -> Pos). */
+    if (tc->n_assoc_types > 0 || n_assoc_binds > 0) {
+        Type *resolved = tc->n_assoc_types > 0
+            ? (Type *)arena_alloc(e->arena, tc->n_assoc_types * sizeof(Type)) : NULL;
+        bool *bound = tc->n_assoc_types > 0
+            ? (bool *)arena_alloc(e->arena, tc->n_assoc_types * sizeof(bool)) : NULL;
+        for (uint8_t k = 0; k < tc->n_assoc_types; k++) bound[k] = false;
+        for (uint32_t bi = 0; bi < n_assoc_binds; bi++) {
+            uint8_t idx = 0; bool found = false;
+            for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
+                if (tc->assoc_type_names[k] == assoc_bind_names[bi]) {
+                    idx = k; found = true; break;
+                }
+            }
+            if (!found) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "definstance: '%s' is not an associated type of typeclass '%s'",
+                          assoc_bind_names[bi]->name, tc_name->name);
+                return NULL;
+            }
+            Type *rt = type_expr_from_form(e, assoc_bind_forms[bi], NULL, NULL, NULL, 0);
+            if (!rt) {
+                diag_emit(DIAG_ERROR, assoc_bind_forms[bi]->span,
+                          "definstance: unsupported type for associated type '%s'",
+                          assoc_bind_names[bi]->name);
+                return NULL;
+            }
+            resolved[idx] = *rt;
+            bound[idx] = true;
+        }
+        for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
+            if (!bound[k]) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "definstance: missing binding for associated type '%s' of '%s'",
+                          tc->assoc_type_names[k]->name, tc_name->name);
+                return NULL;
+            }
+        }
+        inst->assoc_types = resolved;
+        inst->n_assoc_types = tc->n_assoc_types;
+    }
+
     for (uint8_t i = 0; i < tc->n_methods; i++) {
         Form *impl_form = method_impl_forms[i];
         if (impl_form->tag != F_LIST || impl_form->as.list.len < 3) {
@@ -2251,11 +2439,25 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * the instance type (e.g. (decode! [raw :int] : a) becomes : User for
          * HasSchema[User]).  An explicit annotation below still wins. */
         if (return_type.kind == TY_TYVAR && return_type.as.tyvar_.name) {
+            bool subst = false;
             for (uint8_t ti = 0; ti < tc->n_type_params && ti < n_type_args; ti++) {
                 if (tc->type_params[ti] &&
                     strcmp(tc->type_params[ti]->name,
                            return_type.as.tyvar_.name) == 0) {
                     return_type = type_args[ti];
+                    subst = true;
+                    break;
+                }
+            }
+            /* ECS E2d-P6 (Issue 1): a return type naming an associated type
+             * member (`: Elem`) substitutes with this instance's binding
+             * (`(type Elem = Pos)` -> Pos), so the emitted impl returns the
+             * concrete projected type. */
+            for (uint8_t ak = 0; !subst && ak < inst->n_assoc_types; ak++) {
+                if (tc->assoc_type_names[ak] &&
+                    strcmp(tc->assoc_type_names[ak]->name,
+                           return_type.as.tyvar_.name) == 0) {
+                    return_type = inst->assoc_types[ak];
                     break;
                 }
             }
@@ -2411,7 +2613,54 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     if (tc->methods[i].param_types && n_method_params < tc->methods[i].n_params) {
                         param_type = tc->methods[i].param_types[n_method_params];
                     }
-                    
+
+                    /* ECS E2d-P6 (Issue 2 secondary): when the class method param
+                     * type references the class's type parameters (e.g. `val : E`
+                     * -> TY_TYVAR("E"), or `s : S` -> TY_TYVAR("S")), substitute
+                     * them with this instance's concrete type args so an
+                     * unannotated instance-body param (`[s idx val]`) inherits the
+                     * right type instead of an abstract tyvar.  This is the
+                     * general, multi-param-aware replacement for the legacy
+                     * receiver-only `type_args[0]` rewrite below (which keyed on
+                     * the param defaulting to TY_INT). */
+                    bool param_was_tyvar_subst = false;
+                    if (param_type.kind == TY_TYVAR || param_type.kind == TY_APP) {
+                        for (uint8_t ck = 0; n_type_args > 0 && ck < tc->n_type_params; ck++) {
+                            if (tc->type_params[ck] &&
+                                rt_type_mentions_tyvar(&param_type,
+                                                       tc->type_params[ck]->name)) {
+                                param_was_tyvar_subst = true;
+                                break;
+                            }
+                        }
+                        /* ECS E2d-P6 (Issue 1): also substitute associated-type
+                         * tyvars (`val : Elem`) with this instance's binding
+                         * (`(type Elem = Pos)` -> Pos). */
+                        for (uint8_t ak = 0; !param_was_tyvar_subst &&
+                                 ak < inst->n_assoc_types; ak++) {
+                            if (tc->assoc_type_names[ak] &&
+                                rt_type_mentions_tyvar(&param_type,
+                                                       tc->assoc_type_names[ak]->name)) {
+                                param_was_tyvar_subst = true;
+                                break;
+                            }
+                        }
+                        if (param_was_tyvar_subst) {
+                            if (n_type_args > 0) {
+                                param_type = elab_subst_class_tyvars(
+                                    e->arena, param_type,
+                                    tc->type_params, tc->n_type_params,
+                                    type_args, n_type_args);
+                            }
+                            if (inst->n_assoc_types > 0) {
+                                param_type = elab_subst_class_tyvars(
+                                    e->arena, param_type,
+                                    tc->assoc_type_names, tc->n_assoc_types,
+                                    inst->assoc_types, inst->n_assoc_types);
+                            }
+                        }
+                    }
+
                     /* Phase 15: Substitute type variables with type args */
                     /* For v1: if the param type is TYPE_INT (default) and we have type args,
                      * use the first type arg */
@@ -2427,7 +2676,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                      * protocol.  This applies even to a return-dispatch method
                      * (e.g. `comp [f g] : a`, whose untyped params default to the
                      * carrier): the arrow instance head makes the params arrows. */
-                    if (param_type.kind == TY_INT && n_type_args > 0 &&
+                    if (param_was_tyvar_subst) {
+                        /* The substituted full type (elab_param_type) is what the
+                         * method body sees; lower the ABI/signature type to the
+                         * int64 carrier for applied/parametric types, matching the
+                         * dispatch ABI used for concrete instances elsewhere. */
+                        if (elab_param_type.kind == TY_APP ||
+                            (elab_param_type.kind == TY_STRUCT &&
+                             elab_param_type.as.struct_.def &&
+                             elab_param_type.as.struct_.def->n_type_params > 0)) {
+                            param_type = TYPE_INT;
+                        } else {
+                            param_type = elab_param_type;
+                        }
+                    }
+                    else if (param_type.kind == TY_INT && n_type_args > 0 &&
                         type_args[0].kind == TY_FN) {
                         elab_param_type = TYPE_PTR_VOID;
                         param_type = TYPE_PTR_VOID;
@@ -2856,52 +3119,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         }
     }
     
-    /* assoc-types-plan: resolve and store associated-type bindings.  Every
-     * member the class declares must be bound exactly once; an unknown member
-     * name or a missing binding is a hard error reported on the instance, so a
-     * wrong/forgotten projection surfaces here rather than at a downstream use
-     * site. */
-    if (tc->n_assoc_types > 0 || n_assoc_binds > 0) {
-        Type *resolved = tc->n_assoc_types > 0
-            ? (Type *)arena_alloc(e->arena, tc->n_assoc_types * sizeof(Type)) : NULL;
-        bool *bound = tc->n_assoc_types > 0
-            ? (bool *)arena_alloc(e->arena, tc->n_assoc_types * sizeof(bool)) : NULL;
-        for (uint8_t k = 0; k < tc->n_assoc_types; k++) bound[k] = false;
-        for (uint32_t bi = 0; bi < n_assoc_binds; bi++) {
-            uint8_t idx = 0; bool found = false;
-            for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
-                if (tc->assoc_type_names[k] == assoc_bind_names[bi]) {
-                    idx = k; found = true; break;
-                }
-            }
-            if (!found) {
-                diag_emit(DIAG_ERROR, call->span,
-                          "definstance: '%s' is not an associated type of typeclass '%s'",
-                          assoc_bind_names[bi]->name, tc_name->name);
-                return NULL;
-            }
-            Type *rt = type_expr_from_form(e, assoc_bind_forms[bi], NULL, NULL, NULL, 0);
-            if (!rt) {
-                diag_emit(DIAG_ERROR, assoc_bind_forms[bi]->span,
-                          "definstance: unsupported type for associated type '%s'",
-                          assoc_bind_names[bi]->name);
-                return NULL;
-            }
-            resolved[idx] = *rt;
-            bound[idx] = true;
-        }
-        for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
-            if (!bound[k]) {
-                diag_emit(DIAG_ERROR, call->span,
-                          "definstance: missing binding for associated type '%s' of '%s'",
-                          tc->assoc_type_names[k]->name, tc_name->name);
-                return NULL;
-            }
-        }
-        inst->assoc_types = resolved;
-        inst->n_assoc_types = tc->n_assoc_types;
-    }
-
     /* Create an INSTANCE_DEF expression for codegen */
     Expr *inst_expr = expr_new(e->arena, EX_INSTANCE_DEF, TYPE_NIL, call->span);
     inst_expr->as.instance_def_.instance = inst;
@@ -3052,6 +3269,30 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                   memcmp(m->name->name, name->name, name->len) == 0)) {
                 continue;
             }
+            /* ECS E2d-P6 (Issue 2): multi-param dispatch resolvable from an
+             * argument-position param.  When SOME class type parameter appears
+             * in a parameter type, argument-based dispatch can pin the instance
+             * (the receiver's static type selects it), and any return-only
+             * param is then read off the matched instance.  Decline
+             * return-only dispatch here so elab_method_call's argument dispatch
+             * takes over -- otherwise a method like `(sop-get [s : S idx : int]
+             * : E)` on `(defclass StorageOps [S E])` would key the lookup on E
+             * (return-only) and fail to find the instance even though S is fully
+             * known from the receiver.  A genuinely return-only method (every
+             * class type param absent from the parameter list, e.g. Serializable
+             * `(deserialize [b : ptr<void>] : a)`) still flows through below. */
+            bool any_tp_in_param = false;
+            for (uint8_t ti = 0; ti < c->n_type_params && !any_tp_in_param; ti++) {
+                const Symbol *tp = c->type_params[ti];
+                if (!tp) continue;
+                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                    if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
+                        any_tp_in_param = true;
+                        break;
+                    }
+                }
+            }
+            if (any_tp_in_param) continue;
             for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
                 const Symbol *tp = c->type_params[ti];
                 if (!tp) continue;
@@ -3863,6 +4104,55 @@ skip_capability_field_lookup:;
                             inst->type_args[0].as.struct_.def != NULL &&
                             inst->type_args[0].as.struct_.def != head->as.struct_.def) {
                             type_ok = false;
+                        }
+                    }
+                    /* ECS E2d-P6 (Issue 3): when BOTH the receiver and the
+                     * instance head are fully-applied type constructors -- e.g. a
+                     * receiver `(Dense Pos)` against instances `[(Dense Pos) Pos]`
+                     * and `[(Sparse Vel) Vel]` -- the bare `!inst_is_primitive`
+                     * test above accepts every non-primitive instance, so the
+                     * first one in registration order silently wins regardless of
+                     * the constructor (Dense vs Sparse) or argument (Pos vs Vel).
+                     * Discriminate by (a) head-constructor identity and (b) the
+                     * leftmost type argument when both sides are concrete, so each
+                     * storage backend dispatches to its own instance.  This is the
+                     * miscompile case CLAUDE.md flags: "works by luck because the
+                     * register classes happen to match".
+                     *
+                     * Carrier/tyvar/erased instance arguments (a partially-applied
+                     * head like `Functor [(Result _ B)]`, whose varying arm is
+                     * erased to the int64 carrier) act as wildcards: comparing
+                     * only concrete-vs-concrete keeps those instances matching. */
+                    if (type_ok && obj->type.kind == TY_APP &&
+                        inst->type_args[0].kind == TY_APP) {
+                        const Type *oh = &obj->type;
+                        while (oh && oh->kind == TY_APP) oh = oh->as.app.fn;
+                        const Type *ih = &inst->type_args[0];
+                        while (ih && ih->kind == TY_APP) ih = ih->as.app.fn;
+                        bool heads_differ = false;
+                        if (oh && ih && oh->kind == TY_STRUCT && ih->kind == TY_STRUCT &&
+                            oh->as.struct_.def && ih->as.struct_.def &&
+                            oh->as.struct_.def != ih->as.struct_.def) {
+                            heads_differ = true;
+                        } else if (oh && ih && oh->kind == TY_ADT && ih->kind == TY_ADT &&
+                                   oh->as.adt_.def && ih->as.adt_.def &&
+                                   oh->as.adt_.def != ih->as.adt_.def) {
+                            heads_differ = true;
+                        }
+                        if (heads_differ) {
+                            type_ok = false;
+                        } else {
+                            const Type *oa = obj->type.as.app.arg;
+                            const Type *ia = inst->type_args[0].as.app.arg;
+                            bool oa_concrete = oa &&
+                                ((oa->kind == TY_STRUCT && oa->as.struct_.def) ||
+                                 (oa->kind == TY_ADT && oa->as.adt_.def));
+                            bool ia_concrete = ia &&
+                                ((ia->kind == TY_STRUCT && ia->as.struct_.def) ||
+                                 (ia->kind == TY_ADT && ia->as.adt_.def));
+                            if (oa_concrete && ia_concrete && !type_eq(*oa, *ia)) {
+                                type_ok = false;
+                            }
                         }
                     }
                 }

@@ -1,0 +1,40 @@
+;; typeclass-assoc-type-method-return -- ECS E2d-P6 Issue 1.
+;;
+;; A typeclass may declare an associated type member `(type Elem : Type)`
+;; and a method may RETURN that associated member (`(sop-get [...] : Elem)`),
+;; not just take it in argument position.  Each instance binds the member
+;; with `(type Elem = T)`; the instance method bodies inherit the class
+;; method's param/return types under the instance substitution, so the
+;; bare-param bodies `[s idx]` / `[s idx val]` need not re-annotate.
+;;
+;; (Associated types are erased: the value-level result/argument rides the
+;; int64 carrier like any other opaque -- recovering the concrete projected
+;; struct *at a call site* is value-level projection, which the
+;; assoc-types-plan leaves out of scope.  This fixture exercises
+;; declaration + per-instance binding + dispatch + body type inheritance.)
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defopaque Dense [A] :int)
+(defstruct Pos [x : int])
+
+(defn dense-new [] : (Dense Pos)
+  ```c return 0; ```)
+
+(defclass StorageOps [S]
+  (type Elem : Type)
+  (sop-insert! [^borrow s : S idx : int val : Elem] : nil)
+  (sop-get     [^borrow s : S idx : int] : Elem))
+
+(definstance StorageOps [(Dense Pos)]
+  (type Elem = Pos)
+  (sop-insert! [s idx val]
+    ```c (void)s; printf("insert idx=%d\n", (int)idx); return; ```)
+  (sop-get [s idx]
+    ```c (void)s; printf("get idx=%d\n", (int)idx); return 0; ```))
+
+(defn main [] : int
+  (let [s : (Dense Pos)  (dense-new)]
+    (sop-get s 7)
+    (sop-insert! s 1 (make-struct Pos 5))
+    0))

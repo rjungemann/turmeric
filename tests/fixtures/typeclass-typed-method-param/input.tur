@@ -1,0 +1,26 @@
+;; typeclass-typed-method-param -- a typeclass method declared with a
+;; parameter typed by the class type variable (`[w : W]`) now works
+;; end-to-end: the instance method body inherits the concrete receiver
+;; type under the instance substitution, so a `.field` access on the
+;; receiver resolves.
+;;
+;; This was previously a negative fixture (gap H item 2) that only
+;; guarded against a SEGV in elab_method_call -- the typed-method-param
+;; feature itself did not work and the documented result was a
+;; "no typeclass method found" error.  ECS E2d-P6 made the feature
+;; work: `w : W` is parsed as the class tyvar and substituted with the
+;; instance type (GameWorld), so `(.pos-store w)` type-checks.
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defclass HasPos [W] (pos-of [w : W] : int))
+
+(defstruct GameWorld [pos-store : int])
+
+(definstance HasPos [GameWorld]
+  (pos-of [w] (.pos-store w)))
+
+(defn main [] : int
+  (let [g : GameWorld (make-struct GameWorld 42)]
+    (printf "pos=%lld\n" (pos-of g))
+    0))
