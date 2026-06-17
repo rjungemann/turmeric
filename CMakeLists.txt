@@ -171,7 +171,7 @@ add_test(
 # module imports both.  Without a per-instantiation include guard around
 # the `typedef struct Result__cstr__cstr` in each module's .h, the third
 # TU fails to compile with `redefinition`.  See
-# docs/reported/result-typedef-duplicated-across-modules.md.
+# docs/archive/result-typedef-duplicated-across-modules.md.
 add_test(
   NAME tur_result_typedef_multi_module
   COMMAND bash tests/run-result-typedef-multi-module.sh

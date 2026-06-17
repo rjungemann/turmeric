@@ -1,5 +1,18 @@
 ## Result<A,B> typedef duplicated across module headers -> C redefinition error
 
+**Status:** RESOLVED. Fixed via direction (1) -- a per-instantiation include
+guard (`#ifndef TUR_TY_<Name> / #define / #endif`) wrapped around every
+monomorphic Result/Option/ADT-application typedef in `src/compiler/types.c`
+(`emit_registered_struct_app_rec` + `emit_registered_adt_app_rec`). Pinned by
+the dedicated test `tests/run-result-typedef-multi-module.sh` (ctest
+`tur_result_typedef_multi_module`), which drives the *separate-compilation*
+(shared-library) build -- the exact shape of the original repro,
+`tur build spices/tourist` -- so two module headers (`app__produce.h`,
+`app__consume.h`) both emit the guarded typedef and `app__main`'s TU includes
+both without colliding. Verified load-bearing: stripping the guard from the
+generated headers reproduces `redefinition of 'struct Result__cstr__cstr'`
+exactly. See history note in `docs/archive/history/`.
+
 **Severity:** Blocking for multi-module spices that return the same Result instantiation.
 
 When two modules in a single project both export functions whose return type
