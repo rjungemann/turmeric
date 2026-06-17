@@ -600,6 +600,16 @@ static int compile_to_c(const char *path, Buf *out_c,
     size_t len_adj = len;
     ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
 
+    /* Each compile_to_c call is a self-contained compilation unit.  Clear the
+     * global diagnostic state (the `had_error_` flag and the file registry)
+     * before registering this file so a prior failed compile in the same
+     * process cannot poison this one.  Without this, batch drivers that loop
+     * compile_to_c in-process (`tur test <dir>`, `tur check <dir>`) would mark
+     * every alphabetically-later file as FAIL once any earlier file failed to
+     * compile -- the stale `had_error_` short-circuits the `diag_had_error()`
+     * gate below. */
+    diag_reset();
+
     SourceFile file = {0};
     file.path = path;
     file.src = src_adj;
@@ -976,6 +986,12 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     size_t len_adj = len;
     ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
 
+    /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
+     * project-mode dir build loops compile_to_h / compile_to_implementation
+     * in-process, so a stale `had_error_` from an earlier module would
+     * otherwise short-circuit every later module's `diag_had_error()` gate. */
+    diag_reset();
+
     SourceFile file = {0};
     file.path = path;
     file.src = src_adj;
@@ -1065,6 +1081,12 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     const char *src_adj = src;
     size_t len_adj = len;
     ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+
+    /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
+     * project-mode dir build loops compile_to_h / compile_to_implementation
+     * in-process, so a stale `had_error_` from an earlier module would
+     * otherwise short-circuit every later module's `diag_had_error()` gate. */
+    diag_reset();
 
     SourceFile file = {0};
     file.path = path;
@@ -4396,6 +4418,11 @@ static int parse_check_read(const char *path, ReaderType forced, Buf *out) {
         rest_len = len;
     }
 
+    /* Fresh diagnostic slate per file -- see compile_to_c.  cmd_check_dir
+     * loops parse_check_read in-process, so a stale `had_error_` from an
+     * earlier file must not leak into this one's `diag_had_error()` gate. */
+    diag_reset();
+
     SourceFile file = {0};
     file.path        = path;
     file.src         = rest;
@@ -4496,6 +4523,12 @@ static bool fmt_is_tur_file(const char *name) {
  * Returns 0 on success with *out populated, -1 on error. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
+    /* Reset BEFORE registering: diag_reset() clears the file registry, so
+     * registering first (as this used to) wiped this file's entry and left
+     * any format-time parse-error diagnostic without a source snippet
+     * (files_[0] == NULL -> "<unknown>"). */
+    diag_reset();
+
     SourceFile file = {0};
     file.path        = path_label;
     file.src         = src;
@@ -4503,7 +4536,6 @@ static int fmt_format_source(const char *path_label, const char *src, size_t len
     file.file_id     = 0;
     file.reader_type = rtype;
     diag_register_file(&file);
-    diag_reset();
 
     Arena arena;
     arena_init(&arena, 0);
