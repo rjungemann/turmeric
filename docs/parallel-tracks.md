@@ -1,6 +1,6 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-17 (post-PR #411; post-v0.21.0).
+Snapshot: 2026-06-17 (post-PR #417; post-v0.21.0).
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
 open report in `docs/reported/`, bucketed into tracks that can largely
@@ -22,15 +22,26 @@ advances.
   -- umbrella; M2 landed, M3 deletion blocked on M4
 - [m4-typeclass-per-method-abi-plan](upcoming/m4-typeclass-per-method-abi-plan.md)
   -- **immediate next step**; unblocks M3 bridge deletion
-- [tco-in-abi-specs-for-stdlib-iteration](upcoming/tco-in-abi-specs-for-stdlib-iteration.md)
-  -- runs in parallel with M4; converts inline-C carrier helpers
-  (Vec/Map/MutableMap/Set) to pure Turmeric once the TCO gate is lifted.
-  `Eq [Vec]` landed as a pure-Turmeric TCO'd loop in PR #400; Map /
-  MutableMap / Set conversions still pending.
-- [m3-carrier-bridge-deletion-blocked-on-typeclass-abi](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
-  (report) -- closes when M4 + TCO conversions land. Audit baseline refreshed
-  post-#411 to **56 crossings / 11 fixtures** (was 60; option-eq? retype cleared
-  4); still zero monomorphic deref-copies.
+- ~~[tco-in-abi-specs-for-stdlib-iteration](archive/tco-in-abi-specs-for-stdlib-iteration.md)~~
+  -- **archived 2026-06-17**. The three TCO restriction lifts plus the
+  `Eq [Vec]` (PR #400) and `Eq [MutableMap]` rewrites shipped; the
+  audit-reduction goal is met (post-#400: 34 crossings / 10 fixtures,
+  zero monomorphic deref-copies; Map/Set are `:heap` and no longer
+  cross the bridge at all). Residual `Eq [Map]` / `Eq [Set]`
+  pure-Turmeric rewrites are tracked in
+  [tco-map-set-eq-pure-turmeric-followup](upcoming/tco-map-set-eq-pure-turmeric-followup.md)
+  as low-priority type-hygiene work, not on the audit critical path.
+- ~~[m3-carrier-bridge-deletion-blocked-on-typeclass-abi](archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)~~
+  -- **archived 2026-06-17**. The original "delete `emit_carrier_bridge`
+  wholesale" target is **superseded**: post-#400 the audit floor is
+  34 crossings / 10 fixtures with **zero monomorphic deref-copies**,
+  and all three remaining buckets (A' fat-closure `:heap` casts,
+  C blessed inline-C `tur_ok`/`tur_some` construction, E type-erased
+  `SChan`) are by-design boundaries the function is **kept** for.
+  M4 dict-slot typing does not move any of the 34. The down-scope
+  is complete for the non-HKT collection-Eq cascade; the bucket A'
+  residual would only clear via fat-closure-element monomorphization
+  (M5/M7-adjacent), which is tracked separately if/when prioritized.
 - [option-none-as-null-byvalue-param-segfault](reported/option-none-as-null-byvalue-param-segfault.md)
   (report, RESOLVED 2026-06-17) -- a by-value `(Option A)`/`(Result A B)` param
   can now receive a carrier `#{Construct}` result (`some`/`none`/`ok`/`err`),
@@ -40,17 +51,32 @@ advances.
   (report, PARTIAL 2026-06-17) -- `option-eq?` retyped to by-value `(Option A)`;
   `option-map` (construct-in-by-value-return) and `some?`/`unwrap-or` (cascade
   into refined.tur + kleisli Arrow) are the documented remainder.
+- [result-bridge-tail-call-from-pure-tur-to-inline-c](reported/result-bridge-tail-call-from-pure-tur-to-inline-c.md)
+  (report) -- **filed 2026-06-17 (PR #417)**; sibling case to PR #416
+  surfaced while pursuing the Track C tourist retype. PR #416 fixed
+  the bare-tail-call form (regression fixture
+  `result-bridge-tail-call-to-inline-c`, report archived) but a
+  pure-Turmeric wrapper around an inline-C carrier helper still
+  needs the let-binding workaround in the general case; spice
+  authors currently fall back to inline-C re-implementation. Lives
+  on Track A; unblocks Track C's "thin pure-Turmeric defns over
+  inline-C bodies" direction.
 
-**Order:** M4 -> TCO lift -> bridge tail elimination -> archive M3 report.
-Parallel sub-thread: Option none-as-NULL retirement (by-value-param bridge done;
+**Order:** M4 -> TCO lift -> bridge tail-call follow-up (#417). The
+M3 wholesale-deletion goal is retired; `emit_carrier_bridge` stays for
+the cast / blessed-construction / type-erased boundaries it was
+re-scoped to in the now-archived M3 report. Parallel sub-thread:
+Option none-as-NULL retirement (by-value-param bridge done;
 option-eq? retyped; option-map + some?/unwrap-or remain).
 
 ## Track B -- ECS spice (E2d wiring + sized worlds)
 
 All compiler-side blockers cleared. E2d's last straggler -- by-value
 struct fields silently stored as the int64 carrier -- was fixed in
-PR #407, so ECS authors no longer need `:int` stand-ins for component
-shapes. E2d wiring is unblocked end-to-end.
+PR #407, and the residual typeclass-dispatch identity gaps for plain
+struct/ADT receivers closed in PR #412 (assoc-type returns,
+multi-param instances, projection discrimination). E2d wiring is
+unblocked end-to-end.
 
 - ~~[defopaque-struct-payload-fails-through-unsafe-helper](archive/defopaque-struct-payload-fails-through-unsafe-helper.md)~~
   -- **closed**; archived.
@@ -82,8 +108,13 @@ Pure spice-side work; no compiler dependencies.
   via `use!`'s `(c-fn [Ctx] (Option Response))` shape). Open
   follow-ups: S4 cons lists in tourist internals; residual S2 (a
   `ctx : int` parameter retype on `param`/`capture`, and a missing
-  `Captures` defopaque) inside otherwise-fixed tourist; secondary
-  handle leaks inside plutovg / raylib / rtaudio.
+  `Captures` defopaque) inside otherwise-fixed tourist -- the
+  `param`/`capture` retype is currently soft-blocked by the
+  pure-Tur-wrapper-around-inline-C bridge bug
+  ([result-bridge-tail-call-from-pure-tur-to-inline-c](reported/result-bridge-tail-call-from-pure-tur-to-inline-c.md),
+  Track A), so the tourist spice carries an inline-C re-implementation
+  of `capture` as a temporary workaround; secondary handle leaks
+  inside plutovg / raylib / rtaudio.
 - ~~[tourist-middleware-takes-req-not-ctx](reported/tourist-middleware-takes-req-not-ctx.md)~~
   -- **closed in `tur-tourist` v0.2.0** (Ctx-based `use!`, `ctx-attr-*`,
   `ctx-add-header!`, `use-after!`); see
@@ -102,8 +133,8 @@ secondary handle work.
 The M3 report's audit floor mentions a 10-crossing "bucket C"
 covering inline-C `tur_ok`/`tur_some` construction at the
 typeclass-dispatch boundary (see
-[reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md
-"Update 2026-06-17"](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)).
+[archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md
+"Update 2026-06-17"](archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)).
 A natural-but-wrong read is "generic `(ok v)` / `(some v)` from a
 typeclass instance doesn't work cleanly, so any new spice surface
 that returns `(Result T E)` / `(Option T)` is gated on M3
@@ -189,10 +220,15 @@ No open cross-cutting reports as of this snapshot.
 
 ## Concurrency summary
 
-**Parallelizable today** (no inter-track blocks):
+**Parallelizable today** (no hard inter-track blocks):
 
-- A (M4 in progress; TCO/stdlib helper conversions in parallel),
-  B (E2d wiring resumable; all compiler blockers cleared),
-  C (per-spice uplift phases + S3 work).
+- A (M4 in progress; TCO/stdlib helper conversions in parallel;
+  pure-Tur-wrapper-around-inline-C bridge follow-up filed),
+- B (E2d wiring resumable; all compiler blockers cleared),
+- C (per-spice uplift phases + S3 work; tourist `param`/`capture`
+  retype is soft-blocked by the Track A bridge follow-up but the
+  inline-C workaround keeps the surface shipping).
 
-**No remaining inter-track sequencing constraints.**
+**No hard inter-track sequencing constraints** -- the one soft
+coupling is the Track A bridge follow-up unblocking the cleanest
+form of the Track C `param`/`capture` retype.
