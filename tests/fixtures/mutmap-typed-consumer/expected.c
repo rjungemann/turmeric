@@ -2432,6 +2432,14 @@ typedef struct MutableMap {
 } MutableMap;
 
 
+#ifndef TUR_TY_MutableMap__int__int
+#define TUR_TY_MutableMap__int__int
+typedef struct MutableMap__int__int {
+    void * storage;
+} MutableMap__int__int;
+#endif
+
+
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
@@ -2508,9 +2516,9 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_584(int64_t, int64_t);
+static bool __fn_586(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
-static bool __fn_620(int64_t, int64_t);
+static bool __fn_622(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
 static int64_t __inst_Functor_fmap_Option(int64_t, tur_poly_fn_t);
@@ -2527,10 +2535,10 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
-static bool __fn_802(int64_t, int64_t);
+static bool __fn_804(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_898(int64_t, int64_t);
+static bool __fn_900(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -2639,6 +2647,7 @@ static bool set_hyeq_hycmp_qu(int64_t, int64_t, int64_t);
 static void set_hyfree(int64_t);
 static int64_t set_hyadd1(int64_t, int64_t);
 static int64_t mutmap_hylen(int64_t);
+static void mutmap_hyset_ex(int64_t, int64_t, int64_t, int64_t);
 static int64_t mutmap_hyget(int64_t, int64_t, int64_t);
 static bool mutmap_hyhas_qu(int64_t, int64_t, int64_t);
 static int64_t mutmap_hycap(int64_t);
@@ -2648,6 +2657,10 @@ static int64_t mutmap_hyslot_hykey(int64_t, int64_t);
 static int64_t mutmap_hyslot_hyvalue(int64_t, int64_t);
 static bool mutmap_hyeq_hystorage_qu(void *, void *, int64_t);
 static bool mutmap_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
+static void mutmap_hyfree(int64_t);
+static int64_t sum_hyvals(MutableMap__int__int *, int64_t, int64_t, int64_t);
+static int64_t total(MutableMap__int__int *);
+static MutableMap__int__int * mutmap_new__spec__MutableMap__int__int__();
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3025,14 +3038,14 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
     .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float,
 };
 
-static bool __fn_584(int64_t a, int64_t b) {
+static bool __fn_586(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         int64_t *__t2 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t2[1] = (int64_t)(intptr_t)__fn_584;
+        __t2[1] = (int64_t)(intptr_t)__fn_586;
         void *__t3 = __t2;
         return map_hyeq_hydynamic(x, y, (int64_t)(intptr_t)(__t3));
 }
@@ -3045,7 +3058,7 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Map,
 };
 
-static bool __fn_620(int64_t a, int64_t b) {
+static bool __fn_622(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
 
@@ -3054,7 +3067,7 @@ static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
         if (__t4) {
             int64_t *__t5 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t5[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-            __t5[1] = (int64_t)(intptr_t)__fn_620;
+            __t5[1] = (int64_t)(intptr_t)__fn_622;
             void *__t6 = __t5;
             __t4 = vec_hyeq_hyloop(x, y, INT64_C(0), vec_hylen(x), (int64_t)(intptr_t)(__t6));
         }
@@ -3288,14 +3301,14 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
-static bool __fn_802(int64_t a, int64_t b) {
+static bool __fn_804(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         int64_t *__t13 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t13[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t13[1] = (int64_t)(intptr_t)__fn_802;
+        __t13[1] = (int64_t)(intptr_t)__fn_804;
         void *__t14 = __t13;
         return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t14));
 }
@@ -3320,7 +3333,7 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_898(int64_t a, int64_t b) {
+static bool __fn_900(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
 
@@ -3329,7 +3342,7 @@ static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         if (__t15) {
             int64_t *__t16 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t16[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-            __t16[1] = (int64_t)(intptr_t)__fn_898;
+            __t16[1] = (int64_t)(intptr_t)__fn_900;
             void *__t17 = __t16;
             __t15 = mutmap_hyeq_hyloop(x, y, INT64_C(0), mutmap_hycap(x), (int64_t)(intptr_t)(__t17));
         }
@@ -4212,6 +4225,67 @@ static int64_t mutmap_hylen(int64_t m) {
   
 }
 
+static void mutmap_hyset_ex(int64_t m, int64_t h, int64_t key, int64_t val) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  /* Resize when load factor (len + tomb) / cap >= 0.75. */
+  if ((s->len + s->tomb) * 4 >= s->cap * 3) {
+      uint64_t new_cap = s->cap * 2;
+      struct __tur_mm_storage *ns = (struct __tur_mm_storage *)
+          malloc(sizeof(*ns) + new_cap * sizeof(struct __tur_mm_slot));
+      ns->cap = new_cap; ns->len = 0; ns->tomb = 0;
+      for (uint64_t i = 0; i < new_cap; i++) {
+          ns->slots[i].tag = TUR_MM_EMPTY;
+          ns->slots[i].hash = 0; ns->slots[i].key = 0; ns->slots[i].value = 0;
+      }
+      uint64_t mask = new_cap - 1;
+      for (uint64_t i = 0; i < s->cap; i++) {
+          if (s->slots[i].tag != TUR_MM_OCCUPIED) continue;
+          uint64_t idx = ((uint64_t)s->slots[i].hash) & mask;
+          while (ns->slots[idx].tag == TUR_MM_OCCUPIED) idx = (idx + 1) & mask;
+          ns->slots[idx] = s->slots[i];
+          ns->len++;
+      }
+      free(s);
+      mm->storage = ns;
+      s = ns;
+  }
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  int64_t first_tomb = -1;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) {
+          /* Not present: insert at first tombstone if any, else here. */
+          if (first_tomb >= 0) {
+              struct __tur_mm_slot *ts = &s->slots[first_tomb];
+              ts->tag = TUR_MM_OCCUPIED;
+              ts->hash = h; ts->key = key; ts->value = val;
+              s->tomb--;
+              s->len++;
+          } else {
+              slot->tag = TUR_MM_OCCUPIED;
+              slot->hash = h; slot->key = key; slot->value = val;
+              s->len++;
+          }
+          return;
+      }
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          /* Update existing. */
+          slot->value = val;
+          return;
+      }
+      if (slot->tag == TUR_MM_DELETED && first_tomb < 0) {
+          first_tomb = (int64_t)idx;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
 static int64_t mutmap_hyget(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
@@ -4358,6 +4432,46 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
         return __t25;
 }
 
+static void mutmap_hyfree(int64_t m) {
+        struct { void *storage; } *mm = (void*)(intptr_t)m;
+  if (mm->storage) free(mm->storage);
+  free(mm);
+  
+}
+
+static int64_t sum_hyvals(MutableMap__int__int * m, int64_t i, int64_t cap, int64_t acc) {
+        __tur_tailcall:;
+        if ((i) == (cap)) {
+            return acc;
+        } else {
+            if (mutmap_hyslot_hyoccupied_qu((int64_t)(intptr_t)(m), i)) {
+                MutableMap__int__int * __t29 = m;
+                int64_t __t30 = (i) + (INT64_C(1));
+                int64_t __t31 = cap;
+                int64_t __t32 = (acc) + (mutmap_hyslot_hyvalue((int64_t)(intptr_t)(m), i));
+                m = __t29;
+                i = __t30;
+                cap = __t31;
+                acc = __t32;
+                goto __tur_tailcall;
+            } else {
+                MutableMap__int__int * __t33 = m;
+                int64_t __t34 = (i) + (INT64_C(1));
+                int64_t __t35 = cap;
+                int64_t __t36 = acc;
+                m = __t33;
+                i = __t34;
+                cap = __t35;
+                acc = __t36;
+                goto __tur_tailcall;
+            }
+        }
+}
+
+static int64_t total(MutableMap__int__int * m) {
+        return sum_hyvals(m, INT64_C(0), mutmap_hycap((int64_t)(intptr_t)(m)), INT64_C(0));
+}
+
 int main(int argc, char **argv) {
         /* *args*: build cons list from argv[1..argc-1] */
         g_tur_args = 0;
@@ -4368,10 +4482,49 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        printf("%lld\n", (long long)((INT64_C(1)) + ((INT64_C(2)) + (INT64_C(3)))));
-        int64_t __t29;
-        __t29 = INT64_C(0);
-        return (int)__t29;
+        {
+            MutableMap__int__int * a_907 = mutmap_new__spec__MutableMap__int__int__();
+            (void)a_907;
+            mutmap_hyset_ex((int64_t)(intptr_t)(a_907), INT64_C(1), INT64_C(1), INT64_C(100));
+            mutmap_hyset_ex((int64_t)(intptr_t)(a_907), INT64_C(2), INT64_C(2), INT64_C(200));
+            mutmap_hyset_ex((int64_t)(intptr_t)(a_907), INT64_C(3), INT64_C(3), INT64_C(300));
+            printf("%lld\n", (long long)(total(a_907)));
+            printf("%lld\n", (long long)(mutmap_hylen((int64_t)(intptr_t)(a_907))));
+            mutmap_hyfree((int64_t)(intptr_t)(a_907));
+        }
+        int64_t __t37;
+        __t37 = INT64_C(0);
+        return (int)__t37;
+}
+
+static MutableMap__int__int * mutmap_new__spec__MutableMap__int__int__() {
+        /* Backing storage layout:
+   *   uint64_t cap;        capacity (power of two)
+   *   uint64_t len;        live entry count (OCCUPIED slots only)
+   *   uint64_t tomb;       tombstone count (DELETED slots)
+   *   Slot     slots[cap];
+   *
+   * Slot layout:
+   *   uint8_t  tag;        0=EMPTY, 1=OCCUPIED, 2=DELETED
+   *   int64_t  hash;
+   *   int64_t  key;
+   *   int64_t  value;
+   */
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  size_t init_cap = 16;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)
+      malloc(sizeof(*s) + init_cap * sizeof(struct __tur_mm_slot));
+  s->cap = init_cap; s->len = 0; s->tomb = 0;
+  for (size_t i = 0; i < init_cap; i++) {
+      s->slots[i].tag = TUR_MM_EMPTY;
+      s->slots[i].hash = 0; s->slots[i].key = 0; s->slots[i].value = 0;
+  }
+  struct { void *storage; } *m = malloc(sizeof(*m));
+  m->storage = s;
+  return (MutableMap__int__int *)(intptr_t)m;
+  
 }
 
 

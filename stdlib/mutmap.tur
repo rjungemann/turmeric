@@ -69,7 +69,7 @@
   }
   struct { void *storage; } *m = malloc(sizeof(*m));
   m->storage = s;
-  return (int64_t)(intptr_t)m;
+  return (__TUR_RET__)(intptr_t)m;
   ```)
 ;;; mutmap-len -- live entry count (excludes tombstones).
 ;;;
@@ -283,28 +283,135 @@
       idx = (idx + 1) & mask;
   }
   ```)
-;;; mutmap-eq? -- structural equality.  Two MutableMap[K V]s are
-;;; equal iff they have the same live entries (any order) per a
-;;; user-supplied value comparator.  Keys compared by (== h h) +
-;;; (== k k) on the int64_t storage representation.
+;;; mutmap-cap -- slot-array capacity (number of probe slots, a power of two).
 ;;;
 ;;; Parameters:
-;;;   m1     -- MutableMap[K V]
-;;;   m2     -- MutableMap[K V]
-;;;   val-cmp -- comparator fn [a :int b :int] :bool for values
+;;;   m -- MutableMap[K V]
 ;;;
 ;;; Returns:
-;;;   true iff m1 and m2 have the same set of (key, value) pairs.
+;;;   The backing storage capacity (>= mutmap-len; includes EMPTY and
+;;;   DELETED slots).  Used as the iteration bound for mutmap-slot-* walks.
 ;;;
 ;;; Example:
-;;;   (mutmap-eq? ma mb (fn [a b] (= a b)))
+;;;   (mutmap-cap mm)  ; => 16
 ;;;
 ;;; Since: Phase F5
 
+(defn mutmap-cap [K V] [m : (MutableMap K V)]
+  #{}
+  : int
+  ```c
+  struct __tur_mm_storage_c { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_c *s = (struct __tur_mm_storage_c *)mm->storage;
+  return (int64_t)s->cap;
+  ```)
+;;; mutmap-slot-occupied? -- is slot i a live (OCCUPIED) entry?
+;;;
+;;; Parameters:
+;;;   m -- MutableMap[K V]
+;;;   i -- slot index in [0, mutmap-cap m)
+;;;
+;;; Returns:
+;;;   true iff slot i holds a live entry (not EMPTY, not a DELETED tombstone).
+;;;
+;;; Example:
+;;;   (mutmap-slot-occupied? mm 0)  ; => true / false
+;;;
+;;; Since: Phase F5
+
+(defn mutmap-slot-occupied? [K V] [m : (MutableMap K V) i : int]
+  #{}
+  : bool
+  ```c
+  enum { TUR_MM_OCCUPIED=1 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return s->slots[i].tag == TUR_MM_OCCUPIED;
+  ```)
+;;; mutmap-slot-hash -- precomputed hash stored in slot i.
+;;;
+;;; Parameters:
+;;;   m -- MutableMap[K V]
+;;;   i -- slot index in [0, mutmap-cap m)
+;;;
+;;; Returns:
+;;;   The hash recorded for slot i (meaningful only when the slot is OCCUPIED).
+;;;
+;;; Example:
+;;;   (mutmap-slot-hash mm 0)
+;;;
+;;; Since: Phase F5
+
+(defn mutmap-slot-hash [K V] [m : (MutableMap K V) i : int]
+  #{}
+  : int
+  ```c
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return (int64_t)s->slots[i].hash;
+  ```)
+;;; mutmap-slot-key -- key stored in slot i.
+;;;
+;;; Parameters:
+;;;   m -- MutableMap[K V]
+;;;   i -- slot index in [0, mutmap-cap m)
+;;;
+;;; Returns:
+;;;   The key in slot i (meaningful only when the slot is OCCUPIED).
+;;;
+;;; Example:
+;;;   (mutmap-slot-key mm 0)
+;;;
+;;; Since: Phase F5
+
+(defn mutmap-slot-key [K V] [m : (MutableMap K V) i : int]
+  #{}
+  : K
+  ```c
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return (int64_t)s->slots[i].key;
+  ```)
+;;; mutmap-slot-value -- value stored in slot i.
+;;;
+;;; Parameters:
+;;;   m -- MutableMap[K V]
+;;;   i -- slot index in [0, mutmap-cap m)
+;;;
+;;; Returns:
+;;;   The value in slot i (meaningful only when the slot is OCCUPIED).
+;;;
+;;; Example:
+;;;   (mutmap-slot-value mm 0)
+;;;
+;;; Since: Phase F5
+
+(defn mutmap-slot-value [K V] [m : (MutableMap K V) i : int]
+  #{}
+  : V
+  ```c
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return (int64_t)s->slots[i].value;
+  ```)
 ;;; mutmap-eq-storage? -- structural equality over two raw storage pointers.
-;; Internal helper: the fixed-arity inline-C iteration core that mutmap-eq?
-;; delegates to.  Takes the two `storage` field values directly (ptr<void>),
-;; so it is agnostic to K/V and to how the caller held the map.
+;; Internal helper: the fixed-arity inline-C iteration core that the public
+;; `mutmap-eq?` wrapper delegates to.  Takes the two `storage` field values
+;; directly (ptr<void>), so it is agnostic to K/V and to how the caller held
+;; the map -- and its C `for` loop is stack-safe for any size.  The `Eq
+;; [MutableMap]` instance does NOT use this path; it walks `mutmap-eq-loop`
+;; (pure Turmeric, TCO'd inside the by-value spec) instead, mirroring how
+;; `Eq [Vec]` keeps the inline-C `vec-eq?` for direct/abstract use but
+;; dispatches through the pure-Turmeric `vec-eq-loop`.
 
 (defn mutmap-eq-storage? [pa : ptr<void> pb : ptr<void> ^fat val-cmp]
   #{}
@@ -342,11 +449,70 @@
   }
   return true;
   ```)
+;;; mutmap-eq-loop -- pure-Turmeric structural-equality walk (self-tail slot loop).
+;;;
+;;; Path A specializes this per (K V) at the `Eq [MutableMap]` dispatch site; the
+;;; self-tail-recursive spec is turned into a loop by the C compiler's
+;;; sibling-call optimization (the same shape as `vec-eq-loop`'s typed spec), so
+;;; a large table iterates in constant stack (verified: a 200k-entry `.eq?` runs
+;;; in a 512KB stack).  Unlike the inline-C `mutmap-eq-storage?` carrier core
+;;; (kept for the public `mutmap-eq?` wrapper / abstract callers), the receivers
+;;; flow by their honest `(MutableMap K V)` type and the iteration is expressed
+;;; with the `mutmap-slot-*` accessors -- no fat-closure inline-C dispatch.  For
+;;; each live slot of m1 the matching key is looked up in m2 (via
+;;; mutmap-has?/mutmap-get) and the values compared by val-cmp.
+;;;
+;;; Parameters:
+;;;   m1      -- first MutableMap[K V]
+;;;   m2      -- second MutableMap[K V]
+;;;   i       -- current slot index (start at 0)
+;;;   cap     -- slot bound (mutmap-cap m1)
+;;;   val-cmp -- value comparator fn [a :V b :V] :bool
+;;;
+;;; Returns:
+;;;   true iff every live entry of m1[i..cap) is present in m2 with an
+;;;   equal value under val-cmp.
+;;;
+;;; Example:
+;;;   (mutmap-eq-loop a b 0 (mutmap-cap a) (fn [x y] (= x y)))
+;;;
+;;; Since: Phase F5
+
+(defn mutmap-eq-loop [K V]
+  [m1 : (MutableMap K V) m2 : (MutableMap K V) i : int cap : int
+   ^fat val-cmp : (fn [V V] bool)]
+  : bool
+  (if (= i cap)
+    true
+    (if (mutmap-slot-occupied? m1 i)
+      (if (mutmap-has? m2 (mutmap-slot-hash m1 i) (mutmap-slot-key m1 i))
+        (if (val-cmp (mutmap-slot-value m1 i)
+                     (mutmap-get m2 (mutmap-slot-hash m1 i) (mutmap-slot-key m1 i)))
+          (mutmap-eq-loop m1 m2 (+ i 1) cap val-cmp)
+          false)
+        false)
+      (mutmap-eq-loop m1 m2 (+ i 1) cap val-cmp))))
 ;;; mutmap-eq? -- structural equality.  Two MutableMap[K V]s are equal iff
 ;;; they have the same live (key, value) entries (any order) per a supplied
-;;; value comparator.  Reads each map's K/V-agnostic `storage` field directly
-;;; and delegates to the shared inline-C core; the receivers flow by their
-;;; honest `(MutableMap K V)` type, so no carrier round-trip is needed.
+;;; value comparator.  This public wrapper reads each map's K/V-agnostic
+;;; `storage` field directly and delegates to the shared inline-C core
+;;; (`mutmap-eq-storage?`, a stack-safe C loop) so it is safe for direct /
+;;; abstract callers of any size.  The `Eq [MutableMap]` instance instead
+;;; dispatches through the pure-Turmeric `mutmap-eq-loop` (TCO'd inside its
+;;; by-value spec).
+;;;
+;;; Parameters:
+;;;   m1     -- MutableMap[K V]
+;;;   m2     -- MutableMap[K V]
+;;;   val-cmp -- comparator fn [a :int b :int] :bool for values
+;;;
+;;; Returns:
+;;;   true iff m1 and m2 have the same set of (key, value) pairs.
+;;;
+;;; Example:
+;;;   (mutmap-eq? ma mb (fn [a b] (= a b)))
+;;;
+;;; Since: Phase F5
 
 (defn mutmap-eq? [K V]
   [m1 : (MutableMap K V) m2 : (MutableMap K V) ^fat val-cmp]
@@ -377,15 +543,20 @@
 ;; The cross-plan-followups F3-5 dispatcher synthesises the value
 ;; comparator at the call site when V is itself a TY_APP.
 ;;
-;; The instance head receiver is bare-`MutableMap`, so it is ascribed to
-;; `(MutableMap K V)` to call the parametric `mutmap-eq?`.  Now that the
-;; handle is honestly typed end-to-end, that ascription no longer bridges:
-;; `mutmap-eq` audits 0 carrier crossings (was 4) -- the same clean dispatch
-;; `Eq [Vec]` gets, just reached via a typed-ascription rather than Vec's
-;; `(:: x :int)` carrier relabel.
+;; TCO-in-ABI-specs: the instance body is pure Turmeric, mirroring `Eq [Vec]`.
+;; Path A specializes `mutmap-eq-loop` to the concrete (K V) and the self-tail-
+;; call becomes a goto loop after TCO, so the by-value MutableMap receiver
+;; iterates without growing the C stack and without the inline-C fat-closure
+;; dispatch of `mutmap-eq-storage?`.  The instance head receiver is bare-
+;; `MutableMap`, so each receiver use is ascribed inline to `(MutableMap K V)`
+;; (the typed-pointer handle), exactly like `Eq [Vec]`'s `(:: x (Vec A))`.
+;; The inline-C `mutmap-eq-storage?` / `mutmap-eq?` pair stays for direct and
+;; abstract callers (stack-safe C loop), just as `vec-eq?` stays for Vec.
 (definstance Eq [MutableMap]
   [(Eq V)]
   (eq? [x y]
-    (mutmap-eq? (:: x (MutableMap K V))
-                (:: y (MutableMap K V))
-                (fn [a b] (= a b)))))
+    (and (= (mutmap-len (:: x (MutableMap K V)))
+            (mutmap-len (:: y (MutableMap K V))))
+         (mutmap-eq-loop (:: x (MutableMap K V)) (:: y (MutableMap K V))
+                         0 (mutmap-cap (:: x (MutableMap K V)))
+                         (fn [a b] (eq? a b))))))

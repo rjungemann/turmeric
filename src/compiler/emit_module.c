@@ -1095,10 +1095,21 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
 }
 
 /* end-to-end-monomorphization (bucket A): a concrete `:heap` type whose struct
- * constructor is `Vec` -- the typed-pointer producer slice currently covers Vec
- * only (Map/Set/MutableMap/Cons are later steps in the vec-typed-pointer plan).
- * Used to scope inline-C producer/accessor spec-minting to Vec so the broader
- * `:heap` family is untouched this increment. */
+ * constructor is covered by the typed-pointer producer slice -- `Vec` (the
+ * original slice) and `MutableMap` (this follow-up).  Map/Set/Cons remain on
+ * the carrier base (later steps in the vec-typed-pointer plan).  Used to scope
+ * inline-C producer/accessor spec-minting so the broader `:heap` family is
+ * untouched.
+ *
+ * MutableMap's producer typing was previously thought blocked on the
+ * multi-param resolution gap (#364), but the gap was narrower than feared: the
+ * zero-arg `[K V]` constructor `mutmap-new` mints a typed spec once its
+ * inline-C body returns through `__TUR_RET__` (which makes it bypass the
+ * carrier-skip block and intern on the `abi_changes` path, exactly like
+ * `vec-new`).  The remaining issue -- a typed `:heap` value spilled to the
+ * int64 carrier when passed to a user fn taking the concrete heap type -- was a
+ * GENERAL call-site relabel bug (it hit Vec equally) and is fixed in
+ * emit_expr.c via the `callee_param_is_typed_heap_ptr` guard. */
 static bool type_is_heap_vec(Type t) {
     if (!type_is_heap_struct(t)) return false;
     StructDef *def = NULL;
@@ -1107,7 +1118,9 @@ static bool type_is_heap_vec(Type t) {
         Type args[16]; uint8_t n = 0;
         if (!type_extract_struct_app(&t, &def, args, &n)) return false;
     }
-    return def && def->name && strcmp(def->name, "Vec") == 0;
+    return def && def->name &&
+        (strcmp(def->name, "Vec") == 0 ||
+         strcmp(def->name, "MutableMap") == 0);
 }
 
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,

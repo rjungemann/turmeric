@@ -1,0 +1,26 @@
+;; TCO-in-ABI-specs MutableMap producer slice: a typed (MutableMap int int)
+;; handle from mutmap-new flows into user fns that take the concrete heap type
+;; (sum-vals / total) with NO int->pointer relabel at the call site -- the
+;; callee_param_is_typed_heap_ptr guard (emit_expr.c) lets the typed pointer
+;; pass straight through.  mutmap-new mints its typed producer spec via the
+;; `__TUR_RET__` return + the type_is_heap_vec gate (emit_module.c).
+
+(defn sum-vals [m : (MutableMap int int) i : int cap : int acc : int] : int
+  (if (= i cap)
+    acc
+    (if (mutmap-slot-occupied? m i)
+      (sum-vals m (+ i 1) cap (+ acc (mutmap-slot-value m i)))
+      (sum-vals m (+ i 1) cap acc))))
+
+(defn total [m : (MutableMap int int)] : int
+  (sum-vals m 0 (mutmap-cap m) 0))
+
+(defn main [] : int
+  (let [a (:: (mutmap-new) (MutableMap int int))]
+    (mutmap-set! a 1 1 100)
+    (mutmap-set! a 2 2 200)
+    (mutmap-set! a 3 3 300)
+    (println (total a))          ; 600
+    (println (mutmap-len a))     ; 3
+    (mutmap-free a))
+  0)
