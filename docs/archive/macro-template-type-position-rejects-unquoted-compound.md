@@ -1,10 +1,24 @@
 ---
 title: Macro template parser rejects `~(first comps)` in type-position; only `~directparam` is accepted
 severity: medium -- forces macro authors to per-arity-split any defmacro that needs to project a type-parameter into a defstruct field type or fn signature
-status: open
+status: RESOLVED 2026-06-17. The `F_TYPE_ANN` case in `ct_eval_quasiquote`
+  (`src/compiler/elab_macros.c:202-209`) now recurses into its payload, so an
+  unquoted compound like `~(first comps)` inside a `: (Box ~(first comps))`
+  annotation is evaluated at expansion time instead of reaching
+  `type_expr_from_form` as a raw unquote. The report's minimal repro compiles
+  on current HEAD (`tur check` clean). NOTE: the *downstream* goal of collapsing
+  the ECS `defworld--0..5` cascade into one variadic-over-components macro is
+  still blocked, but by a SEPARATE limitation now tracked in
+  `docs/reported/quasiquote-splice-into-vector-unsupported.md` (`~@` splice into
+  a vector literal is unimplemented), not by this type-position bug.
 discovered: 2026-06-16
 surfaced-by: E2d-P1+P5 migration in turmeric-spices (the (defworld Name [Comps]) -> per-arity (defworld--N Name Comp1 ... CompN) split was forced by this gap)
 ---
+
+> **RESOLVED 2026-06-17.** The type-position unquote described below now
+> compiles. The remaining blocker for the variadic `defworld` collapse is
+> the independent `~@`-splice-into-vector gap, filed separately as
+> `docs/reported/quasiquote-splice-into-vector-unsupported.md`.
 
 # Macro template parser rejects unquoted compound expressions in type position
 

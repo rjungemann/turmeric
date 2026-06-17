@@ -3,6 +3,10 @@ title: defopaque [A] with struct A payload fails through the (unsafe (__raw)) li
 severity: medium -- blocks lifting parametric storages (ecs/storage Dense, ecs/sparse Sparse) when component type A is a by-value struct; the int-A and opaque-A cases work, so the issue is invisible until a real defstruct component flows through. Class of bug appears related to M3 carrier-bridge / generic-inline-c-struct-arg monomorphisation.
 status: open
 discovered: 2026-06-16
+re-confirmed: 2026-06-17 -- during E2d triage this remained the live tracking
+  item for the `(unsafe (__raw))` struct-A mis-typed-return path; it did not
+  block the E2d landing (the 0-5 arity cascade and per-site re-pins worked
+  around it) but the underlying carrier-bridge defect is unfixed. Keep open.
 surfaced-by: E2d-P1+P5 migration in turmeric-spices (the spawn1k-pos and defcomponent-accessors fixtures regressed when (Dense A) accessors were threaded against A=Pos with Pos a `{x:int, y:int}` defstruct)
 ---
 
