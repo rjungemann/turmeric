@@ -16,6 +16,7 @@ static bool form_contains_ct_builtins(Form *f);
 static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint32_t n_args, Span span);
 static CtValue ct_eval_call(CtEnv *env, Form *f);
 static CtValue ct_eval_form(CtEnv *env, Form *f);
+static CtValue ct_eval_splice_inner(CtEnv *env, Form *f);
 static Form *elab_eval_macro_form(Elab *e, Form *f);
 static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args);
 
@@ -39,7 +40,17 @@ static CtEnv *ct_env_new(Elab *e, CtEnv *parent, bool *ok) {
     env->bindings = NULL;
     env->elab = e;
     env->ok = ok;
+    env->expand_macro_head = false;
     return env;
+}
+
+/* Evaluate the inner of a `~@` splice. Same as ct_eval_form except a list
+ * whose head names a user macro is expanded at compile time (see CtEnv's
+ * expand_macro_head field). Used everywhere a splice element is evaluated. */
+static CtValue ct_eval_splice_inner(CtEnv *env, Form *f) {
+    CtEnv *senv = ct_env_new(env->elab, env, env->ok);
+    senv->expand_macro_head = true;
+    return ct_eval_form(senv, f);
 }
 
 static void ct_env_bind(CtEnv *env, const Symbol *name, CtValue v) {
@@ -134,7 +145,7 @@ static Form **ct_qq_eval_seq_items(CtEnv *env, Form *f, uint32_t *out_n) {
     for (uint32_t i = 0; i < n_in; i++) {
         Form *it = f->as.list.items[i];
         if (it->tag == F_UNQUOTE_SPLICING) {
-            CtValue v = ct_eval_form(env, it->as.list.items[0]);
+            CtValue v = ct_eval_splice_inner(env, it->as.list.items[0]);
             Form *inner = ct_value_to_form(env, v, it->span);
             if (!*env->ok) return NULL;
             tmp[i] = inner;
@@ -172,7 +183,7 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
             return ct_value_to_form(env, v, f->span);
         }
         case F_UNQUOTE_SPLICING: {
-            CtValue v = ct_eval_form(env, f->as.list.items[0]);
+            CtValue v = ct_eval_splice_inner(env, f->as.list.items[0]);
             return ct_value_to_form(env, v, f->span);
         }
         case F_LIST: {
@@ -257,7 +268,8 @@ static bool form_contains_ct_builtins(Form *f) {
                     ct_symbol_name(head, "str-append") ||
                     ct_symbol_name(head, "cons") ||
                     ct_symbol_name(head, "list") ||
-                    ct_symbol_name(head, "vec")) {
+                    ct_symbol_name(head, "vec") ||
+                    ct_symbol_name(head, "map")) {
                     return true;
                 }
             }
@@ -660,6 +672,42 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         return ct_value_fn(fn);
     }
 
+    /* Compile-time (map fn seq): apply a CT fn value to each element of a
+     * list/vec and collect the results into a list. Handled here rather than
+     * in ct_eval_builtin because the function argument must stay a CT_VAL_FN
+     * instead of being forced through ct_value_to_form (which only accepts
+     * data forms). This lets a template GENERATE the sequence it splices, e.g.
+     * `(do ~@(map (fn [x] `(println ~x)) items))`.
+     * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+    if (ct_symbol_name(head->as.sym, "map") && f->as.list.len == 3) {
+        CtValue fn_v = ct_eval_form(env, f->as.list.items[1]);
+        if (!*env->ok) return fn_v;
+        /* Only treat this as the compile-time map when the first argument is a
+         * CT fn (e.g. a literal `(fn ...)`) over a sequence. A `(map f xs)`
+         * whose `f` is an ordinary runtime function is left to the general
+         * path below, which rebuilds it as data -- so a runtime map call sitting
+         * in a macro template is not hijacked or rejected here. */
+        if (fn_v.tag == CT_VAL_FN && !fn_v.as.fn->is_variadic && fn_v.as.fn->n_params == 1) {
+            CtFn *fn = fn_v.as.fn;
+            CtValue seq_v = ct_eval_form(env, f->as.list.items[2]);
+            Form *seq = ct_value_to_form(env, seq_v, f->as.list.items[2]->span);
+            if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+            if (seq->tag == F_LIST || seq->tag == F_VEC || seq->tag == F_NIL) {
+                uint32_t n = (seq->tag == F_NIL) ? 0 : seq->as.list.len;
+                Form **out = (n == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n * sizeof(Form *));
+                for (uint32_t i = 0; i < n; i++) {
+                    CtEnv *call_env = ct_env_new(env->elab, fn->env, env->ok);
+                    ct_env_bind(call_env, fn->params[0]->as.sym, ct_value_form(seq->as.list.items[i]));
+                    CtValue r = ct_eval_form(call_env, fn->body);
+                    out[i] = ct_value_to_form(env, r, fn->span);
+                    if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+                }
+                return ct_value_form(form_list(env->elab->arena, f->span, out, n));
+            }
+        }
+        /* fall through: not a CT map -- rebuild as a data/runtime call */
+    }
+
     CtValue head_v = ct_eval_form(env, head);
     if (!*env->ok) return head_v;
     uint32_t n_in_args = f->as.list.len - 1;
@@ -669,7 +717,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
     for (uint32_t i = 0; i < n_in_args; i++) {
         Form *arg_form = f->as.list.items[i + 1];
         if (arg_form->tag == F_UNQUOTE_SPLICING) {
-            CtValue v = ct_eval_form(env, arg_form->as.list.items[0]);
+            CtValue v = ct_eval_splice_inner(env, arg_form->as.list.items[0]);
             Form *inner = ct_value_to_form(env, v, arg_form->span);
             if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
             tmp_args[i] = inner;
@@ -727,6 +775,28 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
             ct_env_bind(call_env, fn->rest_param, ct_value_form(form_list(env->elab->arena, f->span, rest, n_rest)));
         }
         return ct_eval_form(call_env, fn->body);
+    }
+
+    /* The head names neither a CT special form, a builtin, nor a bound CT fn.
+     * When this call is the direct inner of a `~@` splice (expand_macro_head),
+     * resolve it as a user macro and expand it at compile time so a macro
+     * buried in a splice -- in particular one that recurses over a list, e.g.
+     * `(chain (rest xs))` -- expands instead of leaking through as an unbound
+     * symbol once the surrounding template is spliced into place. Outside a
+     * splice the call is left as data (rebuilt below) for ordinary
+     * elaboration, so macro-built data forms threaded through `list`/`cons`
+     * (e.g. an accumulated `(map-assoc ...)`) are not prematurely expanded.
+     * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+    if (env->expand_macro_head) {
+        MacroDef *macro = elab_lookup_macro(env->elab, head->as.sym);
+        if (macro) {
+            Form *expanded = elab_expand_macro(env->elab, macro, args, n_args);
+            if (!expanded) {
+                *env->ok = false;
+                return ct_value_form(form_nil(env->elab->arena, f->span));
+            }
+            return ct_value_form(expanded);
+        }
     }
 
     Form *head_form = ct_value_to_form(env, head_v, head->span);
@@ -933,6 +1003,24 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
     return f;
 }
 
+/* A `~@X` whose (substituted) inner X is a compile-time computation -- a CT
+ * builtin / `map` call, a user-macro call, or any form containing CT builtins
+ * -- must NOT be eagerly flattened as data by substitute_params's splice path.
+ * Keep the `~@` wrapper instead so the post-substitution ct_eval_quasiquote
+ * pass evaluates X and splices its RESULT. Without this, `~@(map ...)` /
+ * `~@(chain ...)` are flattened into their literal call tokens (`map`, the fn,
+ * the argument list), which then reach the elaborator as an unbound symbol.
+ * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+static bool splice_inner_needs_ct_eval(Elab *e, Form *f) {
+    if (form_contains_ct_builtins(f)) return true;
+    if (f->tag == F_LIST && f->as.list.len > 0 &&
+        f->as.list.items[0]->tag == F_SYM &&
+        elab_lookup_macro(e, f->as.list.items[0]->as.sym) != NULL) {
+        return true;
+    }
+    return false;
+}
+
 /* Phase 6: Helper to substitute parameters in a form */
 static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
     switch (f->tag) {
@@ -1046,7 +1134,15 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                         Form *inner = item->as.list.items[0];
                         Form *subst = substitute_params(e, inner, macro, args);
                         temp[i] = subst;
-                        if (subst->tag == F_LIST) {
+                        if (splice_inner_needs_ct_eval(e, subst)) {
+                            /* CT computation (e.g. (map ...) / a macro call):
+                             * keep the wrapper so ct_eval_quasiquote computes
+                             * and splices the result rather than flattening the
+                             * un-evaluated call here. */
+                            is_splice[i] = false;
+                            keep_splice_wrapper[i] = true;
+                            n_out++;
+                        } else if (subst->tag == F_LIST) {
                             is_splice[i] = true;
                             keep_splice_wrapper[i] = false;
                             n_out += subst->as.list.len;

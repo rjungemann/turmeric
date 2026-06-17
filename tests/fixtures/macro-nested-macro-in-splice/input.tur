@@ -1,0 +1,20 @@
+;; Regression for docs/reported/ct-macro-evaluator-no-function-call-in-splice.md
+;;
+;; A nested user macro could not be expanded from inside a `~@` splice, so a
+;; macro could not recurse over a list to generate the sequence it splices.
+;; Pre-fix `(chain (rest xs))` in the splice errored with "unbound symbol
+;; 'chain'".
+;;
+;; The fix expands a macro-headed call when it is the direct inner of a `~@`
+;; splice (and only there -- a macro-built data form threaded through `list`
+;; etc. is still left as data for ordinary elaboration).
+
+(defmacro chain [xs]
+  (if (empty? xs)
+    `()
+    `((println ~(first xs)) ~@(chain (rest xs)))))
+
+(defmacro run-all [xs] `(do ~@(chain xs) 0))
+
+(defn main [] : int
+  (run-all ("one" "two" "three")))
