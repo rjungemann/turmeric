@@ -2616,7 +2616,6 @@ static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static int64_t option_hymap(int64_t, int64_t);
-static bool option_hyeq_qu(int64_t, int64_t, int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
@@ -3801,21 +3800,6 @@ static int64_t option_hymap(int64_t o, int64_t f) {
   r->is_some = true;
   r->value = TUR_APPLY1(f, opt->value);
   return (int64_t)(intptr_t)r;
-  
-}
-
-static bool option_hyeq_qu(int64_t o1, int64_t o2, int64_t cmp_fn) {
-        struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
-  struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
-  bool a_some = a && a->is_some;
-  bool b_some = b && b->is_some;
-  if (!a_some && !b_some) return true;
-  if (a_some != b_some)   return false;
-  /* CRU B-3: cmp-fn is a fat closure box { thunk, env... }; fat-dispatch it
-     through slot 0 so a capturing comparator works (a bare thin cast would
-     read the box address as code).  Captureless lambdas are boxed at the call
-     site via the ^fat auto-shim. */
-  return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])((void*)(intptr_t)cmp_fn, a->value, b->value);
   
 }
 

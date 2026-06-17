@@ -2608,7 +2608,6 @@ static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static int64_t option_hymap(int64_t, int64_t);
-static bool option_hyeq_qu(int64_t, int64_t, int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
@@ -2664,6 +2663,7 @@ static bool mutmap_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
 static Option__int g();
 static Option__int gn();
 static int64_t dbl(int64_t);
+static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int, Option__int, int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3787,21 +3787,6 @@ static int64_t option_hymap(int64_t o, int64_t f) {
   
 }
 
-static bool option_hyeq_qu(int64_t o1, int64_t o2, int64_t cmp_fn) {
-        struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
-  struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
-  bool a_some = a && a->is_some;
-  bool b_some = b && b->is_some;
-  if (!a_some && !b_some) return true;
-  if (a_some != b_some)   return false;
-  /* CRU B-3: cmp-fn is a fat closure box { thunk, env... }; fat-dispatch it
-     through slot 0 so a capturing comparator works (a bare thin cast would
-     read the box address as code).  Captureless lambdas are boxed at the call
-     site via the ^fat auto-shim. */
-  return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)cmp_fn)[0])((void*)(intptr_t)cmp_fn, a->value, b->value);
-  
-}
-
 static bool ok_qu(int64_t r) {
         return tur_is_ok(r);
   
@@ -4434,25 +4419,37 @@ int main(int argc, char **argv) {
         __t39[1] = (int64_t)(intptr_t)dbl;
         void *__t40 = __t39;
         printf("%lld\n", (long long)(unwrap_hyor(option_hymap((int64_t)(intptr_t)(&__t38), (int64_t)(intptr_t)(__t40)), INT64_C(0))));
-        Option__int __t41 = g();
-        Option__int __t42 = g();
+        int64_t *__t41 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t41[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t41[1] = (int64_t)(intptr_t)__fn_906;
+        void *__t42 = __t41;
+        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), g(), (int64_t)(intptr_t)(__t42))) ? "true" : "false");
         int64_t *__t43 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t43[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t43[1] = (int64_t)(intptr_t)__fn_906;
+        __t43[1] = (int64_t)(intptr_t)__fn_910;
         void *__t44 = __t43;
-        puts((option_hyeq_qu((int64_t)(intptr_t)(&__t41), (int64_t)(intptr_t)(&__t42), (int64_t)(intptr_t)(__t44))) ? "true" : "false");
-        Option__int __t45 = g();
-        Option__int __t46 = gn();
-        int64_t *__t47 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t47[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t47[1] = (int64_t)(intptr_t)__fn_910;
-        void *__t48 = __t47;
-        puts((option_hyeq_qu((int64_t)(intptr_t)(&__t45), (int64_t)(intptr_t)(&__t46), (int64_t)(intptr_t)(__t48))) ? "true" : "false");
+        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), gn(), (int64_t)(intptr_t)(__t44))) ? "true" : "false");
         puts((some_qu(some(INT64_C(1)))) ? "true" : "false");
         printf("%lld\n", (long long)(unwrap_hyor(none(), INT64_C(42))));
-        int64_t __t49;
-        __t49 = INT64_C(0);
-        return (int)__t49;
+        int64_t __t45;
+        __t45 = INT64_C(0);
+        return (int)__t45;
+}
+
+static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int o1, Option__int o2, int64_t cmp_fn) {
+        bool __t46;
+        if ((o1).is_some) {
+            bool __t47;
+            if ((o2).is_some) {
+                __t47 = (*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), (o1).value, (o2).value);
+            } else {
+                __t47 = false;
+            }
+            __t46 = __t47;
+        } else {
+            __t46 = !((o2).is_some);
+        }
+        return __t46;
 }
 
 
