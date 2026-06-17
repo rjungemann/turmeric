@@ -264,6 +264,9 @@ issue (the comparator `(fn [a b] (eq? a b))` carries int64-uniform params),
 cleared only by closure-element monomorphization -- a separate, larger
 frontier. See the "Update 2026-06-17 (post-#400 audit floor)" section of
 [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md).
+**Baseline refreshed post-#411 to 60 crossings / 11 fixtures** (still zero
+monomorphic deref-copies; the rise is new #411 test coverage, not a regression
+-- see that report's "Update 2026-06-17 (post-#411 baseline refresh)" section).
 
 ## Risks
 

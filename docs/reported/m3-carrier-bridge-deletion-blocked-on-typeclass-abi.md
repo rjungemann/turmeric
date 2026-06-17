@@ -999,6 +999,102 @@ all require it), and there is no monomorphic-path call left to strip out of it.
   deliverable is the corrected post-#400 baseline and the down-scope-complete
   verdict for the collection-Eq cascade.
 
+## Update 2026-06-17 (post-#411 baseline refresh: 34 -> 60; still zero deref-copies; new Option/by-value boundary fixtures)
+
+Re-ran the per-fixture sweep on the current branch head (post-#411, fresh Debug
+build; methodology unchanged: `TUR_M3_AUDIT=1 ./build/tur $flags emit-c <fixture>`
+per fixture with each fixture's own `flags`, stderr captured directly).
+**Refreshed baseline: 11 fixtures / 60 crossings.** The post-#400 "34 / 10"
+figure above is now stale -- the rise is entirely new test coverage and
+post-#400 ABI fixes landing (#407 inline by-value struct fields, #411 MutableMap
+typed-pointer producer), **not** a regression: the "zero monomorphic deref-copy"
+invariant still holds (verified -- `grep '\*\([A-Za-z0-9_]+ \*\)\(intptr_t\)'`
+over the crossing fixtures finds no whole-struct carrier deref-copy; every
+crossing is a `:heap` reinterpret cast, a blessed inline-C construction, or a
+by-value->`:int` spill).
+
+### The refreshed 60, by fixture and bucket
+
+| Fixture | crossings | bucket |
+|---|---|---|
+| `vec-of-tvec-eq` | 12 | A' (6 `Vec int` cast + 6 nested `Vec(Vec ...)` spill -- all fat-closure comparator `(Vec__int *)(intptr_t)(__cmp_*)` casts) |
+| `option-consumers-byvalue-arg` | 12 | **NEW (#411)** -- see below |
+| `set-of-tvec-eq` | 10 | A' (fat-closure comparator `:heap` casts) |
+| `option-of-tvec-eq` | 6 | A' |
+| `inline-c-typed-result-option` | 5 | C (blessed inline-C `tur_ok`/`tur_some`) |
+| `map-of-tvec-eq` | 4 | A' |
+| `option-control-form-construct` | 4 | **NEW (#411)** -- 3 `Option int` + 1 `Result int cstr` carrier->concrete control-form construction (bucket C-shaped) |
+| `decode-bool-carrier-instance-ascription` | 3 | C |
+| `result-of-typed-eq` | 2 | A' |
+| `instance-method-return-carrier-bridge` | 1 | C |
+| `typeclass-method-parameterized-result-decode` | 1 | C |
+
+Bucket totals: **A' ~34** (fat-closure `:heap` casts, up from 22 -- `vec`/`set`
+grew), **C ~14** (blessed inline-C construction, incl. the two new
+control-form/Option fixtures), **bucket E (SChan) is now 0** --
+`generic-relay-aggregate-result` no longer crosses (it improved post-#400; one
+fewer by-design boundary).
+
+### The new #411 fixtures pinpoint the next tractable carrier source: stdlib Option consumers still typed `:int`
+
+`option-consumers-byvalue-arg` (12) is the standout. Its crossings are NOT the
+collection-Eq cascade -- they are the **stdlib Option consumers** (`some?`,
+`unwrap-or`, `option-map`, `option-eq?`) whose handle param is still declared
+`o : int` (the historical carrier ABI; `stdlib/option.tur:63,99,135,161`):
+
+- 4 `carrier->concrete (Option int)`: the by-value producers `g`/`gn`
+  (`(defn g [] : (Option int) (some 5))`) materialise the by-value `Option__int`
+  field-wise from the `tur_some` carrier box
+  (`(Option__int){.is_some = __t->is_some, .value = __t->value}`) -- the blessed
+  bucket-C construction shape (Option's `some`/`none` are inline-C carrier
+  producers), not a deref-copy.
+- 8 `concrete->carrier (Option int)`: each by-value `(Option int)` arg spilled
+  back to the int64 carrier at the `:int`-typed consumer call site -- the
+  **No-Lazy-`:int` boundary**. This is the direct analogue of the Vec/MutableMap
+  handle-retype that took `mutmap-eq` 4 -> 0 (Update 2026-06-15 / the TCO plan):
+  retyping the consumers to `o : (Option A)` is the obvious next increment.
+
+**But it is NOT a quick win** -- it is entangled with Option's none-as-NULL
+carrier representation (the same hazard the 2026-06-15 `Serializable [Option]`
+resolution hit: a carrier `none` (int64 `0`) flowing into a by-value `(Option A)`
+param is deref'd by the call-site bridge as `*(Option__int *)(intptr_t)(0)` ->
+segfault). All four consumers' inline-C bodies also read `o` as a carrier
+pointer (`(void*)(intptr_t)o`) and NULL-check it, so retyping the param forces a
+by-value-field rewrite of each body AND a non-NULL none representation. That is
+the deferred "Option stops representing none as NULL" work, not a param-type
+flip. Recorded here so the next engineer does not mistake the 8 spills for a
+trivial retype.
+
+> **Follow-up landed 2026-06-17.** The by-value-param call-site bridge gap
+> (the `*(Option__int *)(intptr_t)(0)` none-as-NULL segfault) is now fixed --
+> a carrier `#{Construct}` result (`some`/`none`/`ok`/`err`) bridges into a
+> by-value Option/Result param, NULL-safe (carrier `0` -> `(Option__A){0}`,
+> never deref'd). See
+> [option-none-as-null-byvalue-param-segfault.md](option-none-as-null-byvalue-param-segfault.md).
+> On the back of it, `option-eq?` is retyped to by-value `(Option A)`
+> (`option-consumers-byvalue-arg` 12 -> 8; baseline 60 -> 56). `option-map`
+> (construct-in-by-value-return) and `some?`/`unwrap-or` (refined.tur +
+> kleisli Arrow cascade) remain -- see
+> [option-consumer-retype-byvalue.md](option-consumer-retype-byvalue.md).
+
+### Verdict unchanged; reduction frontiers re-stated for the current baseline
+
+The down-scope-complete verdict stands: the bridge fires only at by-design
+boundaries (A' casts, C construction; E is now empty). Reducing the residual 60:
+
+- **A' (~34)** clears only by fat-closure element-ABI monomorphization (typed
+  per-`:heap`-element comparator shims) -- a large M5/M7-adjacent frontier.
+- **C (~14)** is permanent unless Option/Result stop allowing inline-C bodies to
+  return real typed values and Option drops none-as-NULL -- the same Option
+  representation work the new consumer fixtures point at.
+- **M4 typed dict slots still touch ZERO of the 60** (re-confirmed: no crossing
+  is a dict-slot consumption; A' is a closure cast, C is construction).
+
+No code changed in this update -- the deliverable is the corrected post-#411
+baseline (60 / 11, regression-free), bucket E reaching 0, and the identification
+of the stdlib-Option `:int`-consumer retype (gated on none-as-NULL retirement)
+as the next tractable carrier-source reduction.
+
 ## What bucket C does NOT block (anti-FUD note for downstream readers)
 
 This section exists because a 2026-06-17 probe concluded "generic
