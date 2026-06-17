@@ -1,0 +1,24 @@
+;; Option none-as-NULL retirement (Track A): a PLAIN (non-spec) function whose
+;; param is a concrete by-value `(Option A)` can now receive a carrier construct
+;; result (`some`/`none`) without a hard cc error -- and crucially `(none)`
+;; (carrier 0) is reconstructed by the carrier->concrete bridge as a zeroed
+;; `Option__A` (is_some=false) rather than being NULL-deref'd.  Before this fix
+;; the call site emitted `takes_byval(int64_t)` against an `Option__A` formal
+;; (cc type error); the historical workaround was to type every Option consumer
+;; as `o : int` (the No-Lazy-:int carrier stand-in).
+(load "stdlib/math.tur")
+
+(defn takes-byval [o : (Option int)] : int
+  (if (.is-some o) (.value o) -1))
+
+(defn takes-byval-f [o : (Option float)] : float
+  (if (.is-some o) (.value o) -1.0))
+
+(defn main [] : int
+  ;; some + none through a by-value (Option int) param
+  (println (takes-byval (some 5)))                        ; 5
+  (println (takes-byval (:: (none) (Option int))))        ; -1  (none, no NULL deref)
+  ;; float payload (STRICT: non-zero fractional part) -- union reinterpret
+  (println (float->int (* (takes-byval-f (some 7.25)) 100.0)))               ; 725
+  (println (float->int (* (takes-byval-f (:: (none) (Option float))) 100.0))) ; -100
+  0)
