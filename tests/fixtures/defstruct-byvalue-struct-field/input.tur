@@ -1,0 +1,23 @@
+; Regression: docs/reported/defstruct-byvalue-struct-field-stored-as-int-carrier.md
+;
+; A defstruct field typed by a bare (nullary) by-value struct must be stored
+; INLINE as that aggregate, so that `make-struct` initializes the nested struct
+; and `(.field x)` reads it back as the declared struct type -- not the int64
+; carrier.  Previously the field was forced to the int64 carrier (TY_INT), so
+; `(.inner o)` read back as `:int` (type error against a `:Inner` parameter)
+; and recording the nominal type instead broke construction (a by-value struct
+; initializer into an int64 slot).  Both now agree on inline by-value storage.
+
+(defstruct Inner [v : int])
+(defstruct Outer [tag : int inner : Inner])
+
+; Accepts the nested struct type directly -- no `:int` field, no re-pin.
+(defn use-inner [i : Inner] : int (.v i))
+
+(defn main [] : int
+  (let [^mut o (make-struct Outer 1 (make-struct Inner 7))]
+    (println (use-inner (.inner o)))     ; 7, read back as Inner
+    (set! (.inner o) (make-struct Inner 9))
+    (println (.v (.inner o)))            ; 9, mutated inline slot
+    (println (.tag o))                   ; 1, sibling scalar field unaffected
+    0))
