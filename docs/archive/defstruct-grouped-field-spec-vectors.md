@@ -4,12 +4,36 @@ severity: medium -- ergonomics/expressiveness gap. It is the remaining blocker
   for collapsing the ECS `defworld--0..5` per-arity cascade into one
   variadic-over-components macro, now that the `~@`-splice / compile-time `map`
   blocker is fixed (see docs/archive/ct-macro-evaluator-no-function-call-in-splice.md).
-status: open
+status: RESOLVED 2026-06-17
 discovered: 2026-06-17
 surfaced-by: validating the `defworld` collapse after the CT-macro `~@`-splice
   fix landed -- `map` over the component list now works, but its grouped output
   cannot be spliced into a `defstruct` field list.
 ---
+
+> **RESOLVED 2026-06-17.** Fix direction (1) implemented in
+> `src/compiler/elab_structs.c`: before the old-style field vector is scanned,
+> a flattening pre-pass expands every top-level `F_VEC` element (a grouped
+> `[name : type]` spec) into the surrounding `name`, `: type` token stream, so
+> it is exactly equivalent to writing the field inline. Types are never bare
+> vectors (keyword/symbol/list, wrapped in `F_TYPE_ANN`), so a top-level
+> `F_VEC` element is unambiguously a grouped spec. The pre-pass is a no-op when
+> no grouped specs are present.
+>
+> Both the direct spelling
+> `(defstruct World [gens : int [pos : Dense] [vel : Dense]])` and the variadic
+> `defworld` macro
+> `` `(defstruct ~name [gens : int ~@(map (fn [c] `[~c : int]) comps)]) ``
+> now compile and run. Regression fixture:
+> `tests/fixtures/defstruct-grouped-field-specs/`. Full suite green
+> (1667 passed, 0 failed).
+>
+> **Note:** chaining `(.count (.pos w))` through a *by-value struct* field
+> (`pos : Dense`) still reads the inner field back through the int64 carrier --
+> that is the separate, pre-existing straddle tracked in
+> `docs/reported/defstruct-byvalue-struct-field-stored-as-int-carrier.md`, not
+> a grouped-field issue. Grouped specs over scalar / opaque field types work
+> end to end.
 
 # defstruct rejects grouped `[name : type]` field-spec sub-vectors
 

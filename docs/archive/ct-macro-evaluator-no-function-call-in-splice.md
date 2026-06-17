@@ -39,11 +39,11 @@ surfaced-by: turmeric-spices ECS work (E2d) -- attempting the variadic `defworld
 > (1666 passed, 0 failed), including all `#map{...}`/`hamt-of` data-literal
 > fixtures.
 >
-> **Note:** the full ECS `defworld` collapse (validation item 2 below) needs
+> **Note:** the full ECS `defworld` collapse (validation item 2 below) needed
 > one more, independent piece -- `defstruct` accepting grouped `[name : type]`
-> field-spec sub-vectors -- filed separately under
-> `docs/reported/defstruct-grouped-field-spec-vectors.md`. The macro-splice
-> blocker described here is fixed.
+> field-spec sub-vectors -- which is now also fixed (see
+> `docs/archive/defstruct-grouped-field-spec-vectors.md`). With both in place a
+> single variadic `defworld` expands and runs end to end.
 
 # CT macro evaluator: no function call / nested-macro expansion in a `~@` splice
 
