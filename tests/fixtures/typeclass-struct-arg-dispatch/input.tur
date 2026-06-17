@@ -1,0 +1,50 @@
+;; typeclass-struct-arg-dispatch -- struct-argument typeclass dispatch must
+;; resolve each call site to ITS OWN instance, not the last-declared one.
+;;
+;; A class with a method that takes a (plain, non-applied) struct argument,
+;; instantiated for several distinct structs.  Before the fix, the elaborator's
+;; KIND_ARROW instance search treated every non-primitive struct instance as an
+;; equally-good match and picked the first in registration order -- which, since
+;; instances are prepended, is the LAST-declared instance.  So `(render c4)`,
+;; `(render c8)` and `(render c24)` all baked `__inst_Render_render_Color24`:
+;; a hard cc error when the struct layouts differ (Color24), and a SILENT
+;; wrong-vtable dispatch when two structs share a layout (Fg/Bg below).
+
+(defstruct Color4  [code : int])
+(defstruct Color8  [idx  : int])
+(defstruct Color24 [r : int  g : int  b : int])
+
+(defclass Render [a]
+  (render [x] : int))
+
+(definstance Render [Color4]
+  (render [x] : int 4))
+
+(definstance Render [Color8]
+  (render [x] : int 8))
+
+(definstance Render [Color24]
+  (render [x] : int 24))
+
+;; Fg/Bg share an identical single-int C layout: the pre-fix bug routed both to
+;; the last-declared instance (Bg) with no cc error -- a silent miscompile.
+
+(defstruct Fg [code : int])
+(defstruct Bg [code : int])
+
+(defclass Sgr [a]
+  (sgr [x] : int))
+
+(definstance Sgr [Fg]
+  (sgr [x] : int (+ 30 (.code x))))
+
+(definstance Sgr [Bg]
+  (sgr [x] : int (+ 40 (.code x))))
+
+(defn main [] : int
+  (println (render (make-struct Color4 1)))    ; 4
+  (println (render (make-struct Color8 2)))    ; 8
+  (println (render (make-struct Color24 3 4 5))) ; 24
+  (println (sgr (make-struct Fg 1)))           ; 31
+  (println (sgr (make-struct Bg 1)))           ; 41
+  0)

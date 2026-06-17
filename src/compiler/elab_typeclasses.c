@@ -4144,6 +4144,31 @@ skip_capability_field_lookup:;
                      * head like `Functor [(Result _ B)]`, whose varying arm is
                      * erased to the int64 carrier) act as wildcards: comparing
                      * only concrete-vs-concrete keeps those instances matching. */
+                    /* Plain (non-applied) aggregate receiver against a plain
+                     * aggregate instance head: discriminate by type identity.
+                     * Without this, every struct/ADT instance of a class
+                     * (e.g. Render[Color4], Render[Color8], Render[Color24])
+                     * looks like an equally-good non-primitive match, so the
+                     * first one in registration order silently wins.  Since
+                     * instances are prepended (typeclass.c:register_instance),
+                     * "first in registration order" is the LAST-declared
+                     * instance -- so a struct-argument typeclass call resolves
+                     * every call site to the last-declared instance.  That is a
+                     * miscompile (a hard cc type error when the struct layouts
+                     * differ, a silent wrong-vtable dispatch when they happen to
+                     * match -- the "works by luck because the register classes
+                     * match" case CLAUDE.md flags).  Carrier/erased heads
+                     * (NULL def) stay wildcards. */
+                    if (type_ok && obj->type.kind == TY_STRUCT && itk == TY_STRUCT &&
+                        obj->type.as.struct_.def && inst->type_args[0].as.struct_.def &&
+                        obj->type.as.struct_.def != inst->type_args[0].as.struct_.def) {
+                        type_ok = false;
+                    }
+                    if (type_ok && obj->type.kind == TY_ADT && itk == TY_ADT &&
+                        obj->type.as.adt_.def && inst->type_args[0].as.adt_.def &&
+                        obj->type.as.adt_.def != inst->type_args[0].as.adt_.def) {
+                        type_ok = false;
+                    }
                     if (type_ok && obj->type.kind == TY_APP &&
                         inst->type_args[0].kind == TY_APP) {
                         const Type *oh = &obj->type;
