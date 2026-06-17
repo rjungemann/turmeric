@@ -28,9 +28,22 @@ advances.
   `Eq [Vec]` landed as a pure-Turmeric TCO'd loop in PR #400; Map /
   MutableMap / Set conversions still pending.
 - [m3-carrier-bridge-deletion-blocked-on-typeclass-abi](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
-  (report) -- closes when M4 + TCO conversions land
+  (report) -- closes when M4 + TCO conversions land. Audit baseline refreshed
+  post-#411 to **56 crossings / 11 fixtures** (was 60; option-eq? retype cleared
+  4); still zero monomorphic deref-copies.
+- [option-none-as-null-byvalue-param-segfault](reported/option-none-as-null-byvalue-param-segfault.md)
+  (report, RESOLVED 2026-06-17) -- a by-value `(Option A)`/`(Result A B)` param
+  can now receive a carrier `#{Construct}` result (`some`/`none`/`ok`/`err`),
+  with NULL-safe none (carrier `0` -> `(Option__A){0}`, never deref'd). The
+  codegen prerequisite for retiring the Option-consumer `:int` carrier stand-ins.
+- [option-consumer-retype-byvalue](reported/option-consumer-retype-byvalue.md)
+  (report, PARTIAL 2026-06-17) -- `option-eq?` retyped to by-value `(Option A)`;
+  `option-map` (construct-in-by-value-return) and `some?`/`unwrap-or` (cascade
+  into refined.tur + kleisli Arrow) are the documented remainder.
 
 **Order:** M4 -> TCO lift -> bridge tail elimination -> archive M3 report.
+Parallel sub-thread: Option none-as-NULL retirement (by-value-param bridge done;
+option-eq? retyped; option-map + some?/unwrap-or remain).
 
 ## Track B -- ECS spice (E2d wiring + sized worlds)
 
