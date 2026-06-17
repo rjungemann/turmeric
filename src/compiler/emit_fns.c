@@ -232,7 +232,8 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
              * with an int64_t C return type, so a tail call to it yields the
              * carrier handle.  A pure-Turmeric wrapper around such a helper
              * needs the same carrier->by-value bridge that the #{Construct}
-             * and __inst_ producers above already get. */
+             * and __inst_ producers above already get.
+             * See docs/archive/tail-call-inline-c-carrier-bridge.md. */
             if (b->body_is_inline_c && b->type.kind == TY_FN &&
                 b->type.as.fn.result_full_type &&
                 type_uses_carrier_abi(*b->type.as.fn.result_full_type))
