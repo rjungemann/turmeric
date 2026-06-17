@@ -2432,10 +2432,13 @@ typedef struct MutableMap {
 } MutableMap;
 
 
+#ifndef TUR_TY_Option__int
+#define TUR_TY_Option__int
 typedef struct Option__int {
     bool is_some;
     int64_t value;
 } Option__int;
+#endif
 
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {

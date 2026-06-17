@@ -2442,15 +2442,21 @@ typedef struct World {
 } World;
 
 
+#ifndef TUR_TY_PairD__int__int
+#define TUR_TY_PairD__int__int
 typedef struct PairD__int__int {
     int64_t fst;
     int64_t snd;
 } PairD__int__int;
+#endif
 
+#ifndef TUR_TY_World__int__int__int
+#define TUR_TY_World__int__int__int
 typedef struct World__int__int__int {
     int64_t pos;
     int64_t vel;
 } World__int__int__int;
+#endif
 
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
