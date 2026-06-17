@@ -83,11 +83,12 @@ whenever.
 
 ## Track F -- PR #386 regression hotfix
 
-Doesn't fit the bigger themes but should be cleared so it doesn't rot.
-
-- [pr-386-source-binding-alias-breaks-closure-and-with-resource](reported/pr-386-source-binding-alias-breaks-closure-and-with-resource.md)
-  (report) -- bisects cleanly to `849a8711`; either targeted fix or
-  partial revert
+**Resolved 2026-06-17.** The let-bound `source_binding` alias rule no longer
+chains to lifted-lambda `__fn_N` helpers (new `is_lifted_lambda` Binding flag),
+restoring closure-dispatch for captureless closure-returning lambdas and the
+`with-resource` macro. Both regressed fixtures flipped FAIL -> PASS; the report
+is archived at
+[docs/archive/pr-386-source-binding-alias-breaks-closure-and-with-resource.md](archive/pr-386-source-binding-alias-breaks-closure-and-with-resource.md).
 
 ---
 
@@ -95,8 +96,8 @@ Doesn't fit the bigger themes but should be cleared so it doesn't rot.
 
 **Parallelizable today** (no inter-track blocks):
 
-- A (start M4), C (start S1 callbacks), E (parity matrix), F (#386 fix)
-  -- four streams can run concurrently.
+- A (start M4), C (start S1 callbacks), E (parity matrix)
+  -- three streams can run concurrently. (F resolved 2026-06-17.)
 
 **Sequenced inside tracks:**
 

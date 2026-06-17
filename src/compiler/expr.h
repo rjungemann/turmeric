@@ -213,6 +213,16 @@ struct Binding {
      * (EX_VAR / EX_GET_FIELD args), not just a direct call.  NULL when no form
      * is recoverable. */
     const struct Form  *decl_type_form;
+    /* pr-386 regression fix (docs/reported/pr-386-source-binding-alias-breaks-
+     * closure-and-with-resource.md): true when this binding is the global
+     * `__fn_N` helper minted for a captureless lifted lambda (elab_fns.c).
+     * The source_binding alias rule in elab_forms.c must NOT chain a let
+     * binding to such a helper: a lifted closure-returning lambda is callable
+     * only through the closure-dispatch protocol on the let binding, not by a
+     * direct call to the lifted global (whose C signature returns the int64
+     * carrier, not a function pointer).  Only user-named globals are valid
+     * source_binding targets. */
+    bool                is_lifted_lambda;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */

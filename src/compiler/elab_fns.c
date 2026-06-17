@@ -3772,6 +3772,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
     
     Binding *b = binding_new(e, fn_name_sym, fn_type, false, true, call->span);
     scope_add(&e->global, b);
+    /* pr-386 regression fix: mark this as a lifted-lambda helper so the
+     * let-bound source_binding alias rule (elab_forms.c) does not chain to it.
+     * A captureless closure-returning lambda must be called through the
+     * closure-dispatch protocol on the let binding, not by a direct call to
+     * __fn_N (whose C signature returns the int64 carrier, not a fn pointer). */
+    b->is_lifted_lambda = true;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);

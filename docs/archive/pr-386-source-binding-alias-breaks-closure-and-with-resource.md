@@ -1,10 +1,40 @@
 ---
 title: PR #386's let-bound source_binding alias miscompiles captureless closure-returning lambdas + with-resource macro emits wrong C type
 severity: medium -- silent miscompile at clang time (-Wint-conversion fires; would be a hard runtime bug otherwise). Two fixtures regress: curried-fn-typed-param-application and with-resource-basic.
-status: open
+status: resolved
 discovered: 2026-06-15
+resolved: 2026-06-17
 introduced-by: PR #386 (849a8711 "Fix generic-dict dispatch re-resolution under --interpret")
 ---
+
+## Resolution (2026-06-17)
+
+Fixed via the report's **Option 2** (the surgical, single-site fix). A new
+`is_lifted_lambda` flag on `Binding` (`src/compiler/expr.h`) is set when a
+captureless lambda is lifted to a global `__fn_N` helper
+(`src/compiler/elab_fns.c`). The let-binding `source_binding` alias rule in
+`src/compiler/elab_forms.c` now refuses to chain to a lifted-lambda helper:
+`source_binding` means "the user typed a global function name as the init",
+which a `__fn_N` helper is not. With the alias gone, `(f x)` flows through the
+closure-dispatch protocol on the let binding (a function-pointer cast at the
+call site) instead of a direct `__fn_N(...)` call whose C signature returns
+the int64 carrier.
+
+The same change fixed the `with-resource` case (the untraced root cause shared
+the alias-rule lineage), so no separate investigation was needed.
+
+Validation:
+
+- `tests/fixtures/curried-fn-typed-param-application/` FAIL -> PASS.
+- `tests/fixtures/with-resource-basic/` FAIL -> PASS.
+- The constrained-generic regression #386 closes
+  (`cgi-constrained-generic-dispatch`, `m5-constrained-poly-*`) stays green.
+- `tests/fixtures/macro-quasiquote-unquote/expected.c` codegen snapshot
+  regenerated: a captureless `add5 = (make-add 5)` now emits the
+  function-pointer cast on the binding rather than a direct `__fn_881(...)`
+  call -- the new behavior is correct and general (the old direct call only
+  happened to compile for int-returning captureless lambdas).
+- Full `bash tests/run.sh`: 1653 passed, 0 failed.
 
 # PR #386 regressed two fixtures
 
