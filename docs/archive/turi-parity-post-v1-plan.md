@@ -1,9 +1,24 @@
 # turi ↔ tur Parity (post-v1) Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-10
+> **Status:** RESOLVED -- all phases landed or intentionally carved (2026-06-17)
+> **Last Updated:** 2026-06-17
 > **Type:** Interpreter / Test Infra / Docs
 > **Scope:** post-v1 -- not blocking the v1 release
+
+> **Resolution (2026-06-17).** Every phase has landed: TI0 (typeclass audit),
+> TI1 (quick wins), TI2 (generators), TI3 (delimited control -- abortive +
+> context-capturing), TI4 (STM), TI5 (panic payloads), TI6 (with-handler +
+> first-class handlers), TI7 (carve-outs codified), TI8 (CI ratchet +
+> allowlist->denylist flip), TI9 (parity matrix guide), and TI10 (turi-closure-
+> aware HAMT, Tiers A+B). The two CI ratchets pass clean
+> (`check_turi_parity.py`: 115/116 EX_* handled, 1 carved, 0 gaps;
+> `check_turi_native_parity.py`: 0 uncarved native gaps), and the turi harness is
+> green at **1212 passed, 0 failed, 416 skipped** (all 416 are permanent
+> user-inline-C carve-outs). Residual surface is exactly the documented,
+> intentional carve-outs: `EX_CPS_CONT_APP` (never emitted by the elaborator),
+> user inline-C (`docs/turi-carve-out.txt`), and WASM async (`src/turi/fiber.c`).
+> This plan is retained as the historical record; the published parity matrix is
+> [docs/guides/turi-parity-guide.md](../guides/turi-parity-guide.md).
 
 ---
 
@@ -374,11 +389,23 @@ The wiring flip belongs with the TI8 triage (it turns CI red until the
 ~31 fixtures are fixed or carved out) and is intentionally **not**
 bundled into TI1.
 
-### TI1 items still open
+### TI1 items still open -- **all since LANDED**
 
-`EX_SYM_LIT`, `EX_CONS_LIST`, `EX_HANDLER_LIT`/`EX_COMPOSE_HANDLERS`,
-`EX_OR_ELSE`, and `EX_CHECK` remain unimplemented. They are less
-self-contained than the plan's "quick wins" framing implies:
+All five originally-open quick wins have landed, each through the larger
+phase the analysis below predicted they belonged with:
+
+- `EX_SYM_LIT` and `EX_CONS_LIST` are now handled in `src/turi/eval.c`
+  (a `:Sym` interned as a stable `const Symbol *`; a `& rest` tail built
+  as a chain of `{head; tail}` cells matching the `__tur_cons_of` ABI),
+  paired with native `sym->str`/`sym=?`/`str->sym`/`Eq[Sym]`/`Hash[Sym]`/
+  `MapKey[Sym]` and cons-accessor overrides for the inline-C stdlib bodies
+  -- see `docs/turi-carve-out.txt`.
+- `EX_OR_ELSE` and `EX_CHECK` landed with TI4 (STM).
+- `EX_HANDLER_LIT`/`EX_COMPOSE_HANDLERS` landed with TI6 (first-class
+  handlers).
+
+The original (correct) "less self-contained than quick wins" analysis is
+retained below for the record:
 
 - The existing `sym-*` and `variadic-*` fixtures pair `EX_SYM_LIT` /
   `EX_CONS_LIST` with **user inline-C** (`__tur_sym` field reads,
@@ -393,11 +420,20 @@ self-contained than the plan's "quick wins" framing implies:
 
 ---
 
-## Phase TI2 -- Generators
+## Phase TI2 -- Generators -- **LANDED (interpreter)**
 
-The compiler emits `EX_GEN` (generator constructor), `EX_GEN_NEXT`,
-`EX_GEN_DONE`, and `EX_YIELD` for `(gen ...)` and `for*`-style loops.
-Today these are unhandled.
+`EX_GEN` (generator constructor), `EX_GEN_NEXT`, `EX_GEN_DONE`, and
+`EX_YIELD` are now handled in `src/turi/eval.c` via the fiber-backed
+strategy (1) below: each generator body runs on its own `ucontext` stack
+(reusing `src/turi/fiber.c`), `yield` swaps back to the caller and
+`gen-next` swaps in, with native `gen-some?`/`gen-unwrap`/`gen-done?`
+overrides. Verified under `tur --interpret`: `gen-basic` (sums 1..3 = 6)
+and `gen-done` pass and ride the harness. `gen-nested` re-yields from an
+inner generator but defines its `ptr-some?`/`ptr-unwrap` accessors as
+**user inline-C**, so it auto-skips as a permanent TI7 carve-out (the
+generator machinery itself is fine -- only the raw `c` blocks are
+unrunnable). The planned `gen-defer` fixture was not created; defer-on-drop
+is exercised by the broader defer suite.
 
 ### Implementation
 
@@ -731,7 +767,20 @@ The foundational correctness fix and the CI ratchet shipped:
   the harness is green at **122 passed, 0 failed**. The `requires.tur-only`
   marker (from TI1) is honored as the symmetric skip to `requires.compiled`.
 
-### TI8.b -- Full allowlist → denylist flip -- **IN PROGRESS (defmodule defect fixed)**
+### TI8.b -- Full allowlist → denylist flip -- **LANDED**
+
+> **Flip shipped (W5).** `tests/run-turi.sh` no longer carries an allowlist:
+> `TURI_FIXTURES_DEFAULT` and its O(1) lookup set are deleted, and the harness
+> now runs **every** `tests/fixtures/*` under `tur --interpret` minus the
+> `requires.{compiled,tur-only,dedicated-runner,spices,tsan}` marker skips and
+> the auto-detected user-inline-C (```c) carve-outs (TI7). `tests/fixtures/errors/*`
+> run through the dedicated diag-comparison pass. As of 2026-06-17 the harness is
+> green at **1212 passed, 0 failed, 416 skipped** (all 416 are inline-C
+> carve-outs). The four remaining steps below are all done; `tests/run-flags.sh`'s
+> three `tur run` assertions were flipped to `--interpret` alongside the harness.
+> The historical IN-PROGRESS write-up is retained below for the paper trail.
+
+#### Historical: IN PROGRESS (defmodule defect fixed)
 
 > **Execution detail:** the full per-bucket plan for closing the remaining
 > failures lives in
@@ -778,14 +827,15 @@ existential / continuation semantic divergences. Each must
 be fixed in `src/turi/eval.c` or tagged `requires.tur-only`/`requires.compiled`
 before the flip lands green.
 
-Remaining steps when the flip is tackled:
+Remaining steps when the flip is tackled -- **all done (W5)**:
 
-1. Delete `TURI_FIXTURES_DEFAULT` from `tests/run-turi.sh`.
-2. Default to "run every fixture" minus `requires.{compiled,tur-only,
-   dedicated-runner,spices}`.
-3. Retire the `KB-001` allowlist-gap workaround comment.
-4. Also flip `tests/run-flags.sh`'s three `tur run` assertions (`:345`,
-   `:355`, `:408`) to `--interpret`.
+1. ~~Delete `TURI_FIXTURES_DEFAULT` from `tests/run-turi.sh`.~~ Done.
+2. ~~Default to "run every fixture" minus `requires.{compiled,tur-only,
+   dedicated-runner,spices}`.~~ Done (also skips `tsan` markers and
+   auto-detected user-inline-C bodies).
+3. ~~Retire the `KB-001` allowlist-gap workaround comment.~~ Done.
+4. ~~Also flip `tests/run-flags.sh`'s three `tur run` assertions to
+   `--interpret`.~~ Done (`:345`, `:355`, `:412`).
 
 ---
 
@@ -939,7 +989,8 @@ scalar-keyed `map-*` program pass under `--interpret` with **no change to
 > `keyeq` to a bare C function pointer, so handing it a *capturing* closure
 > segfaults on `tur run` with no type rejection (the interpreter accepts it via
 > Tier B). Filed at
-> [docs/reported/raw-map-eq-api-segfaults-on-capturing-comparator.md](../reported/raw-map-eq-api-segfaults-on-capturing-comparator.md);
+> [docs/archive/raw-map-eq-api-segfaults-on-capturing-comparator.md](raw-map-eq-api-segfaults-on-capturing-comparator.md)
+> (since resolved + archived);
 > the reentrancy fixture therefore uses top-level captureless comparators (which
 > lower to C fn pointers on the compiled path) so it stays green on both.
 
