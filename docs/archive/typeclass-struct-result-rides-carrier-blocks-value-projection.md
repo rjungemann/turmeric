@@ -9,10 +9,12 @@ severity: Medium. A typeclass method declared to return a by-value struct/ADT
   with the by-value `T` (a hard cc error, not a silent miscompile). Argument
   position is *by-value*, result position is *carrier* -- the asymmetry is what
   blocks round-tripping a struct element through a dispatched get/insert pair.
-status: OPEN. Discovered while landing ECS E2d-P6 (associated-type method
-  returns + multi-param storage dispatch). The three reported P6 type-checker
-  gaps are fixed; this is the next layer (value-level projection) which the
-  assoc-types-plan explicitly scoped OUT, surfaced concretely here.
+status: RESOLVED -- see "Resolution" below.  A by-value struct/concrete-ADT
+  result of a typeclass method now carries its precise type (def) to the call
+  site, so `(.field (method ...))` resolves and a get/insert struct round-trip
+  type-checks and lowers.  Discovered while landing ECS E2d-P6 (associated-type
+  method returns + multi-param storage dispatch); fixed in the same line of
+  work as the follow-up the report called for.
 ---
 
 # Typeclass struct/ADT results ride the int64 carrier at call sites
@@ -137,10 +139,60 @@ later milestone can let `get` return a real struct the caller can field-access.
 - Full suite stays green; add a fixture pinning a struct-returning method whose
   result is field-accessed and let-bound.
 
+## Resolution
+
+Fixed via direction 1 (make the value-level path consistent), scoped to the
+genuinely by-value nominal types so the carrier ABI is untouched everywhere
+else.
+
+`src/compiler/elab_typeclasses.c`:
+
+1. **Impl side** (instance-method fn-type build): when the (already correctly
+   substituted) `return_type` is a **non-parametric** `TY_STRUCT`/`TY_ADT`
+   (`def && def->n_type_params == 0`), attach it as `result_full_type` -- the
+   same mechanism the closure-returning (`TY_FN`) case already used.  This makes
+   the emitted impl signature, the dictionary slot, and `type_c_name` all agree
+   on the by-value layout.  Parametric structs and applied/opaque heads
+   (`TY_APP`, e.g. the receiver `(Dense Pos)`) are deliberately *excluded* so
+   they keep the documented int64 carrier ABI.
+
+2. **Call site** (`elab_method_call` result-type computation): recover that
+   `result_full_type` (same non-parametric gate) instead of the def-less
+   `type_from_kind(result_kind)`, so the call's result Expr carries the struct
+   def.  `(.field (method ...))` then resolves and a let-bound `p : Pos` lowers
+   to the by-value struct.
+
+Because struct *parameters* of a typeclass method were already by-value, making
+the *result* by-value too is symmetric: a get/insert round-trip
+`(sop-insert! s i (sop-get s j))` now type-checks and lowers without a
+carrier/by-value mismatch.
+
+The earlier worry that this would break carrier-shim instance bodies does not
+materialize for real code: a body that genuinely produces the element (a
+direct `(make-struct Pos ...)`, or a generic `__TUR_TY_A__`-templated storage
+read) returns the struct by value, which is exactly what the new signature
+expects.  Inline-C `return 0;` shims only "worked" before because the result
+was erased -- they were returning the wrong thing, and a `: Pos` method should
+return a `Pos`.
+
+**Validation:**
+
+```turmeric
+;; element copied through get -> insert -> get -> field-access
+(sop-insert! s 5 (sop-get s 2))
+(printf "copied x=%lld\n" (.x (sop-get s 5)))   ; copied x=99
+```
+
+Fixtures `tests/fixtures/typeclass-assoc-type-method-return/` and
+`tests/fixtures/typeclass-multiparam-storage-dispatch/` now exercise the full
+value-level path (the dispatched struct result is field-accessed at the call
+site and round-tripped through insert).  Full suite: 1665 passed, 0 failed.
+
 ## Related
 
 - `docs/archive/typeclass-associated-types-missing.md` (value-level projection
-  explicitly out of scope).
+  was previously listed out of scope; this resolution lifts that for by-value
+  struct/concrete-ADT element types).
 - `tests/fixtures/typeclass-assoc-type-method-return/`,
   `tests/fixtures/typeclass-multiparam-storage-dispatch/`,
   `tests/fixtures/typeclass-typed-method-param/` (the P6 dispatch fixtures; they

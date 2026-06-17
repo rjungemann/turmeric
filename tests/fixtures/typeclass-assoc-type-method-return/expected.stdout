@@ -1,2 +1,1 @@
-get idx=7
-insert idx=1
+elem.x=42

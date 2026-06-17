@@ -2861,6 +2861,27 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             *rft = return_type;
             fn_type.as.fn.result_full_type = rft;
         }
+        /* ECS E2d-P6 (value-level projection): a method returning a *by-value*
+         * struct or concrete ADT -- e.g. an instance whose return type
+         * substituted to the by-value `Pos` (a class-var `: E`, an associated
+         * member `: Elem`, or a direct `: Pos`) -- must carry the precise
+         * return Type so the emitted impl, the dict slot, and the call site
+         * agree on the by-value layout.  `type_from_kind(result_kind)` alone
+         * drops the struct def, leaving `(.field (method ...))` unable to
+         * resolve and a let-bound result mis-lowered against the carrier.
+         *
+         * Scope: genuinely by-value nominal types only.  Parametric structs and
+         * applied/opaque heads (TY_APP, e.g. the receiver `(Dense Pos)`) keep
+         * the documented int64 carrier ABI -- they are erased everywhere else,
+         * and forcing them by-value here would diverge from the dispatch ABI. */
+        else if ((return_type.kind == TY_STRUCT && return_type.as.struct_.def &&
+                  return_type.as.struct_.def->n_type_params == 0) ||
+                 (return_type.kind == TY_ADT && return_type.as.adt_.def &&
+                  return_type.as.adt_.def->n_type_params == 0)) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = return_type;
+            fn_type.as.fn.result_full_type = rft;
+        }
 
         /* Create FnDef for the method implementation */
         FnDef *method_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
@@ -4432,6 +4453,23 @@ resolved_user_fallback:;
         result_type = method_callable_result_type(
             best_method->binding,
             type_from_kind(best_method->binding->type.as.fn.result_kind));
+        /* ECS E2d-P6 (value-level projection): recover the precise by-value
+         * struct/ADT return (with its def) from the impl binding's
+         * result_full_type, so a struct result carries its def to the call site
+         * -- `(.field (method ...))` resolves and a let-bound `p : Pos` lowers
+         * to the by-value struct instead of the def-less carrier kind.  Gated to
+         * the same non-parametric nominal types the impl side threads above;
+         * boxed-fn results are already handled by method_callable_result_type. */
+        {
+            const Type *rft = best_method->binding->type.as.fn.result_full_type;
+            if (rft &&
+                ((rft->kind == TY_STRUCT && rft->as.struct_.def &&
+                  rft->as.struct_.def->n_type_params == 0) ||
+                 (rft->kind == TY_ADT && rft->as.adt_.def &&
+                  rft->as.adt_.def->n_type_params == 0))) {
+                result_type = *rft;
+            }
+        }
         /* Arrow-identity passthrough: the method's declared return is the arrow
          * class variable (a boxed arity-0 TY_FN shell) and its body is a bare
          * reference to one of the method's parameters -- so the dispatched
