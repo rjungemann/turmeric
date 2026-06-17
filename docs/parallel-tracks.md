@@ -1,6 +1,6 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-17 (post-PR #417; post-v0.21.0).
+Snapshot: 2026-06-17 (post-PR #415/#416/#417; post-v0.21.0).
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
 open report in `docs/reported/`, bucketed into tracks that can largely
@@ -51,23 +51,25 @@ advances.
   (report, PARTIAL 2026-06-17) -- `option-eq?` retyped to by-value `(Option A)`;
   `option-map` (construct-in-by-value-return) and `some?`/`unwrap-or` (cascade
   into refined.tur + kleisli Arrow) are the documented remainder.
-- [result-bridge-tail-call-from-pure-tur-to-inline-c](reported/result-bridge-tail-call-from-pure-tur-to-inline-c.md)
-  (report) -- **filed 2026-06-17 (PR #417)**; sibling case to PR #416
-  surfaced while pursuing the Track C tourist retype. PR #416 fixed
-  the bare-tail-call form (regression fixture
-  `result-bridge-tail-call-to-inline-c`, report archived) but a
-  pure-Turmeric wrapper around an inline-C carrier helper still
-  needs the let-binding workaround in the general case; spice
-  authors currently fall back to inline-C re-implementation. Lives
-  on Track A; unblocks Track C's "thin pure-Turmeric defns over
-  inline-C bodies" direction.
+- ~~[result-bridge-tail-call-from-pure-tur-to-inline-c](archive/result-bridge-tail-call-from-pure-tur-to-inline-c.md)~~
+  -- **archived 2026-06-17**. PR #416 fixed the bare tail-call form and
+  PR #415 extended the bridge to all tail positions (if-branched,
+  do-block, let-body, do-then-tail) by recognising inline-C carrier-ABI
+  callees as carrier producers in `fn_body_tail_is_carrier_producer`.
+  Regression coverage: `tests/fixtures/result-bridge-tail-call-to-inline-c/`
+  and `tests/fixtures/tail-call-inline-c-carrier-bridge/`. The
+  duplicate in `docs/reported/` was a stale copy left behind when the
+  archive landed; removed in this snapshot. Unblocks Track C's thin
+  pure-Turmeric wrappers over inline-C bodies (the tourist
+  `param`/`capture` retype no longer needs the inline-C workaround).
 
-**Order:** M4 -> TCO lift -> bridge tail-call follow-up (#417). The
-M3 wholesale-deletion goal is retired; `emit_carrier_bridge` stays for
-the cast / blessed-construction / type-erased boundaries it was
-re-scoped to in the now-archived M3 report. Parallel sub-thread:
-Option none-as-NULL retirement (by-value-param bridge done;
-option-eq? retyped; option-map + some?/unwrap-or remain).
+**Order:** M4 is the sole open critical-path item. The bridge
+tail-call follow-up (#415, #416) shipped; the M3 wholesale-deletion
+goal is retired (`emit_carrier_bridge` stays for the cast /
+blessed-construction / type-erased boundaries it was re-scoped to in
+the now-archived M3 report). Parallel sub-thread: Option none-as-NULL
+retirement (by-value-param bridge done; option-eq? retyped;
+option-map + some?/unwrap-or remain).
 
 ## Track B -- ECS spice (E2d wiring + sized worlds)
 
@@ -109,12 +111,12 @@ Pure spice-side work; no compiler dependencies.
   follow-ups: S4 cons lists in tourist internals; residual S2 (a
   `ctx : int` parameter retype on `param`/`capture`, and a missing
   `Captures` defopaque) inside otherwise-fixed tourist -- the
-  `param`/`capture` retype is currently soft-blocked by the
+  `param`/`capture` retype was previously soft-blocked by the
   pure-Tur-wrapper-around-inline-C bridge bug
-  ([result-bridge-tail-call-from-pure-tur-to-inline-c](reported/result-bridge-tail-call-from-pure-tur-to-inline-c.md),
-  Track A), so the tourist spice carries an inline-C re-implementation
-  of `capture` as a temporary workaround; secondary handle leaks
-  inside plutovg / raylib / rtaudio.
+  ([archive/result-bridge-tail-call-from-pure-tur-to-inline-c](archive/result-bridge-tail-call-from-pure-tur-to-inline-c.md),
+  Track A) -- now unblocked by PR #415/#416, so the tourist spice can
+  drop its inline-C re-implementation of `capture` at the next pass;
+  secondary handle leaks inside plutovg / raylib / rtaudio remain.
 - ~~[tourist-middleware-takes-req-not-ctx](reported/tourist-middleware-takes-req-not-ctx.md)~~
   -- **closed in `tur-tourist` v0.2.0** (Ctx-based `use!`, `ctx-attr-*`,
   `ctx-add-header!`, `use-after!`); see
@@ -223,12 +225,12 @@ No open cross-cutting reports as of this snapshot.
 **Parallelizable today** (no hard inter-track blocks):
 
 - A (M4 in progress; TCO/stdlib helper conversions in parallel;
-  pure-Tur-wrapper-around-inline-C bridge follow-up filed),
+  pure-Tur-wrapper-around-inline-C bridge follow-up shipped in
+  PR #415/#416),
 - B (E2d wiring resumable; all compiler blockers cleared),
 - C (per-spice uplift phases + S3 work; tourist `param`/`capture`
-  retype is soft-blocked by the Track A bridge follow-up but the
-  inline-C workaround keeps the surface shipping).
+  retype is now unblocked by the Track A bridge follow-up landing).
 
-**No hard inter-track sequencing constraints** -- the one soft
-coupling is the Track A bridge follow-up unblocking the cleanest
-form of the Track C `param`/`capture` retype.
+**No hard inter-track sequencing constraints.** The prior soft
+coupling between the Track A bridge follow-up and the Track C
+`param`/`capture` retype is gone now that the bridge fix landed.
