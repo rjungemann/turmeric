@@ -1,12 +1,31 @@
 # tur-tourist middleware: takes `req`, no ctx, no post-response hook
 
-**Status:** Reported
-**Severity:** Design defect / expressiveness hole -- blocks any non-trivial
+**Status:** Resolved (2026-06-16) -- `tur-tourist` v0.2.0 lands all three
+fixes the report asked for:
+
+- `use!` now takes `(c-fn [Ctx] (Option Response))`; the per-request
+  Ctx is built once at request entry and shared with middleware AND the
+  route handler.
+- `use-after!` adds a post-response hook taking
+  `(c-fn [Ctx Response] Response)`; runs in reverse declaration order
+  before the framework applies any queued headers.
+- `__tourist_ctx` grows an `attrs` slot (with `ctx-attr-get` /
+  `ctx-attr-set!` helpers) and a `resp_headers` slot (with
+  `ctx-add-header!`), unblocking sessions / request IDs / CSRF / etc.
+
+The `tourist-spices/spices/tourist` branch `tourist-v0.2.0-ctx-redesign`
+(commits `a2fbad1`, `9ea035d`, `a353950`) carries the fix and a new
+`ctx-attrs-after` fixture that round-trips a request-id through ctx
+attrs and after-mw header injection. The session-middleware plan at
+`docs/upcoming/v1/tourist-session-middleware-plan.md` can now retarget
+SS4/SS5 against the new typed API.
+
+**Severity:** Design defect / expressiveness hole -- blocked any non-trivial
 middleware (sessions, auth, request-scoped logging with capture context,
 response decoration, CSRF, gzip/compression, observability).
 **Discovered:** 2026-06-14, while scoping the session-middleware plan at
 `docs/upcoming/v1/tourist-session-middleware-plan.md`.
-**Spice:** `../turmeric-spices/spices/tourist` (`tur-tourist` v0.1.0).
+**Spice:** `../turmeric-spices/spices/tourist` (`tur-tourist` v0.1.0 -> v0.2.0).
 
 ---
 

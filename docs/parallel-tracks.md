@@ -49,28 +49,23 @@ phases.
 
 ## Track C -- Spices uplift (type hygiene)
 
-Pure spice-side work; no compiler dependencies. Pairs naturally with
-Track D.
+Pure spice-side work; no compiler dependencies.
 
 - [spices-int-stand-in-audit-2026-06-14](reported/spices-int-stand-in-audit-2026-06-14.md)
-  (report) -- S1 callbacks first (5 cases, zero type protection)
-- [tourist-middleware-takes-req-not-ctx](reported/tourist-middleware-takes-req-not-ctx.md)
-  (report) -- redesign Tourist middleware ABI
+  (report) -- S1 callbacks closed (rtmidi/osc/httpd already shipped
+  `c-fn` types pre-audit; tourist closed in v0.2.0). Open follow-ups:
+  S2 handles in httpd/osc/rtmidi, S3 result/option on
+  param/capture/req-header, S4 cons lists in tourist internals.
+- ~~[tourist-middleware-takes-req-not-ctx](reported/tourist-middleware-takes-req-not-ctx.md)~~
+  -- **closed in `tur-tourist` v0.2.0** (Ctx-based `use!`, `ctx-attr-*`,
+  `ctx-add-header!`, `use-after!`); see
+  [archive/tourist-middleware-takes-req-not-ctx](archive/tourist-middleware-takes-req-not-ctx.md).
 - [spices-type-features-uplift-plan](upcoming/spices-type-features-uplift-plan.md)
   -- phased per-spice work (rows, typeclasses, sized types where they
   "pay rent")
 
-**Order:** S1 callback fixes -> tourist ABI redesign -> per-spice uplift
-phases in any order.
-
-## Track D -- Workspace consolidation (orthogonal)
-
-Mechanical refactor with high friction-removal payoff. Independent of
-A/B/C, but **best landed after** Track C's tourist redesign so the merge
-doesn't carry a known-bad public API into the monorepo.
-
-- [recombine-turmeric-spices-plan](upcoming/recombine-turmeric-spices-plan.md)
-  -- single repo / single workspace
+**Order:** S1 callbacks (done) -> tourist ABI redesign (done) ->
+remaining S2/S3 in httpd/osc/rtmidi -> per-spice uplift phases.
 
 ## Track E -- Interpreter parity (post-v1)
 
@@ -112,4 +107,3 @@ is archived at
 **Sequenced inside tracks:**
 
 - B is gated on its two bug fixes before E2d wiring can resume.
-- D should wait on C's tourist redesign.

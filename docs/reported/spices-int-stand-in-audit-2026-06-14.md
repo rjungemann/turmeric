@@ -58,10 +58,18 @@ These are the most dangerous: handler signature is documented in prose only,
 and an exported call site can pass a function of any shape with no
 diagnostic.
 
+Status (2026-06-16): rtmidi / osc / httpd already shipped `c-fn`-typed
+callbacks before this audit was filed (the audit caught these stale).
+~~`tourist/middleware.tur` `use!`~~ and ~~`tourist/dsl.tur`
+`get!`/`post!`/`put!`/`delete!`/`any!`~~ are **fixed in `tur-tourist`
+v0.2.0** (Ctx-based shapes; see archived companion report
+`docs/archive/tourist-middleware-takes-req-not-ctx.md`). All five S1
+callback findings are now closed.
+
 | File:line | Function | `:int` actually is | Should be |
 |---|---|---|---|
-| `tourist/src/tourist/middleware.tur:58` | `use! [fn : int]` | `(fn [Request] option<Response>)` (per current tourist/app dispatch) -- but see the separate `tourist-middleware-takes-req-not-ctx.md` finding; the right shape is `(fn [Ctx] option<Response>)` | `(fn [Ctx] option<Response>)` |
-| `tourist/src/tourist/dsl.tur:185,198,211,224,240` | `get!`, `post!`, `put!`, `delete!`, `any!` -- all take `handler : int` | `(fn [Ctx] Response)` route handler | `(fn [Ctx] Response)` |
+| ~~`tourist/src/tourist/middleware.tur:58`~~ | ~~`use! [fn : int]`~~ -- **fixed v0.2.0** | `(c-fn [Ctx] (Option Response))` | -- |
+| ~~`tourist/src/tourist/dsl.tur:185,198,211,224,240`~~ | ~~`get!`, `post!`, `put!`, `delete!`, `any!`~~ -- **fixed v0.2.0** | `(c-fn [Ctx] Response)` | -- |
 | `httpd/src/httpd/server.tur:511,528` | `server-start [... handler : ptr<void>]`, `server-start-pool` | Raw C function pointer of shape `int64_t(*)(int64_t)` | `(fn [Request] Response)` (or named `Handler` newtype) |
 | `rtmidi/src/rtmidi/in.tur:120` | `midi-in-set-callback [mi : int callback : int]` | `RtMidiCCallback` (`(fn [double bytes :ptr<u8> nbytes :int user :ptr<void>] :void)`) | Named callback type, ideally a `defopaque` over the function-pointer type |
 | `osc/src/osc/server.tur:138` | `server-add-method [... handler : int]` | OSC liblo method handler | `(fn [path :cstr types :cstr argv :ptr<void> argc :int msg :Msg user :ptr<void>] :int)` or, since the docstring says "reserved for future FFI", drop the parameter until it has a real type |
@@ -82,19 +90,34 @@ Grouped by spice. The fix in every case is one of:
   exists, OR
 - `defopaque Foo :int` (last resort) if it really is an opaque integer key.
 
-### tourist (11 findings)
+### ~~tourist (11 findings)~~ -- **partially fixed in `tur-tourist` v0.2.0**
 
-| File:line | Function | What `:int` is | Should be |
-|---|---|---|---|
-| `tourist/dsl.tur:78` | `route-new` returns `:int` | `Route` handle | `defopaque Route` |
-| `tourist/dsl.tur:107,122` | `route-pattern`, `route-handler` | `Route` handle | `Route` |
-| `tourist/dsl.tur:144` | `route-call-handler` -> `:int` | `Response` handle | `Response` |
-| `tourist/helpers.tur:28,43,58,77` | `text`, `html`, `json-body`, `redirect` -> `:int` | `Response` handle | `Response` |
-| `tourist/param.tur:212,217` | `tourist-ctx-new`, `__tourist-ctx-alloc` -> `:int` | `Ctx` handle | `defopaque Ctx` (also needs an extension slot -- see the middleware finding) |
-| `tourist/param.tur:111` | `tourist-ctx-caps [ctx : int] : int` | `ctx`->`Captures` | `[Ctx] : Captures` |
-| `tourist/router.tur:45,143` | `router-compile`, `router-match` -> `:int` | `Pattern`, `Captures` | `defopaque Pattern`, `defopaque Captures` |
-| `tourist/routing.tur:95` | `mount! [prefix : cstr item : int] : int` | `Route` or sub-app handle in; `Mount` out | parameterise on whatever the sub-app type is |
-| `tourist/routing.tur:256,275` | `__dispatch-item`, `__url-map-dispatch` -> `:int` | `Response` handle | `Response` |
+`defopaque Ctx`, `defopaque Response`, `defopaque Request`, `defopaque Item`,
+and `defopaque Mount` are exported from the new `tourist/types` module
+and threaded through the user-facing surface. Specifically:
+
+- `text` / `html` / `json-body` / `redirect` / `status` now return
+  `Response` (helpers.tur).
+- `get!` / `post!` / `put!` / `delete!` / `any!` are typed
+  `[cstr (c-fn [Ctx] Response)] : Item` (dsl.tur via the v0.2.0
+  middleware reshape; the audit's "Route" defopaque is folded into
+  the `Item` newtype to fit Turmeric's single-typed variadic rest).
+- The ctx extension slot called out in the middleware finding shipped
+  as `attrs` and `resp_headers`, with public `ctx-attr-get` /
+  `ctx-attr-set!` / `ctx-add-header!` helpers (param.tur).
+
+Remaining tourist holes from this row that the v0.2.0 cut did NOT close
+(follow-up work; not blocking sessions or downstream apps):
+
+- The internal `route-new` / `route-method` / `route-pattern` /
+  `route-handler` / `route-call-handler` accessors still take `:int`
+  (they sit below the public Item surface; not a user-visible hole).
+- `tourist-ctx-caps` still takes `ctx : int`; the public surface uses
+  `Ctx` everywhere else.
+- `router-compile` / `router-match` -> `:int` (Pattern / Captures
+  opaques still pending; internal-only).
+- `mount!` / `subapp-call` accessors still take `:int` internally.
+- `__dispatch-item` / `__url-map-dispatch` -> `:int` internally.
 
 ### httpd (4 findings beyond the S1 callback)
 
@@ -233,17 +256,19 @@ parameter is still `:int` -- that one really is a file descriptor.
 Particularly painful in the tourist/httpd path because every handler that
 reads a query param or header is forced to write inline-C to unwrap.
 
+Status (2026-06-16): the `mw-chain-run` `option<Response>` row was the
+linchpin -- it landed implicitly when `tur-tourist` v0.2.0 retyped
+`use!` as `(c-fn [Ctx] (Option Response))`. The new public helper
+`ctx-attr-get` already returns `(Option int)` so the same pattern is
+available to user code. The `param`/`capture`/`captures-get`/`req-header`
+rows are still open and remain the top S3 follow-up.
+
 | File:line | Function | Should be |
 |---|---|---|
 | `tourist/param.tur:324,370` | `param`, `capture` -> `:int` (result<cstr>) | `result<cstr>` |
 | `tourist/router.tur:244` | `captures-get` -> `:int` (result<cstr>) | `result<cstr>` |
 | `httpd/request.tur:120` | `req-header` -> `:int` (result<cstr>) | `result<cstr>` |
-| `tourist/app.tur:228`, `tourist/middleware.tur:114` | `mw-chain-run` -> `:int` (option<Response>) | `option<Response>` |
-
-The middleware chain runner returning `option<Response>` is doubly
-ironic given that the type *exists* in stdlib and the body literally
-encodes "0 = none, non-zero = some". Same shape as `option<T>`; just
-spell it.
+| ~~`tourist/app.tur:228`, `tourist/middleware.tur:114`~~ | ~~`mw-chain-run` -> `:int` (option<Response>)~~ -- **fixed in v0.2.0** | -- |
 
 ---
 
@@ -278,7 +303,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | frame | clean |
 | glsl | clean |
 | http | clean (audited as part of tourist sweep) |
-| **httpd** | **S1 + S2 + S3 (Request/Response/Wbuf opaques + handler callback)** |
+| **httpd** | **S2 + S3** (Request/Response/Wbuf opaques + req-header result); S1 already shipped (`c-fn [int] int` handler) |
 | json | clean |
 | linalg | clean |
 | math | clean |
@@ -302,16 +327,17 @@ Middleware opaques exist, these should become `list<Route>` and
 | test | clean |
 | tidal | clean |
 | ~~tls~~ | ~~S2: 2 handle types~~ -- fixed (`defopaque TlsCtx`, `defopaque TlsConn`) |
-| **tourist** | **S1 + S2 + S3 + S4 (worst offender)** |
+| ~~tourist~~ | **S1 + S2 + S3 + S4 fixed in v0.2.0** for the public surface (`Ctx`/`Response`/`Item`/`Mount` opaques, ctx-based middleware, `mw-chain-run` typed `(Option Response)`); internal `route-*` / `router-*` / cons-list helpers still `:int` (follow-up) |
 | ~~valkey~~ | ~~S2: 1 handle type (client)~~ -- fully fixed (`Client`, `Reply`, `Message`) |
 | watch | clean |
 | ~~wav~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Wav`) |
 | zlib | clean |
 
-19 spices need work, 16 are clean. As of 2026-06-14: regex, sqlite, png, wav,
-postgres, valkey, rtaudio, tls, plus three already-shipped-at-audit-time
-(opengl, plutovg, raylib's audited subset) are fixed (11 done); **8 remain**.
-Remaining S2 work: tourist, httpd, osc, rtmidi handles (each paired with an
+19 spices need work, 16 are clean. As of 2026-06-16: regex, sqlite, png, wav,
+postgres, valkey, rtaudio, tls, tourist (v0.2.0), plus three
+already-shipped-at-audit-time (opengl, plutovg, raylib's audited subset)
+are fixed for the public surface (12 done); **7 remain**.
+Remaining S2 work: httpd, osc, rtmidi handles (each paired with an
 S1 callback fix); follow-up handle leaks inside plutovg (dash-array,
 font-cache, gradient-stops, rect), raylib (models, text, textures, camera,
 shapes), and rtaudio (DeviceInfo, callback).
