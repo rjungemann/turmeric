@@ -2863,11 +2863,36 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * APP) — when emit_arg->type is TY_INT, the EX_ASCRIBE was
                  * stripped above and the value is already a carrier int64_t,
                  * which the impl accepts as-is. */
+                /* end-to-end-monomorphization (typed-pointer producer slice):
+                 * the two `concrete->carrier` spill branches below fire on
+                 * `arg_kinds[i] == TY_INT`, which treats EVERY carrier-ABI slot
+                 * (including a concrete `:heap` collection) as an int64 sink.
+                 * But when the callee's DECLARED param is a concrete `:heap`
+                 * type (`(Vec int)` / `(MutableMap int int)`), its C signature
+                 * is a typed pointer (`Vec__int *`), not int64 -- the typed
+                 * value flows in directly, and spilling it to the int64 carrier
+                 * emits `callee((int64_t)(intptr_t)(p))` against a pointer
+                 * formal (-Wint-conversion).  Detect that case and skip the
+                 * spill so the typed pointer passes through unchanged.  A
+                 * genuine `:int`-sink consumer (stdlib `some?`/`unwrap-or`,
+                 * declared `o : int`) has a non-heap full param type, so it is
+                 * unaffected and still spills. */
+                bool callee_param_is_typed_heap_ptr = false;
+                if (fn_binding->type.kind == TY_FN &&
+                    i < fn_binding->type.as.fn.arity &&
+                    fn_binding->type.as.fn.arg_full_types &&
+                    fn_binding->type.as.fn.arg_full_types[i]) {
+                    Type pf = *fn_binding->type.as.fn.arg_full_types[i];
+                    if (type_is_heap_struct(pf) &&
+                        type_has_concrete_codegen_layout(&pf))
+                        callee_param_is_typed_heap_ptr = true;
+                }
                 /* KB-021: after standardising carrier-ABI values on the int64_t
                  * carrier, only a by-value struct literal still needs bridging
                  * here; a plain var / call result / temp is already a carrier
                  * int64_t that the impl accepts as-is. */
                 if (!needs_fn_cast && !matched_spec &&
+                    !callee_param_is_typed_heap_ptr &&
                     e->as.call_.dict_arg != NULL &&
                     emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
                     type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
@@ -2896,6 +2921,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * this only fires on a real by-value producer.  The dict path
                  * above keeps its own `dict_arg != NULL` branch unchanged. */
                 else if (!needs_fn_cast && !matched_spec &&
+                         !callee_param_is_typed_heap_ptr &&
                          e->as.call_.dict_arg == NULL &&
                          emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
                          type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
@@ -2982,10 +3008,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * clang warns (`-Wint-conversion`) or errs on the implicit
                  * pointer->int conversion.  Skip when the matched spec already
                  * types this slot as the `:heap` pointer (the typed consumer
-                 * takes `Vec__int *` directly -- no bridge). */
+                 * takes `Vec__int *` directly -- no bridge), OR when the
+                 * callee's DECLARED param is a concrete `:heap` type (a typed-
+                 * pointer formal even without a matched spec, e.g. a user fn
+                 * `(defn f [v : (Vec int)] ...)` or `[m : (MutableMap int int)]`
+                 * -- the typed value flows in directly). */
                 if (emit_arg &&
                     type_is_heap_struct(emit_resolve_type(ctx, emit_arg->type)) &&
                     expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                    !callee_param_is_typed_heap_ptr &&
                     !(matched_spec && i < matched_spec->n_args &&
                       type_is_heap_struct(matched_spec->arg_types[i]))) {
                     Buf _hb; buf_init(&_hb);

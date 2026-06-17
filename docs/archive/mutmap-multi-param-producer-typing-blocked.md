@@ -9,14 +9,68 @@ severity: Medium. Not a miscompile on the common (carrier) path -- the int64 and
   blocks the MutableMap typed-pointer producer slice (the analog of the Vec slice
   in #377/#400): typing the *consumers* without typing the *producer* is exactly
   the inconsistency that surfaces.
-status: OPEN. Discovered while landing the pure-Turmeric `Eq [MutableMap]` instance
-  (TCO-in-ABI-specs MutableMap follow-up). The instance work shipped WITHOUT
-  extending the producer-slice gate to MutableMap (the gate was prototyped and
-  reverted precisely because of this gap). The gap itself is pre-existing -- it
-  predates that work and reproduces on a clean tree.
+status: RESOLVED. The "multi-param resolution gap (#364)" framing turned out to be
+  wrong -- the bindings/result-type resolution for the zero-arg `[K V]` producer
+  was already correct. The two real causes were (1) `mutmap-new`'s inline-C body
+  not returning through `__TUR_RET__` (so it never minted a typed producer spec),
+  and (2) a GENERAL call-site relabel bug (a typed `:heap` value spilled to the
+  int64 carrier when passed to a user fn taking the concrete heap type) that hit
+  Vec equally. Both fixed; see "Resolution" below.
 ---
 
 # MutableMap multi-param producer typing is blocked
+
+## Resolution (this session)
+
+The "multi-param resolution gap" was a misdiagnosis. Instrumenting
+`emit_abi_register_call` showed the zero-arg `[K V]` constructor `mutmap-new`
+already gets correct `K->int, V->int` bindings and a concrete
+`result_type = MutableMap__int__int *` (`abi_changes=1`). Two concrete,
+non-multi-param causes were the real blockers:
+
+1. **`mutmap-new`'s inline-C body returned `(int64_t)`, not `(__TUR_RET__)`.**
+   That is the difference that routes `vec-new` and `mutmap-new` down different
+   paths: a `__TUR_RET__`-bearing body sets `inline_c_has_ty_template`, which
+   makes `body_qualifies_for_carrier_skip` false, so the call interns its typed
+   producer spec on the `abi_changes` path. Without it, `mutmap-new` entered the
+   carrier-skip block and fell to the producer-result gate at
+   `emit_module.c` -- which keys on `type_is_heap_vec(fd->return_type)`, and
+   `fd->return_type` for a `(MutableMap K V)` return is a degenerate `TY_APP`
+   (`type_from_kind(TY_APP)` at `elab_fns.c:3120`, no spine/def), so the gate
+   missed it. **Fix:** `stdlib/mutmap.tur` -- `mutmap-new` now returns
+   `(__TUR_RET__)(intptr_t)m`, and `type_is_heap_vec` (emit_module.c) accepts
+   `MutableMap`. `mutmap-new` now mints
+   `mutmap_new__spec__MutableMap__int__int__()`.
+
+2. **A typed `:heap` value was spilled to the int64 carrier when passed to a
+   user fn taking the concrete heap type.** `emit_expr.c`'s call-arg emit wrapped
+   a `Vec__int *` / `MutableMap__int__int *` argument in `(int64_t)(intptr_t)`
+   whenever the callee's `arg_kinds[i] == TY_INT` (true for every carrier-ABI
+   slot, including a concrete `:heap` param whose C type is actually a typed
+   pointer). This was a GENERAL bug -- the Vec analog
+   `(defn f [v : (Vec int)] ...)` fed by `vec-of` warned identically. **Fix:**
+   `emit_expr.c` -- compute `callee_param_is_typed_heap_ptr` (the callee's
+   DECLARED full param type is a concrete `:heap` struct) and skip the three
+   `concrete->carrier` spill branches when set, so the typed pointer flows in
+   unchanged. A genuine `:int`-sink consumer (`some?`/`unwrap-or`, declared
+   `o : int`) has a non-heap full param type and is unaffected.
+
+**Validation:**
+- The minimal repro and the Vec analog both build with **zero**
+  `-Wint-conversion` warnings.
+- New fixture `tests/fixtures/mutmap-typed-consumer` exercises a typed
+  `(MutableMap int int)` flowing through user fns (`total`/`sum-vals`) -- 0
+  warnings, 0 bridge crossings, `mutmap_new__spec__` + `MutableMap__int__int *`
+  locals, no `(int64_t)(intptr_t)` relabel.
+- A 200k-entry ascribed `.eq?` drops from 2 bridge crossings to **0**.
+- Compiled suite **1666 passed, 0 failed**; interpreter **1221 passed, 0
+  failed**; suite-wide bridge audit crossing-neutral (60/11) with **zero**
+  snapshot drift on the existing fixtures (the change activates only on the new
+  typed paths).
+
+The original finding is retained below for the paper trail.
+
+---
 
 ## One-line summary
 

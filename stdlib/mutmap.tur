@@ -69,7 +69,7 @@
   }
   struct { void *storage; } *m = malloc(sizeof(*m));
   m->storage = s;
-  return (int64_t)(intptr_t)m;
+  return (__TUR_RET__)(intptr_t)m;
   ```)
 ;;; mutmap-len -- live entry count (excludes tombstones).
 ;;;

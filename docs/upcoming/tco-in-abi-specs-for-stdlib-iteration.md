@@ -232,12 +232,19 @@ Same shape, harder iteration:
   pure-Turmeric path + native slot accessors), and the bridge audit is
   crossing-neutral (60 -> 60; no mutmap fixture crosses).
 
-  NOT done: the **typed-pointer producer slice** for MutableMap
-  (`mutmap-new` -> `MutableMap__int__int *`). It is blocked on the
-  multi-param resolution gap (`#364`); typing the consumers without the
-  producer yields an int->pointer mismatch in ascribed user code. Filed
-  as
-  [docs/reported/mutmap-multi-param-producer-typing-blocked.md](../reported/mutmap-multi-param-producer-typing-blocked.md).
+  ALSO done: the **typed-pointer producer slice** for MutableMap
+  (`mutmap-new` -> `MutableMap__int__int *`). The "multi-param resolution
+  gap (`#364`)" framing was a misdiagnosis -- the bindings/result-type
+  resolution for the zero-arg `[K V]` producer was already correct. The
+  real causes were (1) `mutmap-new`'s body not returning through
+  `__TUR_RET__` (so it never minted a typed spec) and (2) a GENERAL
+  call-site relabel bug (a typed `:heap` value spilled to the int64
+  carrier when passed to a user fn taking the concrete heap type -- it hit
+  Vec equally). Both fixed (`mutmap-new` `__TUR_RET__` + `type_is_heap_vec`
+  gate; the `callee_param_is_typed_heap_ptr` guard in emit_expr.c). A typed
+  `(MutableMap int int)` now flows through user fns with no relabel and no
+  crossing (fixture `mutmap-typed-consumer`). See
+  [docs/archive/mutmap-multi-param-producer-typing-blocked.md](../archive/mutmap-multi-param-producer-typing-blocked.md).
 - **Set** wraps a HAMT — same shape as Map.
 
 Hold Map/Set for a follow-up phase. The Vec landing proved the pattern

@@ -165,7 +165,20 @@ ascription reinterprets, identical to `vec-get`.
 So pieces 1-3 are the entire diff: one predicate generalization, the
 carrier-forcing already covers K/V, and the per-body `__TUR_RET__` edits.
 
-## MutableMap (the one worth doing now)
+## MutableMap (the one worth doing now) -- DONE
+
+**Landed (TCO-in-ABI-specs MutableMap follow-up).** `mutmap-new` returns through
+`__TUR_RET__` and `type_is_heap_vec` accepts `MutableMap`, so it mints
+`mutmap_new__spec__MutableMap__int__int__()`. The "Multi-param caveat" below was
+a misdiagnosis -- the zero-arg `[K V]` producer's binding/result resolution was
+already correct; what blocked it was the missing `__TUR_RET__` (the producer-
+result gate keys on `fd->return_type`, which is a degenerate `type_from_kind`
+shell for a multi-param TY_APP, so the `__TUR_RET__` / `abi_changes` intern path
+is the one that fires). A SEPARATE general call-site relabel bug (a typed `:heap`
+value spilled to int64 when passed to a user fn taking the concrete heap type --
+Vec hit it too) was fixed in emit_expr.c via `callee_param_is_typed_heap_ptr`.
+See `docs/archive/mutmap-multi-param-producer-typing-blocked.md`. The rest of
+this section is retained as the historical analysis.
 
 MutableMap is the only collection with a live producer-result crossing. In
 `mutmap-eq`, `a = mutmap-new(); b = ...; (.eq? a b)` emits
