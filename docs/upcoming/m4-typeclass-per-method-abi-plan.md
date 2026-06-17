@@ -6,6 +6,124 @@ description: Concrete sub-plan for `docs/upcoming/end-to-end-monomorphization-pl
 
 # M4 — non-HKT typeclass instances switch to per-method ABI
 
+## Status 2026-06-17 -- M4a audit refresh
+
+M4a's three deliverables have all landed in earlier turns; remaining
+phases (M4b/M4c/M4d) substantively landed in pieces and are tracked
+in their now-archived per-piece docs (see *Related*). Concretely:
+
+1. **Cross-reference of dict-slot emits vs. call-site dispatches** --
+   dict-slot emit lives at `src/compiler/emit_stmt.c:399`-`574`
+   (`EX_INSTANCE_DEF` arm). Call-site dispatch lives at
+   `src/compiler/emit_expr.c:1507`-`1524` (`EX_DICT` arm, reading
+   `<dict>_singleton.<method>`). Both paths route through
+   `emit_dict_name(...)` -- one source of mangling. **No untyped
+   `(int64_t)(intptr_t)` casts on the function pointer at the
+   non-HKT dispatch site as of #400/#412.**
+
+2. **HKT vs. non-HKT catalogue.** Gate is
+   `TypeClass.type_param_kinds[i] != KIND_STAR` (used at
+   `emit_module.c:729`; the field doubles as `is_hkt` per the plan
+   sketch). Stdlib classification:
+
+   | Non-HKT (per-method ABI) | HKT (uniform carrier) |
+   |---|---|
+   | `Eq`, `Ord`, `Show`, `Num`, `Clone`, `Hash` | `Functor`, `Applicative`, `Monad` |
+   | `HasSchema`, `Display`, `Debug`, `Error` | `Alternative`, `Bifunctor`, `Foldable` |
+   | `From`, `Into`, `Serializable`, `MapKey` | `Traversable`, `Comonad`, `MonadError` |
+   | `Category`, `Arrow*` (arr is `*`) | |
+
+3. **`EmitAbiSpecialization` extended for instance methods.** Field
+   `typeclass_inst` at `emit_internal.h:136` is populated by
+   `emit_abi_intern_spec` (`emit_module.c:726`-`737`) for non-HKT
+   instance-method specs; consumed by the forward-decl emitter
+   (`emit_module.c:2497`) and the spec-body return path
+   (`emit_fns.c:506`, `:1092`, `:1172`) so the spec returns the
+   concrete result type instead of the int64 carrier. HKT-class
+   instance methods deliberately keep `typeclass_inst = NULL`.
+
+### Current bridge audit floor
+
+Direct sweep (this session, all `tests/fixtures/**/input.tur` under
+`TUR_M3_AUDIT=1`):
+
+| Direction | Count |
+|---|---|
+| `carrier->concrete` | 35 |
+| `concrete->carrier` | 6 |
+| **total** | **41** (11 fixtures) |
+
+By type spine: 26 `Option <T>` (T = int / float / Device / cstr),
+15 `Result <T> <E>`. No `Tuple2 int int`, no plain struct, no
+`Vec`/`Map`/`Set`-style heap receiver -- the heap-receiver
+fast-path (`emit_core.c:2492`-onwards) keeps those off the bridge.
+
+Floor moved from "post-#400: 34 / 10" to **41 / 11** because of
+**new by-design regression coverage**, not regression:
+
+- PR #414 added `option-byvalue-param-none-safe` (4) and
+  `option-control-form-construct` (4) -- new regression coverage
+  for the carrier `#{Construct}` -> by-value `(Option A)` param
+  path the PR itself enabled. The bridge MUST fire here by design.
+- PR #415/#416 added `tail-call-inline-c-carrier-bridge` (5) and
+  `result-bridge-tail-call-to-inline-c` (2) -- regression coverage
+  for the tail-call-to-inline-C bridge those PRs added.
+
+### Per-fixture classification (M4a deliverable)
+
+Bucket A' -- regression coverage for the carrier bridge **by design**
+(34 crossings / 7 fixtures): `tail-call-inline-c-carrier-bridge`,
+`result-bridge-tail-call-to-inline-c`, `inline-c-typed-result-option`,
+`eq-carrier-capturing-comparator`,
+`decode-bool-carrier-instance-ascription`,
+`instance-method-return-carrier-bridge`,
+`typeclass-method-parameterized-result-decode`. These fixtures
+exist *to* exercise the bridge; deletion would regress them.
+
+Bucket B -- Option-construct-at-carrier-boundary regression
+fixtures (12 crossings / 3 fixtures): `option-basic`,
+`option-control-form-construct`, `option-byvalue-param-none-safe`.
+The bridge fires because the test deliberately mixes the carrier
+construction surface (`(some X)` / `(none)`) with by-value
+`(Option A)` consumers -- this is the PR #414 codepath under test.
+
+Bucket C -- tractable cascade, tracked elsewhere (8 crossings /
+1 fixture): `option-consumers-byvalue-arg`. Tracked in
+[docs/reported/option-consumer-retype-byvalue.md](../reported/option-consumer-retype-byvalue.md).
+Cascade-coupled retypes (`refined.tur`'s `ne-from?`/`bidx-of?`
+returning carrier `:int` Option, plus `kleisli.tur`'s `comp` /
+`k-apply-raw` threading the carrier int64) gate retyping
+`some?`/`unwrap-or`; `construct_recovered_byvalue`
+generalisation gates `option-map`/`result-map`.
+
+**Net:** the only tractable residual on the floor is bucket C
+(8 crossings), and the sequencing is already captured in the
+existing Track-A report. Buckets A' and B are by-design
+boundaries the bridge is **kept** for, per the now-archived
+[m4-final-state-bridge-still-essential-for-collection-eq](../archive/m4-final-state-bridge-still-essential-for-collection-eq.md).
+
+### Next concrete work
+
+- **Track A residual:** drive bucket C via
+  `docs/reported/option-consumer-retype-byvalue.md` (the
+  `construct_recovered_byvalue` non-instance-generic-spec
+  generalisation + `refined.tur` retype).
+- **Track A north-star:** Plan M5 (constrained polymorphic
+  functions over a dict argument) -- the natural next phase
+  after M4's per-method ABI infrastructure landed.
+- **HKT extension (M6/M7):** Path A's mechanism extends to
+  `Functor`/`Monad`/etc. once the M6 design pass picks the HKT
+  dispatch shape.
+
+The "M4 -- 4 sessions" estimate in
+[end-to-end-monomorphization-plan.md](end-to-end-monomorphization-plan.md)
+§M4 is now stale; the bulk landed across PRs #399, #400, #402,
+#405, #407, #411, #412, #414, #415, #416. Treat M4 as
+substantively done; the open work is bucket C plus the M5/M6/M7
+sequel phases.
+
+## Original plan (preserved for reference)
+
 ## Current state (audit, this session)
 
 The dict struct for a non-HKT instance like `Eq[int]` already carries
@@ -180,7 +298,13 @@ regen.
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](end-to-end-monomorphization-plan.md)
   §M4, §M5, §M6, §M7 — the parent plan.
-- [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
-  — the blocked Plan M3 this design unblocks.
+- [docs/archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
+  — the original Plan M3 deletion gate (wholesale-deletion goal retired).
+- [docs/archive/m4-final-state-bridge-still-essential-for-collection-eq.md](../archive/m4-final-state-bridge-still-essential-for-collection-eq.md)
+  — final-state writeup; bridge stays for by-design boundaries.
+- [docs/archive/m4c-execution-plan.md](../archive/m4c-execution-plan.md)
+  — M4c execution paper trail.
+- [docs/reported/option-consumer-retype-byvalue.md](../reported/option-consumer-retype-byvalue.md)
+  — bucket C residual (8 crossings).
 - [docs/reported/m2b-stdlib-migration-blocked-on-carrier-fallback.md](../reported/m2b-stdlib-migration-blocked-on-carrier-fallback.md)
   — the M2b finding that first pointed at M4 as the deeper dependency.

@@ -19,9 +19,16 @@ North-star track. Critical path; every other track benefits when it
 advances.
 
 - [end-to-end-monomorphization-plan](upcoming/end-to-end-monomorphization-plan.md)
-  -- umbrella; M2 landed, M3 deletion blocked on M4
+  -- umbrella; M2 landed, M3 wholesale-deletion goal retired (see
+  archived report), M4 substantively landed across #399/#400/#402/
+  #405/#407/#411/#412/#414/#415/#416
 - [m4-typeclass-per-method-abi-plan](upcoming/m4-typeclass-per-method-abi-plan.md)
-  -- **immediate next step**; unblocks M3 bridge deletion
+  -- M4a audit refreshed 2026-06-17; M4a deliverables all landed;
+  current bridge audit floor is **41 crossings / 11 fixtures**
+  (34 `carrier->concrete`, 6 `concrete->carrier`), of which only
+  bucket C (8 crossings, tracked in `option-consumer-retype-byvalue`)
+  is tractable -- buckets A' / B are by-design carrier-bridge
+  regression coverage
 - ~~[tco-in-abi-specs-for-stdlib-iteration](archive/tco-in-abi-specs-for-stdlib-iteration.md)~~
   -- **archived 2026-06-17**. The three TCO restriction lifts plus the
   `Eq [Vec]` (PR #400) and `Eq [MutableMap]` rewrites shipped; the
@@ -63,13 +70,14 @@ advances.
   pure-Turmeric wrappers over inline-C bodies (the tourist
   `param`/`capture` retype no longer needs the inline-C workaround).
 
-**Order:** M4 is the sole open critical-path item. The bridge
-tail-call follow-up (#415, #416) shipped; the M3 wholesale-deletion
-goal is retired (`emit_carrier_bridge` stays for the cast /
-blessed-construction / type-erased boundaries it was re-scoped to in
-the now-archived M3 report). Parallel sub-thread: Option none-as-NULL
+**Order:** M4 is substantively done; the audit refresh (this
+snapshot) confirms the residual floor is by-design regression
+coverage plus the bucket C cascade tracked in
+`option-consumer-retype-byvalue`. The natural sequel is **Plan M5**
+(constrained-polymorphic dict typing) and then the M6/M7 HKT
+design+implementation pass. Parallel sub-thread: Option none-as-NULL
 retirement (by-value-param bridge done; option-eq? retyped;
-option-map + some?/unwrap-or remain).
+option-map + some?/unwrap-or remain -- bucket C above).
 
 ## Track B -- ECS spice (E2d wiring + sized worlds)
 
