@@ -1,0 +1,44 @@
+;; TI10 Tier B (reentrancy): an outer content-keyed Map whose key comparator,
+;; on every compare, queries a SECOND content-keyed Map. Under --interpret this
+;; nests one turi_call comparator trampoline inside another -- the case the
+;; Tier B plan flagged ("the comparator could itself touch another map"). The
+;; B2 ctx-carrying HAMT ABI keeps each op's {env, closure} ctx on the C stack,
+;; so nesting is reentrant by construction; this proves it rather than relying
+;; on it.
+;;
+;; Both comparators are top-level captureless defns so the SAME source also runs
+;; on the compiled path (where they lower to plain C function pointers, the
+;; contract the raw map-*-eq inline-C expects). The shared `syn` map lives as a
+;; global. `syn` maps a raw int key to a canonical group id (10 and 20 share
+;; group 1). The outer comparator decides two keys equal iff they resolve to the
+;; same group via `syn`, so inserting key 20 (group 1) UPDATES the entry first
+;; made under key 10. Hash is forced to 0 in BOTH maps so every probe runs the
+;; comparator (no works-by-luck on carrier identity).
+
+;; Inner comparator: plain identity on the raw int key.
+(defn syn-eq? [a : int b : int] : bool (= a b))
+
+;; Global synonym table: 10 -> group 1, 20 -> group 1, 30 -> group 2 (all hash 0).
+(def syn
+  (map-assoc-eq (map-assoc-eq (map-assoc-eq (:: (map-new) (Map int int))
+                                            0 10 1 syn-eq?)
+                              0 20 1 syn-eq?)
+                0 30 2 syn-eq?))
+
+;; Outer comparator: equal iff same group. Each call makes two NESTED map-get-eq
+;; queries against the global `syn` (nested comparator trampolines under interp).
+(defn grp-eq? [a : int b : int] : bool
+  (= (map-get-eq syn 0 a syn-eq?)
+     (map-get-eq syn 0 b syn-eq?)))
+
+(defn main [] : int
+  (let [m0 (:: (map-new) (Map int int))
+        m1 (map-assoc-eq m0 0 10 100 grp-eq?)
+        m2 (map-assoc-eq m1 0 20 200 grp-eq?)   ;; 20 ~ 10 -> updates -> value 200
+        m  (map-assoc-eq m2 0 30 300 grp-eq?)]  ;; 30 group 2 -> new entry
+    (println (map-count m))                        ; 2 (groups 1 and 2)
+    (println (map-get-eq m 0 10 grp-eq?))          ; 200 (group 1, last write wins)
+    (println (map-get-eq m 0 30 grp-eq?))          ; 300 (group 2)
+    (println (if (map-has-eq? m 0 20 grp-eq?) 1 0)) ; 1 (group 1 present via 20)
+    (println (if (map-has-eq? m 0 99 grp-eq?) 1 0))); 0 (99 -> group 0, absent)
+  0)
