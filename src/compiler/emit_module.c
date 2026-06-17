@@ -1466,7 +1466,18 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      *
      * GATED to instance-method spec bodies -- the dispatch-boundary site the M3
      * audit flags -- so a top-level `(ok 5)` in user code keeps the carrier path
-     * (avoiding the broad M2 suite-wide snapshot blast). */
+     * (avoiding the broad M2 suite-wide snapshot blast).
+     *
+     * 2026-06-17 generalization (docs/reported/option-consumer-retype-byvalue.md
+     * step 1): the gate now also fires for NON-instance generic specs whose
+     * declared return is a concrete by-value Option/Result struct of the same
+     * family the body's construct produces.  That unblocks pure-Turmeric
+     * `option-map` / `result-map` bodies returning `(some ...)` / `(ok ...)`
+     * in return position to construct by value.  The family-match guard
+     * (`rh.as.struct_.def == ch.as.struct_.def`) plus the by-value-result
+     * guard (`!type_is_heap_struct` + `type_has_concrete_codegen_layout`)
+     * keep the scope tight: only constructs whose enclosing spec already
+     * pinned the return to the same parametric family promote. */
     bool construct_recovered_byvalue = false;
     {
         bool body_is_construct = fd && fd->body
@@ -1474,8 +1485,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             && fd->binding && fd->binding->is_construct_template;
         if (body_is_construct && !borrow_path &&
             ctx->current_abi_specialization &&
-            ctx->current_abi_specialization->fn &&
-            ctx->current_abi_specialization->fn->owner_instance) {
+            ctx->current_abi_specialization->fn) {
             Type spec_ret = ctx->current_abi_specialization->result_type;
             if (spec_ret.kind == TY_APP &&
                 !type_is_heap_struct(spec_ret) &&

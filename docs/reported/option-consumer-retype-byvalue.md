@@ -10,9 +10,13 @@ severity: Low-medium ergonomics + audit hygiene. The stdlib Option consumers
   No-Lazy-`:int` rule and removes those spills.
 status: PARTIAL 2026-06-17. `option-eq?` retyped to `[A] [o1 : (Option A)
   o2 : (Option A) ^fat cmp-fn] : bool` with a pure-Turmeric by-value body;
-  audit `option-consumers-byvalue-arg` 12 -> 8 crossings. The rest are blocked
-  or cascade-coupled; see below. Gated only on the now-landed by-value-param
-  bridge fix (docs/reported/option-none-as-null-byvalue-param-segfault.md).
+  audit `option-consumers-byvalue-arg` 12 -> 8 crossings. `construct_recovered_byvalue`
+  generalised to fire for non-instance generic specs (gate previously locked
+  to instance-method spec bodies) -- proven by
+  `tests/fixtures/option-construct-byvalue-return-spec/`. The `option-map` /
+  `result-map` rewrites still pend on the 0-arg constructor binding follow-up
+  (see step 2 in "Sequencing for the remainder"). The rest are blocked or
+  cascade-coupled; see below.
 ---
 
 # Retyping the stdlib Option consumers to by-value `(Option A)`
@@ -91,13 +95,30 @@ is fully retired and the carrier producers (`some`/`none`) stop heap-allocating.
 
 ## Sequencing for the remainder
 
-1. Generalize `construct_recovered_byvalue` to non-instance generic specs
-   (construct-in-by-value-return) -> unblocks `option-map` and `result-map`.
-   Coordinated snapshot regen.
-2. Retype `refined.tur`'s `ne-from?`/`bidx-of?`/`ne-unwrap`/`bidx-unwrap` to
-   `(Option X)`, then retype `some?`/`unwrap-or` together with them.
-3. Retype `kleisli.tur` `comp` / `k-apply-raw` to thread a by-value Option (or
-   keep Arrow on the carrier and bridge at its boundary).
+1. ~~Generalize `construct_recovered_byvalue` to non-instance generic specs
+   (construct-in-by-value-return)~~ -- **2026-06-17: gate generalized;
+   regression fixture `tests/fixtures/option-construct-byvalue-return-spec/`
+   proves a non-instance generic helper returning `(some x)` now mints a
+   spec returning `Option__A` by value (zero bridge crossings on that
+   fixture). The 0-arg `(none)` / `(err)` constructor leg stays on the
+   carrier base because `emit_abi_register_call` early-exits when the
+   call carries no `abi_bindings` -- elab does not attach bindings on a
+   pure type-arg-only call. Tracked as the follow-up below.
+2. **0-arg constructor `abi_bindings` (follow-up).** Wire elab to
+   attach `abi_bindings` on a 0-arg constructor call whose declared
+   result type involves a tyvar bound by the enclosing generic's
+   active spec, OR weaken `emit_abi_register_call`'s
+   `n_bindings == 0` early-exit to synthesize the missing bindings
+   from the active spec when the callee is a `#{Construct}` template
+   and the call type composes with the spec's bindings. This is what
+   `option-map` / `result-map` need to compile a pure-Turmeric body
+   that returns `(none)` / `(err)` in the false arm.
+3. Rewrite `option-map` / `result-map` bodies to pure Turmeric (drop
+   the carrier inline-C), unblocked by step 2.
+4. Retype `refined.tur`'s `ne-from?`/`bidx-of?`/`ne-unwrap`/`bidx-unwrap`
+   to `(Option X)`, then retype `some?`/`unwrap-or` together with them.
+5. Retype `kleisli.tur` `comp` / `k-apply-raw` to thread a by-value
+   Option (or keep Arrow on the carrier and bridge at its boundary).
 
 ## Related
 

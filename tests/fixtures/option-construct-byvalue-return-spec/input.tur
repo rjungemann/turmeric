@@ -1,0 +1,45 @@
+;; Option none-as-NULL retirement (Track A) -- bucket C step 1: a NON-instance
+;; generic spec whose declared return is a concrete by-value `(Option A)`
+;; (resolved from the call site) and whose body constructs via `(some ...)`
+;; in return position now monomorphizes to a direct by-value construction,
+;; without crossing the carrier-bridge.
+;;
+;; Before the `construct_recovered_byvalue` generalization (emit_module.c,
+;; M4 follow-up), the gate was restricted to instance-method spec bodies,
+;; so a `wrap-some` helper like the one below had its spec return the int64
+;; carrier and the by-value `(Option int)` consumer bridged carrier->concrete
+;; on every call.  Audit-side: this fixture would otherwise contribute 4
+;; bridge crossings (Option int + Option float, each direction); with the
+;; gate generalized, the producer spec returns `Option__int` / `Option__float`
+;; by value and only the residual `(none)` constructors (which still go
+;; through the carrier today) cross.
+;;
+;; The (none) leg is the documented residual -- elab does not attach
+;; abi_bindings to a 0-arg type-arg-only call, so `emit_abi_register_call`
+;; early-exits and the (none) call stays on the carrier base.  Tracked in
+;; docs/reported/option-consumer-retype-byvalue.md "follow-up: 0-arg
+;; constructor bindings"; the cascade to `option-map` / `result-map` will
+;; need this resolved.
+;;
+;; See docs/reported/option-consumer-retype-byvalue.md (step 1 of bucket C).
+
+(load "stdlib/math.tur")
+
+;; Pure-Turmeric polymorphic helper: builds `(Option A)` via `(some ...)`.
+;; Two call sites (int, float) drive two specs; each spec's declared return
+;; is the concrete `(Option int)` / `(Option float)`.
+(defn wrap-some [A] [x : A] : (Option A)
+  (some x))
+
+;; By-value consumer -- the bridge IS retired when the producer spec
+;; returns by-value.
+(defn unwrap-or-default [o : (Option int) d : int] : int
+  (if (.is-some o) (.value o) d))
+
+(defn unwrap-or-default-f [o : (Option float) d : float] : float
+  (if (.is-some o) (.value o) d))
+
+(defn main [] : int
+  (println (unwrap-or-default   (wrap-some 7) 0))                                     ; 7
+  (println (float->int (* (unwrap-or-default-f (wrap-some 3.25) 0.0) 100.0)))         ; 325
+  0)
