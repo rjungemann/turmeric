@@ -2,7 +2,7 @@
 title: Sized worlds cannot ride the parallel scheduler -- `System`/`Stage` type-erase the world through an `int`/`void*` carrier
 category: Compiler / library architecture -- world-type polymorphism vs. int64 carrier ABI
 severity: Expressiveness wall (blocked feature). No miscompile; the sized scheduler simply cannot be expressed today. A by-value `(GameWorld n)` struct cannot pass through the scheduler's type-erased run-fn carrier -- the same carrier wall as the `world-resize` blocker. Blocks the Slice 8 follow-up "wire sized worlds through the parallel scheduler."
-status: OPEN 2026-06-17. Root-caused. Shares the int64 carrier root cause with [`world-resize-existential-multifield-struct-payload.md`](world-resize-existential-multifield-struct-payload.md). Out of spice-side scope: needs either world-type-polymorphic `System`/`Stage` (monomorphization/linking work -- the gap-H limitation) or a by-pointer world calling convention. No spice code can land until one of those resolves.
+status: OPEN 2026-06-17. Root-caused. Shares the int64 carrier root cause with the (now resolved) world-resize blocker [`docs/archive/world-resize-existential-multifield-struct-payload.md`](../archive/world-resize-existential-multifield-struct-payload.md). The pack/open half of the carrier wall is fixed (struct payloads can now be heap-boxed through an existential), so **direction 1 below (pass the world by heap pointer) is now unblocked** -- a `System`/`Stage` carrying a `ptr<GameWorld>` is implementable today. The remaining blocker is only the *heterogeneous* world-type-polymorphism (direction 2 / gap-H). Single-world sized scheduling can land via direction 1; cross-world scheduling still waits on gap-H.
 ---
 
 # Sized worlds cannot ride the parallel scheduler
@@ -150,9 +150,10 @@ scheduling; defer direction 2 to the monomorphization track.
 
 ## Related
 
-- [`docs/reported/world-resize-existential-multifield-struct-payload.md`](world-resize-existential-multifield-struct-payload.md)
-  -- the sibling blocker; **same int64 carrier root cause**. Its
-  heap-boxing fix-direction is a prerequisite-adjacent for direction 1 here.
+- [`docs/archive/world-resize-existential-multifield-struct-payload.md`](../archive/world-resize-existential-multifield-struct-payload.md)
+  -- the sibling blocker, **now resolved** (same int64 carrier root cause).
+  Its heap-boxing pack/open fix landed, which is what unblocks direction 1
+  here.
 - [`docs/upcoming/ecs-sized-world-plan.md`](../upcoming/ecs-sized-world-plan.md)
   -- the sized-world surface the scheduler must accept.
 - [`docs/upcoming/v1/ecs-cross-world-systems-plan.md`](../upcoming/v1/ecs-cross-world-systems-plan.md)

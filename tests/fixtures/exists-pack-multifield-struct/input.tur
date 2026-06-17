@@ -1,0 +1,28 @@
+;; world-resize blocker fix: existential pack/open of a multi-field by-value
+;; struct payload. A (World m A B) -- one (Dense m _) field per component, like
+;; a (defworld GameWorld ...) world -- is WIDER than the int64 existential
+;; carrier, so `pack` heap-boxes the aggregate and `open` reads it back through
+;; the pointer (freeing it on the single-use open path). Before the fix, pack
+;; emitted `(tur_exists_t)(intptr_t)((int64_t)(world_struct))`, which cc
+;; rejected with "aggregate value used where an integer was expected".
+;;
+;; See docs/reported/world-resize-existential-multifield-struct-payload.md.
+
+(defopaque Dense [n A] :int)
+
+(defstruct World [m A B] (pos (Dense m A)) (vel (Dense m B)))
+
+(defn dn [n A] [v : int] : (Dense n A)
+  (:: v :Dense))
+
+(defn d->int [d : (Dense n A)] : int
+  (:: d :int))
+
+(defn main [] : int
+  ;; Pack a runtime-built world behind an existential that hides m, then open
+  ;; it and read both fields back -- proving the boxed payload round-trips.
+  (let [w      (make-struct World (dn 11) (dn 22))
+        packed (pack w (exists [m] (World m int int)))]
+    (open packed [m w2]
+      (println (+ (d->int (.pos w2)) (d->int (.vel w2))))))   ; 33
+  0)

@@ -2,10 +2,30 @@
 title: Existential `pack` of a multi-field struct payload miscompiles -- blocks `world-resize` over sized worlds
 category: Compiler / codegen -- existential carrier ABI
 severity: Hard error (codegen). `tur check` passes but `emit-c` produces non-compilable C ("aggregate value used where an integer was expected"). No silent miscompile -- it fails loudly at `cc` -- but it is a hard expressiveness wall: the entire by-value sized-world existential surface is unbuildable. Blocks the `ecs-sized-world-plan` `world-resize` helper.
-status: OPEN 2026-06-17. Root-caused with a minimal repro and file:line pointers. Out of spice-side scope -- needs compiler support for existential packing of multi-field struct payloads. Tracked here as a blocker for `world-resize`; no spice code can land until this resolves.
+status: RESOLVED 2026-06-17. Fixed in the compiler (this repo) the same session it was filed: `pack` now heap-boxes a by-value aggregate payload and `open` reads it back through the pointer (freeing on the single-use open path), with field access on the opened binding using direct `.field` access. Verified by `tests/fixtures/exists-pack-multifield-struct` (round-trips a `(World m A B)`, leak-clean under ASan/LSan) and a full `bash tests/run.sh` (1676 passed, 0 failed). `world-resize` is unblocked.
 ---
 
 # Existential `pack` of a multi-field struct payload miscompiles
+
+> **Resolution (2026-06-17).** Fixed in `src/compiler/emit_expr.c`. A new
+> predicate `exists_payload_is_byval_aggregate` (keyed on the lowered C name
+> via `type_struct_value_c_name`, so it tolerates phantom params defaulted
+> to `int64`) gates a heap-boxing path:
+> - **pack** (`case EX_EXISTS_PACK`): malloc a copy of the aggregate and
+>   carry the pointer instead of casting the struct to `int64`.
+> - **open** (`case EX_EXISTS_OPEN`): read the binding back as
+>   `*(T *)carrier`, mark the binding `emit_byvalue_carrier_abi = true` so
+>   `EX_GET_FIELD` uses direct `.field` access, and `free` the box at the
+>   end of the body (single-use ownership, matching the `:linear` open
+>   discipline).
+>
+> Scope of the fix: the **unconstrained** existential path (no typeclass
+> witnesses) -- which is what `world-resize` needs. The **constrained**
+> aggregate path (`->value = (int64_t)(struct)`, `pack` with witnesses) has
+> the same latent issue and would need the rc-record drop hook to free an
+> inner box; it is left for a follow-up (no current caller, and the
+> world-resize surface is unconstrained). The original analysis is preserved
+> verbatim below.
 
 ## Summary
 
