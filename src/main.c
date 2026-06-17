@@ -8633,10 +8633,26 @@ static TuriValue native_mutmap_delete(TuriEnv *env, TuriValue *a, uint32_t n, vo
         idx = (idx + 1) & mask;
     }
 }
-static TuriValue native_mutmap_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+/* mutmap-storage-field__ -- read the raw `storage` pointer out of a carrier
+ * MutableMap wrapper (the inline-C bridge mutmap-eq? uses to feed the by-value
+ * storage core).  The interpreter holds the wrapper as a TURI_INT pointer to
+ * { void *storage }; return word 0 as a TURI_INT ptr<void>. */
+static TuriValue native_mutmap_storage_field(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_int(0);
+    TurMmWrap *m = (TurMmWrap *)(intptr_t)a[0].as_int;
+    return turi_int((int64_t)(intptr_t)m->storage);
+}
+/* mutmap-eq-storage? -- structural equality over two raw storage pointers,
+ * invoking the value comparator (a turi closure) via turi_call.  This is the
+ * native override for the inline-C helper that mutmap-eq? / mutmap-eq?-byval
+ * both delegate to; the override hook only fires for the inline-C-bodied
+ * helper, not for the plain-call mutmap-eq? wrapper. */
+static TuriValue native_mutmap_eq_storage(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 3) return turi_bool(false);
-    TurMmStorage *sa = mm_storage(a[0]), *sb = mm_storage(a[1]);
+    TurMmStorage *sa = (TurMmStorage *)(intptr_t)a[0].as_int;
+    TurMmStorage *sb = (TurMmStorage *)(intptr_t)a[1].as_int;
     TuriValue cmp = a[2];
     if (!sa || !sb || sa->len != sb->len) return turi_bool(false);
     for (uint64_t i = 0; i < sa->cap; i++) {
@@ -9229,7 +9245,10 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "mutmap-get",      native_mutmap_get,      NULL);
     turi_env_register_native(env, "mutmap-has?",     native_mutmap_has,      NULL);
     turi_env_register_native(env, "mutmap-delete!",  native_mutmap_delete,   NULL);
-    turi_env_register_native(env, "mutmap-eq?",      native_mutmap_eq,       NULL);
+    /* mutmap-eq? / mutmap-eq?-byval are plain-call wrappers; the native
+     * override fires only for their inline-C helpers, so register those. */
+    turi_env_register_native(env, "mutmap-storage-field__", native_mutmap_storage_field, NULL);
+    turi_env_register_native(env, "mutmap-eq-storage?",     native_mutmap_eq_storage,    NULL);
     turi_env_register_native(env, "mutmap-free",     native_mutmap_free,     NULL);
     turi_env_register_native(env, "result-collect",  native_result_collect,  NULL);
     turi_env_register_native(env, "result-partition",native_result_partition, NULL);

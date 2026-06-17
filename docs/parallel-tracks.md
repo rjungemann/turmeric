@@ -78,8 +78,18 @@ No dependencies on any other track. Long-running, can be picked up
 whenever.
 
 - [turi-parity-post-v1-plan](upcoming/turi-parity-post-v1-plan.md) --
-  36 of 114 `EX_*` kinds unhandled; needs published parity matrix +
-  denylist CI gate to replace the allowlist
+  largely landed: `EX_*` parity is **115/116 handled, 1 carved, 0 gaps**
+  (was 36 unhandled); the parity matrix shipped (TI9,
+  [turi-parity-guide](guides/turi-parity-guide.md)); the CI ratchets
+  (`check_turi_parity.py`, `check_turi_native_parity.py`) are wired into
+  `tests/run.sh`; and the allowlist -> denylist flip (TI8.b/W5) landed --
+  `tests/run-turi.sh` now runs every fixture under `tur --interpret`
+  minus the documented carve-outs. As of 2026-06-17 the turi harness is
+  green at **1211 passed, 0 failed** (the last two gaps,
+  `mutmap-eq` / `eq-carrier-capturing-comparator`, are fixed via the
+  MutableMap storage-helper natives). Residual follow-ups: TI10 Tier B
+  (user-closure key comparators / non-int map values) and the documented
+  carve-outs (`EX_CPS_CONT_APP`, user inline-C, WASM async).
 
 ## Track F -- PR #386 regression hotfix
 
