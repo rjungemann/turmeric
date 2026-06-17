@@ -1,0 +1,26 @@
+; Regression: docs/reported/quasiquote-splice-into-vector-unsupported.md
+;
+; `~@` (unquote-splicing) must expand inside a vector literal `[...]`, not just
+; inside a `(...)` list.  The motivating case is a macro that splices a computed
+; field list into a `defstruct` field vector.  Previously the F_VEC branch of
+; the quasiquote evaluator mapped children 1:1 and left the splice node as a
+; single bogus element ("defstruct field list: expected field name symbol").
+
+; Splice an entire computed field list into the field vector.
+(defmacro defrecord [name flds]
+  `(defstruct ~name [~@flds]))
+
+(defrecord Whole (a : int b : int c : int))
+
+; Mix a literal field with a spliced tail (type annotations must survive).
+(defmacro defrecord2 [name flds]
+  `(defstruct ~name [tag : int ~@flds]))
+
+(defrecord2 Mixed (x : int y : int))
+
+(defn main [] : int
+  (let [w (make-struct Whole 1 2 3)
+        m (make-struct Mixed 10 20 30)]
+    (println (+ (.a w) (+ (.b w) (.c w))))   ; 6
+    (println (+ (.tag m) (+ (.x m) (.y m)))) ; 60
+    0))

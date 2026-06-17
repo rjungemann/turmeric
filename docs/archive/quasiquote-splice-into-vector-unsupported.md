@@ -1,10 +1,35 @@
 ---
 title: Quasiquote `~@` splicing is not implemented inside vector/map/set literals -- only inside list context
 severity: medium -- blocks any macro that synthesizes a `defstruct` field vector (or any `[...]`/`#map{}`/`#set{}` literal) from a computed list. Forces per-arity macro cascades. This is the *separate* limitation that still blocks collapsing the ECS `defworld--0..5` cascade into one variadic-over-components macro, even though the type-position unquote bug it was paired with is now fixed.
-status: open
+status: RESOLVED 2026-06-17. `~@` now splices inside vector, set, and map
+  literals (and the defstruct field vector).  Regression fixture:
+  tests/fixtures/quasiquote-splice-into-vector/.  NOTE: the downstream
+  variadic `defworld` collapse is still blocked, but by a SEPARATE,
+  pre-existing limitation now tracked in
+  docs/reported/ct-macro-evaluator-no-function-call-in-splice.md -- the CT
+  macro evaluator cannot call `map` or expand a nested macro inside a splice
+  expression, so a template cannot *compute* the sequence it splices (it
+  fails identically in list context, proving it is not this vector bug).
 discovered: 2026-06-17
 surfaced-by: turmeric-spices ECS work (E2d). The variadic `defworld` collapse anticipated by docs/archive/macro-template-type-position-rejects-unquoted-compound.md is still blocked here; the 0-5 arity cascade had to be kept.
 ---
+
+> **RESOLVED 2026-06-17.** Fixed `ct_eval_quasiquote` to expand `~@`
+> children for every sequence kind (the F_VEC / F_MAP / F_SET / map-literal /
+> set-literal / row-literal branch previously mapped children 1:1 and never
+> looked for `F_UNQUOTE_SPLICING`).  A shared `ct_qq_eval_seq_items` helper
+> now drives both the list branch and the sequence-literal branches.  Also
+> deferred the `#map{...}` even-arity / key-form parse-time checks
+> (`reader.c`, TUR-E0280/E0282) when a slot is an unquote/splice, since the
+> real slots are only known after expansion.  Proven for a defstruct field
+> vector (whole-list and mixed literal+splice, with type annotations
+> surviving), a `[...]` data vector, `#set{...}`, and `#map{...}`.  Full
+> suite green (`1661 passed, 0 failed`).
+>
+> The variadic `defworld` collapse this report anticipated needs an
+> additional, independent capability -- generating the spliced sequence with
+> `map`/recursion at macro-eval time -- which is filed separately as
+> `docs/reported/ct-macro-evaluator-no-function-call-in-splice.md`.
 
 # `~@` splice unsupported inside a vector (defstruct field-vector) literal
 
