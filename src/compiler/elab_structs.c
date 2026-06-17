@@ -775,6 +775,24 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
                         fkind = TY_INT;
                         finner = TY_UNKNOWN;
+                        /* defstruct-bare-user-type-field-reads-back-as-int-carrier:
+                         * a field typed by a bare (nullary) defopaque lowers to the
+                         * int64 carrier for STORAGE (its real representation), but
+                         * its nominal identity must be kept so `(.field x)` reads
+                         * back as the declared opaque type rather than `:int`.
+                         * Gated to opaque newtypes: a by-value (non-opaque) struct
+                         * field stored as the int64 carrier is a separate,
+                         * pre-existing storage straddle -- recording its by-value
+                         * full_type would make make-struct emit a by-value struct
+                         * initializer into an int64 slot.  ADTs are left on the
+                         * carrier too for now. */
+                        if (tb->type.kind == TY_STRUCT &&
+                            tb->type.as.struct_.def &&
+                            tb->type.as.struct_.def->is_opaque) {
+                            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *t = tb->type;
+                            full_type = t;
+                        }
                     } else {
                         diag_emit(DIAG_ERROR, field_type_form->span,
                                   "defstruct field '%s' has unrecognized type :%s",
@@ -882,6 +900,18 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
                         fkind = TY_INT;
                         finner = TY_UNKNOWN;
+                        /* defstruct-bare-user-type-field-reads-back-as-int-carrier:
+                         * keep the nominal type for a bare defopaque field so
+                         * `(.field x)` reads back as the declared opaque, not its
+                         * int64 carrier.  Gated to opaque newtypes (carrier-
+                         * consistent storage); see the new-style branch above. */
+                        if (tb->type.kind == TY_STRUCT &&
+                            tb->type.as.struct_.def &&
+                            tb->type.as.struct_.def->is_opaque) {
+                            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *t = tb->type;
+                            full_type = t;
+                        }
                     } else {
                         diag_emit(DIAG_ERROR, field_type_form->span,
                                   "defstruct field '%s' has unrecognized type :%s",

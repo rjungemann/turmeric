@@ -791,6 +791,18 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_GEN_DONE:
         case EX_PERFORM:
         case EX_HANDLE:
+            /* defopaque-struct-payload-fails-through-unsafe-helper: a pure
+             * `Unsafe` handle in statement position (its result discarded)
+             * emits its body as a statement so the body's side effects still
+             * run, without forcing the value through a typed temp (whose
+             * carrier-vs-struct type we cannot recover here).  The value
+             * position is handled in emit_effects_handle. */
+            if (e->as.handle_.handle &&
+                emit_handle_is_pure_unsafe(e->as.handle_.handle)) {
+                emit_stmt(ctx, body, e->as.handle_.handle->body);
+                return;
+            }
+            /* fallthrough */
         case EX_HANDLER_LIT:
         case EX_WITH_HANDLER:
         case EX_COMPOSE_HANDLERS:

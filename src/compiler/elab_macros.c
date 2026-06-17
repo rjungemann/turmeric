@@ -118,6 +118,53 @@ static Form *ct_value_to_form(CtEnv *env, CtValue v, Span span) {
     return form_nil(env->elab->arena, span);
 }
 
+/* Evaluate the children of a sequence form (list/vec/map/set/...) under
+ * quasiquote, expanding any `~@` (F_UNQUOTE_SPLICING) child by splicing the
+ * elements of its (list-valued) result into the output.  Shared by every
+ * sequence kind so `~@` works uniformly inside `[...]`, `#map{...}`,
+ * `#set{...}`, etc. -- not just inside `(...)` lists.
+ * docs/reported/quasiquote-splice-into-vector-unsupported.md. Returns the
+ * expanded item array and writes its length to *out_n; returns NULL (with
+ * *env->ok cleared) on a splice-evaluation error. */
+static Form **ct_qq_eval_seq_items(CtEnv *env, Form *f, uint32_t *out_n) {
+    uint32_t n_in = f->as.list.len;
+    Form **tmp = (Form **)arena_alloc(env->elab->arena, n_in * sizeof(Form *));
+    bool *splice = (bool *)arena_alloc(env->elab->arena, n_in * sizeof(bool));
+    uint32_t n_out = 0;
+    for (uint32_t i = 0; i < n_in; i++) {
+        Form *it = f->as.list.items[i];
+        if (it->tag == F_UNQUOTE_SPLICING) {
+            CtValue v = ct_eval_form(env, it->as.list.items[0]);
+            Form *inner = ct_value_to_form(env, v, it->span);
+            if (!*env->ok) return NULL;
+            tmp[i] = inner;
+            if (inner->tag == F_LIST) {
+                splice[i] = true;
+                n_out += inner->as.list.len;
+            } else {
+                splice[i] = false;
+                n_out++;
+            }
+        } else {
+            tmp[i] = ct_eval_quasiquote(env, it);
+            splice[i] = false;
+            n_out++;
+        }
+    }
+    Form **items = (Form **)arena_alloc(env->elab->arena, n_out * sizeof(Form *));
+    uint32_t out_idx = 0;
+    for (uint32_t i = 0; i < n_in; i++) {
+        if (splice[i]) {
+            Form *lst = tmp[i];
+            for (uint32_t j = 0; j < lst->as.list.len; j++) items[out_idx++] = lst->as.list.items[j];
+        } else {
+            items[out_idx++] = tmp[i];
+        }
+    }
+    *out_n = n_out;
+    return items;
+}
+
 static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
     switch (f->tag) {
         case F_UNQUOTE: {
@@ -129,40 +176,9 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
             return ct_value_to_form(env, v, f->span);
         }
         case F_LIST: {
-            uint32_t n_in = f->as.list.len;
-            Form **tmp = (Form **)arena_alloc(env->elab->arena, n_in * sizeof(Form *));
-            bool *splice = (bool *)arena_alloc(env->elab->arena, n_in * sizeof(bool));
             uint32_t n_out = 0;
-            for (uint32_t i = 0; i < n_in; i++) {
-                Form *it = f->as.list.items[i];
-                if (it->tag == F_UNQUOTE_SPLICING) {
-                    CtValue v = ct_eval_form(env, it->as.list.items[0]);
-                    Form *inner = ct_value_to_form(env, v, it->span);
-                    if (!*env->ok) return form_nil(env->elab->arena, f->span);
-                    tmp[i] = inner;
-                    if (inner->tag == F_LIST) {
-                        splice[i] = true;
-                        n_out += inner->as.list.len;
-                    } else {
-                        splice[i] = false;
-                        n_out++;
-                    }
-                } else {
-                    tmp[i] = ct_eval_quasiquote(env, it);
-                    splice[i] = false;
-                    n_out++;
-                }
-            }
-            Form **items = (Form **)arena_alloc(env->elab->arena, n_out * sizeof(Form *));
-            uint32_t out_idx = 0;
-            for (uint32_t i = 0; i < n_in; i++) {
-                if (splice[i]) {
-                    Form *lst = tmp[i];
-                    for (uint32_t j = 0; j < lst->as.list.len; j++) items[out_idx++] = lst->as.list.items[j];
-                } else {
-                    items[out_idx++] = tmp[i];
-                }
-            }
+            Form **items = ct_qq_eval_seq_items(env, f, &n_out);
+            if (!items) return form_nil(env->elab->arena, f->span);
             /* Gap D: if the constructed list has an inline-C block at its
              * head, the elaborator would otherwise try to elaborate it as
              * a call (with the CBLOCK in callee position, which has type
@@ -187,15 +203,19 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
         case F_MAP_LITERAL:
         case F_SET_LITERAL:
         case F_ROW_LITERAL: {
-            uint32_t n_in = f->as.list.len;
-            Form **items = (Form **)arena_alloc(env->elab->arena, n_in * sizeof(Form *));
-            for (uint32_t i = 0; i < n_in; i++) items[i] = ct_eval_quasiquote(env, f->as.list.items[i]);
-            if (f->tag == F_MAP) return form_map(env->elab->arena, f->span, items, n_in);
-            if (f->tag == F_SET) return form_set(env->elab->arena, f->span, items, n_in);
-            if (f->tag == F_MAP_LITERAL) return form_map_literal(env->elab->arena, f->span, items, n_in);
-            if (f->tag == F_SET_LITERAL) return form_set_literal(env->elab->arena, f->span, items, n_in);
-            if (f->tag == F_ROW_LITERAL) return form_row_literal(env->elab->arena, f->span, items, n_in);
-            return form_vec(env->elab->arena, f->span, items, n_in);
+            /* quasiquote-splice-into-vector-unsupported: expand `~@` children
+             * here too (previously a 1:1 map that left a splice node as a
+             * single bogus element), so a computed field list can be spliced
+             * into a `defstruct` field vector, `#map{...}`, `#set{...}`, etc. */
+            uint32_t n_out = 0;
+            Form **items = ct_qq_eval_seq_items(env, f, &n_out);
+            if (!items) return form_nil(env->elab->arena, f->span);
+            if (f->tag == F_MAP) return form_map(env->elab->arena, f->span, items, n_out);
+            if (f->tag == F_SET) return form_set(env->elab->arena, f->span, items, n_out);
+            if (f->tag == F_MAP_LITERAL) return form_map_literal(env->elab->arena, f->span, items, n_out);
+            if (f->tag == F_SET_LITERAL) return form_set_literal(env->elab->arena, f->span, items, n_out);
+            if (f->tag == F_ROW_LITERAL) return form_row_literal(env->elab->arena, f->span, items, n_out);
+            return form_vec(env->elab->arena, f->span, items, n_out);
         }
         case F_QUASIQUOTE:
             return ct_eval_quasiquote(env, f->as.list.items[0]);

@@ -2328,6 +2328,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
         body_expected = return_fn_type;
     } else if (return_exists_type) {
         body_expected = return_exists_type;
+    } else if (return_tyvar_type) {
+        /* defopaque-struct-payload-fails-through-unsafe-helper: push a BARE
+         * type-variable return as the body's expected type too.  It carries
+         * no concrete witness here (so the ground-binding branch in elab_call
+         * still declines), but a return-only-polymorphic tail call -- e.g.
+         * `(__get b idx)` whose own result is a bare tyvar -- needs the
+         * enclosing tyvar as a witness so elab can record the callee->caller
+         * tyvar mapping.  emit then composes that mapping through the active
+         * specialization to mint a per-instantiation clone instead of
+         * silently lowering a by-value struct result to the int64 carrier. */
+        body_expected = return_tyvar_type;
     }
     if (body_expected) e->expected_type = body_expected;
     {

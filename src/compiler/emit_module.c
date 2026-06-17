@@ -1378,6 +1378,27 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         result_type = emit_abi_instantiate_type(
             &result_type, spec_bindings, spec_n_bindings, ctx->type_arena);
     }
+    /* defopaque-struct-payload-fails-through-unsafe-helper: a
+     * return-only-polymorphic callee (bare-tyvar result, no tyvar-carrying
+     * argument) has its `call->type` collapsed to the int64 carrier at elab
+     * (call_result_type = TYPE_INT for a non-composite tyvar result), so the
+     * `result_type` derived above is the carrier, not the real by-value
+     * type.  Recover it by instantiating the callee's own result tyvar
+     * through the composed callee bindings (which the elab-side
+     * return-tyvar mapping + spec composition resolved to the concrete
+     * type, e.g. A -> Pos).  Without this the result ABI change is invisible
+     * and the call stays on the carrier, miscompiling a struct result. */
+    if (fn_binding->type.as.fn.result_kind == TY_TYVAR &&
+        generic_result.kind == TY_TYVAR &&
+        (result_type.kind == TY_TYVAR || result_type.kind == TY_INT) &&
+        bindings && n_bindings > 0) {
+        Type recovered = emit_abi_instantiate_type(
+            &generic_result, bindings, n_bindings, ctx->type_arena);
+        if (recovered.kind == TY_STRUCT && recovered.as.struct_.def &&
+            !type_uses_carrier_abi(recovered)) {
+            result_type = recovered;
+        }
+    }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;
     }

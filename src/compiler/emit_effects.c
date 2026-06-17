@@ -74,6 +74,10 @@ char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 }
 
+bool emit_handle_is_pure_unsafe(const HandleExpr *h) {
+    return h && h->is_unsafe_marker;
+}
+
 char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (handle body (E [params] k) handler ...)
      *
@@ -85,6 +89,28 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
      * Handler case functions receive outer captures via __env.
      */
     HandleExpr *h = e->as.handle_.handle;
+
+    /* defopaque-struct-payload-fails-through-unsafe-helper: the built-in
+     * `Unsafe` effect is a pure compile-time marker -- it is never actually
+     * `perform`ed, so this handle's fiber-lift never suspends; it exists only
+     * to discharge the Unsafe row from the body's effect type.  Routing the
+     * body result through the fiber's `int64_t` result slot truncates a
+     * by-value struct return (e.g. `(unsafe (dense-get d i))` whose element
+     * type is a struct -- "aggregate value used where an integer was
+     * expected").  Emit the body directly in the current context instead:
+     * semantically identical (nothing suspends, so no continuation is ever
+     * captured) and it preserves the body's real C type.  Any genuine effect
+     * the body performs is handled by an enclosing handle exactly as it would
+     * have been after the Unsafe dispatch forwarded it to the parent. */
+    if (emit_handle_is_pure_unsafe(h)) {
+        /* Value position: emit the body and return its value directly.  Its C
+         * type is whatever the body produces (e.g. a per-instantiation struct
+         * return `Pos`), so no carrier truncation occurs.  Statement position
+         * (where the result is discarded) is handled in emit_stmt's EX_HANDLE
+         * case, which emit_stmt's the body so its side effects still run. */
+        return emit_value(ctx, body, h->body);
+    }
+
     bool returns_value = (e->type.kind != TY_NIL);
 
     /* Allocate unique IDs for this handle expression */

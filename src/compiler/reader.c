@@ -947,6 +947,17 @@ static Form *read_map_literal(Reader *r) {
     if (!lit || r->error) return lit;
 
     uint32_t n = lit->as.list.len;
+    /* quasiquote-splice-into-vector-unsupported: when a slot is an unquote
+     * (`~x`) or unquote-splicing (`~@xs`), the literal sits inside a macro
+     * template and its real key/value slots are only known after expansion.
+     * A `~@` splice in particular changes the slot count.  Defer the
+     * even-arity and key-form checks past macro expansion in that case. */
+    bool has_unquote = false;
+    for (uint32_t i = 0; i < n; i++) {
+        FormTag t = lit->as.list.items[i]->tag;
+        if (t == F_UNQUOTE || t == F_UNQUOTE_SPLICING) { has_unquote = true; break; }
+    }
+    if (has_unquote) return lit;
     if (n % 2 != 0) {
         diag_emit(DIAG_ERROR, lit->span,
                   "#map{...} requires an even number of slot forms "

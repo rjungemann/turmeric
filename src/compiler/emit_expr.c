@@ -401,7 +401,7 @@ static Type emit_fn_arg_type_from_type(Type fn_type, uint8_t idx) {
 
 /* ------------ block-shaped emitters ------------ */
 
-static void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null) {
+void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null) {
     type = emit_resolve_type(ctx, type);
     indent_buf(body, ctx->indent);
     /* CRU B-1: a boxed TY_FN (first-class closure value) is carried as a void *

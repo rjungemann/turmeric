@@ -545,6 +545,13 @@ typedef struct HandleExpr {
     Expr *body;                 /* The expression being handled */
     HandleCase *cases;         /* Array of handle cases */
     uint8_t n_cases;
+    /* defopaque-struct-payload-fails-through-unsafe-helper: set by elab_unsafe
+     * for the desugaring of `(unsafe ...)`.  The built-in Unsafe effect is a
+     * pure compile-time marker that is never performed, so this handle's
+     * fiber-lift never suspends and its body may be emitted directly in place
+     * (preserving the body's real C type).  A dedicated flag avoids reading
+     * post-lowering case data, which is not reliably populated at emit time. */
+    bool is_unsafe_marker;
 } HandleExpr;
 
 /* Resume expression: (resume k value) */

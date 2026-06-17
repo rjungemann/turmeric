@@ -413,6 +413,14 @@ char *emit_effects_cont_pred(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* ------------ emit_expr.c: expression-position emission ------------ */
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e);
+void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null);
+
+/* True when a handle's sole case is the built-in `Unsafe` effect -- a pure
+ * compile-time marker that is never performed, so its fiber-lift never
+ * suspends and the body can be emitted directly in place (preserving the
+ * body's real C type instead of truncating a by-value struct result through
+ * the fiber's int64_t result slot).  See emit_effects_handle. */
+bool emit_handle_is_pure_unsafe(const struct HandleExpr *h);
 
 /* ------------ emit_stmt.c: statement-position emission ------------ */
 void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e);

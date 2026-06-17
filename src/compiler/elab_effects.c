@@ -1070,6 +1070,7 @@ Expr *elab_handle(Elab *e, const Form *call) {
     handle->body = body;
     handle->cases = cases;
     handle->n_cases = n_cases;
+    handle->is_unsafe_marker = false;
 
     /* The return type of handle is the same as the body's type */
     Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
@@ -1248,6 +1249,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     handle->body = NULL;          /* literal: detached from any body (FH design) */
     handle->cases = cases;
     handle->n_cases = 1;
+    handle->is_unsafe_marker = false;
 
     /* Build the TY_HANDLER value type. */
     Type htype;
