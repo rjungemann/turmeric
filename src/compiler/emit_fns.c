@@ -227,6 +227,16 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
             if (b->is_construct_template) return true;
             if (b->name && b->name->name &&
                 strncmp(b->name->name, "__inst_", 7) == 0) return true;
+            /* result-bridge-tail-call-from-pure-tur-to-inline-c: an inline-C
+             * body whose declared return type uses the carrier ABI is lowered
+             * with an int64_t C return type, so a tail call to it yields the
+             * carrier handle.  A pure-Turmeric wrapper around such a helper
+             * needs the same carrier->by-value bridge that the #{Construct}
+             * and __inst_ producers above already get. */
+            if (b->body_is_inline_c && b->type.kind == TY_FN &&
+                b->type.as.fn.result_full_type &&
+                type_uses_carrier_abi(*b->type.as.fn.result_full_type))
+                return true;
             return false;
         }
         default:
