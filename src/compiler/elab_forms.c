@@ -804,7 +804,15 @@ Expr *elab_let(Elab *e, const Form *call) {
             } else if (init_b->type.kind == TY_FN) {
                 /* Follow any existing source chain to the root global fn. */
                 Binding *root = init_b->source_binding ? init_b->source_binding : init_b;
-                if (root->is_global) b->source_binding = root;
+                /* pr-386 regression fix (docs/reported/pr-386-source-binding-
+                 * alias-breaks-closure-and-with-resource.md): never chain to a
+                 * lifted-lambda __fn_N helper.  source_binding means "the user
+                 * typed a global function name as the init"; a captureless
+                 * closure-returning lambda is callable only through the
+                 * closure-dispatch protocol on this let binding, and chaining
+                 * to __fn_N makes (f x) emit a direct call whose result is the
+                 * int64 carrier rather than a function pointer. */
+                if (root->is_global && !root->is_lifted_lambda) b->source_binding = root;
             }
         }
         
