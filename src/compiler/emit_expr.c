@@ -2816,6 +2816,57 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
                 }
+                /* Option none-as-NULL retirement (Track A): a `#{Construct}`
+                 * result (`some`/`none`/`ok`/`err`, which stay on the int64
+                 * carrier base) passed straight into a PLAIN (non-spec) callee
+                 * whose declared param is a concrete by-value Option/Result --
+                 * e.g. `(takes-byval (some 5))` where `takes-byval`'s param is
+                 * `(Option int)` -> by-value `Option__int` -- otherwise emits a
+                 * hard cc type error (int64_t vs Option__int).  The spec branch
+                 * above only fires for an ABI-specialized callee; a monomorphic
+                 * user fn has no `matched_spec`, so bridge here using its declared
+                 * param type.  The bridge is NULL-safe for Option (carrier 0 ==
+                 * none reconstructs to `(Option__int){0}`, never deref'd), so a
+                 * by-value Option consumer can now receive `(none)` without the
+                 * historical NULL-deref segfault.
+                 *
+                 * Scoped TIGHTLY -- only when (a) the arg is itself a call to a
+                 * `#{Construct}` template (the some/none/ok/err carrier
+                 * producers, the documented gap), AND (b) the param's struct
+                 * family is Option or Result (the only families the bridge's
+                 * canonical `tur_option_t`/`tur_result_box_t` field-wise
+                 * reconstruction handles; every other parametric struct rides
+                 * the int64 carrier ABI in param position, so a generic
+                 * "concrete aggregate param" gate wrongly deref'd already-correct
+                 * carrier values -- the cause of the first cut's 98-fixture
+                 * regression). */
+                else if (!needs_fn_cast && !matched_spec && emit_arg &&
+                         emit_arg->kind == EX_CALL &&
+                         emit_arg->as.call_.fn_binding &&
+                         emit_arg->as.call_.fn_binding->is_construct_template &&
+                         !expr_is_pbp_param(ctx, emit_arg) &&
+                         (emit_arg->type.kind == TY_INT ||
+                          (type_kind_is_aggregate(emit_arg->type.kind) &&
+                           type_uses_carrier_abi(emit_arg->type) &&
+                           !expr_emits_byvalue_carrier_abi(ctx, emit_arg))) &&
+                         fn_binding && fn_binding->type.kind == TY_FN &&
+                         fn_binding->type.as.fn.arg_full_types &&
+                         i < fn_binding->type.as.fn.arity &&
+                         fn_binding->type.as.fn.arg_full_types[i]) {
+                    Type pty = *fn_binding->type.as.fn.arg_full_types[i];
+                    StructDef *pdef = NULL; Type pargs[16]; uint8_t pn = 0;
+                    bool is_opt_res =
+                        type_extract_struct_app(&pty, &pdef, pargs, &pn) &&
+                        pdef && pdef->name &&
+                        (strcmp(pdef->name, "Option") == 0 ||
+                         strcmp(pdef->name, "Result") == 0);
+                    if (is_opt_res &&
+                        type_has_concrete_codegen_layout(&pty) &&
+                        !type_is_heap_struct(pty)) {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                 CK_CARRIER, CK_CONCRETE, pty);
+                    }
+                }
                 /* Phase D / tuplen-struct-param: a pass-by-pointer struct
                  * *parameter* is materialized in C as `const T*`, but several
                  * callee shapes take the struct *by value* even when it crosses
