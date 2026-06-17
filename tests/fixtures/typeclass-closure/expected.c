@@ -2508,9 +2508,9 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_579(int64_t, int64_t);
+static bool __fn_585(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
-static bool __fn_615(int64_t, int64_t);
+static bool __fn_621(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
 static int64_t __inst_Functor_fmap_Option(int64_t, tur_poly_fn_t);
@@ -2527,10 +2527,10 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
-static bool __fn_797(int64_t, int64_t);
+static bool __fn_803(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_879(int64_t, int64_t);
+static bool __fn_899(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static const char * __inst_MyShow_show_int(int64_t);
 static void * array_hyget(void *, int64_t);
@@ -2639,8 +2639,16 @@ static bool set_hyeq_qu(int64_t, int64_t);
 static bool set_hyeq_hycmp_qu(int64_t, int64_t, int64_t);
 static void set_hyfree(int64_t);
 static int64_t set_hyadd1(int64_t, int64_t);
+static int64_t mutmap_hylen(int64_t);
+static int64_t mutmap_hyget(int64_t, int64_t, int64_t);
+static bool mutmap_hyhas_qu(int64_t, int64_t, int64_t);
+static int64_t mutmap_hycap(int64_t);
+static bool mutmap_hyslot_hyoccupied_qu(int64_t, int64_t);
+static int64_t mutmap_hyslot_hyhash(int64_t, int64_t);
+static int64_t mutmap_hyslot_hykey(int64_t, int64_t);
+static int64_t mutmap_hyslot_hyvalue(int64_t, int64_t);
 static bool mutmap_hyeq_hystorage_qu(void *, void *, int64_t);
-static bool mutmap_hyeq_qu(int64_t, int64_t, void *);
+static bool mutmap_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t make_hyshower(int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -3019,14 +3027,14 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
     .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float,
 };
 
-static bool __fn_579(int64_t a, int64_t b) {
+static bool __fn_585(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         int64_t *__t2 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t2[1] = (int64_t)(intptr_t)__fn_579;
+        __t2[1] = (int64_t)(intptr_t)__fn_585;
         void *__t3 = __t2;
         return map_hyeq_hydynamic(x, y, (int64_t)(intptr_t)(__t3));
 }
@@ -3039,7 +3047,7 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Map,
 };
 
-static bool __fn_615(int64_t a, int64_t b) {
+static bool __fn_621(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
 
@@ -3048,7 +3056,7 @@ static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
         if (__t4) {
             int64_t *__t5 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t5[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-            __t5[1] = (int64_t)(intptr_t)__fn_615;
+            __t5[1] = (int64_t)(intptr_t)__fn_621;
             void *__t6 = __t5;
             __t4 = vec_hyeq_hyloop(x, y, INT64_C(0), vec_hylen(x), (int64_t)(intptr_t)(__t6));
         }
@@ -3282,14 +3290,14 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
-static bool __fn_797(int64_t a, int64_t b) {
+static bool __fn_803(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         int64_t *__t13 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t13[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t13[1] = (int64_t)(intptr_t)__fn_797;
+        __t13[1] = (int64_t)(intptr_t)__fn_803;
         void *__t14 = __t13;
         return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t14));
 }
@@ -3314,16 +3322,20 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_879(int64_t a, int64_t b) {
-        return (a) == (b);
+static bool __fn_899(int64_t a, int64_t b) {
+        return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
-        int64_t *__t15 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t15[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t15[1] = (int64_t)(intptr_t)__fn_879;
-        void *__t16 = __t15;
-        return mutmap_hyeq_qu(x, y, (void *)(intptr_t)(__t16));
+        bool __t15 = (mutmap_hylen(x)) == (mutmap_hylen(y));
+        if (__t15) {
+            int64_t *__t16 = (int64_t *)malloc(2 * sizeof(int64_t));
+            __t16[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+            __t16[1] = (int64_t)(intptr_t)__fn_899;
+            void *__t17 = __t16;
+            __t15 = mutmap_hyeq_hyloop(x, y, INT64_C(0), mutmap_hycap(x), (int64_t)(intptr_t)(__t17));
+        }
+        return __t15;
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3677,19 +3689,19 @@ static int64_t vec_hydata_hyget_hychecked_un_un(void * data, int64_t i, int64_t 
 }
 
 static bool vec_hyeq_hyloop(int64_t x, int64_t y, int64_t i, int64_t len, int64_t cmp) {
-        bool __t17;
+        bool __t18;
         if ((i) == (len)) {
-            __t17 = true;
+            __t18 = true;
         } else {
-            bool __t18;
+            bool __t19;
             if (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(cmp)))[0])((void *)(intptr_t)(cmp), vec_hyget(x, i), vec_hyget(y, i))) {
-                __t18 = vec_hyeq_hyloop(x, y, (i) + (INT64_C(1)), len, (int64_t)(intptr_t)(cmp));
+                __t19 = vec_hyeq_hyloop(x, y, (i) + (INT64_C(1)), len, (int64_t)(intptr_t)(cmp));
             } else {
-                __t18 = false;
+                __t19 = false;
             }
-            __t17 = __t18;
+            __t18 = __t19;
         }
-        return __t17;
+        return __t18;
 }
 
 static int64_t slice_hynew(void * data, int64_t length) {
@@ -3890,35 +3902,35 @@ static int64_t list_hylength(int64_t l) {
 }
 
 static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        bool __t19;
+        bool __t20;
         if (tnil_qu(l1)) {
-            __t19 = tnil_qu(l2);
+            __t20 = tnil_qu(l2);
         } else {
-            bool __t20;
+            bool __t21;
             if (tnil_qu(l2)) {
-                __t20 = false;
+                __t21 = false;
             } else {
-                bool __t21;
+                bool __t22;
                 if ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), list_hyhead(l1), list_hyhead(l2))) {
-                    __t21 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
+                    __t22 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
                 } else {
-                    __t21 = false;
+                    __t22 = false;
                 }
-                __t20 = __t21;
+                __t21 = __t22;
             }
-            __t19 = __t20;
+            __t20 = __t21;
         }
-        return __t19;
+        return __t20;
 }
 
 static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
-        int64_t __t22;
+        int64_t __t23;
         if (tnil_qu(cell)) {
-            __t22 = INT64_C(0);
+            __t23 = INT64_C(0);
         } else {
-            __t22 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
+            __t23 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
         }
-        return __t22;
+        return __t23;
 }
 
 static int64_t list_hyhead(int64_t l) {
@@ -3934,13 +3946,13 @@ static int64_t list_hytail(int64_t l) {
 }
 
 static int64_t list_hyconcat(int64_t l1, int64_t l2) {
-        int64_t __t23;
+        int64_t __t24;
         if (tnil_qu(l1)) {
-            __t23 = l2;
+            __t24 = l2;
         } else {
-            __t23 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
+            __t24 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
         }
-        return __t23;
+        return __t24;
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
@@ -4206,6 +4218,97 @@ static int64_t set_hyadd1(int64_t s, int64_t x) {
         return set_hyadd(s, x, x);
 }
 
+static int64_t mutmap_hylen(int64_t m) {
+        struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_l *s = (struct __tur_mm_storage_l *)mm->storage;
+  return (int64_t)s->len;
+  
+}
+
+static int64_t mutmap_hyget(int64_t m, int64_t h, int64_t key) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return 0;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          return slot->value;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
+static bool mutmap_hyhas_qu(int64_t m, int64_t h, int64_t key) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return false;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          return true;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
+static int64_t mutmap_hycap(int64_t m) {
+        struct __tur_mm_storage_c { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_c *s = (struct __tur_mm_storage_c *)mm->storage;
+  return (int64_t)s->cap;
+  
+}
+
+static bool mutmap_hyslot_hyoccupied_qu(int64_t m, int64_t i) {
+        enum { TUR_MM_OCCUPIED=1 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return s->slots[i].tag == TUR_MM_OCCUPIED;
+  
+}
+
+static int64_t mutmap_hyslot_hyhash(int64_t m, int64_t i) {
+        struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return (int64_t)s->slots[i].hash;
+  
+}
+
+static int64_t mutmap_hyslot_hykey(int64_t m, int64_t i) {
+        struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return (int64_t)s->slots[i].key;
+  
+}
+
+static int64_t mutmap_hyslot_hyvalue(int64_t m, int64_t i) {
+        struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return (int64_t)s->slots[i].value;
+  
+}
+
 static bool mutmap_hyeq_hystorage_qu(void * pa, void * pb, int64_t val_cmp) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
@@ -4241,8 +4344,32 @@ static bool mutmap_hyeq_hystorage_qu(void * pa, void * pb, int64_t val_cmp) {
   
 }
 
-static bool mutmap_hyeq_qu(int64_t m1, int64_t m2, void * val_cmp) {
-        return mutmap_hyeq_hystorage_qu((void *)(intptr_t)(((MutableMap *)(intptr_t)(m1))->storage), (void *)(intptr_t)(((MutableMap *)(intptr_t)(m2))->storage), (int64_t)(intptr_t)(val_cmp));
+static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, int64_t val_cmp) {
+        bool __t25;
+        if ((i) == (cap)) {
+            __t25 = true;
+        } else {
+            bool __t26;
+            if (mutmap_hyslot_hyoccupied_qu(m1, i)) {
+                bool __t27;
+                if (mutmap_hyhas_qu(m2, mutmap_hyslot_hyhash(m1, i), mutmap_hyslot_hykey(m1, i))) {
+                    bool __t28;
+                    if (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), mutmap_hyslot_hyvalue(m1, i), mutmap_hyget(m2, mutmap_hyslot_hyhash(m1, i), mutmap_hyslot_hykey(m1, i)))) {
+                        __t28 = mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp));
+                    } else {
+                        __t28 = false;
+                    }
+                    __t27 = __t28;
+                } else {
+                    __t27 = false;
+                }
+                __t26 = __t27;
+            } else {
+                __t26 = mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp));
+            }
+            __t25 = __t26;
+        }
+        return __t25;
 }
 
 static int64_t make_hyshower(int64_t x) {

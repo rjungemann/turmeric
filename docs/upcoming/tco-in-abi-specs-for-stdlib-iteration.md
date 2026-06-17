@@ -206,16 +206,38 @@ Same shape, harder iteration:
 - **Map** uses a HAMT — recursive walk over the trie. The iteration
   primitive `hamt-fold` could be lifted to a TCO'd pure-Turmeric form
   with an accumulator. Larger language work; tracked separately.
-- **MutableMap** — **DONE** (see
-  `docs/archive/mutmap-int-handle-stand-in-blocks-carrier-retirement.md`).
-  MutableMap's blocker turned out to be not iteration but an `:int`
-  handle stand-in across its whole API: because `mutmap-new` returned
-  `:int`, callers had to ascribe `(:: a (MutableMap int int))` to
-  dispatch `.eq?`, forcing the carrier bridge. Retyping the API to honest
-  `(MutableMap K V)` handles (mirroring `Eq[Vec]`) dropped `mutmap-eq`
-  from 4 crossings to 0, no TCO lift required — the inline-C storage
-  iteration core (`mutmap-eq-storage?`) stays, taking the K/V-agnostic
-  `ptr<void>` directly.
+- **MutableMap** — **DONE** (handle retype +
+  `docs/archive/mutmap-int-handle-stand-in-blocks-carrier-retirement.md`)
+  **and now pure-Turmeric instance** (this follow-up). The first step's
+  blocker turned out to be not iteration but an `:int` handle stand-in
+  across its whole API: because `mutmap-new` returned `:int`, callers had
+  to ascribe `(:: a (MutableMap int int))` to dispatch `.eq?`, forcing the
+  carrier bridge. Retyping the API to honest `(MutableMap K V)` handles
+  (mirroring `Eq[Vec]`) dropped `mutmap-eq` from 4 crossings to 0.
+
+  The follow-up then mirrored Vec's `#400` shape end-to-end: a
+  pure-Turmeric `mutmap-eq-loop` (self-tail-call) + slot accessors
+  (`mutmap-cap`/`mutmap-slot-occupied?`/`-hash`/`-key`/`-value`), and the
+  `Eq [MutableMap]` instance now dispatches through them with ascribed
+  receivers (`(:: x (MutableMap K V))`), exactly like `Eq [Vec]`'s
+  `(:: x (Vec A))`. The inline-C `mutmap-eq-storage?` / `mutmap-eq?` pair
+  stays for direct/abstract callers (a stack-safe C `for` loop), just as
+  `vec-eq?` stays for Vec. Concrete dispatch mints a typed
+  `mutmap_eq_loop__spec__(MutableMap__int__int *, ...)`; like Vec's typed
+  loop spec it emits self-tail-recursive C that the C compiler's
+  sibling-call optimization turns into a loop (verified stack-safe: a
+  200k-entry `.eq?` runs in a 512KB stack). Suite stays green (1665/0),
+  interpreter parity IMPROVES (the two long-standing interpreter failures
+  `eq-carrier-capturing-comparator` / `mutmap-eq` now PASS via the
+  pure-Turmeric path + native slot accessors), and the bridge audit is
+  crossing-neutral (60 -> 60; no mutmap fixture crosses).
+
+  NOT done: the **typed-pointer producer slice** for MutableMap
+  (`mutmap-new` -> `MutableMap__int__int *`). It is blocked on the
+  multi-param resolution gap (`#364`); typing the consumers without the
+  producer yields an int->pointer mismatch in ascribed user code. Filed
+  as
+  [docs/reported/mutmap-multi-param-producer-typing-blocked.md](../reported/mutmap-multi-param-producer-typing-blocked.md).
 - **Set** wraps a HAMT — same shape as Map.
 
 Hold Map/Set for a follow-up phase. The Vec landing proved the pattern

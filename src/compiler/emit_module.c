@@ -1098,7 +1098,15 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
  * constructor is `Vec` -- the typed-pointer producer slice currently covers Vec
  * only (Map/Set/MutableMap/Cons are later steps in the vec-typed-pointer plan).
  * Used to scope inline-C producer/accessor spec-minting to Vec so the broader
- * `:heap` family is untouched this increment. */
+ * `:heap` family is untouched this increment.
+ *
+ * NOTE: MutableMap was prototyped here but reverted -- its producer
+ * (`mutmap-new`, a zero-arg `[K V]` inline-C constructor) does NOT get a typed
+ * spec under the multi-param resolution gap (#364), so typing the *consumers*
+ * (`mutmap-eq-loop`, user fns taking `(MutableMap int int)`) while the producer
+ * still returns the int64 carrier yields an int->pointer mismatch in ascribed
+ * code.  MutableMap's typed-pointer slice is blocked on that gap; see
+ * docs/reported/mutmap-multi-param-producer-typing-blocked.md. */
 static bool type_is_heap_vec(Type t) {
     if (!type_is_heap_struct(t)) return false;
     StructDef *def = NULL;

@@ -8633,10 +8633,58 @@ static TuriValue native_mutmap_delete(TuriEnv *env, TuriValue *a, uint32_t n, vo
         idx = (idx + 1) & mask;
     }
 }
+/* mutmap-cap / mutmap-slot-* -- the slot-iteration accessors the pure-Turmeric
+ * `mutmap-eq-loop` (stdlib/mutmap.tur) walks.  They replace the old inline-C
+ * `mutmap-eq-storage?` carrier core: equality is now expressed in Turmeric over
+ * these reads plus mutmap-has?/mutmap-get, and the value comparator (a turi
+ * closure) is invoked directly by the interpreted loop -- no native needs to
+ * call back into a comparator.  Each is a single bounds-checked field read. */
+static TuriValue native_mutmap_cap(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    TurMmStorage *s = mm_storage(a[0]);
+    return turi_int(s ? (int64_t)s->cap : 0);
+}
+static TuriValue native_mutmap_slot_occupied(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    TurMmStorage *s = mm_storage(a[0]);
+    if (!s) return turi_bool(false);
+    int64_t i = a[1].as_int;
+    if (i < 0 || (uint64_t)i >= s->cap) return turi_bool(false);
+    return turi_bool(s->slots[i].tag == TUR_MM_OCCUPIED);
+}
+static TuriValue native_mutmap_slot_hash(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TurMmStorage *s = mm_storage(a[0]);
+    if (!s) return turi_int(0);
+    int64_t i = a[1].as_int;
+    if (i < 0 || (uint64_t)i >= s->cap) return turi_int(0);
+    return turi_int(s->slots[i].hash);
+}
+static TuriValue native_mutmap_slot_key(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TurMmStorage *s = mm_storage(a[0]);
+    if (!s) return turi_int(0);
+    int64_t i = a[1].as_int;
+    if (i < 0 || (uint64_t)i >= s->cap) return turi_int(0);
+    return turi_int(s->slots[i].key);
+}
+static TuriValue native_mutmap_slot_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    TurMmStorage *s = mm_storage(a[0]);
+    if (!s) return turi_int(0);
+    int64_t i = a[1].as_int;
+    if (i < 0 || (uint64_t)i >= s->cap) return turi_int(0);
+    return turi_int(s->slots[i].value);
+}
 /* mutmap-storage-field__ -- read the raw `storage` pointer out of a carrier
- * MutableMap wrapper (the inline-C bridge mutmap-eq? uses to feed the by-value
- * storage core).  The interpreter holds the wrapper as a TURI_INT pointer to
- * { void *storage }; return word 0 as a TURI_INT ptr<void>. */
+ * MutableMap wrapper (the inline-C bridge the public mutmap-eq? uses to feed
+ * the by-value storage core).  The interpreter holds the wrapper as a TURI_INT
+ * pointer to { void *storage }; return word 0 as a TURI_INT ptr<void>. */
 static TuriValue native_mutmap_storage_field(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_int(0);
@@ -8644,10 +8692,10 @@ static TuriValue native_mutmap_storage_field(TuriEnv *env, TuriValue *a, uint32_
     return turi_int((int64_t)(intptr_t)m->storage);
 }
 /* mutmap-eq-storage? -- structural equality over two raw storage pointers,
- * invoking the value comparator (a turi closure) via turi_call.  This is the
- * native override for the inline-C helper that mutmap-eq? / mutmap-eq?-byval
- * both delegate to; the override hook only fires for the inline-C-bodied
- * helper, not for the plain-call mutmap-eq? wrapper. */
+ * invoking the value comparator (a turi closure) via turi_call.  Native
+ * override for the inline-C core that the public mutmap-eq? wrapper delegates
+ * to (the Eq[MutableMap] instance walks the pure-Turmeric mutmap-eq-loop
+ * instead, so it never reaches this native). */
 static TuriValue native_mutmap_eq_storage(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 3) return turi_bool(false);
@@ -9245,8 +9293,15 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "mutmap-get",      native_mutmap_get,      NULL);
     turi_env_register_native(env, "mutmap-has?",     native_mutmap_has,      NULL);
     turi_env_register_native(env, "mutmap-delete!",  native_mutmap_delete,   NULL);
-    /* mutmap-eq? / mutmap-eq?-byval are plain-call wrappers; the native
-     * override fires only for their inline-C helpers, so register those. */
+    /* mutmap-eq? / mutmap-eq-loop are pure-Turmeric; the slot accessors they
+     * walk are native (the simple inline-C executor reads them, but registering
+     * keeps the interpreter on the same self-contained open-addressing layout). */
+    turi_env_register_native(env, "mutmap-cap",            native_mutmap_cap,           NULL);
+    turi_env_register_native(env, "mutmap-slot-occupied?", native_mutmap_slot_occupied, NULL);
+    turi_env_register_native(env, "mutmap-slot-hash",      native_mutmap_slot_hash,     NULL);
+    turi_env_register_native(env, "mutmap-slot-key",       native_mutmap_slot_key,      NULL);
+    turi_env_register_native(env, "mutmap-slot-value",     native_mutmap_slot_value,    NULL);
+    /* Public mutmap-eq? still delegates to the inline-C storage core. */
     turi_env_register_native(env, "mutmap-storage-field__", native_mutmap_storage_field, NULL);
     turi_env_register_native(env, "mutmap-eq-storage?",     native_mutmap_eq_storage,    NULL);
     turi_env_register_native(env, "mutmap-free",     native_mutmap_free,     NULL);
