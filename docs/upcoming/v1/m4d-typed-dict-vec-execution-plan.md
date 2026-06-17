@@ -6,6 +6,47 @@ description: The concrete plan for the dominant residual M3 audit bucket -- the 
 
 # M4d -- Typed/Conditional Dict Emit for Eq[Vec] -- Execution Plan
 
+> **STATUS UPDATE 2026-06-17 (post-#400 -- read this first).** #400 (the
+> pure-Turmeric TCO'd `Eq [Vec]` rewrite) **moved the by-value loop into the
+> `__spec`** and left the int64 **carrier base** delegating to the carrier
+> helpers (`vec_hylen` / `vec_hyeq_hyloop`). The carrier base therefore **no
+> longer carries any `Vec int` crossing** -- the "80 `Vec int` carrier crossings
+> in the dead carrier base" this plan was written against are GONE. The current
+> `TUR_M3_AUDIT=1` floor is **34 crossings / 10 fixtures**, of which the **22
+> `Vec int`** are entirely the **live element-comparator thunks** (Phase 2),
+> never the carrier base. Consequences for this plan:
+>
+> - **Phase 1 (dead-dict/base DCE) no longer reduces the audit.** The dead
+>   carrier base it removes has zero crossings post-#400, so Phase 1 is now a
+>   pure **code-size / compile-time / dead-`emit_carrier_bridge`-reachability**
+>   cleanup, not a crossing win. It is still worth doing (e.g. `defn-basic`'s
+>   snapshot carries **93 dead `__inst_{Eq,Clone,Hash,Ord,Show}` references**),
+>   but it is a **large coordinated snapshot regen** (every program that links
+>   stdlib emits these dead instances) and must be scheduled as a regen window,
+>   not rushed. The two-pass post-emit DCE (below) remains the only robust route.
+> - **Phase 2a (typed comparator parameter) does NOT eliminate the cast --
+>   verified.** The byval `vec-eq-loop` spec sources each element with
+>   `vec_hyget(x, i)`, which returns **int64** (the matrix keeps Vec's `data[]`
+>   buffer int64 for *every* element type -- interpreter parity + float-element
+>   reads). So typing the comparator param to `Vec__int *` only **relocates** the
+>   `(Vec__int *)(intptr_t)` cast from the thunk body to the call site
+>   (`cmp((Vec__int *)vec_hyget(...), ...)`); it cannot remove it. Full
+>   elimination needs **element-buffer monomorphization** (`vec-get` returning
+>   `Vec__int *` per element type), which the parametric-type ABI matrix
+>   deliberately rules out. **Therefore the disposition is Phase 2b: the 22
+>   comparator casts are the permanent type-erased boundary** the bridge is
+>   down-scoped *to*, not deleted from (matrix roadblock 4). They are cheap
+>   reinterpret casts (Vec is `:heap`, so the int64 *is* the pointer), correct
+>   and free at `-O2`.
+>
+> Net: the audit-reducing work this plan targeted is **complete** (via #400, a
+> different route than the dict typing here). What remains is (a) optional
+> Phase-1 dead-code DCE as a coordinated-regen cleanup, and (b) accepting the
+> Phase-2 comparator casts as permanent. The original root-2 framing below is
+> kept for history.
+
+---
+
 This is **root 2** in the bucket-A breakdown of
 [m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md):
 the **80 `Vec int` carrier crossings** that dominate the 93-crossing residual
