@@ -316,6 +316,30 @@ launched against `rjungemann/turmeric-spices` itself. If you are unsure which
 repo this session is rooted in, check `git remote -v` before starting any
 spice-related edit.
 
+### Reading the sibling `turmeric-spices` repo -- STRICT RULE
+
+The "do not pick up spice work" rule above constrains **writes** only. Reading
+spice source, docs, fixtures, manifests, or history from
+`rjungemann/turmeric-spices` is **always allowed**, even when the sibling is
+not checked out at `../turmeric-spices`. "We only have turmeric checked out"
+is **never** a valid reason to refuse to look up something in the spices repo
+when a user asks about it (e.g. "what's the yyjson plan?", "how does the json
+spice's parser work?", "what does `build.tur` declare for tur-signal?").
+
+Use whichever fetch path is convenient:
+
+- `gh api repos/rjungemann/turmeric-spices/contents/<path>` (single file, base64).
+- `gh api repos/rjungemann/turmeric-spices/git/trees/main?recursive=1` (tree listing).
+- `git clone --depth=1 https://github.com/rjungemann/turmeric-spices /tmp/turmeric-spices`
+  for a read-only scratch copy to grep against. Do not treat it as a second
+  working tree, do not commit to it, do not push from it. That stays consistent
+  with the write-side rule above.
+- `WebFetch` on a `https://raw.githubusercontent.com/rjungemann/turmeric-spices/main/<path>` URL.
+
+Quoting a passage from the spices repo back to the user is a normal read
+operation, not a cross-repo violation. Fetch first; only refuse if the user
+asks for a *write* (PR, commit, scaffold).
+
 ## Per-file Commands Inside a Spice
 
 `tur check`, `tur emit-c`, `tur emit-h`, and `tur run <file>` walk up

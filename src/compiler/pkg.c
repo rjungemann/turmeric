@@ -2346,9 +2346,16 @@ bool pkg_gen_cmake_deps(const char *project_dir,
              * when the dep's build dir layout is nested (e.g. mbedTLS puts its
              * .a files in <BINARY_DIR>/library/, not <BINARY_DIR>/ directly).
              * With no :targets, fall back to the dep's BINARY_DIR + a single
-             * link_lib from cmake_dep_link_lib(). */
+             * link_lib from cmake_dep_link_lib().
+             *
+             * Include dirs: when :targets is declared, source them from the
+             * first target's INTERFACE_INCLUDE_DIRECTORIES rather than the
+             * ${SOURCE_DIR}/{include,} heuristic in emit_fetch_inc_bld --
+             * the heuristic misses libraries (e.g. yyjson) that publish their
+             * public header from a non-standard subdir like ${SOURCE_DIR}/src.
+             * Falls back to the heuristic when no :targets are declared. */
             fprintf(f, "string(APPEND _spice_manifest\n");
-            emit_include_dirs_line(f, d, /*from_targets=*/false);
+            emit_include_dirs_line(f, d, /*from_targets=*/d->n_targets > 0);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
             fprintf(f, ")\n");
         }
