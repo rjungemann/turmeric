@@ -1,0 +1,11 @@
+;; app/consume -- second module also returning (Result cstr cstr).
+;; Without the per-instantiation include guard around the `typedef struct
+;; Result__cstr__cstr`, a TU including both this module's .h AND the
+;; sibling app/produce's .h fails with `redefinition of Result__cstr__cstr`.
+;; Result/err are preloaded by the project prelude; no explicit import.
+
+(defmodule app/consume
+  (export make-err)
+
+  (defn make-err [s : cstr] : (Result cstr cstr)
+    (err s)))

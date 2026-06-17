@@ -1,0 +1,9 @@
+;; app/produce -- exports a function whose return type is (Result cstr cstr).
+;; This module's generated .h emits `typedef struct Result__cstr__cstr ...`.
+;; Result/ok/err are preloaded by the project prelude; no explicit import.
+
+(defmodule app/produce
+  (export make-ok)
+
+  (defn make-ok [s : cstr] : (Result cstr cstr)
+    (ok s)))

@@ -1,0 +1,44 @@
+;; Regression: defopaque [A] :int with a struct-A payload threaded through
+;; an (unsafe (__raw)) lifting wrapper.
+;;
+;; The public box-set!/box-get accessor takes A by value and calls a
+;; private __raw inline-C helper inside an (unsafe ...) block. The
+;; outer body is lifted into a fiber-body closure with an env struct;
+;; the env slot for `v` must be the concrete A (here `Pos`), not the
+;; int64_t carrier. Before the fix, the env field stayed int64_t and
+;; the C compiler rejected `env->v = v;` / `v = env->v;` with
+;; "assigning to int64_t from incompatible type Pos".
+;;
+;; See docs/reported/defopaque-struct-payload-fails-through-unsafe-helper.md
+;; (resolved) and the archived
+;; docs/archive/history/generic-inline-c-struct-arg-monomorphises-to-int64.md
+;; for the sibling per-instantiation monomorphization fix; this fixture
+;; pins the closure-env counterpart.
+
+(defstruct Pos [x : int y : int])
+
+(defopaque Box [A] :int)
+
+(defn __mk-raw [] #{Unsafe} : int
+  ```c
+  return 0;
+  ```)
+
+(defn make-box [A] [] : (Box A)
+  (:: (unsafe (__mk-raw)) :Box))
+
+(defn __set-raw [A] [b : int v : A] #{Unsafe} : int
+  ```c
+  (void)b; (void)v;
+  return 1;
+  ```)
+
+(defn box-set! [A] [b : (Box A) v : A] : int
+  (unsafe (__set-raw (:: b :int) v)))
+
+(defn main [] : int
+  (let [b : (Box Pos) (make-box)
+        p (make-struct Pos 1 2)
+        r (box-set! b p)]
+    (println r)
+    0))

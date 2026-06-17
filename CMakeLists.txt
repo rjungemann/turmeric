@@ -166,6 +166,17 @@ add_test(
   COMMAND bash tests/run-build-project.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# result-typedef-duplicated-across-modules regression: two modules export
+# functions returning the same (Result cstr cstr) instantiation; a third
+# module imports both.  Without a per-instantiation include guard around
+# the `typedef struct Result__cstr__cstr` in each module's .h, the third
+# TU fails to compile with `redefinition`.  See
+# docs/reported/result-typedef-duplicated-across-modules.md.
+add_test(
+  NAME tur_result_typedef_multi_module
+  COMMAND bash tests/run-result-typedef-multi-module.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Sweet-exp manifest support: verifies build.tur.sweet is treated as a
 # fully equivalent manifest by walk-up discovery, pkg_manifest_read, and
 # tur init --sweet.  See docs/upcoming/build-tur-sweet-manifest-plan.md.

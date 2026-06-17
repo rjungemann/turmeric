@@ -2786,9 +2786,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * change.  expr_is_pbp_param is side-effect-free (the comment on
                  * the pbp branch below explains why it is the safe predicate to
                  * consult here). */
+                /* defopaque-struct-payload: an opaque [A] :int spec arg
+                 * (e.g. `(Box Pos)`) is aggregate at the type level but
+                 * lowers to plain `int64_t` at the C level -- the carrier
+                 * IS the spec's parameter shape, so bridging a CK_CARRIER
+                 * source to "concrete" produces a wild deref
+                 * (`(*(int64_t *)(intptr_t)(b_892))`). Skip the bridge
+                 * when the spec arg's C lowering is already int64_t.
+                 * Sibling to the closure-env fix in emit_effects.c that
+                 * resolves a generic `:A` capture's env-field type
+                 * through the current spec. */
+                bool spec_lowers_to_int64 = false;
+                if (matched_spec) {
+                    const char *spec_cname =
+                        emit_type_c_name(ctx, matched_spec->arg_types[i]);
+                    if (spec_cname && strcmp(spec_cname, "int64_t") == 0)
+                        spec_lowers_to_int64 = true;
+                }
                 if (!needs_fn_cast && matched_spec &&
                     emit_arg &&
                     !expr_is_pbp_param(ctx, emit_arg) &&
+                    !spec_lowers_to_int64 &&
                     type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&

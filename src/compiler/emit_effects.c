@@ -185,12 +185,22 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (ctx->fn_params[pi] == b) { is_param = true; break; }
                     }
                 }
-                if (is_param && type_struct_pass_by_ptr(b->type)) {
+                /* Resolve through the current ABI specialization so a
+                 * captured `:A` binding inside a per-instantiation clone
+                 * picks up the concrete C type (e.g. struct Pos), not
+                 * the int64_t carrier. Without this, the env-fill
+                 * `__henv->v = v;` and writeback `v = __henv->v;` would
+                 * be int64_t-vs-struct mismatches at C compile time --
+                 * the closure-env counterpart of the per-instantiation
+                 * monomorphization fix at emit_module.c (see archived
+                 * generic-inline-c-struct-arg-monomorphises-to-int64). */
+                Type resolved_ty = emit_resolve_type(ctx, b->type);
+                if (is_param && type_struct_pass_by_ptr(resolved_ty)) {
                     buf_printf(hbuf, "    const %s *%s;\n",
-                               type_c_name(b->type), raw);
+                               type_c_name(resolved_ty), raw);
                 } else {
                     buf_printf(hbuf, "    %s %s;\n",
-                               type_c_name(b->type), raw);
+                               type_c_name(resolved_ty), raw);
                 }
             }
             free(raw);

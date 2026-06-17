@@ -287,59 +287,6 @@ under this repository. Its canonical remote is
   git clone https://github.com/rjungemann/turmeric-spices/ ../turmeric-spices
   ```
 
-### Web Claude (claude.ai/code) -- STRICT RULE: do not pick up spice work
-
-If you are running in the web sandbox (claude.ai/code) and this session was
-launched against **turmeric** (this repo), you **cannot** open PRs against
-`turmeric-spices`. The sandbox has exactly one repo checked out -- the one the
-session started with -- and there is no second working tree, no sibling clone,
-and no push target for `rjungemann/turmeric-spices`. Cloning it inside the
-sandbox does not give you a PR-able remote; the work gets thrown away.
-
-**Do not:**
-
-- attempt to `git clone ../turmeric-spices` and edit it in-sandbox "to open a PR later",
-- promise the user a PR against `turmeric-spices` from a turmeric-rooted session,
-- propose, scaffold, or start spice-side changes on the assumption you can ship them.
-
-**Instead, stop immediately and tell the user one of:**
-
-1. Re-launch a web Claude Code session with `rjungemann/turmeric-spices` as the
-   repo -- only that session can open PRs against the spices repo.
-2. Run the task in local Claude Code (CLI/desktop), where both checkouts coexist
-   on disk and one session can ship PRs to both repos.
-3. Have this session emit a patch (`git format-patch` or a diff) targeted at
-   `turmeric-spices` for the user to apply locally.
-
-The only time a web Claude may do spice work directly is when the session was
-launched against `rjungemann/turmeric-spices` itself. If you are unsure which
-repo this session is rooted in, check `git remote -v` before starting any
-spice-related edit.
-
-### Reading the sibling `turmeric-spices` repo -- STRICT RULE
-
-The "do not pick up spice work" rule above constrains **writes** only. Reading
-spice source, docs, fixtures, manifests, or history from
-`rjungemann/turmeric-spices` is **always allowed**, even when the sibling is
-not checked out at `../turmeric-spices`. "We only have turmeric checked out"
-is **never** a valid reason to refuse to look up something in the spices repo
-when a user asks about it (e.g. "what's the yyjson plan?", "how does the json
-spice's parser work?", "what does `build.tur` declare for tur-signal?").
-
-Use whichever fetch path is convenient:
-
-- `gh api repos/rjungemann/turmeric-spices/contents/<path>` (single file, base64).
-- `gh api repos/rjungemann/turmeric-spices/git/trees/main?recursive=1` (tree listing).
-- `git clone --depth=1 https://github.com/rjungemann/turmeric-spices /tmp/turmeric-spices`
-  for a read-only scratch copy to grep against. Do not treat it as a second
-  working tree, do not commit to it, do not push from it. That stays consistent
-  with the write-side rule above.
-- `WebFetch` on a `https://raw.githubusercontent.com/rjungemann/turmeric-spices/main/<path>` URL.
-
-Quoting a passage from the spices repo back to the user is a normal read
-operation, not a cross-repo violation. Fetch first; only refuse if the user
-asks for a *write* (PR, commit, scaffold).
-
 ## Per-file Commands Inside a Spice
 
 `tur check`, `tur emit-c`, `tur emit-h`, and `tur run <file>` walk up

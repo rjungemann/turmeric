@@ -1,0 +1,21 @@
+;; app/main -- the third module that imports both app/produce and
+;; app/consume.  Its translation unit pulls in both `.h` headers which
+;; each emit a `typedef struct Result__cstr__cstr` declaration; without
+;; the per-instantiation include guard this fails to compile with
+;; `redefinition of Result__cstr__cstr`.
+
+(defmodule app/main
+  (import app/produce :refer [make-ok])
+  (import app/consume :refer [make-err])
+
+  (defn main [] : int
+    ;; Call both imports; we don't need to inspect the Results -- the
+    ;; bug under test is purely the header-side typedef collision.
+    ;; Returning 42 (a process exit code) is enough to observe success.
+    (let [r1 (make-ok  "hello")
+          r2 (make-err "boom")]
+      ;; Ascribe to silence "unused value" once both imports are wired in;
+      ;; the compiler only needs to see the call sites referencing both .h's.
+      (let [_ r1
+            _ r2]
+        42))))

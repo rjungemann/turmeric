@@ -1,0 +1,27 @@
+;; Regression for docs/reported/macro-template-type-position-rejects-unquoted-compound.md
+;;
+;; A defmacro template that emits a (defstruct ...) field type may use a
+;; *compound* unquoted expression like ~(first comps) inside a type-
+;; constructor application -- not just a bare ~param. Pre-fix, only the
+;; direct-parameter spelling ~c worked; ~(first comps) was rejected at
+;; template elaboration time with "unsupported type expression form".
+;;
+;; The fix: form_contains_ct_builtins and ct_eval_quasiquote recurse into
+;; F_TYPE_ANN payloads, so a CT-evaluable unquote nested inside a type
+;; annotation is resolved before type_expr_from_form sees it.
+
+(defopaque Box [A] :int)
+
+(defstruct Pos [x : int])
+
+;; The macro projects (first comps) into a (Box T) field-type position.
+;; If the unquoted compound isn't resolved at expansion time, this fails
+;; with "unsupported type expression form" pointing at ~(first comps).
+(defmacro mk-box-field [name comps]
+  `(defstruct ~name [field : (Box ~(first comps))]))
+
+(mk-box-field W (Pos))
+
+(defn main [] : int
+  (println "ok")
+  0)

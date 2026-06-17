@@ -199,6 +199,16 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
         }
         case F_QUASIQUOTE:
             return ct_eval_quasiquote(env, f->as.list.items[0]);
+        case F_TYPE_ANN: {
+            /* docs/reported/macro-template-type-position-rejects-unquoted-compound.md:
+             * recurse into the type-annotation payload so unquoted compound
+             * expressions inside a `: T` annotation (e.g. `: (Box ~(first xs))`)
+             * are evaluated at expansion time rather than left as raw F_UNQUOTE
+             * nodes for type_expr_from_form to reject. */
+            if (f->as.list.len == 0) return f;
+            Form *inner = ct_eval_quasiquote(env, f->as.list.items[0]);
+            return form_type_ann(env->elab->arena, f->span, inner);
+        }
         default:
             return f;
     }
@@ -245,6 +255,18 @@ static bool form_contains_ct_builtins(Form *f) {
                 if (form_contains_ct_builtins(f->as.list.items[i])) return true;
             }
             return false;
+        case F_TYPE_ANN:
+            /* docs/reported/macro-template-type-position-rejects-unquoted-compound.md:
+             * a `: (T ~(first xs))` annotation wraps the type-expression in an
+             * F_TYPE_ANN whose payload still carries the unquote node.  If we
+             * report `false` here, elab_eval_macro_form is skipped and the raw
+             * F_UNQUOTE reaches type_expr_from_form, which rejects it.  Recurse
+             * into the payload so a CT-evaluable form in type position triggers
+             * the post-substitute ct_eval_quasiquote pass. */
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (form_contains_ct_builtins(f->as.list.items[i])) return true;
+            }
+            return false;
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
             return form_contains_ct_builtins(f->as.list.items[0]);
@@ -262,7 +284,6 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_STR:
         case F_KEYWORD:
         case F_CBLOCK:
-        case F_TYPE_ANN:
         /* CT0: Contract type annotations don't contain CT builtins at top level */
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals don't contain CT builtins */

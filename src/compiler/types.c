@@ -1296,6 +1296,16 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
         }
     }
 
+    /* result-typedef-duplicated-across-modules: wrap each monomorphic
+     * instantiation in a per-instantiation include guard so that when two
+     * modules' .h files (each emitting the same `Result__cstr__cstr` typedef
+     * from their own exported signatures) get transitively included in the
+     * same TU, the second definition is skipped instead of triggering
+     * `redefinition of 'Result__cstr__cstr'`. C treats each
+     * `typedef struct { ... } Name;` as a fresh anonymous struct tag, so
+     * even textually identical typedefs collide without this guard. */
+    buf_printf(out, "#ifndef TUR_TY_%s\n", g_struct_apps[idx].name);
+    buf_printf(out, "#define TUR_TY_%s\n", g_struct_apps[idx].name);
     buf_printf(out, "typedef struct %s {\n", g_struct_apps[idx].name);
     for (uint32_t fi = 0; fi < def->n_fields; fi++) {
         const StructField *field = &def->fields[fi];
@@ -1313,7 +1323,8 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
         buf_printf(out, "    %s %s;\n", ctype, mfn);
         free(mfn);
     }
-    buf_printf(out, "} %s;\n\n", g_struct_apps[idx].name);
+    buf_printf(out, "} %s;\n", g_struct_apps[idx].name);
+    buf_printf(out, "#endif\n\n");
     g_struct_apps[idx].emitted = true;
     g_struct_apps[idx].emitting = false;
 }
@@ -1334,7 +1345,15 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
 
     const char *adt_inst_name = g_adt_apps[idx].name;
 
-    /* Emit the typedef for this monomorphised ADT instance. */
+    /* Emit the typedef for this monomorphised ADT instance.
+     *
+     * result-typedef-duplicated-across-modules: same guard story as the
+     * struct-app emitter above -- when two module .h files each emit this
+     * typedef for the same instantiation, a third TU including both fails
+     * with `redefinition` (each anonymous-struct typedef makes a fresh tag).
+     * Per-instantiation include guard keyed on the mangled name. */
+    buf_printf(out, "#ifndef TUR_TY_%s\n", adt_inst_name);
+    buf_printf(out, "#define TUR_TY_%s\n", adt_inst_name);
     buf_printf(out, "typedef struct %s {\n", adt_inst_name);
     buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
@@ -1359,7 +1378,8 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         free(mctor);
     }
     buf_printf(out, "    } as;\n");
-    buf_printf(out, "} %s;\n\n", adt_inst_name);
+    buf_printf(out, "} %s;\n", adt_inst_name);
+    buf_printf(out, "#endif\n\n");
 
     /* Build the type-arg suffix (e.g. "__float"). */
     Buf suffix; buf_init(&suffix);
