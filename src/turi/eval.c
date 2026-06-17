@@ -4708,6 +4708,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 for (uint8_t i = 0; i < hv->n_cases; i++) cs[i] = *hv->cases[i];
                 h->body = control->as.with_handler_.body;
                 h->cases = cs; h->n_cases = hv->n_cases;
+                h->is_unsafe_marker = false;
                 bool ok = ws_capturable(env, cf, h->body, 64);
                 for (uint8_t i = 0; i < h->n_cases && ok; i++)
                     ok = ws_capturable(env, cf, h->cases[i].body, 64);

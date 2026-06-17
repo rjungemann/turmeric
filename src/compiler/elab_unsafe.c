@@ -928,6 +928,9 @@ Expr *elab_unsafe(Elab *e, const Form *call) {
     handle->body = body;
     handle->cases = unsafe_case;
     handle->n_cases = 1;
+    /* Mark this as the pure-marker Unsafe discharge so emit can run the body
+     * in place rather than through the int64-truncating fiber result slot. */
+    handle->is_unsafe_marker = true;
 
     Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
     out->as.handle_.handle = handle;

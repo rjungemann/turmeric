@@ -3755,6 +3755,33 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                          *saved_expected_return,
                                          type_bindings, &n_type_bindings);
     }
+    /* defopaque-struct-payload-fails-through-unsafe-helper: a
+     * return-only-polymorphic callee -- one whose RESULT is a bare type
+     * variable and none of whose arguments carry it (e.g. an inline-C
+     * `(defn __get [A] [b : int idx : int] : A ...)`) -- gets no
+     * argument-derived bindings.  When such a call sits in the return
+     * position of an *enclosing* generic body, `saved_expected_return` is
+     * that body's own tyvar (non-ground), so the ground-only branch above
+     * declines to bind and the call reaches emit with zero abi_bindings.
+     * emit_abi_register_call then early-returns and the callee is emitted
+     * once on the int64 carrier -- silently miscompiling a by-value struct
+     * result (the call site expects `Pos`, the carrier returns `int64_t`).
+     *
+     * Record the callee-result-tyvar -> caller-tyvar mapping so emit can
+     * compose it through the active specialization's concrete bindings and
+     * mint a per-instantiation clone.  Gated to a BARE-tyvar result so the
+     * compound non-ground case the branch above guards against (e.g. a
+     * `(Map K V)` relay return) is untouched and keeps the carrier path. */
+    else if (saved_expected_return && fn_type.kind == TY_FN &&
+             fn_type.as.fn.result_kind == TY_TYVAR &&
+             fn_type.as.fn.result_full_type &&
+             fn_type.as.fn.result_full_type->kind == TY_TYVAR &&
+             saved_expected_return->kind == TY_TYVAR &&
+             n_type_bindings == 0) {
+        (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                         *saved_expected_return,
+                                         type_bindings, &n_type_bindings);
+    }
 
     /* Result type is the function's return type */
     Type result_type;

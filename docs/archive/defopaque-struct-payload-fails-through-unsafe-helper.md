@@ -1,14 +1,59 @@
 ---
 title: defopaque [A] with struct A payload fails through the (unsafe (__raw)) lifting pattern that sized-storage relies on
 severity: medium -- blocks lifting parametric storages (ecs/storage Dense, ecs/sparse Sparse) when component type A is a by-value struct; the int-A and opaque-A cases work, so the issue is invisible until a real defstruct component flows through. Class of bug appears related to M3 carrier-bridge / generic-inline-c-struct-arg monomorphisation.
-status: open
+status: RESOLVED 2026-06-17. Two distinct compiler bugs combined here; both
+  are fixed and a regression fixture pins the result.  See the resolution
+  banner below.
 discovered: 2026-06-16
-re-confirmed: 2026-06-17 -- during E2d triage this remained the live tracking
-  item for the `(unsafe (__raw))` struct-A mis-typed-return path; it did not
-  block the E2d landing (the 0-5 arity cascade and per-site re-pins worked
-  around it) but the underlying carrier-bridge defect is unfixed. Keep open.
 surfaced-by: E2d-P1+P5 migration in turmeric-spices (the spawn1k-pos and defcomponent-accessors fixtures regressed when (Dense A) accessors were threaded against A=Pos with Pos a `{x:int, y:int}` defstruct)
 ---
+
+> **RESOLVED 2026-06-17.** The exemplar now compiles and round-trips a
+> by-value struct through a parametric `(Dense A)` storage built from
+> generic inline-C helpers (new / set! / get via `(unsafe ...)`).
+> Regression fixture: `tests/fixtures/generic-inline-c-struct-through-unsafe/`.
+> Full suite green (`1660 passed, 0 failed`); interpreter harness green
+> (`1215 passed`).
+>
+> Two independent bugs were responsible:
+>
+> 1. **Return-only-polymorphic inline-C helper never specialized.** A helper
+>    whose result is a bare type variable carried ONLY in the return
+>    position (e.g. `(defn __dense-get [A] [d : int idx : int] : A ...)`) got
+>    no argument-derived `abi_bindings`.  Inside an enclosing generic body
+>    the expected return is that body's own (non-ground) tyvar, so the
+>    ground-only return-binding branch in `elab_call.c` declined to bind, and
+>    the call reached emit with zero bindings -> `emit_abi_register_call`
+>    early-returned -> the helper was emitted once on the int64 carrier,
+>    miscompiling the struct return.  Fix:
+>    - `elab_fns.c`: push a BARE-tyvar return type onto the body's
+>      expected-type channel (previously skipped) so a return-only-poly tail
+>      call has the enclosing tyvar as a witness.
+>    - `elab_call.c`: record the callee-result-tyvar -> caller-tyvar mapping
+>      for such calls (gated to bare-tyvar results so the compound `(Map K V)`
+>      relay case the existing guard protects is untouched).
+>    - `emit_module.c`: recover the concrete by-value struct result by
+>      instantiating the callee's result tyvar through the composed
+>      specialization bindings (the elab side leaves `call->type` collapsed to
+>      the int64 carrier), so the result ABI change is visible and a
+>      per-instantiation clone is minted.
+>
+> 2. **Struct result truncated through the `unsafe` fiber slot.** `(unsafe
+>    body)` desugars to an effect handler for the built-in `Unsafe` effect,
+>    whose body result is routed through the fiber's `int64_t` result slot --
+>    truncating a by-value struct return ("aggregate value used where an
+>    integer was expected").  Unsafe is a pure compile-time marker that is
+>    never actually performed, so the fiber-lift never suspends.  Fix: tag the
+>    desugared handle with `HandleExpr.is_unsafe_marker` (`elab_unsafe.c`) and
+>    emit its body directly in place -- as a value in expression position
+>    (`emit_effects.c`, preserving the real C type) and as a statement in
+>    statement position (`emit_stmt.c`, so side effects still run).
+>
+> The earlier mode-1/mode-2 framing (env-slot mismatch / spurious deref) was
+> the same two root causes seen through the lens of two different workaround
+> attempts; the spurious-deref-on-`(w).Pos` symptom is actually the separate
+> nullary-field-reads-back-as-int bug
+> (`defstruct-bare-user-type-field-reads-back-as-int-carrier.md`).
 
 # `defopaque [A] :int` + struct-A payload broken through `(unsafe (__raw))` lift
 

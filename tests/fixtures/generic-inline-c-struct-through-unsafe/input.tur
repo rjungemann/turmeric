@@ -1,0 +1,60 @@
+; Regression: docs/reported/defopaque-struct-payload-fails-through-unsafe-helper.md
+;
+; A parametric `(Dense A)` storage built from generic inline-C helpers must
+; work when A is a by-value struct (e.g. Pos), threaded through `(unsafe ...)`
+; blocks for new / set! / get.  Two compiler bugs combined to break this:
+;
+;   1. A return-only-polymorphic inline-C helper (`__dense-get [A] : A`, whose
+;      result is a bare tyvar carried only in the RETURN) got no abi_bindings
+;      inside the enclosing generic body, so it was emitted once on the int64
+;      carrier -- miscompiling the struct return.
+;   2. `(unsafe expr)` desugars to an effect-handler whose body result is
+;      routed through the fiber's int64_t result slot, truncating a by-value
+;      struct return ("aggregate value used where an integer was expected").
+;
+; The fix specializes the return-only-polymorphic helper per instantiation and
+; emits the never-suspending Unsafe handler body inline (preserving its real C
+; type).  This fixture pins both: a struct round-trips through `(Dense Pos)`.
+
+(defopaque Dense [A] :int)
+
+(defn __dense-new [A] [cap : int] #{Unsafe} : int
+  ```c
+  return (int64_t)(intptr_t)calloc((size_t)cap, sizeof(__TUR_TY_A__));
+  ```)
+
+(defn __dense-set! [A] [d : int idx : int v : A] #{Unsafe} : nil
+  ```c
+  __TUR_TY_A__ *arr = (__TUR_TY_A__ *)(intptr_t)d;
+  arr[idx] = v;
+  return;
+  ```)
+
+(defn __dense-get [A] [d : int idx : int] #{Unsafe} : A
+  ```c
+  __TUR_TY_A__ *arr = (__TUR_TY_A__ *)(intptr_t)d;
+  return arr[idx];
+  ```)
+
+(defn dense-new [A] [cap : int] : (Dense A)
+  (:: (unsafe (__dense-new cap)) :Dense))
+
+(defn dense-set! [A] [d : (Dense A) idx : int v : A] : nil
+  (unsafe (__dense-set! (:: d :int) idx v)))
+
+(defn dense-get [A] [d : (Dense A) idx : int] : A
+  (unsafe (__dense-get (:: d :int) idx)))
+
+(defstruct Pos [x : int y : int])
+
+(defn main [] : int
+  (let [d (:: (dense-new 8) (Dense Pos))]
+    (dense-set! d 0 (make-struct Pos 11 22))
+    (dense-set! d 3 (make-struct Pos 33 44))
+    (let [a (dense-get d 0)
+          b (dense-get d 3)]
+      (println (.x a))
+      (println (.y a))
+      (println (.x b))
+      (println (.y b))
+      0)))
