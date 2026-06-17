@@ -47,12 +47,23 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
         ? ctx->current_abi_specialization->clone_name : NULL;
     const char *fallback_clone = NULL;
     bool saw_call = false;
+    bool saw_any = false;
     for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
         if (ctx->specialized_call_exprs[i] != e) continue;
-        if (!saw_call) { fallback_clone = ctx->specialized_call_names[i]; saw_call = true; }
+        saw_any = true;
         if (ctx->specialized_call_outer[i] == active_outer) {
             fallback_clone = ctx->specialized_call_names[i];
+            saw_call = true;
             break;
+        }
+        /* Cross-spec fallback (M5 Finding 7) only applies when we are emitting
+         * INSIDE some spec; a carrier base / top-level emit (active_outer==NULL)
+         * must not pick up a spec-scoped entry, else e.g. the int64-returning
+         * carrier base routes `(ok v)` to a by-value `ok__spec` (return-type
+         * mismatch).  See the M2-completion primitive-payload construct path. */
+        if (active_outer != NULL && !saw_call) {
+            fallback_clone = ctx->specialized_call_names[i];
+            saw_call = true;
         }
     }
     if (saw_call) {
@@ -63,6 +74,13 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
                 return spec;
             }
         }
+    }
+    /* Spec-scoped call recorded under a non-matching outer: at the carrier
+     * base / top-level (active_outer==NULL) it must NOT fall into the by-args
+     * spec match below, which cannot tell a return-only-differentiated spec
+     * (e.g. by-value `ok__spec`) from the carrier (identical arg types). */
+    if (saw_any && active_outer == NULL) {
+        return NULL;
     }
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];

@@ -1408,6 +1408,57 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     bool inner_float = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
         emit_inner_closure_needs_float_spec(inner_closure, bindings, n_bindings);
     if (inner_float) abi_changes = true;
+    /* end-to-end-monomorphization (M2 completion, primitive-payload Result/
+     * Option at the typeclass-dispatch boundary): a #{Construct} constructor
+     * whose RESULT is a concrete by-value (non-heap) struct -- e.g.
+     * `(ok v) : (Result int cstr)` -- should construct the struct directly
+     * instead of returning the int64 carrier box and forcing a
+     * carrier->concrete bridge deref.  The arg-side trigger (in the
+     * body_qualifies_for_carrier_skip block below) already fires when the
+     * PAYLOAD is a struct (User); this is the symmetric PRIMITIVE-payload case
+     * where only the result is the by-value struct.
+     *
+     * Two wrinkles handled here:
+     *   1. A `(ok v)` whose payload is a primitive elaborates with `call->type`
+     *      collapsed to the int64 carrier (the parametric result type was not
+     *      preserved), so `result_type` is a bare int64, not `(Result int cstr)`.
+     *      Recover the concrete result from the ENCLOSING instance-method spec's
+     *      declared return type when the construct produces the SAME struct
+     *      family the spec returns (spec returns `Result__int__cstr`, `ok`
+     *      builds a `Result`) -- the construct IS that return value.
+     *   2. Because every primitive collapses to int64, `abi_changes` is false
+     *      and this call would early-exit to the carrier path below.  Recovering
+     *      a concrete by-value result IS an ABI change, so set `abi_changes`.
+     *
+     * GATED to instance-method spec bodies -- the dispatch-boundary site the M3
+     * audit flags -- so a top-level `(ok 5)` in user code keeps the carrier path
+     * (avoiding the broad M2 suite-wide snapshot blast). */
+    bool construct_recovered_byvalue = false;
+    {
+        bool body_is_construct = fd && fd->body
+            && fd->body->kind == EX_MAKE_STRUCT
+            && fd->binding && fd->binding->is_construct_template;
+        if (body_is_construct && !borrow_path &&
+            ctx->current_abi_specialization &&
+            ctx->current_abi_specialization->fn &&
+            ctx->current_abi_specialization->fn->owner_instance) {
+            Type spec_ret = ctx->current_abi_specialization->result_type;
+            if (spec_ret.kind == TY_APP &&
+                !type_is_heap_struct(spec_ret) &&
+                type_has_concrete_codegen_layout(&spec_ret)) {
+                Type rh = spec_ret;
+                while (rh.kind == TY_APP && rh.as.app.fn) rh = *rh.as.app.fn;
+                Type ch = generic_result;
+                while (ch.kind == TY_APP && ch.as.app.fn) ch = *ch.as.app.fn;
+                if (rh.kind == TY_STRUCT && ch.kind == TY_STRUCT &&
+                    rh.as.struct_.def && rh.as.struct_.def == ch.as.struct_.def) {
+                    result_type = spec_ret;
+                    construct_recovered_byvalue = true;
+                    abi_changes = true;
+                }
+            }
+        }
+    }
     /* M4 follow-up: an instance-method spec whose substituted arg_types
      * still carry unresolved TYVARs is a phantom — type_c_name downgrades
      * the unresolved TY_APP to int64_t, making `abi_changes` appear true
@@ -1521,6 +1572,14 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         if (!needs_byvalue_spec &&
             result_type.kind == TY_STRUCT &&
             !type_uses_carrier_abi(result_type)) {
+            needs_byvalue_spec = true;
+        }
+        /* M2-completion primitive-payload construct (recovered before the
+         * early-exit above): the enclosing instance-method spec's by-value
+         * struct return already drove `result_type` to the concrete struct and
+         * forced `abi_changes`, so construct it directly and skip the carrier
+         * box + carrier->concrete bridge. */
+        if (!needs_byvalue_spec && construct_recovered_byvalue) {
             needs_byvalue_spec = true;
         }
         /* end-to-end-monomorphization (bucket A): a producer returning a

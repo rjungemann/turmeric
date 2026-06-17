@@ -833,6 +833,103 @@ by-design carrier boundaries the plan keeps: cheap `:heap` casts
 -- the No-Lazy-`:int` retype is the prerequisite to its producer slice), and
 the type-erased `SChan` path. None is the old deref-copy root-2 shape.
 
+## Update 2026-06-17 (M2-completion: primitive-payload `(ok v)`/`(some v)` at the dispatch boundary; 66 -> 60)
+
+Refreshed the per-fixture audit after #396 (MutableMap retype) merged: the
+baseline was **16 fixtures / 66 crossings** (the prior "70" minus MutableMap's
+4). Root-caused the `Result`/`Option`-at-dispatch crossings and cleared the
+tractable half of them.
+
+### Root cause (the `ok`/primitive-payload asymmetry)
+
+A `#{Construct}` constructor (`ok`/`err`/`some`, body `(make-struct ...)`) is
+monomorphized to a direct by-value construction **only when its PAYLOAD is a
+by-value struct** -- the arg-side `needs_byvalue_spec` trigger
+(`emit_module.c`, `arg_types[i].kind == TY_STRUCT`).  `polymorphic-ok-err-
+value-struct-payload` works because `(ok (make-struct User ...))` has a struct
+payload, so `ok__spec__Result__User__cstr_User` mints and constructs directly.
+
+But a **primitive**-payload `(ok v)` (`v : int`) inside an instance-method spec
+(`(definstance Dec [int] (dec [v] (ok v)))`) had no by-value trigger:
+
+- the payload `int` is a carrier-ABI primitive (no arg trigger), and
+- the result `(Result int cstr)` is a **TY_APP**, which `type_uses_carrier_abi`
+  (`emit_core.c:277`) reports as carrier, so the result-side trigger
+  (`result_type.kind == TY_STRUCT`, `emit_module.c`) misses it (it only fires
+  for an already-resolved `TY_STRUCT`, not a `TY_APP`).
+
+Worse, the nested `(ok v)`'s `call->type` is **collapsed to the int64 carrier**
+at elaboration (the parametric result type was not preserved), so `result_type`
+at the call is a bare int64 -- there is no concrete `(Result int cstr)` to test.
+With everything stringifying to `int64_t`, `abi_changes` is false and the call
+**early-exits to the carrier path** before any construct gate.  Result: the
+spec body emitted `return (Result__int__cstr){... __t->is_ok ...}` over a
+deref'd `tur_ok` box -- the `carrier->concrete` crossing the audit flagged in
+`typeclass-return-dispatch-result-wrapped` (2) and `m5-instance-spec-
+constraint-var` (4).
+
+### Fix (recover the concrete result from the enclosing instance-method spec)
+
+`src/compiler/emit_module.c` (`emit_abi_register_call`): when a `#{Construct}`
+call is scanned inside an `__inst_*__spec__*` body whose declared **return** is
+a concrete by-value (non-heap) struct of the **same struct family** the
+constructor produces (spec returns `Result__int__cstr`, `ok` builds a
+`Result`), recover `result_type` from the spec's return type and set
+`abi_changes` so it does not early-exit.  The construct then mints
+`ok__spec__Result__int__cstr_int64_t` and the spec body becomes
+`return ok__spec__Result__int__cstr_int64_t(v)` -- direct by-value, no box, no
+bridge.
+
+GATED to instance-method spec bodies (the dispatch-boundary site the audit
+flags); a top-level `(ok 5)` in user code keeps the carrier path, so the broad
+M2 suite-wide snapshot blast is avoided.
+
+**Call-routing correction (the load-bearing half).** The same `(ok v)` Expr is
+emitted in *two* functions: the int64-returning **carrier base**
+`__inst_Dec_dec_int` (referenced by the dict singleton for indirect dispatch)
+and the by-value **spec** `__inst_Dec_dec_int__spec`.  They must route the call
+differently -- carrier base -> `ok` (int64), spec -> `ok__spec` (by-value).  The
+existing call->clone lookups (`emit_core.c:emit_call_name`,
+`emit_expr.c:find_matched_abi_spec`) fell back to the *first*-recorded entry for
+a call Expr regardless of the active outer spec, and the secondary by-args
+lookup matched `ok__spec` on arg types alone -- both made the **carrier base**
+wrongly call the by-value `ok__spec` (a hard `incompatible types when returning
+'Result__int__cstr' but 'int64_t' was expected`).  Fixed both: a return-only-
+differentiated spec is reachable **only** via an exact call-Expr+outer match;
+when a call was recorded under a spec outer but none matches the active
+(`NULL`) outer, the carrier base / top-level emit uses the plain carrier callee
+and skips the by-args match (which cannot tell two specs apart when they differ
+only by return ABI).
+
+### Validation
+
+- Audit: **16 fixtures / 66 crossings -> 14 / 60.**
+  `typeclass-return-dispatch-result-wrapped` (2 -> 0) and
+  `m5-instance-spec-constraint-var` (4 -> 0) cleared.
+- Compiled suite **1653 passed, 0 failed**, **zero `expected.c` drift** (the
+  affected instance-method specs live in fixtures that carry no snapshot, and
+  the carrier base / top-level paths are byte-identical).
+- Interpreter gate **1209 passed, 2 failed** (the documented pre-existing
+  `eq-carrier-capturing-comparator` / `mutmap-eq`; this change is emit-side
+  only, so the tree-walker is unaffected).
+- Spice: `../turmeric-spices/spices/json` (heavy Result use) -- all 5 `src/`
+  modules `tur check` clean (the full roundtrip needs the yyjson cmake-dep,
+  not buildable here; the equivalent Result-construct-at-dispatch patterns are
+  covered by the in-tree fixtures above).
+
+### Residual 60, unchanged in character
+
+The remaining crossings are the by-design carrier boundaries the plan keeps:
+the `Vec` carrier-based `Eq [Vec]` delegation + `:heap` producer-feed casts
+(root 2 -- `vec-eq-ascribed*`, `*-of-tvec-eq`: cheap casts, cleared only by
+monomorphizing the `vec-eq?` iteration core, which may stay carrier for
+interpreter parity); the **blessed inline-C** `tur_ok`/`tur_some` construction
+(`decode-bool-carrier-instance-ascription` 3, `inline-c-typed-result-option` 5
+-- a user/instance inline-C body literally writing `tur_ok`, inherently
+carrier); and the type-erased `SChan` path (`generic-relay-aggregate-result`
+2).  None is the by-value-Result-from-a-Turmeric-construct shape this change
+targeted.
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
