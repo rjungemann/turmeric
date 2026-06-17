@@ -1,0 +1,23 @@
+;; Regression for docs/reported/ct-macro-evaluator-no-function-call-in-splice.md
+;;
+;; The compile-time macro evaluator could not call `map` from inside a `~@`
+;; splice: `map` was unbound at macro-eval time, so a template could only
+;; splice an already-built value, never one it GENERATED. Pre-fix this errored
+;; with "unbound symbol 'map'".
+;;
+;; The fix adds a compile-time `map` (apply a CT fn over a list/vec), and stops
+;; substitute_params from eagerly flattening a `~@(map ...)` CT computation as
+;; if it were literal data -- so ct_eval computes the sequence and splices the
+;; RESULT.
+
+(defmacro emit-prints [items]
+  `(do ~@(map (fn [x] `(println ~x)) items)))
+
+;; map producing a single value per element, spliced into a `+` call.
+(defmacro sum-all [xs]
+  `(+ ~@(map (fn [x] x) xs)))
+
+(defn main [] : int
+  (emit-prints ("a" "b" "c"))
+  (println (sum-all (10 20 30)))
+  0)

@@ -1,0 +1,30 @@
+;; Regression for docs/reported/defstruct-grouped-field-spec-vectors.md
+;;
+;; defstruct's old-style field vector now accepts grouped `[name : type]`
+;; sub-vectors, flattening each into the surrounding `name`, `: type` token
+;; stream. This is the shape a `~@(map (fn [c] `[~c : T]) comps)` splice
+;; produces, so a single variadic macro can build the field list -- which is
+;; what the CT-macro `~@`-splice fix was pursued for (the ECS `defworld`
+;; collapse). Pre-fix, a grouped sub-vector errored with
+;; "defstruct field list: expected field name symbol".
+
+;; Direct grouped specs, mixed with a flat leading field.
+(defstruct Mixed [a : int [b : int] [c : int]])
+
+;; The motivating case: one variadic macro maps each component name to a
+;; `[c : int]` field and splices the lot into the field vector.
+(defmacro defworld [name comps]
+  `(defstruct ~name [gens : int ~@(map (fn [c] `[~c : int]) comps)]))
+
+(defworld World (pos vel))
+
+(defn main [] : int
+  (let [m (make-struct Mixed 1 2 3)
+        w (make-struct World 7 11 22)]
+    (println (.a m))
+    (println (.b m))
+    (println (.c m))
+    (println (.gens w))
+    (println (.pos w))
+    (println (.vel w)))
+  0)

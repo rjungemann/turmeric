@@ -1,10 +1,49 @@
 ---
 title: The compile-time macro evaluator cannot call functions or expand nested macros inside a `~@` splice expression
 severity: medium -- forces per-arity macro cascades for any template that needs to GENERATE its spliced sequence (map over a list, recurse over it). This is the actual remaining blocker for collapsing the ECS `defworld--0..5` cascade into one variadic-over-components macro; the splice-into-vector mechanism it was paired with is now fixed.
-status: open
+status: RESOLVED 2026-06-17
 discovered: 2026-06-17
 surfaced-by: turmeric-spices ECS work (E2d) -- attempting the variadic `defworld` collapse after the `~@`-splice-into-vector fix landed.
 ---
+
+> **RESOLVED 2026-06-17.** Both minimal repros now compile, expand, and run.
+> The fix is in `src/compiler/elab_macros.c`:
+>
+> 1. **Compile-time `map`** -- `ct_eval_call` now handles `(map fn seq)` by
+>    applying a CT `fn` value (a literal `(fn ...)`) to each element of a
+>    list/vec/nil and collecting the results into a list. It lives in
+>    `ct_eval_call` (not the `ct_eval_builtin` table) because the function
+>    argument must stay a `CT_VAL_FN` rather than be forced through
+>    `ct_value_to_form`. A `(map f xs)` whose `f` is an ordinary runtime
+>    function falls through and is rebuilt as a data/runtime call, so a
+>    runtime map in a template is not hijacked.
+> 2. **Nested-macro expansion in a splice** -- a new `expand_macro_head` flag
+>    on `CtEnv`, set only by `ct_eval_splice_inner` (the evaluator used at
+>    every `~@` splice site), lets a list whose head names a user macro be
+>    expanded at compile time. This enables `~@(chain (rest xs))`-style
+>    recursion. Crucially the flag is **not** set when evaluating ordinary
+>    arguments, so a macro-built data form threaded through `list`/`cons`
+>    (e.g. an accumulated `(map-assoc ...)` from `hamt-of`) is left as data
+>    for ordinary elaboration rather than being prematurely expanded (and
+>    CT-`let`-inlined, which produced `&<literal>` lvalue errors).
+> 3. **`substitute_params` deferral** -- the eager list-splice path no longer
+>    flattens a `~@X` whose substituted `X` is a CT computation (a builtin /
+>    `map` call, a macro call, or anything containing CT builtins). It keeps
+>    the `~@` wrapper so the post-substitution `ct_eval_quasiquote` pass
+>    computes `X` and splices its RESULT, instead of flattening the
+>    un-evaluated call tokens (which is what leaked `map`/`chain` as unbound
+>    symbols).
+>
+> Regression fixtures: `tests/fixtures/macro-map-in-splice/` and
+> `tests/fixtures/macro-nested-macro-in-splice/`. Full suite green
+> (1666 passed, 0 failed), including all `#map{...}`/`hamt-of` data-literal
+> fixtures.
+>
+> **Note:** the full ECS `defworld` collapse (validation item 2 below) needed
+> one more, independent piece -- `defstruct` accepting grouped `[name : type]`
+> field-spec sub-vectors -- which is now also fixed (see
+> `docs/archive/defstruct-grouped-field-spec-vectors.md`). With both in place a
+> single variadic `defworld` expands and runs end to end.
 
 # CT macro evaluator: no function call / nested-macro expansion in a `~@` splice
 

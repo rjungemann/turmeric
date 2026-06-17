@@ -772,6 +772,15 @@ struct CtEnv {
     CtBinding *bindings;
     Elab *elab;
     bool *ok;
+    /* True only when this env directly evaluates the inner of a `~@` splice.
+     * In that position a list whose head names a user macro is expanded at
+     * compile time (so a macro can recurse over a list to GENERATE the spliced
+     * sequence, e.g. `~@(chain (rest xs))`). Elsewhere a macro-headed call is
+     * left as data for ordinary elaboration -- expanding it during CT eval
+     * would mis-fire on data forms threaded through builtins like `list`
+     * (e.g. an accumulated `(map-assoc ...)`).  Not inherited by child envs.
+     * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+    bool expand_macro_head;
 };
 
 struct CtFn {
