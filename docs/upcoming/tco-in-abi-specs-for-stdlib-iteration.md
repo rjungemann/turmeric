@@ -185,12 +185,22 @@ Same shape, harder iteration:
 - **Map** uses a HAMT — recursive walk over the trie. The iteration
   primitive `hamt-fold` could be lifted to a TCO'd pure-Turmeric form
   with an accumulator. Larger language work; tracked separately.
-- **MutableMap** uses open-addressed hashing — index loop over the
-  bucket array, similar to Vec.
+- **MutableMap** — **DONE** (see
+  `docs/archive/mutmap-int-handle-stand-in-blocks-carrier-retirement.md`).
+  MutableMap's blocker turned out to be not iteration but an `:int`
+  handle stand-in across its whole API: because `mutmap-new` returned
+  `:int`, callers had to ascribe `(:: a (MutableMap int int))` to
+  dispatch `.eq?`, forcing the carrier bridge. Retyping the API to honest
+  `(MutableMap K V)` handles (mirroring `Eq[Vec]`) dropped `mutmap-eq`
+  from 4 crossings to 0, no TCO lift required — the inline-C storage
+  iteration core (`mutmap-eq-storage?`) stays, taking the K/V-agnostic
+  `ptr<void>` directly.
 - **Set** wraps a HAMT — same shape as Map.
 
-Hold these for a follow-up phase. The Vec landing proves the pattern
-and the TCO lifts.
+Hold Map/Set for a follow-up phase. The Vec landing proved the pattern
+and the TCO lifts; the MutableMap landing showed that a collection's
+remaining crossings can be a type-hygiene defect rather than an
+iteration blocker — always check the handle typing first.
 
 ## Risks
 
