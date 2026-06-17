@@ -72,24 +72,30 @@ doesn't carry a known-bad public API into the monorepo.
 - [recombine-turmeric-spices-plan](upcoming/recombine-turmeric-spices-plan.md)
   -- single repo / single workspace
 
-## Track E -- Interpreter parity (post-v1)
+## Track E -- Interpreter parity (post-v1) -- **RESOLVED 2026-06-17**
 
-No dependencies on any other track. Long-running, can be picked up
-whenever.
+No dependencies on any other track. **Every phase has landed or been
+intentionally carved**; the plan is archived at
+[turi-parity-post-v1-plan](archive/turi-parity-post-v1-plan.md).
 
-- [turi-parity-post-v1-plan](upcoming/turi-parity-post-v1-plan.md) --
-  largely landed: `EX_*` parity is **115/116 handled, 1 carved, 0 gaps**
-  (was 36 unhandled); the parity matrix shipped (TI9,
-  [turi-parity-guide](guides/turi-parity-guide.md)); the CI ratchets
-  (`check_turi_parity.py`, `check_turi_native_parity.py`) are wired into
-  `tests/run.sh`; and the allowlist -> denylist flip (TI8.b/W5) landed --
-  `tests/run-turi.sh` now runs every fixture under `tur --interpret`
-  minus the documented carve-outs. As of 2026-06-17 the turi harness is
-  green at **1211 passed, 0 failed** (the last two gaps,
-  `mutmap-eq` / `eq-carrier-capturing-comparator`, are fixed via the
-  MutableMap storage-helper natives). Residual follow-ups: TI10 Tier B
-  (user-closure key comparators / non-int map values) and the documented
-  carve-outs (`EX_CPS_CONT_APP`, user inline-C, WASM async).
+- `EX_*` parity: **115/116 handled, 1 carved, 0 gaps** (was 36 unhandled).
+- Native parity: **0 uncarved native gaps** (2 conditional-preload carve-outs).
+- Both CI ratchets (`check_turi_parity.py`, `check_turi_native_parity.py`)
+  pass and are wired into `tests/run.sh`.
+- The parity matrix shipped (TI9,
+  [turi-parity-guide](guides/turi-parity-guide.md)).
+- The allowlist -> denylist flip (TI8.b/W5) landed: `tests/run-turi.sh`
+  carries no allowlist and runs every fixture under `tur --interpret`
+  minus the documented carve-outs.
+- TI10 Tiers A+B landed (scalar-keyed maps, turi-closure key comparators,
+  reentrant comparators); the non-int-value carrier-ascription follow-up
+  is resolved and archived.
+- Turi harness green at **1212 passed, 0 failed, 416 skipped** (all 416
+  are permanent user-inline-C carve-outs).
+
+Residual surface is exactly the documented, intentional carve-outs:
+`EX_CPS_CONT_APP` (never emitted by the elaborator), user inline-C
+(`docs/turi-carve-out.txt`), and WASM async (`src/turi/fiber.c`).
 
 ## Track F -- PR #386 regression hotfix
 
@@ -106,8 +112,8 @@ is archived at
 
 **Parallelizable today** (no inter-track blocks):
 
-- A (start M4), C (start S1 callbacks), E (parity matrix)
-  -- three streams can run concurrently. (F resolved 2026-06-17.)
+- A (start M4) and C (start S1 callbacks) -- two streams can run
+  concurrently. (E and F both resolved 2026-06-17.)
 
 **Sequenced inside tracks:**
 

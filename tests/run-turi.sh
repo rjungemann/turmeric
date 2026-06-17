@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
 # tests/run-turi.sh -- interpreter (turi) fixture runner.
 #
-# Runs a curated allowlist of tests/fixtures/ through `tur --interpret` (the
-# tree-walking turi interpreter, src/turi/eval.c) instead of compiling each to
-# a native binary.  Fixtures that require compilation (requires.compiled), or
-# whose features the interpreter deliberately does not implement
-# (requires.tur-only), are skipped.
+# Runs EVERY tests/fixtures/ through `tur --interpret` (the tree-walking turi
+# interpreter, src/turi/eval.c) instead of compiling each to a native binary.
+# Fixtures that require compilation (requires.compiled), whose features the
+# interpreter deliberately does not implement (requires.tur-only), or whose
+# body contains a user inline-C (```c) block (a permanent TI7 carve-out) are
+# PASS-skipped; see the W5-flip block further down for the full skip rules.
 #
-# TI8 note (turi-parity-post-v1-plan): this harness used to invoke `tur run`,
-# which COMPILES and runs a native binary -- so the allowlist never actually
-# exercised src/turi/eval.c (see the now-resolved blocker report
-# docs/reported/turi-harness-compiles-instead-of-interpreting.md).  It now uses
-# `--interpret`.  Reconciling the allowlist to true interpretation removed 31
-# entries that only "passed" via codegen -- some are permanent carve-outs
-# (call/cc, inline-C), but several surfaced genuine interpreter gaps or silent
-# miscompiles, catalogued in
-# docs/reported/turi-harness-flip-reconciliation.md.  The full allowlist ->
-# denylist flip (run every fixture minus markers) is still future work: under
-# `--interpret` ~933 of ~1500 fixtures currently fail, spanning many distinct
-# interpreter bugs and missing-native gaps (see that report for the buckets).
+# TI8 history (turi-parity-post-v1-plan): this harness used to invoke `tur run`,
+# which COMPILES and runs a native binary -- so an earlier allowlist never
+# actually exercised src/turi/eval.c (the now-resolved blocker report
+# docs/archive/history/turi-harness-compiles-instead-of-interpreting.md).  It now
+# uses `--interpret`, and the full allowlist -> denylist flip (TI8.b/W5) has
+# LANDED: the hand-curated TURI_FIXTURES_DEFAULT is gone and the harness defaults
+# to run-everything-minus-markers.  The record of how the ~933-fixture gap was
+# driven to zero lives in
+# docs/archive/history/turi-harness-flip-reconciliation.md and
+# docs/archive/history/turi-interpreter-gap-closure-plan.md.
 #
 # Usage:
 #   bash tests/run-turi.sh                  # run the default turi fixture set
