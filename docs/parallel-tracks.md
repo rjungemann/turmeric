@@ -1,6 +1,6 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-17 (post-v0.21.0; post-PR #406).
+Snapshot: 2026-06-17 (post-PR #411; post-v0.21.0).
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
 open report in `docs/reported/`, bucketed into tracks that can largely
@@ -34,29 +34,24 @@ advances.
 
 ## Track B -- ECS spice (E2d wiring + sized worlds)
 
-ECS is mostly shipped (I1-I6, E0-E4, E2d compiler prereqs). The two
-original E2d compiler-side blockers landed and E2d-P6 typeclass dispatch
-gaps were closed in PR #405; the CT macro evaluator hole that blocked
-`defworld` was fixed in PR #406. One new field-storage bug, surfaced
-while completing E2d, is the remaining straggler.
+All compiler-side blockers cleared. E2d's last straggler -- by-value
+struct fields silently stored as the int64 carrier -- was fixed in
+PR #407, so ECS authors no longer need `:int` stand-ins for component
+shapes. E2d wiring is unblocked end-to-end.
 
 - ~~[defopaque-struct-payload-fails-through-unsafe-helper](archive/defopaque-struct-payload-fails-through-unsafe-helper.md)~~
   -- **closed**; archived.
 - ~~[macro-template-type-position-rejects-unquoted-compound](archive/macro-template-type-position-rejects-unquoted-compound.md)~~
   -- **closed**; archived.
-- [defstruct-byvalue-struct-field-stored-as-int-carrier](reported/defstruct-byvalue-struct-field-stored-as-int-carrier.md)
-  (report, 2026-06-17) -- by-value struct/ADT field is stored as the
-  int64 carrier; surfaced during E2d work after the bare-user-type
-  field fix. Forces ECS authors back to `:int` stand-ins for some
-  component shapes; ties into Track A's carrier retirement.
-- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- E2d wiring; the
-  compiler-side blockers are cleared, so the spice-side work can
-  resume modulo the by-value field bug above.
+- ~~[defstruct-byvalue-struct-field-stored-as-int-carrier](archive/defstruct-byvalue-struct-field-stored-as-int-carrier.md)~~
+  -- **closed in PR #407**; archived. Bare by-value struct/ADT fields
+  now store inline rather than as the int64 carrier.
+- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- E2d wiring; all
+  compiler-side blockers cleared, spice-side work can resume.
 - [ecs-sized-world-plan](upcoming/ecs-sized-world-plan.md) -- surface
   settled; lands after E2d wiring.
 
-**Order:** triage the by-value field bug (work around or escalate to
-Track A) -> finish E2d wiring -> sized worlds.
+**Order:** finish E2d wiring -> sized worlds.
 
 ## Track C -- Spices uplift (type hygiene)
 
@@ -85,17 +80,20 @@ and S3 work on the request path.
 
 ## Unassigned / cross-cutting reports
 
-These open reports do not yet belong to a track but are worth surfacing
-here so they are not lost between snapshots:
+All previously listed cross-cutting reports have been resolved and
+archived since the prior snapshot:
 
-- [result-typedef-duplicated-across-modules](reported/result-typedef-duplicated-across-modules.md)
-  -- multi-module spice codegen bug: identical `Result<A,B>` typedef
-  emitted from two module headers fails to compile when both are
-  transitively imported. Blocks any multi-module spice that returns
-  the same Result instantiation.
-- [sleep-ms-not-auto-loaded](reported/sleep-ms-not-auto-loaded.md)
-  -- `stdlib/time.tur` is not in the auto-load list; tourist v0.2.2 and
-  httpd v0.2.1 carry per-fixture stubs as a workaround. Root fix open.
+- ~~[result-typedef-duplicated-across-modules](archive/result-typedef-duplicated-across-modules.md)~~
+  -- **closed**; separate-compilation repro landed in PR #408 with
+  the de-dup fix.
+- ~~[sleep-ms-not-auto-loaded](archive/sleep-ms-not-auto-loaded.md)~~
+  -- **closed in PR #410**; `stdlib/time.tur` is now importable as
+  the `time` module, retiring per-fixture stubs.
+- ~~[mutmap-multi-param-producer-typing-blocked](archive/mutmap-multi-param-producer-typing-blocked.md)~~
+  -- **closed in PR #411**; MutableMap typed-pointer producer
+  monomorphization fixed.
+
+No open cross-cutting reports as of this snapshot.
 
 ---
 
@@ -104,11 +102,7 @@ here so they are not lost between snapshots:
 **Parallelizable today** (no inter-track blocks):
 
 - A (M4 in progress; TCO/stdlib helper conversions in parallel),
-  B (E2d wiring resumable now that compiler blockers cleared),
+  B (E2d wiring resumable; all compiler blockers cleared),
   C (per-spice uplift phases + S3 work).
 
-**Sequenced inside tracks:**
-
-- B's remaining straggler is the by-value struct-field carrier bug;
-  decide whether to work around it in E2d or fold it into Track A's
-  carrier retirement before pushing E2d to completion.
+**No remaining inter-track sequencing constraints.**

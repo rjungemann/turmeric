@@ -7,6 +7,7 @@ ecosystem. Type checker provides ~zero protection on the public surface of
 where even a flagrantly wrong handler signature compiles silently.
 **Discovered:** 2026-06-14, audit triggered by
 `docs/reported/tourist-middleware-takes-req-not-ctx.md`.
+**Last verified:** 2026-06-17.
 **Scope:** `../turmeric-spices/spices/*/src/**/*.tur` (35 spices audited).
 
 ---
@@ -119,15 +120,25 @@ Remaining tourist holes from this row that the v0.2.0 cut did NOT close
   opaques still pending; internal-only).
 - `mount!` / `subapp-call` accessors still take `:int` internally.
 - `__dispatch-item` / `__url-map-dispatch` -> `:int` internally.
+- `param` / `capture` still take `ctx : int` on the public surface
+  (return types are correct -- see S3 row above -- but the ctx
+  parameter never got the `Ctx` retype, so handler code that already
+  has a `Ctx` value has to pass it through as an int again). One-line
+  retype each; the bodies already cast through the same struct layout
+  the `Ctx` opaque carries.
+- `captures-get` / `captures-count` / `captures-free` -- no `Captures`
+  defopaque yet; `caps : int` flows through the public surface. A
+  `defopaque Captures :int` in `tourist/router.tur` would close this
+  alongside the `param`/`capture` retype.
 
-### httpd (4 findings beyond the S1 callback)
+### ~~httpd (4 findings beyond the S1 callback)~~ -- **fixed in `tur-httpd` v0.2.0**
 
-| File:line | Function | Should be |
+| File:line | Function | Status |
 |---|---|---|
-| `httpd/request.tur:120` | `req-header [req : int name : cstr] : int` (return is `result<cstr>`) | `[Request cstr] : result<cstr>` |
-| `httpd/response.tur:56,89,122,148,198,217,232,247` | Response constructors / accessors | `Response` opaque throughout |
-| `httpd/server.tur:272` | `srv-call-handler [handler : ptr<void> req : int] : int` | Typed handler + `Request`/`Response` opaques |
-| `httpd/write.tur:70,216,233` | `serialize-response`, `wbuf-bytes`, `wbuf-len` | `Wbuf` opaque, `Response` opaque |
+| ~~`httpd/request.tur:120`~~ | ~~`req-header [req : int name : cstr] : int`~~ | **fixed**: `[Request cstr] : (Result cstr cstr)` |
+| ~~`httpd/response.tur:*`~~ | ~~Response constructors / accessors~~ | **fixed**: `Response` opaque threaded through |
+| ~~`httpd/server.tur:272`~~ | ~~`srv-call-handler [handler : ptr<void> req : int] : int`~~ | **fixed**: typed handler + `Request`/`Response` opaques |
+| ~~`httpd/write.tur:70,216,233`~~ | ~~`serialize-response`, `wbuf-bytes`, `wbuf-len`~~ | **fixed**: `Wbuf` opaque + `Response` opaque |
 
 ### ~~sqlite (6 findings)~~ -- **fixed**
 
@@ -257,19 +268,26 @@ parameter is still `:int` -- that one really is a file descriptor.
 Particularly painful in the tourist/httpd path because every handler that
 reads a query param or header is forced to write inline-C to unwrap.
 
-Status (2026-06-16): the `mw-chain-run` `option<Response>` row was the
-linchpin -- it landed implicitly when `tur-tourist` v0.2.0 retyped
-`use!` as `(c-fn [Ctx] (Option Response))`. The new public helper
-`ctx-attr-get` already returns `(Option int)` so the same pattern is
-available to user code. The `param`/`capture`/`captures-get`/`req-header`
-rows are still open and remain the top S3 follow-up.
+**Status (2026-06-17): all S3 return-type rows closed.** `mw-chain-run`
+landed `option<Response>` implicitly in `tur-tourist` v0.2.0 when
+`use!` was retyped as `(c-fn [Ctx] (Option Response))`. The public
+helper `ctx-attr-get` returns `(Option int)`. The
+`param` / `capture` / `captures-get` / `req-header` returns are all
+`(Result cstr cstr)` on `main` today (verified 2026-06-17 against
+`tourist/param.tur:392,430`, `tourist/router.tur:244`,
+`httpd/request.tur:121`).
 
-| File:line | Function | Should be |
+Residual S2 (not S3) on these same rows: `param` / `capture` still take
+`ctx : int` rather than `ctx : Ctx`; `captures-get` / `captures-count` /
+`captures-free` still take `caps : int` (no `Captures` defopaque yet).
+Tracked under S2 tourist follow-ups below, not here.
+
+| File:line | Function | Status |
 |---|---|---|
-| `tourist/param.tur:324,370` | `param`, `capture` -> `:int` (result<cstr>) | `result<cstr>` |
-| `tourist/router.tur:244` | `captures-get` -> `:int` (result<cstr>) | `result<cstr>` |
-| `httpd/request.tur:120` | `req-header` -> `:int` (result<cstr>) | `result<cstr>` |
-| ~~`tourist/app.tur:228`, `tourist/middleware.tur:114`~~ | ~~`mw-chain-run` -> `:int` (option<Response>)~~ -- **fixed in v0.2.0** | -- |
+| ~~`tourist/param.tur:392,430`~~ | ~~`param`, `capture` -> `:int`~~ | **fixed**: returns `(Result cstr cstr)` |
+| ~~`tourist/router.tur:244`~~ | ~~`captures-get` -> `:int`~~ | **fixed**: returns `(Result cstr cstr)` |
+| ~~`httpd/request.tur:121`~~ | ~~`req-header` -> `:int`~~ | **fixed** in `tur-httpd` v0.2.0: `(Request, cstr) -> (Result cstr cstr)` |
+| ~~`tourist/app.tur:228`, `tourist/middleware.tur:114`~~ | ~~`mw-chain-run` -> `:int` (option<Response>)~~ | **fixed in v0.2.0** |
 
 ---
 
@@ -304,7 +322,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | frame | clean |
 | glsl | clean |
 | http | clean (audited as part of tourist sweep) |
-| ~~httpd~~ | ~~S2~~ -- **fixed in `tur-httpd` v0.2.0** (`defopaque Request`, `defopaque Response`, `defopaque Wbuf` in `httpd/types`; threaded through request/response/write/server). Tourist re-exports the same types (v0.2.1) so the framework boundary has zero cross-spice casts. **S3 still open** (`req-header` returns `:int`). |
+| ~~httpd~~ | ~~S2 + S3~~ -- **fully fixed in `tur-httpd` v0.2.0**. `defopaque Request`, `defopaque Response`, `defopaque Wbuf` in `httpd/types`, threaded through request/response/write/server; `req-header` returns `(Result cstr cstr)`. Tourist re-exports the same types (v0.2.1) so the framework boundary has zero cross-spice casts. |
 | json | clean |
 | linalg | clean |
 | math | clean |
@@ -334,7 +352,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | ~~wav~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Wav`) |
 | zlib | clean |
 
-19 spices need work, 16 are clean. As of 2026-06-16: regex, sqlite, png, wav,
+19 spices need work, 16 are clean. As of 2026-06-17: regex, sqlite, png, wav,
 postgres, valkey, rtaudio, tls, tourist (v0.2.0/v0.2.1), httpd (v0.2.0),
 osc (v0.2.0), rtmidi (v0.2.0), plus three already-shipped-at-audit-time
 (opengl, plutovg, raylib's audited subset) are fixed for the public
@@ -343,7 +361,10 @@ handle leaks inside already-fixed spices:
 plutovg (dash-array, font-cache, gradient-stops, rect),
 raylib (models, text, textures, camera, shapes),
 rtaudio (DeviceInfo, callback),
-and tourist internals (`route-*` / `router-*` / cons-list helpers).
+and tourist internals (`route-*` / `router-*` / cons-list helpers
+plus the `ctx : int` / `caps : int` polish on `param`/`capture`/
+`captures-*` -- return types are correct, only the parameter retype
+remains).
 
 ---
 
