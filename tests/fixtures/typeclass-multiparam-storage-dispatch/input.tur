@@ -1,0 +1,46 @@
+;; typeclass-multiparam-storage-dispatch -- ECS E2d-P6 Issues 2 & 3.
+;;
+;; Issue 2: a multi-parameter class `[S E]` whose method has S in argument
+;; position and E only in the return resolves dispatch from the argument
+;; (the receiver's static type), reading E off the matched instance --
+;; instead of mis-keying on the return-only E and failing to find the
+;; instance.  The bare-param instance bodies also inherit the substituted
+;; param types (no per-method re-annotation needed).
+;;
+;; Issue 3: two storage backends `(Dense Pos)` and `(Sparse Vel)` -- both
+;; fully-applied opaque type constructors -- dispatch to their OWN instance.
+;; Before the fix the dispatcher accepted any non-primitive instance and the
+;; first in registration order silently won (a Dense receiver ran Sparse's
+;; method): the "works by luck because the register classes match" miscompile.
+;;
+;; The element returns are by-value structs (Pos / Vel), exercising the
+;; value-level projection path: the dispatched result carries its struct def
+;; so `(.x ...)` / `(.y ...)` resolve at the call site.
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defopaque Dense  [A] :int)
+(defopaque Sparse [A] :int)
+(defstruct Pos [x : int])
+(defstruct Vel [y : int])
+
+(defn dense-pos  [] : (Dense Pos)   ```c return 0; ```)
+(defn sparse-vel [] : (Sparse Vel)  ```c return 0; ```)
+
+(defclass StorageOps [S E]
+  (sop-get [^borrow s : S idx : int] : E))
+
+(definstance StorageOps [(Dense Pos) Pos]
+  (sop-get [s idx] ```c (void)s; Pos r; r.x = (int64_t)(idx + 100); return r; ```))
+
+(definstance StorageOps [(Sparse Vel) Vel]
+  (sop-get [s idx] ```c (void)s; Vel r; r.y = (int64_t)(idx + 200); return r; ```))
+
+(defn main [] : int
+  (let [d : (Dense Pos)   (dense-pos)
+        v : (Sparse Vel)  (sparse-vel)
+        p : Pos           (sop-get d 7)
+        q : Vel           (sop-get v 9)]
+    (printf "pos.x=%lld\n" (.x p))
+    (printf "vel.y=%lld\n" (.y q))
+    0))

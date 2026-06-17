@@ -1,0 +1,41 @@
+;; typeclass-assoc-type-method-return -- ECS E2d-P6 Issue 1.
+;;
+;; A typeclass may declare an associated type member `(type Elem : Type)`
+;; and a method may RETURN that associated member (`(sop-get [...] : Elem)`),
+;; not just take it in argument position.  Each instance binds the member
+;; with `(type Elem = T)`; the instance method bodies inherit the class
+;; method's param/return types under the instance substitution, so the
+;; bare-param bodies `[s idx]` / `[s idx val]` need not re-annotate.
+;;
+;; The element type Elem = Pos is a by-value struct: the get/insert
+;; round-trip below recovers the projected struct at the call site, so
+;; `(.x (sop-get ...))` resolves and a Pos flows from get into insert.
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defopaque Dense [A] :int)
+(defstruct Pos [x : int])
+
+(defn dense-get [A] [^borrow s : (Dense A) idx : int] : A
+  ```c return ((__TUR_TY_A__*)(intptr_t)s)[idx]; ```)
+(defn dense-set! [A] [^borrow s : (Dense A) idx : int val : A] : nil
+  ```c ((__TUR_TY_A__*)(intptr_t)s)[idx] = val; return; ```)
+(defn dense-new [] : (Dense Pos)
+  ```c static Pos arr[8]; arr[2].x = 42; return (intptr_t)arr; ```)
+
+(defclass StorageOps [S]
+  (type Elem : Type)
+  (sop-insert! [^borrow s : S idx : int val : Elem] : nil)
+  (sop-get     [^borrow s : S idx : int] : Elem))
+
+(definstance StorageOps [(Dense Pos)]
+  (type Elem = Pos)
+  (sop-insert! [s idx val] (dense-set! s idx val))
+  (sop-get     [s idx]     (dense-get s idx)))
+
+(defn main [] : int
+  (let [s : (Dense Pos)  (dense-new)]
+    ;; copy element 2 -> element 6 through the get/insert round-trip
+    (sop-insert! s 6 (sop-get s 2))
+    (printf "elem.x=%lld\n" (.x (sop-get s 6)))
+    0))
