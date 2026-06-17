@@ -152,32 +152,53 @@ EOF
 /tmp/tco_probe    # expect 0, not crash
 ```
 
-## Vec rewrite (after all three lifts land)
+## Vec rewrite -- LANDED
+
+The three TCO restriction lifts are in tree (`emit_fns.c`: the
+`!use_abi_spec` eligibility gate, the `type_uses_carrier_abi` rejection
+in `tco_params_simple`/`tco_param_type`, and the `dict_arg` reject in
+`tco_is_self_call`). The Vec rewrite (`stdlib/vec.tur`) is now done:
 
 ```turmeric
-;; M4c-pre-ext (Vec): replace the carrier-helper body with a pure-Turmeric
-;; index loop.  Path A specializes vec-eq-loop per element-type; TCO inside
-;; the spec turns the self-tail-call into a goto loop.  Both vec-eq? and
-;; vec-len? helpers stay (used by external callers and the un-specialized
-;; carrier dispatch).
+;; Path A specializes vec-eq-loop per element-type; TCO inside the spec
+;; turns the self-tail-call into a goto loop.  The vec-eq? carrier helper
+;; stays (external callers + the un-specialized abstract-A carrier dispatch).
 (defn vec-eq-loop [A] [x : (Vec A) y : (Vec A) i : int len : int
-                       ^fat cmp : (fn [A A] : bool)] : bool
-  (if (= i len) true
-      (if (cmp (vec-get x i) (vec-get y i))
-          (vec-eq-loop x y (+ i 1) len cmp)
-          false)))
+                       ^fat cmp : (fn [A A] bool)] : bool
+  (if (= i len)
+    true
+    (if (cmp (vec-get x i) (vec-get y i))
+      (vec-eq-loop x y (+ i 1) len cmp)
+      false)))
 
-(definstance Eq [Vec] [(Eq A)]
+(definstance Eq [Vec]
+  [(Eq A)]
   (eq? [x y]
-    (and (= (vec-len x) (vec-len y))
-         (vec-eq-loop x y 0 (vec-len x) (fn [a b] (eq? a b))))))
+    (and (= (vec-len (:: x (Vec A))) (vec-len (:: y (Vec A))))
+         (vec-eq-loop (:: x (Vec A)) (:: y (Vec A))
+                      0 (vec-len (:: x (Vec A)))
+                      (fn [a b] (eq? a b))))))
 ```
 
-Validation: `vec-eq-ascribed` and the chain
-(`option-of-tvec-eq`, `vec-of-tvec-eq`, `result-of-typed-eq`,
-`map-of-tvec-eq`, `set-of-tvec-eq`) reduce bridge crossings to zero
-on the Vec layer. The audit count drops from ~60 (Vec-layer crossings)
-to <10.
+**Implementation note (not in the original plan):** the `definstance Eq
+[Vec]` receiver `x`/`y` type as the bare class head `Vec` (from `(defclass
+Eq [a] (eq? [x y] : bool))`), not `(Vec A)` -- the typeclass signature
+does not thread the element tyvar to the method params. So the plan's
+literal `(vec-len x)` fails type-check (`expected (type-app Vec tyvar
+'A'), got Vec`). The fix mirrors the retyped `Eq [MutableMap]` instance:
+ascribe the receiver **inline** at each call site with `(:: x (Vec A))`.
+The ascription must be inline; a `let`-bound `(let [xv (:: x (Vec A))] ...)`
+intermediate lowers the binding to the int64 carrier (re-minting the
+`concrete->carrier` bridge), whereas the inline form flows the typed
+`Vec__A *` pointer straight into the by-value spec.
+
+Validation: `m5-constrained-poly-vec-eq` `concrete->carrier` crossings
+**2 -> 0** (the by-value `(Vec int)` args now reach `vec-eq-loop`'s spec
+without the carrier bridge). The `vec-eq` / `tvec-eq` / `typed-eq` fixture
+chain (`vec-eq-ascribed`, `vec-eq-ascribed-multi`, `option-of-tvec-eq`,
+`vec-of-tvec-eq`, `result-of-typed-eq`, `map-of-tvec-eq`, `set-of-tvec-eq`)
+all pass. Full suite **1654 passed, 0 failed** after regenerating the 77
+codegen snapshots that pick up the new `vec-eq-loop` defn.
 
 ## After Vec: Map / MutableMap / Set
 

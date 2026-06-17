@@ -333,19 +333,53 @@
 (defn vec-get-byval [A] [v : (Vec A) i : int] : A
   (:: (vec-data-get-checked__ (.data v) i (.len v)) A))
 
-;; end-to-end-monomorphization (root 2 retirement): Vec is a `:heap` type
-;; (typed pointer `Vec__A *` post-#377), so `(:: x :int)` relabels the handle
-;; to the int64 carrier with a pure cast -- not a by-value struct spill.  That
-;; makes the carrier-based instance shape viable here exactly as it is for
-;; `Eq [Cons]` (see stdlib/list.tur): delegate to the carrier-based `vec-eq?`
-;; with an element-comparison closure, so the instance method stays all-carrier
-;; and mints no by-value spec whose carrier base would have to bridge
-;; `(Vec__int *)(intptr_t)` casts back to the typed helpers.  The earlier
-;; "carrier-based Eq [Vec] breaks the build" finding predated #377, when
-;; `(Vec A)` was a by-value `Vec__int` and the relabel was a struct widening;
-;; that no longer holds.
+;;; vec-eq-loop -- pure-Turmeric element-wise Vec[A] comparison (TCO'd index loop).
+;;;
+;;; Path A specializes this per element type; the self-tail-call lowers to a
+;;; goto loop inside the spec (TCO-in-ABI-specs, emit_fns.c eligibility gate),
+;;; so deep iteration on large vecs does not grow the C stack.  Unlike the
+;;; inline-C `vec-eq?` carrier helper, the receiver flows by value: `vec-get`
+;;; is redirected to `vec-get-byval` inside the spec body, so no
+;;; `(:: x :int)` relabel and no concrete->carrier bridge is minted at the
+;;; `Eq [Vec]` dispatch site.
+;;;
+;;; Parameters:
+;;;   x   -- first Vec[A]
+;;;   y   -- second Vec[A]
+;;;   i   -- current index (start at 0)
+;;;   len -- shared length (both vecs are known equal-length by the caller)
+;;;   cmp -- element comparator fn [a :A b :A] :bool
+;;;
+;;; Returns:
+;;;   true if x[i..len) equals y[i..len) under cmp.
+;;;
+;;; Example:
+;;;   (vec-eq-loop a b 0 (vec-len a) (fn [p q] (eq? p q)))  ; => true
+;;;
+;;; Since: Phase M4c (TCO-in-ABI-specs)
+(defn vec-eq-loop [A] [x : (Vec A) y : (Vec A) i : int len : int
+                       ^fat cmp : (fn [A A] bool)] : bool
+  (if (= i len)
+    true
+    (if (cmp (vec-get x i) (vec-get y i))
+      (vec-eq-loop x y (+ i 1) len cmp)
+      false)))
+
+;;; Eq [Vec] -- element-wise equality using the element type's Eq instance.
+;; M4c (TCO-in-ABI-specs): the instance body is now pure Turmeric.  Path A
+;; specializes `vec-eq-loop` to the concrete element type and the self-tail-
+;; call becomes a loop after TCO, so the by-value Vec receiver never bridges
+;; back to the int64 carrier.  The inline-C `vec-eq?` helper stays for
+;; external callers and the un-specialized (abstract-A) carrier dispatch.
+;; The earlier "carrier-based Eq [Vec] breaks the build" finding predated
+;; #377 (when `(Vec A)` was a by-value `Vec__int` and the relabel was a
+;; struct widening); that no longer holds, and TCO inside ABI specs (gate
+;; lifted in emit_fns.c) lets the pure-Turmeric body iterate without a
+;; carrier helper at all.
 (definstance Eq [Vec]
   [(Eq A)]
   (eq? [x y]
-    (vec-eq? (:: x :int) (:: y :int)
-             (fn [a b] (eq? (:: a A) (:: b A))))))
+    (and (= (vec-len (:: x (Vec A))) (vec-len (:: y (Vec A))))
+         (vec-eq-loop (:: x (Vec A)) (:: y (Vec A))
+                      0 (vec-len (:: x (Vec A)))
+                      (fn [a b] (eq? a b))))))
