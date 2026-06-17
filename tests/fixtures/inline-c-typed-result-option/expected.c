@@ -3083,10 +3083,10 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
 
 static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
         bool __t7;
-        if ((((Option *)(intptr_t)(x))->is_some) == (((Option *)(intptr_t)(y))->is_some)) {
+        if ((((x) ? ((Option *)(intptr_t)(x))->is_some : 0)) == (((y) ? ((Option *)(intptr_t)(y))->is_some : 0))) {
             bool __t8;
-            if (((Option *)(intptr_t)(x))->is_some) {
-                __t8 = __inst_Eq_eq_qu_int(((Option *)(intptr_t)(x))->value, ((Option *)(intptr_t)(y))->value);
+            if (((x) ? ((Option *)(intptr_t)(x))->is_some : 0)) {
+                __t8 = __inst_Eq_eq_qu_int(((x) ? ((Option *)(intptr_t)(x))->value : 0), ((y) ? ((Option *)(intptr_t)(y))->value : 0));
             } else {
                 __t8 = true;
             }
@@ -4306,9 +4306,9 @@ int main(int argc, char **argv) {
             (void)o_891;
             puts((some_qu(o_891)) ? "true" : "false");
             tur_option_t *__t27 = (tur_option_t *)(intptr_t)(o_891);
-            printf("%lld\n", (long long)(device_hytag(unwrap__spec__int64_t_Option__Device((Option__Device){.is_some = __t27->is_some, .value = (int64_t)(intptr_t)(__t27->value)}))));
+            printf("%lld\n", (long long)(device_hytag(unwrap__spec__int64_t_Option__Device((__t27 ? (Option__Device){.is_some = __t27->is_some, .value = (int64_t)(intptr_t)(__t27->value)} : (Option__Device){0})))));
             tur_option_t *__t28 = (tur_option_t *)(intptr_t)(o_891);
-            device_hyfree(unwrap__spec__int64_t_Option__Device((Option__Device){.is_some = __t28->is_some, .value = (int64_t)(intptr_t)(__t28->value)}));
+            device_hyfree(unwrap__spec__int64_t_Option__Device((__t28 ? (Option__Device){.is_some = __t28->is_some, .value = (int64_t)(intptr_t)(__t28->value)} : (Option__Device){0})));
         }
         puts((some_qu(maybe_hyopen(INT64_C(-1)))) ? "true" : "false");
         int64_t __t29;

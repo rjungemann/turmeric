@@ -192,6 +192,18 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
     } else if (p->kind == EX_VAR) {
         if (!(p->as.var.binding && p->as.var.binding->emit_byvalue_carrier_abi))
             return "int64_t";
+    } else if (p->kind == EX_IF || p->kind == EX_LET || p->kind == EX_LETREC ||
+               p->kind == EX_DO) {
+        /* option-lowering-mid-migration: a control-form initialiser whose tail
+         * leaves are all carrier producers (some/none/ok/err/__inst_) and none
+         * by-value is emitted as the int64 carrier by
+         * emit_control_result_temp_decl -- declare the binding as the carrier so
+         * its C initialiser type-checks (downstream uses bridge via the var's
+         * emit_byvalue_carrier_abi=false flag).  The exact mirror of the temp's
+         * representation decision keeps the two halves consistent. */
+        if (fn_body_tail_is_carrier_producer(p) &&
+            !fn_body_tail_emits_byvalue_carrier_abi(ctx, p))
+            return "int64_t";
     }
 
     /* Everything else (struct constructor literal, concrete-spec call result,
@@ -419,6 +431,35 @@ static void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name,
     buf_puts(body, ";\n");
 }
 
+/* option-lowering-mid-migration: a control-form (if/let/do) *result temp*
+ * whose static type is a carrier-ABI aggregate (Option/Result) but whose value
+ * flows from carrier-int64 producers (some/none/ok/err or an __inst_ method)
+ * on every tail path must be declared as the int64 carrier, NOT the by-value
+ * `Option__T` / `Result__T__U` struct.
+ *
+ * The branch/last-expr assignments hand back the bare carrier handle (e.g.
+ * `__t = some(x);`), and the downstream consumer -- typically the fn-return
+ * bridge in emit_fns.c, which keys off fn_body_tail_is_carrier_producer --
+ * unboxes the carrier to the concrete struct.  Declaring the temp by-value
+ * here makes `__t = some(x)` an `int64_t`->struct mismatch and the consumer's
+ * carrier deref a struct-as-pointer error (the two halves of the
+ * mid-migration straddle).  Mirroring the exact return-side predicate keeps
+ * the representation consistent end to end.
+ *
+ * `tail_expr` drives the carrier-producer decision (the control form whose
+ * tail leaves are the producers); `type` is the temp's static type. */
+static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
+                                          const Expr *tail_expr, const char *name) {
+    if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
+        fn_body_tail_is_carrier_producer(tail_expr) &&
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_expr)) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "int64_t %s;\n", name);
+        return;
+    }
+    emit_temp_decl(ctx, body, type, name, NULL);
+}
+
 /* Fat-closure-env scoped free (docs/reported/fat-closure-env-leak.md): decide
  * whether let-binding `idx` of `e` holds a freshly-constructed fat closure whose
  * heap env can be `free`d when the let scope exits.  Sound iff:
@@ -461,11 +502,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase R1: Also create temp if body has return/throw but let has non-nil type */
     if (!nil_result && !body_has_return_or_throw) {
         tmp = fresh_tmp(ctx);
-        emit_temp_decl(ctx, body, e->type, tmp, NULL);
+        emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
     } else if (!nil_result && body_has_return_or_throw) {
         /* Special case for ? operator: body may contain return but still produce a value */
         tmp = fresh_tmp(ctx);
-        emit_temp_decl(ctx, body, e->type, tmp, NULL);
+        emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
     }
     
     indent_buf(body, ctx->indent);
@@ -654,7 +695,7 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool nil_result = (e->type.kind == TY_NIL);
     if (!nil_result) {
         tmp = fresh_tmp(ctx);
-        emit_temp_decl(ctx, body, e->type, tmp, NULL);
+        emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
     }
 
     indent_buf(body, ctx->indent);
@@ -759,7 +800,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool else_no_return = e->as.if_.else_or_null ? !else_has_return_or_throw : false;
     if (!nil_result && ( !any_has_return_or_throw || (then_has_return_or_throw && else_no_return))) {
         tmp = fresh_tmp(ctx);
-        emit_temp_decl(ctx, body, e->type, tmp, NULL);
+        emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
     }
     char *cond = emit_value(ctx, body, e->as.if_.cond);
     indent_buf(body, ctx->indent);
@@ -902,7 +943,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "int64_t %s;\n", result);
                 } else {
-                    emit_temp_decl(ctx, body, last->type, result, NULL);
+                    emit_control_result_temp_decl(ctx, body, last->type, last, result);
                 }
                 char *v = emit_value(ctx, body, last);
                 indent_buf(body, ctx->indent);
@@ -1087,7 +1128,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             /* Hoist value into a temp so defers can fire after it's computed. */
             result = fresh_tmp(ctx);
-            emit_temp_decl(ctx, body, last->type, result, NULL);
+            emit_control_result_temp_decl(ctx, body, last->type, last, result);
             char *v = emit_value(ctx, body, last);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", result, v);
@@ -2821,6 +2862,35 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CONCRETE, CK_CARRIER,
                                              e->as.call_.args[i]->type);
                 }
+                /* option-consumers-typed-as-int-carrier: the same
+                 * concrete->carrier bridge, but for an ordinary *direct* call
+                 * (dict_arg == NULL) whose callee declares the slot as the
+                 * int64 carrier (`o : int`).  The stdlib Option/Result
+                 * consumers (`some?`, `unwrap-or`, `option-map`, `option-eq?`,
+                 * ...) take their handle as `:int` (the historical carrier ABI),
+                 * but a function returning `(Option A)` now hands back the
+                 * by-value `Option__A` struct -- passing it straight to the
+                 * `int` slot is a hard cc type error.  When the argument
+                 * genuinely emits a by-value carrier-ABI aggregate, spill it to
+                 * the carrier so the `:int`-sink impl reads the heap-pointer
+                 * handle it expects.  The `expr_emits_byvalue_carrier_abi` guard
+                 * excludes a plain carrier var/call result (already int64), so
+                 * this only fires on a real by-value producer.  The dict path
+                 * above keeps its own `dict_arg != NULL` branch unchanged. */
+                else if (!needs_fn_cast && !matched_spec &&
+                         e->as.call_.dict_arg == NULL &&
+                         emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
+                         type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
+                         type_uses_carrier_abi(
+                             emit_resolve_type(ctx, e->as.call_.args[i]->type)) &&
+                         expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                         fn_binding->type.kind == TY_FN &&
+                         i < fn_binding->type.as.fn.arity &&
+                         fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
+                    raw = emit_carrier_bridge(ctx, body, raw,
+                                             CK_CONCRETE, CK_CARRIER,
+                                             e->as.call_.args[i]->type);
+                }
                 /* M4c Path A (RETIRED -- M5 D.4, end-to-end-monomorphization
                  * plan): a by-value spec body that called an int64-carrier-sink
                  * stdlib helper (e.g. `(vec-len x)` / `(vec-get x i)` inside an
@@ -4351,8 +4421,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&lit, "((%s *)((RcControlBlock *)(%s))->value)->%s",
                                def->name, sv, fname);
             } else if (through_carrier) {
+                /* option-lowering-mid-migration: an Option carrier may be the
+                 * NULL `none` handle (`0`), so a `.is-some` / `.value` access
+                 * through the carrier must NULL-guard the deref -- mirroring
+                 * `tur_is_some`'s own `__o != 0 && ...` check -- instead of
+                 * blindly dereferencing and segfaulting on none.  is-some reads
+                 * back false, value reads back 0 (meaningless past a false
+                 * is-some, but never a wild deref).  Result has no NULL carrier,
+                 * so it keeps the unguarded access. */
+                bool option_carrier = def && def->name &&
+                                      strcmp(def->name, "Option") == 0;
                 if (field_is_heap_ptr_for_value_struct)
                     buf_printf(&lit, "(*((%s *)(intptr_t)(%s))->%s)", def->name, sv, fname);
+                else if (option_carrier)
+                    buf_printf(&lit, "((%s) ? ((%s *)(intptr_t)(%s))->%s : 0)",
+                               sv, def->name, sv, fname);
                 else
                     buf_printf(&lit, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
             } else if (through_pbp) {
