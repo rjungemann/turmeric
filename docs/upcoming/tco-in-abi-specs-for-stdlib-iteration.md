@@ -223,6 +223,19 @@ and the TCO lifts; the MutableMap landing showed that a collection's
 remaining crossings can be a type-hygiene defect rather than an
 iteration blocker — always check the handle typing first.
 
+**Audit impact (2026-06-17).** The Vec TCO'd by-value rewrite (#400) dropped
+the `TUR_M3_AUDIT=1` bridge sweep from **60 to 34 crossings / 10 fixtures**,
+and -- crucially -- left **zero monomorphic deref-copy crossings**. The
+residual 34 are all by-design boundaries (22 fat-closure comparator `:heap`
+reinterpret casts, 10 blessed inline-C `tur_ok`/`tur_some` construction, 2
+type-erased `SChan`). Map/Set no longer cross the bridge at all (they are
+`:heap`), so their producer slices are pure type-hygiene/cleanup rather than
+audit-reducing. The remaining 22 `Vec` casts are a *fat-closure element ABI*
+issue (the comparator `(fn [a b] (eq? a b))` carries int64-uniform params),
+cleared only by closure-element monomorphization -- a separate, larger
+frontier. See the "Update 2026-06-17 (post-#400 audit floor)" section of
+[docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md).
+
 ## Risks
 
 - **TCO restriction lifting may surface a real bug** the conservative

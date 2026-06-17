@@ -19,16 +19,27 @@ North-star track. Critical path; every other track benefits when it
 advances.
 
 - [end-to-end-monomorphization-plan](upcoming/end-to-end-monomorphization-plan.md)
-  -- umbrella; M2 landed, M3 deletion blocked on M4
-- [m4-typeclass-per-method-abi-plan](upcoming/m4-typeclass-per-method-abi-plan.md)
-  -- **immediate next step**; unblocks M3 bridge deletion
+  -- umbrella; M2 landed. M3 bridge down-scope **complete for the non-HKT
+  collection-Eq cascade** (2026-06-17): audit floor is 34 crossings with
+  **zero monomorphic deref-copies** -- all 34 are by-design boundaries
+  (`:heap` casts / blessed inline-C / type-erased)
 - [tco-in-abi-specs-for-stdlib-iteration](upcoming/tco-in-abi-specs-for-stdlib-iteration.md)
-  -- runs in parallel with M4; converts inline-C carrier helpers
-  (Vec/Map/MutableMap/Set) to pure Turmeric once the TCO gate is lifted
+  -- **Vec TCO'd by-value loop landed (#400)**, dropping the bridge audit
+  60 -> 34. Map/Set/MutableMap producer slices held for follow-up (they no
+  longer cross the bridge -- `:heap` already)
+- [m4-typeclass-per-method-abi-plan](upcoming/m4-typeclass-per-method-abi-plan.md)
+  -- per-method dict-slot typing. NOTE: re-audit shows M4 dict slots clear
+  **0** of the current 34 crossings (bucket A' is a fat-closure cast, not a
+  dict-slot consumption); the remaining 22 `Vec` casts clear only via
+  fat-closure-element monomorphization (M5/M7-adjacent). M4 remains worth
+  doing for ABI cleanliness but is not the lever for this cascade's residual
 - [m3-carrier-bridge-deletion-blocked-on-typeclass-abi](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
-  (report) -- closes when M4 + TCO conversions land
+  (report) -- down-scope complete; the bridge is kept (not deleted) for the
+  three by-design boundaries. Full audit-zero needs fat-closure-element mono.
 
-**Order:** M4 -> TCO lift -> bridge tail elimination -> archive M3 report.
+**Order:** TCO lift (Vec done) -> bridge tail elimination (**done: monomorphic
+deref-copies are zero; bridge down-scoped to by-design boundaries**) ->
+remaining residual is the fat-closure-element / HKT frontier (M5/M7), not M4.
 
 ## Track B -- ECS spice (E2d wiring + sized worlds)
 

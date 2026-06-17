@@ -3,7 +3,7 @@ title: Plan M3 ("delete `emit_carrier_bridge`") is gated on M4, not just M2
 category: Codegen / ABI — monomorphization plan refinement
 severity: Low. M3 is presented in `docs/upcoming/end-to-end-monomorphization-plan.md` as a 1-2-session phase to retire the carrier-bridge machinery after M2 lands. Empirical audit (this session) shows that claim was over-optimistic: even with the full M2b stdlib migration in tree, the bridge is still load-bearing for typeclass-method-dispatch call sites. The actual deletion needs M4 (per-method typeclass ABI) first.
 description: I shipped instrumentation (`TUR_M3_AUDIT=1`) inside `emit_carrier_bridge` so the per-call-site cost of removing it is measurable. Running the full suite under the audit shows only 2 crossings (and both inside already-FAILing pre-existing fixtures), which initially looked like the bridge was dead. Attempting the M3 deletion, the suite regressed by ~6 fixtures with cc errors of the form "passing 'int64_t' to parameter of incompatible type 'Result__int__cstr'". Direct per-fixture re-audit then showed the bridge IS firing for those — `tests/run.sh` was swallowing per-fixture stderr in the snapshot/test phase, so the suite-wide audit count was misleadingly low. The bridge's remaining role is `carrier→concrete` at `EX_ASCRIBE` (when a typeclass-method return like `(:: (decode …) (Result int cstr))` produces an int64 carrier but the ascription's outer context wants the by-value struct) and `concrete→carrier` at the typeclass-instance dispatch arg-cast site (when a by-value `Tuple2__int__int` is passed to a dict-dispatched `__inst_Eq_eq_qu_Tuple2(int64_t, int64_t)`).
-status: MOSTLY UNBLOCKED -- 2026-06-15 (see "Resolution 2026-06-15" below). On the current merged tree (`origin/main`, with M5 Option C `#364` and the M5 emit fixes landed) the bridge fired for **1188 fixtures / 2429 crossings**, but **2376 of those (98%) were a single pattern**: the `Eq [Cons]` carrier base (`stdlib/list.tur`) recursing through `(:: t1 (Cons A))` with `A` abstract, emitted into every program that links stdlib. That instance was also **silently miscompiled** (invoking `(eq? cons cons)` via spec or abstract dispatch produced hard cc errors) and **never tested** -- `list-basic` exercises the separate `list-eq?` function, not the instance. **Fixed this session** by rewriting `Eq [Cons]` to delegate to carrier-based `list-eq?` with an element-comparison closure (the proven `Eq [Vec]` pattern): empty `main` crossings 2 -> 0, the instance now compiles + returns correct results, full suite 1637/0. Remaining: a **~53-crossing long tail** (abstract-element `Vec`, multi-param `MutableMap`, and the pre-existing `concrete->carrier` dispatch-arg-bridge gap that fails identically for `Vec` and `Cons`). The bridge cannot be deleted outright until those clear -- M4/M5 work -- but M3 is no longer dominated by `Eq [Cons]`.
+status: BRIDGE DOWN-SCOPE COMPLETE for the non-HKT collection-Eq cascade -- 2026-06-17 (see "Update 2026-06-17 (post-#400 audit floor)" below). The audit floor is **34 crossings / 10 fixtures** with **zero monomorphic deref-copy crossings**: 22 are fat-closure comparator `:heap` reinterpret casts (bucket A'), 10 are blessed inline-C `tur_ok`/`tur_some` construction (bucket C), 2 are the type-erased SChan path (bucket E) -- all three are the by-design boundaries `emit_carrier_bridge` is kept for. The original "delete the bridge wholesale" goal is superseded; the realistic re-scoped goal (delete it from the monomorphic paths, keep it for the type-erased/cast/blessed boundary) is met. The remaining 22 clear only via fat-closure-element monomorphization (a large M5/M7-adjacent ABI change), NOT M4 dict-slot typing. EARLIER STATUS (kept for history): MOSTLY UNBLOCKED -- 2026-06-15 (see "Resolution 2026-06-15" below). On the current merged tree (`origin/main`, with M5 Option C `#364` and the M5 emit fixes landed) the bridge fired for **1188 fixtures / 2429 crossings**, but **2376 of those (98%) were a single pattern**: the `Eq [Cons]` carrier base (`stdlib/list.tur`) recursing through `(:: t1 (Cons A))` with `A` abstract, emitted into every program that links stdlib. That instance was also **silently miscompiled** (invoking `(eq? cons cons)` via spec or abstract dispatch produced hard cc errors) and **never tested** -- `list-basic` exercises the separate `list-eq?` function, not the instance. **Fixed this session** by rewriting `Eq [Cons]` to delegate to carrier-based `list-eq?` with an element-comparison closure (the proven `Eq [Vec]` pattern): empty `main` crossings 2 -> 0, the instance now compiles + returns correct results, full suite 1637/0. Remaining: a **~53-crossing long tail** (abstract-element `Vec`, multi-param `MutableMap`, and the pre-existing `concrete->carrier` dispatch-arg-bridge gap that fails identically for `Vec` and `Cons`). The bridge cannot be deleted outright until those clear -- M4/M5 work -- but M3 is no longer dominated by `Eq [Cons]`.
 NOTE-on-earlier-status: an earlier 2026-06-15 status line on this report claimed the M4c Path A / M5 work "was never merged" and that the tree was blocked on 1186 fixtures. That was WRONG -- it came from auditing a stale checkout that predated M5 Option C (`#364`) and from looking up squash-merged commits by their pre-merge short SHAs (which no longer exist after squash). M5 Option C IS merged; the accurate status is above.
 historical-status: PARTIALLY RESOLVED 2026-06-13. Path A landed for arg-side AND return-side substitution (commits `0fd565fe` and `c6088488`). **Suite-wide bridge audit** (`TUR_M3_AUDIT=1` per-fixture) reveals 14 fixtures still cross the bridge with ~82 total crossings — but those are NOT residuals from Path A's mechanism. They are **legitimate, essential bridge uses**: stdlib `Eq` instances on collection types (`Vec`, `Map`, `MutableMap`, `Set`, `Cons`) consult inline-C carrier helpers (`vec-eq?`, `map-eq?`, etc.) that fundamentally require the int64 carrier ABI to iterate opaque memory. With Path A specializing the instance methods to by-value param types, the bridge fires (correctly) at the helper call sites to spill the by-value back to int64. Additional bridge-essential cases: `generic-relay-aggregate-result` (SChan), `tuplen-struct-param-passing`, `data-literal-typed-empty`, `serial-composite-instances`. **The bridge is not dead code; it's load-bearing for any dispatch path that bottoms out in an inline-C carrier helper.** Deleting it requires rewriting every such stdlib helper to be ABI-agnostic — a substantial parallel effort that would touch `vec-eq?`, `map-eq?`, `mutmap-eq?`, `option-eq?`, `set-eq?`, `list-eq?`, `vec-fmap`, `map-fmap`, etc., reimplementing each in pure Turmeric without inline-C helpers that take int64. That's strictly beyond the M4 scope as originally written.
 ---
@@ -929,6 +929,75 @@ interpreter parity); the **blessed inline-C** `tur_ok`/`tur_some` construction
 carrier); and the type-erased `SChan` path (`generic-relay-aggregate-result`
 2).  None is the by-value-Result-from-a-Turmeric-construct shape this change
 targeted.
+
+## Update 2026-06-17 (post-#400 audit floor: `Eq [Vec]` TCO'd by-value loop; 60 -> 34; bridge down-scope COMPLETE for the collection-Eq cascade)
+
+Refreshed the per-fixture sweep on the current branch head (compiled suite
+**1653 passed, 0 failed**) after #400 landed -- the TCO-in-ABI-specs `Eq [Vec]`
+rewrite (`stdlib/vec.tur`: the pure-Turmeric `vec-eq-loop` self-tail-call that
+TCO lowers to a goto loop inside the by-value `Vec__int *` spec). That rewrite
+retired the carrier-based `vec-eq?` delegation the "Update 2026-06-16 (root 2)"
+entry installed, and the audit fell from **60 to 34 crossings / 10 fixtures**.
+
+### The refreshed 34, bucketed by root cause (methodology unchanged: `TUR_M3_AUDIT=1 tur $flags emit-c <fixture>` per fixture, stderr captured directly)
+
+| Bucket | count | direction | type(s) | nature |
+|---|---|---|---|---|
+| **A'. fat-closure comparator `:heap` reinterpret casts** | **22** | carrier->concrete | `Vec int` | the `Eq [Vec]` element comparator `(fn [a b] (eq? a b))` lowers to a fat closure with **int64-uniform params**; when the element type is itself a `:heap` `(Vec int)`, the body's `eq?` resolves (M4c Path A) to the typed `__inst_Eq_eq_qu_Vec__spec__(Vec__int *, ...)`, so each int64 closure arg is `(Vec__int *)(intptr_t)(__cmp_a)` -- a **cast, never a deref-copy** (verified: 0 `*(Vec__int *)(intptr_t)` whole-struct derefs across all 5 Vec-crossing fixtures). Fixtures: `vec-of-tvec-eq` 6, `option-of-tvec-eq` 6, `set-of-tvec-eq` 4, `map-of-tvec-eq` 4, `result-of-typed-eq` 2 |
+| **C. blessed inline-C `tur_ok`/`tur_some` construction** | **10** | carrier->concrete | `Result Device int` 3, `Option Device` 2, `Result bool cstr` 2, `Result int cstr` 3 | an instance body literally writing `tur_ok`/`tur_some` (returns the int64 heap box); the by-value consumer materialises the struct field-wise from the reinterpreted box pointer (`ok_val__spec__...((Result__Device__int){.is_ok = __t->is_ok, .ok_val = (int64_t)(intptr_t)(__t->ok_val), ...})`). The deliberately blessed boundary (`inline-c-typed-result-option` exists to bless it; `instance-method-return-carrier-bridge` keeps its `Decode [int]` inline-C body **on purpose** as a guard). Fixtures: `inline-c-typed-result-option` 5, `decode-bool-carrier-instance-ascription` 3, `typeclass-method-parameterized-result-decode` 1, `instance-method-return-carrier-bridge` 1 |
+| **E. type-erased channel** | **2** | carrier->concrete | `SChan<SRecv int ptr<void>>` | `generic-relay-aggregate-result` -- carrier by design (matrix roadblock 4); never deleted |
+
+### The milestone: ZERO monomorphic deref-copy crossings remain
+
+The original report's deletion target was the `CK_CARRIER -> CK_CONCRETE`
+**deref-copy** that materialised a by-value collection/value out of an int64
+carrier handle to feed a `*-byval` helper or a typed consumer. **Every such
+crossing is now gone:**
+
+- bucket A' is a **reinterpret cast** (Vec is `:heap`, so the int64 *is* the
+  `Vec__int *`; no 24-byte copy), forced only by the int64-uniform fat-closure
+  ABI -- not a carrier round-trip of the data;
+- bucket C is **construction**, not deref-copy: the value genuinely originates
+  as an int64 `tur_ok` box from a user/instance inline-C body, and the by-value
+  struct is built field-wise at the blessed boundary;
+- bucket E is the type-erased channel the plan keeps forever.
+
+This is exactly the "delete the bridge from the **monomorphic** paths;
+`emit_carrier_bridge` itself survives for the casts / blessed-construction /
+type-erased boundary" end state that the 2026-06-15 sequencing re-scoped the
+deletion down to (roadblock 4). **That down-scope is now complete for the
+non-HKT collection-Eq cascade** -- there is no remaining monomorphic
+deref-copy to remove, and the function fires only at the three by-design
+boundaries above. The step-3 "delete `emit_carrier_bridge` wholesale"
+checklist is therefore **superseded**: the function must stay (buckets A'/C/E
+all require it), and there is no monomorphic-path call left to strip out of it.
+
+### What would reduce the residual 34 (and what would NOT)
+
+- **M4 typed dict slots do NOT touch any of the 34.** The earlier-corrected
+  analysis (Update 2026-06-15, point (b)) already established M4 dict-slot
+  typing is a near-zero-crossing win on this audit; post-#400 it is literally
+  zero -- bucket A' is a *closure* cast (not a dict-slot consumption), bucket C
+  is inline-C construction, bucket E is type-erased. Do not gate any bridge
+  work on M4 dict slots for this cascade.
+- **Bucket A' (22) clears only by typing the fat-closure element ABI** --
+  i.e. per-`:heap`-element-type closure shims so the comparator's params are
+  `Vec__int *` rather than int64. That is the closure-monomorphization frontier
+  (M5/M7-adjacent), a broad ABI change with its own snapshot blast; it is the
+  only thing standing between this cascade and zero crossings, and it is a
+  large multi-session item, not a stdlib tweak.
+- **Bucket C (10) is permanent** unless `Option` stops representing `none` as
+  the NULL carrier and inline-C bodies stop being allowed to return real typed
+  `Result`/`Option` (the explicitly blessed boundary). Out of scope; keep it.
+- **Bucket E (2) is permanent** by design.
+
+### Validation
+
+- Compiled suite **1653 passed, 0 failed**.
+- Audit: **10 fixtures / 34 crossings** (A' 22 + C 10 + E 2), zero monomorphic
+  deref-copies (verified per fixture). No code changed this session -- the
+  deliverable is the corrected post-#400 baseline and the down-scope-complete
+  verdict for the collection-Eq cascade.
 
 ## Related
 
