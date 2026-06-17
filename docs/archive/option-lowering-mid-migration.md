@@ -238,4 +238,6 @@ straddle remains: `(some? (g))` / `(unwrap-or (g) d)` where `g` returns
 `o : int` (the carrier ABI) -- a by-value `Option__int` result cannot be
 passed. That is the consumer half of this same migration (and a
 `No Lazy :int Stand-Ins` violation -- they should be `o : (Option A)`).
-Filed as `docs/reported/option-consumers-typed-as-int-carrier.md`.
+Filed as `docs/archive/option-consumers-typed-as-int-carrier.md`, since
+resolved via a call-site concrete->carrier bridge (the honest `:int`
+retype stays blocked on migrating the carrier-`int` Option producers).

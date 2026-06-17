@@ -1,0 +1,28 @@
+;;
+;; option-consumers-typed-as-int-carrier regression: the stdlib Option
+;; consumers (some?, unwrap-or, option-map, option-eq?) declare their handle as
+;; `o : int` (the historical carrier ABI).  A function that returns (Option A)
+;; now hands back the by-value Option__A struct; passing that straight into the
+;; `:int` slot was a hard cc type error.  The call-site concrete->carrier bridge
+;; spills the by-value aggregate so the carrier-sink impl reads the handle it
+;; expects -- while a bare carrier producer (some/none) still flows unchanged.
+
+;; by-value (Option int) producers
+(defn g [] : (Option int) (some 5))
+(defn gn [] : (Option int) (none))
+(defn dbl [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; by-value argument into each carrier-:int consumer
+  (println (some? (g)))                                  ; true
+  (println (some? (gn)))                                 ; false
+  (println (unwrap-or (g) 99))                           ; 5
+  (println (unwrap-or (gn) 99))                          ; 99
+  (println (some? (option-map (g) dbl)))                 ; true
+  (println (unwrap-or (option-map (g) dbl) 0))           ; 10
+  (println (option-eq? (g) (g) (fn [a b] (= a b))))      ; true
+  (println (option-eq? (g) (gn) (fn [a b] (= a b))))     ; false
+  ;; bare carrier producers still flow unchanged
+  (println (some? (some 1)))                             ; true
+  (println (unwrap-or (none) 42))                        ; 42
+  0)

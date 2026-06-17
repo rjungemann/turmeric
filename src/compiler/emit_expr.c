@@ -2862,6 +2862,35 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CONCRETE, CK_CARRIER,
                                              e->as.call_.args[i]->type);
                 }
+                /* option-consumers-typed-as-int-carrier: the same
+                 * concrete->carrier bridge, but for an ordinary *direct* call
+                 * (dict_arg == NULL) whose callee declares the slot as the
+                 * int64 carrier (`o : int`).  The stdlib Option/Result
+                 * consumers (`some?`, `unwrap-or`, `option-map`, `option-eq?`,
+                 * ...) take their handle as `:int` (the historical carrier ABI),
+                 * but a function returning `(Option A)` now hands back the
+                 * by-value `Option__A` struct -- passing it straight to the
+                 * `int` slot is a hard cc type error.  When the argument
+                 * genuinely emits a by-value carrier-ABI aggregate, spill it to
+                 * the carrier so the `:int`-sink impl reads the heap-pointer
+                 * handle it expects.  The `expr_emits_byvalue_carrier_abi` guard
+                 * excludes a plain carrier var/call result (already int64), so
+                 * this only fires on a real by-value producer.  The dict path
+                 * above keeps its own `dict_arg != NULL` branch unchanged. */
+                else if (!needs_fn_cast && !matched_spec &&
+                         e->as.call_.dict_arg == NULL &&
+                         emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
+                         type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
+                         type_uses_carrier_abi(
+                             emit_resolve_type(ctx, e->as.call_.args[i]->type)) &&
+                         expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                         fn_binding->type.kind == TY_FN &&
+                         i < fn_binding->type.as.fn.arity &&
+                         fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
+                    raw = emit_carrier_bridge(ctx, body, raw,
+                                             CK_CONCRETE, CK_CARRIER,
+                                             e->as.call_.args[i]->type);
+                }
                 /* M4c Path A (RETIRED -- M5 D.4, end-to-end-monomorphization
                  * plan): a by-value spec body that called an int64-carrier-sink
                  * stdlib helper (e.g. `(vec-len x)` / `(vec-get x i)` inside an

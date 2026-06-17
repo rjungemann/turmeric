@@ -86,3 +86,60 @@ Validate with the `(some? (g))` repro above plus `unwrap-or` /
   now fixed; this is the consumer half of the same migration.
 - `docs/reported/spices-int-stand-in-audit-2026-06-14.md` -- same
   `:int`-as-handle family of findings.
+
+## Resolution (2026-06-17)
+
+Fixed via **direction #2** (call-site concrete->carrier bridge), after
+empirically ruling out direction #1.
+
+Direction #1 (retype the consumers `o : (Option A)`) was attempted and
+**reverted**: it breaks every carrier-`int` caller. elab's carrier
+equivalence is *one-directional* -- it accepts an `(Option int)` value
+where an `int` carrier is expected (the bug this report is about), but
+rejects an `int` carrier where `(Option A)` is expected
+(`TUR-E0001: expected (type-app Option tyvar 'A'), got int`). The stdlib
+is full of the latter: `option-map` / `ne-from?` / `bidx-of?` and the
+whole `seq` Option machinery return `: int` carriers and feed them into
+`some?` / `unwrap-or`. Retyping just `some?` already broke
+`(some? (option-map ...))` at elab. Honest-typing the consumers would
+therefore require migrating that entire carrier-Option subsystem -- a
+much larger effort than this report's scope, tracked with the other
+`:int`-stand-in rows in
+`docs/reported/spices-int-stand-in-audit-2026-06-14.md`.
+
+Direction #2 is the minimal, blast-radius-free fix and is exactly
+symmetric with the bridges already in the emitter (the carrier->concrete
+return/field bridges added for `option-lowering-mid-migration`, and the
+`dict_arg != NULL` concrete->carrier dispatch bridge):
+
+- **`emit_expr.c` (call-arg coercion)**: a new branch, sibling to the
+  existing dict-dispatch concrete->carrier bridge, fires on an ordinary
+  *direct* call (`dict_arg == NULL`, no matched ABI spec) when the
+  argument genuinely emits a by-value carrier-ABI aggregate
+  (`expr_emits_byvalue_carrier_abi`) and the callee declares that slot as
+  the int64 carrier (`arg_kinds[i] == TY_INT`). It spills the by-value
+  `Option__A` / `Result__A__B` to a temp and passes its address as the
+  carrier handle. The `Option__int { bool is_some; int64_t value; }`
+  layout matches the canonical `tur_option_t`, so the `:int`-sink impl's
+  `tur_is_some` / `tur_opt_value` / `opt->value` reads land correctly;
+  `none` ({is_some=false}) reads back false. A bare carrier producer
+  (`(some 1)`, `(option-map ...)` returning the carrier) is *not*
+  by-value, so the guard leaves it untouched -- it flows as the carrier
+  int64 it already is.
+
+Regression fixture: `tests/fixtures/option-consumers-byvalue-arg/`
+passes a by-value `(Option int)` into `some?`, `unwrap-or`, `option-map`,
+`option-eq?` (and confirms bare carrier producers still flow unchanged).
+The change is purely additive -- it only emits a bridge where there was
+previously a hard `cc` error -- so there is **zero** snapshot churn
+(suite: 1656 passed, 0 failed).
+
+### Still open
+
+The `:int` parameter types themselves are unchanged -- the honest
+`o : (Option A)` retype remains blocked on migrating the carrier-`int`
+Option producers (`option-map`, `ne-from?`, `bidx-of?`, `seq/*`) to
+return `(Option A)` first. That migration is the proper home for
+direction #1 and is left to the `spices-int-stand-in-audit` follow-up
+rather than forced here, where it would regress a large swath of the
+stdlib.
