@@ -2508,9 +2508,9 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_577(int64_t, int64_t);
+static bool __fn_578(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
-static bool __fn_608(int64_t, int64_t);
+static bool __fn_614(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
 static int64_t __inst_Functor_fmap_Option(int64_t, tur_poly_fn_t);
@@ -2527,10 +2527,10 @@ static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
-static bool __fn_790(int64_t, int64_t);
+static bool __fn_796(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_872(int64_t, int64_t);
+static bool __fn_878(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
@@ -2579,10 +2579,13 @@ static bool map_hyeq_hyraw_qu(int64_t, int64_t, int64_t);
 static bool map_hyeq_hyraw_hyk_qu(int64_t, int64_t, int64_t, int64_t);
 static bool map_hyeq_hydynamic(int64_t, int64_t, int64_t);
 static void tur_hymap_hyhomog_un_un(int64_t, int64_t);
+static int64_t vec_hylen(int64_t);
+static int64_t vec_hyget(int64_t, int64_t);
 static void tur_hyvec_hyhomog_un_un(int64_t, int64_t);
 static bool vec_hyeq_qu(int64_t, int64_t, int64_t);
 static int64_t vec_hydata_hyget_un_un(void *, int64_t);
 static int64_t vec_hydata_hyget_hychecked_un_un(void *, int64_t, int64_t);
+static bool vec_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t slice_hynew(void *, int64_t);
 static int64_t slice_hylen(int64_t);
 static int64_t slice_hyget(int64_t, int64_t);
@@ -3014,14 +3017,14 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
     .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float,
 };
 
-static bool __fn_577(int64_t a, int64_t b) {
+static bool __fn_578(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         int64_t *__t2 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t2[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t2[1] = (int64_t)(intptr_t)__fn_577;
+        __t2[1] = (int64_t)(intptr_t)__fn_578;
         void *__t3 = __t2;
         return map_hyeq_hydynamic(x, y, (int64_t)(intptr_t)(__t3));
 }
@@ -3034,16 +3037,20 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Map,
 };
 
-static bool __fn_608(int64_t a, int64_t b) {
+static bool __fn_614(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
-        int64_t *__t4 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t4[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t4[1] = (int64_t)(intptr_t)__fn_608;
-        void *__t5 = __t4;
-        return vec_hyeq_qu(x, y, (int64_t)(intptr_t)(__t5));
+        bool __t4 = (vec_hylen(x)) == (vec_hylen(y));
+        if (__t4) {
+            int64_t *__t5 = (int64_t *)malloc(2 * sizeof(int64_t));
+            __t5[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+            __t5[1] = (int64_t)(intptr_t)__fn_614;
+            void *__t6 = __t5;
+            __t4 = vec_hyeq_hyloop(x, y, INT64_C(0), vec_hylen(x), (int64_t)(intptr_t)(__t6));
+        }
+        return __t4;
 }
 
 typedef struct dict_Eq_Vec {
@@ -3055,19 +3062,19 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
 };
 
 static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
-        bool __t6;
+        bool __t7;
         if ((((Option *)(intptr_t)(x))->is_some) == (((Option *)(intptr_t)(y))->is_some)) {
-            bool __t7;
+            bool __t8;
             if (((Option *)(intptr_t)(x))->is_some) {
-                __t7 = __inst_Eq_eq_qu_int(((Option *)(intptr_t)(x))->value, ((Option *)(intptr_t)(y))->value);
+                __t8 = __inst_Eq_eq_qu_int(((Option *)(intptr_t)(x))->value, ((Option *)(intptr_t)(y))->value);
             } else {
-                __t7 = true;
+                __t8 = true;
             }
-            __t6 = __t7;
+            __t7 = __t8;
         } else {
-            __t6 = false;
+            __t7 = false;
         }
-        return __t6;
+        return __t7;
 }
 
 typedef struct dict_Eq_Option {
@@ -3154,19 +3161,19 @@ static dict_Alternative_Option dict_Alternative_Option_singleton = {
 };
 
 static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
-        bool __t8;
+        bool __t9;
         if ((((Result *)(intptr_t)(x))->is_ok) == (((Result *)(intptr_t)(y))->is_ok)) {
-            bool __t9;
+            bool __t10;
             if (((Result *)(intptr_t)(x))->is_ok) {
-                __t9 = __inst_Eq_eq_qu_int(((Result *)(intptr_t)(x))->ok_val, ((Result *)(intptr_t)(y))->ok_val);
+                __t10 = __inst_Eq_eq_qu_int(((Result *)(intptr_t)(x))->ok_val, ((Result *)(intptr_t)(y))->ok_val);
             } else {
-                __t9 = __inst_Eq_eq_qu_int(((Result *)(intptr_t)(x))->err_val, ((Result *)(intptr_t)(y))->err_val);
+                __t10 = __inst_Eq_eq_qu_int(((Result *)(intptr_t)(x))->err_val, ((Result *)(intptr_t)(y))->err_val);
             }
-            __t8 = __t9;
+            __t9 = __t10;
         } else {
-            __t8 = false;
+            __t9 = false;
         }
-        return __t8;
+        return __t9;
 }
 
 typedef struct dict_Eq_Result {
@@ -3242,11 +3249,11 @@ static dict_MonadError_Result__ltstruct_gt dict_MonadError_Result__ltstruct_gt_s
 };
 
 static bool __inst_Eq_eq_qu_Pair(int64_t x, int64_t y) {
-        bool __t10 = __inst_Eq_eq_qu_int(((Pair *)(intptr_t)(x))->fst, ((Pair *)(intptr_t)(y))->fst);
-        if (__t10) {
-            __t10 = __inst_Eq_eq_qu_int(((Pair *)(intptr_t)(x))->snd, ((Pair *)(intptr_t)(y))->snd);
+        bool __t11 = __inst_Eq_eq_qu_int(((Pair *)(intptr_t)(x))->fst, ((Pair *)(intptr_t)(y))->fst);
+        if (__t11) {
+            __t11 = __inst_Eq_eq_qu_int(((Pair *)(intptr_t)(x))->snd, ((Pair *)(intptr_t)(y))->snd);
         }
-        return __t10;
+        return __t11;
 }
 
 typedef struct dict_Eq_Pair {
@@ -3258,11 +3265,11 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
 };
 
 static bool __inst_Eq_eq_qu_Tuple2(int64_t x, int64_t y) {
-        bool __t11 = __inst_Eq_eq_qu_int(((Tuple2 *)(intptr_t)(x))->e1, ((Tuple2 *)(intptr_t)(y))->e1);
-        if (__t11) {
-            __t11 = __inst_Eq_eq_qu_int(((Tuple2 *)(intptr_t)(x))->e2, ((Tuple2 *)(intptr_t)(y))->e2);
+        bool __t12 = __inst_Eq_eq_qu_int(((Tuple2 *)(intptr_t)(x))->e1, ((Tuple2 *)(intptr_t)(y))->e1);
+        if (__t12) {
+            __t12 = __inst_Eq_eq_qu_int(((Tuple2 *)(intptr_t)(x))->e2, ((Tuple2 *)(intptr_t)(y))->e2);
         }
-        return __t11;
+        return __t12;
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -3273,16 +3280,16 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Tuple2,
 };
 
-static bool __fn_790(int64_t a, int64_t b) {
+static bool __fn_796(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        int64_t *__t12 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t12[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t12[1] = (int64_t)(intptr_t)__fn_790;
-        void *__t13 = __t12;
-        return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t13));
+        int64_t *__t13 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t13[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t13[1] = (int64_t)(intptr_t)__fn_796;
+        void *__t14 = __t13;
+        return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t14));
 }
 
 typedef struct dict_Eq_Cons {
@@ -3305,16 +3312,16 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_qu = __inst_Eq_eq_qu_Set,
 };
 
-static bool __fn_872(int64_t a, int64_t b) {
+static bool __fn_878(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
-        int64_t *__t14 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t14[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t14[1] = (int64_t)(intptr_t)__fn_872;
-        void *__t15 = __t14;
-        return mutmap_hyeq_qu(x, y, (void *)(intptr_t)(__t15));
+        int64_t *__t15 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t15[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t15[1] = (int64_t)(intptr_t)__fn_878;
+        void *__t16 = __t15;
+        return mutmap_hyeq_qu(x, y, (void *)(intptr_t)(__t16));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3610,6 +3617,21 @@ static void tur_hymap_hyhomog_un_un(int64_t a, int64_t b) {
         (void)a; (void)b; 
 }
 
+static int64_t vec_hylen(int64_t v) {
+        struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  return (int)vec->len;
+  
+}
+
+static int64_t vec_hyget(int64_t v, int64_t i) {
+        struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < (size_t)vec->len) return (int64_t)vec->data[i];
+  fprintf(stderr, "tvec index out of bounds\n");
+  exit(1);
+  return 0;
+  
+}
+
 static void tur_hyvec_hyhomog_un_un(int64_t a, int64_t b) {
         (void)a; (void)b; 
 }
@@ -3638,6 +3660,22 @@ static int64_t vec_hydata_hyget_hychecked_un_un(void * data, int64_t i, int64_t 
   exit(1);
   return 0;
   
+}
+
+static bool vec_hyeq_hyloop(int64_t x, int64_t y, int64_t i, int64_t len, int64_t cmp) {
+        bool __t17;
+        if ((i) == (len)) {
+            __t17 = true;
+        } else {
+            bool __t18;
+            if (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(cmp)))[0])((void *)(intptr_t)(cmp), vec_hyget(x, i), vec_hyget(y, i))) {
+                __t18 = vec_hyeq_hyloop(x, y, (i) + (INT64_C(1)), len, (int64_t)(intptr_t)(cmp));
+            } else {
+                __t18 = false;
+            }
+            __t17 = __t18;
+        }
+        return __t17;
 }
 
 static int64_t slice_hynew(void * data, int64_t length) {
@@ -3838,35 +3876,35 @@ static int64_t list_hylength(int64_t l) {
 }
 
 static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t cmp_fn) {
-        bool __t16;
+        bool __t19;
         if (tnil_qu(l1)) {
-            __t16 = tnil_qu(l2);
+            __t19 = tnil_qu(l2);
         } else {
-            bool __t17;
+            bool __t20;
             if (tnil_qu(l2)) {
-                __t17 = false;
+                __t20 = false;
             } else {
-                bool __t18;
+                bool __t21;
                 if ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), list_hyhead(l1), list_hyhead(l2))) {
-                    __t18 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
+                    __t21 = list_hyeq_qu(list_hytail(l1), list_hytail(l2), (int64_t)(intptr_t)(cmp_fn));
                 } else {
-                    __t18 = false;
+                    __t21 = false;
                 }
-                __t17 = __t18;
+                __t20 = __t21;
             }
-            __t16 = __t17;
+            __t19 = __t20;
         }
-        return __t16;
+        return __t19;
 }
 
 static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
-        int64_t __t19;
+        int64_t __t22;
         if (tnil_qu(cell)) {
-            __t19 = INT64_C(0);
+            __t22 = INT64_C(0);
         } else {
-            __t19 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
+            __t22 = tcons((*( tur_thunk_int64_t_int64_t_t *)(f))(f, list_hyhead(cell)), _un_uncons_hyfmap(list_hytail(cell), (void *)(intptr_t)(f)));
         }
-        return __t19;
+        return __t22;
 }
 
 static int64_t list_hyhead(int64_t l) {
@@ -3882,13 +3920,13 @@ static int64_t list_hytail(int64_t l) {
 }
 
 static int64_t list_hyconcat(int64_t l1, int64_t l2) {
-        int64_t __t20;
+        int64_t __t23;
         if (tnil_qu(l1)) {
-            __t20 = l2;
+            __t23 = l2;
         } else {
-            __t20 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
+            __t23 = tcons(list_hyhead(l1), list_hyconcat(list_hytail(l1), l2));
         }
-        return __t20;
+        return __t23;
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
@@ -4203,20 +4241,20 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        int64_t __t21;
+        int64_t __t24;
         {
-            int64_t x_874 = INT64_C(42);
-            (void)x_874;
+            int64_t x_880 = INT64_C(42);
+            (void)x_880;
             {
-                int64_t y_875 = x_874;
-                (void)y_875;
-                printf("%lld\n", (long long)(y_875));
+                int64_t y_881 = x_880;
+                (void)y_881;
+                printf("%lld\n", (long long)(y_881));
             }
-            int64_t __t22;
-            __t22 = INT64_C(0);
-            __t21 = __t22;
+            int64_t __t25;
+            __t25 = INT64_C(0);
+            __t24 = __t25;
         }
-        return (int)__t21;
+        return (int)__t24;
 }
 
 
