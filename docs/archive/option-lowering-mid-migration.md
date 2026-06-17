@@ -181,3 +181,61 @@ compiled with `tur build`.
   follow-up rows (`param`/`capture`/`req-header`) are blocked on
   this; their `result<cstr>` shape hits the same lowering inconsistency
   as Option (`Result__T__U` is a sibling struct).
+
+## Resolution (2026-06-17)
+
+Fixed. The straddle was in the **control-form** lowering, not the
+constructors themselves. The constructors (`some`/`none`) and the
+function-return bridge were already consistent for a *bare* producer
+body (`(defn g [] : (Option int) (some 1))` compiled fine via the
+carrier->concrete return unbox). The break was that a control form
+(`if`/`let`/`do`) whose tail leaves are carrier producers declared its
+**result temp by value** (`Option__int __t`) while assigning the int64
+carrier handle that `some()`/`none()` actually return -- so
+`__t = none()` was an `int64_t`->struct mismatch and the return readback
+dereferenced the struct as a `tur_option_t *`.
+
+Three coordinated changes in the emitter, all keyed on the existing
+return-side predicate (`fn_body_tail_is_carrier_producer` &&
+!`fn_body_tail_emits_byvalue_carrier_abi`):
+
+1. **`emit_expr.c` -- `emit_control_result_temp_decl`** (new helper, used
+   by `emit_if_value`, `emit_let_value`, `emit_do_value`): an `if`/`let`/
+   `do` result temp whose static type is a carrier-ABI aggregate but whose
+   tail leaves are all carrier producers is now declared as the `int64_t`
+   carrier, matching the `some()`/`none()` values flowing into it. The
+   downstream consumer (the fn-return bridge) unboxes the carrier exactly
+   as it already did for a bare producer body.
+2. **`emit_expr.c` -- `emit_binding_repr_c_name`**: a `let` binding whose
+   initialiser is such a control form is declared as the carrier too, so
+   `Option__int o = <int64>` no longer mismatches; downstream uses bridge
+   via the var's `emit_byvalue_carrier_abi=false` flag.
+3. **`emit_core.c` -- canonical Option carrier->concrete readback** and
+   **`emit_expr.c` -- through-carrier `.field` access**: both now
+   NULL-guard the Option carrier, because `none` is the `0` handle.
+   The return readback collapses to `(Option__int){0}` and a `.is-some`/
+   `.value` access reads back `false`/`0` instead of dereferencing NULL.
+   (This also fixed a **pre-existing** segfault: any function returning
+   `(Option int)` whose body was a bare `(none)`, then field-accessed,
+   crashed on the NULL deref -- independent of control forms.) Result has
+   no NULL carrier, so it keeps the unguarded path.
+
+Regression fixture: `tests/fixtures/option-control-form-construct/`
+exercises `if`/`let`/`do` construction of `(Option int)` and
+`(Result int cstr)`, the let-bound + field-accessed consumer, the
+`some?` carrier consumer, and the `none` path. Snapshot churn: the
+Option-carrier field-access NULL-guard touches the preloaded stdlib
+`option-eq?` Eq instance, so all 77 `expected.c` snapshots were
+regenerated in the same change (suite: 1655 passed, 0 failed).
+
+### Still open (filed separately)
+
+Direction #3 (lift `ctx-attr-get` back to `(Option int)` in
+`tur-tourist`) is spice-side work, untouched here. And the *consumer*
+straddle remains: `(some? (g))` / `(unwrap-or (g) d)` where `g` returns
+`(Option int)` by value still fail to compile, because `some?` /
+`unwrap-or` / `option-map` / `option-free` declare their parameter
+`o : int` (the carrier ABI) -- a by-value `Option__int` result cannot be
+passed. That is the consumer half of this same migration (and a
+`No Lazy :int Stand-Ins` violation -- they should be `o : (Option A)`).
+Filed as `docs/reported/option-consumers-typed-as-int-carrier.md`.

@@ -2544,12 +2544,21 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
             if (type_extract_struct_app(&concrete_ty, &def, type_args, &n_args) &&
                 def && def->name &&
                 (strcmp(def->name, "Result") == 0 || strcmp(def->name, "Option") == 0)) {
-                const char *box_t = (strcmp(def->name, "Result") == 0)
-                    ? "tur_result_box_t" : "tur_option_t";
+                bool is_option = strcmp(def->name, "Option") == 0;
+                const char *box_t = is_option ? "tur_option_t" : "tur_result_box_t";
                 char *src_tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s *%s = (%s *)(intptr_t)(%s);\n",
                            box_t, src_tmp, box_t, src_str);
+                /* option-lowering-mid-migration: `none` is the NULL carrier
+                 * (`0`), so the canonical readback must NOT dereference it.
+                 * Guard the whole field-by-field reconstruction with a NULL
+                 * check that collapses to a zeroed `Option__T` (is_some=false,
+                 * value=0) -- exactly the none value -- when the carrier is 0.
+                 * Result has no NULL carrier (ok/err both heap-allocate), so it
+                 * keeps the unguarded read. */
+                if (is_option)
+                    buf_printf(&out, "(%s ? ", src_tmp);
                 buf_printf(&out, "(%s){", cname);
                 for (uint32_t fi = 0; fi < def->n_fields; fi++) {
                     const StructField *f = &def->fields[fi];
@@ -2618,6 +2627,8 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                     }
                 }
                 buf_printf(&out, "}");
+                if (is_option)
+                    buf_printf(&out, " : (%s){0})", cname);
                 free(src_tmp);
                 used_canonical = true;
             }

@@ -3070,10 +3070,10 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
 
 static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
         bool __t7;
-        if ((((Option *)(intptr_t)(x))->is_some) == (((Option *)(intptr_t)(y))->is_some)) {
+        if ((((x) ? ((Option *)(intptr_t)(x))->is_some : 0)) == (((y) ? ((Option *)(intptr_t)(y))->is_some : 0))) {
             bool __t8;
-            if (((Option *)(intptr_t)(x))->is_some) {
-                __t8 = __inst_Eq_eq_qu_int(((Option *)(intptr_t)(x))->value, ((Option *)(intptr_t)(y))->value);
+            if (((x) ? ((Option *)(intptr_t)(x))->is_some : 0)) {
+                __t8 = __inst_Eq_eq_qu_int(((x) ? ((Option *)(intptr_t)(x))->value : 0), ((y) ? ((Option *)(intptr_t)(y))->value : 0));
             } else {
                 __t8 = true;
             }
