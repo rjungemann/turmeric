@@ -271,22 +271,6 @@ upstream `just` binary still works against the same Justfile if you prefer it,
 but it is not required. See
 [docs/guides/tur-run-guide.md](docs/guides/tur-run-guide.md).
 
-## Spice Repository Layout
-
-Spice implementations live in the sibling repository `../turmeric-spices`, not
-under this repository. Its canonical remote is
-**https://github.com/rjungemann/turmeric-spices/**.
-
-- Do not create or scaffold a local `./spices/` tree in this repo.
-- When work targets a spice, edit it in `../turmeric-spices`.
-- In this repo, only touch spice-related fixtures, docs, integration glue, or
-  references that are intentionally kept here.
-- If the sibling checkout is missing (e.g. a fresh container), clone it next to
-  this repo before working on or reproducing spice-side issues:
-  ```sh
-  git clone https://github.com/rjungemann/turmeric-spices/ ../turmeric-spices
-  ```
-
 ## Per-file Commands Inside a Spice
 
 `tur check`, `tur emit-c`, `tur emit-h`, and `tur run <file>` walk up

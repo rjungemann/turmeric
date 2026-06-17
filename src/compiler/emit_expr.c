@@ -9,6 +9,38 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
+/* world-resize / multi-field existential payloads: true when `t` lowers to a
+ * by-value C aggregate (`World__int__int__int` etc.) that is WIDER than the
+ * single int64 the existential carrier (`tur_exists_t`) holds. Such a payload
+ * cannot ride the scalar `(int64_t)(aggregate)` cast the carrier ABI uses for
+ * single-word handles (`SizedBuf`, `SizedVec int`), so `pack` must heap-box it
+ * and `open` must read it back through the pointer. Excludes:
+ *   - heap structs (`:heap`): already a typed pointer `T *` -- one word, fits;
+ *   - opaque newtypes / transparent int-newtypes: lower to int64 -- fit;
+ *   - scalars / non-struct kinds.
+ * The two emit sites (pack, open) must agree, so both consult this predicate. */
+static bool exists_payload_is_byval_aggregate(Type t) {
+    if (type_is_heap_struct(t)) return false;          /* typed pointer T * */
+    if (type_is_transparent_int_newtype(t)) return false;  /* int64 */
+    StructDef *def = NULL;
+    if (t.kind == TY_STRUCT) {
+        def = t.as.struct_.def;
+    } else if (t.kind == TY_APP) {
+        Type args[16];
+        uint8_t n_args = 0;
+        type_extract_struct_app(&t, &def, args, &n_args);
+    } else {
+        return false;
+    }
+    if (!def || def->is_opaque) return false;
+    /* type_struct_value_c_name resolves phantom params to int64 -- a multi-field
+     * world like (World m A B) lowers to the real aggregate `World__int__int__int`,
+     * while a genuine int64 carrier (or an unresolved generic body) lowers to
+     * "int64_t". Only the former needs heap-boxing. */
+    const char *cn = type_struct_value_c_name(t);
+    return cn && strcmp(cn, "int64_t") != 0;
+}
+
 /* KB-021/KB-031: a type's dictionary-dispatch instance body uses the carrier
  * ABI (int64_t parameter) exactly when its value representation is the carrier
  * (see type_uses_carrier_abi in emit_core.c).  Both the value-declaration path
@@ -4946,8 +4978,32 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Already a pointer — cast directly */
                 buf_printf(&out, "(tur_exists_t)(%s)", val);
             } else {
-                /* Scalar (int64_t, bool, etc.) — reinterpret via intptr_t (64-bit safe) */
-                buf_printf(&out, "(tur_exists_t)(intptr_t)((int64_t)(%s))", val);
+                Type payload_ty =
+                    emit_resolve_type(ctx, e->as.exists_pack_.value->type);
+                if (exists_payload_is_byval_aggregate(payload_ty)) {
+                    /* world-resize: the payload is a by-value aggregate wider
+                     * than the int64 carrier (e.g. a (GameWorld n) struct with
+                     * one sized-dense field per component). Heap-box a copy and
+                     * carry the pointer; EX_EXISTS_OPEN reads it back through
+                     * the same predicate and frees it (single-use ownership,
+                     * matching the :linear open discipline). */
+                    const char *cname = type_struct_value_c_name(payload_ty);
+                    char *box = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                               cname, box, cname, cname);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "if (!%s) { fprintf(stderr, \"pack: out of memory\\n\"); abort(); }\n",
+                        box);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "*%s = %s;\n", box, val);
+                    buf_printf(&out, "(tur_exists_t)(%s)", box);
+                    free(box);
+                } else {
+                    /* Scalar (int64_t, bool, etc.) — reinterpret via intptr_t (64-bit safe) */
+                    buf_printf(&out, "(tur_exists_t)(intptr_t)((int64_t)(%s))", val);
+                }
             }
             buf_putc(&out, '\0');
             free(val);
@@ -4990,7 +5046,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             TypeKind vk = e->as.exists_open_.var_binding->type.kind;
             bool vk_is_ptr = (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL
                               || vk == TY_FN || vk == TY_RC || vk == TY_REF || vk == TY_WEAK);
-            if (packed_is_linear_record) {
+            /* world-resize: a by-value aggregate payload was heap-boxed by
+             * EX_EXISTS_PACK (only on the unconstrained, non-record path). Read
+             * it back through the pointer and own it -- free after the body, the
+             * same single-use discipline as the :linear record path. */
+            Type open_bind_ty =
+                emit_resolve_type(ctx, e->as.exists_open_.var_binding->type);
+            bool packed_is_byval_aggregate =
+                !packed_is_record
+                && exists_payload_is_byval_aggregate(open_bind_ty);
+            if (packed_is_byval_aggregate) {
+                const char *cname = type_struct_value_c_name(open_bind_ty);
+                buf_printf(body, "%s %s = *(%s *)(%s);\n",
+                           cname, var_name, cname, packed_val);
+                /* The binding is a real by-value aggregate, not the int64
+                 * carrier -- mark it so EX_GET_FIELD uses direct `.field`
+                 * access instead of the `((T *)(intptr_t)sv)->field` carrier
+                 * cast (the same flag the let-binding path sets). */
+                if (e->as.exists_open_.var_binding)
+                    e->as.exists_open_.var_binding->emit_byvalue_carrier_abi = true;
+            } else if (packed_is_linear_record) {
                 if (vk_is_ptr) {
                     buf_printf(body,
                         "void *%s = (void *)(intptr_t)((tur_existential_t *)(%s))->value;\n",
@@ -5036,7 +5111,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* EXG6-3: free the bare record now that the (only) open has
              * consumed it.  The linear discipline guarantees this is the
              * single use, so the free is unconditional. */
-            if (packed_is_linear_record) {
+            if (packed_is_linear_record || packed_is_byval_aggregate) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "free((void *)(%s));\n", packed_val);
             }
