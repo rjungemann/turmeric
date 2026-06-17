@@ -1091,18 +1091,41 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
             ? ctx->current_abi_specialization->clone_name : NULL;
         const char *matched = NULL;
         bool saw = false;
+        bool saw_any = false;
         for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
             if (ctx->specialized_call_exprs[i] != call) continue;
-            if (!saw) { matched = ctx->specialized_call_names[i]; saw = true; }
+            saw_any = true;
             if (ctx->specialized_call_outer[i] == active_outer) {
                 matched = ctx->specialized_call_names[i];
+                saw = true;
                 break;
+            }
+            /* Cross-spec fallback only inside a spec (active_outer != NULL); a
+             * carrier base / top-level emit must require an exact NULL-outer
+             * match so it never routes a call to a spec-scoped clone with a
+             * different return ABI (M2-completion primitive-payload construct). */
+            if (active_outer != NULL && !saw) {
+                matched = ctx->specialized_call_names[i];
+                saw = true;
             }
         }
         if (saw) {
             char *name = strdup(matched);
             if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
             return name;
+        }
+        /* If this call was recorded under a spec outer but none matches the
+         * active (NULL) outer, it is a spec-scoped specialization (e.g. a
+         * by-value-return construct spec) -- the carrier base / top-level emit
+         * must use the plain carrier callee, not the by-args lookup below which
+         * cannot distinguish a return-only-differentiated spec from the carrier
+         * (identical arg types).  Skip to the carrier name. */
+        if (saw_any && active_outer == NULL) {
+            if (b) {
+                char *captured = capture_env_access(ctx, b);
+                if (captured) return captured;
+            }
+            return raw_name_for_binding(b);
         }
         if (call->kind == EX_CALL && b) {
             for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
