@@ -1076,6 +1076,15 @@ static const char *struct_field_c_type(const StructDef *owner, const StructField
         case TY_WEAK:     return "RcControlBlock *";
         case TY_REF:
         case TY_LREF:     return "void *";
+        /* defstruct-byvalue-struct-field-stored-as-int-carrier: a field typed
+         * by a bare by-value struct is stored INLINE as that aggregate (not the
+         * int64 carrier).  full_type carries the nominal struct; type_c_name
+         * names the C aggregate.  (Parametric owners with `args` are handled by
+         * the substitute-and-name branch above; this reaches non-parametric
+         * owners where args == NULL.) */
+        case TY_STRUCT:
+            if (field->full_type) return type_c_name(*field->full_type);
+            return "int64_t";
         case TY_INT8:     return "int8_t";
         case TY_INT16:    return "int16_t";
         case TY_INT32:    return "int32_t";

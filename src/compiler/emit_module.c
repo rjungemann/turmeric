@@ -5923,6 +5923,11 @@ int emit_program(Buf *out, const Expr *program) {
                 if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
                     const char *td = register_fn_ptr_typedef(f->full_type);
                     ctype = td ? td : "int64_t";
+                } else if (f->kind == TY_STRUCT && f->full_type) {
+                    /* defstruct-byvalue-struct-field-stored-as-int-carrier:
+                     * a bare by-value struct field is stored inline as that
+                     * aggregate, named by type_c_name (int64_t for opaque). */
+                    ctype = type_c_name(*f->full_type);
                 } else switch (f->kind) {
                     case TY_INT:      ctype = "int64_t"; break;
                     case TY_BOOL:     ctype = "bool"; break;
@@ -6809,6 +6814,11 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                 if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
                     const char *td = register_fn_ptr_typedef(f->full_type);
                     ctype = td ? td : "int64_t";
+                } else if (f->kind == TY_STRUCT && f->full_type) {
+                    /* defstruct-byvalue-struct-field-stored-as-int-carrier:
+                     * a bare by-value struct field is stored inline as that
+                     * aggregate, named by type_c_name (int64_t for opaque). */
+                    ctype = type_c_name(*f->full_type);
                 } else switch (f->kind) {
                     case TY_INT:      ctype = "int64_t"; break;
                     case TY_BOOL:     ctype = "bool"; break;

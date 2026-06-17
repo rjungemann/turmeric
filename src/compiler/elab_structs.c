@@ -168,6 +168,54 @@ static bool struct_type_has_named_tyvar(const StructDef *def, const Type *t) {
     }
 }
 
+/* defstruct-byvalue-struct-field-stored-as-int-carrier: decide the STORAGE
+ * kind for a defstruct field whose type is a bare (nullary) user struct/ADT,
+ * and record its nominal `full_type` for read-back.  Three cases:
+ *
+ *   - opaque newtype  -> int64 carrier (TY_INT); full_type kept so `(.f x)`
+ *     reads back as the declared opaque, not `:int`.  type_c_name lowers the
+ *     opaque to int64_t, so storage stays carrier-consistent.
+ *   - ADT             -> int64 carrier (TY_INT); full_type kept (ADT carriers
+ *     are int64-consistent on both the store and the access path).
+ *   - by-value struct -> stored INLINE by value (TY_STRUCT) with full_type, so
+ *     make-struct initializes the inline aggregate and `(.f x)` reads the
+ *     struct back -- both representations agree.  A direct self-reference
+ *     (`(defstruct Node [next : Node])`) would be an infinite-size aggregate,
+ *     so it stays on the int64 carrier (a self-link is necessarily a pointer).
+ *
+ * `owner` is the struct currently being defined (for the self-reference check);
+ * it may be NULL/partially-filled for a forward stub, which is fine -- the
+ * pointer-identity compare just won't match and we keep the by-value path.
+ */
+static TypeKind struct_field_user_type_storage(const Binding *tb,
+                                               const StructDef *owner,
+                                               Type **out_full_type,
+                                               Arena *arena) {
+    bool is_byvalue_struct =
+        tb->type.kind == TY_STRUCT &&
+        tb->type.as.struct_.def &&
+        !tb->type.as.struct_.def->is_opaque &&
+        tb->type.as.struct_.def != owner;  /* not a direct self-link */
+    if (is_byvalue_struct) {
+        Type *t = (Type *)arena_alloc(arena, sizeof(Type));
+        *t = tb->type;
+        *out_full_type = t;
+        return TY_STRUCT;
+    }
+    /* Opaque newtype: int64 carrier storage, but keep the nominal type so
+     * `(.f x)` reads back as the declared opaque rather than `:int`.  ADTs and
+     * self-referential struct links stay on the bare int64 carrier with no
+     * recorded full_type (their existing carrier-consistent behavior). */
+    if (tb->type.kind == TY_STRUCT &&
+        tb->type.as.struct_.def &&
+        tb->type.as.struct_.def->is_opaque) {
+        Type *t = (Type *)arena_alloc(arena, sizeof(Type));
+        *t = tb->type;
+        *out_full_type = t;
+    }
+    return TY_INT;
+}
+
 static void struct_field_storage_from_type(const Type *t, TypeKind *out_kind, TypeKind *out_inner) {
     *out_kind = TY_UNKNOWN;
     *out_inner = TY_UNKNOWN;
@@ -803,26 +851,8 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
                     Binding *tb = scope_lookup_type_def(e->scope, type_sym);
                     if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
-                        fkind = TY_INT;
                         finner = TY_UNKNOWN;
-                        /* defstruct-bare-user-type-field-reads-back-as-int-carrier:
-                         * a field typed by a bare (nullary) defopaque lowers to the
-                         * int64 carrier for STORAGE (its real representation), but
-                         * its nominal identity must be kept so `(.field x)` reads
-                         * back as the declared opaque type rather than `:int`.
-                         * Gated to opaque newtypes: a by-value (non-opaque) struct
-                         * field stored as the int64 carrier is a separate,
-                         * pre-existing storage straddle -- recording its by-value
-                         * full_type would make make-struct emit a by-value struct
-                         * initializer into an int64 slot.  ADTs are left on the
-                         * carrier too for now. */
-                        if (tb->type.kind == TY_STRUCT &&
-                            tb->type.as.struct_.def &&
-                            tb->type.as.struct_.def->is_opaque) {
-                            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                            *t = tb->type;
-                            full_type = t;
-                        }
+                        fkind = struct_field_user_type_storage(tb, def, &full_type, e->arena);
                     } else {
                         diag_emit(DIAG_ERROR, field_type_form->span,
                                   "defstruct field '%s' has unrecognized type :%s",
@@ -928,20 +958,8 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
                     Binding *tb = scope_lookup_type_def(e->scope, type_sym);
                     if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
-                        fkind = TY_INT;
                         finner = TY_UNKNOWN;
-                        /* defstruct-bare-user-type-field-reads-back-as-int-carrier:
-                         * keep the nominal type for a bare defopaque field so
-                         * `(.field x)` reads back as the declared opaque, not its
-                         * int64 carrier.  Gated to opaque newtypes (carrier-
-                         * consistent storage); see the new-style branch above. */
-                        if (tb->type.kind == TY_STRUCT &&
-                            tb->type.as.struct_.def &&
-                            tb->type.as.struct_.def->is_opaque) {
-                            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                            *t = tb->type;
-                            full_type = t;
-                        }
+                        fkind = struct_field_user_type_storage(tb, def, &full_type, e->arena);
                     } else {
                         diag_emit(DIAG_ERROR, field_type_form->span,
                                   "defstruct field '%s' has unrecognized type :%s",

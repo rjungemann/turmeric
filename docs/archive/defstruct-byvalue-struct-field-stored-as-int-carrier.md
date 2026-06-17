@@ -1,8 +1,9 @@
 ---
 title: A defstruct field typed by a bare by-value struct/ADT is stored as the int64 carrier, so it neither reads back as its type nor accepts a by-value value
 severity: medium -- the `:int` stand-in disease at the struct-field level. Because a `field : SomeStruct` slot is forced to the int64 carrier, both construction (`make-struct` with a by-value struct value) and access (`(.field x)` typed `:int`) are broken, so authors declare such fields `:int` (see tests/fixtures/clone-list `next : int`, typeclass-poly-wrapper-struct-receiver `Pos : int`).
-status: open
+status: resolved
 discovered: 2026-06-17
+resolved: 2026-06-17
 surfaced-by: turmeric-spices ECS work (E2d), while fixing the nullary-opaque variant (defstruct-bare-user-type-field-reads-back-as-int-carrier.md). The opaque case was carrier-consistent and fixed; the by-value struct/ADT case is a deeper storage straddle and was scoped out.
 ---
 
@@ -83,6 +84,42 @@ by-value struct field needs `fkind = TY_STRUCT` (storing the struct inline)
   field and no `(:: ... :T)` re-pin.
 - `bash tests/run.sh` green; regenerate snapshots only if struct-field
   storage codegen genuinely moves.
+
+## Resolution (2026-06-17)
+
+Implemented fix direction 1.  A defstruct field typed by a bare by-value
+(non-opaque) struct is now stored **inline as that aggregate** rather than the
+int64 carrier; both construction and access agree.
+
+- `src/compiler/elab_structs.c` -- the bare-symbol user-type fallthrough in both
+  defstruct field branches now routes through a new
+  `struct_field_user_type_storage` helper.  It returns `fkind = TY_STRUCT`
+  (plus the nominal `full_type`) for a by-value, non-opaque, non-self-referential
+  struct, and keeps the int64 carrier (`TY_INT`) for opaque newtypes (with
+  `full_type` for read-back, unchanged), ADTs, and direct self-links (a
+  self-referential field is necessarily a pointer, so an inline aggregate would
+  be an infinite-size / incomplete C type -- those stay on the carrier).
+- `src/compiler/types.c` -- `struct_field_c_type` gained a `TY_STRUCT` case that
+  names the inline aggregate via `type_c_name(*full_type)` for non-parametric
+  owners (parametric owners with `args` were already handled by the
+  substitute-and-name branch).
+- `src/compiler/emit_module.c` -- the two inlined struct-typedef field-type
+  switches (header and early-file emit) gained the matching
+  `TY_STRUCT && full_type` arm so the slot is declared `Inner inner;` instead of
+  `int64_t inner;`.
+
+The minimal repro compiles and runs (`use-inner` returns 7) with no `:int`
+field and no `(:: ... :T)` re-pin; nested access, in-place `set!` of an inline
+struct field, and sibling scalar fields all behave.  Regression coverage:
+`tests/fixtures/defstruct-byvalue-struct-field`.  `bash tests/run.sh` is green
+(1668 passed, 0 failed); no snapshot regen was needed (no existing fixture used
+a by-value struct field).
+
+Fix directions 2 (drop-glue/copy-kind audit -- a by-value struct field correctly
+makes a `:copy` container non-copy via `typekind_is_copy_for_struct(TY_STRUCT)`)
+and 3 (tightening the `:int` self-link / nested-struct fields in `clone-list`
+and `typeclass-poly-wrapper-struct-receiver`) remain optional follow-ups; they
+are not required for the storage straddle itself, which is now closed.
 
 ## Cross-references
 
