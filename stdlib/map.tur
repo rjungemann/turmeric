@@ -153,7 +153,11 @@
 ;;;   h     -- precomputed content hash of key
 ;;;   key   -- key of type K
 ;;;   val   -- value of type V
-;;;   keyeq -- a (fn [a :K b :K] :bool) used to compare keys that share a hash
+;;;   keyeq -- a captureless (c-fn [K K] bool) used to compare keys that share a
+;;;            hash. Must carry no environment (it is called as a bare C function
+;;;            pointer); pass a top-level defn or a captureless lambda, or a
+;;;            MapKey carrier comparator like tur-int-carrier-eq? /
+;;;            tur-cstr-key-eq?. A capturing closure is rejected at compile time.
 ;;;
 ;;; Returns:
 ;;;   A new Map[K V] with the entry inserted or updated. Keys that are equal
@@ -166,7 +170,7 @@
 
 
 (defn map-assoc-eq [K V]
-  [m (Map K V) h :int key :K val :V keyeq]
+  [m (Map K V) h :int key :K val :V keyeq : (c-fn [K K] bool)]
   : (Map K V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
@@ -194,7 +198,7 @@
 ;;; Since: TCE4
 
 (defn map-get-eq [K V]
-  [m (Map K V) h :int key :K keyeq]
+  [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)]
   :V
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
@@ -219,7 +223,7 @@
 ;;; Since: TCE4
 
 (defn map-has-eq? [K V]
-  [m (Map K V) h :int key :K keyeq]
+  [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)]
   :bool
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
@@ -243,7 +247,7 @@
 ;;; Since: TCE4
 
 (defn map-dissoc-eq [K V]
-  [m (Map K V) h :int key :K keyeq]
+  [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)]
   : (Map K V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;

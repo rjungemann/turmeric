@@ -912,7 +912,36 @@ Tier A alone makes `typed/map-basic`, the `data-literal-map-*` fixtures, and any
 scalar-keyed `map-*` program pass under `--interpret` with **no change to
 `src/runtime/hamt.c`**.
 
-#### Tier B -- the general turi-closure-aware HAMT (user comparators)
+#### Tier B -- the general turi-closure-aware HAMT (user comparators) -- **LANDED**
+
+> **Shipped.** The implementation took option **B2** (the reentrant `_eq_ctx`
+> runtime family), not B1 -- the recommendation below is retained for the record.
+> `src/runtime/hamt.c` carries `tur_hamt_{set,get,has,del}_eq_ctx` over
+> `tur_hamt_keyeq_ctx_fn = bool(*)(int64_t,int64_t,void*)`, and the map natives
+> (`native_map_assoc_eq[_o]` / `..._get_eq` / `..._has_eq` / `..._dissoc_eq`,
+> `src/main.c`) detect a `TURI_CLOSURE` comparator and route through them with
+> `map_turi_eq_tramp`, which packs `{env, closure}` into the ctx word and invokes
+> the closure via `turi_call` on every collision compare. The `map-eq?`'s `^fat`
+> value-comparator slice is also done: `native_map_eq_raw[_k]` iterate the HAMT
+> and call the value comparator via `turi_call` (the map analogue of
+> `native_result_eq`). Because the ctx travels on the C stack (no thread-local),
+> the path is **reentrant by construction** -- a comparator may itself touch
+> another content-keyed map. Fixtures (both run on `--interpret` *and*
+> `tur run`): `tib-map-turi-comparator` (forced hash-0 collision chain, custom
+> equality-by-x so the closure's logic is genuinely exercised, not works-by-luck)
+> and `tib-map-reentrant-comparator` (an outer map whose comparator queries a
+> second content-keyed map -- nested trampolines). Umbrella report resolved and
+> archived at
+> [docs/archive/history/turi-map-set-hamt-interpreter-gap.md](../archive/history/turi-map-set-hamt-interpreter-gap.md).
+>
+> **Compiled-path footgun found while adding the reentrancy fixture** (Track A /
+> `map.tur`, not interpreter work): the raw `map-*-eq` API casts its *untyped*
+> `keyeq` to a bare C function pointer, so handing it a *capturing* closure
+> segfaults on `tur run` with no type rejection (the interpreter accepts it via
+> Tier B). Filed at
+> [docs/reported/raw-map-eq-api-segfaults-on-capturing-comparator.md](../reported/raw-map-eq-api-segfaults-on-capturing-comparator.md);
+> the reentrancy fixture therefore uses top-level captureless comparators (which
+> lower to C fn pointers on the compiled path) so it stays green on both.
 
 Tier A covers every comparator that *is* a C function (all built-in `MapKey`
 instances). A comparator that is a genuine **turi closure** -- a user-defined

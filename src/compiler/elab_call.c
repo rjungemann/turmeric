@@ -2931,10 +2931,29 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         (unsigned)args[i]->type.as.fn.arity);
                     return NULL;
                 } else {
-                    bool sig_ok = (args[i]->type.as.fn.result_kind
+                    /* tyvars-in-c-fn: a (c-fn [...] R) parameter on a generic
+                     * defn may carry type-variable arg/result positions (e.g.
+                     * `keyeq : (c-fn [K K] bool)` on `map-assoc-eq [K V]`). Those
+                     * positions lower their kind slot to the int64 carrier
+                     * (TY_INT) at parse time, so a per-kind compare here would
+                     * spuriously reject a captureless comparator whose concrete
+                     * arg kind differs from the carrier (e.g. a `(fn [cstr cstr]
+                     * bool)` for a `(Map cstr int)`). Treat a tyvar position in
+                     * the *expected* c-fn as a wildcard -- it matches any single
+                     * concrete kind. The boxed (capturing-closure) and arity
+                     * checks above are unaffected, so the contract that matters
+                     * (no environment, right arity) is still enforced. */
+                    bool exp_res_tyvar = exp_cfn->as.fn.result_full_type &&
+                        exp_cfn->as.fn.result_full_type->kind == TY_TYVAR;
+                    bool sig_ok = exp_res_tyvar ||
+                        (args[i]->type.as.fn.result_kind
                                    == exp_cfn->as.fn.result_kind);
                     for (uint8_t si = 0; sig_ok && si < exp_cfn->as.fn.arity; si++) {
-                        if (args[i]->type.as.fn.arg_kinds[si]
+                        bool exp_arg_tyvar = exp_cfn->as.fn.arg_full_types &&
+                            exp_cfn->as.fn.arg_full_types[si] &&
+                            exp_cfn->as.fn.arg_full_types[si]->kind == TY_TYVAR;
+                        if (!exp_arg_tyvar &&
+                            args[i]->type.as.fn.arg_kinds[si]
                                 != exp_cfn->as.fn.arg_kinds[si])
                             sig_ok = false;
                     }
