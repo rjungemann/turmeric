@@ -999,11 +999,61 @@ all require it), and there is no monomorphic-path call left to strip out of it.
   deliverable is the corrected post-#400 baseline and the down-scope-complete
   verdict for the collection-Eq cascade.
 
+## What bucket C does NOT block (anti-FUD note for downstream readers)
+
+This section exists because a 2026-06-17 probe concluded "generic
+ok/err at the struct-carrier boundary still doesn't work cleanly,
+so Track C / S3 spice work is gated on M3" and was about to defer
+already-tractable spice work. The conclusion is **wrong** -- bucket
+C is a narrow inline-C boundary, not a blanket gate on typed
+`(Result T E)` / `(Option T)` returns. Concrete evidence on `main`:
+
+- **Primitive-payload `(ok v)` through return-typeclass dispatch is
+  by-value.** `tests/fixtures/typeclass-return-dispatch-result-wrapped`
+  -- `(definstance Dec [int] (dec [v] (ok v)))` dispatched via
+  `(:: (dec 42) (Result int cstr))`; 2 -> 0 crossings since #399
+  (see the "Update 2026-06-17 (M2-completion ...)" entry above).
+- **Value-struct payload through polymorphic `ok`/`err` is
+  by-value.** `tests/fixtures/polymorphic-ok-err-value-struct-payload`
+  -- `(ok (make-struct User ...))` round-trips through `ok-val`.
+- **Constrained-generic helpers over collections monomorphize.**
+  `tests/fixtures/m5-instance-spec-constraint-var` -- 4 -> 0
+  crossings since #399.
+- **Pure-Turmeric instance rewrite pattern lives in stdlib.**
+  `Serializable [Pair]` (`stdlib/serial.tur`) is the worked example;
+  fixture `tests/fixtures/serial-composite-instances` validates byte
+  layout. The rewrite recipe: replace inline-C body with a
+  pure-Turmeric body that dispatches recursively through declared
+  constraint vars; M4c Path A mints the typed spec; no carrier
+  spill.
+- **Already-shipped spice surfaces use this directly.**
+  `tur-regex` v0.2.0 (`regex-compile` -> `(Result Regex cstr)`),
+  `tur-tourist` v0.2.0 (`param`/`capture` -> `(Result cstr cstr)`),
+  `tur-httpd` v0.2.0 (`req-header` -> `(Result cstr cstr)`).
+
+The narrow case bucket C **does** cover -- and the only place a
+"works cleanly" probe legitimately fails today -- is rewriting an
+**existing inline-C instance body for `Option`** in pure Turmeric
+across the dispatch boundary. The dispatch site derefs
+`*(Option__int *)(intptr_t)(0)` before the body's NULL guard runs;
+see "Resolution 2026-06-15 (`Serializable [Option]` deliberately
+LEFT inline-C)" above for the repro. The fix is to leave the
+inline-C body alone and flag it with a `;;` NOTE, not to wait on
+M3. New spice surfaces that return `(Option T)` from a wrapper
+constructing the value at the C boundary are not on this path.
+
+Quick decision: writing a typed `(Result T E)` / `(Option T)`
+return on a new or refactored spice helper? Just write it. Tempted
+to rewrite an existing `Option`-returning typeclass instance body
+in pure Turmeric to "clean it up"? Read the segfault repro first.
+
 ## Related
 
 - [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
   §M3 / §M4 — the plan this report refines.
 - [docs/reported/m2b-stdlib-migration-blocked-on-carrier-fallback.md](m2b-stdlib-migration-blocked-on-carrier-fallback.md)
   — the M2b finding that pointed at M4 as the deeper unblocker.
+- [docs/parallel-tracks.md](../parallel-tracks.md) Track C "Not a
+  blocker" note — same anti-FUD content scoped to spice S3 work.
 - `src/compiler/emit_core.c` `emit_carrier_bridge` — the bridge function
   (now carrying a permanent audit hook).

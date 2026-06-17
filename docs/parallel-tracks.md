@@ -61,9 +61,16 @@ Pure spice-side work; no compiler dependencies.
   (report) -- S1 callbacks closed; S2 handles in httpd / osc / rtmidi
   closed in their respective v0.2.0 releases (httpd's Request/Response/
   Wbuf are also re-used by tourist v0.2.1 so the framework boundary
-  has zero cross-spice casts). Open follow-ups: S3 result/option on
-  `param`/`capture`/`req-header`, S4 cons lists in tourist internals,
-  secondary handle leaks inside plutovg / raylib / rtaudio.
+  has zero cross-spice casts). **S3 return-type rows also closed**
+  (`param`/`capture`/`captures-get`/`req-header` all return
+  `(Result cstr cstr)` on `main` today -- verified 2026-06-17 against
+  `tourist/param.tur:392,430`, `tourist/router.tur:244`,
+  `httpd/request.tur:121`; `mw-chain-run` returns `(Option Response)`
+  via `use!`'s `(c-fn [Ctx] (Option Response))` shape). Open
+  follow-ups: S4 cons lists in tourist internals; residual S2 (a
+  `ctx : int` parameter retype on `param`/`capture`, and a missing
+  `Captures` defopaque) inside otherwise-fixed tourist; secondary
+  handle leaks inside plutovg / raylib / rtaudio.
 - ~~[tourist-middleware-takes-req-not-ctx](reported/tourist-middleware-takes-req-not-ctx.md)~~
   -- **closed in `tur-tourist` v0.2.0** (Ctx-based `use!`, `ctx-attr-*`,
   `ctx-add-header!`, `use-after!`); see
@@ -73,8 +80,78 @@ Pure spice-side work; no compiler dependencies.
   "pay rent")
 
 **Order:** S1 callbacks (done) -> tourist ABI redesign (done) ->
-S2 handles in httpd / osc / rtmidi (done) -> per-spice uplift phases
-and S3 work on the request path.
+S2 handles in httpd / osc / rtmidi (done) -> S3 request-path
+returns (done) -> per-spice uplift phases and the residual S4 /
+secondary handle work.
+
+### Not a blocker: "M3 struct-carrier handling of generic ok/err"
+
+The M3 report's audit floor mentions a 10-crossing "bucket C"
+covering inline-C `tur_ok`/`tur_some` construction at the
+typeclass-dispatch boundary (see
+[reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md
+"Update 2026-06-17"](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)).
+A natural-but-wrong read is "generic `(ok v)` / `(some v)` from a
+typeclass instance doesn't work cleanly, so any new spice surface
+that returns `(Result T E)` / `(Option T)` is gated on M3
+finishing." That conclusion is **incorrect** and the next engineer
+should not treat it as a reason to defer S3-style work. Evidence:
+
+1. **Primitive payloads through return-typeclass dispatch already
+   monomorphize by-value.**
+   `tests/fixtures/typeclass-return-dispatch-result-wrapped/input.tur`
+   covers `(definstance Dec [int] (dec [v] (ok v)))` dispatched via
+   `(:: (dec 42) (Result int cstr))` and back through `ok-val`;
+   suite green, audit shows 2 -> 0 crossings since #399 (M3 report
+   "Update 2026-06-17 (M2-completion ...)" entry).
+2. **By-value-struct payloads through polymorphic `ok`/`err` work.**
+   `tests/fixtures/polymorphic-ok-err-value-struct-payload/input.tur`
+   covers `(ok (make-struct User ...))` and `(err (make-struct Errm
+   ...))` end-to-end, including struct-field access on the unwrapped
+   value.
+3. **Constrained-generic helpers over collections monomorphize.**
+   `tests/fixtures/m5-instance-spec-constraint-var/input.tur` covers
+   the `(definstance MyEq [Vec] [(Eq A)] ...)` -> sibling
+   `(callee [A] [(Eq A)] [x : (Vec A) ...])` composition the M3
+   report calls out as previously broken; audit 4 -> 0 since #399.
+4. **The pure-Turmeric rewrite pattern is in stdlib.**
+   `Serializable [Pair]` in `stdlib/serial.tur` was the worked
+   example: an inline-C instance body rewritten to a pure-Turmeric
+   body that dispatches a recursive `(.fst x)` / `(.snd x)`
+   through declared `(Serializable A)` constraints, so M4c Path A
+   mints `serialize_Pair__spec__(Pair__int__int)` and the carrier
+   crossing falls away. The fixture
+   `tests/fixtures/serial-composite-instances` validates byte-layout
+   equivalence with the prior inline-C body.
+5. **Already-shipped spice surfaces use exactly this pattern.**
+   `tur-regex` v0.2.0 (`regex-compile` -> `(Result Regex cstr)`,
+   `regex-match` -> `(Result Match cstr)`), `tur-tourist` v0.2.0
+   (`param`/`capture` -> `(Result cstr cstr)`), and `tur-httpd`
+   v0.2.0 (`req-header` -> `(Result cstr cstr)`) all ship typed
+   Result returns through the spice public surface. None of them
+   needed an M3 change to land.
+
+The narrow case that genuinely is permanent at the carrier boundary
+is **`Serializable [Option]`-shaped instances whose `none` arm
+relies on `none` being the NULL int64**: the dispatch boundary
+derefs `*(Option__int *)(intptr_t)(0)` before the body's NULL guard
+runs, so a pure-Turmeric rewrite segfaults. This is **out of scope
+for any new spice S3 work**: spice surfaces returning `(Option T)` /
+`(Result T E)` from a wrapper that calls a C function and constructs
+the value at the wrapper boundary are not on this path. If a future
+S3 task is tempted to rewrite an `Option`-returning typeclass
+instance body in pure Turmeric across the carrier boundary, see the
+M3 report's "Resolution 2026-06-15 (`Serializable [Option]`
+deliberately LEFT inline-C)" entry for the segfault repro before
+declaring it a follow-up.
+
+Quick decision: writing a spice helper that returns
+`(Result T E)` / `(Option T)`? Just write it; declare the return
+type; do not gate on M3. Writing an inline-C instance body for an
+**existing** typeclass method that returns `(Option T)` and whose
+`none` arm crosses the dispatch boundary? Use inline-C; flag the
+carrier boundary in a `;;` NOTE; do not "clean it up" later without
+reading the segfault repro first.
 
 ---
 
