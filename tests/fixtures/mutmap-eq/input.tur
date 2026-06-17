@@ -19,9 +19,10 @@
     (mutmap-set! c 3 3 300)
     (println (mutmap-eq? a b (fn [x y] (= x y))))   ; true
     (println (mutmap-eq? a c (fn [x y] (= x y))))   ; false
-    ;; Same content via the typeclass dispatch (uses (= x y))
-    (println (.eq? (:: a (MutableMap int int))
-                   (:: b (MutableMap int int))))     ; true
+    ;; Same content via the typeclass dispatch (uses (= x y)).
+    ;; a/b carry their (MutableMap int int) type from mutmap-new, so .eq?
+    ;; dispatches with no ascription -- mirroring the Eq[Vec] surface.
+    (println (.eq? a b))     ; true
     (mutmap-free a)
     (mutmap-free b)
     (mutmap-free c))
