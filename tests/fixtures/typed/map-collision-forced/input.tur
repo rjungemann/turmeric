@@ -4,13 +4,19 @@
 ;; so the MapKey comparator is never invoked -- it cannot prove the comparator
 ;; is wired.  This fixture drives the explicit-hash content API with BOTH keys
 ;; pinned to hash 0, forcing a HAMT collision chain.  The comparator
-;; (mk-cmp, the carrier-ABI int comparator) is what keeps the two distinct keys
-;; distinct and matches a key for update inside the chain.  If the comparator
-;; were dropped (the "works by luck" shim), distinct keys at the same hash would
-;; alias and the counts/values below would be wrong.
+;; (tur-int-carrier-eq?, the carrier-ABI int comparator that MapKey[int]'s
+;; mk-cmp returns the address of) is what keeps the two distinct keys distinct
+;; and matches a key for update inside the chain.  If the comparator were dropped
+;; (the "works by luck" shim), distinct keys at the same hash would alias and the
+;; counts/values below would be wrong.
+;;
+;; The public raw map-*-eq API takes a captureless comparator function typed
+;; (c-fn [K K] bool), so pass tur-int-carrier-eq? directly rather than mk-cmp's
+;; erased :int address (see
+;; docs/reported/raw-map-eq-api-segfaults-on-capturing-comparator.md).
 
 (defn run [] : int
-  (let [cmp (mk-cmp 0)
+  (let [cmp tur-int-carrier-eq?
         ;; two distinct int keys, both hashed to 0 -> collision chain of 2
         m  (map-assoc-eq (:: (map-new) (Map int int)) 0 7 70 cmp)
         m2 (map-assoc-eq m 0 8 80 cmp)

@@ -1,5 +1,26 @@
 # Raw `map-*-eq` API segfaults when handed a capturing closure comparator (compiled path)
 
+> **RESOLVED 2026-06-17 (direction 1, via the compiler enabler).** The public
+> raw `map-*-eq` `keyeq` parameter is now typed `(c-fn [K K] bool)`, so the
+> existing C-function-pointer checker (`elab_call.c`) rejects a capturing closure
+> at **compile time** with a clear diagnostic instead of letting it segfault at
+> runtime. The enabling sub-task identified in the 2026-06-17 investigation
+> below -- "a type variable inside `(c-fn ...)` does not unify with the outer
+> tyvar" -- was fixed first: the c-fn argument/result signature check now treats
+> a tyvar position in the *expected* `c-fn` as a wildcard (it still enforces the
+> no-environment and arity contracts), so `(c-fn [K K] bool)` works on the
+> generic `map-assoc-eq [K V]` for `int`, `cstr`, and `float` keys alike.
+> `mk-cmp`'s carrier-ABI `:int` address was left as-is (it feeds the internal,
+> untyped `-eq-o` variants the typeclass macros use); the one fixture that passed
+> `(mk-cmp 0)` to the *public* API (`typed/map-collision-forced`) now passes the
+> captureless `tur-int-carrier-eq?` that `mk-cmp[int]` returns the address of --
+> same comparator, honest type. Verified: the capturing-closure repro is a clean
+> compile error; `cstr` / `int` captureless comparators and the forced-collision
+> test pass on both `--interpret` and `tur run`; `tests/run.sh` and
+> `tests/run-turi.sh` stay green with **zero snapshot churn** (no affected
+> fixture has an `expected.c`). Moving to `docs/archive/` per the resolved-report
+> rule.
+
 **Summary:** The raw content-keyed map API (`map-assoc-eq` / `map-get-eq` /
 `map-has-eq?` / `map-dissoc-eq`, stdlib/map.tur) declares its `keyeq` parameter
 *untyped* and its inline-C body casts it straight to a bare C function pointer
