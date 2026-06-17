@@ -2437,10 +2437,13 @@ typedef struct Box {
 } Box;
 
 
+#ifndef TUR_TY_Box__cstr
+#define TUR_TY_Box__cstr
 typedef struct Box__cstr {
     int64_t val;
     int64_t tag;
 } Box__cstr;
+#endif
 
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {

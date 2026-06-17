@@ -2433,16 +2433,22 @@ typedef struct MutableMap {
 } MutableMap;
 
 
+#ifndef TUR_TY_Result__Device__int
+#define TUR_TY_Result__Device__int
 typedef struct Result__Device__int {
     bool is_ok;
     int64_t ok_val;
     int64_t err_val;
 } Result__Device__int;
+#endif
 
+#ifndef TUR_TY_Option__Device
+#define TUR_TY_Option__Device
 typedef struct Option__Device {
     bool is_some;
     int64_t value;
 } Option__Device;
+#endif
 
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
