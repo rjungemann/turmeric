@@ -94,6 +94,60 @@ use (the typed `map-assoc`/`map-get`/... macros always feed `mk-cmp`'s C address
   global map -- and passes on both paths; it should stay green.
 - `bash tests/run.sh` and `bash tests/run-turi.sh` stay green.
 
+## Investigation 2026-06-17 -- both directions are blocked on deeper work
+
+An attempt at direction (1) (type `keyeq` so the checker rejects capturing
+closures) found the clean fix is **not** focused -- it is entangled with the
+carrier-ABI type erasure and a compiler limitation. Three concrete blockers,
+each reproduced:
+
+1. **`mk-cmp` returns `:int`, not a function type.** The public raw API
+   legitimately accepts *both* a captureless fn (e.g. `tur-cstr-key-eq?`) **and**
+   `mk-cmp`'s C-address `:int` (see `tests/fixtures/typed/map-collision-forced`,
+   which passes `(mk-cmp 0)`). Typing `keyeq` as any function type rejects the
+   `:int` address path, so `mk-cmp` would have to be retyped across the whole
+   `MapKey` typeclass (method + int/bool/cstr/float32/float instances + the
+   `native_mk_cmp_*` overrides in `src/main.c` + user struct-key instances in
+   fixtures).
+
+2. **Carrier comparators are int-typed except `cstr`.** `tur-int-carrier-eq?` /
+   `tur-f32-carrier-eq?` / `tur-f64-carrier-eq?` are all `(fn [int int] bool)`
+   (they bit-reinterpret the int64 carrier word), while `tur-cstr-key-eq?` is
+   `(fn [cstr cstr] bool)`. So the comparator's true type is **not** uniformly
+   `(... [K K] ...)` -- a `float` key's comparator is `[int int]`, not
+   `[float float]`. A single typed `mk-cmp` signature cannot describe all
+   instances honestly.
+
+3. **A type variable inside `(c-fn ...)` does not unify with the outer tyvar.**
+   Typing `keyeq : (c-fn [K K] bool)` on the generic `map-assoc-eq [K V]`
+   resolved to `(c-fn [int int] bool)` regardless of the map's `K` (it ignored
+   `K = cstr` for `tce4-map-cstr-key`). `c-fn` is for concrete C-ABI types; it is
+   untested with type variables (zero `c-fn` uses in stdlib). And a plain
+   non-`^fat` `(fn [K K] bool)` param boxes the comparator into a *fat aggregate*
+   that the inline-C `(void *)(intptr_t)keyeq` cannot cast -- breaking **all**
+   callers, not just capturing ones.
+
+**Consequence.** The c-fn rejection path (`elab_call.c:2896`, the existing
+"argument N is a capturing closure, but the parameter is a C function pointer"
+diagnostic) *does* fire correctly when `keyeq` is a concrete `(c-fn [int int]
+bool)` -- the capturing-closure repro becomes a clean compile error. But making
+that typing correct for *all* key types requires either:
+
+- **(1')** compiler support for type variables inside `(c-fn [...] ...)` (so
+  `(c-fn [K K] bool)` binds `K` to the map's key type), **plus** retyping
+  `mk-cmp` to return `(c-fn [a a] bool)` (benign for `float`, whose body returns
+  an int-carrier comparator the HAMT only ever calls int-level); or
+- **(2)** the full fat-dispatch rework: make `keyeq` `^fat`, have `mk-cmp` return
+  the comparator *function* (not its `:int` address), fat-dispatch it in the
+  inline-C / thread a ctx through `tur_hamt_*_eq` on the compiled path (the
+  `_eq_ctx` family already exists for the interpreter).
+
+Both are sizable Track A / typeclass-ABI changes with broad fixture-snapshot
+churn -- **not** the "smaller, safer" change the original directions implied. The
+enabling sub-task is **(1')'s compiler half**: support tyvars in `c-fn`. With
+that, direction (1) becomes a contained stdlib change. Recommend sequencing the
+compiler support first.
+
 ## Notes
 
 Found while adding interpreter-reentrancy coverage for TI10 Tier B
