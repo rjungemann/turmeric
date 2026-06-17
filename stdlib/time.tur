@@ -1,315 +1,287 @@
 ;;; tur/time -- Time capability implementation using platform time functions.
 ;;;
-;;; Implements the Time capability typeclass for real clock access.
+;;; Implements the Time capability typeclass for real clock access, plus
+;;; direct helpers (sleep-ms / get-time-ms / get-cpu-time).
+;;;
+;;; Not auto-loaded -- import the names you need explicitly:
+;;;
+;;;   (import time :refer [sleep-ms get-time-ms])
 ;;;
 ;;; Since: Phase 16
 ;; Phase 16: Real Time implementation
 ;;
-;; Implementation of Time capability using platform time functions
-(extern-c time [^ptr] :ptr)
+;; Phase M (time-as-import-module): wrapped in (defmodule time ...) so user
+;; code can `(import time :refer [sleep-ms ...])`.  The module name is `time`
+;; so it resolves to stdlib/time.tur via the import stdlib-dir fallback.  It is
+;; intentionally NOT in main.c's auto-load list -- keeping every program's
+;; generated C free of the unused time helpers and its codegen snapshots stable.
+(defmodule time
+  (export Time
+          Real-Time
+          Real-Time-free
+          HighRes-Time
+          HighRes-Time-free
+          Mock-Time
+          Mock-Time-free
+          mock-time-set
+          mock-time-get
+          get-time-ms
+          sleep-ms
+          get-cpu-time)
 
-(extern-c clock [^] :int)
-
-(extern-c nanosleep [^ptr ^ptr] :int)
-
-(extern-c malloc [^ptr size] :ptr)
-
-(extern-c free [^ptr p] :void)
-;;; Real-Time -- create a wall-clock Time capability backed by libc time().
-;;;
-;;; Returns:
-;;;   A heap-allocated Time struct with:
-;;;     now   -- returns milliseconds since the Unix epoch (second precision).
-;;;     sleep -- sleeps for the requested number of milliseconds via nanosleep,
-;;;              retrying on EINTR.
-;;;   Free with Real-Time-free when done.
-;;;
-;;; Example:
-;;;   (let [t (Real-Time)] ...)
-;;;
-;;; Since: Phase 16
-;; Real-Time implementation
-;; Uses libc time() and nanosleep()
-
-(defn Real-Time []
+  ;; File-scope C helpers for the Time-capability constructors below.  The
+  ;; now/sleep implementations MUST live at file scope: a Time struct stores
+  ;; their addresses and outlives the constructor call, so they cannot be
+  ;; nested functions (a nested function's address dangles once its enclosing
+  ;; frame returns).  The inline-C constructors just malloc a struct and point
+  ;; its slots at these.  libc time()/clock()/nanosleep() come from the
+  ;; <time.h>/<unistd.h> preamble includes.
   ```c
-  /* Define the Time struct */
-  typedef struct Time Time;
-  struct Time {
-      int (*now)(void);
-      void (*sleep)(int ms);
-  };
+  typedef struct __tur_time_cap { int (*now)(void); void (*sleep)(int ms); } __tur_time_cap;
+  typedef struct __tur_mock_cap { int (*now)(void); void (*sleep)(int ms); int current_time; } __tur_mock_cap;
 
-  /* now implementation - returns milliseconds since epoch */
-  static int time_now(void) {
+  static int __tur_real_time_now(void) {
       time_t now = time(NULL);
-      /* Convert seconds to milliseconds (approximate) */
-      return (int)(now * 1000);
+      return (int)(now * 1000);  /* seconds -> ms (second precision) */
   }
-
-  /* sleep implementation - sleeps for ms milliseconds */
-  static void time_sleep(int ms) {
+  static void __tur_real_time_sleep(int ms) {
       if (ms <= 0) return;
-
-      /* Convert ms to seconds and nanoseconds */
-      long seconds = ms / 1000;
-      long nanoseconds = (ms % 1000) * 1000000;
-
-      struct timespec req = {.tv_sec = seconds, .tv_nsec = nanoseconds};
+      struct timespec req = {.tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000};
       struct timespec rem;
-
-      while (nanosleep(&req, &rem) == -1) {
-          /* If interrupted, sleep for remaining time */
-          req = rem;
-      }
+      while (nanosleep(&req, &rem) == -1) { req = rem; }
   }
 
-  /* Create and populate the capability struct */
-  Time* time = (Time*)malloc(sizeof(Time));
-  time->now = time_now;
-  time->sleep = time_sleep;
-  return (void*)time;
-  ```)
-;;; Real-Time-free -- release a Time capability created by Real-Time.
-;;;
-;;; Parameters:
-;;;   t -- the Time pointer returned by Real-Time.
-;;;
-;;; Since: Phase 16
-;; Free a Real-Time
-
-(defn Real-Time-free [t]
-  ```c
-  free(t);
-  ```)
-;; ============================================================================
-;; High-resolution Time implementation
-;; ============================================================================
-;;; HighRes-Time -- create a CPU-clock Time capability backed by clock().
-;;;
-;;; Returns:
-;;;   A heap-allocated Time struct with:
-;;;     now   -- returns CPU time in milliseconds (based on CLOCKS_PER_SEC).
-;;;     sleep -- sleeps for the requested number of milliseconds via nanosleep.
-;;;   Note: now measures CPU time, not wall-clock time.
-;;;   Free with HighRes-Time-free when done.
-;;;
-;;; Example:
-;;;   (let [t (HighRes-Time)] ...)
-;;;
-;;; Since: Phase 16
-;; HighRes-Time implementation - uses clock() for higher precision
-;; Note: clock() may not be suitable for wall-clock time, but works for timing
-
-
-(defn HighRes-Time []
-  ```c
-  typedef struct Time Time;
-  struct Time {
-      int (*now)(void);
-      void (*sleep)(int ms);
-  };
-
-  /* now implementation - returns CPU time in milliseconds */
-  static int hires_now(void) {
+  static int __tur_hires_time_now(void) {
       clock_t now = clock();
-      /* CLOCKS_PER_SEC is typically 1000000 */
       return (int)(now * 1000 / CLOCKS_PER_SEC);
   }
-
-  /* sleep implementation */
-  static void hires_sleep(int ms) {
+  static void __tur_hires_time_sleep(int ms) {
       if (ms <= 0) return;
-
-      long seconds = ms / 1000;
-      long nanoseconds = (ms % 1000) * 1000000;
-
-      struct timespec req = {.tv_sec = seconds, .tv_nsec = nanoseconds};
+      struct timespec req = {.tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000};
       struct timespec rem;
-
-      while (nanosleep(&req, &rem) == -1) {
-          req = rem;
-      }
+      while (nanosleep(&req, &rem) == -1) { req = rem; }
   }
 
-  /* Create and populate the capability struct */
-  Time* time = (Time*)malloc(sizeof(Time));
-  time->now = hires_now;
-  time->sleep = hires_sleep;
-  return (void*)time;
-  ```)
-;;; HighRes-Time-free -- release a Time capability created by HighRes-Time.
-;;;
-;;; Parameters:
-;;;   t -- the Time pointer returned by HighRes-Time.
-;;;
-;;; Since: Phase 16
-;; Free a HighRes-Time
-
-(defn HighRes-Time-free [t]
-  ```c
-  free(t);
-  ```)
-;; ============================================================================
-;; Mock Time implementation (for testing)
-;; ============================================================================
-;;; Mock-Time -- create a controllable Time capability for testing.
-;;;
-;;; Returns:
-;;;   A heap-allocated Time struct backed by an internal integer counter
-;;;   (initially 0 ms).  now returns the current counter value; sleep
-;;;   advances the counter by the requested amount without blocking.
-;;;   Use mock-time-set and mock-time-get to inspect and manipulate time.
-;;;   Free with Mock-Time-free when done.
-;;;
-;;; Example:
-;;;   (let [t (Mock-Time)] (mock-time-set t 5000) ...)
-;;;
-;;; Since: Phase 16
-;; Mock-Time implementation - time can be controlled manually
-;; Useful for testing time-dependent code
-
-
-(defn Mock-Time []
-  ```c
-  /* Define the Time struct */
-  typedef struct MockTime MockTime;
-  struct MockTime {
-      int (*now)(void);
-      void (*sleep)(int ms);
-      int current_time;  /* Current mock time in milliseconds */
-  };
-
-  static MockTime* mock_time = NULL;
-
-  /* now implementation - returns current mock time */
-  static int mock_now(void) {
-      if (!mock_time) return 0;
-      return mock_time->current_time;
+  /* Mock clock: a single process-wide instance the now/sleep closures share. */
+  static __tur_mock_cap *__tur_mock_time_singleton = NULL;
+  static int __tur_mock_time_now(void) {
+      return __tur_mock_time_singleton ? __tur_mock_time_singleton->current_time : 0;
   }
-
-  /* sleep implementation - advances mock time */
-  static void mock_sleep(int ms) {
-      if (!mock_time) return;
-      mock_time->current_time += ms;
+  static void __tur_mock_time_sleep(int ms) {
+      if (__tur_mock_time_singleton) __tur_mock_time_singleton->current_time += ms;
   }
+  ```
 
-  /* Create and populate the capability struct */
-  mock_time = (MockTime*)malloc(sizeof(MockTime));
-  mock_time->current_time = 0;
+  ;;; Time -- opaque handle to a Time capability struct (now/sleep closures).
+  ;;;
+  ;;; Created by Real-Time / HighRes-Time / Mock-Time; released by the matching
+  ;;; *-free helper.
+  ;;;
+  ;;; Since: Phase 16
+  (defopaque Time :ptr<void>)
 
-  Time* time = (Time*)malloc(sizeof(Time));
-  time->now = mock_now;
-  time->sleep = mock_sleep;
-  return (void*)time;
-  ```)
-;;; Mock-Time-free -- release a Time capability created by Mock-Time.
-;;;
-;;; Parameters:
-;;;   t -- the Time pointer returned by Mock-Time.
-;;;
-;;; Since: Phase 16
-;; Free a Mock-Time
+  ;;; Real-Time -- create a wall-clock Time capability backed by libc time().
+  ;;;
+  ;;; Returns:
+  ;;;   A heap-allocated Time struct with:
+  ;;;     now   -- returns milliseconds since the Unix epoch (second precision).
+  ;;;     sleep -- sleeps for the requested number of milliseconds via nanosleep,
+  ;;;              retrying on EINTR.
+  ;;;   Free with Real-Time-free when done.
+  ;;;
+  ;;; Example:
+  ;;;   (let [t (Real-Time)] ...)
+  ;;;
+  ;;; Since: Phase 16
+  ;; Real-Time implementation -- uses libc time() and nanosleep()
+  (defn Real-Time [] : Time
+    ```c
+    __tur_time_cap *cap = (__tur_time_cap *)malloc(sizeof(*cap));
+    cap->now = __tur_real_time_now;
+    cap->sleep = __tur_real_time_sleep;
+    return (int64_t)(intptr_t)cap;
+    ```)
 
-(defn Mock-Time-free [t]
-  ```c
-  free(t);
-  ```)
-;;; mock-time-set -- set the current time on a Mock-Time instance.
-;;;
-;;; Parameters:
-;;;   t        -- the Mock-Time pointer.
-;;;   new_time -- the new time value in milliseconds.
-;;;
-;;; Example:
-;;;   (mock-time-set t 10000)  ; set mock clock to 10 seconds
-;;;
-;;; Since: Phase 16
-;; Set mock time to a specific value (in milliseconds)
-;; Note: This modifies the global mock time state
+  ;;; Real-Time-free -- release a Time capability created by Real-Time.
+  ;;;
+  ;;; Parameters:
+  ;;;   t -- the Time pointer returned by Real-Time.
+  ;;;
+  ;;; Since: Phase 16
+  ;; Free a Real-Time
+  (defn Real-Time-free [t : Time] : void
+    ```c
+    free((void*)(intptr_t)t);
+    ```)
 
-(defn mock-time-set [t new_time]
-  ```c
-  typedef struct MockTime MockTime;
-  MockTime* mock_time = (MockTime*)t;
-  mock_time->current_time = new_time;
-  ```)
-;;; mock-time-get -- read the current time from a Mock-Time instance.
-;;;
-;;; Parameters:
-;;;   t -- the Mock-Time pointer.
-;;;
-;;; Returns:
-;;;   The current mock time in milliseconds as an int.
-;;;
-;;; Example:
-;;;   (mock-time-get t)  ; => 10000
-;;;
-;;; Since: Phase 16
-;; Get current mock time
+  ;; ============================================================================
+  ;; High-resolution Time implementation
+  ;; ============================================================================
+  ;;; HighRes-Time -- create a CPU-clock Time capability backed by clock().
+  ;;;
+  ;;; Returns:
+  ;;;   A heap-allocated Time struct with:
+  ;;;     now   -- returns CPU time in milliseconds (based on CLOCKS_PER_SEC).
+  ;;;     sleep -- sleeps for the requested number of milliseconds via nanosleep.
+  ;;;   Note: now measures CPU time, not wall-clock time.
+  ;;;   Free with HighRes-Time-free when done.
+  ;;;
+  ;;; Example:
+  ;;;   (let [t (HighRes-Time)] ...)
+  ;;;
+  ;;; Since: Phase 16
+  ;; HighRes-Time implementation -- uses clock() for higher precision.
+  ;; Note: clock() measures CPU time, not wall-clock time.
+  (defn HighRes-Time [] : Time
+    ```c
+    __tur_time_cap *cap = (__tur_time_cap *)malloc(sizeof(*cap));
+    cap->now = __tur_hires_time_now;
+    cap->sleep = __tur_hires_time_sleep;
+    return (int64_t)(intptr_t)cap;
+    ```)
 
-(defn mock-time-get [t]
-  ```c
-  typedef struct MockTime MockTime;
-  MockTime* mock_time = (MockTime*)t;
-  return mock_time->current_time;
-  ```)
-;; ============================================================================
-;; Helper functions for direct time operations
-;; ============================================================================
-;;; get-time-ms -- return the current wall-clock time in milliseconds since epoch.
-;;;
-;;; Returns:
-;;;   Seconds since the Unix epoch multiplied by 1000 (second precision).
-;;;
-;;; Example:
-;;;   (get-time-ms)  ; => 1747123456000
-;;;
-;;; Since: Phase 16
-;; Get current time in milliseconds since epoch
+  ;;; HighRes-Time-free -- release a Time capability created by HighRes-Time.
+  ;;;
+  ;;; Parameters:
+  ;;;   t -- the Time pointer returned by HighRes-Time.
+  ;;;
+  ;;; Since: Phase 16
+  ;; Free a HighRes-Time
+  (defn HighRes-Time-free [t : Time] : void
+    ```c
+    free((void*)(intptr_t)t);
+    ```)
 
+  ;; ============================================================================
+  ;; Mock Time implementation (for testing)
+  ;; ============================================================================
+  ;;; Mock-Time -- create a controllable Time capability for testing.
+  ;;;
+  ;;; Returns:
+  ;;;   A heap-allocated Time struct backed by an internal integer counter
+  ;;;   (initially 0 ms).  now returns the current counter value; sleep
+  ;;;   advances the counter by the requested amount without blocking.
+  ;;;   Use mock-time-set and mock-time-get to inspect and manipulate time.
+  ;;;   Free with Mock-Time-free when done.
+  ;;;
+  ;;;   Note: the now/sleep closures read a single process-wide mock clock, so
+  ;;;   only one Mock-Time should be live at a time.
+  ;;;
+  ;;; Example:
+  ;;;   (let [t (Mock-Time)] (mock-time-set t 5000) ...)
+  ;;;
+  ;;; Since: Phase 16
+  ;; Mock-Time implementation -- time advances only via sleep / mock-time-set.
+  (defn Mock-Time [] : Time
+    ```c
+    __tur_mock_cap *cap = (__tur_mock_cap *)malloc(sizeof(*cap));
+    cap->now = __tur_mock_time_now;
+    cap->sleep = __tur_mock_time_sleep;
+    cap->current_time = 0;
+    __tur_mock_time_singleton = cap;
+    return (int64_t)(intptr_t)cap;
+    ```)
 
-(defn get-time-ms []
-  ```c
-  time_t now = time(NULL);
-  return (int)(now * 1000);
-  ```)
-;;; sleep-ms -- suspend execution for a given number of milliseconds.
-;;;
-;;; Parameters:
-;;;   ms -- number of milliseconds to sleep (no-op if <= 0).
-;;;
-;;; Example:
-;;;   (sleep-ms 250)  ; sleep for a quarter second
-;;;
-;;; Since: Phase 16
-;; Sleep for specified milliseconds
+  ;;; Mock-Time-free -- release a Time capability created by Mock-Time.
+  ;;;
+  ;;; Parameters:
+  ;;;   t -- the Time pointer returned by Mock-Time.
+  ;;;
+  ;;; Since: Phase 16
+  ;; Free a Mock-Time
+  (defn Mock-Time-free [t : Time] : void
+    ```c
+    __tur_mock_cap *cap = (__tur_mock_cap *)(intptr_t)t;
+    if (__tur_mock_time_singleton == cap) __tur_mock_time_singleton = NULL;
+    free((void*)cap);
+    ```)
 
-(defn sleep-ms [ms]
-  ```c
-  if (ms <= 0) return;
-  long seconds = ms / 1000;
-  long nanoseconds = (ms % 1000) * 1000000;
-  struct timespec req = {.tv_sec = seconds, .tv_nsec = nanoseconds};
-  struct timespec rem;
-  while (nanosleep(&req, &rem) == -1) {
-      req = rem;
-  }
-  ```)
-;;; get-cpu-time -- return the current process CPU time in milliseconds.
-;;;
-;;; Returns:
-;;;   clock() * 1000 / CLOCKS_PER_SEC -- CPU milliseconds consumed by
-;;;   the current process.
-;;;
-;;; Example:
-;;;   (get-cpu-time)  ; => 42  (42 ms of CPU time used so far)
-;;;
-;;; Since: Phase 16
-;; Get CPU time in milliseconds
+  ;;; mock-time-set -- set the current time on a Mock-Time instance.
+  ;;;
+  ;;; Parameters:
+  ;;;   t        -- the Mock-Time pointer.
+  ;;;   new_time -- the new time value in milliseconds.
+  ;;;
+  ;;; Example:
+  ;;;   (mock-time-set t 10000)  ; set mock clock to 10 seconds
+  ;;;
+  ;;; Since: Phase 16
+  ;; Set mock time to a specific value (in milliseconds)
+  (defn mock-time-set [t : Time new_time : int] : void
+    ```c
+    __tur_mock_cap *cap = (__tur_mock_cap *)(intptr_t)t;
+    cap->current_time = (int)new_time;
+    ```)
 
-(defn get-cpu-time []
-  ```c
-  clock_t now = clock();
-  return (int)(now * 1000 / CLOCKS_PER_SEC);
-  ```)
+  ;;; mock-time-get -- read the current time from a Mock-Time instance.
+  ;;;
+  ;;; Parameters:
+  ;;;   t -- the Mock-Time pointer.
+  ;;;
+  ;;; Returns:
+  ;;;   The current mock time in milliseconds as an int.
+  ;;;
+  ;;; Example:
+  ;;;   (mock-time-get t)  ; => 10000
+  ;;;
+  ;;; Since: Phase 16
+  ;; Get current mock time
+  (defn mock-time-get [t : Time] : int
+    ```c
+    __tur_mock_cap *cap = (__tur_mock_cap *)(intptr_t)t;
+    return cap->current_time;
+    ```)
+
+  ;; ============================================================================
+  ;; Helper functions for direct time operations
+  ;; ============================================================================
+  ;;; get-time-ms -- return the current wall-clock time in milliseconds since epoch.
+  ;;;
+  ;;; Returns:
+  ;;;   Seconds since the Unix epoch multiplied by 1000 (second precision).
+  ;;;
+  ;;; Example:
+  ;;;   (get-time-ms)  ; => 1747123456000
+  ;;;
+  ;;; Since: Phase 16
+  ;; Get current time in milliseconds since epoch
+  (defn get-time-ms [] : int
+    ```c
+    time_t now = time(NULL);
+    return (int64_t)now * 1000;  /* full 64-bit ms; (int) here would overflow */
+    ```)
+
+  ;;; sleep-ms -- suspend execution for a given number of milliseconds.
+  ;;;
+  ;;; Parameters:
+  ;;;   ms -- number of milliseconds to sleep (no-op if <= 0).
+  ;;;
+  ;;; Example:
+  ;;;   (sleep-ms 250)  ; sleep for a quarter second
+  ;;;
+  ;;; Since: Phase 16
+  ;; Sleep for specified milliseconds
+  (defn sleep-ms [ms : int] : void
+    ```c
+    if (ms <= 0) return;
+    struct timespec req = {.tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000};
+    struct timespec rem;
+    while (nanosleep(&req, &rem) == -1) { req = rem; }
+    ```)
+
+  ;;; get-cpu-time -- return the current process CPU time in milliseconds.
+  ;;;
+  ;;; Returns:
+  ;;;   clock() * 1000 / CLOCKS_PER_SEC -- CPU milliseconds consumed by
+  ;;;   the current process.
+  ;;;
+  ;;; Example:
+  ;;;   (get-cpu-time)  ; => 42  (42 ms of CPU time used so far)
+  ;;;
+  ;;; Since: Phase 16
+  ;; Get CPU time in milliseconds
+  (defn get-cpu-time [] : int
+    ```c
+    clock_t now = clock();
+    return (int)(now * 1000 / CLOCKS_PER_SEC);
+    ```))

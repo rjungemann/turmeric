@@ -1,0 +1,15 @@
+;; time-as-import-module: stdlib/time.tur is wrapped in (defmodule time ...) so
+;; user code can import it without it being auto-loaded into every program.
+;; Exercises the direct helper sleep-ms plus the Mock-Time capability (the only
+;; deterministic clock; Real-Time/get-time-ms are wall-clock and unprintable).
+(defmodule time-import
+  (import time :refer [Mock-Time Mock-Time-free mock-time-set mock-time-get sleep-ms])
+  (defn main [] : int
+    (sleep-ms 1)
+    (let [mt (Mock-Time)]
+      (mock-time-set mt 1234)
+      (println (mock-time-get mt))
+      (mock-time-set mt 5678)
+      (println (mock-time-get mt))
+      (Mock-Time-free mt))
+    0))
