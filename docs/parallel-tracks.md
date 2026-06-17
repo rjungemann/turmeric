@@ -52,10 +52,12 @@ phases.
 Pure spice-side work; no compiler dependencies.
 
 - [spices-int-stand-in-audit-2026-06-14](reported/spices-int-stand-in-audit-2026-06-14.md)
-  (report) -- S1 callbacks closed (rtmidi/osc/httpd already shipped
-  `c-fn` types pre-audit; tourist closed in v0.2.0). Open follow-ups:
-  S2 handles in httpd/osc/rtmidi, S3 result/option on
-  param/capture/req-header, S4 cons lists in tourist internals.
+  (report) -- S1 callbacks closed; S2 handles in httpd / osc / rtmidi
+  closed in their respective v0.2.0 releases (httpd's Request/Response/
+  Wbuf are also re-used by tourist v0.2.1 so the framework boundary
+  has zero cross-spice casts). Open follow-ups: S3 result/option on
+  `param`/`capture`/`req-header`, S4 cons lists in tourist internals,
+  secondary handle leaks inside plutovg / raylib / rtaudio.
 - ~~[tourist-middleware-takes-req-not-ctx](reported/tourist-middleware-takes-req-not-ctx.md)~~
   -- **closed in `tur-tourist` v0.2.0** (Ctx-based `use!`, `ctx-attr-*`,
   `ctx-add-header!`, `use-after!`); see
@@ -65,7 +67,8 @@ Pure spice-side work; no compiler dependencies.
   "pay rent")
 
 **Order:** S1 callbacks (done) -> tourist ABI redesign (done) ->
-remaining S2/S3 in httpd/osc/rtmidi -> per-spice uplift phases.
+S2 handles in httpd / osc / rtmidi (done) -> per-spice uplift phases
+and S3 work on the request path.
 
 ## Track E -- Interpreter parity (post-v1)
 

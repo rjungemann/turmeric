@@ -58,13 +58,14 @@ These are the most dangerous: handler signature is documented in prose only,
 and an exported call site can pass a function of any shape with no
 diagnostic.
 
-Status (2026-06-16): rtmidi / osc / httpd already shipped `c-fn`-typed
-callbacks before this audit was filed (the audit caught these stale).
-~~`tourist/middleware.tur` `use!`~~ and ~~`tourist/dsl.tur`
+Status (2026-06-16): all five S1 callback findings are closed. rtmidi
+/ osc / httpd had already shipped `c-fn`-typed callbacks before the
+audit was filed (the audit caught these stale; subsequent v0.2.0
+releases further tightened their handle types -- see the per-spice
+rows below). ~~`tourist/middleware.tur` `use!`~~ and ~~`tourist/dsl.tur`
 `get!`/`post!`/`put!`/`delete!`/`any!`~~ are **fixed in `tur-tourist`
 v0.2.0** (Ctx-based shapes; see archived companion report
-`docs/archive/tourist-middleware-takes-req-not-ctx.md`). All five S1
-callback findings are now closed.
+`docs/archive/tourist-middleware-takes-req-not-ctx.md`).
 
 | File:line | Function | `:int` actually is | Should be |
 |---|---|---|---|
@@ -303,13 +304,13 @@ Middleware opaques exist, these should become `list<Route>` and
 | frame | clean |
 | glsl | clean |
 | http | clean (audited as part of tourist sweep) |
-| **httpd** | **S2 + S3** (Request/Response/Wbuf opaques + req-header result); S1 already shipped (`c-fn [int] int` handler) |
+| ~~httpd~~ | ~~S2~~ -- **fixed in `tur-httpd` v0.2.0** (`defopaque Request`, `defopaque Response`, `defopaque Wbuf` in `httpd/types`; threaded through request/response/write/server). Tourist re-exports the same types (v0.2.1) so the framework boundary has zero cross-spice casts. **S3 still open** (`req-header` returns `:int`). |
 | json | clean |
 | linalg | clean |
 | math | clean |
 | notebook | not audited (large, mostly string/parsing) |
 | ~~opengl~~ | ~~S2: 5 handle types~~ -- already fixed (7 opaques in `opengl/types.tur`) |
-| **osc** | **S1 + S2: 3 handles + 1 callback** |
+| ~~osc~~ | ~~S2: 3 handles~~ -- **fixed in `tur-osc` v0.2.0** (`defopaque Msg`/`Bundle`/`Server`/`Address` with `server-of`/`address-of` extractors). S1 callback had already shipped pre-audit. |
 | plot | clean |
 | ~~plutovg~~ | ~~S2: 5 handle types~~ -- already fixed (5 opaques in `plutovg/types.tur`); dash-array/font-cache/gradient-stops/rect remain |
 | ~~png~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Img`) |
@@ -318,7 +319,7 @@ Middleware opaques exist, these should become `list<Route>` and
 | ~~raylib~~ | ~~S2: 3 handle types~~ -- audit set fixed (`Sound`, `Music`); broad follow-up leakage in models/text/textures/camera/shapes remains |
 | ~~regex~~ | ~~S2: 1 handle type~~ -- fixed in `tur-regex` v0.2.0 |
 | ~~rtaudio~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Audio`); `DeviceInfo` handle + callback remain |
-| **rtmidi** | **S1 + S2: 2 handles + 1 callback** |
+| ~~rtmidi~~ | ~~S2: 2 handles~~ -- **fixed in `tur-rtmidi` v0.2.0** (`defopaque MidiIn`/`MidiOut` with `midi-in-of`/`midi-out-of` extractors). S1 callback had already shipped pre-audit. |
 | scscm | clean |
 | sdf-raylib | clean |
 | signal | clean |
@@ -334,13 +335,15 @@ Middleware opaques exist, these should become `list<Route>` and
 | zlib | clean |
 
 19 spices need work, 16 are clean. As of 2026-06-16: regex, sqlite, png, wav,
-postgres, valkey, rtaudio, tls, tourist (v0.2.0), plus three
-already-shipped-at-audit-time (opengl, plutovg, raylib's audited subset)
-are fixed for the public surface (12 done); **7 remain**.
-Remaining S2 work: httpd, osc, rtmidi handles (each paired with an
-S1 callback fix); follow-up handle leaks inside plutovg (dash-array,
-font-cache, gradient-stops, rect), raylib (models, text, textures, camera,
-shapes), and rtaudio (DeviceInfo, callback).
+postgres, valkey, rtaudio, tls, tourist (v0.2.0/v0.2.1), httpd (v0.2.0),
+osc (v0.2.0), rtmidi (v0.2.0), plus three already-shipped-at-audit-time
+(opengl, plutovg, raylib's audited subset) are fixed for the public
+surface (15 done); **4 remain**. All four remaining are secondary
+handle leaks inside already-fixed spices:
+plutovg (dash-array, font-cache, gradient-stops, rect),
+raylib (models, text, textures, camera, shapes),
+rtaudio (DeviceInfo, callback),
+and tourist internals (`route-*` / `router-*` / cons-list helpers).
 
 ---
 
