@@ -1,10 +1,31 @@
 ---
 title: A defstruct field typed by a bare (nullary) user type name reads back as its :int carrier, not the nominal type
 severity: medium -- silent type-erasure at every field-access site. The field is stored fine, but `(.field x)` is typed `:int` instead of the declared struct/ADT/opaque, so it cannot be passed where the declared type is expected without a re-pin `(:: (.field x) :T)`. This is the exact `:int` stand-in disease CLAUDE.md dedicates a section to -- it forces callers to either ascribe at every use or (worse) declare the field `:int` up front, exporting an API the type checker can't help with.
-status: open
+status: RESOLVED 2026-06-17 (opaque case). A bare nullary `defopaque` field
+  now reads back as the declared opaque type while storage stays the int64
+  carrier.  Regression fixture: tests/fixtures/defstruct-opaque-field-readback/.
+  The by-value struct/ADT variant below is a deeper STORAGE straddle (the slot
+  is int64 but the value is a by-value aggregate) and is scoped out to
+  docs/reported/defstruct-byvalue-struct-field-stored-as-int-carrier.md.
 discovered: 2026-06-17
 surfaced-by: turmeric-spices ECS work (E2d). A `(defopaque Tag :int)` stored in a world struct read back as `:int` from `(.tag w)`, forcing a `(:: (.Tag w) :Tag)` re-pin at every accessor. Parameterized opaques `(Tag A)` do NOT exhibit this, which is what made the asymmetry obvious.
 ---
+
+> **RESOLVED 2026-06-17 (opaque case).** `elab_defstruct`'s bare-symbol
+> user-type fallthrough (`elab_structs.c`, both field branches) now records
+> the nominal `full_type` for an opaque newtype field, so `(.field x)` reads
+> back as the opaque (e.g. `Tag`) instead of `:int` -- no `(:: ... :Tag)`
+> re-pin.  Storage is unchanged (the opaque already lowers to the int64
+> carrier), so codegen does not move; full suite green (`1661 passed`).
+>
+> The fix is gated to opaque newtypes.  The **by-value struct / ADT** variant
+> documented below (a `field : SomeStruct` whose value is a by-value
+> aggregate) is a separate, pre-existing STORAGE problem: the field slot is
+> forced to `int64_t`, so recording its by-value `full_type` would make
+> `make-struct` emit a by-value struct initializer into an int64 slot.
+> Fixing read-back and storage together there requires storing the field
+> by value (`fkind = TY_STRUCT`), tracked in
+> `docs/reported/defstruct-byvalue-struct-field-stored-as-int-carrier.md`.
 
 # Bare nullary user-type field reads back as `:int`, losing nominal identity
 

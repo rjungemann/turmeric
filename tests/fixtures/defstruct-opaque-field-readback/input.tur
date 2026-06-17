@@ -1,0 +1,20 @@
+; Regression: docs/reported/defstruct-bare-user-type-field-reads-back-as-int-carrier.md
+;
+; A defstruct field typed by a bare (nullary) defopaque must read back as the
+; declared opaque type, not its int64 carrier.  Previously `(.tag w)` was typed
+; `:int`, so passing it where the opaque was expected required a re-pin
+; `(:: (.tag w) :Tag)`.  The field's nominal identity is now preserved while
+; storage stays the int64 carrier.
+
+(defopaque Tag :int)
+
+(defstruct World [tag : Tag])
+
+; Accepts the opaque type directly -- no re-pin at the call site.
+(defn use-tag [t : Tag] : int
+  (:: t :int))
+
+(defn main [] : int
+  (let [w (make-struct World (:: 7 :Tag))]
+    (println (use-tag (.tag w)))   ; 7, with (.tag w) read back as Tag
+    0))
