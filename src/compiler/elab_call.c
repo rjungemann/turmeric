@@ -2458,7 +2458,17 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
     if (!vt->as.fn.arg_full_types) return NULL;
     uint8_t ar = vt->as.fn.arity;
     if (ar == 0 || ar > MAX_FN_ARITY || ar != expected->as.fn.arity) return NULL;
-    bool pins_nonprim = false;
+    /* poly-hof-reversed-order-primitive-pin: a "pin" is any generic parameter
+     * slot (gt is a bare tyvar) whose expected counterpart `ct` is already
+     * concrete -- not just a struct/ADT/type-app, but also a primitive such as
+     * `int`.  When the value argument precedes the fn argument the HOF's tyvar
+     * is pinned early via the sibling look-ahead, so by the time we get here
+     * `ct` is the concrete `int`; eta-expanding then specializes the bare
+     * constrained-generic global (e.g. `count-it`) to its real instance
+     * (`Size[int]`) instead of leaving a bare `(fn [tyvar] int)` representative.
+     * Abstract pins (`ct` still a tyvar, i.e. the relay path) are deliberately
+     * excluded so the enclosing-generic case stays abstract. */
+    bool pins_concrete = false;
     for (uint8_t k = 0; k < ar; k++) {
         if (vt->as.fn.arg_linear[k] || vt->as.fn.arg_affine[k] ||
             vt->as.fn.arg_borrow[k] || vt->as.fn.arg_unique[k] ||
@@ -2468,10 +2478,10 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
         const Type *gt = vt->as.fn.arg_full_types[k];
         const Type *ct = expected->as.fn.arg_full_types[k];
         if (gt && gt->kind == TY_TYVAR && ct &&
-            (ct->kind == TY_STRUCT || ct->kind == TY_ADT || ct->kind == TY_APP))
-            pins_nonprim = true;
+            ct->kind != TY_TYVAR && ct->kind != TY_UNKNOWN)
+            pins_concrete = true;
     }
-    if (!pins_nonprim) return NULL;
+    if (!pins_concrete) return NULL;
     /* Build (fn [g$eta$0 ...] (<name> g$eta$0 ...)). */
     Span sp = arg_form->span;
     Form **pvec   = (Form **)arena_alloc(e->arena, ar * sizeof(Form *));
