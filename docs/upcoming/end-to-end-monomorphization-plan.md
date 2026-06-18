@@ -162,16 +162,36 @@ Per
       sole remaining stdlib `unwrap-or-carrier` caller is kleisli, M7-gated).
       Finding recorded in
       [`unwrap-or-byvalue-cascade.md`](../reported/unwrap-or-byvalue-cascade.md).
-- [ ] Retype `unwrap-or` in `stdlib/option.tur` to
+- [x] Retype `unwrap-or` in `stdlib/option.tur` to
       `[A] [o : (Option A) dflt : A] : A` with a pure-Turmeric body:
-      `(if (.is-some o) (.value o) dflt)`.
-- [ ] Walk every call site from the pre-task; for each, either:
-      - resolve `A` via the surrounding context (preferred), or
-      - retype the carrier-int Option producer that feeds this call to
-        return `(Option A)` (cascades into the producer module).
-- [ ] Regenerate any affected `tests/fixtures/*/expected.c` snapshots
-      in this same PR (per CLAUDE.md fixture rule -- no follow-up).
-- [ ] **Validation:** `bash tests/run.sh` clean.
+      `(if (.is-some o) (.value o) dflt)`. (Step 1, landed.)
+- [x] **Step 2 -- zipper producer migration (2026-06-18).** Migrated
+      `stdlib/zipper.tur` to a by-value Option producer: split each handle op
+      into a `-raw` inline-C helper (taking/returning the bare `:int` carrier)
+      plus an element-typed by-value wrapper -- `zipper-new [A] [... focus : A
+      ...] : (Zipper A)`, `zipper-focus [A] [z : (Zipper A)] : A`,
+      `zipper-move-left`/`-right [A] [z : (Zipper A)] : (Option (Zipper A))`,
+      `zipper-free [A] [z : (Zipper A)] : void`. The move ops now return
+      `(some (:: r (Zipper A)))` / `(none)` instead of hand-malloc'ing a carrier
+      Option struct in C. **Root blocker fixed in-PR:** `Zipper` was declared
+      `(defstruct Zipper [A] (left ...) (left-len) (focus) (right) (right-len))`
+      but every helper treats it as an opaque heap pointer (malloc'd, passed as
+      int64) -- nothing ever constructs it by-value or reads a field through
+      Turmeric. The 5-field by-value layout was a phantom that made
+      `(Option (Zipper A))` un-threadable (`(:: int (Zipper A))` tried to
+      reinterpret an int64 into a 5-field struct -> cc type error). Retyped it
+      to `(defopaque Zipper [A] :int)`, matching the real pointer-handle
+      representation. Fixtures `zipper-basic` / `typed/zipper-basic` flipped to
+      by-value `unwrap-or` (dflt `(:: 0 (Zipper int))`) and `(not (.is-some
+      opt))` none-detection (was the carrier-peeking `(= opt 0)`).
+- [ ] Remaining step-2/step-3: the sole stdlib `unwrap-or-carrier` caller left
+      is the kleisli `comp` body (M7-gated, see 1.4); shim retirement waits on it.
+- [x] Regenerate any affected `tests/fixtures/*/expected.c` snapshots
+      in this same PR (85 snapshots regenerated for the zipper preamble change).
+- [x] **Validation:** `bash tests/run.sh` -- 1682 passed; only the pre-existing
+      stale-ECS-spices `errors/ecs-defsystem-writes-unauthorized` fixture fails
+      (tracked in `docs/reported/ecs-defsystem-writes-unauthorized-stale-diag.md`,
+      unrelated to zipper).
 - [ ] Strike `unwrap-or` from the "Remaining" list in
       `option-consumer-retype-byvalue.md`.
 

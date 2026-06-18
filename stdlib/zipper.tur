@@ -8,14 +8,16 @@
 ;; Runtime layout: { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; }
 ;;; Zipper -- parameterized 1D list zipper with element type A.
 ;;;
+;;; Runtime representation is an opaque heap handle (a pointer to a malloc'd
+;;; `{ int64_t *left; size_t left_len; int64_t focus; int64_t *right;
+;;; size_t right_len; }`, built and walked by the `-raw` inline-C helpers
+;;; below). It is therefore a carrier-compatible `:int` newtype, NOT a
+;;; by-value multi-field struct -- modeling it as `defstruct` would force a
+;;; 5-field by-value layout that does not match the pointer the helpers
+;;; return, and would make `(Option (Zipper A))` impossible to thread.
+;;;
 ;;; Since: Phase TC2
-(defstruct Zipper
-  [A]
-  (left :ptr<void>)
-  (left-len :int)
-  (focus :int)
-  (right :ptr<void>)
-  (right-len :int))
+(defopaque Zipper [A] :int)
 ;;; zipper-new -- create a Zipper[A] from left array, focus, and right array.
 ;;;
 ;;; Ownership: zipper-new does NOT take ownership of `left` / `right`. It
@@ -43,11 +45,11 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn zipper-new [left : ptr<void>
-                  left-len : int
-                  focus : int
-                  right : ptr<void>
-                  right-len : int]
+(defn zipper-new-raw [left : ptr<void>
+                      left-len : int
+                      focus : int
+                      right : ptr<void>
+                      right-len : int]
   #{}
   : int
   ```c
@@ -61,6 +63,16 @@
   if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;
   ```)
+;;; zipper-new -- by-value: recover A from the typed focus element.
+
+(defn zipper-new [A]
+                 [left : ptr<void>
+                  left-len : int
+                  focus : A
+                  right : ptr<void>
+                  right-len : int]
+  : (Zipper A)
+  (:: (zipper-new-raw left left-len (:: focus :int) right right-len) (Zipper A)))
 ;;; zipper-focus -- return the focused element of a Zipper[A].
 ;;;
 ;;; Parameters:
@@ -74,13 +86,17 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn zipper-focus [z : int]
+(defn zipper-focus-raw [z : int]
   #{}
   : int
   ```c
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   return (int64_t)zip->focus;
   ```)
+;;; zipper-focus -- by-value: return the focused element typed as A.
+
+(defn zipper-focus [A] [z : (Zipper A)] : A
+  (:: (zipper-focus-raw (:: z :int)) A))
 ;;; zipper-move-left -- move the focus one step to the left; returns Option[Zipper[A]].
 ;;;
 ;;; Parameters:
@@ -94,7 +110,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn zipper-move-left [z : int]
+(defn zipper-move-left-raw [z : int]
   #{}
   : int
   ```c
@@ -109,11 +125,13 @@
   nz->right = malloc(sizeof(int64_t) * nz->right_len);
   nz->right[0] = zip->focus;
   if (zip->right_len > 0) memcpy(nz->right + 1, zip->right, sizeof(int64_t) * zip->right_len);
-  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
-  opt->is_some = true;
-  opt->value = (int64_t)(intptr_t)nz;
-  return (int64_t)(intptr_t)opt;
+  return (int64_t)(intptr_t)nz;
   ```)
+;;; zipper-move-left -- by-value: some(z') if a left neighbor exists, else none.
+
+(defn zipper-move-left [A] [z : (Zipper A)] : (Option (Zipper A))
+  (let [r (zipper-move-left-raw (:: z :int))]
+    (if (= r 0) (none) (some (:: r (Zipper A))))))
 ;;; zipper-move-right -- move the focus one step to the right; returns Option[Zipper[A]].
 ;;;
 ;;; Parameters:
@@ -127,7 +145,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn zipper-move-right [z : int]
+(defn zipper-move-right-raw [z : int]
   #{}
   : int
   ```c
@@ -142,11 +160,13 @@
   nz->left = malloc(sizeof(int64_t) * nz->left_len);
   if (zip->left_len > 0) memcpy(nz->left, zip->left, sizeof(int64_t) * zip->left_len);
   nz->left[zip->left_len] = zip->focus;
-  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
-  opt->is_some = true;
-  opt->value = (int64_t)(intptr_t)nz;
-  return (int64_t)(intptr_t)opt;
+  return (int64_t)(intptr_t)nz;
   ```)
+;;; zipper-move-right -- by-value: some(z') if a right neighbor exists, else none.
+
+(defn zipper-move-right [A] [z : (Zipper A)] : (Option (Zipper A))
+  (let [r (zipper-move-right-raw (:: z :int))]
+    (if (= r 0) (none) (some (:: r (Zipper A))))))
 ;;; zipper-free -- free a Zipper[A] and its neighbor arrays.
 ;;;
 ;;; Parameters:
@@ -157,7 +177,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn zipper-free [z : int]
+(defn zipper-free-raw [z : int]
   #{}
   : void
   ```c
@@ -166,3 +186,7 @@
   if (zip->right) free(zip->right);
   free(zip);
   ```)
+;;; zipper-free -- by-value: free a Zipper[A] and its neighbor arrays.
+
+(defn zipper-free [A] [z : (Zipper A)] : void
+  (zipper-free-raw (:: z :int)))
