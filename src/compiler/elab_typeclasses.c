@@ -1636,6 +1636,31 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
     return t;
 }
 
+/* M7 fix direction 1 (flag-gated): a function value stored as an HKT container
+ * element (e.g. the `(fn a b)` element of `(Option (fn a b))` in the
+ * Applicative `ap` shape) is physically a fat closure box -- it was boxed at
+ * the producer (the EX_FN_TO_FAT shim in elab_call.c) and extracted via the
+ * carrier `value` field.  For the instance-method body to CALL it correctly
+ * (`((.value ff) x)`), the element fn must be marked `boxed` so the application
+ * dispatches through the fat-box thunk instead of a bare fn-pointer call (which
+ * reads the box address as code and segfaults).  Walk a substituted body param
+ * type and box any unboxed TY_FN that sits in HKT-element position. */
+static Type m7_box_hkt_element_fns(Arena *arena, Type t) {
+    if (t.kind == TY_APP) {
+        if (t.as.app.arg) {
+            Type *arg = (Type *)arena_alloc(arena, sizeof(Type));
+            *arg = m7_box_hkt_element_fns(arena, *t.as.app.arg);
+            t.as.app.arg = arg;
+        }
+        return t;
+    }
+    if (t.kind == TY_FN && !t.as.fn.boxed) {
+        t.as.fn.boxed = true;
+        return t;
+    }
+    return t;
+}
+
 /* M7 HKT layer-4 (flag-gated): is this instance-method body genuinely
  * by-value-constructible?  The emit-side per-(f, A) by-value spec only works
  * when the method body constructs its `(f b)` result IN-BODY via `#{Construct}`
@@ -2941,6 +2966,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                      * (e.g. `comp [f g] : a`, whose untyped params default to the
                      * carrier): the arrow instance head makes the params arrows. */
                     if (param_was_tyvar_subst) {
+                        /* M7 fix direction 1 (flag-gated): box any fn that sits
+                         * in HKT-element position of the body param type, so
+                         * calling an HKT-wrapped function (`((.value ff) x)` in
+                         * the Applicative `ap` shape) fat-dispatches through the
+                         * box instead of bare-calling the box address. */
+                        if (g_m7_hkt_enabled)
+                            elab_param_type = m7_box_hkt_element_fns(e->arena,
+                                                                     elab_param_type);
                         /* The substituted full type (elab_param_type) is what the
                          * method body sees; lower the ABI/signature type to the
                          * int64 carrier for applied/parametric types, matching the

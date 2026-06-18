@@ -1,28 +1,60 @@
 ---
 title: M7 HKT Applicative `ap` blocked -- function element of an HKT container erases to `ptr<void>`
-severity: expressiveness gap (blocks the Applicative `ap` shape under the M7 by-value HKT path). As of 2026-06-18 the defensive guard (fix direction 3) has landed, so `TUR_M7_HKT=1` no longer emits broken C for `ap`; it now degrades to the same clean elaborator type error as the flag-off path. The by-value `ap` monomorphization itself (fix direction 1) is still open.
-status: open (mitigated -- guard landed; full by-value `ap` still blocked on the fat-closure-carrier change)
+severity: expressiveness gap (blocked the Applicative `ap` shape under the M7 by-value HKT path) -- RESOLVED 2026-06-18
+status: RESOLVED (2026-06-18) -- fix directions 1 + 3 landed; `ap` monomorphizes by value (probe -> 42)
 since: 2026-06-18
 ---
 
-## Resolution progress
+## Resolution (2026-06-18) -- RESOLVED, both halves landed
 
-- **2026-06-18 -- fix direction 3 (defensive guard) LANDED.** A residual free
-  result element tyvar now aborts the by-value HKT monomorphization for that
-  call and falls back to the uniform carrier dispatch, instead of emitting a
-  half-by-value spec with a dangling carrier-base dict reference. Implemented in
-  `src/compiler/elab_typeclasses.c` as `m7_type_has_free_tyvar` + the
-  `m7_byvalue_grounded` gate in `elab_method_call`. Effect: under `TUR_M7_HKT=1`
-  the `ap` probe no longer triggers a cc error; it surfaces the SAME
-  `expected (type-app Option tyvar 'A'), got (type-app ? ?)` elaborator error as
-  the flag-off path. Flag-off codegen is byte-identical (suite 1683/0); the
-  guard is inert for the grounded `fmap`/`bind` shapes (still 42/21) and across
-  a 92-fixture HKT/typeclass flag-on sweep (the one flag-on codegen difference,
-  `typeclass-return-dispatch-result-wrapped`, is pre-existing and identical to
-  the parent commit).
-- **Still open:** fix direction 1 (thread the precise fn type through
-  polymorphic constructor calls so `(some add1) : (Option (fn [int] int))`),
-  which is what actually lets `ap` monomorphize by value and reach 42.
+The `ap` probe (`docs/upcoming/v2/m7-hkt-probe-ap.tur`) now exits **42** under
+`TUR_M7_HKT=1` with no ascription. Flag-off path byte-identical (suite 1683/0);
+flag-on codegen across a 92-fixture HKT/typeclass sweep is unchanged vs. the
+parent commit (the fix only enables the previously-broken `ap` shape).
+
+**Fix direction 3 (defensive guard) -- landed first.** A residual free result
+element tyvar aborts the by-value HKT monomorphization and falls back to the
+uniform carrier dispatch, instead of emitting a half-by-value spec with a
+dangling carrier-base dict reference (`m7_type_has_free_tyvar` +
+`m7_byvalue_grounded` in `src/compiler/elab_typeclasses.c`,
+`elab_method_call`). This converted the original hard cc error into a clean
+diagnostic and -- crucially -- still backstops the genuinely-uninferable case
+(see Caveat below).
+
+**Fix direction 1 (preserve the fn type) -- landed, three coordinated pieces:**
+
+1. **Producer (`src/compiler/elab_call.c`).** A bare `TY_FN` escaping into a
+   `TY_TYVAR` parameter is boxed via `EX_FN_TO_FAT`; the shim's STATIC type now
+   keeps the precise `(fn [int] int)` signature (marked `boxed`) instead of
+   erasing to `ptr<void>`. So `some`'s `A` binds to the real fn type and
+   `(some add1) : (Option (fn [int] int))`. The runtime value is still a fat
+   box (`EX_FN_TO_FAT` emits a `void *` regardless, reading `inner->type`);
+   only the static type changes, gated behind `g_m7_hkt_enabled`.
+2. **Call site.** With the producer type preserved, `m7_collect_tyvar_bindings`
+   unifies decl `(f (fn a b))` against actual `(Option (fn int int))` and now
+   recovers `b` (the wrapped fn's RETURN type), so the result `(f b)` grounds to
+   `(Option int)` and the by-value spec returns `Option__int`.
+3. **Instance body (`src/compiler/elab_typeclasses.c`).** The body param
+   `ff : (Option (fn a b))` has its element fn marked `boxed`
+   (`m7_box_hkt_element_fns`, applied to `elab_param_type` under the flag) so
+   calling the wrapped function -- `((.value ff) (.value fa))` -- dispatches
+   through the fat-box thunk instead of bare-calling the box address (which read
+   the box pointer as code and segfaulted).
+
+**Verified:** `b = int` (probe -> 42), `b = cstr` (the wrapped fn's RETURN type
+drives `b` independently of `a = int`), and the `(some f)/(none)` short-circuit.
+
+**Caveat (legitimate inference boundary, not a regression).**
+`(ap (none) (some 41))` supplies no function anywhere, so `b` is genuinely
+uninferable; the fix-direction-3 guard keeps the result un-grounded and emits a
+clean `(type-app ? ?)` type error rather than a miscompile. The user annotates
+the `(none)` (or passes a real function) in that case. This is the correct
+behavior for an under-determined type, identical in spirit to needing an
+annotation on a bare `(none)` anywhere else.
+
+---
+
+## (original report follows)
 
 # M7 HKT `ap`: the wrapped-function element of `(f (fn [a] b))` erases to `ptr<void>`
 
