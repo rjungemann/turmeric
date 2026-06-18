@@ -439,10 +439,21 @@ carrier ABI per Plan M6/M7 -- leave typeclass_inst NULL so the legacy dispatch
 path stays unchanged for them." So **enabling HKT by-value dispatch is exactly
 the M7 implementation** -- removing/relaxing this gate AND making the
 per-instantiation path handle the HKT element type (the elaborator work in 3.0
-+ a per-`(f, A)` by-value spec for the instance method body). It is NOT a safe
-flag flip: routing HKT specs through the M4 path without the element-type
-handling would break all 30 instances. This gate + the 3.0 elaborator sites
-are the two ends of the atomic change.
++ a per-`(f, A)` by-value spec for the instance method body).
+
+**Experiment (2026-06-18):** relaxing the gate alone (always set
+`typeclass_inst`, no elaborator change) was tested. Result: it routes existing
+HKT instances through the per-instantiation path with **mixed** outcomes --
+`hkt-stdlib-option-result-instances`, `hkt-stdlib-backtrack-instances`,
+`schema-hkt-functor` still PASS, but `hkt-stdlib-parser-instances` and
+`hkt-typeclass-instance` **break** (diff / exit 1). So the gate is load-bearing
+-- the per-instantiation path does not yet handle all HKT instances -- and the
+flip is NOT safe. Reverted. Combined with the 3.0 result (elaborator alone
+silently miscompiles the value path), this proves **both ends of the change are
+individually unsafe**: M7 must land the elaborator element-type threading AND
+the emit per-`(f, A)` by-value path AND the parser/typeclass-instance dispatch
+fixes together. The two ends (`emit_module.c:736` + the 3.0 elaborator sites)
+are now both located and characterized.
 
 - [ ] Relax the `is_hkt` gate at `emit_module.c:736` so HKT instance methods
       get a `typeclass_inst` (per-instantiation spec), coordinated with the 3.0
