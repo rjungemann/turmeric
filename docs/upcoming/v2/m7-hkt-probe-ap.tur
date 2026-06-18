@@ -1,0 +1,58 @@
+;; M7 HKT-dispatch reference probe #3 -- Applicative `ap` shape. NOT a
+;; test-suite fixture. Companion to m7-hkt-probe.tur (Functor `fmap`) and
+;; m7-hkt-probe-bind.tur (Monad `bind`).
+;;
+;; The defining feature of `ap` (vs `fmap`/`bind`) is the FIRST argument
+;;   ff : (f (fn [a] b))
+;; -- an applied HKT type whose ELEMENT is itself a function type `(fn [a] b)`.
+;; This stresses the element-tyvar threading on the arg side (the element of
+;; `(f (fn [a] b))` is a fn, not a bare tyvar), where `fmap` had `(f a)` and
+;; `bind` had a fn-RETURNING-applied continuation.
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-ap.tur; echo $?
+;;   -> 42  (TARGET, NOT YET REACHED)
+;;
+;; STATUS (2026-06-18): BLOCKED on a representational erasure, not on the
+;; layer-4 emit machinery. Root cause confirmed by instrumented trace
+;; (docs/reported/m7-hkt-ap-fn-element-carrier-erasure.md):
+;;
+;;   - The CLASS decl side is correct: `(f (fn [a] b))` parses with the nested
+;;     fn's `arg0_full`/`result_full_type` preserved as TY_TYVAR `a`/`b` (the
+;;     `(fn [int] : int)` you may see in a type_print dump is just lossy
+;;     kind-only printing of TY_FN, not an erased decl).
+;;   - The VALUE side erases: `(some add1)` elaborates to `(Option ptr<void>)`,
+;;     NOT `(Option (fn [int] int))`. Passing a function to a type-variable
+;;     parameter (`some [A] [x : A] : (Option A)`) records the arg as the
+;;     universal poly carrier `ptr<void>`, dropping the precise fn signature.
+;;   - Because `b` (the result element / the wrapped fn's RETURN type) lives
+;;     ONLY inside that erased fn, m7_collect_tyvar_bindings cannot recover it:
+;;     unifying decl `(f (fn a b))` against actual `(Option ptr<void>)` binds
+;;     `f -> Option` but leaves `a`/`b` free. The by-value spec's result `(f b)`
+;;     therefore stays the int64 carrier, the spec emits a carrier return, AND
+;;     the per-instance dispatch dict is left referencing the (now-dropped)
+;;     carrier base method -> a hard cc error (undeclared
+;;     `__inst_MyApplicative_ap_Option`).
+;;
+;; Unblocking ap is the "fat-closure carrier" follow-on flagged in Phase 4.2:
+;; thread the precise fn type through polymorphic constructor calls so an
+;; Option-of-fn keeps its element signature. That is a broad change, out of
+;; scope for a layer-4 emit increment, so ap stays a documented-blocked probe.
+;;
+;; With the flag OFF the probe errors by design (no ascriptions).
+
+(defclass MyApplicative [^f]
+  (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
+
+(definstance MyApplicative [Option]
+  (ap [ff fa]
+    (if (some? ff)
+      (if (some? fa)
+        (some ((.value ff) (.value fa)))
+        (none))
+      (none))))
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn main [] : int
+  (let [r (ap (some add1) (some 41))]
+    (unwrap r)))   ; TARGET: 42

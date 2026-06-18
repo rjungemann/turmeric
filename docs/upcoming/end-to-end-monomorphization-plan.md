@@ -980,8 +980,26 @@ genuine carrier)
 >   constructor HEAD (`Option`) so `(m b)` resolves to the by-value
 >   `Option__int`. Remaining for the monadic family: a continuation passed as a
 >   bare `:fn` poly/fat-closure carrier (the probe's is a typed lambda with an
->   explicit `: (Option b)` return) -- a further follow-on; and Applicative `ap`
->   (arg `(f (fn [a] b))`) is not yet probed.
+>   explicit `: (Option b)` return) -- a further follow-on.
+> - **Applicative `ap` shape: PROBED, BLOCKED (2026-06-18).** Probe landed at
+>   `docs/upcoming/v2/m7-hkt-probe-ap.tur` (documented-blocked, not a suite
+>   fixture). `ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)` is the first shape
+>   whose result element `b` is reachable only THROUGH a wrapped function value,
+>   and it bottoms out on a representational erasure rather than the layer-4
+>   emit machinery: `(some add1)` elaborates to `(Option ptr<void>)` -- passing
+>   a function to a type-variable parameter (`some`'s `A`) records the universal
+>   poly carrier and drops the precise `(fn [int] int)` signature -- so `b` (the
+>   wrapped fn's RETURN type) cannot be recovered by `m7_collect_tyvar_bindings`.
+>   The by-value spec then emits a carrier (`int64_t`) return and the dispatch
+>   dict is left referencing a dropped carrier base (hard cc error under the
+>   flag; flag-off path byte-identical). The class-decl side is CORRECT (the
+>   nested `(fn a b)`'s `a`/`b` are preserved as TY_TYVARs; a `type_print`
+>   `(fn [int]:int)` dump is just lossy kind-only printing). This is the same
+>   "fat-closure carrier" follow-on as the monadic continuation case: unblocking
+>   it needs the precise fn type threaded through polymorphic constructor calls,
+>   a broad change out of scope for a layer-4 increment. Full root-cause +
+>   repro + three fix directions in
+>   [`docs/reported/m7-hkt-ap-fn-element-carrier-erasure.md`](../../reported/m7-hkt-ap-fn-element-carrier-erasure.md).
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT
