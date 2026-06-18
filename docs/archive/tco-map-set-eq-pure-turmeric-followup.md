@@ -1,6 +1,32 @@
 ---
 title: TCO follow-up -- pure-Turmeric `Eq [Map]` / `Eq [Set]` instances
-status: Open, low priority (type-hygiene cleanup; not on the audit critical path)
+status: Resolved -- shipped pure-Turmeric `map-eq-loop` / `set-eq-loop` (option 1)
+---
+
+# Resolution
+
+Implemented option 1 (TCO'd accumulator walk).  The `Eq [Map]` and
+`Eq [Set]` instances now dispatch through pure-Turmeric loops
+(`map-eq-loop` / `set-eq-loop`) that drive HAMT iteration via a thin
+heap-allocated iter-box (`tur_hamt_iter_alloc` / `_advance` /
+`_destroy` plus `_cur_hash` / `_cur_key` / `_cur_val` accessors) and
+look up keys content-correctly through `tur_hamt_get_dynamic` /
+`tur_hamt_has_dynamic`, which thread m1's stamped key comparator
+(`tur_hamt_keyeq`) so `cstr` and other content-keyed maps stay
+correct.  The self-tail-recursive specs lower to goto loops under the
+existing TCO-in-ABI-specs gate, mirroring `Eq [Vec]` /
+`Eq [MutableMap]`.
+
+The inline-C `map-eq?` / `map-eq-raw?` / `map-eq-dynamic` and
+`set-eq?` / `set-eq-cmp?` helpers stay for direct and abstract-K-V
+callers (same compromise the Vec / MutableMap rewrites made).
+
+Validation:
+
+- Full suite green (`bash tests/run.sh`: `1676 passed, 0 failed`).
+- 82 codegen snapshots regenerated alongside the instance change.
+- Bridge audit: crossing-neutral (Map / Set remain `:heap`).
+
 ---
 
 # Pure-Turmeric `Eq [Map]` / `Eq [Set]` instances

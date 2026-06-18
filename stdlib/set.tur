@@ -325,11 +325,71 @@
   ```c
   free((void*)(intptr_t)s);
   ```)
-;;; Eq [Set] -- membership equality using the HAMT structure.
-;; TC2-15: Phase PTC4 -- constrained Eq instance for Set[A].
-;; Constraint (Eq A) ensures elements are comparable; HAMT uses hash-based lookup.
+;;; set-hamt -- internal accessor returning the backing HAMT pointer.
 
-(definstance Eq [Set] [(Eq A)] (eq? [x y] (set-eq? x y)))
+(defn set-hamt [s : int] #{} : ptr<void>
+  ```c struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; ```)
+
+;;; set-eq-loop -- pure-Turmeric structural-equality walk over s1's HAMT.
+;;;
+;;; Path A specializes this per A at the `Eq [Set]` dispatch site; the
+;;; self-tail-recursive spec lowers to a goto loop (TCO-in-ABI-specs, same
+;;; gate as `vec-eq-loop` / `mutmap-eq-loop`), so deep iteration over large
+;;; sets runs in constant stack.  For each entry of s1 the matching key is
+;;; looked up in s2's hamt via `hamt/has-dynamic?` (threading s1's stamped
+;;; key comparator so content-keyed elements stay content-correct).
+;;;
+;;; Parameters:
+;;;   iter    -- hamt/iter-alloc-allocated handle scanning s1
+;;;   s2-hamt -- raw HAMT pointer of the second set (from set-hamt)
+;;;   keyeq   -- stamped key comparator (from hamt/keyeq on s1's hamt)
+;;;
+;;; Returns:
+;;;   true iff every entry of s1 is present in s2 under keyeq.
+;;;
+;;; Since: Phase TCO-Eq-MapSet
+
+(defn set-eq-loop [iter : ptr<void> s2-hamt : ptr<void> keyeq : ptr<void>] : bool
+  (if (hamt/iter-advance! iter)
+    (let [h (hamt/iter-cur-hash iter)
+          k (hamt/iter-cur-key iter)]
+      (if (hamt/has-dynamic? s2-hamt h k keyeq)
+        (set-eq-loop iter s2-hamt keyeq)
+        false))
+    true))
+
+;;; set-eq-driver -- allocate the iter box, run set-eq-loop, free.
+;;;
+;;; Since: Phase TCO-Eq-MapSet
+
+(defn set-eq-driver [s1 : int s2 : int] : bool
+  (let [iter   (hamt/iter-alloc (set-hamt s1))
+        keyeq  (hamt/keyeq (set-hamt s1))
+        result (set-eq-loop iter (set-hamt s2) keyeq)]
+    (do
+      (hamt/iter-destroy! iter)
+      result)))
+
+;;; Eq [Set] -- membership equality using the HAMT structure.
+;; TCO-Eq-MapSet (pure-turmeric Eq [Map] / Eq [Set] follow-up): the instance
+;; body now dispatches through the pure-Turmeric `set-eq-loop` (TCO'd inside
+;; its by-value spec), mirroring `Eq [Vec]` / `Eq [MutableMap]` / `Eq [Map]`.
+;; The inline-C `set-eq?` / `set-eq-cmp?` pair stays for direct callers.
+
+;;; set-eq-full -- length-prefixed structural equality (carrier inputs).
+;;;
+;;; Pulled out as a single-receiver helper so the `Eq [Set]` instance reads
+;;; x and y exactly once each, mirroring the original single-use instance
+;;; shape and sidestepping the :heap receiver use-after-move check.  At the
+;;; int carrier level Set values are freely copyable, so threading them
+;;; through this helper unblocks the length + driver pair.
+
+(defn set-eq-full [s1 : int s2 : int] : bool
+  (and (= (set-count s1) (set-count s2))
+       (set-eq-driver s1 s2)))
+
+(definstance Eq [Set] [(Eq A)]
+  (eq? [x y] (set-eq-full x y)))
 ;;; set-add1 -- insert one element, using it as its own hash.
 ;;;
 ;;; The identity-hash convention the typed Set[A] uses everywhere

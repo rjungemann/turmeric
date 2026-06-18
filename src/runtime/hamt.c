@@ -1417,6 +1417,77 @@ bool tur_hamt_iter_next(HamtIter *iter, uint64_t *hash_out, void **key_out, void
 }
 
 /* ============================================================================
+ * Iterator box wrapper (pure-Turmeric iteration support)
+ * ============================================================================
+ * The Eq[Map] / Eq[Set] instances drive iteration from pure Turmeric via a
+ * TCO'd self-tail loop.  Each loop step needs to advance the iterator and read
+ * the (hash, key, val) of the current entry, but the underlying tur_hamt_iter_*
+ * API stores those in *_out parameters that pure-Turmeric code cannot easily
+ * spell.  The "box" packs a HamtIter together with three current-position
+ * slots, exposes a heap-allocated handle, and provides scalar accessors so the
+ * Turmeric loop can read each field independently between advance calls.
+ */
+
+typedef struct {
+    HamtIter iter;
+    uint64_t cur_hash;
+    void *cur_key;
+    void *cur_val;
+} TurHamtIterBox;
+
+void *tur_hamt_iter_alloc(Hamt *m) {
+    TurHamtIterBox *box = (TurHamtIterBox *)calloc(1, sizeof(*box));
+    tur_hamt_iter_init(&box->iter, m);
+    return box;
+}
+
+void tur_hamt_iter_destroy(void *box_) {
+    if (!box_) return;
+    TurHamtIterBox *box = (TurHamtIterBox *)box_;
+    tur_hamt_iter_free(&box->iter);
+    free(box);
+}
+
+bool tur_hamt_iter_advance(void *box_) {
+    TurHamtIterBox *box = (TurHamtIterBox *)box_;
+    return tur_hamt_iter_next(&box->iter, &box->cur_hash, &box->cur_key, &box->cur_val);
+}
+
+int64_t tur_hamt_iter_cur_hash(void *box_) {
+    return (int64_t)((TurHamtIterBox *)box_)->cur_hash;
+}
+
+void *tur_hamt_iter_cur_key(void *box_) {
+    return ((TurHamtIterBox *)box_)->cur_key;
+}
+
+void *tur_hamt_iter_cur_val(void *box_) {
+    return ((TurHamtIterBox *)box_)->cur_val;
+}
+
+/* Read the stamped key comparator (NULL = identity).  Pure-Turmeric Eq[Map]
+ * threads this into tur_hamt_get_eq when set, so content-keyed maps (e.g.
+ * cstr keys) stay content-correct without leaving Turmeric. */
+void *tur_hamt_keyeq(Hamt *m) {
+    return m ? (void *)(intptr_t)m->key_ops.eq : NULL;
+}
+
+/* Identity-or-eq lookup: when keyeq is NULL falls back to tur_hamt_get,
+ * else delegates to tur_hamt_get_eq.  Exists so the Turmeric loop body
+ * stays a straight-line expression (no conditional around the lookup). */
+void *tur_hamt_get_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq) {
+    if (keyeq)
+        return tur_hamt_get_eq(m, (uint64_t)hash, key, (tur_hamt_keyeq_fn)(intptr_t)keyeq);
+    return tur_hamt_get(m, (uint64_t)hash, key);
+}
+
+bool tur_hamt_has_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq) {
+    if (keyeq)
+        return tur_hamt_has_eq(m, (uint64_t)hash, key, (tur_hamt_keyeq_fn)(intptr_t)keyeq);
+    return tur_hamt_has(m, (uint64_t)hash, key);
+}
+
+/* ============================================================================
  * Debugging: Dump functions
  * ============================================================================
  */

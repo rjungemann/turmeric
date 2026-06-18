@@ -322,6 +322,77 @@
   #{}
   : bool
   (tur_hamt_iter_next iter hash-out key-out val-out))
+;; ----------------------------------------------------------------------------
+;; Iterator-box wrapper -- heap-allocated (iter + current slots) handle.
+;;
+;; The Eq[Map] / Eq[Set] instances run their per-entry walk in pure
+;; Turmeric (self-tail TCO'd in a typed by-value spec), so they need a
+;; handle they can pass through the loop and three scalar accessors for
+;; the current (hash, key, val).  These wrap tur_hamt_iter_* under the hood
+;; -- the box owns the iter state and the cached current-entry slots.
+;; ----------------------------------------------------------------------------
+
+(extern-c tur_hamt_iter_alloc [m :ptr] :ptr)
+(extern-c tur_hamt_iter_destroy [box :ptr] :void)
+(extern-c tur_hamt_iter_advance [box :ptr] :bool)
+(extern-c tur_hamt_iter_cur_hash [box :ptr] :int)
+(extern-c tur_hamt_iter_cur_key [box :ptr] :ptr)
+(extern-c tur_hamt_iter_cur_val [box :ptr] :ptr)
+(extern-c tur_hamt_keyeq [m :ptr] :ptr)
+(extern-c tur_hamt_get_dynamic [m :ptr hash :int key :ptr keyeq :ptr] :ptr)
+(extern-c tur_hamt_has_dynamic [m :ptr hash :int key :ptr keyeq :ptr] :bool)
+
+;;; hamt/iter-alloc -- allocate an iterator box for HAMT m.
+;;;
+;;; Returns an opaque handle that owns a HamtIter plus cached current
+;;; (hash, key, val) slots.  Pair with hamt/iter-destroy! when done.
+;;;
+;;; Since: Phase TCO-Eq-MapSet
+
+(defn hamt/iter-alloc [m : ptr<void>] #{} : ptr<void> (tur_hamt_iter_alloc m))
+
+;;; hamt/iter-destroy! -- free an iterator box.
+
+(defn hamt/iter-destroy! [box : ptr<void>] #{} : void (tur_hamt_iter_destroy box))
+
+;;; hamt/iter-advance! -- step to the next entry; returns false on exhaustion.
+;;;
+;;; The current hash / key / value are exposed via the cur-* accessors.
+
+(defn hamt/iter-advance! [box : ptr<void>] #{} : bool (tur_hamt_iter_advance box))
+
+;;; hamt/iter-cur-hash -- current entry's 64-bit hash (only valid after a
+;;; successful hamt/iter-advance!).
+
+(defn hamt/iter-cur-hash [box : ptr<void>] #{} : int (tur_hamt_iter_cur_hash box))
+
+;;; hamt/iter-cur-key -- current entry's key pointer.
+
+(defn hamt/iter-cur-key [box : ptr<void>] #{} : ptr<void> (tur_hamt_iter_cur_key box))
+
+;;; hamt/iter-cur-val -- current entry's value pointer.
+
+(defn hamt/iter-cur-val [box : ptr<void>] #{} : ptr<void> (tur_hamt_iter_cur_val box))
+
+;;; hamt/keyeq -- read the stamped key comparator off a HAMT (NULL = identity).
+
+(defn hamt/keyeq [m : ptr<void>] #{} : ptr<void> (tur_hamt_keyeq m))
+
+;;; hamt/get-dynamic -- lookup using the supplied key comparator when
+;;; non-NULL, else identity.  Used by the pure-Turmeric Eq[Map] loop so the
+;;; loop body has no conditional around the per-entry lookup.
+
+(defn hamt/get-dynamic [m : ptr<void> hash : int key : ptr<void> keyeq : ptr<void>]
+  #{}
+  : ptr<void>
+  (tur_hamt_get_dynamic m hash key keyeq))
+
+;;; hamt/has-dynamic? -- presence check matching hamt/get-dynamic's semantics.
+
+(defn hamt/has-dynamic? [m : ptr<void> hash : int key : ptr<void> keyeq : ptr<void>]
+  #{}
+  : bool
+  (tur_hamt_has_dynamic m hash key keyeq))
 ;; ============================================================================
 ;; Higher-order operations
 ;; ============================================================================
