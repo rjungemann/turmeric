@@ -1,0 +1,38 @@
+;; M7 HKT-dispatch reference probe #2 -- Monad `bind` shape. NOT a test-suite
+;; fixture. Companion to m7-hkt-probe.tur (the Functor `fmap` shape).
+;;
+;; STATUS (2026-06-19): BLOCKED before layer-4 emit on a kind-system
+;; prerequisite, NOT on the by-value emit work. See
+;; docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md.
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-bind.tur
+;; Observed (BOTH flag states -- it is a kind-check error, fired during
+;; instance elaboration, so the flag is irrelevant):
+;;   error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as a
+;;   type constructor; expected an arrow kind (* -> * or higher)
+;;
+;; The defining feature of `bind` (vs `fmap`) is the continuation parameter
+;;   k : (fn [a] (m b))
+;; -- a function RETURNING an applied HKT type `(m b)`. Elaborating the Option
+;; instance substitutes m -> Option into that fn-nested `(m b)`; the rebuilt
+;; TY_APP's head carries hkt_kind = KIND_STAR (not KIND_ARROW), so type_app's
+;; kind_of_type_app rejects it. A fn returning a BARE element `b` (the fmap
+;; shape, m7-hkt-probe.tur) does not hit this -- only the applied-return form.
+;;
+;; Until that kind prerequisite is fixed, the layer-4 by-value emit for the
+;; monadic shapes (Monad bind, MonadError, Applicative ap whose arg is
+;; `(f (fn [a] b))`, ...) cannot be exercised. The Functor `fmap` shape is
+;; fully working end-to-end across element types {int, cstr, float, struct}.
+;;
+;; TARGET (once unblocked): main returns 21.
+
+(defclass MyMonad [^m]
+  (mbind [ma : (m a) k : (fn [a] (m b))] : (m b)))
+
+(definstance MyMonad [Option]
+  (mbind [ma k]
+    (if (some? ma) (k (.value ma)) (none))))
+
+(defn main [] : int
+  (let [r (mbind (some 20) (fn [x : int] : (Option int) (some (+ x 1))))]
+    (unwrap r)))   ; TARGET: 21

@@ -948,12 +948,45 @@ ABI-agnostic first.
 ### 4.2 -- Rewrite each helper in pure Turmeric (or accept it as
 genuine carrier)
 
-> **Gating note (2026-06-18):** the subset of these helpers that are **HKT
+> **APPROACH UPDATE (2026-06-19): "extend layer-4 via probes first."** The
+> stdlib HKT instance/class rewrites CANNOT be the small flag-off-byte-identical
+> steps the earlier phases were: the element-type threading is flag-gated
+> (`TUR_M7_HKT`) but stdlib **class signatures are shared source** (changing
+> `Functor`'s sig from `: int` to `(f b)` changes flag-off parsing AND forces
+> rewriting all 10 Functor instances at once, since the inline-C bodies depend on
+> the `:fn` carrier shape). So before touching stdlib, the layer-4 emit machinery
+> is being hardened against the full set of HKT method shapes via flag-gated
+> reference probes (kept flag-off byte-identical). Progress:
+>
+> - **Functor `fmap` shape: DONE across all element representations.** The
+>   layer-4 by-value path now works for element types `{int, cstr, float,
+>   struct}` (probes verified). **Bug fixed in-session:** the fn-value call
+>   inside a by-value HKT spec was casting the mapper `f`'s RESULT to the int64
+>   carrier (`((int64_t (*)(int64_t))f)`) instead of resolving the result tyvar
+>   `b` through the active spec -- so `(gmap (some 7) to-cstr)` miscompiled
+>   (worked "by luck" only for `b = int`). Now resolves via `emit_type_c_name`
+>   at the thin-fn-call site (`emit_expr.c`), symmetric to the existing arg-side
+>   resolution. Flag-off suite stays 1683/0.
+> - **Monad `bind` shape (and Applicative `ap`, MonadError): BLOCKED on a
+>   kind-system prerequisite, NOT on layer-4 emit.** A class method with a fn
+>   param returning an *applied* HKT type (`k : (fn [a] (m b))`) fails
+>   kind-check (TUR-E0012) on instance elaboration, regardless of the flag.
+>   Tracked in
+>   [`docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md`](../reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md);
+>   probe at `docs/upcoming/v2/m7-hkt-probe-bind.tur`. Fix that first, then the
+>   layer-4 gate (`m7_body_constructs_byvalue`) must also admit a tail branch
+>   that is a call returning the same `(f b)` family (not only an in-body
+>   construct).
+
+> **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
+> the subset of these helpers that are **HKT
 > instance method bodies** (`fmap`/`ap`/`bind`/`pure` for Option, Parser, Goal,
 > Backtrack, Schema, ...) CANNOT be rewritten to pure-Turmeric until Phase 3.0
 > lands -- the method body has no element-type tyvar in scope, so a by-value
 > rewrite (`(option-map container fn)`) fails to typecheck (`container : Option`,
-> not `(Option A)`). Proven 2026-06-18. Non-HKT carrier helpers
+> not `(Option A)`). Proven 2026-06-18. (3.0 + layer-4 have since landed
+> flag-gated; the remaining blocker for the monadic shapes is the kind-system
+> prerequisite above, not the element-type scoping.) Non-HKT carrier helpers
 > (`vec-eq?`/`map-eq?`/`set-eq?`/...) are independent of 3.0 and can proceed.
 
 For each enumerated helper:
