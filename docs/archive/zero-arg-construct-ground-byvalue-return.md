@@ -8,7 +8,17 @@ severity: Medium. The step-2 fix in
   return type -- e.g. `(Option BoundedIdx)` -- still falls through the carrier
   base, so the emitted C assigns `int64_t = none()` into an `Option__BoundedIdx`
   slot and `cc` rejects with `incompatible types`.
-status: OPEN.
+status: RESOLVED 2026-06-18. Fixed by a ground-TY_APP sibling to the step-2
+  constructor-result-tyvar binding (`elab_call.c`) plus a struct-element
+  carrier-skip gate (`emit_module.c`).  Gated to a by-value struct/opaque
+  element (`call_app_has_struct_elem`) so a primitive-element `(Option int)`
+  stays on the existing carrier+bridge path -- only struct/opaque payloads,
+  where the carrier base straddles the sibling `some`/`ok` by-value spec, opt
+  in.  `stdlib/refined.tur` `bidx-of?` / `bidx-unwrap` retyped to pure
+  Turmeric by-value; `tests/fixtures/refined-bounded-idx/` reverted to
+  ascription-free calls; new codegen fixture
+  `tests/fixtures/option-construct-ground-byvalue-none/` pins the by-value
+  `none__spec__Option__BoundedIdx`.  Full suite green (1680 passed, 0 failed).
 ---
 
 # 0-arg `(none)` in a ground `(Option T)` return: by-value spec missing

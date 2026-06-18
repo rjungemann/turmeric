@@ -1618,6 +1618,33 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             !type_uses_carrier_abi(result_type)) {
             needs_byvalue_spec = true;
         }
+        /* zero-arg-construct-ground-byvalue-return: a 0-arg `#{Construct}`
+         * constructor (`(none)`) called in a ground by-value context resolves
+         * `result_type` to a concrete parameterised TY_APP (`(Option
+         * BoundedIdx)`) with a real by-value codegen layout -- NOT the int64
+         * carrier.  Unlike the parametric `option-map` case there is no
+         * enclosing spec to drive `construct_recovered_byvalue`, so force the
+         * by-value spec directly from the concrete TY_APP result.  Same
+         * by-value-result guards as `construct_recovered_byvalue`
+         * (`!type_is_heap_struct` + concrete codegen layout) keep heap /
+         * abstract results on the carrier. */
+        if (!needs_byvalue_spec && body_is_construct_make_struct &&
+            result_type.kind == TY_APP &&
+            !type_is_heap_struct(result_type) &&
+            type_has_concrete_codegen_layout(&result_type)) {
+            /* Mirror the elab-side struct-element gate (call_app_has_struct_elem):
+             * only a by-value struct/opaque payload (the case the sibling `some`/
+             * `ok` spec already lowers by value) opts in.  A carrier-primitive
+             * element (`(Option int)`) keeps the existing carrier+bridge path. */
+            bool elem_is_struct = false;
+            for (Type tx = result_type; tx.kind == TY_APP && tx.as.app.fn;
+                 tx = *tx.as.app.fn) {
+                if (tx.as.app.arg && tx.as.app.arg->kind == TY_STRUCT) {
+                    elem_is_struct = true; break;
+                }
+            }
+            if (elem_is_struct) needs_byvalue_spec = true;
+        }
         /* M2-completion primitive-payload construct (recovered before the
          * early-exit above): the enclosing instance-method spec's by-value
          * struct return already drove `result_type` to the concrete struct and

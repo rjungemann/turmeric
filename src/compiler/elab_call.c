@@ -71,6 +71,20 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     return inject;
 }
 
+/* zero-arg-construct-ground-byvalue-return: true when a parameterised type
+ * (`(Option BoundedIdx)`, `(Result Pos cstr)`) carries an element that is a
+ * by-value struct/opaque payload (TY_STRUCT) -- the case where the sibling
+ * `some`/`ok` constructor already mints a by-value spec (its struct arg trips
+ * `emit_abi_register_call`'s `arg_types[i].kind == TY_STRUCT` gate).  A `(Option
+ * int)` whose element is the int64 carrier does NOT match, so it stays on the
+ * existing carrier+bridge return path; only struct/opaque-element families,
+ * where the carrier base would straddle the by-value sibling spec, opt in. */
+static bool call_app_has_struct_elem(const Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    if (t->as.app.arg && t->as.app.arg->kind == TY_STRUCT) return true;
+    return call_app_has_struct_elem(t->as.app.fn);
+}
+
 static bool call_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -3932,6 +3946,36 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              fn_type.as.fn.result_full_type &&
              call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
              call_type_has_named_tyvar(saved_expected_return) &&
+             n_type_bindings == 0) {
+        (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                         *saved_expected_return,
+                                         type_bindings, &n_type_bindings);
+    }
+    /* zero-arg-construct-ground-byvalue-return: the GROUND counterpart of the
+     * step-2 branch above.  A 0-arg `#{Construct}` constructor whose declared
+     * result is a parameterised TY_APP (`none : (Option A)`) sitting in a
+     * return position whose expected type is a *ground* (tyvar-free) TY_APP
+     * (`(Option BoundedIdx)` -- a monomorphic defn's declared return) gets no
+     * argument-derived bindings AND no tyvar to compose through, so the
+     * step-2 branch (which requires a named tyvar on BOTH sides) declines and
+     * the call reaches emit on the int64 carrier base.  emit then assigns the
+     * carrier `none()` into a by-value `Option__BoundedIdx` slot -- a `cc`
+     * "incompatible types" error.
+     *
+     * There is no tyvar to substitute here, just a direct structural match:
+     * bind the constructor's result tyvar straight to the ground element
+     * (`A -> BoundedIdx`) so `emit_abi_register_call` mints (and records the
+     * call Expr* against) a by-value `none__spec__Option__BoundedIdx` clone.
+     * Gated to a GROUND expected return so a tyvar-bearing context keeps using
+     * the step-2 (compose-through-spec) path, and to `#{Construct}` callees so
+     * a plain relay return is untouched. */
+    else if (saved_expected_return && fn_type.kind == TY_FN &&
+             fn_binding && fn_binding->is_construct_template &&
+             fn_type.as.fn.result_full_type &&
+             call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+             saved_expected_return->kind == TY_APP &&
+             !call_type_has_named_tyvar(saved_expected_return) &&
+             call_app_has_struct_elem(saved_expected_return) &&
              n_type_bindings == 0) {
         (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
                                          *saved_expected_return,

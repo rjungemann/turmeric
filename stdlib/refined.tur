@@ -235,27 +235,20 @@
 ;;;
 ;;; Since: R2
 
-(defn bidx-of? [n : int i : int] : int
-  ;; Inline-C body: kept on the carrier ABI pending compiler support for
-  ;; 0-arg `(none)` returning a ground `(Option BoundedIdx)` by-value (the
-  ;; step-2 fix in `option-consumer-retype-byvalue.md` handles parametric
-  ;; TY_APP returns like `(Option (NonEmpty A))`, but a ground non-generic
-  ;; return like `(Option BoundedIdx)` still emits the carrier handle into
-  ;; the by-value Option slot -- see
-  ;; docs/reported/zero-arg-construct-ground-byvalue-return.md.
-  ```c
-  if (i < 0 || i >= n) return 0;
-  struct { bool is_some; int64_t value; } *o = malloc(sizeof(*o));
-  o->is_some = true;
-  o->value = i;
-  return (int64_t)(intptr_t)o;
-  ```)
+(defn bidx-of? [n : int i : int] : (Option BoundedIdx)
+  ;; Pure-Turmeric by-value body: the false arm constructs a by-value
+  ;; `none__spec__Option__BoundedIdx` and the true arm a matching `some`
+  ;; spec, so the ground `(Option BoundedIdx)` return never round-trips
+  ;; through the int64 carrier (zero-arg-construct-ground-byvalue-return).
+  (if (or (< i 0) (>= i n))
+    (none)
+    (some (:: i :BoundedIdx))))
 ;;; bidx-unwrap -- recover the BoundedIdx payload from a non-none Option.
 ;;;
 ;;; Pair with bidx-of? after a some? check.
 ;;;
 ;;; Parameters:
-;;;   o -- an Option carrier as returned by bidx-of?
+;;;   o -- a (Option BoundedIdx) as returned by bidx-of?
 ;;;
 ;;; Returns:
 ;;;   The wrapped BoundedIdx.
@@ -266,10 +259,10 @@
 ;;;
 ;;; Since: R2
 
-(defn bidx-unwrap [o : int] : BoundedIdx
-  ;; Carrier-ABI: o is the int64 Option produced by bidx-of?.  Bridge into the
-  ;; by-value (Option int) shape and read .value (BoundedIdx == :int).
-  (if (some? (:: o (Option int))) (:: (.value (:: o (Option int))) :BoundedIdx) (:: 0 :BoundedIdx)))
+(defn bidx-unwrap [o : (Option BoundedIdx)] : BoundedIdx
+  ;; By-value (Option BoundedIdx): read .value directly (it is the BoundedIdx
+  ;; payload).  none-case returns the zero BoundedIdx -- callers gate on some?.
+  (if (some? o) (.value o) (:: 0 :BoundedIdx)))
 ;;; vec-get-checked -- index a Vec with a proven-in-range BoundedIdx (total).
 ;;;
 ;;; Because the BoundedIdx was validated against the vector's length by
