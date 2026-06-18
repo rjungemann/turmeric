@@ -2036,6 +2036,7 @@ static int cmd_build(const char *input, const char *out_path,
     /* If libturi was ASAN-instrumented, add sanitizer flags to avoid linker errors. */
     if (autolink_needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
     /* Append cmake dep flags (-I/-L/-l). */
+    bool had_cmake_flags = cmake_flags.len > 0;
     if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
     /* Append spice include dirs (-I). */
@@ -2043,6 +2044,12 @@ static int cmd_build(const char *input, const char *out_path,
         if (include_dirs[_i] && include_dirs[_i][0])
             buf_printf(&cmd, " -I%s", include_dirs[_i]);
     }
+    /* Static spice deps (e.g. plutovg) reference libm symbols (sin/cos/...)
+     * but don't carry -lm themselves. GNU ld resolves archives left-to-right,
+     * so -lm must come AFTER those -l<staticlib> flags or the math symbols go
+     * unresolved. Append it last whenever cmake dep flags were emitted. On
+     * macOS libm lives in libSystem and -lm is a harmless no-op. */
+    if (had_cmake_flags) buf_puts(&cmd, " -lm");
     /* Ensure the command string is null-terminated before passing to system(). */
     buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
@@ -3859,8 +3866,15 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         buf_printf(&cmd, " %s", c_files[i]);
     }
     /* Append cmake dep flags (-I/-L/-l). */
+    bool had_cmake_flags = cmake_flags.len > 0;
     if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
+    /* Static spice deps (e.g. plutovg) reference libm symbols (sin/cos/...)
+     * but don't carry -lm themselves. GNU ld resolves archives left-to-right,
+     * so -lm must come AFTER those -l<staticlib> flags or the math symbols go
+     * unresolved. Append it last whenever cmake dep flags were emitted. On
+     * macOS libm lives in libSystem and -lm is a harmless no-op. */
+    if (had_cmake_flags) buf_puts(&cmd, " -lm");
     /* Ensure null termination before passing to system(). */
     buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
