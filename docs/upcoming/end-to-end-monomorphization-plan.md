@@ -475,6 +475,28 @@ representation; the feature is a sustained representational thread-through
 (constructor type -> element tyvar -> result -> emit mono -> by-value bodies),
 not an incremental patch. Code reverted; tree at HEAD, suite green.
 
+**Correction to the "fifth layer" (2026-06-18, code re-read):** the HKT
+constructor IS recoverable -- `elab_definstance`
+(`elab_typeclasses.c:1634-1657`) resolves an instance head like `[Option]` via
+`scope_lookup`, so for a `defstruct`/`defdata` constructor `type_args[0]` is a
+real `TY_STRUCT`/`TY_ADT` carrying its def (and `type_arg_syms[0]` the symbol);
+`elab_subst_class_tyvars(g -> type_args[0])` therefore HAS something concrete to
+plug in. The flag-gated probe still saw `(type-app ? ?)` not because the
+constructor is missing but because the probe's class-method return `(g b)` did
+not arrive as a `TY_APP` at the layer-0 site -- a `parse_typeclass_method`
+representation gap for an HKT-param-applied return. **The larger root:** the
+real stdlib HKT classes do not declare the `(g b)` shape at all -- every method
+returns a bare `: int` carrier (`fmap [container [fn :fn]] : int`, etc.). So M7
+requires **changing all 9 HKT class method *signatures*** from `: int` to the
+applied-head form (`: (f b)`); that is the true source of the
+"change-everything-together" atomicity. Revised first step for the next
+session: (a) teach `parse_typeclass_method` to represent an HKT-param-applied
+return `(f b)` as `TY_APP(TY_TYVAR f, TY_TYVAR b)`; (b) convert one class
+(Functor) + its Option instance to that shape; (c) wire layers 0-3 (now
+unblocked -- the constructor type is available); (d) the emit monomorphization
+(layer 4). The suite-green gate sits at the end of (d): (a)-(c) without (d)
+still miscompile the value path, so they cannot land separately.
+
 **Why reverted (the two reasons it can't land in isolation):**
   1. **Emit-side by-value HKT dispatch is missing (Phase 3.2/3.3).** With the
      type resolved to by-value `(Option int)`, the probe *compiles* but prints
