@@ -1,6 +1,12 @@
 # Poly HOF with primitive tyvar pinned by a value arg *before* the fn arg fails to type-check
 
-**Status:** OPEN 2026-06-18.
+**Status:** RESOLVED 2026-06-18. Fixed by broadening the eta-expansion pin
+detection in `try_eta_expand_generic_fn_arg` (`src/compiler/elab_call.c`) to
+fire for *any* concrete pin -- primitives such as `int` included -- not just
+`TY_STRUCT`/`TY_ADT`/`TY_APP`. The abstract/relay path (`ct` still a tyvar) is
+deliberately excluded, so the `m5-lambda-aft-tyvar-prior-accepts-concrete` relay
+behavior is preserved. Regression guard:
+`tests/fixtures/poly-hof-reversed-order-primitive-pin/`.
 **Severity:** Hard compile error (TUR-E0001 at elaboration). Loud, not a
 silent miscompile -- the program never lowers. An ergonomics/expressiveness
 gap, not a codegen defect.
