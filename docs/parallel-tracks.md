@@ -1,7 +1,9 @@
 # Parallel Tracks -- Open Plans and Reports
 
 Snapshot: 2026-06-19 (post-PR #433; post turmeric-spices PR #15
-sized-scheduler direction-1 land).
+sized-scheduler direction-1 land). Track A bug list refreshed
+2026-06-18: `ne-from?` inference gap closed (PR #434) and
+`unwrap-or` cascade status corrected to STEP 1 + producers LANDED.
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
 open report in `docs/reported/`, bucketed into tracks that can largely
@@ -32,61 +34,34 @@ advances.
   `docs/archive/end-to-end-monomorphization-plan.md`; M5 scope audit
   archived at `docs/archive/m5-scope-audit-2026-06-18.md`.
 - [option-consumer-retype-byvalue](reported/option-consumer-retype-byvalue.md)
-  (report, PARTIAL 2026-06-19) -- `option-eq?`, `option-map`, `some?`,
+  (report, PARTIAL 2026-06-18) -- `option-eq?`, `option-map`, `some?`,
   and the BoundedIdx half of step 4 (`bidx-of?` / `bidx-unwrap`) all
   retyped to pure-Turmeric by-value `(Option A)`. Remaining:
   - `result-map` -- deferred; its `:int` signature is a deliberate
     carrier-ABI regression test.
   - `unwrap-or` cascade -- broken out into
-    [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md).
-  - NonEmpty half of step 4 (`ne-from?`/`ne-unwrap`) -- blocked on
-    inference, see [ne-from-byvalue-option-nonempty-element-type-uninferable](reported/ne-from-byvalue-option-nonempty-element-type-uninferable.md).
+    [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md);
+    nearly complete, only the M7-gated kleisli caller remains.
+  - NonEmpty half of step 4 (`ne-from?`/`ne-unwrap`) -- **closed
+    2026-06-18** by PR #434 (typed `(List A)` witness); see
+    [docs/archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md](archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md).
   - Step 5 (`kleisli.tur` `comp`/`k-apply-raw` retype) -- broken out
     into [kleisli-byvalue-option-cascade](reported/kleisli-byvalue-option-cascade.md).
-- [ne-from-byvalue-option-nonempty-element-type-uninferable](reported/ne-from-byvalue-option-nonempty-element-type-uninferable.md)
-  (plan, OPEN 2026-06-19) -- the NonEmpty half of step 4 stays on the
-  carrier until the inference gap is closed by giving `ne-from?` a
-  typed list parameter (`(defopaque List [A] :int)` + `list-of`
-  smart constructor), so `A` is recovered from the argument rather
-  than ascribed at the call site. Caller-ascription `(:: o (Option int))`
-  workaround is explicitly out -- it would propagate carrier-`:int`
-  into every NonEmpty consumer and is the kind of "tighten the types
-  later" patch CLAUDE.md forbids.
 - [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md)
-  (plan, OPEN 2026-06-19) -- retype `unwrap-or` to by-value
-  `[A] [o : (Option A) dflt : A] : A` and migrate the ~10 stdlib
+  (plan, STEP 1 + producer migrations LANDED) -- `unwrap-or` retyped
+  to by-value `[A] [o : (Option A) dflt : A] : A` and the ~10 stdlib
   producers (`zipper`, `seq/*`, `json`, `safe`, `env`, `serial`, ...)
-  one PR per row, gated on a temporary `unwrap-or-carrier` shim so the
-  suite stays green at each step. No caller-ascription bridges.
+  migrated under the temporary `unwrap-or-carrier` shim. Only the
+  M7-gated kleisli caller remains -- effectively blocked on the
+  kleisli cascade below, not on its own work.
 - [kleisli-byvalue-option-cascade](reported/kleisli-byvalue-option-cascade.md)
-  (plan, OPEN 2026-06-19) -- retype `k-apply-raw` / `k-apply` /
+  (plan, OPEN, NOT YET STARTED) -- retype `k-apply-raw` / `k-apply` /
   `Category [Kleisli]` to thread `(Option B)` by value; retires the
   `(:: r (Option int))` ascription that landed in PR #426 as a
-  temporary patch. Independent of `unwrap-or`; one self-contained PR.
+  temporary patch. Gated on M7 HKT (PR #435 landed M7 elaborator
+  behind `TUR_M7_HKT`). One self-contained PR once unblocked.
 
 ## Track B -- ECS spice (sized worlds + scheduler)
-
-**Direction-1 unblocker landed** -- turmeric-spices PR #15
-(`sized-defsystem-scheduled`) takes a heap-pointer world and single-world
-sized scheduling, closing the prior Track B blocker. Slice 8 ("wire sized
-worlds through the parallel scheduler") can now proceed.
-
-**Compiler-side prereqs all cleared:** PR #407 (inline struct fields),
-PR #412 (typeclass-dispatch identity), PR #420 (existential pack/open via
-heap-boxing). Direction 2 (cross-world / heterogeneous scheduling) stays
-blocked on **gap-H world-type polymorphism**, which depends on Track A's
-monomorphization phases retiring the carrier bridge.
-
-**Spice-side already landed** (turmeric-spices, verified against git log):
-
-- E2d wiring (PRs #6-#8): associated-type storage projection (P1-P5),
-  variadic `defworld` collapse (P5b), `StorageOps` typeclass (P6).
-- E2c sized worlds (slices 1-12): `SizedDense n A` /
-  `SizedSparse` / `SizedTag` shapes, `sized-defworld`, `sized-spawn`,
-  generational `Entity` handles, `sized-for-each` payoff macro, fallible
-  `sized-spawn -> (Result int WorldFull)`.
-- PR #15: sized-scheduler direction 1.
-- PR #17: `sized-defworld` `world-resize` existential wrapper.
 
 **Open work:**
 
@@ -100,13 +75,6 @@ monomorphization phases retiring the carrier bridge.
      itself behind Track A monomorphization. Direction 1 shipped
      (PR #15); the `world-resize` existential wrapper shipped (PR #17).
   E2b (refinement-typed APIs) stays gated on refinement types.
-
-**Archived since last snapshot:**
-
-- `ecs-sized-world-plan` -- Q1-Q4 settled, surface specced, and every
-  spice-side slice (1-12) plus PR #15 (direction-1 scheduler) and
-  PR #17 (world-resize wrapper) have shipped. Moved to
-  [docs/archive/ecs-sized-world-plan.md](archive/ecs-sized-world-plan.md).
 
 **Order:** the remaining `StorageOps` routing is implementable when
 struct-element projection lands; direction-2 cross-world scheduling
