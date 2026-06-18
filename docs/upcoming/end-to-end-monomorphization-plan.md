@@ -479,6 +479,23 @@ are now both located and characterized.
       option-map by-value spec work, applied to dispatch-reached instance
       methods. Because the current prototype silently miscompiles
       hkt-param-headed methods (no `__spec` clone) it is reverted, not landed.
+
+      **Deepest root cause traced (2026-06-18):** `emit_abi_register_call`
+      (`emit_module.c`) does not intern a by-value spec for the HKT dispatch
+      call because the call's result `(Option int)` is a **carrier-ABI** type
+      (`type_uses_carrier_abi` is true for Option), so `abi_changes` stays false
+      and the call falls through to the bare carrier method
+      (`emit_module.c:1532`). The construct-body `needs_byvalue_spec` logic
+      (`emit_module.c:1559+`) that forces `option-map`'s by-value spec is NOT
+      reached for dispatch-reached HKT instance methods, and the instance-method
+      spec gate (`emit_module.c:1514-1531`) further skips specs whose arg/result
+      spine `type_c_name`'s to `int64_t` (the unresolved-element case). So the
+      Phase 3.2 emit work is: make the HKT instance-method dispatch call's
+      construct body (`(if ... (some ...) (none))`) trigger the same
+      `needs_byvalue_spec` per-`(f, A)` by-value interning that a direct
+      `option-map` call gets, with the element `b` resolved from the call args.
+      This is subtle (it interacts with Option's default carrier ABI) and is the
+      irreducible core of M7's emit half.
 - [ ] Update `__inst_<Class>_<method>` symbol naming to disambiguate
       per-`(f, A)` clones.
 - [ ] Per-instance test fixture under `tests/fixtures/hkt-<class>-<f>/`
