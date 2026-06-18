@@ -36,7 +36,7 @@
     (let [right (make-arr3)]
       (let [z (zipper-new empty 0 10 right 3)]
         (let [opt (zipper-move-right z)]
-          (let [z2 (unwrap-or opt 0)]
+          (let [z2 (unwrap-or opt (:: 0 (Zipper int)))]
             (let [f (zipper-focus z2)]
               (zipper-free z)
               (free empty)
@@ -48,7 +48,7 @@
     (let [right (make-arr3)]
       (let [z (zipper-new empty 0 10 right 3)]
         (let [opt (zipper-move-left z)]
-          (let [is-none (= opt 0)]
+          (let [is-none (not (.is-some opt))]
             (zipper-free z)
             (free empty)
             (free right)

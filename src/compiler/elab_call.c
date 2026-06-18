@@ -2707,6 +2707,17 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
         /* Build cons-list expression for rest args */
         Expr *rest_expr;
+        /* Homogeneity / result specialization (hoisted so they survive past the
+         * cons-list build): a polymorphic-tyvar rest (`[& xs :A]`) names a
+         * single type variable A.  Bind A to the first rest arg, then -- once
+         * the cons list is built -- substitute A into the declared result type
+         * so `(list-of 7)`'s `(List A)` return becomes `(List int)`. */
+        Type tyvar_first;
+        bool tyvar_first_set = false;
+        const char *rest_tyvar_name =
+            (fn_type.as.fn.rest_full_type &&
+             fn_type.as.fn.rest_full_type->kind == TY_TYVAR)
+                ? fn_type.as.fn.rest_full_type->as.tyvar_.name : NULL;
         if (n_rest == 0) {
             rest_expr = expr_new(e->arena, EX_INT_LIT, TYPE_INT, call->span);
             rest_expr->as.i = 0;  /* nil = 0 */
@@ -2717,14 +2728,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * declaration carries its full Type so we can compare identity
              * (struct/ADT def pointer, applied type args) rather than only the
              * coarse TypeKind.  Primitive rest keeps rest_full_type == NULL and
-             * uses the fast TypeKind path below. */
+             * uses the fast TypeKind path below.  A polymorphic-tyvar rest also
+             * carries a (TY_TYVAR) rest_full_type purely to name A for the
+             * result specialization above; it is NOT a type-identity match, so
+             * route it through the homogeneity path (rk == TY_TYVAR). */
             Type *rest_full = fn_type.as.fn.rest_full_type;
+            if (rest_full && rest_full->kind == TY_TYVAR) rest_full = NULL;
             bool rest_err = false;
-            /* Homogeneity: a polymorphic-tyvar rest (`[& xs :A]`) names a
-             * single type variable A, so all rest args must share one type.
-             * Bind A to the first rest arg and require the rest to match it. */
-            Type tyvar_first;
-            bool tyvar_first_set = false;
             for (uint32_t i = 0; i < n_rest; i++) {
                 rest_items[i] = elab_form(e, call->as.list.items[1 + n_required + i]);
                 if (!rest_items[i]) return NULL;
@@ -2779,6 +2789,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         Type result_type = fn_type.as.fn.result_full_type
                            ? *fn_type.as.fn.result_full_type
                            : type_from_kind(fn_type.as.fn.result_kind);
+        /* Specialize a polymorphic-tyvar rest into the result type: when the
+         * rest element is `:A` and the call's args pin A to a concrete type,
+         * substitute A throughout the declared result (e.g. `(List A)` becomes
+         * `(List int)` for `(list-of 7)`), so downstream consumers recover the
+         * element type instead of a bare tyvar.  With zero rest args A is
+         * unconstrained and stays as declared. */
+        if (rest_tyvar_name && tyvar_first_set) {
+            CallTypeBinding rest_bind;
+            rest_bind.name = rest_tyvar_name;
+            rest_bind.type = tyvar_first;
+            result_type = call_instantiate_type(e, &result_type, &rest_bind, 1);
+        }
         Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
         out->as.call_.fn_binding = fn_binding;
         out->as.call_.args = call_args;

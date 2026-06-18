@@ -2088,6 +2088,14 @@ static const char *abi_trace_clone_name(const EmitCtx *ctx, const Expr *call) {
         }
     }
     const Binding *b = call->kind == EX_CALL ? call->as.call_.fn_binding : NULL;
+    /* Mirror emit_call_name / find_matched_abi_spec: a 0-arg or N-arg
+     * `#{Construct}` callee is disambiguated only by the per-Expr* recording
+     * above, never by the structural by-args match (which cannot tell a
+     * by-value spec from the carrier base for a constructor). */
+    if (call->kind == EX_CALL && b &&
+        (call->as.call_.n_args == 0 || b->is_construct_template)) {
+        return NULL;
+    }
     if (call->kind == EX_CALL && b) {
         for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
             const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];

@@ -8,7 +8,18 @@ severity: Medium. The compiler's own ASan run flags a 304-byte leak from
   parameterized defopaque application) are unresolved. The fixture runs
   correctly (program output matches expected), but the compiler leak
   trips the suite's leak-detection gate per CLAUDE.md.
-status: RESOLVED 2026-06-18 (no longer reproduces). The exact repro -- a `defn`
+status: RESOLVED 2026-06-18 (genuinely fixed). **Correction 2026-06-18:** the
+  "no longer reproduces" claim below was premature -- the leak DID still
+  reproduce through the full monomorphized path (a concrete call to a `defn`
+  returning `(Option (NonEmpty A))` whose `.value` is read), surfaced while
+  landing the typed-list `ne-from?` retype. Root cause: `emit_expr.c:4604`
+  called `substitute_struct_app_type` (which mallocs the TY_APP spine for a
+  `(NonEmpty int)` field) and never freed it. Now fixed: `free_struct_app_type`
+  is exposed via `types.h` and the owned result is freed after use. Verified
+  leak-clean under `ASAN_OPTIONS=detect_leaks=1` and the full suite (1683/0).
+  Original (premature) note follows.
+
+  RESOLVED 2026-06-18 (no longer reproduces). The exact repro -- a `defn`
   with a `(Option (NonEmpty A))` return whose body does `(some (:: xs (NonEmpty
   A)))` / `(none)` -- typechecks with zero LeakSanitizer output under
   `ASAN_OPTIONS=detect_leaks=1` on the current tree (the `clone_struct_app_type`

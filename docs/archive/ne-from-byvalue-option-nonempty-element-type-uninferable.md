@@ -10,15 +10,48 @@ severity: Medium ergonomics / expressiveness hole. Retyping `ne-from?` from the
   tyvar. The principled fix is to give `ne-from?` a typed list parameter so
   `A` is recovered from the argument; pushing the type onto callers via
   `(:: ... (Option int))` ascriptions is **not** a path we will take.
-status: OPEN. `ne-from?` / `ne-unwrap` remain on the carrier ABI in
-  `stdlib/refined.tur` with a pointer to this plan. **No caller-ascription
-  workaround is in the tree**, and none will be added: the workaround would
-  spread carrier-`:int` reasoning across every NonEmpty call site, defeats
-  the No-Lazy-`:int` rule, and is the kind of "tighten the types later"
-  patch the CLAUDE.md guidance explicitly forbids. The BoundedIdx half of
-  step 4 (`bidx-of?` / `bidx-unwrap` -> by-value `(Option BoundedIdx)`) IS
-  landed (PR #431) -- BoundedIdx is ground, so it has no element-type
-  ambiguity and did not need this work.
+status: RESOLVED 2026-06-18. The inference gap is closed exactly as planned
+  below: `ne-from? [A] [xs : (List A)] : (Option (NonEmpty A))` and
+  `ne-unwrap [A] [o : (Option (NonEmpty A))] : (NonEmpty A)` are now pure-
+  Turmeric by-value in `stdlib/refined.tur`, and `(List A)` is the typed
+  witness that recovers `A` from the argument. `tests/fixtures/refined-nonempty/`
+  drops every `(:: o (Option int))` ascription and `(ne-head (ne-unwrap o))`
+  resolves the element type concretely; the suite is green (1683/0) and the
+  `TUR_M3_AUDIT` sweep on the fixture shows zero crossings.
+
+  Three compiler defects had to be fixed to land this (all kept; none introduce
+  fixture churn -- the typed list lives in a non-auto-loaded module):
+    1. **Variadic result-type inference gap** -- a `[A] [& xs : A] : (List A)`
+       call did not substitute `A` into its declared result type, so
+       `(list-of 7)` stayed `(List ?A)`. Fixed in `elab_call.c` (variadic
+       dispatch now specializes the result via the rest tyvar) +
+       `elab_fns.c::resolve_variadic_rest_type` (preserves the rest tyvar name).
+    2. **`clone_struct_app_type` compiler leak** -- the `(Option (NonEmpty A))`
+       field access leaked the malloc'd substitute result at
+       `emit_expr.c:4604`; now freed via the newly-exposed
+       `free_struct_app_type`. (This is the leak `parametric-option-return-
+       clone-struct-app-leak.md` was prematurely archived as "no longer
+       reproduces" -- it does, through the full monomorphized path.)
+    3. **Variadic float-head truncation** -- `EX_CONS_LIST` cast a float head to
+       int64 (`1.5` -> `1`); now stores the IEEE-754 bit pattern. Regression:
+       `tests/fixtures/variadic-float-cons-collect/`.
+
+  **Placement note:** `List` was first added to the auto-loaded `stdlib/list.tur`
+  and collided with the user `(defdata List ...)` in `tests/fixtures/adt-recursive/`
+  (and renumbered every snapshot). It now lives in a non-auto-loaded
+  `stdlib/list-typed.tur` that `refined.tur` loads explicitly -- zero collision,
+  zero snapshot churn.
+
+  **Remaining caveat (separate report):** the plan's float-validation fixture
+  (`(ne-from? (list-of 1.5 2.5))` proving `A = float` through `ne-head`) is
+  still blocked -- not on inference, but on a pre-existing polymorphic
+  float<->carrier ascription miscompile that also breaks the un-retyped
+  `(ne-head (ne-singleton 1.5))`. Tracked in
+  [polymorphic-float-carrier-ascription-value-cast.md](../reported/polymorphic-float-carrier-ascription-value-cast.md).
+  No caller-ascription workaround is in the tree, as planned.
+
+  The BoundedIdx half of step 4 (`bidx-of?` / `bidx-unwrap` -> by-value
+  `(Option BoundedIdx)`) landed earlier (PR #431).
 ---
 
 # Closing the `ne-from?` inference gap with a typed list parameter

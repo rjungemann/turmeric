@@ -574,7 +574,7 @@ static Type clone_struct_app_type(Type t) {
     return out;
 }
 
-static void free_struct_app_type(Type t) {
+void free_struct_app_type(Type t) {
     if (t.kind != TY_APP) return;
     if (t.as.app.fn) {
         free_struct_app_type(*t.as.app.fn);

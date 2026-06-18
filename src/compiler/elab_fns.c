@@ -248,6 +248,14 @@ static bool resolve_variadic_rest_type(Elab *e, const Form *type_p,
     uint8_t tpi = 0;
     if (fn_type_param_index(fn_type_params, n_fn_type_params, sym, &tpi)) {
         *out_kind = TY_TYVAR;
+        /* Preserve the rest tyvar's *name* so the call site can substitute it
+         * in the declared result type (e.g. recover A=int from `(list-of 7)`
+         * into the `(List A)` return).  The call-site reader special-cases a
+         * TY_TYVAR rest_full_type to keep the homogeneity acceptance path
+         * (any single type) rather than treating it as a type-identity match. */
+        Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *tv = type_tyvar_named(sym ? sym->name : NULL);
+        *out_full = tv;
         return true;
     }
     Type *rt = fn_type_from_form(e, type_p, fn_type_params,

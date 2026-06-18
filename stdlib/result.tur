@@ -166,23 +166,14 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-map [r : int f]
-  #{}
-  : int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res) return 0;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok = res->is_ok;
-  if (res->is_ok) {
-      out->ok_val = ((int64_t(*)(int64_t))(intptr_t)f)(res->ok_val);
-      out->err_val = 0;
-  } else {
-      out->ok_val = 0;
-      out->err_val = res->err_val;
-  }
-  return (int64_t)(intptr_t)out;
-  ```)
+(defn result-map [A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)
+  ;; Option/Result none-as-NULL retirement (Track A): by-value `(Result A E)`
+  ;; receiver.  Pure-Turmeric body reads `.is-ok`/`.ok-val`/`.err-val` directly
+  ;; and rebuilds via the `#{Construct}` ok/err constructors -- no inline-C
+  ;; carrier round-trip.  The interpreter keeps its native override.
+  (if (.is-ok r)
+    (ok (f (.ok-val r)))
+    (err (.err-val r))))
 ;;; result-eq? -- compare two Result[A B] values.
 ;;;
 ;;; Parameters:

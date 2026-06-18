@@ -1161,8 +1161,21 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
          * such call -- including carrier-context ones -- to a by-value spec
          * the moment one is interned.  The per-Expr* recording above is the
          * only sound disambiguator; an unrecorded 0-arg constructor stays on
-         * the carrier callee. */
-        if (call->kind == EX_CALL && call->as.call_.n_args == 0) {
+         * the carrier callee.
+         *
+         * The SAME hazard applies to an N-arg `#{Construct}` callee
+         * (`(ok x)` / `(err e)` / `(some x)`): its by-value spec and the int64
+         * carrier base share identical argument types and differ only in
+         * return ABI, so the by-args match cannot tell them apart.  Once a
+         * pure-Turmeric body (e.g. `result-map`) interns a by-value
+         * `ok__spec__Result__int__int`, the by-args fallback would route an
+         * unrelated carrier-context `(ok? (ok 1))` to it (assigning a
+         * `Result__int__int` aggregate into a carrier `int64_t` slot -- a cc
+         * error).  A construct call that genuinely needs the by-value spec was
+         * recorded per-Expr* and is honoured by the exact-match path above; an
+         * unrecorded construct call stays on the carrier base. */
+        if (call->kind == EX_CALL &&
+            (call->as.call_.n_args == 0 || (b && b->is_construct_template))) {
             if (b) {
                 char *captured = capture_env_access(ctx, b);
                 if (captured) return captured;

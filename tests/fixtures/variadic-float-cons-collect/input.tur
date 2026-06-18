@@ -1,0 +1,16 @@
+; The variadic rest collector must store a float head's IEEE-754 bit pattern
+; in the int64 cons-cell head slot, not a truncating (int64_t) value cast.
+; Read back via a concrete (:: <carrier> :float) ascription (which bit-
+; reinterprets correctly) to prove 1.5 survives collection without truncation.
+;
+; Regression for the EX_CONS_LIST float-head truncation surfaced in
+; docs/upcoming/end-to-end-monomorphization-plan.md Phase 1.1.
+
+(load "stdlib/list-typed.tur")
+
+(defn main [] : int
+  (let [c (list->carrier (list-of 1.5 2.5 3.5))]
+    (println (:: (list-head c) :float))                       ; 1.5
+    (println (:: (list-head (list-tail c)) :float))           ; 2.5
+    (println (:: (list-head (list-tail (list-tail c))) :float))) ; 3.5
+  0)

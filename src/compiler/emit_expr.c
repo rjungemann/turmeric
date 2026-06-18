@@ -125,6 +125,15 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     if (e->as.call_.n_args == 0) {
         return NULL;
     }
+    /* Same disambiguation for an N-arg `#{Construct}` callee (`(ok x)` /
+     * `(err e)` / `(some x)`): a by-value spec and the int64 carrier base differ
+     * ONLY in return ABI, not in argument types, so the structural by-args match
+     * below cannot tell them apart.  The per-Expr* recording (handled above) is
+     * the sound disambiguator; an unrecorded construct call stays on the
+     * carrier.  Keeps this in lockstep with emit_call_name's identical guard. */
+    if (fn_binding && fn_binding->is_construct_template) {
+        return NULL;
+    }
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
@@ -4592,6 +4601,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * unbound A/B tyvars from the polymorphic source. */
                 Type rt = emit_resolve_type(ctx, e->as.get_field_.struct_expr->type);
                 Type field_resolved = e->type;
+                /* substitute_struct_app_type returns a TY_APP result whose spine
+                 * nodes are freshly malloc'd (e.g. resolving `(NonEmpty A)` to
+                 * `(NonEmpty int)` for a `(Option (NonEmpty A))` field); we only
+                 * inspect it below, so free it after use.  The default
+                 * `field_resolved = e->type` is borrowed -- only free the
+                 * substituted result. */
+                bool field_resolved_owned = false;
                 if (rt.kind == TY_APP || rt.kind == TY_STRUCT) {
                     Type extracted_args[16];
                     uint8_t n_extracted = 0;
@@ -4602,6 +4618,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (f->full_type) {
                             field_resolved =
                                 substitute_struct_app_type(f->full_type, def, extracted_args);
+                            field_resolved_owned = true;
                         }
                     }
                 }
@@ -4610,6 +4627,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     field_resolved.as.struct_.def->n_type_params == 0) {
                     field_is_heap_ptr_for_value_struct = true;
                 }
+                if (field_resolved_owned) free_struct_app_type(field_resolved);
             }
             Buf lit; buf_init(&lit);
             if (through_rc) {
@@ -5755,8 +5773,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *tail = strdup("0LL");  /* nil sentinel */
             for (int32_t i = (int32_t)n - 1; i >= 0; i--) {
                 char *head = emit_value(ctx, body, e->as.cons_list_.items[i]);
+                TypeKind hk = e->as.cons_list_.items[i]->type.kind;
                 Buf cell; buf_init(&cell);
-                buf_printf(&cell, "__tur_cons_of((int64_t)(intptr_t)(%s), %s)", head, tail);
+                if (hk == TY_FLOAT || hk == TY_FLOAT64 || hk == TY_FLOAT32) {
+                    /* A float head does not survive an integer cast -- store its
+                     * IEEE-754 bit pattern in the cons cell's int64 head slot via
+                     * a union reinterpret (mirrors EX_UNION_INJECT's float path).
+                     * A plain (int64_t) cast would truncate 1.5 to 1, silently
+                     * miscompiling a `(list-of 1.5 ...)` / float variadic rest. */
+                    const char *cty = (hk == TY_FLOAT32) ? "float" : "double";
+                    buf_printf(&cell,
+                        "__tur_cons_of(((union { %s d; int64_t i; }){.d = (%s)}).i, %s)",
+                        cty, head, tail);
+                } else {
+                    buf_printf(&cell, "__tur_cons_of((int64_t)(intptr_t)(%s), %s)", head, tail);
+                }
                 buf_putc(&cell, '\0');
                 free(head);
                 free(tail);
