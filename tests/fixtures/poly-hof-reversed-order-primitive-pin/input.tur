@@ -1,0 +1,34 @@
+;; poly-hof-reversed-order-primitive-pin: the reversed-argument-order corner of
+;; poly-hof-constrained-arg-baked-carrier.  Here the polymorphic HOF takes its
+;; value arg `a : A` *before* the function arg `f : (fn [A] int)`, so the tyvar
+;; `A` is pinned by the leading value argument; the trailing bare constrained-
+;; generic `count-it` (type `(fn [tyvar] int)`) must then unify against the now-
+;; concrete `(fn [A] int)`.
+;;
+;; Before the fix, the struct call type-checked (eta-expansion fires for a
+;; non-primitive pin) but the *primitive* call `(apply-it 42 count-it)` failed
+;; to type-check:
+;;   error [TUR-E0001]: function 'apply-it' arg 2:
+;;     expected (fn [int] : int), got (fn [tyvar] : int)
+;; because `call_collect_type_bindings` rejected a bare actual tyvar against the
+;; already-pinned concrete binding `A -> int` via `type_eq` instead of accepting
+;; it (the function value is dispatched to the concrete instance at the call
+;; site).
+;;
+;; Correct dispatch: 7 (Size[Box]) for the struct call, -1 (Size[int]) for the
+;; primitive call.  A wrong instance would print -1 / -1 (or 7 / 7).
+
+(defstruct Box [n : int])
+(defclass Size [a] (size [x] : int))
+(definstance Size [int] (size [x] -1))
+(definstance Size [Box] (size [x : Box] 7))
+
+(defn count-it [^Size A] [x : A] : int (size x))
+
+;; NOTE the parameter order: the value `a : A` comes BEFORE the fn `f`.
+(defn apply-it [A] [a : A f : (fn [A] int)] : int (f a))
+
+(defn main [] : int
+  (println (apply-it (make-struct Box 0) count-it))   ; want 7  (Size[Box])
+  (println (apply-it 42 count-it))                    ; want -1 (Size[int])
+  0)

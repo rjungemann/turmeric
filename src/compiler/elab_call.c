@@ -184,6 +184,24 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                     actual.kind != TY_TYVAR) {
                     return true;
                 }
+                /* Mirror (poly-hof-reversed-order-primitive-pin): a prior
+                 * CONCRETE binding (e.g. A->int, pinned by a value arg that
+                 * appears *before* the function arg) accepts a bare actual
+                 * tyvar without overwriting it.  This arises for a reversed-
+                 * order poly HOF `(defn apply-it [A] [a : A f : (fn [A] int)])`
+                 * called as `(apply-it 42 count-it)`: by the time the trailing
+                 * `count-it` arg (type `(fn [tyvar] int)`) is checked, `A` is
+                 * already pinned to `int`, so collecting `(fn [int] int)` vs
+                 * `(fn [tyvar] int)` reaches here with a concrete prior binding
+                 * and a bare actual tyvar.  The function value carrying the
+                 * abstract tyvar (a constrained-generic like `count-it`) is
+                 * dispatched/specialized to the concrete type at the call site,
+                 * so accept rather than `type_eq`-reject.  Narrowly gated to a
+                 * bare actual tyvar so concrete-vs-concrete mismatches still
+                 * fail. */
+                if (actual.kind == TY_TYVAR && bindings[idx].type.kind != TY_TYVAR) {
+                    return true;
+                }
                 return type_eq(bindings[idx].type, actual);
             }
             if (*n_bindings >= 16) return false;

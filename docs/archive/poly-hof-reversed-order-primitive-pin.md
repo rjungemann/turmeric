@@ -1,11 +1,15 @@
 # Poly HOF with primitive tyvar pinned by a value arg *before* the fn arg fails to type-check
 
-**Status:** OPEN 2026-06-18.
+**Status:** RESOLVED 2026-06-18 (fixed in the same session, as the final
+M5 residual). See the "Resolution" section at the bottom; validated by
+`tests/fixtures/poly-hof-reversed-order-primitive-pin/`.
+
+**Status (original):** OPEN 2026-06-18.
 **Severity:** Hard compile error (TUR-E0001 at elaboration). Loud, not a
 silent miscompile -- the program never lowers. An ergonomics/expressiveness
 gap, not a codegen defect.
 **Discovered:** while fixing
-[`docs/archive/poly-hof-constrained-arg-baked-carrier.md`](../archive/poly-hof-constrained-arg-baked-carrier.md)
+[`docs/archive/poly-hof-constrained-arg-baked-carrier.md`](poly-hof-constrained-arg-baked-carrier.md)
 (the original-argument-order variant, now resolved). This is the residual
 reversed-order + primitive corner of the same feature.
 
@@ -102,3 +106,54 @@ repro; expected output:
 
 (The struct line already passes today; the suite fixture guards the
 primitive line once fixed.)
+
+## Resolution
+
+Landed 2026-06-18 as the final M5 residual (the last open M5-class gap
+after `poly-hof-constrained-arg-baked-carrier` resolved the original-order
+variant). **Fix direction 1 alone was sufficient** -- no eta-expansion
+change was needed.
+
+The single change is in `call_collect_type_bindings`
+(`src/compiler/elab_call.c`, `TY_TYVAR` case). The function already had a
+special case for a prior *tyvar* binding accepting a *concrete* actual
+(the `m5-eq-vec-rewrite-fn-arg-loses-annotation` relay path). It lacked
+the **mirror**: a prior *concrete* binding accepting a bare *actual
+tyvar*. For the reversed-order call `(apply-it 42 count-it)`, by the time
+the trailing `count-it` argument (type `(fn [tyvar] int)`) is checked, the
+leading value arg `42` has already pinned `A -> int`, so collecting
+`(fn [int] int)` (the param) against `(fn [tyvar] int)` (the arg) reaches
+the `TY_TYVAR` case with a *concrete* prior binding (`int`) and a bare
+*actual* tyvar -- and fell through to `type_eq(int, tyvar)` -> false,
+rejecting the argument. The mirror now accepts it:
+
+```c
+if (actual.kind == TY_TYVAR && bindings[idx].type.kind != TY_TYVAR) {
+    return true;
+}
+```
+
+This is sound: a bare actual tyvar means the function value
+(`count-it`, a constrained-generic) is itself still polymorphic, so it is
+specialized/dispatched to the concrete type at the call site. The
+narrow gate (`actual.kind == TY_TYVAR`) leaves concrete-vs-concrete
+mismatches still rejected, so it does not loosen real type errors. The
+existing relay special case (prior tyvar + concrete actual, kept
+abstract) is untouched, so the `m5-lambda-aft-tyvar-prior-accepts-concrete`
+behavior the report flags is preserved.
+
+No eta-expansion was required because the primitive case dispatches
+correctly through the **carrier base** -- exactly as the working
+original-order primitive call `(apply-it count-it 42)` already does.
+Emitted C for the repro:
+
+- Struct call -> `apply_it__spec__int64_t_Box_int64_t((Box){.n=0}, <eta
+  wrapper around count_it__spec__int64_t_Box>)` -> `__inst_Size_size_Box`
+  -> `7`.
+- Primitive call -> carrier base `apply_hyit(42, count_hyit)` ->
+  `count_hyit` -> `__inst_Size_size_int` -> `-1`.
+
+Validated by `tests/fixtures/poly-hof-reversed-order-primitive-pin/`
+(output `7` / `-1`; a wrong instance would print `-1` / `-1`). Full suite
+green (`bash tests/run.sh`: 1680 passed, 0 failed), zero codegen-snapshot
+drift.

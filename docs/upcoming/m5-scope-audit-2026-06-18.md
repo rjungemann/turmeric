@@ -6,6 +6,21 @@ description: M5 of `end-to-end-monomorphization-plan.md` ("polymorphic functions
 
 # M5 scope audit -- 2026-06-18
 
+## STATUS 2026-06-18: M5 COMPLETE
+
+Gap 1 (`poly-hof-constrained-arg-baked-carrier`) landed earlier the same
+day, and its residual reversed-order + primitive-pin corner
+(`poly-hof-reversed-order-primitive-pin`) is now **also resolved** -- a
+one-line mirror in `call_collect_type_bindings`
+(`src/compiler/elab_call.c`) that lets a bare actual tyvar unify against an
+already-pinned concrete binding. Both reports are archived under
+`docs/archive/`; pinned by `tests/fixtures/poly-hof-constrained-arg-spec/`
+and `tests/fixtures/poly-hof-reversed-order-primitive-pin/`. The remaining
+M5-scope items below (Gap 2 runtime-erased `tur_poly_fn_t`, Gap 3 HKT) are
+explicitly **out of M5** (M8 and M6/M7 respectively). M5 of
+`end-to-end-monomorphization-plan.md` is therefore fully delivered; the next
+non-trivial monomorphization milestone is M6/M7 (HKT classes).
+
 ## TL;DR
 
 Per-call-site monomorphization of **constrained-polymorphic defns** is
