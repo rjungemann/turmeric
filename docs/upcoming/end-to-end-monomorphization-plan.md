@@ -455,12 +455,30 @@ the emit per-`(f, A)` by-value path AND the parser/typeclass-instance dispatch
 fixes together. The two ends (`emit_module.c:736` + the 3.0 elaborator sites)
 are now both located and characterized.
 
-- [ ] Relax the `is_hkt` gate at `emit_module.c:736` so HKT instance methods
-      get a `typeclass_inst` (per-instantiation spec), coordinated with the 3.0
-      elaborator element-type threading.
-- [ ] Per-`(f, A)` by-value spec emission for the HKT instance method body
-      (so `gmap_Option__int` returns `Option__int` by value with `b` resolved,
-      instead of the double-boxing generic carrier the 3.0 probe hit).
+- [x] **Coordinated narrowing prototyped (2026-06-18, reverted).** Implemented
+      the full coordinated change: the 3.0 elaborator (hkt-param-headed only) +
+      a NARROWED gate at `emit_module.c:736` that sets `typeclass_inst` for an
+      HKT method ONLY when its `result_full_type` is a `TY_APP` (the new
+      by-value style), leaving `:int`-returning HKT methods on the carrier. This
+      is **regression-free** (1682 pass; existing HKT fixtures incl. parser /
+      typeclass-instance stay green -- the earlier unconditional-relax breakage
+      is avoided). The remaining gap is below.
+- [ ] **Per-`(f, A)` by-value SPEC INTERNING -- the precise final piece.**
+      Even with the elaborator + narrowed gate, the probe still prints `0`:
+      the generated C shows `__inst_MyFunctor_gmap_Option` emitted **once** as
+      `int64_t(int64_t,int64_t)` (carrier) with **no** `__spec` clone. Routing
+      through `typeclass_inst` (the M4 per-instance dict) is NOT enough -- M4
+      monomorphizes on the dispatch type (`g` = Option, already concrete in the
+      instance), but the HKT *element* `b` stays a tyvar, so the method body's
+      `(some ...)` double-boxes the carrier. The fix: make the HKT
+      instance-method DISPATCH CALL intern a by-value `abi_spec` that
+      monomorphizes `b` from the call args (mirroring how a direct call to the
+      generic `option-map` interns `option_map__int_int`) and emit the
+      `gmap_Option__int` clone with a by-value `Option__int` return. This is the
+      genuine Phase 3.2 emit core -- a standalone feature comparable to the
+      option-map by-value spec work, applied to dispatch-reached instance
+      methods. Because the current prototype silently miscompiles
+      hkt-param-headed methods (no `__spec` clone) it is reverted, not landed.
 - [ ] Update `__inst_<Class>_<method>` symbol naming to disambiguate
       per-`(f, A)` clones.
 - [ ] Per-instance test fixture under `tests/fixtures/hkt-<class>-<f>/`
