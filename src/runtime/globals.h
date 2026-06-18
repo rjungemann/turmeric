@@ -67,6 +67,15 @@ extern bool g_schema_reader_enabled;
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 extern bool g_sized_types_enabled;
 
+/* M7 (end-to-end-monomorphization-plan Phase 3): TUR_M7_HKT env gate — enable
+ * the experimental by-value HKT class-method dispatch (element-type threading
+ * through `(g b)` returns + per-(f,A) by-value instance-method emit). Default
+ * OFF: the shipped codegen path is byte-identical to HEAD. The full feature
+ * additionally needs the stdlib HKT instance bodies rewritten to by-value
+ * (Phase 4.2); under the flag only by-value-bodied instances (e.g. the
+ * docs/upcoming/v2/m7-hkt-probe.tur reference) work end-to-end. */
+extern bool g_m7_hkt_enabled;
+
 /* Phase SZ8: --dump-sizes flag — print inferred size index per sized-GADT
  * constructor application during elaboration (requires -Xsized-types) */
 extern bool g_dump_sizes;

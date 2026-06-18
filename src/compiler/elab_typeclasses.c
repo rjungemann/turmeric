@@ -2462,6 +2462,27 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 }
             }
         }
+        /* M7 layer 0 (flag-gated): an HKT-applied return like `(g b)` arrives as
+         * TY_APP(TY_TYVAR g, TY_TYVAR b).  Substitute the HKT class param in the
+         * application HEAD (`g`) with this instance's constructor (type_args[ti],
+         * e.g. Option), leaving the element tyvar (`b`) abstract for per-call
+         * refinement.  Result: `(Option b)`.  Only the outermost head is
+         * rewritten (the common `(f a)` / `(f b)` shape). */
+        else if (g_m7_hkt_enabled && return_type.kind == TY_APP &&
+                 return_type.as.app.fn &&
+                 return_type.as.app.fn->kind == TY_TYVAR &&
+                 return_type.as.app.fn->as.tyvar_.name) {
+            const char *head = return_type.as.app.fn->as.tyvar_.name;
+            for (uint8_t ti = 0; ti < tc->n_type_params && ti < n_type_args; ti++) {
+                if (tc->type_params[ti] &&
+                    strcmp(tc->type_params[ti]->name, head) == 0) {
+                    Type *new_fn = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *new_fn = type_args[ti];
+                    return_type.as.app.fn = new_fn;
+                    break;
+                }
+            }
+        }
         /* Arrow head: a method whose declared return is the class variable
          * (e.g. `comp : a` under `Arrow [(->)]`) returns a callable closure.
          * The arrow marker carries no arity yet, so flag it as a boxed TY_FN
@@ -2878,6 +2899,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                   return_type.as.struct_.def->n_type_params == 0) ||
                  (return_type.kind == TY_ADT && return_type.as.adt_.def &&
                   return_type.as.adt_.def->n_type_params == 0)) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = return_type;
+            fn_type.as.fn.result_full_type = rft;
+        }
+        /* M7 layer 2 (flag-gated): carry an HKT-applied TY_APP return (`(Option b)`
+         * after layer-0 head substitution) through result_full_type so the call
+         * site receives the named applied head + element tyvar to refine, instead
+         * of an anonymous `(type-app ? ?)`. */
+        else if (g_m7_hkt_enabled && return_type.kind == TY_APP) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = return_type;
             fn_type.as.fn.result_full_type = rft;

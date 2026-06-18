@@ -595,6 +595,36 @@ change of unknown blast radius across all 9 classes / 30 instances and the
 M4 per-method dispatch; it is the genuine multi-session core of M7. The
 probes that established this are reverted (suite stays 1683/0).
 
+**Sixth iteration (2026-06-18): flag + layers 0 & 2 landed INERT (not reverted).**
+Unlike iterations 1-5 (all reverted), this attempt's scaffolding is kept,
+because it is fully gated behind a new default-OFF `TUR_M7_HKT` env flag
+(`g_m7_hkt_enabled`, `src/runtime/globals.{h,c}`, set in `main.c`) -- with the
+flag off, codegen is byte-identical and the suite is green (1682; only the
+pre-existing ECS fixture). Landed under the flag:
+  - **Layer 0** (`elab_typeclasses.c` ~2465): a TY_APP instance-method return
+    `(g b)` substitutes the HKT class param in HEAD position with the
+    instance's constructor (`type_args[ti]`, e.g. `Option`), leaving the
+    element tyvar `b` abstract -> `(Option b)`.
+  - **Layer 2** (`elab_typeclasses.c` ~2886): carry that TY_APP return through
+    `result_full_type` so the call site receives the named applied head + `b`
+    (instead of an anonymous `(type-app ? ?)`).
+Confirmed STILL INSUFFICIENT on the probe (prints the same call-site error)
+because three layers remain: **step (a)** -- the parse representation: `(g b)`
+arrives with an anonymous (un-named) head/arg, so layer 0's
+`return_type.as.app.fn->kind == TY_TYVAR` guard does not even fire (the
+`type_expr_from_form` head-position fix must precede it); **layers 1 & 3** --
+call-site element-tyvar refinement in `elab_method_call`; and **layer 4** --
+the emit-side per-`(f,A)` by-value monomorphization. The emit gate is now
+pinned exactly: `emit_module.c:736` sets `spec->typeclass_inst` (routing to
+the M4 per-instantiation by-value emit) ONLY when `!is_hkt`; flipping it for
+HKT is necessary BUT the 35 real stdlib HKT instance bodies are carrier
+inline-C and would miscompile under by-value per-instantiation emit -- which
+is precisely why the Phase 4.2 body rewrites must land WITH layer 4. The
+probe's own `gmap` body is by-value, so a complete a+0+1+2+3+4 lands the probe
+(prints 42) without touching stdlib; enabling the flag by default additionally
+needs Phase 4.2. Net: the scaffolding (flag, layers 0+2) is in place and
+inert; next session does step (a) -> layers 1,3 -> layer 4 against the probe.
+
 **Re-verified on HEAD (2026-06-18) + probe preserved in-repo.** Re-ran the
 minimal probe against the current (unmodified) compiler and reproduced the
 exact documented failure: `(gmap (some 21) dbl)` resolves to `(type-app ? ?)`

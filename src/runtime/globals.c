@@ -98,6 +98,10 @@ bool g_schema_reader_enabled = false;
  * `-Xsized-types` CLI flag is now a deprecated no-op, mirroring -Xgadt. */
 bool g_sized_types_enabled = true;
 
+/* M7 Phase 3: experimental by-value HKT dispatch; default OFF, set from the
+ * TUR_M7_HKT env var at startup. */
+bool g_m7_hkt_enabled = false;
+
 /* Phase SZ8: --dump-sizes flag */
 bool g_dump_sizes = false;
 
