@@ -93,22 +93,25 @@ printers), `src/compiler/elab_types.c` (slot detection +
 TUR-E0290/E0291 diagnostics). Reader unchanged -- `name : T` parses to
 F_SYM + F_TYPE_ANN already.
 
-### P1 -- `defsystem :writes` enforcement (Path A: per-component `WriteCap`)
+### P1 -- `defsystem :writes` enforcement (Path A: per-component `WriteCap`) -- DONE
 
-**Blocks:** nothing in U1-U6 directly, but it's the missing piece of the
-ECS plan
-([docs/reported/ecs-defsystem-write-caps-not-enforced.md](../reported/ecs-defsystem-write-caps-not-enforced.md))
-and it exercises the same substructural machinery U1 leans on for
-`Stmt`/`TlsConn`/`Texture`. Shipping it first stress-tests `^&`/linear
-across more code paths than ECS alone, and the bugs it surfaces are
-cheaper to fix before five spices depend on the same paths.
+**Was the missing piece of the ECS plan; resolved report archived at
+[docs/archive/history/ecs-defsystem-write-caps-not-enforced.md](../archive/history/ecs-defsystem-write-caps-not-enforced.md).**
+The `^&`/linear paths it exercises are now battle-tested across the ECS
+spice, which lowers the cost of the same machinery in U1's
+`Stmt`/`TlsConn`/`Texture` targets.
 
-### P2a -- `derive-json` macro (narrow, ships first) -- MINIMAL SLICE 2026-06-12
+### P2a -- `derive-json` macro (narrow, ships first) -- ENCODE + DECODE LANDED
 
-**Status:** minimal slice landed in `../turmeric-spices` (`spices/json/`),
-exercising the encode direction for `defstruct` only. Decode, defdata,
-opaque opt-in, and the codec options (`:rename-fields`, `:optional`,
-`:skip`) are deferred to follow-up commits in the spices repo.
+**Status:** encode and decode directions for `defstruct` both ship in
+`../turmeric-spices/spices/json/`. `derive-json` emits both
+`(definstance Encode [T] ...)` and `(definstance Decode [T] ...)`;
+primitive Decode instances cover `int`, `bool`, `cstr`, `float`. The
+typeclass-method blocker
+([typeclass-method-parameterized-result-carrier-mismatch](../archive/history/typeclass-method-parameterized-result-carrier-mismatch.md))
+is resolved and archived. Defdata sum-type encoding, `defopaque :as
+:carrier` opt-in, and the codec options (`:rename-fields`, `:optional`,
+`:skip`) remain follow-ups.
 
 **Was blocking:** U2 json work in its planned form. **Hard prereq for U2.**
 
@@ -190,20 +193,18 @@ Deliverables for P2a:
 
 **Open follow-ups carried forward to a P2a-followup or P2b session**:
 
-- `Decode` typeclass + `derive-json` Decode side. (A scanner + plain-
-  defn primitive decoders shipped 2026-06-12 in `json/decode.tur` --
-  see below. The typed-typeclass surface is gated on
-  [docs/reported/typeclass-method-parameterized-result-carrier-mismatch.md](../reported/typeclass-method-parameterized-result-carrier-mismatch.md).)
 - `defdata` sum-type encoding with tag discriminator.
 - `defopaque :as :carrier` opt-in.
 - `:rename-fields` / `:only` / `:skip` codec options.
 
-**Decode minimal slice (shipped 2026-06-12)**: scanner + plain-defn
-primitive decoders for flat JSON objects. Round-trip fixture in
-`../turmeric-spices/spices/json/tests/round-trip.tur` decodes
-`{"id":42,"name":"alice"}` into a `User` defstruct then re-encodes it
-through the Encode side. The typed-typeclass surface is deferred to a
-follow-up; the report above lays out the three issues to address.
+**Decode (shipped, typed-typeclass surface)**: the `Decode` typeclass with
+primitive instances for `int`, `bool`, `cstr`, `float` lives alongside
+Encode in `src/json/encode.tur`; `derive-json` emits the Decode instance
+for any `defstruct` arity. Round-trip fixture
+(`tests/round-trip.tur`) decodes `{"id":42,"name":"alice"}` into a `User`
+defstruct via the typeclass dispatch and re-encodes it back. The
+parameterized-result carrier-mismatch report that previously gated this
+surface is resolved.
 
 (The earlier 3+ field cap from
 [docs/archive/history/typeclass-method-struct-arg-closure-codegen.md](../archive/history/typeclass-method-struct-arg-closure-codegen.md)
@@ -325,8 +326,8 @@ marker on the closer. Keeps the U1 PRs small and uniform.
 | Prereq | Blocks | Phases unblocked |
 |---|---|---|
 | ~~P0 typed-field rows~~ DONE | -- | U3 unblocked (shipped 2026-06-12) |
-| P1 `:writes` enforcement | none directly | Stress-tests substructural for U1 |
-| P2a `derive-json` | U2 json (hard prereq) | U2 json collapses to a usable surface |
+| ~~P1 `:writes` enforcement~~ DONE | -- | Substructural paths battle-tested before U1 |
+| ~~P2a `derive-json` (encode+decode)~~ DONE | -- | U2 json collapses to a usable surface |
 | P2b general `derive` | U2 beyond json | U2 generalizes to `Eq`/`Show`/future classes |
 | ~~P3 SZ6 sized index~~ DONE | -- | U4 errors actually bite (shipped 2026-06-10) |
 | P4 `match-fix` sugar | none (sugar only) | U5 readability |
@@ -335,12 +336,11 @@ marker on the closer. Keeps the U1 PRs small and uniform.
 
 ### What can ship in parallel with the phases
 
-P1 (`:writes`) and P5 (negative fixtures) can land any time relative
-to the phases without forcing a phase rewrite -- they upgrade
-guarantees rather than change signatures. (P0 / P3 already landed.)
-P2a (`derive-json`), P4 (match-fix), and P6 (FFI shim) all change
-*surfaces* and should land before their dependent phase to avoid
-double-touching the same spice files. P2b (general `derive`) can land
+P5 (negative fixtures) can land any time relative to the phases
+without forcing a phase rewrite -- it upgrades guarantees rather than
+changes signatures. (P0 / P1 / P2a / P3 already landed.) P4 (match-fix)
+and P6 (FFI shim) both change *surfaces* and should land before their
+dependent phase to avoid double-touching the same spice files. P2b (general `derive`) can land
 after U2 ships -- the hand-written `definstance` fallback covers the
 gap for the other U2 typeclasses (`Renderer`, `Handler`, `Color`)
 which only need a handful of instances each.

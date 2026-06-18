@@ -6,7 +6,7 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 
 # `tur-ecs` -- Plan
 
-> **Status 2026-06-17.** Phases E0, E1', E1 (variadic), E2 (incl.
+> **Status 2026-06-18.** Phases E0, E1', E1 (variadic), E2 (incl.
 > compile-time write-cap enforcement via I1-I6), E2d (associated-type
 > storage projection, P1-P6 + P5b variadic-arity collapse), E2c
 > (sized-rectangular iteration, slices 1-12 against the resolved
@@ -14,13 +14,27 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 > companion), and E4 (comparison writeup --
 > [`docs/guides/ecs-guide.md`](../guides/ecs-guide.md) and
 > [`docs/guides/ecs-vs-haskell-ecs.md`](../guides/ecs-vs-haskell-ecs.md))
-> all shipped. Residual follow-ups (none design-blocking): the sized
-> parallel-scheduler wiring (`System`/`Stage` generalisation over the
-> world type), a `world-resize` existential wrapper around the shipped
-> `sized-defworld-copy-into`, and routing `defcomponent-accessors`
-> through `StorageOps` once struct-element projection lands. E2b
-> (refinement-typed APIs) remains gated on refinement types, which are
-> still in plan. The original prerequisite-tracking plan has been
+> all shipped. Residual follow-ups (none design-blocking, all three
+> with compiler prereqs **now in** after PR #420's existential
+> pack/open heap-boxing fix for multi-field struct payloads):
+>
+> 1. **Sized parallel-scheduler wiring** -- `System`/`Stage`
+>    generalisation over the world type. Direction 1 (heap-pointer
+>    world, single-world scheduling) is the unblocked path; tracked
+>    spice-side in
+>    [`docs/reported/sized-scheduler-system-stage-world-carrier.md`](../reported/sized-scheduler-system-stage-world-carrier.md)
+>    -- the current Track B blocker. Direction 2 (cross-world /
+>    heterogeneous scheduling) stays gated on gap-H world-type
+>    polymorphism, itself behind the Track A monomorphization phases.
+> 2. **`world-resize` existential wrapper** around the shipped
+>    `sized-defworld-copy-into` -- PR #420 cleared the pack/open path
+>    for the multi-field `(GameWorld n)` payload; the thin client
+>    layer is implementable today.
+> 3. **Routing `defcomponent-accessors` through `StorageOps`** -- still
+>    waiting on struct-element projection (independent of PR #420).
+>
+> E2b (refinement-typed APIs) remains gated on refinement types, which
+> are still in plan. The original prerequisite-tracking plan has been
 > archived at
 > [`docs/archive/history/ecs-prereq-plan.md`](../archive/history/ecs-prereq-plan.md).
 
@@ -535,6 +549,11 @@ against the resolved surface:
   `ptr<void>` cast as a bare int), and a `(GameWorld n)` struct
   does not. Generalising `System`/`Stage` over the world type is
   queued; callers invoke the typed impl directly until then.
+  Direction 1 (heap-pointer world, single-world scheduling) is
+  unblocked at the compiler level by PR #420's existential
+  pack/open heap-boxing fix for multi-field struct payloads;
+  tracked in
+  [`docs/reported/sized-scheduler-system-stage-world-carrier.md`](../reported/sized-scheduler-system-stage-world-carrier.md).
 - **Slice 9 -- mixed-shape sparse lookup**
   (`sized-world-sparse-has?` / `sized-world-sparse-get`), the
   sized counterpart of slice 6's tag pair. Hand-rolled-world
@@ -557,6 +576,8 @@ against the resolved surface:
   a copy into the `pack-sized` / `open-sized` existential is
   still queued (thin client layer over `copy-into-<W>` plus the
   `(exists [n'] ...)` packaging the sized-world plan calls out).
+  PR #420's existential pack/open heap-boxing fix cleared the
+  compiler-side prerequisite; the wrapper is implementable today.
 - **Slice 12 -- fallible `sized-spawn`** returning
   `(Result int WorldFull)`, the typed counterpart of the
   panicking `sized-spawn!`. Q3's result-returning spawn; the

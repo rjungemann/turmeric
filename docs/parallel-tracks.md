@@ -126,9 +126,10 @@ sized-world `world-resize` helper.
 
 **Still open:**
 
-- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- plan doc is **stale**.
-  Reflects 2026-06-12 state; should be re-baselined against E2d
-  P1-P6 + E2c slices 1-12 having landed.
+- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- refreshed
+  2026-06-18 against E2d P1-P6 + E2c slices 1-12 landed and PR #420
+  clearing the compiler-side prereqs for the sized scheduler
+  (direction 1) and `world-resize` wrapper follow-ups.
 - [ecs-sized-world-plan](upcoming/ecs-sized-world-plan.md) -- surface
   settled; partly subsumed by the E2c slices that already shipped.
 - [sized-scheduler-system-stage-world-carrier](reported/sized-scheduler-system-stage-world-carrier.md)
