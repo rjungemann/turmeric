@@ -2498,7 +2498,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *fn_ptr = name_for_binding(ctx, fn_binding);
                 uint32_t n = e->as.call_.n_args;
-                const char *ret_c = type_c_name(e->type);
+                /* poly-hof-constrained-result-baked-carrier (symmetric to the
+                 * arg-side fix below): resolve the RESULT type through the active
+                 * ABI spec so a monomorphized fn-value call whose result tyvar
+                 * binds to a non-int64 type (e.g. an HKT `(fn [a] b)` mapper with
+                 * b -> cstr/float/struct) casts the fn pointer to the correct
+                 * return type instead of the int64 carrier.  A no-op outside a
+                 * spec / for already-concrete results. */
+                const char *ret_c = emit_type_c_name(ctx, e->type);
                 /* two-level-sf-closure-return-miscompiles-out-binding: when this
                  * thin local fn returns a *function value* (e.g. (sf input) where
                  * sf : (fn [sig] (fn [t] float))), the result is a concrete thin

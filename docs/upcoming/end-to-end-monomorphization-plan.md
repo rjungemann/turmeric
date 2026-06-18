@@ -359,6 +359,51 @@ per Phase 2's design doc.
 
 ### 3.0 -- THE core prerequisite: thread the element type into HKT instance methods
 
+> **UPDATE (2026-06-19, third session -- LAYER 4 EMIT LANDED, probe prints 42).**
+> The "sole remaining wall" (layer 4 = the Phase 3.2 emit-side per-`(f, A)`
+> by-value instance-method monomorphization) is now implemented, flag-gated
+> behind `TUR_M7_HKT` and **regression-free with the flag OFF** (suite
+> 1683/0; shipped codegen byte-identical). `TUR_M7_HKT=1 ./build/tur run
+> docs/upcoming/v2/m7-hkt-probe.tur` now exits **42** with no ascription
+> anywhere. What landed:
+>
+> - **Elab (`elab_typeclasses.c`, `elab_method_call`):** for an HKT class the
+>   dispatch call now attaches the class var (`g -> Option`) plus the
+>   layers-1+3 element tyvars (`a/b -> int`) as the call's `abi_bindings`, so
+>   `emit_abi_register_call` can mint a per-`(f, A)` spec. **Gated tightly:**
+>   only when the instance body is by-value-*constructible* --
+>   `m7_body_constructs_byvalue` requires the body's tail (through if/do/let) to
+>   be a `#{Construct}` call. Carrier inline-C bodies and bodies that delegate
+>   to a carrier helper (`Bifunctor [Result]` -> `result-bimap [container :
+>   int]`) are excluded and stay on the carrier ABI even under the flag.
+> - **Emit return type (`emit_fns.c` body+signature, `emit_module.c` forward
+>   decl):** a by-value HKT instance-method spec whose `result_type` is a
+>   concrete non-heap `TY_APP` (`Option__int`) emits the struct BY VALUE instead
+>   of the int64 carrier spill -- three sites kept in sync.
+> - **Emit construct recovery (`emit_module.c:1139` fall-through):** a 0-arg
+>   `#{Construct}` (`(none)`) inside an active by-value HKT instance-method spec
+>   now falls past the no-`abi_bindings` early-return so `construct_recovered_byvalue`
+>   interns `none__spec` (the 1-arg `(some ...)` already did via its element arg).
+> - **Dict base (`emit_module.c`):** the carrier base instance method is
+>   carrier-noted when its by-value spec is interned, so the (still carrier-ABI)
+>   dispatch dict keeps a valid reference for indirect dispatch.
+>
+> **Verified:** probe -> 42; flag-off suite 1683/0; all existing HKT fixtures
+> (`hkt-stdlib-*`, `schema-hkt-functor`, `hkt-typeclass-instance`) stay green
+> BOTH flag-off and flag-on; no flag-on regressions vs. parent across a
+> 154-fixture typeclass sweep (the 3 flag-on failures -- `hrt-rankn-hkt`,
+> `hrt-rankn-typeclass`, `instance-method-return-carrier-bridge` -- already
+> failed flag-on at the parent commit; the rank-N pair is a separate pre-existing
+> null-`Kind` deref tracked in
+> [`docs/reported/rankn-hkt-null-kind-deref-under-m7-flag.md`](../reported/rankn-hkt-null-kind-deref-under-m7-flag.md)).
+>
+> **What remains for flag-on-by-default = Phase 4.2:** the stdlib HKT instance
+> bodies that are still carrier inline-C or delegate to carrier helpers
+> (`fmap`/`bind`/`pure`/`ap`/`bimap` for Option/Result/Parser/Goal/Backtrack/
+> Schema). Each must be rewritten to an in-body by-value construct (the probe's
+> `gmap` is the template) before the gate admits it. The layer-4 machinery is
+> now in place and waiting for those rewrites.
+
 > **UPDATE (2026-06-18, second session -- elaborator threading LANDED INERT,
 > "step (a)" DISPROVEN).** The full elaborator type-threading is now implemented
 > and committed behind the existing default-OFF `TUR_M7_HKT` flag (suite green
@@ -735,7 +780,15 @@ are now both located and characterized.
       is **regression-free** (1682 pass; existing HKT fixtures incl. parser /
       typeclass-instance stay green -- the earlier unconditional-relax breakage
       is avoided). The remaining gap is below.
-- [ ] **Per-`(f, A)` by-value SPEC INTERNING -- the precise final piece.**
+- [x] **Per-`(f, A)` by-value SPEC INTERNING -- LANDED (2026-06-19, flag-gated).**
+      Implemented end-to-end; the probe now prints 42 under `TUR_M7_HKT=1`. See
+      the 2026-06-19 UPDATE at the top of Phase 3.0 for the exact sites. The
+      mechanism that finally interned the by-value spec was attaching the HKT
+      element-tyvar bindings to the dispatch call at elab (gated on a genuinely
+      by-value-constructible instance body), which lets the existing
+      `construct_recovered_byvalue` + by-value return-type emit fire. The
+      historical dead-end notes below are retained for context.
+- [ ] **(historical) Per-`(f, A)` by-value SPEC INTERNING -- the precise final piece.**
       Even with the elaborator + narrowed gate, the probe still prints `0`:
       the generated C shows `__inst_MyFunctor_gmap_Option` emitted **once** as
       `int64_t(int64_t,int64_t)` (carrier) with **no** `__spec` clone. Routing
@@ -895,12 +948,50 @@ ABI-agnostic first.
 ### 4.2 -- Rewrite each helper in pure Turmeric (or accept it as
 genuine carrier)
 
-> **Gating note (2026-06-18):** the subset of these helpers that are **HKT
+> **APPROACH UPDATE (2026-06-19): "extend layer-4 via probes first."** The
+> stdlib HKT instance/class rewrites CANNOT be the small flag-off-byte-identical
+> steps the earlier phases were: the element-type threading is flag-gated
+> (`TUR_M7_HKT`) but stdlib **class signatures are shared source** (changing
+> `Functor`'s sig from `: int` to `(f b)` changes flag-off parsing AND forces
+> rewriting all 10 Functor instances at once, since the inline-C bodies depend on
+> the `:fn` carrier shape). So before touching stdlib, the layer-4 emit machinery
+> is being hardened against the full set of HKT method shapes via flag-gated
+> reference probes (kept flag-off byte-identical). Progress:
+>
+> - **Functor `fmap` shape: DONE across all element representations.** The
+>   layer-4 by-value path now works for element types `{int, cstr, float,
+>   struct}` (probes verified). **Bug fixed in-session:** the fn-value call
+>   inside a by-value HKT spec was casting the mapper `f`'s RESULT to the int64
+>   carrier (`((int64_t (*)(int64_t))f)`) instead of resolving the result tyvar
+>   `b` through the active spec -- so `(gmap (some 7) to-cstr)` miscompiled
+>   (worked "by luck" only for `b = int`). Now resolves via `emit_type_c_name`
+>   at the thin-fn-call site (`emit_expr.c`), symmetric to the existing arg-side
+>   resolution. Flag-off suite stays 1683/0.
+> - **Monad `bind` shape: DONE end-to-end (2026-06-19).** The probe
+>   (`docs/upcoming/v2/m7-hkt-probe-bind.tur`) exits 21 under the flag; verified
+>   for B = cstr and `(none)` short-circuit. Two coordinated fixes landed (both
+>   resolved/archived):
+>   ([kind-check](../archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md))
+>   thread the class param kinds through `parse_typeclass_method` so an HKT param
+>   `^m` resolves to a KIND_ARROW TY_TYVAR even nested inside a fn type; and
+>   ([layer-4 emit](../archive/m7-hkt-bind-body-byvalue-emit.md)) `m7_body_constructs_byvalue`
+>   now admits a tail call to a LOCAL fn returning the `(f b)` family (bind's
+>   `(k (.value ma))`), and the HKT class var is bound to the receiver's
+>   constructor HEAD (`Option`) so `(m b)` resolves to the by-value
+>   `Option__int`. Remaining for the monadic family: a continuation passed as a
+>   bare `:fn` poly/fat-closure carrier (the probe's is a typed lambda with an
+>   explicit `: (Option b)` return) -- a further follow-on; and Applicative `ap`
+>   (arg `(f (fn [a] b))`) is not yet probed.
+
+> **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
+> the subset of these helpers that are **HKT
 > instance method bodies** (`fmap`/`ap`/`bind`/`pure` for Option, Parser, Goal,
 > Backtrack, Schema, ...) CANNOT be rewritten to pure-Turmeric until Phase 3.0
 > lands -- the method body has no element-type tyvar in scope, so a by-value
 > rewrite (`(option-map container fn)`) fails to typecheck (`container : Option`,
-> not `(Option A)`). Proven 2026-06-18. Non-HKT carrier helpers
+> not `(Option A)`). Proven 2026-06-18. (3.0 + layer-4 have since landed
+> flag-gated; the remaining blocker for the monadic shapes is the kind-system
+> prerequisite above, not the element-type scoping.) Non-HKT carrier helpers
 > (`vec-eq?`/`map-eq?`/`set-eq?`/...) are independent of 3.0 and can proceed.
 
 For each enumerated helper:

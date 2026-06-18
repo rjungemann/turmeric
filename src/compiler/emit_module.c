@@ -1136,7 +1136,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * matters; absence of bindings means there is nothing to specialize. */
     const AbiTypeBinding *bindings = call->as.call_.abi_bindings;
     uint8_t n_bindings = call->as.call_.n_abi_bindings;
-    if (!bindings || n_bindings == 0) return;
+    if (!bindings || n_bindings == 0) {
+        /* M7 layer-4 (flag-gated): a 0-arg `#{Construct}` (`(none)`) in an HKT
+         * instance-method body has no abi_bindings of its own, but when scanned
+         * inside an active by-value HKT instance-method spec the
+         * construct_recovered_byvalue path below recovers it by value from the
+         * enclosing spec's result type.  Fall through for that narrow case so
+         * `none__spec` is interned (otherwise the body emits the carrier `none()`
+         * and the by-value `Option__int` slot misreads it). */
+        bool m7_construct_in_byval_spec =
+            g_m7_hkt_enabled &&
+            call->as.call_.fn_binding &&
+            call->as.call_.fn_binding->is_construct_template &&
+            !call->as.call_.fn_expr &&
+            ctx->current_abi_specialization &&
+            ctx->current_abi_specialization->fn &&
+            ctx->current_abi_specialization->fn->owner_instance &&
+            ctx->current_abi_specialization->result_type.kind == TY_APP;
+        if (!m7_construct_in_byval_spec) return;
+    }
 
     /* Variant 2 of generic-struct-opaque-element: when this call is scanned
      * inside an *active* specialization, its abi_bindings (captured at elab
@@ -1724,6 +1742,19 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * invalidating `spec`; refer to the outer spec by index afterward. */
     uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
     emit_abi_record_specialized_call(ctx, call, spec->clone_name);
+
+    /* M7 layer-4 (flag-gated): a by-value HKT instance-method spec replaces the
+     * direct dispatch call, so the carrier base method would otherwise be
+     * skipped by emit_abi_fn_skip_generic -- but the per-instance dispatch dict
+     * still references it (indirect/polymorphic HKT dispatch keeps the carrier
+     * ABI per the M6/M7 carve-out).  Note a carrier call so the base stays
+     * emitted and the dict's `int64_t (*)(...)` field resolves. */
+    if (g_m7_hkt_enabled && fd && fd->owner_instance &&
+        result_type.kind == TY_APP &&
+        !type_is_heap_struct(result_type) &&
+        type_has_concrete_codegen_layout(&result_type)) {
+        emit_abi_note_carrier_call(ctx, fn_binding);
+    }
 
     /* poly-closure-result-specialization (Stage B+C): intern a register-class-
      * correct clone of the lifted inner closure body and link it to this outer
@@ -2539,7 +2570,14 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
      * this override-skip, a `Dec[int]` spec returning `(Result int cstr)`
      * still lowers to `int64_t`, and the caller's bridge has to unbox — the
      * very bridge crossing Path A is trying to retire. */
-    if (is_instance_method && type_uses_carrier_abi(spec->result_type)
+    if (g_m7_hkt_enabled && is_instance_method &&
+        spec->result_type.kind == TY_APP &&
+        !type_is_heap_struct(spec->result_type) &&
+        type_has_concrete_codegen_layout(&spec->result_type)) {
+        /* M7 layer-4 (flag-gated): per-(f, A) by-value HKT instance-method spec
+         * returns the resolved struct by value (sync with emit_fns.c). */
+        buf_puts(out, type_c_name(spec->result_type));
+    } else if (is_instance_method && type_uses_carrier_abi(spec->result_type)
         && spec->typeclass_inst == NULL) {
         buf_puts(out, "int64_t");
     } else {

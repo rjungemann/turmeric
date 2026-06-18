@@ -7,6 +7,7 @@
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
     uint32_t *out_body_start,
     const Symbol **class_type_params, uint8_t n_class_type_params,
+    const Kind *class_type_param_kinds,
     const Symbol **assoc_type_names, uint8_t n_assoc_type_names);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
 static bool rt_type_mentions_tyvar(const Type *t, const char *name);
@@ -652,6 +653,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                                uint32_t *out_body_start,
                                                const Symbol **class_type_params,
                                                uint8_t n_class_type_params,
+                                               const Kind *class_type_param_kinds,
                                                const Symbol **assoc_type_names,
                                                uint8_t n_assoc_type_names) {
     if (method_form->tag != F_LIST || method_form->as.list.len < 3) {
@@ -684,13 +686,28 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * so the path is byte-for-byte inert.  See m7_is_method_tyvar_name. */
     const Symbol **eff_tp = class_type_params;
     uint8_t n_eff_tp = n_class_type_params;
+    /* Thread the class type-param kinds through to type-expression resolution so
+     * an HKT param `^m` (kind `* -> *`) used in an APPLIED position inside a
+     * method signature -- e.g. `bind`'s `k : (fn [a] (m b))` -- resolves to a
+     * TY_TYVAR carrying KIND_ARROW, not the KIND_STAR default.  Without this,
+     * `(m b)` reconstructed by call_instantiate_type at the instance call site
+     * trips type_app's kind check (TUR-E0012).  The fmap shape (fn returns a
+     * bare element `b`) never builds `(m _)` so it was unaffected; only the
+     * monadic shapes (fn returning an applied HKT type) hit it.  See
+     * docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
+    Kind *eff_kinds = (Kind *)class_type_param_kinds;
     if (g_m7_hkt_enabled) {
         enum { M7_MAX_TP = 16 };
         const Symbol **buf =
             (const Symbol **)arena_alloc(e->arena, M7_MAX_TP * sizeof(const Symbol *));
+        Kind *kbuf = (Kind *)arena_alloc(e->arena, M7_MAX_TP * sizeof(Kind));
         uint8_t n = 0;
-        for (uint8_t i = 0; i < n_class_type_params && n < M7_MAX_TP; i++)
-            buf[n++] = class_type_params[i];
+        for (uint8_t i = 0; i < n_class_type_params && n < M7_MAX_TP; i++) {
+            kbuf[n] = class_type_param_kinds ? class_type_param_kinds[i] : KIND_STAR;
+            buf[n] = class_type_params[i];
+            n++;
+        }
+        uint8_t n_class_in_buf = n;
         m7_collect_form_tyvars(params_form, class_type_params, n_class_type_params,
                                buf, &n, M7_MAX_TP);
         /* Locate the return form (index 2, or 3 when an effect-row #{...}
@@ -704,7 +721,11 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                        class_type_params, n_class_type_params,
                                        buf, &n, M7_MAX_TP);
         }
+        /* The method-level tyvars appended after the class params are ordinary
+         * element variables of kind `*`. */
+        for (uint8_t i = n_class_in_buf; i < n; i++) kbuf[i] = KIND_STAR;
         eff_tp = buf;
+        eff_kinds = kbuf;
         n_eff_tp = n;
     }
 
@@ -855,7 +876,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                      * argument-dispatchable method as return-only. */
                     Type *ft = inner_f
                         ? type_expr_from_form(e, inner_f, NULL,
-                                              eff_tp, NULL,
+                                              eff_tp, eff_kinds,
                                               n_eff_tp)
                         : NULL;
                     if (!ft) {
@@ -913,7 +934,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     } else {
                         Type *ft = ti
                             ? type_expr_from_form(e, ti, NULL,
-                                                  eff_tp, NULL,
+                                                  eff_tp, eff_kinds,
                                                   n_eff_tp)
                             : NULL;
                         if (!ft) {
@@ -926,7 +947,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
                     Type *ft = type_expr_from_form(e, type_f, NULL,
-                                                   eff_tp, NULL,
+                                                   eff_tp, eff_kinds,
                                                    n_eff_tp);
                     if (!ft) {
                         diag_emit(DIAG_ERROR, type_f->span,
@@ -1050,7 +1071,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
              * elsewhere in this function, not via type_expr_from_form.) */
             Type *ft = (ret_form->as.list.len > 0)
                 ? type_expr_from_form(e, ret_form->as.list.items[0], NULL,
-                                      eff_tp, NULL,
+                                      eff_tp, eff_kinds,
                                       n_eff_tp)
                 : NULL;
             if (!ft) {
@@ -1064,7 +1085,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
              * Prereq 5: same as above -- pass class type params so a
              * nested `a` resolves to TY_TYVAR. */
             Type *ft = type_expr_from_form(e, ret_form, NULL,
-                                           eff_tp, NULL,
+                                           eff_tp, eff_kinds,
                                            n_eff_tp);
             if (!ft) {
                 diag_emit(DIAG_ERROR, ret_form->span,
@@ -1326,6 +1347,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         uint32_t body_start = 0;
         TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start,
                                                          type_params, n_type_params,
+                                                         type_param_kinds,
                                                          assoc_type_names, n_assoc_types);
         if (!method) return NULL;
         methods[i] = *method;
@@ -1612,6 +1634,48 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
         return t;
     }
     return t;
+}
+
+/* M7 HKT layer-4 (flag-gated): is this instance-method body genuinely
+ * by-value-constructible?  The emit-side per-(f, A) by-value spec only works
+ * when the method body constructs its `(f b)` result IN-BODY via `#{Construct}`
+ * calls (`some`/`none`/`ok`/...) -- so its inner constructs recover by value.
+ * A body that DELEGATES to a carrier helper (e.g. `Bifunctor [Result]`'s
+ * `(result-bimap container ...)`, where `result-bimap` takes a `:int` carrier)
+ * cannot, and must stay on the uniform-carrier dispatch until Phase 4.2 rewrites
+ * the helper.  Recurse through if/do/let to the tail position.
+ *
+ * Monadic shapes (Monad `bind`): the tail of a branch may be a CALL to the
+ * continuation `k` -- `(k (.value ma))` -- which returns the result family
+ * `(m b)` BY VALUE (k is a fn-typed PARAMETER, not a global carrier helper).
+ * Admit such a tail too, distinguished from a carrier-delegating helper by
+ * (a) the callee is a local fn binding (`!is_global`), not a top-level defn,
+ * and (b) the call's result type is the applied `(f b)` family (TY_APP). */
+static bool m7_body_constructs_byvalue(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_IF:
+            return m7_body_constructs_byvalue(e->as.if_.then_) &&
+                   m7_body_constructs_byvalue(e->as.if_.else_or_null);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   m7_body_constructs_byvalue(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+            return m7_body_constructs_byvalue(e->as.let_.body);
+        case EX_CALL:
+            if (e->as.call_.fn_binding &&
+                e->as.call_.fn_binding->is_construct_template)
+                return true;
+            /* Monadic continuation tail call: a local (parameter) fn returning
+             * the applied `(f b)` family by value. */
+            if (e->as.call_.fn_binding && !e->as.call_.fn_expr &&
+                !e->as.call_.fn_binding->is_global &&
+                e->type.kind == TY_APP)
+                return true;
+            return false;
+        default:
+            return false;
+    }
 }
 
 /* M7 HKT layers 1+3 (flag-gated): unify a method's DECLARED parameter type
@@ -4742,6 +4806,12 @@ resolved_user_fallback:;
      * the parse fix + layer-0 head substitution), unify the declared parameter
      * types against the actual argument types to bind `b` (and any other element
      * tyvars), and substitute into rft so it grounds to `(Option int)`. */
+    /* M7 layer-4 prep: persist the element-tyvar bindings collected here so they
+     * can be attached as the dispatch call's abi_bindings below (the emit-side
+     * per-(f, A) by-value spec interning reads them). */
+    const Symbol *m7_bind_names[16];
+    Type m7_bind_types[16];
+    uint8_t m7_nb = 0;
     if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
         best_method->binding->type.kind == TY_FN &&
         best_method->binding->type.as.fn.result_full_type &&
@@ -4759,21 +4829,19 @@ resolved_user_fallback:;
              * CLASS method's param_types (parsed with the method-tyvar fix), not
              * on the instance binding (whose arg_full_types is NULL). */
             const Type *rft = best_method->binding->type.as.fn.result_full_type;
-            const Symbol *names[16];
-            Type types[16];
-            uint8_t nb = 0;
             if (cm->n_params >= 1)
                 m7_collect_tyvar_bindings(e, cm->param_types[0], obj_orig_type,
-                                          names, types, &nb, 16);
+                                          m7_bind_names, m7_bind_types, &m7_nb, 16);
             for (uint32_t i = 0; i < n_args; i++) {
                 uint8_t pidx = 1 + (uint8_t)i;
                 if (pidx < cm->n_params)
                     m7_collect_tyvar_bindings(e, cm->param_types[pidx],
-                                              args_orig_types[i], names, types, &nb, 16);
+                                              args_orig_types[i], m7_bind_names,
+                                              m7_bind_types, &m7_nb, 16);
             }
-            if (nb > 0)
-                result_type = elab_subst_class_tyvars(e->arena, *rft, names, nb,
-                                                      types, nb);
+            if (m7_nb > 0)
+                result_type = elab_subst_class_tyvars(e->arena, *rft, m7_bind_names,
+                                                      m7_nb, m7_bind_types, m7_nb);
         }
     }
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
@@ -4817,6 +4885,48 @@ resolved_user_fallback:;
             bindings[0].type = obj_orig_type;
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = 1;
+        }
+        /* M7 layer-4 prep (flag-gated): for an HKT class, attach the class var
+         * (`g -> Option`) plus the element tyvars collected by layers 1+3
+         * (`a -> int`, `b -> int`) as the dispatch call's abi_bindings, so
+         * emit_abi_register_call can mint a per-(f, A) by-value instance-method
+         * spec instead of falling through to the carrier-double-boxing path. */
+        /* M7 layer-4 (flag-gated): only by-value-expressible (pure-Turmeric)
+         * instance bodies can be monomorphized by value.  Carrier inline-C
+         * instance bodies (the current stdlib HKT instances) must stay on the
+         * uniform-carrier dispatch until Phase 4.2 rewrites them; attaching the
+         * element bindings to them would mint a by-value spec whose signature
+         * contradicts the carrier inline-C body.  Gate on the body kind. */
+        bool m7_body_byvalue_ok = best_method && best_method->body &&
+            best_method->body->kind != EX_INLINE_C &&
+            m7_body_constructs_byvalue(best_method->body);
+        if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
+            tc->n_type_params >= 1 && tc->type_params[0]) {
+            uint8_t total = (uint8_t)(1 + m7_nb);
+            if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, total * sizeof(AbiTypeBinding));
+            /* Bind the HKT class var to the CONSTRUCTOR HEAD of the receiver
+             * (`Option`), not the full applied receiver (`(Option int)`), so an
+             * applied occurrence in the body -- e.g. the monadic continuation's
+             * result `(m b)` in `bind` -- resolves to `(Option b)` -> `(Option
+             * int)` at emit time instead of the nonsensical `((Option int) int)`
+             * (which type_c_name's to the int64 carrier).  For the fmap shape the
+             * result `(g b)` is pre-resolved by the elaborator, so this only
+             * matters for in-body applied occurrences like the bind tail call. */
+            Type hkt_head = obj_orig_type;
+            while (hkt_head.kind == TY_APP && hkt_head.as.app.fn)
+                hkt_head = *hkt_head.as.app.fn;
+            bindings[0].name = tc->type_params[0]->name;
+            bindings[0].type = hkt_head;
+            uint8_t bi = 1;
+            for (uint8_t k = 0; k < m7_nb && bi < total; k++) {
+                bindings[bi].name = m7_bind_names[k]->name;
+                bindings[bi].type = m7_bind_types[k];
+                bi++;
+            }
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = bi;
         }
     }
     return out;

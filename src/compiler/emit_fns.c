@@ -1,5 +1,6 @@
 /* emit_fns.c -- function-definition C emission (emit_fn_def). */
 #include "emit_internal.h"
+#include "globals.h"   /* M7: g_m7_hkt_enabled (flag-gated by-value HKT dispatch) */
 
 /* ============================================================================
  * CF1: Self-tail-call optimization (self-TCO).
@@ -501,8 +502,18 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             bool is_instance_method =
                 fd->binding && fd->binding->name && fd->binding->name->name &&
                 strncmp(fd->binding->name->name, "__inst_", 7) == 0;
-            if (is_instance_method &&
-                type_uses_carrier_abi(emit_resolve_type(ctx, rt))
+            Type rt_resolved = emit_resolve_type(ctx, rt);
+            /* M7 layer-4 (flag-gated): a per-(f, A) by-value HKT instance-method
+             * spec returns the resolved struct by value (keep in sync with the
+             * body-side return-type branch and the forward decl in
+             * emit_module.c). */
+            if (g_m7_hkt_enabled && is_instance_method &&
+                rt_resolved.kind == TY_APP &&
+                !type_is_heap_struct(rt_resolved) &&
+                type_has_concrete_codegen_layout(&rt_resolved)) {
+                buf_puts(file, emit_type_c_name(ctx, rt));
+            } else if (is_instance_method &&
+                type_uses_carrier_abi(rt_resolved)
                 && ctx->current_abi_specialization->typeclass_inst == NULL) {
                 buf_puts(file, "int64_t");
             } else {
@@ -1088,7 +1099,19 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                  * (typeclass_inst set) skip the carrier-int64 override.
                  * The signature emit at L412 + the forward decl at
                  * emit_module.c:1853 use the same gate; keep them in sync. */
-                if (is_inst && type_uses_carrier_abi(emit_resolve_type(ctx, rt))
+                Type rt_resolved = emit_resolve_type(ctx, rt);
+                /* M7 layer-4 (flag-gated): a per-(f, A) by-value HKT
+                 * instance-method spec returns the resolved struct (`Option__int`)
+                 * BY VALUE, not the int64 carrier -- this is the whole point of
+                 * the spec.  Detect it by the concrete by-value TY_APP result
+                 * (same guards as construct_recovered_byvalue) and skip the
+                 * carrier spill below. */
+                if (g_m7_hkt_enabled && is_inst &&
+                    rt_resolved.kind == TY_APP &&
+                    !type_is_heap_struct(rt_resolved) &&
+                    type_has_concrete_codegen_layout(&rt_resolved)) {
+                    ret_ctype = emit_type_c_name(ctx, rt);
+                } else if (is_inst && type_uses_carrier_abi(rt_resolved)
                     && ctx->current_abi_specialization->typeclass_inst == NULL) {
                     ret_ctype = "int64_t";
                     inst_method_carrier_spill = true;

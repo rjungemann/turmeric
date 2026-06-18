@@ -955,10 +955,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 Kind *ext_kinds = (Kind *)arena_alloc(
                     e->arena, n_extended * sizeof(Kind));
 
-                /* Copy existing type params */
+                /* Copy existing type params.  type_param_kinds follows the
+                 * codebase-wide "NULL means all-KIND_STAR" convention (see the
+                 * guarded reads in emit_module.c / elab_typeclasses.c); without
+                 * this guard a rank-N HKT signature with a NULL kinds array
+                 * NULL-derefs here (only reachable under TUR_M7_HKT). */
                 for (uint8_t i = 0; i < n_type_params; i++) {
                     ext_params[i] = type_params[i];
-                    ext_kinds[i] = type_param_kinds[i];
+                    ext_kinds[i] = type_param_kinds ? type_param_kinds[i] : KIND_STAR;
                 }
 
                 /* Parse each bound variable */
