@@ -980,8 +980,36 @@ genuine carrier)
 >   constructor HEAD (`Option`) so `(m b)` resolves to the by-value
 >   `Option__int`. Remaining for the monadic family: a continuation passed as a
 >   bare `:fn` poly/fat-closure carrier (the probe's is a typed lambda with an
->   explicit `: (Option b)` return) -- a further follow-on; and Applicative `ap`
->   (arg `(f (fn [a] b))`) is not yet probed.
+>   explicit `: (Option b)` return) -- a further follow-on.
+> - **Applicative `ap` shape: DONE end-to-end (2026-06-18).** Probe at
+>   `docs/upcoming/v2/m7-hkt-probe-ap.tur` exits 42 under the flag.
+>   `ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)` is the first shape whose result
+>   element `b` is reachable only THROUGH a wrapped function value, so it needed
+>   the "fat-closure carrier" follow-on resolved. Two coordinated fixes landed
+>   (report archived to
+>   [`docs/archive/m7-hkt-ap-fn-element-carrier-erasure.md`](../archive/m7-hkt-ap-fn-element-carrier-erasure.md)):
+>   - **Fix direction 3 (defensive guard):** a residual free result element
+>     tyvar aborts the by-value HKT monomorphization and falls back to carrier
+>     dispatch (`m7_type_has_free_tyvar` + `m7_byvalue_grounded` in
+>     `elab_typeclasses.c`), instead of emitting a half-by-value spec with a
+>     dangling carrier-base dict reference. This both converted the original cc
+>     error into a clean diagnostic AND backstops the genuinely-uninferable
+>     `(ap (none) (some _))` case (no function anywhere -> `b` undetermined ->
+>     clean `(type-app ? ?)` error, not a miscompile).
+>   - **Fix direction 1 (preserve the fn type), three pieces:** (1) the producer
+>     `EX_FN_TO_FAT` shim keeps the precise `(fn [int] int)` signature (marked
+>     `boxed`) on its static type instead of erasing to `ptr<void>`, so
+>     `(some add1) : (Option (fn [int] int))` (`elab_call.c`); (2) the call site
+>     then recovers `b` via `m7_collect_tyvar_bindings` and grounds `(f b)` ->
+>     `(Option int)`; (3) the instance body param's element fn is marked `boxed`
+>     (`m7_box_hkt_element_fns` on `elab_param_type`) so `((.value ff) x)`
+>     fat-dispatches through the box thunk rather than bare-calling the box
+>     address. All three flag-gated.
+>   Verified `b = int` (-> 42) and `b = cstr` (the wrapped fn's RETURN type
+>   drives `b`). Inert flag-off (suite 1683/0, byte-identical codegen) and inert
+>   flag-on for the grounded `fmap`/`bind` shapes; the 92-fixture HKT/typeclass
+>   flag-on codegen sweep is unchanged vs. the parent commit (the fix only
+>   enables the previously-broken `ap` shape).
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT

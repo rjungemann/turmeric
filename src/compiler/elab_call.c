@@ -3172,7 +3172,27 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed) {
                 uint8_t inner_arity = args[i]->type.as.fn.arity;
                 if (inner_arity >= 1 && inner_arity <= 5) {
-                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                    /* M7 fix direction 1 (flag-gated): keep the precise fn
+                     * signature on the boxed shim's static type so a function
+                     * value escaping into a type-variable parameter -- e.g.
+                     * `(some add1)` binding `some`'s `A` -- binds the tyvar to
+                     * `(fn [int] int)` rather than the opaque `ptr<void>`
+                     * carrier.  This lets the HKT by-value monomorphization
+                     * recover the result element of the Applicative `ap` shape
+                     * (docs/reported/m7-hkt-ap-fn-element-carrier-erasure.md).
+                     * The runtime value is still a fat box (EX_FN_TO_FAT emits a
+                     * `void *` regardless, reading inner->type); only the static
+                     * type changes, and only under the M7 flag, so the shipped
+                     * flag-off path stays byte-identical.  The clone is marked
+                     * `boxed` so downstream auto-shim sites do not double-box. */
+                    Type shim_ty = TYPE_PTR_VOID;
+                    if (g_m7_hkt_enabled) {
+                        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *bt = args[i]->type;
+                        bt->as.fn.boxed = true;
+                        shim_ty = *bt;
+                    }
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, shim_ty,
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
                     args[i] = shim;
