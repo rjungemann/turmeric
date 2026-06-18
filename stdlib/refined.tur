@@ -154,10 +154,13 @@
 ;;; Since: R1
 
 (defn ne-from? [xs : int] : int
-  ;; Inline-C body: the polymorphic `(none)` / `(some …)` post-M2b return a
-  ;; typed `(Option A)`; this function's contract is the carrier int64 (so
-  ;; `(some? (ne-from? …))` and friends keep working).  Build the carrier
-  ;; Option directly here to bridge the two ABIs without ascription gymnastics.
+  ;; Inline-C body: kept on the carrier ABI pending two compiler follow-ups
+  ;; that block the by-value rewrite (see option-consumer-retype-byvalue.md):
+  ;;   - 0-arg `(none)` in a ground (Option T) return (handled for
+  ;;     parametric TY_APP, not yet for ground non-generics, but the
+  ;;     parametric case here also leaks compiler memory in
+  ;;     clone_struct_app_type -- see
+  ;;     docs/reported/parametric-option-return-clone-struct-app-leak.md).
   ```c
   if (xs == 0) return 0;
   struct { bool is_some; int64_t value; } *o = malloc(sizeof(*o));
@@ -182,7 +185,12 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-unwrap [o : int] : (NonEmpty int) (:: (unwrap-or o 0) :NonEmpty))
+(defn ne-unwrap [o : int] : (NonEmpty int)
+  ;; Carrier-ABI: o is the int64 Option produced by ne-from?.  Bridge into the
+  ;; by-value (Option int) shape and read .value (NonEmpty == :int carrier).
+  (if (some? (:: o (Option int)))
+    (:: (.value (:: o (Option int))) :NonEmpty)
+    (:: 0 :NonEmpty)))
 ;; ===================================================================
 ;; R2: BoundedIdx -- an index proven to be in range for some length.
 ;; ===================================================================
@@ -228,9 +236,13 @@
 ;;; Since: R2
 
 (defn bidx-of? [n : int i : int] : int
-  ;; Inline-C body: same carrier-bridge as ne-from?.  Returns the int64
-  ;; Option carrier (0 = none, heap-allocated otherwise) so existing call
-  ;; sites that use `(some? (bidx-of? …))` continue to work post-M2b.
+  ;; Inline-C body: kept on the carrier ABI pending compiler support for
+  ;; 0-arg `(none)` returning a ground `(Option BoundedIdx)` by-value (the
+  ;; step-2 fix in `option-consumer-retype-byvalue.md` handles parametric
+  ;; TY_APP returns like `(Option (NonEmpty A))`, but a ground non-generic
+  ;; return like `(Option BoundedIdx)` still emits the carrier handle into
+  ;; the by-value Option slot -- see
+  ;; docs/reported/zero-arg-construct-ground-byvalue-return.md.
   ```c
   if (i < 0 || i >= n) return 0;
   struct { bool is_some; int64_t value; } *o = malloc(sizeof(*o));
@@ -254,7 +266,10 @@
 ;;;
 ;;; Since: R2
 
-(defn bidx-unwrap [o : int] : BoundedIdx (:: (unwrap-or o 0) :BoundedIdx))
+(defn bidx-unwrap [o : int] : BoundedIdx
+  ;; Carrier-ABI: o is the int64 Option produced by bidx-of?.  Bridge into the
+  ;; by-value (Option int) shape and read .value (BoundedIdx == :int).
+  (if (some? (:: o (Option int))) (:: (.value (:: o (Option int))) :BoundedIdx) (:: 0 :BoundedIdx)))
 ;;; vec-get-checked -- index a Vec with a proven-in-range BoundedIdx (total).
 ;;;
 ;;; Because the BoundedIdx was validated against the vector's length by

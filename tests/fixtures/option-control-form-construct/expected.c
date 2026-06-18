@@ -2635,7 +2635,6 @@ static void slice_hyfree(int64_t);
 static bool slice_hyeq_qu(int64_t, int64_t, int64_t);
 static int64_t some(int64_t);
 static int64_t none();
-static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static int64_t ok(int64_t);
@@ -2703,6 +2702,7 @@ static Result__int__cstr res_hyif(bool);
 static int64_t opt_hyconsume(bool);
 static bool opt_hypred(bool);
 static int64_t res_hyok(const Result__int__cstr *);
+static bool some___spec__bool_Option__int(Option__int);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3900,11 +3900,6 @@ static int64_t none() {
         return 0;
 }
 
-static bool some_qu(int64_t o) {
-        return tur_is_some(o);
-  
-}
-
 static int64_t unwrap_hyor(int64_t o, int64_t dflt) {
         return tur_is_some(o) ? tur_opt_value(o) : dflt;
   
@@ -4652,17 +4647,22 @@ static bool opt_hypred(bool b) {
         } else {
             __t56 = none();
         }
-        return some_qu(__t56);
+        tur_option_t *__t57 = (tur_option_t *)(intptr_t)(__t56);
+        return some___spec__bool_Option__int((__t57 ? (Option__int){.is_some = __t57->is_some, .value = __t57->value} : (Option__int){0}));
 }
 
 static int64_t res_hyok(const Result__int__cstr * r) {
-        int64_t __t57;
+        int64_t __t58;
         if (((Result *)(intptr_t)(r))->is_ok) {
-            __t57 = ((Result *)(intptr_t)(r))->ok_val;
+            __t58 = ((Result *)(intptr_t)(r))->ok_val;
         } else {
-            __t57 = (INT64_C(0)) - (INT64_C(1));
+            __t58 = (INT64_C(0)) - (INT64_C(1));
         }
-        return __t57;
+        return __t58;
+}
+
+static bool some___spec__bool_Option__int(Option__int o) {
+        return (o).is_some;
 }
 
 
@@ -4680,10 +4680,10 @@ int main(int argc, char **argv) {
     puts(((opt_hyif(false)).is_some) ? "true" : "false");
     printf("%lld\n", (long long)((opt_hylet(true)).value));
     printf("%lld\n", (long long)((opt_hydo(true)).value));
-    Result__int__cstr __t58 = res_hyif(true);
-    printf("%lld\n", (long long)(res_hyok(&__t58)));
-    Result__int__cstr __t59 = res_hyif(false);
+    Result__int__cstr __t59 = res_hyif(true);
     printf("%lld\n", (long long)(res_hyok(&__t59)));
+    Result__int__cstr __t60 = res_hyif(false);
+    printf("%lld\n", (long long)(res_hyok(&__t60)));
     printf("%lld\n", (long long)(opt_hyconsume(true)));
     printf("%lld\n", (long long)(opt_hyconsume(false)));
     puts((opt_hypred(true)) ? "true" : "false");

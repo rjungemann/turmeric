@@ -8,23 +8,34 @@ severity: Low-medium ergonomics + audit hygiene. The stdlib Option consumers
   concrete->carrier at every call site (the 8 spills the audit flags in
   `option-consumers-byvalue-arg`). Retyping them to `(Option A)` honours the
   No-Lazy-`:int` rule and removes those spills.
-status: PARTIAL 2026-06-18. `option-eq?` retyped to `[A] [o1 : (Option A)
-  o2 : (Option A) ^fat cmp-fn] : bool`; `option-map` now retyped to
-  `[A B] [o : (Option A) ^fat f : (fn [A] B)] : (Option B)` with a pure-Turmeric
-  by-value body. The 0-arg constructor `abi_bindings` follow-up (step 2) is
-  DONE -- elab now attaches the constructor-result-tyvar -> caller-tyvar binding
-  to a 0-arg `#{Construct}` (`(none)`/`(err)`) in non-ground return position, and
-  emit composes it through the active spec so the false arm mints a by-value
-  `none__spec`. A guard in `emit_call_name` / `find_matched_abi_spec` stops a
-  by-value 0-arg constructor spec from leaking into carrier-context `(none)`
-  sites (a 0-arg call has no args to disambiguate structurally), and
-  `call_returns_byvalue_aggregate` / `expr_emits_byvalue_carrier_abi` now trust
-  the matched spec's return ABI (a spec whose result element stayed unresolved
-  returns the carrier handle, not a by-value aggregate). Proven by
-  `tests/fixtures/option-construct-byvalue-return-spec/` (some + none arms) and
-  `tests/fixtures/option-map-capturing-closure/`; full suite green (1675/0).
+status: PARTIAL 2026-06-18. `option-eq?` and `option-map` retyped to by-value
+  `(Option A)` (see prior PARTIAL notes for step 1/2 detail). **2026-06-18
+  follow-up: `some?` retyped to `[A] [o : (Option A)] : bool (.is-some o)`
+  -- pure-Turmeric by-value body.** Carrier-context callers (`(some? (lookup
+  ...))` against an inline-C carrier-int Option producer, `(some? r)` in
+  `kleisli.tur`/`refined.tur` where `r` is a carrier-int from
+  `k-apply-raw`/`ne-from?`/`bidx-of?`) bridge via `(:: r (Option int))`
+  ascription -- the layout is uniform across element types so a single
+  `(Option int)` ascription is safe at carrier-erased boundaries. Native
+  interpreter override `native_some_pred` is unchanged. Full suite green
+  (1676/0). `unwrap-or` retype attempted and reverted: it requires the
+  default-value type `A` to be inferable at carrier-context call sites
+  (e.g. `(unwrap-or opt 0)` where opt is `:int`), and the cascade spans
+  ~10 stdlib modules (`zipper`, `seq/*`, `json`, `safe`, `env`, `serial`,
+  ...) that all produce carrier-int Options -- a separate PR is warranted.
+  Rewriting `ne-from?`/`bidx-of?` bodies to pure-Turmeric by-value Option
+  uncovered two new compiler-side bugs filed as their own reports:
+    - [zero-arg-construct-ground-byvalue-return.md](zero-arg-construct-ground-byvalue-return.md)
+      (0-arg `(none)` in a ground `(Option BoundedIdx)` return emits the
+      carrier handle into the by-value slot)
+    - [parametric-option-return-clone-struct-app-leak.md](parametric-option-return-clone-struct-app-leak.md)
+      (doubly-nested parametric `(Option (NonEmpty A))` return leaks
+      304 bytes from `clone_struct_app_type` per compile)
+  Step 4 (refined.tur smart-constructor + unwrapper retype) and step 5
+  (kleisli.tur `comp`/`k-apply-raw` retype) are blocked on those two
+  compiler bugs plus the broader carrier-Option-producer cascade.
   `result-map` remains (a deliberate carrier-ABI regression test backs its
-  `:int` signature -- see below); `some?`/`unwrap-or` remain cascade-coupled.
+  `:int` signature -- see below); `unwrap-or` remains cascade-coupled.
   One niche residual on `option-map` is filed under
   `docs/archive/option-map-literal-none-unannotated-fn-no-A-inference.md` (resolved 2026-06-18; emit-side guards in PR #421 route the under-determined-`A` call to the carrier-context spec). A separate spill-bridge regression at the by-value-producer -> carrier-consumer boundary inside a `let`/`do`/`if` arg slot is tracked in `docs/reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md`.
 ---
@@ -90,10 +101,39 @@ return. Resolved 2026-06-18:
 `option-map` now has a pure-Turmeric by-value body and no inline-C carrier base.
 `result-map` is NOT in the same boat: see below.
 
-## Cascade-coupled: `some?` / `unwrap-or`
+## Done: `some?` (by-value `(Option A) -> bool`)
 
-`some?` and `unwrap-or` are used internally by carrier-`:int` designs that would
-all have to retype together:
+`some?` (`stdlib/option.tur`) retyped to:
+
+```turmeric
+(defn some? [A] [o : (Option A)] : bool (.is-some o))
+```
+
+Pure-Turmeric, reads `.is-some` by value. The native interpreter override
+`native_some_pred` (`src/main.c`) is unchanged. Carrier-context callers --
+where `some?` previously consumed a carrier-int Option directly from
+inline-C producers like `lookup`, `zipper-move-right`, `ne-from?`,
+`bidx-of?`, or the closure result threaded through `k-apply-raw` -- bridge
+with `(:: r (Option int))`. The layout is uniform regardless of A
+(`{bool is_some, int64 value}`), so a single `(Option int)` ascription is
+safe even where the actual element type is erased (kleisli Arrow).
+
+Callers updated:
+
+- `stdlib/kleisli.tur` `comp` body: `(some? (:: r (Option int)))`.
+- `stdlib/refined.tur` `ne-unwrap` / `bidx-unwrap`: bridge `o : int`
+  through `(:: o (Option int))` to read `.value` by-value.
+- `tests/fixtures/refined-nonempty/input.tur`,
+  `tests/fixtures/refined-bounded-idx/input.tur`,
+  `tests/fixtures/kleisli-arrow-instance/input.tur`,
+  `tests/fixtures/option-result-c-abi/input.tur`: ascribe carrier-int
+  Option producers at the `(some? ...)` site.
+
+## Cascade-coupled: `unwrap-or` (deferred)
+
+`unwrap-or` is used internally by many carrier-`:int` designs that would all
+have to retype together (the `some?` retype is no longer in this cascade --
+it bridges via call-site ascription):
 
 - **`stdlib/refined.tur`**: `ne-from?` / `bidx-of?` deliberately return the
   carrier `:int` Option (inline-C builds the box) and `ne-unwrap` / `bidx-unwrap`
