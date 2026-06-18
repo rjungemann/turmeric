@@ -3165,6 +3165,35 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_free(&_ab);
                     free(_tmp);
                 }
+                /* GHE struct-receiver: a constrained-generic method call
+                 * (`(render-to b ...)` with `b : B`, `^Backend B`) re-resolved
+                 * in this ABI spec to a struct/ADT-receiver instance calls
+                 * `__inst_<Class>_<method>_<T>(const T *self, ...)`, but the spec
+                 * clone holds the receiver by value.  Spill to a temp and pass
+                 * its address so the by-value receiver matches the instance
+                 * method's `const T *` formal.  Without this a genuinely-sized
+                 * struct receiver passed a `T` to a `const T *` formal -- a hard
+                 * cc type error; single-field structs only "worked" by sharing
+                 * the int64 carrier's by-value ABI.  Scoped to arg 0 (the
+                 * receiver / dispatch tyvar) and to callees the predicate
+                 * confirms take the receiver by pointer. */
+                if (i == 0 && !needs_fn_cast &&
+                    emit_reresolved_receiver_is_by_ptr(ctx, e)) {
+                    Type _recv_ty;
+                    if (!emit_var_spec_arg_type(ctx, emit_arg, &_recv_ty))
+                        _recv_ty = emit_resolve_type(ctx, emit_arg->type);
+                    char *_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = %s;\n",
+                               emit_type_c_name(ctx, _recv_ty), _tmp, raw);
+                    free(raw);
+                    Buf _ab; buf_init(&_ab);
+                    buf_printf(&_ab, "&%s", _tmp);
+                    buf_putc(&_ab, '\0');
+                    raw = strdup(_ab.data);
+                    buf_free(&_ab);
+                    free(_tmp);
+                }
                 /* end-to-end-monomorphization (bucket A): a `:heap` value that
                  * is emitted as its typed pointer (e.g. a `Vec__int *` from a
                  * vec-new/-push spec, or a let-bound typed-pointer var) must be
