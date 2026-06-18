@@ -104,19 +104,21 @@ coverage from `result-map` is safe).
       is the carrier-ABI regression (bare `:int` carrier -> `result-map` ->
       `(:: ... (Result int int))`); `tests/fixtures/typed/result-basic/` and
       `tests/fixtures/result-combinators/` (local `u-result-map`) also touch it.
-- [ ] **BLOCKED.** The retype is a clean one-liner, but its pure-Turmeric body
-      (constructing via `(ok ...)`/`(err ...)`) interns a by-value
-      `ok__spec__Result__int__int` that the monomorphization recording pass
-      then leaks onto the UNRELATED carrier-context call `(ok? (ok 1))` in
-      `result-basic`, yielding a C type error (`int64_t = Result__int__int`).
-      This is the N-arg analogue of the 0-arg `(none)` construct-spec
-      disambiguation that `option-map` (step 3) solved. Reverted to keep the
-      suite green; tracked in
-      [`result-map-byvalue-construct-spec-leak.md`](../reported/result-map-byvalue-construct-spec-leak.md).
-- [ ] (After unblock) Synthesize the decoupled carrier-bridge regression
-      fixture, retype `result-map`, run `bash tests/run.sh` clean, and strike
-      `result-map` from the "Remaining" list in
-      `docs/reported/option-consumer-retype-byvalue.md`.
+- [x] Decoupled `coerce-carrier-to-struct` from `result-map`: it now uses a
+      dedicated inline-C carrier producer (NOTE in-file), so the carrier->struct
+      `::` bridge (KB-004) stays covered independently of `result-map`.
+- [x] Retyped `result-map` to
+      `[A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)`,
+      pure-Turmeric. Fixed the construct-spec leak it surfaced: extended the
+      0-arg `#{Construct}` spec-selection guard to N-arg construct callees in
+      `emit_call_name` / `find_matched_abi_spec` / `abi_trace_clone_name`
+      (a constructor's by-value spec vs. its carrier base differ only in return
+      ABI, so the structural by-args match cannot pick between them -- they now
+      resolve only from the per-`Expr*` recording).
+- [x] **Validation:** `bash tests/run.sh` -- 1683 passed, 0 failed (85 stdlib
+      snapshots regenerated in-PR). `result-map` struck from the "Remaining"
+      list; report archived to
+      [`docs/archive/result-map-byvalue-construct-spec-leak.md`](../archive/result-map-byvalue-construct-spec-leak.md).
 
 ### 1.3 -- Retype `unwrap-or` (the ~10-module cascade)
 

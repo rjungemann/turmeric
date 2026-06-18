@@ -2622,7 +2622,6 @@ static void option_hyfree(int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
-static int64_t result_hymap(int64_t, int64_t);
 static bool result_hyeq_qu(int64_t, int64_t, int64_t, int64_t);
 static bool _un_untur_hyq_hyis_hyerr_qu(void *);
 static int64_t _un_untur_hyq_hyok_hyval(void *);
@@ -3892,22 +3891,6 @@ static bool err_qu(int64_t r) {
 
 static void result_hyfree(int64_t r) {
         if (r) free((void*)(intptr_t)r);
-  
-}
-
-static int64_t result_hymap(int64_t r, int64_t f) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res) return 0;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok = res->is_ok;
-  if (res->is_ok) {
-      out->ok_val = ((int64_t(*)(int64_t))(intptr_t)f)(res->ok_val);
-      out->err_val = 0;
-  } else {
-      out->ok_val = 0;
-      out->err_val = res->err_val;
-  }
-  return (int64_t)(intptr_t)out;
   
 }
 

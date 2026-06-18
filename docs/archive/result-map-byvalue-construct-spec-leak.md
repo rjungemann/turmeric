@@ -8,8 +8,23 @@ severity: Medium. Blocks the `result-map` by-value retype (Phase 1.2 of
   monomorphization recording pass then routes an UNRELATED carrier-context call
   -- `(ok? (ok 1))` in `tests/fixtures/typed/result-basic/` -- to that by-value
   spec, producing a C type error (`int64_t = Result__int__int`).
-status: OPEN, retype reverted to keep the suite green (1683/0). `result-map`
-  stays on its inline-C carrier body in `stdlib/result.tur`.
+status: RESOLVED 2026-06-18. Fixed via fix direction 1 (carrier-context-aware
+  construct spec selection): the 0-arg `#{Construct}` disambiguation guard was
+  extended to N-arg construct callees in BOTH `emit_call_name`
+  (`emit_core.c`) and `find_matched_abi_spec` (`emit_expr.c`), plus the
+  `abi_trace_clone_name` audit mirror (`emit_module.c`). A construct callee's
+  by-value spec and its int64 carrier base share identical argument types and
+  differ only in return ABI, so the structural by-args fallback cannot tell
+  them apart; constructors now resolve their spec ONLY from the per-`Expr*`
+  recording, so an unrecorded carrier-context `(ok 1)` stays on the carrier
+  base. `result-map` is now by-value
+  (`[A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)`,
+  pure-Turmeric). The deliberate carrier-ABI regression fixture
+  `tests/fixtures/typed-slots/coerce-carrier-to-struct/` was decoupled from
+  `result-map` (its subject is the carrier->struct `::` bridge; it now uses a
+  dedicated inline-C carrier producer, preserving the exact KB-004 coverage).
+  Full suite green (1683/0); 85 snapshots regenerated for the stdlib codegen
+  change.
 ---
 
 # `result-map` by-value retype leaks a by-value construct spec

@@ -125,6 +125,15 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     if (e->as.call_.n_args == 0) {
         return NULL;
     }
+    /* Same disambiguation for an N-arg `#{Construct}` callee (`(ok x)` /
+     * `(err e)` / `(some x)`): a by-value spec and the int64 carrier base differ
+     * ONLY in return ABI, not in argument types, so the structural by-args match
+     * below cannot tell them apart.  The per-Expr* recording (handled above) is
+     * the sound disambiguator; an unrecorded construct call stays on the
+     * carrier.  Keeps this in lockstep with emit_call_name's identical guard. */
+    if (fn_binding && fn_binding->is_construct_template) {
+        return NULL;
+    }
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;

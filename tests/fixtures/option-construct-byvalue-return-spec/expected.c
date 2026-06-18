@@ -2648,7 +2648,6 @@ static void option_hyfree(int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
-static int64_t result_hymap(int64_t, int64_t);
 static bool result_hyeq_qu(int64_t, int64_t, int64_t, int64_t);
 static bool _un_untur_hyq_hyis_hyerr_qu(void *);
 static int64_t _un_untur_hyq_hyok_hyval(void *);
@@ -3947,22 +3946,6 @@ static void result_hyfree(int64_t r) {
   
 }
 
-static int64_t result_hymap(int64_t r, int64_t f) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res) return 0;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok = res->is_ok;
-  if (res->is_ok) {
-      out->ok_val = ((int64_t(*)(int64_t))(intptr_t)f)(res->ok_val);
-      out->err_val = 0;
-  } else {
-      out->ok_val = 0;
-      out->err_val = res->err_val;
-  }
-  return (int64_t)(intptr_t)out;
-  
-}
-
 static bool result_hyeq_qu(int64_t r1, int64_t r2, int64_t ok_cmp, int64_t err_cmp) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
@@ -4660,25 +4643,28 @@ int main(int argc, char **argv) {
         }
         printf("%lld\n", (long long)(unwrap_hyor_hydefault(wrap_some__spec__Option__int_int64_t(INT64_C(7)), INT64_C(0))));
         printf("%lld\n", (long long)(float_hy_gtint((unwrap_hyor_hydefault_hyf(wrap_some__spec__Option__float_double(3.25), 0.0)) * (100.0))));
-        int64_t *__t44 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t44[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
-        __t44[1] = (int64_t)(intptr_t)pos_hyi_qu;
-        void *__t45 = __t44;
-        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool(some__spec__Option__int_int64_t(INT64_C(7)), (int64_t)(intptr_t)(__t45)), INT64_C(11))));
-        int64_t *__t46 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t46[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
-        __t46[1] = (int64_t)(intptr_t)pos_hyi_qu;
-        void *__t47 = __t46;
-        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool(some__spec__Option__int_int64_t(INT64_C(-3)), (int64_t)(intptr_t)(__t47)), INT64_C(11))));
+        tur_option_t *__t44 = (tur_option_t *)(intptr_t)(some(INT64_C(7)));
+        int64_t *__t45 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t45[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
+        __t45[1] = (int64_t)(intptr_t)pos_hyi_qu;
+        void *__t46 = __t45;
+        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool((__t44 ? (Option__int){.is_some = __t44->is_some, .value = __t44->value} : (Option__int){0}), (int64_t)(intptr_t)(__t46)), INT64_C(11))));
+        tur_option_t *__t47 = (tur_option_t *)(intptr_t)(some(INT64_C(-3)));
         int64_t *__t48 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t48[0] = (int64_t)(intptr_t)__tur_fatshim_bool_double;
-        __t48[1] = (int64_t)(intptr_t)pos_hyf_qu;
+        __t48[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
+        __t48[1] = (int64_t)(intptr_t)pos_hyi_qu;
         void *__t49 = __t48;
-        printf("%lld\n", (long long)(float_hy_gtint((unwrap_hyor_hydefault_hyf(keep_if__spec__Option__float_Option__float_bool(some__spec__Option__float_double(-2.5), (int64_t)(intptr_t)(__t49)), 4.5)) * (100.0))));
+        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool((__t47 ? (Option__int){.is_some = __t47->is_some, .value = __t47->value} : (Option__int){0}), (int64_t)(intptr_t)(__t49)), INT64_C(11))));
+        tur_option_t *__t50 = (tur_option_t *)(intptr_t)(some(((union { double s; int64_t d; }){.s = -2.5}).d));
+        int64_t *__t51 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t51[0] = (int64_t)(intptr_t)__tur_fatshim_bool_double;
+        __t51[1] = (int64_t)(intptr_t)pos_hyf_qu;
+        void *__t52 = __t51;
+        printf("%lld\n", (long long)(float_hy_gtint((unwrap_hyor_hydefault_hyf(keep_if__spec__Option__float_Option__float_bool((__t50 ? (Option__float){.is_some = __t50->is_some, .value = ((union { int64_t s; double d; }){.s = __t50->value}).d} : (Option__float){0}), (int64_t)(intptr_t)(__t52)), 4.5)) * (100.0))));
         puts((some_qu(none())) ? "true" : "false");
-        int64_t __t50;
-        __t50 = INT64_C(0);
-        return (int)__t50;
+        int64_t __t53;
+        __t53 = INT64_C(0);
+        return (int)__t53;
 }
 
 static Option__int wrap_some__spec__Option__int_int64_t(int64_t x) {
@@ -4698,19 +4684,19 @@ static Option__float some__spec__Option__float_double(double x) {
 }
 
 static Option__int keep_if__spec__Option__int_Option__int_bool(Option__int o, int64_t pred) {
-        Option__int __t51;
+        Option__int __t54;
         if ((o).is_some) {
-            Option__int __t52;
+            Option__int __t55;
             if ((*( tur_thunk_bool_int64_t_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (o).value)) {
-                __t52 = o;
+                __t55 = o;
             } else {
-                __t52 = none__spec__Option__int();
+                __t55 = none__spec__Option__int();
             }
-            __t51 = __t52;
+            __t54 = __t55;
         } else {
-            __t51 = none__spec__Option__int();
+            __t54 = none__spec__Option__int();
         }
-        return __t51;
+        return __t54;
 }
 
 static Option__int none__spec__Option__int() {
@@ -4718,19 +4704,19 @@ static Option__int none__spec__Option__int() {
 }
 
 static Option__float keep_if__spec__Option__float_Option__float_bool(Option__float o, int64_t pred) {
-        Option__float __t53;
+        Option__float __t56;
         if ((o).is_some) {
-            Option__float __t54;
+            Option__float __t57;
             if ((*( tur_thunk_bool_double_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (o).value)) {
-                __t54 = o;
+                __t57 = o;
             } else {
-                __t54 = none__spec__Option__float();
+                __t57 = none__spec__Option__float();
             }
-            __t53 = __t54;
+            __t56 = __t57;
         } else {
-            __t53 = none__spec__Option__float();
+            __t56 = none__spec__Option__float();
         }
-        return __t53;
+        return __t56;
 }
 
 static Option__float none__spec__Option__float() {

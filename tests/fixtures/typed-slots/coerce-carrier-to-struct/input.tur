@@ -1,12 +1,26 @@
 ;; KB-004 regression: (:: carrier (Result int int)) -> ok-val
 ;;
-;; result-map returns :int (carrier ABI).  When the caller ascribes the result
-;; to (Result int int) via ::, the emitter must bridge the int64_t carrier to
-;; the concrete Result__int__int struct so that ok-val (which takes the struct
-;; by value) receives the right type.
+;; The subject of this fixture is the carrier->struct `::` bridge: a function
+;; returns the int64_t Result carrier, the caller ascribes it to
+;; (Result int int) via ::, and the emitter must bridge the carrier to the
+;; concrete Result__int__int struct so that ok-val (which takes the struct by
+;; value) receives the right type.
+;;
+;; NOTE: double-if-ok deliberately stays on the inline-C carrier ABI.  It used
+;; to call result-map, but result-map is now by-value (Track A retype); this
+;; fixture keeps a dedicated carrier producer so the KB-004 bridge stays
+;; covered independently of result-map's signature.
 
 (defn double-if-ok [r : int] : int
-  (result-map r (fn [x] (* x 2))))
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res) return 0;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = res->is_ok;
+  out->ok_val = res->is_ok ? res->ok_val * 2 : 0;
+  out->err_val = res->is_ok ? 0 : res->err_val;
+  return (int64_t)(intptr_t)out;
+  ```)
 
 (defn main [] : int
   (let [r (double-if-ok (ok 21))

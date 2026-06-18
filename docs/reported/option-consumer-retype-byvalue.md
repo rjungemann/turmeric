@@ -48,8 +48,15 @@ status: PARTIAL 2026-06-18. `option-eq?` and `option-map` retyped to by-value
   [polymorphic-float-carrier-ascription-value-cast.md](polymorphic-float-carrier-ascription-value-cast.md).
   Step 5 (kleisli.tur `comp`/`k-apply-raw` retype) is blocked on the broader
   carrier-Option-producer cascade.
-  `result-map` remains (a deliberate carrier-ABI regression test backs its
-  `:int` signature -- see below); `unwrap-or` remains cascade-coupled.
+  `result-map` is now **DONE** (2026-06-18): retyped to by-value
+  `[A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)` with a
+  pure-Turmeric body. Required extending the 0-arg `#{Construct}` spec-selection
+  guard to N-arg construct callees (`emit_call_name` / `find_matched_abi_spec` /
+  `abi_trace_clone_name`); the carrier-ABI regression fixture was decoupled from
+  `result-map`. See archived report
+  [`result-map-byvalue-construct-spec-leak.md`](../archive/result-map-byvalue-construct-spec-leak.md).
+  `unwrap-or` remains cascade-coupled (its sole stdlib caller is the kleisli
+  `comp` body; see [`unwrap-or-byvalue-cascade.md`](unwrap-or-byvalue-cascade.md)).
   One niche residual on `option-map` is filed under
   `docs/archive/option-map-literal-none-unannotated-fn-no-A-inference.md` (resolved 2026-06-18; emit-side guards in PR #421 route the under-determined-`A` call to the carrier-context spec). A separate spill-bridge regression at the by-value-producer -> carrier-consumer boundary inside a `let`/`do`/`if` arg slot is tracked in `docs/reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md`.
 ---
@@ -164,21 +171,27 @@ Both have **native interpreter overrides** (`native_some_pred`,
 `native_option_unwrap_or`), so the interpreter is unaffected by a signature
 change; the cascade is purely the compiled-path callers above.
 
-## Blocked: `result-map` (deliberate carrier-ABI regression test)
+## Done: `result-map` (2026-06-18)
 
-`result-map` is *not* in the same boat as `option-map`. Retyping it to
-`[A B C] [r : (Result A B) ^fat f : (fn [A] C)] : (Result C B)` would break
-`tests/fixtures/typed-slots/coerce-carrier-to-struct/`, a **deliberate
-carrier-ABI regression test**: its `(defn double-if-ok [r : int] : int
-(result-map r (fn [x] (* x 2))))` passes a bare `:int` carrier into
-`result-map`, then ascribes the carrier result via `(:: r (Result int int))`.
-The carrier->concrete `::` bridge it exercises depends on `result-map`'s
-`:int` signature. Retyping `result-map` makes `(result-map r ...)` with
-`r : int` a type error, regressing that test's premise -- and per the
-project rule, a deliberate carrier-bridge regression fixture is not rewritten
-to dodge the breakage. `result-map` therefore stays on its inline-C carrier
-body until that fixture is intentionally migrated (or a by-value twin is added
-alongside the carrier surface).
+`result-map` is now by-value
+`[A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)` with a
+pure-Turmeric body (`if (.is-ok r) (ok (f (.ok-val r))) (err (.err-val r))`).
+
+The retype initially leaked a by-value `ok__spec__Result__int__int` onto the
+unrelated carrier-context call `(ok? (ok 1))` in
+`tests/fixtures/typed/result-basic/` (a C type error). Root cause: the
+structural by-args spec match could not distinguish a constructor's by-value
+spec from its int64 carrier base (identical arg types, return ABI only). Fixed
+by extending the 0-arg `#{Construct}` disambiguation guard to N-arg construct
+callees in `emit_call_name`, `find_matched_abi_spec`, and `abi_trace_clone_name`
+-- constructors now resolve their spec only from the per-`Expr*` recording.
+
+The deliberate carrier-ABI regression `tests/fixtures/typed-slots/coerce-carrier-to-struct/`
+(whose subject is the carrier->struct `::` bridge feeding `ok-val`, not
+`result-map`) was decoupled: it now uses a dedicated inline-C carrier producer,
+so the KB-004 bridge stays covered independently of `result-map`'s signature.
+Full archived detail:
+[`docs/archive/result-map-byvalue-construct-spec-leak.md`](../archive/result-map-byvalue-construct-spec-leak.md).
 
 ## `option-free`
 
