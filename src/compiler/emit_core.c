@@ -1126,6 +1126,16 @@ bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
         FnDef *impl = inst->method_impls[k];
         if (!impl) return false;
         if (impl->closure) return false;
+        /* Inline-C instance bodies declare their struct params BY VALUE even
+         * above the pass-by-ptr threshold (emit_fns.c §643/737 keys this off
+         * `fd->body->kind == EX_INLINE_C`, not the binding flag).  Mirror that
+         * exact predicate here: a `body_is_inline_c` cached on the binding is
+         * not reliably set for instance-method FnDefs, so checking it alone let
+         * the address-of bridge fire on an inline-C receiver -- passing `&tmp`
+         * (a `T *`) to a by-value `T self` formal.  That re-triggered the very
+         * ABI mismatch #439 set out to fix, but in the opposite direction, the
+         * moment a generic helper forced the instance method to be emitted. */
+        if (impl->body && impl->body->kind == EX_INLINE_C) return false;
         if (impl->binding && impl->binding->body_is_inline_c) return false;
         return true;
     }
