@@ -431,6 +431,33 @@ single phase": an atomic elaborator+emit change across all 9 HKT classes / 30
 instances. Both elaborator iterations (broad, then narrowed) are reverted;
 suite restored to green (HKT-via-ascription prints 42 again).
 
+**Third iteration (2026-06-18): flag-gated probe pins a FOURTH layer below the
+documented three.** Re-attempted the elaborator threading behind a default-OFF
+`TUR_M7_HKT` env gate (so the shipped path stays byte-identical), implementing
+the impl-side `TY_APP` `result_full_type` branch (now `elab_typeclasses.c`
+~2884) and a call-site `m7_unify_named` refinement that walks the method's
+declared param types through `TY_APP`/`TY_FN` (`arg_full_types`/
+`result_full_type` do preserve the element tyvar names, so `b` *is*
+recoverable). Result under the flag: the probe STILL resolves to
+`(type-app ? ?)`, because the instance method's `return_type` is the raw class
+return `(g b)` with the **HKT class param `g` itself unsubstituted** -- so the
+carried `rft` is `(type-app ? ?)`, not `(Option b)`, and there is nothing
+concrete to refine. So the prerequisite ordering is now four-deep:
+  0. **(new) Substitute the instance's HKT constructor for the class param**
+     (`g` -> `Option`) into `return_type` at instance-definition time
+     (`elab_subst_class_tyvars` exists at `elab_typeclasses.c:1513` but is not
+     applied to the HKT-headed return here) so `rft` is `(Option b)`.
+  1-3. The documented `tc_subst_class_params` / `result_full_type` TY_APP carry
+     / call-site element-tyvar refinement (the latter two were reconstructed
+     and build clean; step 0 gates them).
+  4. The Phase 3.2 emit monomorphization (the wall: even with 0-3, the generic
+     instance method emits the double-boxing carrier return and prints `0`).
+All flag-gated experimental code was **reverted**; the tree matches HEAD and
+the suite is green. Net: the layering is now fully mapped (0->1->2->3->4) and
+each layer's exact code site is pinned, but the bottom layer (4, emit) remains
+the atomic blocker that cannot land without the by-value instance-body rewrite
+(Phase 4.2), confirming the "must land together" conclusion from a third angle.
+
 **Why reverted (the two reasons it can't land in isolation):**
   1. **Emit-side by-value HKT dispatch is missing (Phase 3.2/3.3).** With the
      type resolved to by-value `(Option int)`, the probe *compiles* but prints
