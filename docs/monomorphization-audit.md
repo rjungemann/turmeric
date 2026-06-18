@@ -380,6 +380,25 @@ after M8. M8's job is to (a) rename `tur_ok` / `tur_err` to
 `tur_box_ok` / `tur_box_err` so it's clear they're the existential's
 box, and (b) suppress prelude emission when no user code references them.
 
+#### Carrier-essential helper inventory (Phase 4.1/4.3, 2026-06-18)
+
+Per [`docs/upcoming/v2/phase4-carrier-helper-inventory.md`](upcoming/v2/phase4-carrier-helper-inventory.md),
+the following stdlib helpers walk a heterogeneous HAMT with no element type
+available, so they are **carrier-essential** -- they stay inline-C on the
+int64 carrier (each now carries a `;;` NOTE in source) and are the legitimate
+non-zero crossings the Phase 5 bridge predicate must still permit:
+
+- `stdlib/set.tur` -- `set-eq?` / `set-eq-full` (HAMT iteration via
+  `tur_hamt_iter_*`).
+- `stdlib/map.tur` -- `map-eq-raw?` / `map-eq-raw-k?` (HAMT iteration).
+
+Everything else the inventory examined is already by-value or is a standalone
+public-API helper that does NOT back a typeclass dispatch (the non-HKT `Eq`
+instances were migrated to by-value field access in M4c). The remaining
+dispatch-backing carrier surface is the **HKT instance method bodies**, which
+are gated on the Phase 3.0 element-type threading (see the plan); they are NOT
+carrier-essential -- they become by-value once Phase 3 lands.
+
 ## 7. hybrid_surprises
 
 Places where the carrier convention is load-bearing in a non-obvious
