@@ -359,11 +359,15 @@ which have not yet shipped:
 
 The original phasing was split into a **v1 track** (everything that
 landed against the type system as it shipped at the time) and a **v2
-track** (gated on elaborator prerequisites). Most v1 phases and the
-larger of the two v2 prereqs (variadic HKT rows, associated types)
-landed in the 2026-06-11 ship window; the residual work is one
-deferred surface (refinement types) and two spice-side wiring
-follow-ups whose prereqs are already in.
+track** (gated on elaborator prerequisites). The v1 phases and all
+three v2 prereqs (variadic HKT rows, associated types, sized cross-
+parameter unification + bounded-capacity world) landed across the
+2026-06-11 and 2026-06-17 ship windows, plus the spice-side E2d
+(P1-P6 + P5b) and E2c (slices 1-12) wiring. The residual work is one
+deferred surface (refinement-typed APIs, E2b) plus three follow-ups
+whose prereqs are already in: sized-world parallel-scheduler
+generalisation, a `world-resize` existential wrapper, and routing
+`defcomponent-accessors` through `StorageOps`.
 
 ### Shipped (2026-06-11)
 
