@@ -336,6 +336,31 @@ pure-Turmeric by-value body `(if (some? container) (some (f (.value container)))
        `(g b)` -> `(Option int)`. With this, `(unwrap (gmap (some 21) dbl))`
        typechecks with no ascription.
 
+**CONCLUSIVE (2026-06-18, second iteration): elaborator + emit are ATOMIC.**
+A follow-up narrowed the elaborator change to fire ONLY on HKT-param-headed
+returns (`(g b)` where `g` is the class `[^g]` param), excluding the
+decode-style `(Result a cstr)` pattern via `tc_return_is_hkt_param_headed`.
+This made the change **regression-free on the suite** (1682 pass; only the
+pre-existing stale ECS spices fixture fails) -- the 4 decode/return-dispatch
+fixtures pass again. BUT the narrowed change still **regresses the HKT-method
+value path even WITH the `(:: r (Option int))` ascription**: a probe that
+prints `42` on unmodified HEAD prints `0` after the change, because setting a
+`TY_APP` `result_full_type` on the instance method flips its emit to the
+double-boxing generic-carrier return (the declared `(Option b)` has `b`
+unresolved in the generic instance method, so `__TUR_RET__` wraps a `malloc`'d
+int64 that the by-value consumer then misreads). The suite stays green only
+because no fixture exercises an HKT-param-headed method.
+
+So there is **no safe incremental landing of the elaborator alone** -- it
+silently miscompiles the HKT-method value path the moment it is active, which
+violates the no-silent-miscompile rule. The elaborator type-threading and the
+Phase 3.2 emit-side (per-`(f, A)` by-value monomorphization of the instance
+method, so `b` resolves and it returns `Option__int` by value) **must land
+together**. This is the empirical confirmation that Phase 3 is the "largest
+single phase": an atomic elaborator+emit change across all 9 HKT classes / 30
+instances. Both elaborator iterations (broad, then narrowed) are reverted;
+suite restored to green (HKT-via-ascription prints 42 again).
+
 **Why reverted (the two reasons it can't land in isolation):**
   1. **Emit-side by-value HKT dispatch is missing (Phase 3.2/3.3).** With the
      type resolved to by-value `(Option int)`, the probe *compiles* but prints
