@@ -73,6 +73,26 @@ fixtures; those are not producers, just call-site/doc text.)
 **Verify the table before starting**: re-run the grep against current HEAD
 and reconcile any new producers added since 2026-06-19.
 
+**Empirical pre-task result (2026-06-18).** `grep -rn '(unwrap-or' stdlib/`
+(excluding docstrings) finds exactly **one** stdlib call site:
+`stdlib/kleisli.tur:86` -- inside the `Category [Kleisli]` `comp` body, which
+the step-5 retype ([kleisli-byvalue-option-cascade](
+kleisli-byvalue-option-cascade.md)) *removes* entirely (it switches to
+`.is-some`/`.value`). The "~10 stdlib modules" / `zipper`/`seq`/`json`/`safe`/
+`env`/`serial` table above is **not borne out** by the current tree -- those
+modules do not call `unwrap-or`. So the stdlib cascade is empty once step 5
+lands; the remaining consumers are **test fixtures** that deliberately pass a
+carrier-int Option into `(unwrap-or r 0)` (e.g.
+`tests/fixtures/option-consumers-byvalue-arg/`, `tests/fixtures/zipper-basic/`,
+`tests/fixtures/kleisli-arrow-instance/`). Those are the real blockers: the
+by-value retype makes `(unwrap-or <carrier-int> 0)` a type error wherever the
+producer is still a carrier-int Option, and they cannot all be flipped to a
+shim without changing what they test. Net: this retype is gated behind step 5
+(kleisli) -- itself blocked on
+[kleisli-k-apply-raw-B-uninferable](kleisli-k-apply-raw-B-uninferable.md) --
+and behind retyping the fixtures' carrier-Option producers. It is NOT the
+mechanical shim cascade the strategy below assumed.
+
 ## Strategy
 
 The cascade is too large for a single PR, but each row is independently

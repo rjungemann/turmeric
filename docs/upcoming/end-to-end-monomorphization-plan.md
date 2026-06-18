@@ -99,18 +99,23 @@ regression test. The retype has to land alongside a *new* fixture that
 keeps the carrier path covered explicitly (so removing the implicit
 coverage from `result-map` is safe).
 
-- [ ] Identify the fixture(s) whose pass depends on `result-map`'s
-      current `:int` signature -- `grep -rn 'result-map' tests/fixtures/`
-      and read each to confirm which one is the carrier-ABI regression.
-- [ ] Synthesize a replacement fixture that exercises the same
-      carrier-bridge path *without* going through `result-map`
-      (e.g. via a small stdlib helper that intentionally stays inline-C
-      with `;;` NOTE). File under `tests/fixtures/carrier-bridge-regression-<topic>/`.
-- [ ] Retype `result-map` in `stdlib/result.tur` to
-      `[A B E] [r : (Result A E) f : (fn [A] B)] : (Result B E)` with a
-      pure-Turmeric body (`if (.is-ok r) (ok (f (.ok-val r))) (err (.err-val r))`).
-- [ ] **Validation:** `bash tests/run.sh` clean.
-- [ ] Strike `result-map` from the "Remaining" list in
+- [x] Identify the fixture(s) whose pass depends on `result-map`'s
+      current `:int` signature -- `tests/fixtures/typed-slots/coerce-carrier-to-struct/`
+      is the carrier-ABI regression (bare `:int` carrier -> `result-map` ->
+      `(:: ... (Result int int))`); `tests/fixtures/typed/result-basic/` and
+      `tests/fixtures/result-combinators/` (local `u-result-map`) also touch it.
+- [ ] **BLOCKED.** The retype is a clean one-liner, but its pure-Turmeric body
+      (constructing via `(ok ...)`/`(err ...)`) interns a by-value
+      `ok__spec__Result__int__int` that the monomorphization recording pass
+      then leaks onto the UNRELATED carrier-context call `(ok? (ok 1))` in
+      `result-basic`, yielding a C type error (`int64_t = Result__int__int`).
+      This is the N-arg analogue of the 0-arg `(none)` construct-spec
+      disambiguation that `option-map` (step 3) solved. Reverted to keep the
+      suite green; tracked in
+      [`result-map-byvalue-construct-spec-leak.md`](../reported/result-map-byvalue-construct-spec-leak.md).
+- [ ] (After unblock) Synthesize the decoupled carrier-bridge regression
+      fixture, retype `result-map`, run `bash tests/run.sh` clean, and strike
+      `result-map` from the "Remaining" list in
       `docs/reported/option-consumer-retype-byvalue.md`.
 
 ### 1.3 -- Retype `unwrap-or` (the ~10-module cascade)
@@ -121,10 +126,18 @@ Per
 `unwrap-or-carrier` shim). Cascade spans ~10 stdlib modules
 (`zipper`, `seq/*`, `json`, `safe`, `env`, `serial`, ...).
 
-- [ ] **Pre-task:** generate the actual list of call sites:
-      `grep -rn '(unwrap-or' stdlib/ ../turmeric-spices/spices/ > /tmp/unwrap-or-sites.txt`.
-      The "~10 modules" claim is unverified; replace with the empirical
-      list and update this checkbox with the count before estimating.
+- [x] **Pre-task (2026-06-18):** empirical grep finds **one** stdlib call site
+      (`stdlib/kleisli.tur:86`), not ~10 modules. The `zipper`/`seq`/`json`/...
+      table is not borne out by the current tree. That sole stdlib caller is the
+      kleisli `comp` body, which step 5 (1.4) *removes*. The remaining consumers
+      are test fixtures that intentionally pass a carrier-int Option
+      (`option-consumers-byvalue-arg`, `zipper-basic`, `kleisli-arrow-instance`).
+- [ ] **GATED behind 1.4 + fixture-producer retypes.** Retyping `unwrap-or` to
+      by-value makes `(unwrap-or <carrier-int> 0)` a type error at every fixture
+      site whose producer is still a carrier-int Option; those cannot all flip
+      to a shim without changing what they test. The stdlib cascade is empty
+      once 1.4 lands (which is itself blocked -- see above). Finding recorded in
+      [`unwrap-or-byvalue-cascade.md`](../reported/unwrap-or-byvalue-cascade.md).
 - [ ] Retype `unwrap-or` in `stdlib/option.tur` to
       `[A] [o : (Option A) dflt : A] : A` with a pure-Turmeric body:
       `(if (.is-some o) (.value o) dflt)`.
@@ -148,15 +161,19 @@ per the spec doc -- the only external dependency is that
 The `(:: r (Option int))` ascription that landed in PR #426 was
 explicitly an interim patch this phase retires.
 
-- [ ] After 1.1-1.3 land, re-read `stdlib/kleisli.tur` and identify the
-      remaining producers that still hand `comp`/`k-apply-raw` a carrier
-      Option. If the list is empty, retype directly.
-- [ ] Retype `comp` / `k-apply-raw` to by-value `(Option A)` parameters.
-- [ ] **Validation:** `bash tests/run.sh` clean; `tests/fixtures/kleisli-*`
-      all green.
-- [ ] Strike step 5 from `option-consumer-retype-byvalue.md`.
-- [ ] If everything in `option-consumer-retype-byvalue.md`'s Remaining
-      list is struck, archive it.
+- [ ] **BLOCKED on prerequisite 1.** Applied the target-shape retype and ran
+      the spec's own prerequisite-1 repro: it fails. `k-apply-raw [A B]
+      [k : int x : A] : (Option B)` leaves `B` uninferable -- the return tyvar
+      has no argument witness (`k : int` erases the closure's result type), so
+      `.value`/`.is-some` on the result is a bare tyvar. Per the spec's
+      instruction ("if this fails, file a fresh report and pause this plan"),
+      reverted; tracked in
+      [`kleisli-k-apply-raw-B-uninferable.md`](../reported/kleisli-k-apply-raw-B-uninferable.md).
+      No new ascription patches added.
+- [ ] (After unblock) Retype `comp` / `k-apply-raw` to by-value `(Option B)`,
+      add `tests/fixtures/kleisli-non-int-element/`, run `bash tests/run.sh`
+      clean, strike step 5 from `option-consumer-retype-byvalue.md`, and (if all
+      Remaining items are struck) archive it.
 
 ### 1.5 -- Bucket C exit criterion
 
