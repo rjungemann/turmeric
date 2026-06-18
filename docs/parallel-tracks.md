@@ -32,10 +32,26 @@ advances.
   `option-consumer-retype-byvalue`. Buckets A' / B are by-design
   carrier-bridge regression coverage.
 - [option-consumer-retype-byvalue](reported/option-consumer-retype-byvalue.md)
-  (report, PARTIAL) -- `option-eq?` retyped to by-value `(Option A)`.
-  Remainder: `option-map` (construct-in-by-value-return -- gate
-  generalized 2026-06-17, ready to land) and `some?`/`unwrap-or`
-  (cascade into refined.tur + kleisli Arrow).
+  (report, PARTIAL 2026-06-18) -- `option-eq?` AND `option-map` now
+  retyped to by-value `(Option A)` with pure-Turmeric bodies. The
+  step-2 "0-arg constructor `abi_bindings`" follow-up landed: elab
+  attaches the constructor-result-tyvar -> caller-tyvar binding for a
+  0-arg `(none)`/`(err)` in non-ground return position, with emit-side
+  structural-match guards and a spec-return-ABI consult so
+  carrier-context and unresolved-element specs stay correct. Remainder:
+  `result-map` (deferred -- a deliberate carrier-ABI regression test
+  backs its `:int` signature) and `some?`/`unwrap-or` (cascade into
+  refined.tur + kleisli Arrow).
+- [option-map-literal-none-unannotated-fn-no-A-inference](reported/option-map-literal-none-unannotated-fn-no-A-inference.md)
+  (report, OPEN 2026-06-18) -- niche ergonomics regression from the
+  `option-map` retype: `(option-map (none) (fn [x] ...))` (literal
+  `(none)` + unannotated lambda) leaves the element type `A`
+  under-determined and fails with a hard cc error. Loud, not a silent
+  miscompile; every realistic use compiles. Fix is an elab-side
+  inference improvement (bind the generic's tyvar from a `^fat
+  (fn [A] B)` closure arg when the by-value `(Option A)` arg is a
+  carrier `#{Construct}` that carries no `A`). Workaround: annotate the
+  lambda or map over a typed Option value.
 - [tco-map-set-eq-pure-turmeric-followup](upcoming/tco-map-set-eq-pure-turmeric-followup.md)
   -- low-priority type-hygiene residual; not on the audit critical
   path (Map/Set are `:heap` and no longer cross the bridge).

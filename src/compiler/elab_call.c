@@ -3782,6 +3782,36 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                          *saved_expected_return,
                                          type_bindings, &n_type_bindings);
     }
+    /* option-consumer-retype-byvalue step 2 (0-arg constructor abi_bindings):
+     * a `#{Construct}` constructor whose declared result is a parameterised
+     * TY_APP (`none : (Option A)`, `err : (Result A B)`) and that takes no
+     * argument carrying its result tyvar gets no argument-derived bindings.
+     * When such a call sits in the return position of an *enclosing* generic
+     * body, `saved_expected_return` is that body's own tyvar-app (non-ground,
+     * e.g. `(Option B)`), so the ground-only branch above declines and the
+     * call reaches emit with zero abi_bindings -- `emit_abi_register_call`
+     * early-returns and the constructor is emitted once on the int64 carrier,
+     * so its by-value-result consumer (the `option-map`/`result-map` body that
+     * returns `(none)` in the false arm) cannot assign the carrier box to the
+     * by-value `Option__B` return.
+     *
+     * Record the constructor-result-tyvar -> caller-tyvar mapping (e.g.
+     * none's `A` -> option-map's `B`).  emit composes it through the active
+     * specialization's concrete bindings (B -> int) so `construct_recovered_-
+     * byvalue` mints a per-instantiation clone returning `Option__int` by
+     * value.  Gated to `#{Construct}` callees so the broad non-constructor
+     * relay case (which the ground-only guard above deliberately keeps on the
+     * carrier) is untouched. */
+    else if (saved_expected_return && fn_type.kind == TY_FN &&
+             fn_binding && fn_binding->is_construct_template &&
+             fn_type.as.fn.result_full_type &&
+             call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+             call_type_has_named_tyvar(saved_expected_return) &&
+             n_type_bindings == 0) {
+        (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                         *saved_expected_return,
+                                         type_bindings, &n_type_bindings);
+    }
 
     /* Result type is the function's return type */
     Type result_type;

@@ -114,6 +114,17 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     if (saw_any && active_outer == NULL) {
         return NULL;
     }
+    /* option-consumer-retype-byvalue step 2: a 0-arg call (e.g. a `(none)` /
+     * `(empty)` constructor) carries no argument types, so the structural
+     * arg-type match below degenerates to "first spec of this binding" and
+     * would route EVERY such call -- including carrier-context ones like
+     * `(some? (none))` -- to a by-value spec the moment one is interned
+     * (e.g. by a pure-Turmeric `option-map` body).  The per-Expr* recording
+     * above is the only sound disambiguator for 0-arg constructors; if this
+     * exact call was not recorded as specialized, it stays on the carrier. */
+    if (e->as.call_.n_args == 0) {
+        return NULL;
+    }
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
@@ -151,6 +162,20 @@ static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
     if (!call || call->kind != EX_CALL) return false;
     const Binding *fb = call->as.call_.fn_binding;
     if (!fb || fb->type.kind != TY_FN || fb->body_is_inline_c) return false;
+    /* option-consumer-retype-byvalue step 2: when this call resolves to an ABI
+     * spec, the spec's return type is the actual C ABI in effect -- not the
+     * generic declared return.  A spec whose result element collapsed to the
+     * int64 carrier (e.g. a pure-Turmeric `option-map` whose `(fn [A] B)`
+     * closure left `B` unresolved, so the spec returns `int64_t`) hands back
+     * the carrier handle, NOT a by-value aggregate; reporting it as by-value
+     * here makes the caller spill `&temp` (taking the address of an int64 that
+     * already holds the carrier pointer).  Trust the matched spec. */
+    const EmitAbiSpecialization *spec = find_matched_abi_spec(ctx, call, fb);
+    if (spec) {
+        Type sr = emit_resolve_type(ctx, spec->result_type);
+        return type_uses_carrier_abi(sr) &&
+               strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0;
+    }
     const Type *rft = fb->type.as.fn.result_full_type;
     if (!rft) return false;
     Type r = emit_resolve_type(ctx, *rft);
@@ -260,8 +285,19 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (e->kind == EX_CALL) {
         const EmitAbiSpecialization *spec =
             find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
-        if (spec && type_uses_carrier_abi(emit_resolve_type(ctx, spec->result_type)))
-            return true;
+        if (spec) {
+            /* option-consumer-retype-byvalue step 2: a spec's result_type is
+             * stored as the (possibly still-parametric) declared return -- e.g.
+             * a pure-Turmeric `option-map` spec whose `(fn [A] B)` closure left
+             * `B` unresolved keeps `(Option B)` as its return Type, which IS a
+             * carrier-ABI kind (TY_APP) yet c-names to `int64_t` and is returned
+             * as the bare carrier handle.  Such a spec is NOT a by-value producer:
+             * treat it as by-value only when its resolved return c-names to a
+             * concrete aggregate, not to the int64 carrier. */
+            Type sr = emit_resolve_type(ctx, spec->result_type);
+            return type_uses_carrier_abi(sr) &&
+                   strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0;
+        }
         return call_returns_byvalue_aggregate(ctx, e);
     }
     return false;

@@ -1089,6 +1089,24 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
          * fall back to the first entry (top-level / single-spec, unchanged). */
         const char *active_outer = ctx->current_abi_specialization
             ? ctx->current_abi_specialization->clone_name : NULL;
+        /* option-consumer-retype-byvalue step 2: a `#{Construct}` callee
+         * (`some`/`none`/`ok`/`err`) emitted inside a spec whose own return is
+         * the int64 carrier must produce the carrier box, not a by-value clone.
+         * This case arises in a pure-Turmeric `option-map`/`result-map` body
+         * when the `(fn [A] B)` closure leaves the result element `B`
+         * unresolved (e.g. a `ptr<void>` capturing closure): elab mints a spec
+         * whose declared return collapses to `int64_t`, but the body's
+         * `(some ...)` Expr was *also* recorded under a sibling spec where `B`
+         * resolved (returning `Option__int` by value).  The cross-spec / by-args
+         * fallbacks below would route the construct to that by-value clone,
+         * assigning an `Option__int` aggregate into the carrier `int64_t`
+         * local -- a hard cc error.  Suppress those fallbacks here so the
+         * construct stays on its carrier base; the EXACT per-Expr* match (an
+         * entry recorded under THIS active outer, honoured below) is unaffected. */
+        bool construct_into_carrier =
+            b && b->is_construct_template && ctx->current_abi_specialization &&
+            strcmp(emit_type_c_name(ctx, ctx->current_abi_specialization->result_type),
+                   "int64_t") == 0;
         const char *matched = NULL;
         bool saw = false;
         bool saw_any = false;
@@ -1104,7 +1122,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
              * carrier base / top-level emit must require an exact NULL-outer
              * match so it never routes a call to a spec-scoped clone with a
              * different return ABI (M2-completion primitive-payload construct). */
-            if (active_outer != NULL && !saw) {
+            if (active_outer != NULL && !saw && !construct_into_carrier) {
                 matched = ctx->specialized_call_names[i];
                 saw = true;
             }
@@ -1114,6 +1132,15 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
             if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
             return name;
         }
+        /* Construct-into-carrier (see above): force the carrier base callee so a
+         * by-value sibling clone never leaks into a carrier-returning spec body. */
+        if (construct_into_carrier) {
+            if (b) {
+                char *captured = capture_env_access(ctx, b);
+                if (captured) return captured;
+            }
+            return raw_name_for_binding(b);
+        }
         /* If this call was recorded under a spec outer but none matches the
          * active (NULL) outer, it is a spec-scoped specialization (e.g. a
          * by-value-return construct spec) -- the carrier base / top-level emit
@@ -1121,6 +1148,21 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
          * cannot distinguish a return-only-differentiated spec from the carrier
          * (identical arg types).  Skip to the carrier name. */
         if (saw_any && active_outer == NULL) {
+            if (b) {
+                char *captured = capture_env_access(ctx, b);
+                if (captured) return captured;
+            }
+            return raw_name_for_binding(b);
+        }
+        /* option-consumer-retype-byvalue step 2: a 0-arg call (e.g. a
+         * `(none)` / `(empty)` constructor) carries no argument types to
+         * disambiguate one spec from another, so the by-args lookup below
+         * degenerates to "first spec of this binding" and would route every
+         * such call -- including carrier-context ones -- to a by-value spec
+         * the moment one is interned.  The per-Expr* recording above is the
+         * only sound disambiguator; an unrecorded 0-arg constructor stays on
+         * the carrier callee. */
+        if (call->kind == EX_CALL && call->as.call_.n_args == 0) {
             if (b) {
                 char *captured = capture_env_access(ctx, b);
                 if (captured) return captured;

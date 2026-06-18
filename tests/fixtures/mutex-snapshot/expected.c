@@ -2594,7 +2594,6 @@ static bool slice_hyeq_qu(int64_t, int64_t, int64_t);
 static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
-static int64_t option_hymap(int64_t, int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
@@ -3745,16 +3744,6 @@ static int64_t unwrap_hyor(int64_t o, int64_t dflt) {
 
 static void option_hyfree(int64_t o) {
         if (o) free((void*)(intptr_t)o);
-  
-}
-
-static int64_t option_hymap(int64_t o, int64_t f) {
-        struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = TUR_APPLY1(f, opt->value);
-  return (int64_t)(intptr_t)r;
   
 }
 
