@@ -518,6 +518,22 @@ are now both located and characterized.
       the element from the call args) so `construct_recovered_byvalue` then
       fires inside it. This is new emit machinery deeply entangled with the
       carrier-ABI default -- the genuine multi-session core of M7.
+
+      **Final disproof of the shortcut (2026-06-18):** tested whether a
+      *genuinely by-value* Option argument (not the `(:: ... (Option int))`
+      ascription, but a `(mk) : (Option int)` producer) would trigger the
+      instance-method dispatch to intern a by-value spec the way a direct
+      `option-map` call does. It does NOT: with the full elaborator + relaxed
+      gate + by-value arg, the probe still prints `0` and `grep` finds **zero**
+      `gmap__spec` clones. So the instance-method DISPATCH path does not intern
+      by-value specs by any existing trigger (arg-driven `abi_changes`,
+      construct-body, or otherwise) -- unlike a direct generic-defn call.
+      Also confirmed: the stdlib HKT classes cannot be migrated by delegation
+      either, because their class methods declare `: int` returns (not `(f b)`),
+      so `container` stays the bare `Option` and `(option-map container fn)`
+      fails to typecheck until the **class decls themselves** are rewritten to
+      `(f a)`/`(f b)` -- cascading to all 9 classes' 30 instances. There is no
+      single-instance or delegation shortcut; M7 is the full coordinated build.
 - [ ] Update `__inst_<Class>_<method>` symbol naming to disambiguate
       per-`(f, A)` clones.
 - [ ] Per-instance test fixture under `tests/fixtures/hkt-<class>-<f>/`
