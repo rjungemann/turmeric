@@ -1000,6 +1000,16 @@ genuine carrier)
 >   a broad change out of scope for a layer-4 increment. Full root-cause +
 >   repro + three fix directions in
 >   [`docs/reported/m7-hkt-ap-fn-element-carrier-erasure.md`](../../reported/m7-hkt-ap-fn-element-carrier-erasure.md).
+>   **Defensive guard LANDED (2026-06-18, fix direction 3):** a residual free
+>   result element tyvar now aborts the by-value HKT monomorphization and falls
+>   back to the uniform carrier dispatch (`m7_type_has_free_tyvar` +
+>   `m7_byvalue_grounded` in `elab_typeclasses.c`), so the M7 flag no longer
+>   emits broken C for an `ap`-style by-value-constructible instance body -- it
+>   degrades to the same clean type error as the flag-off path. Inert flag-off
+>   (suite 1683/0, byte-identical codegen) and inert flag-on for the grounded
+>   `fmap`/`bind` shapes; the full by-value `ap` (fix direction 1) is still
+>   open. This makes layer-4 robust against partially-resolvable HKT result
+>   types, a prerequisite for admitting more instance shapes to the gate.
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT

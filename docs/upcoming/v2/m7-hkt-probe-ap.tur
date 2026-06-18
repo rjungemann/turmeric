@@ -38,6 +38,16 @@
 ;; Option-of-fn keeps its element signature. That is a broad change, out of
 ;; scope for a layer-4 emit increment, so ap stays a documented-blocked probe.
 ;;
+;; MITIGATION LANDED (2026-06-18, fix direction 3): a residual free result
+;; element tyvar now aborts the by-value HKT monomorphization and falls back to
+;; the uniform carrier dispatch (m7_type_has_free_tyvar / m7_byvalue_grounded in
+;; src/compiler/elab_typeclasses.c). So under TUR_M7_HKT=1 this probe no longer
+;; produces broken C / a cc crash -- it surfaces the SAME clean elaborator type
+;; error as the flag-off path:
+;;   error [TUR-E0001]: function 'unwrap' arg 1:
+;;     expected (type-app Option tyvar 'A'), got (type-app ? ?)
+;; The TARGET (exit 42) still awaits fix direction 1.
+;;
 ;; With the flag OFF the probe errors by design (no ascriptions).
 
 (defclass MyApplicative [^f]

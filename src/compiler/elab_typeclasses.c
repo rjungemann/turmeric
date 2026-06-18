@@ -1739,6 +1739,37 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
     }
 }
 
+/* M7 layer-4 guard: does a (post-substitution) result type still carry a named,
+ * un-grounded element tyvar?  When the HKT by-value monomorphization cannot
+ * recover a result element tyvar from the call args -- the Applicative `ap`
+ * shape, whose result element `b` lives only inside a wrapped function value
+ * that erases to `ptr<void>` (docs/reported/m7-hkt-ap-fn-element-carrier-
+ * erasure.md) -- the substituted result `(Option b)` keeps `b` free.  Emitting
+ * a by-value spec for it mints a half-by-value method (carrier `int64_t`
+ * return) while the dispatch dict references a dropped carrier base, a hard cc
+ * error.  Detecting the free tyvar lets the caller fall back to the uniform
+ * carrier dispatch instead. */
+static bool m7_type_has_free_tyvar(Type t) {
+    switch (t.kind) {
+        case TY_TYVAR:
+            return t.as.tyvar_.name != NULL;
+        case TY_APP:
+            return (t.as.app.fn && m7_type_has_free_tyvar(*t.as.app.fn)) ||
+                   (t.as.app.arg && m7_type_has_free_tyvar(*t.as.app.arg));
+        case TY_FN: {
+            if (t.as.fn.arg_full_types)
+                for (uint8_t i = 0; i < t.as.fn.arity; i++)
+                    if (t.as.fn.arg_full_types[i] &&
+                        m7_type_has_free_tyvar(*t.as.fn.arg_full_types[i]))
+                        return true;
+            return t.as.fn.result_full_type &&
+                   m7_type_has_free_tyvar(*t.as.fn.result_full_type);
+        }
+        default:
+            return false;
+    }
+}
+
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
  *
  * Defines an instance of a typeclass for concrete types.
@@ -4812,6 +4843,10 @@ resolved_user_fallback:;
     const Symbol *m7_bind_names[16];
     Type m7_bind_types[16];
     uint8_t m7_nb = 0;
+    /* M7 layer-4 guard (see m7_type_has_free_tyvar): stays false unless the
+     * substituted result type fully grounds, so an `ap`-style call whose result
+     * element cannot be recovered falls back to carrier dispatch. */
+    bool m7_byvalue_grounded = false;
     if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
         best_method->binding->type.kind == TY_FN &&
         best_method->binding->type.as.fn.result_full_type &&
@@ -4839,9 +4874,20 @@ resolved_user_fallback:;
                                               args_orig_types[i], m7_bind_names,
                                               m7_bind_types, &m7_nb, 16);
             }
-            if (m7_nb > 0)
-                result_type = elab_subst_class_tyvars(e->arena, *rft, m7_bind_names,
-                                                      m7_nb, m7_bind_types, m7_nb);
+            if (m7_nb > 0) {
+                Type substituted = elab_subst_class_tyvars(
+                    e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
+                /* Only commit the by-value result type (and, below, the by-value
+                 * element bindings) when the result fully grounds.  A residual
+                 * free element tyvar -- the `ap` fat-closure-carrier case --
+                 * keeps the carrier result_type so dispatch falls back to the
+                 * uniform carrier ABI instead of emitting a broken half-by-value
+                 * spec with a dangling carrier-base dict reference. */
+                if (!m7_type_has_free_tyvar(substituted)) {
+                    result_type = substituted;
+                    m7_byvalue_grounded = true;
+                }
+            }
         }
     }
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
@@ -4901,6 +4947,7 @@ resolved_user_fallback:;
             best_method->body->kind != EX_INLINE_C &&
             m7_body_constructs_byvalue(best_method->body);
         if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
+            m7_byvalue_grounded &&
             tc->n_type_params >= 1 && tc->type_params[0]) {
             uint8_t total = (uint8_t)(1 + m7_nb);
             if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;

@@ -1,9 +1,28 @@
 ---
 title: M7 HKT Applicative `ap` blocked -- function element of an HKT container erases to `ptr<void>`
-severity: expressiveness gap (blocks the Applicative `ap` shape under the M7 by-value HKT path); under `TUR_M7_HKT=1` it currently surfaces as a hard cc error, not a silent miscompile
-status: open
+severity: expressiveness gap (blocks the Applicative `ap` shape under the M7 by-value HKT path). As of 2026-06-18 the defensive guard (fix direction 3) has landed, so `TUR_M7_HKT=1` no longer emits broken C for `ap`; it now degrades to the same clean elaborator type error as the flag-off path. The by-value `ap` monomorphization itself (fix direction 1) is still open.
+status: open (mitigated -- guard landed; full by-value `ap` still blocked on the fat-closure-carrier change)
 since: 2026-06-18
 ---
+
+## Resolution progress
+
+- **2026-06-18 -- fix direction 3 (defensive guard) LANDED.** A residual free
+  result element tyvar now aborts the by-value HKT monomorphization for that
+  call and falls back to the uniform carrier dispatch, instead of emitting a
+  half-by-value spec with a dangling carrier-base dict reference. Implemented in
+  `src/compiler/elab_typeclasses.c` as `m7_type_has_free_tyvar` + the
+  `m7_byvalue_grounded` gate in `elab_method_call`. Effect: under `TUR_M7_HKT=1`
+  the `ap` probe no longer triggers a cc error; it surfaces the SAME
+  `expected (type-app Option tyvar 'A'), got (type-app ? ?)` elaborator error as
+  the flag-off path. Flag-off codegen is byte-identical (suite 1683/0); the
+  guard is inert for the grounded `fmap`/`bind` shapes (still 42/21) and across
+  a 92-fixture HKT/typeclass flag-on sweep (the one flag-on codegen difference,
+  `typeclass-return-dispatch-result-wrapped`, is pre-existing and identical to
+  the parent commit).
+- **Still open:** fix direction 1 (thread the precise fn type through
+  polymorphic constructor calls so `(some add1) : (Option (fn [int] int))`),
+  which is what actually lets `ap` monomorphize by value and reach 42.
 
 # M7 HKT `ap`: the wrapped-function element of `(f (fn [a] b))` erases to `ptr<void>`
 
