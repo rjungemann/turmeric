@@ -39,20 +39,38 @@ error [TUR-E0006]: operator lookup failed for 'println': got 1 arg(s),
 
 `(.value (k-apply-raw (:: f :int) 7))` has type `B`, a free type variable.
 
-## Root cause
+## Root cause (definitive)
 
-`k-apply-raw`'s only inputs are `k : int` (the erased fat-closure carrier) and
-`x : A`. The return tyvar `B` -- the closure's *result* element -- appears
-**only in the return position**, with no argument to witness it. `(:: f :int)`
-deliberately erases the closure's type so type-erased instance-method params can
-call `k-apply-raw`, which is exactly what destroys the `B` witness. This is the
-same shape as the original `ne-from?` inference gap (return tyvar with no
-argument witness), but here there is no typed-witness argument to add without
-defeating the carrier-erased call convention that `k-apply-raw` exists to serve.
+Two layers, the second fatal:
 
-The spec doc's target shape (`k : int`, `: (Option B)`) is internally
-inconsistent on inferability -- which is precisely why it pins a prerequisite-1
-gate that says "if this fails, file a fresh report and pause this plan."
+1. **`k-apply-raw` arg witness.** Its inputs are `k : int` (the erased
+   fat-closure carrier) and `x : A`; the return tyvar `B` appears only in the
+   return, with no argument to witness it. A *typed* closure parameter
+   (`k : (fn [A] (Option B))`) DOES let `B` infer at elab -- verified -- but
+   then hits an inline-C-returns-carrier vs. declared-by-value codegen
+   mismatch (the `return TUR_APPLY1(...)` body yields the int64 carrier while
+   the declared `(Option B)` wants the struct), and instance methods cannot
+   pass a typed closure anyway (see layer 2).
+
+2. **`Category` is a kind-`*` class, so Kleisli's `A`/`B` are phantom at the
+   class level.** `stdlib/arrow.tur:303` declares
+   `(defclass Category [arr] (ident [] : arr) (comp [f g] : arr))`. `arr` has
+   kind `*`. The Kleisli instance is `Category [Kleisli]` with
+   `arr = Kleisli` -- the bare `(defopaque Kleisli [A B] :int)` carrier. So
+   `comp`'s params `f`, `g` and result are all just `arr` (= the int64
+   Kleisli carrier); the arrow's element types `A`/`B`/`C` are **phantom**
+   and entirely absent from `comp`'s type. There is nowhere in `comp` for
+   `B` to come from -- it is not a free tyvar of the method, it is erased by
+   the class abstraction itself.
+
+Recovering `B` in `comp` therefore requires the arrow category to be an **HKT
+class** (a `(* -> * -> *)` `arr`, dispatched per element type) -- i.e. the M6
+design pass + M7 HKT class dispatch implementation of
+`docs/upcoming/end-to-end-monomorphization-plan.md` Phases 2-3. It is NOT a
+local `kleisli.tur` fix and NOT independent of those phases, contrary to the
+"self-contained one-PR retype" estimate in
+`kleisli-byvalue-option-cascade.md`. The spec doc's prerequisite-1 gate ("if
+this fails, file a report and pause") anticipated exactly this.
 
 ## Why the obvious fixes don't apply cleanly
 
@@ -69,19 +87,20 @@ gate that says "if this fails, file a fresh report and pause this plan."
 
 ## Proposed fix directions
 
-1. **Recover `B` through the typed `Kleisli A B` handle end-to-end.** Make the
-   instance methods carry the typed `(Kleisli A B)` (not the erased `:int`) so
-   `k-apply` (typed) is the only entry and `k-apply-raw` is dropped or made
-   private with `B` supplied by the caller's spec. Requires the typeclass
-   instance machinery to preserve the arrow's element types through `comp`/
-   `ident` rather than erasing to `:int`.
-2. **A `Monad [Option]` `>>=` surface** (named as the natural successor in the
-   cascade spec's "out of scope"): express `comp` as `\x -> f x >>= g` over a
-   by-value `(Option B)` bind whose signature witnesses `B` from the `(fn [A]
-   (Option B))` continuation, sidestepping the bare `k-apply-raw` entirely.
+1. **HKT arrow category (the real fix).** Promote `Category`/`Arrow` to an HKT
+   class whose `arr` has kind `(* -> * -> *)`, so the Kleisli instance tracks
+   `A`/`B`/`C` and `comp` can witness `B`. This is exactly the M6 design pass +
+   M7 HKT class dispatch implementation (Phases 2-3 of the umbrella plan); it is
+   not a local `kleisli.tur` change. Until that lands, `comp` cannot thread a
+   by-value `(Option B)` and the `(:: r (Option int))` interim bridge (PR #426)
+   must stay.
+2. **Sidestep via a `Monad [Option]` `>>=`** with a `(fn [A] (Option B))`
+   continuation that witnesses `B` -- still blocked by layer 2 (the kind-`*`
+   `Category` erases the element types before `>>=` is ever reached in `comp`).
 
-Either is a larger change than the "single PR, ~90 lines" the cascade spec
-estimated; the estimate assumed prerequisite 1 held.
+Both are larger than the "single PR, ~90 lines" the cascade spec estimated; the
+estimate assumed prerequisite 1 held and that `Category` carried the element
+types, neither of which holds.
 
 ## Validation for a fix
 

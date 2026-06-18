@@ -29,9 +29,20 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
 
 ## What remains (this plan)
 
-Five phases. **Phase 1 is independent** of the rest and can ship in
-parallel; **Phases 2-5 are sequential** (HKT design -> HKT impl ->
+Five phases. **Phases 2-5 are sequential** (HKT design -> HKT impl ->
 carrier-helper rewrites -> bridge delete -> re-audit).
+
+**Status (2026-06-18):** Phase 1 was assumed fully independent of the rest;
+that holds for 1.1 + 1.2 (both **landed** -- by-value `ne-from?` via a typed
+`(List A)` witness, and by-value `result-map` with the N-arg `#{Construct}`
+spec-selection fix). It does **not** hold for **1.3 + 1.4**: 1.4 (kleisli) is
+root-caused as gated on the **HKT class dispatch** work (Phases 2-3) -- the
+`Category` class is kind-`*`, so the arrow's element types are phantom and `B`
+cannot be witnessed in `comp` without an HKT arrow category. 1.3 (`unwrap-or`)
+has exactly one stdlib caller (the blocked kleisli `comp`), so it is gated
+behind 1.4. 1.5 (bucket C exit criterion) cannot close until 1.3/1.4 do.
+Net dependency order is now: 1.1 ✓, 1.2 ✓, then Phases 2-3 (HKT), then
+1.4 -> 1.3 -> 1.5. See per-item notes below.
 
 ---
 
@@ -163,21 +174,26 @@ per the spec doc -- the only external dependency is that
 The `(:: r (Option int))` ascription that landed in PR #426 was
 explicitly an interim patch this phase retires.
 
-- [ ] **BLOCKED on prerequisite 1.** Applied the target-shape retype and ran
-      the spec's own prerequisite-1 repro: it fails. `k-apply-raw [A B]
-      [k : int x : A] : (Option B)` leaves `B` uninferable -- the return tyvar
-      has no argument witness (`k : int` erases the closure's result type), so
-      `.value`/`.is-some` on the result is a bare tyvar. Per the spec's
-      instruction ("if this fails, file a fresh report and pause this plan"),
-      reverted; tracked in
-      [`kleisli-k-apply-raw-B-uninferable.md`](../reported/kleisli-k-apply-raw-B-uninferable.md).
-      No new ascription patches added.
-- [ ] (After unblock) Retype `comp` / `k-apply-raw` to by-value `(Option B)`,
-      add `tests/fixtures/kleisli-non-int-element/`, run `bash tests/run.sh`
-      clean, strike step 5 from `option-consumer-retype-byvalue.md`, and (if all
-      Remaining items are struck) archive it.
+- [ ] **GATED ON PHASES 2-3 (HKT).** Definitive root cause:
+      `(defclass Category [arr] ...)` (`stdlib/arrow.tur:303`) is a kind-`*`
+      class, so `Category [Kleisli]` binds `arr = Kleisli` (the bare int64
+      carrier) and the arrow's element types `A`/`B`/`C` are **phantom at the
+      class level** -- `comp [f g]`'s params and result are all just `arr`, so
+      `B` is not a free tyvar of the method and cannot be witnessed. Recovering
+      it requires an HKT arrow category (`arr : * -> * -> *`), i.e. the M6/M7
+      work of Phases 2-3 below -- this item is NOT independent of them, contrary
+      to the original framing. The spec's prerequisite-1 gate anticipated this.
+      Verified the secondary inline-C-carrier-vs-by-value-return mismatch too.
+      Tracked in
+      [`kleisli-k-apply-raw-B-uninferable.md`](../reported/kleisli-k-apply-raw-B-uninferable.md);
+      the `(:: r (Option int))` interim bridge (PR #426) stays until HKT lands.
 
 ### 1.5 -- Bucket C exit criterion
+
+**GATED:** cannot close until 1.3 + 1.4 land, which are themselves gated on
+Phases 2-3 (HKT). The kleisli `(:: r (Option int))` bridge and the carrier
+`unwrap-or` are the remaining bucket-C contributions; both clear only with the
+HKT arrow category. Re-run this sweep after Phase 3.
 
 - [ ] Re-run `TUR_M3_AUDIT=1` per-fixture sweep (the methodology is
       pinned in `docs/archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`
