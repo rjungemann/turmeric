@@ -592,6 +592,62 @@ static const Symbol *class_type_param_match(const char *kw_name, uint32_t kw_len
     return NULL;
 }
 
+/* M7 HKT (flag-gated by g_m7_hkt_enabled): is `sym` a candidate method-level
+ * type variable -- a lowercase-leading symbol that is neither a primitive type
+ * keyword, a special type-form head (fn/c-fn/void/any), nor a class type param?
+ *
+ * Rationale (corrected root cause, 2026-06-18): an HKT-applied method signature
+ * such as `(gmap [container : (g a) f : (fn [a] b)] : (g b))` parses the HEAD
+ * `g` to a NAMED TY_TYVAR (it is a class type param), but the element tyvars
+ * `a`/`b` are NOT class params, so type_expr_from_form takes its "unknown ->
+ * opaque struct" fallback and they become ANONYMOUS TY_STRUCT{def=NULL}.  That
+ * is why `(g b)` resolves to `(type-app tyvar ?)` instead of `(type-app g b)`:
+ * the element is anonymous, so layer-0 head substitution yields `(Option ?)`
+ * with no named element to refine per call.  Collecting these implicit
+ * method-level tyvars and threading them as additional type params makes them
+ * resolve to NAMED tyvars, the prerequisite for per-call element refinement. */
+static bool m7_is_method_tyvar_name(const Symbol *sym,
+                                    const Symbol **class_tp, uint8_t n_class_tp) {
+    if (!sym || sym->len == 0) return false;
+    char c = sym->name[0];
+    if (c < 'a' || c > 'z') return false;            /* tyvars are lowercase */
+    if (typekind_from_symbol(sym->name) != TY_UNKNOWN) return false; /* primitive */
+    if ((sym->len == 4 && memcmp(sym->name, "void", 4) == 0) ||
+        (sym->len == 3 && memcmp(sym->name, "any",  3) == 0) ||
+        (sym->len == 2 && memcmp(sym->name, "fn",   2) == 0) ||
+        (sym->len == 4 && memcmp(sym->name, "c-fn", 4) == 0))
+        return false;
+    for (uint8_t i = 0; i < n_class_tp; i++)
+        if (class_tp[i] == sym) return false;
+    return true;
+}
+
+/* M7 HKT: walk a (type-position) form collecting de-duplicated method-level
+ * tyvar symbols into `out` (capacity `max`, current count `*n_out`). */
+static void m7_collect_form_tyvars(const Form *form,
+                                   const Symbol **class_tp, uint8_t n_class_tp,
+                                   const Symbol **out, uint8_t *n_out, uint8_t max) {
+    if (!form) return;
+    switch (form->tag) {
+        case F_SYM:
+            if (m7_is_method_tyvar_name(form->as.sym, class_tp, n_class_tp)) {
+                for (uint8_t i = 0; i < *n_out; i++)
+                    if (out[i] == form->as.sym) return;
+                if (*n_out < max) out[(*n_out)++] = form->as.sym;
+            }
+            return;
+        case F_TYPE_ANN:
+        case F_LIST:
+        case F_VEC:
+            for (uint32_t i = 0; i < form->as.list.len; i++)
+                m7_collect_form_tyvars(form->as.list.items[i], class_tp, n_class_tp,
+                                       out, n_out, max);
+            return;
+        default:
+            return;
+    }
+}
+
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
                                                uint32_t *out_body_start,
                                                const Symbol **class_type_params,
@@ -621,6 +677,37 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         return NULL;
     }
     
+    /* M7 HKT (flag-gated): build the effective type-param array used for
+     * type-expression resolution = the class type params plus any implicit
+     * method-level tyvars collected from the param/return type forms.  When the
+     * flag is OFF this is identical to (class_type_params, n_class_type_params),
+     * so the path is byte-for-byte inert.  See m7_is_method_tyvar_name. */
+    const Symbol **eff_tp = class_type_params;
+    uint8_t n_eff_tp = n_class_type_params;
+    if (g_m7_hkt_enabled) {
+        enum { M7_MAX_TP = 16 };
+        const Symbol **buf =
+            (const Symbol **)arena_alloc(e->arena, M7_MAX_TP * sizeof(const Symbol *));
+        uint8_t n = 0;
+        for (uint8_t i = 0; i < n_class_type_params && n < M7_MAX_TP; i++)
+            buf[n++] = class_type_params[i];
+        m7_collect_form_tyvars(params_form, class_type_params, n_class_type_params,
+                               buf, &n, M7_MAX_TP);
+        /* Locate the return form (index 2, or 3 when an effect-row #{...}
+         * precedes it) and collect its element tyvars too. */
+        {
+            uint32_t ri = 2;
+            if (method_form->as.list.len > ri &&
+                method_form->as.list.items[ri]->tag == F_MAP) ri++;
+            if (method_form->as.list.len > ri)
+                m7_collect_form_tyvars(method_form->as.list.items[ri],
+                                       class_type_params, n_class_type_params,
+                                       buf, &n, M7_MAX_TP);
+        }
+        eff_tp = buf;
+        n_eff_tp = n;
+    }
+
     /* Parse parameters */
     uint8_t n_params = params_form->as.list.len;
     const Symbol **param_names = NULL;
@@ -768,8 +855,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                      * argument-dispatchable method as return-only. */
                     Type *ft = inner_f
                         ? type_expr_from_form(e, inner_f, NULL,
-                                              class_type_params, NULL,
-                                              n_class_type_params)
+                                              eff_tp, NULL,
+                                              n_eff_tp)
                         : NULL;
                     if (!ft) {
                         diag_emit(DIAG_ERROR, p->span,
@@ -826,8 +913,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     } else {
                         Type *ft = ti
                             ? type_expr_from_form(e, ti, NULL,
-                                                  class_type_params, NULL,
-                                                  n_class_type_params)
+                                                  eff_tp, NULL,
+                                                  n_eff_tp)
                             : NULL;
                         if (!ft) {
                             diag_emit(DIAG_ERROR, type_f->span,
@@ -839,8 +926,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
                     Type *ft = type_expr_from_form(e, type_f, NULL,
-                                                   class_type_params, NULL,
-                                                   n_class_type_params);
+                                                   eff_tp, NULL,
+                                                   n_eff_tp);
                     if (!ft) {
                         diag_emit(DIAG_ERROR, type_f->span,
                                   "unsupported type form in typeclass method parameter");
@@ -963,8 +1050,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
              * elsewhere in this function, not via type_expr_from_form.) */
             Type *ft = (ret_form->as.list.len > 0)
                 ? type_expr_from_form(e, ret_form->as.list.items[0], NULL,
-                                      class_type_params, NULL,
-                                      n_class_type_params)
+                                      eff_tp, NULL,
+                                      n_eff_tp)
                 : NULL;
             if (!ft) {
                 diag_emit(DIAG_ERROR, ret_form->span,
@@ -977,8 +1064,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
              * Prereq 5: same as above -- pass class type params so a
              * nested `a` resolves to TY_TYVAR. */
             Type *ft = type_expr_from_form(e, ret_form, NULL,
-                                           class_type_params, NULL,
-                                           n_class_type_params);
+                                           eff_tp, NULL,
+                                           n_eff_tp);
             if (!ft) {
                 diag_emit(DIAG_ERROR, ret_form->span,
                           "unsupported return type form in typeclass method");
@@ -1525,6 +1612,67 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
         return t;
     }
     return t;
+}
+
+/* M7 HKT layers 1+3 (flag-gated): unify a method's DECLARED parameter type
+ * (carrying element tyvars, e.g. `(g a)` or `(fn [a] b)`) against the ACTUAL
+ * call-site argument type, recording each tyvar -> concrete-type binding.  The
+ * collected bindings feed elab_subst_class_tyvars to refine the HKT result
+ * `(Option b)` to a ground `(Option int)` at the call site.  Names are interned
+ * so they compare by Symbol identity the same way elab_subst_class_tyvars does. */
+static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
+                                      const Symbol **names, Type *types,
+                                      uint8_t *n, uint8_t max) {
+    switch (decl.kind) {
+        case TY_TYVAR:
+            if (decl.as.tyvar_.name) {
+                for (uint8_t i = 0; i < *n; i++)
+                    if (names[i] && strcmp(names[i]->name, decl.as.tyvar_.name) == 0)
+                        return;  /* keep the first binding for a given tyvar */
+                if (*n < max) {
+                    names[*n] = symtab_intern(e->st,
+                        strslice(decl.as.tyvar_.name,
+                                 (uint32_t)strlen(decl.as.tyvar_.name)));
+                    types[*n] = act;
+                    (*n)++;
+                }
+            }
+            return;
+        case TY_APP:
+            if (act.kind == TY_APP) {
+                if (decl.as.app.fn && act.as.app.fn)
+                    m7_collect_tyvar_bindings(e, *decl.as.app.fn, *act.as.app.fn,
+                                              names, types, n, max);
+                if (decl.as.app.arg && act.as.app.arg)
+                    m7_collect_tyvar_bindings(e, *decl.as.app.arg, *act.as.app.arg,
+                                              names, types, n, max);
+            }
+            return;
+        case TY_FN:
+            if (act.kind == TY_FN) {
+                uint8_t ar = decl.as.fn.arity < act.as.fn.arity
+                             ? decl.as.fn.arity : act.as.fn.arity;
+                for (uint8_t i = 0; i < ar; i++) {
+                    Type da = (decl.as.fn.arg_full_types && decl.as.fn.arg_full_types[i])
+                              ? *decl.as.fn.arg_full_types[i]
+                              : type_from_kind(decl.as.fn.arg_kinds[i]);
+                    Type aa = (act.as.fn.arg_full_types && act.as.fn.arg_full_types[i])
+                              ? *act.as.fn.arg_full_types[i]
+                              : type_from_kind(act.as.fn.arg_kinds[i]);
+                    m7_collect_tyvar_bindings(e, da, aa, names, types, n, max);
+                }
+                Type dr = decl.as.fn.result_full_type
+                          ? *decl.as.fn.result_full_type
+                          : type_from_kind(decl.as.fn.result_kind);
+                Type ar2 = act.as.fn.result_full_type
+                           ? *act.as.fn.result_full_type
+                           : type_from_kind(act.as.fn.result_kind);
+                m7_collect_tyvar_bindings(e, dr, ar2, names, types, n, max);
+            }
+            return;
+        default:
+            return;
+    }
 }
 
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
@@ -4586,6 +4734,48 @@ resolved_user_fallback:;
                          sizeof(dict_expr->as.dict_.method_name));
     }
 
+    /* M7 HKT layers 1+3 (flag-gated): an HKT-applied method result `(Option b)`
+     * arrives here as an empty `type_from_kind(TY_APP)` => `(type-app ? ?)`,
+     * because the method's result_kind is TY_APP but type_from_kind drops the
+     * head/element.  Recover the real result: take the binding's
+     * result_full_type rft (`(Option b)`, with `b` a named element tyvar after
+     * the parse fix + layer-0 head substitution), unify the declared parameter
+     * types against the actual argument types to bind `b` (and any other element
+     * tyvars), and substitute into rft so it grounds to `(Option int)`. */
+    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
+        best_method->binding->type.kind == TY_FN &&
+        best_method->binding->type.as.fn.result_full_type &&
+        best_method->binding->type.as.fn.result_full_type->kind == TY_APP) {
+        TypeClass *tc = best_inst->typeclass;
+        const TypeClassMethod *cm = NULL;
+        for (uint8_t mi = 0; mi < tc->n_methods; mi++)
+            if (tc->methods[mi].name &&
+                strcmp(tc->methods[mi].name->name, method_name) == 0) {
+                cm = &tc->methods[mi];
+                break;
+            }
+        if (cm) {
+            /* The declared element tyvars `(g a)` / `(fn [a] b)` live on the
+             * CLASS method's param_types (parsed with the method-tyvar fix), not
+             * on the instance binding (whose arg_full_types is NULL). */
+            const Type *rft = best_method->binding->type.as.fn.result_full_type;
+            const Symbol *names[16];
+            Type types[16];
+            uint8_t nb = 0;
+            if (cm->n_params >= 1)
+                m7_collect_tyvar_bindings(e, cm->param_types[0], obj_orig_type,
+                                          names, types, &nb, 16);
+            for (uint32_t i = 0; i < n_args; i++) {
+                uint8_t pidx = 1 + (uint8_t)i;
+                if (pidx < cm->n_params)
+                    m7_collect_tyvar_bindings(e, cm->param_types[pidx],
+                                              args_orig_types[i], names, types, &nb, 16);
+            }
+            if (nb > 0)
+                result_type = elab_subst_class_tyvars(e->arena, *rft, names, nb,
+                                                      types, nb);
+        }
+    }
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
     /* Phase H §1: receiver type is statically known here (best_inst was resolved
      * by the type-based instance search above; ambiguous matches would have

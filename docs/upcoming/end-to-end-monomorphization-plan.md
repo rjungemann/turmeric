@@ -357,7 +357,54 @@ open-ended ecosystem-wide expansion.
 `v2/hkt-dispatch-options-tradeoff.md`). Tasks below are skeleton; flesh out
 per Phase 2's design doc.
 
-### 3.0 -- THE core prerequisite (grounded 2026-06-18): thread the element type into HKT instance methods
+### 3.0 -- THE core prerequisite: thread the element type into HKT instance methods
+
+> **UPDATE (2026-06-18, second session -- elaborator threading LANDED INERT,
+> "step (a)" DISPROVEN).** The full elaborator type-threading is now implemented
+> and committed behind the existing default-OFF `TUR_M7_HKT` flag (suite green
+> at 1683/0 with the flag off; existing HKT fixtures behave identically with the
+> flag on). Under `TUR_M7_HKT=1` the probe `(gmap (some 21) dbl)` now resolves
+> end-to-end to `(Option int)` with **no ascription** and typechecks; it now
+> fails only in CODEGEN (layer 4, below). This required correcting the prior
+> root-cause analysis:
+>
+> - **"Step (a)" (resolve the application HEAD `g` to `TY_TYVAR`) is a red
+>   herring.** Instrumentation proved `(g b)` already parses with a NAMED head
+>   `TY_TYVAR("g")` (`type_expr_from_form` resolves `g` via the bare-class-param
+>   branch at `elab_types.c:421-446`). The reliability caveat above was right.
+> - **The real parse gap was the ARG:** the element tyvars `a`/`b` are NOT class
+>   params, so they took the "unknown -> anonymous opaque struct" fallback
+>   (`elab_types.c:549-562`), giving `TY_APP(TY_TYVAR g, TY_STRUCT{NULL})` which
+>   prints `(type-app tyvar ?)` and leaves no named element to refine. **Fix:**
+>   collect method-level implicit tyvars from the param/return type forms and
+>   thread them as additional type params (`m7_collect_form_tyvars` /
+>   `m7_is_method_tyvar_name` in `elab_typeclasses.c`), so `(g b)` parses to
+>   `TY_APP(TY_TYVAR g, TY_TYVAR b)`. Gated on the flag (inert when off).
+> - **Layers 0+2** (HKT head substitution `g -> Option`; carry the `TY_APP`
+>   return through `result_full_type`) were already present inert from the prior
+>   session and now fire correctly given the named element.
+> - **Layers 1+3 (call-site refinement) IMPLEMENTED:** `m7_collect_tyvar_bindings`
+>   (in `elab_typeclasses.c`, next to `elab_subst_class_tyvars`) unifies the
+>   CLASS method's declared param types -- `(g a)` and the real `TY_FN`
+>   `(fn [a] b)` (the `(fn ...)` form is parsed as a genuine fn-type, NOT the
+>   `:fn` carrier, so its result tyvar `b` survives) -- against the actual call
+>   arg types to bind `a/b`, then substitutes into the result `(Option b)` ->
+>   `(Option int)` at `elab_method_call`. The declared types are read from the
+>   class method (`tc->methods[i].param_types`), not the instance binding
+>   (whose `arg_full_types` is NULL).
+>
+> **The SOLE remaining wall is layer 4 (= Phase 3.2 emit).** With the type fully
+> threaded, the probe compiles but the instance method
+> `__inst_MyFunctor_gmap_Option` still emits the int64 carrier return
+> (`malloc(sizeof(int64_t)); return (int64_t)__tur_ret_p;`) while the by-value
+> consumer reads `Option__int` -- the documented carrier-vs-by-value mismatch.
+> The emit-side per-`(f, A)` by-value instance-method monomorphization (the
+> "irreducible core" detailed in 3.1) is now the only thing between HEAD and a
+> probe that prints 42. Because the probe body is already by-value
+> pure-Turmeric, completing layer 4 lands the probe WITHOUT touching stdlib;
+> enabling the flag by default additionally needs the Phase-4.2 body rewrites.
+
+### 3.0 (historical) -- the iterative root-cause dig (superseded by the UPDATE above)
 
 > **Reliability caveat (added 2026-06-18, end of session).** The
 > layer-by-layer "precise root" notes below (the "fifth layer" / "step (a)"

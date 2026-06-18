@@ -5,25 +5,33 @@
 ;;
 ;; Run it with: ./build/tur run docs/upcoming/v2/m7-hkt-probe.tur
 ;;
-;; CURRENT BEHAVIOR ON HEAD (re-verified 2026-06-18):
+;; BEHAVIOR ON HEAD, default (flag OFF) -- unchanged hard error:
 ;;   docs/upcoming/v2/m7-hkt-probe.tur:<line>: error [TUR-E0001]:
 ;;     function 'unwrap' arg 1: expected (type-app Option tyvar 'A'),
 ;;     got (type-app ? ?)
+;;   The producer `(gmap (some 21) dbl)` resolves to an anonymous
+;;   `(type-app ? ?)` instead of `(Option int)`.
 ;;
-;; i.e. the producer `(gmap (some 21) dbl)` resolves to an anonymous
-;; `(type-app ? ?)` instead of `(Option int)`: the class-method return `(g b)`
-;; is not refined to the instance's constructor + element type at the call
-;; site. The failure surfaces at the CONSUMER (`unwrap`), not inside `gmap`.
+;; BEHAVIOR UNDER `TUR_M7_HKT=1` (the elaborator type-threading, LANDED inert
+;; 2026-06-18, second session): the type now threads end-to-end --
+;;   g -> Option and b -> int -- so `(gmap (some 21) dbl)` resolves to
+;;   `(Option int)` with NO ascription and the consumer `unwrap` typechecks.
+;;   Run: `TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe.tur`
+;;   It now gets PAST elaboration and fails in CODEGEN (layer 4): the instance
+;;   method `__inst_MyFunctor_gmap_Option` still emits the int64 carrier return
+;;   (`malloc(sizeof(int64_t)); return ...`) while the by-value consumer reads
+;;   `Option__int` -- a carrier-vs-by-value mismatch (gcc warns
+;;   "array subscript ... outside array bounds" / "used uninitialized").
 ;;
-;; TARGET BEHAVIOR (what a complete M7 must achieve):
-;;   `main` returns 42 with NO ascription anywhere -- the type threads
-;;   g -> Option and b -> int end-to-end, AND the instance method
-;;   `__inst_MyFunctor_gmap_Option` emits a by-value `(Option int)` return
-;;   (per-(f, A) monomorphization, Phase 3.2) so the by-value `unwrap`
-;;   consumer reads it correctly. Landing the type-threading WITHOUT the
-;;   emit-side by-value monomorphization compiles but prints 0, not 42 --
-;;   a silent miscompile (this is why the two halves are atomic; see
-;;   end-to-end-monomorphization-plan.md Phase 3.0).
+;; SOLE REMAINING WALL (layer 4 = Phase 3.2 emit):
+;;   make the dispatch-reached HKT instance method intern a per-(f, A) by-value
+;;   `abi_spec` so it emits `gmap_Option__int` returning `Option__int` BY VALUE
+;;   (resolving the element `b` from the call args). The probe body is already
+;;   by-value pure-Turmeric, so completing layer 4 lands the probe (prints 42)
+;;   WITHOUT touching any stdlib instance; enabling the flag by DEFAULT
+;;   additionally needs the Phase-4.2 stdlib instance-body rewrites.
+;;
+;; TARGET BEHAVIOR: `main` returns 42 with NO ascription anywhere.
 
 (defclass MyFunctor [^g]
   (gmap [container : (g a) f : (fn [a] b)] : (g b)))
