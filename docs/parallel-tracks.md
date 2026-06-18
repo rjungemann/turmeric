@@ -22,14 +22,15 @@ advances.
 **Open work:**
 
 - [end-to-end-monomorphization-plan](upcoming/end-to-end-monomorphization-plan.md)
-  -- umbrella. M2/M3-downscoped/M4 substantively landed. Next: **M5**
-  (constrained-polymorphic dict typing) -> M6/M7 HKT design+implementation.
-  Empirical M5 surface is pinned by `m5-scope-audit-2026-06-18`: most M5
-  behaviors already landed via M4c Path A; one genuine HOF gap remains.
-- [m5-scope-audit-2026-06-18](upcoming/m5-scope-audit-2026-06-18.md)
-  -- pins what's left for M5 against M4c-landed behavior. One genuine
-  M5-class gap (constrained-poly HOF arg baked through carrier);
-  everything else in the original M5 scope already works.
+  -- **rewritten 2026-06-19** as remaining-work-only with actionable
+  per-phase checklists. M1-M5 landed (M5 closed by PRs #427/#428,
+  verified). Five remaining phases: (1) Track A bucket-C residuals
+  (independent of the rest), (2) HKT design pass with measured
+  per-(f,A) cost, (3) HKT implementation, (4) carrier-helper rewrites
+  (M9 prerequisite per the archived blocker doc), (5) bridge deletion
+  + re-audit. Predecessor framing archived at
+  `docs/archive/end-to-end-monomorphization-plan.md`; M5 scope audit
+  archived at `docs/archive/m5-scope-audit-2026-06-18.md`.
 - [m4-typeclass-per-method-abi-plan](upcoming/m4-typeclass-per-method-abi-plan.md)
   -- M4a deliverables landed. Bridge audit floor: **41 crossings / 11
   fixtures**; only bucket C (8 crossings) is tractable and is tracked
@@ -67,29 +68,6 @@ advances.
   `Category [Kleisli]` to thread `(Option B)` by value; retires the
   `(:: r (Option int))` ascription that landed in PR #426 as a
   temporary patch. Independent of `unwrap-or`; one self-contained PR.
-- [tco-map-set-eq-pure-turmeric-followup](upcoming/tco-map-set-eq-pure-turmeric-followup.md)
-  -- low-priority type-hygiene residual; not on the audit critical path
-  (Map/Set are `:heap`, no longer cross the bridge). **Note:** the
-  primary deliverable (TCO'd pure-Turmeric `Eq [Map]`/`Eq [Set]`) shipped
-  in PR #424; verify what residual content remains and archive if empty.
-
-**Recently resolved** (archived since last snapshot):
-
-- `option-map-byvalue-result-into-carrier-consumer-let-inside-arg`
-  -- emit-side spill-bridge generalized for `let`/`do`/`if` wrappers
-  whose tail produces a by-value aggregate into a carrier-int slot
-  (PR #425).
-- `option-map-literal-none-unannotated-fn-no-A-inference` -- closed by
-  PR #421's emit-side guard suite; regression fixture
-  `tests/fixtures/option-map-literal-none-unannotated-lambda/`.
-- `zero-arg-construct-ground-byvalue-return` and
-  `parametric-option-return-clone-struct-app-leak` -- both retired
-  (cleared the path for the BoundedIdx half of step 4).
-- Earlier-snapshot resolutions still load-bearing for context:
-  `option-none-as-null-byvalue-param-segfault` (PR #414),
-  `result-bridge-tail-call-from-pure-tur-to-inline-c` (PR #415/#416),
-  `tco-in-abi-specs-for-stdlib-iteration`,
-  `m3-carrier-bridge-deletion`.
 
 ## Track B -- ECS spice (sized worlds + scheduler)
 
@@ -117,16 +95,27 @@ monomorphization phases retiring the carrier bridge.
 
 **Open work:**
 
-- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- needs a refresh: the
-  "E2d wiring pending" / "direction-1 unblocked but unimplemented"
-  framing is now stale. Remaining real work is direction 2 (cross-world
-  scheduling) once Track A retires the carrier bridge.
-- [ecs-sized-world-plan](upcoming/ecs-sized-world-plan.md) -- surface
-  settled; largely subsumed by E2c slices 1-12 + PR #15. Refresh or
-  archive after the ecs-spice-plan refresh decides scope.
+- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- top status block
+  current as of 2026-06-18. Two residual follow-ups, neither
+  design-blocking:
+  1. Routing `defcomponent-accessors` through `StorageOps` -- waiting
+     on struct-element projection (independent of PR #420).
+  2. Sized-scheduler direction 2 (cross-world / heterogeneous
+     scheduling) -- gated on **gap-H world-type polymorphism**,
+     itself behind Track A monomorphization. Direction 1 shipped
+     (PR #15); the `world-resize` existential wrapper shipped (PR #17).
+  E2b (refinement-typed APIs) stays gated on refinement types.
 
-**Order:** refresh both plan docs against landed state -> gap-H if
-cross-world scheduling is needed for Track B's next slice.
+**Archived since last snapshot:**
+
+- `ecs-sized-world-plan` -- Q1-Q4 settled, surface specced, and every
+  spice-side slice (1-12) plus PR #15 (direction-1 scheduler) and
+  PR #17 (world-resize wrapper) have shipped. Moved to
+  [docs/archive/ecs-sized-world-plan.md](archive/ecs-sized-world-plan.md).
+
+**Order:** the remaining `StorageOps` routing is implementable when
+struct-element projection lands; direction-2 cross-world scheduling
+waits on Track A's gap-H.
 
 ## Track C -- Spices uplift (type hygiene)
 
@@ -136,11 +125,12 @@ Pure spice-side work; no compiler dependencies.
 
 - [spices-type-features-uplift-plan](upcoming/spices-type-features-uplift-plan.md)
   -- phased per-spice uplift (rows, typeclasses, sized types where they
-  pay rent). Independent across spices.
-- [spices-int-stand-in-audit-2026-06-14](reported/spices-int-stand-in-audit-2026-06-14.md)
-  (report) -- 19 spices still carry `:int` stand-ins for handles /
-  callbacks / options; phased retype across the offending spices. Blocks
-  any session-middleware-style composition work.
+  pay rent). Independent across spices. **U2 target 1 (ansi Color
+  typeclass collapse) landed 2026-06-19** as turmeric-spices PR #18;
+  remaining U2 targets are `plot` (Renderer class), `json`
+  (Encode/Decode -- minimal slice already shipped under P2a, full
+  typeclass collapse pending), and `http`/`httpd` (Handler class).
+  U1/U3/U4/U5/U6 still open.
 
 **Recently landed in turmeric-spices** (since last snapshot):
 
@@ -148,23 +138,15 @@ Pure spice-side work; no compiler dependencies.
 - PR #13 (tourist v0.2.5): `defopaque Pattern` for
   `router-compile`/`router-match`/`router-free`.
 - PR #16: remaining tourist `ctx : int` -> `ctx : Ctx` retype.
-- PR #18 (ansi v0.2.0): `Color` typeclass collapse.
-- Audit row `spices-int-stand-in-audit-2026-06-14` previously closed
-  S1/S2/S3 surfaces + four secondary-handle rows (tourist internals
-  landed in turmeric-spices 9a590cb / v0.2.6).
+- PR #18 (ansi v0.2.0): `Color` typeclass collapse -- **U2 target 1**.
 
-### Quick decision: spice helpers returning `(Result T E)` / `(Option T)`
+**Archived since last snapshot:**
 
-Just write it; declare the return type. Do **not** gate new S3-style
-work on the M3 bucket-C residual. Primitive payloads, by-value-struct
-payloads, and constrained-generic helpers all monomorphize today
-(`tur-regex`, `tur-tourist`, `tur-httpd` v0.2.0 all ship typed Result
-returns through the public surface). The narrow permanent case is
-`Serializable [Option]`-shaped instances whose `none` arm relies on
-`none` being the NULL int64 -- keep those inline-C with a `;;` NOTE.
-See [archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md
-"Update 2026-06-17"](archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
-for the segfault repro before rewriting.
+- `spices-int-stand-in-audit-2026-06-14` -- all S1/S2/S3 surfaces and
+  the four follow-up rows (plutovg secondary handles, raylib
+  models/text/textures/camera/shapes, rtaudio `DeviceInfo` + callback,
+  tourist internals via v0.2.6 / commit 9a590cb) are closed. Moved to
+  [docs/archive/spices-int-stand-in-audit-2026-06-14.md](archive/spices-int-stand-in-audit-2026-06-14.md).
 
 ---
 

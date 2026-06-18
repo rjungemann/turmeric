@@ -406,12 +406,12 @@ one typeclass + N instances, picking up coherent dispatch.
 
 Targets:
 
-1. **`ansi`** -- `ansi__color.c` has parallel `fg4/bg4/fg8/bg8/fg24/bg24`.
-   One `Color` typeclass with instances `Color4`, `Color8`, `Color24`
-   collapses six functions to two (`fg`, `bg`), and the depth becomes
-   a *type-level* property of the color value so a 24-bit color cannot
-   be passed where a 4-bit one is expected by a terminal that doesn't
-   advertise truecolor.
+1. **`ansi`** -- DONE 2026-06-19 (turmeric-spices PR #18, ansi v0.2.0).
+   `ansi__color.c` had parallel `fg4/bg4/fg8/bg8/fg24/bg24`; collapsed
+   into a `Color` typeclass with instances `Color4`, `Color8`, `Color24`
+   so callers write `fg`/`bg` and the depth is a *type-level* property
+   of the color value -- a 24-bit color cannot be passed where a 4-bit
+   one is expected by a terminal that doesn't advertise truecolor.
 2. **`plot`** -- `plot__core.c` dispatches on backend (canvas vs. PNG
    vs. notebook-inline). One `Renderer` class with instances per
    backend; the plot-building DSL becomes generic in `Renderer`.

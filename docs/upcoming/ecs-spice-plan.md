@@ -10,7 +10,7 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 > compile-time write-cap enforcement via I1-I6), E2d (associated-type
 > storage projection, P1-P6 + P5b variadic-arity collapse), E2c
 > (sized-rectangular iteration, slices 1-12 against the resolved
-> [`ecs-sized-world-plan.md`](ecs-sized-world-plan.md)), E3 (raylib
+> [`ecs-sized-world-plan.md`](../archive/ecs-sized-world-plan.md)), E3 (raylib
 > companion), and E4 (comparison writeup --
 > [`docs/guides/ecs-guide.md`](../guides/ecs-guide.md) and
 > [`docs/guides/ecs-vs-haskell-ecs.md`](../guides/ecs-vs-haskell-ecs.md))
@@ -338,7 +338,7 @@ which have not yet shipped:
   landed 2026-06-10 (see
   [`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md));
   the bounded-capacity world API designed in
-  [`ecs-sized-world-plan.md`](ecs-sized-world-plan.md) (Q1-Q4
+  [`ecs-sized-world-plan.md`](../archive/ecs-sized-world-plan.md) (Q1-Q4
   settled) and the spice-side `sized-defworld` / `sized-for-each`
   / cap-gated sized accessors / `sized-defsystem` /
   `sized-defworld-copy-into` / fallible `sized-spawn` family
@@ -495,7 +495,7 @@ path landed in order:
 reclassification correctly observed that SZ6-SZ8 cross-parameter
 unification needs the size index to ride a constructor chain, and
 that a bounded-capacity world API was the right landing. That
-design plan ([`ecs-sized-world-plan.md`](ecs-sized-world-plan.md))
+design plan ([`ecs-sized-world-plan.md`](../archive/ecs-sized-world-plan.md))
 settled Q1-Q4 and the spice-side slices then landed in sequence
 against the resolved surface:
 
@@ -571,12 +571,12 @@ against the resolved surface:
   the `gens` array so `Entity` handles packed against the source
   remain `(sized-alive? dst e)` after the copy. Growing resizes
   work directly; shrinking aborts before any partial state is
-  observable. **Follow-up:** a `world-resize` wrapper that lifts
-  a copy into the `pack-sized` / `open-sized` existential is
-  still queued (thin client layer over `copy-into-<W>` plus the
-  `(exists [n'] ...)` packaging the sized-world plan calls out).
-  PR #420's existential pack/open heap-boxing fix cleared the
-  compiler-side prerequisite; the wrapper is implementable today.
+  observable. The `world-resize` existential
+  wrapper shipped as `sized-defworld-world-resize` via
+  turmeric-spices PR #17 (2026-06-19): a thin client layer over
+  `copy-into-<W>` plus the `(exists [n'] ...)` packaging the
+  archived [`ecs-sized-world-plan`](../archive/ecs-sized-world-plan.md)
+  calls out, riding PR #420's existential pack/open heap-boxing fix.
 - **Slice 12 -- fallible `sized-spawn`** returning
   `(Result int WorldFull)`, the typed counterpart of the
   panicking `sized-spawn!`. Q3's result-returning spawn; the
