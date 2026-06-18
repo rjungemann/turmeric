@@ -1,0 +1,55 @@
+;; constrained-generic-inline-c-receiver-dispatch: a typeclass whose instances
+;; have INLINE-C bodies (the plot spice shape: each Backend renders via inline
+;; C) is used both at a DIRECT concrete call site and through a constrained-
+;; generic helper in the SAME module.  An inline-C instance method declares its
+;; struct receiver BY VALUE even above the pass-by-ptr threshold (emit_fns.c
+;; keys this off `fd->body->kind == EX_INLINE_C`).  The generic helper's
+;; monomorphization must respect that and NOT take the address of the receiver.
+;;
+;; Regression for docs/archive/constrained-generic-dispatch-tyvar-name-and-inlinec.md
+;; (Bug 2): #439's address-of bridge (emit_reresolved_receiver_is_by_ptr)
+;; checked only the binding-cached `body_is_inline_c` flag, which is not set on
+;; instance-method FnDefs.  So merely adding the generic helper re-triggered the
+;; #439 ABI mismatch in the opposite direction: the spec passed `&tmp` (a `T *`)
+;; to the inline-C instance method's by-value `T self` formal --
+;;   incompatible type for argument 1 of '__inst_Backend_render_hyto_CanvasBackend'
+;; a hard cc error that broke the previously-green direct call sites.
+(defclass Backend [b]
+  (render-to [self : b  x : int] : int))
+
+;; CanvasBackend is 5 ints = 40 bytes, well above the 16-byte pass-by-ptr
+;; threshold, so its by-value-vs-by-pointer ABI actually matters.
+(defstruct CanvasBackend [canvas : int  px : int  py : int  pw : int  ph : int])
+(defstruct PngBackend [path : cstr  tag : int  dpi : int])
+
+(definstance Backend [CanvasBackend]
+  (render-to [self x]
+    ```c
+    return self.canvas + self.pw + x;
+    ```))
+(definstance Backend [PngBackend]
+  (render-to [self x]
+    ```c
+    return self.tag + self.dpi + x;
+    ```))
+
+;; Direct concrete call sites -- receivers built inline as values (the
+;; plot-write-png wrapper shape).
+(defn draw-canvas-direct [c : int  w : int  x : int] : int
+  (render-to (make-struct CanvasBackend c 0 0 w 0) x))
+(defn draw-png-direct [tag : int  dpi : int  x : int] : int
+  (render-to (make-struct PngBackend "out.png" tag dpi) x))
+
+;; The constrained-generic helper whose mere presence used to break the direct
+;; call sites above (the plot/core `render` helper).
+(defn draw [^Backend B  b : B  x : int] : int
+  (render-to b x))
+
+(defn main [] : int
+  ;; Direct call sites.
+  (println (draw-canvas-direct 100 7 1))                       ;; 100+7+1 = 108
+  (println (draw-png-direct 50 300 3))                         ;; 50+300+3 = 353
+  ;; Same instances through the generic helper.
+  (println (draw (make-struct CanvasBackend 100 0 0 7 0) 2))   ;; 100+7+2 = 109
+  (println (draw (make-struct PngBackend "out.png" 50 300) 4)) ;; 50+300+4 = 354
+  0)

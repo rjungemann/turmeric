@@ -1222,9 +1222,32 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* Phase 15: Handle type variable declarations */
         /* After constraints, the next symbol is a type variable name */
         if (n_pending > 0 && p->tag == F_SYM) {
-            /* This is a type variable that the pending constraints apply to */
-            /* For v1, we ignore the type variable name and just record constraints */
-            
+            /* This is a type variable that the pending constraints apply to.
+             *
+             * dispatch-tyvar-name-independence: the binder name (`B` in
+             * `^Backend B`) MUST be registered as a function type parameter.
+             * Without it, a later parameter annotated with that name (`b : B`)
+             * does not resolve against fn_type_params, so it falls through to
+             * the KB-026 demotion pass below -- which rewrites the parameter's
+             * type to an anonymous `<struct>` placeholder unless the name
+             * happens to collide with some loaded ADT/struct's type-param name
+             * (fn_name_is_adt_tyvar).  That accidental collision is exactly why
+             * `^Backend B` resolved for B/A/.../K/V but not for T/X/Z or any
+             * multi-letter binder: dispatch depended on the tyvar's *spelling*.
+             * Registering the binder makes `b : B` a genuine named TY_TYVAR for
+             * every spelling, so constraint-driven dispatch no longer hinges on
+             * the name. */
+            const Symbol *binder = p->as.sym;
+            bool already_param = false;
+            for (uint8_t k = 0; k < n_fn_type_params; k++) {
+                if (fn_type_params[k] == binder) { already_param = true; break; }
+            }
+            if (!already_param && n_fn_type_params < 8) {
+                fn_type_params[n_fn_type_params] = binder;
+                fn_type_param_kinds[n_fn_type_params] = KIND_STAR;
+                n_fn_type_params++;
+            }
+
             /* Register all pending constraints for this type variable */
             /* Allocate space for new constraints */
             uint8_t new_count = n_constraints + n_pending;
@@ -1234,14 +1257,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 memcpy(new_list, constraint_list, n_constraints * sizeof(TypeConstraint));
             }
             constraint_list = new_list;
-            
+
             for (uint8_t c = 0; c < n_pending; c++) {
-                /* For v1, we just record the constraint - type_arg will be resolved later */
-                /* We use TYPE_UNKNOWN as a placeholder for the type variable */
+                /* type_arg is resolved later from the call-site argument; the
+                 * binder name is recorded so the constraint knows which type
+                 * variable (and hence which parameter) it dispatches on. */
                 constraint_list[n_constraints + c].typeclass = pending_constraints[c];
                 constraint_list[n_constraints + c].type_arg = TYPE_UNKNOWN;
                 constraint_list[n_constraints + c].param_idx = -1;
-                constraint_list[n_constraints + c].tyvar = NULL;
+                constraint_list[n_constraints + c].tyvar = binder;
                 constraint_list[n_constraints + c].return_resolved = false;
             }
             n_constraints = new_count;

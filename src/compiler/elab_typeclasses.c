@@ -3340,6 +3340,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         FnDef *method_fd = mp->method_fd;
         method_fd->body = method_body;
 
+        /* constrained-generic-dispatch-tyvar-name-and-inlinec (Bug 2): stamp the
+         * binding's `body_is_inline_c` flag here, the same way elab_fns.c does
+         * for ordinary defns.  Instance-method FnDefs are built in this pass, so
+         * without this the flag stays false on every instance method -- and the
+         * call-site ABI logic that keys off it (the Phase D `&temp` pass-by-ptr
+         * spill in emit_expr.c, and #439's emit_reresolved_receiver_is_by_ptr
+         * bridge) would wrongly take the address of an inline-C instance's
+         * by-value struct receiver, passing a `T *` to a by-value `T self`
+         * formal -- a hard cc type error at both direct and generic call sites. */
+        if (method_fd->binding) {
+            method_fd->binding->body_is_inline_c =
+                (method_body && method_body->kind == EX_INLINE_C);
+        }
+
         /* Arrow head: the method's declared return was the class variable (the
          * function arrow), flagged as a boxed-TY_FN placeholder in pass 1.  Now
          * that the body is elaborated, refine the result's full signature from

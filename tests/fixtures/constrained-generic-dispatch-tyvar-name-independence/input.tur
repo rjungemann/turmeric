@@ -1,0 +1,35 @@
+;; constrained-generic-dispatch-tyvar-name-independence: a generic helper
+;; constrained over a typeclass whose instances are STRUCTS must resolve and
+;; dispatch regardless of the *spelling* of the constraint's bound type
+;; variable.  The binder name (`Zz` in `^Backend Zz`) is registered as a real
+;; function type parameter, so a later parameter annotated with it (`b : Zz`)
+;; resolves to a genuine named TY_TYVAR -- not the anonymous `<struct>`
+;; placeholder the KB-026 demotion pass falls back to for an undeclared name.
+;;
+;; Regression for docs/archive/constrained-generic-dispatch-tyvar-name-and-inlinec.md
+;; (Bug 1): the binder name used to be discarded ("for v1, we ignore the type
+;; variable name"), so `b : Zz` only resolved as a tyvar when the spelling
+;; happened to collide with some loaded ADT/struct's type-param name
+;; (fn_name_is_adt_tyvar).  That made dispatch depend on the tyvar name --
+;; B/A/.../K/V worked, T/X/Z and every multi-letter name failed with
+;; `[TUR-E0001] ... expected <struct>, got CanvasBackend`.  `Zz` is chosen
+;; precisely because it collides with nothing, so a pre-fix compiler fails it.
+(defclass Backend [b]
+  (render-to [self : b  x : int] : int))
+
+(defstruct CanvasBackend [canvas : int  px : int  py : int  pw : int  ph : int])
+(defstruct PngBackend [path : cstr  tag : int])
+
+(definstance Backend [CanvasBackend]
+  (render-to [self x] (+ (+ (.canvas self) (.pw self)) x)))
+(definstance Backend [PngBackend]
+  (render-to [self x] (+ (.tag self) x)))
+
+;; Multi-letter binder `Zz` -- nothing else in scope is named Zz.
+(defn draw [^Backend Zz  b : Zz  x : int] : int
+  (render-to b x))
+
+(defn main [] : int
+  (println (draw (make-struct CanvasBackend 100 0 0 7 0) 1))  ;; 100+7+1 = 108
+  (println (draw (make-struct PngBackend "x" 50) 3))          ;; 50+3 = 53
+  0)
