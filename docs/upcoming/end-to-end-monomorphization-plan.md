@@ -316,10 +316,22 @@ type-system change.
       give each method-body parameter the *applied* type (`container : (f A)`,
       i.e. `(Option A)`), with `A` a fresh method-level tyvar that
       monomorphizes per call. Today the method body sees the bare head type
-      (`Option`) with the element erased. This is a change to how
-      `defclass`/`definstance` over an HKT param elaborate method signatures
-      (`elab_typeclasses.c`), not a codegen tweak. Until it lands, the
-      inline-C carrier bodies are load-bearing and cannot be rewritten.
+      (`Option`) with the element erased. Precise mechanism traced 2026-06-18:
+        - `elab_typeclasses.c` (~line 674) types instance-method params with a
+          hard `param_types[actual_p] = TYPE_INT;` under the comment "Default to
+          int for now -- type inference for method params deferred". That carrier
+          default is exactly the element erasure.
+        - The class decls do not express the applied type either:
+          `(defclass Functor [^f] (fmap [container [fn :fn]] : int))` has
+          `container` untyped (-> int) and `: int` return. There is no `(f a)`
+          anywhere to substitute. So the feature needs BOTH (a) class-decl
+          syntax for HKT-applied method param/return types (`container : (f a)`,
+          `: (f b)`) and (b) elaborator support to substitute the instance's `f`
+          and bind `a`/`b` as fresh per-call tyvars that monomorphize.
+      This is a cross-cutting type-system change touching the class decls of all
+      9 HKT classes, the 30 instances, and the per-method dispatch -- not a
+      codegen tweak. Until it lands, the inline-C carrier bodies are
+      load-bearing and cannot be rewritten (Phase 4.2 HKT subset is gated here).
 - [ ] Once methods carry `(f A)`, rewrite the inline-C HKT instance bodies to
       pure-Turmeric by-value (this is Phase 4.2 for the HKT helpers, unblocked
       by 3.0) and let option-1 per-`(f, A)` monomorphization (3.2) clone them.
