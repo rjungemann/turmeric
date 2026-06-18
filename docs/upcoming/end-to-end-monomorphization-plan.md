@@ -545,6 +545,20 @@ are now both located and characterized.
       fails to typecheck until the **class decls themselves** are rewritten to
       `(f a)`/`(f b)` -- cascading to all 9 classes' 30 instances. There is no
       single-instance or delegation shortcut; M7 is the full coordinated build.
+
+      **All existing emit hooks exhausted (2026-06-18, ~12 experiments).**
+      Beyond the elaborator + gate work, also tested forcing `needs_byvalue_spec`
+      directly in `emit_abi_register_call` for HKT instance methods (extending
+      `body_qualifies_for_carrier_skip` to admit their `EX_IF` construct bodies
+      and forcing the by-value-spec flag). Result: STILL no `__spec` clone is
+      interned and the value is still `0`. Combined with the disproven
+      `typeclass_inst` (M4) routing, by-value-arg, and delegation paths, the
+      per-`(f, A)` by-value HKT instance-method spec machinery is absent at
+      EVERY existing layer (scan, `register_call`, the M4 dict path, the
+      construct-recovery path). It must be built one level deeper: making a
+      dispatch-reached instance method participate in generic-style per-element
+      spec interning the way a direct `option-map` call does. No existing hook
+      short-circuits it -- this is the irreducible M7 emit build.
 - [ ] Update `__inst_<Class>_<method>` symbol naming to disambiguate
       per-`(f, A)` clones.
 - [ ] Per-instance test fixture under `tests/fixtures/hkt-<class>-<f>/`
