@@ -358,6 +358,11 @@ char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
+/* GHE struct-receiver: true when a constrained-generic method call re-resolved
+ * in the active ABI spec targets a struct/ADT-receiver instance whose method
+ * takes the receiver by `const T *`, so the by-value receiver arg must be passed
+ * by address.  Defined in emit_core.c. */
+bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call);
 char *name_for_binding(EmitCtx *ctx, const Binding *b);
 void emit_c_string(Buf *out, StrSlice s);
 char *atom_nil(void);

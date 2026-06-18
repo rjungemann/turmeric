@@ -1071,6 +1071,67 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     return result;
 }
 
+/* GHE struct-receiver ABI bridge: when emit_reresolve_method_call retargets a
+ * constrained-generic method call (inside an ABI specialization) to a concrete
+ * instance whose receiver is a pass-by-pointer struct/ADT, that instance method
+ * is emitted as `__inst_<Class>_<method>_<T>(const T *self, ...)` -- but the
+ * spec clone holds the receiver argument by value.  The receiver must therefore
+ * be passed by address (`&tmp`) to match the `const T *` formal.
+ *
+ * Returns true only when the re-resolved callee genuinely takes the receiver by
+ * pointer: the dispatch tyvar is the receiver argument (arg 0), it resolves to a
+ * pass-by-ptr struct/ADT, and the selected instance method emits its receiver as
+ * `const T *` (mirrors emit_fns.c: a non-inline-C, non-closure struct param
+ * above the pass-by-ptr threshold).  Returns false for the int-carrier base
+ * clone (no re-resolution), single-field/scalar receivers that ride the int64
+ * carrier's by-value ABI, and inline-C/closure instance bodies (which declare
+ * struct params by value).  Without this bridge a genuinely-sized struct
+ * receiver passed a `T` to a `const T *` formal -- a hard cc type error that
+ * single-field structs only "worked around" by register-class coincidence. */
+bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
+    if (!ctx || !ctx->current_abi_specialization || !call ||
+        call->kind != EX_CALL) {
+        return false;
+    }
+    const Expr *dict = call->as.call_.dict_arg;
+    if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
+    if (dict->as.dict_.method_name[0] == '\0') return false;
+    /* The dispatch tyvar must be the receiver argument (arg 0).  A
+     * return-dispatch method carries the tyvar only in its result type and has
+     * no receiver tyvar arg, so it never needs this address-of bridge. */
+    if (call->as.call_.n_args < 1 || !call->as.call_.args) return false;
+    const Expr *recv = call->as.call_.args[0];
+    while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+    if (!recv || recv->type.kind != TY_TYVAR) return false;
+
+    Type resolved = emit_resolve_type(ctx, recv->type);
+    if (resolved.kind != TY_STRUCT && resolved.kind != TY_ADT &&
+        resolved.kind != TY_APP) {
+        return false; /* scalar carrier / still unbound -> int base clone */
+    }
+    if (!type_struct_pass_by_ptr(resolved)) return false;
+
+    /* Confirm the selected instance method emits the receiver by pointer.  Match
+     * the dict's (mangled) method name against the instance's typeclass methods
+     * to locate the impl FnDef; an inline-C / closure body declares the receiver
+     * by value even above the pass-by-ptr threshold (emit_fns.c §737). */
+    TypeClassInstance *inst = dict->as.dict_.instance;
+    const TypeClass *tc = inst->typeclass;
+    if (!tc) return false;
+    for (uint8_t k = 0; k < tc->n_methods && k < inst->n_method_impls; k++) {
+        if (!tc->methods[k].name) continue;
+        char mangled[128];
+        tur_mangle_ident(tc->methods[k].name->name, mangled, sizeof(mangled));
+        if (strcmp(mangled, dict->as.dict_.method_name) != 0) continue;
+        FnDef *impl = inst->method_impls[k];
+        if (!impl) return false;
+        if (impl->closure) return false;
+        if (impl->binding && impl->binding->body_is_inline_c) return false;
+        return true;
+    }
+    return false;
+}
+
 static char *capture_env_access(EmitCtx *ctx, const Binding *b);
 
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
