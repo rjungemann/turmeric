@@ -7,6 +7,7 @@
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
     uint32_t *out_body_start,
     const Symbol **class_type_params, uint8_t n_class_type_params,
+    const Kind *class_type_param_kinds,
     const Symbol **assoc_type_names, uint8_t n_assoc_type_names);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
 static bool rt_type_mentions_tyvar(const Type *t, const char *name);
@@ -652,6 +653,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                                uint32_t *out_body_start,
                                                const Symbol **class_type_params,
                                                uint8_t n_class_type_params,
+                                               const Kind *class_type_param_kinds,
                                                const Symbol **assoc_type_names,
                                                uint8_t n_assoc_type_names) {
     if (method_form->tag != F_LIST || method_form->as.list.len < 3) {
@@ -684,13 +686,28 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * so the path is byte-for-byte inert.  See m7_is_method_tyvar_name. */
     const Symbol **eff_tp = class_type_params;
     uint8_t n_eff_tp = n_class_type_params;
+    /* Thread the class type-param kinds through to type-expression resolution so
+     * an HKT param `^m` (kind `* -> *`) used in an APPLIED position inside a
+     * method signature -- e.g. `bind`'s `k : (fn [a] (m b))` -- resolves to a
+     * TY_TYVAR carrying KIND_ARROW, not the KIND_STAR default.  Without this,
+     * `(m b)` reconstructed by call_instantiate_type at the instance call site
+     * trips type_app's kind check (TUR-E0012).  The fmap shape (fn returns a
+     * bare element `b`) never builds `(m _)` so it was unaffected; only the
+     * monadic shapes (fn returning an applied HKT type) hit it.  See
+     * docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
+    Kind *eff_kinds = (Kind *)class_type_param_kinds;
     if (g_m7_hkt_enabled) {
         enum { M7_MAX_TP = 16 };
         const Symbol **buf =
             (const Symbol **)arena_alloc(e->arena, M7_MAX_TP * sizeof(const Symbol *));
+        Kind *kbuf = (Kind *)arena_alloc(e->arena, M7_MAX_TP * sizeof(Kind));
         uint8_t n = 0;
-        for (uint8_t i = 0; i < n_class_type_params && n < M7_MAX_TP; i++)
-            buf[n++] = class_type_params[i];
+        for (uint8_t i = 0; i < n_class_type_params && n < M7_MAX_TP; i++) {
+            kbuf[n] = class_type_param_kinds ? class_type_param_kinds[i] : KIND_STAR;
+            buf[n] = class_type_params[i];
+            n++;
+        }
+        uint8_t n_class_in_buf = n;
         m7_collect_form_tyvars(params_form, class_type_params, n_class_type_params,
                                buf, &n, M7_MAX_TP);
         /* Locate the return form (index 2, or 3 when an effect-row #{...}
@@ -704,7 +721,11 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                        class_type_params, n_class_type_params,
                                        buf, &n, M7_MAX_TP);
         }
+        /* The method-level tyvars appended after the class params are ordinary
+         * element variables of kind `*`. */
+        for (uint8_t i = n_class_in_buf; i < n; i++) kbuf[i] = KIND_STAR;
         eff_tp = buf;
+        eff_kinds = kbuf;
         n_eff_tp = n;
     }
 
@@ -855,7 +876,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                      * argument-dispatchable method as return-only. */
                     Type *ft = inner_f
                         ? type_expr_from_form(e, inner_f, NULL,
-                                              eff_tp, NULL,
+                                              eff_tp, eff_kinds,
                                               n_eff_tp)
                         : NULL;
                     if (!ft) {
@@ -913,7 +934,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     } else {
                         Type *ft = ti
                             ? type_expr_from_form(e, ti, NULL,
-                                                  eff_tp, NULL,
+                                                  eff_tp, eff_kinds,
                                                   n_eff_tp)
                             : NULL;
                         if (!ft) {
@@ -926,7 +947,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
                     Type *ft = type_expr_from_form(e, type_f, NULL,
-                                                   eff_tp, NULL,
+                                                   eff_tp, eff_kinds,
                                                    n_eff_tp);
                     if (!ft) {
                         diag_emit(DIAG_ERROR, type_f->span,
@@ -1050,7 +1071,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
              * elsewhere in this function, not via type_expr_from_form.) */
             Type *ft = (ret_form->as.list.len > 0)
                 ? type_expr_from_form(e, ret_form->as.list.items[0], NULL,
-                                      eff_tp, NULL,
+                                      eff_tp, eff_kinds,
                                       n_eff_tp)
                 : NULL;
             if (!ft) {
@@ -1064,7 +1085,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
              * Prereq 5: same as above -- pass class type params so a
              * nested `a` resolves to TY_TYVAR. */
             Type *ft = type_expr_from_form(e, ret_form, NULL,
-                                           eff_tp, NULL,
+                                           eff_tp, eff_kinds,
                                            n_eff_tp);
             if (!ft) {
                 diag_emit(DIAG_ERROR, ret_form->span,
@@ -1326,6 +1347,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         uint32_t body_start = 0;
         TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start,
                                                          type_params, n_type_params,
+                                                         type_param_kinds,
                                                          assoc_type_names, n_assoc_types);
         if (!method) return NULL;
         methods[i] = *method;

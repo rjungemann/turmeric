@@ -967,16 +967,21 @@ genuine carrier)
 >   (worked "by luck" only for `b = int`). Now resolves via `emit_type_c_name`
 >   at the thin-fn-call site (`emit_expr.c`), symmetric to the existing arg-side
 >   resolution. Flag-off suite stays 1683/0.
-> - **Monad `bind` shape (and Applicative `ap`, MonadError): BLOCKED on a
->   kind-system prerequisite, NOT on layer-4 emit.** A class method with a fn
->   param returning an *applied* HKT type (`k : (fn [a] (m b))`) fails
->   kind-check (TUR-E0012) on instance elaboration, regardless of the flag.
->   Tracked in
->   [`docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md`](../reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md);
->   probe at `docs/upcoming/v2/m7-hkt-probe-bind.tur`. Fix that first, then the
->   layer-4 gate (`m7_body_constructs_byvalue`) must also admit a tail branch
->   that is a call returning the same `(f b)` family (not only an in-body
->   construct).
+> - **Monad `bind` shape (and Applicative `ap`, MonadError): kind-check
+>   prerequisite FIXED (2026-06-19); now blocked on the layer-4 emit follow-on.**
+>   A class method with a fn param returning an *applied* HKT type
+>   (`k : (fn [a] (m b))`) used to fail kind-check (TUR-E0012) on instance
+>   elaboration. Fixed by threading the class param kinds through
+>   `parse_typeclass_method` so an HKT param `^m` resolves to a KIND_ARROW
+>   TY_TYVAR even nested inside a fn type (resolved report
+>   [`docs/archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md`](../archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md)).
+>   The probe (`docs/upcoming/v2/m7-hkt-probe-bind.tur`) now elaborates and
+>   reaches codegen. **Remaining (the emit follow-on,
+>   [`docs/reported/m7-hkt-bind-body-byvalue-emit.md`](../reported/m7-hkt-bind-body-byvalue-emit.md)):**
+>   the layer-4 gate (`m7_body_constructs_byvalue`) must also admit a tail branch
+>   that is a `(f b)`-returning call (bind's `(k (.value ma))`, not only an
+>   in-body construct), AND the continuation `k` must be made to return the
+>   `(m b)` struct by value (the closure-ABI half).
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT

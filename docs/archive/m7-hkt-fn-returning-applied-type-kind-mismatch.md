@@ -5,8 +5,27 @@ severity: medium (expressiveness hole -- blocks the monadic HKT method shapes:
   Monad `bind`, MonadError, Applicative `ap`; not a miscompile, a hard error;
   reachable today only via the experimental M7 by-value HKT class shapes, but it
   fires regardless of the TUR_M7_HKT flag)
-status: open
+status: RESOLVED 2026-06-19 (kind-threading fix; archived). Layer-4 by-value
+  emit for the bind body is a separate follow-on, tracked in
+  docs/reported/m7-hkt-bind-body-byvalue-emit.md.
 ---
+
+> **RESOLVED 2026-06-19.** Root was as diagnosed: during `parse_typeclass_method`
+> the class param kinds were not threaded into `type_expr_from_form`, so an HKT
+> param `^m` used in an applied position resolved to a `TY_TYVAR` with
+> `hkt_kind = KIND_STAR`. That STAR-kinded head, reconstructed by
+> `call_instantiate_type` -> `type_app` at the instance call site, tripped
+> `kind_of_type_app` (TUR-E0012). Fix: thread `type_param_kinds` through
+> `parse_typeclass_method` and build a parallel `eff_kinds` array (class kinds +
+> KIND_STAR for the m7-collected method tyvars), passed to the five
+> `type_expr_from_form` calls in place of NULL (`elab_typeclasses.c`). The bind
+> probe (`docs/upcoming/v2/m7-hkt-probe-bind.tur`) now elaborates and reaches
+> codegen. Flag-off suite 1683/0; zero flag-on regressions across a 196-fixture
+> typeclass sweep (the lone flag-on failure, `instance-method-return-carrier-bridge`,
+> fails identically at the prior commit). The remaining wall -- the by-value
+> emit of the bind body (the then-branch `(k (.value ma))` is a call returning
+> `(m b)`, not an in-body construct) -- is a distinct emit follow-on, NOT a
+> kind-check issue; see docs/reported/m7-hkt-bind-body-byvalue-emit.md.
 
 # HKT method `k : (fn [a] (m b))` kind-mismatches on instance elaboration
 

@@ -61,15 +61,16 @@ advances.
   `(:: r (Option int))` ascription that landed in PR #426 as a
   temporary patch. Gated on M7 HKT (PR #435 landed M7 elaborator
   behind `TUR_M7_HKT`). One self-contained PR once unblocked.
-- [m7-hkt-fn-returning-applied-type-kind-mismatch](reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md)
-  (report, OPEN 2026-06-19) -- Phase 3/4.2 follow-on. An HKT class method
-  whose fn param returns an *applied* HKT type (`k : (fn [a] (m b))` --
-  the defining shape of Monad `bind`, also Applicative `ap` / MonadError)
-  fails kind-check (TUR-E0012) on instance elaboration, regardless of the
-  `TUR_M7_HKT` flag. Blocks the by-value monadic HKT method shapes for the
-  Phase 4.2 stdlib rewrites. The Functor `fmap` shape is unaffected and now
-  works end-to-end across element types `{int, cstr, float, struct}` (layer-4
-  emit landed; fn-value result-type-resolution bug fixed 2026-06-19). Probe:
+- [m7-hkt-bind-body-byvalue-emit](reported/m7-hkt-bind-body-byvalue-emit.md)
+  (report, OPEN 2026-06-19) -- Phase 4.2 layer-4 emit follow-on for the
+  monadic HKT shapes. The kind-check prerequisite (TUR-E0012 on a fn param
+  returning an applied HKT type `k : (fn [a] (m b))`) is **RESOLVED**
+  (archived; class param kinds now threaded through `parse_typeclass_method`),
+  so the Monad `bind` probe elaborates. Remaining: the layer-4 by-value emit
+  must (a) admit a tail branch that is a `(f b)`-returning call (bind's
+  `(k (.value ma))`), not only an in-body construct, and (b) make the
+  continuation `k` return the `(m b)` struct by value. Functor `fmap` works
+  end-to-end across element types `{int, cstr, float, struct}`. Probe:
   `docs/upcoming/v2/m7-hkt-probe-bind.tur`.
 
 ## Track B -- ECS spice (sized worlds + scheduler)
