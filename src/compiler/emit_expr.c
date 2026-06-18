@@ -3046,7 +3046,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
                          type_uses_carrier_abi(
                              emit_resolve_type(ctx, e->as.call_.args[i]->type)) &&
-                         expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                         /* option-map-byvalue-result-into-carrier-consumer-let-
+                          * inside-arg: recurse through let/do/if/ascribe wrappers
+                          * so a by-value `Option__A` producer buried in a nested
+                          * form's tail still triggers the &temp+int64 spill at
+                          * the carrier-`int` consumer boundary. */
+                         fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg) &&
                          fn_binding->type.kind == TY_FN &&
                          i < fn_binding->type.as.fn.arity &&
                          fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {

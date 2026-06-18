@@ -12,12 +12,19 @@ severity: Medium. Hard cc error
   99)))`). Severity is "medium" rather than "low" because realistic code
   routinely binds the option in a `let` and consumes the mapped result in an
   outer expression position; the workaround is mechanical but easy to miss.
-status: OPEN 2026-06-18. Surfaced while validating
-  `docs/archive/option-map-literal-none-unannotated-fn-no-A-inference.md` -- the
-  cascade-coupled `unwrap-or` retype tracked in
-  `docs/reported/option-consumer-retype-byvalue.md` is the proper long-term
-  fix; an interim emit-side spill bridge at the by-value-result -> carrier-
-  param boundary would close the regression without waiting for the cascade.
+status: RESOLVED 2026-06-18 via direction 1 (emit-side fix). The arg-slot
+  spill check for the carrier-`int` consumer (direct call, `dict_arg ==
+  NULL`) in `src/compiler/emit_expr.c` now calls
+  `fn_body_tail_emits_byvalue_carrier_abi` instead of
+  `expr_emits_byvalue_carrier_abi`, so a by-value `Option__A` producer
+  buried in a `let`/`do`/`if`/ascribe wrapper's tail still triggers the
+  `&temp + (int64_t)(intptr_t)` spill bridge at the carrier boundary. The
+  cascade-coupled long-term retype tracked in
+  `docs/reported/option-consumer-retype-byvalue.md` is unaffected and
+  remains the right end state. Regression fixture:
+  `tests/fixtures/option-map-byvalue-result-into-carrier-consumer-let-inside-arg/`
+  (covers the `let` wrapper from the report plus `do` and `if`-arm
+  variants).
 ---
 
 # By-value `Option__A` -> carrier-`int64_t` consumer slot misses a spill bridge inside a nested `let` arg
