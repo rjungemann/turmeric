@@ -1,27 +1,19 @@
-;; Option none-as-NULL retirement (Track A) -- bucket C step 1: a NON-instance
+;; Option none-as-NULL retirement (Track A) -- bucket C: a NON-instance
 ;; generic spec whose declared return is a concrete by-value `(Option A)`
 ;; (resolved from the call site) and whose body constructs via `(some ...)`
-;; in return position now monomorphizes to a direct by-value construction,
-;; without crossing the carrier-bridge.
+;; OR `(none)` in return position now monomorphizes to a direct by-value
+;; construction, without crossing the carrier-bridge.
 ;;
-;; Before the `construct_recovered_byvalue` generalization (emit_module.c,
-;; M4 follow-up), the gate was restricted to instance-method spec bodies,
-;; so a `wrap-some` helper like the one below had its spec return the int64
-;; carrier and the by-value `(Option int)` consumer bridged carrier->concrete
-;; on every call.  Audit-side: this fixture would otherwise contribute 4
-;; bridge crossings (Option int + Option float, each direction); with the
-;; gate generalized, the producer spec returns `Option__int` / `Option__float`
-;; by value and only the residual `(none)` constructors (which still go
-;; through the carrier today) cross.
+;; Step 1 (the `construct_recovered_byvalue` generalization, emit_module.c)
+;; handled the `(some ...)` arm.  Step 2 (this fixture's `(none)` arm) wires
+;; elab to attach the constructor-result-tyvar -> caller-tyvar abi_binding to
+;; a 0-arg `#{Construct}` call in non-ground return position, so emit composes
+;; it through the active spec and mints a by-value `none__spec__Option__int`.
+;; A guard in emit_call_name / find_matched_abi_spec keeps the by-value
+;; constructor spec from leaking into carrier-context `(none)` sites (a 0-arg
+;; call has no args to disambiguate one spec from another structurally).
 ;;
-;; The (none) leg is the documented residual -- elab does not attach
-;; abi_bindings to a 0-arg type-arg-only call, so `emit_abi_register_call`
-;; early-exits and the (none) call stays on the carrier base.  Tracked in
-;; docs/reported/option-consumer-retype-byvalue.md "follow-up: 0-arg
-;; constructor bindings"; the cascade to `option-map` / `result-map` will
-;; need this resolved.
-;;
-;; See docs/reported/option-consumer-retype-byvalue.md (step 1 of bucket C).
+;; See docs/reported/option-consumer-retype-byvalue.md (bucket C, steps 1+2).
 
 (load "stdlib/math.tur")
 
@@ -31,6 +23,16 @@
 (defn wrap-some [A] [x : A] : (Option A)
   (some x))
 
+;; Pure-Turmeric `option-map`-shaped helper: `(none)` in by-value return
+;; position, with `A` resolved from the `(Option A)` parameter (the realistic
+;; step-2 case).  Each concrete call site mints a spec returning `Option__A`
+;; by value; the `(none)` arm now mints a by-value `none__spec__Option__A`
+;; clone instead of the carrier base.
+(defn keep-if [A] [o : (Option A) ^fat pred : (fn [A] bool)] : (Option A)
+  (if (.is-some o)
+    (if (pred (.value o)) o (none))
+    (none)))
+
 ;; By-value consumer -- the bridge IS retired when the producer spec
 ;; returns by-value.
 (defn unwrap-or-default [o : (Option int) d : int] : int
@@ -39,7 +41,18 @@
 (defn unwrap-or-default-f [o : (Option float) d : float] : float
   (if (.is-some o) (.value o) d))
 
+(defn pos-i? [x : int] : bool (> x 0))
+(defn pos-f? [x : float] : bool (> x 0.0))
+
 (defn main [] : int
   (println (unwrap-or-default   (wrap-some 7) 0))                                     ; 7
   (println (float->int (* (unwrap-or-default-f (wrap-some 3.25) 0.0) 100.0)))         ; 325
+  ;; keep-if int: predicate true -> some 7; predicate false -> by-value (none)
+  (println (unwrap-or-default   (keep-if (some 7) pos-i?) 11))                        ; 7
+  (println (unwrap-or-default   (keep-if (some -3) pos-i?) 11))                       ; 11
+  ;; keep-if float: predicate false -> by-value (none) in the float spec
+  (println (float->int (* (unwrap-or-default-f (keep-if (some -2.5) pos-f?) 4.5) 100.0))) ; 450
+  ;; carrier-context (none): some? still takes `o : int`, so this `(none)` must
+  ;; stay on the carrier base -- it must NOT pick up keep-if's by-value spec.
+  (println (some? (none)))                                                           ; false
   0)

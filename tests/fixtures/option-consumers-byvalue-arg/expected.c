@@ -2607,7 +2607,6 @@ static int64_t none();
 static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
-static int64_t option_hymap(int64_t, int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
 static void result_hyfree(int64_t);
@@ -2663,6 +2662,9 @@ static bool mutmap_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
 static Option__int g();
 static Option__int gn();
 static int64_t dbl(int64_t);
+static Option__int option_map__spec__Option__int_Option__int_int64_t(Option__int, int64_t);
+static Option__int some__spec__Option__int_int64_t(int64_t);
+static Option__int none__spec__Option__int();
 static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int, Option__int, int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -3777,16 +3779,6 @@ static void option_hyfree(int64_t o) {
   
 }
 
-static int64_t option_hymap(int64_t o, int64_t f) {
-        struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = TUR_APPLY1(f, opt->value);
-  return (int64_t)(intptr_t)r;
-  
-}
-
 static bool ok_qu(int64_t r) {
         return tur_is_ok(r);
   
@@ -4376,13 +4368,12 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
 }
 
 static Option__int g() {
-                tur_option_t *__t29 = (tur_option_t *)(intptr_t)(some(INT64_C(5)));
-        return (__t29 ? (Option__int){.is_some = __t29->is_some, .value = __t29->value} : (Option__int){0});
+        return some__spec__Option__int_int64_t(INT64_C(5));
 }
 
 static Option__int gn() {
-                tur_option_t *__t30 = (tur_option_t *)(intptr_t)(none());
-        return (__t30 ? (Option__int){.is_some = __t30->is_some, .value = __t30->value} : (Option__int){0});
+                tur_option_t *__t29 = (tur_option_t *)(intptr_t)(none());
+        return (__t29 ? (Option__int){.is_some = __t29->is_some, .value = __t29->value} : (Option__int){0});
 }
 
 static int64_t dbl(int64_t x) {
@@ -4399,57 +4390,76 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        Option__int __t31 = g();
+        Option__int __t30 = g();
+        puts((some_qu((int64_t)(intptr_t)(&__t30))) ? "true" : "false");
+        Option__int __t31 = gn();
         puts((some_qu((int64_t)(intptr_t)(&__t31))) ? "true" : "false");
-        Option__int __t32 = gn();
-        puts((some_qu((int64_t)(intptr_t)(&__t32))) ? "true" : "false");
-        Option__int __t33 = g();
+        Option__int __t32 = g();
+        printf("%lld\n", (long long)(unwrap_hyor((int64_t)(intptr_t)(&__t32), INT64_C(99))));
+        Option__int __t33 = gn();
         printf("%lld\n", (long long)(unwrap_hyor((int64_t)(intptr_t)(&__t33), INT64_C(99))));
-        Option__int __t34 = gn();
-        printf("%lld\n", (long long)(unwrap_hyor((int64_t)(intptr_t)(&__t34), INT64_C(99))));
-        Option__int __t35 = g();
-        int64_t *__t36 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t36[0] = (int64_t)(intptr_t)__tur_fatshim1;
-        __t36[1] = (int64_t)(intptr_t)dbl;
-        void *__t37 = __t36;
-        puts((some_qu(option_hymap((int64_t)(intptr_t)(&__t35), (int64_t)(intptr_t)(__t37)))) ? "true" : "false");
-        Option__int __t38 = g();
-        int64_t *__t39 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t39[0] = (int64_t)(intptr_t)__tur_fatshim1;
-        __t39[1] = (int64_t)(intptr_t)dbl;
-        void *__t40 = __t39;
-        printf("%lld\n", (long long)(unwrap_hyor(option_hymap((int64_t)(intptr_t)(&__t38), (int64_t)(intptr_t)(__t40)), INT64_C(0))));
-        int64_t *__t41 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t41[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t41[1] = (int64_t)(intptr_t)__fn_906;
-        void *__t42 = __t41;
-        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), g(), (int64_t)(intptr_t)(__t42))) ? "true" : "false");
-        int64_t *__t43 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t43[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t43[1] = (int64_t)(intptr_t)__fn_910;
-        void *__t44 = __t43;
-        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), gn(), (int64_t)(intptr_t)(__t44))) ? "true" : "false");
-        puts((some_qu(some(INT64_C(1)))) ? "true" : "false");
+        int64_t *__t34 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t34[0] = (int64_t)(intptr_t)__tur_fatshim1;
+        __t34[1] = (int64_t)(intptr_t)dbl;
+        void *__t35 = __t34;
+        Option__int __t36 = option_map__spec__Option__int_Option__int_int64_t(g(), (int64_t)(intptr_t)(__t35));
+        puts((some_qu((int64_t)(intptr_t)(&__t36))) ? "true" : "false");
+        int64_t *__t37 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t37[0] = (int64_t)(intptr_t)__tur_fatshim1;
+        __t37[1] = (int64_t)(intptr_t)dbl;
+        void *__t38 = __t37;
+        Option__int __t39 = option_map__spec__Option__int_Option__int_int64_t(g(), (int64_t)(intptr_t)(__t38));
+        printf("%lld\n", (long long)(unwrap_hyor((int64_t)(intptr_t)(&__t39), INT64_C(0))));
+        int64_t *__t40 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t40[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t40[1] = (int64_t)(intptr_t)__fn_906;
+        void *__t41 = __t40;
+        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), g(), (int64_t)(intptr_t)(__t41))) ? "true" : "false");
+        int64_t *__t42 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t42[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t42[1] = (int64_t)(intptr_t)__fn_910;
+        void *__t43 = __t42;
+        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), gn(), (int64_t)(intptr_t)(__t43))) ? "true" : "false");
+        Option__int __t44 = some__spec__Option__int_int64_t(INT64_C(1));
+        puts((some_qu((int64_t)(intptr_t)(&__t44))) ? "true" : "false");
         printf("%lld\n", (long long)(unwrap_hyor(none(), INT64_C(42))));
         int64_t __t45;
         __t45 = INT64_C(0);
         return (int)__t45;
 }
 
-static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int o1, Option__int o2, int64_t cmp_fn) {
-        bool __t46;
-        if ((o1).is_some) {
-            bool __t47;
-            if ((o2).is_some) {
-                __t47 = (*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), (o1).value, (o2).value);
-            } else {
-                __t47 = false;
-            }
-            __t46 = __t47;
+static Option__int option_map__spec__Option__int_Option__int_int64_t(Option__int o, int64_t f) {
+        Option__int __t46;
+        if ((o).is_some) {
+            __t46 = some__spec__Option__int_int64_t((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), (o).value));
         } else {
-            __t46 = !((o2).is_some);
+            __t46 = none__spec__Option__int();
         }
         return __t46;
+}
+
+static Option__int some__spec__Option__int_int64_t(int64_t x) {
+        return (Option__int){.is_some = true, .value = x};
+}
+
+static Option__int none__spec__Option__int() {
+        return (Option__int){.is_some = false};
+}
+
+static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int o1, Option__int o2, int64_t cmp_fn) {
+        bool __t47;
+        if ((o1).is_some) {
+            bool __t48;
+            if ((o2).is_some) {
+                __t48 = (*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), (o1).value, (o2).value);
+            } else {
+                __t48 = false;
+            }
+            __t47 = __t48;
+        } else {
+            __t47 = !((o2).is_some);
+        }
+        return __t47;
 }
 
 

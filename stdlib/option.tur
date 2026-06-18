@@ -118,15 +118,16 @@
   ```c
   if (o) free((void*)(intptr_t)o);
   ```)
-;; Option none-as-NULL retirement (Track A): option-map stays on the carrier
-;; body for now.  A by-value `(Option A) -> (Option B)` body constructs its
-;; result with `(some ...)` / `(none)` in RETURN position, which inside a
-;; monomorphized spec emits the carrier int64 box and fails to assign to the
-;; by-value `Option__B` return.  Fixing that needs the construct-in-by-value-
-;; return generalization of `construct_recovered_byvalue` (emit_module.c) to
-;; non-instance generic specs -- the broad M2 change deliberately deferred to
-;; avoid a wide snapshot blast.  See docs/reported/option-consumer-retype-
-;; byvalue.md.  `option-eq?` (no construct in its body) is already retyped.
+;; Option none-as-NULL retirement (Track A): option-map is a pure-Turmeric
+;; by-value `(Option A) -> (Option B)` body.  It reads `.is-some`/`.value`
+;; directly and constructs its result with `(some ...)` / `(none)` in RETURN
+;; position; inside a monomorphized spec the `(some ...)` arm constructs
+;; `Option__B` by value (construct_recovered_byvalue, emit_module.c) and the
+;; `(none)` arm now likewise mints a by-value `none__spec` clone -- elab
+;; attaches the constructor-result-tyvar -> caller-tyvar binding for the 0-arg
+;; `(none)` so emit can compose it through the active spec (the step-2
+;; "0-arg constructor abi_bindings" follow-up in docs/reported/option-consumer-
+;; retype-byvalue.md).  The interpreter keeps its `native_option_map` override.
 ;;; option-map -- apply a function to the contained value if some.
 ;;;
 ;;; Parameters:
@@ -139,19 +140,18 @@
 ;;; Example:
 ;;;   (option-map (some 3) (fn [x] (* x 2)))  ; => some(6)
 ;;;
+;;; Note:
+;;;   Mapping over a *literal* `(none)` with an *unannotated* lambda leaves the
+;;;   element type under-determined (`(none)` carries no element type) and fails
+;;;   to compile -- annotate the lambda or map over a typed Option value. See
+;;;   docs/reported/option-map-literal-none-unannotated-fn-no-A-inference.md.
+;;;
 ;;; Since: Phase TC1
 
-(defn option-map [o : int ^fat f]
-  #{}
-  : int
-  ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = TUR_APPLY1(f, opt->value);
-  return (int64_t)(intptr_t)r;
-  ```)
+(defn option-map [A B] [o : (Option A) ^fat f : (fn [A] B)] : (Option B)
+  (if (.is-some o)
+    (some (f (.value o)))
+    (none)))
 ;; Option none-as-NULL retirement (Track A): by-value `(Option A)` receivers.
 ;; Pure-Turmeric body reads `.is-some`/`.value` directly; none (`{is_some=false}`)
 ;; is never deref'd.  The interpreter keeps its `native_option_eq` override.
