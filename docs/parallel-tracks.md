@@ -1,6 +1,6 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-17 (post-PR #420; post-v0.21.0; post turmeric-spices
+Snapshot: 2026-06-18 (post-PR #420; post-v0.21.0; post turmeric-spices
 PR #14 / tourist v0.2.5).
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
@@ -130,14 +130,20 @@ Pure spice-side work; no compiler dependencies.
 **Still open:**
 
 - [spices-int-stand-in-audit-2026-06-14](reported/spices-int-stand-in-audit-2026-06-14.md)
-  -- S1/S2/S3 closed across the audited public surfaces. Genuinely
-  remaining:
-  - **S4 cons lists** in tourist internals.
-  - **Secondary handle leaks** outside the audited public surfaces:
-    - raylib: models / text / textures / camera / shapes.
-    - rtaudio: `DeviceInfo` handle + the `rtaudio/stream.tur:62`
-      S1-class callback hole.
-    - plutovg: dash-array / font-cache / gradient-stops / rect.
+  -- S1/S2/S3 closed across the audited public surfaces. Secondary
+  handle leakage flagged in the original audit (raylib
+  models/text/textures/camera/shapes, rtaudio DeviceInfo + stream
+  callback, plutovg dash-array/font-cache/gradient-stops/rect) **all
+  closed** as of 2026-06-18, verified against `turmeric-spices` `main`
+  (PRs #10 / #12 / earlier rtaudio S2 sweep). Genuinely remaining:
+  - **S4 / internal residual** in tourist: `tourist-ctx-caps` /
+    `tourist-ctx-free` / `tourist-ctx-new` / `tourist-ctx-strip-path` /
+    `req-full-path` and the `__ctx-free-*` helpers still take
+    `ctx : int` even though `param`/`capture` retyped to `ctx : Ctx`
+    on the public surface (a `(:: ctx :int)` cast bridges them at
+    `param.tur:431`); `route-*` / `router-*` internal accessors and
+    `mount!`/`subapp-call` still take `:int`. Self-contained; no other
+    spice depends on these internal signatures.
 - [spices-type-features-uplift-plan](upcoming/spices-type-features-uplift-plan.md)
   -- phased per-spice work (rows, typeclasses, sized types where they
   "pay rent"). Independent of the audit residuals above.

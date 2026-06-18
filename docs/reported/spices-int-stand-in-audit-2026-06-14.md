@@ -7,7 +7,7 @@ ecosystem. Type checker provides ~zero protection on the public surface of
 where even a flagrantly wrong handler signature compiles silently.
 **Discovered:** 2026-06-14, audit triggered by
 `docs/reported/tourist-middleware-takes-req-not-ctx.md`.
-**Last verified:** 2026-06-17.
+**Last verified:** 2026-06-18.
 **Scope:** `../turmeric-spices/spices/*/src/**/*.tur` (35 spices audited).
 
 ---
@@ -73,8 +73,9 @@ v0.2.0** (Ctx-based shapes; see archived companion report
 | ~~`tourist/src/tourist/middleware.tur:58`~~ | ~~`use! [fn : int]`~~ -- **fixed v0.2.0** | `(c-fn [Ctx] (Option Response))` | -- |
 | ~~`tourist/src/tourist/dsl.tur:185,198,211,224,240`~~ | ~~`get!`, `post!`, `put!`, `delete!`, `any!`~~ -- **fixed v0.2.0** | `(c-fn [Ctx] Response)` | -- |
 | `httpd/src/httpd/server.tur:511,528` | `server-start [... handler : ptr<void>]`, `server-start-pool` | Raw C function pointer of shape `int64_t(*)(int64_t)` | `(fn [Request] Response)` (or named `Handler` newtype) |
-| `rtmidi/src/rtmidi/in.tur:120` | `midi-in-set-callback [mi : int callback : int]` | `RtMidiCCallback` (`(fn [double bytes :ptr<u8> nbytes :int user :ptr<void>] :void)`) | Named callback type, ideally a `defopaque` over the function-pointer type |
-| `osc/src/osc/server.tur:138` | `server-add-method [... handler : int]` | OSC liblo method handler | `(fn [path :cstr types :cstr argv :ptr<void> argc :int msg :Msg user :ptr<void>] :int)` or, since the docstring says "reserved for future FFI", drop the parameter until it has a real type |
+| ~~`rtmidi/src/rtmidi/in.tur:120`~~ | ~~`midi-in-set-callback`~~ -- shipped pre-audit | `RtMidiCCallback` `c-fn` type | -- |
+| ~~`osc/src/osc/server.tur:138`~~ | ~~`server-add-method`~~ -- shipped pre-audit | OSC liblo method handler | -- |
+| ~~`rtaudio/src/rtaudio/stream.tur:62`~~ | ~~`stream-open [... callback : int]`~~ -- shipped pre-audit | `(c-fn [ptr<void> ptr<void> int float int ptr<void>] int)` | -- |
 
 **Why S1 first**: any further work on tourist routes, OSC servers, or MIDI
 input compounds the surface area of these holes. Fixing them first lets
@@ -182,11 +183,12 @@ All five public handle types -- `Canvas`, `Surface`, `Path`, `FontFace`,
 `Paint` -- are `defopaque :int` in `plutovg/types.tur` and threaded through
 every relevant constructor / accessor across `canvas.tur`, `surface.tur`,
 `path.tur`, `font.tur`, and `paint.tur`. `canvas-of` and `font-face-of`
-extractors already in place. Secondary handle leaks remain (and are not
-on the original audit): `dashes : int` in `canvas.tur:670,686,695,719`,
-`fc : int` (font cache) in `font.tur:237,258,279,310`, `stops : int`
-(gradient stops) in `paint.tur:185,223,233`, and `box : int` (bounding
-rect) in `path.tur:421,429,436,443,450`.
+extractors already in place. The secondary handle leaks called out in the
+original audit are now also closed (verified 2026-06-18 against
+`turmeric-spices` `main`): `DashArray`, `FontCache`, `GradientStops`, and
+`Rect` defopaques are exported from `plutovg/types.tur` and threaded
+through `dash-array-*`, `font-cache-*`, `gradient-stops-*`, and `rect-*`
+respectively. All five plutovg modules typecheck clean.
 
 ### osc (3 findings beyond the S1 handler param)
 
@@ -200,14 +202,20 @@ rect) in `path.tur:421,429,436,443,450`.
 
 `defopaque Sound` and `defopaque Music` in `raylib/audio.tur`; threaded
 through `load-sound`, `unload-sound`, `play-sound`, `load-music-stream`,
-`unload-music-stream`, `play-music-stream`, `update-music-stream`. Broad
-follow-up leakage in non-audited modules remains (and was not on the
-original audit): `model : int`, `mesh : int`, `material : int`,
-`transform : int` in `raylib/models.tur`; `font : int` in `raylib/text.tur`;
-`tex : int` in `raylib/textures.tur`; `camera : int` in `raylib/camera.tur`
-and `raylib/core.tur`; plus pervasive `col : int` (`Color`), `pos : int`
-(`Vector2`), `rec : int` (`Rectangle`), `center : int`, `v1`/`v2`/`v3 : int`
-across `shapes.tur` -- candidates for a separate `raylib` v0.2.0 sweep.
+`unload-music-stream`, `play-music-stream`, `update-music-stream`. The
+broader follow-up leakage flagged here originally is also closed (verified
+2026-06-18 against `turmeric-spices` `main`, post-PR #10 / #12):
+`Color`, `Vector2`, `Rectangle`, `Camera3D`, `Camera2D`, `Texture2D`,
+`Font`, `Model`, `Mesh`, `Material`, `Matrix` are all `defopaque :int` in
+`raylib/types.tur` and threaded through `models.tur`, `text.tur`,
+`textures.tur`, `camera.tur`, `core.tur`, and `shapes.tur` (e.g.
+`draw-model [model : Model ...]`, `draw-mesh [mesh : Mesh material :
+Material transform : Matrix]`, `draw-text-ex [font : Font ...]`,
+`draw-texture [tex : Texture2D ...]`, `begin-mode-3d [camera : Camera3D]`,
+`draw-rectangle-rec [rec : Rectangle col : Color]`, `draw-triangle [v1 :
+Vector2 v2 : Vector2 v3 : Vector2 col : Color]`). All ten raylib modules
+typecheck clean. Remaining `:int` parameters in those files are
+legitimately ints (x, y, width, size, mode keys).
 
 ### ~~tls (2 findings)~~ -- **fixed**
 
@@ -244,9 +252,15 @@ parameter is still `:int` -- that one really is a file descriptor.
   **fixed in `tur-rtaudio` v0.2.0**: `defopaque Audio` exported from
   `rtaudio/core.tur`; `audio-free`, `audio-api`, and every `device-*` /
   `stream-*` function that took the backend handle now takes
-  `a : Audio`. The `RtAudioDeviceInfo*` accessor handle (`di : int` in
-  `rtaudio/devices.tur`) and the audio callback (`callback : int` in
-  `rtaudio/stream.tur:62`, an S1-class hole) remain as follow-up work.
+  `a : Audio`. The `RtAudioDeviceInfo*` accessor handle and the audio
+  callback are also closed (verified 2026-06-18 against `turmeric-spices`
+  `main`): `defopaque DeviceInfo :int` is exported from `rtaudio/core.tur`
+  and threaded through `device-info`, `device-info-name`,
+  `device-info-output-chans`, `device-info-input-chans`,
+  `device-info-sample-rates`, and `device-info-free`. The S1 callback in
+  `rtaudio/stream.tur:69` is typed `(c-fn [ptr<void> ptr<void> int float
+  int ptr<void>] int)`, not `:int`. All three rtaudio modules typecheck
+  clean.
 - ~~`regex/regex.tur:56,95` -- compiled regex~~ **fixed in `tur-regex` v0.2.0**:
   `defopaque Regex` + `defopaque Match`; all public parameters retyped.
   Result-typed returns also landed (`(Result Regex cstr)`, etc.) once the
@@ -330,13 +344,13 @@ Middleware opaques exist, these should become `list<Route>` and
 | ~~opengl~~ | ~~S2: 5 handle types~~ -- already fixed (7 opaques in `opengl/types.tur`) |
 | ~~osc~~ | ~~S2: 3 handles~~ -- **fixed in `tur-osc` v0.2.0** (`defopaque Msg`/`Bundle`/`Server`/`Address` with `server-of`/`address-of` extractors). S1 callback had already shipped pre-audit. |
 | plot | clean |
-| ~~plutovg~~ | ~~S2: 5 handle types~~ -- already fixed (5 opaques in `plutovg/types.tur`); dash-array/font-cache/gradient-stops/rect remain |
+| ~~plutovg~~ | ~~S2: 5 handle types~~ -- fully fixed (5 audited opaques + 4 secondary: DashArray, FontCache, GradientStops, Rect) |
 | ~~png~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Img`) |
 | ~~postgres~~ | ~~S2: 5 handle types~~ -- fully fixed (`Conn`, `Rows`, `Notification`) |
 | raygui | clean |
-| ~~raylib~~ | ~~S2: 3 handle types~~ -- audit set fixed (`Sound`, `Music`); broad follow-up leakage in models/text/textures/camera/shapes remains |
+| ~~raylib~~ | ~~S2: 3 handle types~~ -- fully fixed (`Sound`, `Music` + `Color`/`Vector2`/`Rectangle`/`Camera3D`/`Camera2D`/`Texture2D`/`Font`/`Model`/`Mesh`/`Material`/`Matrix` opaques in `raylib/types.tur`, threaded through models/text/textures/camera/core/shapes) |
 | ~~regex~~ | ~~S2: 1 handle type~~ -- fixed in `tur-regex` v0.2.0 |
-| ~~rtaudio~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Audio`); `DeviceInfo` handle + callback remain |
+| ~~rtaudio~~ | ~~S2: 1 handle type~~ -- fully fixed (`Audio` + `DeviceInfo` defopaques; `stream-open` callback typed `c-fn`) |
 | ~~rtmidi~~ | ~~S2: 2 handles~~ -- **fixed in `tur-rtmidi` v0.2.0** (`defopaque MidiIn`/`MidiOut` with `midi-in-of`/`midi-out-of` extractors). S1 callback had already shipped pre-audit. |
 | scscm | clean |
 | sdf-raylib | clean |
@@ -352,19 +366,23 @@ Middleware opaques exist, these should become `list<Route>` and
 | ~~wav~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Wav`) |
 | zlib | clean |
 
-19 spices need work, 16 are clean. As of 2026-06-17: regex, sqlite, png, wav,
+19 spices need work, 16 are clean. As of 2026-06-18: regex, sqlite, png, wav,
 postgres, valkey, rtaudio, tls, tourist (v0.2.0/v0.2.1), httpd (v0.2.0),
-osc (v0.2.0), rtmidi (v0.2.0), plus three already-shipped-at-audit-time
-(opengl, plutovg, raylib's audited subset) are fixed for the public
-surface (15 done); **4 remain**. All four remaining are secondary
-handle leaks inside already-fixed spices:
-plutovg (dash-array, font-cache, gradient-stops, rect),
-raylib (models, text, textures, camera, shapes),
-rtaudio (DeviceInfo, callback),
-and tourist internals (`route-*` / `router-*` / cons-list helpers
-plus the `ctx : int` / `caps : int` polish on `param`/`capture`/
-`captures-*` -- return types are correct, only the parameter retype
-remains).
+osc (v0.2.0), rtmidi (v0.2.0), plutovg (audited set + secondary), raylib
+(audited set + secondary), plus opengl (already shipped at audit time)
+are fixed for the public surface. Per-spice secondary follow-up leakage
+flagged in the original audit (plutovg dash-array/font-cache/gradient-stops/
+rect; raylib models/text/textures/camera/shapes; rtaudio DeviceInfo +
+callback) is **all closed** -- verified 2026-06-18 against `turmeric-spices`
+`main` with all four spices' modules `tur check`-ing clean.
+
+**Sole remaining residual**: tourist internals -- `route-*` / `router-*`
+accessors, the `tourist-ctx-caps` / `tourist-ctx-free` / `tourist-ctx-new`
+/ `tourist-ctx-strip-path` / `req-full-path` family still take `ctx : int`
+internally even though `param`/`capture` retyped to `ctx : Ctx` on the
+public surface (a `(:: ctx :int)` cast bridges them at `param.tur:431`),
+and the `__ctx-free-*` helpers retain `:int`. Self-contained tourist
+follow-up; no other spice depends on these internal signatures.
 
 ---
 
