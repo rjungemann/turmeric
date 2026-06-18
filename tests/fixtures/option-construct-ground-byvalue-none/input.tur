@@ -1,0 +1,38 @@
+;; zero-arg-construct-ground-byvalue-return: a 0-arg `(none)` in the return
+;; position of a MONOMORPHIC defn whose declared return is a GROUND parametric
+;; TY_APP with a by-value struct/opaque element -- `(Option BoundedIdx)` --
+;; must construct a by-value `none__spec__Option__BoundedIdx`, not assign the
+;; int64 carrier `none()` into the by-value `Option__BoundedIdx` slot.
+;;
+;; The sibling `(some ...)` arm already mints `some__spec__Option__BoundedIdx`
+;; (its struct payload trips the by-value spec gate), so a carrier `(none)`
+;; straddles the by-value if-temp and fails to compile.  The ground branch of
+;; the constructor-result-tyvar binding (elab_call.c) + the struct-element
+;; carrier-skip gate (emit_module.c) close the straddle.  A primitive-element
+;; `(Option int)` stays on the existing carrier+bridge path (excluded by the
+;; struct-element gate), so this is scoped to struct/opaque payloads.
+;;
+;; See docs/archive/zero-arg-construct-ground-byvalue-return.md.
+
+(defopaque BoundedIdx :int)
+
+;; Ground `(Option BoundedIdx)` return: `(none)` in the false arm, `(some ...)`
+;; in the true arm -- both must lower by value.
+(defn bidx-of? [n : int i : int] : (Option BoundedIdx)
+  (if (or (< i 0) (>= i n))
+    (none)
+    (some (:: i :BoundedIdx))))
+
+(defn bidx-unwrap [o : (Option BoundedIdx)] : BoundedIdx
+  (if (some? o) (.value o) (:: 0 :BoundedIdx)))
+
+(defn bidx->int [b : BoundedIdx] : int (:: b :int))
+
+(defn main [] : int
+  (let [a (bidx-of? 5 2)
+        b (bidx-of? 5 9)
+        c (bidx-of? 5 -1)]
+    (println (if (some? a) (bidx->int (bidx-unwrap a)) -1))   ; 2
+    (println (if (some? b) 1 0))                              ; 0
+    (println (if (some? c) 1 0)))                             ; 0
+  0)

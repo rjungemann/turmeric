@@ -20,15 +20,15 @@
     (vec-push! v 33)
     ; bidx-of? validates the index against the length, then the access is total.
     (let [o (bidx-of? (vec-len v) 2)]
-      (if (some? (:: o (Option int))) (println (vec-get-checked v (bidx-unwrap o))) (println -1))) ; 33
+      (if (some? o) (println (vec-get-checked v (bidx-unwrap o))) (println -1))) ; 33
     (println (bidx->int (bidx-unwrap (bidx-of? (vec-len v) 0))))                 ; 0
     ; out-of-range and negative indices fail the smart constructor.
-    (println (if (some? (:: (bidx-of? (vec-len v) 3) (Option int))) 1 0))        ; 0
-    (println (if (some? (:: (bidx-of? (vec-len v) -1) (Option int))) 1 0)))      ; 0
+    (println (if (some? (bidx-of? (vec-len v) 3)) 1 0))                          ; 0
+    (println (if (some? (bidx-of? (vec-len v) -1)) 1 0)))                        ; 0
   (let [arr (make-arr)]
     (let [s (slice-new arr 3)]
       (let [o (bidx-of? (slice-len s) 1)]
-        (if (some? (:: o (Option int))) (println (slice-get-checked s (bidx-unwrap o))) (println -1))) ; 200
+        (if (some? o) (println (slice-get-checked s (bidx-unwrap o))) (println -1))) ; 200
       (slice-free s)
       (free arr)))
   0)
