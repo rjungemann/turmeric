@@ -11,8 +11,10 @@
     (println (list-head (ne-tail ne)))                            ; 20
     (println (list-head (ne->list ne))))                          ; 10
   ; ne-from? discharges the proof obligation: some for non-empty, none for empty.
-  (let [o (ne-from? (tcons 7 (tnil)))]
-    (if (some? (:: o (Option int))) (println (ne-head (ne-unwrap o))) (println -1))) ; 7
-  (let [e (ne-from? (tnil))]
-    (println (if (some? (:: e (Option int))) 1 0)))                ; 0
+  ; The (List int) argument pins A, so (ne-head (ne-unwrap o)) resolves the
+  ; element type without any (Option int) ascription.
+  (let [o (ne-from? (list-of 7))]
+    (if (some? o) (println (ne-head (ne-unwrap o))) (println -1))) ; 7
+  (let [e (ne-from? (list-of))]
+    (println (if (some? e) 1 0)))                                 ; 0
   0)

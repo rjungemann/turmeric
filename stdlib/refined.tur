@@ -27,6 +27,10 @@
 ;;; Since: stdlib-refinement-collections-plan (R1, R2)
 ;; Refinement newtypes: NonEmpty (R1) and BoundedIdx (R2).
 ;; ===================================================================
+;; ne-from? takes a typed (List A) so its element type is recoverable at the
+;; call site; pull in the (non-auto-loaded) typed-list witness.
+(load "stdlib/list-typed.tur")
+;; ===================================================================
 ;; R1: NonEmpty -- a non-empty cons list.
 ;; ===================================================================
 ;;; NonEmpty -- a cons list of element type A, proven to contain at least one
@@ -141,56 +145,47 @@
 ;;; some-branch holds a NonEmpty whose ne-head / ne-tail are total.
 ;;;
 ;;; Parameters:
-;;;   xs -- an arbitrary cons list (may be empty)
+;;;   xs -- an arbitrary typed list (may be empty)
 ;;;
 ;;; Returns:
-;;;   (some ne) when xs is non-empty, (none) when xs is empty. The payload
-;;;   is the NonEmpty carrier; recover it with ne-unwrap.
+;;;   (some ne) when xs is non-empty, (none) when xs is empty. The payload is
+;;;   a (NonEmpty A) whose element type A is recovered from the (List A) arg;
+;;;   recover it with ne-unwrap.
 ;;;
 ;;; Example:
-;;;   (some? (ne-from? (tcons 1 (tnil))))  ; => true
-;;;   (some? (ne-from? (tnil)))            ; => false
+;;;   (some? (ne-from? (list-of 1)))  ; => true
+;;;   (some? (ne-from? (list-of)))    ; => false
 ;;;
 ;;; Since: R1
 
-(defn ne-from? [xs : int] : int
-  ;; Inline-C body: kept on the carrier ABI pending two compiler follow-ups
-  ;; that block the by-value rewrite (see option-consumer-retype-byvalue.md):
-  ;;   - 0-arg `(none)` in a ground (Option T) return (handled for
-  ;;     parametric TY_APP, not yet for ground non-generics, but the
-  ;;     parametric case here also leaks compiler memory in
-  ;;     clone_struct_app_type -- see
-  ;;     docs/reported/parametric-option-return-clone-struct-app-leak.md).
-  ```c
-  if (xs == 0) return 0;
-  struct { bool is_some; int64_t value; } *o = malloc(sizeof(*o));
-  o->is_some = true;
-  o->value = xs;
-  return (int64_t)(intptr_t)o;
-  ```)
+(defn ne-from? [A] [xs : (List A)] : (Option (NonEmpty A))
+  ;; By-value (Option (NonEmpty A)): the typed (List A) argument is the witness
+  ;; that pins A, so downstream ne-head resolves the element type concretely
+  ;; instead of leaving a bare tyvar.  No carrier round-trip.
+  (if (list-empty? xs)
+    (none)
+    (some (:: (list->carrier xs) (NonEmpty A)))))
 ;;; ne-unwrap -- recover the NonEmpty payload from a non-none Option.
 ;;;
 ;;; Pair with ne-from? after a some? check; on a none Option this yields a
 ;;; NonEmpty over 0, so guard with some? first.
 ;;;
 ;;; Parameters:
-;;;   o -- an Option carrier as returned by ne-from?
+;;;   o -- a (Option (NonEmpty A)) as returned by ne-from?
 ;;;
 ;;; Returns:
-;;;   The wrapped NonEmpty.
+;;;   The wrapped (NonEmpty A).
 ;;;
 ;;; Example:
-;;;   (let [o (ne-from? (tcons 9 (tnil)))]
+;;;   (let [o (ne-from? (list-of 9))]
 ;;;     (if (some? o) (ne-head (ne-unwrap o)) -1))  ; => 9
 ;;;
 ;;; Since: R1
 
-(defn ne-unwrap [o : int] : (NonEmpty int)
-  ;; Carrier-ABI: o is the int64 Option produced by ne-from?.  Bridge into the
-  ;; by-value (Option int) shape and read .value (NonEmpty == :int carrier).
-  (if (some? (:: o (Option int)))
-    (:: (.value (:: o (Option int))) :NonEmpty)
-    (:: 0 :NonEmpty)))
+(defn ne-unwrap [A] [o : (Option (NonEmpty A))] : (NonEmpty A)
+  ;; By-value (Option (NonEmpty A)): read .value directly (it is the NonEmpty
+  ;; payload).  none-case returns the zero NonEmpty -- callers gate on some?.
+  (if (some? o) (.value o) (:: 0 (NonEmpty A))))
 ;; ===================================================================
 ;; R2: BoundedIdx -- an index proven to be in range for some length.
 ;; ===================================================================

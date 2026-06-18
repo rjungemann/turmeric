@@ -1,0 +1,74 @@
+;;; tur/list-typed -- a phantom-typed (List A) view over the int64 cons-list
+;;; carrier.
+;;;
+;;; (List A) is the "either empty or a chain of Cons cells of A" view that
+;;; smart constructors like refined.tur's ne-from? consume: it pins the element
+;;; type at the boundary so downstream accessors recover A instead of a bare
+;;; tyvar. It lowers to :int (the head cons-cell pointer, or 0 for empty) at
+;;; zero runtime cost, sitting alongside the untyped carrier helpers
+;;; (list-head, list-tail, ...) in list.tur, which keep working unchanged.
+;;;
+;;; This module is NOT auto-loaded: `List` is an extremely common user type
+;;; name (a plain `(defdata List ...)` in user code must not collide with it),
+;;; so it stays opt-in via (load "stdlib/list-typed.tur"). refined.tur loads it
+;;; for the NonEmpty smart constructors.
+;;;
+;;; Since: end-to-end-monomorphization-plan (Phase 1.1)
+;; Typed list witness for element-type recovery.  The untyped carrier helpers
+;; (tcons / tnil? / list-head / list-tail) come from the auto-loaded list.tur;
+;; no explicit load is needed (and loading it here would re-define Cons).
+;;; List -- a typed view over the int64 cons-list carrier, carrying a phantom
+;;; element type A.
+;;;
+;;; Lowers to :int (the head cons-cell pointer, or 0 for empty). Construct it
+;;; with list-of (variadic) or an explicit (:: ... (List A)) ascription on a
+;;; tcons chain whose head type pins A.
+;;;
+;;; Since: end-to-end-monomorphization-plan (Phase 1.1)
+(defopaque List [A] :int)
+;;; list-of -- build a (List A) from N values, recovering A from the rest type.
+;;;
+;;; Parameters:
+;;;   & xs -- zero or more elements, all of type A.
+;;;
+;;; Returns:
+;;;   A (List A) over the int64 cons-list carrier the variadic collector builds.
+;;;   With zero arguments, the empty list (carrier 0).
+;;;
+;;; Example:
+;;;   (list-empty? (list-of))      ; => true
+;;;   (list-empty? (list-of 1 2))  ; => false
+;;;
+;;; Since: end-to-end-monomorphization-plan (Phase 1.1)
+
+(defn list-of [A] [& xs : A] : (List A) (:: xs (List A)))
+;;; list-empty? -- is a (List A) the empty list?
+;;;
+;;; Parameters:
+;;;   xs -- the (List A) to inspect
+;;;
+;;; Returns:
+;;;   true when xs is empty (carrier 0), false otherwise.
+;;;
+;;; Example:
+;;;   (list-empty? (list-of))   ; => true
+;;;   (list-empty? (list-of 9)) ; => false
+;;;
+;;; Since: end-to-end-monomorphization-plan (Phase 1.1)
+
+(defn list-empty? [A] [xs : (List A)] : bool (tnil? (:: xs :int)))
+;;; list->carrier -- recover the raw int64 cons-list carrier from a (List A).
+;;;
+;;; Parameters:
+;;;   xs -- the (List A) to unwrap
+;;;
+;;; Returns:
+;;;   The underlying int64 cons-list pointer (0 for empty), suitable as input
+;;;   to the untyped carrier helpers (list-head, list-tail, list-length, ...).
+;;;
+;;; Example:
+;;;   (list-head (list->carrier (list-of 7 8)))  ; => 7
+;;;
+;;; Since: end-to-end-monomorphization-plan (Phase 1.1)
+
+(defn list->carrier [A] [xs : (List A)] : int (:: xs :int))

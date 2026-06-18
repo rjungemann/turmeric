@@ -1422,6 +1422,10 @@ bool         type_extract_struct_app(const Type *t, struct StructDef **out_def,
 Type         substitute_struct_app_type(const Type *t,
                                         const struct StructDef *def,
                                         const Type *args);
+/* Release the malloc'd TY_APP spine nodes that substitute_struct_app_type /
+ * clone_struct_app_type allocate for a compound (TY_APP) result.  A no-op on a
+ * leaf Type, so it is safe to call unconditionally on any substitute result. */
+void         free_struct_app_type(Type t);
 /* TS4P1: ADT-app (polymorphic ADT monomorphisation) registry. */
 void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);

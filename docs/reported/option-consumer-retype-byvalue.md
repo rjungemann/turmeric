@@ -37,10 +37,15 @@ status: PARTIAL 2026-06-18. `option-eq?` and `option-map` retyped to by-value
   are now pure-Turmeric by-value; `tests/fixtures/refined-bounded-idx/` drops its
   carrier ascriptions; regression fixture
   `tests/fixtures/option-construct-ground-byvalue-none/`. Full suite green
-  (1681/0). The **NonEmpty half** of step 4 (`ne-from?`/`ne-unwrap`) is still
-  blocked, now on a genuine inference gap (the element type `A` is uninferable
-  from `ne-from?`'s untyped `xs : int`) -- tracked in
-  [ne-from-byvalue-option-nonempty-element-type-uninferable.md](ne-from-byvalue-option-nonempty-element-type-uninferable.md).
+  (1681/0). The **NonEmpty half** of step 4 (`ne-from?`/`ne-unwrap`) is now
+  **DONE** (2026-06-18): retyped to by-value `(Option (NonEmpty A))` with a
+  typed `(List A)` witness recovering the element type. Required three compiler
+  fixes (variadic result-type inference, a `clone_struct_app_type` leak, and a
+  variadic float-head truncation); see the archived spec
+  [ne-from-byvalue-option-nonempty-element-type-uninferable.md](../archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md).
+  A float round-trip caveat (pre-existing, not introduced by the retype) is
+  tracked separately in
+  [polymorphic-float-carrier-ascription-value-cast.md](polymorphic-float-carrier-ascription-value-cast.md).
   Step 5 (kleisli.tur `comp`/`k-apply-raw` retype) is blocked on the broader
   carrier-Option-producer cascade.
   `result-map` remains (a deliberate carrier-ABI regression test backs its

@@ -64,22 +64,33 @@ Per
 `ne-from?`'s `xs : int` argument is what makes `A` uninferable; the fix
 is to give it a typed list to recover `A` from.
 
-- [ ] Add `(defopaque List [A] :int)` and a `list-of [A] [& xs : A] : (List A)`
-      smart constructor in `stdlib/list.tur` (or a new `stdlib/list-typed.tur`
-      if the existing module's untyped surface should stay intact).
-- [ ] Retype the NonEmpty surface in `stdlib/refined.tur`:
+- [x] Add `(defopaque List [A] :int)` and a `list-of [A] [& xs : A] : (List A)`
+      smart constructor -- landed in a NEW `stdlib/list-typed.tur` (NOT
+      auto-loaded; `List` collides with user `(defdata List ...)` -- see
+      `tests/fixtures/adt-recursive/`). `refined.tur` loads it explicitly.
+      Required a compiler fix: variadic `[A] [& xs : A] : (List A)` now
+      substitutes the inferred `A` into the result type (`elab_call.c`,
+      `elab_fns.c`).
+- [x] Retype the NonEmpty surface in `stdlib/refined.tur`:
       `ne-from? [A] [xs : (List A)] : (Option (NonEmpty A))`,
-      `ne-unwrap [A] [o : (Option (NonEmpty A))] : (NonEmpty A)`,
-      `ne-head`/`ne-tail`/`ne->list` all on `(NonEmpty A)` / `(List A)`.
-- [ ] Update `tests/fixtures/refined-nonempty/` to drop
-      `(:: o (Option int))` ascriptions; the element type must resolve
-      at `(ne-head ...)` without annotation.
-- [ ] **Validation:** `bash tests/run.sh 2>&1 | grep '^FAIL'` empty.
-- [ ] **Validation:** `TUR_M3_AUDIT=1 ./build/tur build
-      tests/fixtures/refined-nonempty/input.tur 2>&1 | grep m3-audit`
-      shows zero crossings.
-- [ ] Archive `docs/reported/ne-from-byvalue-option-nonempty-element-type-uninferable.md`
-      with resolution note.
+      `ne-unwrap [A] [o : (Option (NonEmpty A))] : (NonEmpty A)`, pure-Turmeric.
+      (`ne-head`/`ne-tail`/`ne->list` already typed on `(NonEmpty A)`.)
+      Also fixed a `clone_struct_app_type` compiler leak at `emit_expr.c:4604`
+      this path exposed.
+- [x] Update `tests/fixtures/refined-nonempty/` to drop
+      `(:: o (Option int))` ascriptions; `(ne-head ...)` resolves the element
+      type without annotation.
+- [x] **Validation:** `bash tests/run.sh` -- 1683 passed, 0 failed.
+- [x] **Validation:** `TUR_M3_AUDIT=1` on the fixture shows zero crossings.
+- [x] Archive `ne-from-byvalue-option-nonempty-element-type-uninferable.md`
+      with resolution note (now in `docs/archive/`).
+- [ ] **Deferred (separate report):** the `refined-nonempty-typed-list` float
+      fixture proving `A = float` through `ne-head` without truncation is
+      blocked on a pre-existing polymorphic float<->carrier ascription
+      miscompile (also breaks `(ne-head (ne-singleton 1.5))`), tracked in
+      `docs/reported/polymorphic-float-carrier-ascription-value-cast.md`. The
+      variadic-collector half of that round-trip IS fixed
+      (`tests/fixtures/variadic-float-cons-collect/`).
 
 ### 1.2 -- Retype `result-map` and decouple from its regression fixture
 
