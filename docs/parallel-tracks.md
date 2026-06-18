@@ -27,25 +27,31 @@ advances.
 - [end-to-end-monomorphization-plan](upcoming/end-to-end-monomorphization-plan.md)
   -- **rewritten 2026-06-19** as remaining-work-only with actionable
   per-phase checklists. M1-M5 landed (M5 closed by PRs #427/#428,
-  verified). Five remaining phases: (1) Track A bucket-C residuals
-  (independent of the rest), (2) HKT design pass with measured
-  per-(f,A) cost, (3) HKT implementation, (4) carrier-helper rewrites
-  (M9 prerequisite per the archived blocker doc), (5) bridge deletion
-  + re-audit. Predecessor framing archived at
+  verified). Phase 2 (HKT design pass) DONE. Phase 3 (HKT
+  implementation) substantially landed flag-gated behind `TUR_M7_HKT`:
+  PR #435 (M7 elaborator element-type threading) and PR #436 (layer-4
+  by-value HKT instance-method emit + kind-threading fix) shipped, and
+  the Functor `fmap` / Monad `bind` probes exit end-to-end under the
+  flag. Remaining: (1) Track A bucket-C residuals (independent of the
+  rest), Phase 4 (carrier-helper rewrites + stdlib HKT body rewrites --
+  M9 prerequisite per the archived blocker doc; needed to flip
+  `TUR_M7_HKT` on by default), Phase 5 (bridge deletion + re-audit).
+  Predecessor framing archived at
   `docs/archive/end-to-end-monomorphization-plan.md`; M5 scope audit
   archived at `docs/archive/m5-scope-audit-2026-06-18.md`.
 - [option-consumer-retype-byvalue](reported/option-consumer-retype-byvalue.md)
   (report, PARTIAL 2026-06-18) -- `option-eq?`, `option-map`, `some?`,
-  and the BoundedIdx half of step 4 (`bidx-of?` / `bidx-unwrap`) all
-  retyped to pure-Turmeric by-value `(Option A)`. Remaining:
-  - `result-map` -- deferred; its `:int` signature is a deliberate
-    carrier-ABI regression test.
+  `result-map`, the BoundedIdx half of step 4 (`bidx-of?` /
+  `bidx-unwrap`), and the NonEmpty half (`ne-from?` / `ne-unwrap`) all
+  retyped to pure-Turmeric by-value `(Option A)` / `(Result B E)`.
+  Remaining:
   - `unwrap-or` cascade -- broken out into
     [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md);
     nearly complete, only the M7-gated kleisli caller remains.
-  - NonEmpty half of step 4 (`ne-from?`/`ne-unwrap`) -- **closed
-    2026-06-18** by PR #434 (typed `(List A)` witness); see
-    [docs/archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md](archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md).
+  - NonEmpty closure (PR #434, typed `(List A)` witness) archived at
+    [docs/archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md](archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md);
+    `result-map` closure archived at
+    [docs/archive/result-map-byvalue-construct-spec-leak.md](archive/result-map-byvalue-construct-spec-leak.md).
   - Step 5 (`kleisli.tur` `comp`/`k-apply-raw` retype) -- broken out
     into [kleisli-byvalue-option-cascade](reported/kleisli-byvalue-option-cascade.md).
 - [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md)
@@ -59,8 +65,13 @@ advances.
   (plan, OPEN, NOT YET STARTED) -- retype `k-apply-raw` / `k-apply` /
   `Category [Kleisli]` to thread `(Option B)` by value; retires the
   `(:: r (Option int))` ascription that landed in PR #426 as a
-  temporary patch. Gated on M7 HKT (PR #435 landed M7 elaborator
-  behind `TUR_M7_HKT`). One self-contained PR once unblocked.
+  temporary patch. M7 elaborator (PR #435) and M7 layer-4 emit
+  (PR #436) have both landed behind `TUR_M7_HKT`; `k-apply-raw` is
+  still on the carrier ABI in `stdlib/kleisli.tur` and `comp` still
+  routes through `unwrap-or-carrier`. Now unblocked on M7, but in
+  practice cascade-coupled to Phase 4 stdlib HKT body rewrites (see
+  end-to-end-monomorphization-plan) -- decide whether the kleisli
+  retype rides 4.x or lands as an independent self-contained PR.
 - **M7 by-value HKT dispatch (Phase 3/4.2): Functor `fmap` AND Monad `bind`
   shapes now work end-to-end** under `TUR_M7_HKT` (flag default-OFF; shipped
   path byte-identical). fmap across element types `{int, cstr, float, struct}`;
