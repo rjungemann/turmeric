@@ -2634,7 +2634,6 @@ static int64_t slice_hylen(int64_t);
 static int64_t slice_hyget(int64_t, int64_t);
 static void slice_hyfree(int64_t);
 static bool slice_hyeq_qu(int64_t, int64_t, int64_t);
-static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static bool ok_qu(int64_t);
@@ -2699,6 +2698,7 @@ static void device_hyfree(int64_t);
 static int64_t maybe_hyopen(int64_t);
 static int64_t ok_val__spec__int64_t_Result__Device__int(Result__Device__int);
 static int64_t err_val__spec__int64_t_Result__Device__int(Result__Device__int);
+static bool some___spec__bool_Option__Device(Option__Device);
 static int64_t unwrap__spec__int64_t_Option__Device(Option__Device);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -3889,11 +3889,6 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
   
 }
 
-static bool some_qu(int64_t o) {
-        return tur_is_some(o);
-  
-}
-
 static int64_t unwrap_hyor(int64_t o, int64_t dflt) {
         return tur_is_some(o) ? tur_opt_value(o) : dflt;
   
@@ -4599,16 +4594,18 @@ int main(int argc, char **argv) {
         {
             int64_t o_997 = maybe_hyopen(INT64_C(5));
             (void)o_997;
-            puts((some_qu(o_997)) ? "true" : "false");
             tur_option_t *__t45 = (tur_option_t *)(intptr_t)(o_997);
-            printf("%lld\n", (long long)(device_hytag(unwrap__spec__int64_t_Option__Device((__t45 ? (Option__Device){.is_some = __t45->is_some, .value = (int64_t)(intptr_t)(__t45->value)} : (Option__Device){0})))));
+            puts((some___spec__bool_Option__Device((__t45 ? (Option__Device){.is_some = __t45->is_some, .value = (int64_t)(intptr_t)(__t45->value)} : (Option__Device){0}))) ? "true" : "false");
             tur_option_t *__t46 = (tur_option_t *)(intptr_t)(o_997);
-            device_hyfree(unwrap__spec__int64_t_Option__Device((__t46 ? (Option__Device){.is_some = __t46->is_some, .value = (int64_t)(intptr_t)(__t46->value)} : (Option__Device){0})));
+            printf("%lld\n", (long long)(device_hytag(unwrap__spec__int64_t_Option__Device((__t46 ? (Option__Device){.is_some = __t46->is_some, .value = (int64_t)(intptr_t)(__t46->value)} : (Option__Device){0})))));
+            tur_option_t *__t47 = (tur_option_t *)(intptr_t)(o_997);
+            device_hyfree(unwrap__spec__int64_t_Option__Device((__t47 ? (Option__Device){.is_some = __t47->is_some, .value = (int64_t)(intptr_t)(__t47->value)} : (Option__Device){0})));
         }
-        puts((some_qu(maybe_hyopen(INT64_C(-1)))) ? "true" : "false");
-        int64_t __t47;
-        __t47 = INT64_C(0);
-        return (int)__t47;
+        tur_option_t *__t48 = (tur_option_t *)(intptr_t)(maybe_hyopen(INT64_C(-1)));
+        puts((some___spec__bool_Option__Device((__t48 ? (Option__Device){.is_some = __t48->is_some, .value = (int64_t)(intptr_t)(__t48->value)} : (Option__Device){0}))) ? "true" : "false");
+        int64_t __t49;
+        __t49 = INT64_C(0);
+        return (int)__t49;
 }
 
 static int64_t ok_val__spec__int64_t_Result__Device__int(Result__Device__int r) {
@@ -4617,6 +4614,10 @@ static int64_t ok_val__spec__int64_t_Result__Device__int(Result__Device__int r) 
 
 static int64_t err_val__spec__int64_t_Result__Device__int(Result__Device__int r) {
         return (r).err_val;
+}
+
+static bool some___spec__bool_Option__Device(Option__Device o) {
+        return (o).is_some;
 }
 
 static int64_t unwrap__spec__int64_t_Option__Device(Option__Device o) {

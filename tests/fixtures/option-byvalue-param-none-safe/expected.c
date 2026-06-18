@@ -2634,7 +2634,6 @@ static void slice_hyfree(int64_t);
 static bool slice_hyeq_qu(int64_t, int64_t, int64_t);
 static int64_t some(int64_t);
 static int64_t none();
-static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static bool ok_qu(int64_t);
@@ -3898,11 +3897,6 @@ static int64_t some(int64_t x) {
 
 static int64_t none() {
         return 0;
-}
-
-static bool some_qu(int64_t o) {
-        return tur_is_some(o);
-  
 }
 
 static int64_t unwrap_hyor(int64_t o, int64_t dflt) {

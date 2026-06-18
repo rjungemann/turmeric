@@ -34,10 +34,10 @@
 (defn main [] : int
   (do
     ;; stdlib some? reads a C-built Option
-    (println (some? (lookup 7)))             ;; true
+    (println (some? (:: (lookup 7) (Option int))))   ;; true
     ;; inline-C consumer reads a C-built Option
     (println (opt-or (lookup 7) 0))          ;; 700
-    (println (some? (lookup 3)))             ;; false
+    (println (some? (:: (lookup 3) (Option int))))   ;; false
     (println (opt-or (lookup 3) -9))         ;; -9
     ;; stdlib ok?/err? read a C-built Result
     (println (ok? (safe-div 10 2)))          ;; true

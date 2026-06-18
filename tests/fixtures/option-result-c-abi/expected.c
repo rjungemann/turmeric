@@ -2432,6 +2432,15 @@ typedef struct MutableMap {
 } MutableMap;
 
 
+#ifndef TUR_TY_Option__int
+#define TUR_TY_Option__int
+typedef struct Option__int {
+    bool is_some;
+    int64_t value;
+} Option__int;
+#endif
+
+
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
@@ -2615,7 +2624,6 @@ static int64_t slice_hylen(int64_t);
 static int64_t slice_hyget(int64_t, int64_t);
 static void slice_hyfree(int64_t);
 static bool slice_hyeq_qu(int64_t, int64_t, int64_t);
-static bool some_qu(int64_t);
 static int64_t unwrap_hyor(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static bool ok_qu(int64_t);
@@ -2678,6 +2686,7 @@ static int64_t lookup(int64_t);
 static int64_t opt_hyor(int64_t, int64_t);
 static int64_t safe_hydiv(int64_t, int64_t);
 static int64_t res_hypayload(int64_t);
+static bool some___spec__bool_Option__int(Option__int);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3867,11 +3876,6 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
   
 }
 
-static bool some_qu(int64_t o) {
-        return tur_is_some(o);
-  
-}
-
 static int64_t unwrap_hyor(int64_t o, int64_t dflt) {
         return tur_is_some(o) ? tur_opt_value(o) : dflt;
   
@@ -4554,17 +4558,23 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        puts((some_qu(lookup(INT64_C(7)))) ? "true" : "false");
+        tur_option_t *__t42 = (tur_option_t *)(intptr_t)(lookup(INT64_C(7)));
+        puts((some___spec__bool_Option__int((__t42 ? (Option__int){.is_some = __t42->is_some, .value = __t42->value} : (Option__int){0}))) ? "true" : "false");
         printf("%lld\n", (long long)(opt_hyor(lookup(INT64_C(7)), INT64_C(0))));
-        puts((some_qu(lookup(INT64_C(3)))) ? "true" : "false");
+        tur_option_t *__t43 = (tur_option_t *)(intptr_t)(lookup(INT64_C(3)));
+        puts((some___spec__bool_Option__int((__t43 ? (Option__int){.is_some = __t43->is_some, .value = __t43->value} : (Option__int){0}))) ? "true" : "false");
         printf("%lld\n", (long long)(opt_hyor(lookup(INT64_C(3)), INT64_C(-9))));
         puts((ok_qu(safe_hydiv(INT64_C(10), INT64_C(2)))) ? "true" : "false");
         printf("%lld\n", (long long)(res_hypayload(safe_hydiv(INT64_C(10), INT64_C(2)))));
         puts((err_qu(safe_hydiv(INT64_C(10), INT64_C(0)))) ? "true" : "false");
         printf("%lld\n", (long long)(res_hypayload(safe_hydiv(INT64_C(10), INT64_C(0)))));
-        int64_t __t42;
-        __t42 = INT64_C(0);
-        return (int)__t42;
+        int64_t __t44;
+        __t44 = INT64_C(0);
+        return (int)__t44;
+}
+
+static bool some___spec__bool_Option__int(Option__int o) {
+        return (o).is_some;
 }
 
 

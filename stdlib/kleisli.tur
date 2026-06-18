@@ -79,7 +79,11 @@
                    ;; M2b: polymorphic `(none)` returns `(Option A)`; this
                    ;; closure threads the carrier int64 ABI (k-apply-raw
                    ;; returns int).  Use the carrier-nil constant directly.
-                   (if (some? r) (k-apply-raw gc (unwrap-or r 0)) 0)))))))
+                   ;; some?/unwrap-or: some? takes by-value (Option A); ascribe
+                   ;; the carrier int from k-apply-raw to bridge into it.  The
+                   ;; Arrow type-erases the element, so (Option int) is safe
+                   ;; (layout is uniform regardless of A).
+                   (if (some? (:: r (Option int))) (k-apply-raw gc (unwrap-or r 0)) 0)))))))
 ;;; ArrowZero [Kleisli] -- the honest zero arrow over Option: ignore the input
 ;;; and fail with `none`. (->) has no such inhabitant; Kleisli does.
 

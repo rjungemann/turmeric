@@ -3919,8 +3919,7 @@ static int64_t none() {
 }
 
 static bool some_qu(int64_t o) {
-        return tur_is_some(o);
-  
+        return ((o) ? ((Option *)(intptr_t)(o))->is_some : 0);
 }
 
 static int64_t unwrap_hyor(int64_t o, int64_t dflt) {

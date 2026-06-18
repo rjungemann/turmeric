@@ -60,12 +60,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some? [o : int]
-  #{}
+(defn some? [A] [o : (Option A)]
   : bool
-  ```c
-  return tur_is_some(o);
-  ```)
+  (.is-some o))
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:
