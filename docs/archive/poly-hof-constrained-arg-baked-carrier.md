@@ -1,6 +1,10 @@
 # Polymorphic HOF taking a constrained-poly-as-value bakes carrier ABI
 
-**Status:** OPEN 2026-06-18.
+**Status:** RESOLVED 2026-06-18 (fixed in the same session). See the
+"Resolution" section at the bottom for the landed fix; validated by
+`tests/fixtures/poly-hof-constrained-arg-spec/`.
+
+**Status (original):** OPEN 2026-06-18.
 **Severity:** Hard compile error in emitted C (clang `-Wint-conversion` /
 incompatible-pointer-types). Loud, not a silent miscompile -- the
 generated C does not build, so no runtime miscompile reaches the user.
@@ -126,3 +130,68 @@ mirroring the repro above; expected output:
 Plus a `grep` assertion in the emitted C for
 `apply_it__spec__int_Box` and `apply_it__spec__int_int64_t` (the
 specialized clones must actually be emitted, not just typed away).
+
+## Resolution
+
+Landed 2026-06-18. The root cause was *three* coupled gaps, all on the
+path that decides whether a function-typed parameter monomorphizes or is
+demoted to the `tur_poly_fn_t` carrier:
+
+1. **`fn_type_has_named_tyvar` did not recurse into `TY_FN`**
+   (`src/compiler/elab_fns.c`). A parameter `f : (fn [A] int)` carries its
+   named tyvar `A` *inside* a `TY_FN` annotation, but the carrier-eligibility
+   check only looked at `TY_TYVAR`/`TY_APP`/unions, so the nested `A` went
+   undetected and `carrier_ok` wrongly fired -- demoting `f` to the int64
+   carrier ABI (`tur_poly_fn_t`). The fix adds the `TY_FN` recursion
+   (mirroring `call_type_has_named_tyvar`), so a polymorphic fn-typed
+   parameter stays on the regular generic `TY_FN` path and monomorphizes
+   per instantiation. The comment at `elab_fns.c:1346-1350` already
+   documented this as the *intended* behavior; the predicate just failed to
+   detect the case.
+
+2. **Eta-expansion of the constrained-generic value argument did not fire
+   through the polymorphic-HOF layer** (`src/compiler/elab_call.c`).
+   `try_eta_expand_generic_fn_arg` only eta-expands when the parameter's fn
+   type is already concrete; for a poly HOF the parameter is `(fn [A] int)`
+   with `A` still abstract at the point the `count-it` argument is
+   processed. A look-ahead now resolves the parameter's tyvars from sibling
+   arguments that are exactly a bare tyvar (`a : A`) -- elaborating just
+   those siblings early (cached via `arg_done[]`) -- then instantiates the
+   parameter fn type so the eta look-ahead sees a concrete `(fn [Box] int)`
+   and specializes `count-it` to its `Box` instance. (`call_instantiate_type`
+   has no `TY_FN` case, so the fn-type instantiation is done locally.)
+
+3. **The ABI-spec body emitted the indirect `(f a)` call with the generic
+   carrier signature** (`src/compiler/emit_expr.c`). In the spec body the
+   argument `a : A` still carries its generic type (the int64 carrier), so
+   the fn-pointer cast read `(int64_t (*)(int64_t))` while the value was a
+   by-value `Box` -- a `-Wint-conversion` hard error. Both indirect-call
+   cast sites now resolve each argument through the active spec's
+   `arg_types[]` (via the existing `emit_var_spec_arg_type`), so the cast
+   signature and the carrier-bridge decision use the concrete monomorphized
+   type (`(int64_t (*)(Box))`).
+
+With all three, the repro lowers to the expected shape: `apply-it`
+monomorphizes to `apply_it__spec__..._Box(int64_t f, Box a)` whose body is
+`((int64_t (*)(Box))(intptr_t)f)(a)`, the `Box` call site passes an eta
+wrapper around `count_it__spec__..._Box` (`Size[Box]` -> 7), and the `int`
+call keeps the carrier base `apply_hyit` with `count_hyit` (`Size[int]` ->
+-1). The carrier base is retained alongside the specialized clone, exactly
+as this report's "Proposed fix direction" anticipated.
+
+Validated by `tests/fixtures/poly-hof-constrained-arg-spec/` (output
+`7` / `-1`; a wrong instance prints `-1` / `-1`). Full suite green
+(`bash tests/run.sh`: 1678 passed, 0 failed).
+
+### Known remaining gap (filed separately)
+
+A *reversed argument order* poly HOF whose tyvar is pinned to a
+**primitive** by a value argument appearing *before* the constrained-generic
+fn argument -- `(defn apply-it [A] [a : A f : (fn [A] int)] ...)` called as
+`(apply-it 42 count-it)` -- still fails to type-check (`expected
+(fn [int] int), got (fn [tyvar] int)`). The struct case in that order now
+works (eta fires for non-primitives); the primitive case does not (the
+eta gate requires a struct/ADT/app pin). This was already fully broken
+before this fix (it failed earlier, on the carrier coercion); it is a
+pre-existing, orthogonal ordering limitation. See
+`docs/reported/poly-hof-reversed-order-primitive-pin.md`.

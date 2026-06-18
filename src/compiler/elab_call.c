@@ -105,6 +105,39 @@ static bool call_type_has_named_tyvar(const Type *t) {
     }
 }
 
+/* True when `t` mentions a named type variable equal to `name` anywhere in its
+ * structure.  Used by the poly-HOF eta-expansion look-ahead to decide whether a
+ * sibling bare-tyvar parameter pins a tyvar appearing in a function-typed
+ * parameter (e.g. `f : (fn [A] int)` mentions "A", pinned by `a : A`). */
+static bool type_mentions_tyvar_name(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return type_mentions_tyvar_name(t->as.app.fn, name) ||
+                   type_mentions_tyvar_name(t->as.app.arg, name);
+        case TY_FN:
+            if (type_mentions_tyvar_name(t->as.fn.result_full_type, name)) return true;
+            if (t->as.fn.arg_full_types) {
+                for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+                    if (type_mentions_tyvar_name(t->as.fn.arg_full_types[i], name)) return true;
+                }
+            }
+            return false;
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++)
+                if (type_mentions_tyvar_name(t->as.union_.members[i], name)) return true;
+            return false;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++)
+                if (type_mentions_tyvar_name(t->as.intersection_.members[i], name)) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
 static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings,
                                    const char *name, uint8_t *out_idx) {
     if (!name) return false;
@@ -2810,6 +2843,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
 
     /* Elaborate arguments */
     Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    /* poly-hof-constrained-arg-baked-carrier: the eta-expansion look-ahead may
+     * elaborate a *sibling* concrete arg early (to pin a tyvar appearing in a
+     * function-typed parameter); `arg_done[i]` records that so the main loop
+     * does not re-elaborate it.  Zero-initialize both arrays. */
+    for (uint32_t ai = 0; ai < n_args; ai++) args[ai] = NULL;
+    bool *arg_done = (bool *)arena_alloc(e->arena, (n_args ? n_args : 1) * sizeof(bool));
+    for (uint32_t ai = 0; ai < n_args; ai++) arg_done[ai] = false;
     CallTypeBinding type_bindings[16];
     uint8_t n_type_bindings = 0;
     for (uint8_t bi = 0; bi < 16; bi++) type_bindings[bi].name = NULL;
@@ -2835,12 +2875,86 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 fn_type.as.fn.arg_full_types[idx]->kind == TY_FN)
                 exp_param_fn = fn_type.as.fn.arg_full_types[idx];
         }
+        /* poly-hof-constrained-arg-baked-carrier: when the function-typed
+         * parameter is itself polymorphic (`f : (fn [A] int)` on a HOF
+         * quantified over A) the param type is still abstract here, so the
+         * eta-expansion below would not fire and the bare constrained-generic
+         * arg (`count-it`) would be coerced to its int64-carrier representative
+         * instance -- baking the wrong typeclass dispatch into the per-call-site
+         * wrapper.  Resolve the param's tyvars from *sibling* arguments that are
+         * exactly a bare tyvar (`a : A`): elaborate just those siblings early
+         * (cached via arg_done) to learn the concrete type, then instantiate the
+         * param fn type so the eta look-ahead sees a concrete `(fn [Box] int)`
+         * and specializes `count-it` per instantiation.  Gated to a bare global
+         * fn symbol arg whose param fn type carries named tyvars, so ordinary
+         * calls are untouched. */
+        const Type *eta_param_fn = exp_param_fn;
+        Type eta_param_fn_inst;
+        if (exp_param_fn && call_type_has_named_tyvar(exp_param_fn) &&
+            arg_form->tag == F_SYM && fn_type.kind == TY_FN &&
+            fn_type.as.fn.arg_full_types) {
+            CallTypeBinding lab[16];
+            uint8_t n_lab = 0;
+            for (uint8_t bi = 0; bi < 16; bi++) lab[bi].name = NULL;
+            for (uint32_t j = 0; j < n_args; j++) {
+                if (j == i) continue;
+                uint32_t pj = fn_binding->closure_fn_binding ? j + 1 : j;
+                if (pj >= fn_type.as.fn.arity) continue;
+                const Type *pjt = fn_type.as.fn.arg_full_types[pj];
+                if (!pjt || pjt->kind != TY_TYVAR || !pjt->as.tyvar_.name) continue;
+                if (!type_mentions_tyvar_name(exp_param_fn, pjt->as.tyvar_.name)) continue;
+                uint8_t exist = 0;
+                if (call_find_type_binding(lab, n_lab, pjt->as.tyvar_.name, &exist)) continue;
+                /* Elaborate the sibling arg once and cache it for the main loop. */
+                if (!arg_done[j]) {
+                    args[j] = elab_form(e, call->as.list.items[1 + j]);
+                    arg_done[j] = true;
+                }
+                if (args[j] && args[j]->type.kind != TY_TYVAR && n_lab < 16) {
+                    lab[n_lab].name = pjt->as.tyvar_.name;
+                    lab[n_lab].type = args[j]->type;
+                    n_lab++;
+                }
+            }
+            if (n_lab > 0) {
+                /* Instantiate the function-typed parameter's tyvars locally
+                 * (call_instantiate_type has no TY_FN case and would return it
+                 * unchanged).  Only the full-type arrays the eta look-ahead
+                 * reads need substituting. */
+                eta_param_fn_inst = *exp_param_fn;
+                uint8_t ar = exp_param_fn->as.fn.arity;
+                if (exp_param_fn->as.fn.arg_full_types) {
+                    Type **afts = (Type **)arena_alloc(e->arena,
+                        (ar ? ar : 1) * sizeof(Type *));
+                    for (uint8_t k = 0; k < ar; k++) {
+                        if (exp_param_fn->as.fn.arg_full_types[k]) {
+                            afts[k] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *afts[k] = call_instantiate_type(e,
+                                exp_param_fn->as.fn.arg_full_types[k], lab, n_lab);
+                        } else {
+                            afts[k] = NULL;
+                        }
+                    }
+                    eta_param_fn_inst.as.fn.arg_full_types = afts;
+                }
+                if (exp_param_fn->as.fn.result_full_type) {
+                    Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *rft = call_instantiate_type(e,
+                        exp_param_fn->as.fn.result_full_type, lab, n_lab);
+                    eta_param_fn_inst.as.fn.result_full_type = rft;
+                }
+                if (!call_type_has_named_tyvar(&eta_param_fn_inst))
+                    eta_param_fn = &eta_param_fn_inst;
+            }
+        }
         /* Eta-expand a bare constrained-generic fn arg so its body dispatches
          * the real instance (see try_eta_expand_generic_fn_arg). */
-        Expr *eta = exp_param_fn
-            ? try_eta_expand_generic_fn_arg(e, arg_form, exp_param_fn) : NULL;
+        Expr *eta = (eta_param_fn && !arg_done[i])
+            ? try_eta_expand_generic_fn_arg(e, arg_form, eta_param_fn) : NULL;
         if (eta) {
             args[i] = eta;
+        } else if (arg_done[i]) {
+            /* Already elaborated by a prior sibling look-ahead. */
         } else {
             /* Bidirectional inference: push the param's concrete fn type while
              * elaborating a lambda arg so its un-annotated params type from
@@ -2856,6 +2970,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             args[i] = elab_form(e, call->as.list.items[1 + i]);
             if (pushed_expected) e->expected_type = NULL;
         }
+        arg_done[i] = true;
         if (!args[i]) return NULL;
         TypeKind expected_arg_kind = TY_INT;
         if (fn_type.kind == TY_FN) {

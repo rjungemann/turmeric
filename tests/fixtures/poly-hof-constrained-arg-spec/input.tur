@@ -1,0 +1,27 @@
+;; poly-hof-constrained-arg-baked-carrier: a polymorphic higher-order function
+;; `apply-it [A]` taking `f : (fn [A] int)` and `a : A` must monomorphize per
+;; concrete A at each call site, and the constrained-generic `count-it` passed
+;; as the `f` value must resolve to the matching instance for that A.
+;;
+;; Before the fix, `apply-it` was emitted once on the int64 carrier ABI
+;; (`apply_hyit(tur_poly_fn_t, int64_t)`) and `count-it` was baked to its int
+;; representative instance -- so the Box call returned -1 (int instance) instead
+;; of 7 (Box instance), or failed to lower at all (incompatible C types).
+;;
+;; The correct dispatch returns 7 (Size[Box]) for the Box call and -1
+;; (Size[int]) for the int call.  A wrong instance would print -1 / -1.
+
+(defstruct Box [n : int])
+(defclass Size [a] (size [x] : int))
+(definstance Size [int] (size [x] -1))
+(definstance Size [Box] (size [x : Box] 7))
+
+(defn count-it [^Size A] [x : A] : int (size x))
+
+;; HOF is itself polymorphic over A.
+(defn apply-it [A] [f : (fn [A] int) a : A] : int (f a))
+
+(defn main [] : int
+  (println (apply-it count-it (make-struct Box 0)))   ; want 7  (Size[Box])
+  (println (apply-it count-it 42))                    ; want -1 (Size[int])
+  0)

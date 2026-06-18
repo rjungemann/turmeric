@@ -275,6 +275,21 @@ static bool fn_type_has_named_tyvar(const Type *t) {
         case TY_APP:
             return fn_type_has_named_tyvar(t->as.app.fn) ||
                    fn_type_has_named_tyvar(t->as.app.arg);
+        case TY_FN:
+            /* poly-hof-constrained-arg-baked-carrier: a function-typed parameter
+             * whose signature carries a named tyvar (e.g. `f : (fn [A] int)` on
+             * a HOF quantified over A) must stay on the regular generic TY_FN
+             * path so it monomorphizes per instantiation -- demoting it to the
+             * tur_poly_fn_t carrier bakes the int64-carrier ABI and miscompiles
+             * a by-value struct argument.  Without this TY_FN recursion the
+             * nested tyvar went undetected and `carrier_ok` wrongly fired. */
+            if (fn_type_has_named_tyvar(t->as.fn.result_full_type)) return true;
+            if (t->as.fn.arg_full_types) {
+                for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+                    if (fn_type_has_named_tyvar(t->as.fn.arg_full_types[i])) return true;
+                }
+            }
+            return false;
         case TY_UNION:
             for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
                 if (fn_type_has_named_tyvar(t->as.union_.members[i])) return true;
