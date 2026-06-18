@@ -359,6 +359,29 @@ per Phase 2's design doc.
 
 ### 3.0 -- THE core prerequisite (grounded 2026-06-18): thread the element type into HKT instance methods
 
+> **Reliability caveat (added 2026-06-18, end of session).** The
+> layer-by-layer "precise root" notes below (the "fifth layer" / "step (a)"
+> findings, and the per-commit refinements in the history) were produced by an
+> iterative in-session deep-dive that **partially contradicted itself** by the
+> end. In particular: the claim that an HKT instance constructor isn't a
+> substitutable `Type` was later **corrected** (it is -- `elab_definstance`
+> resolves it at `elab_typeclasses.c:1634-1657`); and the final "step (a)"
+> claim that `type_expr_from_form` fails to resolve an application **head**
+> class-param to `TY_TYVAR` is **probably wrong** -- the application path
+> (`elab_types.c:1730`) recurses into the head, and the bare-type-param branch
+> (`elab_types.c:421-446`) already returns a named `TY_TYVAR`, so `(g b)` likely
+> parses to `TY_APP(TY_TYVAR g, TY_TYVAR b)` already. The `(type-app ? ?)` the
+> probe showed was therefore more likely a bug in the (reverted) flag-gated
+> elaborator edits than a real parser gap. **Do not treat the layer
+> breakdown below as authoritative;** re-derive it fresh with a debugger.
+> What IS reliable and held across every attempt: (1) the **emit
+> monomorphization** (per-`(f, A)` by-value instance-method clone) is the
+> definitive wall -- without it the HKT value path silently miscompiles (`0`
+> for `42`); (2) it cannot land without the by-value instance-body rewrite
+> (Phase 4.2) and the class-signature change (`: int` -> `: (f b)`); (3) the
+> change is therefore atomic across elaborator + emit + the ~30 instance
+> bodies, and a partial landing violates the no-silent-miscompile rule.
+
 Empirically pinned by three probes, all bottoming out on the **same gap**:
 
 1. **Kleisli `comp`** -- `(defclass Category [arr])` is kind-`*`, so `arr =
