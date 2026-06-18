@@ -496,6 +496,28 @@ are now both located and characterized.
       `option-map` call gets, with the element `b` resolved from the call args.
       This is subtle (it interacts with Option's default carrier ABI) and is the
       irreducible core of M7's emit half.
+
+      **Irreducible core, fully traced (2026-06-18):** the by-value spec
+      machinery has a circular dependency for HKT instance methods:
+        - The `needs_byvalue_spec` block (`emit_module.c:1559+`) is gated on
+          `body_qualifies_for_carrier_skip`, which requires the body to be
+          `EX_MAKE_STRUCT` (a `#{Construct}` template) or marker-less inline-C.
+          The HKT instance method body is `(if (some? c) (some ...) (none))` --
+          an `EX_IF` -- so this block is SKIPPED; it never even considers a
+          by-value spec for the method.
+        - `option-map` (same `EX_IF` body shape) gets its by-value emit instead
+          via `construct_recovered_byvalue` -- the `(some ...)` construct is
+          recovered by-value from an ENCLOSING spec whose result is already
+          by-value. For a dispatch-reached HKT instance method there is no such
+          enclosing by-value spec, because interning one requires the call's
+          `(Option int)` result to register as a by-value `abi_change` -- and
+          `(Option int)` is carrier-ABI by default, so it does not.
+      Breaking the circle is the M7 emit task: make a dispatch-reached HKT
+      instance method whose body constructs `(some ...)`/`(none)` over a
+      by-value-resolvable element intern a per-`(f, A)` by-value spec (resolving
+      the element from the call args) so `construct_recovered_byvalue` then
+      fires inside it. This is new emit machinery deeply entangled with the
+      carrier-ABI default -- the genuine multi-session core of M7.
 - [ ] Update `__inst_<Class>_<method>` symbol naming to disambiguate
       per-`(f, A)` clones.
 - [ ] Per-instance test fixture under `tests/fixtures/hkt-<class>-<f>/`
