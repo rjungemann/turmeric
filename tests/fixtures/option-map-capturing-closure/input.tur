@@ -11,9 +11,9 @@
 (defn main [] : int
   (let [scale4 (make-scale 4)]
     ;; option-map with a capturing closure over some(5) -> some(20)
-    (println (unwrap-or (option-map (some 5) scale4) 0))     ;; 20
+    (println (unwrap-or-carrier (option-map (some 5) scale4) 0))     ;; 20
     ;; option-map with a captureless lambda still works -> some(15)
-    (println (unwrap-or (option-map (some 5) (fn [x : int] : int (* x 3))) 0))  ;; 15
+    (println (unwrap-or-carrier (option-map (some 5) (fn [x : int] : int (* x 3))) 0))  ;; 15
     ;; option-map over none stays none
-    (println (unwrap-or (option-map (none) scale4) 99)))     ;; 99
+    (println (unwrap-or-carrier (option-map (none) scale4) 99)))     ;; 99
   0)

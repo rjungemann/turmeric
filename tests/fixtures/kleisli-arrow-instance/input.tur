@@ -21,14 +21,14 @@
   ;; some? takes by-value (Option A); bridge from k-apply's carrier int via (:: r (Option int)).
   (let [i (:: (ident) :Kleisli)]
     (println (some? (:: (k-apply i 41) (Option int))))   ;; true
-    (println (unwrap-or (k-apply i 41) 0)))              ;; 41
+    (println (unwrap-or-carrier (k-apply i 41) 0)))              ;; 41
 
   ;; Kleisli composition over some: (100/5)=20 then +1 = 21.  `fg` is reused:
   ;; applied to 5 (some path) and 0 (none short-circuit).
   (let [f  (kleisli safe-recip)
         g  (kleisli add1m)
         fg (:: (comp f g) :Kleisli)]
-    (println (unwrap-or (k-apply fg 5) -7))                  ;; 21
+    (println (unwrap-or-carrier (k-apply fg 5) -7))                  ;; 21
     (println (some? (:: (k-apply fg 0) (Option int)))))      ;; false (none short-circuits)
 
   ;; honest zero arrow: ignore input, fail with none

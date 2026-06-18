@@ -2,12 +2,16 @@
 ;; docs/archive/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md.
 ;;
 ;; After PR #421 retyped `option-map` to a pure-Turmeric by-value body,
-;; passing its `Option__int` result into the carrier-`int` `unwrap-or` slot
+;; passing its `Option__int` result into the carrier-`int` consumer slot
 ;; failed at cc time when the producer was wrapped in a nested form (let, do,
 ;; if-arm) inside the consumer's arg position -- the emit-side spill bridge
 ;; only matched a direct EX_CALL producer, so a let/do/if wrapper bypassed
 ;; the `&temp + (int64_t)(intptr_t)` cast. The fix recurses through the
 ;; wrapper's tail at the carrier-int arg-slot spill check.
+;;
+;; The carrier-`int` consumer is `unwrap-or-carrier` (the Track A step-1.3 shim;
+;; `unwrap-or` itself is now by-value `(Option A)`). The spill-bridge subject is
+;; unchanged: a by-value `Option__int` producer feeding a carrier-int arg slot.
 ;;
 ;; Direct-producer shapes (which already worked) are bundled so any
 ;; regression that re-breaks one of those without breaking the let-inside-
@@ -15,15 +19,15 @@
 
 (defn main [] : int
   ;; Producer wrapped in `let` inside the unwrap-or arg slot -- the bug.
-  (println (unwrap-or (let [o (some 5)] (option-map o (fn [x] (* x 3)))) 99)) ; 15
+  (println (unwrap-or-carrier (let [o (some 5)] (option-map o (fn [x] (* x 3)))) 99)) ; 15
   ;; Producer wrapped in `do`.
-  (println (unwrap-or (do (option-map (some 4) (fn [x] (* x 2)))) 99))        ; 8
+  (println (unwrap-or-carrier (do (option-map (some 4) (fn [x] (* x 2)))) 99))        ; 8
   ;; Producer wrapped in an `if` arm (both arms by-value to match reps).
-  (println (unwrap-or (if true
+  (println (unwrap-or-carrier (if true
                         (option-map (some 7) (fn [x] (* x 3)))
                         (option-map (some 0) (fn [x] x)))
                       99))                                                    ; 21
   ;; Direct producer (always worked, kept for coverage).
   (let [o (some 6)]
-    (println (unwrap-or (option-map o (fn [x] (* x 5))) 0)))                  ; 30
+    (println (unwrap-or-carrier (option-map o (fn [x] (* x 5))) 0)))                  ; 30
   0)

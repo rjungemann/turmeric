@@ -39,10 +39,12 @@ spec-selection fix). It does **not** hold for **1.3 + 1.4**: 1.4 (kleisli) is
 root-caused as gated on the **HKT class dispatch** work (Phases 2-3) -- the
 `Category` class is kind-`*`, so the arrow's element types are phantom and `B`
 cannot be witnessed in `comp` without an HKT arrow category. 1.3 (`unwrap-or`)
-has exactly one stdlib caller (the blocked kleisli `comp`), so it is gated
-behind 1.4. 1.5 (bucket C exit criterion) cannot close until 1.3/1.4 do.
-Net dependency order is now: 1.1 ✓, 1.2 ✓, then Phases 2-3 (HKT), then
-1.4 -> 1.3 -> 1.5. See per-item notes below.
+**step 1 is LANDED** (by-value `unwrap-or` + `unwrap-or-carrier` shim,
+regression-free); its remaining producer migration (step 2) is gated behind
+1.4 (the sole remaining stdlib shim caller is the kleisli `comp`). 1.5 (bucket
+C exit criterion) cannot close until 1.4 + 1.3-step-2 do.
+Net dependency order is now: 1.1 ✓, 1.2 ✓, 1.3-step-1 ✓, then Phases 2-3 (HKT),
+then 1.4 -> 1.3-step-2 -> 1.5. See per-item notes below.
 
 ---
 
@@ -145,11 +147,20 @@ Per
       kleisli `comp` body, which step 5 (1.4) *removes*. The remaining consumers
       are test fixtures that intentionally pass a carrier-int Option
       (`option-consumers-byvalue-arg`, `zipper-basic`, `kleisli-arrow-instance`).
-- [ ] **GATED behind 1.4 + fixture-producer retypes.** Retyping `unwrap-or` to
-      by-value makes `(unwrap-or <carrier-int> 0)` a type error at every fixture
-      site whose producer is still a carrier-int Option; those cannot all flip
-      to a shim without changing what they test. The stdlib cascade is empty
-      once 1.4 lands (which is itself blocked -- see above). Finding recorded in
+- [x] **Step 1 LANDED (2026-06-18).** Retyped `unwrap-or` to by-value
+      `[A] [o : (Option A) dflt : A] : A` (pure-Turmeric `(if (.is-some o)
+      (.value o) dflt)`) and added the `unwrap-or-carrier` inline-C shim for
+      carrier-context callers. Most call sites are by-value producers
+      (`some`/`none`/`option-map`) and now dispatch by-value (reducing carrier
+      crossings -- the goal); the genuinely carrier-context sites (zipper's
+      `zipper-move-right` result, kleisli's `k-apply` result, and the deliberate
+      `option-map-byvalue-result-into-carrier-consumer-let-inside-arg` spill-bridge
+      fixture) flip to `unwrap-or-carrier`, preserving their coverage. Suite
+      green (1682; only the pre-existing stale ECS spices fixture fails); 85
+      stdlib snapshots regenerated. Per-module producer migration (step 2) and
+      shim retirement (step 3) remain, gated on by-value Option producers (the
+      sole remaining stdlib `unwrap-or-carrier` caller is kleisli, M7-gated).
+      Finding recorded in
       [`unwrap-or-byvalue-cascade.md`](../reported/unwrap-or-byvalue-cascade.md).
 - [ ] Retype `unwrap-or` in `stdlib/option.tur` to
       `[A] [o : (Option A) dflt : A] : A` with a pure-Turmeric body:
