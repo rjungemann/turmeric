@@ -1965,6 +1965,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 bool *arg_cast = (bool *)malloc(e->as.call_.n_args * sizeof(bool));
                 if (!arg_cast) { fprintf(stderr, "tur: oom\n"); abort(); }
+                /* poly-hof-constrained-arg-baked-carrier: in an ABI spec body the
+                 * argument of an indirect fn-pointer call (`(f a)` where `a : A`)
+                 * carries its GENERIC type (the int64 carrier for A), but the spec
+                 * has monomorphized it to a concrete by-value type (e.g. Box).
+                 * Resolve each arg through the active spec's arg_types[] so both the
+                 * carrier-bridge decision and the cast signature use the concrete
+                 * type -- otherwise the cast says `(int64_t)` while the value is a
+                 * `Box`, a -Wint-conversion hard error. */
+                Type *resolved_arg_ty = (Type *)malloc(e->as.call_.n_args * sizeof(Type));
+                if (!resolved_arg_ty && e->as.call_.n_args) { fprintf(stderr, "tur: oom\n"); abort(); }
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    Type rt = e->as.call_.args[i]->type;
+                    Type spec_rt;
+                    if (emit_var_spec_arg_type(ctx, e->as.call_.args[i], &spec_rt))
+                        rt = spec_rt;
+                    resolved_arg_ty[i] = rt;
+                }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     char *raw = emit_value(ctx, body, e->as.call_.args[i]);
                     /* Apply same function-ptr → int64_t cast as the direct-call path:
@@ -1986,7 +2003,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * int64_t (arg_cast stays set) rather than the concrete
                      * struct typedef. */
                     bool needs_carrier_bridge = !needs_fn_cast && ctx &&
-                        type_uses_carrier_in_dispatch(e->as.call_.args[i]->type);
+                        type_uses_carrier_in_dispatch(resolved_arg_ty[i]);
                     arg_cast[i] = needs_fn_cast || needs_carrier_bridge;
                     if (needs_fn_cast) {
                         Buf cast; buf_init(&cast);
@@ -2025,7 +2042,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             if (arg_cast[i]) {
                                 buf_puts(&out, "int64_t");
                             } else {
-                                buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                                buf_puts(&out, type_c_name(resolved_arg_ty[i]));
                             }
                         }
                     }
@@ -2042,10 +2059,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_free(&out);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
+                free(resolved_arg_ty);
                 free(fn_ptr_val);
                 return result;
             }
-            
+
             /* Phase HRT1: poly call through rank-2 fn param: emit fn_name.fn(fn_name.env, arg0, ...) */
             if (e->as.call_.is_poly_call) {
                 char *fn_name = emit_call_name(ctx, e, fn_binding);
@@ -2506,7 +2524,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&out, "((%s (*)(", ret_c);
                     for (uint32_t i = 0; i < n; i++) {
                         if (i > 0) buf_puts(&out, ", ");
-                        buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                        /* poly-hof-constrained-arg-baked-carrier: resolve the arg
+                         * type through the active ABI spec so a monomorphized
+                         * by-value arg (`a : A` -> Box) types the cast signature
+                         * concretely instead of as the int64 carrier. */
+                        Type ait = e->as.call_.args[i]->type;
+                        Type aspec_t;
+                        if (emit_var_spec_arg_type(ctx, e->as.call_.args[i], &aspec_t))
+                            ait = aspec_t;
+                        buf_puts(&out, type_c_name(ait));
                     }
                     buf_printf(&out, "))(intptr_t)%s)(", fn_ptr);
                     for (uint32_t i = 0; i < n; i++) {
