@@ -311,12 +311,65 @@ cannot rewrite an HKT instance body to a by-value pure-Turmeric form (Phase
 by-value (Phase 3) until the bodies are by-value. Both depend on this one
 type-system change.
 
-- [ ] **Elaborator change (the real M7 core):** an HKT class method must bind
-      the element parameter(s) of its `[^f]` / `[^^f]` type constructor and
-      give each method-body parameter the *applied* type (`container : (f A)`,
-      i.e. `(Option A)`), with `A` a fresh method-level tyvar that
-      monomorphizes per call. Today the method body sees the bare head type
-      (`Option`) with the element erased. Precise mechanism traced 2026-06-18:
+**Elaborator path PROTOTYPED end-to-end + emit gap pinpointed (2026-06-18).**
+A standalone probe (custom `(defclass MyFunctor [^g] (gmap [container : (g a)
+f : (fn [a] b)] : (g b)))` + `definstance MyFunctor [Option]` with a
+pure-Turmeric by-value body `(if (some? container) (some (f (.value container)))
+(none))`) drove the full implementation. Findings (the prototype is **reverted**
+-- see "Why reverted" below -- but every step was validated):
+
+  - The class-decl parser **already accepts** HKT-applied method signatures
+    `(g a)` / `(g b)` -- no parser change needed.
+  - The instance body elaborates with `container : (g a)` and works by-value
+    (some?/.value/`(some ...)`/`(none)` all type-check).
+  - **The elaborator can be made to resolve the result type end-to-end with NO
+    ascription.** Three coordinated changes did it (all prototyped, working):
+    1. `tc_subst_class_params` (recurse into `TY_APP`) at the instance-return
+       substitution site -- `(g b)` -> `(Option b)`.
+    2. Carry a `TY_APP` return through `result_full_type` (the existing code
+       set it only for `TY_FN` / ground struct/ADT; added a `TY_APP` branch at
+       `elab_typeclasses.c:2974`).
+    3. At the call site (`elab_method_call`, `elab_typeclasses.c:4517`) handle a
+       `TY_APP` `rft` by collecting element-tyvar bindings (unify the method's
+       declared param types `(g a)` / `(fn [a] b)` against the actual arg types
+       `(Option int)` / `(fn [int] int)`) and substituting into the result so
+       `(g b)` -> `(Option int)`. With this, `(unwrap (gmap (some 21) dbl))`
+       typechecks with no ascription.
+
+**Why reverted (the two reasons it can't land in isolation):**
+  1. **Emit-side by-value HKT dispatch is missing (Phase 3.2/3.3).** With the
+     type resolved to by-value `(Option int)`, the probe *compiles* but prints
+     **0, not 42**: the instance method `__inst_MyFunctor_gmap_Option` still
+     emits the int64 carrier (`malloc(int64)`), while the now-by-value consumer
+     (`unwrap`) dereferences it as `Option*` -- a carrier-vs-by-value mismatch
+     (same family as the result-map spec-leak fixed in 1.2, but at the HKT
+     method boundary). The instance method must emit a by-value `(Option b)`
+     return per `(f, A)` -- that is Phase 3.2 and it does not yet exist.
+  2. **It regresses 4 existing parameterized-result typeclass fixtures.** The
+     elaborator changes are NOT inert: `decode-bool-carrier-instance-ascription`,
+     `instance-method-return-carrier-bridge`,
+     `typeclass-method-parameterized-result-decode`, and
+     `typeclass-return-dispatch-result-wrapped` all `build failed` with the
+     prototype, because existing decode / return-dispatch methods share the
+     changed `result_full_type` / call-site paths. Landing 3.0 requires
+     reconciling those simultaneously.
+
+So Phase 3 is confirmed as the "largest single phase": the type-threading is
+*implementable* (prototyped + validated above), but landing it is a coordinated
+change across (a) the elaborator (the 3 steps above), (b) the emit-side
+by-value HKT dispatch (3.2/3.3), and (c) reconciling the 4 existing
+parameterized-result fixtures -- a multi-session effort, not a single safe
+increment. The prototype lives in the session transcript; re-create from the 3
+steps above.
+
+After the elaborator + emit land, the original plan item below is the follow-on:
+- [ ] An HKT class method must bind the element parameter(s) of its `[^f]` /
+      `[^^f]` type constructor and give each method-body parameter the *applied*
+      type (`container : (f A)`), with `A` a fresh method-level tyvar that
+      monomorphizes per call -- now mostly proven above; the remaining work is
+      the call-site inference + migrating the 9 stdlib HKT classes' decls and
+      30 instance bodies to the by-value form (each a small rewrite like the
+      probe's `gmap`). Precise mechanism traced 2026-06-18:
         - `elab_typeclasses.c` (~line 674) types instance-method params with a
           hard `param_types[actual_p] = TYPE_INT;` under the comment "Default to
           int for now -- type inference for method params deferred". That carrier
