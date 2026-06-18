@@ -1614,6 +1614,33 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
     return t;
 }
 
+/* M7 HKT layer-4 (flag-gated): is this instance-method body genuinely
+ * by-value-constructible?  The emit-side per-(f, A) by-value spec only works
+ * when the method body constructs its `(f b)` result IN-BODY via `#{Construct}`
+ * calls (`some`/`none`/`ok`/...) -- so its inner constructs recover by value.
+ * A body that DELEGATES to a carrier helper (e.g. `Bifunctor [Result]`'s
+ * `(result-bimap container ...)`, where `result-bimap` takes a `:int` carrier)
+ * cannot, and must stay on the uniform-carrier dispatch until Phase 4.2 rewrites
+ * the helper.  Recurse through if/do/let to the tail position. */
+static bool m7_body_constructs_byvalue(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_IF:
+            return m7_body_constructs_byvalue(e->as.if_.then_) &&
+                   m7_body_constructs_byvalue(e->as.if_.else_or_null);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   m7_body_constructs_byvalue(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+            return m7_body_constructs_byvalue(e->as.let_.body);
+        case EX_CALL:
+            return e->as.call_.fn_binding &&
+                   e->as.call_.fn_binding->is_construct_template;
+        default:
+            return false;
+    }
+}
+
 /* M7 HKT layers 1+3 (flag-gated): unify a method's DECLARED parameter type
  * (carrying element tyvars, e.g. `(g a)` or `(fn [a] b)`) against the ACTUAL
  * call-site argument type, recording each tyvar -> concrete-type binding.  The
@@ -4742,6 +4769,12 @@ resolved_user_fallback:;
      * the parse fix + layer-0 head substitution), unify the declared parameter
      * types against the actual argument types to bind `b` (and any other element
      * tyvars), and substitute into rft so it grounds to `(Option int)`. */
+    /* M7 layer-4 prep: persist the element-tyvar bindings collected here so they
+     * can be attached as the dispatch call's abi_bindings below (the emit-side
+     * per-(f, A) by-value spec interning reads them). */
+    const Symbol *m7_bind_names[16];
+    Type m7_bind_types[16];
+    uint8_t m7_nb = 0;
     if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
         best_method->binding->type.kind == TY_FN &&
         best_method->binding->type.as.fn.result_full_type &&
@@ -4759,21 +4792,19 @@ resolved_user_fallback:;
              * CLASS method's param_types (parsed with the method-tyvar fix), not
              * on the instance binding (whose arg_full_types is NULL). */
             const Type *rft = best_method->binding->type.as.fn.result_full_type;
-            const Symbol *names[16];
-            Type types[16];
-            uint8_t nb = 0;
             if (cm->n_params >= 1)
                 m7_collect_tyvar_bindings(e, cm->param_types[0], obj_orig_type,
-                                          names, types, &nb, 16);
+                                          m7_bind_names, m7_bind_types, &m7_nb, 16);
             for (uint32_t i = 0; i < n_args; i++) {
                 uint8_t pidx = 1 + (uint8_t)i;
                 if (pidx < cm->n_params)
                     m7_collect_tyvar_bindings(e, cm->param_types[pidx],
-                                              args_orig_types[i], names, types, &nb, 16);
+                                              args_orig_types[i], m7_bind_names,
+                                              m7_bind_types, &m7_nb, 16);
             }
-            if (nb > 0)
-                result_type = elab_subst_class_tyvars(e->arena, *rft, names, nb,
-                                                      types, nb);
+            if (m7_nb > 0)
+                result_type = elab_subst_class_tyvars(e->arena, *rft, m7_bind_names,
+                                                      m7_nb, m7_bind_types, m7_nb);
         }
     }
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
@@ -4817,6 +4848,37 @@ resolved_user_fallback:;
             bindings[0].type = obj_orig_type;
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = 1;
+        }
+        /* M7 layer-4 prep (flag-gated): for an HKT class, attach the class var
+         * (`g -> Option`) plus the element tyvars collected by layers 1+3
+         * (`a -> int`, `b -> int`) as the dispatch call's abi_bindings, so
+         * emit_abi_register_call can mint a per-(f, A) by-value instance-method
+         * spec instead of falling through to the carrier-double-boxing path. */
+        /* M7 layer-4 (flag-gated): only by-value-expressible (pure-Turmeric)
+         * instance bodies can be monomorphized by value.  Carrier inline-C
+         * instance bodies (the current stdlib HKT instances) must stay on the
+         * uniform-carrier dispatch until Phase 4.2 rewrites them; attaching the
+         * element bindings to them would mint a by-value spec whose signature
+         * contradicts the carrier inline-C body.  Gate on the body kind. */
+        bool m7_body_byvalue_ok = best_method && best_method->body &&
+            best_method->body->kind != EX_INLINE_C &&
+            m7_body_constructs_byvalue(best_method->body);
+        if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
+            tc->n_type_params >= 1 && tc->type_params[0]) {
+            uint8_t total = (uint8_t)(1 + m7_nb);
+            if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, total * sizeof(AbiTypeBinding));
+            bindings[0].name = tc->type_params[0]->name;
+            bindings[0].type = obj_orig_type;
+            uint8_t bi = 1;
+            for (uint8_t k = 0; k < m7_nb && bi < total; k++) {
+                bindings[bi].name = m7_bind_names[k]->name;
+                bindings[bi].type = m7_bind_types[k];
+                bi++;
+            }
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = bi;
         }
     }
     return out;

@@ -359,6 +359,51 @@ per Phase 2's design doc.
 
 ### 3.0 -- THE core prerequisite: thread the element type into HKT instance methods
 
+> **UPDATE (2026-06-19, third session -- LAYER 4 EMIT LANDED, probe prints 42).**
+> The "sole remaining wall" (layer 4 = the Phase 3.2 emit-side per-`(f, A)`
+> by-value instance-method monomorphization) is now implemented, flag-gated
+> behind `TUR_M7_HKT` and **regression-free with the flag OFF** (suite
+> 1683/0; shipped codegen byte-identical). `TUR_M7_HKT=1 ./build/tur run
+> docs/upcoming/v2/m7-hkt-probe.tur` now exits **42** with no ascription
+> anywhere. What landed:
+>
+> - **Elab (`elab_typeclasses.c`, `elab_method_call`):** for an HKT class the
+>   dispatch call now attaches the class var (`g -> Option`) plus the
+>   layers-1+3 element tyvars (`a/b -> int`) as the call's `abi_bindings`, so
+>   `emit_abi_register_call` can mint a per-`(f, A)` spec. **Gated tightly:**
+>   only when the instance body is by-value-*constructible* --
+>   `m7_body_constructs_byvalue` requires the body's tail (through if/do/let) to
+>   be a `#{Construct}` call. Carrier inline-C bodies and bodies that delegate
+>   to a carrier helper (`Bifunctor [Result]` -> `result-bimap [container :
+>   int]`) are excluded and stay on the carrier ABI even under the flag.
+> - **Emit return type (`emit_fns.c` body+signature, `emit_module.c` forward
+>   decl):** a by-value HKT instance-method spec whose `result_type` is a
+>   concrete non-heap `TY_APP` (`Option__int`) emits the struct BY VALUE instead
+>   of the int64 carrier spill -- three sites kept in sync.
+> - **Emit construct recovery (`emit_module.c:1139` fall-through):** a 0-arg
+>   `#{Construct}` (`(none)`) inside an active by-value HKT instance-method spec
+>   now falls past the no-`abi_bindings` early-return so `construct_recovered_byvalue`
+>   interns `none__spec` (the 1-arg `(some ...)` already did via its element arg).
+> - **Dict base (`emit_module.c`):** the carrier base instance method is
+>   carrier-noted when its by-value spec is interned, so the (still carrier-ABI)
+>   dispatch dict keeps a valid reference for indirect dispatch.
+>
+> **Verified:** probe -> 42; flag-off suite 1683/0; all existing HKT fixtures
+> (`hkt-stdlib-*`, `schema-hkt-functor`, `hkt-typeclass-instance`) stay green
+> BOTH flag-off and flag-on; no flag-on regressions vs. parent across a
+> 154-fixture typeclass sweep (the 3 flag-on failures -- `hrt-rankn-hkt`,
+> `hrt-rankn-typeclass`, `instance-method-return-carrier-bridge` -- already
+> failed flag-on at the parent commit; the rank-N pair is a separate pre-existing
+> null-`Kind` deref tracked in
+> [`docs/reported/rankn-hkt-null-kind-deref-under-m7-flag.md`](../reported/rankn-hkt-null-kind-deref-under-m7-flag.md)).
+>
+> **What remains for flag-on-by-default = Phase 4.2:** the stdlib HKT instance
+> bodies that are still carrier inline-C or delegate to carrier helpers
+> (`fmap`/`bind`/`pure`/`ap`/`bimap` for Option/Result/Parser/Goal/Backtrack/
+> Schema). Each must be rewritten to an in-body by-value construct (the probe's
+> `gmap` is the template) before the gate admits it. The layer-4 machinery is
+> now in place and waiting for those rewrites.
+
 > **UPDATE (2026-06-18, second session -- elaborator threading LANDED INERT,
 > "step (a)" DISPROVEN).** The full elaborator type-threading is now implemented
 > and committed behind the existing default-OFF `TUR_M7_HKT` flag (suite green
@@ -735,7 +780,15 @@ are now both located and characterized.
       is **regression-free** (1682 pass; existing HKT fixtures incl. parser /
       typeclass-instance stay green -- the earlier unconditional-relax breakage
       is avoided). The remaining gap is below.
-- [ ] **Per-`(f, A)` by-value SPEC INTERNING -- the precise final piece.**
+- [x] **Per-`(f, A)` by-value SPEC INTERNING -- LANDED (2026-06-19, flag-gated).**
+      Implemented end-to-end; the probe now prints 42 under `TUR_M7_HKT=1`. See
+      the 2026-06-19 UPDATE at the top of Phase 3.0 for the exact sites. The
+      mechanism that finally interned the by-value spec was attaching the HKT
+      element-tyvar bindings to the dispatch call at elab (gated on a genuinely
+      by-value-constructible instance body), which lets the existing
+      `construct_recovered_byvalue` + by-value return-type emit fire. The
+      historical dead-end notes below are retained for context.
+- [ ] **(historical) Per-`(f, A)` by-value SPEC INTERNING -- the precise final piece.**
       Even with the elaborator + narrowed gate, the probe still prints `0`:
       the generated C shows `__inst_MyFunctor_gmap_Option` emitted **once** as
       `int64_t(int64_t,int64_t)` (carrier) with **no** `__spec` clone. Routing
