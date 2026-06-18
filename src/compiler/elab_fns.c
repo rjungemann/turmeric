@@ -2183,6 +2183,27 @@ Expr *elab_defn(Elab *e, const Form *call) {
             existing->type.as.fn.arg_fat[_ei] = params[_ei]->is_fat;
         }
         existing->type.as.fn.result_fat = result_fat;
+        /* LB1 (recursion): propagate the ^borrow param markers early too, so a
+         * *recursive* call inside the body that passes one of this function's
+         * own linear/affine parameters back into a ^borrow slot is recognised as
+         * a non-consuming read and rolls back the consumption the var-use path
+         * recorded (elab_call.c gates that rollback on arg_borrow[i]).  Without
+         * this, the self-call sees the stale pass-1 arg_borrow=false, leaves the
+         * argument marked consumed, and -- when the recursion sits in one arm of
+         * a branch -- the merge wrongly reports TUR-E0104 "consumed in one
+         * branch but not the other".  The remaining substructural/ownership
+         * markers are propagated alongside it so recursive self-calls see the
+         * complete discipline signature, mirroring the final fn_type assignment
+         * below. */
+        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+            existing->type.as.fn.arg_borrow[_ei]     = params[_ei]->is_borrow;
+            existing->type.as.fn.arg_linear[_ei]     = params[_ei]->is_linear;
+            existing->type.as.fn.arg_affine[_ei]     = params[_ei]->is_affine;
+            existing->type.as.fn.arg_relevant[_ei]   = params[_ei]->is_relevant;
+            existing->type.as.fn.arg_unique[_ei]     = params[_ei]->is_unique;
+            existing->type.as.fn.arg_unique_mut[_ei] = params[_ei]->is_unique &&
+                                                       params[_ei]->is_mut;
+        }
     }
 
     /* Push params into the inner scope (created earlier for kind-var bindings). */
