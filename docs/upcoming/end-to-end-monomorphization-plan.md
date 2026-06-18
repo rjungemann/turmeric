@@ -421,10 +421,37 @@ probes that established this are reverted (suite stays 1683/0).
 
 ### 3.1 -- Dict generation for HKT instances
 
-- [ ] Extend `emit_typeclasses.c` to emit HKT instance dicts per the
-      chosen ABI. The non-HKT dispatch (M4) stays as-is.
-- [ ] Update `__inst_<Class>_<method>` symbol naming if needed to
-      disambiguate per-`(f, A)` clones.
+**Exact emit gate located (2026-06-18):** the per-instantiation
+instance-method spec machinery the non-HKT M4 path uses **already exists** and
+is **deliberately gated off for HKT classes** at
+`src/compiler/emit_module.c:726-736`:
+
+```c
+if (fd && fd->owner_instance && fd->owner_instance->typeclass) {
+    TypeClass *tc = fd->owner_instance->typeclass;
+    bool is_hkt = /* any tc->type_param_kinds[i] != KIND_STAR */;
+    if (!is_hkt) spec->typeclass_inst = fd->owner_instance;  // <-- HKT excluded
+}
+```
+
+The comment there says verbatim: "HKT-class instance methods keep the uniform
+carrier ABI per Plan M6/M7 -- leave typeclass_inst NULL so the legacy dispatch
+path stays unchanged for them." So **enabling HKT by-value dispatch is exactly
+the M7 implementation** -- removing/relaxing this gate AND making the
+per-instantiation path handle the HKT element type (the elaborator work in 3.0
++ a per-`(f, A)` by-value spec for the instance method body). It is NOT a safe
+flag flip: routing HKT specs through the M4 path without the element-type
+handling would break all 30 instances. This gate + the 3.0 elaborator sites
+are the two ends of the atomic change.
+
+- [ ] Relax the `is_hkt` gate at `emit_module.c:736` so HKT instance methods
+      get a `typeclass_inst` (per-instantiation spec), coordinated with the 3.0
+      elaborator element-type threading.
+- [ ] Per-`(f, A)` by-value spec emission for the HKT instance method body
+      (so `gmap_Option__int` returns `Option__int` by value with `b` resolved,
+      instead of the double-boxing generic carrier the 3.0 probe hit).
+- [ ] Update `__inst_<Class>_<method>` symbol naming to disambiguate
+      per-`(f, A)` clones.
 - [ ] Per-instance test fixture under `tests/fixtures/hkt-<class>-<f>/`
       pinning the emitted dispatch C.
 
