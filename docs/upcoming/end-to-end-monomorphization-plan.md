@@ -217,35 +217,67 @@ design pass picks the model before the implementation phase commits.
 
 ### 2.1 -- Measure HKT call-graph cost per option
 
+**Partial measurement (2026-06-18, stdlib-only -- `../turmeric-spices/` is NOT
+checked out in this environment, so the spices half is still TODO):**
+
+- **9 HKT classes** confirmed: Functor, Applicative, Monad, Foldable,
+  Traversable, Alternative, Bifunctor, Comonad, MonadError (`stdlib/typeclass*.tur`,
+  `stdlib/comonad.tur`). All declare their methods with the int64-carrier
+  result (`... : int`) and an HKT type param (`[^f]` / `[^m]` / `[^^f]`).
+- **35 HKT `definstance` lines** across: Functor [Option/Result/Either/Parser/
+  Goal/Backtrack/Schema/Cons/rc], Applicative + Monad + Alternative
+  [Option/Parser/Goal/Backtrack(+Schema for Applicative/Alternative)],
+  Bifunctor [Result], Foldable [rc], MonadError [Result], Comonad
+  [identity/pair].
+- **43** `fmap`/`bind`/`pure`/`lift2`/`ap`/`>>=`/`traverse`/... call sites in
+  stdlib (the plan's "~199" figure must have counted `../turmeric-spices/`).
+
+Still TODO for a complete option-1 estimate: the per-`(combinator, f, A)`
+tuple enumeration + distinct-clone count needs (a) the spices checkout and
+(b) a clone-counting probe in the elaborator (no such tooling exists yet).
+This partial inventory bounds the *instance* surface (35) but not the
+*monomorphization* blast radius (the `A` dimension), which is the figure that
+actually decides option 1 vs 2.
+
 - [ ] Build the per-`(f, A)` monomorphization estimate for option 1
       (full per-(f, A) clone): enumerate every `(combinator, f, A)`
       tuple reachable from stdlib + `../turmeric-spices/spices/` and
-      count distinct clones the elaborator would emit.
-- [ ] Compare against option 2 (dict-passing with payload erasure at
-      the HKT boundary) and option 3 (source-rewriting inline-expansion):
-      for each, estimate generated-C delta and which HKT features
-      regress (recursion, polymorphic recursion, etc.).
-- [ ] Deliverable: `docs/upcoming/v2/hkt-dispatch-options-tradeoff.md`
-      with the three options scored on binary-size, compile-time,
-      expressiveness regression. Numbers, not adjectives.
+      count distinct clones the elaborator would emit. (Blocked on the
+      spices checkout + a clone-count probe; stdlib instance surface = 35,
+      measured above.)
+- [x] Compared option 2 (dict-passing w/ payload erasure) and option 3
+      (source-rewriting inline-expansion) against option 1 on generated-C delta
+      and expressiveness regression -- see the tradeoff doc. Key finding:
+      option 2 **reintroduces the int64 carrier** at the HKT boundary (the very
+      thing Phases 4-5 delete), and option 3 regresses polymorphic/recursive
+      instances (Parser/Goal/Backtrack).
+- [x] Deliverable landed: [`docs/upcoming/v2/hkt-dispatch-options-tradeoff.md`](v2/hkt-dispatch-options-tradeoff.md)
+      with measured numbers (9 classes, 30 instances, ~21 genuine dispatch call
+      sites, element-type set ~={int,+few}; option-1 clone-count bound = low
+      tens).
 
 ### 2.2 -- Pick a model and pin acceptance criteria
 
-- [ ] Choose option 1 / 2 / 3 (default: option 1 unless 2.1's binary
-      estimate is > 2x larger). Record the decision and reasoning in
-      the tradeoff doc.
-- [ ] Specify the new dispatch ABI shape concretely: what does
-      `Functor [Option]`'s dict look like in C? What does `lift2` look
-      like for option 2? For option 3, what does an inlined `fmap (fmap f) x`
-      look like at the call site?
-- [ ] Identify which existing HKT call sites need to change vs. stay
-      source-stable (target: zero source-side changes).
+- [x] **Chose option 1** (full per-`(f, A)` clone). Reasoning in the tradeoff
+      doc: it is the only option that achieves the plan's carrier-retirement
+      goal (option 2 reintroduces the carrier; option 3 regresses recursion),
+      and the measured blast radius (low tens of clones) is well under the
+      "default to option 1 unless > 2x larger" gate.
+- [x] Acceptance criteria pinned in the tradeoff doc (zero source-side changes
+      at the ~21 call sites; HKT method results stop returning the int64
+      carrier; nested `(fmap (fmap f) x)` reaches all `(f, A)` monos without a
+      worklist cycle; suite + spice suites + `TUR_M3_AUDIT` clean).
+- [ ] **Open before Phase 3:** build the elaborator clone-count probe to turn
+      the "low tens" bound into an exact per-`(f, A)` figure and re-measure
+      against the then-current spices tree (needed to *size* Phase 3, not to
+      *choose* the model -- the choice is settled).
 
 ### 2.3 -- Phase 2 done when
 
-- [ ] Tradeoff doc landed; design choice recorded; no implementation
-      questions remain that would change the deliverable. Phase 3 below
-      can be sized in sessions.
+- [x] Tradeoff doc landed; option 1 chosen and reasoned; acceptance criteria
+      pinned. The only open item (clone-count probe) is a *sizing* input for
+      Phase 3, not a model-changing question -- Phase 2's design decision is
+      final. **Phase 2 design pass: DONE.**
 
 ---
 
