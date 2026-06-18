@@ -241,15 +241,17 @@ HKT arrow category. Re-run this sweep after Phase 3.
 **Why this is gated:** the current HKT surface is broad -- 9 HKT
 classes in `stdlib/typeclass*.tur` (Functor, Applicative, Monad,
 Bifunctor, Foldable, Traversable, Alternative, MonadError, Comonad),
-~15 `definstance` lines across Parser, Option, Result/Either, Goal,
-Backtrack, Schema, rc, and ~199 fmap/bind/pure/lift2 grep hits across
-stdlib. Per-instantiation expansion blast radius is not obvious; the
-design pass picks the model before the implementation phase commits.
+35 `definstance` lines across Parser, Option, Result/Either, Goal,
+Backtrack, Schema, rc, and 43 fmap/bind/pure/lift2 call sites across
+stdlib (the old "~199" figure is stale; spices adds 0 -- see 2.1).
+Per-instantiation expansion blast radius is now known to be
+stdlib-bounded; the design pass picks the model before the implementation
+phase commits.
 
 ### 2.1 -- Measure HKT call-graph cost per option
 
-**Partial measurement (2026-06-18, stdlib-only -- `../turmeric-spices/` is NOT
-checked out in this environment, so the spices half is still TODO):**
+**Measurement (2026-06-18; spices half now COMPLETE -- `../turmeric-spices/`
+IS checked out, 522 `.tur` files):**
 
 - **9 HKT classes** confirmed: Functor, Applicative, Monad, Foldable,
   Traversable, Alternative, Bifunctor, Comonad, MonadError (`stdlib/typeclass*.tur`,
@@ -262,20 +264,31 @@ checked out in this environment, so the spices half is still TODO):**
   [identity/pair].
 - **43** `fmap`/`bind`/`pure`/`lift2`/`ap`/`>>=`/`traverse`/... call sites in
   stdlib (the plan's "~199" figure must have counted `../turmeric-spices/`).
+- **Spices half (now measured): ZERO.** Across all 522 `.tur` files in
+  `../turmeric-spices/spices/` there are **0** HKT `definstance` lines and
+  **0** genuine HKT method call sites. Every grep hit for the method names is
+  a false positive at a different binding: `bind-vao`/`bind-vbo`/`bind-texture`
+  (OpenGL), `bind(fd, ...)` (POSIX socket in `httpd/server.tur`), `first`/
+  `second` (pair/list accessors), `empty` (collection emptiness predicates),
+  "pure Turmeric" (prose comments). The "~199" figure in the gating note above
+  was therefore **not** spices-driven either; it is simply stale/overcounted.
+  **The HKT monomorphization surface is entirely stdlib-bounded:** 9 classes,
+  35 instances, 43 call sites; spices adds nothing to the `A` dimension.
 
-Still TODO for a complete option-1 estimate: the per-`(combinator, f, A)`
-tuple enumeration + distinct-clone count needs (a) the spices checkout and
-(b) a clone-counting probe in the elaborator (no such tooling exists yet).
-This partial inventory bounds the *instance* surface (35) but not the
-*monomorphization* blast radius (the `A` dimension), which is the figure that
-actually decides option 1 vs 2.
+This de-risks option 1 materially: the reachable `(combinator, instance)`
+call graph does not grow with the spice ecosystem, so the per-`(f, A)`
+clone blast radius is bounded by the 35-instance stdlib surface plus whatever
+distinct `A`s those 43 stdlib sites instantiate -- a small, closed set, not an
+open-ended ecosystem-wide expansion.
 
-- [ ] Build the per-`(f, A)` monomorphization estimate for option 1
-      (full per-(f, A) clone): enumerate every `(combinator, f, A)`
-      tuple reachable from stdlib + `../turmeric-spices/spices/` and
-      count distinct clones the elaborator would emit. (Blocked on the
-      spices checkout + a clone-count probe; stdlib instance surface = 35,
-      measured above.)
+- [x] Spices-half inventory complete (2026-06-18): 0 HKT instances, 0 HKT
+      call sites across 522 spice `.tur` files; surface is stdlib-bounded
+      (9 classes / 35 instances / 43 call sites).
+- [ ] Remaining for a precise option-1 clone count: a clone-counting probe in
+      the elaborator (no such tooling exists yet) to turn the 43 stdlib sites
+      into a distinct-`(f, A)`-clone total. The *instance* surface (35) and the
+      *reachability bound* (stdlib-only) are now fixed; only the per-`A`
+      multiplier is unmeasured, and it cannot grow beyond the stdlib call sites.
 - [x] Compared option 2 (dict-passing w/ payload erasure) and option 3
       (source-rewriting inline-expansion) against option 1 on generated-C delta
       and expressiveness regression -- see the tradeoff doc. Key finding:
