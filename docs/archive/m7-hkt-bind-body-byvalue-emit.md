@@ -4,8 +4,31 @@ title: M7 layer-4 by-value emit does not yet handle the Monad `bind` body shape
 severity: medium (blocks the by-value monadic HKT instances -- Monad `bind`,
   MonadError, Applicative `ap` -- for Phase 4.2; flag-gated, default-OFF, so no
   effect on the shipped path; not a miscompile -- the probe fails to compile)
-status: open
+status: RESOLVED 2026-06-19 (gate + class-var-head binding; archived).
 ---
+
+> **RESOLVED 2026-06-19.** Two coordinated changes (both flag-gated):
+> 1. **Gate** (`m7_body_constructs_byvalue`, `elab_typeclasses.c`): also admit a
+>    tail branch that is a call to a LOCAL fn (`!is_global`) returning the
+>    applied `(f b)` family (TY_APP) -- bind's `(k (.value ma))` -- distinguished
+>    from a global carrier-helper delegation (e.g. `result-bimap`, which stays
+>    excluded).
+> 2. **Binding** (`elab_method_call` layer-4 abi_bindings): bind the HKT class
+>    var to the receiver's CONSTRUCTOR HEAD (`Option`) instead of the full
+>    applied receiver (`(Option int)`), so the continuation's result `(m b)`
+>    resolves at emit time to `(Option b)` -> `(Option int)` -> by-value
+>    `Option__int` (with the head it was `((Option int) int)` -> int64 carrier).
+>    The existing fn-value result-type resolution (`emit_expr.c`) then casts `k`
+>    as `Option__int (*)(int64_t)` and the if-temp/return are by-value.
+>
+> `docs/upcoming/v2/m7-hkt-probe-bind.tur` exits 21; variants verified (B = cstr
+> prints "pos"; `(none)` short-circuits). fmap probe stays 42. Flag-off suite
+> 1683/0; zero new flag-on regressions across a 197-fixture typeclass sweep (the
+> lone flag-on failure, `instance-method-return-carrier-bridge`, fails
+> identically at prior commits). Note: the probe's continuation is a lambda with
+> an explicit `: (Option int)` return, so it is already emitted by value; a
+> continuation passed as a bare `:fn` poly/fat-closure carrier is a further
+> follow-on (not exercised here).
 
 # M7 layer-4: by-value emit for the Monad `bind` body shape
 

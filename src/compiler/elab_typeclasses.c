@@ -1643,7 +1643,14 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
  * A body that DELEGATES to a carrier helper (e.g. `Bifunctor [Result]`'s
  * `(result-bimap container ...)`, where `result-bimap` takes a `:int` carrier)
  * cannot, and must stay on the uniform-carrier dispatch until Phase 4.2 rewrites
- * the helper.  Recurse through if/do/let to the tail position. */
+ * the helper.  Recurse through if/do/let to the tail position.
+ *
+ * Monadic shapes (Monad `bind`): the tail of a branch may be a CALL to the
+ * continuation `k` -- `(k (.value ma))` -- which returns the result family
+ * `(m b)` BY VALUE (k is a fn-typed PARAMETER, not a global carrier helper).
+ * Admit such a tail too, distinguished from a carrier-delegating helper by
+ * (a) the callee is a local fn binding (`!is_global`), not a top-level defn,
+ * and (b) the call's result type is the applied `(f b)` family (TY_APP). */
 static bool m7_body_constructs_byvalue(const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -1656,8 +1663,16 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
         case EX_LET:
             return m7_body_constructs_byvalue(e->as.let_.body);
         case EX_CALL:
-            return e->as.call_.fn_binding &&
-                   e->as.call_.fn_binding->is_construct_template;
+            if (e->as.call_.fn_binding &&
+                e->as.call_.fn_binding->is_construct_template)
+                return true;
+            /* Monadic continuation tail call: a local (parameter) fn returning
+             * the applied `(f b)` family by value. */
+            if (e->as.call_.fn_binding && !e->as.call_.fn_expr &&
+                !e->as.call_.fn_binding->is_global &&
+                e->type.kind == TY_APP)
+                return true;
+            return false;
         default:
             return false;
     }
@@ -4891,8 +4906,19 @@ resolved_user_fallback:;
             if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
             AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
                 e->arena, total * sizeof(AbiTypeBinding));
+            /* Bind the HKT class var to the CONSTRUCTOR HEAD of the receiver
+             * (`Option`), not the full applied receiver (`(Option int)`), so an
+             * applied occurrence in the body -- e.g. the monadic continuation's
+             * result `(m b)` in `bind` -- resolves to `(Option b)` -> `(Option
+             * int)` at emit time instead of the nonsensical `((Option int) int)`
+             * (which type_c_name's to the int64 carrier).  For the fmap shape the
+             * result `(g b)` is pre-resolved by the elaborator, so this only
+             * matters for in-body applied occurrences like the bind tail call. */
+            Type hkt_head = obj_orig_type;
+            while (hkt_head.kind == TY_APP && hkt_head.as.app.fn)
+                hkt_head = *hkt_head.as.app.fn;
             bindings[0].name = tc->type_params[0]->name;
-            bindings[0].type = obj_orig_type;
+            bindings[0].type = hkt_head;
             uint8_t bi = 1;
             for (uint8_t k = 0; k < m7_nb && bi < total; k++) {
                 bindings[bi].name = m7_bind_names[k]->name;

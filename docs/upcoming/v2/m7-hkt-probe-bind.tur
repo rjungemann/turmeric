@@ -1,31 +1,33 @@
 ;; M7 HKT-dispatch reference probe #2 -- Monad `bind` shape. NOT a test-suite
 ;; fixture. Companion to m7-hkt-probe.tur (the Functor `fmap` shape).
 ;;
-;; STATUS (2026-06-19): the kind-check prerequisite is FIXED (resolved report
-;; docs/archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md). This probe
-;; now ELABORATES under TUR_M7_HKT=1 and reaches CODEGEN, where it currently
-;; fails on the layer-4 by-value emit -- the SAME carrier-vs-by-value mismatch
-;; the fmap probe had before layer-4 landed. That remaining emit work is tracked
-;; in docs/reported/m7-hkt-bind-body-byvalue-emit.md.
+;; STATUS (2026-06-19): WORKING end-to-end under TUR_M7_HKT=1 -- this probe now
+;; exits 21. Both the kind-check prerequisite and the layer-4 by-value emit for
+;; the Monad `bind` shape have landed (resolved reports
+;; docs/archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md and
+;; docs/archive/m7-hkt-bind-body-byvalue-emit.md). With the flag OFF the probe
+;; still errors by design (it has no ascriptions).
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-bind.tur
-;; Observed now: gcc "array subscript ... outside array bounds" / "used
-;; uninitialized" at the unwrap call site -- __inst_MyMonad_mbind_Option still
-;; emits the int64 carrier return while the consumer reads Option__int.
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-bind.tur; echo $?
+;;   -> 21
 ;;
 ;; The defining feature of `bind` (vs `fmap`) is the continuation parameter
 ;;   k : (fn [a] (m b))
-;; -- a function RETURNING an applied HKT type `(m b)`. (1) The kind-check fix:
-;; class param kinds are now threaded into parse_typeclass_method so the HKT
-;; param `m` resolves with KIND_ARROW even nested inside the fn type, so
-;; type_app no longer rejects the reconstructed `(m b)`. (2) The remaining
-;; layer-4 emit follow-on: the bind body's then-branch `(k (.value ma))` is a
-;; `(m b)`-returning CALL, not an in-body construct, so m7_body_constructs_byvalue
-;; rejects it and no by-value spec is interned; and `k` must be made to return
-;; the `(m b)` struct by value. The Functor `fmap` shape is fully working
-;; end-to-end across element types {int, cstr, float, struct}.
+;; -- a function RETURNING an applied HKT type `(m b)`. Two coordinated fixes:
+;; (1) Kind-check: class param kinds are threaded into parse_typeclass_method so
+;;     the HKT param `m` resolves with KIND_ARROW even nested inside a fn type,
+;;     so type_app no longer rejects the reconstructed `(m b)`.
+;; (2) Layer-4 emit: m7_body_constructs_byvalue admits a tail call to a LOCAL fn
+;;     returning the `(f b)` family (bind's `(k (.value ma))`), and the HKT class
+;;     var is bound to the receiver's constructor HEAD (`Option`) so `(m b)`
+;;     resolves to the by-value `Option__int` -- the continuation `k` is then
+;;     cast to return `Option__int` by value and the result threads by value.
 ;;
-;; TARGET (once the emit follow-on lands): main returns 21.
+;; The Functor `fmap` shape works end-to-end across {int, cstr, float, struct};
+;; the `bind` shape works for the same element types (B = cstr verified) and
+;; short-circuits on `(none)`.
+;;
+;; TARGET: main returns 21.
 
 (defclass MyMonad [^m]
   (mbind [ma : (m a) k : (fn [a] (m b))] : (m b)))

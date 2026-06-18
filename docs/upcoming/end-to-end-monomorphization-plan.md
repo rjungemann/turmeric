@@ -967,21 +967,21 @@ genuine carrier)
 >   (worked "by luck" only for `b = int`). Now resolves via `emit_type_c_name`
 >   at the thin-fn-call site (`emit_expr.c`), symmetric to the existing arg-side
 >   resolution. Flag-off suite stays 1683/0.
-> - **Monad `bind` shape (and Applicative `ap`, MonadError): kind-check
->   prerequisite FIXED (2026-06-19); now blocked on the layer-4 emit follow-on.**
->   A class method with a fn param returning an *applied* HKT type
->   (`k : (fn [a] (m b))`) used to fail kind-check (TUR-E0012) on instance
->   elaboration. Fixed by threading the class param kinds through
->   `parse_typeclass_method` so an HKT param `^m` resolves to a KIND_ARROW
->   TY_TYVAR even nested inside a fn type (resolved report
->   [`docs/archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md`](../archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md)).
->   The probe (`docs/upcoming/v2/m7-hkt-probe-bind.tur`) now elaborates and
->   reaches codegen. **Remaining (the emit follow-on,
->   [`docs/reported/m7-hkt-bind-body-byvalue-emit.md`](../reported/m7-hkt-bind-body-byvalue-emit.md)):**
->   the layer-4 gate (`m7_body_constructs_byvalue`) must also admit a tail branch
->   that is a `(f b)`-returning call (bind's `(k (.value ma))`, not only an
->   in-body construct), AND the continuation `k` must be made to return the
->   `(m b)` struct by value (the closure-ABI half).
+> - **Monad `bind` shape: DONE end-to-end (2026-06-19).** The probe
+>   (`docs/upcoming/v2/m7-hkt-probe-bind.tur`) exits 21 under the flag; verified
+>   for B = cstr and `(none)` short-circuit. Two coordinated fixes landed (both
+>   resolved/archived):
+>   ([kind-check](../archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md))
+>   thread the class param kinds through `parse_typeclass_method` so an HKT param
+>   `^m` resolves to a KIND_ARROW TY_TYVAR even nested inside a fn type; and
+>   ([layer-4 emit](../archive/m7-hkt-bind-body-byvalue-emit.md)) `m7_body_constructs_byvalue`
+>   now admits a tail call to a LOCAL fn returning the `(f b)` family (bind's
+>   `(k (.value ma))`), and the HKT class var is bound to the receiver's
+>   constructor HEAD (`Option`) so `(m b)` resolves to the by-value
+>   `Option__int`. Remaining for the monadic family: a continuation passed as a
+>   bare `:fn` poly/fat-closure carrier (the probe's is a typed lambda with an
+>   explicit `: (Option b)` return) -- a further follow-on; and Applicative `ap`
+>   (arg `(f (fn [a] b))`) is not yet probed.
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT
