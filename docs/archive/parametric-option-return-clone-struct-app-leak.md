@@ -8,9 +8,17 @@ severity: Medium. The compiler's own ASan run flags a 304-byte leak from
   parameterized defopaque application) are unresolved. The fixture runs
   correctly (program output matches expected), but the compiler leak
   trips the suite's leak-detection gate per CLAUDE.md.
-status: OPEN. Repro is `stdlib/refined.tur` `ne-from?` rewritten to pure
-  Turmeric with a `(Option (NonEmpty A))` return -- reverted to the carrier
-  ABI in this branch with a pointer back to this report.
+status: RESOLVED 2026-06-18 (no longer reproduces). The exact repro -- a `defn`
+  with a `(Option (NonEmpty A))` return whose body does `(some (:: xs (NonEmpty
+  A)))` / `(none)` -- typechecks with zero LeakSanitizer output under
+  `ASAN_OPTIONS=detect_leaks=1` on the current tree (the `clone_struct_app_type`
+  call sites in `substitute_struct_app_type` now consistently `free_struct_app_-
+  type` their owned clones; see the ownership comments in `src/compiler/types.c`).
+  The `ne-from?` by-value retype this report gated is still NOT landed, but it is
+  now blocked on a separate, genuine inference gap -- the element type `A` is
+  uninferable from `ne-from?`'s untyped `xs : int` argument -- tracked in
+  `docs/reported/ne-from-byvalue-option-nonempty-element-type-uninferable.md`,
+  not on this leak.
 ---
 
 # `clone_struct_app_type` leak on doubly-nested parametric TY_APP return

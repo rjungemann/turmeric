@@ -16,9 +16,10 @@ status: RESOLVED 2026-06-18. Fixed by a ground-TY_APP sibling to the step-2
   where the carrier base straddles the sibling `some`/`ok` by-value spec, opt
   in.  `stdlib/refined.tur` `bidx-of?` / `bidx-unwrap` retyped to pure
   Turmeric by-value; `tests/fixtures/refined-bounded-idx/` reverted to
-  ascription-free calls; new codegen fixture
+  ascription-free calls; codegen fixture
   `tests/fixtures/option-construct-ground-byvalue-none/` pins the by-value
-  `none__spec__Option__BoundedIdx`.  Full suite green (1680 passed, 0 failed).
+  `none__spec__Option__BoundedIdx`.  Full suite green (1681 passed, 0 failed).
+
 ---
 
 # 0-arg `(none)` in a ground `(Option T)` return: by-value spec missing

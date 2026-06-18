@@ -23,17 +23,26 @@ status: PARTIAL 2026-06-18. `option-eq?` and `option-map` retyped to by-value
   (e.g. `(unwrap-or opt 0)` where opt is `:int`), and the cascade spans
   ~10 stdlib modules (`zipper`, `seq/*`, `json`, `safe`, `env`, `serial`,
   ...) that all produce carrier-int Options -- a separate PR is warranted.
-  Rewriting `ne-from?`/`bidx-of?` bodies to pure-Turmeric by-value Option
-  uncovered two new compiler-side bugs filed as their own reports:
-    - [zero-arg-construct-ground-byvalue-return.md](zero-arg-construct-ground-byvalue-return.md)
-      (0-arg `(none)` in a ground `(Option BoundedIdx)` return emits the
-      carrier handle into the by-value slot)
-    - [parametric-option-return-clone-struct-app-leak.md](parametric-option-return-clone-struct-app-leak.md)
-      (doubly-nested parametric `(Option (NonEmpty A))` return leaks
-      304 bytes from `clone_struct_app_type` per compile)
-  Step 4 (refined.tur smart-constructor + unwrapper retype) and step 5
-  (kleisli.tur `comp`/`k-apply-raw` retype) are blocked on those two
-  compiler bugs plus the broader carrier-Option-producer cascade.
+  **2026-06-18 follow-up (step 4, BoundedIdx half): both gating compiler bugs
+  resolved, and the ground BoundedIdx smart constructors retyped to by-value.**
+    - [zero-arg-construct-ground-byvalue-return.md](../archive/zero-arg-construct-ground-byvalue-return.md)
+      -- RESOLVED: emit now mints a by-value `none__spec__Option__T` for a 0-arg
+      `#{Construct}` in a ground concrete TY_APP return, gated to a by-value
+      struct/opaque payload (mirrors `some`'s lowering) so a primitive-payload
+      `(Option int)` stays carrier and control-form constructs do not straddle.
+    - [parametric-option-return-clone-struct-app-leak.md](../archive/parametric-option-return-clone-struct-app-leak.md)
+      -- RESOLVED: the leak no longer reproduces (verified with LSan on the exact
+      `(Option (NonEmpty A))` repro).
+  `bidx-of?` -> `(Option BoundedIdx)` and `bidx-unwrap [o : (Option BoundedIdx)]`
+  are now pure-Turmeric by-value; `tests/fixtures/refined-bounded-idx/` drops its
+  carrier ascriptions; regression fixture
+  `tests/fixtures/option-construct-ground-byvalue-none/`. Full suite green
+  (1681/0). The **NonEmpty half** of step 4 (`ne-from?`/`ne-unwrap`) is still
+  blocked, now on a genuine inference gap (the element type `A` is uninferable
+  from `ne-from?`'s untyped `xs : int`) -- tracked in
+  [ne-from-byvalue-option-nonempty-element-type-uninferable.md](ne-from-byvalue-option-nonempty-element-type-uninferable.md).
+  Step 5 (kleisli.tur `comp`/`k-apply-raw` retype) is blocked on the broader
+  carrier-Option-producer cascade.
   `result-map` remains (a deliberate carrier-ABI regression test backs its
   `:int` signature -- see below); `unwrap-or` remains cascade-coupled.
   One niche residual on `option-map` is filed under
@@ -135,12 +144,11 @@ Callers updated:
 have to retype together (the `some?` retype is no longer in this cascade --
 it bridges via call-site ascription):
 
-- **`stdlib/refined.tur`**: `ne-from?` / `bidx-of?` deliberately return the
-  carrier `:int` Option (inline-C builds the box) and `ne-unwrap` / `bidx-unwrap`
-  consume it via `(unwrap-or o 0)` with `o : int`. Retyping `unwrap-or` to
-  `(Option A)` makes `(unwrap-or o 0)` a type error (`int` is not `(Option A)`).
-  Honest fix: retype the whole refined smart-constructor surface to `(Option X)`
-  (itself a No-Lazy-`:int` item in `spices-int-stand-in-audit`).
+- **`stdlib/refined.tur`**: `bidx-of?` / `bidx-unwrap` are now pure-Turmeric
+  by-value `(Option BoundedIdx)` (see step 4 BoundedIdx half, landed). They no
+  longer touch `unwrap-or` -- `bidx-unwrap` reads `.value` off the by-value
+  Option directly. `ne-from?` / `ne-unwrap` stay on the carrier ABI, blocked on
+  element-type inference (see the NonEmpty report), not on `unwrap-or`.
 - **`stdlib/kleisli.tur`** `comp`: threads the Kleisli arrow result as the
   carrier int64 (`k-apply-raw` returns `:int`) and calls `(some? r)` /
   `(unwrap-or r 0)` on it. The Arrow abstraction erases the element type, so
@@ -191,8 +199,11 @@ is fully retired and the carrier producers (`some`/`none`) stop heap-allocating.
    `result-map` deferred (deliberate carrier-ABI regression test, above).
    Niche `option-map` residual:
    `docs/archive/option-map-literal-none-unannotated-fn-no-A-inference.md` (resolved 2026-06-18; emit-side guards in PR #421 route the under-determined-`A` call to the carrier-context spec). A separate spill-bridge regression at the by-value-producer -> carrier-consumer boundary inside a `let`/`do`/`if` arg slot is tracked in `docs/reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md`.
-4. Retype `refined.tur`'s `ne-from?`/`bidx-of?`/`ne-unwrap`/`bidx-unwrap`
-   to `(Option X)`, then retype `some?`/`unwrap-or` together with them.
+4. ~~Retype `refined.tur`'s `bidx-of?`/`bidx-unwrap` to by-value `(Option
+   BoundedIdx)`~~ -- **2026-06-18: done** (the ground half; both gating compiler
+   bugs resolved and archived). The `ne-from?`/`ne-unwrap` (NonEmpty) half stays
+   on the carrier, blocked on element-type inference -- see
+   [ne-from-byvalue-option-nonempty-element-type-uninferable.md](ne-from-byvalue-option-nonempty-element-type-uninferable.md).
 5. Retype `kleisli.tur` `comp` / `k-apply-raw` to thread a by-value
    Option (or keep Arrow on the carrier and bridge at its boundary).
 
