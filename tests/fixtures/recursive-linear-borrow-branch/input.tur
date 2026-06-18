@@ -1,0 +1,36 @@
+;; recursive-linear-borrow-checker: a recursive function that takes a :linear
+;; handle by ^borrow and branches on it (the recursive call sits in one arm of
+;; an `if`) must not be flagged TUR-E0104. The ^borrow parameter is read, never
+;; consumed -- consumption stays the caller's obligation -- so passing it back
+;; into the same function's ^borrow slot is a non-consuming read in every arm.
+;;
+;; Before the fix, the recursive self-call did not see its own arg_borrow flag
+;; (it is only stamped onto the final fn_type after the body is elaborated), so
+;; the var-use left the handle marked consumed in the recursing branch but not
+;; the base-case branch, and the if-merge wrongly reported "consumed in one
+;; branch but not the other". The follow-on consume in main then tripped
+;; TUR-E0101 "used after being consumed".
+;;
+;; Expected output:
+;;   reading
+;;   reading
+;;   reading
+;;   done reading
+;;   tmpfile released
+(load "stdlib/fs.tur")
+
+(defn read-times [^borrow t : TmpFile n : int] : int
+  (if (<= n 0)
+    (do (println "done reading") 0)
+    (do
+      (fs/tmpfile-path t)
+      (println "reading")
+      (read-times t (- n 1)))))
+
+(defn main [] : int
+  (let [t (fs/tmpfile)]
+    (read-times t 3)
+    ;; The single legal consumption stays with the caller.
+    (fs/tmpfile-free t)
+    (println "tmpfile released")
+    0))
