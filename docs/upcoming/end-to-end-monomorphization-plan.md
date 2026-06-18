@@ -497,6 +497,23 @@ unblocked -- the constructor type is available); (d) the emit monomorphization
 (layer 4). The suite-green gate sits at the end of (d): (a)-(c) without (d)
 still miscompile the value path, so they cannot land separately.
 
+**Precise root of step (a) (2026-06-18, traced to one site):** for an applied
+return `(g b)`, `parse_typeclass_method` (`elab_typeclasses.c:975-987`) calls
+`type_expr_from_form(ret_form, ..., class_type_params, ...)`. That helper
+resolves a class type-param in **argument** position (`b`) to a `TY_TYVAR`, but
+resolves the **head/constructor** position (`g`) as a concrete constructor
+lookup -- so `(g b)` becomes `TY_APP(<unknown/opaque head>, TY_TYVAR b)`, which
+prints `(type-app ? ?)` and gives the layer-0 `elab_subst_class_tyvars(g -> ...)`
+no `TY_TYVAR("g")` head to match. **Step (a) is therefore: teach
+`type_expr_from_form` (or the class-method return path) to resolve a class
+type-param that appears as an application HEAD to `TY_TYVAR(name)`,** so `(g b)`
+parses to `TY_APP(TY_TYVAR g, TY_TYVAR b)`. With that, layer 0's substitution
+fires (g -> the instance's `TY_STRUCT`/`TY_ADT` constructor, which 1634-1657
+already provides), layers 1-3 refine `b`, and the result resolves to
+`(Option int)` at the call site. The emit monomorphization (d) remains the
+suite-green gate. This is the single most actionable starting point and the
+deepest the root has been localized.
+
 **Why reverted (the two reasons it can't land in isolation):**
   1. **Emit-side by-value HKT dispatch is missing (Phase 3.2/3.3).** With the
      type resolved to by-value `(Option int)`, the probe *compiles* but prints
