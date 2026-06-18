@@ -41,12 +41,12 @@ advances.
   retyped to pure-Turmeric by-value `(Option A)`. Remaining:
   - `result-map` -- deferred; its `:int` signature is a deliberate
     carrier-ABI regression test.
-  - `unwrap-or` -- cascade-coupled (~10 stdlib modules produce
-    carrier-int Options); needs its own PR.
+  - `unwrap-or` cascade -- broken out into
+    [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md).
   - NonEmpty half of step 4 (`ne-from?`/`ne-unwrap`) -- blocked on
-    inference, see next bullet.
-  - Step 5 (`kleisli.tur` `comp`/`k-apply-raw` retype) -- blocked on
-    the broader carrier-Option-producer cascade.
+    inference, see [ne-from-byvalue-option-nonempty-element-type-uninferable](reported/ne-from-byvalue-option-nonempty-element-type-uninferable.md).
+  - Step 5 (`kleisli.tur` `comp`/`k-apply-raw` retype) -- broken out
+    into [kleisli-byvalue-option-cascade](reported/kleisli-byvalue-option-cascade.md).
 - [ne-from-byvalue-option-nonempty-element-type-uninferable](reported/ne-from-byvalue-option-nonempty-element-type-uninferable.md)
   (plan, OPEN 2026-06-19) -- the NonEmpty half of step 4 stays on the
   carrier until the inference gap is closed by giving `ne-from?` a
@@ -56,6 +56,17 @@ advances.
   workaround is explicitly out -- it would propagate carrier-`:int`
   into every NonEmpty consumer and is the kind of "tighten the types
   later" patch CLAUDE.md forbids.
+- [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md)
+  (plan, OPEN 2026-06-19) -- retype `unwrap-or` to by-value
+  `[A] [o : (Option A) dflt : A] : A` and migrate the ~10 stdlib
+  producers (`zipper`, `seq/*`, `json`, `safe`, `env`, `serial`, ...)
+  one PR per row, gated on a temporary `unwrap-or-carrier` shim so the
+  suite stays green at each step. No caller-ascription bridges.
+- [kleisli-byvalue-option-cascade](reported/kleisli-byvalue-option-cascade.md)
+  (plan, OPEN 2026-06-19) -- retype `k-apply-raw` / `k-apply` /
+  `Category [Kleisli]` to thread `(Option B)` by value; retires the
+  `(:: r (Option int))` ascription that landed in PR #426 as a
+  temporary patch. Independent of `unwrap-or`; one self-contained PR.
 - [tco-map-set-eq-pure-turmeric-followup](upcoming/tco-map-set-eq-pure-turmeric-followup.md)
   -- low-priority type-hygiene residual; not on the audit critical path
   (Map/Set are `:heap`, no longer cross the bridge). **Note:** the
