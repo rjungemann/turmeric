@@ -458,6 +458,23 @@ each layer's exact code site is pinned, but the bottom layer (4, emit) remains
 the atomic blocker that cannot land without the by-value instance-body rewrite
 (Phase 4.2), confirming the "must land together" conclusion from a third angle.
 
+**Fourth iteration (2026-06-18, second hands-on attempt): a FIFTH layer below
+layer 0.** Re-applied all of layers 0-3 behind `TUR_M7_HKT` and added the
+layer-0 `elab_subst_class_tyvars` call on a `TY_APP` instance return
+(`elab_typeclasses.c` ~2464). Under the flag the probe STILL resolved to
+`(type-app ? ?)`: the substitution left the HKT constructor head `g`
+unsubstituted because an HKT instance's constructor argument (`Option` in
+`MyFunctor [Option]`) is **not carried in `type_args` as a substitutable
+`Type`** -- the `[^g]`-kinded slot is tracked via `type_arg_syms` / a separate
+representation, so `elab_subst_class_tyvars(g -> type_args[0])` finds no Type to
+plug in for `g`. So the true prerequisite is a -1th layer: **give HKT instance
+constructor args a first-class substitutable `Type` representation** (or teach
+the layer-0 substitution to read the constructor from `type_arg_syms` and build
+the applied head). Each hands-on fix exposes the next erasure in the HKT type
+representation; the feature is a sustained representational thread-through
+(constructor type -> element tyvar -> result -> emit mono -> by-value bodies),
+not an incremental patch. Code reverted; tree at HEAD, suite green.
+
 **Why reverted (the two reasons it can't land in isolation):**
   1. **Emit-side by-value HKT dispatch is missing (Phase 3.2/3.3).** With the
      type resolved to by-value `(Option int)`, the probe *compiles* but prints
