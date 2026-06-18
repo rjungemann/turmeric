@@ -595,6 +595,25 @@ change of unknown blast radius across all 9 classes / 30 instances and the
 M4 per-method dispatch; it is the genuine multi-session core of M7. The
 probes that established this are reverted (suite stays 1683/0).
 
+**Re-verified on HEAD (2026-06-18) + probe preserved in-repo.** Re-ran the
+minimal probe against the current (unmodified) compiler and reproduced the
+exact documented failure: `(gmap (some 21) dbl)` resolves to `(type-app ? ?)`
+and the error surfaces at the CONSUMER call site --
+`function 'unwrap' arg 1: expected (type-app Option tyvar 'A'), got
+(type-app ? ?)`. So `gmap`'s declared `(g b)` return reaches the call site
+with anonymous (un-named, un-refined) tyvars: neither `g -> Option` nor
+`b -> int` is recovered. The probe is now committed at
+[`docs/upcoming/v2/m7-hkt-probe.tur`](v2/m7-hkt-probe.tur) (deliberately NOT a
+suite fixture -- it errors by design) so the next dedicated M7 session drives
+the implementation against a fixed reproduction instead of reconstructing it
+from the transcript. **Single most actionable next step is still step (a)
+above** (`type_expr_from_form` head-position class-param -> `TY_TYVAR`), then
+layers 1-3 (call-site refinement), then the layer-4 emit monomorphization
++ Phase-4.2 by-value instance bodies, which must land together. No safe
+partial landing exists: threading the type without the emit half compiles
+but prints `0` (silent miscompile), so this stays scheduled as a dedicated
+multi-session effort rather than an in-session increment.
+
 ### 3.1 -- Dict generation for HKT instances
 
 **Exact emit gate located (2026-06-18):** the per-instantiation

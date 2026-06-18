@@ -1,0 +1,39 @@
+;; M7 HKT-dispatch reference probe -- NOT a test-suite fixture (it currently
+;; ERRORS by design; it is the minimal reproduction the next dedicated M7
+;; session should drive the implementation against). Kept out of
+;; tests/fixtures/ on purpose.
+;;
+;; Run it with: ./build/tur run docs/upcoming/v2/m7-hkt-probe.tur
+;;
+;; CURRENT BEHAVIOR ON HEAD (re-verified 2026-06-18):
+;;   docs/upcoming/v2/m7-hkt-probe.tur:<line>: error [TUR-E0001]:
+;;     function 'unwrap' arg 1: expected (type-app Option tyvar 'A'),
+;;     got (type-app ? ?)
+;;
+;; i.e. the producer `(gmap (some 21) dbl)` resolves to an anonymous
+;; `(type-app ? ?)` instead of `(Option int)`: the class-method return `(g b)`
+;; is not refined to the instance's constructor + element type at the call
+;; site. The failure surfaces at the CONSUMER (`unwrap`), not inside `gmap`.
+;;
+;; TARGET BEHAVIOR (what a complete M7 must achieve):
+;;   `main` returns 42 with NO ascription anywhere -- the type threads
+;;   g -> Option and b -> int end-to-end, AND the instance method
+;;   `__inst_MyFunctor_gmap_Option` emits a by-value `(Option int)` return
+;;   (per-(f, A) monomorphization, Phase 3.2) so the by-value `unwrap`
+;;   consumer reads it correctly. Landing the type-threading WITHOUT the
+;;   emit-side by-value monomorphization compiles but prints 0, not 42 --
+;;   a silent miscompile (this is why the two halves are atomic; see
+;;   end-to-end-monomorphization-plan.md Phase 3.0).
+
+(defclass MyFunctor [^g]
+  (gmap [container : (g a) f : (fn [a] b)] : (g b)))
+
+(definstance MyFunctor [Option]
+  (gmap [container f]
+    (if (some? container) (some (f (.value container))) (none))))
+
+(defn dbl [x : int] : int (* x 2))
+
+(defn main [] : int
+  (let [r (gmap (some 21) dbl)]
+    (unwrap r)))   ; TARGET: 42
