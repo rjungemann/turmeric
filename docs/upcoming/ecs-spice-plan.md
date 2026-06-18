@@ -6,22 +6,22 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 
 # `tur-ecs` -- Plan
 
-> **Status 2026-06-11.** Phases E0, E1', E1 (variadic), E2 (incl.
-> compile-time write-cap enforcement via I1-I6), E3 (raylib
+> **Status 2026-06-17.** Phases E0, E1', E1 (variadic), E2 (incl.
+> compile-time write-cap enforcement via I1-I6), E2d (associated-type
+> storage projection, P1-P6 + P5b variadic-arity collapse), E2c
+> (sized-rectangular iteration, slices 1-12 against the resolved
+> [`ecs-sized-world-plan.md`](ecs-sized-world-plan.md)), E3 (raylib
 > companion), and E4 (comparison writeup --
 > [`docs/guides/ecs-guide.md`](../guides/ecs-guide.md) and
 > [`docs/guides/ecs-vs-haskell-ecs.md`](../guides/ecs-vs-haskell-ecs.md))
-> all shipped. E2d (associated-type storage projection) has its
-> compiler prereq landed and still needs the spice-side wiring. E2c
-> (sized-rectangular iteration) is **no longer "just wiring"** -- the
-> shipped SZ6-SZ8 cross-parameter unification only kicks in for size
-> indices derived from a GADT constructor chain, which mutating
-> dense storage cannot supply; E2c is now gated on a bounded-capacity
-> world API redesign (see
-> [`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md)).
-> E2b (refinement-typed APIs) remains gated on refinement types,
-> which are still in plan.
-> The original prerequisite-tracking plan has been archived at
+> all shipped. Residual follow-ups (none design-blocking): the sized
+> parallel-scheduler wiring (`System`/`Stage` generalisation over the
+> world type), a `world-resize` existential wrapper around the shipped
+> `sized-defworld-copy-into`, and routing `defcomponent-accessors`
+> through `StorageOps` once struct-element projection lands. E2b
+> (refinement-typed APIs) remains gated on refinement types, which are
+> still in plan. The original prerequisite-tracking plan has been
+> archived at
 > [`docs/archive/history/ecs-prereq-plan.md`](../archive/history/ecs-prereq-plan.md).
 
 ## Goal
@@ -323,25 +323,25 @@ which have not yet shipped:
 - **Refinement-typed world bounds** (`/has Pos` as a predicate on `W`).
   Use the typeclass encoding in v1.
 
-### Prereq shipped, spice-side wiring pending
+### Shipped (E2c + E2d wiring)
 
 - **Statically-rectangular sized iteration.** Sized-types SZ6-SZ8
-  landed 2026-06-10 -- size indices participate in type equality and
-  cross-parameter unification (see
-  [`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md)).
-  Dense-storage zip still checks length at runtime, and lifting it
-  is **not** the transparent spice-side update originally claimed
-  here: cross-parameter unification only fires when the size index
-  rides on a GADT constructor chain, which mutation-based dense
-  storage cannot supply. Lifting to a compile-time check now
-  requires a bounded-capacity world API redesign -- see
-  [`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md).
-- **Associated-type storage projection.** Associated type members on
-  typeclasses landed in turmeric 0.20.0 (see
+  landed 2026-06-10 (see
+  [`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md));
+  the bounded-capacity world API designed in
+  [`ecs-sized-world-plan.md`](ecs-sized-world-plan.md) (Q1-Q4
+  settled) and the spice-side `sized-defworld` / `sized-for-each`
+  / cap-gated sized accessors / `sized-defsystem` /
+  `sized-defworld-copy-into` / fallible `sized-spawn` family
+  shipped as E2c slices 1-12. See the E2c section below for
+  per-slice detail and residual follow-ups.
+- **Associated-type storage projection.** Associated type members
+  on typeclasses landed in turmeric 0.20.0 (see
   [`docs/archive/history/typeclass-associated-types-missing.md`](../archive/history/typeclass-associated-types-missing.md));
-  the spice's `defcomponent` still emits a no-op marker. Wiring the
-  `Storage` associated type into `defcomponent` and `defworld` is a
-  follow-up.
+  `defcomponent` now emits a real `Component` instance with an
+  associated `Storage` type, and `defworld` projects through it.
+  Shipped as E2d slices P1-P6 + P5b variadic collapse; see the
+  E2d section below.
 
 ## Out of scope (v1)
 
@@ -428,97 +428,140 @@ write-set enforcement -- the cap-gating that shipped in Phase I lets
 the tur-ecs column claim compile-time `:writes` enforcement honestly
 against apecs's and aztecs's trust-the-programmer baseline.
 
-### Spice-side wiring pending (prereq landed)
+### Shipped (E2d -- 2026-06-17)
 
-**E2d -- associated-type storage projection.** Associated type
-members on typeclasses shipped in turmeric 0.20.0 (see
-[`docs/archive/history/typeclass-associated-types-missing.md`](../archive/history/typeclass-associated-types-missing.md)).
-The spice's `defcomponent` is still the E0 documentation marker;
-wiring a real `type Storage : Type` associated member on
-`Component` -- and letting `defworld` project through it instead of
-consulting the macro-time storage registry -- is queued.
+**E2d -- associated-type storage projection.** A `Component`
+typeclass in `ecs/world` carries an associated type member
+`(type Storage : Type)`; `(defcomponent T)` lowers to a
+`(definstance Component [T] (type Storage = (Dense T)))`
+registration and `defworld` projects every component field type
+through `(Storage T)` instead of the prior hard-coded `: int`.
+Storage backend choice is now a property of the component, visible
+on the world's type to every downstream consumer. The critical
+path landed in order:
 
-The shipped milestone is "single-parameter classes, single
-output type, no value-level projection" -- which lines up with
-ECS's needs but constrains the design. Prereqs that should land in
-this order to keep the wiring small:
+- **P1 -- Typed storage opaques per backend.** `ecs/storage`
+  exports `(Dense A)`, `ecs/sparse` exports `(Sparse A)`,
+  `ecs/tag` exports `Tag`. Carrier still `:int`; a one-token `::`
+  ascription crosses the boundary for hand-rolled handles.
+  **Breaking:** bare-`int` "marker" components no longer compile
+  -- a `(defopaque Marker :int)` (or real struct) plus a
+  `(defcomponent ...)` registration is required.
+- **P2 -- `Component` class with associated `Storage`.**
+- **P3 -- `defstruct` accepts `(Storage T)` in field position**
+  (verification fixture green; no elaborator work needed).
+- **P4 -- `defcomponent` macro emits the instance.**
+- **P5 -- `defworld` projects field types through `(Storage T)`.**
+  Removes `defworld`'s dependency on the macro-time storage
+  registry.
+- **P5b -- variadic `defworld` (uncapped arity).** The former
+  `defworld--0..5` per-arity cascade is collapsed into one
+  variadic body via a recursive `world-fields` helper macro,
+  riding the 2026-06-17 turmeric fixes for `~@`-splice into a
+  vector literal and nested user-macro calls from inside a `~@`
+  splice. `tests/spawn1k-wide.tur` is the eight-component
+  regression.
+- **P6 (stretch) -- Polymorphic storage ops via a single-param
+  class.** `ecs/storage-ops` ships `(defclass StorageOps [S]
+  (type Elem : Type) (storage-insert! ...) (storage-get ...)
+  (storage-has? ...))` with instances for `(Dense A)` and
+  `(Sparse A)`. `Tag` is deliberately out (payload-less). One
+  follow-up remains: routing `defcomponent-accessors` through
+  `StorageOps` is **deferred** until struct-element projection
+  lands -- those accessors carry struct components that
+  monomorphise `Elem` to the int64 carrier and mismatch the C
+  ABI, and the cap-gated passing-test surface is too large to
+  regress for no behavioural gain today. Bounded-polymorphic
+  wrappers (`[S] [(StorageOps S)]`) also remain off the shipped
+  surface (the gap-H typeclass-bounded-wrapper limitation);
+  monomorphic dispatch works end to end.
 
-**E2d-P1 -- Typed storage opaques per backend.** Today
-`dense-new`, `sparse-new`, and `tag-new` all return bare `:int`.
-Lift each to a phantom-parameterized opaque: `(defopaque Dense
-[A] :int)`, `(defopaque Sparse [A] :int)`, `(defopaque Tag :int)`.
-Underlying representation unchanged; this is a typing surface
-change in `ecs/storage`, `ecs/sparse`, `ecs/tag`. Without it, an
-associated `(Storage T)` projection has nothing distinct to point
-at.
+### Shipped (E2c -- 2026-06-17)
 
-**E2d-P2 -- `Component` class with associated `Storage`.**
-`(defclass Component [T] (type Storage : Type))`. Per the archive,
-this is exactly the shape the milestone resolves. Instances:
-`(definstance Component [Pos] (type Storage = (Dense Pos)))`.
-Stdlib/spice-only work, gated on E2d-P1.
+**E2c -- sized-rectangular dense iteration.** The 2026-06-12
+reclassification correctly observed that SZ6-SZ8 cross-parameter
+unification needs the size index to ride a constructor chain, and
+that a bounded-capacity world API was the right landing. That
+design plan ([`ecs-sized-world-plan.md`](ecs-sized-world-plan.md))
+settled Q1-Q4 and the spice-side slices then landed in sequence
+against the resolved surface:
 
-**E2d-P3 -- `defstruct` accepts `(Storage T)` in field position.**
-Verification fixture: a struct with a field typed `(Storage Pos)`
-that reduces to `(Dense Pos)` at projection time. The archive
-notes resolution happens in both `type_expr_from_form` *and*
-`fn_type_from_form`, so this *should* be green -- but it's the
-load-bearing assumption for `defworld` and worth one fixture
-before any macro rewrite.
-
-**E2d-P4 -- `defcomponent` macro emits the instance.** Once P2
-holds, `(defcomponent Pos :storage :dense)` lowers to the
-`Component`/`Storage` instance plus the existing registration
-hook. Macro work, no elaborator changes.
-
-**E2d-P5 -- `defworld` projects field types through `(Storage
-T)`.** Replace the hard-coded `~Pos : int` field emission with
-`~Pos : (Storage ~Pos)`. Gated on P3 + P4. Removes `defworld`'s
-dependency on the macro-time storage registry; storage choice
-becomes a property of the component, visible to every consumer
-that reads the world's type.
-
-**E2d-P6 (stretch) -- Polymorphic storage ops via a
-single-param class.** A `(defclass StorageOps [S] (type Elem :
-Type) (insert ...) (get ...) (has? ...))` with instances per
-backend lets `defcomponent-accessors` dispatch via class methods
-instead of bare `dense-*` / `sparse-*` / `tag-*` calls. Lifts the
-"swap storage with one line" claim from documentation to type
-system. Sits inside the shipped single-param-class milestone by
-threading the element type through an associated `Elem` instead
-of a second class parameter -- the workaround the archive hints
-at for the missing multi-param class machinery.
-
-**Out of scope (still gated on compiler work):** anything that
-needs the value-level projection caveat called out in the
-archive -- methods whose *C* signature depends on `(Storage T)`.
-Today every storage handle rides the `int64` carrier so this is
-fine; if a backend ever wants non-int handles, that compiler work
-has to land first.
-
-The critical path is **E2d-P1 -> E2d-P3 (verify) -> E2d-P2 ->
-E2d-P4 -> E2d-P5**, with P6 as a follow-up. Each step is
-self-contained and re-uses shipped machinery; the whole sequence
-should be a single multi-PR landing, not a multi-release effort.
-
-### Design pending (prereq alone is not enough)
-
-**E2c -- sized-rectangular dense iteration.** Originally listed as
-"spice-side wiring pending." Reclassified 2026-06-12 after a
-scoping pass: SZ6-SZ8 cross-parameter unification only fires when
-the size index rides on a GADT constructor chain
-([`tests/fixtures/sized-cross-param-accept`](../../tests/fixtures/sized-cross-param-accept/input.tur)
-is the reference case). Dense storage's handle is a mutating
-`int`-pointer with no constructor chain, so any size index attached
-to it is a true phantom -- never load-bearing. The only honest
-landing is a **bounded-capacity world API** that commits to a
-single size `n` at world construction and threads it through every
-storage field, `spawn`, `despawn`, and the accessors. That is a
-world-API redesign, not transparent wiring. Full analysis and the
-open design questions are in
-[`docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md`](../reported/ecs-e2c-sized-dense-needs-bounded-world.md).
-A follow-up `ecs-sized-world-plan.md` is the next deliverable;
-no spice code lands before that design plan is resolved.
+- **Slices 1-3 -- sized storage shapes + `sized-defworld`.**
+  `(SizedDense n A)`, `(SizedSparse n A)`, `(SizedTag n)` ship
+  with `n` threaded structurally; `sized-defworld` emits an
+  `n`-polymorphic world `defstruct` whose dense fields all share
+  `n`, so SZ8 proves rectangularity across storages without a
+  runtime probe.
+- **Slice 3b -- variadic `sized-defworld` (uncapped arity).**
+  Mirrors P5b; bounded-capacity worlds may carry any number of
+  components. `tests/sized-world-wide.tur` is the five-component
+  regression.
+- **Slices 4 / 4b / 4c -- spawn / despawn / generational handles.**
+  `sized-spawn!` allocates from a slot free-list (slice 4b reuse)
+  and returns a packed generational `Entity` (slice 4c). The
+  matching `sized-despawn`, `sized-alive?`,
+  `sized-slot-generation` surface lifts the sized world to the
+  same use-after-despawn safety the unsized world has had since
+  E0. **Breaking:** `sized-spawn!` returns `Entity` and
+  `sized-despawn` takes `Entity` (was bare slot `int` in slice 4b).
+- **Slice 5 -- `sized-for-each` payoff macro.** New
+  `ecs/sized-query` module: every storage access goes through the
+  typed `(SizedDense n Comp)` surface and the loop bound is the
+  first storage's static `sized-dense-cap`; the runtime
+  `__fe-min-cap` probe is gone for sized worlds. This is the
+  load-bearing E2c win.
+- **Slice 6 -- `sized-world-tagged?` / `sized-world-untagged?`.**
+  Sized analogues of the unsized `with`/`without` filter pair,
+  composing with `sized-for-each` via `when`/`unless`.
+- **Slice 7 -- `sized-defcomponent-accessors`.** Cap-gated
+  `get-<Comp>` / `set-<Comp>!` / `has-<Comp>?` for sized worlds,
+  `n`-polymorphic at the accessor signature so one family
+  elaborates against every `(GameWorld (Static k))` shape. Cap
+  surface unchanged: caps pair with component type, not world
+  shape.
+- **Slice 8 -- `sized-defsystem`.** Single `n`-polymorphic
+  `(defn name [n] [^borrow w : (WorldName n)] : nil ...)` with
+  the same cap-binding rules and auto-consume as the unsized
+  `defsystem`. Negative regression
+  (`tests/errors/sized-defsystem-undeclared-write.tur`) confirms
+  the "writes to a component not in `:writes` is a compile-time
+  error" guarantee carries over. **Follow-up:** no `System`
+  value is emitted yet; the parallel scheduler's `System` struct
+  pins the run-fn signature to `[w : int] : nil` (world rides the
+  `ptr<void>` cast as a bare int), and a `(GameWorld n)` struct
+  does not. Generalising `System`/`Stage` over the world type is
+  queued; callers invoke the typed impl directly until then.
+- **Slice 9 -- mixed-shape sparse lookup**
+  (`sized-world-sparse-has?` / `sized-world-sparse-get`), the
+  sized counterpart of slice 6's tag pair. Hand-rolled-world
+  caveat: `sized-defworld` emits dense fields only, so worlds
+  mixing in `SizedSparse` / `SizedTag` spell out their
+  `defstruct` by hand (the same constraint the unsized `defworld`
+  has today).
+- **Slice 10 -- monomorphic `sized-defworld-mono` +
+  `sized-defcomponent-accessors-mono`.** The ergonomic-default
+  for application code with a fixed budget: capacity baked in at
+  declaration, no `[n]` ascription at call sites. The polymorphic
+  forms stay for libraries shipping reusable world shapes.
+- **Slice 11 -- `sized-defworld-copy-into` for slot-preserving
+  resize.** Emits a per-world `copy-into-<Name>` function
+  polymorphic in both source and destination capacity, threading
+  the `gens` array so `Entity` handles packed against the source
+  remain `(sized-alive? dst e)` after the copy. Growing resizes
+  work directly; shrinking aborts before any partial state is
+  observable. **Follow-up:** a `world-resize` wrapper that lifts
+  a copy into the `pack-sized` / `open-sized` existential is
+  still queued (thin client layer over `copy-into-<W>` plus the
+  `(exists [n'] ...)` packaging the sized-world plan calls out).
+- **Slice 12 -- fallible `sized-spawn`** returning
+  `(Result int WorldFull)`, the typed counterpart of the
+  panicking `sized-spawn!`. Q3's result-returning spawn; the
+  slot-allocation path is shared verbatim with `sized-spawn!`
+  so generational correctness is preserved. The carrier-bridge
+  workaround (per-arm helper functions whose body is a bare tail
+  `(ok ...)` / `(err ...)`) is documented in CHANGELOG and is the
+  spice-side idiom for the if-branched-form carrier-bridge
+  tail-position limitation until that bridges directly upstream.
 
 ### Still deferred (refinement types not shipping)
 
@@ -535,15 +578,25 @@ do land.
 - **Spice-side regression tests** under
   `../turmeric-spices/spices/ecs/tests/` covering: world declaration
   + spawn/despawn + generational safety
-  (`spawn1k.tur`, `spawn1k-pos.tur`); variadic queries up to arity 12
-  with intersection and tag filters (`for-each-arity-*.tur`,
-  `defquery-integrate.tur`, `query-typed.tur`); system scheduling
-  order and parallel non-conflict (`stage-pair.tur`, `stage-wave.tur`);
-  Phase I cap surface (`cap-linear-single-use.tur`,
+  (`spawn1k.tur`, `spawn1k-pos.tur`, `spawn1k-wide.tur` for the
+  eight-component variadic `defworld`); variadic queries up to
+  arity 12 with intersection and tag filters
+  (`for-each-arity-*.tur`, `defquery-integrate.tur`,
+  `query-typed.tur`); system scheduling order and parallel
+  non-conflict (`stage-pair.tur`, `stage-wave.tur`); Phase I cap
+  surface (`cap-linear-single-use.tur`,
   `cap-mint-per-instance.tur`, `defsystem-caps-bound.tur`,
-  `defcomponent-accessors.tur`); negative cases under
+  `defcomponent-accessors.tur`); E2d storage-ops polymorphism
+  (`storage-ops-poly.tur`); E2c sized-world surface
+  (`sized-world-wide.tur`, `sized-world-reuse.tur`,
+  `sized-world-generation.tur`, `sized-for-each.tur`,
+  `sized-filter-with-without.tur`, `sized-sparse-lookup.tur`,
+  `sized-defcomponent-accessors.tur`, `sized-defsystem.tur`,
+  `sized-defworld-mono.tur`, `sized-world-copy-into.tur`,
+  `sized-world-spawn-result.tur`); negative cases under
   `tests/errors/` rejecting double-use caps, wrong-component cap
-  shapes, and `:writes`-undeclared writes.
+  shapes, `:writes`-undeclared writes in both `defsystem` and
+  `sized-defsystem`.
 - **Main-repo regression fixture**
   `tests/fixtures/errors/ecs-defsystem-writes-unauthorized/` --
   declaring `:writes [Pos]` and trying to write `Vel` via the typed

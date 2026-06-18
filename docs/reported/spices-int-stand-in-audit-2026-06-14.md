@@ -352,19 +352,43 @@ Middleware opaques exist, these should become `list<Route>` and
 | ~~wav~~ | ~~S2: 1 handle type~~ -- fixed (`defopaque Wav`) |
 | zlib | clean |
 
-19 spices need work, 16 are clean. As of 2026-06-17: regex, sqlite, png, wav,
-postgres, valkey, rtaudio, tls, tourist (v0.2.0/v0.2.1), httpd (v0.2.0),
-osc (v0.2.0), rtmidi (v0.2.0), plus three already-shipped-at-audit-time
-(opengl, plutovg, raylib's audited subset) are fixed for the public
-surface (15 done); **4 remain**. All four remaining are secondary
-handle leaks inside already-fixed spices:
-plutovg (dash-array, font-cache, gradient-stops, rect),
-raylib (models, text, textures, camera, shapes),
-rtaudio (DeviceInfo, callback),
-and tourist internals (`route-*` / `router-*` / cons-list helpers
-plus the `ctx : int` / `caps : int` polish on `param`/`capture`/
-`captures-*` -- return types are correct, only the parameter retype
-remains).
+19 spices need work, 16 are clean. As of 2026-06-18: regex, sqlite, png, wav,
+postgres, valkey, rtaudio, tls, tourist (v0.2.0/v0.2.1/v0.2.6), httpd
+(v0.2.0), osc (v0.2.0), rtmidi (v0.2.0), plus three already-shipped-at-
+audit-time (opengl, plutovg, raylib's audited subset) are fixed for the
+public surface (15 done). **All four follow-up rows from the prior snapshot
+are now closed:**
+
+- **plutovg** -- dash-array (`DashArray`), font-cache (`FontCache`),
+  gradient-stops (`GradientStops`), and rect (`Rect`) are defopaque in
+  `plutovg/types.tur` and threaded through canvas/font/paint/path.
+  (Audit was stale; this had already shipped.)
+- **raylib** -- `Model` / `Mesh` / `Material` / `Matrix` / `Texture2D` /
+  `Font` / `Camera{2,3}D` / `Color` / `Vector2` / `Rectangle` are
+  defopaque in `raylib/types.tur` and threaded through
+  models/text/textures/camera/shapes. (Audit was stale; already shipped.)
+- **rtaudio** -- `DeviceInfo` is defopaque in `rtaudio/core.tur` and
+  threaded through `rtaudio/devices.tur`; the stream callback in
+  `rtaudio/stream.tur:69` is typed as a `c-fn` (no longer S1). (Audit was
+  stale on both; already shipped.)
+- **tourist internals** -- closed by tourist v0.2.6 (turmeric-spices commit
+  9a590cb): `tourist-ctx-caps` / `-strip-path` / `-new` / `-free` /
+  `-resp-headers` / `-clear-resp-headers` / `req-full-path` retyped from
+  bare `:int` to `Ctx`, and the annotation pushed through routing internals
+  (`__ctx-method` / `__ctx-path` / `__ctx-set-caps` / `__dispatch-item` /
+  `__url-map-dispatch` / `__cascade-dispatch` / `subapp-call`) and
+  middleware (`mw-call` / `mw-chain-run` / `mwafter-call` /
+  `mwafter-chain-run`). Swap-reject probes added in
+  `tests/tourist/swap_reject_test.tur`.
+
+The only remaining tourist row is S4 cons-list type hygiene
+(`__tourist-cons` / `__mw-cons-*` / `__rt-cons-*`); those are
+already typed through `ItemList` / `MountList` / `AppList` /
+`StatusList` defopaques in the cons-walker bodies, so the original
+S4 row is effectively closed as well.
+
+The audit should now be archived (move to `docs/archive/` and
+update `docs/parallel-tracks.md`).
 
 ---
 

@@ -145,18 +145,18 @@ Pure spice-side work; no compiler dependencies.
 
 **Still open:**
 
-- [spices-int-stand-in-audit-2026-06-14](reported/spices-int-stand-in-audit-2026-06-14.md)
-  -- S1/S2/S3 closed across the audited public surfaces. Genuinely
-  remaining:
-  - **S4 cons lists** in tourist internals.
-  - **Secondary handle leaks** outside the audited public surfaces:
-    - raylib: models / text / textures / camera / shapes.
-    - rtaudio: `DeviceInfo` handle + the `rtaudio/stream.tur:62`
-      S1-class callback hole.
-    - plutovg: dash-array / font-cache / gradient-stops / rect.
 - [spices-type-features-uplift-plan](upcoming/spices-type-features-uplift-plan.md)
   -- phased per-spice work (rows, typeclasses, sized types where they
-  "pay rent"). Independent of the audit residuals above.
+  "pay rent"). Independent of the audit (now closed).
+
+**Recently resolved** (archived since last snapshot):
+
+- `spices-int-stand-in-audit-2026-06-14` -- all S1/S2/S3 surfaces and
+  the four secondary-handle follow-up rows closed. Three were already
+  shipped at audit time (the doc was stale on plutovg/raylib/rtaudio);
+  the tourist internals row landed in turmeric-spices commit 9a590cb
+  (tourist v0.2.6 -- `tourist-ctx-*` and routing/middleware internals
+  retyped to `Ctx`).
 
 The audit report's open section can be trimmed to the two bullets
 above; nothing else from the original audit is still pending.
