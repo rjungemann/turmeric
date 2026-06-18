@@ -11,10 +11,22 @@ severity: Medium ergonomics + audit hygiene. `unwrap-or`'s `[o : int dflt : int]
   inline-C bodies and pass them straight into `(unwrap-or r dflt)`. Retyping
   `unwrap-or` without first retyping (or bridging) those producers turns every
   call site into a hard type error.
-status: OPEN, NOT YET STARTED. `unwrap-or` remains on
-  `[o : int dflt : int] : int` in `stdlib/option.tur`. The native interpreter
-  override (`native_option_unwrap_or` in `src/main.c`) is unaffected by a
-  compiled-path signature change; the cascade is purely compiled-path callers.
+status: STEP 1 + producer migrations LANDED; only the M7-gated kleisli caller
+  remains. (1) `unwrap-or` is now by-value `[A] [o : (Option A) dflt : A] : A`
+  in `stdlib/option.tur` with the temporary `unwrap-or-carrier` inline-C shim.
+  (2) The zipper producers (`zipper-move-left`/`-right` and the rest of
+  `stdlib/zipper.tur`) are migrated to by-value `(Option (Zipper A))` -- which
+  required retyping `Zipper` itself from the phantom 5-field `defstruct` to the
+  correct `(defopaque Zipper [A] :int)` heap-handle. (3) `stdlib/env.tur`
+  `env/get` is migrated to by-value `(Option cstr)`. The remaining stdlib
+  `unwrap-or-carrier` caller is `stdlib/kleisli.tur:86` (the `Category
+  [Kleisli]` `comp` body), which is gated on the HKT arrow category (Phase 3 /
+  M7) and tracked under [kleisli-byvalue-option-cascade](
+  kleisli-byvalue-option-cascade.md). The other carrier-Option producers
+  (safe/json/seq/serial) are gated on prelude load order / handle-typing and
+  tracked under [carrier-option-producers-gated-on-handle-typing](
+  carrier-option-producers-gated-on-handle-typing.md). So `unwrap-or-carrier`
+  shim retirement (step 3) cannot complete until M7 lands.
   **No caller-ascription workaround (`(:: r (Option int))`) is in the tree
   for `unwrap-or`, and none will be added** -- same reasoning as the NonEmpty
   plan ([ne-from-byvalue-option-nonempty-element-type-uninferable](
@@ -58,12 +70,12 @@ either retyped to by-value `(Option A)` or have a bridge installed at the
 
 | Module | Producer | Notes |
 |---|---|---|
-| `stdlib/zipper.tur` | `zipper-move-right` and siblings (`zipper-move-left`, `zipper-down`, `zipper-up`) | Inline-C; return the carrier-int Option for an out-of-range move. Migrate to by-value `(Option (Zipper A))`. |
-| `stdlib/seq/*.tur` | `seq-head?`, `seq-tail?`, generator-step Options | Carrier-int Options from inline-C iteration primitives. |
-| `stdlib/json.tur` | `json-get?` / `json-field?` lookup helpers | Carrier-int Options over a parsed-JSON handle. |
-| `stdlib/safe.tur` | safe-arith helpers (`safe-div`, `safe-mod`, ...) | Return carrier-int Option for divide-by-zero / overflow guard. |
-| `stdlib/env.tur` | `getenv?` | Carrier-int Option over a `:cstr` payload. |
-| `stdlib/serial.tur` | deserializer-step Options | Carrier-int Options from inline-C parse step. |
+| `stdlib/zipper.tur` | `zipper-move-left`/`-right` (+ `zipper-new`/`-focus`/`-free`) | **MIGRATED (2026-06-18)** to by-value `(Option (Zipper A))` via `-raw` helpers; `Zipper` retyped `defstruct` -> `(defopaque Zipper [A] :int)`. |
+| `stdlib/seq/*.tur` | `seq-make-some`/`-none` step Options | GATED: the lazy-seq step protocol's own internal Option ABI; needs a typed step protocol, not a producer retype. See carrier-option-producers-gated-on-handle-typing. |
+| `stdlib/json.tur` | `json/get` lookup | GATED on a real `JsonNode` handle type (the whole json surface is bare `:int`). |
+| `stdlib/safe.tur` | `array-get` | GATED on prelude load order (`safe.tur` auto-loads before `option.tur`, so `Option` is not a constructor in its scope). |
+| `stdlib/env.tur` | `env/get` | **MIGRATED (2026-06-18)** to by-value `(Option cstr)` via `env/get-raw : int` + pure-Turmeric wrapper. |
+| `stdlib/serial.tur` | deserializer-step Options | GATED: serialization-internal byte-buffer shapes, not isolated `(Option T)` producers. |
 | `stdlib/kleisli.tur` | `k-apply-raw`'s return | Tracked separately under [kleisli-byvalue-option-cascade](kleisli-byvalue-option-cascade.md); not retired by this plan. |
 | `stdlib/refined.tur` `ne-from?` | Carrier-int Option | Tracked under [ne-from-byvalue-option-nonempty-element-type-uninferable](ne-from-byvalue-option-nonempty-element-type-uninferable.md); the typed-list retype subsumes it. |
 
