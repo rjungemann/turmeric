@@ -559,6 +559,23 @@ are now both located and characterized.
       dispatch-reached instance method participate in generic-style per-element
       spec interning the way a direct `option-map` call does. No existing hook
       short-circuits it -- this is the irreducible M7 emit build.
+
+      **Guard chain mapped (2026-06-18, 13th experiment).** Attaching the
+      element-tyvar bindings as the dispatch call's `abi_bindings` (so it
+      survives `emit_abi_register_call`'s no-bindings early-return at
+      `emit_module.c:1139`) DOES make the result type resolve end-to-end with no
+      ascription -- but the spec STILL is not interned, because the NEXT guard
+      fires: the instance-method spec gate at `emit_module.c:1514-1531` skips a
+      spec whose arg type `type_c_name`'s to `int64_t`, and `(Option int)` is
+      carrier-ABI (`int64_t`) by default. So the M7 emit build is a *chain* of
+      coordinated guard changes -- `:1139` (abi_bindings, done in the probe),
+      `:1514-1531` (carrier-ABI arg skip), `:736` (typeclass_inst gate),
+      `:1559+` (carrier-skip body gate) -- plus emitting the instance-method
+      spec body by-value, ALL entangled with Option's default carrier ABI
+      (an `(Option int)` arg/result lowers to `int64_t` unless it is the Track A
+      by-value Option). Each guard defeated reveals the next; this is the
+      layered, deliberate M6/M7 boundary, and completing it is the multi-session
+      build. Exact guard chain recorded here for the next session.
 - [ ] Update `__inst_<Class>_<method>` symbol naming to disambiguate
       per-`(f, A)` clones.
 - [ ] Per-instance test fixture under `tests/fixtures/hkt-<class>-<f>/`
