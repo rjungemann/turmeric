@@ -387,13 +387,18 @@ ABI-agnostic first.
 
 ### 4.1 -- Enumerate the carrier-helper surface
 
-- [ ] Grep `stdlib/` for inline-C blocks that take `int64_t` and back
-      a typeclass method: `grep -rn 'tur_is_some\|tur_opt_value\|vec_eq\|map_eq\|set_eq\|list_eq' stdlib/`.
-- [ ] Walk the result; for each helper, identify the `definstance`
-      that consumes it and which typeclass method it backs.
-- [ ] Deliverable: a checklist of helpers (`vec-eq?`, `map-eq?`,
-      `mutmap-eq?`, `option-eq?` [done], `set-eq?`, `list-eq?`,
-      `vec-fmap`, `map-fmap`, ...) with their consuming instances.
+- [x] **DONE (2026-06-18).** Deliverable:
+      [`v2/phase4-carrier-helper-inventory.md`](v2/phase4-carrier-helper-inventory.md).
+      Headline: the **non-HKT `Eq` instances no longer bottom out in an inline-C
+      carrier helper** -- they were already migrated (M4c) to read by-value
+      fields directly (`Eq [Vec]` uses `vec-eq-loop`, `Eq [Map]` uses
+      `map-count`+fields, `Eq [Cons]`->pure `list-eq?`, etc.). The remaining
+      inline-C `*-eq?` helpers (`vec-eq?`/`slice-eq?`/`result-eq?`) are
+      **standalone public API**, not dispatch targets. So the only
+      dispatch-backing carrier surface left is (a) the **HKT instance bodies**
+      (gated on Phase 3.0) and (b) the **genuinely runtime-erased HAMT helpers**
+      (`set-eq-full`/`map-eq-raw?`/`tur_hamt_*` -- carrier-essential). Full
+      per-helper verdict table + revised Phase 4/5 sequencing in the deliverable.
 
 ### 4.2 -- Rewrite each helper in pure Turmeric (or accept it as
 genuine carrier)
