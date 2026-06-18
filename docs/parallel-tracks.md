@@ -1,7 +1,7 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-18 (post-PR #421; post-v0.21.0; post turmeric-spices
-PR #14 / tourist v0.2.5).
+Snapshot: 2026-06-19 (post-PR #433; post turmeric-spices PR #15
+sized-scheduler direction-1 land).
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
 open report in `docs/reported/`, bucketed into tracks that can largely
@@ -19,165 +19,128 @@ file -- never leave a resolved item parked here.
 North-star track. Critical path; every other track benefits when it
 advances.
 
-**Open:**
+**Open work:**
 
 - [end-to-end-monomorphization-plan](upcoming/end-to-end-monomorphization-plan.md)
-  -- umbrella. M2 + M3 (down-scoped) + M4 substantively landed. Natural
-  sequel: **M5** (constrained-polymorphic dict typing) -> M6/M7 HKT
-  design+implementation pass.
+  -- umbrella. M2/M3-downscoped/M4 substantively landed. Next: **M5**
+  (constrained-polymorphic dict typing) -> M6/M7 HKT design+implementation.
+  Empirical M5 surface is pinned by `m5-scope-audit-2026-06-18`: most M5
+  behaviors already landed via M4c Path A; one genuine HOF gap remains.
+- [m5-scope-audit-2026-06-18](upcoming/m5-scope-audit-2026-06-18.md)
+  -- pins what's left for M5 against M4c-landed behavior. One genuine
+  M5-class gap (constrained-poly HOF arg baked through carrier);
+  everything else in the original M5 scope already works.
 - [m4-typeclass-per-method-abi-plan](upcoming/m4-typeclass-per-method-abi-plan.md)
   -- M4a deliverables landed. Bridge audit floor: **41 crossings / 11
-  fixtures** (34 `carrier->concrete`, 6 `concrete->carrier`); only
-  bucket C (8 crossings) is tractable, tracked in
-  `option-consumer-retype-byvalue`. Buckets A' / B are by-design
+  fixtures**; only bucket C (8 crossings) is tractable and is tracked
+  under `option-consumer-retype-byvalue`. Buckets A'/B are by-design
   carrier-bridge regression coverage.
 - [option-consumer-retype-byvalue](reported/option-consumer-retype-byvalue.md)
-  (report, PARTIAL 2026-06-18) -- `option-eq?` AND `option-map` now
-  retyped to by-value `(Option A)` with pure-Turmeric bodies. The
-  step-2 "0-arg constructor `abi_bindings`" follow-up landed: elab
-  attaches the constructor-result-tyvar -> caller-tyvar binding for a
-  0-arg `(none)`/`(err)` in non-ground return position, with emit-side
-  structural-match guards and a spec-return-ABI consult so
-  carrier-context and unresolved-element specs stay correct. Remainder:
-  `result-map` (deferred -- a deliberate carrier-ABI regression test
-  backs its `:int` signature) and `some?`/`unwrap-or` (cascade into
-  refined.tur + kleisli Arrow). A spill-bridge gap surfaced at the
-  by-value-producer -> carrier-consumer boundary when the producer is
-  wrapped in a `let`/`do`/`if` arg slot -- see
-  [option-map-byvalue-result-into-carrier-consumer-let-inside-arg](reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md);
-  emit-side direction 1 there closes the regression without waiting on
-  the cascade.
-- [option-map-byvalue-result-into-carrier-consumer-let-inside-arg](reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md)
-  (report, OPEN 2026-06-18) -- regression from the `option-map` retype:
-  `(unwrap-or (let [o (some 5)] (option-map o (fn [x] (* x 3)))) 99)`
-  hits a hard cc error because the by-value `Option__int` producer in
-  the `let` tail is passed to the carrier-`int64_t` `unwrap-or` slot
-  without the `&temp` spill bridge. Loud, not silent; the same call
-  with the option-map call as the *direct* arg of `unwrap-or` compiles
-  and runs. Pre-PR #421 the failing repro worked. Fix direction 1 is
-  an emit-side bridge generalization (spill around `let`/`do`/`if`
-  wrappers whose tail produces a by-value aggregate into a carrier-int
-  slot); direction 2 is the cascade-coupled `unwrap-or` retype tracked
-  in `option-consumer-retype-byvalue`.
+  (report, PARTIAL 2026-06-19) -- `option-eq?`, `option-map`, `some?`,
+  and the BoundedIdx half of step 4 (`bidx-of?` / `bidx-unwrap`) all
+  retyped to pure-Turmeric by-value `(Option A)`. Remaining:
+  - `result-map` -- deferred; its `:int` signature is a deliberate
+    carrier-ABI regression test.
+  - `unwrap-or` -- cascade-coupled (~10 stdlib modules produce
+    carrier-int Options); needs its own PR.
+  - NonEmpty half of step 4 (`ne-from?`/`ne-unwrap`) -- blocked on
+    inference, see next bullet.
+  - Step 5 (`kleisli.tur` `comp`/`k-apply-raw` retype) -- blocked on
+    the broader carrier-Option-producer cascade.
+- [ne-from-byvalue-option-nonempty-element-type-uninferable](reported/ne-from-byvalue-option-nonempty-element-type-uninferable.md)
+  (plan, OPEN 2026-06-19) -- the NonEmpty half of step 4 stays on the
+  carrier until the inference gap is closed by giving `ne-from?` a
+  typed list parameter (`(defopaque List [A] :int)` + `list-of`
+  smart constructor), so `A` is recovered from the argument rather
+  than ascribed at the call site. Caller-ascription `(:: o (Option int))`
+  workaround is explicitly out -- it would propagate carrier-`:int`
+  into every NonEmpty consumer and is the kind of "tighten the types
+  later" patch CLAUDE.md forbids.
 - [tco-map-set-eq-pure-turmeric-followup](upcoming/tco-map-set-eq-pure-turmeric-followup.md)
-  -- low-priority type-hygiene residual; not on the audit critical
-  path (Map/Set are `:heap` and no longer cross the bridge).
+  -- low-priority type-hygiene residual; not on the audit critical path
+  (Map/Set are `:heap`, no longer cross the bridge). **Note:** the
+  primary deliverable (TCO'd pure-Turmeric `Eq [Map]`/`Eq [Set]`) shipped
+  in PR #424; verify what residual content remains and archive if empty.
 
 **Recently resolved** (archived since last snapshot):
 
-- `option-map-literal-none-unannotated-fn-no-A-inference` -- the
-  exact minimal repro
-  `(println (unwrap-or (option-map (none) (fn [x] (* x 3))) 99))`
-  compiles and prints `99` in HEAD. Resolved by the emit-side guard
-  suite that landed in PR #421 alongside the option-map retype (the
-  call routes to the carrier-context spec whose body uses the
-  NULL-safe `(o) ? ((Option *)o)->is_some : 0` deref). The proposed
-  elab-side inference improvement is unnecessary for correctness.
-  Regression fixture: `tests/fixtures/option-map-literal-none-unannotated-lambda/`.
-  (Archived this snapshot.)
-- `option-none-as-null-byvalue-param-segfault` -- PR #414 enabled
-  carrier->concrete conversion at by-value `(Option/Result)` call sites
-  with NULL-safe none. (Archived this snapshot.)
-- `result-bridge-tail-call-from-pure-tur-to-inline-c` -- PR #415/#416
-  bridged carrier tail calls in all tail positions; unblocked the
-  Track C tourist `param`/`capture` retype.
-- `tco-in-abi-specs-for-stdlib-iteration`, `m3-carrier-bridge-deletion`
-  -- both retired; the post-#400 audit floor (34 crossings, zero
-  monomorphic deref-copies) met the down-scoped goal.
+- `option-map-byvalue-result-into-carrier-consumer-let-inside-arg`
+  -- emit-side spill-bridge generalized for `let`/`do`/`if` wrappers
+  whose tail produces a by-value aggregate into a carrier-int slot
+  (PR #425).
+- `option-map-literal-none-unannotated-fn-no-A-inference` -- closed by
+  PR #421's emit-side guard suite; regression fixture
+  `tests/fixtures/option-map-literal-none-unannotated-lambda/`.
+- `zero-arg-construct-ground-byvalue-return` and
+  `parametric-option-return-clone-struct-app-leak` -- both retired
+  (cleared the path for the BoundedIdx half of step 4).
+- Earlier-snapshot resolutions still load-bearing for context:
+  `option-none-as-null-byvalue-param-segfault` (PR #414),
+  `result-bridge-tail-call-from-pure-tur-to-inline-c` (PR #415/#416),
+  `tco-in-abi-specs-for-stdlib-iteration`,
+  `m3-carrier-bridge-deletion`.
 
-## Track B -- ECS spice (E2d wiring + sized worlds)
+## Track B -- ECS spice (sized worlds + scheduler)
 
-**Blocked on:**
-[`sized-scheduler-system-stage-world-carrier`](reported/sized-scheduler-system-stage-world-carrier.md)
--- the parallel scheduler's `System`/`Stage` type-erase the world
-through an `int`/`void*` carrier, so a by-value `(GameWorld n)` struct
-has nowhere to ride. Direction 1 (heap-pointer world, single-world
-scheduling) is **unblocked** at the compiler level by PR #420's
-existential pack/open heap-boxing fix and is implementable today, but
-**no spice-side commit has taken it yet** -- this is the next
-required step before further sized-world track progress, and it
-gates the Slice 8 "wire sized worlds through the parallel scheduler"
-follow-up. Direction 2 (cross-world / heterogeneous scheduling) stays
-blocked on **gap-H world-type polymorphism**, which itself depends on
-the Track A monomorphization phases retiring the carrier bridge.
+**Direction-1 unblocker landed** -- turmeric-spices PR #15
+(`sized-defsystem-scheduled`) takes a heap-pointer world and single-world
+sized scheduling, closing the prior Track B blocker. Slice 8 ("wire sized
+worlds through the parallel scheduler") can now proceed.
 
-E2d's compiler-side blockers all cleared (PR #407 stored by-value
-struct fields inline; PR #412 closed typeclass-dispatch identity gaps
-for plain struct/ADT receivers). PR #420 fixed existential pack/open
-of multi-field struct payloads via heap-boxing, unblocking the
-sized-world `world-resize` helper.
+**Compiler-side prereqs all cleared:** PR #407 (inline struct fields),
+PR #412 (typeclass-dispatch identity), PR #420 (existential pack/open via
+heap-boxing). Direction 2 (cross-world / heterogeneous scheduling) stays
+blocked on **gap-H world-type polymorphism**, which depends on Track A's
+monomorphization phases retiring the carrier bridge.
 
-**Spice-side progress since last snapshot** (verified against
-`turmeric-spices` git log, not just the plan doc, which is stale at
-2026-06-12):
+**Spice-side already landed** (turmeric-spices, verified against git log):
 
-- **E2d wiring landed** -- PRs #6, #7, #8 shipped P1-P6: associated-type
-  storage projection (P1-P5), the variadic `defworld` collapse (P5b),
-  and the `StorageOps` typeclass (P6). The plan doc still lists these
-  as "spice-side wiring pending" but the wiring is in.
-- **E2c sized worlds substantively landed** -- slices 1, 2-4, 4c, 5, 12
-  shipped (`SizedDense n A` shape, `SizedSparse`/`SizedTag`,
-  `sized-defworld`, `sized-spawn`, generational `Entity` handles,
-  `sized-for-each` payoff macro, fallible `sized-spawn ->
-  (Result int WorldFull)`).
-- `ecs-spice-plan.md`'s "E2c is no longer just wiring" framing is now
-  obsolete -- the bounded-capacity world API got built around the
-  sized constructors instead. Plan needs a refresh (out of scope here).
+- E2d wiring (PRs #6-#8): associated-type storage projection (P1-P5),
+  variadic `defworld` collapse (P5b), `StorageOps` typeclass (P6).
+- E2c sized worlds (slices 1-12): `SizedDense n A` /
+  `SizedSparse` / `SizedTag` shapes, `sized-defworld`, `sized-spawn`,
+  generational `Entity` handles, `sized-for-each` payoff macro, fallible
+  `sized-spawn -> (Result int WorldFull)`.
+- PR #15: sized-scheduler direction 1.
+- PR #17: `sized-defworld` `world-resize` existential wrapper.
 
-**Still open:**
+**Open work:**
 
-- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- refreshed
-  2026-06-18 against E2d P1-P6 + E2c slices 1-12 landed and PR #420
-  clearing the compiler-side prereqs for the sized scheduler
-  (direction 1) and `world-resize` wrapper follow-ups.
+- [ecs-spice-plan](upcoming/ecs-spice-plan.md) -- needs a refresh: the
+  "E2d wiring pending" / "direction-1 unblocked but unimplemented"
+  framing is now stale. Remaining real work is direction 2 (cross-world
+  scheduling) once Track A retires the carrier bridge.
 - [ecs-sized-world-plan](upcoming/ecs-sized-world-plan.md) -- surface
-  settled; partly subsumed by the E2c slices that already shipped.
-- [sized-scheduler-system-stage-world-carrier](reported/sized-scheduler-system-stage-world-carrier.md)
-  (report -- **the current Track B blocker**, see top of section)
-  -- `System`/`Stage` type-erase the world through an int carrier.
-  Direction 1 is unblocked at the compiler level but the spice-side
-  by-pointer rework has not landed; cross-world (gap-H) scheduling
-  remains compiler-blocked.
+  settled; largely subsumed by E2c slices 1-12 + PR #15. Refresh or
+  archive after the ecs-spice-plan refresh decides scope.
 
-**Order:** land direction-1 single-world sized scheduling (clears the
-current Track B blocker) -> refresh ecs-spice-plan status against
-landed E2d/E2c slices -> gap-H if cross-world scheduling is needed.
+**Order:** refresh both plan docs against landed state -> gap-H if
+cross-world scheduling is needed for Track B's next slice.
 
 ## Track C -- Spices uplift (type hygiene)
 
 Pure spice-side work; no compiler dependencies.
 
-**Spice-side progress since last snapshot** (verified against
-`turmeric-spices` git log):
-
-- **tourist v0.2.2 (PR #12)** -- `param` / `capture` retyped to
-  `ctx : Ctx`; closes the residual S2 item the prior snapshot listed
-  as "unblocked, awaiting next pass."
-- **tourist v0.2.5 (PR #13)** -- `defopaque Pattern` for
-  `router-compile` / `router-match` / `router-free`; closes the
-  "Pattern opaque still pending" internal S2 item.
-- **`Captures` defopaque** -- shipped in tourist v0.2.1 (referenced
-  by PR #13 prerequisites).
-- **Track B/C cross-over: ecs PRs #4-#14** are listed under Track B
-  but also land spice-side type hygiene.
-
-**Still open:**
+**Open work:**
 
 - [spices-type-features-uplift-plan](upcoming/spices-type-features-uplift-plan.md)
-  -- phased per-spice work (rows, typeclasses, sized types where they
-  "pay rent"). Independent of the audit (now closed).
+  -- phased per-spice uplift (rows, typeclasses, sized types where they
+  pay rent). Independent across spices.
+- [spices-int-stand-in-audit-2026-06-14](reported/spices-int-stand-in-audit-2026-06-14.md)
+  (report) -- 19 spices still carry `:int` stand-ins for handles /
+  callbacks / options; phased retype across the offending spices. Blocks
+  any session-middleware-style composition work.
 
-**Recently resolved** (archived since last snapshot):
+**Recently landed in turmeric-spices** (since last snapshot):
 
-- `spices-int-stand-in-audit-2026-06-14` -- all S1/S2/S3 surfaces and
-  the four secondary-handle follow-up rows closed. Three were already
-  shipped at audit time (the doc was stale on plutovg/raylib/rtaudio);
-  the tourist internals row landed in turmeric-spices commit 9a590cb
-  (tourist v0.2.6 -- `tourist-ctx-*` and routing/middleware internals
-  retyped to `Ctx`).
-
-The audit report's open section can be trimmed to the two bullets
-above; nothing else from the original audit is still pending.
+- PR #12 (tourist v0.2.2): `param`/`capture` retyped to `ctx : Ctx`.
+- PR #13 (tourist v0.2.5): `defopaque Pattern` for
+  `router-compile`/`router-match`/`router-free`.
+- PR #16: remaining tourist `ctx : int` -> `ctx : Ctx` retype.
+- PR #18 (ansi v0.2.0): `Color` typeclass collapse.
+- Audit row `spices-int-stand-in-audit-2026-06-14` previously closed
+  S1/S2/S3 surfaces + four secondary-handle rows (tourist internals
+  landed in turmeric-spices 9a590cb / v0.2.6).
 
 ### Quick decision: spice helpers returning `(Result T E)` / `(Option T)`
 
@@ -202,15 +165,11 @@ None open as of this snapshot.
 
 ## Concurrency summary
 
-A / C are independently progressable. The prior soft coupling between
-Track A (bridge follow-up) and Track C (`param`/`capture` retype) is
-gone (PR #415/#416 -> spices PR #12).
+All three tracks are independently progressable.
 
-**Track B is currently blocked** on
-[`sized-scheduler-system-stage-world-carrier`](reported/sized-scheduler-system-stage-world-carrier.md).
-The compiler-side prerequisite for direction 1 (heap-pointer world,
-single-world sized scheduling) landed in PR #420, but the spice-side
-`System`/`Stage` rework to take it has not -- until that lands, the
-Slice 8 follow-up "wire sized worlds through the parallel scheduler"
-cannot proceed, and cross-world (direction 2 / gap-H) work stays
-gated on Track A's monomorphization phases.
+- **Track A** is the critical path; M5/M6/M7 unlocks Track B direction 2
+  (cross-world scheduling) and reduces Track C audit pressure.
+- **Track B** direction 1 is unblocked and has spice-side traction
+  (PR #15); direction 2 stays gated on Track A gap-H.
+- **Track C** is fully independent. The prior soft coupling to Track A
+  bridge follow-ups is gone (PR #415/#416 -> spices PR #12).
