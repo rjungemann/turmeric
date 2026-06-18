@@ -41,6 +41,20 @@ If you find a resolved report sitting in `docs/reported/` (or a stray
 `docs/reported/history/`), relocate it to `docs/archive/` (or
 `docs/archive/history/`); do not duplicate an already-archived report.
 
+## Test Suite Timeout -- STRICT RULE
+
+**Every single test suite run, NO EXCEPTIONS, MUST be invoked with a 10
+minute (600000ms) timeout.** This applies to `bash tests/run.sh`, any
+ctest invocation, any spice-side suite, any subset run, every time.
+
+- `Bash` tool: pass `timeout: 600000`.
+- Shell directly: wrap in `timeout 600 ...` (or platform equivalent).
+
+If a test suite run is invoked without a 10-minute timeout, you have
+failed the rule -- stop, cancel, and re-run with the timeout. No
+exceptions for "quick" runs, no exceptions for "just one fixture", no
+exceptions for "I'll be fast." Always 10 minutes.
+
 ## No Lazy `:int` Stand-Ins -- STRICT RULE
 
 Typing a request handle, response handle, ctx, server, connection, file,
