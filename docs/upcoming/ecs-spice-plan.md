@@ -14,24 +14,19 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 > companion), and E4 (comparison writeup --
 > [`docs/guides/ecs-guide.md`](../guides/ecs-guide.md) and
 > [`docs/guides/ecs-vs-haskell-ecs.md`](../guides/ecs-vs-haskell-ecs.md))
-> all shipped. Residual follow-ups (none design-blocking, all three
-> with compiler prereqs **now in** after PR #420's existential
-> pack/open heap-boxing fix for multi-field struct payloads):
+> all shipped, plus the sized parallel-scheduler wiring (direction 1)
+> via the new `sized-defsystem-scheduled` macro and the `world-resize`
+> existential wrapper via `sized-defworld-world-resize` -- see the E2c
+> sized-scheduler section below. Residual follow-ups (none
+> design-blocking):
 >
-> 1. **Sized parallel-scheduler wiring** -- `System`/`Stage`
->    generalisation over the world type. Direction 1 (heap-pointer
->    world, single-world scheduling) is the unblocked path; tracked
->    spice-side in
->    [`docs/reported/sized-scheduler-system-stage-world-carrier.md`](../reported/sized-scheduler-system-stage-world-carrier.md)
->    -- the current Track B blocker. Direction 2 (cross-world /
->    heterogeneous scheduling) stays gated on gap-H world-type
->    polymorphism, itself behind the Track A monomorphization phases.
-> 2. **`world-resize` existential wrapper** around the shipped
->    `sized-defworld-copy-into` -- PR #420 cleared the pack/open path
->    for the multi-field `(GameWorld n)` payload; the thin client
->    layer is implementable today.
-> 3. **Routing `defcomponent-accessors` through `StorageOps`** -- still
+> 1. **Routing `defcomponent-accessors` through `StorageOps`** -- still
 >    waiting on struct-element projection (independent of PR #420).
+> 2. **Sized-scheduler direction 2** (cross-world / heterogeneous
+>    scheduling -- a `System` / `Stage` polymorphic in the world
+>    type). Stays gated on gap-H world-type polymorphism, itself behind
+>    the Track A monomorphization phases. Direction 1 (monomorphic
+>    single-world scheduling) shipped via `sized-defsystem-scheduled`.
 >
 > E2b (refinement-typed APIs) remains gated on refinement types, which
 > are still in plan. The original prerequisite-tracking plan has been
@@ -543,17 +538,21 @@ against the resolved surface:
   `defsystem`. Negative regression
   (`tests/errors/sized-defsystem-undeclared-write.tur`) confirms
   the "writes to a component not in `:writes` is a compile-time
-  error" guarantee carries over. **Follow-up:** no `System`
-  value is emitted yet; the parallel scheduler's `System` struct
-  pins the run-fn signature to `[w : int] : nil` (world rides the
-  `ptr<void>` cast as a bare int), and a `(GameWorld n)` struct
-  does not. Generalising `System`/`Stage` over the world type is
-  queued; callers invoke the typed impl directly until then.
-  Direction 1 (heap-pointer world, single-world scheduling) is
-  unblocked at the compiler level by PR #420's existential
-  pack/open heap-boxing fix for multi-field struct payloads;
-  tracked in
-  [`docs/reported/sized-scheduler-system-stage-world-carrier.md`](../reported/sized-scheduler-system-stage-world-carrier.md).
+  error" guarantee carries over. **Companion macro shipped:**
+  `sized-defsystem-scheduled` (sized-scheduler wiring, direction 1
+  -- see
+  [`docs/archive/sized-scheduler-system-stage-world-carrier.md`](../archive/sized-scheduler-system-stage-world-carrier.md))
+  lowers a monomorphic-world body to a typed impl plus an
+  int-carrier wrapper plus a `System` value runnable on the
+  parallel `Stage`. The wrapper passes the world as a heap-boxed
+  `ptr<void>` reinterpreted as `:int`; per-world `box-<W>` /
+  `load-<W>` / `free-<W>-box` helpers stay user-written (macros
+  cannot splice identifiers into inline-C text -- see
+  [`docs/archive/history/macro-cannot-emit-inline-c-block.md`](../archive/history/macro-cannot-emit-inline-c-block.md)).
+  Direction 2 (cross-world / heterogeneous scheduling) remains
+  queued behind gap-H world-type polymorphism, itself behind the
+  Track A monomorphization phases. New regression:
+  `tests/sized-stage.tur`.
 - **Slice 9 -- mixed-shape sparse lookup**
   (`sized-world-sparse-has?` / `sized-world-sparse-get`), the
   sized counterpart of slice 6's tag pair. Hand-rolled-world
