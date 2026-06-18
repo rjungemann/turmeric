@@ -31,11 +31,6 @@ advances.
   + re-audit. Predecessor framing archived at
   `docs/archive/end-to-end-monomorphization-plan.md`; M5 scope audit
   archived at `docs/archive/m5-scope-audit-2026-06-18.md`.
-- [m4-typeclass-per-method-abi-plan](upcoming/m4-typeclass-per-method-abi-plan.md)
-  -- M4a deliverables landed. Bridge audit floor: **41 crossings / 11
-  fixtures**; only bucket C (8 crossings) is tractable and is tracked
-  under `option-consumer-retype-byvalue`. Buckets A'/B are by-design
-  carrier-bridge regression coverage.
 - [option-consumer-retype-byvalue](reported/option-consumer-retype-byvalue.md)
   (report, PARTIAL 2026-06-19) -- `option-eq?`, `option-map`, `some?`,
   and the BoundedIdx half of step 4 (`bidx-of?` / `bidx-unwrap`) all
