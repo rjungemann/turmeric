@@ -1010,6 +1010,34 @@ genuine carrier)
 >   flag-on for the grounded `fmap`/`bind` shapes; the 92-fixture HKT/typeclass
 >   flag-on codegen sweep is unchanged vs. the parent commit (the fix only
 >   enables the previously-broken `ap` shape).
+> - **Alternative `<|>` / selection shape: DONE end-to-end (2026-06-19).** Probe
+>   at `docs/upcoming/v2/m7-hkt-probe-alt.tur` exits 42 under the flag.
+>   `alt2 [x : (f a) y : (f a)] : (f a)` is the first shape whose instance body
+>   does NOT construct its result in-body -- the body is a SELECTION /
+>   PASS-THROUGH `(if (some? x) x y)` that returns an existing `(f a)` argument
+>   directly. It also exposed a latent silent miscompile and a one-grounded-arg
+>   inference gap; two coordinated fixes landed (both in `elab_typeclasses.c`,
+>   flag-gated):
+>   - **Body gate + miscompile fix.** `m7_body_constructs_byvalue` now admits an
+>     `EX_VAR` tail of the applied `(f b)` family (TY_APP) -- a by-value
+>     pass-through return of an existing `(f a)` value -- not only a
+>     `#{Construct}` call. Critically, the `m7_body_byvalue_ok` flag is now
+>     computed ONCE up front and ALSO gates the by-value result-type commit
+>     (layers 1+3), which previously fired on result-grounding ALONE: a
+>     carrier-bodied selection method had its CONSUMER flipped to by-value
+>     (`Option__int`) while its PRODUCER still emitted the int64 carrier, so
+>     `(alt2 (some 7) (some 42))` silently returned `0` instead of `7`. The two
+>     halves (consumer by-value result type / producer by-value abi_bindings) now
+>     share one gate and can never disagree.
+>   - **Multi-arg element recovery.** `m7_collect_tyvar_bindings` now SKIPS a
+>     free-tyvar actual (the element of a bare `(none)`), so a sibling argument
+>     that DOES ground the element wins: `(alt2 (none) (some 42))` grounds `a`
+>     from arg 1, order-independent. The genuinely-uninferable
+>     `(alt2 (none) (none))` stays un-grounded and falls back to a clean
+>     `(type-app ? ?)` error (no miscompile), mirroring the `ap (none) (some _)`
+>     caveat. Inert flag-off (suite 1684/0, byte-identical codegen);
+>     `fmap`/`bind`/`ap` probes unchanged (42/21/42); existing HKT fixtures emit
+>     clean flag-on.
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT

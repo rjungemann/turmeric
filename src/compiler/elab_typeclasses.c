@@ -1687,6 +1687,17 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
                    m7_body_constructs_byvalue(e->as.do_.items[e->as.do_.n - 1]);
         case EX_LET:
             return m7_body_constructs_byvalue(e->as.let_.body);
+        case EX_VAR:
+            /* Selection / pass-through tail (Alternative `<|>` / `or-else`):
+             * the body returns an EXISTING `(f a)` value -- a parameter or local
+             * of the result applied family -- directly, e.g.
+             * `(if (some? x) x y)`.  Under the by-value spec the param's type is
+             * the by-value `Option__int`, so returning it is already by value;
+             * no in-body `#{Construct}` is needed.  Restrict to the applied
+             * `(f b)` family (TY_APP) so a bare-element return (the `extract` /
+             * Foldable shape, whose result is not an applied type) stays on the
+             * uniform carrier path until its own probe hardens it. */
+            return e->type.kind == TY_APP;
         case EX_CALL:
             if (e->as.call_.fn_binding &&
                 e->as.call_.fn_binding->is_construct_template)
@@ -1714,6 +1725,16 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
                                       uint8_t *n, uint8_t max) {
     switch (decl.kind) {
         case TY_TYVAR:
+            /* A free-tyvar ACTUAL carries no grounding information (e.g. the
+             * element of a bare `(none)` argument).  Skip it so a sibling
+             * argument that DOES ground this tyvar wins -- the Alternative
+             * `(alt2 (none) (some 42))` shape, where the element is recoverable
+             * from the second arg.  Without this skip the "keep the first
+             * binding" rule below would lock `a` to the free element of arg 0
+             * and the result would never ground.  (This also leaves the genuine
+             * `ap` caveat -- `(ap (none) (some 41))`, where NO arg grounds `b` --
+             * un-grounded, so it still falls back to carrier dispatch.) */
+            if (act.kind == TY_TYVAR) return;
             if (decl.as.tyvar_.name) {
                 for (uint8_t i = 0; i < *n; i++)
                     if (names[i] && strcmp(names[i]->name, decl.as.tyvar_.name) == 0)
@@ -4880,6 +4901,16 @@ resolved_user_fallback:;
      * substituted result type fully grounds, so an `ap`-style call whose result
      * element cannot be recovered falls back to carrier dispatch. */
     bool m7_byvalue_grounded = false;
+    /* M7 layer-4: is the instance body by-value-expressible (pure-Turmeric)?
+     * Computed up front because it gates BOTH the by-value result-type commit
+     * below AND the abi_bindings attachment further down -- the two MUST agree.
+     * Committing a by-value result type for a CARRIER-bodied method (so the
+     * consumer reads by value) without also interning the by-value spec (so the
+     * producer returns by value) is exactly the carrier-vs-by-value mismatch
+     * that silently miscompiles a selection body to 0 (Alternative `<|>`). */
+    bool m7_body_byvalue_ok = best_method && best_method->body &&
+        best_method->body->kind != EX_INLINE_C &&
+        m7_body_constructs_byvalue(best_method->body);
     if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
         best_method->binding->type.kind == TY_FN &&
         best_method->binding->type.as.fn.result_full_type &&
@@ -4916,7 +4947,7 @@ resolved_user_fallback:;
                  * keeps the carrier result_type so dispatch falls back to the
                  * uniform carrier ABI instead of emitting a broken half-by-value
                  * spec with a dangling carrier-base dict reference. */
-                if (!m7_type_has_free_tyvar(substituted)) {
+                if (!m7_type_has_free_tyvar(substituted) && m7_body_byvalue_ok) {
                     result_type = substituted;
                     m7_byvalue_grounded = true;
                 }
@@ -4975,10 +5006,8 @@ resolved_user_fallback:;
          * instance bodies (the current stdlib HKT instances) must stay on the
          * uniform-carrier dispatch until Phase 4.2 rewrites them; attaching the
          * element bindings to them would mint a by-value spec whose signature
-         * contradicts the carrier inline-C body.  Gate on the body kind. */
-        bool m7_body_byvalue_ok = best_method && best_method->body &&
-            best_method->body->kind != EX_INLINE_C &&
-            m7_body_constructs_byvalue(best_method->body);
+         * contradicts the carrier inline-C body.  Gate on the body kind
+         * (m7_body_byvalue_ok, computed up front above). */
         if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
             m7_byvalue_grounded &&
             tc->n_type_params >= 1 && tc->type_params[0]) {
