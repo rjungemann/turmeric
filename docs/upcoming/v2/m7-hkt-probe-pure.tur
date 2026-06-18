@@ -1,0 +1,52 @@
+;; M7 HKT-dispatch reference probe #5 -- Applicative `pure` / return-directed
+;; shape. NOT a test-suite fixture. Companion to m7-hkt-probe.tur (Functor
+;; `fmap`), m7-hkt-probe-bind.tur (Monad `bind`), m7-hkt-probe-ap.tur
+;; (Applicative `ap`), and m7-hkt-probe-alt.tur (Alternative `<|>`).
+;;
+;; The defining feature of `pure` (vs every prior shape) is that the HKT class
+;; var `f` appears ONLY in the result, never in an argument:
+;;     wrap [x : a] : (f a)
+;; so the instance CANNOT be selected from a receiver argument -- it is
+;; RETURN-DIRECTED: the expected/ascribed result type picks the instance. This
+;; routes through a different dispatcher (elab_try_return_dispatch) than the
+;; receiver-dispatch shapes (elab_method_call), so the layer-4 by-value spec
+;; interning had to be mirrored there.
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-pure.tur; echo $?
+;;   -> 42  (TARGET, REACHED 2026-06-19)
+;;
+;; ASCRIPTION IS INHERENT HERE (unlike the prior probes). Return-directed
+;; dispatch fundamentally needs the expected type to pick the instance -- `(wrap
+;; 42)` alone could be ANY Applicative -- so the `(:: ... (Option int))` is NOT
+;; an M7 limitation and is NOT removable. Consequently this probe behaves
+;; differently across the flag than fmap/bind/ap (which error flag-off for lack
+;; of an ascription):
+;;   - flag OFF: returns 42 via the int64 CARRIER + the `::` carrier->by-value
+;;     bridge at the consumer. Correct, but a carrier round-trip at the HKT
+;;     method boundary (exactly what monomorphization aims to delete).
+;;   - flag ON:  returns 42 via a BY-VALUE per-(f, A) instance-method spec
+;;     (`__inst_MyPure_wrap_Option__spec__Option__int`), NO carrier round-trip.
+;; Verify the contrast in the emitted C: `grep -c '__spec__Option__int'` is 0
+;; flag-off and >=1 flag-on. (Before this probe's fix, flag-ON SILENTLY
+;; MISCOMPILED: the carve-out skipped abi_bindings for the HKT return-dispatch
+;; method, so the producer emitted the carrier while the by-value consumer read
+;; Option__int -- garbage. The fix gates by-value interning on a
+;; by-value-constructible body, exactly as the receiver path does.)
+;;
+;; What it took (one flag-gated piece in elab_typeclasses.c): an M7 layer-4
+;; branch in elab_try_return_dispatch mirroring the receiver-dispatch path --
+;; bind the class var `f` to the ascribed instance head (`bound` = Option) and
+;; recover the element `a` from the argument types (m7_collect_tyvar_bindings),
+;; gated on m7_body_constructs_byvalue(impl->body).
+;;
+;; Verified for a = int (this probe -> 42) and a = cstr (the element threads
+;; through independently of the constructor).
+
+(defclass MyPure [^f]
+  (wrap [x : a] : (f a)))
+
+(definstance MyPure [Option]
+  (wrap [x] (some x)))
+
+(defn main [] : int
+  (unwrap (:: (wrap 42) (Option int))))   ; TARGET: 42

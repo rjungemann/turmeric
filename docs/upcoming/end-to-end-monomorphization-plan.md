@@ -1038,6 +1038,25 @@ genuine carrier)
 >     caveat. Inert flag-off (suite 1684/0, byte-identical codegen);
 >     `fmap`/`bind`/`ap` probes unchanged (42/21/42); existing HKT fixtures emit
 >     clean flag-on.
+> - **Applicative `pure` / return-directed shape: DONE end-to-end (2026-06-19).**
+>   Probe at `docs/upcoming/v2/m7-hkt-probe-pure.tur` exits 42 under the flag.
+>   `wrap [x : a] : (f a)` is the first shape whose class var `f` appears ONLY in
+>   the result -- it is RETURN-DIRECTED, so the instance is picked from the
+>   expected/ascribed type, NOT a receiver arg. This routes through a DIFFERENT
+>   dispatcher (`elab_try_return_dispatch`) than the receiver-dispatch shapes
+>   (`elab_method_call`), whose HKT carve-out skipped the by-value abi_bindings --
+>   so flag-on previously SILENTLY MISCOMPILED (carrier producer vs. by-value
+>   consumer). Fix (one flag-gated branch in `elab_try_return_dispatch`): mirror
+>   the receiver path's layer-4 interning -- bind the class var `f` to the
+>   ascribed instance head (`bound` = Option) and recover the element `a` from the
+>   argument types (`m7_collect_tyvar_bindings`), gated on
+>   `m7_body_constructs_byvalue(impl->body)`. NOTE the ascription is INHERENT to
+>   return-directed dispatch (not removable): flag-off returns 42 via the carrier
+>   + `::` bridge, flag-on via a by-value spec with no carrier round-trip (verify
+>   with `grep -c '__spec__Option__int'`: 0 off / >=1 on). Verified `a = int`
+>   (-> 42) and `a = cstr`. Inert flag-off (suite 1684/0, byte-identical codegen);
+>   `fmap`/`bind`/`ap`/`alt` probes unchanged (42/21/42/42); HKT + return-dispatch
+>   fixtures (`decode-*`, `typeclass-return-dispatch-*`) emit clean flag-on.
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT

@@ -3828,6 +3828,50 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = 1;
         }
+        /* M7 layer-4 (flag-gated): a return-directed HKT method -- Applicative
+         * `pure`/`wrap`, `[x : a] : (f a)` -- has its class var `f` ONLY in the
+         * result, so the instance is picked from the ascribed return type
+         * (`bound` = the constructor, e.g. Option) and the element `a` is
+         * recovered from the argument types.  Mirror the receiver-dispatch path's
+         * by-value spec interning (elab_method_call) so the instance method emits
+         * a by-value `(Option int)` return instead of the int64 carrier (which
+         * the by-value consumer would then misread -> silent miscompile).  Gated
+         * on a by-value-constructible body, exactly as the receiver path is. */
+        if (g_m7_hkt_enabled && is_hkt && tc->n_type_params >= 1 &&
+            tc->type_params[0] && impl->body &&
+            impl->body->kind != EX_INLINE_C &&
+            m7_body_constructs_byvalue(impl->body)) {
+            const Symbol *m7_names[16];
+            Type m7_types[16];
+            uint8_t m7_n = 0;
+            for (uint32_t i = 0; i < n_args; i++) {
+                if (i < meth->n_params && args[i])
+                    m7_collect_tyvar_bindings(e, meth->param_types[i],
+                                              args[i]->type, m7_names, m7_types,
+                                              &m7_n, 16);
+            }
+            /* Bind the HKT class var to the CONSTRUCTOR HEAD of the ascribed
+             * result (`Option`), not the full applied `(Option int)`, matching
+             * the receiver-dispatch path (an in-body applied occurrence `(f a)`
+             * then resolves to `(Option a)` -> `(Option int)` at emit). */
+            Type hkt_head = bound;
+            while (hkt_head.kind == TY_APP && hkt_head.as.app.fn)
+                hkt_head = *hkt_head.as.app.fn;
+            uint8_t total = (uint8_t)(1 + m7_n);
+            if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, total * sizeof(AbiTypeBinding));
+            bindings[0].name = tc->type_params[0]->name;
+            bindings[0].type = hkt_head;
+            uint8_t bi = 1;
+            for (uint8_t k = 0; k < m7_n && bi < total; k++) {
+                bindings[bi].name = m7_names[k]->name;
+                bindings[bi].type = m7_types[k];
+                bi++;
+            }
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = bi;
+        }
     }
     /* return-dispatch-tyvar: tag the abstract-tyvar return-dispatch call with a
      * dict_arg carrying the (representative int) instance + method name, so the
