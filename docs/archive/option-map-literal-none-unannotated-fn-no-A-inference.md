@@ -7,11 +7,17 @@ severity: Low (niche ergonomics regression, NOT a silent miscompile). Mapping a
   after `option-map` was retyped from the carrier `:int` ABI to a pure-Turmeric
   by-value `(Option A) -> (Option B)` body. Every realistic use compiles and runs
   correctly; the workaround is a one-token annotation. Loud, not silent.
-status: OPEN 2026-06-18. Surfaced while retyping stdlib `option-map` (bucket C,
-  docs/reported/option-consumer-retype-byvalue.md step 3). Left as a documented
-  limitation; the fix is an elab-side inference improvement (bind the generic's
-  tyvar from a `^fat (fn [A] B)` closure arg when the by-value `(Option A)` arg
-  is a carrier `#{Construct}` that carries no `A`).
+status: RESOLVED 2026-06-18. The exact minimal repro
+  `(println (unwrap-or (option-map (none) (fn [x] (* x 3))) 99))` compiles and
+  prints `99` in HEAD. The fix is not the proposed elab-side inference
+  improvement; it is the emit-side guard suite that landed in PR #421 itself
+  (`emit_call_name` / `find_matched_abi_spec` / `expr_emits_byvalue_carrier_abi`
+  consulting the matched spec's return ABI). With `A` left unbound by the
+  literal `(none)` arg and the fat-boxed lambda arg, the option-map call routes
+  to the carrier-context spec (`int64_t o`) whose body uses a NULL-safe
+  `(o) ? ((Option *)o)->is_some : 0` deref -- so the literal NULL `(none)` is
+  handled correctly without ever needing to bind `A`. Regression fixture:
+  `tests/fixtures/option-map-literal-none-unannotated-lambda/`.
 ---
 
 # `(option-map (none) <unannotated-lambda>)` under-determines the element type
@@ -104,6 +110,39 @@ Expected: prints `99` (none maps to none; default returned).
 `tests/fixtures/option-construct-byvalue-return-spec/` exercises the working
 by-value `(some ...)`/`(none)` return-position paths. A fix should add a
 fixture for `(option-map (none) (fn [x] (* x 3)))` printing `99`.
+
+## Resolution (2026-06-18)
+
+The exact minimal repro now compiles and runs in HEAD. The fix path was
+**not** the proposed elab-side inference improvement (#1); it was the
+emit-side guards that landed alongside the option-map retype in PR #421:
+
+- `emit_call_name` / `find_matched_abi_spec` require the per-Expr* recording
+  for 0-arg constructors (so a carrier-context `(none)` does not pick up the
+  first by-value `none__spec`).
+- `call_returns_byvalue_aggregate` / `expr_emits_byvalue_carrier_abi` consult
+  the matched spec's return ABI: a spec whose result element stayed
+  unresolved returns the carrier handle, not a by-value aggregate, so the
+  caller does not spill `&temp`.
+
+With `A` left unbound by the literal-`(none)` arg + fat-boxed unannotated
+lambda, the call routes to the carrier-context option-map spec
+(`int64_t o`, `int64_t f`) whose body uses the NULL-safe
+`((o) ? ((Option *)o)->is_some : 0)` deref pattern. The literal NULL
+`(none)` flows through correctly and `unwrap-or` returns the default `99`.
+
+The proposed elab-side fix (#1) -- binding the generic's tyvar from a
+`^fat (fn [A] B)` closure arg -- would have been a more aggressive
+specialization, routing this call to a by-value `Option__int` spec instead
+of the carrier path. It is unnecessary for correctness; the carrier path is
+the current pragmatic answer. Filed here for the record in case a future
+deletion of the carrier base re-opens the under-determined-`A` question.
+
+Regression coverage:
+`tests/fixtures/option-map-literal-none-unannotated-lambda/` -- exercises
+the literal-`(none)` + unannotated-lambda arm (prints `99`) alongside the
+report's noted-working variants (annotated lambda; `(some ...)` literal +
+unannotated lambda).
 
 ## Related
 

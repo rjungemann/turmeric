@@ -1,6 +1,6 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-17 (post-PR #420; post-v0.21.0; post turmeric-spices
+Snapshot: 2026-06-18 (post-PR #421; post-v0.21.0; post turmeric-spices
 PR #14 / tourist v0.2.5).
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
@@ -41,23 +41,40 @@ advances.
   carrier-context and unresolved-element specs stay correct. Remainder:
   `result-map` (deferred -- a deliberate carrier-ABI regression test
   backs its `:int` signature) and `some?`/`unwrap-or` (cascade into
-  refined.tur + kleisli Arrow).
-- [option-map-literal-none-unannotated-fn-no-A-inference](reported/option-map-literal-none-unannotated-fn-no-A-inference.md)
-  (report, OPEN 2026-06-18) -- niche ergonomics regression from the
-  `option-map` retype: `(option-map (none) (fn [x] ...))` (literal
-  `(none)` + unannotated lambda) leaves the element type `A`
-  under-determined and fails with a hard cc error. Loud, not a silent
-  miscompile; every realistic use compiles. Fix is an elab-side
-  inference improvement (bind the generic's tyvar from a `^fat
-  (fn [A] B)` closure arg when the by-value `(Option A)` arg is a
-  carrier `#{Construct}` that carries no `A`). Workaround: annotate the
-  lambda or map over a typed Option value.
+  refined.tur + kleisli Arrow). A spill-bridge gap surfaced at the
+  by-value-producer -> carrier-consumer boundary when the producer is
+  wrapped in a `let`/`do`/`if` arg slot -- see
+  [option-map-byvalue-result-into-carrier-consumer-let-inside-arg](reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md);
+  emit-side direction 1 there closes the regression without waiting on
+  the cascade.
+- [option-map-byvalue-result-into-carrier-consumer-let-inside-arg](reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md)
+  (report, OPEN 2026-06-18) -- regression from the `option-map` retype:
+  `(unwrap-or (let [o (some 5)] (option-map o (fn [x] (* x 3)))) 99)`
+  hits a hard cc error because the by-value `Option__int` producer in
+  the `let` tail is passed to the carrier-`int64_t` `unwrap-or` slot
+  without the `&temp` spill bridge. Loud, not silent; the same call
+  with the option-map call as the *direct* arg of `unwrap-or` compiles
+  and runs. Pre-PR #421 the failing repro worked. Fix direction 1 is
+  an emit-side bridge generalization (spill around `let`/`do`/`if`
+  wrappers whose tail produces a by-value aggregate into a carrier-int
+  slot); direction 2 is the cascade-coupled `unwrap-or` retype tracked
+  in `option-consumer-retype-byvalue`.
 - [tco-map-set-eq-pure-turmeric-followup](upcoming/tco-map-set-eq-pure-turmeric-followup.md)
   -- low-priority type-hygiene residual; not on the audit critical
   path (Map/Set are `:heap` and no longer cross the bridge).
 
 **Recently resolved** (archived since last snapshot):
 
+- `option-map-literal-none-unannotated-fn-no-A-inference` -- the
+  exact minimal repro
+  `(println (unwrap-or (option-map (none) (fn [x] (* x 3))) 99))`
+  compiles and prints `99` in HEAD. Resolved by the emit-side guard
+  suite that landed in PR #421 alongside the option-map retype (the
+  call routes to the carrier-context spec whose body uses the
+  NULL-safe `(o) ? ((Option *)o)->is_some : 0` deref). The proposed
+  elab-side inference improvement is unnecessary for correctness.
+  Regression fixture: `tests/fixtures/option-map-literal-none-unannotated-lambda/`.
+  (Archived this snapshot.)
 - `option-none-as-null-byvalue-param-segfault` -- PR #414 enabled
   carrier->concrete conversion at by-value `(Option/Result)` call sites
   with NULL-safe none. (Archived this snapshot.)

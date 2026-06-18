@@ -26,7 +26,7 @@ status: PARTIAL 2026-06-18. `option-eq?` retyped to `[A] [o1 : (Option A)
   `result-map` remains (a deliberate carrier-ABI regression test backs its
   `:int` signature -- see below); `some?`/`unwrap-or` remain cascade-coupled.
   One niche residual on `option-map` is filed under
-  `docs/reported/option-map-literal-none-unannotated-fn-no-A-inference.md`.
+  `docs/archive/option-map-literal-none-unannotated-fn-no-A-inference.md` (resolved 2026-06-18; emit-side guards in PR #421 route the under-determined-`A` call to the carrier-context spec). A separate spill-bridge regression at the by-value-producer -> carrier-consumer boundary inside a `let`/`do`/`if` arg slot is tracked in `docs/reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md`.
 ---
 
 # Retyping the stdlib Option consumers to by-value `(Option A)`
@@ -150,7 +150,7 @@ is fully retired and the carrier producers (`some`/`none`) stop heap-allocating.
 3. ~~Rewrite `option-map` body to pure Turmeric~~ -- **2026-06-18: done.**
    `result-map` deferred (deliberate carrier-ABI regression test, above).
    Niche `option-map` residual:
-   `docs/reported/option-map-literal-none-unannotated-fn-no-A-inference.md`.
+   `docs/archive/option-map-literal-none-unannotated-fn-no-A-inference.md` (resolved 2026-06-18; emit-side guards in PR #421 route the under-determined-`A` call to the carrier-context spec). A separate spill-bridge regression at the by-value-producer -> carrier-consumer boundary inside a `let`/`do`/`if` arg slot is tracked in `docs/reported/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md`.
 4. Retype `refined.tur`'s `ne-from?`/`bidx-of?`/`ne-unwrap`/`bidx-unwrap`
    to `(Option X)`, then retype `some?`/`unwrap-or` together with them.
 5. Retype `kleisli.tur` `comp` / `k-apply-raw` to thread a by-value

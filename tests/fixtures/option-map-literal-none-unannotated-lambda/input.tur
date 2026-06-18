@@ -1,0 +1,25 @@
+;; Regression fixture for the formerly-OPEN report
+;; docs/archive/option-map-literal-none-unannotated-fn-no-A-inference.md.
+;;
+;; `(option-map (none) (fn [x] ...))` -- literal carrier `(none)` plus an
+;; unannotated lambda -- previously failed with a hard cc error because the
+;; selected option-map spec attempted to read `.is-some` on the int64 carrier.
+;; PR #421 (Track A bucket C: option-map retype to pure-Turmeric by-value
+;; body) landed emit-side guards that route this call to the carrier-context
+;; spec (`int64_t o` with a NULL-safe `(o) ? ((Option *)o)->is_some : 0`
+;; deref), so a literal `(none)` flows through correctly and `unwrap-or` then
+;; returns the default.
+;;
+;; Variants that the report explicitly noted as working remain covered: an
+;; annotated lambda, mapping over a typed Option binding, and mapping over a
+;; `(some ...)` literal. Bundled here so any regression that re-breaks the
+;; under-determined-`A` arm without breaking the annotated arm is caught.
+
+(defn main [] : int
+  ;; Literal (none) + unannotated lambda -- the report's exact minimal repro.
+  (println (unwrap-or (option-map (none) (fn [x] (* x 3))) 99))         ; 99
+  ;; Annotated lambda still works.
+  (println (unwrap-or (option-map (none) (fn [x : int] : int (* x 3))) 88)) ; 88
+  ;; Mapping a (some ...) literal with an unannotated lambda still works.
+  (println (unwrap-or (option-map (some 7) (fn [x] (* x 2))) 0))         ; 14
+  0)
