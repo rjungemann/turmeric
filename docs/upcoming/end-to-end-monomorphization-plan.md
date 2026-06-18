@@ -283,8 +283,51 @@ actually decides option 1 vs 2.
 
 ## Phase 3 -- M7: HKT class dispatch implementation
 
-**Largest single phase.** Implement whatever Phase 2 picked. Tasks
-below are skeleton; flesh out per Phase 2's design doc.
+**Largest single phase.** Implement whatever Phase 2 picked (option 1, per
+`v2/hkt-dispatch-options-tradeoff.md`). Tasks below are skeleton; flesh out
+per Phase 2's design doc.
+
+### 3.0 -- THE core prerequisite (grounded 2026-06-18): thread the element type into HKT instance methods
+
+Empirically pinned by three probes, all bottoming out on the **same gap**:
+
+1. **Kleisli `comp`** -- `(defclass Category [arr])` is kind-`*`, so `arr =
+   Kleisli` and the arrow's `A`/`B`/`C` are phantom; `comp [f g]` has no `B`.
+2. **`fmap` class method** -- `(defclass Functor [^f] (fmap [container [fn :fn]]
+   : int))` returns the int64 carrier and the method does not bind the element
+   tyvar.
+3. **Rewriting `Functor [Option]` `fmap` to pure-Turmeric** (delegating to the
+   already-by-value `option-map`) **fails to typecheck**: inside the instance
+   method `container` arrives as the bare `Option`, not `(Option A)`, so
+   `(option-map container fn)` errors `expected (type-app Option tyvar 'A'),
+   got Option`. The element type `A` is simply not in scope in the method body.
+
+This is why **every** HKT instance body in stdlib is hand-rolled inline-C over
+the raw carrier struct (`struct { bool is_some; int64_t value; } *o = ...;
+return tur_some(...)`): the inline-C sidesteps the missing element type. It
+also means **Phase 3 and Phase 4 are NOT sequentially independent** -- you
+cannot rewrite an HKT instance body to a by-value pure-Turmeric form (Phase
+4.2) until the method *receives* the element type, and you cannot make dispatch
+by-value (Phase 3) until the bodies are by-value. Both depend on this one
+type-system change.
+
+- [ ] **Elaborator change (the real M7 core):** an HKT class method must bind
+      the element parameter(s) of its `[^f]` / `[^^f]` type constructor and
+      give each method-body parameter the *applied* type (`container : (f A)`,
+      i.e. `(Option A)`), with `A` a fresh method-level tyvar that
+      monomorphizes per call. Today the method body sees the bare head type
+      (`Option`) with the element erased. This is a change to how
+      `defclass`/`definstance` over an HKT param elaborate method signatures
+      (`elab_typeclasses.c`), not a codegen tweak. Until it lands, the
+      inline-C carrier bodies are load-bearing and cannot be rewritten.
+- [ ] Once methods carry `(f A)`, rewrite the inline-C HKT instance bodies to
+      pure-Turmeric by-value (this is Phase 4.2 for the HKT helpers, unblocked
+      by 3.0) and let option-1 per-`(f, A)` monomorphization (3.2) clone them.
+
+**Not attempted in-session beyond the probes above:** 3.0 is a type-system
+change of unknown blast radius across all 9 classes / 30 instances and the
+M4 per-method dispatch; it is the genuine multi-session core of M7. The
+probes that established this are reverted (suite stays 1683/0).
 
 ### 3.1 -- Dict generation for HKT instances
 
@@ -342,6 +385,14 @@ ABI-agnostic first.
 
 ### 4.2 -- Rewrite each helper in pure Turmeric (or accept it as
 genuine carrier)
+
+> **Gating note (2026-06-18):** the subset of these helpers that are **HKT
+> instance method bodies** (`fmap`/`ap`/`bind`/`pure` for Option, Parser, Goal,
+> Backtrack, Schema, ...) CANNOT be rewritten to pure-Turmeric until Phase 3.0
+> lands -- the method body has no element-type tyvar in scope, so a by-value
+> rewrite (`(option-map container fn)`) fails to typecheck (`container : Option`,
+> not `(Option A)`). Proven 2026-06-18. Non-HKT carrier helpers
+> (`vec-eq?`/`map-eq?`/`set-eq?`/...) are independent of 3.0 and can proceed.
 
 For each enumerated helper:
 
