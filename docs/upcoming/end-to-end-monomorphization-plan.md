@@ -311,10 +311,36 @@ open-ended ecosystem-wide expansion.
       at the ~21 call sites; HKT method results stop returning the int64
       carrier; nested `(fmap (fmap f) x)` reaches all `(f, A)` monos without a
       worklist cycle; suite + spice suites + `TUR_M3_AUDIT` clean).
-- [ ] **Open before Phase 3:** build the elaborator clone-count probe to turn
-      the "low tens" bound into an exact per-`(f, A)` figure and re-measure
-      against the then-current spices tree (needed to *size* Phase 3, not to
-      *choose* the model -- the choice is settled).
+- [x] **Static enumeration done (2026-06-18); exact figure still probe-gated.**
+      A precise static pass over the now-closed surface tightened both inputs to
+      the clone count:
+      - **Genuine dispatch sites ~21, confirmed.** The raw stdlib grep (110+
+        hits) is dominated by false positives: all `stdlib/httpd.tur` hits are
+        inline-C (`while (ap)`, POSIX `bind(fd, ...)`), `async_socket.tur:58`
+        is socket `bind`, `effects.tur`/`map.tur`/`set.tur`/`mutmap.tur` `pure`
+        are comments, `docstrings.tur` is auto-generated string content, and the
+        `typeclass*.tur` / `comonad.tur` lines are class-default / instance
+        *method definitions*, not call sites.
+      - **Ground-reachable instance set = 6:** Option, Vec, Result, Pair, List,
+        Parser (measured from the HKT leaf instantiations across all
+        `tests/fixtures/**`).
+      - **Ground element-type set is closed and small: `{int, cstr, ~2 schema
+        structs (e.g. User)}`** -- i.e. the tradeoff doc's "+few" is now
+        enumerated. Across the entire fixture suite no HKT site instantiates an
+        open-ended `A`; the A-dimension does not grow with the (already
+        HKT-free) spice ecosystem either (2.1).
+      - So the option-1 clone count = (ground-reachable combinator x instance
+        pairs over ~30 instance-method impls) x |A-set ~= 3-4| = **low tens**,
+        with the A-multiplier now bounded by an enumerated set rather than an
+        estimate.
+- [ ] **Exact figure remains probe-gated (circular w/ M7):** turning the bound
+      into a precise per-`(f, A)` total needs the transitive leaf-to-instance
+      call graph, which an *elaborator* clone-count probe would walk. Building
+      one that faithfully models the per-`(f, A)` monomorphization is itself
+      M7-adjacent (it must model the expansion that does not exist yet), so the
+      exact count cannot be produced ahead of Phase 3 without that tooling. The
+      *bound* (low tens) and both its inputs (6 instances, A-set of 3-4) are
+      now fixed and are sufficient to *size* Phase 3 as "low tens of clones."
 
 ### 2.3 -- Phase 2 done when
 
