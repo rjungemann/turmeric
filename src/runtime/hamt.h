@@ -260,6 +260,29 @@ void tur_hamt_iter_free(HamtIter *iter);
  *   - val_out: receives the value pointer */
 bool tur_hamt_iter_next(HamtIter *iter, uint64_t *hash_out, void **key_out, void **val_out);
 
+/* Iterator-box wrapper: heap-allocated HamtIter + current (hash, key, val)
+ * slots.  Pure-Turmeric Eq[Map] / Eq[Set] drive the loop via these accessors
+ * so the iteration core stays in Turmeric while keeping the underlying iter
+ * state on the C side. */
+void *tur_hamt_iter_alloc(Hamt *m);
+void tur_hamt_iter_destroy(void *box);
+bool tur_hamt_iter_advance(void *box);
+int64_t tur_hamt_iter_cur_hash(void *box);
+void *tur_hamt_iter_cur_key(void *box);
+void *tur_hamt_iter_cur_val(void *box);
+
+/* Read the stamped key comparator off a HAMT root (NULL = identity).  The
+ * pure-Turmeric Eq[Map] loop threads this into tur_hamt_get_dynamic for
+ * content-correct equality on maps built with explicit key comparators. */
+void *tur_hamt_keyeq(Hamt *m);
+
+/* Lookup using the stamped key comparator when keyeq is non-NULL, else
+ * identity.  Keeps the pure-Turmeric loop body free of a conditional. */
+void *tur_hamt_get_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq);
+
+/* has? variant of get_dynamic. */
+bool tur_hamt_has_dynamic(Hamt *m, int64_t hash, void *key, void *keyeq);
+
 /* Public API - Debugging */
 
 /* Dump the HAMT structure to a file for debugging.
