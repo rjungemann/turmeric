@@ -304,3 +304,44 @@ crossings runs through the parent end-to-end-monomorphization plan (consumer +
 Vec/Map element monomorphization), so this plan should be re-scoped to "land
 bind/ap by-value parity" (DONE) and the bridge-deletion goal moved under the
 parent plan.
+
+## Final disposition (2026-06-19) -- why this plan cannot reach 0 crossings, and that is correct
+
+Two questions settle the plan's fate:
+
+**Does leaving the bridge in lose any functionality?** No. `emit_carrier_bridge`
+is purely an internal ABI impedance-matcher (int64 carrier <-> by-value struct).
+Every crossing is a correct translation; the suite is green at 1688/0 with it in.
+For Option/Result it is a stack spill + field copy; for the 41 Vec/MutableMap
+crossings it is a no-op pointer reinterpret the C compiler folds away. The only
+cost of keeping it is the bridge machinery's presence in the tree. "Delete the
+bridge" is a code-hygiene goal, not a capability goal.
+
+**Should the remaining-crossing fixtures change?** No -- they serve a purpose:
+
+- The `:int`-carrier inline-C extractors (`opt-val`/`res-ok`/... in the
+  `hkt-stdlib-*` fixtures) are deliberate carrier-ABI regression coverage: they
+  read the raw `{ bool; int64_t }` layout to assert the representation. Their
+  crossing is `(opt-val byval_option)` -> concrete->carrier. Rewriting them to
+  by-value `some?`/`unwrap` would delete that coverage and game the metric.
+- `ap`'s fixture (`hkt-stdlib-option-result-instances`) explicitly ascribes the
+  function-in-container to int: `(some (:: (fn ...) int))`. So `ff` is genuinely
+  `(Option int)` -- the fn structure is gone by the fixture's own choice, and `b`
+  cannot be recovered structurally. This is the empirical reason attempt #1's
+  "element collapsed to opaque" happened; it is the FIXTURE erasing the element,
+  not a compiler gap. There is no fixture exercising `ap` with a by-value
+  fn-in-container, so `ap` grounding has nothing to ground against.
+- The 41 Vec/MutableMap crossings are generic heap-tagged helpers compiled once
+  over a tyvar; eliminating them is per-element monomorphization of all generic
+  Vec/Map functions -- the parent end-to-end-monomorphization plan, a large
+  change to erase a no-op cast.
+
+**Conclusion.** Every remaining crossing is either (a) deliberate carrier-ABI
+regression coverage or (b) a benign Vec/Map heap reinterpret reducible only by
+the parent plan's general monomorphization. None is removable by closure-result
+monomorphization, and none should be removed by editing the deliberate tests.
+The bind/ap by-value grounding landed here is the correct and complete extent of
+THIS plan (architectural parity with fmap/bimap/pure). The "0 crossings / delete
+the bridge" objective is hereby moved to the parent
+`end-to-end-monomorphization-plan` (general consumer + Vec/Map monomorphization)
+and is NOT pursued here. The bridge stays -- load-bearing and functionally free.
