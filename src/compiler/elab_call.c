@@ -3641,15 +3641,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     if (inner_fn_b->is_poly_fn) {
                         /* Already a tur_poly_fn_t -- pass through. */
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
-                    } else if (inner_fn_b->closure_fn_binding && !inner_fn_b->is_global) {
-                        /* CRU: a *capturing closure VALUE* bound to a local (e.g.
-                         * a `:ptr<void>` from `(make-add 10)`).  make_poly_wrapper
-                         * would emit a file-scope wrapper that statically references
-                         * the local env var (`__poly_N` reading `add10_904`), which
-                         * is out of scope at file scope and fails to compile.  Pack
-                         * the runtime closure into the carrier inline instead -- the
-                         * is_closure path reads the thunk from the box's slot 0 at
-                         * runtime, so a capturing closure round-trips correctly. */
+                    } else if (!inner_fn_b->is_global) {
+                        /* CRU + typed-fn-param forwarding: any LOCAL fn binding --
+                         * a capturing closure VALUE (`(make-add 10)`) OR a plain
+                         * typed fn PARAMETER (`g : (fn [a] b)` forwarded into a
+                         * `:fn` helper, the M7 Functor-instance shape) -- cannot go
+                         * through make_poly_wrapper: it emits a file-scope wrapper
+                         * `__poly_N` that statically references the local (`g` /
+                         * `add10_904`), which is out of scope at file scope and
+                         * fails to compile (`'g' undeclared`).  Pack the runtime
+                         * value into the carrier inline instead -- the is_closure
+                         * path reads the thunk from the box's slot 0 at runtime, so
+                         * both a capturing closure and a passed-in fn round-trip. */
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
                         wrap->as.poly_wrap_.is_closure = true;
                     } else {
