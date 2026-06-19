@@ -52,19 +52,27 @@ fixing the previous:
 4. **Lambda-return propagation** (prototyped in `elab_fns.c`): an un-annotated
    lambda elaborated against an expected `(fn [A] (Parser B))` should push the
    fn-result as the body's expected type. Added -- still did not fire, because:
-5. **ROOT CAUSE -- opaque-applied type erased at type-parse**: `then-parser`'s
-   `q : (Parser B)` parameter has `arg_full_types[1] = int64` at BOTH definition
-   and call (debug: `ppkind=TY_INT, ppc=int64_t`). Traced to `fn_type_from_form`:
-   `Parser` is `(defopaque Parser [A] :ptr<void>)`, and an opaque PARAMETRIC
-   applied type `(Parser B)` is resolved to its `int64`/`ptr<void>` carrier at
-   type-parse, so the structured `(Parser B)` is never stored (the
-   `param_poly_types` `ann->kind == TY_APP` branch at `elab_fns.c:1420` never sees
-   a TY_APP -- it sees the carrier). Without the structured type, NO downstream
-   push (arg-position or lambda-return) can ever propagate a `(Parser _)` to
-   `pure`. Preserving opaque-applied type structure through parsing is a
-   foundational type-representation change (opaque types are pervasive), and it
-   must coexist with the by-value/carrier boundary (blocker 6) -- a multi-session
-   effort, not a localized patch.
+5. **ROOT CAUSE (corrected, attempt 9) -- structured param erased at the CALL
+   SITE, not at defn.** A debug in `elab_fns.c` param handling confirmed
+   `then-parser`'s `q : (Parser B)` IS captured as a `TY_APP` at definition
+   (`ann_kind = 21`, stored in `param_poly_types` -> `arg_full_types[1]`). But a
+   debug in `elab_call.c` at the call site reads `arg_full_types[1] = int64`
+   (`TY_INT`) -- so the generic call instantiation of `then-parser`/`bind-parser`
+   (`[A B]`) lowers the structured `(Parser B)` to the carrier before the
+   expected-type pushes (arg-position / lambda-return, both prototyped) can see
+   it. The fix is to PRESERVE the structured applied type through generic
+   call-site instantiation (it currently collapses applied/opaque-applied param
+   types to int64 when the type args are not yet inferred). This is a change to
+   the generic-dispatch instantiation path -- it touches every generic call, so
+   it is a foundational, broadly-tested change, and it must still coexist with
+   the by-value/carrier boundary for opaque applied results (blocker 6). A
+   multi-session effort, not a localized patch.
+
+   (NOTE: an earlier draft of this report blamed `fn_type_from_form` / type-parse;
+   that was wrong -- `defn` captures the TY_APP correctly. The erasure is purely
+   call-site generic instantiation. Prototypes confirmed: the arg-position push
+   and lambda-return push both fire correctly once given a structured `(Parser
+   _)`, but at the call site they only ever receive the int64 carrier.)
 6. **Opaque-type return-directed by-value (runtime)**: ascribing the 7 sites
    `(:: (pure x) (Parser int))` makes the fixture COMPILE, but it SEGFAULTS at
    runtime -- forcing a by-value `(Parser int)` on the opaque `Parser`
