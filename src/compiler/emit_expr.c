@@ -2232,6 +2232,57 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     arg_strs[i] = raw;
                 }
 
+                /* closure-result-monomorphization Phase 0: a tur_poly_fn_t
+                 * thunk uniformly returns the int64_t carrier.  When the
+                 * concrete result type is a carrier-ABI aggregate (Option /
+                 * Result / parametric struct / ADT), casting fn.fn to return
+                 * the by-value struct is a return-ABI mismatch (the struct is
+                 * returned via a hidden pointer / multi-register, the int64
+                 * carrier in rax/xmm0) -- it silently yields garbage (attempt
+                 * #3 in docs/upcoming/v1/closure-result-monomorphization-plan.md:
+                 * `(bind (some 20) (fn [x] (some (+ x 1))))` returned 0 not 21).
+                 * Invoke through the int64 thunk ABI and bridge the carrier
+                 * result back to the concrete aggregate.  Latent today (no
+                 * fixture mints such a typed carrier yet) but correctness-
+                 * critical for the by-value bind/ap specs that Phase 2 adds.
+                 *
+                 * The mismatch only bites for a by-value STRUCT return: its C
+                 * type name is a real struct typedef (not the int64_t carrier,
+                 * and not a `T *` heap pointer -- both of which share rax with
+                 * the int64 thunk result and round-trip cleanly).  An abstract /
+                 * element-erased carrier (e.g. the generic `bind` base's
+                 * `(Option a)`, whose C type collapses to int64_t) must keep the
+                 * carrier int64 result untouched -- bridging it would deref the
+                 * carrier as a wild pointer (segfault). */
+                const char *pf_result_cname =
+                    phase_f_concrete ? emit_type_c_name(ctx, e->type) : NULL;
+                bool pf_byvalue_aggregate =
+                    phase_f_concrete && type_uses_carrier_abi(e->type) &&
+                    pf_result_cname && strcmp(pf_result_cname, "int64_t") != 0 &&
+                    !strchr(pf_result_cname, '*');
+                if (pf_byvalue_aggregate) {
+                    Buf call; buf_init(&call);
+                    buf_puts(&call, "((int64_t (*)(void*");
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&call, ", %s", emit_type_c_name(ctx, e->as.call_.args[i]->type));
+                    }
+                    buf_printf(&call, "))%s.fn)(%s.env", fn_name, fn_name);
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&call, ", %s", arg_strs[i]);
+                    }
+                    buf_puts(&call, ")");
+                    buf_putc(&call, '\0');
+                    char *call_str = strdup(call.data);
+                    buf_free(&call);
+                    char *bridged = emit_carrier_bridge(ctx, body, call_str,
+                                                        CK_CARRIER, CK_CONCRETE,
+                                                        e->type);
+                    for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+                    free(arg_strs);
+                    free(fn_name);
+                    return bridged;
+                }
+
                 Buf out; buf_init(&out);
                 if (phase_f_concrete) {
                     /* Phase F: cast fn.fn to the concrete signature and call directly */
