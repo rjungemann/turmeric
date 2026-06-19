@@ -3439,7 +3439,7 @@ static dict_Arrow_T dict_Arrow_T_singleton = {
     .second = __inst_Arrow_second_arrow,
 };
 
-struct __env_1199 { int64_t __fn; void * f; };
+struct __env_1199 { tur_thunk_int64_t_int64_t_t __fn; void * f; };
 static int64_t prog____fn_1197(void * __env_p_1200, int64_t e) {
         struct __env_1199 *__env___env_1199 = (struct __env_1199 *)__env_p_1200;
         int64_t __t27 = 0;
@@ -3464,13 +3464,13 @@ static int64_t prog____fn_1197(void * __env_p_1200, int64_t e) {
 
 static void * __inst_ArrowChoice_left_arrow(void * f) {
         struct __env_1199 *__t28 = (struct __env_1199 *)malloc(sizeof(struct __env_1199));
-        __t28->__fn = (int64_t)(intptr_t)prog____fn_1197;
+        __t28->__fn = (tur_thunk_int64_t_int64_t_t)prog____fn_1197;
         __t28->f = f;
         void *__t29 = __t28;
         return __t29;
 }
 
-struct __env_1207 { int64_t __fn; void * f; };
+struct __env_1207 { tur_thunk_int64_t_int64_t_t __fn; void * f; };
 static int64_t prog____fn_1205(void * __env_p_1208, int64_t e) {
         struct __env_1207 *__env___env_1207 = (struct __env_1207 *)__env_p_1208;
         int64_t __t30 = 0;
@@ -3495,13 +3495,13 @@ static int64_t prog____fn_1205(void * __env_p_1208, int64_t e) {
 
 static void * __inst_ArrowChoice_right_arrow(void * f) {
         struct __env_1207 *__t31 = (struct __env_1207 *)malloc(sizeof(struct __env_1207));
-        __t31->__fn = (int64_t)(intptr_t)prog____fn_1205;
+        __t31->__fn = (tur_thunk_int64_t_int64_t_t)prog____fn_1205;
         __t31->f = f;
         void *__t32 = __t31;
         return __t32;
 }
 
-struct __env_1215 { int64_t __fn; void * f; void * g; };
+struct __env_1215 { tur_thunk_int64_t_int64_t_t __fn; void * f; void * g; };
 static int64_t prog____fn_1213(void * __env_p_1216, int64_t e) {
         struct __env_1215 *__env___env_1215 = (struct __env_1215 *)__env_p_1216;
         int64_t __t33 = 0;
@@ -3526,7 +3526,7 @@ static int64_t prog____fn_1213(void * __env_p_1216, int64_t e) {
 
 static void * __inst_ArrowChoice__pl_pl_pl_arrow(void * f, void * g) {
         struct __env_1215 *__t34 = (struct __env_1215 *)malloc(sizeof(struct __env_1215));
-        __t34->__fn = (int64_t)(intptr_t)prog____fn_1213;
+        __t34->__fn = (tur_thunk_int64_t_int64_t_t)prog____fn_1213;
         __t34->f = f;
         __t34->g = g;
         void *__t35 = __t34;

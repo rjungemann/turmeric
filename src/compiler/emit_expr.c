@@ -2232,6 +2232,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     arg_strs[i] = raw;
                 }
 
+                /* closure-result-monomorphization: a monadic continuation
+                 * (bind/ap over Option/Result) is boxed into tur_poly_fn_t via
+                 * make_poly_wrapper, whose wrapper RETURNS the by-value carrier-
+                 * ABI aggregate directly (ensure_aggregate_spill_shim explicitly
+                 * excludes carrier-ABI aggregates, so no int64-boxing shim is
+                 * inserted).  The by-value bind/ap `__spec` therefore invokes the
+                 * continuation through the original by-value cast below
+                 * (`((Option__int (*)(void*, int64_t))k.fn)(...)`), which matches
+                 * the wrapper's real return ABI and crosses no carrier boundary.
+                 * (An earlier revision bridged carrier->concrete here on the
+                 * assumption the thunk always returns int64; that is false post
+                 * construct-monomorphization and produced a wild-pointer deref
+                 * once the grounding fix made the path reachable.) */
                 Buf out; buf_init(&out);
                 if (phase_f_concrete) {
                     /* Phase F: cast fn.fn to the concrete signature and call directly */

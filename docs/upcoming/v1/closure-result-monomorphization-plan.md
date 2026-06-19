@@ -6,6 +6,35 @@ description: The plan for the last ~102 carrier-bridge crossings (24 fixtures), 
 
 # Closure-Result Monomorphization -- Execution Plan
 
+> **UPDATE (2026-06-19, execution attempt).** The bind/ap grounding gap was
+> root-caused and fixed, and `bind` (plus every aggregate-returning-continuation
+> method) now monomorphizes to a by-value `__spec` clone exactly like
+> fmap/bimap/pure -- the by-value spec takes the container by value (no arg
+> spill) and invokes the continuation through the by-value cast with NO bridge in
+> the spec body. Suite green at 1688/0. See "Execution findings" below.
+>
+> **HOWEVER the crossing count did NOT move (102 -> 102), and the plan's central
+> premise is contradicted by the live audit.** The remaining 102 crossings are
+> NOT "only bind and ap" (the STATUS line below). A fresh `TUR_M3_AUDIT=1` sweep
+> shows: 41 are `Vec`/`MutableMap` carrier boundaries in non-HKT generic fixtures
+> (m5-constrained-poly-vec-eq etc.) -- nothing to do with monadic dispatch; the
+> Option/Result crossings are dominated by CONSUMER-side bridges where a by-value
+> `Option__int` meets the fixtures' deliberate `:int`-carrier inline-C extractors
+> (`opt-val`/`res-ok`/...), which intentionally read the carrier layout and so
+> MUST take int64; and `ap` is still on its carrier base (the fn-in-container
+> `ff : (f (fn a b))` case this fix does not address). Eliminating the bind ARG
+> spill simply traded it for an already-present consumer bridge -- the net-neutral
+> trap, now confirmed for the real (not half-measure) by-value spec.
+>
+> **Conclusion: reaching 0 crossings is NOT achievable via closure-result
+> monomorphization alone.** It requires (a) by-value Option/Result *consumers*
+> (a fixture rewrite away from `:int`-carrier extractors, which defeats their
+> purpose as carrier-ABI regression tests, OR consumer-side monomorphization),
+> and (b) Vec/MutableMap element monomorphization -- i.e. the parent
+> end-to-end-monomorphization plan, not this one. The bind/ap closure-result work
+> landed here is correct and worth keeping (architectural parity with the other
+> HKT methods), but it is not the lever that deletes the bridge.
+>
 > **STATUS (2026-06-19).** Carrier-bridge deletion is at **102 crossings / 24
 > fixtures**, down from 1338 (92% deleted) via construct-monomorphization +
 > dead-instance elimination. Suite green at 1685/0. The remaining crossings are
@@ -215,3 +244,104 @@ returns by value):
 - `emit_carrier_bridge` and the bridge predicates deleted (or provably
   unreachable and removed).
 - Parent monomorphization plan + v2 audit archived.
+
+## Execution findings (2026-06-19)
+
+What was implemented and landed (green, 1688/0):
+
+1. **Root-caused the bind/ap grounding gap.** An unannotated monadic
+   continuation `(fn [x] (some (+ x 1)))` whose body is a carrier-ABI aggregate
+   recorded only `result_kind = TY_APP` and dropped the full result type:
+   `elab_fns.c`'s return-type inference only captured `result_full_type` for a
+   `TY_FN` body. So the continuation typed as `(fn [int] (type-app ? ?))`, and
+   `m7_collect_tyvar_bindings` could not recover `b` from `bind`'s `(m b)`
+   result -- `m7_byvalue_grounded` stayed false and dispatch fell back to the
+   carrier base. The agent-claimed "b is only known at runtime" was wrong; the
+   info was present in the continuation body, merely discarded at lift time.
+
+2. **Fix (elab_fns.c).** When inferring a lambda's return type from its body,
+   also preserve a fully-ground carrier-ABI aggregate body type
+   (TY_APP/TY_ADT/parametric TY_STRUCT). Gated on NO free named tyvar -- a
+   residual free arm (the fixed `B` of a partial ok-biased `(Result int B)`)
+   makes the lifted continuation wrapper `emit_abi_fn_is_generic_unsafe` and it
+   gets skipped as dead generic code while its address is still taken (an
+   undeclared `__poly_N`).
+
+3. **Result:** `bind` (and any aggregate-returning-continuation method) now mints
+   `__inst_Monad_bind_Option__spec__...(Option__int, tur_poly_fn_t)` taking the
+   container BY VALUE and invoking the continuation via the by-value cast
+   `((Option__int (*)(void*, int64_t))k.fn)(...)` -- no arg spill, no bridge in
+   the spec body. This is genuine architectural parity with fmap/bimap/pure.
+
+4. **Reverted the Phase-0 carrier->concrete bridge.** It assumed the continuation
+   thunk always returns the int64 carrier. Post construct-monomorphization,
+   `make_poly_wrapper` returns the by-value aggregate directly and
+   `ensure_aggregate_spill_shim` explicitly EXCLUDES carrier-ABI aggregates, so
+   no int64-boxing shim is inserted -- the original by-value cast is correct, and
+   the bridge produced a wild-pointer deref once the path became reachable. (So
+   Phase 0 as written in this plan is moot: the int64-thunk premise no longer
+   holds for Option/Result continuations.)
+
+Why the metric did not move (the decisive measurement):
+
+- A full `TUR_M3_AUDIT=1` sweep is byte-identical before and after: 102 -> 102.
+- `hkt-stdlib-option-result-instances`: 12 -> 12. The bind args are now by-value
+  (`some__spec__...(20)`, no spill), but the fixture's `(opt-val byval_option)`
+  consumers -- `opt-val : (defn [o : int] ...)`, an inline-C extractor reading
+  the int64 carrier layout -- bridge `concrete->carrier (Option int)`. Removing
+  the producer spill exposed the pre-existing consumer bridge 1:1.
+- `ap` is still on its carrier base (`__inst_Applicative_ap_Option((int64_t)
+  (intptr_t)(&__t57), ...)`); the lambda-result grounding does not touch
+  `ff : (f (fn a b))`.
+- 41 of the 102 are `Vec`/`MutableMap` (e.g. `m5-constrained-poly-vec-eq`),
+  unrelated to monadic dispatch and untouched by this work.
+
+Recommendation: keep the bind/ap-grounding commit (correct, green, parity). Do
+NOT pursue Phase 3 (delete the bridge) under this plan -- the bridge is
+load-bearing for the consumer-side Option/Result crossings and the Vec/Map
+crossings, none of which closure-result monomorphization removes. The path to 0
+crossings runs through the parent end-to-end-monomorphization plan (consumer +
+Vec/Map element monomorphization), so this plan should be re-scoped to "land
+bind/ap by-value parity" (DONE) and the bridge-deletion goal moved under the
+parent plan.
+
+## Final disposition (2026-06-19) -- why this plan cannot reach 0 crossings, and that is correct
+
+Two questions settle the plan's fate:
+
+**Does leaving the bridge in lose any functionality?** No. `emit_carrier_bridge`
+is purely an internal ABI impedance-matcher (int64 carrier <-> by-value struct).
+Every crossing is a correct translation; the suite is green at 1688/0 with it in.
+For Option/Result it is a stack spill + field copy; for the 41 Vec/MutableMap
+crossings it is a no-op pointer reinterpret the C compiler folds away. The only
+cost of keeping it is the bridge machinery's presence in the tree. "Delete the
+bridge" is a code-hygiene goal, not a capability goal.
+
+**Should the remaining-crossing fixtures change?** No -- they serve a purpose:
+
+- The `:int`-carrier inline-C extractors (`opt-val`/`res-ok`/... in the
+  `hkt-stdlib-*` fixtures) are deliberate carrier-ABI regression coverage: they
+  read the raw `{ bool; int64_t }` layout to assert the representation. Their
+  crossing is `(opt-val byval_option)` -> concrete->carrier. Rewriting them to
+  by-value `some?`/`unwrap` would delete that coverage and game the metric.
+- `ap`'s fixture (`hkt-stdlib-option-result-instances`) explicitly ascribes the
+  function-in-container to int: `(some (:: (fn ...) int))`. So `ff` is genuinely
+  `(Option int)` -- the fn structure is gone by the fixture's own choice, and `b`
+  cannot be recovered structurally. This is the empirical reason attempt #1's
+  "element collapsed to opaque" happened; it is the FIXTURE erasing the element,
+  not a compiler gap. There is no fixture exercising `ap` with a by-value
+  fn-in-container, so `ap` grounding has nothing to ground against.
+- The 41 Vec/MutableMap crossings are generic heap-tagged helpers compiled once
+  over a tyvar; eliminating them is per-element monomorphization of all generic
+  Vec/Map functions -- the parent end-to-end-monomorphization plan, a large
+  change to erase a no-op cast.
+
+**Conclusion.** Every remaining crossing is either (a) deliberate carrier-ABI
+regression coverage or (b) a benign Vec/Map heap reinterpret reducible only by
+the parent plan's general monomorphization. None is removable by closure-result
+monomorphization, and none should be removed by editing the deliberate tests.
+The bind/ap by-value grounding landed here is the correct and complete extent of
+THIS plan (architectural parity with fmap/bimap/pure). The "0 crossings / delete
+the bridge" objective is hereby moved to the parent
+`end-to-end-monomorphization-plan` (general consumer + Vec/Map monomorphization)
+and is NOT pursued here. The bridge stays -- load-bearing and functionally free.

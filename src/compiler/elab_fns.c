@@ -3739,6 +3739,29 @@ Expr *elab_fn(Elab *e, const Form *call) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = body->type;
             return_fn_type = rft;
+        } else if (!return_full_type &&
+                   (body->type.kind == TY_APP || body->type.kind == TY_ADT ||
+                    (body->type.kind == TY_STRUCT && body->type.as.struct_.def)) &&
+                   !fn_type_has_named_tyvar(&body->type)) {
+            /* closure-result-monomorphization Phase 2 grounding: an unannotated
+             * lambda whose body is a carrier-ABI aggregate (e.g. a monadic
+             * continuation `(fn [x] (some (+ x 1)))` returning `(Option int)`)
+             * previously recorded only result_kind=TY_APP and dropped the full
+             * type, leaving the fn type's result as `(type-app ? ?)`.  That
+             * erasure is exactly why `m7_collect_tyvar_bindings` could not ground
+             * `b` in `bind`/`ap`'s `(m b)` result (the continuation's concrete
+             * `(Option int)` was unrecoverable), forcing the carrier fallback.
+             * Preserve the body's full aggregate type so the element grounds.
+             *
+             * Gate on a FULLY-GROUND body: a residual free named tyvar (e.g. the
+             * fixed arm `B` of a partial ok-biased `(Result int B)` instance)
+             * would make the lifted wrapper `emit_abi_fn_is_generic_unsafe` and
+             * get skipped as dead generic code while its address is still taken
+             * (an undeclared `__poly_N`).  Only concrete aggregates are safe to
+             * record here. */
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = body->type;
+            return_full_type = rft;
         }
     }
 
