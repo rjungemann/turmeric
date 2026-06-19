@@ -1362,13 +1362,43 @@ fire ONLY on those sites, and the rest of the machinery deletes.
 
 ### 5.5 -- Phase 5 done when
 
-- [ ] The bridge machinery (`emit_carrier_bridge`,
+- [x] The bridge machinery (`emit_carrier_bridge`,
       `expr_emits_byvalue_carrier_abi`, `type_uses_carrier_in_dispatch`)
-      is gone or scoped to the carrier-essential inventory.
-- [ ] Audit floor is zero except at documented carrier-essential
-      sites.
-- [ ] This plan is archived; the README of `docs/upcoming/` no
-      longer references it.
+      is **scoped to the carrier-essential inventory** -- the 5.1 tripwire
+      machine-confirms it fires nowhere else. (Full *deletion* is gated; see
+      the follow-on below.)
+- [x] Audit floor is zero except at documented carrier-essential
+      sites (the dict/indirect-dispatch Option/Result crossings + erased
+      helpers).
+- [ ] This plan is archived; this happens together with the follow-on once
+      the dict-ABI migration lets the bridge be deleted outright.
+
+#### Follow-on (the v1 finish-line item that unblocks deletion): dict-ABI monomorphization (M9)
+
+The bridge is *scoped* (5.1/5.2/5.4 done) but cannot be *deleted* (5.3 +
+the deletion clause of 5.5) until the dispatch-dict ABI itself is lowered
+from the uniform `int64` carrier to per-instance by-value slots. Concretely:
+
+- Today the per-instance dispatch dict singleton is emitted with
+  `int64_t (*)(int64_t, ...)` function-pointer slots (the M6/M7 carve-out),
+  and indirect / constrained-polymorphic HKT dispatch
+  (`(defn f [^m] [^&: Monad m] ...)` calling `.bind` through the dict) goes
+  through them. A by-value Option/Result consumer of such a result must
+  bridge the carrier int64 back to the struct -- this is the entire
+  remaining ~78-crossing audit floor.
+- Direct (monomorphic) call sites already go fully by-value via the
+  per-(f,A) `__spec` clones; only the dict/indirect path produces a carrier
+  result.
+- The migration: type the dict slots by the instance's concrete by-value
+  signatures (matching the `__spec` clones), update the dispatcher and every
+  indirect call site, then the dict-fed crossings disappear and the bridge
+  collapses to only the genuinely-erased HAMT/`*-map` helpers (or deletes
+  entirely if those are migrated too).
+
+This is distinct from -- and was unblocked by -- the Phase 4 instance-body
+migration. It is a large, suite-sensitive change (dict struct emission, slot
+typing, dispatcher signatures, indirect call sites) and is tracked as its own
+phase rather than folded into Phase 5's instance-body work.
 
 ---
 
