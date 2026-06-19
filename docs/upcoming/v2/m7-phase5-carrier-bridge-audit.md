@@ -73,6 +73,21 @@ barely moved (12 -> 11).  So the naive grounding is unsound (the author's guard
 is correct), and bind/ap genuinely require the deeper closure-result ABI change,
 not a grounding tweak.  Reverted; gate kept green at 1685/0.
 
+**Second confirmation (bind-only, gated, also reverted).** I then narrowed the
+grounding to exclude function-in-container methods (skip `ap`'s `ff:(f (fn a
+b))`, attempt only `bind`).  That BUILT cleanly (the ap-specific `Option__opaque`
+error was gone), but **miscompiled at runtime**: the bind test
+`(bind (some 20) (fn [x] (some (+ x 1))))` returned `0` instead of `21` -- the
+continuation's carrier container is not correctly read by value, a silent
+wrong-value miscompile (worse than a build error).  Reverted.
+
+So across two independent attempts the bind/ap residue is proven unsound to
+monomorphize naively (ap: `cc` type error; bind: runtime miscompile).  The only
+sound completion is closure-result monomorphization for monadic continuations --
+making the continuation closure itself return a by-value container -- which is a
+fundamental change to the higher-order closure ABI, not a localized fix.  That
+is the genuine, empirically-validated floor for the final 102 crossings.
+
 ### (Historical) Lever 2 -- earlier diagnostic (what blocks it; two suppression points)
 
 A probe of `emit_abi_register_call` over the live fixture
