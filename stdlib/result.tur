@@ -29,7 +29,7 @@
 ;;;   the previous monomorphic-on-`:int` shape rejected non-int payloads
 ;;;   at TUR-E0001 and blocked the typed Decode surface in the json
 ;;;   spice. The body still goes through the int64 carrier helper
-;;;   `tur_ok`; the type-level polymorphism is achieved by ascribing the
+;;;   `tur_box_ok`; the type-level polymorphism is achieved by ascribing the
 ;;;   carrier handle to `(Result A B)` and letting the carrier-ABI
 ;;;   codegen take care of the rest).
 
@@ -267,8 +267,8 @@
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
   if (!res) return 0;
   if (res->is_ok)
-      return tur_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
-  return tur_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
+      return tur_box_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
+  return tur_box_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
   ```)
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
@@ -345,7 +345,7 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance MonadError [(Result _ B)]
-  (throw-error [err] ```c return tur_err(err); ```)
+  (throw-error [err] ```c return tur_box_err(err); ```)
   (catch-error [ma handler]
     ```c
     struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;

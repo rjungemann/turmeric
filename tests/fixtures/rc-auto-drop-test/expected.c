@@ -157,8 +157,8 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 typedef struct { bool is_some; int64_t value; } tur_option_t;
 typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;
 #define TUR_NONE ((int64_t)0)
-static int64_t tur_some(int64_t __x) __attribute__((unused));
-static int64_t tur_some(int64_t __x) {
+static int64_t tur_box_some(int64_t __x) __attribute__((unused));
+static int64_t tur_box_some(int64_t __x) {
     tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));
     __o->is_some = true; __o->value = __x;
     return (int64_t)(intptr_t)__o;
@@ -171,14 +171,14 @@ static int64_t tur_opt_value(int64_t __o) __attribute__((unused));
 static int64_t tur_opt_value(int64_t __o) {
     return ((tur_option_t *)(intptr_t)__o)->value;
 }
-static int64_t tur_ok(int64_t __v) __attribute__((unused));
-static int64_t tur_ok(int64_t __v) {
+static int64_t tur_box_ok(int64_t __v) __attribute__((unused));
+static int64_t tur_box_ok(int64_t __v) {
     tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));
     __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;
     return (int64_t)(intptr_t)__r;
 }
-static int64_t tur_err(int64_t __e) __attribute__((unused));
-static int64_t tur_err(int64_t __e) {
+static int64_t tur_box_err(int64_t __e) __attribute__((unused));
+static int64_t tur_box_err(int64_t __e) {
     tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));
     __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;
     return (int64_t)(intptr_t)__r;
@@ -689,14 +689,14 @@ static int64_t tur_catch_unwind_box(int64_t thunk) {
         int64_t __v = TUR_APPLY0(thunk);
         global_panic_jmpbuf_valid = __prev_valid;
         if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
-        return tur_ok(__v);
+        return tur_box_ok(__v);
     } else {
         global_panic_jmpbuf_valid = __prev_valid;
         if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
         tur_panic_in_progress = 0;
         tur_panic_payload *__p = global_panic_payload;
         global_panic_payload = NULL;
-        return tur_err((int64_t)(intptr_t)__p);
+        return tur_box_err((int64_t)(intptr_t)__p);
     }
 }
 
@@ -708,7 +708,7 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
         int64_t __v = TUR_APPLY0(thunk);
         global_panic_jmpbuf_valid = __prev_valid;
         if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
-        return tur_ok(__v);
+        return tur_box_ok(__v);
     } else {
         global_panic_jmpbuf_valid = __prev_valid;
         if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
@@ -716,11 +716,11 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
         tur_panic_payload *__p = global_panic_payload;
         global_panic_payload = NULL;
         if (__p && __p->type_tag == expected_type) {
-            return tur_err((int64_t)(intptr_t)__p);
+            return tur_box_err((int64_t)(intptr_t)__p);
         }
         /* type mismatch: re-raise to the next outer boundary (restored above) */
         if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);
-        return tur_err(0);
+        return tur_box_err(0);
     }
 }
 
@@ -3310,7 +3310,7 @@ static dict_Monad_Result__ltstruct_gt dict_Monad_Result__ltstruct_gt_singleton =
 };
 
 static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t err) {
-        return tur_err(err); 
+        return tur_box_err(err); 
 }
 
 static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t ma, tur_poly_fn_t handler) {
@@ -3966,8 +3966,8 @@ static int64_t result_hybimap(int64_t container, int64_t fn_left, int64_t fn_rig
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
   if (!res) return 0;
   if (res->is_ok)
-      return tur_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
-  return tur_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
+      return tur_box_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
+  return tur_box_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
   
 }
 

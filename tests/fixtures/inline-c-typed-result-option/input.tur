@@ -4,7 +4,7 @@
 ;; A fallible C constructor (one that allocates/acquires a handle in C and may
 ;; fail) can return a *real typed* `(Result Handle E)` / `(Option Handle)` --
 ;; not a `:ptr<void>` or a magic-sentinel `:int` -- by calling the preamble
-;; helpers tur_ok / tur_err / tur_some / TUR_NONE.  The helpers share the
+;; helpers tur_box_ok / tur_box_err / tur_box_some / TUR_NONE.  The helpers share the
 ;; canonical Result/Option heap layout with stdlib, so the typed value flows
 ;; straight into the stdlib accessors (ok?, err?, ok-val, some?, unwrap).
 ;; No spice needs to re-declare `{ bool is_ok; int64_t ok_val; ... }` by hand.
@@ -16,10 +16,10 @@
 (defn open-device [id : int] : (Result Device int)
   ```c
   #include <stdlib.h>
-  if (id < 0) return tur_err(22);
+  if (id < 0) return tur_box_err(22);
   int64_t *h = (int64_t *)malloc(sizeof(int64_t));
   *h = 1000 + id;
-  return tur_ok((int64_t)(intptr_t)h);
+  return tur_box_ok((int64_t)(intptr_t)h);
   ```)
 
 ;; device-tag : read the int stashed behind the opaque Device handle.
@@ -37,7 +37,7 @@
   if (id < 0) return TUR_NONE;
   int64_t *h = (int64_t *)malloc(sizeof(int64_t));
   *h = 2000 + id;
-  return tur_some((int64_t)(intptr_t)h);
+  return tur_box_some((int64_t)(intptr_t)h);
   ```)
 
 (defn main [] : int

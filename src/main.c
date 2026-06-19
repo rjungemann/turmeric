@@ -5806,7 +5806,7 @@ static TuriValue native_none(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     return turi_int(0); /* NULL pointer */
 }
 /* W1b: an Option reaches these shims either as a native int64[2] box
- * {is_some, value} (from native_some / tur_some) or as a make-struct TuriStruct
+ * {is_some, value} (from native_some / tur_box_some) or as a make-struct TuriStruct
  * with the same field order (from `(make-struct Option ...)`).  option_field
  * reads field `idx` from whichever representation so the two coexist -- the same
  * dual-rep pattern as result_field.  none is the 0/NULL box (every field 0). */

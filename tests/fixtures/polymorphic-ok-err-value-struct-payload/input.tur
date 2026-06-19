@@ -1,5 +1,5 @@
 ;; Prereq 6 regression: polymorphic `ok` / `err` with a value-struct payload.
-;; Pre-fix the inline-C body `return tur_ok((int64_t)(intptr_t)x);` rejected
+;; Pre-fix the inline-C body `return tur_box_ok((int64_t)(intptr_t)x);` rejected
 ;; the User struct rvalue; post-fix the spec emit detects the boxing-needed
 ;; shape (body_is_inline_c + value-struct A + return type uses carrier ABI)
 ;; and synthesizes a direct by-value Result struct construction, bypassing

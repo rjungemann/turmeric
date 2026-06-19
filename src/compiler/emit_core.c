@@ -2639,7 +2639,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                        cname, src_str);
         } else {
             /* decode-bool-carrier-instance-ascription:
-             * The carrier source produced by inline-C `tur_ok` / `tur_some`
+             * The carrier source produced by inline-C `tur_box_ok` / `tur_box_some`
              * always lays out its payload fields as int64_t (the universal
              * `tur_result_box_t` / `tur_option_t` shape). The by-value sink
              * struct `Result__T__U` / `Option__T` lays them out at native

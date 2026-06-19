@@ -1618,7 +1618,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     /* M2b: the same monomorphization-vs-carrier choice applies to
      * `#{Construct}` polymorphic defns whose body is a `(make-struct …)`.
      * Their carrier-emit body is synthesized in emit_fns.c to the same
-     * `return tur_ok((int64_t)(intptr_t)x);` shape the inline-C body
+     * `return tur_box_ok((int64_t)(intptr_t)x);` shape the inline-C body
      * produces, so for ABI-neutral specs (no by-value struct in args or
      * result) the carrier path is correct and a spec is wasted code that
      * also triggers caller/callee ABI mismatch when the caller still
@@ -3058,14 +3058,14 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * canonical layout instead of hand-rolling the struct cast + a magic
      * sentinel integer (`-1`, `INT64_MIN`, `0`-as-absent).  The layout matches
      * stdlib/option.tur and stdlib/result.tur byte-for-byte, so values built
-     * with tur_some/tur_ok flow transparently into the stdlib accessors and
+     * with tur_box_some/tur_box_ok flow transparently into the stdlib accessors and
      * vice versa.  Marked unused so a program that touches neither type still
      * compiles clean under -Wall. */
     buf_puts(out, "typedef struct { bool is_some; int64_t value; } tur_option_t;\n");
     buf_puts(out, "typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;\n");
     buf_puts(out, "#define TUR_NONE ((int64_t)0)\n");
-    buf_puts(out, "static int64_t tur_some(int64_t __x) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_some(int64_t __x) {\n");
+    buf_puts(out, "static int64_t tur_box_some(int64_t __x) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_box_some(int64_t __x) {\n");
     buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
     buf_puts(out, "    __o->is_some = true; __o->value = __x;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
@@ -3075,13 +3075,13 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
     buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->value;\n}\n");
-    buf_puts(out, "static int64_t tur_ok(int64_t __v) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_ok(int64_t __v) {\n");
+    buf_puts(out, "static int64_t tur_box_ok(int64_t __v) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_box_ok(int64_t __v) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
     buf_puts(out, "    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
-    buf_puts(out, "static int64_t tur_err(int64_t __e) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_err(int64_t __e) {\n");
+    buf_puts(out, "static int64_t tur_box_err(int64_t __e) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_box_err(int64_t __e) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
     buf_puts(out, "    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
@@ -3893,7 +3893,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase R2: catch-unwind/catch-panic-of for the (catch-unwind thunk) special
      * form.  Unlike the try/catch helpers above (purpose-built tur_thunk_fn ABI),
      * these take a fat-closure thunk (int64_t handle) invoked via TUR_APPLY0 and
-     * return a result box (tur_ok / tur_err) so the value composes with
+     * return a result box (tur_box_ok / tur_box_err) so the value composes with
      * err?/ok?/ok-val/err-val and the ? operator.  The single global jmp_buf is
      * saved/restored on entry/exit so nested boundaries work.  The caught panic
      * payload becomes the err value (an opaque Panic handle); it is intentionally
@@ -3907,14 +3907,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
-    buf_puts(out, "        return tur_ok(__v);\n");
+    buf_puts(out, "        return tur_box_ok(__v);\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
-    buf_puts(out, "        return tur_err((int64_t)(intptr_t)__p);\n");
+    buf_puts(out, "        return tur_box_err((int64_t)(intptr_t)__p);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {\n");
@@ -3925,7 +3925,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
-    buf_puts(out, "        return tur_ok(__v);\n");
+    buf_puts(out, "        return tur_box_ok(__v);\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
@@ -3933,11 +3933,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
     buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
-    buf_puts(out, "            return tur_err((int64_t)(intptr_t)__p);\n");
+    buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        /* type mismatch: re-raise to the next outer boundary (restored above) */\n");
     buf_puts(out, "        if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);\n");
-    buf_puts(out, "        return tur_err(0);\n");
+    buf_puts(out, "        return tur_box_err(0);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
 

@@ -795,7 +795,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * C (designated initializer on a non-aggregate) — because the result
      * type's tyvars never get bound.
      *
-     * The synthesized body replays the legacy tur_ok / tur_err / tur_some /
+     * The synthesized body replays the legacy tur_box_ok / tur_box_err / tur_box_some /
      * TUR_NONE pattern: identify (a) the bool discriminator field's literal
      * value in the make-struct, and (b) the payload field whose value is a
      * direct parameter reference; then emit
@@ -864,9 +864,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             const char *helper = NULL;
             if (disc_known) {
                 if (strcmp(def->name, "Result") == 0)
-                    helper = disc_value ? "tur_ok" : "tur_err";
+                    helper = disc_value ? "tur_box_ok" : "tur_box_err";
                 else if (strcmp(def->name, "Option") == 0)
-                    helper = disc_value ? "tur_some" : NULL;
+                    helper = disc_value ? "tur_box_some" : NULL;
             }
 
             if (disc_known && (helper || (!disc_value
