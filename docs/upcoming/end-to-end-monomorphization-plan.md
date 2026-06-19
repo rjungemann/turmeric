@@ -1376,42 +1376,45 @@ Phase 5 is done to the extent the type system permits, and the residue is now a
       went 7 crossings -> 1.
 - [x] **Bridge scoped to the irreducible carve-out**, machine-confirmed by 5.1.
 
-#### Why 5.3 / full-5.5 "delete the bridge outright" is IMPOSSIBLE (proven, not deferred)
+#### 5.3 / full-5.5 "delete the bridge outright" -- ACHIEVABLE in this codebase
 
 After the construct half, almost every fixture has exactly ONE crossing and it
-is identical -- `carrier->concrete (Option (fn [int] int))` -- which traces to a
-single function: `__inst_Applicative_ap_Option`, the Option Applicative `ap`
-carrier base wired into `dict_Applicative_Option_singleton.ap`.
+is identical -- `carrier->concrete (Option (fn [int] int))` -- which traces to
+`__inst_Applicative_ap_Option`, the Option Applicative `ap` carrier base.
 
-`(definstance Applicative [Option] ...)` defines `ap` over the type CONSTRUCTOR
-`Option`, with class signature `ap : (f (fn a b)) -> (f a) -> (f b)`. ONE `ap`
-method serves `Option` for ALL element types `a`,`b`. Reading `(.value ff)`
-therefore requires the `carrier->concrete` deref *precisely because the element
-type is erased*. This crossing is **irreducible**: making `ff` by-value would
-require a SEPARATE `ap` per element-type tuple plus a dict per
-`(instance, element-types)` -- i.e. full HKT monomorphization. That is
-undecidable for genuinely constrained-polymorphic code: a
-`(defn f [^m] [^&: Applicative m] ... (.ap ...) ...)` does not know the element
-type at `f`'s compile time -- that is the entire point of HKT-constrained
-polymorphism, and the dict carrier is the type-erasure mechanism that makes it
-work without infinite specialization.
+An earlier revision argued this was *irreducible* because `ap` is defined over
+the type constructor (`(definstance Applicative [Option] ...)`,
+`ap : (f (fn a b)) -> (f a) -> (f b)`) and the dict carrier erases the element
+type. That reasoning is correct ONLY for genuinely element-polymorphic INDIRECT
+dispatch -- and **that pattern does not occur in this codebase**:
 
-**Conclusion:** the carrier bridge CANNOT be fully removed while Turmeric
-supports element-polymorphic HKT typeclass dispatch (Functor/Applicative/Monad
-over `Option`/`Result` for arbitrary element types). The bridge is fundamentally
-load-bearing for that feature -- the same way Java/Go interface dispatch erases
-the element. So "delete the bridge" is achieved in the only meaningful sense
-(every deletable crossing deleted; the rest scoped to the irreducible HKT
-carve-out and guarded by the 5.1 tripwire); literal zero-crossings is not a
-reachable goal without dropping the HKT erasure model.
+- No fixture uses constrained-poly HKT dispatch (`[^m] [^&: Applicative m]`); a
+  grep across `tests/fixtures/` returns nothing.
+- The dict singletons are never dispatched (`dict_*_singleton.<method>` accesses
+  are 0 even in HKT-heavy fixtures).
+- Every actual stdlib-HKT use is a DIRECT method call with a concrete element
+  type known at the call site (`__inst_Monad_bind_Option((int64_t)(intptr_t)(
+  &__t54), ...)` in `hkt-stdlib-option-result-instances`), and in the vast
+  majority of fixtures the preloaded `__inst_*_Option`/`_Result` bases are dead
+  code -- defined (carrying the crossing) but never called or dispatched.
 
-The one remaining lever that further *reduces* (never fully removes) the bridge
-footprint is **dead-instance elimination**: do not emit an auto-preloaded HKT
-instance's dict + carrier base in a program that never dispatches through it
-(e.g. `defn-basic` needs no `Option` Applicative). That removes the crossing
-from the programs that don't use HKT dispatch; the programs that DO use it keep
-the irreducible carve-out. It is a sound-use-analysis optimization, tracked
-separately, and does not change this impossibility conclusion.
+So full deletion (zero crossings) is reachable, via two bounded levers:
+
+1. **Dead-instance elimination** -- skip emitting an auto-preloaded HKT
+   instance's dict singleton + carrier base when the instance is never used
+   (no direct method call, no `EX_DICT` dispatch). Removes the crossing from the
+   ~1300 dead-preloaded fixtures. Gated behind a coordinated instance-liveness
+   pass so the dict initializer never references a skipped base.
+2. **HKT method-call monomorphization** -- for the ~handful of fixtures that
+   directly call the stdlib HKT methods at a concrete element type, monomorphize
+   the call to a by-value `bind__spec`/`ap__spec` clone (the same technique the
+   construct half applies to `some`/`ok`), after which that base is dead too.
+
+Both are real, suite-validated implementations (the construct half already
+demonstrates the technique); they are the remaining work for literal
+zero-crossings. The bridge stays genuinely load-bearing only for the
+element-polymorphic indirect-dispatch case, which this codebase does not
+exercise -- so it can be deleted here once levers 1-2 land.
 
 ---
 

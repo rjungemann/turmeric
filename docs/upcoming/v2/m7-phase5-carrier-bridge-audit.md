@@ -176,24 +176,43 @@ construct sites + generic consumers monomorphize at concrete call sites); the
    the crossing from the ~1300 fixtures that don't use it, but keeps the bridge
    machinery for those that do.  Sound-use-analysis optimization; tracked
    separately.
-2. **Dict-ABI monomorphization is IMPOSSIBLE here, not merely large.** The
-   `ap`/`fmap`/`bind` Option/Result bases are defined over the type CONSTRUCTOR
-   (`(definstance Applicative [Option] ...)`, `ap : (f (fn a b)) -> (f a) -> (f
-   b)`): ONE method serves all element types `a`,`b`, so its `ff` param CANNOT be
-   typed `Option__A` for a single concrete `A` -- the element is erased by
-   design.  Making it by-value would require a separate `ap` per element-type
-   tuple + a dict per `(instance, element-types)`, i.e. full HKT monomorphization,
-   which is undecidable for constrained-polymorphic code (`(defn f [^m] [^&:
-   Applicative m] ... .ap ...)` does not know the element type).  The dict
-   carrier IS the type-erasure mechanism for element-polymorphic HKT dispatch, so
-   this crossing is irreducible while the HKT feature exists.
+2. **HKT method-call monomorphization** -- for the handful of fixtures that
+   genuinely use the stdlib Option/Result HKT instances, the method calls are
+   emitted as DIRECT calls to the carrier base with concrete element types known
+   at the call site (e.g. `__inst_Monad_bind_Option((int64_t)(intptr_t)(&__t54),
+   ...)` in `hkt-stdlib-option-result-instances` -- it spills a by-value
+   `Option__int` back to the carrier for the base).  Because the element type is
+   concrete at the call site, these can be monomorphized to by-value
+   `bind__spec`/`ap__spec` clones exactly like the construct half did for
+   `some`/`ok`, after which the base is dead too.
 
-**Therefore full carrier-bridge deletion is impossible** without dropping
-element-polymorphic HKT typeclass dispatch.  The bridge is genuinely
-load-bearing for that feature; "delete the bridge" is complete in the only
-achievable sense (every deletable crossing deleted via the construct half; the
-remainder scoped to the irreducible HKT carve-out and guarded by the 5.1
-tripwire).
+### Correction (2026-06-19, later): full deletion IS achievable -- earlier "impossible" claim retracted
+
+An earlier revision of this section argued the dict carve-out made full deletion
+impossible.  That is WRONG for this codebase, and the evidence is direct:
+
+- **No fixture uses genuinely-indirect / constrained-polymorphic HKT dispatch**
+  (`(defn f [^m] [^&: Applicative m] ...)`).  A grep for the constraint-dispatch
+  syntax across `tests/fixtures/` returns nothing.
+- **The dict singletons are never dispatched.**  `dict_*_singleton.<method>`
+  slot accesses are 0 even in HKT-heavy fixtures (`hkt-stdlib-suite`,
+  `hkt-do-m-option`, `hkt-monad-laws`).
+- Every actual stdlib-HKT use is a DIRECT method call with a concrete element
+  type (monomorphizable), and in the vast majority of fixtures the preloaded
+  `__inst_*_Option`/`_Result` bases are **dead code** -- defined (carrying the
+  crossing) but never called and never dispatched.
+
+The impossibility argument only applies to *genuinely element-polymorphic
+indirect dispatch through the dict* -- which the carrier is indeed the erasure
+mechanism for -- but that pattern does not occur here.  So the carve-out is not
+irreducible in practice: it is dead preloaded code plus direct calls that
+monomorphize.  Full deletion (zero crossings) is reachable via lever 1
+(dead-instance elimination of the unused preloaded dicts+bases, ~1300 fixtures)
+plus lever 2 (HKT method-call monomorphization for the ~handful of genuine-use
+fixtures).  Both are real, bounded implementations gated behind a coordinated
+instance-liveness analysis (skip the dead dict singleton and its base together)
+and lifting the M6/M7 carve-out for the direct-call case.  The construct half
+(landed) is the same technique applied to constructors.
 
 ### The conclusive architectural constraint (why this is genuinely structural)
 
