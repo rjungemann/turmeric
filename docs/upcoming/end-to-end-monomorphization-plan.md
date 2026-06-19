@@ -11,6 +11,28 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
 (rationale, non-goals, why-monomorphization framing -- keep there).
 **Predecessor scope audit:** [`docs/archive/m5-scope-audit-2026-06-18.md`](../archive/m5-scope-audit-2026-06-18.md).
 
+## Current state (2026-06-19, M7 by-value HKT now DEFAULT-ON)
+
+- **By-value HKT dispatch is the DEFAULT** (`g_m7_hkt_enabled = true`;
+  `TUR_M7_HKT=0` opts back to the legacy carrier path). `bash tests/run.sh`
+  (now by-value) and `TUR_M7_HKT=0 bash tests/run.sh` (carrier) both pass
+  **1684/0**.
+- **Layer-4 by-value emit is hardened for 7 of 9 HKT method shapes** (Functor
+  `fmap`, Monad `bind`, Applicative `ap`+`pure`, Alternative `<|>`, Comonad
+  `extract`, Foldable `foldr`) -- reference probes in `v2/m7-hkt-probe-*.tur`.
+  Bifunctor `bimap` (two-param struct-tyvar leak) and Traversable `traverse`
+  (method-level HKT tyvar + nested result) are reported and remain carrier.
+- **First real stdlib class migrated: Foldable** (sig typed; sole instance `rc`
+  carrier-essential). The remaining stdlib migration is now an INCREMENTAL,
+  per-class effort with the default suite as the gate -- concrete sequencing +
+  per-class by-value readiness in
+  [`v2/m7-stdlib-migration-execution.md`](v2/m7-stdlib-migration-execution.md).
+- **Next:** migrate Functor/Monad/Applicative/Alternative
+  (Option/Result/Either/list bodies -> pure-Turmeric by-value; recursive
+  combinator instances Parser/Goal/Backtrack/Schema + `rc` are the hard part,
+  kept carrier until rewritten), then Phase 5 (tighten/delete the carrier
+  bridge). These are large per-class PRs, not single increments.
+
 ## What's done (one-liners; full detail in the archive)
 
 - **M1 audit** -- shipped (`docs/monomorphization-audit.md`).
