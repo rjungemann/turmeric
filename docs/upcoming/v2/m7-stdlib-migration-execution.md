@@ -174,6 +174,39 @@ So the Functor-family migration is one deep fix away (thin/fat typed-fn
 forwarding) plus mechanical churn (snapshot regen + the poly-to-fat custom-class
 rewrite). dict-base and the fat-forwarding case are solved.
 
+### The remaining blocker is foundational: typed fn params are not fully first-class
+
+Further probing (2026-06-19) shows the blocker is broader than `:fn` forwarding:
+a typed fn PARAMETER `g : (fn [a] b)` is not a complete first-class value across
+the operations the migration needs:
+
+- **Forward to `:fn`** -- the fat case works (committed fix); the THIN case
+  segfaults (is_closure reads a non-existent slot-0 thunk).
+- **Capture in a closure** -- `(fn [x] (g x))` capturing `g` emits `'g'
+  undeclared`: the closure lifter does not capture a typed-fn-param binding into
+  the closure env (it leaves a dangling reference to the local). This is a
+  SEPARATE bug from the `:fn` forwarding path (EX_CLOSURE env capture, not
+  EX_POLY_WRAP), and it defeats the lambda-wrap workaround too.
+
+Both stem from the typed fn param lacking a uniform first-class representation
+(thin fn ptr vs fat box) that capture/forward/box can all consume. The clean
+resolution is to normalize a typed fn param to a single representation (e.g.
+always a fat box, boxing thin fns at the call site when bound to a `(fn ...)`
+param) so capture, forward, and direct-call all use one path. That is a
+foundational closure/fn-representation change with broad impact -- the genuine
+next compiler task gating the parser-family (Parser/Goal/Backtrack/Schema)
+Functor/Monad/Applicative/Alternative migrations. Option/Result/Either/list/rc do
+NOT hit it (they call `g` directly, never capture or forward it).
+
+**Implication for sequencing:** the simple instances (Option/Result/Either/list)
+CAN migrate today; only the parser-family combinator instances need the
+first-class-typed-fn-param fix. A future attempt could migrate the simple
+instances per-class and leave the parser-family combinators on the carrier (with
+the dict-base fix keeping their bases) until the fn-representation work lands --
+if a way is found to keep the parser-family instances compiling under the typed
+sig without capturing/forwarding `g` (e.g. their `*-raw` helpers retyped to take
+the typed fn and thread it through their carrier internals).
+
 ## Functor migration: blocker status (2026-06-19, attempt 2)
 
 A second Functor-migration attempt (sig -> typed, Option by-value, Result
