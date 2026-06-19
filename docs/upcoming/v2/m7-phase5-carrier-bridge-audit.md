@@ -141,15 +141,43 @@ trades consumer-side `carrier->concrete` crossings for construct-side
 (option-basic 7->1). So this lands the construct *half* of the deletion and the
 reusable boundary-bridge infrastructure, but does not itself delete the bridge.
 
-### What still blocks full deletion: the generic Option/Result CONSUMERS
+### What still blocks full deletion: the auto-preloaded HKT instance dict bases
 
-The ~1319 raw crossings are dominated by the generic stdlib helper bodies
-(`unwrap`/`some?`/`unwrap-or`/`option-eq?`/`result-map`/...), compiled ONCE over
-a type variable `A` and replicated per importing fixture. They carry the carrier
-internally and only monomorphize when a concrete call site grounds the whole
-relay chain. Deleting the bridge requires monomorphizing these CONSUMERS (and
-their generic-to-generic "relay" calls) per element type -- the second half of
-the engine, building on the construct half and the boundary bridges landed here.
+A per-fixture breakdown after the construct half is sharper than "consumers":
+**almost every fixture now has exactly ONE crossing, and it is the same one** --
+`carrier->concrete type=(Option (fn [int] int))`. Tracing it (defn-basic, which
+uses no Option at all, still has it) lands on a single function:
+
+```c
+static int64_t __inst_Applicative_ap_Option(int64_t ff, int64_t fa) {
+    tur_option_t *__t12 = (tur_option_t *)(intptr_t)(ff);   // <-- the crossing
+    ...
+}
+```
+
+This is the **Option Applicative `ap` carrier base**, wired into
+`dict_Applicative_Option_singleton.ap`.  It is emitted in EVERY fixture because
+(a) the Option/Result HKT instances are auto-preloaded and (b)
+`emit_abi_fn_skip_generic` never skips an HKT instance carrier base (the dict
+references it -- the M6/M7 carve-out).  Its `ff` param is the int64 carrier (the
+dict slot is `int64_t (*)(...)`), so reading the `Option<fn>` payload requires
+the carrier->concrete deref.  The same applies to the `fmap`/`bind`/`ap` bases
+of the preloaded Option/Result instances.
+
+So the construct half eliminated the genuinely-deletable crossings (user
+construct sites + generic consumers monomorphize at concrete call sites); the
+~1319 raw total is dominated by this ONE function re-emitted per fixture, not by
+1319 distinct deletable crossings.  The irreducible remainder is exactly the
+**dict carve-out**.  Two independent levers remain, neither yet pulled:
+
+1. **Dead-instance elimination** -- do not emit an auto-preloaded HKT instance's
+   dict + carrier base in a program that never dispatches through it (defn-basic
+   needs no Option Applicative).  This drops the crossing from the ~1300
+   fixtures that don't use it, but keeps the bridge machinery for those that do.
+2. **Dict-ABI monomorphization** -- lower the dispatch-dict slots from the int64
+   carrier to per-instance by-value signatures so the `ap`/`fmap`/`bind` bases
+   take `Option__A` by value and need no deref.  This is the genuine deletion of
+   the remaining crossings, and the larger change.
 
 ### The conclusive architectural constraint (why this is genuinely structural)
 
