@@ -2320,6 +2320,111 @@ static void scan_adt_apps_in_expr(const Expr *e) {
     }
 }
 
+/* constrained-generic-mixed-abi: a constrained generic whose carrier base would
+ * dispatch a typeclass method on a bare-tyvar receiver to a CONCRETE struct/ADT
+ * instance (one emitted as a real C struct param -- by value above the
+ * pass-by-ptr threshold, or `const T *` -- not the int64 carrier).  The carrier
+ * base declares that receiver as `int64_t b` but bakes `__inst_<Class>_<m>_<T>`,
+ * so it passes an `int64_t` into a `T` / `const T *` formal: a hard cc type
+ * error (`incompatible type for argument 1`).
+ *
+ * This shape is NOT caught by emit_abi_fn_is_generic_unsafe -- that predicate
+ * deliberately excludes a BARE TY_TYVAR arg (it only fires when a named tyvar is
+ * nested inside a compound type), and the receiver here is the bare class tyvar.
+ * It is also not caught by the Gap H spec-scan when the generic is never called
+ * (no specialization exists to observe the struct arg).  A carrier base over a
+ * type-erased receiver can never dispatch correctly anyway -- every concrete use
+ * monomorphizes to a per-instance clone -- so when one of these baked struct
+ * receivers is present the carrier base is dead code.
+ *
+ * Returns true if `e` (a defn body subtree) contains such a call.  The check
+ * mirrors emit_reresolve_method_call's receiver detection: arg 0 is a bare
+ * TY_TYVAR and the baked instance takes that receiver as a non-carrier
+ * struct/ADT. */
+static bool expr_dispatches_tyvar_to_struct_receiver(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_CALL && e->as.call_.dict_arg) {
+        const Expr *dict = e->as.call_.dict_arg;
+        if (dict->kind == EX_DICT && dict->as.dict_.instance &&
+            dict->as.dict_.method_name[0] != '\0' &&
+            e->as.call_.n_args >= 1 && e->as.call_.args) {
+            const Expr *recv = e->as.call_.args[0];
+            while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+            const TypeClassInstance *inst = dict->as.dict_.instance;
+            if (recv && recv->type.kind == TY_TYVAR &&
+                inst->n_type_args >= 1) {
+                Type rty = inst->type_args[0];
+                if ((rty.kind == TY_STRUCT || rty.kind == TY_ADT) &&
+                    !type_uses_carrier_abi(rty)) {
+                    return true;
+                }
+            }
+        }
+    }
+    switch (e->kind) {
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_dispatches_tyvar_to_struct_receiver(e->as.call_.args[i]))
+                    return true;
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.call_.fn_expr);
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn &&
+                   expr_dispatches_tyvar_to_struct_receiver(e->as.fn_def_.fn->body);
+        case EX_DEF:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.def_.init);
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_dispatches_tyvar_to_struct_receiver(e->as.let_.bindings[i].init))
+                    return true;
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.let_.body);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_dispatches_tyvar_to_struct_receiver(e->as.do_.items[i]))
+                    return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_dispatches_tyvar_to_struct_receiver(e->as.builtin.args[i]))
+                    return true;
+            return false;
+        case EX_IF:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.if_.cond) ||
+                   expr_dispatches_tyvar_to_struct_receiver(e->as.if_.then_) ||
+                   expr_dispatches_tyvar_to_struct_receiver(e->as.if_.else_or_null);
+        case EX_WHILE:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.while_.cond) ||
+                   expr_dispatches_tyvar_to_struct_receiver(e->as.while_.body);
+        case EX_MATCH:
+            if (expr_dispatches_tyvar_to_struct_receiver(e->as.match_.scrutinee))
+                return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (expr_dispatches_tyvar_to_struct_receiver(e->as.match_.arms[i].body))
+                    return true;
+                if (e->as.match_.arms[i].guard &&
+                    expr_dispatches_tyvar_to_struct_receiver(e->as.match_.arms[i].guard))
+                    return true;
+            }
+            return false;
+        case EX_RETURN:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.return_.value);
+        case EX_ASCRIBE:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.ascribe_.inner);
+        case EX_CAST:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.cast_.expr);
+        case EX_REINTERPRET:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.reinterpret_.expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (expr_dispatches_tyvar_to_struct_receiver(e->as.make_struct_.field_values[i]))
+                    return true;
+            return false;
+        case EX_GET_FIELD:
+            return expr_dispatches_tyvar_to_struct_receiver(e->as.get_field_.struct_expr);
+        default:
+            return false;
+    }
+}
+
 static bool emit_abi_fn_is_generic_unsafe(const Expr *e) {
     if (!e || e->kind != EX_FN_DEF || e->type.kind != TY_FN) return false;
     if (e->type.as.fn.result_full_type &&
@@ -2382,6 +2487,16 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
                     return !emit_abi_has_carrier_call(ctx, fd->binding);
                 }
             }
+        }
+        /* constrained-generic-mixed-abi: the Gap H spec-scan above only fires
+         * when a struct-arg specialization was actually minted (the generic was
+         * called with a struct receiver).  A constrained generic whose carrier
+         * base bakes a concrete struct-receiver instance miscompiles the same
+         * way even when it is never called -- merely defining it emits the
+         * ill-typed `int64_t b -> T self` carrier base.  Skip that dead carrier
+         * base too (still keyed on no observed carrier call). */
+        if (fd->body && expr_dispatches_tyvar_to_struct_receiver(fd->body)) {
+            return !emit_abi_has_carrier_call(ctx, fd->binding);
         }
     }
     if (!emit_abi_fn_is_generic_unsafe(e)) return false;

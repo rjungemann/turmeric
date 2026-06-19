@@ -1,0 +1,41 @@
+;; constrained-generic-mixed-abi-uncalled-carrier: a `^Backend`-generic helper
+;; over a class whose instances have MIXED C ABIs -- CanvasBackend (5 fields,
+;; emitted `const CanvasBackend *self`, by-pointer) alongside SurfaceBackend
+;; (2 fields) and PngBackend (1 field), both emitted by-value -- miscompiled the
+;; generic's own carrier base.  The base was emitted as a single standalone
+;; symbol `render(int64_t b, ...)` whose body baked `__inst_Backend_render_..._
+;; PngBackend(b, ...)`, passing an `int64_t` into a by-value `PngBackend self`
+;; formal: a hard cc error (`incompatible type for argument 1`).
+;;
+;; Regression for docs/archive/constrained-generic-mixed-abi-carrier-base.md.
+;; Crucially `render` is DEFINED BUT NEVER CALLED here: merely defining it
+;; emitted the ill-typed carrier base, so this fixture reproduces the break
+;; without monomorphizing the generic.  The concrete `render-to` call sites are
+;; fine on their own; only the generic helper's carrier base was wrong.
+(defclass Backend [b]
+  (render-to [self : b  renderers : int  opts : int] : int))
+
+;; Deliberately mixed ABIs: 5 fields (by-pointer), 2 fields, 1 field (by-value).
+(defstruct CanvasBackend [canvas : int  px : int  py : int  pw : int  ph : int])
+(defstruct SurfaceBackend [width : int  height : int])
+(defstruct PngBackend [path : cstr])
+
+(definstance Backend [CanvasBackend]
+  (render-to [self renderers opts] (+ (.canvas self) (+ renderers opts))))
+(definstance Backend [SurfaceBackend]
+  (render-to [self renderers opts] (+ (.width self) (+ renderers opts))))
+(definstance Backend [PngBackend]
+  (render-to [self renderers opts] (+ 3 (+ renderers opts))))
+
+;; The generic helper.  Defined, exported-shaped, but never called below: its
+;; carrier base alone used to break compilation of this whole module.
+(defn render [^Backend B b : B  renderers : int  opts : int] : int
+  (render-to b renderers opts))
+
+(defn main [] : int
+  ;; Output comes from DIRECT concrete dispatch (no monomorphization of render),
+  ;; so the carrier-base path of `render` is the only thing exercising the fix.
+  (println (render-to (make-struct CanvasBackend 100 0 0 0 0) 5 1))  ;; 106
+  (println (render-to (make-struct SurfaceBackend 200 0) 1 1))       ;; 202
+  (println (render-to (make-struct PngBackend "x") 10 0))            ;; 13
+  0)
