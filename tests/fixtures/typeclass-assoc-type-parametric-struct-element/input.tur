@@ -1,0 +1,45 @@
+;; typeclass-assoc-type-parametric-struct-element -- ECS E2d-P6 follow-up.
+;;
+;; The PARAMETRIC associated-type instance: `(definstance StorageOps [(Dense A)]
+;; (type Elem = A) ...)` binds the element member to the instance head's own
+;; type variable `A`, not to a concrete struct.  Dispatching it at a struct
+;; element `(Dense Pos)` must project `Elem -> A -> Pos`, so:
+;;
+;;   - `(.x (storage-get s i))` resolves against the projected struct, and
+;;   - the get/insert round-trip lowers a by-value `Pos` (a per-element spec is
+;;     minted: `__TUR_TY_A__ = Pos`), reading/writing ALL struct fields rather
+;;     than carrier-collapsing to the first int64 word.
+;;
+;; A two-field `Pos` is deliberate: a one-field struct round-trips even under
+;; the broken carrier path (it is int64-layout-compatible), so the second field
+;; `y` is what actually pins the by-value projection.
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defopaque Dense [A] :int)
+(defstruct Pos [x : int y : int])
+
+(defn dense-get [A] [^borrow s : (Dense A) idx : int] : A
+  ```c return ((__TUR_TY_A__*)(intptr_t)s)[idx]; ```)
+(defn dense-set! [A] [^borrow s : (Dense A) idx : int val : A] : nil
+  ```c ((__TUR_TY_A__*)(intptr_t)s)[idx] = val; return; ```)
+(defn dense-new [] : (Dense Pos)
+  ```c static Pos arr[8]; arr[2].x = 42; arr[2].y = 99; return (intptr_t)arr; ```)
+
+(defclass StorageOps [S]
+  (type Elem : Type)
+  (storage-insert! [^borrow s : S idx : int v : Elem] : nil)
+  (storage-get     [^borrow s : S idx : int] : Elem))
+
+(definstance StorageOps [(Dense A)]
+  (type Elem = A)
+  (storage-insert! [s idx v] (dense-set! s idx v))
+  (storage-get     [s idx]   (dense-get  s idx)))
+
+(defn main [] : int
+  (let [s : (Dense Pos)  (dense-new)]
+    ;; copy element 2 -> element 6 through the get/insert round-trip
+    (storage-insert! s 6 (storage-get s 2))
+    (printf "x=%lld\n" (.x (storage-get s 6)))
+    (printf "y=%lld\n" (.y (storage-get s 6)))
+    0))
