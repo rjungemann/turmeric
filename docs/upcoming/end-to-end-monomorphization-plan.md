@@ -79,15 +79,17 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
   they classify non-by-value and stay carrier-delegating under the typed sig.
   Default suite 1685/0. The legacy `TUR_M7_HKT=0` carrier suite no longer builds
   Functor-using fixtures (by design; per CLAUDE.md the default is the gate).
-- **Applicative / Alternative PARTIALLY migrated (2026-06-19).** The
-  receiver-style methods `ap` and `alt-or` are migrated to by-value (`Option`
-  bodies pure-Turmeric; combinators unchanged; suite 1685/0). The return-directed
-  `pure`/`empty` stay on the legacy `:int` carrier sig (split out so the rest
-  could land): their dispatch needs an expected type, but the parser/goal/
-  backtrack combinator APIs erase their container to `:int` so no `(f _)`
-  propagates to an unascribed `(pure x)`. Tracked in
-  `docs/reported/m7-applicative-alternative-pure-empty-return-inference.md`
-  (fix: type the combinator APIs with a real `Parser`/`Goal` type, not `:int`).
+- **Applicative / Alternative FULLY migrated to by-value (2026-06-19).** All four
+  methods are typed: `ap`/`pure` and `alt-or`/`empty`; `Option` bodies are
+  pure-Turmeric (`(some x)`/`(none)`), combinator instances unchanged. The
+  return-directed `pure`/`empty` were unblocked by a NAME-PRECEDENCE fix
+  (`elab_try_return_dispatch` now gated on `!fn_binding`, so a user `(defn pure
+  ...)` wins over the method -- it was hijacking parsec-tutorial's local `pure`).
+  The deep opaque-applied/generic-instantiation analysis was a red herring.
+  Resolved report archived to
+  `docs/archive/m7-applicative-alternative-pure-empty-return-inference.md`.
+  **All six HKT classes (Functor/Applicative/Monad/Alternative/Bifunctor/
+  Foldable) are now by-value.** Suite 1685/0.
 - **Monad stdlib class MIGRATED to by-value (2026-06-19).** Sig is now
   `(bind [ma : (m a) k : (fn [a] (m b))] : (m b))`; `Option`/`Result` bind bodies
   are pure Turmeric; combinator instances (Backtrack/Goal/Parser) unchanged. The

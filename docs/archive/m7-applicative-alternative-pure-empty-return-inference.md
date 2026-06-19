@@ -1,5 +1,28 @@
 # M7 stdlib migration: Applicative/Alternative return-directed `pure`/`empty` inference
 
+> **RESOLVED (2026-06-19) -- Applicative + Alternative fully migrated to by-value.**
+> The actual root cause turned out to be much simpler than the deep
+> type-representation chain explored below: a NAME-RESOLUTION PRECEDENCE bug.
+> `elab_try_return_dispatch` (elab_call.c) fired BEFORE the user-defn check and,
+> unlike the GHE1 bare-method path, was NOT gated on `!fn_binding` -- so once
+> `pure`/`empty` became return-directed, the method dispatch HIJACKED an unrelated
+> user `(defn pure ...)` (parsec-tutorial reimplements its own `pure`/parser),
+> routing the call to the wrong carrier-representative instance and segfaulting.
+>
+> Fix: gate `elab_try_return_dispatch` on `!fn_binding` (a user/local binding of
+> the same name wins), mirroring the existing GHE1 gating. With that, `pure`/
+> `empty` migrated cleanly: `Option` bodies are `(some x)` / `(none)`, combinator
+> instances unchanged, and the only call that genuinely needed help was one
+> stdlib-test `(empty 0)` with no local defn and no type context -- ascribed
+> `(:: (empty 0) (Option int))`. Default suite 1685/0.
+>
+> The deep opaque-applied / generic-instantiation analysis below was a RED
+> HERRING for this fixture (its `pure` was a local defn, not a typeclass use);
+> it is retained only as a record of the investigation. There is no remaining
+> opaque-type-representation blocker for the HKT migration.
+
+## (Historical investigation -- superseded by the name-precedence fix above)
+
 > **DISPOSITION (2026-06-19): receiver methods migrated; `pure`/`empty` ACCEPTED
 > AS GENUINE CARRIER (Phase 4.2).** The RECEIVER-style methods are migrated
 > by-value: **`ap`** (`ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)`) and
