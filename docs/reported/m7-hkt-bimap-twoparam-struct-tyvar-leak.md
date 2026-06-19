@@ -23,6 +23,23 @@
 > (consistent mangling + by-value spec interning for a partially-applied
 > constructor), distinct from the now-fixed full-two-param case.
 
+> **Defensive-guard attempt (2026-06-19, reverted as insufficient).** Tried
+> gating the by-value commit off when the HKT class var binds to a partial
+> application (`f -> (Result int)`, a TY_APP) so the partial-app instance stays
+> fully carrier. It does NOT fix the miscompile, for two reasons: (1) the
+> consumer in the repro uses an explicit `(:: ... (Result int int))` ascription,
+> which forces the consumer to by-value independently of the dispatch call's
+> grounding; and (2) the instance body's `(ok ...)` is still recovered BY VALUE
+> (`ok__spec`) inside the otherwise-carrier instance method, so the carrier base
+> spills a by-value aggregate as `sizeof(int64_t)` (the same shape as the fixed
+> `instance-method-return-carrier-bridge`, but here the body type doesn't ground
+> so the spill-type fix can't recover it either). So the real fix is not a
+> consumer-side guard -- it is making the partial-app instance either fully
+> by-value (intern the spec under a consistent `(Result _ E)` mangling, ground
+> the `_` placeholder positionally) OR fully carrier (suppress the in-body
+> by-value construct recovery when the instance method is carrier). The former is
+> the proper feature; the latter is a narrower correctness fallback.
+
 **Summary.** The by-value HKT path cannot monomorphize instance methods over a
 PARTIALLY-APPLIED multi-param constructor with a wildcard (`(Result _ B)`).
 (The full two-param case `(p a b)` -- bimap -- is fixed, see UPDATE above.)
