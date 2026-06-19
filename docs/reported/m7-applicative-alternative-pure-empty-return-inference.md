@@ -50,6 +50,29 @@ rewritten in pure Turmeric run correctly with an explicit ascription, e.g.
 `(:: (pure 7) (Option int))` -> 7, `(.ap (some add1) (some 41))` -> 42. The block
 is purely the unascribed-`pure` INFERENCE in `:int`-erased combinator code.)
 
+## Deeper finding (2026-06-19): an elaborator-only fix is NOT sufficient
+
+An argument-position expected-type push was prototyped (in `elab_call.c`: when a
+call arg is a return-directed method call and the callee's param is an applied
+HKT type with a concrete head, push that param type as `e->expected_type` so
+dispatch resolves the instance). It is necessary but NOT sufficient for the
+parsec stdlib, for two reasons found by tracing parsec-tutorial:
+
+1. Some `(pure x)` args land on a param the elaborator sees as the **`:int`
+   carrier** (not `(Parser B)`), so there is no head to dispatch on -- those
+   combinator params are still `:int`-typed at that site.
+2. The harder ones are INSIDE a continuation: `(bind-parser p (fn [xs] (pure
+   ...)))`. `bind-parser`'s continuation is typed `f : fn` (the untyped `:fn`
+   poly carrier), so the lambda body has NO expected result type at all -- the
+   `(pure ...)` there cannot be reached by any caller-param push.
+
+So migrating `pure`/`empty` requires the **parser/goal/backtrack combinator APIs
+fully typed** -- not only the direct combinator params as `(Parser A)` (then-parser
+already is) but also the **continuations** as `(fn [A] (Parser B))` instead of the
+`:fn` carrier (and `bind-parser`/`many`/... results threaded). That is a parser-
+library retyping pass, the real unit of work here. The receiver-style `ap`/`alt-or`
+migration (which needs none of this) already landed.
+
 ## Root cause
 
 `elab_typeclasses.c` return-directed dispatch (~line 3857) uses
