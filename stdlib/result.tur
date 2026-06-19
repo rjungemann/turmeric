@@ -29,7 +29,7 @@
 ;;;   the previous monomorphic-on-`:int` shape rejected non-int payloads
 ;;;   at TUR-E0001 and blocked the typed Decode surface in the json
 ;;;   spice. The body still goes through the int64 carrier helper
-;;;   `tur_ok`; the type-level polymorphism is achieved by ascribing the
+;;;   `tur_box_ok`; the type-level polymorphism is achieved by ascribing the
 ;;;   carrier handle to `(Result A B)` and letting the carrier-ABI
 ;;;   codegen take care of the rest).
 
@@ -267,8 +267,8 @@
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
   if (!res) return 0;
   if (res->is_ok)
-      return tur_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
-  return tur_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
+      return tur_box_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
+  return tur_box_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
   ```)
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
@@ -297,7 +297,10 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Bifunctor [Result]
-  (bimap [container fn-left fn-right] (result-bimap container fn-left fn-right)))
+  (bimap [container fn-left fn-right]
+    (if (.is-ok container)
+      (ok (fn-right (.ok-val container)))
+      (err (fn-left (.err-val container))))))
 ;; ---------------------------------------------------------------------------
 ;; Ok-biased kind-(* -> *) instances (stdlib-hkt-consolidation T4)
 ;;
@@ -315,13 +318,10 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Functor [(Result _ B)]
-  (fmap [container fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
-    if (!r) return 0;
-    if (r->is_ok) return tur_ok(fn.fn(fn.env, r->ok_val));
-    return tur_err(r->err_val);
-    ```))
+  (fmap [container g]
+    (if (.is-ok container)
+      (ok (g (.ok-val container)))
+      (err (.err-val container)))))
 ;;; Monad [(Result _ B)] -- bind sequences through ok; short-circuits on err.
 ;;;
 ;;; Example:
@@ -330,12 +330,10 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Monad [(Result _ B)]
-  (bind [ma fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
-    if (!r || !r->is_ok) return ma;
-    return fn.fn(fn.env, r->ok_val);
-    ```))
+  (bind [ma k]
+    (if (.is-ok ma)
+      (k (.ok-val ma))
+      (err (.err-val ma)))))
 ;;; MonadError [(Result _ B)] -- throw-error builds an err; catch-error runs a
 ;;; handler on the err payload (ok values pass through unchanged).
 ;;;
@@ -347,7 +345,7 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance MonadError [(Result _ B)]
-  (throw-error [err] ```c return tur_err(err); ```)
+  (throw-error [err] ```c return tur_box_err(err); ```)
   (catch-error [ma handler]
     ```c
     struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;

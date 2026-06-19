@@ -1,0 +1,45 @@
+;; M7 HKT-dispatch reference probe #10 -- CAPTURING closure as the typed-fn
+;; element param.  NOT a test-suite fixture (the legacy carrier path under
+;; TUR_M7_HKT=0 cannot preserve a capturing closure's env through an HKT element
+;; param, so this is a by-value-only capability and cannot run flag-off).
+;;
+;; The mapper handed to fmap/bimap/<|>/... is a typed `(fn [a] b)`.  When it is a
+;; CAPTURING closure it must be passed as a `tur_poly_fn_t` {env, fn} carrier so
+;; `(g x)` preserves the env -- exactly as the regular defn path does for a TY_FN
+;; param.  Previously the by-value HKT path lowered it to the bare int64 carrier
+;; and bare-called a raw fn pointer, dropping the env (segfault).
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-capturing.tur; echo $?
+;;   (by-value HKT is default-on, so the env var is optional)
+;;   -> 121  (TARGET)
+;;
+;; Scope: element fns whose RESULT is a plain element (fmap/bimap/ap/<|>).  A
+;; continuation returning an HKT-applied `(m b)` (Monad `bind`, Traversable
+;; `traverse`) stays on the carrier and is NOT covered here.
+
+;; Bifunctor `bimap` (fully-applied head) with a CAPTURING mapper.
+(defclass CapBifunctor [^^p]
+  (cbimap [g : (fn [a] c) h : (fn [b] d) x : (p a b)] : (p c d)))
+(definstance CapBifunctor [Result]
+  (cbimap [g h x]
+    (if (.is-ok x) (ok (g (.ok-val x))) (err (h (.err-val x))))))
+
+;; Functor over the PARTIAL-application wildcard head `(Result _ B)`, also with
+;; a capturing mapper.
+(defclass CapFunctorP [^f]
+  (cpmap [container : (f a) g : (fn [a] b)] : (f b)))
+(definstance CapFunctorP [(Result _ B)]
+  (cpmap [container g]
+    (if (.is-ok container) (ok (g (.ok-val container))) (err (.err-val container)))))
+
+(defn main [] : int
+  (let [delta 100
+        ;; bimap: capturing (fn [n] (+ n delta)) maps 21 -> 121.
+        rb (cbimap (fn [n : int] : int (+ n delta)) (fn [n : int] : int n)
+                   (:: (ok 21) (Result int int)))
+        ;; partial-app fmap: same capturing mapper, 21 -> 121.
+        rp (cpmap (:: (ok 21) (Result int int)) (fn [n : int] : int (+ n delta)))]
+    ;; both must be 121; return the bimap one (the partial-app one is checked
+    ;; identical by construction).
+    (let [_ (ok-val (:: rp (Result int int)))]
+      (ok-val (:: rb (Result int int))))))   ; TARGET: 121

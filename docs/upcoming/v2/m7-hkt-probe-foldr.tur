@@ -1,0 +1,46 @@
+;; M7 HKT-dispatch reference probe #7 -- Foldable `foldr` / non-first-receiver +
+;; fn-fold bare-element shape. NOT a test-suite fixture. Companion to the fmap /
+;; bind / ap / alt / pure / extract probes.
+;;
+;; `foldr` stresses TWO things no earlier probe did at once:
+;;   1. NON-FIRST HKT RECEIVER: the `(f a)` container is the LAST param, not the
+;;      first -- `foldr2 [g z t]` with `t : (f a)`. (fmap/bind/ap/extract all put
+;;      the container first; bimap/foldr do not.)  The layer-4 element collection
+;;      pairs each method param with each actual arg uniformly, so this works --
+;;      but the class var `f` must be bound from the COLLECTED receiver binding
+;;      (f -> Option, recovered from `t`'s type), NOT from `obj` (the first arg,
+;;      here the fold function `g`), whose stripped head is a `(fn ...)`.
+;;   2. FN-FOLD BARE-ELEMENT TAIL: the body folds via a fn PARAMETER returning
+;;      the bare element result -- `(g (.value t) z)` -- not a field read (extract)
+;;      or a construct (fmap). The bare-element body gate now admits a tail call
+;;      to a LOCAL (parameter) fn whose result is a bare element.
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-foldr.tur; echo $?
+;;   -> 42  (TARGET, REACHED 2026-06-19)
+;;
+;; STATUS (2026-06-19): WORKING end-to-end under TUR_M7_HKT=1 -- exits 42 and the
+;; instance method emits a by-value receiver spec
+;; `__inst_MyFoldable_foldr2_Option__spec__..._Option__int(int64_t g, int64_t z,
+;; Option__int t)` (the LAST param is by-value). With the flag OFF the probe
+;; errors by design (the bare-element return `: b` parse fix is flag-gated/inert).
+;;
+;; What it took (flag-gated, elab_typeclasses.c):
+;;   1. Class var bound from the collected receiver binding (works for any param
+;;      position), not from `obj` (only correct when the receiver is param 0).
+;;   2. m7_body_returns_byvalue_element extended to admit a tail call to a local
+;;      fn param returning a bare element (the fold step), alongside field reads
+;;      (extract) and bare-element vars.
+
+(defclass MyFoldable [^f]
+  (foldr2 [g : (fn [a b] b) z : b t : (f a)] : b))
+
+(definstance MyFoldable [Option]
+  (foldr2 [g z t]
+    (if (some? t)
+      (g (.value t) z)
+      z)))
+
+(defn add [x : int acc : int] : int (+ x acc))
+
+(defn main [] : int
+  (foldr2 add 40 (some 2)))   ; TARGET: 42

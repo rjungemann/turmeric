@@ -1587,7 +1587,14 @@ Expr *elab_call(Elab *e, Form *call) {
      * instance is selected from the expected-type channel.  These methods did
      * not exist before tyvar-return parsing was added, so intercepting them
      * here cannot regress existing programs. */
-    {
+    /* Gate on `!fn_binding` so a user defn or local binding of the same name
+     * wins over a return-directed typeclass method -- mirroring the GHE1
+     * bare-method gating below.  Without this, migrating a class method to a
+     * return-directed by-value sig (e.g. Applicative `pure : (f a)`) would
+     * hijack an unrelated user `(defn pure ...)` (parsec-tutorial reimplements
+     * its own `pure`), routing the call to the wrong (carrier-representative)
+     * instance. */
+    if (!fn_binding) {
         bool rt_handled = false;
         Expr *rt = elab_try_return_dispatch(e, call, name, &rt_handled);
         if (rt_handled) return rt;
@@ -3641,15 +3648,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     if (inner_fn_b->is_poly_fn) {
                         /* Already a tur_poly_fn_t -- pass through. */
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
-                    } else if (inner_fn_b->closure_fn_binding && !inner_fn_b->is_global) {
-                        /* CRU: a *capturing closure VALUE* bound to a local (e.g.
-                         * a `:ptr<void>` from `(make-add 10)`).  make_poly_wrapper
-                         * would emit a file-scope wrapper that statically references
-                         * the local env var (`__poly_N` reading `add10_904`), which
-                         * is out of scope at file scope and fails to compile.  Pack
-                         * the runtime closure into the carrier inline instead -- the
-                         * is_closure path reads the thunk from the box's slot 0 at
-                         * runtime, so a capturing closure round-trips correctly. */
+                    } else if (!inner_fn_b->is_global) {
+                        /* CRU + typed-fn-param forwarding: any LOCAL fn binding --
+                         * a capturing closure VALUE (`(make-add 10)`) OR a plain
+                         * typed fn PARAMETER (`g : (fn [a] b)` forwarded into a
+                         * `:fn` helper, the M7 Functor-instance shape) -- cannot go
+                         * through make_poly_wrapper: it emits a file-scope wrapper
+                         * `__poly_N` that statically references the local (`g` /
+                         * `add10_904`), which is out of scope at file scope and
+                         * fails to compile (`'g' undeclared`).  Pack the runtime
+                         * value into the carrier inline instead -- the is_closure
+                         * path reads the thunk from the box's slot 0 at runtime, so
+                         * both a capturing closure and a passed-in fn round-trip. */
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
                         wrap->as.poly_wrap_.is_closure = true;
                     } else {
@@ -4295,6 +4305,22 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     warg_kinds[0] = TY_PTR_VOID;
     for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[i + 1] = real_arg_kinds[i];
     Type wfn_type = type_fn(warg_kinds, w_arity, inner_result_kind);
+    /* M7: when the inner fn returns a by-value aggregate (a Monad/HKT
+     * continuation returning `(m b)` -> e.g. `Option__int`), carry its FULL
+     * result type on the wrapper so the wrapper body `return inner(x)` is a
+     * struct->struct return (valid C) rather than struct->int64 (a hard error).
+     * The pack site (EX_POLY_WRAP) then routes the struct-returning wrapper
+     * through a carrier-spill shim to satisfy the int64 tur_poly_fn_t.fn ABI. */
+    if (inner_b->type.kind == TY_FN && inner_b->type.as.fn.result_full_type) {
+        const Type *irf = inner_b->type.as.fn.result_full_type;
+        bool aggr = (irf->kind == TY_STRUCT && irf->as.struct_.def) ||
+                    irf->kind == TY_APP;
+        if (aggr) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = *irf;
+            wfn_type.as.fn.result_full_type = rft;
+        }
+    }
 
     Binding *wb = binding_new(e, wsym, wfn_type, false, true, span);
     scope_add(&e->global, wb);

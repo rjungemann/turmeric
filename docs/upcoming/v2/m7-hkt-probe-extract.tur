@@ -1,0 +1,53 @@
+;; M7 HKT-dispatch reference probe #6 -- Comonad `extract` / bare-element-result
+;; shape. NOT a test-suite fixture. Companion to m7-hkt-probe.tur (Functor
+;; `fmap`), -bind.tur (Monad `bind`), -ap.tur (Applicative `ap`), -alt.tur
+;; (Alternative `<|>`), and -pure.tur (Applicative `pure`).
+;;
+;; The defining feature of `extract` (vs every prior shape) is that the RESULT is
+;; a BARE ELEMENT, not an applied `(f b)`:
+;;     extract [w : (f a)] : a
+;; so there is no `(f b)` to CONSTRUCT in-body -- the body just READS a scalar
+;; out of the receiver (`(.value w)`). Two distinct gaps had to close:
+;;   1. PARSE: a bare element return `: a` (a METHOD-level tyvar, not a class type
+;;      param) was a hard error ("unsupported return type in typeclass method").
+;;   2. EMIT: the layer-4 by-value path keyed on a TY_APP result, so a
+;;      bare-element method never interned a by-value spec and kept the int64
+;;      carrier receiver.
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-extract.tur; echo $?
+;;   -> 42  (TARGET, REACHED 2026-06-19)
+;;
+;; STATUS (2026-06-19): WORKING end-to-end under TUR_M7_HKT=1 -- exits 42 with
+;; NO ascription, and the instance method emits a BY-VALUE receiver spec
+;; `__inst_MyComonad_extract_Option__spec__int64_t_Option__int(Option__int w)`
+;; (verify: `grep extract_Option__spec` in the emit-c output). With the flag OFF
+;; the probe errors by design (the parse fix is flag-gated/inert flag-off).
+;;
+;; What it took (flag-gated, elab_typeclasses.c):
+;;   1. PARSE: the bare-keyword return-type branch now matches against the
+;;      EFFECTIVE type params (class params + method-level element tyvars), so
+;;      `: a` resolves to a named TY_TYVAR. Inert flag-off (eff_tp == class
+;;      params).
+;;   2. EMIT: the result SHAPE is now classified from the CLASS method's declared
+;;      return type (the instance binding's result_full_type is NULL for a
+;;      bare-element body, set only for a constructing body). A bare-element
+;;      result (TY_TYVAR) admits a body whose tail merely reads a scalar off the
+;;      by-value receiver (m7_body_returns_byvalue_element: field reads /
+;;      bare-element vars, never a general call), and the layer-4 block grounds
+;;      `a` from the receiver arg and interns the by-value spec. An unmigrated
+;;      stdlib class declaring a `: int` carrier return classifies as neither
+;;      applied nor bare-element, so it stays on the uniform carrier dispatch.
+;;
+;; NOTE the receiver producer `(some 42)` is still a carrier `some()` bridged to
+;; Option__int at the call -- exactly the same transitional bridge the fmap probe
+;; uses for ITS receiver; a by-value `some` producer (Track A) eliminates it
+;; uniformly across all shapes.
+
+(defclass MyComonad [^f]
+  (extract [w : (f a)] : a))
+
+(definstance MyComonad [Option]
+  (extract [w] (.value w)))
+
+(defn main [] : int
+  (extract (some 42)))   ; TARGET: 42

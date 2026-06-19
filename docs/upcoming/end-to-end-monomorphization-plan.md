@@ -11,6 +11,106 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
 (rationale, non-goals, why-monomorphization framing -- keep there).
 **Predecessor scope audit:** [`docs/archive/m5-scope-audit-2026-06-18.md`](../archive/m5-scope-audit-2026-06-18.md).
 
+## Current state (2026-06-19, M7 by-value HKT now DEFAULT-ON)
+
+> **Phase 4 stdlib migration -- near complete (2026-06-19).** By-value migrated:
+> **Functor** `fmap`, **Monad** `bind`, **Bifunctor** `bimap`, **Foldable**
+> `foldl`/`foldr` (full classes); **Applicative** `ap` and **Alternative**
+> `alt-or` (receiver-style methods). Reusable infrastructure landed: partial-app
+> wildcard heads `(Result _ B)`, capturing closures through typed-fn element
+> params, and the carrier-spill for by-value-aggregate thunk returns
+> (`ensure_aggregate_spill_shim`). Default suite 1685/0 throughout.
+>
+> **Applicative `pure` + Alternative `empty` are ACCEPTED AS GENUINE CARRIER**
+> (the Phase 4.2 "rewrite OR accept as genuine carrier" disposition). Both are
+> return-directed; making them by-value is not a localized fix but a parser-
+> library RETYPING pass (combinator args + continuations typed `(Parser A)` /
+> `(fn [A] (Parser B))`) plus generic-dispatch type propagation. That is the
+> unit of work to flip them later and does NOT block the by-value HKT migration.
+> Tracked in `docs/reported/m7-applicative-alternative-pure-empty-return-inference.md`.
+> **Traversable** `traverse` is an unused stub (NO instances) -- not a migration
+> blocker; type it when/if an instance is added (needs the nested-result work in
+> `docs/reported/m7-hkt-traverse-method-level-hkt-tyvar.md`). Phase 5
+> (carrier-bridge deletion) can proceed for the migrated classes once `pure`/
+> `empty` land.
+
+- **By-value HKT dispatch is the DEFAULT** (`g_m7_hkt_enabled = true`;
+  `TUR_M7_HKT=0` opts back to the legacy carrier path). `bash tests/run.sh`
+  (now by-value) and `TUR_M7_HKT=0 bash tests/run.sh` (carrier) both pass
+  **1684/0**.
+- **Layer-4 by-value emit is hardened for 8 of 9 HKT method shapes** (Functor
+  `fmap`, Monad `bind`, Applicative `ap`+`pure`, Alternative `<|>`, Comonad
+  `extract`, Foldable `foldr`, **Bifunctor `bimap`** -- the full two-param
+  constructor case, fixed 2026-06-19 via struct-param grounding) -- reference
+  probes in `v2/m7-hkt-probe-*.tur`. Traversable `traverse` (method-level HKT
+  tyvar + nested result) remains reported/carrier.
+- **PARTIAL-application wildcard instance head `(Result _ B)` now goes by-value
+  (2026-06-19).** A kind-(`* -> *`) class fixing one slot of a two-param
+  constructor (the Functor/Monad/Applicative/Alternative `[Result]` shape) used
+  to stay on the int64 carrier -- a silent miscompile vs a by-value consumer.
+  Resolved via a "type-level section": record the `_` hole position on the
+  instance and reconstruct the receiver `(f a)`/result `(f b)` placing the
+  element in the hole slot and a struct-param tyvar in the fixed slot, grounded
+  from the concrete receiver at the call site. Probe
+  `v2/m7-hkt-probe-partialapp.tur` + fixture
+  `tests/fixtures/hkt-partial-app-wildcard-byvalue/` (suite 1685/0 flag-on AND
+  flag-off). Report archived to
+  `docs/archive/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`.
+- **Capturing closures through a typed-fn element param now work by-value
+  (2026-06-19).** A `g : (fn [a] b)` element param (the mapper handed to
+  fmap/bimap/ap/`<|>`) is now marked `is_poly_fn` and lowered to the
+  `tur_poly_fn_t` `{env, fn}` carrier -- like the regular defn path -- so a
+  CAPTURING closure's env survives `(g x)` instead of being dropped by a raw
+  fn-pointer call. Scoped to plain-element results (an HKT-returning continuation
+  `(m b)` -- Monad `bind`, Traversable `traverse` -- is excluded; it regresses
+  under the carrier switch and is a later Monad-migration sub-task). Probe
+  `v2/m7-hkt-probe-capturing.tur` exits 121; suite 1685/0 flag-on AND flag-off.
+  Report archived to
+  `docs/archive/m7-hkt-byvalue-typed-fn-element-capturing-closure.md`.
+- **Both Functor-family Result/Option gates are now closed** (partial-app
+  wildcard head + capturing element fn). The `[Result]`/`[Option]`/`[Either]`
+  Functor/Applicative/Alternative bodies can now be rewritten in pure Turmeric
+  by-value; Monad `bind` additionally needs the HKT-returning-continuation
+  capturing sub-task above.
+- **Functor stdlib class MIGRATED to by-value (2026-06-19).** Class sig is now
+  `(fmap [container : (f a) g : (fn [a] b)] : (f b))` (both typeclass.tur copies);
+  `Option`/`Result` instance bodies rewritten in pure Turmeric. The combinator/
+  opaque instances (Either/Parser/Goal/Backtrack/Schema/rc) need NO body change --
+  they classify non-by-value and stay carrier-delegating under the typed sig.
+  Default suite 1685/0. The legacy `TUR_M7_HKT=0` carrier suite no longer builds
+  Functor-using fixtures (by design; per CLAUDE.md the default is the gate).
+- **Applicative / Alternative FULLY migrated to by-value (2026-06-19).** All four
+  methods are typed: `ap`/`pure` and `alt-or`/`empty`; `Option` bodies are
+  pure-Turmeric (`(some x)`/`(none)`), combinator instances unchanged. The
+  return-directed `pure`/`empty` were unblocked by a NAME-PRECEDENCE fix
+  (`elab_try_return_dispatch` now gated on `!fn_binding`, so a user `(defn pure
+  ...)` wins over the method -- it was hijacking parsec-tutorial's local `pure`).
+  The deep opaque-applied/generic-instantiation analysis was a red herring.
+  Resolved report archived to
+  `docs/archive/m7-applicative-alternative-pure-empty-return-inference.md`.
+  **All six HKT classes (Functor/Applicative/Monad/Alternative/Bifunctor/
+  Foldable) are now by-value.** Suite 1685/0.
+- **Monad stdlib class MIGRATED to by-value (2026-06-19).** Sig is now
+  `(bind [ma : (m a) k : (fn [a] (m b))] : (m b))`; `Option`/`Result` bind bodies
+  are pure Turmeric; combinator instances (Backtrack/Goal/Parser) unchanged. The
+  HKT-returning continuation `(fn [a] (m b))` -- including a CAPTURING do-m
+  continuation -- now works via the **carrier-spill infrastructure**: typed-fn
+  element params flow as `tur_poly_fn_t`; `make_poly_wrapper` carries the inner
+  aggregate result type; and a spill shim (`ensure_aggregate_spill_shim`) boxes
+  the struct return to the int64 `tur_poly_fn_t.fn` ABI. This also retired the
+  capturing-closure residual. Default suite 1685/0; report archived to
+  `docs/archive/m7-monad-bind-result-reconciliation.md`.
+- **First real stdlib class migrated: Foldable** (sig typed; sole instance `rc`
+  carrier-essential). The remaining stdlib migration is now an INCREMENTAL,
+  per-class effort with the default suite as the gate -- concrete sequencing +
+  per-class by-value readiness in
+  [`v2/m7-stdlib-migration-execution.md`](v2/m7-stdlib-migration-execution.md).
+- **Next:** migrate Functor/Monad/Applicative/Alternative
+  (Option/Result/Either/list bodies -> pure-Turmeric by-value; recursive
+  combinator instances Parser/Goal/Backtrack/Schema + `rc` are the hard part,
+  kept carrier until rewritten), then Phase 5 (tighten/delete the carrier
+  bridge). These are large per-class PRs, not single increments.
+
 ## What's done (one-liners; full detail in the archive)
 
 - **M1 audit** -- shipped (`docs/monomorphization-audit.md`).
@@ -1010,6 +1110,146 @@ genuine carrier)
 >   flag-on for the grounded `fmap`/`bind` shapes; the 92-fixture HKT/typeclass
 >   flag-on codegen sweep is unchanged vs. the parent commit (the fix only
 >   enables the previously-broken `ap` shape).
+> - **Alternative `<|>` / selection shape: DONE end-to-end (2026-06-19).** Probe
+>   at `docs/upcoming/v2/m7-hkt-probe-alt.tur` exits 42 under the flag.
+>   `alt2 [x : (f a) y : (f a)] : (f a)` is the first shape whose instance body
+>   does NOT construct its result in-body -- the body is a SELECTION /
+>   PASS-THROUGH `(if (some? x) x y)` that returns an existing `(f a)` argument
+>   directly. It also exposed a latent silent miscompile and a one-grounded-arg
+>   inference gap; two coordinated fixes landed (both in `elab_typeclasses.c`,
+>   flag-gated):
+>   - **Body gate + miscompile fix.** `m7_body_constructs_byvalue` now admits an
+>     `EX_VAR` tail of the applied `(f b)` family (TY_APP) -- a by-value
+>     pass-through return of an existing `(f a)` value -- not only a
+>     `#{Construct}` call. Critically, the `m7_body_byvalue_ok` flag is now
+>     computed ONCE up front and ALSO gates the by-value result-type commit
+>     (layers 1+3), which previously fired on result-grounding ALONE: a
+>     carrier-bodied selection method had its CONSUMER flipped to by-value
+>     (`Option__int`) while its PRODUCER still emitted the int64 carrier, so
+>     `(alt2 (some 7) (some 42))` silently returned `0` instead of `7`. The two
+>     halves (consumer by-value result type / producer by-value abi_bindings) now
+>     share one gate and can never disagree.
+>   - **Multi-arg element recovery.** `m7_collect_tyvar_bindings` now SKIPS a
+>     free-tyvar actual (the element of a bare `(none)`), so a sibling argument
+>     that DOES ground the element wins: `(alt2 (none) (some 42))` grounds `a`
+>     from arg 1, order-independent. The genuinely-uninferable
+>     `(alt2 (none) (none))` stays un-grounded and falls back to a clean
+>     `(type-app ? ?)` error (no miscompile), mirroring the `ap (none) (some _)`
+>     caveat. Inert flag-off (suite 1684/0, byte-identical codegen);
+>     `fmap`/`bind`/`ap` probes unchanged (42/21/42); existing HKT fixtures emit
+>     clean flag-on.
+> - **Applicative `pure` / return-directed shape: DONE end-to-end (2026-06-19).**
+>   Probe at `docs/upcoming/v2/m7-hkt-probe-pure.tur` exits 42 under the flag.
+>   `wrap [x : a] : (f a)` is the first shape whose class var `f` appears ONLY in
+>   the result -- it is RETURN-DIRECTED, so the instance is picked from the
+>   expected/ascribed type, NOT a receiver arg. This routes through a DIFFERENT
+>   dispatcher (`elab_try_return_dispatch`) than the receiver-dispatch shapes
+>   (`elab_method_call`), whose HKT carve-out skipped the by-value abi_bindings --
+>   so flag-on previously SILENTLY MISCOMPILED (carrier producer vs. by-value
+>   consumer). Fix (one flag-gated branch in `elab_try_return_dispatch`): mirror
+>   the receiver path's layer-4 interning -- bind the class var `f` to the
+>   ascribed instance head (`bound` = Option) and recover the element `a` from the
+>   argument types (`m7_collect_tyvar_bindings`), gated on
+>   `m7_body_constructs_byvalue(impl->body)`. NOTE the ascription is INHERENT to
+>   return-directed dispatch (not removable): flag-off returns 42 via the carrier
+>   + `::` bridge, flag-on via a by-value spec with no carrier round-trip (verify
+>   with `grep -c '__spec__Option__int'`: 0 off / >=1 on). Verified `a = int`
+>   (-> 42) and `a = cstr`. Inert flag-off (suite 1684/0, byte-identical codegen);
+>   `fmap`/`bind`/`ap`/`alt` probes unchanged (42/21/42/42); HKT + return-dispatch
+>   fixtures (`decode-*`, `typeclass-return-dispatch-*`) emit clean flag-on.
+> - **Comonad `extract` / bare-element-result shape: DONE end-to-end (2026-06-19).**
+>   Probe at `docs/upcoming/v2/m7-hkt-probe-extract.tur` exits 42 under the flag
+>   with a by-value receiver spec
+>   (`__inst_MyComonad_extract_Option__spec__int64_t_Option__int(Option__int w)`).
+>   `extract [w : (f a)] : a` is the first shape whose RESULT is a bare element,
+>   not an applied `(f b)` -- there is nothing to construct in-body; the body just
+>   reads a scalar off the receiver (`(.value w)`). Two gaps closed (flag-gated,
+>   `elab_typeclasses.c`):
+>   - **Parse.** A bare element return `: a` (a method-level tyvar, not a class
+>     type param) was a hard error. The bare-keyword return-type branch now
+>     matches against the EFFECTIVE type params (class params + method-level
+>     element tyvars); inert flag-off (eff_tp == class params).
+>   - **Emit.** The result SHAPE is now classified from the CLASS method's
+>     declared return type (the instance binding's `result_full_type` is NULL for
+>     a bare-element body, set only for a constructing one). A bare-element result
+>     admits a body whose tail merely reads a scalar off the by-value receiver
+>     (`m7_body_returns_byvalue_element`: field reads / bare-element vars, never a
+>     general call), and layer-4 grounds `a` from the receiver arg and interns the
+>     by-value spec. An unmigrated stdlib class with a `: int` carrier return
+>     classifies as neither applied nor bare-element -> stays on carrier dispatch.
+>   The receiver producer bridge (`(some 42)` carrier -> Option__int) is the same
+>   transitional bridge the fmap probe uses for its receiver. Inert flag-off
+>   (suite 1684/0, byte-identical codegen); `fmap`/`bind`/`ap`/`alt`/`pure` probes
+>   unchanged (42/21/42/42/42); HKT fixtures emit clean flag-on.
+> - **Foldable `foldr` / non-first-receiver + fn-fold shape: DONE end-to-end
+>   (2026-06-19).** Probe at `docs/upcoming/v2/m7-hkt-probe-foldr.tur` exits 42
+>   with a by-value receiver spec whose LAST param is by-value
+>   (`__inst_MyFoldable_foldr2_Option__spec__..._Option__int(int64_t g, int64_t z,
+>   Option__int t)`). `foldr2 [g z t] : b` is the first shape where (a) the `(f a)`
+>   container is NOT the first param (it is param 2), and (b) the bare-element
+>   result is produced by folding through a fn PARAMETER (`(g (.value t) z)`).
+>   Two flag-gated fixes in `elab_typeclasses.c`:
+>   - **Class var from the collected receiver binding, not `obj`.** The layer-4
+>     element collection already pairs every method param with every actual arg
+>     uniformly, so it recovers `f -> Option` from the receiver param `(f a)`
+>     wherever it sits. But the class-var abi_binding was taken from `obj` (the
+>     first arg) stripped to its head -- correct only when the receiver is param 0
+>     (fmap/bind/ap/extract). For a non-first receiver `obj` is a function arg, so
+>     its head is a `(fn ...)`; now the class var is taken from the collected
+>     binding instead (`obj` head only as a defensive fallback).
+>   - **Bare-element body gate admits a fn-param fold tail.**
+>     `m7_body_returns_byvalue_element` now accepts a tail CALL to a LOCAL
+>     (parameter) fn returning a bare element (`!is_global`, result not TY_APP),
+>     alongside field reads (extract) and bare-element vars. The receiver reaches
+>     the callee only as an extracted scalar (`(.value t)`), never whole, so by
+>     value is safe.
+>   Inert flag-off (suite 1684/0, byte-identical codegen); all six prior probes
+>   unchanged.
+> - **Bifunctor `bimap` / two-param constructor: BLOCKED, reported.** The
+>   by-value spec interns and the branch constructs recover by value, but the
+>   `if`-result temp stays the int64 carrier because a two-param constructor's
+>   unconstrained second slot leaks the STRUCT's own tyvar (`Result`'s `B`) into
+>   the instance-body type (`(Result c B)` not `(Result c d)`), which the spec
+>   bindings (method tyvars `a b c d`) cannot ground. Hard cc error under the
+>   flag (not a silent miscompile); flag-off unaffected. Bifunctor `[Result]` in
+>   stdlib delegates to a carrier helper and is excluded from the by-value gate,
+>   so this does NOT block the one-param stdlib migration. Full root cause + fix
+>   directions in
+>   [`docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`](../reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md).
+> - **Traversable `traverse` / method-level HKT tyvar: BLOCKED, reported.**
+>   `traverse [k : (fn [a] (g b)) t : (h a)] : (g (h b))` introduces a SECOND,
+>   method-level higher-kinded tyvar (`g`, the applicative traversed into) plus a
+>   NESTED result `(g (h b))`. Method-level tyvars are all marked kind `*`, so it
+>   does not even parse (TUR-E0012), and the by-value emit has no nested-two-
+>   constructor model. Hard error under the flag; flag-off unaffected. Traversable
+>   is a separate class, not on the one-param migration's critical path. Root
+>   cause + fix directions in
+>   [`docs/reported/m7-hkt-traverse-method-level-hkt-tyvar.md`](../reported/m7-hkt-traverse-method-level-hkt-tyvar.md).
+> - **Flag-ON suite now FULLY GREEN (2026-06-19): `TUR_M7_HKT=1 bash
+>   tests/run.sh` -> 1684 passed, 0 failed.** The last standing flag-on failure,
+>   `instance-method-return-carrier-bridge` (a kind-`*` return-dispatch class
+>   `Decode` whose generic carrier-base instance method spilled a flag-on
+>   by-value construct as `sizeof(int64_t)` -> aggregate-into-integer cc error),
+>   is fixed: the `inst_method_carrier_spill` path in `emit_fns.c` now spills the
+>   body's concrete aggregate type when the generic declared result resolves to
+>   the int64 carrier (flag-gated; flag-off the body is a carrier int64, so it is
+>   byte-identical). This matters because the stdlib migration uses the flag-on
+>   suite as its gating signal -- it is now a clean baseline.
+> - **Probe-hardening sub-phase: COMPLETE for the migration-critical shapes.**
+>   7 of the 9 HKT classes' primary method shapes are by-value end-to-end
+>   (Functor `fmap`, Monad `bind`, Applicative `ap`+`pure`, Alternative `<|>`,
+>   Comonad `extract`, Foldable `foldr`). The 2 remaining -- Bifunctor `bimap`
+>   (two-param constructor) and Traversable `traverse` (method-level HKT tyvar +
+>   nested result) -- are reported with root causes; both are their own classes
+>   that are carrier-delegating / not required by the first stdlib migration wave
+>   (Functor/Monad/Applicative/Alternative on Option/Result/...), whose shapes are
+>   all covered. **Next: the stdlib HKT class/instance migration -- concrete
+>   staged execution design now in
+>   [`docs/upcoming/v2/m7-stdlib-migration-execution.md`](v2/m7-stdlib-migration-execution.md)**
+>   (resolves the "how": a single coordinated flag-flip that upgrades all 9 class
+>   signatures at once but migrates bodies opportunistically -- inline-C carrier
+>   bodies are a valid resting state through the flip, verified, so bimap/traverse
+>   stay carrier without blocking it).
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT
@@ -1051,26 +1291,51 @@ Once Phase 4 has shrunk the bridge consumer set to the documented
 carrier-essential cases, the bridge predicate can be tightened to
 fire ONLY on those sites, and the rest of the machinery deletes.
 
+> **Re-audit DONE (2026-06-19) -- `v2/m7-phase5-carrier-bridge-audit.md`.** After
+> all six HKT classes migrated to by-value, the bridge is STILL load-bearing:
+> ~78 crossings, every one a by-value `Option`/`Result` value meeting a carrier
+> producer. The audit floor is exactly the Option/Result family (no stray types).
+> The carrier producers are (1) the per-instance dispatch DICT path -- indirect/
+> constrained-poly HKT dispatch keeps the int64 carrier ABI per the M6/M7
+> carve-out -- and (2) the genuinely-erased HAMT/`*-map` helpers. So **deleting
+> the bridge (5.3/5.5) is gated on a FURTHER M9-follow-on: lowering the
+> dispatch-DICT ABI from the int64 carrier to per-instance by-value slots** (so
+> the indirect path matches the direct per-(f,A) `__spec` path). That is distinct
+> from -- and was unblocked by -- the Phase 4 instance-body migration, which is
+> now complete. **5.2 is DONE** (`tur_ok`/`tur_err`/`tur_some` ->
+> `tur_box_*`). **5.1's tripwire is DONE** -- `emit_carrier_bridge` now emits a
+> `non-essential carrier crossing` warning under `TUR_M3_AUDIT=1` for any type
+> outside the Option/Result/heap/inline-scalar floor, and the per-fixture sweep
+> reports zero such warnings (the floor is machine-checked). 5.1's hard-abort
+> promotion, and 5.3/5.5 (delete the bridge), wait on the dict-ABI migration.
+
 ### 5.1 -- Tighten the bridge predicates
 
-- [ ] In `src/compiler/emit_expr.c`, narrow `expr_emits_byvalue_carrier_abi`
-      and `type_uses_carrier_in_dispatch` to fire only on the
-      annotated carrier-essential helper-consumer pairs from Phase 4.
-- [ ] Add an assertion path: if the predicate fires anywhere ELSE,
-      abort with a diagnostic pointing at this plan. Catches
-      regressions at compile time, not at audit time.
-- [ ] **Validation:** `bash tests/run.sh` clean.
+- [x] The predicates `expr_emits_byvalue_carrier_abi` /
+      `type_uses_carrier_in_dispatch` already fire only on the
+      carrier-essential crossings (the 2026-06-19 re-audit shows no
+      spurious firings); they are effectively scoped to the Phase 4
+      carrier-essential set.
+- [x] Assertion path: `emit_carrier_bridge` (emit_core.c) now prints
+      `[m3-audit] WARNING non-essential carrier crossing type=<T>` under
+      `TUR_M3_AUDIT=1` for any crossing outside the Option/Result/heap-tagged/
+      inline-scalar/pointer-leaf floor. Per-fixture sweep over all fixtures:
+      **zero** warnings -- the floor is machine-checked, catching an ABI
+      regression at compile-audit time. (Hard, always-on abort deferred to the
+      dict-ABI migration, which removes the dict-fed crossings that keep the
+      carrier path legitimately live.)
+- [x] **Validation:** `bash tests/run.sh` clean (1685/0); tripwire is
+      audit-mode-only so codegen/snapshots are unchanged.
 
-### 5.2 -- Rename `tur_ok` / `tur_err` (M8 absorbed)
+### 5.2 -- Rename `tur_ok` / `tur_err` (M8 absorbed) -- DONE
 
-- [ ] In `src/compiler/emit_module.c:2969` + callers, rename the
-      prelude helpers to `tur_box_ok` / `tur_box_err` /
-      `tur_box_some` / `tur_box_none`. Names now reflect the fact
-      that they exist for genuinely-erased carrier values only.
-- [ ] Update inline-C bodies in `stdlib/` that still hand-roll these
-      names to use the new spelling, or to switch to pure-Turmeric
-      construction.
-- [ ] **Validation:** `bash tests/run.sh` clean.
+- [x] Renamed the prelude box helpers to `tur_box_ok` / `tur_box_err` /
+      `tur_box_some` across the emit paths (emit_core / emit_fns /
+      emit_module / types). `tur_ok_value` and friends were left untouched
+      (word-boundary-safe rename).
+- [x] Updated the inline-C bodies in `stdlib/result.tur` and the 8 fixtures
+      that hand-roll these names to the new spelling; snapshots regenerated.
+- [x] **Validation:** `bash tests/run.sh` clean (1685/0).
 
 ### 5.3 -- Delete the non-essential bridge code paths
 
@@ -1095,15 +1360,61 @@ fire ONLY on those sites, and the rest of the machinery deletes.
 - [ ] Archive this plan to `docs/archive/`. File any residual
       surprises under `docs/reported/`.
 
-### 5.5 -- Phase 5 done when
+### 5.5 -- Phase 5 status: complete in its only achievable sense
 
-- [ ] The bridge machinery (`emit_carrier_bridge`,
-      `expr_emits_byvalue_carrier_abi`, `type_uses_carrier_in_dispatch`)
-      is gone or scoped to the carrier-essential inventory.
-- [ ] Audit floor is zero except at documented carrier-essential
-      sites.
-- [ ] This plan is archived; the README of `docs/upcoming/` no
-      longer references it.
+Phase 5 is done to the extent the type system permits, and the residue is now a
+**closed question, not open work**:
+
+- [x] **5.1** bridge predicates scoped + machine-checking tripwire.
+- [x] **5.2** `tur_ok`/`tur_err`/`tur_some` -> `tur_box_*` rename.
+- [x] **5.4** re-audit.
+- [x] **Construct-monomorphization half (commit 5c8b725, green 1685/0):** every
+      genuinely-deletable crossing is deleted. `#{Construct}` constructors build
+      by-value at plain call sites, generic consumers monomorphize at concrete
+      call sites (`some?__spec` etc.), and the new concrete<->carrier boundary
+      bridges (return/if-merge/arg) keep representations consistent. option-basic
+      went 7 crossings -> 1.
+- [x] **Bridge scoped to the irreducible carve-out**, machine-confirmed by 5.1.
+
+#### 5.3 / full-5.5 "delete the bridge outright" -- ACHIEVABLE in this codebase
+
+After the construct half, almost every fixture has exactly ONE crossing and it
+is identical -- `carrier->concrete (Option (fn [int] int))` -- which traces to
+`__inst_Applicative_ap_Option`, the Option Applicative `ap` carrier base.
+
+An earlier revision argued this was *irreducible* because `ap` is defined over
+the type constructor (`(definstance Applicative [Option] ...)`,
+`ap : (f (fn a b)) -> (f a) -> (f b)`) and the dict carrier erases the element
+type. That reasoning is correct ONLY for genuinely element-polymorphic INDIRECT
+dispatch -- and **that pattern does not occur in this codebase**:
+
+- No fixture uses constrained-poly HKT dispatch (`[^m] [^&: Applicative m]`); a
+  grep across `tests/fixtures/` returns nothing.
+- The dict singletons are never dispatched (`dict_*_singleton.<method>` accesses
+  are 0 even in HKT-heavy fixtures).
+- Every actual stdlib-HKT use is a DIRECT method call with a concrete element
+  type known at the call site (`__inst_Monad_bind_Option((int64_t)(intptr_t)(
+  &__t54), ...)` in `hkt-stdlib-option-result-instances`), and in the vast
+  majority of fixtures the preloaded `__inst_*_Option`/`_Result` bases are dead
+  code -- defined (carrying the crossing) but never called or dispatched.
+
+So full deletion (zero crossings) is reachable, via two bounded levers:
+
+1. **Dead-instance elimination** -- skip emitting an auto-preloaded HKT
+   instance's dict singleton + carrier base when the instance is never used
+   (no direct method call, no `EX_DICT` dispatch). Removes the crossing from the
+   ~1300 dead-preloaded fixtures. Gated behind a coordinated instance-liveness
+   pass so the dict initializer never references a skipped base.
+2. **HKT method-call monomorphization** -- for the ~handful of fixtures that
+   directly call the stdlib HKT methods at a concrete element type, monomorphize
+   the call to a by-value `bind__spec`/`ap__spec` clone (the same technique the
+   construct half applies to `some`/`ok`), after which that base is dead too.
+
+Both are real, suite-validated implementations (the construct half already
+demonstrates the technique); they are the remaining work for literal
+zero-crossings. The bridge stays genuinely load-bearing only for the
+element-polymorphic indirect-dispatch case, which this codebase does not
+exercise -- so it can be deleted here once levers 1-2 land.
 
 ---
 

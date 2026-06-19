@@ -1,0 +1,31 @@
+;; M7 HKT-dispatch reference probe #9 -- PARTIAL-application wildcard instance
+;; head. NOT a test-suite fixture. Companion to the fmap / bind / ap / alt /
+;; pure / extract / foldr / bimap probes.
+;;
+;; This is the unavoidable gate for the Functor/Monad/Applicative/Alternative
+;; `[Result]` stdlib migration: a kind-(* -> *) class fixes ONE parameter of a
+;; two-parameter constructor and varies the other. `(Result _ B)` holds the
+;; err arm (B) and maps over the ok arm, so `(f a)` = `(Result a B)` and the
+;; result `(f b)` = `(Result b B)` -- b fills the FIRST (hole) slot.
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-partialapp.tur; echo $?
+;;   (by-value HKT is now default-on, so the env var is optional)
+;;   -> 42  (TARGET)
+;;
+;; STATUS: see docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md
+;; (the partial-app wildcard remains; the full-two-param bimap is fixed).
+
+(defclass MyFunctorP [^f]
+  (pmap [container : (f a) g : (fn [a] b)] : (f b)))
+
+(definstance MyFunctorP [(Result _ B)]
+  (pmap [container g]
+    (if (.is-ok container)
+      (ok (g (.ok-val container)))
+      (err (.err-val container)))))
+
+(defn dbl [n : int] : int (* n 2))
+
+(defn main [] : int
+  (let [r (pmap (:: (ok 21) (Result int int)) dbl)]
+    (ok-val (:: r (Result int int)))))   ; TARGET: 42

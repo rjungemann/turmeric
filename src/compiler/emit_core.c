@@ -2609,6 +2609,51 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
             ? "carrier->concrete" : "concrete->carrier";
         fprintf(stderr, "[m3-audit] bridge %s type=%s\n",
                 dir, type_name(concrete_ty));
+
+        /* Phase 5.1 tripwire: assert the crossing stays inside the
+         * carrier-essential family.  The 2026-06-19 re-audit
+         * (v2/m7-phase5-carrier-bridge-audit.md) established that every real
+         * crossing is one of: a :heap-tagged handle (Vec/Map/Set/...), an
+         * Option/Result by-value struct meeting a dict/indirect-dispatch
+         * carrier producer, or an inline 8-byte scalar.  The legacy
+         * field-by-field-or-deref fallback below also accepts an arbitrary
+         * non-Option/Result struct (Pair, user defstruct), but the audit floor
+         * for that set is ZERO.  Surfacing such a crossing here catches an ABI
+         * regression at compile-audit time -- e.g. a new generic instance body
+         * that leaks a by-value aggregate through the carrier -- instead of at
+         * the next manual sweep.  A hard abort waits on the dict-ABI
+         * monomorphization (5.3/5.5); under the audit env-var this stays a
+         * non-fatal tripwire so the gate suite is never disturbed. */
+        bool essential = type_is_heap_struct(concrete_ty) ||
+                         carrier_is_inline(concrete_ty.kind);
+        if (!essential) {
+            StructDef *adef = NULL;
+            Type aargs[16];
+            uint8_t an = 0;
+            if (type_extract_struct_app(&concrete_ty, &adef, aargs, &an) &&
+                adef && adef->name &&
+                (strcmp(adef->name, "Option") == 0 ||
+                 strcmp(adef->name, "Result") == 0)) {
+                essential = true;
+            }
+            /* Pointer-sized leaves (cstr, ptr<void>, int/int64) cross with no
+             * reinterpret and are trivially safe -- not part of the
+             * struct-fallback set the tripwire watches. */
+            switch (concrete_ty.kind) {
+                case TY_CSTR: case TY_PTR_VOID:
+                case TY_INT: case TY_INT64: case TY_UINT64:
+                    essential = true;
+                    break;
+                default: break;
+            }
+        }
+        if (!essential) {
+            fprintf(stderr,
+                "[m3-audit] WARNING non-essential carrier crossing type=%s "
+                "(expected floor is Option/Result/heap/inline-scalar only; see "
+                "docs/upcoming/v2/m7-phase5-carrier-bridge-audit.md)\n",
+                type_name(concrete_ty));
+        }
     }
 
     const char *cname = emit_type_c_name(ctx, concrete_ty);
@@ -2649,7 +2694,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                        cname, src_str);
         } else {
             /* decode-bool-carrier-instance-ascription:
-             * The carrier source produced by inline-C `tur_ok` / `tur_some`
+             * The carrier source produced by inline-C `tur_box_ok` / `tur_box_some`
              * always lays out its payload fields as int64_t (the universal
              * `tur_result_box_t` / `tur_option_t` shape). The by-value sink
              * struct `Result__T__U` / `Option__T` lays them out at native

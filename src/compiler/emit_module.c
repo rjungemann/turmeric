@@ -404,6 +404,55 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     return name;
 }
 
+char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
+                                  Type result_type, Type *param_types,
+                                  uint8_t n_params) {
+    /* Only by-value aggregates need spilling: a struct/applied type with a
+     * concrete codegen layout whose C name is not the int64 carrier. */
+    const char *rc = type_c_name(result_type);
+    if (!rc || strcmp(rc, "int64_t") == 0) return NULL;
+    bool is_aggr = (result_type.kind == TY_STRUCT &&
+                    result_type.as.struct_.def) ||
+                   (result_type.kind == TY_APP &&
+                    type_has_concrete_codegen_layout(&result_type) &&
+                    !type_uses_carrier_abi(result_type));
+    if (!is_aggr) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_aggrspill_");
+    append_sanitized_c_token(&nb, real_fn);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) { return name; }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+    buf_puts(target, ") {\n    ");
+    buf_printf(target, "%s __r = %s(__e", rc, real_fn);
+    for (uint8_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+    buf_puts(target, ");\n    ");
+    buf_printf(target, "void *__p = malloc(sizeof(%s));\n    ", rc);
+    buf_printf(target, "memcpy(__p, &__r, sizeof(%s));\n    ", rc);
+    buf_puts(target, "return (int64_t)(intptr_t)__p;\n}\n");
+    return name;
+}
+
 static char *typed_poly_to_fat_name(Type result_type, const Type *arg_types,
                                     uint32_t n_args) {
     Buf name;
@@ -1520,6 +1569,24 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
             }
         }
+        /* Phase 5 carrier-bridge deletion: monomorphize a #{Construct} at a
+         * plain call site whose own bindings (or grounded call->type) resolve to
+         * a concrete by-value non-heap struct -- `(some 42)` => `(Option int)`. */
+        if (!construct_recovered_byvalue && body_is_construct && !borrow_path) {
+            Type recovered = (bindings && n_bindings > 0)
+                ? emit_abi_instantiate_type(&generic_result, bindings,
+                                            n_bindings, ctx->type_arena)
+                : result_type;
+            if (recovered.kind == TY_APP &&
+                !type_is_heap_struct(recovered) &&
+                type_has_concrete_codegen_layout(&recovered) &&
+                !emit_abi_type_has_concrete_named_tyvar(&recovered)) {
+                result_type = recovered;
+                construct_recovered_byvalue = true;
+                abi_changes = true;
+                emit_abi_note_carrier_call(ctx, fn_binding);
+            }
+        }
     }
     /* M4 follow-up: an instance-method spec whose substituted arg_types
      * still carry unresolved TYVARs is a phantom — type_c_name downgrades
@@ -1569,7 +1636,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     /* M2b: the same monomorphization-vs-carrier choice applies to
      * `#{Construct}` polymorphic defns whose body is a `(make-struct …)`.
      * Their carrier-emit body is synthesized in emit_fns.c to the same
-     * `return tur_ok((int64_t)(intptr_t)x);` shape the inline-C body
+     * `return tur_box_ok((int64_t)(intptr_t)x);` shape the inline-C body
      * produces, so for ABI-neutral specs (no by-value struct in args or
      * result) the carrier path is correct and a spec is wasted code that
      * also triggers caller/callee ABI mismatch when the caller still
@@ -2465,7 +2532,25 @@ static bool emit_abi_has_carrier_call(const EmitCtx *ctx, const Binding *binding
  * leaves a dangling call.  Emit the carrier definition whenever a direct
  * (non-specialized) call to the binding was observed during the abi scan;
  * otherwise keep suppressing it (the function is either unused here or fully
- * served by specialization clones, and its body may not be carrier-safe). */
+ * Phase 5 carrier-bridge deletion -- dead-instance elimination liveness: an HKT
+ * typeclass instance is LIVE iff at least one of its method bases is directly
+ * referenced (a carrier call was noted on the base binding during the
+ * pre-emission scan -- a direct `__inst_*` call site).  In this codebase no
+ * EX_DICT dispatch occurs, so a direct call is the only liveness source; if
+ * indirect dispatch is ever added, an EX_DICT-reference check belongs here too.
+ * Used to skip a dead instance's dict singleton (emit_stmt.c) and carrier bases
+ * (emit_abi_fn_skip_generic) in lockstep. */
+bool emit_instance_is_live(const EmitCtx *ctx, TypeClassInstance *inst) {
+    if (!inst || !inst->typeclass) return true; /* conservative: keep */
+    for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
+        FnDef *m = inst->method_impls[i];
+        if (m && m->binding && emit_abi_has_carrier_call(ctx, m->binding))
+            return true;
+    }
+    return false;
+}
+
+ /* served by specialization clones, and its body may not be carrier-safe). */
 static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
     if (e->kind != EX_FN_DEF || !e->as.fn_def_.fn) return false;
     FnDef *fd = e->as.fn_def_.fn;
@@ -2500,6 +2585,36 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
         }
     }
     if (!emit_abi_fn_is_generic_unsafe(e)) return false;
+    /* M7 by-value HKT: never skip the carrier BASE method of an HKT instance.
+     * Its concrete call sites route through per-(f, A) by-value `__spec` clones
+     * (so it looks like dead carrier code), but the per-instance dispatch DICT
+     * singleton still references the base in its function-pointer slot
+     * (indirect/constrained-poly HKT dispatch keeps the uniform carrier ABI per
+     * the M6/M7 carve-out).  Skipping it leaves the dict slot referencing an
+     * undeclared symbol (`__inst_Functor_fmap_Option undeclared`). */
+    if (g_m7_hkt_enabled && fd->owner_instance && fd->owner_instance->typeclass) {
+        TypeClass *tc = fd->owner_instance->typeclass;
+        bool is_hkt = false;
+        if (tc->type_param_kinds) {
+            for (uint8_t i = 0; i < tc->n_type_params; i++)
+                if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
+        }
+        if (is_hkt) {
+            /* Phase 5 carrier-bridge deletion -- dead-instance elimination: an
+             * auto-preloaded HKT instance carrier base used to be kept
+             * unconditionally (the dict singleton references it).  But when the
+             * WHOLE instance is dead -- no method directly called (no carrier
+             * call noted on ANY of its method bindings) and, in this codebase,
+             * no dict dispatch ever occurs -- the base is pure dead code carrying
+             * the ubiquitous `carrier->concrete (Option (fn ...))` crossing.
+             * Skip the whole dead instance (the dict singleton is skipped in
+             * lockstep in emit_stmt.c EX_INSTANCE_DEF, keyed on the same
+             * liveness), which removes the crossing from every fixture that
+             * never uses the instance.  A LIVE instance (some method directly
+             * called) keeps its base + dict unchanged. */
+            return !emit_instance_is_live(ctx, fd->owner_instance);
+        }
+    }
     return !emit_abi_has_carrier_call(ctx, fd->binding);
 }
 
@@ -3110,14 +3225,14 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * canonical layout instead of hand-rolling the struct cast + a magic
      * sentinel integer (`-1`, `INT64_MIN`, `0`-as-absent).  The layout matches
      * stdlib/option.tur and stdlib/result.tur byte-for-byte, so values built
-     * with tur_some/tur_ok flow transparently into the stdlib accessors and
+     * with tur_box_some/tur_box_ok flow transparently into the stdlib accessors and
      * vice versa.  Marked unused so a program that touches neither type still
      * compiles clean under -Wall. */
     buf_puts(out, "typedef struct { bool is_some; int64_t value; } tur_option_t;\n");
     buf_puts(out, "typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;\n");
     buf_puts(out, "#define TUR_NONE ((int64_t)0)\n");
-    buf_puts(out, "static int64_t tur_some(int64_t __x) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_some(int64_t __x) {\n");
+    buf_puts(out, "static int64_t tur_box_some(int64_t __x) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_box_some(int64_t __x) {\n");
     buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
     buf_puts(out, "    __o->is_some = true; __o->value = __x;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
@@ -3127,13 +3242,13 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
     buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->value;\n}\n");
-    buf_puts(out, "static int64_t tur_ok(int64_t __v) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_ok(int64_t __v) {\n");
+    buf_puts(out, "static int64_t tur_box_ok(int64_t __v) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_box_ok(int64_t __v) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
     buf_puts(out, "    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
-    buf_puts(out, "static int64_t tur_err(int64_t __e) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_err(int64_t __e) {\n");
+    buf_puts(out, "static int64_t tur_box_err(int64_t __e) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_box_err(int64_t __e) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
     buf_puts(out, "    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
@@ -3945,7 +4060,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase R2: catch-unwind/catch-panic-of for the (catch-unwind thunk) special
      * form.  Unlike the try/catch helpers above (purpose-built tur_thunk_fn ABI),
      * these take a fat-closure thunk (int64_t handle) invoked via TUR_APPLY0 and
-     * return a result box (tur_ok / tur_err) so the value composes with
+     * return a result box (tur_box_ok / tur_box_err) so the value composes with
      * err?/ok?/ok-val/err-val and the ? operator.  The single global jmp_buf is
      * saved/restored on entry/exit so nested boundaries work.  The caught panic
      * payload becomes the err value (an opaque Panic handle); it is intentionally
@@ -3959,14 +4074,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
-    buf_puts(out, "        return tur_ok(__v);\n");
+    buf_puts(out, "        return tur_box_ok(__v);\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
-    buf_puts(out, "        return tur_err((int64_t)(intptr_t)__p);\n");
+    buf_puts(out, "        return tur_box_err((int64_t)(intptr_t)__p);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {\n");
@@ -3977,7 +4092,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
-    buf_puts(out, "        return tur_ok(__v);\n");
+    buf_puts(out, "        return tur_box_ok(__v);\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
     buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
@@ -3985,11 +4100,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
     buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
-    buf_puts(out, "            return tur_err((int64_t)(intptr_t)__p);\n");
+    buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        /* type mismatch: re-raise to the next outer boundary (restored above) */\n");
     buf_puts(out, "        if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);\n");
-    buf_puts(out, "        return tur_err(0);\n");
+    buf_puts(out, "        return tur_box_err(0);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
 

@@ -319,11 +319,34 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 
     /* Default: emit as a value and return it. */
     char *v = emit_fat_return_value(ctx, body, fn_e, e);
-    indent_buf(body, ctx->indent);
     if (e->type.kind == TY_NIL) {
         free(v);
         v = strdup(result_kind == TY_BOOL ? "false" : "0");
     }
+    /* Phase 5 carrier-bridge deletion (concrete->carrier tail return): this
+     * tail is emitted in a function/closure whose C return is the uniform int64
+     * carrier but the tail value is now a by-value Option/Result struct (a
+     * monomorphized #{Construct} spec).  Heap-spill it back to the int64 carrier
+     * (a stack spill would return a dangling address).  Guard fires only for an
+     * actual by-value carrier producer, so plain int tails and not-yet-
+     * monomorphized carrier producers are untouched. */
+    Type tail_bv = (!is_main && result_kind == TY_INT && e->type.kind != TY_NIL &&
+                    e->type.kind != TY_NEVER &&
+                    fn_body_tail_emits_byvalue_carrier_abi(ctx, e))
+        ? fn_body_tail_byvalue_carrier_type(ctx, e)
+        : type_simple(TY_UNKNOWN, CK_COPY);
+    if (tail_bv.kind != TY_UNKNOWN) {
+        const char *cty = emit_type_c_name(ctx, tail_bv);
+        indent_buf(body, ctx->indent);
+        buf_printf(body,
+            "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+            "*__tur_ret_p = %s; "
+            "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+            cty, cty, cty, v);
+        free(v);
+        return;
+    }
+    indent_buf(body, ctx->indent);
     if (is_main && result_kind == TY_INT)
         buf_printf(body, "return (int)%s;\n", v);
     else
@@ -795,7 +818,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * C (designated initializer on a non-aggregate) — because the result
      * type's tyvars never get bound.
      *
-     * The synthesized body replays the legacy tur_ok / tur_err / tur_some /
+     * The synthesized body replays the legacy tur_box_ok / tur_box_err / tur_box_some /
      * TUR_NONE pattern: identify (a) the bool discriminator field's literal
      * value in the make-struct, and (b) the payload field whose value is a
      * direct parameter reference; then emit
@@ -864,9 +887,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             const char *helper = NULL;
             if (disc_known) {
                 if (strcmp(def->name, "Result") == 0)
-                    helper = disc_value ? "tur_ok" : "tur_err";
+                    helper = disc_value ? "tur_box_ok" : "tur_box_err";
                 else if (strcmp(def->name, "Option") == 0)
-                    helper = disc_value ? "tur_some" : NULL;
+                    helper = disc_value ? "tur_box_some" : NULL;
             }
 
             if (disc_known && (helper || (!disc_value
@@ -1176,11 +1199,47 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 rt = fd->body->type;
             }
             const char *struct_cty = emit_type_c_name(ctx, rt);
-            buf_printf(file,
-                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                "*__tur_ret_p = %s; "
-                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                struct_cty, struct_cty, struct_cty, ret_val);
+            /* M7 (flag-gated): in a GENERIC carrier base instance method whose
+             * declared result is a parameterized struct with a free element
+             * tyvar -- e.g. `Decode`'s `(Result a cstr)` -- `rt` resolves to the
+             * int64 carrier (no instance specialization active here).  But under
+             * the flag the concrete instance body recovers its construct BY VALUE
+             * (`(ok (make-struct Point ...))` -> `ok__spec` returning
+             * `Result__Point__cstr`), so `ret_val` is a by-value aggregate.
+             * Spilling it as `sizeof(int64_t)` + `*(int64_t*)p = <struct>` is a
+             * hard cc error (aggregate into integer).  When the body's own type
+             * is a concrete non-carrier aggregate, spill THAT type so the malloc
+             * size and the cast match the actual value.  Flag-off the body stays
+             * a carrier int64 here, so this is inert (byte-identical) flag-off.
+             * See docs/reported/m7-hkt-bimap-... family / instance-method-
+             * return-carrier-bridge fixture. */
+            if (g_m7_hkt_enabled && struct_cty &&
+                strcmp(struct_cty, "int64_t") == 0 && fd->body) {
+                const char *body_cty = emit_type_c_name(ctx, fd->body->type);
+                if (body_cty && strcmp(body_cty, "int64_t") != 0)
+                    struct_cty = body_cty;
+            }
+            if (g_m7_hkt_enabled && struct_cty &&
+                strcmp(struct_cty, "int64_t") == 0) {
+                /* M7 (flag-gated): the body already produced the carrier int64
+                 * handle -- e.g. a partial-application `(Result _ E)` instance
+                 * whose pure-Turmeric body lowered to the carrier `ok`/`err` (the
+                 * spill type stays int64 because the result element doesn't ground
+                 * by value).  There is nothing to box: malloc'ing another int64
+                 * and storing the handle into it DOUBLE-boxes (the by-value
+                 * consumer then reads a pointer-to-handle as the struct -> garbage,
+                 * the `(Result _ E)` fmr returning 0 for 42).  Return the carrier
+                 * value directly.  Gated on the flag because the legacy carrier
+                 * path (flag-off) relies on the existing spill shape (range-*
+                 * GADT fixtures). */
+                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+            } else {
+                buf_printf(file,
+                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_ret_p = %s; "
+                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                    struct_cty, struct_cty, struct_cty, ret_val);
+            }
         } else if (fd->body->type.kind == TY_FN &&
                    (result_kind == TY_INT || ret_is_int64_carrier)) {
             /* A function-typed body returned through the int64_t closure
@@ -1238,6 +1297,29 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             indent_buf(file, ctx->indent);
             buf_printf(file, "return %s;\n", bridged);
             free(bridged);
+        } else if (ret_is_int64_carrier && fd->body
+                   && fd->body->type.kind != TY_NEVER
+                   && fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)
+                   && fn_body_tail_byvalue_carrier_type(ctx, fd->body).kind != TY_UNKNOWN) {
+            /* Phase 5 carrier-bridge deletion (concrete->carrier return): the C
+             * return is the uniform int64 carrier (a lifted lambda thunk in a
+             * poly_fn slot, or a generic carrier base) but the body tail now
+             * produces a by-value Option/Result struct (a monomorphized
+             * #{Construct} spec like `some__spec`).  Heap-spill the struct and
+             * return its pointer as int64 -- the SAME malloc spill the
+             * inst_method_carrier_spill path uses, so the carrier consumer
+             * (which derefs a {is_some,value}/{is_ok,...} layout) reads it
+             * correctly.  A stack spill (emit_carrier_bridge concrete->carrier)
+             * would return a dangling address, so it is NOT used here.  The
+             * concrete type comes from the matched spec, since the construct's
+             * own e->type is collapsed to the int64 carrier. */
+            Type src = fn_body_tail_byvalue_carrier_type(ctx, fd->body);
+            const char *cty = emit_type_c_name(ctx, src);
+            buf_printf(file,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                cty, cty, cty, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

@@ -8,10 +8,10 @@
 ;; docs/archive/tail-call-inline-c-carrier-bridge.md.
 
 (defn captures-get [caps : int key : cstr] : (Result cstr cstr)
-  ```c return tur_ok((int64_t)(intptr_t)"ok-val"); ```)
+  ```c return tur_box_ok((int64_t)(intptr_t)"ok-val"); ```)
 
 (defn opt-get [k : int] : (Option cstr)
-  ```c return tur_some((int64_t)(intptr_t)"some-val"); ```)
+  ```c return tur_box_some((int64_t)(intptr_t)"some-val"); ```)
 
 ;; Plain tail call: pure-Turmeric wrapper around inline-C carrier helper.
 (defn capture [caps : int name : cstr] : (Result cstr cstr)

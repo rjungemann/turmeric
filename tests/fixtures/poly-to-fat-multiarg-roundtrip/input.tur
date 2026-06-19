@@ -17,13 +17,15 @@
 (defstruct BoxW [A] (raw :int))
 
 ;; instance method whose closure argument is binary -> boxed into call2's ^fat
-(definstance Functor [BoxW]
-  (fmap [container fn]
+(defclass BoxMap [^f] (boxmap [container [fn :fn]] : int))
+
+(definstance BoxMap [BoxW]
+  (boxmap [container fn]
     (call2 fn 3 4)))
 
 (defn add2 [x : int y : int] : int (+ x y))
 
 (defn main [] : int
   (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
-    (println (.fmap b add2)))    ; add2(3, 4) -> 7
+    (println (.boxmap b add2)))    ; add2(3, 4) -> 7
   0)

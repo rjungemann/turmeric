@@ -1043,7 +1043,7 @@ static const char *struct_field_c_type(const StructDef *owner, const StructField
          * the resolved type-arg is a non-parametric value-struct. The struct
          * layout then has a fixed 8-byte slot regardless of T's size and
          * matches the carrier-box layout (tur_result_box_t / tur_option_t)
-         * that the prelude helpers produce -- so tur_ok / tur_some emit a
+         * that the prelude helpers produce -- so tur_box_ok / tur_box_some emit a
          * carrier whose layout downstream consumers can read directly as
          * the by-value Result__T__B / Option__T struct. */
         if (owner && owner->name &&

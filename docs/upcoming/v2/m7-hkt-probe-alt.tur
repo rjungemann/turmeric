@@ -1,0 +1,47 @@
+;; M7 HKT-dispatch reference probe #4 -- Alternative `<|>` / selection shape.
+;; NOT a test-suite fixture. Companion to m7-hkt-probe.tur (Functor `fmap`),
+;; m7-hkt-probe-bind.tur (Monad `bind`), and m7-hkt-probe-ap.tur (Applicative
+;; `ap`).
+;;
+;; The defining feature of this shape (vs fmap/bind/ap, which all CONSTRUCT
+;; their `(f b)` result in-body via `(some ...)`/`(none)`/`(k ...)`) is that the
+;; instance body is a SELECTION / PASS-THROUGH:
+;;     (alt2 [x y] (if (some? x) x y))
+;; the tail returns an EXISTING `(f a)` argument directly. Under the by-value
+;; spec the params x/y arrive as the by-value `Option__int`, so returning one of
+;; them is already by value -- there is no in-body construct to recover. This is
+;; the first shape whose result element is recovered NOT from arg 0 alone but
+;; from whichever argument grounds it (arg 0 may be a bare `(none)` whose element
+;; is a free tyvar).
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-alt.tur; echo $?
+;;   -> 42  (TARGET, REACHED 2026-06-19)
+;;
+;; STATUS (2026-06-19): WORKING end-to-end under TUR_M7_HKT=1 -- exits 42 with
+;; NO ascription. With the flag OFF the probe errors by design (no ascriptions).
+;;
+;; What it took (two coordinated, flag-gated pieces in elab_typeclasses.c):
+;;   1. BODY GATE: m7_body_constructs_byvalue now admits an EX_VAR tail of the
+;;      applied `(f b)` family (TY_APP) -- a selection/pass-through return of an
+;;      existing `(f a)` value -- not just a `#{Construct}` call. The same
+;;      m7_body_byvalue_ok flag is computed ONCE up front and now ALSO gates the
+;;      by-value result-type commit (layers 1+3), so a carrier-bodied method can
+;;      never have its consumer flipped to by-value while its producer still
+;;      returns the carrier (the silent-miscompile-to-0 that this shape exposed).
+;;   2. ELEMENT RECOVERY: m7_collect_tyvar_bindings now SKIPS a free-tyvar actual
+;;      (the element of a bare `(none)`), so a sibling argument that DOES ground
+;;      the element wins -- `(alt2 (none) (some 42))` grounds `a` from arg 1,
+;;      order-independent. The genuinely-uninferable `(alt2 (none) (none))` stays
+;;      un-grounded and falls back to a clean `(type-app ? ?)` error (no
+;;      miscompile), mirroring the documented `ap (none) (some _)` caveat.
+
+(defclass MyAlt [^f]
+  (alt2 [x : (f a) y : (f a)] : (f a)))
+
+(definstance MyAlt [Option]
+  (alt2 [x y]
+    (if (some? x) x y)))
+
+(defn main [] : int
+  (let [r (alt2 (none) (some 42))]
+    (unwrap r)))   ; TARGET: 42

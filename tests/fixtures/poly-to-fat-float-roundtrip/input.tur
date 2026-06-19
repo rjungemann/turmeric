@@ -25,8 +25,10 @@
 ;; Functor instance whose fmap forwards its (poly) closure argument to the
 ;; :float sink.  Inside the body, `fn` is a tur_poly_fn_t carrier that gets
 ;; boxed via EX_POLY_TO_FAT before reaching call-ff's ^fat parameter.
-(definstance Functor [BoxW]
-  (fmap [container fn]
+(defclass BoxMap [^f] (boxmap [container [fn :fn]] : int))
+
+(definstance BoxMap [BoxW]
+  (boxmap [container fn]
     (call-ff fn 3.5)))
 
 (defn main [] : int
@@ -36,5 +38,5 @@
     ;; `double (*)(void *, double)` thunk into the carrier -- so the typed
     ;; slot-0 shim recovers the correct ABI: (* 3.5 2.0) + 0.0 = 7.
     (let [k 0.0]
-      (println (.fmap b (fn [x : float] : float (+ (* x 2.0) k))))))
+      (println (.boxmap b (fn [x : float] : float (+ (* x 2.0) k))))))
   0)

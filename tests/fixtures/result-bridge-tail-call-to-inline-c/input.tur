@@ -16,12 +16,12 @@
 
 (defn captures-get [caps : int key : cstr] : (Result cstr cstr)
   ```c
-  return tur_ok((int64_t)(intptr_t)"hello");
+  return tur_box_ok((int64_t)(intptr_t)"hello");
   ```)
 
 (defn captures-fail [caps : int key : cstr] : (Result cstr cstr)
   ```c
-  return tur_err((int64_t)(intptr_t)"missing");
+  return tur_box_err((int64_t)(intptr_t)"missing");
   ```)
 
 ;; Pure-Turmeric wrapper: tail call to inline-C carrier helper, declared as a

@@ -16,4 +16,4 @@
 ;;; capturing closures can be passed directly.
 ;;;
 ;;; Since: Phase CCL
-(defclass Functor [^f] (fmap [container [fn :fn]] : int))
+(defclass Functor [^f] (fmap [container : (f a) g : (fn [a] b)] : (f b)))

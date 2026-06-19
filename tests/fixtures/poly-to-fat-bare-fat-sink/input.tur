@@ -21,13 +21,15 @@
 (defstruct BoxW [A]
   (raw :int))
 
-(definstance Functor [BoxW]
-  (fmap [container fn]
+(defclass BoxMap [^f] (boxmap [container [fn :fn]] : int))
+
+(definstance BoxMap [BoxW]
+  (boxmap [container fn]
     (call-bare fn 3.5)))
 
 (defn main [] : int
   (let [k 0.0
         b (:: (make-struct BoxW (schema/int)) (BoxW int))]
     ;; capturing closure through the instance method into the bare ^fat sink
-    (println (.fmap b (fn [x : float] : float (+ (* x 2.0) k)))))
+    (println (.boxmap b (fn [x : float] : float (+ (* x 2.0) k)))))
   0)

@@ -1,6 +1,6 @@
 ;; decode-bool-carrier-instance-ascription -- carrier-source typeclass
 ;; instance whose declared return is `(Result A cstr)` with `A` a sub-word
-;; primitive (bool). The instance body returns the int64 `tur_ok` carrier;
+;; primitive (bool). The instance body returns the int64 `tur_box_ok` carrier;
 ;; the call site ascribes `(:: (decode ...) (Result bool cstr))` and the
 ;; outer `ok-val` consumer expects `bool`, not `int`.
 ;;
@@ -26,11 +26,11 @@
 
 (definstance Decode [bool]
   (decode [doc]
-    ```c return tur_ok((int64_t)(doc == 1)); ```))
+    ```c return tur_box_ok((int64_t)(doc == 1)); ```))
 
 (definstance Decode [int]
   (decode [doc]
-    ```c return tur_ok((int64_t)(doc * 10)); ```))
+    ```c return tur_box_ok((int64_t)(doc * 10)); ```))
 
 (defn show-bool [b : bool] : void
   (if b (println "true") (println "false")))

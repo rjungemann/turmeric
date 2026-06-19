@@ -696,7 +696,15 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * monadic shapes (fn returning an applied HKT type) hit it.  See
      * docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
     Kind *eff_kinds = (Kind *)class_type_param_kinds;
-    if (g_m7_hkt_enabled) {
+    /* M7: collecting method-level element tyvars is a PARSE concern, independent
+     * of the by-value EMIT flag.  Un-gated so a typed HKT class signature
+     * (`(foldr [ta : (t a) ...] : b)`) parses in BOTH flag states -- flag-off it
+     * still parses and the emit treats the element types as the int64 carrier
+     * (the by-value emit paths remain gated on g_m7_hkt_enabled).  This is what
+     * lets a stdlib sig be migrated to the typed form without breaking the
+     * TUR_M7_HKT=0 opt-out's parse.  Inert for existing classes whose method
+     * signatures contain no method-level tyvars (eff_tp == class params). */
+    {
         enum { M7_MAX_TP = 16 };
         const Symbol **buf =
             (const Symbol **)arena_alloc(e->arena, M7_MAX_TP * sizeof(const Symbol *));
@@ -1030,10 +1038,15 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 /* Phase RT: a return type `:a` naming a class type parameter
                  * becomes a TY_TYVAR.  This is the return-only dispatch case:
                  * the dispatch variable appears only in the result, so the
-                 * instance must be selected from the call's expected type. */
+                 * instance must be selected from the call's expected type.
+                 * M7 HKT (flag-gated): match against the EFFECTIVE type params
+                 * (class params + method-level element tyvars) so a bare
+                 * element return `: a` -- the Comonad `extract [w : (f a)] : a`
+                 * / Foldable shape -- resolves to a named TY_TYVAR instead of
+                 * erroring.  eff_tp == class_type_params when the flag is off,
+                 * so this is byte-for-byte inert flag-off. */
                 const Symbol *tp = class_type_param_match(kw->name, kw->len,
-                                                          class_type_params,
-                                                          n_class_type_params);
+                                                          eff_tp, n_eff_tp);
                 if (tp) {
                     return_type = type_tyvar_named(tp->name);
                 } else {
@@ -1687,6 +1700,17 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
                    m7_body_constructs_byvalue(e->as.do_.items[e->as.do_.n - 1]);
         case EX_LET:
             return m7_body_constructs_byvalue(e->as.let_.body);
+        case EX_VAR:
+            /* Selection / pass-through tail (Alternative `<|>` / `or-else`):
+             * the body returns an EXISTING `(f a)` value -- a parameter or local
+             * of the result applied family -- directly, e.g.
+             * `(if (some? x) x y)`.  Under the by-value spec the param's type is
+             * the by-value `Option__int`, so returning it is already by value;
+             * no in-body `#{Construct}` is needed.  Restrict to the applied
+             * `(f b)` family (TY_APP) so a bare-element return (the `extract` /
+             * Foldable shape, whose result is not an applied type) stays on the
+             * uniform carrier path until its own probe hardens it. */
+            return e->type.kind == TY_APP;
         case EX_CALL:
             if (e->as.call_.fn_binding &&
                 e->as.call_.fn_binding->is_construct_template)
@@ -1703,6 +1727,50 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
     }
 }
 
+/* M7 HKT layer-4 (flag-gated): is this instance-method body a by-value-safe
+ * BARE-ELEMENT return?  The Comonad `extract [w : (f a)] : a` / Foldable shape
+ * returns a bare element (`a`, grounding to a scalar/struct), not an applied
+ * `(f b)` -- so there is no `#{Construct}` to recover, and m7_body_constructs_
+ * byvalue (which looks for one) correctly rejects it.  A bare-element body is
+ * by-value-safe when its tail merely READS a scalar out of the (now by-value)
+ * receiver -- a field access `(.value w)` -- or returns a bare element binding
+ * directly.  It is NOT safe if it passes the whole `(f a)` receiver to a carrier
+ * helper, so we admit only field reads / bare-element vars (recursing through
+ * if/do/let to the tail), never a general call. */
+static bool m7_body_returns_byvalue_element(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_IF:
+            return m7_body_returns_byvalue_element(e->as.if_.then_) &&
+                   m7_body_returns_byvalue_element(e->as.if_.else_or_null);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   m7_body_returns_byvalue_element(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+            return m7_body_returns_byvalue_element(e->as.let_.body);
+        case EX_GET_FIELD:
+            /* `(.value w)` -- a scalar field read off the by-value receiver. */
+            return true;
+        case EX_VAR:
+            /* returns a bare element value (a param/local) directly, never the
+             * applied `(f a)` receiver itself (that is the selection shape). */
+            return e->type.kind != TY_APP;
+        case EX_CALL:
+            /* Foldable `foldr`: the tail folds via a fn PARAMETER --
+             * `(g (.value t) z)` -- returning the bare element result by value.
+             * Admit a local (parameter) fn callee whose result is a bare element
+             * (non-applied), distinguished from a carrier-delegating global
+             * helper by `!is_global`.  The receiver only ever reaches the callee
+             * as an extracted scalar (`(.value t)`), never whole, so by value is
+             * safe. */
+            return e->as.call_.fn_binding && !e->as.call_.fn_expr &&
+                   !e->as.call_.fn_binding->is_global &&
+                   e->type.kind != TY_APP;
+        default:
+            return false;
+    }
+}
+
 /* M7 HKT layers 1+3 (flag-gated): unify a method's DECLARED parameter type
  * (carrying element tyvars, e.g. `(g a)` or `(fn [a] b)`) against the ACTUAL
  * call-site argument type, recording each tyvar -> concrete-type binding.  The
@@ -1714,6 +1782,16 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
                                       uint8_t *n, uint8_t max) {
     switch (decl.kind) {
         case TY_TYVAR:
+            /* A free-tyvar ACTUAL carries no grounding information (e.g. the
+             * element of a bare `(none)` argument).  Skip it so a sibling
+             * argument that DOES ground this tyvar wins -- the Alternative
+             * `(alt2 (none) (some 42))` shape, where the element is recoverable
+             * from the second arg.  Without this skip the "keep the first
+             * binding" rule below would lock `a` to the free element of arg 0
+             * and the result would never ground.  (This also leaves the genuine
+             * `ap` caveat -- `(ap (none) (some 41))`, where NO arg grounds `b` --
+             * un-grounded, so it still falls back to carrier dispatch.) */
+            if (act.kind == TY_TYVAR) return;
             if (decl.as.tyvar_.name) {
                 for (uint8_t i = 0; i < *n; i++)
                     if (names[i] && strcmp(names[i]->name, decl.as.tyvar_.name) == 0)
@@ -1834,6 +1912,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     const Symbol **type_arg_syms = NULL;
     uint8_t n_type_args = 0;
     uint32_t impls_start = 2;
+    /* M7 partial-app wildcard head: the `_` hole slot index parsed from a
+     * `(Ctor _ B)` / `(Ctor A _)` instance head, recorded onto the instance
+     * so the by-value HKT grounding can fix the non-hole slots. 0xFF = none. */
+    uint8_t hkt_hole_pos = 0xFF;
     
     if (call->as.list.len >= 3) {
         Form *args_form = call->as.list.items[2];
@@ -1966,6 +2048,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             }
                             /* The fixed (non-hole) arm is the type argument. */
                             aarg_form = h1_hole ? h2 : h1;
+                            /* Record the hole slot index (0 = first ctor param,
+                             * 1 = second) so the by-value HKT grounding fixes the
+                             * other slot from the concrete receiver. */
+                            hkt_hole_pos = h1_hole ? 0 : 1;
                         }
                         if (ctor_form->tag != F_SYM && ctor_form->tag != F_KEYWORD) {
                             diag_emit(DIAG_ERROR, ctor_form->span,
@@ -2583,6 +2669,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     inst->n_type_param_constraints = n_type_param_constraints;
     /* Phase HKT-P4: record the file that defined this instance. */
     inst->origin_file_id = call->span.file_id;
+    /* M7: record the partial-app wildcard hole slot (0xFF when absent). */
+    inst->partial_hole_pos = hkt_hole_pos;
 
     /* assoc-types-plan: resolve and store associated-type bindings.  Every
      * member the class declares must be bound exactly once; an unknown member
@@ -2744,9 +2832,47 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             for (uint8_t ti = 0; ti < tc->n_type_params && ti < n_type_args; ti++) {
                 if (tc->type_params[ti] &&
                     strcmp(tc->type_params[ti]->name, head) == 0) {
-                    Type *new_fn = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    *new_fn = type_args[ti];
-                    return_type.as.app.fn = new_fn;
+                    /* M7 partial-app wildcard head (`(Result _ B)`): rebuild the
+                     * full ctor application so the result element `b` lands in the
+                     * HOLE slot and the fixed arm is a tyvar named after the
+                     * struct param (grounded at the call site).  A naive head
+                     * subst would give `((Result B) b)` -- wrong slot order, and
+                     * the opaque fixed arm collapses the result to the carrier. */
+                    if (inst->partial_hole_pos != 0xFF &&
+                        type_args[ti].kind == TY_APP &&
+                        type_args[ti].as.app.fn &&
+                        type_args[ti].as.app.fn->kind == TY_STRUCT &&
+                        type_args[ti].as.app.fn->as.struct_.def) {
+                        Type elem = *return_type.as.app.arg;  /* `b` */
+                        Type rhead = *type_args[ti].as.app.fn;
+                        const StructDef *sd = rhead.as.struct_.def;
+                        uint8_t hole = inst->partial_hole_pos;
+                        Type cur = rhead;
+                        for (uint8_t s = 0; s < sd->n_type_params; s++) {
+                            Type slot;
+                            if (s == hole) {
+                                slot = elem;
+                            } else {
+                                memset(&slot, 0, sizeof(slot));
+                                slot.kind = TY_TYVAR;
+                                slot.copy_kind = CK_COPY;
+                                slot.as.tyvar_.name = sd->type_params[s];
+                            }
+                            Type *fnp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            Type *argp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *fnp = cur; *argp = slot;
+                            memset(&cur, 0, sizeof(cur));
+                            cur.kind = TY_APP; cur.copy_kind = CK_MOVE;
+                            cur.as.app.fn = fnp; cur.as.app.arg = argp;
+                            cur.hkt_kind = (s + 1 < sd->n_type_params)
+                                           ? KIND_ARROW : KIND_STAR;
+                        }
+                        return_type = cur;
+                    } else {
+                        Type *new_fn = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *new_fn = type_args[ti];
+                        return_type.as.app.fn = new_fn;
+                    }
                     break;
                 }
             }
@@ -2947,6 +3073,59 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     tc->assoc_type_names, tc->n_assoc_types,
                                     inst->assoc_types, inst->n_assoc_types);
                             }
+                            /* M7 partial-app wildcard head (`(Result _ B)`): the
+                             * naive class-var subst `f -> (Result B)` turns the
+                             * receiver `(f a)` into `((Result B) a)` -- the fixed
+                             * arm B lands in slot 0 and the element a in slot 1,
+                             * the WRONG order (and the doubly-applied head can't be
+                             * c-named, so it lowers to the int64 carrier and no
+                             * by-value spec is minted).  Rebuild the full ctor
+                             * application placing the element in the HOLE slot and
+                             * the fixed type in the other slot, so the param's full
+                             * type grounds to the by-value `Result__int__int`. */
+                            if (inst->partial_hole_pos != 0xFF && n_type_args > 0 &&
+                                type_args[0].kind == TY_APP && type_args[0].as.app.fn &&
+                                type_args[0].as.app.arg) {
+                                Type cls_param =
+                                    tc->methods[i].param_types[n_method_params];
+                                Type head = *type_args[0].as.app.fn;
+                                if (cls_param.kind == TY_APP && cls_param.as.app.arg &&
+                                    head.kind == TY_STRUCT && head.as.struct_.def) {
+                                    Type elem  = *cls_param.as.app.arg; /* `a` */
+                                    const StructDef *sd = head.as.struct_.def;
+                                    uint8_t hole = inst->partial_hole_pos;
+                                    Type cur = head;  /* KIND_ARROW2 head */
+                                    for (uint8_t s = 0; s < sd->n_type_params; s++) {
+                                        Type slot;
+                                        if (s == hole) {
+                                            slot = elem;   /* the mapped element `a` */
+                                        } else {
+                                            /* Fixed slot: a tyvar named after the
+                                             * struct's own param so the call-site
+                                             * struct-param grounding (`B -> int`)
+                                             * resolves it.  The instance head's arm
+                                             * is parsed as an opaque NULL-def struct,
+                                             * which cannot be grounded by name. */
+                                            memset(&slot, 0, sizeof(slot));
+                                            slot.kind = TY_TYVAR;
+                                            slot.copy_kind = CK_COPY;
+                                            slot.as.tyvar_.name = sd->type_params[s];
+                                        }
+                                        Type *fnp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                        Type *argp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                        *fnp = cur;
+                                        *argp = slot;
+                                        memset(&cur, 0, sizeof(cur));
+                                        cur.kind = TY_APP;
+                                        cur.copy_kind = CK_MOVE;
+                                        cur.as.app.fn = fnp;
+                                        cur.as.app.arg = argp;
+                                        cur.hkt_kind = (s + 1 < sd->n_type_params)
+                                                       ? KIND_ARROW : KIND_STAR;
+                                    }
+                                    param_type = cur;
+                                }
+                            }
                         }
                     }
 
@@ -3045,10 +3224,25 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         param_type = TYPE_PTR_VOID;
                         elab_param_type = TYPE_PTR_VOID;
                     }
+                    /* M7 capturing-closure gate: a typed `(fn [a] b)` element param
+                     * (the mapper handed to fmap/bimap/ap/<|>) must use the
+                     * `tur_poly_fn_t` {env, fn} carrier -- like the regular defn
+                     * path -- so a CAPTURING closure's env survives `(g x)` instead
+                     * of being dropped by a bare raw-fn-pointer call (segfault).
+                     * SCOPED to element fns whose RESULT is a plain element (a bare
+                     * tyvar `b`): a continuation returning an HKT-applied `(m b)`
+                     * (Monad `bind`, Traversable `traverse`) unpacks its wrapped
+                     * result through the carrier and regresses under the
+                     * tur_poly_fn_t switch, so it stays as-is. */
+                    if (g_m7_hkt_enabled && !param_is_poly &&
+                        param_type.kind == TY_FN) {
+                        param_is_poly = true;
+                    }
                     Type c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                     if (p->tag == F_SYM) {
                         /* Simple parameter name */
                         method_params[n_method_params] = binding_new(e, p->as.sym, elab_param_type, false, false, p->span);
+                        method_params[n_method_params]->is_param = true;
                         if (param_is_poly) {
                             method_params[n_method_params]->is_poly_fn = true;
                             Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -3106,6 +3300,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 || (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
                             c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                             method_params[n_method_params] = binding_new(e, name_f->as.sym, c_param_type, false, false, p->span);
+                            method_params[n_method_params]->is_param = true;
                             if (param_is_poly) {
                                 method_params[n_method_params]->is_poly_fn = true;
                                 Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -3820,6 +4015,50 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             bindings[0].type = bound;
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = 1;
+        }
+        /* M7 layer-4 (flag-gated): a return-directed HKT method -- Applicative
+         * `pure`/`wrap`, `[x : a] : (f a)` -- has its class var `f` ONLY in the
+         * result, so the instance is picked from the ascribed return type
+         * (`bound` = the constructor, e.g. Option) and the element `a` is
+         * recovered from the argument types.  Mirror the receiver-dispatch path's
+         * by-value spec interning (elab_method_call) so the instance method emits
+         * a by-value `(Option int)` return instead of the int64 carrier (which
+         * the by-value consumer would then misread -> silent miscompile).  Gated
+         * on a by-value-constructible body, exactly as the receiver path is. */
+        if (g_m7_hkt_enabled && is_hkt && tc->n_type_params >= 1 &&
+            tc->type_params[0] && impl->body &&
+            impl->body->kind != EX_INLINE_C &&
+            m7_body_constructs_byvalue(impl->body)) {
+            const Symbol *m7_names[16];
+            Type m7_types[16];
+            uint8_t m7_n = 0;
+            for (uint32_t i = 0; i < n_args; i++) {
+                if (i < meth->n_params && args[i])
+                    m7_collect_tyvar_bindings(e, meth->param_types[i],
+                                              args[i]->type, m7_names, m7_types,
+                                              &m7_n, 16);
+            }
+            /* Bind the HKT class var to the CONSTRUCTOR HEAD of the ascribed
+             * result (`Option`), not the full applied `(Option int)`, matching
+             * the receiver-dispatch path (an in-body applied occurrence `(f a)`
+             * then resolves to `(Option a)` -> `(Option int)` at emit). */
+            Type hkt_head = bound;
+            while (hkt_head.kind == TY_APP && hkt_head.as.app.fn)
+                hkt_head = *hkt_head.as.app.fn;
+            uint8_t total = (uint8_t)(1 + m7_n);
+            if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, total * sizeof(AbiTypeBinding));
+            bindings[0].name = tc->type_params[0]->name;
+            bindings[0].type = hkt_head;
+            uint8_t bi = 1;
+            for (uint8_t k = 0; k < m7_n && bi < total; k++) {
+                bindings[bi].name = m7_names[k]->name;
+                bindings[bi].type = m7_types[k];
+                bi++;
+            }
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = bi;
         }
     }
     /* return-dispatch-tyvar: tag the abstract-tyvar return-dispatch call with a
@@ -4692,22 +4931,38 @@ resolved_user_fallback:;
         has_poly_params = true;
         Binding *inner_b = poly_arg_fn_binding(obj);
         if (!inner_b) {
-            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
-                      "rank-N typeclass method argument must be a named function");
-            return NULL;
-        }
-        Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
-        wrap->as.poly_wrap_.inner = obj;
-        if (inner_b->is_poly_fn) {
-            wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            /* Phase CCL (symmetric with the args path below): a fat closure --
+             * a capturing or non-capturing lambda (boxed TY_FN) or a ptr<void>
+             * closure handle -- is wrapped for tur_poly_fn_t packing rather than
+             * rejected.  Reached when a typed-fn element param lands in params[0]
+             * (Bifunctor `bimap [g h x]`, whose first param is a mapper fn, not
+             * the HKT receiver). */
+            if (obj->type.kind == TY_PTR_VOID ||
+                (obj->type.kind == TY_FN && obj->type.as.fn.boxed)) {
+                Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
+                cwrap->as.poly_wrap_.inner = obj;
+                cwrap->as.poly_wrap_.wrapper_binding = NULL;
+                cwrap->as.poly_wrap_.is_closure = true;
+                obj = cwrap;
+            } else {
+                diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                          "rank-N typeclass method argument must be a named function");
+                return NULL;
+            }
         } else {
-            uint8_t inner_arity = (inner_b->type.kind == TY_FN)
-                ? (uint8_t)inner_b->type.as.fn.arity : 1;
-            Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
-            if (!wrapper_b) return NULL;
-            wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
+            wrap->as.poly_wrap_.inner = obj;
+            if (inner_b->is_poly_fn) {
+                wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else {
+                uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                    ? (uint8_t)inner_b->type.as.fn.arity : 1;
+                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
+                if (!wrapper_b) return NULL;
+                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            }
+            obj = wrap;
         }
-        obj = wrap;
     }
     for (uint32_t i = 0; i < n_args; i++) {
         uint8_t param_idx = 1 + (uint8_t)i;  /* params[0] is the receiver */
@@ -4894,23 +5149,52 @@ resolved_user_fallback:;
      * substituted result type fully grounds, so an `ap`-style call whose result
      * element cannot be recovered falls back to carrier dispatch. */
     bool m7_byvalue_grounded = false;
-    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
-        best_method->binding->type.kind == TY_FN &&
-        best_method->binding->type.as.fn.result_full_type &&
-        best_method->binding->type.as.fn.result_full_type->kind == TY_APP) {
-        TypeClass *tc = best_inst->typeclass;
-        const TypeClassMethod *cm = NULL;
-        for (uint8_t mi = 0; mi < tc->n_methods; mi++)
-            if (tc->methods[mi].name &&
-                strcmp(tc->methods[mi].name->name, method_name) == 0) {
-                cm = &tc->methods[mi];
+    /* M7 layer-4: is the instance body by-value-expressible (pure-Turmeric)?
+     * Computed up front because it gates BOTH the by-value result-type commit
+     * below AND the abi_bindings attachment further down -- the two MUST agree.
+     * Committing a by-value result type for a CARRIER-bodied method (so the
+     * consumer reads by value) without also interning the by-value spec (so the
+     * producer returns by value) is exactly the carrier-vs-by-value mismatch
+     * that silently miscompiles a selection body to 0 (Alternative `<|>`). */
+    /* The result shape selects the by-value body criterion, and is read from the
+     * CLASS method's declared return type -- not the instance binding, whose
+     * result_full_type is NULL for a bare-element body (extract's `(.value w)`)
+     * and only reliably TY_APP for a constructing body (fmap).  Applied `(f b)`
+     * results must CONSTRUCT in-body (fmap/bind/ap/alt); a bare-element result
+     * (`a`) must merely READ a scalar out of the by-value receiver (Comonad
+     * `extract`).  An unmigrated stdlib class declaring a `: int` carrier return
+     * classifies as neither -> stays on the uniform carrier dispatch. */
+    const TypeClassMethod *m7_cm = NULL;
+    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass) {
+        TypeClass *tc0 = best_inst->typeclass;
+        for (uint8_t mi = 0; mi < tc0->n_methods; mi++)
+            if (tc0->methods[mi].name &&
+                strcmp(tc0->methods[mi].name->name, method_name) == 0) {
+                m7_cm = &tc0->methods[mi];
                 break;
             }
-        if (cm) {
+    }
+    bool m7_result_is_applied   = m7_cm && m7_cm->return_type.kind == TY_APP;
+    bool m7_result_is_bare_elem = m7_cm && m7_cm->return_type.kind == TY_TYVAR;
+    bool m7_body_byvalue_ok = best_method && best_method->body &&
+        best_method->body->kind != EX_INLINE_C &&
+        ((m7_result_is_applied &&
+          m7_body_constructs_byvalue(best_method->body)) ||
+         (m7_result_is_bare_elem &&
+          m7_body_returns_byvalue_element(best_method->body)));
+    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
+        best_method->binding->type.kind == TY_FN && m7_cm &&
+        (m7_result_is_applied || m7_result_is_bare_elem)) {
+        const TypeClassMethod *cm = m7_cm;
+        {
             /* The declared element tyvars `(g a)` / `(fn [a] b)` live on the
              * CLASS method's param_types (parsed with the method-tyvar fix), not
-             * on the instance binding (whose arg_full_types is NULL). */
+             * on the instance binding (whose arg_full_types is NULL).  Substitute
+             * into the binding's result_full_type when it carries the applied
+             * result; for a bare-element result that field is NULL, so fall back
+             * to the class method's declared return type (`a`). */
             const Type *rft = best_method->binding->type.as.fn.result_full_type;
+            if (!rft) rft = &cm->return_type;
             if (cm->n_params >= 1)
                 m7_collect_tyvar_bindings(e, cm->param_types[0], obj_orig_type,
                                           m7_bind_names, m7_bind_types, &m7_nb, 16);
@@ -4921,6 +5205,45 @@ resolved_user_fallback:;
                                               args_orig_types[i], m7_bind_names,
                                               m7_bind_types, &m7_nb, 16);
             }
+            /* M7 partial-app wildcard head: the reconstructed result `(Result b
+             * B)` names the FIXED arm with the struct's own param (`B`).  That
+             * tyvar is grounded from the concrete RECEIVER's matching slot, but
+             * m7_collect (which unifies the CLASS param `(f a)`) never sees it.
+             * Bind it here -- before the grounding check -- so the result fully
+             * grounds and the by-value spec is committed (otherwise the free `B`
+             * forces a carrier fallback). */
+            if (best_inst->partial_hole_pos != 0xFF) {
+                Type rhead = obj_orig_type;
+                Type recv_args[8]; uint8_t n_recv = 0;
+                {
+                    Type spine[8]; uint8_t ns = 0;
+                    Type t = obj_orig_type;
+                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
+                        if (ns < 8) spine[ns++] = *t.as.app.arg;
+                        t = *t.as.app.fn;
+                    }
+                    rhead = t;
+                    for (int s = (int)ns - 1; s >= 0 && n_recv < 8; s--)
+                        recv_args[n_recv++] = spine[s];
+                }
+                if (rhead.kind == TY_STRUCT && rhead.as.struct_.def) {
+                    const StructDef *sd = rhead.as.struct_.def;
+                    for (uint8_t s = 0; s < sd->n_type_params && s < n_recv; s++) {
+                        if (s == best_inst->partial_hole_pos) continue;
+                        const char *nm = sd->type_params[s];
+                        if (!nm) continue;
+                        bool seen = false;
+                        for (uint8_t k = 0; k < m7_nb; k++)
+                            if (m7_bind_names[k] &&
+                                strcmp(m7_bind_names[k]->name, nm) == 0) { seen = true; break; }
+                        if (seen || m7_nb >= 16) continue;
+                        m7_bind_names[m7_nb] = symtab_intern(e->st,
+                            strslice(nm, (uint32_t)strlen(nm)));
+                        m7_bind_types[m7_nb] = recv_args[s];
+                        m7_nb++;
+                    }
+                }
+            }
             if (m7_nb > 0) {
                 Type substituted = elab_subst_class_tyvars(
                     e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
@@ -4930,7 +5253,7 @@ resolved_user_fallback:;
                  * keeps the carrier result_type so dispatch falls back to the
                  * uniform carrier ABI instead of emitting a broken half-by-value
                  * spec with a dangling carrier-base dict reference. */
-                if (!m7_type_has_free_tyvar(substituted)) {
+                if (!m7_type_has_free_tyvar(substituted) && m7_body_byvalue_ok) {
                     result_type = substituted;
                     m7_byvalue_grounded = true;
                 }
@@ -4989,14 +5312,12 @@ resolved_user_fallback:;
          * instance bodies (the current stdlib HKT instances) must stay on the
          * uniform-carrier dispatch until Phase 4.2 rewrites them; attaching the
          * element bindings to them would mint a by-value spec whose signature
-         * contradicts the carrier inline-C body.  Gate on the body kind. */
-        bool m7_body_byvalue_ok = best_method && best_method->body &&
-            best_method->body->kind != EX_INLINE_C &&
-            m7_body_constructs_byvalue(best_method->body);
+         * contradicts the carrier inline-C body.  Gate on the body kind
+         * (m7_body_byvalue_ok, computed up front above). */
         if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
             m7_byvalue_grounded &&
             tc->n_type_params >= 1 && tc->type_params[0]) {
-            uint8_t total = (uint8_t)(1 + m7_nb);
+            uint8_t total = (uint8_t)(1 + m7_nb + 4);  /* +4: struct-param grounding */
             if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
             AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
                 e->arena, total * sizeof(AbiTypeBinding));
@@ -5011,6 +5332,24 @@ resolved_user_fallback:;
             Type hkt_head = obj_orig_type;
             while (hkt_head.kind == TY_APP && hkt_head.as.app.fn)
                 hkt_head = *hkt_head.as.app.fn;
+            /* Prefer the class var's COLLECTED binding -- the receiver's
+             * constructor head, recovered by m7_collect from whichever param
+             * carries the class var (`(g a)` / `(p a b)`).  `obj` is the FIRST
+             * arg, which is the HKT receiver only when the receiver is param 0
+             * (fmap/bind/ap/extract).  For methods whose HKT receiver is NOT
+             * first -- Bifunctor `bimap [g h x]`, Foldable `foldr [f z t]` --
+             * obj is a function arg, so stripping its head gives the wrong type
+             * (a `(fn ...)` instead of `Result`); the collected binding is right.
+             * m7_collect already records the HEAD (it recurses into the TY_APP
+             * fn position), so this needs no extra stripping. */
+            for (uint8_t k = 0; k < m7_nb; k++) {
+                if (m7_bind_names[k] &&
+                    strcmp(m7_bind_names[k]->name,
+                           tc->type_params[0]->name) == 0) {
+                    hkt_head = m7_bind_types[k];
+                    break;
+                }
+            }
             bindings[0].name = tc->type_params[0]->name;
             bindings[0].type = hkt_head;
             uint8_t bi = 1;
@@ -5018,6 +5357,105 @@ resolved_user_fallback:;
                 bindings[bi].name = m7_bind_names[k]->name;
                 bindings[bi].type = m7_bind_types[k];
                 bi++;
+            }
+            /* M7 two-param-constructor grounding: a multi-param constructor
+             * (`(Result a b)`) leaks the STRUCT's OWN param tyvars (`A`/`B`) into
+             * the instance body's construct/if types when a branch constrains only
+             * one slot -- `(ok (g ...))` is `(Result c B)`, not `(Result c d)`, so
+             * the by-value emit can't ground `B` and falls back to the carrier.
+             * Bind each struct param positionally to the method result's element
+             * tyvar value: align the constructor's `type_params` [A,B] with the
+             * applied result `(p c d)`'s elements [c,d], and bind `A->value(c)`,
+             * `B->value(d)`.  This lets emit_resolve_type ground a leaked struct
+             * tyvar.  (One-param constructors: the single struct param maps to the
+             * single element and never leaks, so this is inert for fmap/bind/etc.) */
+            if (hkt_head.kind == TY_STRUCT && hkt_head.as.struct_.def &&
+                hkt_head.as.struct_.def->n_type_params >= 1 && m7_cm) {
+                const StructDef *sd = hkt_head.as.struct_.def;
+                /* Collect the method result's applied-element tyvar names,
+                 * left-to-right: `(p c d)` = app(app(p,c),d) -> spine args
+                 * [d,c] outermost-first; reverse to [c,d]. */
+                const char *res_elems[8]; uint8_t n_res = 0;
+                {
+                    Type spine_args[8]; uint8_t ns = 0;
+                    Type t = m7_cm->return_type;
+                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
+                        if (ns < 8) spine_args[ns++] = *t.as.app.arg;
+                        t = *t.as.app.fn;
+                    }
+                    for (int i = (int)ns - 1; i >= 0 && n_res < 8; i--)
+                        res_elems[n_res++] =
+                            (spine_args[i].kind == TY_TYVAR)
+                                ? spine_args[i].as.tyvar_.name : NULL;
+                }
+                for (uint8_t i = 0; i < sd->n_type_params && i < n_res &&
+                                    bi < total; i++) {
+                    const char *sp = sd->type_params[i];
+                    const char *re = res_elems[i];
+                    if (!sp || !re || strcmp(sp, re) == 0) continue;
+                    for (uint8_t k = 0; k < m7_nb; k++) {
+                        if (m7_bind_names[k] &&
+                            strcmp(m7_bind_names[k]->name, re) == 0) {
+                            bindings[bi].name = sp;
+                            bindings[bi].type = m7_bind_types[k];
+                            bi++;
+                            break;
+                        }
+                    }
+                }
+            } else if (best_inst->partial_hole_pos != 0xFF && m7_cm) {
+                /* M7 PARTIAL-application wildcard head (e.g. `(Result _ B)`):
+                 * the class var bound to a partial application `(Result int)`
+                 * (a TY_APP), so the bare-struct grounding above was skipped and
+                 * the constructor's OWN struct params (`A`/`B`) never grounded --
+                 * leaving the instance on the carrier ABI (a capturing element fn
+                 * then drops its env -> segfault).  Ground them directly: the
+                 * HOLE slot takes the mapped result element `b` (so both `if`
+                 * branches agree on `(Result b B_fixed)`), and each FIXED slot
+                 * takes the concrete type from the matching receiver argument.
+                 * This mints the by-value spec just like the bare-ctor case. */
+                uint8_t hole = best_inst->partial_hole_pos;
+                const StructDef *sd = NULL;
+                Type recv_args[8]; uint8_t n_recv = 0;
+                {
+                    Type spine_args[8]; uint8_t ns = 0;
+                    Type t = obj_orig_type;
+                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
+                        if (ns < 8) spine_args[ns++] = *t.as.app.arg;
+                        t = *t.as.app.fn;
+                    }
+                    if (t.kind == TY_STRUCT && t.as.struct_.def)
+                        sd = t.as.struct_.def;
+                    for (int i = (int)ns - 1; i >= 0 && n_recv < 8; i--)
+                        recv_args[n_recv++] = spine_args[i];
+                }
+                if (sd && sd->n_type_params >= 1) {
+                    /* The result element `b` from the single-app result `(f b)`. */
+                    const char *hole_elem = NULL;
+                    if (m7_cm->return_type.kind == TY_APP &&
+                        m7_cm->return_type.as.app.arg &&
+                        m7_cm->return_type.as.app.arg->kind == TY_TYVAR)
+                        hole_elem = m7_cm->return_type.as.app.arg->as.tyvar_.name;
+                    for (uint8_t i = 0; i < sd->n_type_params && bi < total; i++) {
+                        const char *sp = sd->type_params[i];
+                        if (!sp) continue;
+                        if (i == hole) {
+                            if (!hole_elem) continue;
+                            for (uint8_t k = 0; k < m7_nb; k++)
+                                if (m7_bind_names[k] &&
+                                    strcmp(m7_bind_names[k]->name, hole_elem) == 0) {
+                                    bindings[bi].name = sp;
+                                    bindings[bi].type = m7_bind_types[k];
+                                    bi++;
+                                    break;
+                                }
+                        } else if (i < n_recv) {
+                            bindings[bi].name = sp;
+                            bindings[bi].type = recv_args[i];
+                            bi++;
+                        }
+                    }
+                }
             }
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = bi;

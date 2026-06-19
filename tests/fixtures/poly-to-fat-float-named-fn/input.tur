@@ -21,8 +21,10 @@
 (defstruct BoxW [A]
   (raw :int))
 
-(definstance Functor [BoxW]
-  (fmap [container fn]
+(defclass BoxMap [^f] (boxmap [container [fn :fn]] : int))
+
+(definstance BoxMap [BoxW]
+  (boxmap [container fn]
     (call-ff fn 3.5)))
 
 (defn scale2 [x : float] : float (* x 2.0))
@@ -30,7 +32,7 @@
 (defn main [] : int
   (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
     ;; named top-level function through make_poly_wrapper
-    (println (.fmap b scale2))
+    (println (.boxmap b scale2))
     ;; non-capturing lambda, also through make_poly_wrapper
-    (println (.fmap b (fn [x : float] : float (* x 2.0)))))
+    (println (.boxmap b (fn [x : float] : float (* x 2.0)))))
   0)

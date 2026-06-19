@@ -355,7 +355,7 @@
 ;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 
 
-(defclass Functor [^f] (fmap [container [fn :fn]] : int))
+(defclass Functor [^f] (fmap [container : (f a) g : (fn [a] b)] : (f b)))
 ;;; Applicative -- container with a pure constructor and ap combinator.
 ;;;
 ;;; Parameters:
@@ -369,7 +369,7 @@
 ;;   pure :: a -> f a
 ;;   ap   :: f (a -> b) -> f a -> f b
 
-(defclass Applicative [^f] (pure [x] : int) (ap [ff fa] : int))
+(defclass Applicative [^f] (pure [x : a] : (f a)) (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
 ;;; Monad -- typeclass for sequencing computations with bind.
 ;;;
 ;;; Parameters:
@@ -383,7 +383,7 @@
 ;;   bind :: m a -> (a -> m b) -> m b
 ;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 
-(defclass Monad [^m] (bind [ma [fn :fn]] : int))
+(defclass Monad [^m] (bind [ma : (m a) k : (fn [a] (m b))] : (m b)))
 ;;; Foldable -- reduce a container to a summary value.
 ;;;
 ;;; Parameters:
@@ -397,7 +397,9 @@
 ;;   foldl :: b -> (b -> a -> b) -> t a -> b
 ;;   foldr :: (a -> b -> b) -> b -> t a -> b
 
-(defclass Foldable [^t] (foldl [ta init fn] : int) (foldr [ta init fn] : int))
+(defclass Foldable [^t]
+  (foldl [ta : (t a) init : b fn : (fn [b a] b)] : b)
+  (foldr [ta : (t a) init : b fn : (fn [a b] b)] : b))
 ;;; Traversable -- map with effects, collecting results.
 ;;;
 ;;; Parameters:
@@ -429,7 +431,7 @@
 ;;; Since: Phase HKT H7
 
 
-(defclass Alternative [^f] (empty [a] : int) (alt-or [a b] : int))
+(defclass Alternative [^f] (empty [a] : (f a)) (alt-or [x : (f a) y : (f a)] : (f a)))
 ;;; SINCE: Phase HKT H5
 ;; Bifunctor — map over both sides of a binary type constructor.
 ;;   The canonical signature is:
@@ -446,7 +448,7 @@
 ;;; Since: Phase HKT H5
 
 
-(defclass Bifunctor [^^f] (bimap [container fn-left fn-right] : int))
+(defclass Bifunctor [^^f] (bimap [container : (f a b) fn-left : (fn [a] c) fn-right : (fn [b] d)] : (f c d)))
 ;;; Display -- typeclass for human-readable string formatting.
 ;;;
 ;;; Parameters:
