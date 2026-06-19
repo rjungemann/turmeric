@@ -136,6 +136,40 @@ sig swap:
    - **MonadError** -- 2 instances (Result-family); assess per the Functor-family
      pattern.
 
+## Functor migration: blocker status (2026-06-19, attempt 2)
+
+A second Functor-migration attempt (sig -> typed, Option by-value, Result
+carrier pure-Turmeric) cleared two blockers and surfaced a third. Net: the
+Functor-family migration needs four compiler capabilities, two now landed:
+
+- **[DONE] Typed-sig parse under the opt-out.** The M7 method-tyvar parse is
+  un-gated, so a migrated sig parses under `TUR_M7_HKT=0` (carrier emit). Without
+  this, the Foldable migration had silently broken the flag-off suite.
+- **[DONE] Partial-app carrier correctness.** The `inst_method_carrier_spill`
+  double-box is fixed: a partial-app `(Result _ B)` instance whose body lowers to
+  the carrier `ok`/`err` now returns the carrier handle directly (was
+  double-boxed -> returned 0 for 42). So `Result` can ride the migration on the
+  carrier ABI correctly while `Option` goes by-value.
+- **[OPEN] Dict-base emission for by-value instances.** When `Functor [Option]`
+  fmap goes by-value, the per-`(f, A)` spec is emitted but the carrier BASE
+  method `__inst_Functor_fmap_Option` is NOT -- yet the dispatch dict
+  (`dict_Functor_Option_singleton.fmap = __inst_Functor_fmap_Option`) still
+  references it -> `undeclared` cc error, breaking the whole auto-loaded stdlib.
+  The probes avoided this (direct dispatch, no dict); the stdlib generates dicts.
+  Fix: emit a carrier-base wrapper (or point the dict slot appropriately) for a
+  by-value HKT instance so indirect dispatch stays valid.
+- **[OPEN] Typed-fn forwarding for delegating instances.** Either/Parser/Goal/
+  Backtrack/Schema/rc bodies forward the element fn to a `:fn`/`^fat` helper
+  (`(either-map fn container)`, `(fmap-parser-raw ... fn)`, inline-C `fn.fn`).
+  Under the typed `fn : (fn [a] b)` sig these break (typed fn does not lower to
+  the `tur_poly_fn_t` poly carrier; forwarding it into a `:fn` param miscompiles).
+  Each helper must take the typed fn (and call it pure-Turmeric), or the instance
+  body must call the fn in pure Turmeric directly.
+
+So Functor (and by extension Monad/Applicative/Alternative) migration is gated on
+the two OPEN items above. bimap (full two-param) is already by-value; Foldable is
+migrated. These two emit capabilities are the next concrete compiler tasks.
+
 ## Execution order
 
 ### Step 0 -- prerequisite: keep the flag's default OFF until the very end
