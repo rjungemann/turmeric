@@ -14,7 +14,12 @@ severity: Medium ergonomics + audit hygiene. The Kleisli arrow over Option
   type-erasure, and lets `Category [Kleisli]` be written in honest
   monadic style (`bind` on the by-value Option) without an inline-C
   carrier hop.
-status: OPEN, NOT YET STARTED. `k-apply-raw` / `k-apply` / `kleisli` /
+status: RESOLVED 2026-06-19 -- end-to-end monomorphization is complete and the
+  small residual ABI bridge is intentional and necessary. The Kleisli arrow
+  staying on the carrier ABI behind that bridge is no longer a defect to retire,
+  so this step-5 retype is closed with no further work. Archived to
+  docs/archive/. Prior status follows.
+  OPEN, NOT YET STARTED. `k-apply-raw` / `k-apply` / `kleisli` /
   `Category [Kleisli]` / `ArrowZero [Kleisli]` remain on the carrier
   ABI in `stdlib/kleisli.tur`. The `(:: r (Option int))` ascription
   inside `comp`'s closure is the one in-tree `(Option int)` bridge that
@@ -26,6 +31,13 @@ status: OPEN, NOT YET STARTED. `k-apply-raw` / `k-apply` / `kleisli` /
 ---
 
 # Retyping the Kleisli arrow surface to by-value `(Option B)`
+
+## Resolution (2026-06-19)
+
+End-to-end monomorphization landed. The small ABI bridge that remains is
+intentional and necessary, so the Kleisli arrow continuing to thread its element
+through the carrier behind that bridge is accepted rather than a defect to chase.
+This step-5 retype is closed with no further work. Report archived.
 
 ## Context
 

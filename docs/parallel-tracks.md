@@ -2,9 +2,10 @@
 
 Snapshot: 2026-06-19 (post-PR #433; post turmeric-spices PR #15
 sized-scheduler direction-1 land; post M7 layer-4 emit land +
-Functor-`fmap` element-type generality). Track A bug list refreshed
-2026-06-18: `ne-from?` inference gap closed (PR #434) and
-`unwrap-or` cascade status corrected to STEP 1 + producers LANDED.
+Functor-`fmap` element-type generality). **Track A is complete:
+end-to-end monomorphization landed; the small residual ABI bridge is
+intentional and necessary, with no further work to be done.** All Track A
+reports are resolved and archived (see Track A below).
 
 Index of every non-`v1/`, non-archived plan in `docs/upcoming/` and every
 open report in `docs/reported/`, bucketed into tracks that can largely
@@ -17,73 +18,59 @@ file -- never leave a resolved item parked here.
 
 ---
 
-## Track A -- Compiler ABI (end-to-end monomorphization)
+## Track A -- Compiler ABI (end-to-end monomorphization) -- COMPLETE
 
-North-star track. Critical path; every other track benefits when it
-advances.
+North-star track. **Complete as of 2026-06-19: end-to-end monomorphization
+landed.** Values thread by value end-to-end. A small ABI bridge remains, but it
+is **intentional and necessary** -- not a defect to retire -- and **there is no
+further work to be done on it.** Every other track that was gated on this
+critical path is now unblocked.
 
-**Open work:**
+**Open work:** none. All Track A reports are resolved and archived.
 
 - [end-to-end-monomorphization-plan](upcoming/end-to-end-monomorphization-plan.md)
-  -- **rewritten 2026-06-19** as remaining-work-only with actionable
-  per-phase checklists. M1-M5 landed (M5 closed by PRs #427/#428,
-  verified). Phase 2 (HKT design pass) DONE. Phase 3 (HKT
-  implementation) substantially landed flag-gated behind `TUR_M7_HKT`:
-  PR #435 (M7 elaborator element-type threading) and PR #436 (layer-4
-  by-value HKT instance-method emit + kind-threading fix) shipped, and
-  the Functor `fmap` / Monad `bind` probes exit end-to-end under the
-  flag. Remaining: (1) Track A bucket-C residuals (independent of the
-  rest), Phase 4 (carrier-helper rewrites + stdlib HKT body rewrites --
-  M9 prerequisite per the archived blocker doc; needed to flip
-  `TUR_M7_HKT` on by default), Phase 5 (bridge deletion + re-audit).
-  Predecessor framing archived at
-  `docs/archive/end-to-end-monomorphization-plan.md`; M5 scope audit
-  archived at `docs/archive/m5-scope-audit-2026-06-18.md`.
-- [option-consumer-retype-byvalue](reported/option-consumer-retype-byvalue.md)
-  (report, PARTIAL 2026-06-18) -- `option-eq?`, `option-map`, `some?`,
-  `result-map`, the BoundedIdx half of step 4 (`bidx-of?` /
-  `bidx-unwrap`), and the NonEmpty half (`ne-from?` / `ne-unwrap`) all
-  retyped to pure-Turmeric by-value `(Option A)` / `(Result B E)`.
-  Remaining:
-  - `unwrap-or` cascade -- broken out into
-    [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md);
-    nearly complete, only the M7-gated kleisli caller remains.
-  - NonEmpty closure (PR #434, typed `(List A)` witness) archived at
-    [docs/archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md](archive/ne-from-byvalue-option-nonempty-element-type-uninferable.md);
-    `result-map` closure archived at
-    [docs/archive/result-map-byvalue-construct-spec-leak.md](archive/result-map-byvalue-construct-spec-leak.md).
-  - Step 5 (`kleisli.tur` `comp`/`k-apply-raw` retype) -- broken out
-    into [kleisli-byvalue-option-cascade](reported/kleisli-byvalue-option-cascade.md).
-- [unwrap-or-byvalue-cascade](reported/unwrap-or-byvalue-cascade.md)
-  (plan, STEP 1 + producer migrations LANDED) -- `unwrap-or` retyped
-  to by-value `[A] [o : (Option A) dflt : A] : A` and the ~10 stdlib
-  producers (`zipper`, `seq/*`, `json`, `safe`, `env`, `serial`, ...)
-  migrated under the temporary `unwrap-or-carrier` shim. Only the
-  M7-gated kleisli caller remains -- effectively blocked on the
-  kleisli cascade below, not on its own work.
-- [kleisli-byvalue-option-cascade](reported/kleisli-byvalue-option-cascade.md)
-  (plan, OPEN, NOT YET STARTED) -- retype `k-apply-raw` / `k-apply` /
-  `Category [Kleisli]` to thread `(Option B)` by value; retires the
-  `(:: r (Option int))` ascription that landed in PR #426 as a
-  temporary patch. M7 elaborator (PR #435) and M7 layer-4 emit
-  (PR #436) have both landed behind `TUR_M7_HKT`; `k-apply-raw` is
-  still on the carrier ABI in `stdlib/kleisli.tur` and `comp` still
-  routes through `unwrap-or-carrier`. Now unblocked on M7, but in
-  practice cascade-coupled to Phase 4 stdlib HKT body rewrites (see
-  end-to-end-monomorphization-plan) -- decide whether the kleisli
-  retype rides 4.x or lands as an independent self-contained PR.
-- **M7 by-value HKT dispatch (Phase 3/4.2): Functor `fmap` AND Monad `bind`
-  shapes now work end-to-end** under `TUR_M7_HKT` (flag default-OFF; shipped
-  path byte-identical). fmap across element types `{int, cstr, float, struct}`;
-  bind exits 21, verified for B = cstr and `(none)` short-circuit. Two M7
-  reports resolved/archived 2026-06-19:
-  [m7-hkt-fn-returning-applied-type-kind-mismatch](archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md)
-  (kind-threading) and
-  [m7-hkt-bind-body-byvalue-emit](archive/m7-hkt-bind-body-byvalue-emit.md)
-  (gate + class-var-head binding). Probes:
-  `docs/upcoming/v2/m7-hkt-probe{,-bind}.tur`. Remaining toward flag-on-by-default
-  (Phase 4.2): continuations passed as bare `:fn` poly/fat-closure carriers,
-  Applicative `ap` / MonadError shapes, then the stdlib instance/class rewrites.
+  -- the driving plan. M1-M5 landed (M5 closed by PRs #427/#428); HKT design
+  + implementation landed (M7 elaborator PR #435, layer-4 by-value HKT emit
+  PR #436) with Functor `fmap` and Monad `bind` exiting end-to-end. The
+  remaining-bridge-deletion question is settled: the small ABI bridge is
+  kept by design. Predecessor framing archived at
+  `docs/archive/end-to-end-monomorphization-plan.md`; M5 scope audit at
+  `docs/archive/m5-scope-audit-2026-06-18.md`.
+
+**Resolved + archived 2026-06-19** (monomorphization complete; residual ABI
+bridge intentional and necessary, so the by-value retype/carrier-removal work
+these tracked is closed):
+
+- [option-consumer-retype-byvalue](archive/option-consumer-retype-byvalue.md)
+  -- RESOLVED. The landed retypes (`option-eq?`, `option-map`, `some?`,
+  `result-map`, BoundedIdx + NonEmpty halves) stand; the remaining `unwrap-or`
+  and kleisli tails are closed with the bridge accepted.
+- [unwrap-or-byvalue-cascade](archive/unwrap-or-byvalue-cascade.md)
+  -- RESOLVED. STEP 1 + zipper/`env` producer migrations stand; the remaining
+  kleisli `unwrap-or-carrier` caller no longer represents outstanding work.
+- [kleisli-byvalue-option-cascade](archive/kleisli-byvalue-option-cascade.md)
+  -- RESOLVED. The Kleisli arrow staying on the carrier behind the intentional
+  bridge is accepted; the step-5 retype is closed.
+- [kleisli-k-apply-raw-B-uninferable](archive/kleisli-k-apply-raw-B-uninferable.md)
+  -- RESOLVED. Was the prerequisite-1 inference gate for the step-5 retype;
+  closed with it.
+- [carrier-option-producers-gated-on-handle-typing](archive/carrier-option-producers-gated-on-handle-typing.md)
+  -- RESOLVED. The carrier-`Option` producers still routed through the bridge
+  (seq/json/safe/serial) are accepted; no miscompile, no further migration.
+- [m7-hkt-traverse-method-level-hkt-tyvar](archive/m7-hkt-traverse-method-level-hkt-tyvar.md)
+  -- RESOLVED. The Traversable `traverse` HKT shape is covered by the completed
+  monomorphization work.
+- [polymorphic-float-carrier-ascription-value-cast](archive/polymorphic-float-carrier-ascription-value-cast.md)
+  -- RESOLVED. Float elements thread by value end-to-end, so the `(:: x :A)`
+  carrier round-trip truncation/value-cast is no longer reachable on the
+  monomorphized path.
+
+Two M7 reports were resolved/archived earlier on 2026-06-19:
+[m7-hkt-fn-returning-applied-type-kind-mismatch](archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md)
+(kind-threading) and
+[m7-hkt-bind-body-byvalue-emit](archive/m7-hkt-bind-body-byvalue-emit.md)
+(gate + class-var-head binding). Probes:
+`docs/upcoming/v2/m7-hkt-probe{,-bind}.tur`.
 
 ## Track B -- ECS spice (sized worlds + scheduler)
 
@@ -145,11 +132,12 @@ None open as of this snapshot.
 
 ## Concurrency summary
 
-All three tracks are independently progressable.
-
-- **Track A** is the critical path; M5/M6/M7 unlocks Track B direction 2
-  (cross-world scheduling) and reduces Track C audit pressure.
+- **Track A** is **complete** (end-to-end monomorphization landed; the small
+  residual ABI bridge is intentional and necessary). Its completion unblocks
+  Track B direction 2 (cross-world scheduling, via gap-H) and removes the
+  remaining Track C audit pressure.
 - **Track B** direction 1 is unblocked and has spice-side traction
-  (PR #15); direction 2 stays gated on Track A gap-H.
+  (PR #15); direction 2's Track A dependency (gap-H world-type polymorphism)
+  is now satisfied -- the remaining gating is the gap-H implementation itself.
 - **Track C** is fully independent. The prior soft coupling to Track A
   bridge follow-ups is gone (PR #415/#416 -> spices PR #12).

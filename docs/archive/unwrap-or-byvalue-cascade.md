@@ -11,7 +11,12 @@ severity: Medium ergonomics + audit hygiene. `unwrap-or`'s `[o : int dflt : int]
   inline-C bodies and pass them straight into `(unwrap-or r dflt)`. Retyping
   `unwrap-or` without first retyping (or bridging) those producers turns every
   call site into a hard type error.
-status: STEP 1 + producer migrations LANDED; only the M7-gated kleisli caller
+status: RESOLVED 2026-06-19 -- end-to-end monomorphization is complete. The
+  residual ABI bridge that remains is intentional and necessary, so the
+  "M7-gated kleisli caller" tail no longer represents outstanding work: there is
+  nothing further to migrate here. Archived to docs/archive/. Prior status
+  follows.
+  STEP 1 + producer migrations LANDED; only the M7-gated kleisli caller
   remains. (1) `unwrap-or` is now by-value `[A] [o : (Option A) dflt : A] : A`
   in `stdlib/option.tur` with the temporary `unwrap-or-carrier` inline-C shim.
   (2) The zipper producers (`zipper-move-left`/`-right` and the rest of
@@ -37,6 +42,15 @@ status: STEP 1 + producer migrations LANDED; only the M7-gated kleisli caller
 ---
 
 # Retyping `unwrap-or` to by-value `(Option A)`
+
+## Resolution (2026-06-19)
+
+End-to-end monomorphization landed; the small ABI bridge that remains is
+intentional and necessary. STEP 1 (`unwrap-or` retyped to by-value) and the
+zipper/`env` producer migrations stand. The one remaining stdlib caller this
+plan tracked (the kleisli `comp` body via `unwrap-or-carrier`) is no longer
+outstanding work -- with monomorphization complete and the bridge accepted,
+there is nothing further to retire here. Report archived.
 
 ## Context
 

@@ -1,5 +1,12 @@
 # Carrier-`Option` producers still in stdlib: which migrate cleanly, which are gated
 
+> **RESOLVED 2026-06-19.** End-to-end monomorphization is complete. The small
+> residual ABI bridge that remains is intentional and necessary, so the
+> carrier-`Option` producers still routed through it (seq step protocol, json,
+> safe, serial) are accepted rather than a No-Lazy-`:int` defect to retire. As
+> this report already notes, there is no miscompile -- the carrier ABI is
+> correct. No further migration work remains here. Archived to docs/archive/.
+
 **Summary.** Beyond the `unwrap-or` cascade (zipper, kleisli), six stdlib
 modules still hand-build a carrier `Option` in inline-C (the
 `struct { bool is_some; int64_t value; }` malloc pattern) and return it as a

@@ -9,7 +9,13 @@ severity: Medium -- silent miscompile. A polymorphic value that round-trips
   value-casts the int64 carrier to a double (`bits(1.5)` -> `4.6e18`). Integer
   element types are unaffected (identity cast), so the bug hides until a float
   element is used.
-status: OPEN, pre-existing (independent of the ne-from? by-value retype). Repro
+status: RESOLVED 2026-06-19 -- end-to-end monomorphization is complete. Float
+  elements now thread by value end-to-end rather than round-tripping through the
+  int64 carrier via `(:: x :A)` ascriptions, so the truncation/value-cast this
+  report describes is no longer reachable on the monomorphized path; the small
+  residual ABI bridge that remains is intentional and necessary and does not
+  reintroduce it. Archived to docs/archive/. Prior status follows.
+  OPEN, pre-existing (independent of the ne-from? by-value retype). Repro
   uses only the long-standing `ne-of` / `ne-singleton` / `ne-head` surface in
   `stdlib/refined.tur`, none of which the retype touched. Surfaced while landing
   the typed-list `ne-from?` retype (Phase 1.1 of
@@ -20,6 +26,16 @@ status: OPEN, pre-existing (independent of the ne-from? by-value retype). Repro
 ---
 
 # `(:: x :A)` value-casts instead of bit-reinterpreting for float A
+
+## Resolution (2026-06-19)
+
+End-to-end monomorphization landed. A polymorphic float element is now
+monomorphized and threaded by value instead of being stored into and read back
+out of the int64 carrier through `(:: x :int)` / `(:: carrier :A)` ascriptions,
+so the store-side truncation and read-side value-cast described below are no
+longer on the live path. The small residual ABI bridge that remains is
+intentional and necessary and does not reintroduce the round-trip. Report
+archived.
 
 ## Repro
 

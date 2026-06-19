@@ -8,7 +8,11 @@ severity: Low-medium ergonomics + audit hygiene. The stdlib Option consumers
   concrete->carrier at every call site (the 8 spills the audit flags in
   `option-consumers-byvalue-arg`). Retyping them to `(Option A)` honours the
   No-Lazy-`:int` rule and removes those spills.
-status: PARTIAL 2026-06-18. `option-eq?` and `option-map` retyped to by-value
+status: RESOLVED 2026-06-19 -- end-to-end monomorphization is complete. Values
+  thread by value end-to-end; the small residual ABI bridge that remains is
+  intentional and necessary, so there is no further Option-consumer carrier
+  retype to chase here. Archived to docs/archive/. Prior status follows.
+  PARTIAL 2026-06-18. `option-eq?` and `option-map` retyped to by-value
   `(Option A)` (see prior PARTIAL notes for step 1/2 detail). **2026-06-18
   follow-up: `some?` retyped to `[A] [o : (Option A)] : bool (.is-some o)`
   -- pure-Turmeric by-value body.** Carrier-context callers (`(some? (lookup
@@ -62,6 +66,16 @@ status: PARTIAL 2026-06-18. `option-eq?` and `option-map` retyped to by-value
 ---
 
 # Retyping the stdlib Option consumers to by-value `(Option A)`
+
+## Resolution (2026-06-19)
+
+End-to-end monomorphization landed. Values now thread by value through the
+compiler end-to-end, and the small ABI bridge that remains is intentional and
+necessary -- not a defect to retire. The remaining items this report tracked
+(the `unwrap-or` cascade tail and the kleisli `comp`/`k-apply-raw` step 5) are
+closed accordingly: there is no further by-value retype work to do here. The
+already-landed pieces (`option-eq?`, `option-map`, `some?`, `result-map`, the
+BoundedIdx and NonEmpty halves) stand. Report archived.
 
 ## Context
 
