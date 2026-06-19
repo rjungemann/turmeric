@@ -1,0 +1,31 @@
+;; M7 by-value HKT dispatch over a PARTIAL-application wildcard instance head.
+;;
+;; `(MyFunctorP [(Result _ B)])` fixes the err arm (B) and maps over the ok arm,
+;; so a kind-(* -> *) class instantiates a two-parameter constructor by fixing
+;; one slot.  Under the by-value HKT path the receiver `(f a)` = `(Result a B)`
+;; and the result `(f b)` = `(Result b B)` -- `b` fills the HOLE (first) slot.
+;;
+;; This used to stay on the int64 carrier (the `_` wildcard mangled to an
+;; anonymous `<struct>` and the instance method never went by-value), a silent
+;; miscompile against a by-value consumer.  It now mints a by-value
+;; `pmap_..._spec(Result__int__int, ...) -> Result__int__int`.
+
+(defclass MyFunctorP [^f]
+  (pmap [container : (f a) g : (fn [a] b)] : (f b)))
+
+(definstance MyFunctorP [(Result _ B)]
+  (pmap [container g]
+    (if (.is-ok container)
+      (ok (g (.ok-val container)))
+      (err (.err-val container)))))
+
+(defn dbl [x : int] : int (* x 2))
+
+(defn main [] : int
+  ;; ok branch: maps the ok value by value (21 -> 42).
+  (let [r  (pmap (:: (ok 21) (Result int int)) dbl)
+        ;; err branch: the fixed arm passes through untouched (err 7 stays err 7).
+        re (pmap (:: (err 7) (Result int int)) dbl)]
+    (println (ok-val (:: r (Result int int))))
+    (println (err-val (:: re (Result int int)))))
+  0)

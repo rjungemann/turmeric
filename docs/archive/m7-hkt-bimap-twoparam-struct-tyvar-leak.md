@@ -1,4 +1,42 @@
-# M7 HKT by-value two-param-constructor handling (Symptom 1 / bimap RESOLVED; partial-app wildcard remains)
+# M7 HKT by-value two-param-constructor handling (ALL SYMPTOMS RESOLVED)
+
+> **RESOLVED (2026-06-19): the partial-application wildcard head now goes
+> by-value, end-to-end.** Symptoms 2 + 3 -- a `(definstance Functor [(Result _
+> B)])` instance staying on the int64 carrier (a silent miscompile vs a by-value
+> consumer) -- are fixed. A by-value `pmap` over `[(Result _ B)]` now mints
+> `__inst_..._pmap_..._spec(Result__int__int, ...) -> Result__int__int`; probe
+> `docs/upcoming/v2/m7-hkt-probe-partialapp.tur` exits 42 and fixture
+> `tests/fixtures/hkt-partial-app-wildcard-byvalue/` passes flag-on AND flag-off
+> (suite 1685/0 both ways).
+>
+> **The fix (the "type-level section" the root-cause analysis called for),
+> four coordinated pieces -- all in `elab_typeclasses.c` + a one-field
+> `TypeClassInstance` addition (`typeclass.h`/`typeclass.c`):**
+> 1. **Record the hole.** The instance-head parser stamps `inst->partial_hole_pos`
+>    (0/1, 0xFF when absent) for a `(Ctor _ B)` / `(Ctor A _)` head.
+> 2. **Receiver param reconstruction.** The naive class-var subst `f -> (Result
+>    B)` turned the receiver `(f a)` into `((Result B) a)` = `(Result B a)` --
+>    wrong slot order, and the opaque fixed arm `B` (parsed as a NULL-def struct)
+>    collapsed it to the carrier. Rebuild the full ctor application placing the
+>    element `a` in the HOLE slot and a TYVAR named after the struct's own param
+>    (`B`) in the fixed slot, so it grounds to the by-value `Result__int__int`.
+> 3. **Result reconstruction.** The M7 layer-0 head subst applies the same
+>    rebuild to the result `(f b)` -> `(Result b B)` (element in hole, struct-param
+>    tyvar in the fixed slot).
+> 4. **Fixed-slot grounding.** At the call site, the fixed struct slot's tyvar is
+>    bound from the concrete receiver's matching argument (`B -> int`) BEFORE the
+>    by-value grounding check, and added to the dispatch call's abi_bindings so the
+>    by-value spec is interned.
+>
+> **Separate residual gate (NOT this report): capturing closures through a
+> typed-fn element param.** The element fn param `g : (fn [a] b)` is still emitted
+> as an int64 carrier and bare-called `((int64_t(*)(int64_t))g)(x)` in the
+> by-value spec body, which drops a CAPTURING closure's env (segfault). This
+> affects the WHOLE by-value HKT family (bimap/fmap/... with a capturing mapper),
+> not just the partial-app head, and is filed as
+> `docs/reported/m7-hkt-byvalue-typed-fn-element-capturing-closure.md`. It is the
+> remaining gate for the Functor/Monad/Applicative/Alternative `[Result]`
+> migration.
 
 > **UPDATE (2026-06-19): Symptom 1 (the full two-param `bimap` shape) is FIXED.**
 > A by-value `bimap` over `[Result]` (both result slots are method tyvars) now

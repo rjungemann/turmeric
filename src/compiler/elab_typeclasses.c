@@ -1912,6 +1912,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     const Symbol **type_arg_syms = NULL;
     uint8_t n_type_args = 0;
     uint32_t impls_start = 2;
+    /* M7 partial-app wildcard head: the `_` hole slot index parsed from a
+     * `(Ctor _ B)` / `(Ctor A _)` instance head, recorded onto the instance
+     * so the by-value HKT grounding can fix the non-hole slots. 0xFF = none. */
+    uint8_t hkt_hole_pos = 0xFF;
     
     if (call->as.list.len >= 3) {
         Form *args_form = call->as.list.items[2];
@@ -2044,6 +2048,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             }
                             /* The fixed (non-hole) arm is the type argument. */
                             aarg_form = h1_hole ? h2 : h1;
+                            /* Record the hole slot index (0 = first ctor param,
+                             * 1 = second) so the by-value HKT grounding fixes the
+                             * other slot from the concrete receiver. */
+                            hkt_hole_pos = h1_hole ? 0 : 1;
                         }
                         if (ctor_form->tag != F_SYM && ctor_form->tag != F_KEYWORD) {
                             diag_emit(DIAG_ERROR, ctor_form->span,
@@ -2661,6 +2669,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     inst->n_type_param_constraints = n_type_param_constraints;
     /* Phase HKT-P4: record the file that defined this instance. */
     inst->origin_file_id = call->span.file_id;
+    /* M7: record the partial-app wildcard hole slot (0xFF when absent). */
+    inst->partial_hole_pos = hkt_hole_pos;
 
     /* assoc-types-plan: resolve and store associated-type bindings.  Every
      * member the class declares must be bound exactly once; an unknown member
@@ -2822,9 +2832,47 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             for (uint8_t ti = 0; ti < tc->n_type_params && ti < n_type_args; ti++) {
                 if (tc->type_params[ti] &&
                     strcmp(tc->type_params[ti]->name, head) == 0) {
-                    Type *new_fn = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    *new_fn = type_args[ti];
-                    return_type.as.app.fn = new_fn;
+                    /* M7 partial-app wildcard head (`(Result _ B)`): rebuild the
+                     * full ctor application so the result element `b` lands in the
+                     * HOLE slot and the fixed arm is a tyvar named after the
+                     * struct param (grounded at the call site).  A naive head
+                     * subst would give `((Result B) b)` -- wrong slot order, and
+                     * the opaque fixed arm collapses the result to the carrier. */
+                    if (inst->partial_hole_pos != 0xFF &&
+                        type_args[ti].kind == TY_APP &&
+                        type_args[ti].as.app.fn &&
+                        type_args[ti].as.app.fn->kind == TY_STRUCT &&
+                        type_args[ti].as.app.fn->as.struct_.def) {
+                        Type elem = *return_type.as.app.arg;  /* `b` */
+                        Type rhead = *type_args[ti].as.app.fn;
+                        const StructDef *sd = rhead.as.struct_.def;
+                        uint8_t hole = inst->partial_hole_pos;
+                        Type cur = rhead;
+                        for (uint8_t s = 0; s < sd->n_type_params; s++) {
+                            Type slot;
+                            if (s == hole) {
+                                slot = elem;
+                            } else {
+                                memset(&slot, 0, sizeof(slot));
+                                slot.kind = TY_TYVAR;
+                                slot.copy_kind = CK_COPY;
+                                slot.as.tyvar_.name = sd->type_params[s];
+                            }
+                            Type *fnp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            Type *argp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *fnp = cur; *argp = slot;
+                            memset(&cur, 0, sizeof(cur));
+                            cur.kind = TY_APP; cur.copy_kind = CK_MOVE;
+                            cur.as.app.fn = fnp; cur.as.app.arg = argp;
+                            cur.hkt_kind = (s + 1 < sd->n_type_params)
+                                           ? KIND_ARROW : KIND_STAR;
+                        }
+                        return_type = cur;
+                    } else {
+                        Type *new_fn = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *new_fn = type_args[ti];
+                        return_type.as.app.fn = new_fn;
+                    }
                     break;
                 }
             }
@@ -3024,6 +3072,59 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     e->arena, param_type,
                                     tc->assoc_type_names, tc->n_assoc_types,
                                     inst->assoc_types, inst->n_assoc_types);
+                            }
+                            /* M7 partial-app wildcard head (`(Result _ B)`): the
+                             * naive class-var subst `f -> (Result B)` turns the
+                             * receiver `(f a)` into `((Result B) a)` -- the fixed
+                             * arm B lands in slot 0 and the element a in slot 1,
+                             * the WRONG order (and the doubly-applied head can't be
+                             * c-named, so it lowers to the int64 carrier and no
+                             * by-value spec is minted).  Rebuild the full ctor
+                             * application placing the element in the HOLE slot and
+                             * the fixed type in the other slot, so the param's full
+                             * type grounds to the by-value `Result__int__int`. */
+                            if (inst->partial_hole_pos != 0xFF && n_type_args > 0 &&
+                                type_args[0].kind == TY_APP && type_args[0].as.app.fn &&
+                                type_args[0].as.app.arg) {
+                                Type cls_param =
+                                    tc->methods[i].param_types[n_method_params];
+                                Type head = *type_args[0].as.app.fn;
+                                if (cls_param.kind == TY_APP && cls_param.as.app.arg &&
+                                    head.kind == TY_STRUCT && head.as.struct_.def) {
+                                    Type elem  = *cls_param.as.app.arg; /* `a` */
+                                    const StructDef *sd = head.as.struct_.def;
+                                    uint8_t hole = inst->partial_hole_pos;
+                                    Type cur = head;  /* KIND_ARROW2 head */
+                                    for (uint8_t s = 0; s < sd->n_type_params; s++) {
+                                        Type slot;
+                                        if (s == hole) {
+                                            slot = elem;   /* the mapped element `a` */
+                                        } else {
+                                            /* Fixed slot: a tyvar named after the
+                                             * struct's own param so the call-site
+                                             * struct-param grounding (`B -> int`)
+                                             * resolves it.  The instance head's arm
+                                             * is parsed as an opaque NULL-def struct,
+                                             * which cannot be grounded by name. */
+                                            memset(&slot, 0, sizeof(slot));
+                                            slot.kind = TY_TYVAR;
+                                            slot.copy_kind = CK_COPY;
+                                            slot.as.tyvar_.name = sd->type_params[s];
+                                        }
+                                        Type *fnp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                        Type *argp = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                        *fnp = cur;
+                                        *argp = slot;
+                                        memset(&cur, 0, sizeof(cur));
+                                        cur.kind = TY_APP;
+                                        cur.copy_kind = CK_MOVE;
+                                        cur.as.app.fn = fnp;
+                                        cur.as.app.arg = argp;
+                                        cur.hkt_kind = (s + 1 < sd->n_type_params)
+                                                       ? KIND_ARROW : KIND_STAR;
+                                    }
+                                    param_type = cur;
+                                }
                             }
                         }
                     }
@@ -5060,6 +5161,45 @@ resolved_user_fallback:;
                                               args_orig_types[i], m7_bind_names,
                                               m7_bind_types, &m7_nb, 16);
             }
+            /* M7 partial-app wildcard head: the reconstructed result `(Result b
+             * B)` names the FIXED arm with the struct's own param (`B`).  That
+             * tyvar is grounded from the concrete RECEIVER's matching slot, but
+             * m7_collect (which unifies the CLASS param `(f a)`) never sees it.
+             * Bind it here -- before the grounding check -- so the result fully
+             * grounds and the by-value spec is committed (otherwise the free `B`
+             * forces a carrier fallback). */
+            if (best_inst->partial_hole_pos != 0xFF) {
+                Type rhead = obj_orig_type;
+                Type recv_args[8]; uint8_t n_recv = 0;
+                {
+                    Type spine[8]; uint8_t ns = 0;
+                    Type t = obj_orig_type;
+                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
+                        if (ns < 8) spine[ns++] = *t.as.app.arg;
+                        t = *t.as.app.fn;
+                    }
+                    rhead = t;
+                    for (int s = (int)ns - 1; s >= 0 && n_recv < 8; s--)
+                        recv_args[n_recv++] = spine[s];
+                }
+                if (rhead.kind == TY_STRUCT && rhead.as.struct_.def) {
+                    const StructDef *sd = rhead.as.struct_.def;
+                    for (uint8_t s = 0; s < sd->n_type_params && s < n_recv; s++) {
+                        if (s == best_inst->partial_hole_pos) continue;
+                        const char *nm = sd->type_params[s];
+                        if (!nm) continue;
+                        bool seen = false;
+                        for (uint8_t k = 0; k < m7_nb; k++)
+                            if (m7_bind_names[k] &&
+                                strcmp(m7_bind_names[k]->name, nm) == 0) { seen = true; break; }
+                        if (seen || m7_nb >= 16) continue;
+                        m7_bind_names[m7_nb] = symtab_intern(e->st,
+                            strslice(nm, (uint32_t)strlen(nm)));
+                        m7_bind_types[m7_nb] = recv_args[s];
+                        m7_nb++;
+                    }
+                }
+            }
             if (m7_nb > 0) {
                 Type substituted = elab_subst_class_tyvars(
                     e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
@@ -5216,6 +5356,59 @@ resolved_user_fallback:;
                             bindings[bi].type = m7_bind_types[k];
                             bi++;
                             break;
+                        }
+                    }
+                }
+            } else if (best_inst->partial_hole_pos != 0xFF && m7_cm) {
+                /* M7 PARTIAL-application wildcard head (e.g. `(Result _ B)`):
+                 * the class var bound to a partial application `(Result int)`
+                 * (a TY_APP), so the bare-struct grounding above was skipped and
+                 * the constructor's OWN struct params (`A`/`B`) never grounded --
+                 * leaving the instance on the carrier ABI (a capturing element fn
+                 * then drops its env -> segfault).  Ground them directly: the
+                 * HOLE slot takes the mapped result element `b` (so both `if`
+                 * branches agree on `(Result b B_fixed)`), and each FIXED slot
+                 * takes the concrete type from the matching receiver argument.
+                 * This mints the by-value spec just like the bare-ctor case. */
+                uint8_t hole = best_inst->partial_hole_pos;
+                const StructDef *sd = NULL;
+                Type recv_args[8]; uint8_t n_recv = 0;
+                {
+                    Type spine_args[8]; uint8_t ns = 0;
+                    Type t = obj_orig_type;
+                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
+                        if (ns < 8) spine_args[ns++] = *t.as.app.arg;
+                        t = *t.as.app.fn;
+                    }
+                    if (t.kind == TY_STRUCT && t.as.struct_.def)
+                        sd = t.as.struct_.def;
+                    for (int i = (int)ns - 1; i >= 0 && n_recv < 8; i--)
+                        recv_args[n_recv++] = spine_args[i];
+                }
+                if (sd && sd->n_type_params >= 1) {
+                    /* The result element `b` from the single-app result `(f b)`. */
+                    const char *hole_elem = NULL;
+                    if (m7_cm->return_type.kind == TY_APP &&
+                        m7_cm->return_type.as.app.arg &&
+                        m7_cm->return_type.as.app.arg->kind == TY_TYVAR)
+                        hole_elem = m7_cm->return_type.as.app.arg->as.tyvar_.name;
+                    for (uint8_t i = 0; i < sd->n_type_params && bi < total; i++) {
+                        const char *sp = sd->type_params[i];
+                        if (!sp) continue;
+                        if (i == hole) {
+                            if (!hole_elem) continue;
+                            for (uint8_t k = 0; k < m7_nb; k++)
+                                if (m7_bind_names[k] &&
+                                    strcmp(m7_bind_names[k]->name, hole_elem) == 0) {
+                                    bindings[bi].name = sp;
+                                    bindings[bi].type = m7_bind_types[k];
+                                    bi++;
+                                    break;
+                                }
+                        } else if (i < n_recv) {
+                            bindings[bi].name = sp;
+                            bindings[bi].type = recv_args[i];
+                            bi++;
                         }
                     }
                 }

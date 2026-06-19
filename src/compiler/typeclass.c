@@ -55,6 +55,8 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
     inst->n_type_param_constraints = 0;
     inst->assoc_types = NULL;
     inst->n_assoc_types = 0;
+    inst->origin_file_id = 0;
+    inst->partial_hole_pos = 0xFF;
     inst->next = env->instances;
     env->instances = inst;
     

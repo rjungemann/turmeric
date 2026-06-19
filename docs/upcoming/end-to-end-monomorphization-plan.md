@@ -22,10 +22,27 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
   `extract`, Foldable `foldr`, **Bifunctor `bimap`** -- the full two-param
   constructor case, fixed 2026-06-19 via struct-param grounding) -- reference
   probes in `v2/m7-hkt-probe-*.tur`. Traversable `traverse` (method-level HKT
-  tyvar + nested result) remains reported/carrier. The one OTHER open two-param
-  facet is the PARTIAL-application wildcard instance head `(Result _ E)` (the
-  Functor-family Result migration blocker), tracked in
-  `docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`.
+  tyvar + nested result) remains reported/carrier.
+- **PARTIAL-application wildcard instance head `(Result _ B)` now goes by-value
+  (2026-06-19).** A kind-(`* -> *`) class fixing one slot of a two-param
+  constructor (the Functor/Monad/Applicative/Alternative `[Result]` shape) used
+  to stay on the int64 carrier -- a silent miscompile vs a by-value consumer.
+  Resolved via a "type-level section": record the `_` hole position on the
+  instance and reconstruct the receiver `(f a)`/result `(f b)` placing the
+  element in the hole slot and a struct-param tyvar in the fixed slot, grounded
+  from the concrete receiver at the call site. Probe
+  `v2/m7-hkt-probe-partialapp.tur` + fixture
+  `tests/fixtures/hkt-partial-app-wildcard-byvalue/` (suite 1685/0 flag-on AND
+  flag-off). Report archived to
+  `docs/archive/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`.
+- **Remaining Functor-Result gate: capturing closures through a typed-fn element
+  param.** A `g : (fn [a] b)` element param is still emitted as the int64 carrier
+  and bare-called, dropping a CAPTURING closure's env (segfault). This is shared
+  across the WHOLE by-value HKT family (bimap/fmap/... with a capturing mapper),
+  tracked in
+  `docs/reported/m7-hkt-byvalue-typed-fn-element-capturing-closure.md`. It is the
+  last gate before the `[Result]`/`[Option]` Functor-family bodies can be
+  rewritten in pure Turmeric.
 - **First real stdlib class migrated: Foldable** (sig typed; sole instance `rc`
   carrier-essential). The remaining stdlib migration is now an INCREMENTAL,
   per-class effort with the default suite as the gate -- concrete sequencing +

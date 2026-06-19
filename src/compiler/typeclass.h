@@ -109,6 +109,12 @@ struct TypeClassInstance {
     /* Phase HKT-P4: file that defined this instance (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown. */
     uint16_t origin_file_id;
+    /* M7 partial-application wildcard head (e.g. `(Result _ B)`): the index of
+     * the `_` hole slot within the constructor's type params (0-based), so the
+     * by-value HKT grounding can fix the OTHER (non-hole) slots from the
+     * concrete receiver while the hole slot is grounded by the mapped element.
+     * 0xFF means "no wildcard head" (a bare ctor or a fully-fixed app). */
+    uint8_t partial_hole_pos;
     /* For linking */
     TypeClassInstance *next;      /* Next instance in global registry */
 };
