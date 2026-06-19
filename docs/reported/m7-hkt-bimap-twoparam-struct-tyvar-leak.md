@@ -60,6 +60,24 @@
 > interning/mangling, per-construct recovery, carrier spill) and is a focused
 > type-system addition, not a localized patch.
 
+> **ROOT CAUSE, traced to the instance representation (2026-06-19).** The
+> instance-head parser (`elab_typeclasses.c` ~2117-2126) collapses `(Result _ E)`
+> to `type_args[0] = TY_APP(Result, E)` -- i.e. "Result applied to E" -- and
+> **discards which arm held the `_`**. This is deliberate (the in-code comment:
+> "the varying element arm is erased to the int64 carrier, so downstream only
+> needs the constructor identity"). So the by-value path has NO way to recover
+> that the element fills the FIRST slot and E fixes the SECOND: the collapsed
+> `(Result E)` is indistinguishable from a leftmost application. Fixing this is a
+> REPRESENTATIONAL change -- record the hole position on the instance, then thread
+> it through (a) m7_collect (unify the receiver element into the hole slot, not
+> the last), (b) the by-value spec result construction (`(f b)` -> `(Result b E)`,
+> placing b in the hole), (c) spec mangling (a stable name for the
+> partially-applied head instead of `Result__ltstruct_gt`), and (d) construct
+> recovery + spill. The carrier dispatch path currently RELIES on the collapsed
+> representation, so this must not regress it. This is the definitive reason the
+> partial-app by-value support is a focused multi-file type-system feature, not a
+> localized patch.
+
 **Summary.** The by-value HKT path cannot monomorphize instance methods over a
 PARTIALLY-APPLIED multi-param constructor with a wildcard (`(Result _ B)`).
 (The full two-param case `(p a b)` -- bimap -- is fixed, see UPDATE above.)
