@@ -28,12 +28,12 @@ critical path is now unblocked.
 
 **Open work:** none. All Track A reports are resolved and archived.
 
-- [end-to-end-monomorphization-plan](upcoming/end-to-end-monomorphization-plan.md)
-  -- the driving plan. M1-M5 landed (M5 closed by PRs #427/#428); HKT design
-  + implementation landed (M7 elaborator PR #435, layer-4 by-value HKT emit
-  PR #436) with Functor `fmap` and Monad `bind` exiting end-to-end. The
-  remaining-bridge-deletion question is settled: the small ABI bridge is
-  kept by design. Predecessor framing archived at
+- [end-to-end-monomorphization-plan-2](archive/end-to-end-monomorphization-plan-2.md)
+  -- the driving plan (COMPLETE, archived). M1-M5 landed (M5 closed by
+  PRs #427/#428); HKT design + implementation landed (M7 elaborator PR #435,
+  layer-4 by-value HKT emit PR #436) with Functor `fmap` and Monad `bind`
+  exiting end-to-end. The remaining-bridge-deletion question is settled: the
+  small ABI bridge is kept by design. Predecessor (2026-06-13) framing at
   `docs/archive/end-to-end-monomorphization-plan.md`; M5 scope audit at
   `docs/archive/m5-scope-audit-2026-06-18.md`.
 

@@ -6,6 +6,13 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
 
 # End-to-End Monomorphization -- Remaining Work
 
+> **COMPLETE / ARCHIVED 2026-06-19.** End-to-end monomorphization landed.
+> Values thread by value end-to-end; the small ABI bridge that remains is
+> intentional and necessary, with no further work to be done on it. This is
+> the successor "remaining-work" plan (the 2026-06-13 framing lives at
+> `docs/archive/end-to-end-monomorphization-plan.md`); archived here as
+> `end-to-end-monomorphization-plan-2.md` to disambiguate from it.
+
 **Snapshot:** 2026-06-19.
 **Predecessor:** [`docs/archive/end-to-end-monomorphization-plan.md`](../archive/end-to-end-monomorphization-plan.md)
 (rationale, non-goals, why-monomorphization framing -- keep there).
