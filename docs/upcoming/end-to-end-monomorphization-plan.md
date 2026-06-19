@@ -1057,6 +1057,30 @@ genuine carrier)
 >   (-> 42) and `a = cstr`. Inert flag-off (suite 1684/0, byte-identical codegen);
 >   `fmap`/`bind`/`ap`/`alt` probes unchanged (42/21/42/42); HKT + return-dispatch
 >   fixtures (`decode-*`, `typeclass-return-dispatch-*`) emit clean flag-on.
+> - **Comonad `extract` / bare-element-result shape: DONE end-to-end (2026-06-19).**
+>   Probe at `docs/upcoming/v2/m7-hkt-probe-extract.tur` exits 42 under the flag
+>   with a by-value receiver spec
+>   (`__inst_MyComonad_extract_Option__spec__int64_t_Option__int(Option__int w)`).
+>   `extract [w : (f a)] : a` is the first shape whose RESULT is a bare element,
+>   not an applied `(f b)` -- there is nothing to construct in-body; the body just
+>   reads a scalar off the receiver (`(.value w)`). Two gaps closed (flag-gated,
+>   `elab_typeclasses.c`):
+>   - **Parse.** A bare element return `: a` (a method-level tyvar, not a class
+>     type param) was a hard error. The bare-keyword return-type branch now
+>     matches against the EFFECTIVE type params (class params + method-level
+>     element tyvars); inert flag-off (eff_tp == class params).
+>   - **Emit.** The result SHAPE is now classified from the CLASS method's
+>     declared return type (the instance binding's `result_full_type` is NULL for
+>     a bare-element body, set only for a constructing one). A bare-element result
+>     admits a body whose tail merely reads a scalar off the by-value receiver
+>     (`m7_body_returns_byvalue_element`: field reads / bare-element vars, never a
+>     general call), and layer-4 grounds `a` from the receiver arg and interns the
+>     by-value spec. An unmigrated stdlib class with a `: int` carrier return
+>     classifies as neither applied nor bare-element -> stays on carrier dispatch.
+>   The receiver producer bridge (`(some 42)` carrier -> Option__int) is the same
+>   transitional bridge the fmap probe uses for its receiver. Inert flag-off
+>   (suite 1684/0, byte-identical codegen); `fmap`/`bind`/`ap`/`alt`/`pure` probes
+>   unchanged (42/21/42/42/42); HKT fixtures emit clean flag-on.
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT

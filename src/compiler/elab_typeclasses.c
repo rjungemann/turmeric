@@ -1030,10 +1030,15 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 /* Phase RT: a return type `:a` naming a class type parameter
                  * becomes a TY_TYVAR.  This is the return-only dispatch case:
                  * the dispatch variable appears only in the result, so the
-                 * instance must be selected from the call's expected type. */
+                 * instance must be selected from the call's expected type.
+                 * M7 HKT (flag-gated): match against the EFFECTIVE type params
+                 * (class params + method-level element tyvars) so a bare
+                 * element return `: a` -- the Comonad `extract [w : (f a)] : a`
+                 * / Foldable shape -- resolves to a named TY_TYVAR instead of
+                 * erroring.  eff_tp == class_type_params when the flag is off,
+                 * so this is byte-for-byte inert flag-off. */
                 const Symbol *tp = class_type_param_match(kw->name, kw->len,
-                                                          class_type_params,
-                                                          n_class_type_params);
+                                                          eff_tp, n_eff_tp);
                 if (tp) {
                     return_type = type_tyvar_named(tp->name);
                 } else {
@@ -1709,6 +1714,39 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
                 e->type.kind == TY_APP)
                 return true;
             return false;
+        default:
+            return false;
+    }
+}
+
+/* M7 HKT layer-4 (flag-gated): is this instance-method body a by-value-safe
+ * BARE-ELEMENT return?  The Comonad `extract [w : (f a)] : a` / Foldable shape
+ * returns a bare element (`a`, grounding to a scalar/struct), not an applied
+ * `(f b)` -- so there is no `#{Construct}` to recover, and m7_body_constructs_
+ * byvalue (which looks for one) correctly rejects it.  A bare-element body is
+ * by-value-safe when its tail merely READS a scalar out of the (now by-value)
+ * receiver -- a field access `(.value w)` -- or returns a bare element binding
+ * directly.  It is NOT safe if it passes the whole `(f a)` receiver to a carrier
+ * helper, so we admit only field reads / bare-element vars (recursing through
+ * if/do/let to the tail), never a general call. */
+static bool m7_body_returns_byvalue_element(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_IF:
+            return m7_body_returns_byvalue_element(e->as.if_.then_) &&
+                   m7_body_returns_byvalue_element(e->as.if_.else_or_null);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   m7_body_returns_byvalue_element(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+            return m7_body_returns_byvalue_element(e->as.let_.body);
+        case EX_GET_FIELD:
+            /* `(.value w)` -- a scalar field read off the by-value receiver. */
+            return true;
+        case EX_VAR:
+            /* returns a bare element value (a param/local) directly, never the
+             * applied `(f a)` receiver itself (that is the selection shape). */
+            return e->type.kind != TY_APP;
         default:
             return false;
     }
@@ -4952,26 +4990,45 @@ resolved_user_fallback:;
      * consumer reads by value) without also interning the by-value spec (so the
      * producer returns by value) is exactly the carrier-vs-by-value mismatch
      * that silently miscompiles a selection body to 0 (Alternative `<|>`). */
-    bool m7_body_byvalue_ok = best_method && best_method->body &&
-        best_method->body->kind != EX_INLINE_C &&
-        m7_body_constructs_byvalue(best_method->body);
-    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
-        best_method->binding->type.kind == TY_FN &&
-        best_method->binding->type.as.fn.result_full_type &&
-        best_method->binding->type.as.fn.result_full_type->kind == TY_APP) {
-        TypeClass *tc = best_inst->typeclass;
-        const TypeClassMethod *cm = NULL;
-        for (uint8_t mi = 0; mi < tc->n_methods; mi++)
-            if (tc->methods[mi].name &&
-                strcmp(tc->methods[mi].name->name, method_name) == 0) {
-                cm = &tc->methods[mi];
+    /* The result shape selects the by-value body criterion, and is read from the
+     * CLASS method's declared return type -- not the instance binding, whose
+     * result_full_type is NULL for a bare-element body (extract's `(.value w)`)
+     * and only reliably TY_APP for a constructing body (fmap).  Applied `(f b)`
+     * results must CONSTRUCT in-body (fmap/bind/ap/alt); a bare-element result
+     * (`a`) must merely READ a scalar out of the by-value receiver (Comonad
+     * `extract`).  An unmigrated stdlib class declaring a `: int` carrier return
+     * classifies as neither -> stays on the uniform carrier dispatch. */
+    const TypeClassMethod *m7_cm = NULL;
+    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass) {
+        TypeClass *tc0 = best_inst->typeclass;
+        for (uint8_t mi = 0; mi < tc0->n_methods; mi++)
+            if (tc0->methods[mi].name &&
+                strcmp(tc0->methods[mi].name->name, method_name) == 0) {
+                m7_cm = &tc0->methods[mi];
                 break;
             }
-        if (cm) {
+    }
+    bool m7_result_is_applied   = m7_cm && m7_cm->return_type.kind == TY_APP;
+    bool m7_result_is_bare_elem = m7_cm && m7_cm->return_type.kind == TY_TYVAR;
+    bool m7_body_byvalue_ok = best_method && best_method->body &&
+        best_method->body->kind != EX_INLINE_C &&
+        ((m7_result_is_applied &&
+          m7_body_constructs_byvalue(best_method->body)) ||
+         (m7_result_is_bare_elem &&
+          m7_body_returns_byvalue_element(best_method->body)));
+    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
+        best_method->binding->type.kind == TY_FN && m7_cm &&
+        (m7_result_is_applied || m7_result_is_bare_elem)) {
+        const TypeClassMethod *cm = m7_cm;
+        {
             /* The declared element tyvars `(g a)` / `(fn [a] b)` live on the
              * CLASS method's param_types (parsed with the method-tyvar fix), not
-             * on the instance binding (whose arg_full_types is NULL). */
+             * on the instance binding (whose arg_full_types is NULL).  Substitute
+             * into the binding's result_full_type when it carries the applied
+             * result; for a bare-element result that field is NULL, so fall back
+             * to the class method's declared return type (`a`). */
             const Type *rft = best_method->binding->type.as.fn.result_full_type;
+            if (!rft) rft = &cm->return_type;
             if (cm->n_params >= 1)
                 m7_collect_tyvar_bindings(e, cm->param_types[0], obj_orig_type,
                                           m7_bind_names, m7_bind_types, &m7_nb, 16);
