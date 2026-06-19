@@ -136,6 +136,44 @@ sig swap:
    - **MonadError** -- 2 instances (Result-family); assess per the Functor-family
      pattern.
 
+## Functor migration: attempt 3 (2026-06-19) -- got to 7 real failures, reverted
+
+A third, fuller attempt (CLAUDE.md gates relaxed for the one-track-to-v1 push)
+took the migration much further -- the stdlib COMPILES with by-value Functor and
+the suite drops to **7 real failures** (after snapshot regen) -- then reverted on
+one remaining deep blocker. Status of the four attempt-2 blockers:
+
+- **[DONE] dict-base emission.** Fixed in `emit_module.c`
+  (`emit_abi_fn_skip_generic`): an HKT instance method's carrier base is never
+  skipped (the dispatch dict references it). With this, the by-value Option
+  Functor's dict + base + spec all emit and the auto-loaded stdlib compiles.
+  (Verified working; reverted with the rest of the attempt but proven necessary.)
+- **[DONE] typed-fn forwarding -- FAT case.** Fixed in `elab_call.c` (COMMITTED,
+  suite-green standalone): forwarding a local fn binding into a `:fn` param uses
+  the inline is_closure pack-path instead of a file-scope `__poly_N` wrapper that
+  referenced the local (`'g' undeclared`).
+- **[OPEN -- the remaining blocker] typed-fn forwarding -- THIN case.** The
+  is_closure pack-path reads the box's slot 0 as a thunk; that is correct for a
+  FAT (capturing) fn value but SEGFAULTS for a THIN fn (a top-level fn passed in
+  has no thunk at slot 0). A typed fn PARAMETER `g : (fn [a] b)` is thin/fat-
+  ambiguous at runtime, so the delegating instances (Functor [Parser]/[Goal]/
+  [Backtrack]/[Schema] forward `g` into a `:fn` helper) segfault at runtime
+  (`hkt-stdlib-parser-instances`, `-backtrack-instances`, `hkt-instance-closure-
+  to-fat`). The clean fix is a thin/fat-agnostic box for a forwarded typed fn
+  param (a `:fn` carrier `{env,fn}` populated correctly for both), or retyping
+  the `*-raw` helpers to take the typed fn and call it directly (`(f x)` handles
+  thin/fat).  Option/Result/Either/list/rc migrate fine; only the parser-family
+  combinators hit this.
+- **Fixture churn handled:** the 4 `poly-to-fat-*` fixtures abused the old
+  `Functor fmap : int` sig (their instance body returns a float); the fix is to
+  give them a custom class (`(defclass BoxMap [^f] (boxmap [container fn :fn] :
+  int))`) so they test make_poly_wrapper independently of the Functor sig. Done
+  in-attempt (all 4 pass), reverted with the rest.
+
+So the Functor-family migration is one deep fix away (thin/fat typed-fn
+forwarding) plus mechanical churn (snapshot regen + the poly-to-fat custom-class
+rewrite). dict-base and the fat-forwarding case are solved.
+
 ## Functor migration: blocker status (2026-06-19, attempt 2)
 
 A second Functor-migration attempt (sig -> typed, Option by-value, Result
