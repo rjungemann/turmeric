@@ -64,6 +64,63 @@ This removes the "atomic across all 9 classes / 35 instances" framing: the flip
 must upgrade all SIGNATURES at once (so the file parses), but BODIES migrate
 opportunistically -- carrier bodies are a valid resting state.
 
+## Per-class findings (measured 2026-06-19 while migrating Foldable)
+
+Empirical constraints discovered doing the first real stdlib migration. These
+make each Functor-family class a careful per-instance job, not a mechanical
+sig swap:
+
+1. **The fold/map FN parameter representation is the central hazard.** The
+   legacy sigs leave the fn UNtyped (defaults to the int64 carrier) or `:fn`
+   (the `tur_poly_fn_t` poly carrier). Existing inline-C bodies exploit one of
+   these two shapes -- either `((int64_t(*)(...))(intptr_t)fn)(...)` (raw fn
+   pointer; assumes the untyped-int default) or `fn.fn(fn.env, ...)` (poly
+   carrier; assumes `:fn`). Changing the param to the typed `(fn [a] b)` makes
+   `fn` lower to a scalar callable pointer, which:
+   - KEEPS the raw-fn-pointer inline-C bodies working (verified: Foldable [rc],
+     and the `fold2arg`/`carrier-keep` probes) -- so those instances ride the
+     de-risking lever and stay carrier; BUT
+   - BREAKS the `fn.fn(fn.env, ...)` poly-carrier inline-C bodies (no `.fn`/
+     `.env` on a scalar). Every Functor/Applicative/Monad instance body that
+     calls the element fn via `fn.fn(...)` must be rewritten.
+   - The raw-fn-pointer rewrite is NOT a safe substitute for `fn.fn` when a
+     CAPTURING closure may be passed (it drops the env -> silent miscompile).
+     fmap/bind/ap are routinely called with capturing closures, so those bodies
+     must be rewritten to **pure-Turmeric `(fn x)`** (the probe form, which
+     lowers thin/fat correctly), not to a raw-pointer inline-C cast.
+
+2. **Most stdlib HKT instance bodies DELEGATE to an inline-C carrier helper**
+   (`Comonad [pair]`'s `(extract [wa] (__pair_extract wa))`, Bifunctor
+   [Result]'s `result-bimap`, etc.). A body that is a CALL to a global carrier
+   helper is excluded by the by-value gate (`!is_global` is required), so it
+   stays carrier. To go by-value the body must inline the work in pure Turmeric
+   over the typed payload (`(.ok-val x)` etc.) -- which requires the underlying
+   type to have pure-Turmeric field accessors (Option/Result/Either: yes;
+   rc/identity/pair via Tuple2/built-ins: needs a pure accessor or stays
+   carrier-essential).
+
+3. **Per-class by-value readiness:**
+   - **Foldable** -- DONE (sig typed; the sole instance `rc` is
+     carrier-essential, stays inline-C; no body rewrite needed).
+   - **Functor / Applicative / Monad / Alternative** -- the high-value targets.
+     Option/Result/Either bodies are cleanly pure-Turmeric-rewritable (probe
+     templates). Cons/list via the existing pure list map. The RECURSIVE
+     combinator instances (Parser, Goal, Backtrack, Schema) are the hard part:
+     their bodies thread the `:fn` poly carrier through parser state and need
+     careful pure-Turmeric rewrites (these broke the earlier unconditional-gate
+     experiment, parent plan 3.1). rc stays carrier-essential. Each class is a
+     dedicated PR: upgrade sig + rewrite Option/Result/Either/list by-value +
+     rewrite-or-carrier the combinator instances + regen snapshots, suite green.
+   - **Comonad** -- `extract` is bare-element (hardenable), but `duplicate`
+     returns the nested `(w (w a))` (the traverse blocker) and bodies delegate
+     to carrier helpers; migrate `extract`'s sig per-method, keep extend/
+     duplicate carrier until the nested-result emit lands.
+   - **Bifunctor** -- blocked (two-param leak,
+     `docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`); keep carrier.
+   - **Traversable** -- 0 instances; blocked shape; nothing to migrate.
+   - **MonadError** -- 2 instances (Result-family); assess per the Functor-family
+     pattern.
+
 ## Execution order
 
 ### Step 0 -- prerequisite: keep the flag's default OFF until the very end
