@@ -250,12 +250,10 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Monad [Option]
-  (bind [ma fn]
-    ```c
-    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)ma;
-    if (!o || !o->is_some) return 0;
-    return fn.fn(fn.env, o->value);
-    ```))
+  (bind [ma k]
+    (if (some? ma)
+      (k (.value ma))
+      (none))))
 ;;; Alternative [Option] -- empty is none; alt-or picks the first some.
 ;;;
 ;;; Example:

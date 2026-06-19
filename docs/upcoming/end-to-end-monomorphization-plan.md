@@ -67,12 +67,16 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
   ascription); only the inference is blocked. Tracked in
   `docs/reported/m7-applicative-alternative-pure-empty-return-inference.md`
   (fix: type the combinator APIs with a real `Parser`/`Goal` type, not `:int`).
-- **Monad migration BLOCKED** on the HKT-returning continuation `k : (fn [a] (m
-  b))`: it is excluded from the by-value `tur_poly_fn_t` element marking (it
-  regresses when its wrapped `(m b)` result is unpacked through the carrier), so a
-  CAPTURING continuation -- the common do-m chain -- drops its env (segfault).
-  Needs the wrapped-result-through-`tur_poly_fn_t` reconciliation noted in the
-  archived capturing-closure report.
+- **Monad stdlib class MIGRATED to by-value (2026-06-19).** Sig is now
+  `(bind [ma : (m a) k : (fn [a] (m b))] : (m b))`; `Option`/`Result` bind bodies
+  are pure Turmeric; combinator instances (Backtrack/Goal/Parser) unchanged. The
+  HKT-returning continuation `(fn [a] (m b))` -- including a CAPTURING do-m
+  continuation -- now works via the **carrier-spill infrastructure**: typed-fn
+  element params flow as `tur_poly_fn_t`; `make_poly_wrapper` carries the inner
+  aggregate result type; and a spill shim (`ensure_aggregate_spill_shim`) boxes
+  the struct return to the int64 `tur_poly_fn_t.fn` ABI. This also retired the
+  capturing-closure residual. Default suite 1685/0; report archived to
+  `docs/archive/m7-monad-bind-result-reconciliation.md`.
 - **First real stdlib class migrated: Foldable** (sig typed; sole instance `rc`
   carrier-essential). The remaining stdlib migration is now an INCREMENTAL,
   per-class effort with the default suite as the gate -- concrete sequencing +

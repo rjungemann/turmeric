@@ -1,4 +1,28 @@
-# M7 stdlib migration: Monad `bind` blocked on continuation/result representation reconciliation
+# M7 stdlib migration: Monad `bind` continuation/result reconciliation (RESOLVED)
+
+> **RESOLVED (2026-06-19) -- Monad migrated to by-value.** The carrier-spill
+> infrastructure (fix direction 1) landed and `Monad [Option]`/`[(Result _ B)]`
+> are now pure-Turmeric by-value. The capturing continuation works
+> (`bindcap` -> 121) and the bind probe stays 21; `bash tests/run.sh` is 1685/0.
+>
+> **The fix, three coordinated pieces:**
+> 1. **Unconditional `is_poly_fn` for typed-fn element params** (`elab_typeclasses.c`):
+>    drop the "plain-element-result only" exclusion so an HKT-returning
+>    continuation `(fn [a] (m b))` also flows as a `tur_poly_fn_t`.
+> 2. **`make_poly_wrapper` carries the inner's FULL aggregate result type**
+>    (`elab_call.c`): the wrapper `__poly_N` is declared returning `Option__int`
+>    (not the int64 carrier), so its body `return inner(x)` is a valid
+>    struct->struct return.
+> 3. **Carrier-spill shim at the `EX_POLY_WRAP` pack site** (`emit_expr.c` +
+>    `ensure_aggregate_spill_shim` in `emit_module.c`): a struct-returning thunk
+>    is wrapped by `int64_t shim(void*e, ...) { Aggr r = real(e,...); void*p =
+>    malloc(sizeof r); memcpy(p,&r,sizeof r); return (int64_t)p; }` so it
+>    satisfies the int64 `tur_poly_fn_t.fn` ABI -- and the malloc'd aggregate is
+>    layout-compatible with the carrier the consumer bridges back from. This also
+>    retires the capturing-closure residual noted in
+>    `docs/archive/m7-hkt-byvalue-typed-fn-element-capturing-closure.md`.
+>
+> Original analysis (both pre-fix approaches) preserved below.
 
 **Summary.** `Monad` is receiver-dispatched (`bind` dispatches on `ma`), so it has
 no return-directed inference problem like Applicative/Alternative. But migrating

@@ -4767,8 +4767,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Phase F: cast to int64_t(*)(void*,int64_t) to match the field type;
              * concrete call sites reverse this cast via the concrete dispatch path. */
             char *wn = raw_name_for_binding(e->as.poly_wrap_.wrapper_binding);
+            /* M7: if the wrapper RETURNS a by-value aggregate (a Monad/HKT
+             * continuation returning `(m b)`), it cannot be cast to the int64
+             * `tur_poly_fn_t.fn` ABI without corrupting the struct return -- route
+             * it through a carrier-spill shim that boxes the aggregate. */
+            const Binding *wbnd = e->as.poly_wrap_.wrapper_binding;
+            char *spill = NULL;
+            if (wbnd && wbnd->type.kind == TY_FN) {
+                Type wres = wbnd->type.as.fn.result_full_type
+                    ? *wbnd->type.as.fn.result_full_type
+                    : emit_type_from_kind(wbnd->type.as.fn.result_kind);
+                uint8_t warity = wbnd->type.as.fn.arity;
+                /* params after the env slot (index 0) */
+                Type wparams[MAX_FN_ARITY];
+                uint8_t nwp = 0;
+                for (uint8_t i = 1; i < warity && nwp < MAX_FN_ARITY; i++)
+                    wparams[nwp++] = emit_fn_arg_type_from_type(wbnd->type, i);
+                spill = ensure_aggregate_spill_shim(ctx, wn, wres, wparams, nwp);
+            }
             Buf out; buf_init(&out);
-            buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s }", wn);
+            buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s }",
+                       spill ? spill : wn);
             buf_putc(&out, '\0');
             free(wn);
             char *result = strdup(out.data);

@@ -4298,6 +4298,22 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     warg_kinds[0] = TY_PTR_VOID;
     for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[i + 1] = real_arg_kinds[i];
     Type wfn_type = type_fn(warg_kinds, w_arity, inner_result_kind);
+    /* M7: when the inner fn returns a by-value aggregate (a Monad/HKT
+     * continuation returning `(m b)` -> e.g. `Option__int`), carry its FULL
+     * result type on the wrapper so the wrapper body `return inner(x)` is a
+     * struct->struct return (valid C) rather than struct->int64 (a hard error).
+     * The pack site (EX_POLY_WRAP) then routes the struct-returning wrapper
+     * through a carrier-spill shim to satisfy the int64 tur_poly_fn_t.fn ABI. */
+    if (inner_b->type.kind == TY_FN && inner_b->type.as.fn.result_full_type) {
+        const Type *irf = inner_b->type.as.fn.result_full_type;
+        bool aggr = (irf->kind == TY_STRUCT && irf->as.struct_.def) ||
+                    irf->kind == TY_APP;
+        if (aggr) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = *irf;
+            wfn_type.as.fn.result_full_type = rft;
+        }
+    }
 
     Binding *wb = binding_new(e, wsym, wfn_type, false, true, span);
     scope_add(&e->global, wb);

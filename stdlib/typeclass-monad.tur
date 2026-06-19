@@ -10,4 +10,4 @@
 ;; Monad -- sequencing with flatMap/bind.
 ;;   bind :: m a -> (a -> m b) -> m b
 ;;   fn is declared :fn so capturing closures can be passed.
-(defclass Monad [^m] (bind [ma [fn :fn]] : int))
+(defclass Monad [^m] (bind [ma : (m a) k : (fn [a] (m b))] : (m b)))

@@ -3235,10 +3235,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                      * result through the carrier and regresses under the
                      * tur_poly_fn_t switch, so it stays as-is. */
                     if (g_m7_hkt_enabled && !param_is_poly &&
-                        param_type.kind == TY_FN &&
-                        param_type.as.fn.result_kind != TY_APP &&
-                        !(param_type.as.fn.result_full_type &&
-                          param_type.as.fn.result_full_type->kind == TY_APP)) {
+                        param_type.kind == TY_FN) {
                         param_is_poly = true;
                     }
                     Type c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;

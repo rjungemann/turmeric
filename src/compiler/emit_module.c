@@ -404,6 +404,55 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     return name;
 }
 
+char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
+                                  Type result_type, Type *param_types,
+                                  uint8_t n_params) {
+    /* Only by-value aggregates need spilling: a struct/applied type with a
+     * concrete codegen layout whose C name is not the int64 carrier. */
+    const char *rc = type_c_name(result_type);
+    if (!rc || strcmp(rc, "int64_t") == 0) return NULL;
+    bool is_aggr = (result_type.kind == TY_STRUCT &&
+                    result_type.as.struct_.def) ||
+                   (result_type.kind == TY_APP &&
+                    type_has_concrete_codegen_layout(&result_type) &&
+                    !type_uses_carrier_abi(result_type));
+    if (!is_aggr) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_aggrspill_");
+    append_sanitized_c_token(&nb, real_fn);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) { return name; }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+    buf_puts(target, ") {\n    ");
+    buf_printf(target, "%s __r = %s(__e", rc, real_fn);
+    for (uint8_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+    buf_puts(target, ");\n    ");
+    buf_printf(target, "void *__p = malloc(sizeof(%s));\n    ", rc);
+    buf_printf(target, "memcpy(__p, &__r, sizeof(%s));\n    ", rc);
+    buf_puts(target, "return (int64_t)(intptr_t)__p;\n}\n");
+    return name;
+}
+
 static char *typed_poly_to_fat_name(Type result_type, const Type *arg_types,
                                     uint32_t n_args) {
     Buf name;

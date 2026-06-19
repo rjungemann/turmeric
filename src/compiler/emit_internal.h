@@ -385,6 +385,17 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
+/* M7 carrier-spill shim: a poly thunk (`real_fn`) that RETURNS a by-value
+ * aggregate (e.g. a Monad continuation returning `Option__int`) cannot be cast
+ * to the int64 `tur_poly_fn_t.fn` ABI without corrupting the struct return.
+ * Emit a wrapper `int64_t shim(void*__e, P0..) { Aggr r = real_fn(__e, a0..);
+ * void*p=malloc(sizeof r); memcpy(p,&r,sizeof r); return (int64_t)p; }` so the
+ * aggregate is boxed to the int64 carrier (layout-compatible with the carrier
+ * the consumer reads back).  Returns the shim name, or NULL when result_type is
+ * not a by-value aggregate (the plain int64 carrier needs no shim). */
+char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
+                                  Type result_type, Type *param_types,
+                                  uint8_t n_params);
 /* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the
  * given (result, arg0..argN) method signature, returning its C function name.
  * Returns NULL for the all-int64_t carrier case (caller uses the preamble

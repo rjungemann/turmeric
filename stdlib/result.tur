@@ -327,12 +327,10 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Monad [(Result _ B)]
-  (bind [ma fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
-    if (!r || !r->is_ok) return ma;
-    return fn.fn(fn.env, r->ok_val);
-    ```))
+  (bind [ma k]
+    (if (.is-ok ma)
+      (k (.ok-val ma))
+      (err (.err-val ma)))))
 ;;; MonadError [(Result _ B)] -- throw-error builds an err; catch-error runs a
 ;;; handler on the err payload (ok values pass through unchanged).
 ;;;
