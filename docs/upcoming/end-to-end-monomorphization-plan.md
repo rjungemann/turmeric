@@ -1373,32 +1373,41 @@ fire ONLY on those sites, and the rest of the machinery deletes.
 - [ ] This plan is archived; this happens together with the follow-on once
       the dict-ABI migration lets the bridge be deleted outright.
 
-#### Follow-on (the v1 finish-line item that unblocks deletion): dict-ABI monomorphization (M9)
+#### Follow-on (the v1 finish-line item that unblocks deletion): full element-type monomorphization
 
 The bridge is *scoped* (5.1/5.2/5.4 done) but cannot be *deleted* (5.3 +
-the deletion clause of 5.5) until the dispatch-dict ABI itself is lowered
-from the uniform `int64` carrier to per-instance by-value slots. Concretely:
+the deletion clause of 5.5) until every remaining element-polymorphic
+Option/Result function is monomorphized per concrete element type. The
+2026-06-19 deep re-investigation
+(`v2/m7-phase5-carrier-bridge-audit.md`) corrected the earlier attribution:
+the dominant crossing source is **plain generic stdlib helpers**, not the dict
+path. `option-basic` -- which has zero typeclass/dict dispatch -- produces 7
+crossings, all from `(some 42)` / `(none)` / `(unwrap ...)` / `(unwrap-or ...)`
+/ `(option-eq? ...)`, each a generic `(defn f [A ...] ... : (Option A))`
+compiled once over the type variable `A`.
 
-- Today the per-instance dispatch dict singleton is emitted with
-  `int64_t (*)(int64_t, ...)` function-pointer slots (the M6/M7 carve-out),
-  and indirect / constrained-polymorphic HKT dispatch
-  (`(defn f [^m] [^&: Monad m] ...)` calling `.bind` through the dict) goes
-  through them. A by-value Option/Result consumer of such a result must
-  bridge the carrier int64 back to the struct -- this is the entire
-  remaining ~78-crossing audit floor.
-- Direct (monomorphic) call sites already go fully by-value via the
-  per-(f,A) `__spec` clones; only the dict/indirect path produces a carrier
-  result.
-- The migration: type the dict slots by the instance's concrete by-value
-  signatures (matching the `__spec` clones), update the dispatcher and every
-  indirect call site, then the dict-fed crossings disappear and the bridge
-  collapses to only the genuinely-erased HAMT/`*-map` helpers (or deletes
-  entirely if those are migrated too).
+The fundamental limit (separately-compiled parametric polymorphism, cf.
+Java/Go erasure): a function compiled ONCE over `A` cannot be by-value, because
+`A`'s size is unknown at its compile time. Removing a carrier crossing has
+exactly two options and no third: **monomorphize** (emit a per-`(f, A)` `__spec`
+clone with `A` concrete) or **keep the carrier**. Direct typeclass-instance
+methods already take the first path (Phase 4). Everything still crossing --
+generic stdlib helpers + the dict/indirect path -- is simply not yet
+monomorphized.
 
-This is distinct from -- and was unblocked by -- the Phase 4 instance-body
-migration. It is a large, suite-sensitive change (dict struct emission, slot
-typing, dispatcher signatures, indirect call sites) and is tracked as its own
-phase rather than folded into Phase 5's instance-body work.
+So deleting the bridge is EQUIVALENT to extending the per-`(f, A)` `__spec`
+path from "direct typeclass-instance methods" to "all generic Option/Result
+functions": elab must attach `abi_bindings` (the `A -> int` substitution) to
+EVERY such call (the gate is `call->as.call_.abi_bindings`, emit_module.c:1186;
+`option-basic`'s `(some 42)` carries none today, which is exactly why the
+carrier `some()` is bridged), and the emit-side spec-interning gates must fire
+for them. That is the **core of this plan** (its Phases 1-3 + the
+monomorphization engine), not a bounded follow-on. It changes elab binding
+attachment for all generic calls and the emit spec gates, regenerates hundreds
+of snapshots, and has a broad fixture blast radius -- it cannot land partially
+without breaking the by-value gate suite (the v1 hard requirement), so it is
+tracked as its own phase. Until then the bridge is genuinely load-bearing and
+the 5.1 tripwire guards its scope.
 
 ---
 
