@@ -1,0 +1,35 @@
+;; Regression: a defclass method may declare a bare user-defined nominal
+;; type (defopaque newtype or defstruct) as its return type.
+;;
+;; Before the fix, elab_typeclasses.c normalized a single-symbol `: T`
+;; return to F_KEYWORD and only matched the builtin keyword set, class
+;; type-params, and associated-type names -- a bare nominal `Resp`/`BBox`
+;; fell through to "unsupported return type in typeclass method", even
+;; though the same type is accepted as a parameter and an applied form
+;; wrapping it (`(Result Resp cstr)`, `(Vec Resp)`) is accepted as a
+;; return. The F_KEYWORD else-branch now falls back to type_expr_from_form
+;; (the same resolver the applied-form path uses) before erroring.
+;;
+;; See docs/archive/typeclass-nominal-return-type.md.
+(defopaque Resp :int)
+(defstruct BBox [lo : int hi : int])
+
+(defclass MkResp [a]
+  (mk [x] : Resp))
+
+(definstance MkResp [int]
+  (mk [x] : Resp
+    (:: x :Resp)))
+
+(defclass MkBox [a]
+  (mkb [x] : BBox))
+
+(definstance MkBox [int]
+  (mkb [x] : BBox
+    (make-struct BBox x x)))
+
+(defn main [] : int
+  (let [r (mk 42)
+        b (mkb 7)]
+    (println "ok")
+    0))
