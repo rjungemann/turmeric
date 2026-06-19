@@ -97,44 +97,59 @@ partially without breaking the by-value gate suite (the v1 hard requirement),
 so it is tracked as its own phase. Until then the bridge is genuinely
 load-bearing and the 5.1 tripwire guards its scope.
 
-### Prototype + the sharp remaining blocker (2026-06-19 experiment)
+### Construct-monomorphization layer -- LANDED (2026-06-19, commit 5c8b725)
 
-A bounded emit-side prototype was built and measured to pin down exactly where
-the work lives. In `emit_module.c`'s `emit_abi_register_call`, the
-`construct_recovered_byvalue` block (which today only grounds a `#{Construct}`
-result inside an *active spec*) was extended to also fire at a plain call site
-when the call's own `abi_bindings` ground the constructor's parametric result to
-a concrete by-value struct (`(some 42)`: `A -> int` => `(Option int)`), plus a
-matching `emit_abi_note_carrier_call` so the auto-preloaded HKT instance carrier
-bodies still find the carrier base.
+The construct-monomorphization step is now implemented and green (1685/0). In
+`emit_module.c`'s `emit_abi_register_call`, the `construct_recovered_byvalue`
+block (which previously grounded a `#{Construct}` result only inside an *active
+spec*) now also fires at a plain call site when the call's own `abi_bindings`
+(or already-grounded `call->type`) resolve the constructor's parametric result
+to a concrete by-value non-heap struct (`(some 42)`: `A -> int` => `(Option
+int)`), with a matching `emit_abi_note_carrier_call` so the auto-preloaded HKT
+instance carrier bodies still find the carrier base. `option-basic` drops from
+**7 carrier crossings to 1**.
 
-Result (measured): `option-basic` dropped from **7 crossings to 1**, only **8**
-snapshots churned (not the feared hundreds), and the fixture built and ran with
-correct output. So monomorphizing the *direct-argument* construct case is real,
-bounded, and effective.
+The control-form homogeneity blocker (a by-value `(some 11)` arm meeting a
+carrier `(none)` arm) was resolved **emit-side** -- not via the elaborator
+change earlier predicted -- by teaching every boundary site to bridge between
+the carrier and by-value representations:
 
-But it broke **4 fixtures** (`option-control-form-construct`,
-`kleisli-arrow-instance`, `hkt-stdlib-option-result-instances`,
-`option-of-tvec-eq`), and the failures isolate the true blocker precisely:
+- **concrete->carrier RETURN bridge** (emit_fns.c, both the main fn path and
+  `emit_tail`): a closure/thunk whose C return is the uniform int64 carrier but
+  whose body tail is now a by-value construct spec is heap-spilled
+  (`malloc` -- a stack spill would dangle) back to the carrier.
+- **by-value if-merge** (emit_expr.c `emit_if_value`): when either arm is a
+  by-value producer the merge temp is declared by-value and each carrier arm is
+  bridged carrier->concrete (a deref).
+- **control-form by-value detection** (`expr_emits_byvalue_carrier_abi` now
+  delegates `if`/`do`/`let` to the tail walker; new
+  `fn_body_tail_byvalue_carrier_type` recovers the concrete type from the
+  matched spec, since the construct's `e->type` is carrier-collapsed).
+- **construct cross-spec guard** (`find_matched_abi_spec` never applies its
+  cross-spec fallback to a `#{Construct}` callee, mirroring `emit_call_name`),
+  so a shared `(some ...)` Expr* is not reported by-value under a sibling
+  int64-result spec.
+- **generic-carrier-param arg bridge** fires when the callee param resolves to
+  the `int64_t` carrier C type (abstract `(Option A)`), leaving concrete
+  by-value sinks (`(Option BoundedIdx)`, `(Pair int int)`) alone.
 
-- In `(if b (some 11) (none))` the arg-bearing `(some 11)` monomorphizes to
-  `some__spec` (returns `Option__int`) but the **0-arg `(none)`** stays on the
-  carrier (`int64_t`), because elab only attaches 0-arg-`#{Construct}` bindings
-  in a **return position** with an `expected_return` push (elab_call.c:3996-4035,
-  the "step 2 / ground" branches). A `(none)` sitting in an `if`/`cond`/`let`
-  branch gets no `expected_return`, so it reaches emit with `call->type`
-  collapsed to the carrier and cannot be grounded emit-side either. The two `if`
-  arms then disagree (`Option__int` vs `int64_t`) and `cc` rejects the merge.
+**Measured outcome:** raw suite-wide bridge-call count `1319 -> 1338` (neutral;
+the audit doc's earlier "~78" was a deduped Option/Result subset, the raw
+per-fixture total is ~1319 dominated by stdlib-internal crossings). The change
+trades consumer-side `carrier->concrete` crossings for construct-side
+`concrete->carrier` ones while eliminating them at user construct sites
+(option-basic 7->1). So this lands the construct *half* of the deletion and the
+reusable boundary-bridge infrastructure, but does not itself delete the bridge.
 
-So the sharp next increment is **elaborator-side, not emit-side**: push the
-expected type into `#{Construct}` sites inside control-form branches
-(`if`/`cond`/`let`/`do`) so a 0-arg `none`/`err` receives `abi_bindings`
-consistent with its arg-bearing `some`/`ok` siblings. Once construct siblings
-agree, the emit-side construct-monomorphization prototype above deletes the bulk
-of the Option/Result crossings without the carrier/by-value branch-merge
-mismatch. That elab change is the first concrete, testable step of the larger
-monomorphization engine; the prototype is reverted (gate kept green at 1685/0)
-pending it.
+### What still blocks full deletion: the generic Option/Result CONSUMERS
+
+The ~1319 raw crossings are dominated by the generic stdlib helper bodies
+(`unwrap`/`some?`/`unwrap-or`/`option-eq?`/`result-map`/...), compiled ONCE over
+a type variable `A` and replicated per importing fixture. They carry the carrier
+internally and only monomorphize when a concrete call site grounds the whole
+relay chain. Deleting the bridge requires monomorphizing these CONSUMERS (and
+their generic-to-generic "relay" calls) per element type -- the second half of
+the engine, building on the construct half and the boundary bridges landed here.
 
 ### The conclusive architectural constraint (why this is genuinely structural)
 
