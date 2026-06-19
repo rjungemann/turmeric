@@ -58,13 +58,13 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
   they classify non-by-value and stay carrier-delegating under the typed sig.
   Default suite 1685/0. The legacy `TUR_M7_HKT=0` carrier suite no longer builds
   Functor-using fixtures (by design; per CLAUDE.md the default is the gate).
-- **Applicative / Alternative migration BLOCKED** on the return-directed
-  `pure`/`empty` methods: the class var appears only in the result, so dispatch
-  needs an expected type, but the parser/goal/backtrack combinator APIs erase
-  their container to the `:int` carrier so no `(f _)` expected type propagates to
-  an unascribed `(pure x)` (parsec-tutorial breaks with "cannot infer type for
-  return-directed method"). The by-value `pure`/`ap` EMIT works (with an
-  ascription); only the inference is blocked. Tracked in
+- **Applicative / Alternative PARTIALLY migrated (2026-06-19).** The
+  receiver-style methods `ap` and `alt-or` are migrated to by-value (`Option`
+  bodies pure-Turmeric; combinators unchanged; suite 1685/0). The return-directed
+  `pure`/`empty` stay on the legacy `:int` carrier sig (split out so the rest
+  could land): their dispatch needs an expected type, but the parser/goal/
+  backtrack combinator APIs erase their container to `:int` so no `(f _)`
+  propagates to an unascribed `(pure x)`. Tracked in
   `docs/reported/m7-applicative-alternative-pure-empty-return-inference.md`
   (fix: type the combinator APIs with a real `Parser`/`Goal` type, not `:int`).
 - **Monad stdlib class MIGRATED to by-value (2026-06-19).** Sig is now

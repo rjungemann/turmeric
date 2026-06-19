@@ -1,8 +1,17 @@
-# M7 stdlib migration: Applicative/Alternative blocked on return-directed `pure`/`empty` inference
+# M7 stdlib migration: Applicative/Alternative return-directed `pure`/`empty` inference
 
-**Summary.** Migrating `Applicative` (and `Alternative`) to the typed by-value
-signature is blocked by the **return-directed** methods `pure` (`(pure [x : a] :
-(f a))`) and `empty` (`(empty [] : (f a))`): the class variable `f` appears ONLY
+> **PARTIALLY RESOLVED (2026-06-19).** The RECEIVER-style methods are now migrated
+> by-value: **`ap`** (`ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)`) and
+> **`alt-or`** (`alt-or [x : (f a) y : (f a)] : (f a)`) -- `Option`'s bodies are
+> pure Turmeric, combinator instances unchanged, suite 1685/0. Only the
+> **return-directed `pure`/`empty`** remain on the legacy `:int` carrier sig (this
+> report's subject); they are split out and left carrier so the receiver-style
+> migration could land. `pure`/`empty` still need the fix below before they too
+> can go by-value.
+
+**Summary.** Migrating the return-directed `Applicative`/`Alternative` methods
+`pure` (`(pure [x : a] : (f a))`) and `empty` (`(empty [] : (f a))`) is blocked:
+the class variable `f` appears ONLY
 in the result, so dispatch needs an expected target type. Real user code calls
 `pure`/`empty` without an ascription, relying on the surrounding context -- but
 the parser/goal/backtrack combinator APIs type their arguments as the **`:int`

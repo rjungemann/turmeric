@@ -234,14 +234,11 @@
 (definstance Applicative [Option]
   (pure [x] ```c return tur_some(x); ```)
   (ap [ff fa]
-    ```c
-    struct { bool is_some; int64_t value; } *f = (void*)(intptr_t)ff;
-    struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)fa;
-    if (!f || !f->is_some || !a || !a->is_some) return 0;
-    /* the wrapped function is a fat-closure box; dispatch through slot 0 */
-    int64_t r = ((int64_t(*)(void*, int64_t))(intptr_t)((int64_t*)(intptr_t)f->value)[0])((void*)(intptr_t)f->value, a->value);
-    return tur_some(r);
-    ```))
+    (if (some? ff)
+      (if (some? fa)
+        (some ((.value ff) (.value fa)))
+        (none))
+      (none))))
 ;;; Monad [Option] -- bind sequences through some; short-circuits on none.
 ;;;
 ;;; Example:
@@ -263,9 +260,5 @@
 
 (definstance Alternative [Option]
   (empty [a] ```c (void)a; return 0; ```)
-  (alt-or [a b]
-    ```c
-    struct { bool is_some; int64_t value; } *x = (void*)(intptr_t)a;
-    if (x && x->is_some) return a;
-    return b;
-    ```))
+  (alt-or [x y]
+    (if (some? x) x y)))
