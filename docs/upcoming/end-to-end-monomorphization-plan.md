@@ -1125,6 +1125,16 @@ genuine carrier)
 >   is a separate class, not on the one-param migration's critical path. Root
 >   cause + fix directions in
 >   [`docs/reported/m7-hkt-traverse-method-level-hkt-tyvar.md`](../reported/m7-hkt-traverse-method-level-hkt-tyvar.md).
+> - **Flag-ON suite now FULLY GREEN (2026-06-19): `TUR_M7_HKT=1 bash
+>   tests/run.sh` -> 1684 passed, 0 failed.** The last standing flag-on failure,
+>   `instance-method-return-carrier-bridge` (a kind-`*` return-dispatch class
+>   `Decode` whose generic carrier-base instance method spilled a flag-on
+>   by-value construct as `sizeof(int64_t)` -> aggregate-into-integer cc error),
+>   is fixed: the `inst_method_carrier_spill` path in `emit_fns.c` now spills the
+>   body's concrete aggregate type when the generic declared result resolves to
+>   the int64 carrier (flag-gated; flag-off the body is a carrier int64, so it is
+>   byte-identical). This matters because the stdlib migration uses the flag-on
+>   suite as its gating signal -- it is now a clean baseline.
 > - **Probe-hardening sub-phase: COMPLETE for the migration-critical shapes.**
 >   7 of the 9 HKT classes' primary method shapes are by-value end-to-end
 >   (Functor `fmap`, Monad `bind`, Applicative `ap`+`pure`, Alternative `<|>`,

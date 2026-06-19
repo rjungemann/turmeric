@@ -1176,6 +1176,26 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 rt = fd->body->type;
             }
             const char *struct_cty = emit_type_c_name(ctx, rt);
+            /* M7 (flag-gated): in a GENERIC carrier base instance method whose
+             * declared result is a parameterized struct with a free element
+             * tyvar -- e.g. `Decode`'s `(Result a cstr)` -- `rt` resolves to the
+             * int64 carrier (no instance specialization active here).  But under
+             * the flag the concrete instance body recovers its construct BY VALUE
+             * (`(ok (make-struct Point ...))` -> `ok__spec` returning
+             * `Result__Point__cstr`), so `ret_val` is a by-value aggregate.
+             * Spilling it as `sizeof(int64_t)` + `*(int64_t*)p = <struct>` is a
+             * hard cc error (aggregate into integer).  When the body's own type
+             * is a concrete non-carrier aggregate, spill THAT type so the malloc
+             * size and the cast match the actual value.  Flag-off the body stays
+             * a carrier int64 here, so this is inert (byte-identical) flag-off.
+             * See docs/reported/m7-hkt-bimap-... family / instance-method-
+             * return-carrier-bridge fixture. */
+            if (g_m7_hkt_enabled && struct_cty &&
+                strcmp(struct_cty, "int64_t") == 0 && fd->body) {
+                const char *body_cty = emit_type_c_name(ctx, fd->body->type);
+                if (body_cty && strcmp(body_cty, "int64_t") != 0)
+                    struct_cty = body_cty;
+            }
             buf_printf(file,
                 "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
                 "*__tur_ret_p = %s; "
