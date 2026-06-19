@@ -1,12 +1,59 @@
-# M7 HKT by-value `bimap` blocked: two-param constructor's free struct tyvar leaks into the instance-body result type
+# M7 HKT by-value two-param-constructor handling (blocks bimap AND the Functor-family Result instances)
 
-**Summary.** Under `TUR_M7_HKT=1`, the by-value layer-4 path cannot
+**Summary.** The by-value HKT path cannot monomorphize instance methods that
+involve a **two-parameter** type constructor (`(Result a b)`, `(p a b)`). This
+now blocks not just Bifunctor `bimap` but the **Functor/Monad/Applicative/
+Alternative migrations**, because their `(Result _ B)` instance hits the same
+gap (verified 2026-06-19: Option migrates by-value cleanly; the Result instance
+does not). **This is the single highest-leverage M7 compiler task** -- fixing it
+unblocks the Result instances across the four high-value classes at once. Now
+the default by-value path is ON, so these reproduce without any env var.
+
+## Three distinct symptoms (all two-param-constructor by-value)
+
+Confirmed 2026-06-19 with concrete generated-C evidence; a complete fix must
+address all three:
+
+1. **if-result temp typed as the carrier (the original `bimap` symptom).** The
+   branch constructs recover by value (`ok__spec...Result__int__int`) but the
+   enclosing `if`-result temp is `int64_t`, because the `if` node's type is
+   `(Result c B)` -- `c` is the method element tyvar (bound) but `B` is the
+   STRUCT's own second tyvar (`defstruct Result [A B]`), unbound, so the type
+   resolves to the carrier. `incompatible types ... Result__int__int -> int64_t`.
+   (Full trace below.)
+
+2. **`(Result _ B)` instance head mangles inconsistently.** A by-value Functor
+   migration with `(definstance Functor [(Result _ B)])` fails with
+   `__inst_Functor_fmap_Result__ltstruct_gt undeclared` -- the `_` wildcard /
+   two-param head mangles to an anonymous `<struct>` (`Result__ltstruct_gt`);
+   the call site references that name but the instance method is emitted under a
+   different name (or skipped), so the reference is undefined.
+
+3. **two-param `#{Construct}` emits a malformed compound literal.** A standalone
+   probe (`defstruct Res2 [A B]` + a `#{Construct}` smart ctor `mk2` returning
+   `(Res2 A B)`, dispatched through a by-value HKT instance) emits
+   `static int64_t mk2(int64_t x) { return (int64_t){.tag = true, .a = x}; }`
+   -- an int64 return TYPE with struct-field initializers, and missing the third
+   field `.b`. cc: `field name not in record or union initializer` +
+   `request for member 'a' in something not a structure`. The two-param construct
+   is neither fully carrier (it uses field initializers) nor fully by-value (the
+   type is int64 and a field is dropped).
+
+The common root: the by-value monomorphization models ONE element tyvar over a
+ONE-param constructor (the struct's single tyvar IS the method element). For a
+two-param constructor the second slot -- whether bound (`B` fixed by the
+instance head) or wildcard (`_`) -- is not threaded into the by-value spec's
+type/mangling/construct, so it falls back to the carrier inconsistently.
+
+## Symptom 1 detail (original bimap trace)
+
+The by-value layer-4 path cannot
 monomorphize a Bifunctor-style `bimap` instance method whose result is a
 **two-parameter** applied type `(p c d)`. The by-value spec is interned and the
 branch constructs are recovered by value, but the enclosing `if`-result temp is
 typed `int64_t` (the carrier) and the C compile fails with an
-`incompatible types` error. Severity: **hard cc error under the flag** (not a
-silent miscompile -- the build fails). Flag-off is unaffected.
+`incompatible types` error. Severity: **hard cc error** (not a
+silent miscompile -- the build fails).
 
 ## Minimal repro
 
@@ -88,6 +135,28 @@ not merge the two branches into a fully method-tyvar'd `(p c d)`.
   (`m7_body_constructs_byvalue` rejects carrier-delegating bodies), so this
   does not block the planned stdlib migration of the one-param HKT classes.
   It must be resolved before a Bifunctor instance can go by value.
+
+## Symptom 1 -- precise mechanism traced (2026-06-19)
+
+The `if` node's type is set in `elab_if` (`elab_forms.c` ~2004): the two branch
+types `(Result c B)` (then = `(ok (g ...))`) and `(Result A d)` (else =
+`(err (h ...))`) are NOT `type_eq`, so it calls
+`if_branches_unify_via_tyvar` (`elab_forms.c:1807`). That helper does
+`type_eq_tyvar_tolerant(then, else, &result)` -- which succeeds because both are
+`(Result <tyvar> <tyvar>)` structurally -- and then just sets `result = then_ty`
+(`(Result c B)`). **It does NOT merge per-position.** The correct merge is
+`(Result c d)`: position 0 should take `c` (the method element tyvar, real) over
+`A` (the struct's own param, a `default-of A` placeholder), and position 1 `d`
+over `B`. The blocker: at the if-merge site there is no way to tell a "real"
+method tyvar (recoverable from call args) from a "placeholder" struct tyvar
+introduced by the construct's `default-of` for the unconstrained slot -- both
+are just `TY_TYVAR`. So a correct fix cannot live purely in
+`if_branches_unify_via_tyvar`; it needs either (a) the `#{Construct}` to fill the
+unconstrained slot with a FRESH unification var that the cross-branch merge then
+unifies and the layer-4 grounding resolves, or (b) the by-value HKT spec emit to
+map the struct's param tyvars (`A`/`B`) to the method element tyvars (`c`/`d`) so
+`emit_resolve_type` grounds the leaked slot. Both are non-local changes spanning
+construct elaboration + the by-value HKT spec machinery.
 
 ## Proposed fix directions
 
