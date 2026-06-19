@@ -1,0 +1,67 @@
+;; typeclass-bounded-wrapper-heterogeneous-dispatch -- gap H.
+;;
+;; A function quantified over `[S] [(StorageOps S)]` -- the "generic over any
+;; storage backend" shape that cross-world / direction-2 sized scheduling needs
+;; -- now monomorphises end-to-end at two distinct carrier backends.
+;;
+;; Two failures used to bite (see
+;; docs/archive/bounded-storageops-wrapper-heterogeneous-monomorphisation-gap.md):
+;;
+;;   1. Name desync: the bounded body emitted a call to the *unspecialised*
+;;      instance symbol (`__inst_StorageOps_sop_hyget_Dense`) while the instance
+;;      is emitted under its full multi-arg suffix
+;;      (`__inst_StorageOps_sop_hyget_Dense_PosPos`) -- an undefined reference at
+;;      `cc`.  Fixed by resolving the authoritative instance-method binding name.
+;;
+;;   2. Clone collision: `(Dense Pos)` and `(Sparse Vel)` both lower to the int64
+;;      carrier, so a bool-returning wrapper produced two specs with the same
+;;      `..._int64_t_int64_t` clone name that redefined each other.  Fixed by
+;;      disambiguating colliding carrier-lowered clone names.
+;;
+;; Both a struct-returning wrapper (value projection, scenario 1) and a
+;; bool-returning wrapper (identical C signature, scenario 2) are exercised at a
+;; Dense and a Sparse backend, confirming each routes to its own instance.
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defopaque Dense  [A] :int)
+(defopaque Sparse [A] :int)
+(defstruct Pos [x : int])
+(defstruct Vel [y : int])
+
+(defn dense-pos  [] : (Dense Pos)   ```c return 0; ```)
+(defn sparse-vel [] : (Sparse Vel)  ```c return 0; ```)
+
+(defclass StorageOps [S E]
+  (sop-get  [^borrow s : S idx : int] : E)
+  (sop-has? [^borrow s : S idx : int] : bool))
+
+(definstance StorageOps [(Dense Pos) Pos]
+  (sop-get  [s idx] ```c (void)s; Pos r; r.x = (int64_t)(idx + 100); return r; ```)
+  (sop-has? [s idx] ```c (void)s; return idx == 7; ```))
+
+(definstance StorageOps [(Sparse Vel) Vel]
+  (sop-get  [s idx] ```c (void)s; Vel r; r.y = (int64_t)(idx + 200); return r; ```)
+  (sop-has? [s idx] ```c (void)s; return idx == 9; ```))
+
+;; Scenario 1: struct-returning bounded wrapper (value projection at call site).
+(defn any-get [S E] [(StorageOps S E)] [^borrow s : S idx : int] : E
+  (sop-get s idx))
+
+;; Scenario 2: bool-returning bounded wrapper -- identical C signature for both
+;; backends, the clone-name collision case.
+(defn any-has? [S E] [(StorageOps S E)] [^borrow s : S idx : int] : bool
+  (sop-has? s idx))
+
+(defn main [] : int
+  (let [d : (Dense Pos)   (dense-pos)
+        v : (Sparse Vel)  (sparse-vel)
+        p : Pos           (any-get d 7)
+        q : Vel           (any-get v 9)]
+    (printf "pos.x=%d\n" (.x p))                  ;; 107
+    (printf "vel.y=%d\n" (.y q))                  ;; 209
+    (printf "dense7=%d\n" (if (any-has? d 7) 1 0)) ;; 1
+    (printf "dense9=%d\n" (if (any-has? d 9) 1 0)) ;; 0
+    (printf "sparse7=%d\n" (if (any-has? v 7) 1 0));; 0
+    (printf "sparse9=%d\n" (if (any-has? v 9) 1 0));; 1
+    0))

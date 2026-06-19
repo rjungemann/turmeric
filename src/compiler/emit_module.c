@@ -762,6 +762,51 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
     for (uint8_t i = 0; i < n_spec_args; i++) spec->arg_types[i] = arg_types[i];
     spec->result_type = result_type;
     spec->clone_name = emit_abi_clone_name(fn_binding, result_type, spec->arg_types, n_spec_args);
+    /* Gap H (bounded-storageops-wrapper-heterogeneous-monomorphisation-gap): two
+     * specializations of one typeclass-bounded wrapper at distinct carrier
+     * backends -- e.g. `(Dense Pos)` vs `(Sparse Vel)` behind `[S] [(StorageOps
+     * S)]` -- are genuinely distinct specs (type_eq above kept them apart), but
+     * every storage handle lowers to the int64 carrier, so emit_abi_clone_name
+     * renders the identical `..._int64_t_..._int64_t` spelling for both and the
+     * two C clones redefine each other.  When the freshly-built name collides
+     * with an already-interned spec's clone name, append a `__h<n>` discriminator
+     * (deterministic in intern order, so it reproduces across the header /
+     * implementation emit passes that re-key on clone_name).  No effect on
+     * non-colliding names, so existing snapshots are untouched. */
+    {
+        bool collides = false;
+        for (uint32_t i = 0; i + 1 < ctx->n_abi_specializations; i++) {
+            if (ctx->abi_specializations[i].clone_name &&
+                strcmp(ctx->abi_specializations[i].clone_name, spec->clone_name) == 0) {
+                collides = true;
+                break;
+            }
+        }
+        if (collides) {
+            char *base = spec->clone_name;
+            Buf b;
+            buf_init(&b);
+            char *uniq = NULL;
+            for (uint32_t n = 1; !uniq; n++) {
+                b.len = 0;
+                buf_printf(&b, "%s__h%u", base, n);
+                buf_putc(&b, '\0');
+                bool taken = false;
+                for (uint32_t i = 0; i + 1 < ctx->n_abi_specializations; i++) {
+                    if (ctx->abi_specializations[i].clone_name &&
+                        strcmp(ctx->abi_specializations[i].clone_name, b.data) == 0) {
+                        taken = true;
+                        break;
+                    }
+                }
+                if (!taken) uniq = strdup(b.data);
+            }
+            buf_free(&b);
+            if (!uniq) { fprintf(stderr, "tur: oom\n"); abort(); }
+            free(base);
+            spec->clone_name = uniq;
+        }
+    }
     /* M4a: route typeclass-instance-method specs on NON-HKT classes through
      * the per-instantiation emit path (M4c rewrites the dispatch site to read
      * the per-instantiation dict singleton with typed slots).  HKT-class

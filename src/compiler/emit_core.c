@@ -991,6 +991,77 @@ static const char *emit_inst_suffix_component(TypeKind k) {
     }
 }
 
+/* Gap H (bounded-storageops-wrapper-heterogeneous-monomorphisation-gap):
+ * resolve the *authoritative* emitted instance-method symbol for a concrete
+ * dispatch type, by locating the actual instance and reading its method impl's
+ * FnDef binding name.
+ *
+ * Single-component reconstruction (`__inst_<Class>_<method>_<head>`) is correct
+ * only for instances keyed on one ground type.  A parametric / multi-parameter
+ * instance head such as `StorageOps [(Dense Pos) Pos]` is emitted under the full
+ * type-arg suffix (`_Dense_PosPos`), so reconstructing from the receiver's head
+ * alone (`_Dense`) calls an undefined symbol.  The instance's method FnDef
+ * binding name is the same spelling EX_INSTANCE_DEF wires into the dict
+ * singleton, so returning it keeps the wrapper's call site and the emitted impl
+ * in lockstep regardless of how many type args the instance head carries.
+ *
+ * `resolved` is the concrete dispatch type (already resolved from the spec's
+ * bindings); `method_field_name` is the dict's mangled method field.  Returns a
+ * malloc'd symbol name, or NULL when no concrete instance of `tc` matches
+ * `resolved` (the caller then falls back to single-component reconstruction). */
+static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
+                                            Type resolved,
+                                            const char *method_field_name) {
+    if (!ctx || !ctx->program_root || !tc || !method_field_name ||
+        method_field_name[0] == '\0') {
+        return NULL;
+    }
+    uint32_t n_items = 0;
+    const Expr **items = flatten_program_items(ctx->program_root, &n_items);
+    if (!items) return NULL;
+    char *result = NULL;
+    /* Two passes: prefer a match at the primary (receiver) type-arg position --
+     * the conventional argument-dispatch slot -- before falling back to a match
+     * at any position, which covers a return-position-only dispatch. */
+    for (int pass = 0; pass < 2 && !result; pass++) {
+        for (uint32_t i = 0; i < n_items && !result; i++) {
+            if (items[i]->kind != EX_INSTANCE_DEF) continue;
+            TypeClassInstance *inst = items[i]->as.instance_def_.instance;
+            if (!inst || inst->typeclass != tc) continue;
+            bool matched = false;
+            if (pass == 0) {
+                matched = inst->n_type_args >= 1 &&
+                          type_eq(inst->type_args[0], resolved);
+            } else {
+                for (uint8_t j = 0; j < inst->n_type_args; j++) {
+                    if (type_eq(inst->type_args[j], resolved)) {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if (!matched) continue;
+            /* Locate the method by its mangled field name and read the impl's
+             * authoritative emitted symbol. */
+            for (uint8_t mi = 0;
+                 mi < tc->n_methods && mi < inst->n_method_impls; mi++) {
+                if (!tc->methods[mi].name) continue;
+                char field[64];
+                tur_mangle_ident(tc->methods[mi].name->name, field, sizeof(field));
+                if (strcmp(field, method_field_name) != 0) continue;
+                FnDef *impl = inst->method_impls[mi];
+                if (impl && impl->binding && impl->binding->name) {
+                    result = strdup(impl->binding->name->name);
+                    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                }
+                break;
+            }
+        }
+    }
+    free((void *)items);
+    return result;
+}
+
 /* GHE: re-resolve a typeclass-method call inside a monomorphized constrained
  * generic.  When the call carries a dict_arg annotation (so it is a typeclass
  * method call) and its receiver argument's type is a type variable that the
@@ -1029,6 +1100,22 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
 
     Type resolved = emit_resolve_type(ctx, disp_ty);
     if (resolved.kind == TY_TYVAR) return NULL; /* still unbound: keep base/repr */
+
+    /* Gap H: when the concrete instance can be located, use its method impl's
+     * authoritative emitted symbol.  This is the only spelling that stays
+     * correct for parametric / multi-parameter instance heads (e.g.
+     * `StorageOps [(Dense Pos) Pos]`), whose suffix the single-component
+     * reconstruction below cannot reproduce.  Fall through to reconstruction
+     * only when no concrete instance matches. */
+    {
+        const TypeClass *tc_lookup = dict->as.dict_.instance->typeclass;
+        if (tc_lookup) {
+            char *authoritative = emit_concrete_inst_method_name(
+                ctx, tc_lookup, resolved, dict->as.dict_.method_name);
+            if (authoritative) return authoritative;
+        }
+    }
+
     const char *component = emit_inst_suffix_component(resolved.kind);
     /* WKC3: a named struct/ADT key resolves to TY_STRUCT; its instance is
      * mangled by the (sanitized) type name, mirroring the EX_INSTANCE_DEF and

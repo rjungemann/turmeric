@@ -24,9 +24,14 @@ description: An Entity-Component-System library for Turmeric, inspired by Haskel
 >    waiting on struct-element projection (independent of PR #420).
 > 2. **Sized-scheduler direction 2** (cross-world / heterogeneous
 >    scheduling -- a `System` / `Stage` polymorphic in the world
->    type). Stays gated on gap-H world-type polymorphism, itself behind
->    the Track A monomorphization phases. Direction 1 (monomorphic
->    single-world scheduling) shipped via `sized-defsystem-scheduled`.
+>    type). The compiler-side gap-H blocker (typeclass-bounded
+>    `[S] [(StorageOps S)]` wrappers failing to monomorphise at multiple
+>    carrier backends) is now closed -- see
+>    [`docs/archive/bounded-storageops-wrapper-heterogeneous-monomorphisation-gap.md`](../archive/bounded-storageops-wrapper-heterogeneous-monomorphisation-gap.md).
+>    The remaining work is spice-side (building the world-type-polymorphic
+>    `System` / `Stage` surface on top of the now-available wrapper).
+>    Direction 1 (monomorphic single-world scheduling) shipped via
+>    `sized-defsystem-scheduled`.
 >
 > E2b (refinement-typed APIs) remains gated on refinement types, which
 > are still in plan. The original prerequisite-tracking plan has been
