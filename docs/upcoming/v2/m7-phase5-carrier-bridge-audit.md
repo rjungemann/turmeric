@@ -97,6 +97,45 @@ partially without breaking the by-value gate suite (the v1 hard requirement),
 so it is tracked as its own phase. Until then the bridge is genuinely
 load-bearing and the 5.1 tripwire guards its scope.
 
+### Prototype + the sharp remaining blocker (2026-06-19 experiment)
+
+A bounded emit-side prototype was built and measured to pin down exactly where
+the work lives. In `emit_module.c`'s `emit_abi_register_call`, the
+`construct_recovered_byvalue` block (which today only grounds a `#{Construct}`
+result inside an *active spec*) was extended to also fire at a plain call site
+when the call's own `abi_bindings` ground the constructor's parametric result to
+a concrete by-value struct (`(some 42)`: `A -> int` => `(Option int)`), plus a
+matching `emit_abi_note_carrier_call` so the auto-preloaded HKT instance carrier
+bodies still find the carrier base.
+
+Result (measured): `option-basic` dropped from **7 crossings to 1**, only **8**
+snapshots churned (not the feared hundreds), and the fixture built and ran with
+correct output. So monomorphizing the *direct-argument* construct case is real,
+bounded, and effective.
+
+But it broke **4 fixtures** (`option-control-form-construct`,
+`kleisli-arrow-instance`, `hkt-stdlib-option-result-instances`,
+`option-of-tvec-eq`), and the failures isolate the true blocker precisely:
+
+- In `(if b (some 11) (none))` the arg-bearing `(some 11)` monomorphizes to
+  `some__spec` (returns `Option__int`) but the **0-arg `(none)`** stays on the
+  carrier (`int64_t`), because elab only attaches 0-arg-`#{Construct}` bindings
+  in a **return position** with an `expected_return` push (elab_call.c:3996-4035,
+  the "step 2 / ground" branches). A `(none)` sitting in an `if`/`cond`/`let`
+  branch gets no `expected_return`, so it reaches emit with `call->type`
+  collapsed to the carrier and cannot be grounded emit-side either. The two `if`
+  arms then disagree (`Option__int` vs `int64_t`) and `cc` rejects the merge.
+
+So the sharp next increment is **elaborator-side, not emit-side**: push the
+expected type into `#{Construct}` sites inside control-form branches
+(`if`/`cond`/`let`/`do`) so a 0-arg `none`/`err` receives `abi_bindings`
+consistent with its arg-bearing `some`/`ok` siblings. Once construct siblings
+agree, the emit-side construct-monomorphization prototype above deletes the bulk
+of the Option/Result crossings without the carrier/by-value branch-merge
+mismatch. That elab change is the first concrete, testable step of the larger
+monomorphization engine; the prototype is reverted (gate kept green at 1685/0)
+pending it.
+
 ## Phase 5 status
 
 - **5.4 (re-audit): DONE** -- inventory above; audit floor is the Option/Result
