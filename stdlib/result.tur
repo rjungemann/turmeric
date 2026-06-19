@@ -315,13 +315,10 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Functor [(Result _ B)]
-  (fmap [container fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)container;
-    if (!r) return 0;
-    if (r->is_ok) return tur_ok(fn.fn(fn.env, r->ok_val));
-    return tur_err(r->err_val);
-    ```))
+  (fmap [container g]
+    (if (.is-ok container)
+      (ok (g (.ok-val container)))
+      (err (.err-val container)))))
 ;;; Monad [(Result _ B)] -- bind sequences through ok; short-circuits on err.
 ;;;
 ;;; Example:

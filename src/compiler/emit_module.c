@@ -2385,6 +2385,20 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
         }
     }
     if (!emit_abi_fn_is_generic_unsafe(e)) return false;
+    /* M7 by-value HKT: never skip the carrier BASE method of an HKT instance.
+     * Its concrete call sites route through per-(f, A) by-value `__spec` clones
+     * (so it looks like dead carrier code), but the per-instance dispatch DICT
+     * singleton still references the base in its function-pointer slot
+     * (indirect/constrained-poly HKT dispatch keeps the uniform carrier ABI per
+     * the M6/M7 carve-out).  Skipping it leaves the dict slot referencing an
+     * undeclared symbol (`__inst_Functor_fmap_Option undeclared`). */
+    if (g_m7_hkt_enabled && fd->owner_instance && fd->owner_instance->typeclass) {
+        TypeClass *tc = fd->owner_instance->typeclass;
+        if (tc->type_param_kinds) {
+            for (uint8_t i = 0; i < tc->n_type_params; i++)
+                if (tc->type_param_kinds[i] != KIND_STAR) return false;
+        }
+    }
     return !emit_abi_has_carrier_call(ctx, fd->binding);
 }
 

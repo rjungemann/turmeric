@@ -355,7 +355,7 @@
 ;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 
 
-(defclass Functor [^f] (fmap [container [fn :fn]] : int))
+(defclass Functor [^f] (fmap [container : (f a) g : (fn [a] b)] : (f b)))
 ;;; Applicative -- container with a pure constructor and ap combinator.
 ;;;
 ;;; Parameters:
