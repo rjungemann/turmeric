@@ -103,14 +103,29 @@ sig swap:
    - **Foldable** -- DONE (sig typed; the sole instance `rc` is
      carrier-essential, stays inline-C; no body rewrite needed).
    - **Functor / Applicative / Monad / Alternative** -- the high-value targets.
-     Option/Result/Either bodies are cleanly pure-Turmeric-rewritable (probe
-     templates). Cons/list via the existing pure list map. The RECURSIVE
-     combinator instances (Parser, Goal, Backtrack, Schema) are the hard part:
-     their bodies thread the `:fn` poly carrier through parser state and need
-     careful pure-Turmeric rewrites (these broke the earlier unconditional-gate
-     experiment, parent plan 3.1). rc stays carrier-essential. Each class is a
-     dedicated PR: upgrade sig + rewrite Option/Result/Either/list by-value +
-     rewrite-or-carrier the combinator instances + regen snapshots, suite green.
+     Option bodies are cleanly pure-Turmeric-rewritable and go by value
+     (verified 2026-06-19: a probe Functor migration took `fmap (some 21) dbl`
+     to a by-value `fmap_Option__spec`). **BUT `(Result _ B)` is BLOCKED by the
+     two-param issue.** Attempting the by-value Functor migration with the
+     `(definstance Functor [(Result _ B)])` instance present fails codegen with
+     `__inst_Functor_fmap_Result__ltstruct_gt undeclared` -- the `_` wildcard /
+     two-param head mangles to an anonymous `<struct>` under the by-value
+     instance-spec path. So the SAME two-param-constructor gap reported for
+     Bifunctor `bimap`
+     (`docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`) is on the
+     CRITICAL PATH for Functor/Monad/Applicative/Alternative too, because Result
+     is an instance of all of them. **Resolving the two-param-constructor
+     by-value handling is therefore the highest-leverage next compiler task**:
+     it unblocks the Result instances across the four high-value classes at once.
+     Also note: the element fn param must NOT be named `fn` in the by-value body
+     (`fn` is the lambda keyword -> `(fn x)` misparses); use `g`/`func`.
+     The RECURSIVE combinator instances (Parser, Goal, Backtrack, Schema) remain
+     the other hard part -- they thread the `:fn` poly carrier through parser
+     state and need careful pure-Turmeric rewrites (these broke the earlier
+     unconditional-gate experiment, parent plan 3.1); rc stays carrier-essential.
+     Sequencing per class: (1) land the two-param by-value fix, (2) upgrade sig +
+     rewrite Option/Result/Either/list by-value, (3) rewrite-or-carrier the
+     combinator instances, (4) regen snapshots, suite green.
    - **Comonad** -- `extract` is bare-element (hardenable), but `duplicate`
      returns the nested `(w (w a))` (the traverse blocker) and bodies delegate
      to carrier helpers; migrate `extract`'s sig per-method, keep extend/
