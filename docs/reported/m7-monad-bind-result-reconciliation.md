@@ -39,11 +39,30 @@ multi-bridge reconciliation, not a localized change.
 Change the sig to `(bind [ma : (m a) [k :fn]] : (m b))` (continuation stays the
 `tur_poly_fn_t` poly carrier that already handles capturing under the OLD sig),
 keep every instance body unchanged (inline-C `fn.fn(fn.env, ...)` returning the
-int64 carrier). This COMPILES but SEGFAULTS at runtime on a capturing
-continuation: the body returns the int64 carrier while the now-by-value result
-`(m b)` consumer reads it as the `Option__int` struct, and the carrier-base
-dispatch (whose dict template emits bare `some?`/`ok` calls -- the implicit-decl
-warnings) is reached with a truncated pointer.
+int64 carrier). The `bind` instance method itself emits correctly as a carrier
+(`static int64_t __inst_Monad_bind_Option(int64_t ma, tur_poly_fn_t fn) { ...
+return fn.fn(fn.env, o->value); }`) and the consumer bridges the int64 result
+back to `Option__int` -- so far so good. It COMPILES but SEGFAULTS at runtime.
+
+The precise cause (generated C): the CONTINUATION lambda is lowered to return the
+by-value struct, but the `:fn`/`tur_poly_fn_t` thunk ABI is `int64_t
+(*)(void*, int64_t)`:
+
+```c
+static Option__int __fn_1007(void *env, int64_t x) { ... return (Option__int){...}; }
+/* packed + called as: */
+fn.fn = (int64_t(*)(void*,int64_t)) __fn_1007;   /* struct-return called as int64-return */
+```
+
+So the continuation lambda's declared return `(Option int)` renders by-value
+(`Option__int`, 16 bytes) while the carrier `bind` body invokes it through the
+int64 thunk ABI -- a struct-return-vs-int64 ABI mismatch that corrupts the
+result. The fix locus is the CLOSURE THUNK: a lambda whose result is a by-value
+aggregate, when packed into a `:fn`/`tur_poly_fn_t` carrier, needs a spill thunk
+`int64_t shim(void*env,int64_t x){ Aggr r = __fn(env,x); return <box r to carrier>; }`
+(type-specific by-value->carrier boxing), or a typed thunk that returns the
+aggregate directly. This is the same continuation-result reconciliation as
+Approach A, surfaced from the closure-packing side.
 
 ## Why Functor migrated cleanly but Monad does not
 
