@@ -43,16 +43,41 @@ Segmentation fault          # the capturing (fn [n] (+ n delta)) called without 
 Replacing the capturing lambda with a top-level `defn` (no capture) returns 121
 correctly -- confirming the gate is specifically capturing closures.
 
-## Root cause
+## Root cause (traced 2026-06-19)
 
-The element fn param `g : (fn [a] b)` is lowered to the int64 carrier in the
-instance-method signature, and the body's `(g x)` emits a raw function-pointer
-call rather than a fat-closure dispatch (`TUR_APPLY*`). A fat closure's handle is
-a pointer to a `{env, fn}` box; reinterpreting it as a bare `int64_t(*)(int64_t)`
-and calling it jumps to the box address, not the thunk.
+The discrepancy is **instance-method vs regular-defn lowering of a TY_FN param**:
 
-The non-capturing case works "by luck" because a non-capturing lambda / `defn`
-lowers to a bare function pointer that the raw call invokes correctly.
+- A REGULAR defn `(defn apply-it [f : (fn [int] int) x : int] : int (f x))`
+  lowers `f` to the **`tur_poly_fn_t` `{env, fn}` carrier** and calls it
+  `((int64_t(*)(void*,int64_t))f.fn)(f.env, x)`. A capturing closure round-trips
+  correctly (verified: returns 121). The call site builds the `tur_poly_fn_t`
+  from the closure box.
+- A TYPECLASS INSTANCE METHOD lowers the element fn param `g : (fn [a] b)` to the
+  bare **`int64_t` carrier** and bare-calls it
+  `((int64_t(*)(intptr_t)g)(x)` -- a thin (envless) function-pointer call -- in
+  BOTH the carrier base method AND the by-value `__spec` clone. A capturing
+  closure's env is dropped -> segfault. The non-capturing case works "by luck"
+  because a non-capturing lambda / `defn` lowers to a bare function pointer the
+  raw call invokes correctly.
+
+So the regular path already has the right representation (`tur_poly_fn_t`); the
+instance-method path does not. The difference is the `is_poly_fn` flag: the
+regular path marks a TY_FN param `is_poly_fn` (emit_fns.c lowers it to
+`tur_poly_fn_t`); the instance-method param handling only sets `is_poly_fn` for
+the `:fn` keyword (`param_is_fn`) or `TY_FORALL`/`TY_EXISTS`, NOT a bare typed
+`(fn [a] b)` annotation.
+
+**Constraint: the carrier base method must stay int64.** The polymorphic HKT
+dispatch dict (the M6/M7 carve-out) has `int64_t (*method)(int64_t, ...)` slots
+and is referenced by indirect/constrained-poly dispatch. So the carrier base's
+element-param ABI cannot change to `tur_poly_fn_t`. The fix must thread
+`tur_poly_fn_t` through the **by-value `__spec` clone only**: (a) the spec's
+typed-fn element param emits as `tur_poly_fn_t`, (b) the spec body's `(g x)`
+dispatches via `f.fn(f.env, x)`, (c) the spec call site builds the
+`tur_poly_fn_t` from the (thin or fat) argument -- the same shim the regular defn
+call site already emits. That is the substantial part: it is emit-side surgery in
+the by-value-spec path (param-type emit, body-call emit, call-site arg emit),
+not a single elaborator flag.
 
 ## Proposed fix directions
 
@@ -64,6 +89,29 @@ lowers to a bare function pointer that the raw call invokes correctly.
 2. Alternatively, lower `(fn [a] b)` element params to the `tur_poly_fn_t`
    `{env, fn}` carrier and call `g.fn(g.env, x)`, but that changes the element ABI
    everywhere and is more invasive.
+
+## Experimental finding (2026-06-19): the naive `is_poly_fn` marking regresses `bind`
+
+Marking every typed `(fn [a] b)` instance-method element param `is_poly_fn` (so
+it lowers to `tur_poly_fn_t`, like the regular defn path) -- plus adding the
+missing closure-arg fallback to the `params[0]` rank-N path (Bifunctor `bimap`'s
+first param is a mapper fn, not the HKT receiver, so it lands in `params[0]`,
+whose poly path only accepted a NAMED function, not a lambda/closure) -- DID fix
+the capturing case for **`fmap`/partial-app `pmap` (-> 121)** and **`bimap`
+(-> 121)**. But it **regressed `bind` (probe -> 2, expected 21)**: bind's
+continuation `k : (fn [a] (m b))` RETURNS an HKT-applied type, and switching it to
+the `tur_poly_fn_t` carrier changes how that wrapped result is unpacked. So the
+marking cannot be blanket -- the HKT-RETURNING continuation shape (`bind`, and
+likely `traverse`) needs its result handling reconciled with the
+`tur_poly_fn_t` packing, or the marking must be scoped to element params whose
+result is a plain element (`fmap`/`bimap`/`ap`/`<|>`), not an `(m b)`.
+
+This is why the fix is per-shape, not a one-line flag. The two pieces that DID
+work and are reusable:
+- `elab_typeclasses.c` param loop: `param_is_poly |= (param_type.kind == TY_FN)`.
+- `elab_typeclasses.c` rank-N `params[0]` path: mirror the args-path closure
+  fallback (wrap a `TY_PTR_VOID` / boxed-`TY_FN` arg as an `EX_POLY_WRAP`
+  `is_closure` instead of erroring "must be a named function").
 
 ## How to validate a fix
 
