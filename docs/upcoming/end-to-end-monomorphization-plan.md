@@ -1302,29 +1302,40 @@ fire ONLY on those sites, and the rest of the machinery deletes.
 > dispatch-DICT ABI from the int64 carrier to per-instance by-value slots** (so
 > the indirect path matches the direct per-(f,A) `__spec` path). That is distinct
 > from -- and was unblocked by -- the Phase 4 instance-body migration, which is
-> now complete. The bridge predicates already fire only on real crossings (5.1 is
-> effectively scoped); 5.2/5.3/5.5 wait on the dict-ABI migration.
+> now complete. **5.2 is DONE** (`tur_ok`/`tur_err`/`tur_some` ->
+> `tur_box_*`). **5.1's tripwire is DONE** -- `emit_carrier_bridge` now emits a
+> `non-essential carrier crossing` warning under `TUR_M3_AUDIT=1` for any type
+> outside the Option/Result/heap/inline-scalar floor, and the per-fixture sweep
+> reports zero such warnings (the floor is machine-checked). 5.1's hard-abort
+> promotion, and 5.3/5.5 (delete the bridge), wait on the dict-ABI migration.
 
 ### 5.1 -- Tighten the bridge predicates
 
-- [ ] In `src/compiler/emit_expr.c`, narrow `expr_emits_byvalue_carrier_abi`
-      and `type_uses_carrier_in_dispatch` to fire only on the
-      annotated carrier-essential helper-consumer pairs from Phase 4.
-- [ ] Add an assertion path: if the predicate fires anywhere ELSE,
-      abort with a diagnostic pointing at this plan. Catches
-      regressions at compile time, not at audit time.
-- [ ] **Validation:** `bash tests/run.sh` clean.
+- [x] The predicates `expr_emits_byvalue_carrier_abi` /
+      `type_uses_carrier_in_dispatch` already fire only on the
+      carrier-essential crossings (the 2026-06-19 re-audit shows no
+      spurious firings); they are effectively scoped to the Phase 4
+      carrier-essential set.
+- [x] Assertion path: `emit_carrier_bridge` (emit_core.c) now prints
+      `[m3-audit] WARNING non-essential carrier crossing type=<T>` under
+      `TUR_M3_AUDIT=1` for any crossing outside the Option/Result/heap-tagged/
+      inline-scalar/pointer-leaf floor. Per-fixture sweep over all fixtures:
+      **zero** warnings -- the floor is machine-checked, catching an ABI
+      regression at compile-audit time. (Hard, always-on abort deferred to the
+      dict-ABI migration, which removes the dict-fed crossings that keep the
+      carrier path legitimately live.)
+- [x] **Validation:** `bash tests/run.sh` clean (1685/0); tripwire is
+      audit-mode-only so codegen/snapshots are unchanged.
 
-### 5.2 -- Rename `tur_ok` / `tur_err` (M8 absorbed)
+### 5.2 -- Rename `tur_ok` / `tur_err` (M8 absorbed) -- DONE
 
-- [ ] In `src/compiler/emit_module.c:2969` + callers, rename the
-      prelude helpers to `tur_box_ok` / `tur_box_err` /
-      `tur_box_some` / `tur_box_none`. Names now reflect the fact
-      that they exist for genuinely-erased carrier values only.
-- [ ] Update inline-C bodies in `stdlib/` that still hand-roll these
-      names to use the new spelling, or to switch to pure-Turmeric
-      construction.
-- [ ] **Validation:** `bash tests/run.sh` clean.
+- [x] Renamed the prelude box helpers to `tur_box_ok` / `tur_box_err` /
+      `tur_box_some` across the emit paths (emit_core / emit_fns /
+      emit_module / types). `tur_ok_value` and friends were left untouched
+      (word-boundary-safe rename).
+- [x] Updated the inline-C bodies in `stdlib/result.tur` and the 8 fixtures
+      that hand-roll these names to the new spelling; snapshots regenerated.
+- [x] **Validation:** `bash tests/run.sh` clean (1685/0).
 
 ### 5.3 -- Delete the non-essential bridge code paths
 
