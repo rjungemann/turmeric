@@ -36,6 +36,37 @@ type to propagate to the `(pure x)` argument. The elaborator then reports
 `Functor`/`Monad` (receiver-dispatched on `container`/`ma`) do NOT have this
 problem -- only the return-directed `pure`/`empty` do.
 
+## Full blocker stack (5 traced attempts, 2026-06-19)
+
+Migrating `pure` (class sig typed + `Option` body by-value) leaves exactly ONE
+breaking fixture (`parsec-tutorial`); everything else is snapshot-only. Driving
+that fixture green surfaced a STACK of independent blockers, each revealed by
+fixing the previous:
+
+1. **No expected type at the `(pure x)` call** -> return-directed dispatch errors.
+2. **Argument-position expected-type push** (prototyped in `elab_call.c`):
+   necessary but the parser combinator params/continuations are `:int`/`:fn`.
+3. **Continuation typing**: typed `bind-parser`'s `f` as `(fn [A] (Parser B))`.
+   Did not help on its own -- the lambda body's `pure` still saw no expected
+   return.
+4. **Lambda-return propagation** (prototyped in `elab_fns.c`): an un-annotated
+   lambda elaborated against an expected `(fn [A] (Parser B))` should push the
+   fn-result as the body's expected type. Added -- still did not fire, because:
+5. **Generic-dispatch param erasure**: `then-parser`/`bind-parser` are generic
+   (`[A B]`), and their typed params `(Parser B)` ERASE to `int64` at the call
+   site, so neither the arg push (2) nor the lambda-return push (4) ever sees a
+   `(Parser _)` to propagate.
+6. **Opaque-type return-directed by-value (runtime)**: ascribing the 7 sites
+   `(:: (pure x) (Parser int))` makes the fixture COMPILE, but it SEGFAULTS at
+   runtime -- forcing a by-value `(Parser int)` on the opaque `Parser`
+   (`ptr<void>` carrier) mis-handles the carrier in the pure dispatch.
+
+So `pure`/`empty` by-value is gated on (a) fixing generic-dispatch param erasure
+for typed generic combinators, AND (b) correct by-value/carrier handling of a
+return-directed method over an OPAQUE constructor. Both are multi-layer compiler
+features, not a parser-library edit -- confirming the Phase 4.2 accept-as-carrier
+disposition is the right interim. (`empty` is structurally identical.)
+
 ## Repro
 
 After changing the Applicative class sig to
