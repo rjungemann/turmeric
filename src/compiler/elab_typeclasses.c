@@ -3127,6 +3127,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     if (p->tag == F_SYM) {
                         /* Simple parameter name */
                         method_params[n_method_params] = binding_new(e, p->as.sym, elab_param_type, false, false, p->span);
+                        method_params[n_method_params]->is_param = true;
                         if (param_is_poly) {
                             method_params[n_method_params]->is_poly_fn = true;
                             Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -3184,6 +3185,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 || (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
                             c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                             method_params[n_method_params] = binding_new(e, name_f->as.sym, c_param_type, false, false, p->span);
+                            method_params[n_method_params]->is_param = true;
                             if (param_is_poly) {
                                 method_params[n_method_params]->is_poly_fn = true;
                                 Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
