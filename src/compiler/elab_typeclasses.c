@@ -3224,6 +3224,23 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         param_type = TYPE_PTR_VOID;
                         elab_param_type = TYPE_PTR_VOID;
                     }
+                    /* M7 capturing-closure gate: a typed `(fn [a] b)` element param
+                     * (the mapper handed to fmap/bimap/ap/<|>) must use the
+                     * `tur_poly_fn_t` {env, fn} carrier -- like the regular defn
+                     * path -- so a CAPTURING closure's env survives `(g x)` instead
+                     * of being dropped by a bare raw-fn-pointer call (segfault).
+                     * SCOPED to element fns whose RESULT is a plain element (a bare
+                     * tyvar `b`): a continuation returning an HKT-applied `(m b)`
+                     * (Monad `bind`, Traversable `traverse`) unpacks its wrapped
+                     * result through the carrier and regresses under the
+                     * tur_poly_fn_t switch, so it stays as-is. */
+                    if (g_m7_hkt_enabled && !param_is_poly &&
+                        param_type.kind == TY_FN &&
+                        param_type.as.fn.result_kind != TY_APP &&
+                        !(param_type.as.fn.result_full_type &&
+                          param_type.as.fn.result_full_type->kind == TY_APP)) {
+                        param_is_poly = true;
+                    }
                     Type c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                     if (p->tag == F_SYM) {
                         /* Simple parameter name */
@@ -4903,22 +4920,38 @@ resolved_user_fallback:;
         has_poly_params = true;
         Binding *inner_b = poly_arg_fn_binding(obj);
         if (!inner_b) {
-            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
-                      "rank-N typeclass method argument must be a named function");
-            return NULL;
-        }
-        Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
-        wrap->as.poly_wrap_.inner = obj;
-        if (inner_b->is_poly_fn) {
-            wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            /* Phase CCL (symmetric with the args path below): a fat closure --
+             * a capturing or non-capturing lambda (boxed TY_FN) or a ptr<void>
+             * closure handle -- is wrapped for tur_poly_fn_t packing rather than
+             * rejected.  Reached when a typed-fn element param lands in params[0]
+             * (Bifunctor `bimap [g h x]`, whose first param is a mapper fn, not
+             * the HKT receiver). */
+            if (obj->type.kind == TY_PTR_VOID ||
+                (obj->type.kind == TY_FN && obj->type.as.fn.boxed)) {
+                Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
+                cwrap->as.poly_wrap_.inner = obj;
+                cwrap->as.poly_wrap_.wrapper_binding = NULL;
+                cwrap->as.poly_wrap_.is_closure = true;
+                obj = cwrap;
+            } else {
+                diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                          "rank-N typeclass method argument must be a named function");
+                return NULL;
+            }
         } else {
-            uint8_t inner_arity = (inner_b->type.kind == TY_FN)
-                ? (uint8_t)inner_b->type.as.fn.arity : 1;
-            Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
-            if (!wrapper_b) return NULL;
-            wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
+            wrap->as.poly_wrap_.inner = obj;
+            if (inner_b->is_poly_fn) {
+                wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else {
+                uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                    ? (uint8_t)inner_b->type.as.fn.arity : 1;
+                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
+                if (!wrapper_b) return NULL;
+                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            }
+            obj = wrap;
         }
-        obj = wrap;
     }
     for (uint32_t i = 0; i < n_args; i++) {
         uint8_t param_idx = 1 + (uint8_t)i;  /* params[0] is the receiver */

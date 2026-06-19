@@ -1,5 +1,34 @@
 # M7 by-value HKT: a CAPTURING closure passed as a typed-fn element param drops its env
 
+> **RESOLVED for plain-element shapes (2026-06-19).** A typed `(fn [a] b)`
+> element param whose RESULT is a plain element (`fmap`, Bifunctor `bimap`,
+> Applicative `ap`, Alternative `<|>`) is now marked `is_poly_fn` under the
+> by-value path, so it lowers to the `tur_poly_fn_t` `{env, fn}` carrier and
+> `(g x)` preserves a CAPTURING closure's env -- exactly as the regular defn
+> path does. Probe `docs/upcoming/v2/m7-hkt-probe-capturing.tur` exits 121
+> (capturing mapper through `bimap` AND the partial-app `(Result _ B)` head).
+> Suite 1685/0 flag-on AND flag-off (the marking is gated on `g_m7_hkt_enabled`
+> and inert on the legacy carrier path).
+>
+> **Two coordinated pieces (both `elab_typeclasses.c`):**
+> 1. Param loop: mark a TY_FN element param `is_poly_fn` -- SCOPED to a plain
+>    (non-`TY_APP`) result, so a continuation returning an HKT-applied `(m b)`
+>    (`bind`/`traverse`) is excluded (it regresses under the carrier switch --
+>    see the experimental finding below).
+> 2. Rank-N `params[0]` dispatch path: mirror the args-path closure fallback so a
+>    lambda/closure argument that lands in `params[0]` (Bifunctor `bimap [g h x]`,
+>    whose first param is a mapper, not the HKT receiver) is wrapped as an
+>    `EX_POLY_WRAP` closure instead of erroring "must be a named function".
+>
+> **Residual (narrower, NOT a migration blocker for Functor/Applicative/
+> Alternative):** an HKT-RETURNING continuation -- Monad `bind`'s `k : (fn [a]
+> (m b))`, Traversable `traverse` -- is deliberately excluded from the marking, so
+> a CAPTURING continuation there still drops its env. The Monad `[Result]`/
+> `[Option]` migration will need this reconciled (the continuation's wrapped
+> `(m b)` result must be unpacked through `tur_poly_fn_t`); tracked here for that
+> later effort. The carrier path (`TUR_M7_HKT=0`) does not support capturing
+> through any HKT element param (Phase-5-deprecated).
+
 **Summary.** Under the by-value HKT path (default), an instance method whose
 element mapper is a typed function param (`g : (fn [a] b)`) emits that param as a
 bare `int64_t` and bare-calls it `((int64_t(*)(int64_t))(intptr_t)g)(x)` in the

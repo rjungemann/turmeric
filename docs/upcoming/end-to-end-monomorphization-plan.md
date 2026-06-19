@@ -35,14 +35,22 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
   `tests/fixtures/hkt-partial-app-wildcard-byvalue/` (suite 1685/0 flag-on AND
   flag-off). Report archived to
   `docs/archive/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`.
-- **Remaining Functor-Result gate: capturing closures through a typed-fn element
-  param.** A `g : (fn [a] b)` element param is still emitted as the int64 carrier
-  and bare-called, dropping a CAPTURING closure's env (segfault). This is shared
-  across the WHOLE by-value HKT family (bimap/fmap/... with a capturing mapper),
-  tracked in
-  `docs/reported/m7-hkt-byvalue-typed-fn-element-capturing-closure.md`. It is the
-  last gate before the `[Result]`/`[Option]` Functor-family bodies can be
-  rewritten in pure Turmeric.
+- **Capturing closures through a typed-fn element param now work by-value
+  (2026-06-19).** A `g : (fn [a] b)` element param (the mapper handed to
+  fmap/bimap/ap/`<|>`) is now marked `is_poly_fn` and lowered to the
+  `tur_poly_fn_t` `{env, fn}` carrier -- like the regular defn path -- so a
+  CAPTURING closure's env survives `(g x)` instead of being dropped by a raw
+  fn-pointer call. Scoped to plain-element results (an HKT-returning continuation
+  `(m b)` -- Monad `bind`, Traversable `traverse` -- is excluded; it regresses
+  under the carrier switch and is a later Monad-migration sub-task). Probe
+  `v2/m7-hkt-probe-capturing.tur` exits 121; suite 1685/0 flag-on AND flag-off.
+  Report archived to
+  `docs/archive/m7-hkt-byvalue-typed-fn-element-capturing-closure.md`.
+- **Both Functor-family Result/Option gates are now closed** (partial-app
+  wildcard head + capturing element fn). The `[Result]`/`[Option]`/`[Either]`
+  Functor/Applicative/Alternative bodies can now be rewritten in pure Turmeric
+  by-value; Monad `bind` additionally needs the HKT-returning-continuation
+  capturing sub-task above.
 - **First real stdlib class migrated: Foldable** (sig typed; sole instance `rc`
   carrier-essential). The remaining stdlib migration is now an INCREMENTAL,
   per-class effort with the default suite as the gate -- concrete sequencing +
