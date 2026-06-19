@@ -81,7 +81,7 @@ Consequently the **only** remaining carrier-essential *dispatch* surface is:
 
 ## Cross-references
 
-- `docs/upcoming/end-to-end-monomorphization-plan.md` Phases 3.0, 4, 5.
+- `docs/archive/end-to-end-monomorphization-plan-2.md` Phases 3.0, 4, 5.
 - `docs/upcoming/v2/hkt-dispatch-options-tradeoff.md` (Phase 2 decision).
-- `docs/reported/kleisli-k-apply-raw-B-uninferable.md`,
-  `docs/reported/unwrap-or-byvalue-cascade.md`.
+- `docs/archive/kleisli-k-apply-raw-B-uninferable.md`,
+  `docs/archive/unwrap-or-byvalue-cascade.md`.

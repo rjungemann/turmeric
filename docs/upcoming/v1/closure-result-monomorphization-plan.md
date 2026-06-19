@@ -51,7 +51,7 @@ description: The plan for the last ~102 carrier-bridge crossings (24 fixtures), 
 - `docs/upcoming/v2/m7-phase5-carrier-bridge-audit.md` -- the full audit, the
   92% reduction, and the three tested completion attempts with their exact
   failure modes. Read this first; this plan assumes its findings.
-- `docs/upcoming/end-to-end-monomorphization-plan.md` -- the parent plan
+- `docs/archive/end-to-end-monomorphization-plan-2.md` -- the parent plan
   (Phases 1-5); Phase 5's "delete the bridge" is what this plan finishes.
 
 ## Why the remaining 102 crossings exist (root cause, empirically established)

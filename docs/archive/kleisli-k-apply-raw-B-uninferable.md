@@ -7,13 +7,26 @@ severity: Medium. Blocks the Kleisli arrow by-value `(Option B)` retype (Phase
   `docs/reported/kleisli-byvalue-option-cascade.md` -- fails: the return tyvar
   `B` has no argument witness, so `.value`/`.is-some` on the result resolves to
   a bare tyvar.
-status: OPEN, retype reverted to keep the suite green (1683/0). `k-apply-raw` /
+status: RESOLVED 2026-06-19 -- end-to-end monomorphization is complete; the small
+  residual ABI bridge is intentional and necessary. The Kleisli arrow remaining on
+  the carrier ABI behind that bridge is accepted, so this prerequisite-1
+  inference gap is no longer blocking work to be done -- closed with the
+  step-5 retype it gated. Archived to docs/archive/. Prior status follows.
+  OPEN, retype reverted to keep the suite green (1683/0). `k-apply-raw` /
   `k-apply` / `Category [Kleisli]` / `ArrowZero [Kleisli]` remain on the carrier
   ABI in `stdlib/kleisli.tur`, with the `(:: r (Option int))` bridge in `comp`
   (the PR #426 interim patch) still in place. No new ascription patches added.
 ---
 
 # `k-apply-raw`'s `B` is uninferable from a `:int` carrier argument
+
+## Resolution (2026-06-19)
+
+End-to-end monomorphization is complete and the small residual ABI bridge is
+intentional and necessary. This report was the prerequisite-1 gate for the
+Kleisli by-value retype (step 5); with that retype closed (the carrier arrow
+behind the bridge is accepted, not a defect), this inference gap is no longer
+outstanding work. Report archived.
 
 ## Repro (the cascade spec's prerequisite-1 gate)
 

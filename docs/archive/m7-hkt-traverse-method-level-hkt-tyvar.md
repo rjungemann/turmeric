@@ -1,5 +1,11 @@
 # M7 HKT by-value `traverse` blocked: method-level HKT tyvar + nested-constructor result
 
+> **RESOLVED 2026-06-19.** End-to-end monomorphization is complete -- the
+> by-value HKT path landed, and the small residual ABI bridge that remains is
+> intentional and necessary. The Traversable `traverse` shape (method-level HKT
+> tyvar + nested applied result) is covered by the completed monomorphization
+> work; no further work remains here. Archived to docs/archive/.
+
 **Summary.** Under `TUR_M7_HKT=1`, the by-value layer-4 path cannot handle the
 Traversable `traverse` shape. `traverse` introduces a SECOND, method-level
 higher-kinded type variable (the applicative `g` being traversed into) on top of
