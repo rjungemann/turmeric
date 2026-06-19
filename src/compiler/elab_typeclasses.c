@@ -1747,6 +1747,17 @@ static bool m7_body_returns_byvalue_element(const Expr *e) {
             /* returns a bare element value (a param/local) directly, never the
              * applied `(f a)` receiver itself (that is the selection shape). */
             return e->type.kind != TY_APP;
+        case EX_CALL:
+            /* Foldable `foldr`: the tail folds via a fn PARAMETER --
+             * `(g (.value t) z)` -- returning the bare element result by value.
+             * Admit a local (parameter) fn callee whose result is a bare element
+             * (non-applied), distinguished from a carrier-delegating global
+             * helper by `!is_global`.  The receiver only ever reaches the callee
+             * as an extracted scalar (`(.value t)`), never whole, so by value is
+             * safe. */
+            return e->as.call_.fn_binding && !e->as.call_.fn_expr &&
+                   !e->as.call_.fn_binding->is_global &&
+                   e->type.kind != TY_APP;
         default:
             return false;
     }
@@ -5127,6 +5138,24 @@ resolved_user_fallback:;
             Type hkt_head = obj_orig_type;
             while (hkt_head.kind == TY_APP && hkt_head.as.app.fn)
                 hkt_head = *hkt_head.as.app.fn;
+            /* Prefer the class var's COLLECTED binding -- the receiver's
+             * constructor head, recovered by m7_collect from whichever param
+             * carries the class var (`(g a)` / `(p a b)`).  `obj` is the FIRST
+             * arg, which is the HKT receiver only when the receiver is param 0
+             * (fmap/bind/ap/extract).  For methods whose HKT receiver is NOT
+             * first -- Bifunctor `bimap [g h x]`, Foldable `foldr [f z t]` --
+             * obj is a function arg, so stripping its head gives the wrong type
+             * (a `(fn ...)` instead of `Result`); the collected binding is right.
+             * m7_collect already records the HEAD (it recurses into the TY_APP
+             * fn position), so this needs no extra stripping. */
+            for (uint8_t k = 0; k < m7_nb; k++) {
+                if (m7_bind_names[k] &&
+                    strcmp(m7_bind_names[k]->name,
+                           tc->type_params[0]->name) == 0) {
+                    hkt_head = m7_bind_types[k];
+                    break;
+                }
+            }
             bindings[0].name = tc->type_params[0]->name;
             bindings[0].type = hkt_head;
             uint8_t bi = 1;

@@ -1081,6 +1081,48 @@ genuine carrier)
 >   transitional bridge the fmap probe uses for its receiver. Inert flag-off
 >   (suite 1684/0, byte-identical codegen); `fmap`/`bind`/`ap`/`alt`/`pure` probes
 >   unchanged (42/21/42/42/42); HKT fixtures emit clean flag-on.
+> - **Foldable `foldr` / non-first-receiver + fn-fold shape: DONE end-to-end
+>   (2026-06-19).** Probe at `docs/upcoming/v2/m7-hkt-probe-foldr.tur` exits 42
+>   with a by-value receiver spec whose LAST param is by-value
+>   (`__inst_MyFoldable_foldr2_Option__spec__..._Option__int(int64_t g, int64_t z,
+>   Option__int t)`). `foldr2 [g z t] : b` is the first shape where (a) the `(f a)`
+>   container is NOT the first param (it is param 2), and (b) the bare-element
+>   result is produced by folding through a fn PARAMETER (`(g (.value t) z)`).
+>   Two flag-gated fixes in `elab_typeclasses.c`:
+>   - **Class var from the collected receiver binding, not `obj`.** The layer-4
+>     element collection already pairs every method param with every actual arg
+>     uniformly, so it recovers `f -> Option` from the receiver param `(f a)`
+>     wherever it sits. But the class-var abi_binding was taken from `obj` (the
+>     first arg) stripped to its head -- correct only when the receiver is param 0
+>     (fmap/bind/ap/extract). For a non-first receiver `obj` is a function arg, so
+>     its head is a `(fn ...)`; now the class var is taken from the collected
+>     binding instead (`obj` head only as a defensive fallback).
+>   - **Bare-element body gate admits a fn-param fold tail.**
+>     `m7_body_returns_byvalue_element` now accepts a tail CALL to a LOCAL
+>     (parameter) fn returning a bare element (`!is_global`, result not TY_APP),
+>     alongside field reads (extract) and bare-element vars. The receiver reaches
+>     the callee only as an extracted scalar (`(.value t)`), never whole, so by
+>     value is safe.
+>   Inert flag-off (suite 1684/0, byte-identical codegen); all six prior probes
+>   unchanged.
+> - **Bifunctor `bimap` / two-param constructor: BLOCKED, reported.** The
+>   by-value spec interns and the branch constructs recover by value, but the
+>   `if`-result temp stays the int64 carrier because a two-param constructor's
+>   unconstrained second slot leaks the STRUCT's own tyvar (`Result`'s `B`) into
+>   the instance-body type (`(Result c B)` not `(Result c d)`), which the spec
+>   bindings (method tyvars `a b c d`) cannot ground. Hard cc error under the
+>   flag (not a silent miscompile); flag-off unaffected. Bifunctor `[Result]` in
+>   stdlib delegates to a carrier helper and is excluded from the by-value gate,
+>   so this does NOT block the one-param stdlib migration. Full root cause + fix
+>   directions in
+>   [`docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`](../reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md).
+> - **Probe-hardening status: 7 of the HKT method shapes are by-value
+>   end-to-end** (Functor `fmap`, Monad `bind`, Applicative `ap`+`pure`,
+>   Alternative `<|>`, Comonad `extract`, Foldable `foldr`); Bifunctor `bimap`
+>   (two-param) is reported/blocked and is carrier-delegating in stdlib;
+>   Traversable `traverse` (nested `(g (h b))`) remains. The one-param HKT classes
+>   that the stdlib migration needs (Functor/Monad/Applicative/Alternative) are
+>   all covered.
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT
