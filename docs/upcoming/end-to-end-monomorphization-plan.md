@@ -1291,6 +1291,20 @@ Once Phase 4 has shrunk the bridge consumer set to the documented
 carrier-essential cases, the bridge predicate can be tightened to
 fire ONLY on those sites, and the rest of the machinery deletes.
 
+> **Re-audit DONE (2026-06-19) -- `v2/m7-phase5-carrier-bridge-audit.md`.** After
+> all six HKT classes migrated to by-value, the bridge is STILL load-bearing:
+> ~78 crossings, every one a by-value `Option`/`Result` value meeting a carrier
+> producer. The audit floor is exactly the Option/Result family (no stray types).
+> The carrier producers are (1) the per-instance dispatch DICT path -- indirect/
+> constrained-poly HKT dispatch keeps the int64 carrier ABI per the M6/M7
+> carve-out -- and (2) the genuinely-erased HAMT/`*-map` helpers. So **deleting
+> the bridge (5.3/5.5) is gated on a FURTHER M9-follow-on: lowering the
+> dispatch-DICT ABI from the int64 carrier to per-instance by-value slots** (so
+> the indirect path matches the direct per-(f,A) `__spec` path). That is distinct
+> from -- and was unblocked by -- the Phase 4 instance-body migration, which is
+> now complete. The bridge predicates already fire only on real crossings (5.1 is
+> effectively scoped); 5.2/5.3/5.5 wait on the dict-ABI migration.
+
 ### 5.1 -- Tighten the bridge predicates
 
 - [ ] In `src/compiler/emit_expr.c`, narrow `expr_emits_byvalue_carrier_abi`
