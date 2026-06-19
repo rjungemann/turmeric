@@ -80,13 +80,20 @@
 ;;;
 ;;; Since: Phase HKT S6
 
-(defclass Foldable [^t] (foldl [ta init fn] : int) (foldr [ta init fn] : int))
+(defclass Foldable [^t]
+  (foldl [ta : (t a) init : b fn : (fn [b a] b)] : b)
+  (foldr [ta : (t a) init : b fn : (fn [a b] b)] : b))
 ;; Foldable instance for rc<T>.
 ;; An rc contains exactly one value, so:
 ;;   foldl init fn (rc v) = fn(init, v)
 ;;   foldr fn init (rc v) = fn(v, init)
 ;; KB-027: the bodies dispatch on rc<T> directly (inline C, mirroring the
 ;; Functor instance) instead of round-tripping through a ptr<void> helper.
+;; M7 migration NOTE: under the typed Foldable sig the bodies stay inline-C
+;; carrier (carrier-essential) -- rc<T> value extraction goes through
+;; tur_rc_ptr, which has no pure-Turmeric accessor.  fn lowers to a raw
+;; fn pointer for these element types, so the casts remain valid; the
+;; instance stays on the uniform carrier ABI (verified: suite byte-identical).
 ;;; Foldable [rc] -- Foldable instance for rc<T>.
 ;;;
 ;;; Since: Phase HKT S6
