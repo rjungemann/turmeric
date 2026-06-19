@@ -156,8 +156,22 @@ Functor-family migration needs four compiler capabilities, two now landed:
   (`dict_Functor_Option_singleton.fmap = __inst_Functor_fmap_Option`) still
   references it -> `undeclared` cc error, breaking the whole auto-loaded stdlib.
   The probes avoided this (direct dispatch, no dict); the stdlib generates dicts.
-  Fix: emit a carrier-base wrapper (or point the dict slot appropriately) for a
-  by-value HKT instance so indirect dispatch stays valid.
+  ROOT CAUSE (traced): the dict is a MONOMORPHIC carrier table
+  (`int64_t (*fmap)(int64_t,int64_t)`) for indirect/polymorphic dispatch over
+  ANY element type. A by-value pure-Turmeric instance body
+  (`(if (some? container) (some (g (.value container))) (none))`) can only be
+  emitted per-`(f, A)` (it needs the concrete element type); it CANNOT be emitted
+  as the generic any-`A` carrier base the dict slot points at. The existing
+  `emit_abi_note_carrier_call` (emit_module.c ~1752) tries to keep the base
+  emitted, but there is no emittable carrier base for a by-value body. Options:
+  (a) keep a carrier base body (inline-C) for the dict slot AND add by-value
+  specs for direct calls (dual emission); (b) synthesize a carrier-base wrapper
+  that boxes/unboxes around a generic carrier helper; (c) omit the dict for
+  instances proven never dispatched indirectly (whole-program reachability).
+  Option (a) is the most direct: the instance keeps its inline-C carrier body for
+  the dict, and direct call sites still get the by-value spec -- but that
+  requires the inline-C body to coexist with the typed sig (the fn-forwarding
+  item below). This is the deepest of the four blockers.
 - **[OPEN] Typed-fn forwarding for delegating instances.** Either/Parser/Goal/
   Backtrack/Schema/rc bodies forward the element fn to a `:fn`/`^fat` helper
   (`(either-map fn container)`, `(fmap-parser-raw ... fn)`, inline-C `fn.fn`).
