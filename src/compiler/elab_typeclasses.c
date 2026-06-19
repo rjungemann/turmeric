@@ -1064,9 +1064,29 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     if (am) {
                         return_type = type_tyvar_named(am->name);
                     } else {
-                        diag_emit(DIAG_ERROR, ret_form->span,
-                                  "unsupported return type in typeclass method");
-                        return NULL;
+                        /* Bare nominal return type: a single-symbol `: T` naming
+                         * an ordinary user-defined type (defopaque newtype or
+                         * defstruct) is neither a builtin keyword, a class type
+                         * param, nor an associated-type name -- but it is still a
+                         * legitimate return type.  The applied-form path
+                         * (`(Result T cstr)`, `(Vec T)`) already routes through
+                         * type_expr_from_form; route the bare symbol through the
+                         * same resolver before giving up.  Synthesize an F_SYM
+                         * form (ret_form was normalized to F_KEYWORD above) so the
+                         * nominal-type lookup runs. */
+                        Form *sym_f = (Form *)arena_alloc(e->arena, sizeof(Form));
+                        *sym_f = *ret_form;
+                        sym_f->tag = F_SYM;
+                        Type *ft = type_expr_from_form(e, sym_f, NULL,
+                                                       eff_tp, eff_kinds,
+                                                       n_eff_tp);
+                        if (ft) {
+                            return_type = *ft;
+                        } else {
+                            diag_emit(DIAG_ERROR, ret_form->span,
+                                      "unsupported return type in typeclass method");
+                            return NULL;
+                        }
                     }
                 }
             }
