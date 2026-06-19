@@ -11,10 +11,45 @@ severity: Medium. A function quantified over `[S] [(StorageOps S)]` (the
   int64-carrier C signature and redefine each other. Monomorphic dispatch
   (a helper typed against a concrete `(Dense int)` / `(Sparse int)`) works end
   to end; the bounded wrapper does not.
-status: OPEN
+status: RESOLVED
 ---
 
 # Bounded `[S] [(StorageOps S)]` wrappers don't monomorphise (gap H)
+
+## Resolution
+
+Fixed in the constrained-generic monomorphisation emit path. A bounded
+`[S] [(StorageOps S)]` wrapper now monomorphises end-to-end at multiple carrier
+backends, and the repro from this report (struct-returning *and* bool-returning
+wrappers exercised at a `Dense` and a `Sparse` backend) links, runs, and routes
+each clone to its own instance method. Regression:
+`tests/fixtures/typeclass-bounded-wrapper-heterogeneous-dispatch/`.
+
+Two distinct defects, two fixes:
+
+1. **Name desync** -- the wrapper's interior dispatch call was reconstructed
+   from a single instance-head *component* (`__inst_StorageOps_sop_hyget_Dense`),
+   which drops the rest of a parametric / multi-parameter instance head's
+   type-arg suffix (the instance is actually emitted as
+   `__inst_StorageOps_sop_hyget_Dense_PosPos`). `emit_reresolve_method_call`
+   (`src/compiler/emit_core.c`) now first looks up the *concrete* instance
+   matching the resolved dispatch type and returns its method impl's
+   authoritative FnDef binding name -- the same spelling `EX_INSTANCE_DEF` wires
+   into the dict singleton -- via the new `emit_concrete_inst_method_name`
+   helper. Single-component reconstruction remains the fallback for the
+   ground-type cases it already handled.
+
+2. **Clone-name collision** -- `(Dense Pos)` and `(Sparse Vel)` are distinct
+   spec keys (`type_eq` keeps them apart), but both lower to the int64 carrier,
+   so `emit_abi_clone_name` rendered the identical `..._int64_t_int64_t` spelling
+   for a bool-returning wrapper and the two C clones redefined each other.
+   `emit_abi_intern_spec` (`src/compiler/emit_module.c`) now appends a
+   deterministic `__h<n>` discriminator when a freshly-built clone name collides
+   with an already-interned spec's name. Non-colliding names are untouched, so
+   existing snapshots are unaffected.
+
+This unblocks `sized-defsystem`/`Stage` direction-2 (world-type-polymorphic
+systems) in the ECS spice.
 
 ## One-line summary
 
