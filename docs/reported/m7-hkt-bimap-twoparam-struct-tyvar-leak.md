@@ -40,6 +40,26 @@
 > by-value construct recovery when the instance method is carrier). The former is
 > the proper feature; the latter is a narrower correctness fallback.
 
+> **Conclusive: the partial-app fix is UNAVOIDABLE for the Functor-family
+> migration -- there is no carrier shortcut (2026-06-19).** Verified that
+> `(fn [a] b)` does NOT lower to the `tur_poly_fn_t` poly carrier (no `.fn`/
+> `.env`): an inline-C body `fn.fn(fn.env, x)` fails to compile under the typed
+> sig (`request for member 'fn' in something not a structure`). A raw-fn-pointer
+> call compiles but drops the env for CAPTURING closures (silent miscompile for
+> the common `(fmap xs capturing-closure)` case). So once a class's signature is
+> typed (required for by-value element recovery), EVERY instance body must call
+> the element fn in pure Turmeric `(g x)` -- which then triggers by-value
+> construct recovery on `(ok ...)`/`(err ...)`. Therefore the `(Result _ B)`
+> instance cannot be kept on the carrier path under the typed sig; the
+> partial-application by-value feature (below) is the unavoidable gate for
+> migrating Functor/Monad/Applicative/Alternative `[Result]`. The proper fix is
+> the type-level-section semantics for a wildcard instance head: `(Result _ B)`
+> as `\x. Result x B`, so `(f a)` fills the `_` (first) slot -- currently `(f a)`
+> mechanically binds `a` to Result's LAST param (the err slot), the wrong
+> position. This spans the same four touch-points (elab grounding, spec
+> interning/mangling, per-construct recovery, carrier spill) and is a focused
+> type-system addition, not a localized patch.
+
 **Summary.** The by-value HKT path cannot monomorphize instance methods over a
 PARTIALLY-APPLIED multi-param constructor with a wildcard (`(Result _ B)`).
 (The full two-param case `(p a b)` -- bimap -- is fixed, see UPDATE above.)
