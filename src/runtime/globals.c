@@ -98,9 +98,11 @@ bool g_schema_reader_enabled = false;
  * `-Xsized-types` CLI flag is now a deprecated no-op, mirroring -Xgadt. */
 bool g_sized_types_enabled = true;
 
-/* M7 Phase 3: experimental by-value HKT dispatch; default OFF, set from the
- * TUR_M7_HKT env var at startup. */
-bool g_m7_hkt_enabled = false;
+/* M7: by-value HKT dispatch.  Default ON (end-to-end-monomorphization-plan,
+ * stdlib-migration step 5 / "flip default first"): the flag-on suite is green,
+ * so the by-value HKT path is the default.  `TUR_M7_HKT=0` opts back out to the
+ * legacy carrier path while the stdlib migration is in progress. */
+bool g_m7_hkt_enabled = true;
 
 /* Phase SZ8: --dump-sizes flag */
 bool g_dump_sizes = false;

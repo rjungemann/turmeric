@@ -11448,11 +11448,13 @@ int main(int argc, char **argv) {
      * Platform APIs (_NSGetExecutablePath / /proc/self/exe) are tried
      * first; argv[0] is the last-resort path source. */
     g_argv0 = (argc > 0) ? argv[0] : NULL;
-    /* M7 Phase 3: opt into experimental by-value HKT dispatch via TUR_M7_HKT.
-     * Default OFF -- shipped codegen stays byte-identical. */
+    /* M7: by-value HKT dispatch is now ON by default (the flag-on suite is
+     * green; stdlib migration "flip default first").  `TUR_M7_HKT=0` opts back
+     * out to the legacy carrier path; `=1` (or unset) keeps the default ON. */
     {
         const char *m7 = getenv("TUR_M7_HKT");
-        if (m7 && m7[0] == '1' && m7[1] == '\0') g_m7_hkt_enabled = true;
+        if (m7 && m7[0] == '0' && m7[1] == '\0') g_m7_hkt_enabled = false;
+        else if (m7 && m7[0] == '1' && m7[1] == '\0') g_m7_hkt_enabled = true;
     }
     /* Resolve the stdlib root once at startup so TUR_STDLIB_DIR is
      * propagated into the process env before any subsystem (elaborator,

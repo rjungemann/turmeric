@@ -35,6 +35,16 @@ traverse-method-level-hkt-tyvar}.md`).
 default-ON, landing the sig changes + body rewrites together, then (once stable)
 removing the flag and the flag-off path. It is NOT incrementally flag-off-safe.
 
+> **UPDATE (2026-06-19): default flipped FIRST.** Because the flag-on suite is
+> already fully green (1684/0), the default was flipped to ON *ahead of* any
+> stdlib sig change (`g_m7_hkt_enabled = true`; `TUR_M7_HKT=0` opts back out).
+> Both `bash tests/run.sh` (now flag-on) and `TUR_M7_HKT=0 bash tests/run.sh`
+> (legacy carrier) pass 1684/0. This converts the migration from a single giant
+> atomic change into an INCREMENTAL one: with the default suite now flag-on,
+> stdlib sig upgrades + body rewrites parse and can be committed in small steps,
+> each gated by the (default) flag-on suite. The "flip last" framing below is
+> superseded by "flip first, migrate incrementally, retire the flag last."
+
 ## The de-risking lever (verified 2026-06-19)
 
 An HKT class with the **new applied signature** but an **inline-C carrier body**
