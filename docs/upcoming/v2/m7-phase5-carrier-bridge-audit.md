@@ -136,6 +136,39 @@ mismatch. That elab change is the first concrete, testable step of the larger
 monomorphization engine; the prototype is reverted (gate kept green at 1685/0)
 pending it.
 
+### The conclusive architectural constraint (why this is genuinely structural)
+
+Tracing the prototype's failures one level deeper lands on a single load-bearing
+assumption in the emitter: **control-form branches are homogeneous in
+carrier-kind.** The codegen for `if`/`cond`/`let`/`do` results is built on it:
+
+- `fn_body_tail_is_carrier_producer` for an `if` requires BOTH arms to be carrier
+  producers (emit_expr.c:218-221).
+- `fn_body_tail_emits_byvalue_carrier_abi` for an `if` returns true if EITHER arm
+  is by-value (emit_expr.c:340-341).
+- `emit_control_result_temp_decl` (emit_expr.c:528) picks ONE representation for
+  the whole result temp from those two predicates.
+
+When both arms agree (the status quo: both carrier, or both by-value via a shared
+enclosing spec) this is correct. The construct-monomorphization prototype breaks
+the agreement -- arg-bearing `some` goes by-value while 0-arg `none` stays
+carrier -- so the single result temp is declared `Option__int` but one arm
+assigns the `int64_t` carrier, and `cc` rejects it. The same homogeneity
+assumption underlies the function-return bridge
+(`fn_body_tail_is_carrier_producer` keying the `emit_fns.c` return unbox), which
+is the `kleisli` "returning Option__int but int64_t expected" failure.
+
+So full bridge deletion is not a localized edit; it requires **either**
+homogenizing every control-form's construct leaves at elab time (cross-branch
+expected-type / binding propagation so all arms pick the same representation)
+**or** teaching every control-form result site (if/cond/let/do temps + function
+returns) to bridge each arm to the chosen representation -- i.e. dismantling the
+homogeneity assumption that the emitter currently relies on throughout. That is
+the monomorphization engine, confirmed from three independent angles (the
+generic-helper crossings, the 0-arg construct binding gap, and this control-form
+homogeneity assumption). It is tracked as its own phase; the bridge is genuinely
+load-bearing until it lands, and the 5.1 tripwire guards its scope.
+
 ## Phase 5 status
 
 - **5.4 (re-audit): DONE** -- inventory above; audit floor is the Option/Result
