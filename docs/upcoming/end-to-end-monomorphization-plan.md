@@ -51,6 +51,28 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
   Functor/Applicative/Alternative bodies can now be rewritten in pure Turmeric
   by-value; Monad `bind` additionally needs the HKT-returning-continuation
   capturing sub-task above.
+- **Functor stdlib class MIGRATED to by-value (2026-06-19).** Class sig is now
+  `(fmap [container : (f a) g : (fn [a] b)] : (f b))` (both typeclass.tur copies);
+  `Option`/`Result` instance bodies rewritten in pure Turmeric. The combinator/
+  opaque instances (Either/Parser/Goal/Backtrack/Schema/rc) need NO body change --
+  they classify non-by-value and stay carrier-delegating under the typed sig.
+  Default suite 1685/0. The legacy `TUR_M7_HKT=0` carrier suite no longer builds
+  Functor-using fixtures (by design; per CLAUDE.md the default is the gate).
+- **Applicative / Alternative migration BLOCKED** on the return-directed
+  `pure`/`empty` methods: the class var appears only in the result, so dispatch
+  needs an expected type, but the parser/goal/backtrack combinator APIs erase
+  their container to the `:int` carrier so no `(f _)` expected type propagates to
+  an unascribed `(pure x)` (parsec-tutorial breaks with "cannot infer type for
+  return-directed method"). The by-value `pure`/`ap` EMIT works (with an
+  ascription); only the inference is blocked. Tracked in
+  `docs/reported/m7-applicative-alternative-pure-empty-return-inference.md`
+  (fix: type the combinator APIs with a real `Parser`/`Goal` type, not `:int`).
+- **Monad migration BLOCKED** on the HKT-returning continuation `k : (fn [a] (m
+  b))`: it is excluded from the by-value `tur_poly_fn_t` element marking (it
+  regresses when its wrapped `(m b)` result is unpacked through the carrier), so a
+  CAPTURING continuation -- the common do-m chain -- drops its env (segfault).
+  Needs the wrapped-result-through-`tur_poly_fn_t` reconciliation noted in the
+  archived capturing-closure report.
 - **First real stdlib class migrated: Foldable** (sig typed; sole instance `rc`
   carrier-essential). The remaining stdlib migration is now an INCREMENTAL,
   per-class effort with the default suite as the gate -- concrete sequencing +
