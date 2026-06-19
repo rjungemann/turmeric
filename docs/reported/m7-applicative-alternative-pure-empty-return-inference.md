@@ -52,16 +52,19 @@ fixing the previous:
 4. **Lambda-return propagation** (prototyped in `elab_fns.c`): an un-annotated
    lambda elaborated against an expected `(fn [A] (Parser B))` should push the
    fn-result as the body's expected type. Added -- still did not fire, because:
-5. **Generic-INSTANTIATION param erasure**: `then-parser`/`bind-parser` are
-   generic (`[A B]`). `defn` DOES populate `arg_full_types` from `param_poly_types`
-   (`elab_fns.c` ~2870, so the declared `(Parser B)` is captured at definition).
-   But at the CALL site the generic instantiation lowers the param's full type to
-   the `int64` carrier: a debug push confirmed `then-parser`'s `arg_full_types[1]`
-   reads `ppkind=TY_INT, ppc=int64_t` at the call, not `(Parser B)`. So neither
-   the arg push (2) nor the lambda-return push (4) ever sees a `(Parser _)` to
-   propagate. Fixing this means preserving the structured param type through
-   generic call-site instantiation (it currently collapses applied types to the
-   carrier when the type args are not yet inferred).
+5. **ROOT CAUSE -- opaque-applied type erased at type-parse**: `then-parser`'s
+   `q : (Parser B)` parameter has `arg_full_types[1] = int64` at BOTH definition
+   and call (debug: `ppkind=TY_INT, ppc=int64_t`). Traced to `fn_type_from_form`:
+   `Parser` is `(defopaque Parser [A] :ptr<void>)`, and an opaque PARAMETRIC
+   applied type `(Parser B)` is resolved to its `int64`/`ptr<void>` carrier at
+   type-parse, so the structured `(Parser B)` is never stored (the
+   `param_poly_types` `ann->kind == TY_APP` branch at `elab_fns.c:1420` never sees
+   a TY_APP -- it sees the carrier). Without the structured type, NO downstream
+   push (arg-position or lambda-return) can ever propagate a `(Parser _)` to
+   `pure`. Preserving opaque-applied type structure through parsing is a
+   foundational type-representation change (opaque types are pervasive), and it
+   must coexist with the by-value/carrier boundary (blocker 6) -- a multi-session
+   effort, not a localized patch.
 6. **Opaque-type return-directed by-value (runtime)**: ascribing the 7 sites
    `(:: (pure x) (Parser int))` makes the fixture COMPILE, but it SEGFAULTS at
    runtime -- forcing a by-value `(Parser int)` on the opaque `Parser`
