@@ -24,7 +24,43 @@ args to the carrier base (e.g. `__inst_Monad_bind_Option((int64_t)(intptr_t)(
 &__t54), ...)`).  Eliminating them is lever 2 (HKT method-call monomorphization).
 The original "~78" figure below is the pre-work historical baseline.
 
-### Lever 2 -- precise diagnostic (what blocks it; two suppression points)
+### Lever 2 -- FULLY root-caused (2026-06-19, deep dive): fmap/bimap/pure already monomorphize; bind/ap are closure-ABI-bound
+
+A deep dive corrected the lever-2 picture substantially.  The emit path
+**already monomorphizes HKT instance methods by value** -- e.g. in
+`hkt-stdlib-option-result-instances` the `fmap` call routes to
+`__inst_Functor_fmap_Option__spec__Option__int_Option__int_int64_t(Option__int,
+tur_poly_fn_t)` taking the container BY VALUE with NO crossing.  `fmap`, `bimap`,
+and `pure` all monomorphize cleanly today.  So lever 2 is NOT the broad
+carve-out reversal earlier feared.
+
+The remaining 102 crossings are **only `bind` and `ap`**, and the root cause is
+specific and deep:
+
+- `fmap`'s continuation `g` returns an ELEMENT (a scalar `b`) that flows into a
+  `#{Construct}` (`(some (g x))`) -- the construct takes the carrier scalar
+  directly, no crossing.
+- `bind`'s continuation `k` returns a CONTAINER `(m b)` (a carrier `Option`)
+  that IS the result (`(k (.value ma))` in tail position).  `ap` is analogous
+  (`ff` carries a function whose result is the container element).  Two
+  consequences:
+  1. **Grounding fails:** the element `b` lives in the continuation's RESULT
+     type, which is collapsed to a tyvar at dispatch time (the continuation
+     lambda types as `(fn [int] (Option ?))`), so `m7_collect` can't ground `b`
+     and the by-value spec is not committed (`m7_byvalue_grounded` stays false).
+  2. **Even if grounded, the crossing persists:** `k` is a `tur_poly_fn_t`
+     (closure), and closures use the UNIFORM CARRIER result ABI by design.  So
+     `k` returns a carrier `Option`; `bind` returning it by value needs a
+     `carrier->concrete` bridge regardless.
+
+So the bind/ap residue is tied to the **closure-result carrier ABI for monadic
+continuations** -- the deepest layer (poly_fn results are uniformly carrier).
+Eliminating it requires by-value closure-result ABI for these continuations,
+which is a larger change than method monomorphization and is genuinely the floor
+for HKT monadic dispatch under the current closure model.  `fmap`/`bimap`/`pure`
+are already done; `bind`/`ap` are the closure-ABI-bound remainder.
+
+### (Historical) Lever 2 -- earlier diagnostic (what blocks it; two suppression points)
 
 A probe of `emit_abi_register_call` over the live fixture
 `hkt-stdlib-option-result-instances` shows the direct HKT method calls split
