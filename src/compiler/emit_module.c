@@ -2427,7 +2427,25 @@ static bool emit_abi_has_carrier_call(const EmitCtx *ctx, const Binding *binding
  * leaves a dangling call.  Emit the carrier definition whenever a direct
  * (non-specialized) call to the binding was observed during the abi scan;
  * otherwise keep suppressing it (the function is either unused here or fully
- * served by specialization clones, and its body may not be carrier-safe). */
+ * Phase 5 carrier-bridge deletion -- dead-instance elimination liveness: an HKT
+ * typeclass instance is LIVE iff at least one of its method bases is directly
+ * referenced (a carrier call was noted on the base binding during the
+ * pre-emission scan -- a direct `__inst_*` call site).  In this codebase no
+ * EX_DICT dispatch occurs, so a direct call is the only liveness source; if
+ * indirect dispatch is ever added, an EX_DICT-reference check belongs here too.
+ * Used to skip a dead instance's dict singleton (emit_stmt.c) and carrier bases
+ * (emit_abi_fn_skip_generic) in lockstep. */
+bool emit_instance_is_live(const EmitCtx *ctx, TypeClassInstance *inst) {
+    if (!inst || !inst->typeclass) return true; /* conservative: keep */
+    for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
+        FnDef *m = inst->method_impls[i];
+        if (m && m->binding && emit_abi_has_carrier_call(ctx, m->binding))
+            return true;
+    }
+    return false;
+}
+
+ /* served by specialization clones, and its body may not be carrier-safe). */
 static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
     if (e->kind != EX_FN_DEF || !e->as.fn_def_.fn) return false;
     FnDef *fd = e->as.fn_def_.fn;
@@ -2461,9 +2479,25 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
      * undeclared symbol (`__inst_Functor_fmap_Option undeclared`). */
     if (g_m7_hkt_enabled && fd->owner_instance && fd->owner_instance->typeclass) {
         TypeClass *tc = fd->owner_instance->typeclass;
+        bool is_hkt = false;
         if (tc->type_param_kinds) {
             for (uint8_t i = 0; i < tc->n_type_params; i++)
-                if (tc->type_param_kinds[i] != KIND_STAR) return false;
+                if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
+        }
+        if (is_hkt) {
+            /* Phase 5 carrier-bridge deletion -- dead-instance elimination: an
+             * auto-preloaded HKT instance carrier base used to be kept
+             * unconditionally (the dict singleton references it).  But when the
+             * WHOLE instance is dead -- no method directly called (no carrier
+             * call noted on ANY of its method bindings) and, in this codebase,
+             * no dict dispatch ever occurs -- the base is pure dead code carrying
+             * the ubiquitous `carrier->concrete (Option (fn ...))` crossing.
+             * Skip the whole dead instance (the dict singleton is skipped in
+             * lockstep in emit_stmt.c EX_INSTANCE_DEF, keyed on the same
+             * liveness), which removes the crossing from every fixture that
+             * never uses the instance.  A LIVE instance (some method directly
+             * called) keeps its base + dict unchanged. */
+            return !emit_instance_is_live(ctx, fd->owner_instance);
         }
     }
     return !emit_abi_has_carrier_call(ctx, fd->binding);

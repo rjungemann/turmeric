@@ -1,5 +1,6 @@
 /* emit_stmt.c -- statement-position C emission (emit_stmt and friends). */
 #include "emit_internal.h"
+#include "globals.h"   /* g_m7_hkt_enabled */
 #include "mangle.h"
 
 void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -400,7 +401,26 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase 15: Emit dictionary struct and global singleton */
             TypeClassInstance *inst = e->as.instance_def_.instance;
             TypeClass *tc = inst->typeclass;
-            
+
+            /* Phase 5 carrier-bridge deletion -- dead-instance elimination: skip
+             * the whole dict (struct + singleton) for a DEAD HKT instance, in
+             * lockstep with emit_abi_fn_skip_generic skipping its carrier bases.
+             * An auto-preloaded HKT instance whose methods are never directly
+             * called (and never dict-dispatched -- which never happens in this
+             * codebase) is pure dead code; its `ap`/`fmap`/`bind` carrier bases
+             * carry the ubiquitous `carrier->concrete (Option (fn ...))`
+             * crossing.  Both halves key off emit_instance_is_live so the dict
+             * initializer never references a skipped base (and vice versa).
+             * Restricted to HKT instances (KIND != STAR); ground (kind-*)
+             * instances like Eq are untouched. */
+            if (g_m7_hkt_enabled && tc->type_param_kinds) {
+                bool is_hkt = false;
+                for (uint8_t i = 0; i < tc->n_type_params; i++)
+                    if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
+                if (is_hkt && !emit_instance_is_live(ctx, inst))
+                    break;  /* skip emitting the dead instance's dict */
+            }
+
             /* Generate dictionary struct name: dict_<TypeClass>_<typeargs>
              * Mirrors the type_suffix logic in elab_definstance so that
              * the struct name matches the method impl names already emitted. */

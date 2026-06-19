@@ -329,6 +329,11 @@ bool fn_body_tail_is_carrier_producer(const struct Expr *e);
  * emit_expr.c. */
 bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
 Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e);
+/* Phase 5 dead-instance elimination: is this HKT typeclass instance live (any
+ * method base directly referenced)?  Used to skip dead instances' dict + bases
+ * in lockstep.  Defined in emit_module.c. */
+struct TypeClassInstance;
+bool emit_instance_is_live(const struct EmitCtx *ctx, struct TypeClassInstance *inst);
 /* RT/SC5: carrier-return bridge.  A typeclass instance method whose declared
  * return is the dispatch type variable lowers to the int64_t carrier, but its
  * body resolves to a concrete by-value struct for that instance.  When the
