@@ -13,6 +13,26 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
 
 ## Current state (2026-06-19, M7 by-value HKT now DEFAULT-ON)
 
+> **Phase 4 stdlib migration -- near complete (2026-06-19).** By-value migrated:
+> **Functor** `fmap`, **Monad** `bind`, **Bifunctor** `bimap`, **Foldable**
+> `foldl`/`foldr` (full classes); **Applicative** `ap` and **Alternative**
+> `alt-or` (receiver-style methods). Reusable infrastructure landed: partial-app
+> wildcard heads `(Result _ B)`, capturing closures through typed-fn element
+> params, and the carrier-spill for by-value-aggregate thunk returns
+> (`ensure_aggregate_spill_shim`). Default suite 1685/0 throughout.
+>
+> **Only TWO carrier methods remain that have by-value-relevant instances:**
+> Applicative **`pure`** and Alternative **`empty`** -- both return-directed, both
+> blocked on the SAME thing: the parser/goal/backtrack combinator APIs must type
+> their continuations as `(fn [A] (Parser B))` (not the `:fn` carrier) so an
+> unascribed `(pure x)` inside a combinator chain has an expected target. Tracked
+> in `docs/reported/m7-applicative-alternative-pure-empty-return-inference.md`.
+> **Traversable** `traverse` is an unused stub (NO instances) -- not a migration
+> blocker; type it when/if an instance is added (needs the nested-result work in
+> `docs/reported/m7-hkt-traverse-method-level-hkt-tyvar.md`). Phase 5
+> (carrier-bridge deletion) can proceed for the migrated classes once `pure`/
+> `empty` land.
+
 - **By-value HKT dispatch is the DEFAULT** (`g_m7_hkt_enabled = true`;
   `TUR_M7_HKT=0` opts back to the legacy carrier path). `bash tests/run.sh`
   (now by-value) and `TUR_M7_HKT=0 bash tests/run.sh` (carrier) both pass
