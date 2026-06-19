@@ -24,6 +24,35 @@ args to the carrier base (e.g. `__inst_Monad_bind_Option((int64_t)(intptr_t)(
 &__t54), ...)`).  Eliminating them is lever 2 (HKT method-call monomorphization).
 The original "~78" figure below is the pre-work historical baseline.
 
+### Lever 2 -- precise diagnostic (what blocks it; two suppression points)
+
+A probe of `emit_abi_register_call` over the live fixture
+`hkt-stdlib-option-result-instances` shows the direct HKT method calls split
+into two cases, and BOTH must be fixed to reach zero:
+
+1. **`bind` / `ap` get no `abi_bindings` from elab** (`n_bindings=0`), so
+   `emit_abi_register_call` early-returns and they stay on the carrier base.
+   This is an ELAB gap: the dispatch lowering for `bind`/`ap` does not attach the
+   element-type substitution the way `fmap`/`bimap`/`pure` do (`fmap` n=5,
+   `bimap` n=8, `pure` n=2).  Fix: attach `abi_bindings` to `bind`/`ap` dispatch
+   in elab_typeclasses.c (mirror the fmap path).
+2. **Even `fmap`/`bimap`/`pure` (which HAVE bindings) still emit only the carrier
+   base, no `fmap__spec`** -- so a second, EMIT-side suppression keeps HKT
+   instance-method specs from being minted/routed by value.  This is the M6/M7
+   carve-out (emit_module.c:785 leaves `typeclass_inst` NULL for HKT instances,
+   and the by-value method spec is not interned/routed).  Fix: for a DIRECT HKT
+   method call with concrete element bindings, mint a by-value method clone
+   (by-value container param + `tur_poly_fn_t` for the function args) and route
+   the call to it -- safe here because no fixture uses indirect dispatch.
+
+The body of such a clone is already handled by the construct half
+(construct-recovery for its `(some ...)`/`(ok ...)` tails) + the boundary
+bridges landed this session; lever 2 is purely about *minting and routing* the
+by-value method spec.  It is a two-sided (elab + emit) reversal of the carve-out
+for the direct-call case -- bounded (24 fixtures, 102 crossings) but touching the
+most delicate part of the HKT dispatch ABI, so it warrants its own focused pass
+rather than being rushed against the green gate.
+
 ## (Historical) Result: the bridge is still LOAD-BEARING (~78 crossings), all by-value Option/Result
 
 | shape | crossings (approx) |
