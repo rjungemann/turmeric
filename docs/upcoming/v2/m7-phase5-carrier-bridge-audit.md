@@ -88,6 +88,23 @@ making the continuation closure itself return a by-value container -- which is a
 fundamental change to the higher-order closure ABI, not a localized fix.  That
 is the genuine, empirically-validated floor for the final 102 crossings.
 
+**Third confirmation -- a CORRECT bind monomorphization proves the floor.**
+I then went further: fixed the bind miscompile properly.  The root cause was in
+`emit_expr.c`'s phase-F poly_fn invocation -- it cast the continuation `k.fn` to
+return the by-value struct (`Option__int (*)(...)`), but a `tur_poly_fn_t` thunk
+ALWAYS returns the int64 carrier, so the struct-vs-int64 return-ABI mismatch
+yielded `0`.  Calling through the int64 thunk ABI and bridging the carrier result
+to the concrete struct made the by-value `bind` spec build AND run correctly
+(21, not 0).  But **the crossing count went 12 -> 13, not down**: the
+`concrete->carrier` arg-spill at the call site is replaced by a
+`carrier->concrete` bridge on the continuation's result, because `k` still
+returns a carrier `Option` container.  Net-neutral.  This is the conclusive
+proof: no method-level monomorphization can remove the bind/ap crossings -- the
+continuation CLOSURE must itself return a by-value container (closure-result
+monomorphization).  Reverted (it adds complexity without reducing crossings);
+gate green at 1685/0.  The fix is, however, a real latent-miscompile finding for
+any future poly_fn returning an aggregate.
+
 ### (Historical) Lever 2 -- earlier diagnostic (what blocks it; two suppression points)
 
 A probe of `emit_abi_register_call` over the live fixture
