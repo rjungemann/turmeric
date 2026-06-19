@@ -17,11 +17,15 @@ description: Successor to the archived 2026-06-13 plan (`docs/archive/end-to-end
   `TUR_M7_HKT=0` opts back to the legacy carrier path). `bash tests/run.sh`
   (now by-value) and `TUR_M7_HKT=0 bash tests/run.sh` (carrier) both pass
   **1684/0**.
-- **Layer-4 by-value emit is hardened for 7 of 9 HKT method shapes** (Functor
+- **Layer-4 by-value emit is hardened for 8 of 9 HKT method shapes** (Functor
   `fmap`, Monad `bind`, Applicative `ap`+`pure`, Alternative `<|>`, Comonad
-  `extract`, Foldable `foldr`) -- reference probes in `v2/m7-hkt-probe-*.tur`.
-  Bifunctor `bimap` (two-param struct-tyvar leak) and Traversable `traverse`
-  (method-level HKT tyvar + nested result) are reported and remain carrier.
+  `extract`, Foldable `foldr`, **Bifunctor `bimap`** -- the full two-param
+  constructor case, fixed 2026-06-19 via struct-param grounding) -- reference
+  probes in `v2/m7-hkt-probe-*.tur`. Traversable `traverse` (method-level HKT
+  tyvar + nested result) remains reported/carrier. The one OTHER open two-param
+  facet is the PARTIAL-application wildcard instance head `(Result _ E)` (the
+  Functor-family Result migration blocker), tracked in
+  `docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`.
 - **First real stdlib class migrated: Foldable** (sig typed; sole instance `rc`
   carrier-essential). The remaining stdlib migration is now an INCREMENTAL,
   per-class effort with the default suite as the gate -- concrete sequencing +

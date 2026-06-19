@@ -1,0 +1,49 @@
+;; M7 HKT-dispatch reference probe #8 -- Bifunctor `bimap` / two-param
+;; constructor shape. NOT a test-suite fixture. Companion to the fmap / bind /
+;; ap / alt / pure / extract / foldr probes.
+;;
+;; `bimap` is the first shape over a TWO-parameter type constructor
+;; (`^^p`, kind * -> * -> *): both result element slots `c`/`d` are method
+;; tyvars recovered from the two mapper fns, and the result is `(p c d)`.
+;;     bimap [g : (fn [a] c) h : (fn [b] d) x : (p a b)] : (p c d)
+;;
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-bimap.tur; echo $?
+;;   (by-value HKT is now default-on, so the env var is optional)
+;;   -> 42  (TARGET, REACHED 2026-06-19)
+;;
+;; STATUS (2026-06-19): WORKING end-to-end -- exits 42 with a by-value
+;; `bimap2_Result__spec` (grep the emit-c output). Previously BLOCKED: the
+;; `if`-result temp was typed as the int64 carrier because the constructor's
+;; OWN second tyvar (`Result`'s `B`) leaked into the branch type
+;; (`(Result c B)` not `(Result c d)`) and could not be grounded.
+;;
+;; What fixed it (flag-gated, elab_typeclasses.c layer-4 attachment):
+;; STRUCT-PARAM GROUNDING. The by-value HKT instance-method spec now also binds
+;; the instance constructor's struct params positionally to the method result's
+;; element tyvars -- align `Result`'s `[A B]` with the applied result `(p c d)`'s
+;; `[c d]` and bind `A->value(c)`, `B->value(d)`. So a leaked struct tyvar
+;; (`B`) resolves through emit_resolve_type and the `if`-result temp grounds to
+;; `Result__int__int`. One-param constructors are inert (their single struct
+;; param maps to the single element and never leaks).
+;;
+;; STILL BLOCKED (separate symptom): a PARTIAL-application instance head with a
+;; wildcard -- `(definstance Functor [(Result _ E)])` -- still mangles to
+;; `Result__ltstruct_gt` and stays carrier (silent miscompile vs a by-value
+;; consumer). That is the Functor/Monad/Applicative [Result] migration blocker,
+;; tracked in docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md.
+
+(defclass MyBifunctor [^^p]
+  (bimap2 [g : (fn [a] c) h : (fn [b] d) x : (p a b)] : (p c d)))
+
+(definstance MyBifunctor [Result]
+  (bimap2 [g h x]
+    (if (.is-ok x)
+      (ok (g (.ok-val x)))
+      (err (h (.err-val x))))))
+
+(defn dbl [n : int] : int (* n 2))
+(defn inc [n : int] : int (+ n 1))
+
+(defn main [] : int
+  (let [r (bimap2 dbl inc (:: (ok 21) (Result int int)))]
+    (ok-val (:: r (Result int int)))))   ; TARGET: 42

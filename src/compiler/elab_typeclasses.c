@@ -5123,7 +5123,7 @@ resolved_user_fallback:;
         if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
             m7_byvalue_grounded &&
             tc->n_type_params >= 1 && tc->type_params[0]) {
-            uint8_t total = (uint8_t)(1 + m7_nb);
+            uint8_t total = (uint8_t)(1 + m7_nb + 4);  /* +4: struct-param grounding */
             if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
             AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
                 e->arena, total * sizeof(AbiTypeBinding));
@@ -5163,6 +5163,52 @@ resolved_user_fallback:;
                 bindings[bi].name = m7_bind_names[k]->name;
                 bindings[bi].type = m7_bind_types[k];
                 bi++;
+            }
+            /* M7 two-param-constructor grounding: a multi-param constructor
+             * (`(Result a b)`) leaks the STRUCT's OWN param tyvars (`A`/`B`) into
+             * the instance body's construct/if types when a branch constrains only
+             * one slot -- `(ok (g ...))` is `(Result c B)`, not `(Result c d)`, so
+             * the by-value emit can't ground `B` and falls back to the carrier.
+             * Bind each struct param positionally to the method result's element
+             * tyvar value: align the constructor's `type_params` [A,B] with the
+             * applied result `(p c d)`'s elements [c,d], and bind `A->value(c)`,
+             * `B->value(d)`.  This lets emit_resolve_type ground a leaked struct
+             * tyvar.  (One-param constructors: the single struct param maps to the
+             * single element and never leaks, so this is inert for fmap/bind/etc.) */
+            if (hkt_head.kind == TY_STRUCT && hkt_head.as.struct_.def &&
+                hkt_head.as.struct_.def->n_type_params >= 1 && m7_cm) {
+                const StructDef *sd = hkt_head.as.struct_.def;
+                /* Collect the method result's applied-element tyvar names,
+                 * left-to-right: `(p c d)` = app(app(p,c),d) -> spine args
+                 * [d,c] outermost-first; reverse to [c,d]. */
+                const char *res_elems[8]; uint8_t n_res = 0;
+                {
+                    Type spine_args[8]; uint8_t ns = 0;
+                    Type t = m7_cm->return_type;
+                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
+                        if (ns < 8) spine_args[ns++] = *t.as.app.arg;
+                        t = *t.as.app.fn;
+                    }
+                    for (int i = (int)ns - 1; i >= 0 && n_res < 8; i--)
+                        res_elems[n_res++] =
+                            (spine_args[i].kind == TY_TYVAR)
+                                ? spine_args[i].as.tyvar_.name : NULL;
+                }
+                for (uint8_t i = 0; i < sd->n_type_params && i < n_res &&
+                                    bi < total; i++) {
+                    const char *sp = sd->type_params[i];
+                    const char *re = res_elems[i];
+                    if (!sp || !re || strcmp(sp, re) == 0) continue;
+                    for (uint8_t k = 0; k < m7_nb; k++) {
+                        if (m7_bind_names[k] &&
+                            strcmp(m7_bind_names[k]->name, re) == 0) {
+                            bindings[bi].name = sp;
+                            bindings[bi].type = m7_bind_types[k];
+                            bi++;
+                            break;
+                        }
+                    }
+                }
             }
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = bi;

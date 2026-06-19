@@ -1,13 +1,35 @@
-# M7 HKT by-value two-param-constructor handling (blocks bimap AND the Functor-family Result instances)
+# M7 HKT by-value two-param-constructor handling (Symptom 1 / bimap RESOLVED; partial-app wildcard remains)
 
-**Summary.** The by-value HKT path cannot monomorphize instance methods that
-involve a **two-parameter** type constructor (`(Result a b)`, `(p a b)`). This
-now blocks not just Bifunctor `bimap` but the **Functor/Monad/Applicative/
-Alternative migrations**, because their `(Result _ B)` instance hits the same
-gap (verified 2026-06-19: Option migrates by-value cleanly; the Result instance
-does not). **This is the single highest-leverage M7 compiler task** -- fixing it
-unblocks the Result instances across the four high-value classes at once. Now
-the default by-value path is ON, so these reproduce without any env var.
+> **UPDATE (2026-06-19): Symptom 1 (the full two-param `bimap` shape) is FIXED.**
+> A by-value `bimap` over `[Result]` (both result slots are method tyvars) now
+> works end-to-end -- probe `docs/upcoming/v2/m7-hkt-probe-bimap.tur` exits 42
+> with a by-value `bimap2_Result__spec`, suite 1684/0. Fix: **struct-param
+> grounding** in the layer-4 attachment (`elab_typeclasses.c`) -- the by-value
+> HKT instance-method spec now also binds the instance constructor's struct
+> params positionally to the method result's element tyvars (`Result [A B]`
+> aligned with `(p c d)` -> bind `A->value(c)`, `B->value(d)`), so a leaked
+> struct tyvar resolves through `emit_resolve_type`. One-param constructors are
+> inert (single param maps to single element, never leaks).
+>
+> **STILL OPEN: Symptoms 2 + 3 -- the PARTIAL-application wildcard instance head**
+> `(definstance Functor [(Result _ E)])` (fixing one param, varying the other --
+> the Functor/Monad/Applicative/Alternative [Result] shape). It still mangles to
+> `__inst_..._Result__ltstruct_gt` (the `_` wildcard -> anonymous `<struct>`)
+> and the instance method stays the int64 carrier while the by-value consumer
+> reads `Result__int__int` -- a SILENT MISCOMPILE (probe returns 0, not 42). No
+> stdlib/fixture hits this yet (stdlib Functor still has the legacy `:int` sig),
+> so the suite is green; but it blocks the Functor-family Result migration. The
+> remaining work is the `_`-wildcard / partial-application instance-head handling
+> (consistent mangling + by-value spec interning for a partially-applied
+> constructor), distinct from the now-fixed full-two-param case.
+
+**Summary.** The by-value HKT path cannot monomorphize instance methods over a
+PARTIALLY-APPLIED multi-param constructor with a wildcard (`(Result _ B)`).
+(The full two-param case `(p a b)` -- bimap -- is fixed, see UPDATE above.)
+This blocks the **Functor/Monad/Applicative/Alternative migrations**, because
+their `(Result _ B)` instance hits it (verified 2026-06-19: Option migrates
+by-value cleanly; the Result instance does not). Now the default by-value path
+is ON, so these reproduce without any env var.
 
 ## Three distinct symptoms (all two-param-constructor by-value)
 
