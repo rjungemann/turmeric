@@ -3,12 +3,8 @@
 ## Reporting Bugs
 
 We are on **one track of work to the finish line of v1.** Forward progress
-toward that finish line takes priority: it is fine to land an intermediate
-change that introduces a known, scoped miscompile or failure when it moves
-the one track forward, and to fix it on the way to the line rather than
-blocking on it. The old "never ship a miscompile / works-by-luck is always a
-bug / stop the task and report before proceeding" gates were for a different
-time when a run averaged ~400 failures; they no longer apply.
+toward that finish line takes priority. Land changes that move the track
+forward; fix rough edges on the way to the line rather than blocking on them.
 
 When you hit a real bug, defect, or expressiveness hole that you are NOT
 fixing right now and that is worth not forgetting, a short note under
@@ -16,6 +12,15 @@ fixing right now and that is worth not forgetting, a short note under
 minimal repro, root cause with file:line when known, fix directions). But
 this is an aid, not a gate -- do not let it stop you from pressing on toward
 v1.
+
+### Test suites -- the default (by-value) path is the gate
+
+Turmeric has a single maintainer and no external consumers, so we do **not**
+need both the default suite and the legacy `TUR_M7_HKT=0` (carrier) suite to
+be green at once. The **default `bash tests/run.sh` (by-value) is the gate**;
+the carrier path is being superseded and may degrade as classes migrate to
+by-value -- that is expected, not a regression to chase. Do not hold the one
+track hostage to keeping the legacy carrier suite green.
 
 ### Archiving resolved reports -- STRICT RULE
 
