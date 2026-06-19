@@ -448,7 +448,7 @@
 ;;; Since: Phase HKT H5
 
 
-(defclass Bifunctor [^^f] (bimap [container fn-left fn-right] : int))
+(defclass Bifunctor [^^f] (bimap [container : (f a b) fn-left : (fn [a] c) fn-right : (fn [b] d)] : (f c d)))
 ;;; Display -- typeclass for human-readable string formatting.
 ;;;
 ;;; Parameters:

@@ -297,7 +297,10 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Bifunctor [Result]
-  (bimap [container fn-left fn-right] (result-bimap container fn-left fn-right)))
+  (bimap [container fn-left fn-right]
+    (if (.is-ok container)
+      (ok (fn-right (.ok-val container)))
+      (err (fn-left (.err-val container))))))
 ;; ---------------------------------------------------------------------------
 ;; Ok-biased kind-(* -> *) instances (stdlib-hkt-consolidation T4)
 ;;

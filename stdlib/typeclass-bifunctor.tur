@@ -9,4 +9,4 @@
 ;;; Since: stdlib-hkt-consolidation T1
 ;; Bifunctor -- map over both sides of a binary type constructor.
 ;;   bimap :: (a -> c) -> (b -> d) -> f a b -> f c d
-(defclass Bifunctor [^^f] (bimap [container fn-left fn-right] : int))
+(defclass Bifunctor [^^f] (bimap [container : (f a b) fn-left : (fn [a] c) fn-right : (fn [b] d)] : (f c d)))
