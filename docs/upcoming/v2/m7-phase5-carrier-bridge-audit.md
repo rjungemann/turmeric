@@ -9,7 +9,22 @@
 under `TUR_M3_AUDIT=1`. Ran `TUR_M3_AUDIT=1 tur emit-c` over every
 `tests/fixtures/*/input.tur` and aggregated.
 
-## Result: the bridge is still LOAD-BEARING (~78 crossings), all by-value Option/Result
+## PROGRESS UPDATE (2026-06-19, later same day)
+
+Two levers landed, both green at 1685/0:
+- **Construct-monomorphization half** (commit 5c8b725): constructs build by-value
+  at plain call sites; user-construct-site crossings eliminated.
+- **Dead-instance elimination**: skip unused auto-preloaded HKT instance
+  dicts+bases. **Suite-wide raw crossings dropped 1338 -> 102 (92%)**; the
+  bridge now fires in only **24 fixtures** (down from ~1300), all of which
+  genuinely call the stdlib Option/Result HKT methods directly.
+
+The remaining 102 are direct HKT method calls spilling by-value Option/Result
+args to the carrier base (e.g. `__inst_Monad_bind_Option((int64_t)(intptr_t)(
+&__t54), ...)`).  Eliminating them is lever 2 (HKT method-call monomorphization).
+The original "~78" figure below is the pre-work historical baseline.
+
+## (Historical) Result: the bridge is still LOAD-BEARING (~78 crossings), all by-value Option/Result
 
 | shape | crossings (approx) |
 | --- | --- |
