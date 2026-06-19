@@ -696,7 +696,15 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * monadic shapes (fn returning an applied HKT type) hit it.  See
      * docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
     Kind *eff_kinds = (Kind *)class_type_param_kinds;
-    if (g_m7_hkt_enabled) {
+    /* M7: collecting method-level element tyvars is a PARSE concern, independent
+     * of the by-value EMIT flag.  Un-gated so a typed HKT class signature
+     * (`(foldr [ta : (t a) ...] : b)`) parses in BOTH flag states -- flag-off it
+     * still parses and the emit treats the element types as the int64 carrier
+     * (the by-value emit paths remain gated on g_m7_hkt_enabled).  This is what
+     * lets a stdlib sig be migrated to the typed form without breaking the
+     * TUR_M7_HKT=0 opt-out's parse.  Inert for existing classes whose method
+     * signatures contain no method-level tyvars (eff_tp == class params). */
+    {
         enum { M7_MAX_TP = 16 };
         const Symbol **buf =
             (const Symbol **)arena_alloc(e->arena, M7_MAX_TP * sizeof(const Symbol *));

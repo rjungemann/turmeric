@@ -1196,11 +1196,27 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 if (body_cty && strcmp(body_cty, "int64_t") != 0)
                     struct_cty = body_cty;
             }
-            buf_printf(file,
-                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                "*__tur_ret_p = %s; "
-                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                struct_cty, struct_cty, struct_cty, ret_val);
+            if (g_m7_hkt_enabled && struct_cty &&
+                strcmp(struct_cty, "int64_t") == 0) {
+                /* M7 (flag-gated): the body already produced the carrier int64
+                 * handle -- e.g. a partial-application `(Result _ E)` instance
+                 * whose pure-Turmeric body lowered to the carrier `ok`/`err` (the
+                 * spill type stays int64 because the result element doesn't ground
+                 * by value).  There is nothing to box: malloc'ing another int64
+                 * and storing the handle into it DOUBLE-boxes (the by-value
+                 * consumer then reads a pointer-to-handle as the struct -> garbage,
+                 * the `(Result _ E)` fmr returning 0 for 42).  Return the carrier
+                 * value directly.  Gated on the flag because the legacy carrier
+                 * path (flag-off) relies on the existing spill shape (range-*
+                 * GADT fixtures). */
+                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+            } else {
+                buf_printf(file,
+                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_ret_p = %s; "
+                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                    struct_cty, struct_cty, struct_cty, ret_val);
+            }
         } else if (fd->body->type.kind == TY_FN &&
                    (result_kind == TY_INT || ret_is_int64_carrier)) {
             /* A function-typed body returned through the int64_t closure
