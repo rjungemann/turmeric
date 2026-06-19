@@ -1133,7 +1133,13 @@ genuine carrier)
 >   nested result) -- are reported with root causes; both are their own classes
 >   that are carrier-delegating / not required by the first stdlib migration wave
 >   (Functor/Monad/Applicative/Alternative on Option/Result/...), whose shapes are
->   all covered. **Next: the stdlib HKT class/instance migration (below).**
+>   all covered. **Next: the stdlib HKT class/instance migration -- concrete
+>   staged execution design now in
+>   [`docs/upcoming/v2/m7-stdlib-migration-execution.md`](v2/m7-stdlib-migration-execution.md)**
+>   (resolves the "how": a single coordinated flag-flip that upgrades all 9 class
+>   signatures at once but migrates bodies opportunistically -- inline-C carrier
+>   bodies are a valid resting state through the flip, verified, so bimap/traverse
+>   stay carrier without blocking it).
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT
