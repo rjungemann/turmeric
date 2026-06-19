@@ -52,10 +52,16 @@ fixing the previous:
 4. **Lambda-return propagation** (prototyped in `elab_fns.c`): an un-annotated
    lambda elaborated against an expected `(fn [A] (Parser B))` should push the
    fn-result as the body's expected type. Added -- still did not fire, because:
-5. **Generic-dispatch param erasure**: `then-parser`/`bind-parser` are generic
-   (`[A B]`), and their typed params `(Parser B)` ERASE to `int64` at the call
-   site, so neither the arg push (2) nor the lambda-return push (4) ever sees a
-   `(Parser _)` to propagate.
+5. **Generic-INSTANTIATION param erasure**: `then-parser`/`bind-parser` are
+   generic (`[A B]`). `defn` DOES populate `arg_full_types` from `param_poly_types`
+   (`elab_fns.c` ~2870, so the declared `(Parser B)` is captured at definition).
+   But at the CALL site the generic instantiation lowers the param's full type to
+   the `int64` carrier: a debug push confirmed `then-parser`'s `arg_full_types[1]`
+   reads `ppkind=TY_INT, ppc=int64_t` at the call, not `(Parser B)`. So neither
+   the arg push (2) nor the lambda-return push (4) ever sees a `(Parser _)` to
+   propagate. Fixing this means preserving the structured param type through
+   generic call-site instantiation (it currently collapses applied types to the
+   carrier when the type args are not yet inferred).
 6. **Opaque-type return-directed by-value (runtime)**: ascribing the 7 sites
    `(:: (pure x) (Parser int))` makes the fixture COMPILE, but it SEGFAULTS at
    runtime -- forcing a by-value `(Parser int)` on the opaque `Parser`
