@@ -369,7 +369,7 @@
 ;;   pure :: a -> f a
 ;;   ap   :: f (a -> b) -> f a -> f b
 
-(defclass Applicative [^f] (pure [x] : int) (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
+(defclass Applicative [^f] (pure [x : a] : (f a)) (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
 ;;; Monad -- typeclass for sequencing computations with bind.
 ;;;
 ;;; Parameters:
@@ -431,7 +431,7 @@
 ;;; Since: Phase HKT H7
 
 
-(defclass Alternative [^f] (empty [a] : int) (alt-or [x : (f a) y : (f a)] : (f a)))
+(defclass Alternative [^f] (empty [a] : (f a)) (alt-or [x : (f a) y : (f a)] : (f a)))
 ;;; SINCE: Phase HKT H5
 ;; Bifunctor — map over both sides of a binary type constructor.
 ;;   The canonical signature is:

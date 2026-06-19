@@ -232,7 +232,7 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Applicative [Option]
-  (pure [x] ```c return tur_some(x); ```)
+  (pure [x] (some x))
   (ap [ff fa]
     (if (some? ff)
       (if (some? fa)
@@ -259,6 +259,6 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Alternative [Option]
-  (empty [a] ```c (void)a; return 0; ```)
+  (empty [a] (none))
   (alt-or [x y]
     (if (some? x) x y)))

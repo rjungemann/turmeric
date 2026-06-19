@@ -9,4 +9,4 @@
 ;; Applicative -- container with a pure constructor and an ap combinator.
 ;;   pure :: a -> f a
 ;;   ap   :: f (a -> b) -> f a -> f b
-(defclass Applicative [^f] (pure [x] : int) (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
+(defclass Applicative [^f] (pure [x : a] : (f a)) (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))

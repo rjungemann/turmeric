@@ -1587,7 +1587,14 @@ Expr *elab_call(Elab *e, Form *call) {
      * instance is selected from the expected-type channel.  These methods did
      * not exist before tyvar-return parsing was added, so intercepting them
      * here cannot regress existing programs. */
-    {
+    /* Gate on `!fn_binding` so a user defn or local binding of the same name
+     * wins over a return-directed typeclass method -- mirroring the GHE1
+     * bare-method gating below.  Without this, migrating a class method to a
+     * return-directed by-value sig (e.g. Applicative `pure : (f a)`) would
+     * hijack an unrelated user `(defn pure ...)` (parsec-tutorial reimplements
+     * its own `pure`), routing the call to the wrong (carrier-representative)
+     * instance. */
+    if (!fn_binding) {
         bool rt_handled = false;
         Expr *rt = elab_try_return_dispatch(e, call, name, &rt_handled);
         if (rt_handled) return rt;

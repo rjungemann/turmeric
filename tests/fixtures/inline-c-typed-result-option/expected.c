@@ -3170,7 +3170,7 @@ static dict_Functor_Option dict_Functor_Option_singleton = {
 };
 
 static int64_t __inst_Applicative_pure_Option(int64_t x) {
-        return tur_some(x); 
+        return (int64_t)(intptr_t)some(x);
 }
 
 static int64_t __inst_Applicative_ap_Option(int64_t ff, int64_t fa) {
@@ -3225,7 +3225,7 @@ static dict_Monad_Option dict_Monad_Option_singleton = {
 };
 
 static int64_t __inst_Alternative_empty_Option(int64_t a) {
-        (void)a; return 0; 
+        return (int64_t)(intptr_t)none();
 }
 
 static int64_t __inst_Alternative_alt_hyor_Option(int64_t x, int64_t y) {
