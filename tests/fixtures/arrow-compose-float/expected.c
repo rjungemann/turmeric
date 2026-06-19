@@ -3440,7 +3440,7 @@ static dict_Arrow_T dict_Arrow_T_singleton = {
     .second = __inst_Arrow_second_arrow,
 };
 
-struct __env_1200 { int64_t __fn; void * f; };
+struct __env_1200 { tur_thunk_int64_t_int64_t_t __fn; void * f; };
 static int64_t __fn_1198(void * __env_p_1201, int64_t e) {
         struct __env_1200 *__env___env_1200 = (struct __env_1200 *)__env_p_1201;
         int64_t __t27 = 0;
@@ -3465,13 +3465,13 @@ static int64_t __fn_1198(void * __env_p_1201, int64_t e) {
 
 static void * __inst_ArrowChoice_left_arrow(void * f) {
         struct __env_1200 *__t28 = (struct __env_1200 *)malloc(sizeof(struct __env_1200));
-        __t28->__fn = (int64_t)(intptr_t)__fn_1198;
+        __t28->__fn = (tur_thunk_int64_t_int64_t_t)__fn_1198;
         __t28->f = f;
         void *__t29 = __t28;
         return __t29;
 }
 
-struct __env_1208 { int64_t __fn; void * f; };
+struct __env_1208 { tur_thunk_int64_t_int64_t_t __fn; void * f; };
 static int64_t __fn_1206(void * __env_p_1209, int64_t e) {
         struct __env_1208 *__env___env_1208 = (struct __env_1208 *)__env_p_1209;
         int64_t __t30 = 0;
@@ -3496,13 +3496,13 @@ static int64_t __fn_1206(void * __env_p_1209, int64_t e) {
 
 static void * __inst_ArrowChoice_right_arrow(void * f) {
         struct __env_1208 *__t31 = (struct __env_1208 *)malloc(sizeof(struct __env_1208));
-        __t31->__fn = (int64_t)(intptr_t)__fn_1206;
+        __t31->__fn = (tur_thunk_int64_t_int64_t_t)__fn_1206;
         __t31->f = f;
         void *__t32 = __t31;
         return __t32;
 }
 
-struct __env_1216 { int64_t __fn; void * f; void * g; };
+struct __env_1216 { tur_thunk_int64_t_int64_t_t __fn; void * f; void * g; };
 static int64_t __fn_1214(void * __env_p_1217, int64_t e) {
         struct __env_1216 *__env___env_1216 = (struct __env_1216 *)__env_p_1217;
         int64_t __t33 = 0;
@@ -3527,7 +3527,7 @@ static int64_t __fn_1214(void * __env_p_1217, int64_t e) {
 
 static void * __inst_ArrowChoice__pl_pl_pl_arrow(void * f, void * g) {
         struct __env_1216 *__t34 = (struct __env_1216 *)malloc(sizeof(struct __env_1216));
-        __t34->__fn = (int64_t)(intptr_t)__fn_1214;
+        __t34->__fn = (tur_thunk_int64_t_int64_t_t)__fn_1214;
         __t34->f = f;
         __t34->g = g;
         void *__t35 = __t34;
