@@ -1,13 +1,27 @@
 # M7 stdlib migration: Applicative/Alternative return-directed `pure`/`empty` inference
 
-> **PARTIALLY RESOLVED (2026-06-19).** The RECEIVER-style methods are now migrated
+> **DISPOSITION (2026-06-19): receiver methods migrated; `pure`/`empty` ACCEPTED
+> AS GENUINE CARRIER (Phase 4.2).** The RECEIVER-style methods are migrated
 > by-value: **`ap`** (`ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)`) and
-> **`alt-or`** (`alt-or [x : (f a) y : (f a)] : (f a)`) -- `Option`'s bodies are
-> pure Turmeric, combinator instances unchanged, suite 1685/0. Only the
-> **return-directed `pure`/`empty`** remain on the legacy `:int` carrier sig (this
-> report's subject); they are split out and left carrier so the receiver-style
-> migration could land. `pure`/`empty` still need the fix below before they too
-> can go by-value.
+> **`alt-or`** (`alt-or [x : (f a) y : (f a)] : (f a)`) -- `Option` bodies pure
+> Turmeric, combinator instances unchanged, suite 1685/0.
+>
+> The return-directed **`pure`/`empty`** are kept on the legacy `:int` carrier sig
+> as a deliberate Phase 4.2 disposition ("rewrite each helper in pure Turmeric OR
+> accept it as genuine carrier"). They are carrier-essential as the stdlib stands:
+> the class var appears ONLY in the result, so dispatch needs an expected target,
+> and the parser/goal/backtrack APIs erase their container/continuations to the
+> `:int`/`:fn` carriers -- an unascribed `(pure x)` in a combinator chain has no
+> `(f _)` to dispatch on. Making them by-value is NOT a localized fix: it is a
+> parser-library RETYPING pass (combinator args AND continuations typed
+> `(Parser A)` / `(fn [A] (Parser B))`) plus generic-dispatch type propagation
+> (a generic combinator's `(Parser B)` param currently erases to `int64` at the
+> call site). That retyping is the unit of work to flip `pure`/`empty` later; it
+> is out of scope for the by-value HKT migration itself and does not block it.
+>
+> **Phase 5 impact:** the carrier bridge can be TIGHTENED (removed for the
+> migrated classes) but the `pure`/`empty` carrier path stays until the retyping
+> lands -- consistent with the plan's "tighten/delete" wording.
 
 **Summary.** Migrating the return-directed `Applicative`/`Alternative` methods
 `pure` (`(pure [x : a] : (f a))`) and `empty` (`(empty [] : (f a))`) is blocked:
