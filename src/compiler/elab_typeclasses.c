@@ -1589,7 +1589,18 @@ static bool build_inst_type_suffix(const Type *type_args,
                     ctor_part = type_arg_syms[j]->name;
                 }
                 if (type_args[j].as.app.arg) {
-                    const char *n = type_name(*type_args[j].as.app.arg);
+                    const Type *aarg = type_args[j].as.app.arg;
+                    /* ECS E2d-P6: a parametric instance head's element is now a
+                     * NAMED TY_TYVAR (`A` in `(Dense A)`) where it used to be a
+                     * nameless null-def TY_STRUCT.  Render it with the legacy
+                     * abstract-struct token so the instance's mangled suffix
+                     * (and every emitted symbol/dict name keyed off it) stays
+                     * byte-identical across the representation change -- the
+                     * naming is only needed for the type-level projection, not
+                     * the C identifier.  A concrete element keeps its real
+                     * name. */
+                    const char *n = (aarg->kind == TY_TYVAR)
+                                        ? "<struct>" : type_name(*aarg);
                     if (n) arg_part = n;
                 }
                 char mctor[64], marg[64];
@@ -2094,11 +2105,26 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                            asb->type.as.adt_.def) {
                                     app_arg_type = asb->type;
                                 } else {
-                                    /* Unknown name — treat as opaque struct */
-                                    memset(&app_arg_type, 0, sizeof(app_arg_type));
-                                    app_arg_type.kind = TY_STRUCT;
-                                    app_arg_type.copy_kind = CK_MOVE;
-                                    app_arg_type.as.struct_.def = NULL;
+                                    /* Unknown name in an applied instance head
+                                     * (`A` in `(Dense A)`) is the instance's own
+                                     * type parameter -- a type *variable*, not a
+                                     * concrete opaque struct.  Record it as a
+                                     * NAMED TY_TYVAR (the same representation
+                                     * type_expr_from_form uses for class/sig type
+                                     * params) so its identity survives to the
+                                     * call site: the parametric associated-type
+                                     * projection (`(type Elem = A)`) and the
+                                     * abi-binding grounding both unify this head
+                                     * tyvar against the concrete receiver
+                                     * (`(Dense Pos)` => `A -> Pos`).  A nameless
+                                     * null-def struct here would erase `A` and
+                                     * carrier-collapse a struct element.  Many
+                                     * dispatch sites already accept either shape
+                                     * (the open-binder-skolems named-TYVAR
+                                     * migration); a concrete head arg still
+                                     * resolves to its real def via the branches
+                                     * above. */
+                                    app_arg_type = type_tyvar_named(akw->name);
                                 }
                             }
                         } else {
@@ -2688,6 +2714,38 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         bool *bound = tc->n_assoc_types > 0
             ? (bool *)arena_alloc(e->arena, tc->n_assoc_types * sizeof(bool)) : NULL;
         for (uint8_t k = 0; k < tc->n_assoc_types; k++) bound[k] = false;
+        /* ECS E2d-P6 (parametric associated-type element): collect the free
+         * tyvar names appearing in the instance head (e.g. `A` in `(Dense A)`)
+         * so a binding RHS that names one (`(type Elem = A)`) resolves to that
+         * NAMED TY_TYVAR rather than a nameless null-def struct.  Without this,
+         * `A` is an unknown symbol to type_expr_from_form (no type_params), the
+         * binding becomes an anonymous abstract struct, and the call-site
+         * projection can never correlate `Elem` with the receiver's element. */
+        const Symbol *head_tv_syms[16];
+        Kind head_tv_kinds[16];
+        uint8_t n_head_tv = 0;
+        for (uint8_t ta = 0; ta < n_type_args && n_head_tv < 16; ta++) {
+            const Type *sp = &type_args[ta];
+            while (sp && sp->kind == TY_APP) {
+                const Type *arg = sp->as.app.arg;
+                if (arg && arg->kind == TY_TYVAR && arg->as.tyvar_.name) {
+                    bool dup = false;
+                    for (uint8_t d = 0; d < n_head_tv; d++)
+                        if (head_tv_syms[d] &&
+                            strcmp(head_tv_syms[d]->name, arg->as.tyvar_.name) == 0) {
+                            dup = true; break;
+                        }
+                    if (!dup && n_head_tv < 16) {
+                        head_tv_syms[n_head_tv] = symtab_intern(e->st,
+                            strslice(arg->as.tyvar_.name,
+                                     (uint32_t)strlen(arg->as.tyvar_.name)));
+                        head_tv_kinds[n_head_tv] = KIND_STAR;
+                        n_head_tv++;
+                    }
+                }
+                sp = sp->as.app.fn;
+            }
+        }
         for (uint32_t bi = 0; bi < n_assoc_binds; bi++) {
             uint8_t idx = 0; bool found = false;
             for (uint8_t k = 0; k < tc->n_assoc_types; k++) {
@@ -2701,7 +2759,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                           assoc_bind_names[bi]->name, tc_name->name);
                 return NULL;
             }
-            Type *rt = type_expr_from_form(e, assoc_bind_forms[bi], NULL, NULL, NULL, 0);
+            Type *rt = type_expr_from_form(e, assoc_bind_forms[bi], NULL,
+                                           n_head_tv > 0 ? head_tv_syms : NULL,
+                                           n_head_tv > 0 ? head_tv_kinds : NULL,
+                                           n_head_tv);
             if (!rt) {
                 diag_emit(DIAG_ERROR, assoc_bind_forms[bi]->span,
                           "definstance: unsupported type for associated type '%s'",
@@ -3379,6 +3440,24 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * site receives the named applied head + element tyvar to refine, instead
          * of an anonymous `(type-app ? ?)`. */
         else if (g_m7_hkt_enabled && return_type.kind == TY_APP) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = return_type;
+            fn_type.as.fn.result_full_type = rft;
+        }
+        /* ECS E2d-P6 (parametric associated-type element): a PARAMETRIC instance
+         * such as `(definstance StorageOps [(Dense A)] (type Elem = A) ...)`
+         * projects the method's `: Elem` return to the instance head's own tyvar
+         * `A` (Phase RT's assoc-type substitution above resolves `Elem -> A`, a
+         * *named* TY_TYVAR -- not a concrete struct, so the by-value branch above
+         * does not fire).  Carry that named tyvar through result_full_type so the
+         * call site can recover the concrete element type by instantiating `A`
+         * through the receiver's bindings (`(Dense Pos)` => `A -> Pos`), exactly
+         * the way emit_abi_register_call's bare-tyvar-result recovery expects a
+         * NAMED generic_result.  Without the name, result_kind=TY_TYVAR lowers to
+         * an anonymous tyvar that no binding can substitute, so a struct element
+         * stays carrier-collapsed.  Concrete instances (`Elem = Pos`) already took
+         * the by-value branch; this only adds the parametric case. */
+        else if (return_type.kind == TY_TYVAR && return_type.as.tyvar_.name) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = return_type;
             fn_type.as.fn.result_full_type = rft;
@@ -5069,6 +5148,35 @@ resolved_user_fallback:;
                   rft->as.adt_.def->n_type_params == 0))) {
                 result_type = *rft;
             }
+            /* ECS E2d-P6 (parametric associated-type element): the impl's
+             * result_full_type is the instance head's own tyvar (`A`, threaded
+             * above for `(definstance StorageOps [(Dense A)] (type Elem = A))`).
+             * Ground it through the receiver: unify the matched instance's head
+             * (`(Dense A)`) against the call-site receiver (`(Dense Pos)`) to bind
+             * `A -> Pos`, then substitute into `A`.  When that grounds to a
+             * non-parametric struct/ADT, commit it (with def) so a struct element
+             * carries its precise type to the call site -- `(.field (storage-get
+             * ...))` resolves and a struct round-trips by value through the spec
+             * minted below (the abi_bindings attachment grounds the same `A`). */
+            else if (rft && rft->kind == TY_TYVAR && rft->as.tyvar_.name &&
+                     best_inst && best_inst->n_type_args >= 1) {
+                const Symbol *hb_names[8];
+                Type hb_types[8];
+                uint8_t hb_n = 0;
+                m7_collect_tyvar_bindings(e, best_inst->type_args[0],
+                                          obj_orig_type, hb_names, hb_types,
+                                          &hb_n, 8);
+                if (hb_n > 0) {
+                    Type grounded = elab_subst_class_tyvars(
+                        e->arena, *rft, hb_names, hb_n, hb_types, hb_n);
+                    if ((grounded.kind == TY_STRUCT && grounded.as.struct_.def &&
+                         grounded.as.struct_.def->n_type_params == 0) ||
+                        (grounded.kind == TY_ADT && grounded.as.adt_.def &&
+                         grounded.as.adt_.def->n_type_params == 0)) {
+                        result_type = grounded;
+                    }
+                }
+            }
         }
         /* Arrow-identity passthrough: the method's declared return is the arrow
          * class variable (a boxed arity-0 TY_FN shell) and its body is a bare
@@ -5295,12 +5403,37 @@ resolved_user_fallback:;
             }
         }
         if (!is_hkt && tc->n_type_params == 1 && tc->type_params[0]) {
+            /* ECS E2d-P6 (parametric associated-type element): besides binding
+             * the class var (`S -> (Dense Pos)`), also bind the matched
+             * instance's OWN head tyvars by unifying its head (`(Dense A)`)
+             * against the receiver (`(Dense Pos)`) -> `A -> Pos`.  The instance
+             * method's param/return types are written in terms of `A` (the
+             * `: Elem` associated member projects to it), so without these
+             * bindings emit_abi_register_call sees nothing to substitute, mints
+             * no by-value spec, and the struct element stays on the int64
+             * carrier (`storage-get` returns int64_t, `storage-insert!` takes
+             * int64_t v).  Grounding `A` lets the spec emit a by-value signature
+             * and monomorphize the body's `dense-get`/`dense-set!` to the struct.
+             * Inert for an int element (`A -> int` is the carrier identity) and
+             * for a concrete instance head (no head tyvars to collect). */
+            const Symbol *hb_names[ABI_TYPE_BINDINGS_MAX];
+            Type hb_types[ABI_TYPE_BINDINGS_MAX];
+            uint8_t hb_n = 0;
+            if (best_inst->n_type_args >= 1)
+                m7_collect_tyvar_bindings(e, best_inst->type_args[0],
+                                          obj_orig_type, hb_names, hb_types,
+                                          &hb_n, ABI_TYPE_BINDINGS_MAX - 1);
+            uint8_t total = (uint8_t)(1 + hb_n);
             AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
-                e->arena, sizeof(AbiTypeBinding));
+                e->arena, total * sizeof(AbiTypeBinding));
             bindings[0].name = tc->type_params[0]->name;
             bindings[0].type = obj_orig_type;
+            for (uint8_t k = 0; k < hb_n; k++) {
+                bindings[1 + k].name = hb_names[k]->name;
+                bindings[1 + k].type = hb_types[k];
+            }
             out->as.call_.abi_bindings = bindings;
-            out->as.call_.n_abi_bindings = 1;
+            out->as.call_.n_abi_bindings = total;
         }
         /* M7 layer-4 prep (flag-gated): for an HKT class, attach the class var
          * (`g -> Option`) plus the element tyvars collected by layers 1+3

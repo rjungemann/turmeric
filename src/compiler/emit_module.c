@@ -1608,7 +1608,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         bool ambiguous = false;
         for (uint8_t i = 0; i < n_spec_args && !ambiguous; i++) {
             if (arg_types[i].kind == TY_APP
-                && strcmp(type_c_name(arg_types[i]), "int64_t") == 0) {
+                && strcmp(type_c_name(arg_types[i]), "int64_t") == 0
+                /* ECS E2d-P6: a FULLY-RESOLVED applied opaque carrier (`(Dense
+                 * Pos)`) c-names to int64_t but is NOT ambiguous -- it is a
+                 * genuine carrier handle whose element type is concrete.  Only a
+                 * residual *free named tyvar* in the spine (`(Dense A)`) signals
+                 * the unresolved-tyvar phantom the guard guards against.  Without
+                 * this refinement a parametric instance method dispatched at a
+                 * concrete struct element (`storage-get` on `(Dense Pos)`, whose
+                 * only ABI change is the by-value `Pos` result) is wrongly forced
+                 * back onto the carrier, re-collapsing the struct element. */
+                && emit_abi_type_has_concrete_named_tyvar(&arg_types[i])) {
                 ambiguous = true;
             }
         }

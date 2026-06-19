@@ -12,7 +12,12 @@ severity: Medium-High. A monomorphic helper that drives a `(Dense Pos)`
   carrier read/writes only 8 bytes and silently corrupts. This is the open
   follow-up the ECS plan gates "routing `defcomponent-accessors` through
   `StorageOps`" against.
-status: OPEN
+status: RESOLVED -- see "Resolution" below. The parametric `(Dense A)` instance
+  now projects a struct element by value end to end: `(.field (storage-get s
+  i))` resolves, and a 2-field struct round-trips through get/insert with a
+  per-element by-value spec (`__TUR_TY_A__ = Pos`) instead of carrier-collapsing
+  to the first int64 word. Regression: `tests/fixtures/typeclass-assoc-type-
+  parametric-struct-element/`.
 ---
 
 # Parametric `StorageOps [(Dense A)]` carrier-collapses a struct `Elem`
@@ -160,3 +165,54 @@ associated-type element through it.
   through `StorageOps`" residual follow-up).
 - `../turmeric-spices/spices/ecs/src/ecs/storage-ops.tur` (the shipped
   parametric instance + its "carrier note / element scope" caveat).
+
+## Resolution
+
+Fixed by giving the parametric instance head element a real type-variable
+identity and threading it through both the elaborator's value-level projection
+and the emit-side per-instantiation spec machinery (Track A). Five coordinated
+changes:
+
+`src/compiler/elab_typeclasses.c`:
+
+1. **Head element is a named tyvar.** An unknown applied-instance-head arg
+   (`A` in `(Dense A)`) is recorded as `type_tyvar_named("A")` instead of a
+   nameless null-def `TY_STRUCT`, so `A`'s identity survives to the call site
+   (mirrors the open-binder-skolems named-TYVAR migration).
+2. **Associated binding resolved in head-tyvar scope.** The collected head
+   tyvar names are passed to `type_expr_from_form` when resolving
+   `(type Elem = A)`, so `Elem` binds to the named `TY_TYVAR "A"` rather than
+   an anonymous abstract struct.
+3. **Impl carries the tyvar return.** When the projected method return is a
+   named `TY_TYVAR`, it is threaded through `result_full_type` (the existing
+   by-value branches only handled concrete struct/ADT/HKT-app returns).
+4. **Call-site result projection.** `elab_method_call` unifies the matched
+   instance head (`(Dense A)`) against the receiver (`(Dense Pos)`) to ground
+   `A -> Pos`, substitutes into the tyvar `result_full_type`, and commits the
+   resulting non-parametric struct/ADT (with def) -- so `(.field ...)` resolves
+   and a let-bound `p : Pos` lowers by value.
+5. **abi_bindings carry the head tyvars.** The non-HKT dispatch-call
+   `abi_bindings` attach the grounded head tyvars (`A -> Pos`) alongside the
+   class var, so `emit_abi_register_call` mints a by-value spec whose `v : Elem`
+   arg and `Elem` result instantiate to `Pos` and whose inner
+   `dense-get`/`dense-set!` calls monomorphize `__TUR_TY_A__ = Pos`.
+
+`src/compiler/emit_module.c`:
+
+6. **M4 ambiguity guard tightened.** A fully-resolved applied opaque carrier
+   (`(Dense Pos)`) c-names to `int64_t` but is not the unresolved-tyvar phantom
+   the guard guards against; the guard now fires only when the TY_APP arg still
+   carries a free named tyvar (`emit_abi_type_has_concrete_named_tyvar`).
+   Without this the storage-get spec (whose only ABI change is the by-value
+   `Pos` result) was wrongly forced back onto the carrier.
+
+A representation/identifier coupling left behind by step 1 (the instance-suffix
+mangler renders the named tyvar via the legacy `"<struct>"` token to keep every
+existing instance's C symbol name byte-identical) is tracked separately in
+`docs/reported/instance-suffix-mangler-tyvar-element-legacy-struct-token.md`.
+
+**Validation:** the minimal repro compiles and prints all struct fields; a
+2-field `Pos` round-trips (`x=42`, `y=99`) where the carrier path would have
+read only the first 8 bytes. Full suite: 1688 passed, with the single remaining
+failure (`errors/ecs-defsystem-writes-unauthorized`) being the pre-existing
+spices-main diagnostic-sync issue, unrelated to this change.
