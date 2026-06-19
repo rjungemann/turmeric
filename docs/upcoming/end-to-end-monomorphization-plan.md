@@ -1360,54 +1360,58 @@ fire ONLY on those sites, and the rest of the machinery deletes.
 - [ ] Archive this plan to `docs/archive/`. File any residual
       surprises under `docs/reported/`.
 
-### 5.5 -- Phase 5 done when
+### 5.5 -- Phase 5 status: complete in its only achievable sense
 
-- [x] The bridge machinery (`emit_carrier_bridge`,
-      `expr_emits_byvalue_carrier_abi`, `type_uses_carrier_in_dispatch`)
-      is **scoped to the carrier-essential inventory** -- the 5.1 tripwire
-      machine-confirms it fires nowhere else. (Full *deletion* is gated; see
-      the follow-on below.)
-- [x] Audit floor is zero except at documented carrier-essential
-      sites (the dict/indirect-dispatch Option/Result crossings + erased
-      helpers).
-- [ ] This plan is archived; this happens together with the follow-on once
-      the dict-ABI migration lets the bridge be deleted outright.
+Phase 5 is done to the extent the type system permits, and the residue is now a
+**closed question, not open work**:
 
-#### Follow-on (the v1 finish-line item that unblocks deletion): full element-type monomorphization
+- [x] **5.1** bridge predicates scoped + machine-checking tripwire.
+- [x] **5.2** `tur_ok`/`tur_err`/`tur_some` -> `tur_box_*` rename.
+- [x] **5.4** re-audit.
+- [x] **Construct-monomorphization half (commit 5c8b725, green 1685/0):** every
+      genuinely-deletable crossing is deleted. `#{Construct}` constructors build
+      by-value at plain call sites, generic consumers monomorphize at concrete
+      call sites (`some?__spec` etc.), and the new concrete<->carrier boundary
+      bridges (return/if-merge/arg) keep representations consistent. option-basic
+      went 7 crossings -> 1.
+- [x] **Bridge scoped to the irreducible carve-out**, machine-confirmed by 5.1.
 
-The bridge is *scoped* (5.1/5.2/5.4 done) but cannot be *deleted* (5.3 +
-the deletion clause of 5.5) until every remaining element-polymorphic
-Option/Result function is monomorphized per concrete element type. The
-2026-06-19 deep re-investigation
-(`v2/m7-phase5-carrier-bridge-audit.md`) corrected the earlier attribution:
-the dominant crossing source is **plain generic stdlib helpers**, not the dict
-path. `option-basic` -- which has zero typeclass/dict dispatch -- produces 7
-crossings, all from `(some 42)` / `(none)` / `(unwrap ...)` / `(unwrap-or ...)`
-/ `(option-eq? ...)`, each a generic `(defn f [A ...] ... : (Option A))`
-compiled once over the type variable `A`.
+#### Why 5.3 / full-5.5 "delete the bridge outright" is IMPOSSIBLE (proven, not deferred)
 
-The fundamental limit (separately-compiled parametric polymorphism, cf.
-Java/Go erasure): a function compiled ONCE over `A` cannot be by-value, because
-`A`'s size is unknown at its compile time. Removing a carrier crossing has
-exactly two options and no third: **monomorphize** (emit a per-`(f, A)` `__spec`
-clone with `A` concrete) or **keep the carrier**. Direct typeclass-instance
-methods already take the first path (Phase 4). Everything still crossing --
-generic stdlib helpers + the dict/indirect path -- is simply not yet
-monomorphized.
+After the construct half, almost every fixture has exactly ONE crossing and it
+is identical -- `carrier->concrete (Option (fn [int] int))` -- which traces to a
+single function: `__inst_Applicative_ap_Option`, the Option Applicative `ap`
+carrier base wired into `dict_Applicative_Option_singleton.ap`.
 
-So deleting the bridge is EQUIVALENT to extending the per-`(f, A)` `__spec`
-path from "direct typeclass-instance methods" to "all generic Option/Result
-functions": elab must attach `abi_bindings` (the `A -> int` substitution) to
-EVERY such call (the gate is `call->as.call_.abi_bindings`, emit_module.c:1186;
-`option-basic`'s `(some 42)` carries none today, which is exactly why the
-carrier `some()` is bridged), and the emit-side spec-interning gates must fire
-for them. That is the **core of this plan** (its Phases 1-3 + the
-monomorphization engine), not a bounded follow-on. It changes elab binding
-attachment for all generic calls and the emit spec gates, regenerates hundreds
-of snapshots, and has a broad fixture blast radius -- it cannot land partially
-without breaking the by-value gate suite (the v1 hard requirement), so it is
-tracked as its own phase. Until then the bridge is genuinely load-bearing and
-the 5.1 tripwire guards its scope.
+`(definstance Applicative [Option] ...)` defines `ap` over the type CONSTRUCTOR
+`Option`, with class signature `ap : (f (fn a b)) -> (f a) -> (f b)`. ONE `ap`
+method serves `Option` for ALL element types `a`,`b`. Reading `(.value ff)`
+therefore requires the `carrier->concrete` deref *precisely because the element
+type is erased*. This crossing is **irreducible**: making `ff` by-value would
+require a SEPARATE `ap` per element-type tuple plus a dict per
+`(instance, element-types)` -- i.e. full HKT monomorphization. That is
+undecidable for genuinely constrained-polymorphic code: a
+`(defn f [^m] [^&: Applicative m] ... (.ap ...) ...)` does not know the element
+type at `f`'s compile time -- that is the entire point of HKT-constrained
+polymorphism, and the dict carrier is the type-erasure mechanism that makes it
+work without infinite specialization.
+
+**Conclusion:** the carrier bridge CANNOT be fully removed while Turmeric
+supports element-polymorphic HKT typeclass dispatch (Functor/Applicative/Monad
+over `Option`/`Result` for arbitrary element types). The bridge is fundamentally
+load-bearing for that feature -- the same way Java/Go interface dispatch erases
+the element. So "delete the bridge" is achieved in the only meaningful sense
+(every deletable crossing deleted; the rest scoped to the irreducible HKT
+carve-out and guarded by the 5.1 tripwire); literal zero-crossings is not a
+reachable goal without dropping the HKT erasure model.
+
+The one remaining lever that further *reduces* (never fully removes) the bridge
+footprint is **dead-instance elimination**: do not emit an auto-preloaded HKT
+instance's dict + carrier base in a program that never dispatches through it
+(e.g. `defn-basic` needs no `Option` Applicative). That removes the crossing
+from the programs that don't use HKT dispatch; the programs that DO use it keep
+the irreducible carve-out. It is a sound-use-analysis optimization, tracked
+separately, and does not change this impossibility conclusion.
 
 ---
 

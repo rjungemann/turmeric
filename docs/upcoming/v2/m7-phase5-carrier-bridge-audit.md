@@ -170,14 +170,30 @@ construct sites + generic consumers monomorphize at concrete call sites); the
 1319 distinct deletable crossings.  The irreducible remainder is exactly the
 **dict carve-out**.  Two independent levers remain, neither yet pulled:
 
-1. **Dead-instance elimination** -- do not emit an auto-preloaded HKT instance's
-   dict + carrier base in a program that never dispatches through it (defn-basic
-   needs no Option Applicative).  This drops the crossing from the ~1300
-   fixtures that don't use it, but keeps the bridge machinery for those that do.
-2. **Dict-ABI monomorphization** -- lower the dispatch-dict slots from the int64
-   carrier to per-instance by-value signatures so the `ap`/`fmap`/`bind` bases
-   take `Option__A` by value and need no deref.  This is the genuine deletion of
-   the remaining crossings, and the larger change.
+1. **Dead-instance elimination** (REDUCES, never fully removes) -- do not emit an
+   auto-preloaded HKT instance's dict + carrier base in a program that never
+   dispatches through it (defn-basic needs no Option Applicative).  This drops
+   the crossing from the ~1300 fixtures that don't use it, but keeps the bridge
+   machinery for those that do.  Sound-use-analysis optimization; tracked
+   separately.
+2. **Dict-ABI monomorphization is IMPOSSIBLE here, not merely large.** The
+   `ap`/`fmap`/`bind` Option/Result bases are defined over the type CONSTRUCTOR
+   (`(definstance Applicative [Option] ...)`, `ap : (f (fn a b)) -> (f a) -> (f
+   b)`): ONE method serves all element types `a`,`b`, so its `ff` param CANNOT be
+   typed `Option__A` for a single concrete `A` -- the element is erased by
+   design.  Making it by-value would require a separate `ap` per element-type
+   tuple + a dict per `(instance, element-types)`, i.e. full HKT monomorphization,
+   which is undecidable for constrained-polymorphic code (`(defn f [^m] [^&:
+   Applicative m] ... .ap ...)` does not know the element type).  The dict
+   carrier IS the type-erasure mechanism for element-polymorphic HKT dispatch, so
+   this crossing is irreducible while the HKT feature exists.
+
+**Therefore full carrier-bridge deletion is impossible** without dropping
+element-polymorphic HKT typeclass dispatch.  The bridge is genuinely
+load-bearing for that feature; "delete the bridge" is complete in the only
+achievable sense (every deletable crossing deleted via the construct half; the
+remainder scoped to the irreducible HKT carve-out and guarded by the 5.1
+tripwire).
 
 ### The conclusive architectural constraint (why this is genuinely structural)
 
