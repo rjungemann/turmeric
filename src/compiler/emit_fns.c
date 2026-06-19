@@ -319,11 +319,34 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 
     /* Default: emit as a value and return it. */
     char *v = emit_fat_return_value(ctx, body, fn_e, e);
-    indent_buf(body, ctx->indent);
     if (e->type.kind == TY_NIL) {
         free(v);
         v = strdup(result_kind == TY_BOOL ? "false" : "0");
     }
+    /* Phase 5 carrier-bridge deletion (concrete->carrier tail return): this
+     * tail is emitted in a function/closure whose C return is the uniform int64
+     * carrier but the tail value is now a by-value Option/Result struct (a
+     * monomorphized #{Construct} spec).  Heap-spill it back to the int64 carrier
+     * (a stack spill would return a dangling address).  Guard fires only for an
+     * actual by-value carrier producer, so plain int tails and not-yet-
+     * monomorphized carrier producers are untouched. */
+    Type tail_bv = (!is_main && result_kind == TY_INT && e->type.kind != TY_NIL &&
+                    e->type.kind != TY_NEVER &&
+                    fn_body_tail_emits_byvalue_carrier_abi(ctx, e))
+        ? fn_body_tail_byvalue_carrier_type(ctx, e)
+        : type_simple(TY_UNKNOWN, CK_COPY);
+    if (tail_bv.kind != TY_UNKNOWN) {
+        const char *cty = emit_type_c_name(ctx, tail_bv);
+        indent_buf(body, ctx->indent);
+        buf_printf(body,
+            "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+            "*__tur_ret_p = %s; "
+            "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+            cty, cty, cty, v);
+        free(v);
+        return;
+    }
+    indent_buf(body, ctx->indent);
     if (is_main && result_kind == TY_INT)
         buf_printf(body, "return (int)%s;\n", v);
     else
@@ -1274,6 +1297,29 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             indent_buf(file, ctx->indent);
             buf_printf(file, "return %s;\n", bridged);
             free(bridged);
+        } else if (ret_is_int64_carrier && fd->body
+                   && fd->body->type.kind != TY_NEVER
+                   && fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)
+                   && fn_body_tail_byvalue_carrier_type(ctx, fd->body).kind != TY_UNKNOWN) {
+            /* Phase 5 carrier-bridge deletion (concrete->carrier return): the C
+             * return is the uniform int64 carrier (a lifted lambda thunk in a
+             * poly_fn slot, or a generic carrier base) but the body tail now
+             * produces a by-value Option/Result struct (a monomorphized
+             * #{Construct} spec like `some__spec`).  Heap-spill the struct and
+             * return its pointer as int64 -- the SAME malloc spill the
+             * inst_method_carrier_spill path uses, so the carrier consumer
+             * (which derefs a {is_some,value}/{is_ok,...} layout) reads it
+             * correctly.  A stack spill (emit_carrier_bridge concrete->carrier)
+             * would return a dangling address, so it is NOT used here.  The
+             * concrete type comes from the matched spec, since the construct's
+             * own e->type is collapsed to the int64 carrier. */
+            Type src = fn_body_tail_byvalue_carrier_type(ctx, fd->body);
+            const char *cty = emit_type_c_name(ctx, src);
+            buf_printf(file,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                cty, cty, cty, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

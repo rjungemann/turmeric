@@ -4672,28 +4672,25 @@ int main(int argc, char **argv) {
         }
         printf("%lld\n", (long long)(unwrap_hyor_hydefault(wrap_some__spec__Option__int_int64_t(INT64_C(7)), INT64_C(0))));
         printf("%lld\n", (long long)(float_hy_gtint((unwrap_hyor_hydefault_hyf(wrap_some__spec__Option__float_double(3.25), 0.0)) * (100.0))));
-        tur_option_t *__t54 = (tur_option_t *)(intptr_t)(some(INT64_C(7)));
-        int64_t *__t55 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t55[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
-        __t55[1] = (int64_t)(intptr_t)pos_hyi_qu;
-        void *__t56 = __t55;
-        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool((__t54 ? (Option__int){.is_some = __t54->is_some, .value = __t54->value} : (Option__int){0}), (int64_t)(intptr_t)(__t56)), INT64_C(11))));
-        tur_option_t *__t57 = (tur_option_t *)(intptr_t)(some(INT64_C(-3)));
+        int64_t *__t54 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t54[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
+        __t54[1] = (int64_t)(intptr_t)pos_hyi_qu;
+        void *__t55 = __t54;
+        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool(some__spec__Option__int_int64_t(INT64_C(7)), (int64_t)(intptr_t)(__t55)), INT64_C(11))));
+        int64_t *__t56 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t56[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
+        __t56[1] = (int64_t)(intptr_t)pos_hyi_qu;
+        void *__t57 = __t56;
+        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool(some__spec__Option__int_int64_t(INT64_C(-3)), (int64_t)(intptr_t)(__t57)), INT64_C(11))));
         int64_t *__t58 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t58[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t;
-        __t58[1] = (int64_t)(intptr_t)pos_hyi_qu;
+        __t58[0] = (int64_t)(intptr_t)__tur_fatshim_bool_double;
+        __t58[1] = (int64_t)(intptr_t)pos_hyf_qu;
         void *__t59 = __t58;
-        printf("%lld\n", (long long)(unwrap_hyor_hydefault(keep_if__spec__Option__int_Option__int_bool((__t57 ? (Option__int){.is_some = __t57->is_some, .value = __t57->value} : (Option__int){0}), (int64_t)(intptr_t)(__t59)), INT64_C(11))));
-        tur_option_t *__t60 = (tur_option_t *)(intptr_t)(some(((union { double s; int64_t d; }){.s = -2.5}).d));
-        int64_t *__t61 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t61[0] = (int64_t)(intptr_t)__tur_fatshim_bool_double;
-        __t61[1] = (int64_t)(intptr_t)pos_hyf_qu;
-        void *__t62 = __t61;
-        printf("%lld\n", (long long)(float_hy_gtint((unwrap_hyor_hydefault_hyf(keep_if__spec__Option__float_Option__float_bool((__t60 ? (Option__float){.is_some = __t60->is_some, .value = ((union { int64_t s; double d; }){.s = __t60->value}).d} : (Option__float){0}), (int64_t)(intptr_t)(__t62)), 4.5)) * (100.0))));
+        printf("%lld\n", (long long)(float_hy_gtint((unwrap_hyor_hydefault_hyf(keep_if__spec__Option__float_Option__float_bool(some__spec__Option__float_double(-2.5), (int64_t)(intptr_t)(__t59)), 4.5)) * (100.0))));
         puts((some_qu(none())) ? "true" : "false");
-        int64_t __t63;
-        __t63 = INT64_C(0);
-        return (int)__t63;
+        int64_t __t60;
+        __t60 = INT64_C(0);
+        return (int)__t60;
 }
 
 static bool some___spec__bool_Option__opaque(Option__opaque o) {
@@ -4717,19 +4714,19 @@ static Option__float some__spec__Option__float_double(double x) {
 }
 
 static Option__int keep_if__spec__Option__int_Option__int_bool(Option__int o, int64_t pred) {
-        Option__int __t64;
+        Option__int __t61;
         if ((o).is_some) {
-            Option__int __t65;
+            Option__int __t62;
             if ((*( tur_thunk_bool_int64_t_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (o).value)) {
-                __t65 = o;
+                __t62 = o;
             } else {
-                __t65 = none__spec__Option__int();
+                __t62 = none__spec__Option__int();
             }
-            __t64 = __t65;
+            __t61 = __t62;
         } else {
-            __t64 = none__spec__Option__int();
+            __t61 = none__spec__Option__int();
         }
-        return __t64;
+        return __t61;
 }
 
 static Option__int none__spec__Option__int() {
@@ -4737,19 +4734,19 @@ static Option__int none__spec__Option__int() {
 }
 
 static Option__float keep_if__spec__Option__float_Option__float_bool(Option__float o, int64_t pred) {
-        Option__float __t66;
+        Option__float __t63;
         if ((o).is_some) {
-            Option__float __t67;
+            Option__float __t64;
             if ((*( tur_thunk_bool_double_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (o).value)) {
-                __t67 = o;
+                __t64 = o;
             } else {
-                __t67 = none__spec__Option__float();
+                __t64 = none__spec__Option__float();
             }
-            __t66 = __t67;
+            __t63 = __t64;
         } else {
-            __t66 = none__spec__Option__float();
+            __t63 = none__spec__Option__float();
         }
-        return __t66;
+        return __t63;
 }
 
 static Option__float none__spec__Option__float() {

@@ -4617,11 +4617,11 @@ static int64_t sum_hyvals(MutableMap__int__int * m, int64_t i, int64_t cap, int6
         if ((i) == (cap)) {
             return acc;
         } else {
-            if (mutmap_hyslot_hyoccupied_qu((int64_t)(intptr_t)(m), i)) {
+            if (mutmap_hyslot_hyoccupied_qu((int64_t)(intptr_t)((int64_t)(intptr_t)(m)), i)) {
                 MutableMap__int__int * __t52 = m;
                 int64_t __t53 = (i) + (INT64_C(1));
                 int64_t __t54 = cap;
-                int64_t __t55 = (acc) + (mutmap_hyslot_hyvalue((int64_t)(intptr_t)(m), i));
+                int64_t __t55 = (acc) + (mutmap_hyslot_hyvalue((int64_t)(intptr_t)((int64_t)(intptr_t)(m)), i));
                 m = __t52;
                 i = __t53;
                 cap = __t54;
@@ -4642,7 +4642,7 @@ static int64_t sum_hyvals(MutableMap__int__int * m, int64_t i, int64_t cap, int6
 }
 
 static int64_t total(MutableMap__int__int * m) {
-        return sum_hyvals(m, INT64_C(0), mutmap_hycap((int64_t)(intptr_t)(m)), INT64_C(0));
+        return sum_hyvals(m, INT64_C(0), mutmap_hycap((int64_t)(intptr_t)((int64_t)(intptr_t)(m))), INT64_C(0));
 }
 
 int main(int argc, char **argv) {
@@ -4658,12 +4658,12 @@ int main(int argc, char **argv) {
         {
             MutableMap__int__int * a_1014 = mutmap_new__spec__MutableMap__int__int__();
             (void)a_1014;
-            mutmap_hyset_ex((int64_t)(intptr_t)(a_1014), INT64_C(1), INT64_C(1), INT64_C(100));
-            mutmap_hyset_ex((int64_t)(intptr_t)(a_1014), INT64_C(2), INT64_C(2), INT64_C(200));
-            mutmap_hyset_ex((int64_t)(intptr_t)(a_1014), INT64_C(3), INT64_C(3), INT64_C(300));
+            mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1014)), INT64_C(1), INT64_C(1), INT64_C(100));
+            mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1014)), INT64_C(2), INT64_C(2), INT64_C(200));
+            mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1014)), INT64_C(3), INT64_C(3), INT64_C(300));
             printf("%lld\n", (long long)(total(a_1014)));
-            printf("%lld\n", (long long)(mutmap_hylen((int64_t)(intptr_t)(a_1014))));
-            mutmap_hyfree((int64_t)(intptr_t)(a_1014));
+            printf("%lld\n", (long long)(mutmap_hylen((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1014)))));
+            mutmap_hyfree((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1014)));
         }
         int64_t __t60;
         __t60 = INT64_C(0);

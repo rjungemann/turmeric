@@ -2703,6 +2703,10 @@ static int64_t opt_hyconsume(bool);
 static bool opt_hypred(bool);
 static int64_t res_hyok(const Result__int__cstr *);
 static bool some___spec__bool_Option__opaque(Option__opaque);
+static Option__int some__spec__Option__int_int64_t(int64_t);
+static Option__int none__spec__Option__int();
+static Result__int__cstr ok__spec__Result__int__cstr_int64_t(int64_t);
+static Result__int__cstr err__spec__Result__int__cstr_const_char__(const char *);
 static bool some___spec__bool_Option__int(Option__int);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -4573,108 +4577,121 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
 }
 
 static Option__int opt_hyif(bool b) {
-        int64_t __t52;
+        Option__int __t52;
         if (b) {
-            __t52 = some(INT64_C(1));
+            __t52 = some__spec__Option__int_int64_t(INT64_C(1));
         } else {
-            __t52 = none();
+            __t52 = none__spec__Option__int();
         }
-                tur_option_t *__t53 = (tur_option_t *)(intptr_t)(__t52);
-        return (__t53 ? (Option__int){.is_some = __t53->is_some, .value = __t53->value} : (Option__int){0});
+        return __t52;
 }
 
 static Option__int opt_hylet(bool b) {
-        int64_t __t54;
+        Option__int __t53;
         {
             int64_t x_1015 = INT64_C(5);
             (void)x_1015;
-            int64_t __t55;
+            Option__int __t54;
             if (b) {
-                __t55 = some(x_1015);
+                __t54 = some__spec__Option__int_int64_t(x_1015);
             } else {
-                __t55 = none();
+                __t54 = none__spec__Option__int();
             }
-            __t54 = __t55;
+            __t53 = __t54;
         }
-                tur_option_t *__t56 = (tur_option_t *)(intptr_t)(__t54);
-        return (__t56 ? (Option__int){.is_some = __t56->is_some, .value = __t56->value} : (Option__int){0});
+        return __t53;
 }
 
 static Option__int opt_hydo(bool b) {
-        int64_t __t57;
-        int64_t __t58;
+        Option__int __t55;
+        Option__int __t56;
         {
             int64_t y_1017 = INT64_C(9);
             (void)y_1017;
-            int64_t __t59;
+            Option__int __t57;
             if (b) {
-                __t59 = some(y_1017);
+                __t57 = some__spec__Option__int_int64_t(y_1017);
             } else {
-                __t59 = none();
+                __t57 = none__spec__Option__int();
             }
-            __t58 = __t59;
+            __t56 = __t57;
         }
-        __t57 = __t58;
-                tur_option_t *__t60 = (tur_option_t *)(intptr_t)(__t57);
-        return (__t60 ? (Option__int){.is_some = __t60->is_some, .value = __t60->value} : (Option__int){0});
+        __t55 = __t56;
+        return __t55;
 }
 
 static Result__int__cstr res_hyif(bool b) {
-        int64_t __t61;
+        Result__int__cstr __t58;
         if (b) {
-            __t61 = ok(INT64_C(7));
+            __t58 = ok__spec__Result__int__cstr_int64_t(INT64_C(7));
         } else {
-            __t61 = err(((union { const char * s; int64_t d; }){.s = "bad"}).d);
+            __t58 = err__spec__Result__int__cstr_const_char__("bad");
         }
-                tur_result_box_t *__t62 = (tur_result_box_t *)(intptr_t)(__t61);
-        return (Result__int__cstr){.is_ok = __t62->is_ok, .ok_val = __t62->ok_val, .err_val = (const char *)(intptr_t)(__t62->err_val)};
+        return __t58;
 }
 
 static int64_t opt_hyconsume(bool b) {
-        int64_t __t63;
+        int64_t __t59;
         {
-            int64_t __t64;
+            Option__int __t60;
             if (b) {
-                __t64 = some(INT64_C(11));
+                __t60 = some__spec__Option__int_int64_t(INT64_C(11));
             } else {
-                __t64 = none();
+                tur_option_t *__t61 = (tur_option_t *)(intptr_t)(none());
+                __t60 = (__t61 ? (Option__int){.is_some = __t61->is_some, .value = __t61->value} : (Option__int){0});
             }
-            int64_t o_1020 = __t64;
+            Option__int o_1020 = __t60;
             (void)o_1020;
-            int64_t __t65;
-            if (((o_1020) ? ((Option *)(intptr_t)(o_1020))->is_some : 0)) {
-                __t65 = ((o_1020) ? ((Option *)(intptr_t)(o_1020))->value : 0);
+            int64_t __t62;
+            if ((o_1020).is_some) {
+                __t62 = (o_1020).value;
             } else {
-                __t65 = INT64_C(0);
+                __t62 = INT64_C(0);
             }
-            __t63 = __t65;
+            __t59 = __t62;
         }
-        return __t63;
+        return __t59;
 }
 
 static bool opt_hypred(bool b) {
-        int64_t __t66;
+        Option__int __t63;
         if (b) {
-            __t66 = some(INT64_C(1));
+            __t63 = some__spec__Option__int_int64_t(INT64_C(1));
         } else {
-            __t66 = none();
+            tur_option_t *__t64 = (tur_option_t *)(intptr_t)(none());
+            __t63 = (__t64 ? (Option__int){.is_some = __t64->is_some, .value = __t64->value} : (Option__int){0});
         }
-        tur_option_t *__t67 = (tur_option_t *)(intptr_t)(__t66);
-        return some___spec__bool_Option__int((__t67 ? (Option__int){.is_some = __t67->is_some, .value = __t67->value} : (Option__int){0}));
+        return some___spec__bool_Option__int(__t63);
 }
 
 static int64_t res_hyok(const Result__int__cstr * r) {
-        int64_t __t68;
+        int64_t __t65;
         if (((Result *)(intptr_t)(r))->is_ok) {
-            __t68 = ((Result *)(intptr_t)(r))->ok_val;
+            __t65 = ((Result *)(intptr_t)(r))->ok_val;
         } else {
-            __t68 = (INT64_C(0)) - (INT64_C(1));
+            __t65 = (INT64_C(0)) - (INT64_C(1));
         }
-        return __t68;
+        return __t65;
 }
 
 static bool some___spec__bool_Option__opaque(Option__opaque o) {
         return (o).is_some;
+}
+
+static Option__int some__spec__Option__int_int64_t(int64_t x) {
+        return (Option__int){.is_some = true, .value = x};
+}
+
+static Option__int none__spec__Option__int() {
+        return (Option__int){.is_some = false};
+}
+
+static Result__int__cstr ok__spec__Result__int__cstr_int64_t(int64_t x) {
+        return (Result__int__cstr){.is_ok = true, .ok_val = x};
+}
+
+static Result__int__cstr err__spec__Result__int__cstr_const_char__(const char * e) {
+        return (Result__int__cstr){.is_ok = false, .err_val = e};
 }
 
 static bool some___spec__bool_Option__int(Option__int o) {
@@ -4696,10 +4713,10 @@ int main(int argc, char **argv) {
     puts(((opt_hyif(false)).is_some) ? "true" : "false");
     printf("%lld\n", (long long)((opt_hylet(true)).value));
     printf("%lld\n", (long long)((opt_hydo(true)).value));
-    Result__int__cstr __t69 = res_hyif(true);
-    printf("%lld\n", (long long)(res_hyok(&__t69)));
-    Result__int__cstr __t70 = res_hyif(false);
-    printf("%lld\n", (long long)(res_hyok(&__t70)));
+    Result__int__cstr __t66 = res_hyif(true);
+    printf("%lld\n", (long long)(res_hyok(&__t66)));
+    Result__int__cstr __t67 = res_hyif(false);
+    printf("%lld\n", (long long)(res_hyok(&__t67)));
     printf("%lld\n", (long long)(opt_hyconsume(true)));
     printf("%lld\n", (long long)(opt_hyconsume(false)));
     puts((opt_hypred(true)) ? "true" : "false");

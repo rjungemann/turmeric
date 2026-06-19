@@ -1569,6 +1569,24 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
             }
         }
+        /* Phase 5 carrier-bridge deletion: monomorphize a #{Construct} at a
+         * plain call site whose own bindings (or grounded call->type) resolve to
+         * a concrete by-value non-heap struct -- `(some 42)` => `(Option int)`. */
+        if (!construct_recovered_byvalue && body_is_construct && !borrow_path) {
+            Type recovered = (bindings && n_bindings > 0)
+                ? emit_abi_instantiate_type(&generic_result, bindings,
+                                            n_bindings, ctx->type_arena)
+                : result_type;
+            if (recovered.kind == TY_APP &&
+                !type_is_heap_struct(recovered) &&
+                type_has_concrete_codegen_layout(&recovered) &&
+                !emit_abi_type_has_concrete_named_tyvar(&recovered)) {
+                result_type = recovered;
+                construct_recovered_byvalue = true;
+                abi_changes = true;
+                emit_abi_note_carrier_call(ctx, fn_binding);
+            }
+        }
     }
     /* M4 follow-up: an instance-method spec whose substituted arg_types
      * still carry unresolved TYVARs is a phantom — type_c_name downgrades

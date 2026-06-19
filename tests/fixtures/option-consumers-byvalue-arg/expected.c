@@ -2691,11 +2691,11 @@ static Option__int g();
 static Option__int gn();
 static int64_t dbl(int64_t);
 static bool some___spec__bool_Option__opaque(Option__opaque);
+static Option__int some__spec__Option__int_int64_t(int64_t);
+static Option__int none__spec__Option__int();
 static bool some___spec__bool_Option__int(Option__int);
 static int64_t unwrap_or__spec__int64_t_Option__int_int64_t(Option__int, int64_t);
 static Option__int option_map__spec__Option__int_Option__int_int64_t(Option__int, int64_t);
-static Option__int some__spec__Option__int_int64_t(int64_t);
-static Option__int none__spec__Option__int();
 static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int, Option__int, int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -4576,13 +4576,11 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
 }
 
 static Option__int g() {
-                tur_option_t *__t53 = (tur_option_t *)(intptr_t)(some(INT64_C(5)));
-        return (__t53 ? (Option__int){.is_some = __t53->is_some, .value = __t53->value} : (Option__int){0});
+        return some__spec__Option__int_int64_t(INT64_C(5));
 }
 
 static Option__int gn() {
-                tur_option_t *__t54 = (tur_option_t *)(intptr_t)(none());
-        return (__t54 ? (Option__int){.is_some = __t54->is_some, .value = __t54->value} : (Option__int){0});
+        return none__spec__Option__int();
 }
 
 static int64_t dbl(int64_t x) {
@@ -4603,60 +4601,35 @@ int main(int argc, char **argv) {
         puts((some___spec__bool_Option__int(gn())) ? "true" : "false");
         printf("%lld\n", (long long)(unwrap_or__spec__int64_t_Option__int_int64_t(g(), INT64_C(99))));
         printf("%lld\n", (long long)(unwrap_or__spec__int64_t_Option__int_int64_t(gn(), INT64_C(99))));
+        int64_t *__t53 = (int64_t *)malloc(2 * sizeof(int64_t));
+        __t53[0] = (int64_t)(intptr_t)__tur_fatshim1;
+        __t53[1] = (int64_t)(intptr_t)dbl;
+        void *__t54 = __t53;
+        puts((some___spec__bool_Option__int(option_map__spec__Option__int_Option__int_int64_t(g(), (int64_t)(intptr_t)(__t54)))) ? "true" : "false");
         int64_t *__t55 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t55[0] = (int64_t)(intptr_t)__tur_fatshim1;
         __t55[1] = (int64_t)(intptr_t)dbl;
         void *__t56 = __t55;
-        puts((some___spec__bool_Option__int(option_map__spec__Option__int_Option__int_int64_t(g(), (int64_t)(intptr_t)(__t56)))) ? "true" : "false");
+        printf("%lld\n", (long long)(unwrap_or__spec__int64_t_Option__int_int64_t(option_map__spec__Option__int_Option__int_int64_t(g(), (int64_t)(intptr_t)(__t56)), INT64_C(0))));
         int64_t *__t57 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t57[0] = (int64_t)(intptr_t)__tur_fatshim1;
-        __t57[1] = (int64_t)(intptr_t)dbl;
+        __t57[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+        __t57[1] = (int64_t)(intptr_t)__fn_1013;
         void *__t58 = __t57;
-        printf("%lld\n", (long long)(unwrap_or__spec__int64_t_Option__int_int64_t(option_map__spec__Option__int_Option__int_int64_t(g(), (int64_t)(intptr_t)(__t58)), INT64_C(0))));
+        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), g(), (int64_t)(intptr_t)(__t58))) ? "true" : "false");
         int64_t *__t59 = (int64_t *)malloc(2 * sizeof(int64_t));
         __t59[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t59[1] = (int64_t)(intptr_t)__fn_1013;
+        __t59[1] = (int64_t)(intptr_t)__fn_1017;
         void *__t60 = __t59;
-        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), g(), (int64_t)(intptr_t)(__t60))) ? "true" : "false");
-        int64_t *__t61 = (int64_t *)malloc(2 * sizeof(int64_t));
-        __t61[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-        __t61[1] = (int64_t)(intptr_t)__fn_1017;
-        void *__t62 = __t61;
-        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), gn(), (int64_t)(intptr_t)(__t62))) ? "true" : "false");
-        tur_option_t *__t63 = (tur_option_t *)(intptr_t)(some(INT64_C(1)));
-        puts((some___spec__bool_Option__int((__t63 ? (Option__int){.is_some = __t63->is_some, .value = __t63->value} : (Option__int){0}))) ? "true" : "false");
+        puts((option_eq___spec__bool_Option__int_Option__int_bool(g(), gn(), (int64_t)(intptr_t)(__t60))) ? "true" : "false");
+        puts((some___spec__bool_Option__int(some__spec__Option__int_int64_t(INT64_C(1)))) ? "true" : "false");
         printf("%lld\n", (long long)(unwrap_hyor(none(), INT64_C(42))));
-        int64_t __t64;
-        __t64 = INT64_C(0);
-        return (int)__t64;
+        int64_t __t61;
+        __t61 = INT64_C(0);
+        return (int)__t61;
 }
 
 static bool some___spec__bool_Option__opaque(Option__opaque o) {
         return (o).is_some;
-}
-
-static bool some___spec__bool_Option__int(Option__int o) {
-        return (o).is_some;
-}
-
-static int64_t unwrap_or__spec__int64_t_Option__int_int64_t(Option__int o, int64_t dflt) {
-        int64_t __t65;
-        if ((o).is_some) {
-            __t65 = (o).value;
-        } else {
-            __t65 = dflt;
-        }
-        return __t65;
-}
-
-static Option__int option_map__spec__Option__int_Option__int_int64_t(Option__int o, int64_t f) {
-        Option__int __t66;
-        if ((o).is_some) {
-            __t66 = some__spec__Option__int_int64_t((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), (o).value));
-        } else {
-            __t66 = none__spec__Option__int();
-        }
-        return __t66;
 }
 
 static Option__int some__spec__Option__int_int64_t(int64_t x) {
@@ -4667,20 +4640,44 @@ static Option__int none__spec__Option__int() {
         return (Option__int){.is_some = false};
 }
 
-static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int o1, Option__int o2, int64_t cmp_fn) {
-        bool __t67;
-        if ((o1).is_some) {
-            bool __t68;
-            if ((o2).is_some) {
-                __t68 = (*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), (o1).value, (o2).value);
-            } else {
-                __t68 = false;
-            }
-            __t67 = __t68;
+static bool some___spec__bool_Option__int(Option__int o) {
+        return (o).is_some;
+}
+
+static int64_t unwrap_or__spec__int64_t_Option__int_int64_t(Option__int o, int64_t dflt) {
+        int64_t __t62;
+        if ((o).is_some) {
+            __t62 = (o).value;
         } else {
-            __t67 = !((o2).is_some);
+            __t62 = dflt;
         }
-        return __t67;
+        return __t62;
+}
+
+static Option__int option_map__spec__Option__int_Option__int_int64_t(Option__int o, int64_t f) {
+        Option__int __t63;
+        if ((o).is_some) {
+            __t63 = some__spec__Option__int_int64_t((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), (o).value));
+        } else {
+            __t63 = none__spec__Option__int();
+        }
+        return __t63;
+}
+
+static bool option_eq___spec__bool_Option__int_Option__int_bool(Option__int o1, Option__int o2, int64_t cmp_fn) {
+        bool __t64;
+        if ((o1).is_some) {
+            bool __t65;
+            if ((o2).is_some) {
+                __t65 = (*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), (o1).value, (o2).value);
+            } else {
+                __t65 = false;
+            }
+            __t64 = __t65;
+        } else {
+            __t64 = !((o2).is_some);
+        }
+        return __t64;
 }
 
 

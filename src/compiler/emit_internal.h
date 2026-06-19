@@ -328,6 +328,7 @@ bool fn_body_tail_is_carrier_producer(const struct Expr *e);
  * already-by-value producer is not dereferenced as a heap pointer.  Defined in
  * emit_expr.c. */
 bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
+Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e);
 /* RT/SC5: carrier-return bridge.  A typeclass instance method whose declared
  * return is the dispatch type variable lowers to the int64_t carrier, but its
  * body resolves to a concrete by-value struct for that instance.  When the

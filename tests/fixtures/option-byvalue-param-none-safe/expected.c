@@ -2703,6 +2703,10 @@ static void printf_hyfloat6(double);
 static int64_t takes_hybyval(Option__int);
 static double takes_hybyval_hyf(Option__float);
 static bool some___spec__bool_Option__opaque(Option__opaque);
+static Option__int some__spec__Option__int_int64_t(int64_t);
+static Option__int none__spec__Option__int();
+static Option__float some__spec__Option__float_double(double);
+static Option__float none__spec__Option__float();
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -4639,21 +4643,33 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        tur_option_t *__t54 = (tur_option_t *)(intptr_t)(some(INT64_C(5)));
-        printf("%lld\n", (long long)(takes_hybyval((__t54 ? (Option__int){.is_some = __t54->is_some, .value = __t54->value} : (Option__int){0}))));
-        tur_option_t *__t55 = (tur_option_t *)(intptr_t)(none());
-        printf("%lld\n", (long long)(takes_hybyval((__t55 ? (Option__int){.is_some = __t55->is_some, .value = __t55->value} : (Option__int){0}))));
-        tur_option_t *__t56 = (tur_option_t *)(intptr_t)(some(((union { double s; int64_t d; }){.s = 7.25}).d));
-        printf("%lld\n", (long long)(float_hy_gtint((takes_hybyval_hyf((__t56 ? (Option__float){.is_some = __t56->is_some, .value = ((union { int64_t s; double d; }){.s = __t56->value}).d} : (Option__float){0}))) * (100.0))));
-        tur_option_t *__t57 = (tur_option_t *)(intptr_t)(none());
-        printf("%lld\n", (long long)(float_hy_gtint((takes_hybyval_hyf((__t57 ? (Option__float){.is_some = __t57->is_some, .value = ((union { int64_t s; double d; }){.s = __t57->value}).d} : (Option__float){0}))) * (100.0))));
-        int64_t __t58;
-        __t58 = INT64_C(0);
-        return (int)__t58;
+        printf("%lld\n", (long long)(takes_hybyval(some__spec__Option__int_int64_t(INT64_C(5)))));
+        printf("%lld\n", (long long)(takes_hybyval(none__spec__Option__int())));
+        printf("%lld\n", (long long)(float_hy_gtint((takes_hybyval_hyf(some__spec__Option__float_double(7.25))) * (100.0))));
+        printf("%lld\n", (long long)(float_hy_gtint((takes_hybyval_hyf(none__spec__Option__float())) * (100.0))));
+        int64_t __t54;
+        __t54 = INT64_C(0);
+        return (int)__t54;
 }
 
 static bool some___spec__bool_Option__opaque(Option__opaque o) {
         return (o).is_some;
+}
+
+static Option__int some__spec__Option__int_int64_t(int64_t x) {
+        return (Option__int){.is_some = true, .value = x};
+}
+
+static Option__int none__spec__Option__int() {
+        return (Option__int){.is_some = false};
+}
+
+static Option__float some__spec__Option__float_double(double x) {
+        return (Option__float){.is_some = true, .value = x};
+}
+
+static Option__float none__spec__Option__float() {
+        return (Option__float){.is_some = false};
 }
 
 

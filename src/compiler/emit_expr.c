@@ -92,8 +92,19 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
          * INSIDE some spec; a carrier base / top-level emit (active_outer==NULL)
          * must not pick up a spec-scoped entry, else e.g. the int64-returning
          * carrier base routes `(ok v)` to a by-value `ok__spec` (return-type
-         * mismatch).  See the M2-completion primitive-payload construct path. */
-        if (active_outer != NULL && !saw_call) {
+         * mismatch).  See the M2-completion primitive-payload construct path.
+         *
+         * Phase 5 carrier-bridge deletion: NEVER apply the cross-spec fallback to
+         * a `#{Construct}` callee.  emit_call_name disambiguates a construct only
+         * by the exact Expr* recording (a by-value spec and the carrier base
+         * differ ONLY in return ABI), so the same shared `(some ...)` Expr*
+         * recorded under a by-value option_map spec must NOT be reported as
+         * by-value when this lookup runs under the sibling int64-result spec --
+         * that disagreement made the if-merge temp by-value while the branch
+         * emitted the carrier `some()` (a cc type error). Keep this lookup in
+         * lockstep with emit by requiring an exact outer match for constructs. */
+        if (active_outer != NULL && !saw_call &&
+            !(fn_binding && fn_binding->is_construct_template)) {
             fallback_clone = ctx->specialized_call_names[i];
             saw_call = true;
         }
@@ -287,6 +298,15 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
 static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
     if (!e) return false;
+    /* Phase 5 carrier-bridge deletion: a control form (if/do/let) whose tail is
+     * a by-value Option/Result producer is itself a by-value producer -- even
+     * though its own `e->type` is collapsed to the int64 carrier (so the
+     * type_uses_carrier_abi guard below would wrongly reject it).  Delegate to
+     * the tail walker so a consumer of `(if b (some 1) (none))` sees the merge
+     * result is already by-value and does NOT re-bridge it as a carrier handle. */
+    if (e->kind == EX_IF || e->kind == EX_DO ||
+        e->kind == EX_LET || e->kind == EX_LETREC)
+        return fn_body_tail_emits_byvalue_carrier_abi(ctx, e);
     if (!type_uses_carrier_abi(e->type)) return false;
     if (e->kind == EX_MAKE_STRUCT) return true;
     if (e->kind == EX_VAR)
@@ -345,6 +365,52 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         default:
             return expr_emits_byvalue_carrier_abi(ctx, e);
     }
+}
+
+/* Phase 5 carrier-bridge deletion: the concrete by-value carrier-ABI type the
+ * tail of `e` produces, or TY_UNKNOWN when the tail is not a by-value carrier
+ * producer.  Mirrors fn_body_tail_emits_byvalue_carrier_abi but returns the
+ * type -- recovered from the matched spec's resolved result (the source of
+ * truth; the construct's own e->type is collapsed to the int64 carrier) or a
+ * make-struct's type -- so a carrier-return slot can spill it concrete->carrier. */
+Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
+    Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
+    if (!e) return unknown;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fn_body_tail_byvalue_carrier_type(ctx, e->as.ascribe_.inner);
+        case EX_DO:
+            return e->as.do_.n > 0
+                ? fn_body_tail_byvalue_carrier_type(ctx, e->as.do_.items[e->as.do_.n - 1])
+                : unknown;
+        case EX_IF: {
+            Type t = fn_body_tail_byvalue_carrier_type(ctx, e->as.if_.then_);
+            if (t.kind != TY_UNKNOWN) return t;
+            return e->as.if_.else_or_null
+                ? fn_body_tail_byvalue_carrier_type(ctx, e->as.if_.else_or_null)
+                : unknown;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            return fn_body_tail_byvalue_carrier_type(ctx, e->as.let_.body);
+        default: break;
+    }
+    const Expr *x = e;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return unknown;
+    if (x->kind == EX_MAKE_STRUCT && type_uses_carrier_abi(x->type))
+        return emit_resolve_type(ctx, x->type);
+    if (x->kind == EX_CALL) {
+        const EmitAbiSpecialization *spec =
+            find_matched_abi_spec(ctx, x, x->as.call_.fn_binding);
+        if (spec) {
+            Type sr = emit_resolve_type(ctx, spec->result_type);
+            if (type_uses_carrier_abi(sr) &&
+                strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
+                return sr;
+        }
+    }
+    return unknown;
 }
 
 static bool reinterpret_kind_is_scalar(TypeKind kind) {
@@ -875,9 +941,21 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool nil_result = (e->type.kind == TY_NIL);
     /* Phase R1: Also create temp if only then-branch has return/throw and else doesn't */
     bool else_no_return = e->as.if_.else_or_null ? !else_has_return_or_throw : false;
+    /* Phase 5 carrier-bridge deletion: if either arm is a by-value Option/Result
+     * producer (a monomorphized #{Construct} spec), the merge temp must be that
+     * by-value struct -- the if's own `e->type` is collapsed to the int64
+     * carrier, so the default temp decl would type it int64 and the by-value arm
+     * would `cc`-mismatch.  Declare the temp by-value and bridge each
+     * carrier-producing arm (carrier->concrete; a deref, never a dangling
+     * stack spill). */
+    Type if_bv = type_simple(TY_UNKNOWN, CK_COPY);
     if (!nil_result && ( !any_has_return_or_throw || (then_has_return_or_throw && else_no_return))) {
         tmp = fresh_tmp(ctx);
-        emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
+        if_bv = fn_body_tail_byvalue_carrier_type(ctx, e);
+        if (if_bv.kind != TY_UNKNOWN)
+            emit_temp_decl(ctx, body, if_bv, tmp, NULL);
+        else
+            emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
     }
     char *cond = emit_value(ctx, body, e->as.if_.cond);
     indent_buf(body, ctx->indent);
@@ -888,7 +966,6 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         emit_stmt(ctx, body, e->as.if_.then_);
     } else {
         char *t = emit_value(ctx, body, e->as.if_.then_);
-        indent_buf(body, ctx->indent);
         /* SF-application carrier bridge (if-branch assign):
          * an `^fat`-bound variable is held in C as int64_t even though its
          * elab type (TY_FN boxed or TY_PTR_VOID) lowers `e->type` to a
@@ -901,9 +978,17 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         const char *temp_c = type_c_name(e->type);
         size_t tlen = strlen(temp_c);
         bool temp_is_ptr = tlen > 0 && temp_c[tlen - 1] == '*';
-        if (then_is_fat_var && temp_is_ptr) {
+        if (if_bv.kind != TY_UNKNOWN &&
+            !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_)) {
+            /* by-value merge temp, carrier-producing arm: bridge to concrete */
+            t = emit_carrier_bridge(ctx, body, t, CK_CARRIER, CK_CONCRETE, if_bv);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s;\n", tmp, t);
+        } else if (then_is_fat_var && temp_is_ptr) {
+            indent_buf(body, ctx->indent);
             buf_printf(body, "%s = (void *)(intptr_t)(%s);\n", tmp, t);
         } else {
+            indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, t);
         }
         free(t);
@@ -921,7 +1006,6 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             emit_stmt(ctx, body, e->as.if_.else_or_null);
         } else {
             char *el = emit_value(ctx, body, e->as.if_.else_or_null);
-            indent_buf(body, ctx->indent);
             /* See the then-branch comment above. */
             const Expr *eb = e->as.if_.else_or_null;
             while (eb && eb->kind == EX_ASCRIBE) eb = eb->as.ascribe_.inner;
@@ -930,9 +1014,16 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             const char *temp_c2 = type_c_name(e->type);
             size_t tlen2 = strlen(temp_c2);
             bool temp_is_ptr2 = tlen2 > 0 && temp_c2[tlen2 - 1] == '*';
-            if (else_is_fat_var && temp_is_ptr2) {
+            if (if_bv.kind != TY_UNKNOWN &&
+                !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null)) {
+                el = emit_carrier_bridge(ctx, body, el, CK_CARRIER, CK_CONCRETE, if_bv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = %s;\n", tmp, el);
+            } else if (else_is_fat_var && temp_is_ptr2) {
+                indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = (void *)(intptr_t)(%s);\n", tmp, el);
             } else {
+                indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);
             }
             free(el);
@@ -3096,7 +3187,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg) &&
                          fn_binding->type.kind == TY_FN &&
                          i < fn_binding->type.as.fn.arity &&
-                         fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
+                         (fn_binding->type.as.fn.arg_kinds[i] == TY_INT ||
+                          /* Phase 5: a generic (unspecialized) callee whose
+                           * declared param is a carrier-ABI type with an ABSTRACT
+                           * element (`o : (Option A)` in option-eq? over a Vec
+                           * element) lowers that slot to the int64 carrier even
+                           * though its arg_kind reads TY_APP -- detect this by the
+                           * param resolving to the `int64_t` carrier C type.  A
+                           * MONOMORPHIC callee with a concrete param
+                           * (`(Option BoundedIdx)`, `(Pair int int)`) c-names to a
+                           * by-value struct and is left alone, so a genuinely
+                           * by-value sink is not spuriously spilled. */
+                          (fn_binding->type.as.fn.arg_full_types &&
+                           fn_binding->type.as.fn.arg_full_types[i] &&
+                           type_uses_carrier_abi(emit_resolve_type(ctx,
+                               *fn_binding->type.as.fn.arg_full_types[i])) &&
+                           strcmp(emit_type_c_name(ctx, emit_resolve_type(ctx,
+                               *fn_binding->type.as.fn.arg_full_types[i])),
+                               "int64_t") == 0))) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CONCRETE, CK_CARRIER,
                                              e->as.call_.args[i]->type);
