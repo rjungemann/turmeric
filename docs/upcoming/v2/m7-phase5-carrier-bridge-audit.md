@@ -60,6 +60,19 @@ which is a larger change than method monomorphization and is genuinely the floor
 for HKT monadic dispatch under the current closure model.  `fmap`/`bimap`/`pure`
 are already done; `bind`/`ap` are the closure-ABI-bound remainder.
 
+**Empirical confirmation (attempted + reverted).** I implemented the obvious fix
+-- ground the free result element `b` to `int` (its carrier representation) so
+the by-value spec mints (`m7_ground_free_result_tyvars` in elab_typeclasses.c).
+Result: it produced exactly the "broken half-by-value spec" the existing guard
+(elab_typeclasses.c:5236-5241) warns about.  `ap`'s `ff : (Option (fn a b))`
+does not ground by element alone -- the function element collapsed to
+`Option__opaque`, and the minted
+`__inst_Applicative_ap_Option__spec__Option__int_Option__opaque_Option__int`
+mismatched the call site (`cc: incompatible type for argument 1`).  Crossings
+barely moved (12 -> 11).  So the naive grounding is unsound (the author's guard
+is correct), and bind/ap genuinely require the deeper closure-result ABI change,
+not a grounding tweak.  Reverted; gate kept green at 1685/0.
+
 ### (Historical) Lever 2 -- earlier diagnostic (what blocks it; two suppression points)
 
 A probe of `emit_abi_register_call` over the live fixture
