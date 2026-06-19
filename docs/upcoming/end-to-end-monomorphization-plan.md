@@ -1116,13 +1116,24 @@ genuine carrier)
 >   so this does NOT block the one-param stdlib migration. Full root cause + fix
 >   directions in
 >   [`docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md`](../reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md).
-> - **Probe-hardening status: 7 of the HKT method shapes are by-value
->   end-to-end** (Functor `fmap`, Monad `bind`, Applicative `ap`+`pure`,
->   Alternative `<|>`, Comonad `extract`, Foldable `foldr`); Bifunctor `bimap`
->   (two-param) is reported/blocked and is carrier-delegating in stdlib;
->   Traversable `traverse` (nested `(g (h b))`) remains. The one-param HKT classes
->   that the stdlib migration needs (Functor/Monad/Applicative/Alternative) are
->   all covered.
+> - **Traversable `traverse` / method-level HKT tyvar: BLOCKED, reported.**
+>   `traverse [k : (fn [a] (g b)) t : (h a)] : (g (h b))` introduces a SECOND,
+>   method-level higher-kinded tyvar (`g`, the applicative traversed into) plus a
+>   NESTED result `(g (h b))`. Method-level tyvars are all marked kind `*`, so it
+>   does not even parse (TUR-E0012), and the by-value emit has no nested-two-
+>   constructor model. Hard error under the flag; flag-off unaffected. Traversable
+>   is a separate class, not on the one-param migration's critical path. Root
+>   cause + fix directions in
+>   [`docs/reported/m7-hkt-traverse-method-level-hkt-tyvar.md`](../reported/m7-hkt-traverse-method-level-hkt-tyvar.md).
+> - **Probe-hardening sub-phase: COMPLETE for the migration-critical shapes.**
+>   7 of the 9 HKT classes' primary method shapes are by-value end-to-end
+>   (Functor `fmap`, Monad `bind`, Applicative `ap`+`pure`, Alternative `<|>`,
+>   Comonad `extract`, Foldable `foldr`). The 2 remaining -- Bifunctor `bimap`
+>   (two-param constructor) and Traversable `traverse` (method-level HKT tyvar +
+>   nested result) -- are reported with root causes; both are their own classes
+>   that are carrier-delegating / not required by the first stdlib migration wave
+>   (Functor/Monad/Applicative/Alternative on Option/Result/...), whose shapes are
+>   all covered. **Next: the stdlib HKT class/instance migration (below).**
 
 > **Gating note (2026-06-18, superseded in part by the 2026-06-19 update above):**
 > the subset of these helpers that are **HKT
