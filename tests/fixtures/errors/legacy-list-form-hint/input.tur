@@ -1,8 +1,0 @@
-;; Spice v0.21 compat: the classic Lisp list destructors/predicate
-;; (car / cdr / null? / length) were never Turmeric forms, even though the
-;; `cons` builtin survives. An unknown-call-head on one should carry a
-;; migration hint pointing at the stdlib/list.tur form, not a bare "unknown".
-(defn main [] : int
-  (let [xs (cons 1 (tnil))
-        a  (car xs)]
-    0))

@@ -279,3 +279,59 @@
 
 (defn list-concat [l1 : int l2 : int] : int
   (if (tnil? l1) l2 (tcons (list-head l1) (list-concat (list-tail l1) l2))))
+;;; car -- head of a cons-built list (classic-Lisp alias for list-head).
+;;;
+;;; Pairs with the surviving `cons` builtin so the classic constructor +
+;;; destructor surface is whole: build with cons, take apart with car/cdr.
+;;;
+;;; Parameters:
+;;;   l -- a non-empty carrier-level list (e.g. built with cons or list)
+;;;
+;;; Returns:
+;;;   The head element (carrier :int).
+;;;
+;;; Example:
+;;;   (car (cons 11 (cons 22 (tnil))))  ; => 11
+;;;
+;;; Since: Phase TC1
+(defn car [l : int] : int (list-head l))
+;;; cdr -- tail of a cons-built list (classic-Lisp alias for list-tail).
+;;;
+;;; Parameters:
+;;;   l -- a non-empty carrier-level list (e.g. built with cons or list)
+;;;
+;;; Returns:
+;;;   The tail list (carrier :int; 0 when l had a single element).
+;;;
+;;; Example:
+;;;   (car (cdr (cons 11 (cons 22 (tnil)))))  ; => 22
+;;;
+;;; Since: Phase TC1
+(defn cdr [l : int] : int (list-tail l))
+;;; null? -- test a cons-built list for emptiness (alias for tnil?).
+;;;
+;;; Parameters:
+;;;   l -- a carrier-level list
+;;;
+;;; Returns:
+;;;   true when l is the empty list, false otherwise.
+;;;
+;;; Example:
+;;;   (null? (tnil))             ; => true
+;;;   (null? (cons 1 (tnil)))    ; => false
+;;;
+;;; Since: Phase TC1
+(defn null? [l : int] : bool (tnil? l))
+;;; length -- count the elements of a cons-built list (alias for list-length).
+;;;
+;;; Parameters:
+;;;   l -- a carrier-level list
+;;;
+;;; Returns:
+;;;   Integer length.
+;;;
+;;; Example:
+;;;   (length (list 1 2 3))  ; => 3
+;;;
+;;; Since: Phase TC1
+(defn length [l : int] : int (list-length l))

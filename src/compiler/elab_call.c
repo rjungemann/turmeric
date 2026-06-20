@@ -36,6 +36,13 @@ const char *tur_stdlib_load_hint(const char *name) {
         { "int->float",   "stdlib/math.tur" },
         { "printf-float6", "stdlib/math.tur" },
         { "println-float", "stdlib/bits.tur" },
+        /* Classic Lisp list surface: thin aliases over list-head/list-tail/
+         * tnil?/list-length.  list.tur is auto-loaded normally, so this hint
+         * only surfaces under a :no-stdlib build -- where (load ...) is the fix. */
+        { "car",    "stdlib/list.tur" },
+        { "cdr",    "stdlib/list.tur" },
+        { "null?",  "stdlib/list.tur" },
+        { "length", "stdlib/list.tur" },
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         if (strcmp(name, table[i].name) == 0) return table[i].file;
@@ -67,23 +74,6 @@ const char *tur_legacy_form_hint(const char *name) {
     if (strcmp(name, "declare") == 0)
         return "declare is not a Turmeric form; declare an external C symbol with "
                "(extern-c name [arg : T ...] : ret)";
-    /* Classic Lisp list surface: the `cons` builtin survives, but the matching
-     * destructors/predicate were never part of the typed-list stdlib.  Point at
-     * the carrier-level walkers in stdlib/list.tur that pair with `cons`. */
-    if (strcmp(name, "car") == 0)
-        return "car is not a Turmeric form; take the head of a cons-built list "
-               "with (list-head l) from stdlib/list.tur (or the typed (thead l) "
-               "on a (Cons A) value)";
-    if (strcmp(name, "cdr") == 0)
-        return "cdr is not a Turmeric form; take the tail of a cons-built list "
-               "with (list-tail l) from stdlib/list.tur (or the typed (ttail l) "
-               "on a (Cons A) value)";
-    if (strcmp(name, "null?") == 0)
-        return "null? is not a Turmeric form; test a list for emptiness with "
-               "(tnil? l) from stdlib/list.tur";
-    if (strcmp(name, "length") == 0)
-        return "length is not a Turmeric form; count a list with (list-length l) "
-               "from stdlib/list.tur";
     return NULL;
 }
 

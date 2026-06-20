@@ -1,0 +1,11 @@
+;; The classic Lisp list surface is whole: build with the `cons` builtin,
+;; take apart with car/cdr, test with null?, and count with length -- thin
+;; stdlib/list.tur aliases over list-head/list-tail/tnil?/list-length.
+(defn main [] : int
+  (let [xs (cons 11 (cons 22 (cons 33 (tnil))))]
+    (println (car xs))
+    (println (car (cdr xs)))
+    (println (length xs))
+    (println (null? (tnil)))
+    (println (null? xs))
+    0))
