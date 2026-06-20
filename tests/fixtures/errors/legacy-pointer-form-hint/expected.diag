@@ -1,0 +1,3 @@
+unknown function or operator 'float64*'
+raw-pointer indexing (float64*/float32*) is not a Turmeric form
+(vec-get v i)

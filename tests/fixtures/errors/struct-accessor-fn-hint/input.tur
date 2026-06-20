@@ -1,0 +1,6 @@
+;; Spice v0.21 compat: Turmeric does not generate (Struct-field obj) accessor
+;; FUNCTIONS. Calling one (pt-x) should suggest the supported (.field obj) read.
+(defstruct pt [x : int  y : int])
+(defn main [] : int
+  (let [p (make-struct pt 1 2)]
+    (pt-x p)))

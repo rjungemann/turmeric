@@ -416,6 +416,10 @@ static TuriValue reword_unbound_call_head(TuriValue fn_val, const Expr *fn_expr)
             "unknown function or operator '%s'\n"
             "'%s' lives in %s and is not auto-loaded\n"
             "(load \"%s\")", nm, nm, hint, hint);
+    const char *legacy = tur_legacy_form_hint(nm);
+    if (legacy)
+        return turi_errorf(
+            "unknown function or operator '%s'\n%s", nm, legacy);
     return turi_errorf("unknown function or operator '%s'", nm);
 }
 
