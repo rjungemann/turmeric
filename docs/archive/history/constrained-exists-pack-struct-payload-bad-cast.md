@@ -74,10 +74,39 @@ round-trips instead of being forbidden:
 - `tests/fixtures/exists-pack-constrained-byval-struct/`: new pass fixture for
   the report's exact repro.
 
-The dispatch-ABI layer the diagnostic cited is *not* solved by this change --
-witness dispatch on a by-value-struct receiver still assumes the int64 carrier
-ABI and reads garbage. It is now tracked as a focused open report,
-`docs/reported/constrained-exists-open-dispatch-byval-struct-receiver.md`,
-rather than forbidding the whole construct.
+Verification (heap-box step): `bash tests/run.sh` (10-min timeout) --
+`1704 passed, 0 failed`.
 
-Verification: `bash tests/run.sh` (10-min timeout) -- `1704 passed, 0 failed`.
+## Dispatch ABI closed (carrier-adapter thunks)
+
+Branch: `claude/constrained-exists-pack-struct-cast-a7o5jb`
+
+The dispatch-ABI layer the #455 diagnostic cited -- witness dispatch on a
+by-value-struct receiver hitting the int64-carrier ABI vs the instance's
+by-value-struct ABI -- is now closed, so the construct is fully supported (not
+just compile-but-mis-dispatch):
+
+- `src/compiler/emit_module.c` (`ensure_exists_byval_witness_dict`): generate a
+  per-`(class, struct-instance)` carrier-adapter dict `dict_<Class>_<T>__exbox`.
+  Each method slot is a thunk with the dispatch's carrier signature that derefs
+  the heap-box pointer back to the concrete struct and forwards to the real
+  `__inst_<Class>_<method>_<T>` (passing `const T *` / `&arg` where the real fn
+  is pass-by-ptr). Emitted to `pending_handler_fns` so the thunks sit after the
+  `__inst_` fwd decls and before the bodies referencing `&..._singleton`.
+- `src/compiler/emit_expr.c` (`EX_EXISTS_PACK`): point each witness at the
+  adapter dict when the payload is a by-value aggregate; carrier-compatible
+  payloads keep the real dict.
+- Dedup registry `exbox_dict_names` on `EmitCtx` (init + free mirror the
+  existing thunk/fatshim registries).
+- Investigation note: an unannotated class-var method param defaults to
+  `TY_INT` (not `TY_TYVAR`), so the thunk keys its box-deref off the *instance*
+  param type being a by-value struct, not the abstract method signature.
+- `tests/fixtures/exists-pack-constrained-byval-struct/`: upgraded to open the
+  existential and dispatch a scalar-returning (`rbound`) and struct-returning
+  (`rbox`) method through the witness vtable.
+
+The follow-up report was resolved and moved to
+`docs/archive/constrained-exists-open-dispatch-byval-struct-receiver.md`.
+
+Verification (dispatch step): `bash tests/run.sh` (10-min timeout) --
+`1708 passed, 0 failed`.

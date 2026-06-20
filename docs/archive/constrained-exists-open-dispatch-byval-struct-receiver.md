@@ -1,10 +1,11 @@
 ---
 title: Existential `open`-site witness dispatch on a by-value-struct receiver uses the wrong ABI
 category: Bug Report
-status: reported
+status: resolved
 component: compiler/emit (existentials, witness dispatch)
 affects: turmeric main 0.21.0
 severity: medium
+resolution: route the witness through a generated carrier-adapter thunk dict that derefs the heap-box pointer and forwards to the real instance method; see Resolution
 ---
 
 # Witness dispatch on a boxed by-value-struct receiver reads garbage
@@ -77,7 +78,39 @@ Emit the thunk dict once per `(instance, payload-type)` (dedup like
 `:ptr<void>`, opaque-over-int newtypes) is unaffected -- gate the thunk
 strictly on the by-value-aggregate predicate.
 
-## Workaround
+## Resolution
+
+Implemented as described in Fix directions. `ensure_exists_byval_witness_dict`
+(`src/compiler/emit_module.c`) generates, once per `(class, struct-instance)`, a
+carrier-adapter dict `dict_<Class>_<T>__exbox` whose method slots are thunks
+with the dispatch's carrier signature.  Each thunk dereferences the heap-box
+pointer back to the concrete struct (`*(T *)(intptr_t)recv`, or `(const T *)`
+when the instance method is pass-by-ptr), forwards concrete args (taking their
+address for `const U *` params), and calls the real `__inst_<Class>_<method>_<T>`.
+The constrained `pack` (`EX_EXISTS_PACK`, `emit_expr.c`) points each witness at
+this adapter dict when the payload is a by-value aggregate; carrier-compatible
+payloads keep using the real dict.
+
+Subtlety found in implementation: an *unannotated* class-variable method param
+(e.g. `(rbound [x] : int)`) is stored by the defclass parser as the default
+`TY_INT`, not `TY_TYVAR`, so it is not caught by the class-variable predicate
+yet still lowers to the `int64_t` carrier.  The thunk therefore decides whether
+to deref by inspecting the *instance* method's concrete param type (is it a
+by-value struct?) rather than the abstract method signature.
+
+The thunks are emitted to `pending_handler_fns` (file scope, after the `__inst_`
+prototypes in `fwd_decls`, before the function bodies that reference
+`&..._singleton`).  A method that returns the class variable would need an
+inverse re-box; that case falls back to the real dict (no in-tree class needs
+it).
+
+Regression coverage: `tests/fixtures/exists-pack-constrained-byval-struct/`
+opens a boxed-struct existential and dispatches a scalar-returning (`rbound`)
+and a struct-returning (`rbox`) method.  See
+`docs/archive/constrained-exists-pack-struct-payload-bad-cast.md` for the full
+write-up.
+
+## Workaround (pre-fix)
 
 Use a carrier-compatible payload -- a plain `:int`, a `:ptr<void>` handle, or
 a `defopaque T :int` newtype -- when the existential needs witness dispatch.

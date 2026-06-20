@@ -4,7 +4,7 @@ category: Bug Report
 status: resolved
 component: compiler/emit (existentials)
 affects: turmeric main 0.21.0
-resolution: heap-box the by-value aggregate on the constrained pack path (and read it back through the pointer on open); see Resolution below
+resolution: heap-box the by-value aggregate on the constrained pack path (read it back on open) AND route witness dispatch through a carrier-adapter thunk dict; see Resolution below
 severity: medium
 ---
 
@@ -71,37 +71,42 @@ Fixed by mirroring the unconstrained by-value-aggregate handling inside the
   record -> box indirection for both the rc-managed and `:linear` record
   paths; the `:linear` path frees the box before reclaiming the bare record.
 
-The report's exact repro now compiles and runs (exit 0). Regression fixture:
-`tests/fixtures/exists-pack-constrained-byval-struct/`.
+### Witness dispatch -- carrier-adapter thunk dict
+
+Witness-indirected `open`-site dispatch on a by-value-struct receiver works end
+to end. Existential dispatch (`EX_EXISTS_DISPATCH`, `emit_expr.c`) flows the
+receiver through the int64 carrier and erases class-variable-typed params to
+`int64_t`, calling the witness slot cast to `int64_t (*)(int64_t, ...)`. A
+by-value struct instance method is emitted as
+`int64_t __inst_Rdr_rbound_LinesR(LinesR)` -- a by-value-struct ABI that cannot
+be called through that carrier signature. So when the payload is a by-value
+aggregate, the constrained `pack` points each witness at a generated
+carrier-adapter dict `dict_<Class>_<T>__exbox` instead of the real
+`dict_<Class>_<T>` (`ensure_exists_byval_witness_dict`,
+`src/compiler/emit_module.c`). Each adapter thunk:
+
+- takes the receiver as the int64 carrier (the heap-box pointer),
+  dereferencing it back to the concrete struct (`*(T *)(intptr_t)recv`, or a
+  `(const T *)` cast when the instance method is pass-by-ptr);
+- forwards concrete arguments unchanged (taking their address when the real fn
+  wants `const U *`);
+- calls the real `__inst_<Class>_<method>_<T>` and returns its result.
+
+The thunks are emitted to `pending_handler_fns` so they land at file scope after
+the `__inst_` forward declarations and before the function bodies that reference
+`&dict_<Class>_<T>__exbox_singleton`. A method that returns the class variable
+would need an inverse re-box; that case falls back to the real dict (no in-tree
+class needs it). The carrier-compatible payload path (plain `:int`,
+`:ptr<void>`, opaque-over-int newtypes) matches the carrier dispatch ABI
+directly and uses the real dict unchanged.
+
+The report's exact repro compiles and runs (exit 0), and `(rbound x)` /
+`(rbox x)` dispatch correctly on the boxed receiver. Regression fixture:
+`tests/fixtures/exists-pack-constrained-byval-struct/` (scalar- and
+struct-returning methods, opened and dispatched).
 
 (An earlier resolution on `main` -- #455 -- instead *rejected* the by-value
 struct payload at `elab_pack` with a diagnostic, on the grounds that the
-heap-box alone left the dispatch ABI trap below. That guard was removed in
-favor of this end-to-end heap-box support; the dispatch ABI is tracked as the
-follow-up below rather than forbidding the construct outright.)
-
-## Known follow-up (separate report)
-
-Witness-indirected `open`-site dispatch on a by-value-struct receiver is still
-unsupported. Existential dispatch (`EX_EXISTS_DISPATCH`, `emit_expr.c`) flows
-the receiver through the int64 carrier and erases class-variable-typed params
-to `int64_t`, calling the witness slot cast to `int64_t (*)(int64_t, ...)`. But
-a by-value struct instance method is emitted as
-`int64_t __inst_Rdr_rbound_LinesR(LinesR)` -- a by-value-struct ABI that cannot
-be called through the carrier signature -- so `(rbound x)` after opening a
-boxed-struct existential reads garbage. The pack/open round-trip itself is
-correct; only the witness call ABI needs reconciling (emit a carrier-ABI
-adapter thunk per `(class, struct instance)` and point the packed witness table
-at the adapters). Tracked in
-`docs/reported/constrained-exists-open-dispatch-byval-struct-receiver.md`.
-
-The carrier-compatible payload path (plain `:int`, `:ptr<void>`,
-opaque-over-int newtypes) matches the carrier dispatch ABI and already works
-end to end.
-
-## Workaround (when dispatch is needed)
-
-Use a carrier-compatible payload -- a plain `:int`, a `:ptr<void>` handle, or
-a `defopaque T :int` newtype -- instead of a bare `defstruct` value when the
-existential needs witness dispatch. This is also the natural shape for the
-"heterogeneous handle collection" use case.
+heap-box alone left this dispatch ABI trap. That guard was removed: the trap is
+now closed by the adapter thunks above, so the construct is supported rather
+than forbidden.)

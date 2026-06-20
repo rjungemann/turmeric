@@ -2,6 +2,7 @@
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: DK substrate prelude + wiring */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
+#include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 
 /* ------------ program-level emit ------------ */
 
@@ -324,6 +325,176 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
     }
     buf_puts(target, ");\n");
     return name;
+}
+
+/* constrained-byval dispatch: is this method-signature type the class variable?
+ * Mirrors EX_EXISTS_DISPATCH's carrier-ABI predicate -- an abstract tyvar
+ * (TY_TYVAR) or a TY_STRUCT with a NULL def erases to the int64 carrier. */
+static bool exwit_type_is_classvar(Type t) {
+    return t.kind == TY_TYVAR ||
+           (t.kind == TY_STRUCT && t.as.struct_.def == NULL);
+}
+
+/* Does the real instance method receive its parameter of concrete type `pt` by
+ * const pointer?  Mirrors the dict-struct field-type decision in EX_INSTANCE_DEF
+ * (emit_stmt.c): a non-closure, non-inline-C method passes a >16-byte struct as
+ * const T*; an inline-C body keeps everything by value. */
+static bool exwit_inst_param_by_ptr(const FnDef *mi, Type pt) {
+    if (!mi) return false;
+    bool inline_c = mi->body && mi->body->kind == EX_INLINE_C;
+    return !mi->closure && !inline_c && type_struct_pass_by_ptr(pt);
+}
+
+/* constrained-byval dispatch: does `t` lower to a by-value C aggregate (a bare
+ * `defstruct` value wider than the int64 carrier)?  Same shape as emit_expr.c's
+ * exists_payload_is_byval_aggregate -- such a payload rides the existential
+ * carrier as a heap-box pointer, so the thunk must deref it. */
+static bool exwit_type_is_byval_struct(Type t) {
+    if (type_is_heap_struct(t)) return false;
+    if (type_is_transparent_int_newtype(t)) return false;
+    StructDef *def = NULL;
+    if (t.kind == TY_STRUCT) {
+        def = t.as.struct_.def;
+    } else if (t.kind == TY_APP) {
+        Type args[16]; uint8_t n_args = 0;
+        type_extract_struct_app(&t, &def, args, &n_args);
+    } else {
+        return false;
+    }
+    if (!def || def->is_opaque) return false;
+    const char *cn = type_struct_value_c_name(t);
+    return cn && strcmp(cn, "int64_t") != 0;
+}
+
+char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
+                                       const TypeClassInstance *inst,
+                                       Type payload_ty) {
+    if (!ctx || !inst || !inst->typeclass) return NULL;
+    const TypeClass *tc = inst->typeclass;
+
+    /* Adaptable only when every method can be forwarded through the carrier:
+     *  - a method returning the class variable would need an inverse re-box
+     *    (allocate a box for the returned struct and hand back its pointer)
+     *    with no clear owner -- not implemented; no in-tree class needs it;
+     *  - a poly-fn (tur_poly_fn_t) method param can't ride this flat adapter;
+     *  - a missing method impl / binding leaves nothing to forward to.
+     * In any of these, return NULL so the caller falls back to the real dict. */
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        if (exwit_type_is_classvar(tc->methods[i].return_type)) return NULL;
+        for (uint8_t j = 0; j < tc->methods[i].n_params; j++) {
+            if (tc->methods[i].param_is_fn && tc->methods[i].param_is_fn[j])
+                return NULL;
+        }
+        const FnDef *mi = (i < inst->n_method_impls) ? inst->method_impls[i] : NULL;
+        if (!mi || !mi->binding || !mi->binding->name) return NULL;
+    }
+
+    char real_dict[128];
+    emit_dict_name(real_dict, sizeof(real_dict), inst);
+    char base[160];
+    snprintf(base, sizeof(base), "%s__exbox", real_dict);
+
+    for (uint32_t i = 0; i < ctx->n_exbox_dict_names; i++) {
+        if (strcmp(ctx->exbox_dict_names[i], base) == 0) return strdup(base);
+    }
+    if (ctx->n_exbox_dict_names >= ctx->cap_exbox_dict_names) {
+        uint32_t nc = ctx->cap_exbox_dict_names ? ctx->cap_exbox_dict_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->exbox_dict_names, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->exbox_dict_names = nn;
+        ctx->cap_exbox_dict_names = nc;
+    }
+    ctx->exbox_dict_names[ctx->n_exbox_dict_names++] = strdup(base);
+
+    /* Emit to pending_handler_fns so the thunks + dict land at file scope just
+     * before the enclosing function definition: after fwd_decls (the `__inst_`
+     * prototypes the thunks call) and before `file` (the function bodies that
+     * reference `&<base>_singleton`).  See emit_program's final assembly. */
+    Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file;
+    const char *struct_cn = type_struct_value_c_name(payload_ty);
+
+    /* One carrier-ABI thunk per method, forwarding to the real instance fn. */
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        const TypeClassMethod *m = &tc->methods[i];
+        const FnDef *mi = inst->method_impls[i];
+        const char *inst_fn = mi->binding->name->name;
+        char field[80];
+        tur_mangle_ident(m->name->name, field, sizeof(field));
+        const char *ret_c = type_c_name(m->return_type);
+        bool ret_void = (strcmp(ret_c, "void") == 0);
+
+        buf_printf(out, "static %s %s_%s(", ret_c, base, field);
+        if (m->n_params == 0) buf_puts(out, "void");
+        for (uint8_t j = 0; j < m->n_params; j++) {
+            if (j > 0) buf_puts(out, ", ");
+            if (exwit_type_is_classvar(m->param_types[j]))
+                buf_printf(out, "int64_t __p%u", (unsigned)j);
+            else
+                buf_printf(out, "%s __p%u", type_c_name(m->param_types[j]), (unsigned)j);
+        }
+        buf_puts(out, ") {\n    ");
+        if (!ret_void) buf_puts(out, "return ");
+        buf_printf(out, "%s(", inst_fn);
+        for (uint8_t j = 0; j < m->n_params; j++) {
+            if (j > 0) buf_puts(out, ", ");
+            Type ipt = (j < mi->n_params) ? mi->param_types[j] : payload_ty;
+            bool by_ptr = exwit_inst_param_by_ptr(mi, ipt);
+            /* The dispatch erases a param to the int64 carrier when it is the
+             * class variable (TY_TYVAR / null-def struct) or simply lowers to
+             * int64 -- including an *unannotated* class-var param, which the
+             * defclass parser defaults to TY_INT (so exwit_type_is_classvar
+             * alone misses it).  Such a carrier holds the heap-box pointer iff
+             * the instance actually wants a by-value struct there. */
+            bool carrier_erased =
+                exwit_type_is_classvar(m->param_types[j]) ||
+                strcmp(type_c_name(m->param_types[j]), "int64_t") == 0;
+            bool boxed = carrier_erased && exwit_type_is_byval_struct(ipt);
+            if (boxed) {
+                /* receiver / hidden-type arg: box pointer -> concrete struct */
+                if (by_ptr)
+                    buf_printf(out, "(const %s *)(intptr_t)__p%u", struct_cn, (unsigned)j);
+                else
+                    buf_printf(out, "*(%s *)(intptr_t)__p%u", struct_cn, (unsigned)j);
+            } else {
+                /* carrier-compatible / concrete arg: forward as-is (taking the
+                 * address when the real fn wants the value by const pointer). */
+                if (by_ptr)
+                    buf_printf(out, "&__p%u", (unsigned)j);
+                else
+                    buf_printf(out, "__p%u", (unsigned)j);
+            }
+        }
+        buf_puts(out, ");\n}\n");
+    }
+
+    /* Thunk dict struct + singleton: one carrier-ABI fn-ptr per method, in
+     * method-declaration order so EX_EXISTS_DISPATCH's
+     * `((void **)witness)[method_idx]` indexes the matching thunk. */
+    buf_printf(out, "typedef struct %s {\n", base);
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        const TypeClassMethod *m = &tc->methods[i];
+        char field[80];
+        tur_mangle_ident(m->name->name, field, sizeof(field));
+        buf_printf(out, "    %s (*%s)(", type_c_name(m->return_type), field);
+        if (m->n_params == 0) buf_puts(out, "void");
+        for (uint8_t j = 0; j < m->n_params; j++) {
+            if (j > 0) buf_puts(out, ", ");
+            buf_puts(out, exwit_type_is_classvar(m->param_types[j])
+                              ? "int64_t" : type_c_name(m->param_types[j]));
+        }
+        buf_puts(out, ");\n");
+    }
+    buf_printf(out, "} %s;\n", base);
+    buf_printf(out, "static %s %s_singleton = {\n", base, base);
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        const TypeClassMethod *m = &tc->methods[i];
+        char field[80];
+        tur_mangle_ident(m->name->name, field, sizeof(field));
+        buf_printf(out, "    .%s = %s_%s,\n", field, base, field);
+    }
+    buf_puts(out, "};\n");
+
+    return strdup(base);
 }
 
 static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_params) {
@@ -6267,6 +6438,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.poly_fatshim_names = NULL;
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
+    ctx.exbox_dict_names = NULL;
+    ctx.n_exbox_dict_names = 0;
+    ctx.cap_exbox_dict_names = 0;
     /* Phase 4 v1: frame tracking */
     ctx.frame_var = NULL;
     ctx.in_scope_with_defers = false;
@@ -7010,6 +7184,8 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.fatshim_names);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
+    free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
@@ -7648,6 +7824,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.poly_fatshim_names = NULL;
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
+    ctx.exbox_dict_names = NULL;
+    ctx.n_exbox_dict_names = 0;
+    ctx.cap_exbox_dict_names = 0;
     /* Phase 3/4: Track return emission */
     ctx.return_emitted = false;
     /* Phase 19: Pending effect handler function buffer */
@@ -8143,6 +8322,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.fatshim_names);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
+    free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);

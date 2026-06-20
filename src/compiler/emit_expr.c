@@ -5248,9 +5248,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s->n_witnesses = %u;\n", rec_tmp, (unsigned)n_w);
                 for (uint8_t wi = 0; wi < n_w; wi++) {
-                    char dict_name[128];
-                    emit_dict_name(dict_name, sizeof(dict_name),
-                                   e->as.exists_pack_.witnesses[wi]);
+                    /* constrained-byval dispatch: a heap-boxed by-value struct
+                     * payload rides the carrier as a pointer, so the witness
+                     * must present a carrier-ABI adapter dict whose receiver is
+                     * the int64 box pointer (EX_EXISTS_DISPATCH's ABI).  For a
+                     * carrier-representable payload (int/ptr/opaque) the real
+                     * dict already matches, so use it directly. */
+                    char *exbox = NULL;
+                    if (payload_byval_agg) {
+                        exbox = ensure_exists_byval_witness_dict(
+                                    ctx, e->as.exists_pack_.witnesses[wi],
+                                    cpayload_ty);
+                    }
+                    char dict_name[160];
+                    if (exbox) {
+                        snprintf(dict_name, sizeof(dict_name), "%s", exbox);
+                        free(exbox);
+                    } else {
+                        emit_dict_name(dict_name, sizeof(dict_name),
+                                       e->as.exists_pack_.witnesses[wi]);
+                    }
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "%s->witnesses[%u] = (void *)(&%s_singleton);\n",
                                rec_tmp, (unsigned)wi, dict_name);
