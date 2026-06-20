@@ -852,6 +852,23 @@ Expr *elab_gensym(Elab *e, const Form *call);
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
 
+/* Gap 1 (instance-method-return-not-unified): report a genuine,
+ * carrier-independent return-type conflict between a function's DECLARED return
+ * and its body's actual type.  The int64 carrier ABI deliberately unifies the
+ * representation of int / cstr / bool / opaque-handle / struct-handle, so a
+ * width-compatible "mismatch" (return 42 where :cstr is declared) cannot be
+ * soundly rejected without fighting the carrier -- those are the bridges the
+ * ABI relies on.  What CAN be rejected is a clash of distinct NOMINAL
+ * identities: the declared return is a concrete struct / opaque newtype / ADT
+ * (carrying a def pointer) and the body yields a DIFFERENT concrete struct /
+ * opaque / ADT.  Two distinct nominal defs never share a carrier
+ * representation, so this is always a real error.  ret_struct / ret_adt are the
+ * declared return's def pointers (at most one set); body is the elaborated
+ * body's type.  Returns true on a conflict; a primitive / carrier / tyvar /
+ * applied / unknown body is tolerated. */
+bool return_type_nominal_conflict(const StructDef *ret_struct,
+                                  const AdtDef *ret_adt, Type body);
+
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
 const Binding *borrow_referent_binding(const Expr *e);

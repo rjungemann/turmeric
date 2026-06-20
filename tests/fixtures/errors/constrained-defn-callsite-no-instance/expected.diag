@@ -1,0 +1,1 @@
+no 'HasFlag' instance for 'HandleNoInst' in constrained call to 'show-it'

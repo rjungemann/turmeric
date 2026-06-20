@@ -2691,6 +2691,11 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                      * refine the method's result type from the
                                      * elaborated body (a callable closure) in
                                      * pass 2. */
+        /* Gap 1 (instance-method-return-not-unified): the declared return's
+         * concrete nominal def (after Phase RT substitution), so pass 2 can
+         * reject a body that yields a different nominal type.  At most one set. */
+        const StructDef *ret_struct;
+        const AdtDef    *ret_adt;
     } InstMethodPass;
     InstMethodPass *passes = NULL;
     if (tc->n_methods > 0) {
@@ -3533,6 +3538,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         passes[i].n_method_params = n_method_params;
         passes[i].method_fd       = method_fd;
         passes[i].arrow_return    = arrow_return;
+        passes[i].ret_struct = (return_type.kind == TY_STRUCT) ? return_type.as.struct_.def : NULL;
+        passes[i].ret_adt    = (return_type.kind == TY_ADT)    ? return_type.as.adt_.def    : NULL;
     }
 
     /* Bring the constraint tyvars (e.g. `A` from `[(Eq A)]`) into the
@@ -3667,6 +3674,28 @@ Expr *elab_definstance(Elab *e, const Form *call) {
              * parameter).  Forcing boxed=true here mis-types the non-capturing
              * case and crashes the thunk dispatch on a code address. */
             method_fd->binding->type.as.fn.result_full_type = rft;
+        }
+
+        /* Gap 1 (instance-method-return-not-unified): an instance method body
+         * whose actual type is a DIFFERENT concrete nominal type than the
+         * method's declared return (after Phase RT substitution) is a genuine,
+         * carrier-independent conflict.  The arrow-head refinement above has
+         * already handled TY_FN results; carrier-width bridges are tolerated by
+         * the helper.  e->scope and fn_body_depth are already restored here
+         * (popped above), so on error we mirror the surrounding return-NULL. */
+        if (method_body && (mp->ret_struct || mp->ret_adt) &&
+            return_type_nominal_conflict(mp->ret_struct, mp->ret_adt, method_body->type)) {
+            const char *want = mp->ret_struct ? mp->ret_struct->name
+                                              : mp->ret_adt->name;
+            const char *meth = (tc->methods[i].name) ? tc->methods[i].name->name : "?";
+            Buf gb; buf_init(&gb);
+            type_print(&gb, method_body->type);
+            buf_putc(&gb, '\0');
+            diag_emit_with_code(DIAG_ERROR, method_body->span, TUR_E0001_TYPE_MISMATCH,
+                "instance method '%s' declares return type '%s' but its body returns %s",
+                meth, want, gb.data);
+            buf_free(&gb);
+            return NULL;
         }
 
         /* Register the method now -- after its body's lifted lambdas were

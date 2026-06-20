@@ -2528,6 +2528,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* Gap 1 (instance-method-return-not-unified): reject a body whose actual
+     * type is a DIFFERENT concrete nominal type (struct / opaque / ADT) than
+     * the declared return.  The int64 carrier ABI deliberately lets primitives
+     * and handles share a representation, so the helper tolerates those bridges
+     * and only flags a genuine nominal-identity clash.  Skip the deferred
+     * (lazy) probe, whose body is a nil placeholder. */
+    if (!lazy_defer && body && (return_struct_def || return_adt_def) &&
+        return_type_nominal_conflict(return_struct_def, return_adt_def, body->type)) {
+        const char *want = return_struct_def ? return_struct_def->name
+                                             : return_adt_def->name;
+        Buf gb; buf_init(&gb);
+        type_print(&gb, body->type);
+        buf_putc(&gb, '\0');
+        diag_emit_with_code(DIAG_ERROR, body->span, TUR_E0001_TYPE_MISMATCH,
+            "function '%s' declares return type '%s' but its body returns %s",
+            name_f->as.sym->name, want, gb.data);
+        buf_free(&gb);
+        e->scope = inner.parent;
+        scope_free(&inner);
+        return NULL;
+    }
+
     /* TY4: reject returning a borrow of a function-local (would dangle).  The
      * inner scope is still current here; binding depths were stamped at
      * creation, so the check only reads the elaborated body. */
@@ -3191,6 +3213,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fd->constraints.constraints = constraint_list;
     fd->constraints.n_constraints = n_constraints;
     fd->constraints.cap_constraints = n_constraints;
+    /* class-defn-constraint-not-discharged-at-call-site: backlink the
+     * constraint set onto the function's binding so a call site can re-discharge
+     * each `^Class T` obligation at the concrete type its arguments pin.  Only a
+     * constrained defn gets the link; NULL (the memset default) means "no
+     * obligations to check". */
+    if (fd->binding && n_constraints > 0) {
+        fd->binding->fn_constraints = &fd->constraints;
+    }
 
     /* AR9: variadic defn may not have an inline-C body (fixed C signatures only) */
     if (is_variadic && body && body->kind == EX_INLINE_C) {

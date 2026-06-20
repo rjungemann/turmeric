@@ -1,0 +1,21 @@
+;; return-type-nominal-ok -- positive control for the Gap 1 return-type nominal
+;; conflict check.  Returning the CORRECT nominal type type-checks; returning a
+;; bare int where an opaque newtype (int64 carrier) is declared stays tolerated
+;; by design -- the int64 carrier ABI lets handle-shaped values share a
+;; representation, so this is not a soundly-rejectable mismatch.
+(defstruct Pt [x : int y : int])
+(defopaque Handle :int)
+
+(defn make-pt [n : int] : Pt
+  (make-struct Pt n n))
+
+;; Carrier-tolerated: opaque Handle is int64 under the hood.
+(defn make-handle [n : int] : Handle
+  (:: n :Handle))
+
+(defn main [] : int
+  (let [p (make-pt 5)
+        h (make-handle 9)]
+    (println (.x p))             ;; 5
+    (println (:: h :int))         ;; 9
+    0))

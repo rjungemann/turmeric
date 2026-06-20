@@ -1,0 +1,27 @@
+;; constrained-defn-callsite-instance-ok -- the positive control for
+;; constrained-defn-callsite-no-instance: when the call's type argument DOES
+;; have the required instance, the constrained defn type-checks and dispatches.
+;; A multi-constraint defn is exercised too (both HasA and HasB satisfied).
+(defclass HasFlag [W] (flag-of [^borrow w] : int))
+(defclass HasA    [W] (a-of    [^borrow w] : int))
+(defclass HasB    [W] (b-of    [^borrow w] : int))
+
+(defopaque HandleSimple :int)
+(defopaque HandleAB     :int)
+
+(definstance HasFlag [HandleSimple] (flag-of [w] (:: w :int)))
+(definstance HasA    [HandleAB]     (a-of    [w] 100))
+(definstance HasB    [HandleAB]     (b-of    [w] 200))
+
+(defn use-flag [W] [(HasFlag W)] [^borrow w : W] : int
+  (flag-of w))
+
+(defn sum-ab [W] [(HasA W) (HasB W)] [^borrow w : W] : int
+  (+ (a-of w) (b-of w)))
+
+(defn main [] : int
+  (let [hs (:: 42 :HandleSimple)
+        ab (:: 0  :HandleAB)]
+    (println (use-flag hs))    ;; 42
+    (println (sum-ab ab))       ;; 300
+    0))

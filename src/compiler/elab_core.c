@@ -1681,6 +1681,20 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     return b;
 }
 
+/* Gap 1 (instance-method-return-not-unified): see elab_internal.h. */
+bool return_type_nominal_conflict(const StructDef *ret_struct,
+                                  const AdtDef *ret_adt, Type body) {
+    if (!ret_struct && !ret_adt) return false;
+    const StructDef *bs = (body.kind == TY_STRUCT) ? body.as.struct_.def : NULL;
+    const AdtDef    *ba = (body.kind == TY_ADT)    ? body.as.adt_.def    : NULL;
+    /* A non-nominal body (primitive, opaque-int carrier, tyvar, applied type,
+     * unknown/inline-C) is tolerated: those are exactly the int64 carrier /
+     * by-value bridges the ABI relies on, not a soundly-rejectable mismatch. */
+    if (!bs && !ba) return false;
+    if (ret_struct) return bs != ret_struct;  /* different struct, or an ADT body */
+    return ba != ret_adt;                      /* different ADT, or a struct body */
+}
+
 /* TY4: borrow referent extraction -- see elab_internal.h.
  *
  * Looks through result-position wrappers (do/let/letrec bodies and both `if`
