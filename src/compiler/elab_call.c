@@ -4076,11 +4076,22 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * reinterpret cannot carry a composite anyway -- type_size_bytes is 0
          * for TY_APP/struct/ADT, so call_wrap_reinterpret would no-op and the
          * collapse to int would be pure loss.  See
-         * docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md */
+         * docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md
+         *
+         * vec-get-existential-element-erased-to-int: an existential (or its
+         * dual forall) is the same shape of carrier-ABI structural type -- a
+         * `Vec (exists [a] [(C a)] a)` read through `(vec-get v i) : A`
+         * instantiates A to the existential, whose carrier is already a
+         * pointer-width int64.  Collapsing it to int erases the
+         * `as.forall_.body` payload that `open` (and every existential op) must
+         * see, forcing a per-read `(:: ... (exists ...))` re-ascription.  Keep
+         * the full type for the same reason as the composites above. */
         bool result_is_concrete_composite =
             (result_type.kind == TY_APP) ||
             (result_type.kind == TY_ADT && result_type.as.adt_.def) ||
-            (result_type.kind == TY_STRUCT && result_type.as.struct_.def);
+            (result_type.kind == TY_STRUCT && result_type.as.struct_.def) ||
+            (result_type.kind == TY_EXISTS) ||
+            (result_type.kind == TY_FORALL);
         if (!result_is_concrete_composite) {
             call_result_type = TYPE_INT;
             wrap_generic_result = (result_type.kind != TY_INT);
