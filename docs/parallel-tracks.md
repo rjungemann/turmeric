@@ -1,7 +1,10 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-19 (post-PR #433; post turmeric-spices PR #15
-sized-scheduler direction-1 land; post M7 layer-4 emit land +
+Snapshot: 2026-06-20 (post-PR #471; post turmeric-spices PR #27 linalg
+v0.21.0 land; Track C "newly unblocked paydown" note added below for the
+linalg workarounds that main #469/#470/#471 retire). Prior snapshot
+2026-06-19 (post-PR #433; post turmeric-spices PR #15 sized-scheduler
+direction-1 land; post M7 layer-4 emit land +
 Functor-`fmap` element-type generality). **Track A is complete:
 end-to-end monomorphization landed; the small residual ABI bridge is
 intentional and necessary, with no further work to be done.** All Track A
@@ -113,6 +116,42 @@ Pure spice-side work; no compiler dependencies.
   `router-compile`/`router-match`/`router-free`.
 - PR #16: remaining tourist `ctx : int` -> `ctx : Ctx` retype.
 - PR #18 (ansi v0.2.0): `Color` typeclass collapse -- **U2 target 1**.
+- PR #20/#21 (json): `derive-json-sum` for `defdata` + `Encode [float]`.
+- PR #23/#24 (httpd): `Handler` typeclass + serve bridge + JSON body
+  codecs -- **U2 target 4**.
+- PR #25 (plot): retire S6/S7 fold workarounds in `AnyRenderer`
+  bbox/legacy paths (W1/W2 fixed by main #463, W3 by #464).
+- PR #27 (linalg v0.21.0): `(Vec float)`-backed typed model -- **U4**.
+
+**Newly unblocked paydown (post main #469/#470/#471) -- not yet landed
+in spices:** linalg (PR #27) was verified against main @ `a826bce`
+(pre-#469/#471) and still carries workarounds that those later fixes
+retire. Verified 2026-06-20 against a from-source `tur` (the refactors
+below `tur check` clean and keep the 36-check `tests/linalg.tur` suite
+green):
+
+- **main #471 (always link `-lm`)** retires linalg workaround #3: the
+  libm-free `la-sqrt` (Newton-Raphson) / `la-fabs` (branch) inline-C
+  fallbacks in `spices/linalg/src/linalg/vec.tur` and `.../mat.tur` can
+  call libm `sqrt`/`fabs` directly.
+- **main #469 (letrec self-recursive float accumulator no longer
+  collapses to the int carrier)** retires linalg workaround #2: the
+  one-element heap `(Vec float)` "cell" accumulator dance in
+  `la-vec-norm` / `la-vec-norm-1` / `la-vec-norm-inf` (vec.tur) and
+  `mat-norm-fro` (mat.tur) collapses back to a plain `float` accumulator
+  threaded through the `letrec` self-call.
+- **main #470 (classic `car`/`cdr`/`null?` list surface)** partially
+  addresses linalg workaround #4 (the half-present list API); float
+  list literals (`list-macro-tcons-int-headed-no-float-list-literal`)
+  remain open.
+
+Owner action: this is a spice-side PR against `rjungemann/turmeric-spices`
+(outside this session's repo scope); the analysis + a verified
+proof-of-concept for `la-vec-norm` are recorded here so the next
+spices-side session can land it. See
+`spices/linalg/docs/linalg-v0.21.0-rearchitecture-blocker.md` (the
+"Workarounds for turmeric codegen limitations" list) for the source-side
+locations.
 
 **Archived since last snapshot:**
 
