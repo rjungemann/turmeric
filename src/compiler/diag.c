@@ -188,6 +188,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0705_POLY_CLOSURE_RESULT_TYVAR:        return "TUR-E0705";
         case TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE:    return "TUR-E0706";
         case TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH:   return "TUR-E0707";
+        case TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH:   return "TUR-E0708";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -291,6 +292,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0705") == 0) return TUR_E0705_POLY_CLOSURE_RESULT_TYVAR;
     if (strcmp(s, "TUR-E0706") == 0) return TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE;
     if (strcmp(s, "TUR-E0707") == 0) return TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH;
+    if (strcmp(s, "TUR-E0708") == 0) return TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -1565,6 +1567,33 @@ static const DiagExplanation diag_explanations_[] = {
       "  (defn f [] : float 42)\n"
       ") is NOT an error -- it is widened to the float in place, exactly as a\n"
       "numeric literal coerces in argument and binding positions.\n",
+    },
+    /* pointer-vs-scalar-returns */
+    { TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
+      "TUR-E0708: cstr return type / integer body mismatch\n"
+      "\n"
+      "A function (or instance method) declares its return type as `cstr` -- a\n"
+      "`const char*` string pointer -- but its body yields a concrete\n"
+      "integer-family scalar (int, bool, int8/16/32/64, uint8/16/32/64).\n"
+      "\n"
+      "`cstr` and the integer family all ride the same int64 general-purpose\n"
+      "register, so the carrier ABI cannot see the swap -- it is a silent bitwise\n"
+      "reinterpret.  But a bare integer is never a valid string pointer:\n"
+      "committing to `cstr` and handing back an integer is a type-erasure bug\n"
+      "that surfaces downstream as a bogus pointer dereference.\n"
+      "\n"
+      "Examples triggering this error:\n"
+      "  (defn f [x : int] : cstr 42)        ; int body, cstr return\n"
+      "  (defn g [x : int] : cstr (+ x 1))   ; int body, cstr return\n"
+      "\n"
+      "Fix: return an actual string (a string literal or a cstr-typed value), or\n"
+      "correct the declared return type to match what the body produces.\n"
+      "\n"
+      "Note: only this *commit* direction is rejected.  The reverse -- a function\n"
+      "declared to return an integer carrier whose body yields a `cstr` handle --\n"
+      "is the deliberate int64 carrier-handle bridge (generic and typeclass code\n"
+      "routinely passes pointer handles through an int64 result slot) and stays\n"
+      "accepted.\n",
     },
 };
 

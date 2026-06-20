@@ -1,0 +1,18 @@
+;; return-type-pointer-scalar-ok -- positive control for TUR-E0708.
+;; A function (or instance method) that commits to `: cstr` and actually
+;; delivers a string must NOT be flagged: the E0708 check fires only when a
+;; cstr-declared body yields a concrete INTEGER scalar, never on a genuine
+;; cstr-typed body.  Both a plain defn and an instance-method body exercise the
+;; happy path here, and main prints the returned strings to prove they survive.
+(defn greeting [] : cstr "hello")
+
+(defclass Render [a]
+  (render [x : a] : cstr))
+(defstruct Widget [n : int])
+(definstance Render [Widget]
+  (render [x : Widget] : cstr "widget"))
+
+(defn main [] : int
+  (println (greeting))                       ;; hello
+  (println (.render (make-struct Widget 0)))  ;; widget
+  0)

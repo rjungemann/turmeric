@@ -151,6 +151,16 @@ typedef enum DiagCode {
      * same-register-class carrier bridges the ABI deliberately tolerates,
      * a float-vs-non-float result is a genuine xmm0-vs-rax miscompile. */
     TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
+    /* pointer-vs-scalar-returns: a function/instance-method whose declared
+     * return type is concretely `cstr` (a `const char*`) but whose body yields
+     * a concrete integer-family scalar (int / bool / intN / uintN).  cstr and
+     * the integer family all ride the int64 GP register, so the carrier ABI
+     * cannot see the swap -- but a bare integer is never a valid string
+     * pointer, so committing to `cstr` and returning an integer is a genuine
+     * type-erasure bug, not a tolerable carrier bridge.  Only this commit
+     * direction is rejected; the reverse (an integer carrier returning a cstr
+     * handle) stays a legitimate bridge. */
+    TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

@@ -12,6 +12,42 @@ severity: Medium. A function body may produce a value of a completely unrelated
 status: PARTIALLY RESOLVED
 ---
 
+## Status: cstr-commit / integer-body returns now rejected (2026-06-20)
+
+The next carrier-tolerated slice past the nominal and float guards is now fixed
+for **both** the `defn` and `definstance` paths: a function (or instance method)
+that COMMITS to a `: cstr` return but whose body yields a concrete integer-family
+scalar (`int` / `bool` / `intN` / `uintN`) is now a hard `TUR-E0708`. `cstr` (a
+`const char*`) and the integer family all ride the same int64 GP register, so
+this slips past the `TUR-E0707` register-class check -- but a bare integer is
+never a valid string pointer, so committing to `cstr` and handing back an integer
+is a genuine type-erasure bug, not a tolerable carrier bridge.
+
+- Sibling helper `return_type_pointer_scalar_conflict` (`src/compiler/elab_core.c`,
+  declared in `elab_internal.h`): true iff the declared return is concretely
+  `cstr` and the body's kind is an integer-family scalar
+  (`ps_is_integer_scalar_kind`). Only this **commit direction** is flagged.
+- The reverse (a declared integer *carrier* whose body yields a `cstr` handle) is
+  the deliberate int64 carrier-handle bridge -- generic / typeclass code
+  routinely returns a pointer handle through an int64 result slot, exactly as it
+  returns a struct handle through `int` -- so it stays accepted and is left to a
+  future carrier-aware unification, like the same-register `int`-vs-`bool` case.
+  The commit-direction gate inside the helper encodes this calibration directly,
+  so no float-style path asymmetry was needed: both `defn` and `definstance` call
+  the same helper.
+- `defn`: checked in `elab_defn` (`src/compiler/elab_fns.c`), after the float
+  register-class check, skipping the lazy-probe placeholder and inline-C bodies.
+- `definstance`: checked in pass 2 (`src/compiler/elab_typeclasses.c`) against
+  `InstMethodPass.ret_kind`, after the float register-class check; inline-C
+  bodies (fiat TY_NIL) skipped.
+- New code `TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH` (`src/compiler/diag.{h,c}`)
+  with code string, reverse lookup, and a `tur explain TUR-E0708` long-form entry.
+- Fixtures: `errors/return-type-pointer-scalar-defn`,
+  `errors/return-type-pointer-scalar-instance` (negatives), and
+  `return-type-pointer-scalar-ok` (positive control: a defn and an instance
+  method that commit to `: cstr` and deliver genuine strings are NOT flagged).
+  `bash tests/run.sh`: 1706 passed, 0 failed.
+
 ## Status: float-vs-non-float register-class returns now rejected (2026-06-20)
 
 The float register-class slice flagged as a candidate follow-up below is now
@@ -77,19 +113,24 @@ called for, with zero suite regressions.
 
 ### What remains OPEN (tolerated by carrier-ABI design)
 
-Width-compatible scalar/handle mismatches are still accepted, because the int64
-carrier ABI deliberately unifies their representation:
+The remaining width-compatible scalar/handle mismatches are still accepted,
+because the int64 carrier ABI deliberately unifies their representation:
 
-- `: cstr` body `42`, `: bool` body `42`, `: int` body `"hello"` -- int / cstr /
-  bool all share the int64 register class.
-- A bare primitive where a nominal struct/ADT/opaque is declared -- the
-  carrier-handle bridge (`#{Unsafe}` inline-C and generic carrier code legitimately
-  return an int64 handle for a nominal type).
+- `: bool` body `42`, and the reverse `: int` body `(some-bool)` -- `int` and
+  `bool` are both integer-family scalars that genuinely share the int64 0/1
+  representation, so neither direction can be soundly rejected without a
+  carrier-aware unification.
+- A declared integer *carrier* whose body yields a `cstr` / opaque / struct /
+  ADT handle -- the carrier-handle bridge (`#{Unsafe}` inline-C and generic
+  carrier code legitimately return an int64 handle for a wider type). This is
+  the tolerated reverse of the `TUR-E0708` commit direction.
 
-(Float register-class divergence -- `: float` body returning a non-float, or a
-non-float return with a float body -- was the remaining register-class slice and
-is now **resolved** as `TUR-E0707`; see the status section at the top. Only the
-same-register-class scalar/handle carrier bridges above remain open.)
+(Two earlier register/identity slices are now **resolved**: float register-class
+divergence -- `: float` body returning a non-float, or a non-float return with a
+float body -- is `TUR-E0707`, and the cstr-commit / integer-body direction --
+`: cstr` body `42` / `(+ x 1)` -- is `TUR-E0708`; see the status sections at the
+top. The distinct-nominal-identity clash is `TUR-E0001`. Only the same-integer-
+class `int`-vs-`bool` residue and the carrier-handle bridge above remain open.)
 
 These are genuinely a carrier-ABI consequence, not an elaboration bug: rejecting
 them at the type level would fight the representation bridges the rest of the

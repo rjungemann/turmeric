@@ -3738,6 +3738,29 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             return NULL;
         }
 
+        /* pointer-vs-scalar-returns: the cstr-vs-integer slice, applied to the
+         * instance method body.  The commit-direction gate inside the helper
+         * (declared cstr only) already encodes the carrier calibration -- a
+         * method declared with an integer carrier return whose instance body
+         * yields a cstr handle is the deliberate bridge and is tolerated; only a
+         * method that genuinely COMMITS to a `cstr` return and hands back a
+         * concrete integer is rejected.  inline-C bodies (fiat TY_NIL) skipped. */
+        if (method_body && method_body->kind != EX_INLINE_C &&
+            return_type_pointer_scalar_conflict(mp->ret_kind, method_body->type)) {
+            const char *meth = (tc->methods[i].name) ? tc->methods[i].name->name : "?";
+            Buf gb; buf_init(&gb);
+            type_print(&gb, method_body->type);
+            buf_putc(&gb, '\0');
+            diag_emit_with_code(DIAG_ERROR, method_body->span,
+                TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
+                "instance method '%s' declares return type 'cstr' but its body "
+                "returns %s -- a bare integer is never a valid string pointer, "
+                "so this is a type-erasure bug, not a tolerable carrier bridge",
+                meth, gb.data);
+            buf_free(&gb);
+            return NULL;
+        }
+
         /* Register the method now -- after its body's lifted lambdas were
          * registered above -- so emit order is `[body lambdas...][method def]`,
          * matching the original single-pass behaviour. */
