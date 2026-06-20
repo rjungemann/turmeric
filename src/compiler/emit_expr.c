@@ -4789,8 +4789,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Resolve any TY_TYVARs in the receiver's type via the
                  * current spec context so the struct-app args are the
                  * concrete monomorphized types (e.g. User), not the
-                 * unbound A/B tyvars from the polymorphic source. */
-                Type rt = emit_resolve_type(ctx, e->as.get_field_.struct_expr->type);
+                 * unbound A/B tyvars from the polymorphic source.  When the
+                 * receiver is a spec parameter (an instance method's `self`),
+                 * emit_resolve_type leaves a parametric param type such as
+                 * `(Option A)` unsubstituted, so prefer the spec's concrete
+                 * arg type -- otherwise the element binding is lost and a
+                 * value-struct element field is mistaken for the scalar
+                 * carrier (the by-value field deref below never fires). */
+                Type rt;
+                if (!emit_var_spec_arg_type(ctx, e->as.get_field_.struct_expr, &rt))
+                    rt = emit_resolve_type(ctx, e->as.get_field_.struct_expr->type);
                 Type field_resolved = e->type;
                 /* substitute_struct_app_type returns a TY_APP result whose spine
                  * nodes are freshly malloc'd (e.g. resolving `(NonEmpty A)` to
@@ -4811,6 +4819,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 substitute_struct_app_type(f->full_type, def, extracted_args);
                             field_resolved_owned = true;
                         }
+                    } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
+                               rt.as.struct_.def->n_type_params == 0 &&
+                               e->as.get_field_.field_idx < rt.as.struct_.def->n_fields) {
+                        /* The spec arg type is the monomorphized container struct
+                         * (e.g. `Option__Box`): its field already carries the
+                         * concrete element type as its declared full_type. */
+                        const StructField *f =
+                            &rt.as.struct_.def->fields[e->as.get_field_.field_idx];
+                        if (f->full_type) field_resolved = *f->full_type;
                     }
                 }
                 if (field_resolved.kind == TY_STRUCT && field_resolved.as.struct_.def &&
