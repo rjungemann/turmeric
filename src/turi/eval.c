@@ -69,6 +69,7 @@
 #include "elab.h"
 #include "expr.h"
 #include "forms.h"
+#include "mangle.h"
 #include "reader.h"
 #include "symbols.h"
 #include "types.h"
@@ -3940,10 +3941,17 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
     }
     if (!match || match == rep) return turi_nil();
 
-    /* Same method slot as the baked dict node (sanitized-name match, as EX_DICT). */
+    /* Same method slot as the baked dict node.  The dict node's method_name is
+     * produced by the canonical injective mangler (tur_mangle_ident), so a
+     * hyphen/sigil method renders as e.g. `render-to` -> `render_hyto`, NOT the
+     * lossy `render_to` an underscore-collapse would give.  Compare the method's
+     * canonically-mangled name (and, defensively, the underscore-collapsed form)
+     * so the slot resolves regardless of which spelling the dict carries. */
     const char *mname = dict_arg->as.dict_.method_name;
     for (uint32_t mi = 0; mi < tc->n_methods; mi++) {
         const char *orig = tc->methods[mi].name->name;
+        char mang[256];
+        tur_mangle_ident(orig, mang, sizeof(mang));
         char san[128]; size_t olen = strlen(orig);
         if (olen >= sizeof(san)) olen = sizeof(san) - 1;
         for (size_t k = 0; k < olen; k++) {
@@ -3952,7 +3960,7 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
                       (c >= 'A' && c <= 'Z')) ? c : '_';
         }
         san[olen] = '\0';
-        if (strcmp(san, mname) != 0) continue;
+        if (strcmp(mang, mname) != 0 && strcmp(san, mname) != 0) continue;
         if (mi >= match->n_method_impls || !match->method_impls[mi]) return turi_nil();
         TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl));
@@ -5586,6 +5594,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         const void *saved_defining = env->defining_mod;
         env->defining_mod = mod;
         for (uint32_t i = 0; i < mod->n_body; i++) {
+            /* A bare inline-C block in module-body (statement) position is a
+             * file-scope C declaration block -- typedefs / static helper fns the
+             * module's inline-C constructors point at (e.g. stdlib/time.tur's
+             * __tur_mock_cap + now/sleep statics).  It is codegen-only and has no
+             * interpreter value, so skip it rather than tripping the "inline-C
+             * not supported" carve.  A function's inline-C *body* lives inside an
+             * EX_FN_DEF (still carved there if no native override exists); only a
+             * standalone declaration block reaches here directly. */
+            if (mod->body[i]->kind == EX_INLINE_C) continue;
             last = eval_expr(env, frame, mod->body[i]);
             if (turi_is_error(last) || env->returning || env->throwing) {
                 env->defining_mod = saved_defining;
@@ -5702,8 +5719,20 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * result.tur's field-access accessors (ok-val/err-val/...) work on the
          * native box, not just on make-struct TuriStructs. */
         if (sv.tag == TURI_INT) {
-            if (sv.as_int == 0)
-                return turi_error("eval: field access on null carrier");
+            if (sv.as_int == 0) {
+                /* A null carrier is how a `none` Option / err-less Result flows
+                 * through the carrier ABI (none = NULL).  Reading a field of it
+                 * is the by-value body's tag probe -- `(.is-some o)` on a none,
+                 * `(.is-ok r)` on a 0-carrier -- which the compiled path answers
+                 * from a zeroed `{0}` struct.  Mirror that: hand back the field
+                 * type's zero (false / 0.0 / 0) instead of erroring, so a none
+                 * carrier reads as "tag = false" rather than a null deref. */
+                switch (e->type.kind) {
+                case TY_BOOL: return turi_bool(false);
+                case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: return turi_float(0.0);
+                default: return turi_int(0);
+                }
+            }
             int64_t w = ((int64_t *)(intptr_t)sv.as_int)[idx];
             switch (e->type.kind) {
             case TY_BOOL:  return turi_bool(w != 0);
@@ -6300,24 +6329,39 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return v;
         }
     }
-    case EX_REINTERPRET:
+    case EX_REINTERPRET: {
         /* A same-size scalar bit-reinterpret on the compiled path (raw int64
-         * carrier).  It stays TRANSPARENT here -- and must.  The interpreter is
-         * tag-preserving: a float boxed into an int64 carrier (ADT/cons/tyvar
-         * slot, or `(:: f int)`) stays a TURI_FLOAT and is read back directly,
-         * with no unbox reinterpret.  Any attempt to actually reinterpret one
-         * direction breaks the round-trips that rely on tag preservation
-         * (typed-slots/cons-float reads `.head` of a Cons[float] with no
-         * reinterpret; typed-slots/ascribe-reinterpret round-trips i32<->f32 and
-         * float<->carrier).  Because a `TURI_INT` cannot be distinguished as
-         * "a genuine integer" vs "a carrier holding float bits", there is no
-         * self-consistent partial reinterpret -- fully transparent is the only
-         * correct choice.  Consequence: a literal `(:: 7 :float)` prints `7`
-         * here but the bit pattern `3.45846e-323` compiled.  That divergence is
-         * inherent to the tagged value model (same class as `(:: 7.1 :int)`
-         * giving `7.1`), not a bug -- see
-         * docs/reported/turi-map-nonint-value-carrier-ascription.md. */
-        return eval_expr(env, frame, e->as.reinterpret_.expr);
+         * carrier).  The interpreter is tag-preserving, so this is transparent
+         * almost everywhere: a float that survived a carrier round-trip stays a
+         * TURI_FLOAT (ADT/cons/tyvar slots, `(:: f float)`) and is read back
+         * directly with no unbox.
+         *
+         * The ONE case that must reinterpret is the int-carrier -> float
+         * direction when the runtime value is ACTUALLY a TURI_INT: a genuine
+         * int64 carrier whose word holds IEEE-754 float bits -- e.g. a float
+         * collected into a native int64[2] cons cell by the variadic rest
+         * collector, then read back with `list-head` (which hands back a
+         * TURI_INT) and ascribed `(:: ... :float)`.  Here EX_ASCRIBE would
+         * reinterpret the bits; match it so the two `::` lowerings agree.
+         *
+         * The reverse (float -> int carrier) is left TRANSPARENT on purpose: the
+         * tag-preserving interpreter keeps a "boxed" float as a TURI_FLOAT, so a
+         * consumer that later reads the carrier back as a float still sees the
+         * right value.  Converting float->int here would strip that tag and
+         * print the raw bit pattern (it regressed typed-slots/cons-float,
+         * poly-closure float results, the by-value Option float payloads, ...).
+         * A genuine float<->carrier<->float round-trip still works: the
+         * float->carrier leg stays TURI_FLOAT, so the carrier->float leg is
+         * transparent too.  i32<->f32 and same-tag ascriptions stay transparent. */
+        TuriValue v = eval_expr(env, frame, e->as.reinterpret_.expr);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        if ((e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64) &&
+            v.tag == TURI_INT) {
+            union { int64_t i; double d; } u; u.i = v.as_int;
+            return turi_float(u.d);
+        }
+        return v;
+    }
 
     /* --- Phase 2: type ascription is transparent at runtime, except that it
      * must reconcile the runtime value tag with the ascribed primitive type.
