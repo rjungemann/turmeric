@@ -10,7 +10,7 @@
   (parse [s] 100))
 
 (definstance Parse [bool]
-  (parse [s] 1))
+  (parse [s] true))
 
 (defn main [] : int
   (let [n (:: (parse "x") int)

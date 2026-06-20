@@ -1,8 +1,8 @@
 # Full carrier-aware return unification -- plan
 
 **Status:** Phase 0 + Phase 1 (behavior-neutral) + Phase 2 (reverse
-pointer-scalar, `TUR-E0709`) + Phase 2b (`bool`-vs-integer, `TUR-E0709`) landed.
-Phases 3-4 pending.
+pointer-scalar, `TUR-E0709`) + Phase 2b (`bool`-vs-integer, `TUR-E0709`) +
+Phase 3 (grounded class-var instance methods) landed. Phase 4 pending.
 **Tracks:** `docs/reported/instance-method-return-not-unified.md` (the open
 residue this plan closes).
 
@@ -155,28 +155,51 @@ tolerating the bridge. Fixtures: `errors/return-type-bool-int-defn`,
 `return-type-bool-int-carrier-ok` (positive control). `bash tests/run.sh`: green,
 zero corpus churn (no latent `int`/`bool` mismatches existed).
 
-### Phase 3 -- extend `RET_CLASS_COMMITTED` to grounded instance methods (pending)
+### Phase 3 -- grounded class-var instance methods (DONE)
 
-The goal is to make a *genuinely committed* instance method as strict as the
-equivalent `defn`. **Caution (found while scoping Phase 2b):** "the substituted
-return is fully grounded" is **not** a sufficient signal. A typeclass method
-whose class-declaration return is a *concrete type independent of the instance*
-(e.g. `(defclass Len [a] (len [x : a] : int))`) is a carrier slot for **every**
+A genuinely committed instance method is now as strict as the equivalent `defn`.
+The sound criterion (validated below) is: classify `RET_CLASS_COMMITTED` only
+when the method's **class-declaration return was the class type variable**,
+substituted to a concrete, free-tyvar-free type for this instance. A fixed
+concrete class-decl return (`len : int`), an explicit instance annotation, or a
+still-applied HKT return (`bind`/`ap`'s `(f b)` carrying a free element) stays
+`RET_CLASS_CARRIER_METHOD`.
+
+Implementation:
+
+- Pass 1 records `ret_was_class_var` on `InstMethodPass`: set true exactly where
+  the Phase-RT substitution replaces a class-type-param tyvar return with the
+  instance's concrete type (`elab_typeclasses.c`, the `subst = true` site), and
+  reset to false if an explicit instance annotation later overrides the return
+  (conservative -- that path keeps the carrier classification).
+- The check site computes
+  `meth_cls = (ret_was_class_var && !m7_type_has_free_tyvar(ret_full)) ?
+  RET_CLASS_COMMITTED : RET_CLASS_CARRIER_METHOD`, so the grounding test reuses
+  the same free-tyvar helper the M7 by-value dispatch uses. `bind`/`ap` (free
+  result element) and HKT containers (`(Option b)`) fail the grounding test and
+  stay tolerant.
+- The instance switch now emits `TUR-E0709` for the `TYPE_REVERSE` /
+  `BOOL_INTEGER` conflicts (reachable only under the COMMITTED classification),
+  with an instance-method message.
+
+**Why "grounded" alone is insufficient (the caution that drove the criterion):**
+a method whose class-decl return is a concrete type independent of the instance
+(`(defclass Len [a] (len [x : a] : int))`) is a carrier slot for *every*
 instance -- an instance body returning a `cstr` under that `int` is the
-deliberate carrier-handle bridge the report mandates tolerating (verified: it is
-accepted today, exactly like the float `(add : int)`/float-body bridge). Flipping
-all grounded methods to `RET_CLASS_COMMITTED` would regress that.
+deliberate carrier-handle bridge (verified: still accepted, exactly like the
+float `(add : int)`/float-body bridge). Only the class-type-variable case is a
+genuine per-instance commit.
 
-The sound criterion is narrower: classify `RET_CLASS_COMMITTED` only when the
-method's **class-declaration return was the class type variable** (or built from
-it), substituted to a concrete type for this instance -- e.g. `pure : a`
-substituted to `Option<int>`. There the instance genuinely commits to the
-substituted type and a divergent concrete body is a real error. A class-decl
-return that is a fixed concrete type stays `RET_CLASS_CARRIER_METHOD`. This needs
-the *pre-substitution* class method return threaded into pass 2 (alongside the
-`ret_full` retained in Phase 0) so the classifier can ask "was this slot the
-class var?". Methods still on the carrier base (`bind`/`ap` continuations
-returning a carrier container) also stay `RET_CLASS_CARRIER_METHOD`.
+**Corpus churn (expected, resolved):** two fixtures
+(`rt-return-dispatch-basic`, `rt-return-dispatch-param`) returned the int literal
+`1` as a `bool` value from a class-var-grounded (now committed) instance -- the
+same `int`-as-`bool` the language already rejects in binding position. Fixed to
+the real `true` literal (the bool prints identically, so `expected.stdout` is
+unchanged). New fixtures:
+`errors/instance-method-return-committed-mismatch` (negative) and
+`instance-method-return-committed-ok` (positive control: a committed class-var
+return with a matching body passes; a concrete `len : int` slot with a `cstr`
+body stays tolerated). `bash tests/run.sh`: 1713 passed, 0 failed.
 
 ### Phase 4 -- fixtures, docs, archive (pending)
 

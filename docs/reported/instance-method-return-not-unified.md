@@ -12,6 +12,38 @@ severity: Medium. A function body may produce a value of a completely unrelated
 status: PARTIALLY RESOLVED
 ---
 
+## Status: grounded class-var instance methods now committed (2026-06-20)
+
+The original framing of this report -- "instance methods skip the return check"
+-- is now closed for the soundly-checkable case (Phase 3 of
+`docs/upcoming/v2/carrier-aware-return-unification-plan.md`). An instance method
+whose **class-declaration return was the class type variable**, grounded to a
+concrete (free-tyvar-free) type for this instance, is now classified
+`RET_CLASS_COMMITTED` and is as strict as the equivalent defn: a divergent
+concrete body (cstr-under-integer, bool-vs-integer, distinct nominal, float
+register class) is rejected.
+
+The distinction that keeps this sound: a *fixed concrete* class-decl return
+(`(len [x : a] : int)`, the same `int` for every instance) is a carrier slot, so
+an instance body returning a `cstr` handle there stays the tolerated bridge --
+exactly like the float `(add : int)`/float-body case. Only the class-type-var
+return is a genuine per-instance commit. The classifier therefore keys on
+`ret_was_class_var` (set at the Phase-RT substitution site) AND a grounded
+`ret_full` (no free tyvar, via `m7_type_has_free_tyvar`), so HKT `bind`/`ap`
+returns (`(f b)` with a free element) stay carrier-tolerant.
+
+- Two corpus fixtures returned the int literal `1` as a `bool` from a now-committed
+  instance and were corrected to the real `true` literal (the language already
+  rejects `int`-as-`bool` in binding position).
+- Fixtures: `errors/instance-method-return-committed-mismatch` (negative) and
+  `instance-method-return-committed-ok` (positive control covering both the
+  committed class-var path and the tolerated concrete-slot bridge).
+
+The remaining residue is the carrier-handle bridge for generic / `#{Unsafe}` /
+fixed-concrete-slot / HKT code (tolerated by design), plus explicitly-annotated
+instance returns (conservatively left carrier-classified). This report stays
+OPEN only for those deliberately-tolerated cases.
+
 ## Status: bool-vs-integer returns now rejected for committed defns (2026-06-20)
 
 The `int`-vs-`bool` residue called out below as needing "a carrier-aware

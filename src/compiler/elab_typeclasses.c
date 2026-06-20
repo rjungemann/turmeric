@@ -2707,6 +2707,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * its decomposition; ret_full keeps the whole type for that future
          * carrier-vs-committed decision. */
         Type             ret_full;
+        /* carrier-aware-return-unification Phase 3: true iff the method's
+         * CLASS-DECLARATION return was the class type variable (substituted to
+         * this instance's concrete type at Phase RT).  Only such a return is a
+         * genuine per-instance commit -- a fixed concrete class-decl return
+         * (e.g. `len : int`) is a carrier slot for every instance and must stay
+         * tolerant.  Combined with a grounded ret_full, this gates
+         * RET_CLASS_COMMITTED for the method. */
+        bool             ret_was_class_var;
     } InstMethodPass;
     InstMethodPass *passes = NULL;
     if (tc->n_methods > 0) {
@@ -2886,6 +2894,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Form *impl_params_form = impl_form->as.list.items[1];
         uint32_t impl_body_start = 2;
         Type return_type = tc->methods[i].return_type;  /* Default from typeclass */
+        /* carrier-aware-return-unification Phase 3: did the class-decl return name
+         * the class type variable (so the substitution below grounds it to this
+         * instance's concrete type)?  Only then is the method a genuine
+         * per-instance commit; a fixed concrete class-decl return stays a carrier
+         * slot.  An explicit instance annotation (further below) does NOT set
+         * this -- that path keeps the conservative carrier classification. */
+        bool ret_was_class_var = false;
 
         /* Phase RT: substitute a tyvar return type (the dispatch variable) with
          * the instance's concrete type argument, so the emitted impl returns
@@ -2899,6 +2914,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                            return_type.as.tyvar_.name) == 0) {
                     return_type = type_args[ti];
                     subst = true;
+                    ret_was_class_var = true;
                     break;
                 }
             }
@@ -2998,6 +3014,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 kw = ret_or_body->as.list.items[0]->as.sym;
             }
             if (kw) {
+                /* carrier-aware-return-unification Phase 3: an explicit instance
+                 * return annotation replaces the substituted class-var return, so
+                 * it is no longer the "class type variable grounded for this
+                 * instance" commit.  Conservatively drop back to the carrier
+                 * classification rather than reason about annotation-vs-class-var
+                 * agreement. */
+                ret_was_class_var = false;
                 if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                     return_type = TYPE_INT;
                 } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
@@ -3553,6 +3576,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         passes[i].ret_adt    = (return_type.kind == TY_ADT)    ? return_type.as.adt_.def    : NULL;
         passes[i].ret_kind   = return_type.kind;
         passes[i].ret_full   = return_type;  /* Phase 0: retain the whole type */
+        passes[i].ret_was_class_var = ret_was_class_var;  /* Phase 3 */
     }
 
     /* Bring the constraint tyvars (e.g. `A` from `[(Eq A)]`) into the
@@ -3689,24 +3713,35 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             method_fd->binding->type.as.fn.result_full_type = rft;
         }
 
-        /* carrier-aware-return-unification Phase 1: reject a genuine
-         * return-position conflict between the method's declared return (after
-         * Phase RT substitution) and its elaborated body via the shared
-         * `return_position_conflict` dispatcher.  An instance method is a
-         * CARRIER position: the dispatcher only flags the float-COMMIT direction
-         * (declared float, concrete non-float body), because a non-float-declared
-         * carrier method with a float instance body is the deliberate
-         * per-instance bridge the typeclass ABI resolves to the real register
-         * class.  The arrow-head refinement above already handled TY_FN results.
-         * inline-C bodies (fiat TY_NIL) are skipped; the int-literal -> float
-         * coercion is widened in place first.  e->scope and fn_body_depth are
-         * already restored here, so on error we mirror the surrounding
-         * return-NULL. */
+        /* carrier-aware-return-unification: reject a genuine return-position
+         * conflict between the method's declared return (after Phase RT
+         * substitution) and its elaborated body via the shared
+         * `return_position_conflict` dispatcher.  An instance method is normally a
+         * CARRIER_METHOD position (the dispatcher only flags the float-COMMIT
+         * direction, since a non-float-declared carrier method with a float
+         * instance body is the deliberate per-instance bridge the typeclass ABI
+         * resolves to the real register class) -- EXCEPT when Phase 3 classifies
+         * it COMMITTED (see meth_cls below).  The arrow-head refinement above
+         * already handled TY_FN results.  inline-C bodies (fiat TY_NIL) are
+         * skipped; the int-literal -> float coercion is widened in place first.
+         * e->scope and fn_body_depth are already restored here, so on error we
+         * mirror the surrounding return-NULL. */
         if (method_body && method_body->kind != EX_INLINE_C) {
             rc_widen_int_literal_to_float_return(mp->ret_kind, method_body);
+            /* carrier-aware-return-unification Phase 3: a method whose class-decl
+             * return was the class type variable, grounded to a concrete
+             * (free-tyvar-free) type for this instance, is a genuine per-instance
+             * commit -- as strict as the equivalent defn.  Otherwise (a fixed
+             * concrete class-decl slot, an explicit annotation, or a still-applied
+             * HKT return like bind/ap's `(f b)` carrying a free element) the
+             * method participates in the carrier and stays tolerant. */
+            ReturnClass meth_cls =
+                (mp->ret_was_class_var && !m7_type_has_free_tyvar(mp->ret_full))
+                    ? RET_CLASS_COMMITTED
+                    : RET_CLASS_CARRIER_METHOD;
             ReturnConflict rc = return_position_conflict(
                 mp->ret_struct, mp->ret_adt, mp->ret_kind, method_body->type,
-                RET_CLASS_CARRIER_METHOD);
+                meth_cls);
             if (rc != RET_CONFLICT_NONE) {
                 const char *want = mp->ret_struct ? mp->ret_struct->name
                                  : mp->ret_adt    ? mp->ret_adt->name
@@ -3742,11 +3777,32 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             "not a tolerable carrier bridge",
                             meth, gb.data);
                         break;
-                    /* TYPE_REVERSE / BOOL_INTEGER (TUR-E0709) are committed-defn-
-                     * only; an instance method is RET_CLASS_CARRIER_METHOD, so the
-                     * dispatcher never returns them here. */
+                    /* TYPE_REVERSE / BOOL_INTEGER (TUR-E0709): reachable only when
+                     * Phase 3 classified this method RET_CLASS_COMMITTED (its
+                     * class-decl return was the class type variable, grounded to a
+                     * concrete type for this instance), so a divergent concrete
+                     * body is a real per-instance mismatch, not a carrier bridge. */
                     case RET_CONFLICT_TYPE_REVERSE:
+                        diag_emit_with_code(DIAG_ERROR, method_body->span,
+                            TUR_E0709_RETURN_TYPE_MISMATCH,
+                            "instance method '%s' declares return type '%s' but "
+                            "its body returns %s -- a string pointer is never a "
+                            "valid integer, and this instance commits to the "
+                            "class type variable's grounding, so there is no "
+                            "carrier to bridge it",
+                            meth, want, gb.data);
+                        break;
                     case RET_CONFLICT_BOOL_INTEGER:
+                        diag_emit_with_code(DIAG_ERROR, method_body->span,
+                            TUR_E0709_RETURN_TYPE_MISMATCH,
+                            "instance method '%s' declares return type '%s' but "
+                            "its body returns %s -- bool and the integer family "
+                            "are distinct types (boolean constants are "
+                            "true/false, not 0/1), and this instance commits to "
+                            "the class type variable's grounding, so there is no "
+                            "carrier to bridge them",
+                            meth, want, gb.data);
+                        break;
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
                 buf_free(&gb);
