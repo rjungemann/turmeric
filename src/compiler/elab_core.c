@@ -1729,6 +1729,26 @@ bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body) {
     return true;
 }
 
+/* pointer-vs-scalar-returns: see elab_internal.h. */
+static bool ps_is_integer_scalar_kind(TypeKind k) {
+    switch (k) {
+        case TY_BOOL:
+        case TY_INT:
+        case TY_INT8:  case TY_INT16:  case TY_INT32:  case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return true;
+        default:
+            return false;
+    }
+}
+bool return_type_pointer_scalar_conflict(TypeKind declared, Type body) {
+    /* Only the commit direction (declared cstr, integer body) is sound: the
+     * reverse is the int64 carrier-handle bridge, left to a carrier-aware
+     * unification. */
+    if (declared != TY_CSTR) return false;
+    return ps_is_integer_scalar_kind(body.kind);
+}
+
 /* TY4: borrow referent extraction -- see elab_internal.h.
  *
  * Looks through result-position wrappers (do/let/letrec bodies and both `if`

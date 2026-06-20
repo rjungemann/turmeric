@@ -2583,6 +2583,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* pointer-vs-scalar-returns: reject a body that yields a concrete integer
+     * scalar where the declared return commits to `cstr`.  Both ride the int64
+     * GP register, so this slips past the register-class check above, but a bare
+     * integer is never a valid string pointer.  Only the commit direction is
+     * flagged (declared cstr); the reverse is the carrier-handle bridge.  Skip
+     * the lazy probe (nil placeholder) and inline-C bodies (fiat TY_NIL). */
+    if (!lazy_defer && body && body->kind != EX_INLINE_C &&
+        return_type_pointer_scalar_conflict(return_kind, body->type)) {
+        Buf gb; buf_init(&gb);
+        type_print(&gb, body->type);
+        buf_putc(&gb, '\0');
+        diag_emit_with_code(DIAG_ERROR, body->span,
+            TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
+            "function '%s' declares return type 'cstr' but its body returns %s "
+            "-- a bare integer is never a valid string pointer, so this is a "
+            "type-erasure bug, not a tolerable carrier bridge",
+            name_f->as.sym->name, gb.data);
+        buf_free(&gb);
+        e->scope = inner.parent;
+        scope_free(&inner);
+        return NULL;
+    }
+
     /* TY4: reject returning a borrow of a function-local (would dangle).  The
      * inner scope is still current here; binding depths were stamped at
      * creation, so the check only reads the elaborated body. */

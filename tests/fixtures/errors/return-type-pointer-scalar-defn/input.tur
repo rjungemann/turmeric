@@ -1,0 +1,12 @@
+;; return-type-pointer-scalar-defn -- negative control for TUR-E0708.
+;; A function that COMMITS to a `: cstr` return (a const char* string pointer)
+;; but whose body yields a concrete integer scalar is a type-erasure bug: cstr
+;; and int both ride the int64 GP register, so it slips past the float
+;; register-class check (TUR-E0707), but a bare integer is never a valid string
+;; pointer.  Use a computed int body (not a literal) so no coercion applies.
+(defn ival [] : int 5)
+
+(defn sbad [] : cstr
+  (+ (ival) 1))
+
+(defn main [] : int 0)

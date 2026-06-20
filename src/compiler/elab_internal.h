@@ -892,6 +892,22 @@ bool return_type_register_class_conflict(TypeKind declared, Type body);
  * otherwise. */
 bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body);
 
+/* pointer-vs-scalar-returns: the next carrier-tolerated slice past the nominal
+ * and float guards.  `cstr` (a `const char*`) rides the same int64 GP register
+ * as `int` / `bool`, so swapping them in the result position is a no-op
+ * reinterpret the carrier ABI cannot see -- yet a bare integer is never a valid
+ * string pointer in surface Turmeric.  Only the COMMIT direction is a sound
+ * rejection: the declared return is concretely `cstr` and the body yields a
+ * concrete integer-family scalar (int / bool / intN / uintN).  The reverse
+ * (a declared integer carrier with a `cstr` body) is the deliberate
+ * carrier-handle bridge -- generic / typeclass code legitimately returns a
+ * pointer handle through an int64 result slot, exactly as it returns a struct
+ * handle through `int` -- so it is left to a future carrier-aware unification,
+ * like the same-register int-vs-bool case.  `declared` is the function's
+ * declared return TypeKind; `body` is the elaborated body's type.  Returns true
+ * only on the commit-direction conflict. */
+bool return_type_pointer_scalar_conflict(TypeKind declared, Type body);
+
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
 const Binding *borrow_referent_binding(const Expr *e);

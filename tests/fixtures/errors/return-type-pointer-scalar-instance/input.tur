@@ -1,0 +1,18 @@
+;; return-type-pointer-scalar-instance -- negative control for the TUR-E0708
+;; check wired into definstance pass 2.  A class method that COMMITS to a
+;; concrete `: cstr` return but whose instance body yields a concrete integer is
+;; a type-erasure bug (cstr and int share the int64 GP register).
+;;
+;; Contrast: a class method declaring the int64 *carrier* (`: int`) whose
+;; instance legitimately returns a cstr handle through that slot is the
+;; deliberate carrier bridge and stays accepted; only a declared-cstr
+;; commitment is checked here (see return-type-pointer-scalar-ok).
+(defclass Render [a]
+  (render [x : a] : cstr))
+
+(defstruct Widget [n : int])
+
+(definstance Render [Widget]
+  (render [x : Widget] : cstr 42))
+
+(defn main [] : int 0)
