@@ -36,6 +36,13 @@ const char *tur_stdlib_load_hint(const char *name) {
         { "int->float",   "stdlib/math.tur" },
         { "printf-float6", "stdlib/math.tur" },
         { "println-float", "stdlib/bits.tur" },
+        /* Classic Lisp list surface: thin aliases over list-head/list-tail/
+         * tnil?/list-length.  list.tur is auto-loaded normally, so this hint
+         * only surfaces under a :no-stdlib build -- where (load ...) is the fix. */
+        { "car",    "stdlib/list.tur" },
+        { "cdr",    "stdlib/list.tur" },
+        { "null?",  "stdlib/list.tur" },
+        { "length", "stdlib/list.tur" },
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         if (strcmp(name, table[i].name) == 0) return table[i].file;
