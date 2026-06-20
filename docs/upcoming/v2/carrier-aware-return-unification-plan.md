@@ -1,8 +1,8 @@
 # Full carrier-aware return unification -- plan
 
 **Status:** Phase 0 + Phase 1 (behavior-neutral) + Phase 2 (reverse
-pointer-scalar, `TUR-E0709`) landed. Phases 3-4 pending; the `int`-vs-`bool`
-residue is deferred (see Phase 2 notes).
+pointer-scalar, `TUR-E0709`) + Phase 2b (`bool`-vs-integer, `TUR-E0709`) landed.
+Phases 3-4 pending.
 **Tracks:** `docs/reported/instance-method-return-not-unified.md` (the open
 residue this plan closes).
 
@@ -127,23 +127,56 @@ and `return-type-int-cstr-carrier-ok` (positive control: a generic defn and an
 `#{Unsafe}` defn returning a `cstr` under an `int` return are NOT flagged).
 `bash tests/run.sh`: 1706 passed, 0 failed (no latent mismatches surfaced).
 
-**Deferred: the `int`-vs-`bool` residue.** `:bool` body `42` and the reverse
-`:int` body `(some-bool)` are *not* yet rejected, even for committed defns.
-Returning a `0`/`1` int literal where `: bool` is declared is the idiomatic way
-to write boolean constants, and a `bool`-returning generic call carried as int64
-elaborates with kind `TY_INT`, so a kind-level `int`/`bool` reject would produce
-false positives. Closing this soundly needs a carrier-result marker (knowing a
-`TY_INT` body is a genuine int vs a carried `bool`), which is its own slice
-(Phase 2b) -- the reverse pointer-scalar (`cstr` vs integer) has no such
-ambiguity, hence it went first.
+### Phase 2b -- `bool`-vs-integer for committed defns (DONE)
+
+The `int`-vs-`bool` residue is now closed for committed defns. `:bool` body `42`
+(and the reverse `:int` body `(< x 3)`) is a hard `TUR-E0709`.
+
+The earlier worry -- that a `0`/`1` int literal where `: bool` is declared is
+idiomatic, and that a `bool`-returning generic call elaborates as a carrier
+`TY_INT` -- did not survive investigation:
+
+- Turmeric has real `bool` literals (`true`/`false`, lowering to `EX_BOOL_LIT` /
+  `TY_BOOL`); boolean constants are written that way, not as `0`/`1`.
+- Binding position already rejects the swap: `(let [b : bool 1] ...)` fails with
+  "annotated bool, got int". There is no `int`->`bool` literal coercion, so
+  rejecting it in committed *return* position only makes the two positions
+  consistent.
+- A generic *instantiation* result elaborates as its **concrete** type, not a
+  carrier `int`: a committed defn whose body is a `cstr`-returning generic call
+  under an `int` return already triggers `TUR-E0709` (Phase 2), confirming body
+  types are trustworthy in committed positions.
+
+`return_type_bool_integer_conflict` fires iff exactly one side is `bool` and the
+other a concrete non-bool integer-family scalar; the dispatcher gates it on
+`RET_CLASS_COMMITTED`, so generic / `#{Unsafe}` defns and instance methods keep
+tolerating the bridge. Fixtures: `errors/return-type-bool-int-defn`,
+`errors/return-type-int-bool-defn` (both directions), and
+`return-type-bool-int-carrier-ok` (positive control). `bash tests/run.sh`: green,
+zero corpus churn (no latent `int`/`bool` mismatches existed).
 
 ### Phase 3 -- extend `RET_CLASS_COMMITTED` to grounded instance methods (pending)
 
-When an instance method's substituted return is fully grounded and the body does
-not route through a carrier helper, classify `RET_CLASS_COMMITTED`, making
-instance methods exactly as strict as the equivalent `defn`. Methods still on the
-carrier base (`bind`/`ap` continuations returning a carrier container) classify
-`RET_CLASS_CARRIER` and remain tolerated.
+The goal is to make a *genuinely committed* instance method as strict as the
+equivalent `defn`. **Caution (found while scoping Phase 2b):** "the substituted
+return is fully grounded" is **not** a sufficient signal. A typeclass method
+whose class-declaration return is a *concrete type independent of the instance*
+(e.g. `(defclass Len [a] (len [x : a] : int))`) is a carrier slot for **every**
+instance -- an instance body returning a `cstr` under that `int` is the
+deliberate carrier-handle bridge the report mandates tolerating (verified: it is
+accepted today, exactly like the float `(add : int)`/float-body bridge). Flipping
+all grounded methods to `RET_CLASS_COMMITTED` would regress that.
+
+The sound criterion is narrower: classify `RET_CLASS_COMMITTED` only when the
+method's **class-declaration return was the class type variable** (or built from
+it), substituted to a concrete type for this instance -- e.g. `pure : a`
+substituted to `Option<int>`. There the instance genuinely commits to the
+substituted type and a divergent concrete body is a real error. A class-decl
+return that is a fixed concrete type stays `RET_CLASS_CARRIER_METHOD`. This needs
+the *pre-substitution* class method return threaded into pass 2 (alongside the
+`ret_full` retained in Phase 0) so the classifier can ask "was this slot the
+class var?". Methods still on the carrier base (`bind`/`ap` continuations
+returning a carrier container) also stay `RET_CLASS_CARRIER_METHOD`.
 
 ### Phase 4 -- fixtures, docs, archive (pending)
 

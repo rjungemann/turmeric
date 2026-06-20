@@ -12,6 +12,38 @@ severity: Medium. A function body may produce a value of a completely unrelated
 status: PARTIALLY RESOLVED
 ---
 
+## Status: bool-vs-integer returns now rejected for committed defns (2026-06-20)
+
+The `int`-vs-`bool` residue called out below as needing "a carrier-aware
+unification" is now closed for committed defns (Phase 2b of
+`docs/upcoming/v2/carrier-aware-return-unification-plan.md`). A committed
+monomorphic non-`#{Unsafe}` defn that declares `: bool` with a non-bool integer
+body -- or `: int` with a `bool` body -- is now a hard `TUR-E0709`.
+
+The earlier "cannot be soundly rejected" framing did not survive investigation:
+Turmeric has real `bool` literals (`true`/`false`), binding position already
+rejects the swap (`(let [b : bool 1] ...)` -> "annotated bool, got int"), and a
+generic instantiation result elaborates as its concrete type (not a carrier
+`int`), so body types are trustworthy in committed positions. Rejecting it in
+committed return position only makes it consistent with binding position.
+
+- `return_type_bool_integer_conflict` (`src/compiler/elab_core.c`): exactly one
+  side `bool`, the other a concrete non-bool integer-family scalar. The shared
+  dispatcher gates it on `RET_CLASS_COMMITTED`, so generic / `#{Unsafe}` defns
+  and instance methods keep tolerating the carrier bridge.
+- Reuses `TUR_E0709_RETURN_TYPE_MISMATCH` (the general committed-mismatch code)
+  with a bool-specific message; the `tur explain TUR-E0709` entry now documents
+  both the cstr/integer and bool/integer cases.
+- Fixtures: `errors/return-type-bool-int-defn`, `errors/return-type-int-bool-defn`
+  (both directions) and `return-type-bool-int-carrier-ok` (positive control: a
+  committed `true` return is fine; generic + `#{Unsafe}` int-under-bool stay
+  accepted). `bash tests/run.sh`: green, zero corpus churn.
+
+The only return-position residue left OPEN is the carrier-handle bridge for
+generic / `#{Unsafe}` / typeclass code (tolerated by design) and the
+instance-method case, which needs the class-var-vs-concrete-slot distinction
+(Phase 3) -- not a kind-level reject. This report stays OPEN for that.
+
 ## Status: reverse cstr/integer returns now rejected for committed defns (2026-06-20)
 
 The carrier-aware return unification work (see

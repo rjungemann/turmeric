@@ -915,12 +915,22 @@ bool return_type_pointer_scalar_conflict(TypeKind declared, Type body);
  * gate.  Returns true on the shape match. */
 bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body);
 
+/* carrier-aware-return-unification Phase 2b: a `bool`-vs-non-bool-integer
+ * mismatch -- exactly one of declared / body is `bool` and the other is a
+ * concrete non-bool integer-family scalar.  `bool` and the integer family share
+ * the int64 0/1 carrier, but the language treats them as distinct (binding
+ * position already rejects the swap), so this is sound to reject ONLY for a
+ * committed position; the dispatcher applies that gate.  Returns true on the
+ * shape match. */
+bool return_type_bool_integer_conflict(TypeKind declared, Type body);
+
 /* carrier-aware-return-unification: classify a return position so the shared
  * dispatcher knows how much to reject against the int64 carrier ABI.
  *   RET_CLASS_COMMITTED -- a genuinely committed position: a monomorphic,
  *     non-`#{Unsafe}` `defn` that does not participate in the carrier.  Rejects
- *     every concrete ground mismatch: symmetric register-class AND the reverse
- *     pointer-scalar direction (integer return, cstr body -> TUR-E0709).
+ *     every concrete ground mismatch: symmetric register-class, the reverse
+ *     pointer-scalar direction (integer return, cstr body -> TUR-E0709), AND the
+ *     bool-vs-integer mismatch (both directions -> TUR-E0709).
  *   RET_CLASS_CARRIER_FN -- a generic or `#{Unsafe}` `defn`.  Register-class
  *     stays symmetric (a float never rides the int64 carrier), but the reverse
  *     pointer-scalar direction is the deliberate carrier-handle bridge and is
@@ -939,13 +949,14 @@ typedef enum {
 /* Which return-position predicate fired (RET_CONFLICT_NONE = no conflict).  The
  * caller maps each to its site-specific diagnostic (function vs instance
  * method) and error code (NOMINAL -> TUR-E0001, REGISTER_CLASS -> TUR-E0707,
- * POINTER_SCALAR -> TUR-E0708, TYPE_REVERSE -> TUR-E0709). */
+ * POINTER_SCALAR -> TUR-E0708, TYPE_REVERSE / BOOL_INTEGER -> TUR-E0709). */
 typedef enum {
     RET_CONFLICT_NONE = 0,
     RET_CONFLICT_NOMINAL,
     RET_CONFLICT_REGISTER_CLASS,
     RET_CONFLICT_POINTER_SCALAR,
     RET_CONFLICT_TYPE_REVERSE,
+    RET_CONFLICT_BOOL_INTEGER,
 } ReturnConflict;
 
 /* carrier-aware-return-unification: single dispatcher over the return-position

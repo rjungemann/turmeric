@@ -3742,10 +3742,11 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             "not a tolerable carrier bridge",
                             meth, gb.data);
                         break;
-                    /* TYPE_REVERSE (TUR-E0709) is committed-defn-only; an
-                     * instance method is RET_CLASS_CARRIER_METHOD, so the
-                     * dispatcher never returns it here. */
+                    /* TYPE_REVERSE / BOOL_INTEGER (TUR-E0709) are committed-defn-
+                     * only; an instance method is RET_CLASS_CARRIER_METHOD, so the
+                     * dispatcher never returns them here. */
                     case RET_CONFLICT_TYPE_REVERSE:
+                    case RET_CONFLICT_BOOL_INTEGER:
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
                 buf_free(&gb);

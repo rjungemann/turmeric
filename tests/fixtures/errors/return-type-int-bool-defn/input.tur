@@ -1,0 +1,9 @@
+;; return-type-int-bool-defn -- negative control for TUR-E0709 (integer/bool).
+;; The reverse direction: a committed monomorphic non-#{Unsafe} defn declares
+;; `: int` but its body yields a concrete `bool` (a comparison result).  Same
+;; rationale as return-type-bool-int-defn -- bool and int are distinct types,
+;; and a committed function has no carrier to bridge them.
+(defn ibad [x : int] : int
+  (< x 3))
+
+(defn main [] : int 0)

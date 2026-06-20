@@ -1761,6 +1761,26 @@ bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body) {
     return body.kind == TY_CSTR;
 }
 
+/* carrier-aware-return-unification Phase 2b: a `bool`-vs-non-bool-integer return
+ * mismatch.  `bool` and the integer family share the int64 0/1 representation,
+ * so the carrier ABI cannot see the swap -- but the language already treats them
+ * as distinct everywhere else (a `(let [b : bool 1] ...)` binding is rejected;
+ * boolean constants are `true`/`false`, not `0`/`1`).  In a genuinely committed
+ * position there is no carrier to bridge, so a `bool` declared with a non-bool
+ * integer body (or the reverse) is a real type mismatch.  Fires iff EXACTLY ONE
+ * side is `bool` and the other is a concrete non-bool integer-family scalar; the
+ * dispatcher gates it on RET_CLASS_COMMITTED. */
+static bool bi_is_nonbool_integer_kind(TypeKind k) {
+    return k != TY_BOOL && ps_is_integer_scalar_kind(k);
+}
+bool return_type_bool_integer_conflict(TypeKind declared, Type body) {
+    bool decl_bool = (declared == TY_BOOL);
+    bool body_bool = (body.kind == TY_BOOL);
+    if (decl_bool == body_bool) return false;  /* both bool / neither: not this */
+    return decl_bool ? bi_is_nonbool_integer_kind(body.kind)
+                     : bi_is_nonbool_integer_kind(declared);
+}
+
 /* carrier-aware-return-unification: single dispatcher over the return-position
  * predicates -- see elab_internal.h.  Runs them in the established order
  * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)
@@ -1804,6 +1824,14 @@ ReturnConflict return_position_conflict(const StructDef *ret_struct,
     if (cls == RET_CLASS_COMMITTED &&
         return_type_pointer_scalar_reverse_conflict(ret_kind, body))
         return RET_CONFLICT_TYPE_REVERSE;
+
+    /* bool-vs-integer: likewise committed-only.  `bool` and the integer family
+     * share the int64 0/1 carrier, but the language treats them as distinct
+     * (binding position already rejects the swap), so a committed defn with no
+     * carrier to bridge gets a real mismatch (TUR-E0709). */
+    if (cls == RET_CLASS_COMMITTED &&
+        return_type_bool_integer_conflict(ret_kind, body))
+        return RET_CONFLICT_BOOL_INTEGER;
 
     return RET_CONFLICT_NONE;
 }

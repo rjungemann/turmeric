@@ -2592,6 +2592,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "bridge it",
                         name_f->as.sym->name, want, gb.data);
                     break;
+                case RET_CONFLICT_BOOL_INTEGER:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- bool and the integer family are distinct "
+                        "types (boolean constants are true/false, not 0/1), and "
+                        "this committed monomorphic function has no carrier to "
+                        "bridge them",
+                        name_f->as.sym->name, want, gb.data);
+                    break;
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }
             buf_free(&gb);
