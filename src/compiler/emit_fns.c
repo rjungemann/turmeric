@@ -346,6 +346,27 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         free(v);
         return;
     }
+    /* RSP1: returning a pass-by-ptr struct *parameter* directly.  The param is
+     * held in C as `const T *`, but the function returns the struct by value
+     * (pass-by-ptr applies to parameters, not returns), so `return x;` would
+     * return a pointer where a `T` is expected.  Dereference to copy it out.
+     * Mirrors the if-branch deref in emit_expr.c (emit_if_value). */
+    {
+        const Expr *re = e;
+        while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
+        if (re && re->kind == EX_VAR && re->as.var.binding &&
+            tail_bv.kind == TY_UNKNOWN && !(is_main && result_kind == TY_INT)) {
+            for (uint8_t _i = 0; _i < ctx->n_pbp_params; _i++) {
+                if (ctx->pbp_param_ptrs[_i] == re->as.var.binding) {
+                    char *deref = (char *)malloc(strlen(v) + 4);
+                    sprintf(deref, "*(%s)", v);
+                    free(v);
+                    v = deref;
+                    break;
+                }
+            }
+        }
+    }
     indent_buf(body, ctx->indent);
     if (is_main && result_kind == TY_INT)
         buf_printf(body, "return (int)%s;\n", v);
@@ -1102,6 +1123,28 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     } else {
         /* Function with return value */
         char *ret_val = emit_fat_return_value(ctx, file, e, fd->body);
+        /* RSP1: returning a pass-by-ptr struct *parameter* directly.  The param
+         * is held in C as `const T *` but the function returns the struct by
+         * value, so `return x;` returns a pointer where a `T` is expected.
+         * Dereference to copy it out.  A bare struct param is a concrete sized
+         * value, never an Option/Result carrier aggregate, so it never collides
+         * with the carrier-spill return paths below.  Mirrors emit_tail. */
+        if (fd->body) {
+            const Expr *re = fd->body;
+            while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
+            if (re && re->kind == EX_VAR && re->as.var.binding &&
+                !(is_main && result_kind == TY_INT)) {
+                for (uint8_t _i = 0; _i < ctx->n_pbp_params; _i++) {
+                    if (ctx->pbp_param_ptrs[_i] == re->as.var.binding) {
+                        char *deref = (char *)malloc(strlen(ret_val) + 4);
+                        sprintf(deref, "*(%s)", ret_val);
+                        free(ret_val);
+                        ret_val = deref;
+                        break;
+                    }
+                }
+            }
+        }
         indent_buf(file, ctx->indent);
         /* closure-carrier-return-and-arg-int-pointer-warnings: determine the
          * function's actual C return type so a fn-typed body returned through

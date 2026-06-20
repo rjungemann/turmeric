@@ -2236,6 +2236,42 @@ Expr *elab_defn(Elab *e, const Form *call) {
             existing->type.as.fn.arg_unique_mut[_ei] = params[_ei]->is_unique &&
                                                        params[_ei]->is_mut;
         }
+        /* RR1 (recursion): propagate the *result* shape early too.  Without
+         * this, a recursive self-call inside the body reads the stale pass-1
+         * forward-decl result (the int64 carrier `TY_INT`) and is typed `int`
+         * instead of the declared return -- surfacing as a spurious branch
+         * mismatch when the self-call sits in one arm of an `if` whose other
+         * arm is the real return type (e.g. `then=Box else=int`).  Mirror the
+         * result_kind / result_full_type assigned to the final fn_type below.
+         *
+         * Only the *annotated* return is forwarded here.  An inferred return
+         * (return_kind still TY_NIL / TY_TYVAR, resolved from body->type after
+         * elaboration) is the genuinely mutually-dependent case and is left to
+         * the post-body fn_type construction. */
+        if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
+            existing->type.as.fn.result_kind = return_kind;
+            Type *rft = NULL;
+            if (return_adt_def) {
+                rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *rft = type_adt(return_adt_def);
+            }
+            if (return_struct_def) {
+                rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+                memset(rft, 0, sizeof(Type));
+                rft->kind = TY_STRUCT;
+                rft->copy_kind = return_struct_def->is_linear ? CK_LINEAR
+                               : (return_struct_def->is_copy ? CK_COPY : CK_MOVE);
+                rft->hkt_kind = KIND_STAR;
+                rft->as.struct_.def = return_struct_def;
+            }
+            if (return_session_type) rft = return_session_type;
+            if (return_tyvar_type)   rft = return_tyvar_type;
+            if (return_fn_type && !rft) rft = return_fn_type;
+            if (return_app_type)     rft = return_app_type;
+            if (return_exists_type)  rft = return_exists_type;
+            if (return_borrow_type && !rft) rft = return_borrow_type;
+            if (rft) existing->type.as.fn.result_full_type = rft;
+        }
     }
 
     /* Push params into the inner scope (created earlier for kind-var bindings). */
