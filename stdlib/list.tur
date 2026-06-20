@@ -187,35 +187,72 @@
   (if (tnil? cell)
     0
     (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f))))
-;;; list -- construct a list from N values via nested tcons.
+;;; tur-list-homog__ -- internal: compile-time element homogeneity check.
+;;;
+;;; Both parameters share the single type variable A, so a call with two
+;;; differently-typed arguments is a TUR-E0001 at elaboration. The body is a
+;;; no-op; the call exists only to make the type-checker enforce that adjacent
+;;; (list ...) elements have the same type. No allocation (fixed arity).
+
+(defn tur-list-homog__ [A] [a :A b :A] :nil ```c (void)a; (void)b; ```)
+;;; list-homog-chain__ -- internal: pairwise-chain tur-list-homog__ over xs.
+;;;
+;;; Emits (tur-list-homog__ x0 x1), (tur-list-homog__ x1 x2), ... so all
+;;; elements transitively unify to one type. Zero or one element: no check.
+
+(defmacro list-homog-chain__ [& xs]
+  (if (empty? xs)
+    0
+    (if (empty? (rest xs))
+      0
+      (list do
+        (list tur-list-homog__ (first xs) (second xs))
+        (list list-homog-chain__ ~@(rest xs))))))
+;;; list-build__ -- internal: right-fold xs into a typed (tcons-of ...) chain.
+;;;
+;;; Routes through the polymorphic-head constructor tcons-of (not the int-only
+;;; tcons), so the resulting cons cells specialize their head slot to the
+;;; element type A (e.g. a `double` field for :float). The homogeneity check
+;;; runs separately in the `list` macro, so this just builds the chain.
+
+(defmacro list-build__ [& xs]
+  (if (empty? xs)
+    (list tnil)
+    (list tcons-of (first xs) (list list-build__ ~@(rest xs)))))
+;;; list -- construct a typed list from N values via nested tcons-of.
 ;;;
 ;;; Parameters:
-;;;   & xs -- zero or more values
+;;;   & xs -- zero or more values, all of a single element type A.
 ;;;
 ;;; Returns:
-;;;   The right-folded (tcons ... (tnil)) chain, typed as :int (the raw
-;;;   carrier that tcons/tnil produce). Suitable as input to list-length,
-;;;   list-eq?, and the rest of the :int-taking list API. For typed
-;;;   (Cons A) cells (consumable by thead/ttail), build via make-struct
-;;;   Cons with an explicit (:: ... (Cons A)) annotation.
+;;;   The right-folded (tcons-of ... (tnil)) chain, typed as (Cons A) where A
+;;;   is the element type recovered from the literal -- so (list 7.1 2.5) is a
+;;;   (Cons float) whose head slot is a `double`, and (list 1 2 3) is a
+;;;   (Cons int). A (Cons A) carrier coerces to :int in argument position, so
+;;;   the result still composes with list-length, list-eq?, and the rest of the
+;;;   :int-taking carrier API; an empty (list) is the bare :int carrier 0.
 ;;;
 ;;; Note: all elements must unify to a single type. Mixing types -- e.g.
 ;;;   (list 1 "x" 3.14) -- is a type error (TUR-E0001 on the offending
-;;;   element). For heterogeneous fixed-arity collections, use tuple2,
-;;;   tuple3, tuple4, or tuple5 instead.
+;;;   element). That genuinely-heterogeneous case is the one place to reach for
+;;;   tuple2, tuple3, tuple4, or tuple5 instead; a homogeneous non-int list
+;;;   (like a float list) is exactly what this macro now builds directly.
 ;;;
 ;;; Example:
-;;;   (list)        ; => (tnil)
-;;;   (list 1 2 3)  ; => (tcons 1 (tcons 2 (tcons 3 (tnil))))
+;;;   (list)          ; => (tnil), carrier 0
+;;;   (list 1 2 3)    ; => (Cons int):   tcons-of 1 (tcons-of 2 (tcons-of 3 (tnil)))
+;;;   (list 7.1 2.5)  ; => (Cons float): a double-headed cons chain
 ;;;   ; Heterogeneous -- type error:
-;;;   ; (list 1 "x")  ; => TUR-E0001: function 'tcons' arg 1: expected int, got cstr
-;;;   ; Use tuple2 instead: (tuple2 1 "x")
+;;;   ; (list 1 "x")  ; => TUR-E0001: expected int, got cstr; use tuple2 instead
 ;;;
 ;;; Since: List literal macro
 
-
 (defmacro list [& xs]
-  (if (empty? xs) (list tnil) (list tcons (first xs) (list list ~@(rest xs)))))
+  (if (empty? xs)
+    (list tnil)
+    (list do
+      (list list-homog-chain__ ~@xs)
+      (list list-build__ ~@xs))))
 ;;; list* -- prepend values onto an existing list tail.
 ;;;
 ;;; Parameters:
@@ -223,24 +260,28 @@
 ;;;             prior arguments are prepended left-to-right.
 ;;;
 ;;; Returns:
-;;;   The right-folded (tcons ... tail) chain where tail is the last argument.
-;;;   With a single argument, returns it unchanged (identity on the tail).
+;;;   The right-folded (tcons-of ... tail) chain where tail is the last
+;;;   argument. With a single argument, returns it unchanged (identity on the
+;;;   tail). Routing through the polymorphic-head tcons-of means a non-int
+;;;   prefix (e.g. a float) specializes its head slot, mirroring (list ...).
 ;;;
-;;; Note: all prefix elements must unify to the same type as the elements in
-;;;   the tail list (all :int at the carrier level). Mixing types triggers
-;;;   TUR-E0001. For heterogeneous needs, use tupleN.
+;;; Note: each prefix element pins its own cons cell's head type; the prefix
+;;;   elements should share the tail's element type. A (Cons A) tail coerces to
+;;;   the :int tail carrier, so the chain composes with the carrier list API.
+;;;   For genuinely heterogeneous needs, use tupleN.
 ;;;
 ;;; Example:
 ;;;   (list* (tnil))                    ; => (tnil)
-;;;   (list* 1 2 (tnil))                ; => (tcons 1 (tcons 2 (tnil)))
-;;;   (list* 1 2 (list 3 4))            ; => (tcons 1 (tcons 2 (tcons 3 (tcons 4 (tnil)))))
+;;;   (list* 1 2 (tnil))                ; => (tcons-of 1 (tcons-of 2 (tnil)))
+;;;   (list* 1 2 (list 3 4))            ; => (Cons int) of 1 2 3 4
+;;;   (list* 7.1 (list 2.5))            ; => (Cons float) of 7.1 2.5
 ;;;
 ;;; Since: List literal macro
 
 (defmacro list* [& args]
   (if (empty? (rest args))
     (first args)
-    (list tcons (first args) (list list* ~@(rest args)))))
+    (list tcons-of (first args) (list list* ~@(rest args)))))
 ;;; list-head -- head element of a non-empty carrier-level list.
 
 (defn list-head [l : int] : int
