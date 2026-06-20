@@ -1,0 +1,8 @@
+;; Spice v0.21 compat: legacy ":int pointer" forms (sizeof, float64*) were never
+;; Turmeric language operators. An unknown-call-head on one should carry a
+;; migration hint pointing at the supported form, not a bare "unknown".
+(extern-c malloc [size : int] : ptr<void>)
+(defn main [] : int
+  (let [data (malloc 64)
+        x    (float64* data 0)]
+    0))

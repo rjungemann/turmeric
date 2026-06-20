@@ -1016,4 +1016,12 @@ void  expr_print(Buf *b, const Expr *e);   /* debug only */
  * same hint when a deferred runtime-dispatch head turns out to be unbound. */
 const char *tur_stdlib_load_hint(const char *name);
 
+/* Map a legacy "store pointers as :int and hand-roll allocation" form that was
+ * never a Turmeric language operator (`sizeof`, `float64*`/`float32*` raw-pointer
+ * indexing, `declare`) to a one-line migration pointer, or NULL when the name is
+ * not one of them.  Such a name surfaces as a bare "unknown function or operator"
+ * call head with no path forward; the hint says what to use instead.  See
+ * docs/guides/structs-guide.md (legacy pointer/struct migration). */
+const char *tur_legacy_form_hint(const char *name);
+
 #endif

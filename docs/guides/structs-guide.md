@@ -555,11 +555,67 @@ required-fields table.
 
 ---
 
+## Migrating legacy `:int`-pointer struct code
+
+Older C-backed spice code predates typed structs. It stored a struct as an
+`:int` pointer, sized allocations with `(sizeof T)`, read fields through
+generated `(Struct-field obj)` accessor *functions*, and indexed heap float
+buffers with a `(float64* ptr i)` intrinsic. **None of these are Turmeric
+language forms** -- `sizeof` is valid only inside an inline-C block, and the
+`Struct-field` accessor and `float64*`/`float32*` indexing forms never existed
+at the language level. Code using them fails with `unknown function or
+operator '<name>'` (the compiler now attaches a migration hint pointing here).
+
+Translate each form to the supported equivalent:
+
+| Legacy form | Supported equivalent |
+|-------------|----------------------|
+| `(malloc (sizeof T))` -> struct as `:int` | `(make-struct T ...)`; let the type system own the layout |
+| `(Struct-field obj)` accessor function | `(.field obj)` read |
+| `(set! (Struct-field obj) v)` over an `:int` pointer | give the field a real type and mutate the backing value (e.g. `(vec-set! (.data obj) i v)`) |
+| heap float buffer as `:int` + `(float64* ptr i)` | a stdlib `(Vec float)` field with `(vec-get v i)` / `(vec-set! v i x)` |
+| `(declare malloc free)` | `(extern-c malloc [size : int] : ptr<void>)` (only when you genuinely need raw C `malloc`) |
+
+A matrix wrapper, before and after:
+
+```turmeric
+;; Before -- struct pointer stored as :int, data malloc'd, fields via accessors
+(defstruct mat [rows : int  cols : int  data : int])
+(defn mat-get [m i] : float (float64* (mat-data m) i))
+
+;; After -- typed struct over a heap (Vec float)
+(defstruct mat [rows : int  cols : int  data : (Vec float)])
+(defn mat-get [^borrow m : mat  i : int] : float
+  (vec-get (.data m) i))
+```
+
+### Reading and mutating through a borrow
+
+A struct that owns a `(Vec float)` (or any non-`:copy` field) is move-only, so a
+plain `(defn mat-get [m : mat ...] ...)` *consumes* `m` and a second call trips
+`TUR-E0005` use-after-move. Take the receiver by borrow with the `^borrow`
+parameter annotation -- **not** a `&mat` / `^&mat` type spelling -- and `.field`
+reads (and `vec-set!` writes through `(.data m)`) work without moving:
+
+```turmeric
+(defn mat-get [^borrow m : mat  i : int] : float
+  (vec-get (.data m) i))
+
+(defn mat-set! [^borrow m : mat  i : int  v : float] : void
+  (vec-set! (.data m) i v))
+```
+
+The call site passes the struct directly -- `(mat-get m 0)` -- and keeps
+ownership, so the same `m` can be read and mutated repeatedly.
+
+---
+
 ## Common errors
 
 | Error | Cause |
 |-------|-------|
-| `TUR-E0005` | Use-after-move: reading a field from a struct that was already moved (or extracting a linear field twice) |
+| `TUR-E0005` | Use-after-move: reading a field from a struct that was already moved (or extracting a linear field twice). For a move-only struct, take the receiver `^borrow` (see [Migrating legacy `:int`-pointer struct code](#migrating-legacy-int-pointer-struct-code)) |
+| `unknown function or operator 'sizeof'` / `'float64*'` / `'<Struct>-<field>'` | A legacy `:int`-pointer form; see the migration table above |
 | Field count mismatch | `make-struct` given fewer or more arguments than the struct has fields |
 | `:copy` constraint violation | A `:copy` struct contains a field type that is not copy-compatible (e.g. `:ref<int>`) |
 

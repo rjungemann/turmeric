@@ -47,6 +47,60 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
     return tur_stdlib_load_hint(name->name);
 }
 
+/* Migration aid for legacy C-backed spice code.  A handful of forms that older
+ * "store a pointer as :int and hand-roll allocation + field access" code reaches
+ * for were never Turmeric language operators -- they only ever existed inside an
+ * inline-C block, or not at all -- so they surface as a bare "unknown function or
+ * operator" with no path forward.  Map each to a one-line "use X instead" so the
+ * upgrade is discoverable.  Curated and fixed-name (no false positives); the
+ * `Struct-field` accessor case is handled separately because it needs the struct
+ * registry to know whether `<name>` really decomposes as `<struct>-<field>`. */
+const char *tur_legacy_form_hint(const char *name) {
+    if (strcmp(name, "sizeof") == 0)
+        return "sizeof is only valid inside an inline-C block; for a heap buffer "
+               "use a stdlib (Vec T) via vec-new/vec-push!, or call malloc from "
+               "an (extern-c malloc [size : int] : ptr<void>) block";
+    if (strcmp(name, "float64*") == 0 || strcmp(name, "float32*") == 0)
+        return "raw-pointer indexing (float64*/float32*) is not a Turmeric form; "
+               "store the data in a stdlib (Vec float) and use (vec-get v i) / "
+               "(vec-set! v i x)";
+    if (strcmp(name, "declare") == 0)
+        return "declare is not a Turmeric form; declare an external C symbol with "
+               "(extern-c name [arg : T ...] : ret)";
+    return NULL;
+}
+
+/* True when `name` decomposes as `<struct>-<field>` for some registered struct
+ * and one of its fields -- i.e. an attempt to call a generated accessor function
+ * (`(mat-rows m)`) that Turmeric does not emit.  On a hit, write a `(.field x)`
+ * read suggestion into `buf` (the field name is used in the suggested form so the
+ * pointer is concrete).  Struct names may themselves contain hyphens, so we test
+ * each registered struct as a prefix rather than splitting on the first '-'. */
+static bool struct_accessor_hint(Elab *e, const char *name,
+                                 char *buf, size_t buflen) {
+    if (!e || !name) return false;
+    size_t nlen = strlen(name);
+    for (uint32_t i = 0; i < e->n_struct_defs; i++) {
+        const StructDef *sd = e->struct_defs[i];
+        if (!sd || !sd->name) continue;
+        size_t slen = strlen(sd->name);
+        if (slen + 1 >= nlen) continue;            /* need room for "-<field>" */
+        if (strncmp(name, sd->name, slen) != 0) continue;
+        if (name[slen] != '-') continue;
+        const char *field = name + slen + 1;
+        for (uint32_t f = 0; f < sd->n_fields; f++) {
+            if (sd->fields[f].name && strcmp(field, sd->fields[f].name) == 0) {
+                snprintf(buf, buflen,
+                         "struct accessor functions are not generated; read the "
+                         "field with (.%s x) and construct with (make-struct %s "
+                         "...)", field, sd->name);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* TY2.2: Coerce a value expression to the `any` top type by wrapping it in an
  * EX_UNION_INJECT carrying the value's TypeKind as the runtime tag.  Used at
  * every widening site (call args, return position, branch unification) so a
@@ -1952,6 +2006,22 @@ Expr *elab_call(Elab *e, Form *call) {
                 snprintf(hint_repl, sizeof(hint_repl),
                          "(load \"%s\")", hint_file);
                 DiagSuggestion sug = { hint_text, hint_repl, NULL };
+                diag_emit_with_suggestion(DIAG_ERROR, head->span, err_msg, &sug);
+            } else if (tur_legacy_form_hint(name->name) ||
+                       struct_accessor_hint(e, name->name, NULL, 0)) {
+                /* Legacy C-backed-spice forms (sizeof / float64* / declare) and
+                 * `<struct>-<field>` accessor-function calls: emit a migration
+                 * pointer instead of a bare "unknown" (UCH1 + spice v0.21
+                 * compat). */
+                char err_msg[128];
+                char acc_buf[256];
+                const char *hint = tur_legacy_form_hint(name->name);
+                if (!hint && struct_accessor_hint(e, name->name, acc_buf,
+                                                  sizeof(acc_buf)))
+                    hint = acc_buf;
+                snprintf(err_msg, sizeof(err_msg),
+                         "unknown function or operator '%s'", name->name);
+                DiagSuggestion sug = { hint, NULL, NULL };
                 diag_emit_with_suggestion(DIAG_ERROR, head->span, err_msg, &sug);
             } else {
                 diag_emit(DIAG_ERROR, head->span,
