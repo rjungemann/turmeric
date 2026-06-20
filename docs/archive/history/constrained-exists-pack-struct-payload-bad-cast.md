@@ -49,3 +49,64 @@ already on file and is confirmed accurate.
 - `bash tests/run.sh` (10-min timeout): `summary: 1704 passed, 0 failed`.
 - Diagnostic fires for the report's 1-field repro and the plot 3-field
   `PointsR`; the opaque-over-int dispatch fixture still builds and runs.
+
+## Superseded: heap-box support replaces the diagnostic
+
+Branch: `claude/constrained-exists-pack-struct-cast-a7o5jb`
+
+The `elab_pack` diagnostic above was a *reject*-the-construct resolution. It
+was subsequently replaced by end-to-end **heap-box support** for the by-value
+struct payload -- the construct now compiles and the pack/open record
+round-trips instead of being forbidden:
+
+- `src/compiler/emit_expr.c` (`EX_EXISTS_PACK` / `EX_EXISTS_OPEN`): on the
+  constrained (`n_witnesses > 0`) path, heap-box a by-value aggregate payload
+  (`exists_payload_is_byval_aggregate`) and carry the box pointer in the
+  record's `value` slot; open reads it back through the record -> box
+  indirection (rc-managed and `:linear` paths), freeing the box on the
+  `:linear` path.
+- `src/compiler/emit_module.c`: new `tur_existential_drop_byval` rc drop hook
+  frees the box when the rc-managed record is reclaimed (block stays
+  `RCEXP_OPAQUE`, so the cycle walker never follows the plain box).
+- `src/compiler/elab_types.c` (`elab_pack`): the reject diagnostic was removed.
+- `tests/fixtures/errors/exists-pack-byval-struct-payload/`: removed (the
+  construct is no longer an error).
+- `tests/fixtures/exists-pack-constrained-byval-struct/`: new pass fixture for
+  the report's exact repro.
+
+Verification (heap-box step): `bash tests/run.sh` (10-min timeout) --
+`1704 passed, 0 failed`.
+
+## Dispatch ABI closed (carrier-adapter thunks)
+
+Branch: `claude/constrained-exists-pack-struct-cast-a7o5jb`
+
+The dispatch-ABI layer the #455 diagnostic cited -- witness dispatch on a
+by-value-struct receiver hitting the int64-carrier ABI vs the instance's
+by-value-struct ABI -- is now closed, so the construct is fully supported (not
+just compile-but-mis-dispatch):
+
+- `src/compiler/emit_module.c` (`ensure_exists_byval_witness_dict`): generate a
+  per-`(class, struct-instance)` carrier-adapter dict `dict_<Class>_<T>__exbox`.
+  Each method slot is a thunk with the dispatch's carrier signature that derefs
+  the heap-box pointer back to the concrete struct and forwards to the real
+  `__inst_<Class>_<method>_<T>` (passing `const T *` / `&arg` where the real fn
+  is pass-by-ptr). Emitted to `pending_handler_fns` so the thunks sit after the
+  `__inst_` fwd decls and before the bodies referencing `&..._singleton`.
+- `src/compiler/emit_expr.c` (`EX_EXISTS_PACK`): point each witness at the
+  adapter dict when the payload is a by-value aggregate; carrier-compatible
+  payloads keep the real dict.
+- Dedup registry `exbox_dict_names` on `EmitCtx` (init + free mirror the
+  existing thunk/fatshim registries).
+- Investigation note: an unannotated class-var method param defaults to
+  `TY_INT` (not `TY_TYVAR`), so the thunk keys its box-deref off the *instance*
+  param type being a by-value struct, not the abstract method signature.
+- `tests/fixtures/exists-pack-constrained-byval-struct/`: upgraded to open the
+  existential and dispatch a scalar-returning (`rbound`) and struct-returning
+  (`rbox`) method through the witness vtable.
+
+The follow-up report was resolved and moved to
+`docs/archive/constrained-exists-open-dispatch-byval-struct-receiver.md`.
+
+Verification (dispatch step): `bash tests/run.sh` (10-min timeout) --
+`1708 passed, 0 failed`.

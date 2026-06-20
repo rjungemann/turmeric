@@ -2544,36 +2544,13 @@ Expr *elab_pack(Elab *e, const Form *call) {
         }
         n_witnesses = nc;
 
-        /* A constraint-carrying existential record stores its payload in a
-         * single int64 carrier slot (`tur_existential_t.value`) and dispatches
-         * constraint methods through the packed witness vtable on that carrier.
-         * A by-value `defstruct` payload does not fit that carrier: the pack
-         * site would emit `record->value = (int64_t)(struct)` (an invalid
-         * aggregate-to-int cast), and even once heap-boxed the witness method's
-         * by-value-struct ABI (`int64_t inst(LinesR)`) cannot be called through
-         * the carrier dispatch signature (`int64_t (*)(int64_t)`).  Reject it
-         * here with an actionable diagnostic instead of emitting C that the
-         * backend rejects (see docs/reported/constrained-exists-pack-struct-
-         * payload-bad-cast.md).  Carrier-representable payloads -- a plain
-         * `:int`, a `:ptr<T>` handle, or a `defopaque T :int` newtype -- are
-         * the supported shape and pass through unchanged. */
-        bool payload_is_byval_struct =
-            concrete.kind == TY_STRUCT &&
-            concrete.as.struct_.def != NULL &&
-            !concrete.as.struct_.def->is_opaque &&
-            concrete.as.struct_.def->n_type_params == 0 &&
-            !type_is_transparent_int_newtype(concrete);
-        if (payload_is_byval_struct) {
-            diag_emit(DIAG_ERROR, val_form->span,
-                      "pack: a by-value struct payload ('%s') is not supported "
-                      "in a constraint-carrying existential -- the record stores "
-                      "its payload in an int64 carrier and dispatches witnesses "
-                      "on it. Wrap the value in a 'defopaque T :int' newtype "
-                      "(or use a :ptr<T> handle) so the payload is "
-                      "carrier-representable.",
-                      type_name(concrete));
-            return NULL;
-        }
+        /* A by-value `defstruct` payload in a constraint-carrying existential
+         * is supported by heap-boxing the aggregate at the pack site and
+         * reading it back through the pointer on open (EX_EXISTS_PACK /
+         * EX_EXISTS_OPEN in emit_expr.c).  Witness-dispatch on a by-value-struct
+         * receiver is the remaining gap -- the dispatch site assumes the int64
+         * carrier ABI; see
+         * docs/reported/constrained-exists-open-dispatch-byval-struct-receiver.md. */
     }
 
     /* F1-2-3: move-at-pack for RC-payload existentials.  If the packed

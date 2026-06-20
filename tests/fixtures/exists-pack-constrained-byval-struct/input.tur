@@ -1,0 +1,32 @@
+;; constrained-byval: a constraint-carrying existential `(exists [a] [(C a)] a)`
+;; whose payload is a by-value `defstruct` value. The pack heap-boxes the
+;; aggregate and carries the pointer in the existential record's `value` slot --
+;; before the fix it emitted `__rec->value = (int64_t)((LinesR){...})`, which cc
+;; rejects with "aggregate value used where an integer was expected".
+;;
+;; Witness dispatch on the boxed receiver goes through a carrier-adapter thunk
+;; dict (`dict_<Class>_<T>__exbox`) so EX_EXISTS_DISPATCH's int64-carrier ABI
+;; lines up with the instance method's by-value-struct ABI: the thunk derefs
+;; the box pointer back to the struct and forwards to the real instance method.
+;;
+;; See docs/archive/constrained-exists-pack-struct-payload-bad-cast.md.
+
+(defmodule p (export)
+  (defstruct BBox [lo : int hi : int])
+  (defclass Rdr [a]
+    (rbound [x] : int)
+    (rbox   [x] : BBox))
+  (defstruct LinesR [v : int w : int])
+  (definstance Rdr [LinesR]
+    (rbound [x] (+ (.v x) (.w x)))
+    (rbox   [x] (make-struct BBox (.v x) (.w x))))
+  (defn main [] : int
+    ;; Pack a by-value struct behind a constrained existential, then open it
+    ;; and dispatch both a scalar-returning and a struct-returning method on
+    ;; the boxed receiver through the witness vtable.
+    (let [e (pack (make-struct LinesR 5 7) (exists [a] [(Rdr a)] a))]
+      (open e [a x]
+        (println (rbound x))             ; 12
+        (let [b (rbox x)]
+          (println (+ (.lo b) (.hi b)))))) ; 12
+    0))

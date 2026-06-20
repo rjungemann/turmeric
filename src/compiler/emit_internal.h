@@ -169,6 +169,14 @@ typedef struct EmitCtx {
     char    **poly_fatshim_names;
     uint32_t  n_poly_fatshim_names;
     uint32_t  cap_poly_fatshim_names;
+    /* constrained-byval dispatch: per-(class,struct-instance) carrier-adapter
+     * witness-dict tracking.  A constrained existential over a by-value struct
+     * payload points its witness at one of these `dict_<Class>_<T>__exbox`
+     * thunk dicts so EX_EXISTS_DISPATCH's carrier ABI (int64 receiver) lines up
+     * with the instance method's by-value-struct ABI. */
+    char    **exbox_dict_names;
+    uint32_t  n_exbox_dict_names;
+    uint32_t  cap_exbox_dict_names;
     /* Phase 3: For closure thunk emission, track the current closure */
     struct Closure *closure;
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
@@ -391,6 +399,19 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
+/* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a
+ * by-value struct payload boxed into a constrained existential, returning the
+ * dict's base name (caller references `&<name>_singleton`).  Each method slot is
+ * a thunk taking the receiver as the int64 carrier (the heap-box pointer),
+ * dereferencing it to the concrete struct, and forwarding to the real instance
+ * method through its dict singleton -- so EX_EXISTS_DISPATCH's carrier ABI lines
+ * up with the instance's by-value-struct ABI.  Returns NULL when the instance is
+ * not adaptable this way (a method that returns the class variable needs an
+ * inverse re-box that is not implemented); the caller then falls back to the
+ * real dict. */
+char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
+                                       const TypeClassInstance *inst,
+                                       Type payload_ty);
 /* M7 carrier-spill shim: a poly thunk (`real_fn`) that RETURNS a by-value
  * aggregate (e.g. a Monad continuation returning `Option__int`) cannot be cast
  * to the int64 `tur_poly_fn_t.fn` ABI without corrupting the struct return.

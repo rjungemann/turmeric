@@ -275,6 +275,11 @@ typedef struct tur_existential {
 } tur_existential_t;
 /* EXG1-2: drop hook for constrained-existential rc records */
 static void tur_existential_drop(void *value) { (void)value; }
+/* constrained-byval: drop hook for boxed-aggregate existential payloads */
+static void tur_existential_drop_byval(void *value) {
+    tur_existential_t *rec = (tur_existential_t *)value;
+    if (rec) free((void *)(intptr_t)rec->value);
+}
 /* STM types (Phase 21) */
 typedef void *(*stm_fn_t)(void *env);
 typedef struct TVar { void *value; uint64_t version; pthread_mutex_t lock; pthread_cond_t cond; } TVar;
