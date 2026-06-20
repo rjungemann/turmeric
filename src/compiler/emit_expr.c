@@ -930,6 +930,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     return nil_result ? atom_nil() : tmp;
 }
 
+static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
+
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if branches contain return or throw */
     bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
@@ -978,6 +980,13 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         const char *temp_c = type_c_name(e->type);
         size_t tlen = strlen(temp_c);
         bool temp_is_ptr = tlen > 0 && temp_c[tlen - 1] == '*';
+        /* RSP1: returning a pass-by-ptr struct *parameter* as an if-branch
+         * result.  The param is held in C as `const T *`, but the by-value
+         * merge temp is a `T`; assigning the pointer to the value is a hard cc
+         * mismatch ('T' from 'const T *').  Dereference the param to copy it
+         * out.  (A `make-struct` arm already produces a by-value aggregate, so
+         * only the bare-param arm needs the deref.) */
+        bool then_is_byptr_param = expr_is_pbp_param(ctx, th) && !temp_is_ptr;
         if (if_bv.kind != TY_UNKNOWN &&
             !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_)) {
             /* by-value merge temp, carrier-producing arm: bridge to concrete */
@@ -987,6 +996,9 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else if (then_is_fat_var && temp_is_ptr) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = (void *)(intptr_t)(%s);\n", tmp, t);
+        } else if (then_is_byptr_param) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = *(%s);\n", tmp, t);
         } else {
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, t);
@@ -1014,6 +1026,9 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             const char *temp_c2 = type_c_name(e->type);
             size_t tlen2 = strlen(temp_c2);
             bool temp_is_ptr2 = tlen2 > 0 && temp_c2[tlen2 - 1] == '*';
+            /* RSP1: see the then-branch comment -- deref a pass-by-ptr struct
+             * parameter returned as the else-branch result. */
+            bool else_is_byptr_param = expr_is_pbp_param(ctx, eb) && !temp_is_ptr2;
             if (if_bv.kind != TY_UNKNOWN &&
                 !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null)) {
                 el = emit_carrier_bridge(ctx, body, el, CK_CARRIER, CK_CONCRETE, if_bv);
@@ -1022,6 +1037,9 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else if (else_is_fat_var && temp_is_ptr2) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = (void *)(intptr_t)(%s);\n", tmp, el);
+            } else if (else_is_byptr_param) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = *(%s);\n", tmp, el);
             } else {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);

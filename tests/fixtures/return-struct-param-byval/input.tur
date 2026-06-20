@@ -1,0 +1,16 @@
+;; return-struct-param-byval -- regression for returning a multi-field :copy
+;; struct *parameter* by value.  A >=3-field struct is passed as `const T *`;
+;; returning the param directly (or as an if-branch result) must copy it out
+;; (deref), not assign the pointer to a by-value temp / return slot.
+(defstruct B4 :copy [a : int b : int c : int d : int])
+
+(defn ident [x : B4] : B4 x)                       ;; direct param return
+
+(defn pick [a : B4  b : B4  c : bool] : B4          ;; if-branch param returns
+  (if c a b))
+
+(defn main [] : int
+  (let [p (ident (make-struct B4 11 22 33 44))
+        q (pick (make-struct B4 1 2 3 4) p false)]  ;; q = p = B4(11,22,33,44)
+    (println (.a q))
+    0))

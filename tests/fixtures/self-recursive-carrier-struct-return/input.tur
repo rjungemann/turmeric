@@ -1,0 +1,17 @@
+;; self-recursive-carrier-struct-return -- regression for the self-recursive
+;; call typed at the int64 carrier.  A function whose return type lowers to the
+;; carrier (a :copy struct) and which calls itself must type the recursive call
+;; at its declared return (Box), not the carrier `int`.  Before the fix the
+;; recursive arm of the `if` was typed `int`, giving a spurious branch mismatch
+;; (then=Box else=int).
+(defstruct Box :copy [lo : int  hi : int])
+
+(defn go [n : int  i : int  acc : Box] : Box
+  (if (>= i n)
+    acc
+    (go n (+ i 1) (make-struct Box (+ (.lo acc) 1) (.hi acc)))))
+
+(defn main [] : int
+  (let [r (go 5 0 (make-struct Box 10 99))]
+    (println (.lo r))
+    0))
